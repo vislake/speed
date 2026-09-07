@@ -29,16 +29,31 @@
  *   the request's *host*, never from the access token, so a token
  *   refresh or a tenant switch (which only changes token claims) has
  *   no bearing on this cache. This is a deliberate non-feature.
- * - No auto-polling or window-focus revalidation in this round -- the
- *   design commits only to "fetched at startup"; `refresh()` is the
- *   sole revalidation lever. A future shell round that wants "admin
- *   edited config, show a live update" can add a revalidation policy
- *   without changing either hook's public shape.
- * - No unmount cancellation. The cache is keyed by `api` identity, not
- *   by component lifetime -- an in-flight fetch outliving the component
- *   that triggered it is the point: a second mount of the same `api`
- *   should observe (or await) the one shared request, not start a new
- *   one.
+ * - No auto-polling or window-focus revalidation in this round --
+ *   `refresh()` is the explicit revalidation lever, and a *failed*
+ *   first load is automatically retried by the next subscriber (below),
+ *   so a transient outage is not cached as a permanent "feature flag
+ *   off" answer. A future shell round that wants "admin edited config,
+ *   show a live update" can add a revalidation policy without changing
+ *   either hook's public shape.
+ * - No unmount cancellation, and no retry-while-mounted. The cache is
+ *   keyed by `api` identity, not by component lifetime -- an in-flight
+ *   fetch outliving the component that triggered it is the point: a
+ *   second mount of the same `api` should observe (or await) the one
+ *   shared request, not start a new one. That sharing deliberately
+ *   excludes the failure state: a load that settled on an error caches
+ *   nothing, so the next subscriber of that `api` starts a fresh load
+ *   instead of inheriting the dead state -- a mount after a reconnect
+ *   or a retry recovers on its own, and `refresh()` stays available
+ *   for an explicit retry in the meantime. (A settled success, by
+ *   contrast, is the shared answer: later mounts read it without a new
+ *   fetch, exactly as above.)
+ * - SSR/hydration safety. A store starts only inside a client-side
+ *   subscribe effect (there are no effects during server rendering),
+ *   so the server-side snapshot is the same initial loading snapshot
+ *   the client first paints; useSyncExternalStore is given it
+ *   explicitly as getServerSnapshot, which React 19 requires for any
+ *   server-rendered content.
  */
 
 import { useCallback, useSyncExternalStore } from 'react'
@@ -98,7 +113,11 @@ function createConfigStore(api: RequestFn): ConfigStore {
   // Fetching starts lazily, on the first subscribe (useSyncExternalStore
   // calls subscribe from a passive effect, never during render) --
   // not at store construction, so getStore/createConfigStore stay free
-  // of side effects a render could trigger more than once.
+  // of side effects a render could trigger more than once. `started`
+  // latches only the *success-or-in-flight* sharing: a load that
+  // settles on an error leaves nothing to share, so a later subscriber
+  // starts a fresh load (see subscribe) instead of inheriting the
+  // failure for the api's whole lifetime.
   let started = false
 
   function publish(next: ConfigSnapshot): void {
@@ -142,7 +161,18 @@ function createConfigStore(api: RequestFn): ConfigStore {
     getSnapshot: () => snapshot,
     subscribe(listener) {
       listeners.add(listener)
-      if (!started) {
+      if (!started || snapshot.error !== undefined) {
+        // The first subscriber starts the one shared fetch; a
+        // subscriber arriving after a load settled on an error starts
+        // a fresh one -- a failure is never the shared answer (the
+        // `started` latch records only the success-or-in-flight
+        // sharing), so a mount after a reconnect, a retry or a route
+        // change recovers instead of reading the dead error state for
+        // the client's lifetime. A subscriber arriving mid-flight or
+        // after a success observes that state without starting a new
+        // fetch; load() republishes loading synchronously, so
+        // subscribers in the same batch as the retrying one see the
+        // in-flight state and do not each start a fetch.
         started = true
         load()
       }
@@ -168,13 +198,27 @@ function getStore(api: RequestFn): ConfigStore {
  * Fetches the effective Public config values and enabled feature flags
  * once per `api` identity, sharing the result (and the in-flight
  * request) with every other usePublicConfig/useFeature instance backed
- * by the same `api`. `isLoading` is true until the first response (or
- * error) for this `api` settles; `error` surfaces the rejected
- * `ApiError` verbatim, never re-wrapped.
+ * by the same `api`. `isLoading` is true until the first response for
+ * this `api` settles; `error` surfaces the rejected `ApiError` verbatim,
+ * never re-wrapped. A load that settled on an error is not the shared
+ * answer: the next consumer that subscribes to this `api` starts a
+ * fresh load automatically (see the file header), so a mount after a
+ * transient failure recovers without an explicit `refresh()`.
  */
 export function usePublicConfig(api: RequestFn): UsePublicConfigResult {
   const store = getStore(api)
-  const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot)
+  const snapshot = useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    // Server rendering and hydration render this snapshot: the store
+    // is memory-only and a fetch starts only from a client-side
+    // subscribe effect, so the server's snapshot is the same initial
+    // loading snapshot the client first paints (the shared constant,
+    // one stable reference -- React requires the server snapshot to be
+    // referentially stable across calls). Without it React 19 throws
+    // "Missing getServerSnapshot" for any server-rendered content.
+    () => LOADING_SNAPSHOT,
+  )
   const refresh = useCallback(() => {
     store.refresh()
   }, [store])

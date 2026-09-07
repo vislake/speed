@@ -1,7 +1,7 @@
 /**
  * Pins the public entry of @speed/api-client: the runtime surface is
- * exactly the twelve documented exports (a drift changes this list and
- * fails the test), and the type surface is compile-checked -- the
+ * exactly the seventeen documented exports (a drift changes this list
+ * and fails the test), and the type surface is compile-checked -- the
  * shape-drift guards below are @ts-expect-error lines that fail the
  * package typecheck the moment the constraint they pin stops erroring.
  */
@@ -43,6 +43,7 @@ const RUNTIME_EXPORTS = [
   'fetchSystemFeatures',
   'httpErrorCode',
   'isApiError',
+  'isTransportFailure',
   'retryAfterDelayMs',
   'retryDelayMs',
 ]

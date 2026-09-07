@@ -45,6 +45,20 @@
  * a 401 carrying `authn.session_expired` surfaces as that code, with
  * `auth: true` marking it as a session/credential problem hosts treat
  * specially (silent refresh, forced sign-out).
+ *
+ * One parse-time boundary makes "reserved" a mechanism rather than a
+ * convention: an envelope whose `code` starts with `client.` is refused
+ * (client.ts's parseEnvelope) and the failure is synthesized as
+ * `client.http.<status>` instead. Server codes are module-scoped
+ * (`authn.*`, `notes.*`, ...), and `client` is no module's domain, so a
+ * `client.*` code inside an envelope is a misbehaving backend or an
+ * intermediary borrowing the reserved vocabulary -- accepted, it could
+ * make a login surface render "request timed out" (its whitelisted
+ * `client.timeout` text) for what is actually a server-answered session
+ * error. The exported {@link isTransportFailure} predicate is the
+ * honest discriminator consumers branch on: an ApiError whose request
+ * never reached a usable response carries status 0 -- and an HTTP
+ * response always carries a status, so no server answer can forge one.
  */
 
 /** A single field-level validation failure listed in the envelope. */
@@ -63,7 +77,9 @@ export const ERROR_CODE_NETWORK = 'client.network' as const
 /** Reserved code: the request exceeded ClientOptions.timeoutMs. */
 export const ERROR_CODE_TIMEOUT = 'client.timeout' as const
 
-/** Reserved code: a 2xx response that is not a JSON value. */
+/** Reserved code: the API JSON contract was violated -- see the header
+ * for the full list (a 2xx body that is not a JSON object/array, an
+ * unsendable request body, ...). */
 export const ERROR_CODE_PROTOCOL = 'client.protocol' as const
 
 /** Reserved code for a bare non-2xx response (no valid envelope). */
@@ -162,5 +178,34 @@ export function isApiError(value: unknown): value is ApiError {
     typeof candidate.code === 'string' &&
     typeof candidate.message === 'string' &&
     typeof candidate.auth === 'boolean'
+  )
+}
+
+/**
+ * Whether `value` is a genuine transport-layer failure: a request that
+ * never reached a usable response, diagnosed by this client itself with
+ * its own `client.network`/`client.timeout` code. `status === 0` is the
+ * mechanism that makes the answer trustworthy -- an HTTP response
+ * always carries a status (>= 200 for anything real fetch produces),
+ * and an envelope can only arrive through a response, so *no*
+ * server-answered error can carry status 0. A `client.network` or
+ * `client.timeout` code attached to a real status is therefore not this
+ * client's synthesis but a backend or intermediary that borrowed the
+ * reserved vocabulary (refused at parse time by client.ts today, and
+ * possibly produced by an older copy of this library) -- answering
+ * false keeps such a forgery from rendering as "the request never
+ * completed" in consumer surfaces. Protocol refusals answer false
+ * whatever their status: `client.protocol` is a contract violation
+ * (unsendable request body, malformed 2xx), never a transport failure.
+ * Structural acceptance mirrors {@link isApiError}, for errors thrown
+ * by a second copy of the library.
+ */
+export function isTransportFailure(value: unknown): value is ApiError {
+  if (!isApiError(value)) {
+    return false
+  }
+  return (
+    value.status === 0 &&
+    (value.code === ERROR_CODE_NETWORK || value.code === ERROR_CODE_TIMEOUT)
   )
 }

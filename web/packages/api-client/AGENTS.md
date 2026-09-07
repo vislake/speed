@@ -41,7 +41,14 @@ this one may issue HTTP requests itself.
   `parseEnvelope` must never demand `traceId`, which no backend sends
   today); everything else synthesizes a reserved `client.*` code
   (`client.network`, `client.timeout`, `client.protocol`,
-  `client.http.<status>`).
+  `client.http.<status>`). The reservation is a parse-time mechanism,
+  not a convention: server codes are module-scoped and `client` is no
+  module's domain, so `parseEnvelope` refuses any code starting with
+  `client.` -- a backend or intermediary cannot forge an envelope that
+  reads as this client's own transport diagnosis. `isTransportFailure`
+  is the exported predicate consumers use to distinguish this client's
+  genuine transport failures (`status` 0 -- unanswerable by any HTTP
+  response) from server-answered errors.
 - **Refresh is once per request, single-flight -- and bearer-only.**
   The hook fires only for a refused request that itself presented a
   bearer token; a 401 on a credential-less request means the endpoint
@@ -54,14 +61,18 @@ this one may issue HTTP requests itself.
   transient-retry budget. Hook failure reports `access token refresh
   failed` and rejects the original 401 as an auth `ApiError`.
 - **Credential-less-ness is declared per request, never manufactured
-  by clearing the store.** `RequestOptions.omitAccessToken` sends the
-  request without an Authorization header and skips the store read
-  entirely -- the session-refresh operation is generated to carry it
-  (orval's `speedRequestCredentialless` mutator in @speed/api-sdk).
-  Clearing the store instead would momentarily strip the token from
-  concurrent requests that still hold a valid one, turning their 401s
-  into spurious auth failures under the bearer-only rule above; do not
-  reintroduce a store-clearing refresh wiring.
+  by clearing the store.** `RequestOptions.omitAccessToken` skips the
+  store read entirely, so no store token is attached and the request
+  carries only its own headers -- without a caller-supplied
+  `authorization` that means it travels without an Authorization
+  header. The session-refresh operation is generated to carry the
+  declaration (orval's `speedRequestCredentialless` mutator in
+  @speed/api-sdk). Clearing the store instead would momentarily strip
+  the token from concurrent requests that still hold a valid one,
+  turning their 401s into spurious auth failures under the bearer-only
+  rule above; do not reintroduce a store-clearing refresh wiring. The
+  caller's own headers are never stripped by the declaration: a
+  caller-supplied `authorization` header is the caller's, and survives.
 - **Retry is idempotent-only and transient-only.** GET/HEAD/OPTIONS on
   429 (honouring Retry-After, capped by the policy) / 502 / 503 / 504 /
   network failure / timeout. Full-jitter backoff via `retryDelayMs`;
@@ -86,7 +97,12 @@ this one may issue HTTP requests itself.
   flight, awaited-in-place) by every other instance backed by the same
   `api` -- including ones that mount after the fetch settles. Passing a
   fresh `RequestFn` on every render defeats the sharing; hosts must
-  construct `api` once and reuse the reference.
+  construct `api` once and reuse the reference. The sharing excludes
+  the failure state by design: a load that settles on an error caches
+  nothing, so the next subscriber of that `api` starts a fresh fetch
+  instead of inheriting the dead state for the client's whole lifetime
+  (the failure-recovery shape the B2 round's "fetched at startup"
+  contract needs; `refresh()` remains the explicit retry lever).
 
 ## In this round vs. deferred
 
@@ -188,13 +204,14 @@ Deferred with reasons:
 
 ## Public surface
 
-The sixteen runtime exports are pinned by `src/index.test.ts`
+The seventeen runtime exports are pinned by `src/index.test.ts`
 (`ApiError`, `CONFIG_PUBLIC_PATH`, `DEFAULT_RETRY_POLICY`,
 `ERROR_CODE_NETWORK`, `ERROR_CODE_PROTOCOL`, `ERROR_CODE_TIMEOUT`,
 `SYSTEM_FEATURES_PATH`, `createClient`, `createConsoleReporter`,
 `createMemoryAccessTokenStore`, `fetchPublicConfig`,
 `fetchSystemFeatures`, `httpErrorCode`, `isApiError`,
-`retryAfterDelayMs`, `retryDelayMs`), with compile-time shape-drift
+`isTransportFailure`, `retryAfterDelayMs`, `retryDelayMs`), with
+compile-time shape-drift
 guards for the type exports (`RequestFn`, `ClientOptions`,
 `RequestOptions`, `AccessTokenStore`, `RetryPolicy`, `Reporter`,
 `FieldError`, `HttpMethod`, `ApiErrorInit`, `ConfigFetchOptions`,

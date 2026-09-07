@@ -147,9 +147,12 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   `error.code` to bilingual text through your own i18n catalog, never
   in this package. `refresh()` forces a refetch and republishes to
   every component sharing this `api`, keeping the previous `data`
-  (stale-while-revalidate) while the refetch is in flight -- the sole
-  revalidation lever this round ships; there is no polling or
-  window-focus refetch (see the package `AGENTS.md`).
+  (stale-while-revalidate) while the refetch is in flight; there is no
+  polling or window-focus refetch (see the package `AGENTS.md`). A
+  load that settles on an error is never the shared answer: the next
+  component that subscribes to this `api` starts a fresh fetch
+  automatically, so a mount after a transient failure (a reconnect, a
+  route change, a retry) recovers without calling `refresh()`.
 - **`useFeature(api, key)`** returns a plain `boolean`, composed on
   `usePublicConfig`'s cache rather than a second request to
   `/api/system/features` -- `false` while loading and on error, never
@@ -178,22 +181,34 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   that is not JSON with a `code`, a timeout, a dead network) get a
   synthesized code in the reserved `client.` namespace:
   `client.network`, `client.timeout`, `client.protocol` (a 2xx whose
-  body is not JSON -- or an empty 2xx when the request declared
-  `requireJsonBody` -- or a request body that cannot be
-  JSON-serialized, such as a circular structure or a top-level
+  body is not a JSON object or array -- or an empty 2xx when the
+  request declared `requireJsonBody` -- or a request body that cannot
+  be JSON-serialized, such as a circular structure or a top-level
   function/symbol, which rejects before anything is sent),
   `client.http.<status>`. `error.attempts` reports how many HTTP
-  attempts were made.
+  attempts were made. The namespace is reserved by mechanism, not just
+  by convention: server codes are module-scoped (`authn.*`, `notes.*`)
+  and `client` is no module's domain, so an envelope whose `code`
+  starts with `client.` is refused at parse time and surfaces as the
+  honest `client.http.<status>` instead -- a misbehaving backend or
+  intermediary cannot make a session error read as "the request timed
+  out". `isTransportFailure(error)` is the exported predicate that
+  answers whether an error is genuinely this client's own transport
+  failure (request never reached a usable response): its `status` is
+  0, the one status no HTTP response can carry, so the answer is not
+  forgeable by anything a server answers with.
 - **Bearer auth without a storage API.** The token store is a plain
   two-method interface (`get(): string | null`, `set(token: string |
   null): void`); the memory implementation is the only one the package
   ships. The token is re-read before every attempt, so a retry after a
   refresh carries the fresh token. A request can declare
-  `omitAccessToken` to travel credential-less even while the store
-  holds a token -- the session-refresh operation is generated to do
-  exactly that (see `@speed/api-sdk`) -- in which case the store is
-  never read for that request. No tenant header exists anywhere:
-  tenant context travels inside the access token.
+  `omitAccessToken` to skip the store entirely even while it holds a
+  token -- the session-refresh operation is generated to do exactly
+  that (see `@speed/api-sdk`); the request then carries only its own
+  headers, so without a caller-supplied `authorization` it travels
+  credential-less, and a caller-supplied one is the caller's own,
+  untouched by the store. No tenant header exists anywhere: tenant
+  context travels inside the access token.
 - **Silent 401 refresh, once per request -- bearer-only.** When a
   request that *presented a bearer token* answers 401 and a
   `refreshAccessToken` hook is configured, the client runs one refresh
@@ -256,7 +271,8 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
 | `RequestFn` | type | `<T>(path, options?) => Promise<T>` -- the returned function; call it as `api<T,>(path)` in TSX files. |
 | `ApiError` | class | The one error type. `status` (0 when no response arrived), `code`, `traceId?`, `params?`, `details?`, `attempts`, `auth` (true exactly for HTTP 401), `message` (envelope message or an English diagnostic). |
 | `isApiError(value)` | function | Type guard; accepts `instanceof` and structurally identical errors (a second copy of the library). |
-| `ERROR_CODE_NETWORK` / `ERROR_CODE_TIMEOUT` / `ERROR_CODE_PROTOCOL` | const | Reserved `client.` codes. |
+| `isTransportFailure(value)` | function | Answers whether an error is genuinely this client's own transport-layer failure (`client.network`/`client.timeout` with `status` 0 -- the one status no HTTP response can carry). Consumer whitelists distinguishing "the request never completed" from server-answered errors should consult this, never a bare code match. |
+| `ERROR_CODE_NETWORK` / `ERROR_CODE_TIMEOUT` / `ERROR_CODE_PROTOCOL` | const | Reserved `client.` codes; an envelope that borrows the prefix is refused at parse time. |
 | `httpErrorCode(status)` | function | Shapes a bare non-2xx status into `client.http.<status>`. |
 | `FieldError` | type | `{ field, code, params? }` -- one field-level validation failure in `details`. |
 | `AccessTokenStore` | type | The sync `get`/`set` seam hosts implement (or use the memory store). |

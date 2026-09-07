@@ -12,7 +12,19 @@
  * belong here, never in console.log calls sprinkled through app code.
  */
 
-/** A structured diagnostic sink. */
+/**
+ * A structured diagnostic sink with two channels. `error` is for
+ * failures that are terminal for the operation being reported; `warn`
+ * for problems the client worked around. The client itself currently
+ * calls only `warn` -- its one internal diagnostic is the
+ * access-token-refresh-failed warning, while terminal failures reject
+ * as an ApiError to the caller, who owns reporting them -- so `error`
+ * is a host-facing channel of the sink shape rather than a package
+ * call site today: it is what a host's own diagnostics pipeline (the
+ * M1 round) and future fatal-invariant reports use. It is kept, not
+ * removed, because a Reporter implementation without it would not be a
+ * Reporter for the hosts that already implement the full shape.
+ */
 export interface Reporter {
   /** Report a failure: constant message, snake_case attributes. */
   error(message: string, attrs?: Readonly<Record<string, unknown>>): void

@@ -19,6 +19,7 @@ import {
   ERROR_CODE_PROTOCOL,
   ERROR_CODE_TIMEOUT,
   isApiError,
+  isTransportFailure,
   type ApiError,
   type RequestFn,
   type RetryPolicy,
@@ -437,6 +438,64 @@ describe('request shape', () => {
     expect(recorded(standin).url).toBe(
       `${BASE_URL}/notes?tag=a&tag=b+c&tag=3&keep=x`,
     )
+  })
+
+  it('omitAccessToken skips only the store token: a caller-supplied authorization header survives untouched', async () => {
+    // omitAccessToken's contract is "never read the token store", not
+    // "strip every Authorization header": the request's headers are the
+    // caller's, so a caller-supplied authorization survives while the
+    // store token (which would have overwritten it) is never attached.
+    // (Probe: store null + caller header; and the store-token case
+    // below, where the store holds one and the caller header still
+    // wins, because the store is not consulted at all.)
+    for (const probe of [
+      { storeToken: null, callerHeader: 'Bearer CALLER' },
+      { storeToken: 'store-token', callerHeader: 'Bearer CALLER' },
+    ]) {
+      const store = createMemoryAccessTokenStore()
+      store.set(probe.storeToken)
+      const standin = scriptedStandin(jsonResponse(200, { ok: true }))
+      const api = createClient({
+        baseUrl: BASE_URL,
+        fetch: standin.fetch,
+        accessTokenStore: store,
+      })
+      await api('/notes', {
+        omitAccessToken: true,
+        headers: { authorization: probe.callerHeader },
+      })
+      expect(recorded(standin).headers.get('authorization')).toBe(
+        'Bearer CALLER',
+      )
+    }
+  })
+
+  it('refuses a query option on a path that already carries its own query string', async () => {
+    // buildUrl appends query parameters with '?': a path that already
+    // carries a query string would become a malformed double-? URL
+    // (?draft=1?tag=a) the server would misparse. Request paths are
+    // spec paths -- never query-bearing -- so the combination is a
+    // programmer error, refused before anything is put on the wire,
+    // with the fix named in the message.
+    const standin = scriptedStandin(jsonResponse(200, { ok: true }))
+    const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+    const promise = api<{ ok: boolean }>('/notes?draft=1', {
+      query: { tag: 'a' },
+    })
+    await expect(promise).rejects.toThrow(
+      'request path must not carry a query string',
+    )
+    expect(standin.calls).toHaveLength(0)
+  })
+
+  it('sends a query-bearing path verbatim when no query option is given', async () => {
+    // The refusal above applies only to the ?-appending combination: a
+    // path that carries its own query string and no query option is a
+    // complete URL the caller wrote, sent exactly as given.
+    const standin = scriptedStandin(jsonResponse(200, { ok: true }))
+    const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+    await api<{ ok: boolean }>('/notes?draft=1')
+    expect(recorded(standin).url).toBe(`${BASE_URL}/notes?draft=1`)
   })
 })
 
@@ -1943,4 +2002,59 @@ describe('error normalization', () => {
       )
     }
   })
+
+  it('names what the 2xx-primitive refusal actually refuses', async () => {
+    // The branch refuses JSON that is not an object or an array -- a
+    // JSON string or number *is* a JSON value, so the refusal must say
+    // what it means and not misname the branch as rejecting non-JSON.
+    const standin = scriptedStandin(jsonResponse(200, 'just a string'))
+    const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+    const error = await expectApiError(api<{ ok: boolean }>('/notes'))
+    expect(error.code).toBe(ERROR_CODE_PROTOCOL)
+    expect(error.status).toBe(200)
+    expect(error.cause).toBeInstanceOf(SyntaxError)
+    expect((error.cause as SyntaxError).message).toBe(
+      '2xx body is not a JSON object or array',
+    )
+  })
+
+  it('refuses an envelope whose code borrows the reserved client.* namespace', async () => {
+    // An envelope can only arrive through an HTTP response, and server
+    // codes are module-scoped (authn.*, notes.* -- per the error-code
+    // contract);
+    // `client` is no module's domain. A backend or intermediary that
+    // answers with an envelope carrying a client.*-shaped code is
+    // borrowing this client's reserved vocabulary -- accepted, it
+    // would let a session error read as a transport failure in
+    // consumer surfaces. The envelope is refused at parse time and the
+    // failure lands on the honest client.http.<status> code with the
+    // real status, never on a code that claims a diagnosis the client
+    // did not make.
+    const standin = scriptedStandin(
+      jsonResponse(400, { code: 'client.timeout', traceId: 'forged-1' }),
+    )
+    const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+    const error = await expectApiError(api<{ ok: boolean }>('/notes'))
+    expect(error.code).toBe('client.http.400')
+    expect(error.status).toBe(400)
+    expect(error.traceId).toBeUndefined()
+    expect(error.message).toBe(
+      'The server answered HTTP 400 without a valid ApiError envelope.',
+    )
+  })
+
+  it('never presents a forged client.* envelope as a transport failure', async () => {
+    // The concrete harm behind the reserved-namespace rule: a 401
+    // whose envelope says client.network is still an auth answer --
+    // isTransportFailure must answer false for it, so a login surface
+    // cannot render "the request never completed" for a session error.
+    const standin = scriptedStandin(jsonResponse(401, { code: 'client.network' }))
+    const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+    const error = await expectApiError(api<{ ok: boolean }>('/notes'))
+    expect(error.status).toBe(401)
+    expect(error.auth).toBe(true)
+    expect(error.code).toBe('client.http.401')
+    expect(isTransportFailure(error)).toBe(false)
+  })
 })
+

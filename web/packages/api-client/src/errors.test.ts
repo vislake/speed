@@ -13,6 +13,7 @@ import {
   ERROR_CODE_TIMEOUT,
   httpErrorCode,
   isApiError,
+  isTransportFailure,
   type FieldError,
 } from './index'
 
@@ -155,5 +156,104 @@ describe('isApiError', () => {
     } else {
       expect.unreachable('the fixture above is an ApiError')
     }
+  })
+})
+
+describe('isTransportFailure', () => {
+  it('answers true exactly for the client-synthesized network and timeout failures (status 0)', () => {
+    // A genuine transport-layer failure is one this client synthesized
+    // because no HTTP response ever arrived -- status 0. The code must
+    // be the client's own network/timeout vocabulary: a status-0
+    // protocol refusal (an unsendable request body) is a caller-side
+    // contract violation, not a transport failure.
+    const network = new ApiError({
+      status: 0,
+      code: ERROR_CODE_NETWORK,
+      attempts: 3,
+      cause: new TypeError('fetch failed'),
+    })
+    expect(isTransportFailure(network)).toBe(true)
+    const timeout = new ApiError({
+      status: 0,
+      code: ERROR_CODE_TIMEOUT,
+      attempts: 1,
+    })
+    expect(isTransportFailure(timeout)).toBe(true)
+    const bodyProtocol = new ApiError({
+      status: 0,
+      code: ERROR_CODE_PROTOCOL,
+      attempts: 0,
+    })
+    expect(isTransportFailure(bodyProtocol)).toBe(false)
+    const httpProtocol = new ApiError({
+      status: 200,
+      code: ERROR_CODE_PROTOCOL,
+      attempts: 1,
+    })
+    expect(isTransportFailure(httpProtocol)).toBe(false)
+  })
+
+  it('answers false for any error an HTTP response can carry, whatever code it claims', () => {
+    // An envelope can only arrive through an HTTP response, and a
+    // response always has a status -- so a code attached to a real
+    // status is a server-answered envelope (a forged client.* code
+    // until the parse-time reserved-namespace refusal lands), never
+    // this client's transport diagnosis. This is the discriminator the
+    // reserved-namespace claim rests on: status 0 is not forgeable.
+    const forgedTimeout = new ApiError({
+      status: 401,
+      code: ERROR_CODE_TIMEOUT,
+      attempts: 1,
+    })
+    expect(isTransportFailure(forgedTimeout)).toBe(false)
+    const forgedNetwork = new ApiError({
+      status: 502,
+      code: ERROR_CODE_NETWORK,
+      attempts: 1,
+    })
+    expect(isTransportFailure(forgedNetwork)).toBe(false)
+    const forgedHttp = new ApiError({
+      status: 401,
+      code: 'client.http.401',
+      attempts: 1,
+    })
+    expect(isTransportFailure(forgedHttp)).toBe(false)
+    const moduleError = new ApiError({
+      status: 400,
+      code: 'notes.text_required',
+      attempts: 1,
+    })
+    expect(isTransportFailure(moduleError)).toBe(false)
+  })
+
+  it('accepts structurally shaped transport errors, like isApiError does', () => {
+    // A second copy of the library (dev-time aliasing) throws ApiErrors
+    // this package's instanceof cannot see; the structural guard serves
+    // the same purpose here as in isApiError.
+    const foreign = {
+      name: 'ApiError',
+      status: 0,
+      code: ERROR_CODE_NETWORK,
+      message: 'The request failed before a response arrived.',
+      auth: false,
+    }
+    expect(isTransportFailure(foreign)).toBe(true)
+    const forgedForeign = {
+      name: 'ApiError',
+      status: 401,
+      code: ERROR_CODE_NETWORK,
+      message: 'forged',
+      auth: true,
+    }
+    expect(isTransportFailure(forgedForeign)).toBe(false)
+  })
+
+  it('rejects everything else', () => {
+    expect(isTransportFailure(null)).toBe(false)
+    expect(isTransportFailure(undefined)).toBe(false)
+    expect(isTransportFailure('client.network')).toBe(false)
+    expect(isTransportFailure(new Error('plain'))).toBe(false)
+    expect(isTransportFailure({ status: 0 })).toBe(false)
+    expect(isTransportFailure({ code: ERROR_CODE_NETWORK })).toBe(false)
   })
 })

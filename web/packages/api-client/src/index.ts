@@ -40,6 +40,7 @@ export {
   ERROR_CODE_TIMEOUT,
   httpErrorCode,
   isApiError,
+  isTransportFailure,
 } from './errors.js'
 export type { ApiErrorInit, FieldError } from './errors.js'
 export {

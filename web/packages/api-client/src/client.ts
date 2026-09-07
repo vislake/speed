@@ -6,8 +6,10 @@
  *
  *   1. attach `Authorization: Bearer <token>` from the store (per
  *      attempt, so a refreshed token is picked up on retry) -- unless
- *      the request declares `omitAccessToken`, in which case it goes
- *      out credential-less and the store is never read;
+ *      the request declares `omitAccessToken`, in which case the store
+ *      is never read and no store token is attached (a caller-supplied
+ *      `authorization` header, when one is given, is the caller's own
+ *      and travels untouched);
  *   2. send; a caller-supplied signal cancels the request raw (the
  *      AbortError reaches the caller, standard query-cancellation
  *      semantics -- nothing is wrapped or retried). Cancellation
@@ -107,22 +109,26 @@ export interface RequestOptions {
    * Extra request headers. `accept` defaults to application/json and
    * `content-type` to application/json when a body is sent -- each
    * only when the caller did not already set one, so a caller-supplied
-   * value is honoured. `authorization` is reserved: when the store
-   * holds a token it overwrites a caller-supplied value, because the
-   * store is the session's single source of truth. Declare
-   * `omitAccessToken` below to send the request credential-less
-   * instead.
+   * value is honoured. `authorization` is reserved whenever the store
+   * is consulted: when the store holds a token it overwrites a
+   * caller-supplied value, because the store is the session's single
+   * source of truth. Declare `omitAccessToken` below to send the
+   * request without the store's token instead -- the store is then
+   * never read, so a caller-supplied `authorization` (when one is
+   * given) is the caller's own and travels untouched.
    */
   headers?: Readonly<Record<string, string>>
   /**
-   * Declares this request credential-less: no `Authorization` header
-   * is attached and the token store is never read, no matter what it
-   * holds. A session's own refresh operation is the canonical user --
-   * it authenticates with the refresh token in its body, and its 401
-   * must stay terminal under the bearer-only rule (see
-   * `ClientOptions.refreshAccessToken`) -- and declaring that on the
-   * request keeps the store untouched for every concurrent request,
-   * which may still be presenting a perfectly valid token.
+   * Declares this request store-token-less: the token store is never
+   * read, and no token from it is attached, no matter what it holds --
+   * the request carries only the caller's own headers. Without a
+   * caller-supplied `authorization` that means the request travels
+   * credential-less. A session's own refresh operation is the
+   * canonical user -- it authenticates with the refresh token in its
+   * body, and its 401 must stay terminal under the bearer-only rule
+   * (see `ClientOptions.refreshAccessToken`) -- and declaring this on
+   * the request keeps the store untouched for every concurrent
+   * request, which may still be presenting a perfectly valid token.
    */
   omitAccessToken?: boolean
   /**
@@ -330,10 +336,20 @@ interface Envelope {
 
 /**
  * Parses a response body into the ApiError envelope, or undefined when
- * the body is empty, not JSON, not an object, or lacks the required
- * `code` string -- those stay bare and get a client.http.* code. All
- * other fields are optional: a `{code, params}` body is a valid
- * envelope even though it carries no traceId.
+ * the body is empty, not JSON, not an object, lacks the required
+ * `code` string, or carries a code in the reserved `client.` namespace
+ * -- those stay bare and get a client.http.* code. The namespace rule
+ * is what makes the client.* vocabulary's "reserved" claim a mechanism
+ * instead of documentation: server codes are module-scoped (errors.ts's
+ * header), and `client` is no module's domain, so a `client.*` code
+ * inside an envelope is a misbehaving backend or an intermediary
+ * borrowing the vocabulary -- an HTTP response can only exist with a
+ * real status, so an accepted `client.network`/`client.timeout`
+ * envelope would masquerade as this client's own transport diagnosis
+ * (status 0, the one status no server can answer with) and mislead the
+ * surfaces that render those codes. All other fields are optional: a
+ * `{code, params}` body is a valid envelope even though it carries no
+ * traceId.
  */
 function parseEnvelope(text: string | null): Envelope | undefined {
   if (text === null || text.trim() === '') {
@@ -349,7 +365,7 @@ function parseEnvelope(text: string | null): Envelope | undefined {
     return undefined
   }
   const candidate = parsed as Record<string, unknown>
-  if (typeof candidate.code !== 'string') {
+  if (typeof candidate.code !== 'string' || candidate.code.startsWith('client.')) {
     return undefined
   }
   const envelope: Envelope = {
@@ -436,36 +452,49 @@ function serializeBody(body: unknown): string {
  * array value becomes one repeated parameter per element (URLSearchParams
  * append semantics -- the form/explode convention), so a multi-valued
  * filter survives as `?tag=a&tag=b` instead of collapsing into a
- * comma-joined `?tag=a,b` the backend would read as one literal value. */
+ * comma-joined `?tag=a,b` the backend would read as one literal value.
+ * A path that already carries its own query string cannot take an
+ * appended `?...` -- the result would be a malformed double-? URL -- so
+ * combining one with a query option is refused as a programmer error:
+ * request paths are spec paths, and every parameter belongs in the
+ * query option. */
 function buildUrl(
   baseUrl: string,
   path: string,
   query: RequestOptions['query'],
 ): string {
-  let url = `${baseUrl}${path}`
-  if (query !== undefined) {
-    const params = new URLSearchParams()
-    for (const [key, value] of Object.entries(query)) {
-      if (value === undefined || value === null) {
-        continue
-      }
-      if (Array.isArray(value)) {
-        for (const element of value) {
-          if (element === undefined || element === null) {
-            continue
-          }
-          params.append(key, String(element))
-        }
-        continue
-      }
-      params.append(key, String(value))
-    }
-    const encoded = params.toString()
-    if (encoded !== '') {
-      url += `?${encoded}`
-    }
+  const url = `${baseUrl}${path}`
+  if (query === undefined) {
+    return url
   }
-  return url
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null) {
+      continue
+    }
+    if (Array.isArray(value)) {
+      for (const element of value) {
+        if (element === undefined || element === null) {
+          continue
+        }
+        params.append(key, String(element))
+      }
+      continue
+    }
+    params.append(key, String(value))
+  }
+  const encoded = params.toString()
+  if (encoded === '') {
+    return url
+  }
+  if (path.includes('?')) {
+    throw programmerError(
+      `request path must not carry a query string (${JSON.stringify(path)}): ` +
+        'parameters appended through the query option would produce a ' +
+        'malformed double-? URL; move those parameters into the query option.',
+    )
+  }
+  return `${url}?${encoded}`
 }
 
 /** Programmer-error guard with the package's error prefix. */
@@ -712,10 +741,13 @@ export function createClient(options: ClientOptions): RequestFn {
     }
     // The token is read per attempt: a retry after a successful refresh
     // picks up the fresh token without extra plumbing. A request that
-    // declares omitAccessToken skips the read entirely -- it must go out
-    // credential-less no matter what the store holds (a session's own
+    // declares omitAccessToken skips the read entirely -- no store token
+    // is attached no matter what the store holds (a session's own
     // refresh request authenticates with the refresh token in its body),
-    // and its 401 therefore counts as a credential-less one.
+    // and its 401 therefore counts as a credential-less one. The
+    // request's own headers are untouched by the omission: a
+    // caller-supplied authorization header is the caller's, not the
+    // store's, and travels as given.
     const omitToken = requestOptions.omitAccessToken === true
     let attachedToken = false
     if (!omitToken) {
@@ -1109,11 +1141,15 @@ export function createClient(options: ClientOptions): RequestFn {
               })
             }
             if (typeof data !== 'object' || data === null) {
+              // The branch refuses JSON that is not an object or an
+              // array (a JSON string or number parses fine but is not a
+              // usable response document) -- the cause names exactly
+              // what is refused.
               throw new ApiError({
                 status: outcome.status,
                 code: ERROR_CODE_PROTOCOL,
                 attempts,
-                cause: new SyntaxError('2xx body is not a JSON value'),
+                cause: new SyntaxError('2xx body is not a JSON object or array'),
               })
             }
             return data as T

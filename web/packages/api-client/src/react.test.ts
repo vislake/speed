@@ -12,8 +12,14 @@
 
 import { act, render, renderHook, waitFor } from '@testing-library/react'
 import { Component, createElement, type ReactNode } from 'react'
-import { describe, expect, it } from 'vitest'
-import { createStandinFetch, jsonResponse } from '../test-utils/fetch-standin'
+import { hydrateRoot, type Root } from 'react-dom/client'
+import { renderToString } from 'react-dom/server'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  createStandinFetch,
+  jsonResponse,
+  scriptedStandin,
+} from '../test-utils/fetch-standin'
 import { createClient } from './client'
 import type { RequestFn } from './client'
 import { CONFIG_PUBLIC_PATH } from './config-fetcher'
@@ -29,6 +35,10 @@ function standinClient() {
   const api: RequestFn = createClient({ baseUrl: '/api/v1', fetch: standin.fetch })
   return { standin, api }
 }
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('usePublicConfig', () => {
   it('transitions from loading to success with the fetched data', async () => {
@@ -253,5 +263,116 @@ describe('useFeature', () => {
     })
     expect(renderErrors).toHaveLength(0)
     expect(container.textContent).toBe('disabled')
+  })
+})
+
+describe('a failed first load is retried by the next subscriber, never cached as the shared answer', () => {
+  it('starts a fresh load when the next consumer subscribes after a failed first load', async () => {
+    // The first load fails (a server-answered 500, one attempt). With
+    // nothing cached, that failure must not latch as the store's
+    // permanent answer: the next mounted consumer's subscribe starts a
+    // fresh load, so a later mount (after a reconnect, a retry, a
+    // route change) recovers instead of reading the dead error state
+    // for the client's whole lifetime. (Before the fix the `started`
+    // latch inside subscribe never reopened, no second request was
+    // ever made, and the second mount inherited the first failure.)
+    const standin = scriptedStandin(
+      jsonResponse(500, { code: 'config.internal_error', traceId: 'trace-500' }),
+      jsonResponse(200, { config: { brand_name: 'Speed' }, features: ['flag_a'] }),
+    )
+    const api: RequestFn = createClient({ baseUrl: '/api/v1', fetch: standin.fetch })
+
+    const first = renderHook(() => usePublicConfig(api))
+    await waitFor(() => expect(first.result.current.error).toBeDefined())
+    expect(first.result.current.isLoading).toBe(false)
+    expect(first.result.current.data).toBeUndefined()
+    expect(standin.calls).toHaveLength(1)
+    first.unmount()
+
+    // The moment the second consumer subscribes, a fresh load starts:
+    // the store republishes loading (error cleared) before the fetch
+    // settles, so the very next snapshot is observable.
+    const second = renderHook(() => usePublicConfig(api))
+    expect(second.result.current.isLoading).toBe(true)
+    expect(second.result.current.error).toBeUndefined()
+
+    await waitFor(() => expect(second.result.current.data).toBeDefined())
+    expect(second.result.current.isLoading).toBe(false)
+    expect(second.result.current.error).toBeUndefined()
+    expect(second.result.current.data?.features).toEqual(['flag_a'])
+    expect(standin.calls).toHaveLength(2)
+  })
+
+  it('recovers useFeature on a later mount after the first load failed', async () => {
+    // The useFeature shape of the same regression: a failed first load
+    // left useFeature returning false forever -- the flag stayed hidden
+    // for the client's lifetime even after the network (or the server)
+    // recovered, because refresh() -- the documented re-verification
+    // lever -- is called by no shipped consumer.
+    const standin = scriptedStandin(
+      jsonResponse(500, { code: 'config.internal_error' }),
+      jsonResponse(200, { config: {}, features: ['flag_a'] }),
+    )
+    const api: RequestFn = createClient({ baseUrl: '/api/v1', fetch: standin.fetch })
+
+    // A usePublicConfig observer alongside the feature hook makes the
+    // first load's settled-failure state observable before unmounting,
+    // so the second mount deterministically subscribes to a failed
+    // store (the exact state the latch used to cache forever).
+    const observer = renderHook(() => usePublicConfig(api))
+    const first = renderHook(() => useFeature(api, 'flag_a'))
+    await waitFor(() => expect(observer.result.current.error).toBeDefined())
+    expect(first.result.current).toBe(false)
+    expect(standin.calls).toHaveLength(1)
+    observer.unmount()
+    first.unmount()
+
+    const second = renderHook(() => useFeature(api, 'flag_a'))
+    await waitFor(() => expect(second.result.current).toBe(true))
+    expect(standin.calls).toHaveLength(2)
+  })
+})
+
+describe('server rendering', () => {
+  it('renders the initial loading snapshot server-side and hydrates without error', async () => {
+    // React 19's renderToString throws "Missing getServerSnapshot,
+    // which is required for server-rendered content. Will revert to
+    // client rendering." when a useSyncExternalStore hook lacks one --
+    // so any SSR or hydration of a tree containing usePublicConfig or
+    // useFeature crashed outright. The store is memory-only and a
+    // fetch starts only from a client-side subscribe effect, so the
+    // server-side snapshot is the same initial loading snapshot the
+    // client first paints (this module's constant, one stable
+    // reference): no hydration mismatch is possible.
+    const { standin, api } = standinClient()
+    const consoleErrors: unknown[] = []
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      consoleErrors.push(args)
+    })
+    function Probe(): ReactNode {
+      const { isLoading } = usePublicConfig(api)
+      return createElement('span', null, isLoading ? 'loading' : 'done')
+    }
+
+    const html = renderToString(createElement(Probe))
+    expect(html).toBe('<span>loading</span>')
+
+    const container = document.createElement('div')
+    container.innerHTML = html
+    document.body.appendChild(container)
+    let root: Root | undefined
+    await act(async () => {
+      root = hydrateRoot(container, createElement(Probe))
+    })
+    root?.unmount()
+    container.remove()
+
+    // No Missing-getServerSnapshot error from the render, no hydration
+    // mismatch from the client side: the server and first client
+    // snapshots agree.
+    expect(consoleErrors).toHaveLength(0)
+    // The server render performs no fetch (no subscribe on the
+    // server); hydration's client-side effect starts exactly one.
+    expect(standin.calls).toHaveLength(1)
   })
 })
