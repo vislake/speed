@@ -73,7 +73,28 @@ test('a refused sign-in renders the specific credentials message, not the generi
 
 test('the SMS channel replaces the password form when its tab is chosen', async ({ page }) => {
   await visitSignIn(page)
-  await page.getByRole('tab', { name: SIGN_IN_TEXT.smsTab }).click()
+
+  // Skipped, not failed, when the channel is not offered at all.
+  //
+  // What this test is about is the channel SWITCH -- that choosing
+  // another channel unmounts the previous form rather than hiding it --
+  // and a deployment with nothing able to deliver a code is expected to
+  // hide the tab entirely (offered-channels-work.spec.ts holds that
+  // choice). Without this guard, closing that defect would break this
+  // test, and the round doing the closing would look like it caused a
+  // regression: the gate would be asserting the presence of the very
+  // entrance another gate asks to be removed.
+  //
+  // Two gates of mine wanting opposite things about the same tab is
+  // something only reading them together shows, which is why the fix
+  // belongs here rather than in the round that trips over it.
+  const smsTab = page.getByRole('tab', { name: SIGN_IN_TEXT.smsTab })
+  test.skip(
+    (await smsTab.count()) === 0,
+    'the SMS channel is not offered here, so there is no channel switch to exercise',
+  )
+
+  await smsTab.click()
 
   // Switching channels unmounts the previous form, so the password field
   // is gone rather than merely hidden -- half-typed state and a whole
