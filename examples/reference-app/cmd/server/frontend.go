@@ -173,19 +173,32 @@ func (f *frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The refusal at the open site itself: rel is cleanWebRel's output, and
-	// the root pin inside cleanWebRel makes every clause below unreachable
-	// from this request path -- a "/"-pinned path.Clean cannot leave a ".."
-	// segment behind, and its result never starts with "/" -- but taint
-	// analyzers do not track that invariant across cleanWebRel's function
-	// boundary (CodeQL's go/path-injection fires at the open below on every
-	// scan; this file's #nosec G703 comment records gosec's same blindness),
-	// so the refusal exists to truncate the tainted flow where the analyzer
-	// can see it. It is also the belt-and-braces that documents what happens
-	// if an edit ever removes the pin: a ".."-bearing or absolute rel
-	// answers 404 and returns before the join, never reaching os.Open and
-	// never being swallowed by the SPA fallback.
-	if rel == ".." || strings.HasPrefix(rel, "../") ||
-		strings.Contains(rel, "/../") || filepath.IsAbs(rel) {
+	// while cleanWebRel's root pin stands, every "/"-separated request is
+	// confined before it reaches this point -- a "/"-pinned path.Clean
+	// collapses every ".." segment into the root, and its result never
+	// starts with "/" and is never empty here -- so on separator-"/"
+	// platforms the refusal cannot fire from this request path. It exists
+	// because taint analyzers do not track that cleaning invariant across
+	// cleanWebRel's function boundary: CodeQL's go/path-injection fires at
+	// the open below on every scan (this file's #nosec G703 comment records
+	// gosec's same blindness), so the refusal truncates the tainted flow
+	// where the analyzer can see it -- which is also what answers 404, never
+	// the SPA fallback, if an edit ever removes the pin. filepath.IsLocal is
+	// deliberately the whole clause: it is the one complete confinement
+	// check the analyzers recognize for this purpose. CodeQL's
+	// path-injection customization admits exactly filepath.IsLocal,
+	// strings.Contains(x, ".."), strings.HasPrefix and filepath.Clean("/" +
+	// x) results as path sanitizers -- never filepath.IsAbs and never a
+	// "/../" literal -- and the four clauses this replaces matched none of
+	// them: HasPrefix also guards the branch a ".." climb never takes, and
+	// cleanWebRel's own path.Clean is invisible to a model that knows only
+	// the path/filepath package by name. On Windows builds the clause is
+	// not belt-and-braces: IsLocal splits on the host separator, so a
+	// backslash dot-dot climb ("assets\..\..\x" -- "\" is an ordinary
+	// character to path.Clean and every forward-slash clause, but a
+	// separator to the filepath.Join below) is refused too, closing the one
+	// escape the root pin and the old guard both left open there.
+	if !filepath.IsLocal(rel) {
 		http.NotFound(w, r)
 		return
 	}
