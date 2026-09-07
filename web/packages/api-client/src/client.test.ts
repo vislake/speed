@@ -88,6 +88,27 @@ async function expectRawAbort(promise: Promise<unknown>): Promise<void> {
   expect(isApiError(error)).toBe(false)
 }
 
+/** Waits for `isSettled()` to turn true -- flushing the microtask
+ * queue first, then polling on short real timers -- and fails the test
+ * when the budget runs out with the thing still unsettled. The
+ * never-settling shapes this guards (a refresh hook that never
+ * resolves) are deterministic: the pre-fix code stays pending forever,
+ * so the bounded wait turns what used to be a hang into an assertion
+ * failure, in both directions of the regression. */
+async function expectSettled(
+  isSettled: () => boolean,
+  budgetMs = 2000,
+): Promise<void> {
+  for (let i = 0; i < 64 && !isSettled(); i += 1) {
+    await Promise.resolve()
+  }
+  const deadline = Date.now() + budgetMs
+  while (!isSettled() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 2))
+  }
+  expect(isSettled()).toBe(true)
+}
+
 /** A body stream the test gates by hand: the response's text() stays
  * pending until release (success) or fail (error) is called. A
  * cancellation of the stream -- the client's connection-release path
@@ -785,6 +806,87 @@ describe('401 and the refresh hook', () => {
     expect(store.get()).toBe('stale-token')
   })
 
+  it('does not self-deadlock when the refresh operation forgets omitAccessToken on its own request', async () => {
+    // The host bug this guard backstops: the refresh operation travels
+    // through this same client WITHOUT the per-request credential-less
+    // declaration, so its request presents the stale token and the
+    // refresh endpoint refuses it with a token-bearing 401. Before the
+    // guard that 401 re-entered the refresh path and joined -- and
+    // awaited -- the very flight it was part of: a request awaiting
+    // itself forever (the flight could only settle when its hook
+    // settled, and the hook awaited the request). refreshCalls froze
+    // at 1 and nothing ever settled. The round's own request is now
+    // refused the refresh path, exactly like the bearer-only rule
+    // refuses a credential-less 401: the inner 401 surfaces as the
+    // terminal auth error, the hook answers false, and the original
+    // request takes the ordinary failed-refresh path -- a finite,
+    // honest failure, never a self-deadlock and never a second
+    // concurrent refresh.
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
+    let refreshCalls = 0
+    const memory = createMemoryReporter()
+    const standin = scriptedStandin(
+      jsonResponse(401, { ...SESSION_EXPIRED }),
+      jsonResponse(401, { ...SESSION_EXPIRED, traceId: 'trace-refresh' }),
+    )
+    // The hook only ever runs after createClient has returned (it fires
+    // on a request's 401), so the const binding is initialized by the
+    // time the closure body executes.
+    const api: RequestFn = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      accessTokenStore: store,
+      refreshAccessToken: async () => {
+        refreshCalls += 1
+        try {
+          await api('/api/v1/authn/token/refresh', {
+            method: 'POST',
+            body: { refresh_token: 'stale' },
+            // omitAccessToken deliberately omitted: the host bug.
+          })
+          return true
+        } catch {
+          return false
+        }
+      },
+      reporter: memory.reporter,
+    })
+    let settled = false
+    let caught: unknown
+    const observed = api<{ ok: boolean }>('/notes').then(
+      () => {},
+      (error: unknown) => {
+        settled = true
+        caught = error
+      },
+    )
+    await expectSettled(() => settled)
+    expect(isApiError(caught)).toBe(true)
+    if (isApiError(caught)) {
+      expect(caught.auth).toBe(true)
+      expect(caught.code).toBe('authn.session_expired')
+      // The original 401's own envelope is delivered (trace-1), not the
+      // refresh request's own refusal (trace-refresh).
+      expect(caught.traceId).toBe('trace-1')
+    }
+    // Exactly one refresh, two HTTP calls in total, no recursion -- and
+    // the failure was reported like any other failed refresh.
+    expect(refreshCalls).toBe(1)
+    expect(standin.calls).toHaveLength(2)
+    expect(memory.warns).toEqual([
+      {
+        message: 'access token refresh failed',
+        attrs: {
+          status: 401,
+          code: 'authn.session_expired',
+          trace_id: 'trace-1',
+        },
+      },
+    ])
+    await observed
+  })
+
   it('keeps a declared credential-less 401 terminal even while the store holds a token', async () => {
     // The refresh operation's own request is the canonical declared
     // credential-less one: when the endpoint refuses a stale refresh
@@ -1406,6 +1508,146 @@ describe('caller cancellation', () => {
     releaseRefresh()
     await rejection
     expect(standin.calls).toHaveLength(1)
+  })
+
+  it('rejects raw when an abort lands while a never-settling refresh is in flight', async () => {
+    // The reviewer's real shape: a client WITH a timeoutMs, whose
+    // 401-refresh round suspends the attempt timer (the pause), and a
+    // refresh hook that never settles. An abort landing after the
+    // hook has entered used to race nothing: the attempt's fetch had
+    // already settled and its timer was suspended, so the caller-abort
+    // forwarding had no pending promise to reject -- the request
+    // promise stayed pending forever even though the caller had
+    // cancelled (and at 50ms the suspended attempt timer could not
+    // save it either). The refresh wait now races the caller's signal
+    // exactly like the backoff sleeps do, so the abort rejects the
+    // request raw on the next microtask.
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
+    let refreshCalls = 0
+    const standin = scriptedStandin(jsonResponse(401, { ...SESSION_EXPIRED }))
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      accessTokenStore: store,
+      refreshAccessToken: () => {
+        refreshCalls += 1
+        // A refresh that never settles: no host wiring will end it.
+        return new Promise<boolean>(() => {})
+      },
+      timeoutMs: 50,
+    })
+    const controller = new AbortController()
+    let reason: unknown
+    const observed = api<{ ok: boolean }>('/notes', {
+      signal: controller.signal,
+    }).then(
+      () => {},
+      (caught: unknown) => {
+        reason = caught
+      },
+    )
+    // Each plain await advances the request chain by roughly one
+    // microtask hop, so flush until the 401 has started the refresh.
+    for (let i = 0; i < 32 && refreshCalls === 0; i += 1) {
+      await Promise.resolve()
+    }
+    expect(refreshCalls).toBe(1)
+    controller.abort()
+    await expectSettled(() => reason !== undefined)
+    expect(reason).toBeInstanceOf(DOMException)
+    if (reason instanceof DOMException) {
+      expect(reason.name).toBe('AbortError')
+    }
+    expect(isApiError(reason)).toBe(false)
+    // The abort ended the request: exactly the one refused attempt,
+    // no post-refresh retry.
+    expect(standin.calls).toHaveLength(1)
+    await observed
+  })
+
+  it('frees the single-flight slot when the starting request aborts, so a later 401 starts a fresh refresh instead of joining the dead round', async () => {
+    // The poisoning shape: the first request's refresh never settles
+    // and its caller gives up; a second, independent request then 401s
+    // on the same client. Before the fix the first abort raced
+    // nothing, so the dead flight stayed in the slot: the second
+    // request joined it (the hook was never invoked again --
+    // refreshCalls stayed 1) and its own abort raced nothing either --
+    // both requests hung and every 401 path of that client was dead
+    // for the process lifetime. The flight is now bound to the request
+    // that started it: that request's abort settles the round as a
+    // failed refresh and the slot-clearing finally runs, so the second
+    // request starts a fresh round (the hook is invoked again) and its
+    // own abort rejects it raw.
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
+    let refreshCalls = 0
+    const standin = scriptedStandin(
+      jsonResponse(401, { ...SESSION_EXPIRED }),
+      jsonResponse(401, { ...SESSION_EXPIRED, traceId: 'trace-2' }),
+    )
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      accessTokenStore: store,
+      refreshAccessToken: () => {
+        refreshCalls += 1
+        return new Promise<boolean>(() => {})
+      },
+    })
+    const firstController = new AbortController()
+    let firstReason: unknown
+    const first = api<{ ok: boolean }>('/notes', {
+      signal: firstController.signal,
+    }).then(
+      () => {},
+      (caught: unknown) => {
+        firstReason = caught
+      },
+    )
+    for (let i = 0; i < 32 && refreshCalls === 0; i += 1) {
+      await Promise.resolve()
+    }
+    expect(refreshCalls).toBe(1)
+    // The first caller gives up mid-refresh. Before the fix this
+    // rejected nothing (the flight was awaited bare) and left the slot
+    // occupied by the never-settling round.
+    firstController.abort()
+    await expectSettled(() => firstReason !== undefined)
+    expect(firstReason).toBeInstanceOf(DOMException)
+    if (firstReason instanceof DOMException) {
+      expect(firstReason.name).toBe('AbortError')
+    }
+    expect(isApiError(firstReason)).toBe(false)
+    // The second, independent request with its own controller: the
+    // slot must be free again -- a fresh round starts (the hook is
+    // invoked a second time), never a join onto the dead flight.
+    const secondController = new AbortController()
+    let secondReason: unknown
+    const second = api<{ ok: boolean }>('/notes', {
+      signal: secondController.signal,
+    }).then(
+      () => {},
+      (caught: unknown) => {
+        secondReason = caught
+      },
+    )
+    for (let i = 0; i < 64 && refreshCalls < 2; i += 1) {
+      await Promise.resolve()
+    }
+    expect(refreshCalls).toBe(2)
+    secondController.abort()
+    await expectSettled(() => secondReason !== undefined)
+    expect(secondReason).toBeInstanceOf(DOMException)
+    if (secondReason instanceof DOMException) {
+      expect(secondReason.name).toBe('AbortError')
+    }
+    expect(isApiError(secondReason)).toBe(false)
+    // Two refused attempts only: no retry fired for either cancelled
+    // request.
+    expect(standin.calls).toHaveLength(2)
+    await first
+    await second
   })
 
   it('never delivers a 2xx for a caller that aborts mid-read -- even when the body never settles', { timeout: 1000 }, async () => {

@@ -33,9 +33,15 @@
  *      means authentication is required -- refreshing cannot provide
  *      it -- so it surfaces untouched, which also keeps a session's
  *      own refresh request (sent credential-less) from re-entering
- *      the refresh path. Refresh failure surfaces the original 401 as
- *      a distinguishable auth ApiError and is reported through the
- *      Reporter;
+ *      the refresh path (and a host that forgot that declaration on
+ *      its refresh request is refused the refresh path at runtime the
+ *      same way). Caller cancellation is never muted by the pause: an
+ *      abort landing during the refresh round races the round's wait
+ *      and rejects the request raw, and the round that request
+ *      started settles as a failed refresh so the shared slot is
+ *      freed for the 401s that follow. Refresh failure surfaces the
+ *      original 401 as a distinguishable auth ApiError and is
+ *      reported through the Reporter;
  *   4. on 429/502/503/504, network failures and timeouts: retry only
  *      idempotent methods (GET/HEAD/OPTIONS), exponential full-jitter
  *      backoff per RetryPolicy, Retry-After honoured on 429 and 503.
@@ -200,7 +206,13 @@ export interface ClientOptions {
    * session-refresh operation (`() => session.refresh()`); hosts
    * without a session leave it out and every 401 surfaces as an auth
    * ApiError. Never called more than once per request; concurrent 401s
-   * share one in-flight refresh.
+   * share one in-flight refresh. A caller abort landing while the
+   * round is in flight rejects the request with the raw AbortError on
+   * the next microtask -- the round's wait races the caller's signal
+   * like every other wait in the request loop -- and an abort by the
+   * request that started the round settles it as a failed refresh, so
+   * the single-flight slot is freed for the 401s that follow instead
+   * of staying occupied by a round whose outcome nobody waits for.
    *
    * The hook fires only for a refused request that itself presented a
    * bearer token. A 401 on a credential-less request means the
@@ -215,7 +227,12 @@ export interface ClientOptions {
    * credential-less requests declared the same way for the same
    * reason: clearing the store instead would momentarily strip the
    * token from concurrent requests that still hold a valid one,
-   * turning their 401s into spurious auth failures.
+   * turning their 401s into spurious auth failures. A host that
+   * forgets the declaration on its own refresh request is caught at
+   * runtime instead: a request born inside the refresh round is
+   * refused the refresh path (its 401 surfaces as the terminal auth
+   * error), so the round ends as a finite failure -- never a
+   * self-deadlock and never a second concurrent refresh.
    */
   refreshAccessToken?: () => Promise<boolean>
   /** Abort an HTTP exchange that exceeds this many milliseconds;
@@ -567,6 +584,42 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   })
 }
 
+/** Awaits `promise` -- or rejects with the raw AbortError the moment
+ * `signal` aborts, the same race `sleep` runs for a timed wait, for a
+ * wait that owns no timer of its own (the silent-401-refresh round):
+ * a cancelled caller must not stay stuck on a promise the caller's
+ * abort cannot otherwise reach. A signal that is already aborted
+ * rejects without attaching anything. The awaited promise itself is
+ * never cancelled: when the abort wins, its eventual settlement is
+ * simply discarded. */
+function raceWithAbort<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (signal?.aborted === true) {
+    return Promise.reject(
+      new DOMException('The operation was aborted.', 'AbortError'),
+    )
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      signal?.removeEventListener('abort', onAbort)
+      reject(new DOMException('The operation was aborted.', 'AbortError'))
+    }
+    promise.then(
+      (value) => {
+        signal?.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (cause: unknown) => {
+        signal?.removeEventListener('abort', onAbort)
+        reject(cause)
+      },
+    )
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 /** Throws the raw AbortError the moment a cancelled signal is observed
  * after an await, so caller cancellation is never retried, never
  * wrapped, and never delivered as a result (RequestOptions.signal). */
@@ -853,17 +906,61 @@ export function createClient(options: ClientOptions): RequestFn {
   // restored by another tab can be picked up.
   const refreshHook = options.refreshAccessToken
   let refreshInFlight: Promise<boolean> | null = null
+  // True only while the refresh hook's own synchronous invocation is
+  // on the stack -- the instant the refresh operation issues its
+  // request through this same client (a host hook calls it straight
+  // away, through however many synchronous wrappers). A request born
+  // in that instant is the round's own request, and the 401 guard in
+  // the request loop refuses it the refresh path exactly like the
+  // bearer-only rule refuses a credential-less 401 -- a host that
+  // forgot the `omitAccessToken` declaration on its refresh request
+  // gets a finite failure, never a self-await. The marker is
+  // deliberately dropped once the hook has returned its promise: a
+  // request born later in the round's pending window is an
+  // independent request and must still be able to join the flight.
+  let inRefreshHookCall = false
   const refreshOnce =
     refreshHook === undefined
       ? undefined
-      : (): Promise<boolean> => {
+      : (signal: AbortSignal | undefined): Promise<boolean> => {
           if (refreshInFlight === null) {
-            refreshInFlight = (async () => {
+            refreshInFlight = (async (): Promise<boolean> => {
               try {
-                return (await refreshHook()) === true
+                inRefreshHookCall = true
+                let hookOutcome: Promise<boolean>
+                try {
+                  hookOutcome = (async (): Promise<boolean> => {
+                    try {
+                      return (await refreshHook()) === true
+                    } catch {
+                      // A throwing refresh hook is a failed refresh:
+                      // the session is still gone and the request must
+                      // not retry.
+                      return false
+                    }
+                  })()
+                } finally {
+                  inRefreshHookCall = false
+                }
+                // The flight is bound to the request that starts it:
+                // that request's caller abort settles the round as a
+                // failed refresh (below), so a round whose initiator
+                // gave up is not left occupying the single-flight slot
+                // -- the slot-clearing finally runs, and the next 401
+                // starts a fresh round instead of joining one whose
+                // outcome nobody is waiting for. The host hook itself
+                // is not cancellable and keeps running; its late
+                // settlement is discarded. (A host whose hook is
+                // internally single-flighted -- @speed/auth-core's
+                // session.refresh -- makes a fresh invocation on the
+                // freed slot harmless.)
+                return await raceWithAbort(hookOutcome, signal)
               } catch {
-                // A throwing refresh hook is a failed refresh: the
-                // session is still gone and the request must not retry.
+                // The starting request's signal aborted before the
+                // hook settled (the only rejection this race can
+                // carry). The waiting requests converge on the
+                // ordinary failed-refresh path -- a finite answer,
+                // never a hang on a round nobody started for.
                 return false
               } finally {
                 refreshInFlight = null
@@ -877,6 +974,13 @@ export function createClient(options: ClientOptions): RequestFn {
     path: string,
     requestOptions: RequestOptions = {},
   ): Promise<T> => {
+    // A request born inside the refresh hook's own synchronous
+    // invocation (see refreshOnce's marker) is the refresh round's own
+    // request: the refresh operation travelling through this client
+    // without its credential-less declaration. Captured at entry for
+    // the 401 guard below -- the live marker is gone long before this
+    // request's own 401 can arrive.
+    const bornInsideRefresh = inRefreshHookCall
     if (typeof path !== 'string' || !path.startsWith('/')) {
       throw programmerError(
         `request path must be an absolute path starting with "/" (baseUrl carries host and prefix); got ${JSON.stringify(path)}.`,
@@ -1020,11 +1124,16 @@ export function createClient(options: ClientOptions): RequestFn {
             // is required, which refreshing cannot provide -- and a
             // session's own refresh request (sent credential-less)
             // must never re-enter the refresh path or it awaits
-            // itself.
+            // itself. The born-inside-refresh marker enforces the same
+            // rule at runtime: a refresh request whose host forgot the
+            // credential-less declaration presents the stale token, is
+            // refused with a token-bearing 401, and would otherwise
+            // join -- and await -- the very flight it is part of.
             if (
               !refreshed &&
               refreshOnce !== undefined &&
-              outcome.attachedToken
+              outcome.attachedToken &&
+              !bornInsideRefresh
             ) {
               refreshed = true
               // The refresh round is not part of this attempt's HTTP
@@ -1033,13 +1142,28 @@ export function createClient(options: ClientOptions): RequestFn {
               // timeout into the envelope read below and degrade the
               // real 401 envelope to a synthetic client.http.401 (its
               // code and traceId lost). The caller-abort forwarding
-              // stays live across the pause -- cancellation wins.
+              // stays live across the pause, but with the attempt's
+              // fetch already settled and its timer suspended there is
+              // nothing left for it to abort: an abort landing during
+              // the round has to race the refresh wait itself. The
+              // await below therefore runs the same signal race the
+              // backoff sleeps run -- the caller's cancellation
+              // rejects it with the raw AbortError on the next
+              // microtask, never wrapped, never retried -- and the
+              // flight, bound to this request, settles as a failed
+              // refresh so the single-flight slot is freed for the
+              // requests that follow (see refreshOnce).
               outcome.pauseTimeout()
-              const refreshedOk = await refreshOnce()
+              const refreshedOk = await raceWithAbort(
+                refreshOnce(signal),
+                signal,
+              )
               // The caller may have aborted while the refresh was in
               // flight: cancellation wins -- never send the
               // post-refresh retry, never deliver an auth error
-              // either.
+              // either. (The race above already rejects for the
+              // cancelling caller; this check guards the instant
+              // between the flight settling and this continuation.)
               throwIfAborted(signal)
               if (refreshedOk) {
                 // Retry once with whatever token the store holds now
@@ -1076,9 +1200,10 @@ export function createClient(options: ClientOptions): RequestFn {
               })
               throw envelopeError(outcome, envelope, attempts)
             }
-            // No hook, no bearer token, or the retried request was
-            // refused again: the session is over, surface the auth
-            // error.
+            // No hook, no bearer token, the retried request was
+            // refused again, or a request born inside the refresh
+            // round itself (see the marker guard above): the session
+            // is over, surface the auth error.
             throw envelopeError(outcome, await readEnvelope(outcome), attempts)
           }
 
