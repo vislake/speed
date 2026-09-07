@@ -58,13 +58,35 @@ test(
     await openSurface(page, APP_TEXT.navAccount)
 
     await expect(page.getByRole('heading', { name: SESSIONS_HEADING })).toBeVisible()
+    // The session rows have to have arrived, not merely the section that
+    // will hold them.
+    await expect(page.getByText(CURRENT_SESSION_MARK)).toBeVisible()
 
-    const descriptions = await page.evaluate(() => {
-      const items = [...document.querySelectorAll('li')]
-      return items
-        .map((item) => (item.textContent ?? '').replace(/\s+/g, ' ').trim())
-        .filter((text) => text.length > 0)
-    })
+    // Scoped to the MAIN landmark, not the whole document.
+    //
+    // `document.querySelectorAll('li')` collected the frame's own
+    // navigation too -- Home, Cases, Notes and Account are list items in
+    // a list, ahead of main in the DOM -- and each of the three
+    // assertions below was wrong because of it in a different way. The
+    // count check could never fail, since four nav entries clear a
+    // threshold of one on their own. The machine-string filter was the
+    // only one that happened to survive, because a nav label contains no
+    // User-Agent. And the "every row carries a time" check would have
+    // flagged "Home" and "Account" as rows with nothing to tell them
+    // apart -- a false accusation against the product, waiting to fire
+    // the day the real defect above it is fixed and stops failing first.
+    //
+    // The same unscoped-locator mistake was found in this suite's
+    // core-journey helper on the same day (getByRole('listitem').first()
+    // clicking the nav's Home entry rather than the first case), which is
+    // what prompted looking for its siblings.
+    const descriptions = await page
+      .getByRole('main')
+      .getByRole('listitem')
+      .allTextContents()
+      .then((texts) =>
+        texts.map((text) => text.replace(/\s+/g, ' ').trim()).filter((text) => text.length > 0),
+      )
     expect(descriptions.length, 'the account surface listed no sessions').toBeGreaterThan(1)
 
     // Readable: no row hands a person a machine's own string. This is the
