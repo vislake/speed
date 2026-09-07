@@ -195,7 +195,21 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // Chromium is the default because it is the fastest to run and the
+  // engine most of the specs were written against. WebKit is here for a
+  // reason a dental practice makes concrete: the machines at a front desk
+  // and the iPad a dentist shows a patient their simulation on are Safari,
+  // and Safari is the engine most likely to disagree with the others. It
+  // is opt-in rather than always-on so the everyday run stays quick:
+  //
+  //   pnpm test:e2e --project=webkit
+  //
+  // Install it once with `pnpm exec playwright install webkit`.
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+    { name: 'ipad', use: { ...devices['iPad (gen 7)'] } },
+  ],
   webServer: external
     ? undefined
     : [
