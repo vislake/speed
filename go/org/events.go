@@ -280,9 +280,17 @@ func publishEvent(ctx context.Context, host hostSeams, eventType string, payload
 //     event (pkgcore.WithTenant) because a handler invoked by the
 //     distributed mode's bus runs on a context that carries none, and every
 //     Repository call would otherwise fail closed. Then the tenant's root
-//     node and the user's membership are ensured IDEMPOTENTLY: a redelivered
-//     event -- which an at-least-once broker will produce -- creates neither
-//     a second root nor a second membership.
+//     node and the user's membership are ensured IDEMPOTENTLY: neither of
+//     this module's two published buses ever redelivers (retries belong to
+//     the jobs queue, per pkgcore's bus contract), but a handler that is
+//     safe to repeat costs nothing and keeps this subscription correct
+//     under a future at-least-once broker -- a repeated event creates
+//     neither a second root nor a second membership. That safety does NOT
+//     extend to failures: a transient database error inside an attempt is
+//     logged and never retried (nothing re-fires the event), so a host that
+//     needs its new users' workspaces guaranteed converges them through a
+//     queue-backed retry of its own rather than by relying on this
+//     handler's repeatability.
 func (m *Module) handleUserCreated(ctx context.Context, evt pkgcore.Event) error {
 	log := obs.FromContext(ctx)
 
