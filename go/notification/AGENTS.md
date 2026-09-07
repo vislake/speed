@@ -363,6 +363,23 @@ transport is touched (`EnsureDeliverable`), and a user recipient whose
 addresses have no email/phone simply has those channels skipped with a
 recorded reason -- never failed, never a dispatch refusal at enqueue.
 
+The user-recipient path deliberately carries none of this ledger: a
+user's addresses are identity data the host's own authn half owns and
+verifies, and this module never imports authn, so it reads them at
+send time through the `UserAddressResolver` seam and holds no
+user-address consent or verification state of its own. The seam's
+contract (delivery.go's `Resolve` doc comment) requires the resolver
+to return the host's own verified addresses for that user, and this
+module performs no consent check on user addresses, unlike the
+`VerifiedContact` path above, whose full ledger exists precisely
+because an external contact has no host-side identity store to hold
+verification. The asymmetry is written down because it is the module's
+one delegated-away safety obligation: the
+never-send-to-an-unverified-address rule is enforced in code on the
+contact side and by contract on the user side, and a host whose
+resolver serves unverified addresses bypasses it with nothing in this
+module detecting the bypass.
+
 Every consent transition commits first, then emits its audit action through
 `dbkit/audit`'s declarative `Emit`; an emit failure returns an internal error
 to the caller (the transition happened but its outliving record did not --

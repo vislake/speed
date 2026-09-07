@@ -297,7 +297,10 @@ func (r *SendRecordRepository) SaveGuarded(ctx context.Context, rec *SendRecord)
 		// on that inference -- a value whose type the caller ever changed
 		// (a typed status, say) would answer 42P18 where no SQLite run
 		// could see it. A value compared against the quoted constant needs
-		// no inference at all.
+		// no inference at all. The inlining is safe only because the value
+		// is this package's own constant, never a caller-supplied value: a
+		// caller-supplied value inlined the same way would be an injection,
+		// and must keep going through parameter binding.
 		Where("id = ? AND NOT (status = ? AND ? <> '"+SendRecordStatusSucceeded+"')", rec.ID, SendRecordStatusSucceeded, rec.Status).
 		Select("*").
 		Omit("created_at").

@@ -223,6 +223,22 @@ type UserAddressResolver interface {
 	// of addresses is not an error, it is the ordinary state that makes
 	// the email and SMS channels skip. A store failure is an error, and
 	// the delivery job retries it.
+	//
+	// The addresses returned must be the host's own VERIFIED addresses
+	// for that user: this module performs no consent or verification
+	// check on the user path, so the resolver is the entire "may we send
+	// to this address" gate for user deliveries. That is the deliberate
+	// asymmetry with the module's VerifiedContact path, whose full
+	// consent ledger (double opt-in, terminal unsubscribed and bounced
+	// states, blind-indexed addresses) lives in this module's own tables
+	// because an external contact has no host-side identity store to
+	// hold verification -- user addresses are identity data, owned and
+	// verified by the host's authn half. A resolver returning an address
+	// the host never verified for that user bypasses the
+	// never-send-to-an-unverified-address rule on the user side, and
+	// nothing in this module can detect it; the obligation is written
+	// into the contract because the contract is the only place this
+	// module can hold it.
 	Resolve(ctx context.Context, userID string) (UserAddresses, error)
 }
 
