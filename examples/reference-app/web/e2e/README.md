@@ -160,6 +160,19 @@ reaching `payTheLoginBudget`. Its failure looks different too -- a raw
 which is the tell that a budget failure came from a spec the pacing
 cannot help.
 
+**And it takes unrelated gates down with it, which is measured rather
+than feared.** A whole-tier three-engine invocation failed six tests,
+and one of them was `password-sign-in`'s seeded-owner sign-in -- a gate
+that spends one paced sign-in and overspends nothing. The same specs
+minus the registering ones, asked for the same way, pass: 33 passed and
+3 skipped across three engines in one invocation, zero failures. So that
+gate's red was a knock-on of the invisible API-driven spend, not
+anything of its own.
+
+That sweep was worth running for its own sake: it is the systematic
+version of the accident that found the lockout coupling, and it says the
+non-registering specs carry no second coupling of that family.
+
 **Asking for one block at a time is no longer necessary, and the reason
 it used to be is worth keeping.** The hazard was that a tier's cost
 grows as its gates start passing: the run that finally works is the one
