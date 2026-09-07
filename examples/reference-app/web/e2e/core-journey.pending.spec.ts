@@ -332,6 +332,25 @@ test.describe('the core journey', { tag: '@pending' }, () => {
       ).not.toHaveText('')
 
       await expectBeforeAndAfter(patientPage.getByRole('img'), "the patient's page")
+
+      // AGAIN, because a patient opens the link more than once: from the
+      // message when it arrives, then later to show someone at home.
+      //
+      // Worth asserting rather than assuming now that the pair costs two
+      // token reads per visit. go/sharing settles a granted view only
+      // after the content has actually been served (ee20d37 -- before
+      // that, an unwired resolver or an interrupted stream permanently
+      // spent a limited share nobody saw), and this app mints its
+      // patient links with no view cap at all, so a second visit is
+      // supposed to work. This gate is what would notice if a cap
+      // appeared later: with one, the pair's two reads would spend it on
+      // the first visit and the patient's second look would be a
+      // refusal.
+      await patientPage.reload()
+      await expectBeforeAndAfter(
+        patientPage.getByRole('img'),
+        "the patient's page on a second visit",
+      )
     } finally {
       await patient.close()
     }
