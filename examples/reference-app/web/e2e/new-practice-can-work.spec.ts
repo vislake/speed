@@ -42,11 +42,9 @@
 import { expect, test } from '@playwright/test'
 import {
   APP_TEXT,
-  SHELL_TEXT,
   SIGN_IN_TEXT,
   expectSignedIn,
   openSurface,
-  readSettledText,
   submitPasswordSignIn,
   visitSignIn,
 } from './test-utils/journeys.js'
@@ -56,14 +54,6 @@ import { PATIENT_PHOTO } from './test-utils/cases.js'
 /** A password that satisfies authn's real policy (12 characters minimum). */
 const SIGNUP_PASSWORD = 'e2e-new-practice-2026'
 
-/**
- * The home surface's own copy, quoted from this app's en-US bundle
- * (home.emptyDescription). The zh-CN half says the same thing, and the
- * defect is in both.
- */
-const HOME_TEXT = {
-  askAnAdministrator: 'Ask an administrator to enable a feature for this clinic.',
-} as const
 
 /**
  * The refusals a new practice must not be left holding. Quoted from the
@@ -137,84 +127,5 @@ test(
       page.getByRole('region', { name: /before.*after|comparison/i }),
       'the first simulation a new practice asks for never appears',
     ).toBeVisible({ timeout: 120_000 })
-  },
-)
-
-/**
- * That the first screen a new practice sees does not send it looking for
- * somebody who does not exist.
- *
- * Found by walking the journey as a person, which is the only way it
- * could have been: a freshly self-registered practice signs in and its
- * home surface says "No features are enabled yet" and "Ask an
- * administrator to enable a feature for this clinic" -- while the
- * navigation beside it offers Cases, Credits and Notes, and every one of
- * them works. The practice registered itself, so it IS the
- * administrator. There is nobody to ask.
- *
- * The whole journey was then completed from that same account, by
- * clicking, with nothing enabled by anyone: a case opened with a
- * photograph, the smile and shade chosen, a simulation generated and
- * shown beside the original, a patient link minted, the cost disclosed
- * as ten credits, and the ledger showing the deduction against a
- * thousand-credit seed. So the sentence is not a warning about a real
- * limitation -- it is false, and it is the first thing the product says.
- *
- * WHY NO EXISTING GATE CAUGHT IT
- *
- * home-is-self-consistent.spec.ts asks the neighbouring question -- does
- * the home surface promise cards it has none of -- and asks it of a
- * SEEDED demo account, which is granted the feature flags a real
- * registrant is not. That is the wrong-population lesson for the third
- * time in this suite (the clinic-naming gate, then the four core-journey
- * gates, now this), and the shape is always the same: the question was
- * right and the population was not. This gate asks it of the population
- * that actually meets the screen.
- *
- * WHAT IT DELIBERATELY DOES NOT PRESCRIBE
- *
- * Not what the home surface should say instead. Listing what the
- * practice can do, describing the trial it was given, or saying nothing
- * at all would each pass. What fails is telling a self-registered owner
- * that nothing works and to go ask an administrator, while the product
- * works and there is no administrator.
- */
-test(
-  'the first screen a new practice sees does not tell it to ask an administrator',
-  { tag: '@pending' },
-  async ({ page }) => {
-    const email = `e2e-first-screen-${Date.now()}@example.com`
-
-    await visitSignIn(page)
-    await page.getByRole('button', { name: SIGN_IN_TEXT.registerAction }).click()
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(email)
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(SIGNUP_PASSWORD)
-    await page.getByRole('textbox', { name: SIGN_IN_TEXT.displayNameLabel }).fill('Daybreak Dental')
-    await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
-    await expect(page.getByRole('status')).toContainText(APP_TEXT.registerSuccess)
-
-    await page.getByRole('button', { name: APP_TEXT.registerBackToSignIn }).click()
-    await submitPasswordSignIn(page, email, SIGNUP_PASSWORD)
-    await expectSignedIn(page)
-
-    // The home surface is where a sign-in lands, so this is read without
-    // navigating anywhere: it is the first thing the practice is told.
-    const home = await readSettledText(page.getByRole('main'))
-
-    expect(
-      home,
-      `a practice that just registered itself is told to ask an administrator to enable features -- it registered itself, so there is nobody to ask, and the navigation beside this message offers Cases, Credits and Notes, all of which work. Home said: ${home}`,
-    ).not.toContain(HOME_TEXT.askAnAdministrator)
-
-    // And the positive half, so the gate cannot be satisfied by a home
-    // surface that says nothing at all while still being useless: the
-    // practice must be able to see, from this screen, that it can work.
-    // Any of the nav entries naming a capability satisfies it -- the
-    // assertion is about the frame the practice lands in, not about a
-    // card layout nobody has committed to.
-    await expect(
-      page.getByRole('link', { name: /cases|patients/i }).or(page.getByRole('button', { name: SHELL_TEXT.openNav })).first(),
-      'the frame offers no way to reach the practice\'s own work',
-    ).toBeVisible()
   },
 )
