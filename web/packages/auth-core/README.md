@@ -165,6 +165,23 @@ under.
   (`requestSMSCode`, `register`, `socialAuthorizeUrl`) -- the last
   three never change state even on success, since a registration is
   not a session.
+- The five token-issuing operations above have one rejection that is
+  not an `ApiError`: when a concurrent sibling operation (a second
+  login, a switch, a step-up) committed to the session while this
+  request was in flight, the request's own 2xx was genuine but its
+  answer no longer describes the session -- nothing of it was applied
+  -- and the operation rejects with `OperationSupersededError`
+  instead of resolving with the winner's snapshot. Tell it apart with
+  `isOperationSuperseded` (exported from this package; `isApiError`
+  is false for it). This is not a failure of the request and not a
+  broken session: the session is authenticated under the winner's
+  tokens, which are not necessarily this caller's. Treat the answer
+  accordingly: no one-shot side effect (a tenant switch's
+  `onSwitched`, a sign-in's post-login redirect) may fire for a
+  tenant or identity the session is not actually running under. The
+  error's `snapshot` field carries the session's current (winning)
+  state for a caller that wants to compare it against its own
+  request.
 - A token-issuing 2xx that violates the contract (missing tokens or
   principal, malformed fields) is a protocol violation, never a
   successful login: it rejects with an `ApiError` of
@@ -178,9 +195,14 @@ under.
 - `refresh()` is the silent path. It resolves `true` when a fresh pair
   was stored, `false` when there is nothing to refresh or the server
   refused the held token (the session is over and signs out locally --
-  the server has already terminated the token family). A transport
-  failure or server-side error rethrows the raw `ApiError` with the
-  store and the held tokens untouched (a refresh never clears them).
+  the server has already terminated the token family) -- and `false`
+  too when a tenant switch won the race while the refresh was in
+  flight (the rotated token is still adopted; see below, but the
+  request whose 401 started the refresh spoke for the old tenant and
+  must fail rather than replay under the new one, whose answer could
+  be cached under the old tenant's key). A transport failure or
+  server-side error rethrows the raw `ApiError` with the store and
+  the held tokens untouched (a refresh never clears them).
 - Concurrent `refresh()` calls presenting the same held refresh token
   share a single in-flight request: the authn server treats parallel
   presentations of one token as theft and rotates the whole family,
@@ -193,7 +215,12 @@ under.
   winner's -- with one exception, the rotated refresh token itself,
   adopted into the held slot when the winning operation kept the held
   token (a tenant switch or step-up mints no new one, and the server
-  has already consumed the held token for that refresh).
+  has already consumed the held token for that refresh). The
+  resolution still reflects who won: a step-up kept the same
+  principal, so the refresh resolves `true` -- a retry speaks for the
+  identity the refused request spoke for; a tenant switch changed the
+  principal, so it resolves `false`, and the original request fails
+  instead of replaying under a principal it never asked.
 
 ## Known limitations
 

@@ -46,7 +46,16 @@ below this layer.
   is the one error type a caller must tell apart (`isApiError`), and
   `client.protocol` is reserved for contract-violating 2xx from
   token-issuing endpoints — that check lives in `parseIssued` and
-  never moves.
+  never moves. One rejection is deliberately not an `ApiError`: a
+  token-issuing operation that lost a concurrent race rejects with
+  `OperationSupersededError`, told apart with the package's own
+  `isOperationSuperseded` guard. Consumers of the token-issuing
+  operations (`loginWithPassword`, `loginWithSMSCode`,
+  `completeSocialLogin`, `switchTenant`, `verifyStepUp`) must handle
+  it as the lost race it is — no failure UI, and never a one-shot
+  side effect (a redirect, an `onSwitched`) for a tenant or identity
+  the session is not actually running under; the winning call fires
+  its own.
 - **`refresh()` is the silent path.** It resolves `false` (never
   rejects) for an invalid/expired/refused refresh token and signs the
   session out locally; it rethrows raw only for transport/server
@@ -58,9 +67,19 @@ below this layer.
   rotated refresh token still lands in the held slot when the winning
   operation kept the held token (a tenant switch or step-up mints no
   new one, and the server has already consumed the held token for
-  that refresh). Do not "simplify" this into bump-on-entry or
+  that refresh). The adopted refresh's resolution reflects who won: a
+  same-principal winner (a step-up) resolves `true`, a tenant switch
+  (the principal changed) resolves `false`, so the api-client
+  silent-401 hook never replays the refused request under the new
+  tenant's token. Do not "simplify" this into bump-on-entry or
   compare-free writes — the regression tests around concurrent
-  login/refresh/logout pin the current semantics.
+  login/refresh/logout pin the current semantics. The local clears
+  are asymmetric on purpose: only logout bumps after its clear (a
+  refresh that resolves later must not resurrect the ended session),
+  while the refresh-side clears never bump — the server's refusal is
+  the session's death, but a user operation that started before the
+  refusal and settles after it is the session's legitimate successor
+  and must still commit.
 - **The permission sets are host-attached data with survival rules,
   never evaluation.** The session only carries the per-domain lists
   (`setPermissionSet`) and applies the rules in its header when a
@@ -104,10 +123,12 @@ below this layer.
 `src/index.ts` exports `createAuthSession`, the session types
 (`AuthSession`, `AuthSnapshot`, `AuthSessionListener`, plus
 `AuthDomain` and `AuthPermissionSets`, the two names that parameterise
-the host-attached permission lists) and the hooks (`attachSession`,
-`useAuthState`, `useCurrentTenant`, `usePermission`). Anything else
-that grows here stays unexported until a consumer proves it needs to be
-public.
+the host-attached permission lists), the supersession rejection pair
+(`OperationSupersededError` and its `isOperationSuperseded` guard —
+the one non-`ApiError` rejection of the token-issuing operations, see
+the rules above) and the hooks (`attachSession`, `useAuthState`,
+`useCurrentTenant`, `usePermission`). Anything else that grows here
+stays unexported until a consumer proves it needs to be public.
 
 ## Testing
 
