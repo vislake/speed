@@ -162,6 +162,76 @@ describe('registerNamespace', () => {
     ).toThrow(/"zh-CN" bundle ships no translation keys/)
   })
 
+  it('rejects an empty-string leaf by naming its path', () => {
+    const instance = instanceWithSupported(['zh-CN', 'en-US'])
+    expect(() =>
+      registerNamespace(instance, 'welcome', {
+        'zh-CN': { greeting: { hello: '' } },
+        'en-US': { greeting: { hello: '' } },
+      }),
+    ).toThrow(/"greeting\.hello" translation is empty/)
+  })
+
+  it('rejects an empty-string leaf in one language as loudly as in all', () => {
+    const instance = instanceWithSupported(['zh-CN', 'en-US'])
+    const enUs = JSON.parse(JSON.stringify(welcomeResources['en-US'])) as Record<
+      string,
+      unknown
+    >
+    ;(enUs.greeting as Record<string, unknown>).profile = ''
+    expect(() =>
+      registerNamespace(instance, 'welcome', {
+        'zh-CN': welcomeResources['zh-CN']!,
+        'en-US': enUs as ResourceBundle,
+      }),
+    ).toThrow(/"greeting\.profile" translation is empty/)
+  })
+
+  it('rejects a plural family missing a category a supported language can select', () => {
+    const instance = instanceWithSupported(['zh-CN', 'en-US'])
+    // Both bundles ship only the "_other" form: identical leaf sets, so the
+    // parity check passes -- but en-US counts of 1 select "one", whose form
+    // is absent, and the renderer would spill the raw key.
+    expect(() =>
+      registerNamespace(instance, 'welcome', {
+        'zh-CN': { item_other: 'N items' },
+        'en-US': { item_other: 'N items' },
+      }),
+    ).toThrow(/plural key family "item" is incomplete.*"en-US".*\[one\]/)
+  })
+
+  it('rejects a plural family missing the only category zh-CN can select', () => {
+    const instance = instanceWithSupported(['zh-CN', 'en-US'])
+    // The mirror-image shape: only "_one" ships. zh-CN's sole category is
+    // "other", so every count in zh-CN would spill the raw key.
+    expect(() =>
+      registerNamespace(instance, 'welcome', {
+        'zh-CN': { item_one: '1 item' },
+        'en-US': { item_one: '1 item' },
+      }),
+    ).toThrow(/plural key family "item" is incomplete.*"zh-CN".*\[other\]/)
+  })
+
+  it('registers a plural family that covers every selectable category and serves every count', () => {
+    const instance = createI18n({ storage: new MemoryStorage(), navigatorLanguages: [] })
+    registerNamespace(instance, 'counts', {
+      'zh-CN': { item_one: 'ZH one', item_other: 'ZH many' },
+      'en-US': { item_one: '1 item', item_other: 'N items' },
+    })
+    expect(instance.t('item', { ns: 'counts', lng: 'en-US', count: 1 })).toBe(
+      '1 item',
+    )
+    expect(instance.t('item', { ns: 'counts', lng: 'en-US', count: 5 })).toBe(
+      'N items',
+    )
+    expect(instance.t('item', { ns: 'counts', lng: 'zh-CN', count: 1 })).toBe(
+      'ZH many',
+    )
+    expect(instance.t('item', { ns: 'counts', lng: 'zh-CN', count: 5 })).toBe(
+      'ZH many',
+    )
+  })
+
   it('leaves the instance untouched when validation fails (atomicity)', () => {
     const instance = createI18n({ storage: new MemoryStorage(), navigatorLanguages: [] })
     expect(() => registerNamespace(instance, 'welcome', enUsMissingProfile())).toThrow()

@@ -83,7 +83,16 @@ export interface CreateI18nOptions {
    * Signed-in user's profile locale, resolved by the host before instance
    * creation. M0 has no profile feature yet: this is the documented
    * extension point the M1 user-profile step feeds -- hosts that can
-   * resolve a profile locale pass it here and it outranks the browser.
+   * resolve a profile locale pass it here and it outranks the browser
+   * (the URL parameter and a persisted manual choice still outrank it,
+   * in the negotiation chain's order). When the profile resolves only
+   * after creation (its usual source, a /me round trip), apply it through
+   * the non-persisting form of switchLanguage -- switchLanguage(instance,
+   * locale, null) -- never the persisting default: the persisted slot is
+   * the manual-choice tier, which outranks the profile tier on later
+   * visits, so a persisted profile application would freeze that language
+   * against later profile changes (README, "Applying the profile language
+   * after creation").
    */
   readonly profileLanguage?: string | null
   /**
@@ -271,6 +280,16 @@ export function createI18n(options: CreateI18nOptions = {}): I18nInstance {
  * The optional storage argument is three-state: undefined uses the storage
  * bound at creation, null persists nothing, and a StorageLike persists to
  * that store instead. Reads and writes always go through the binding's key.
+ *
+ * Which state a caller means is intent, not mechanics. The persisting
+ * states belong to the manual language-switch UI: the stored slot is the
+ * manual-choice tier of the negotiation chain, and a manual choice is the
+ * most recent user intent. A language applied because a server-side
+ * profile resolved -- never a manual choice -- must use null, or the
+ * write shadows the profile tier on every later visit: the stored choice
+ * outranks the profile by design, so a later profile change could never
+ * win the negotiation in that browser (README, "Applying the profile
+ * language after creation").
  */
 export async function switchLanguage(
   instance: I18nInstance,

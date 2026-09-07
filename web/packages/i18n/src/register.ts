@@ -15,6 +15,18 @@
  *    a reference language, sorted for deterministic messages), so a key
  *    can never exist in one language and silently miss in another;
  *  - leaves must be strings; nesting uses plain records only.
+ *  - an empty-string leaf is refused: an "" translation renders as silence
+ *    and never fires the missing-key discipline, so at runtime it is
+ *    indistinguishable from a dropped key -- the mirror image of the Go
+ *    catalog, which refuses empty translations outright;
+ *  - plural forms are the i18next suffix convention: `key_one`/`key_other`
+ *    leaves, resolved by count per language. A family of such leaves must
+ *    cover every count category the instance's supported languages can
+ *    select (`Intl.PluralRules` decides), because a count whose form is
+ *    absent renders the raw key. Bundles carry identical leaf sets, so the
+ *    forms one language needs ship in every language's bundle -- including
+ *    forms a language itself never selects (zh-CN carries `_one` forms so
+ *    en-US counts of 1 have theirs).
  *
  * Registration is atomic end to end: any validation failure throws before
  * a single resource lands, a failure while a bundle is being added rolls
@@ -23,6 +35,20 @@
  * after every bundle landed. A namespace registers exactly once per
  * instance (that catches double-init in tests and SSR).
  */
+
+/** The CLDR cardinal plural categories, in canonical order. */
+const PLURAL_CATEGORIES = ['zero', 'one', 'two', 'few', 'many', 'other'] as const
+
+/** `key_<category>` suffixes i18next resolves by count. */
+const PLURAL_SUFFIXES = PLURAL_CATEGORIES.map((category) => `_${category}`)
+
+/** A plural family: one logical key plus the category forms it ships. */
+interface PluralFamily {
+  /** The dot-joined key the family renders under (a `t("...")` call names this). */
+  readonly path: string
+  /** The categories the family carries, in PLURAL_CATEGORIES order. */
+  readonly forms: string[]
+}
 
 import type { i18n as I18nInstance } from 'i18next'
 import { readSupportedLanguages } from './languages.js'
@@ -56,6 +82,15 @@ function collectLeafPaths(
   for (const [key, value] of Object.entries(bundle)) {
     const path = prefix === '' ? key : `${prefix}.${key}`
     if (typeof value === 'string') {
+      if (value === '') {
+        throw new Error(
+          `[speed-i18n] namespace "${namespace}": the "${path}" translation is ` +
+            'empty: an empty string renders as silence and never fires the ' +
+            'missing-key discipline, so a key reduced to "" is indistinguishable ' +
+            'at runtime from a dropped translation. Ship real text in every ' +
+            'language or remove the key.',
+        )
+      }
       leaves.add(path)
       continue
     }
@@ -67,6 +102,67 @@ function collectLeafPaths(
     }
     collectLeafPaths(value as ResourceBundle, path, leaves, namespace)
   }
+}
+
+/**
+ * The count categories `language` can select, in CLDR order. i18next
+ * resolves a plural leaf per count through Intl.PluralRules -- the same
+ * resolution this validator consults -- so a language whose categories
+ * cannot be resolved (a structurally legal tag Intl refuses) cannot have
+ * its plural coverage validated at all; that is reported loudly rather
+ * than assumed.
+ */
+function pluralCategoriesOf(language: string): string[] {
+  let selectable: readonly string[]
+  try {
+    selectable = new Intl.PluralRules(language).resolvedOptions().pluralCategories
+  } catch {
+    throw new Error(
+      `[speed-i18n] cannot resolve the plural categories of language ` +
+        `"${language}": Intl.PluralRules refused the tag, so plural-form ` +
+        'validation cannot run for it.',
+    )
+  }
+  const selectableSet = new Set(selectable)
+  return PLURAL_CATEGORIES.filter((category) => selectableSet.has(category))
+}
+
+/**
+ * The plural families a leaf set declares: a leaf whose final segment ends
+ * in a `_<category>` suffix is one form of the family named by the rest of
+ * its path. Because the parity check has already forced identical leaf
+ * sets across languages, every language declares the same families with
+ * the same forms; the reference language's set decides. Sorted by family
+ * path so failure messages are deterministic.
+ */
+function pluralFamiliesOf(paths: Set<string>): PluralFamily[] {
+  const formsByFamily = new Map<string, string[]>()
+  for (const path of paths) {
+    const leafName = path.slice(path.lastIndexOf('.') + 1)
+    for (const suffix of PLURAL_SUFFIXES) {
+      // leafName.length > suffix.length keeps a leaf named exactly "_one"
+      // (or a bare category word) out: a form names a family, never itself.
+      if (leafName.endsWith(suffix) && leafName.length > suffix.length) {
+        const familyPath = path.slice(0, path.length - suffix.length)
+        let forms = formsByFamily.get(familyPath)
+        if (forms === undefined) {
+          forms = []
+          formsByFamily.set(familyPath, forms)
+        }
+        forms.push(suffix.slice(1))
+        break
+      }
+    }
+  }
+  const byCategoryOrder = (a: string, b: string): number =>
+    PLURAL_CATEGORIES.findIndex((category) => category === a) -
+    PLURAL_CATEGORIES.findIndex((category) => category === b)
+  for (const forms of formsByFamily.values()) {
+    forms.sort(byCategoryOrder)
+  }
+  return [...formsByFamily.entries()]
+    .map(([path, forms]) => ({ path, forms }))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
 }
 
 function listSample(paths: Set<string>): string {
@@ -83,12 +179,15 @@ function listSample(paths: Set<string>): string {
  *
  * resources maps canonical language tags to bundles; every key must be a
  * language the instance supports, and every supported language must be
- * present with the same leaf key set (see the module docs). Throws --
- * before mutating anything -- when any of that fails, or when the
- * namespace is already registered on this instance. A failure while a
- * bundle is being added rolls the already-landed bundles back, so the
- * namespace is never left half-registered and any retry is a fresh
- * registration.
+ * present with the same leaf key set (see the module docs). Leaf values
+ * must be non-empty strings. Plural forms -- leaves whose name ends in a
+ * `_<category>` suffix, resolved per count -- must additionally cover the
+ * count categories every supported language can select, or a count
+ * somewhere would render the raw key. Throws -- before mutating anything --
+ * when any of that fails, or when the namespace is already registered on
+ * this instance. A failure while a bundle is being added rolls the
+ * already-landed bundles back, so the namespace is never left
+ * half-registered and any retry is a fresh registration.
  */
 export function registerNamespace(
   instance: I18nInstance,
@@ -179,6 +278,52 @@ export function registerNamespace(
       throw new Error(
         `[speed-i18n] namespace "${namespace}": the language bundles must carry the ` +
           `same key set; ${parts.join('; ')}.`,
+      )
+    }
+  }
+
+  // Plural coverage, after parity: identical leaf sets mean every language
+  // ships the same families with the same forms, so one family set serves
+  // all languages -- but only when it covers what each language's plural
+  // resolution can select. A count whose category form is absent renders
+  // the raw key (the renderer's missing-key path, never another language's
+  // text -- still the no-silent-fallback discipline, but a bundle gap that
+  // registration can catch and must not ship).
+  const families = pluralFamiliesOf(leafSets.get(referenceLanguage)!)
+  if (families.length > 0) {
+    const selectableByLanguage = new Map(
+      languageKeys.map((language) => [language, pluralCategoriesOf(language)]),
+    )
+    const parts: string[] = []
+    for (const family of families) {
+      const shipped = new Set(family.forms)
+      const gaps: string[] = []
+      for (const language of languageKeys) {
+        const missing = selectableByLanguage
+          .get(language)!
+          .filter((category) => !shipped.has(category))
+        if (missing.length > 0) {
+          gaps.push(
+            `counts in "${language}" can fall into [${missing.join(', ')}], which ` +
+              'the family does not ship',
+          )
+        }
+      }
+      if (gaps.length > 0) {
+        parts.push(
+          `plural key family "${family.path}" is incomplete: ${gaps.join('; ')}; ` +
+            `add the missing "${family.path}_<category>" leaves to every ` +
+            "language's bundle (a count whose form is absent renders the raw key)",
+        )
+      }
+    }
+    if (parts.length > 0) {
+      throw new Error(
+        `[speed-i18n] namespace "${namespace}": ${parts.join('; ')}. Plural forms ` +
+          `are suffixed leaves ("${families[0]!.path}_one", "${families[0]!.path}_other", ...) ` +
+          'resolved per count, and bundles carry identical leaf sets -- so a form one ' +
+          "language needs ships in every language's bundle, including languages that " +
+          'never select it themselves.',
       )
     }
   }

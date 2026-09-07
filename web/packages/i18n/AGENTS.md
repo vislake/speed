@@ -23,6 +23,25 @@ catalog) and is non-negotiable here.
 - **Registration is validated before it mutates, and covers the whole
   supported set with identical key sets.** Parity and coverage errors must
   keep listing actionable details (language tags, leaf paths).
+- **Empty translations are refused at registration.** An `""` leaf
+  renders as silence and never fires the missing-key discipline -- at
+  runtime it is indistinguishable from a dropped key. The Go catalog
+  refuses empty translations the same way; ship real text or remove the
+  key. (Whitespace-only strings are not refused, matching the Go twin's
+  exact-empty check.)
+- **Plural forms are suffixed leaves that must cover every supported
+  language's count categories.** A family (`key_one`, `key_other`, ...)
+  counts as ordinary keys for parity -- identical leaf sets across
+  languages -- and registration additionally validates, through the same
+  `Intl.PluralRules` the renderer resolves counts with, that the family
+  carries every category each supported language can select: a count
+  whose form is absent would render the raw key. Consequence of the
+  parity rule: a form one language selects ships in every language's
+  bundle even where it is never selected (zh-CN's `_one` forms exist for
+  en-US), and adding a language with richer plural categories (ru-RU's
+  few/many) requires extending every existing plural family in every
+  bundle. Extend `PLURAL_CATEGORIES`'s sibling validation in register.ts
+  only with a test proving the renderer's own resolution agrees.
 - **No CJK in sources or tests.** Fixtures live under
   `test-utils/locales/<namespace>/<lang>.json`; every language-text
   assertion imports those fixtures. Never inline a language literal, and
@@ -30,9 +49,19 @@ catalog) and is non-negotiable here.
 - **The supported-language set is the contract.** Adding a language
   touches: `DEFAULT_SUPPORTED_LANGUAGES`/`DEFAULT_LANGUAGE` choices,
   the `muiLocaleFor` mapping (MUI localization must exist), fixture pairs
-  for every namespace, and the parity/coverage tests. A language ships
+  for every namespace, the plural coverage of every existing plural
+  family in every bundle, and the parity/coverage tests. A language ships
   only when every namespace can cover it -- partial support is refused at
   registration by design.
+- **Server-resolved profile locales are applied without persisting.**
+  `switchLanguage(i18n, locale, null)` applies a language to a live
+  instance without writing the manual-choice slot. The persisting default
+  belongs to the manual language-switch UI only: the stored slot is the
+  manual-choice tier of the negotiation chain and outranks the profile
+  tier on later visits, so persisting a profile application (the usual
+  shape: the profile resolves from `/me` after `createI18n`) would
+  permanently shadow later profile changes in that browser. The recipe
+  lives in the README's "Applying the profile language after creation".
 - **Do not widen the DOM dependence.** All browser reads (location,
   localStorage, navigator) are guarded and injectable; tests run
   deterministically in Node. New browser touches go through the same
@@ -68,7 +97,10 @@ AGENTS/README/test update in one commit.
 ## Adding a namespace (consuming-package side)
 
 1. Ship `zh-CN` + `en-US` JSON under the package's
-   `locales/`-named directory with **identical nested structure**.
+   `locales/`-named directory with **identical nested structure**, no
+   empty-string values, and every plural family carrying both `_one` and
+   `_other` forms (the categories zh-CN and en-US can select; zh-CN's
+   `_one` copies are the parity rule's cost, not a typo).
 2. Register once at host bootstrap: `registerNamespace(i18n, name, {…})`.
 3. Render via `useTranslation(name)` / `t(...)`; never hardcode
    user-facing text anywhere (repo rule).

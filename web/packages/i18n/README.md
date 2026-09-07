@@ -22,9 +22,35 @@ nothing:
 3. **Profile language** -- the signed-in user's stored locale. M0 has no
    profile feature: this slot is the documented extension point the M1
    user-profile step feeds. Hosts that can resolve a profile locale pass
-   it to `createI18n` and it outranks the browser.
+   it to `createI18n` and it outranks the browser (the URL parameter and
+   a persisted manual choice still outrank it, in the chain order above).
 4. **Navigator languages**, in preference order.
 5. **The default language** -- `zh-CN`.
+
+### Applying the profile language after creation
+
+`profileLanguage` is a creation-time input, but the profile locale's
+usual source is a `/me` round trip that resolves only after the instance
+exists. The one API that applies a language to a live instance is
+`switchLanguage`, whose optional storage argument is three-state:
+`undefined` uses the storage bound at creation, `null` persists nothing,
+and a `StorageLike` persists to that store instead. Which state a caller
+means is not a mechanics detail:
+
+- the **manual language-switch UI** persists (the default): the stored
+  slot is the manual-choice tier of the negotiation chain, and a manual
+  choice is the most recent user intent;
+- a host **applying a server-resolved profile locale** must use the
+  non-persisting form -- `switchLanguage(i18n, locale, null)`. Persisting
+  a profile application writes the manual slot, and the stored choice
+  outranks the profile tier on every later visit by design: a subsequent
+  profile change would then be shadowed in that browser until the manual
+  slot is overwritten or cleared.
+
+```ts
+// host resolves the profile after creation (e.g. from /me):
+await switchLanguage(i18n, profile.locale, null) // apply, never persist
+```
 
 Matching relaxes language subtags in both directions, never crossing
 languages: an exact tag matches first, a subtagged request selects a
@@ -92,7 +118,20 @@ and validated before anything lands:
 - all bundles must carry the **same leaf key set** (parity with a
   reference language; deterministic error messages) -- a key can never
   exist in one language and silently miss in another;
-- leaves must be strings; nesting is plain records only;
+- leaves must be **non-empty strings**; nesting is plain records only. An
+  empty translation renders as silence and never fires the missing-key
+  discipline, so at runtime it is indistinguishable from a dropped key --
+  `registerNamespace` refuses `""` the same way the Go catalog refuses
+  empty translations;
+- **plural forms are suffixed leaves** (`key_one`, `key_other`, ...,
+  resolved per count) and count as ordinary keys for the parity rule. A
+  family of such leaves must cover every count category the instance's
+  supported languages can select -- registration validates this through
+  the same `Intl.PluralRules` resolution the renderer uses -- because a
+  count whose form is absent would render the raw key. Since bundles
+  carry identical leaf sets, the forms one language needs ship in every
+  language's bundle: zh-CN carries `_one` forms that en-US counts of 1
+  select and that zh-CN itself never does;
 - a namespace registers exactly once per instance (double registration
   usually means double init in tests or SSR).
 
@@ -164,18 +203,21 @@ All validation failures throw `Error` messages prefixed `[speed-i18n]` with
 the actionable fix inline: a non-canonical entry in the supported set at
 creation names its canonical spelling (or says it is not a language tag);
 an unsupported language names the supported set; a parity gap lists the
-missing or extra leaf paths; a switch to an unsupported language lists the
-supported tags; registering on a bare i18next instance (no pinned supported
-set) names `createI18n` as the fix. Storage is deliberately best-effort, by
-design: a failing write warns (`[speed-i18n]` console warning) without
-failing the switch, and a failing read at creation silently means "no
-stored choice". The missing-key handler is the other non-throwing surface
-(a production lookup must degrade visibly, not crash).
+missing or extra leaf paths; an empty translation names its leaf path; an
+incomplete plural family names the family, the languages whose counts
+would spill the raw key and the missing `_<category>` forms; a switch to
+an unsupported language lists the supported tags; registering on a bare
+i18next instance (no pinned supported set) names `createI18n` as the fix.
+Storage is deliberately best-effort, by design: a failing write warns
+(`[speed-i18n]` console warning) without failing the switch, and a failing
+read at creation silently means "no stored choice". The missing-key
+handler is the other non-throwing surface (a production lookup must
+degrade visibly, not crash).
 
 ## Development
 
 From `web/packages/i18n`: `pnpm lint`, `pnpm typecheck`, `pnpm test`
-(73 tests), `pnpm build`. Bilingual fixtures live under
+(80 tests), `pnpm build`. Bilingual fixtures live under
 `test-utils/locales/` (repo CJK-scanner exemption); sources and tests
 assert against imported fixtures. `test-utils/` is test-only and never
 emitted into `dist/`.

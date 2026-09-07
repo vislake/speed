@@ -307,6 +307,54 @@ describe('switchLanguage', () => {
   })
 })
 
+describe('profile-language tier under late resolution', () => {
+  it('applies a late-resolved profile without persisting, so a later profile change still wins on the next visit', async () => {
+    // The documented M1 shape: the host resolves the profile locale only
+    // after creation (it comes from /me), so it applies it through
+    // switchLanguage -- and must use the non-persisting form, because the
+    // persisted slot is the manual-choice tier, which outranks the profile
+    // tier on every later visit.
+    const storage = new MemoryStorage()
+    const visitOne = createI18n({ storage, navigatorLanguages: [] })
+    expect(visitOne.language).toBe('zh-CN')
+    await switchLanguage(visitOne, 'en-US', null)
+    expect(visitOne.language).toBe('en-US')
+    // The manual-choice slot stays untouched: no stale trace to shadow the
+    // tier when the profile changes.
+    expect(storage.getItem(SPEED_LOCALE_STORAGE_KEY)).toBeNull()
+
+    // The profile changes on the server; the next visit feeds the current
+    // profile at creation and the profile tier speaks.
+    const visitTwo = createI18n({
+      storage,
+      profileLanguage: 'zh-CN',
+      navigatorLanguages: [],
+    })
+    expect(visitTwo.language).toBe('zh-CN')
+  })
+
+  it('persisting a profile application writes the manual slot, which outranks the profile tier on later visits', async () => {
+    // The trap the non-persisting recipe exists to prevent: applying the
+    // profile through switchLanguage's default writes the manual-choice
+    // slot, and the stored choice outranks the profile tier by design -- so
+    // a later profile change is shadowed in this browser until the manual
+    // slot is overwritten or cleared.
+    const storage = new MemoryStorage()
+    const visitOne = createI18n({ storage, navigatorLanguages: [] })
+    await switchLanguage(visitOne, 'en-US')
+    expect(storage.getItem(SPEED_LOCALE_STORAGE_KEY)).toBe('en-US')
+
+    // The profile changes to zh-CN, but the stored manual choice wins at
+    // the next visit's negotiation.
+    const visitTwo = createI18n({
+      storage,
+      profileLanguage: 'zh-CN',
+      navigatorLanguages: [],
+    })
+    expect(visitTwo.language).toBe('en-US')
+  })
+})
+
 describe('missing-key discipline (no silent fallback across languages)', () => {
   it('never renders another language text for a key missing in the loaded language', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
