@@ -376,6 +376,12 @@ export function PhotoSimulationPanel({
   // because the job exists (it was accepted) but its live status has
   // not been observed yet.
   const [pollingJobID, setPollingJobID] = useState<string | null>(null)
+  // Whether the automatic first-preview run was refused outright (the
+  // simulate call failed, so no job exists and no spend happened). The
+  // auto-run is one-shot per panel lifetime, so a refusal is its end:
+  // the cost disclosure must withdraw rather than keep promising a
+  // spend that is no longer going to happen.
+  const [autoPreviewRefused, setAutoPreviewRefused] = useState(false)
 
   const listKey = useMemo(
     () => [
@@ -461,6 +467,9 @@ export function PhotoSimulationPanel({
       {
         onSuccess: (jobRef) => {
           setPollingJobID(jobRef.job_id)
+        },
+        onError: () => {
+          setAutoPreviewRefused(true)
         },
       },
     )
@@ -551,9 +560,50 @@ export function PhotoSimulationPanel({
     ? smileSimErrorCodeOf(simulate.error)
     : null
 
+  // Whether the automatic first-preview disclosure stands (see the
+  // auto-run effect above: a photo with no simulation attempt of any
+  // kind is given one automatic generation the moment this panel can
+  // act, and that generation spends credits). The line must be on the
+  // surface BEFORE the automatic run fires and stay while it is in
+  // flight -- a spend with no cost connected to it is a silent one --
+  // and it must never promise a spend the run will not make: a photo
+  // the enumeration shows with attempts of its own is never auto-run
+  // again (the run is one-shot per photo), so the line withdraws the
+  // moment the answer shows any, and it withdraws on the auto-run's
+  // own refusal, when no job exists and no spend happened. While the
+  // enumeration is still loading the panel cannot yet know the
+  // photo's history; the line then reads as the panel's standing rule
+  // and is withdrawn immediately if the answer turns out to show
+  // attempts.
+  const listSettled = simulationsQuery.data !== undefined
+  const showAutoPreviewCostNotice =
+    tenantId !== null &&
+    !autoPreviewRefused &&
+    !simulationsQuery.isError &&
+    (simulations.length === 0 || !listSettled)
+
   return (
     <Box sx={{ marginTop: 2, maxWidth: 720 }}>
       <Typography variant="h6">{t('cases.sim.title')}</Typography>
+
+      {/* The cost disclosure of the automatic first preview (the
+      product-disclosure gate): the panel is about to generate this
+      photo's first preview by itself, and the surface says so and
+      prices it before the run fires -- the person opening the case
+      learns what the automatic preview spends before it spends it,
+      not only from the after-the-fact cost line under a completed
+      comparison. */}
+      {showAutoPreviewCostNotice && (
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          sx={{ marginTop: 0.5 }}
+        >
+          {t('cases.sim.autoPreviewCost', {
+            value: formatCost(SIMULATION_CREDIT_COST),
+          })}
+        </Typography>
+      )}
 
       <Box
         sx={{

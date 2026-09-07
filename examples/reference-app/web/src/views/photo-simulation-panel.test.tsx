@@ -23,6 +23,23 @@ import { CaseDetailView } from './case-detail-view.js'
 /** The fixed demo epoch the demo server's answers carry. */
 const DEMO_CREATED_AT = '2026-09-04T00:00:00Z'
 
+/** The automatic-preview cost disclosure line as the en-US bundle
+ * renders it for one generation's price. */
+const AUTO_PREVIEW_COST_NOTICE =
+  'The automatic first preview of a photo with no simulation yet costs 10 credits'
+
+/** Every automatic or manual generation this responder observed: a POST
+ * to the smile-simulation simulate route. */
+function simulatePosts(
+  calls: ReturnType<typeof makeRealClientRig>['calls'],
+): number {
+  return calls.filter(
+    (call) =>
+      call.method === 'POST' &&
+      call.path.startsWith('/api/v1/smile-simulation/'),
+  ).length
+}
+
 /** A case with one attached photo, as the demo server serves it. */
 function caseWithPhoto(): CasesCase {
   return {
@@ -42,6 +59,9 @@ async function renderCaseDetail(
 ): Promise<
   ReturnType<typeof renderWithAppServices> & {
     readonly calls: ReturnType<typeof makeRealClientRig>['calls']
+    /** The whole rig, so a journey can mount the same case again over
+     * the same responder. */
+    readonly rig: ReturnType<typeof makeRealClientRig>
   }
 > {
   const rig = makeRealClientRig(demoServer(options))
@@ -51,7 +71,7 @@ async function renderCaseDetail(
     { session: rig.session, api: rig.api },
     { language: 'en-US' },
   )
-  return { ...view, calls: rig.calls }
+  return { ...view, calls: rig.calls, rig }
 }
 
 /** The blob-URL stand-ins, installed for one test and restored after:
@@ -256,6 +276,86 @@ describe('PhotoSimulationPanel', () => {
     } finally {
       blobDoubles.restore()
     }
+  })
+
+  it('connects the automatic first preview to its cost before the run spends it (the product-disclosure gate)', async () => {
+    // The product-disclosure shape: a freshly opened photo with no
+    // simulation attempt gets the panel's one automatic generation,
+    // and that generation spends credits -- so the surface must carry
+    // the price of the automatic preview BEFORE the run fires and
+    // while it is in flight, never only in the after-the-fact cost
+    // line under a completed comparison. (Fails before the disclosure
+    // existed: the auto-run fired with no cost connected to it on the
+    // surface at all.)
+    const view = await renderCaseDetail({ initialCases: [caseWithPhoto()] })
+
+    // The disclosure is on the surface from the moment the
+    // enumeration answers empty -- the same answer that lets the
+    // auto-run fire, which is what makes the line precede the run
+    // rather than report it.
+    await waitFor(
+      () => expect(view.getByText(AUTO_PREVIEW_COST_NOTICE)).toBeInTheDocument(),
+      { timeout: 8000 },
+    )
+
+    // The run's own simulate call is recorded with the disclosure
+    // already standing, and the disclosure stays beside the in-flight
+    // status region while the job runs -- the spend is never silent.
+    await waitFor(
+      () => expect(simulatePosts(view.calls)).toBe(1),
+      { timeout: 8000 },
+    )
+    expect(view.getByText(AUTO_PREVIEW_COST_NOTICE)).toBeInTheDocument()
+    await view.findByRole('status')
+    expect(view.getByText(AUTO_PREVIEW_COST_NOTICE)).toBeInTheDocument()
+  })
+
+  it('renders no automatic-preview cost promise on a photo that already has simulations', async () => {
+    // The disclosure's honesty bound: the auto-run is one-shot per
+    // photo, so a photo whose enumeration shows an attempt will never
+    // be auto-run again -- a line promising an automatic preview's
+    // spend there would be a false promise. Once the photo's own
+    // automatic preview has completed (the enumeration carries it),
+    // the disclosure withdraws, and reopening the same case over the
+    // same responder neither re-runs the auto-run nor shows the line.
+    const view = await renderCaseDetail({ initialCases: [caseWithPhoto()] })
+
+    // The automatic preview completes into the comparison...
+    const comparison = await view.findByRole(
+      'region',
+      { name: 'Before and after' },
+      { timeout: 8000 },
+    )
+    await waitFor(() =>
+      expect(within(comparison).getAllByRole('img')).toHaveLength(2),
+    )
+    // ...and with a simulation on the record the disclosure is gone.
+    expect(view.queryByText(AUTO_PREVIEW_COST_NOTICE)).toBeNull()
+    expect(simulatePosts(view.calls)).toBe(1)
+
+    // Opening the same case again is a fresh mount over the same
+    // responder: the enumeration answers with the attempt on the
+    // record, so the panel stays hands-off and the surface promises
+    // no spend -- no disclosure line, and no second automatic
+    // simulate call (the window below is the settle window in which
+    // an auto-run would have fired had the photo still had none).
+    view.unmount()
+    const reopened = renderWithAppServices(
+      <CaseDetailView caseId="case-1" onBack={vi.fn()} />,
+      { session: view.rig.session, api: view.rig.api },
+      { language: 'en-US' },
+    )
+    const again = await reopened.findByRole(
+      'region',
+      { name: 'Before and after' },
+      { timeout: 8000 },
+    )
+    await waitFor(() =>
+      expect(within(again).getAllByRole('img')).toHaveLength(2),
+    )
+    expect(reopened.queryByText(AUTO_PREVIEW_COST_NOTICE)).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(simulatePosts(view.calls)).toBe(1)
   })
 
   it('generates again from a changed option set and keeps both attempts', async () => {

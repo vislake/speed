@@ -139,7 +139,10 @@
       },
       "cost": "本次模拟生成花费 {{value}} 额度",
       "cost_one": "本次模拟生成花费 {{value}} 额度",
-      "cost_other": "本次模拟生成花费 {{value}} 额度"
+      "cost_other": "本次模拟生成花费 {{value}} 额度",
+      "autoPreviewCost": "尚无模拟的照片会自动生成首个预览，消耗 {{value}} 额度",
+      "autoPreviewCost_one": "尚无模拟的照片会自动生成首个预览，消耗 {{value}} 额度",
+      "autoPreviewCost_other": "尚无模拟的照片会自动生成首个预览，消耗 {{value}} 额度"
     },
     "share": {
       "action": "分享给患者",

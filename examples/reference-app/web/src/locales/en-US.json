@@ -139,7 +139,10 @@
       },
       "cost": "This simulation cost {{value}} credits",
       "cost_one": "This simulation cost {{value}} credit",
-      "cost_other": "This simulation cost {{value}} credits"
+      "cost_other": "This simulation cost {{value}} credits",
+      "autoPreviewCost": "The automatic first preview of a photo with no simulation yet costs {{value}} credits",
+      "autoPreviewCost_one": "The automatic first preview of a photo with no simulation yet costs {{value}} credit",
+      "autoPreviewCost_other": "The automatic first preview of a photo with no simulation yet costs {{value}} credits"
     },
     "share": {
       "action": "Share with patient",
