@@ -26,6 +26,7 @@ export {
 } from './components/PageHeader.js'
 export {
   EmptyState,
+  type EmptyStateHeadingLevel,
   type EmptyStateProps,
   type EmptyStateVariant,
 } from './components/EmptyState.js'
@@ -40,10 +41,15 @@ export {
   type FormFieldProps,
   type FormFieldRenderState,
 } from './components/FormField.js'
-export { FormLayout, type FormLayoutProps } from './components/FormLayout.js'
+export {
+  FormLayout,
+  type FormLayoutColumns,
+  type FormLayoutProps,
+} from './components/FormLayout.js'
 export {
   DataTable,
   type DataTableColumn,
+  type DataTableColumnPriority,
   type DataTableFilter,
   type DataTablePagination,
   type DataTableProps,

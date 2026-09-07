@@ -126,9 +126,11 @@ files in order, cancel/retry/remove keyed by row id, each row status
 rendered as given, progress folding (indeterminate when absent,
 determinate clamped when present, NaN and out-of-range fractions
 included) and the settle announcements of the live region (mount quiet,
-a retry clears, an identical later failure re-announces) — and its a11y
-assertions run through the same `expectNoAxeViolations` used everywhere
-here. The usage example's upload panel drives the documented host
+rows appended already settled announce without an uploading phase, a
+retry clears so an identical later failure re-announces, and a second
+same-name row reaching the same outcome as a standing announcement
+clears and re-announces on the next tick) — and its a11y assertions run
+through the same `expectNoAxeViolations` used everywhere here. The usage example's upload panel drives the documented host
 composition — host-owned queue, host AbortControllers, host transport
 — over a scripted fetch answering genuine `Response` objects; scripted
 transports and their fixture URLs live in test files only, and the

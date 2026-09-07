@@ -23,6 +23,22 @@
  * `emptyAction`), which hosts swap for a variant of their own when the
  * emptiness means more than "no data yet".
  *
+ * The loading announcement follows the FileUploader live-region twin: a
+ * role="status" region is mounted (empty and visually silent) for the
+ * whole empty phase, and the loading text fills it while loading. A
+ * region that only appeared together with its text could never announce
+ * the empty-list-then-refresh path -- live regions speak about content
+ * changes that follow their own existence, not text that mounts with
+ * them.
+ *
+ * The stock placeholder's title is a real heading element whose correct
+ * level only the host knows (see EmptyState's own heading-level note):
+ * `emptyHeadingLevel` forwards the level that continues the page's
+ * heading order at the point this table sits, exactly as hosts already
+ * do for EmptyState instances they render themselves. It defaults to
+ * EmptyState's own 'h6' floor, so a host that does not pass it keeps
+ * byte-identical behavior.
+ *
  * Horizontal overflow is a stated, tested contract, not an accident of
  * implementation: the table is always wrapped in MUI's `TableContainer`,
  * whose default styling gives the wrapper `overflow-x: auto` -- more or
@@ -82,6 +98,7 @@ import TableSortLabel from '@mui/material/TableSortLabel'
 import TextField from '@mui/material/TextField'
 import type { SxProps, Theme } from '@mui/material/styles'
 import { EmptyState } from './EmptyState.js'
+import type { EmptyStateHeadingLevel } from './EmptyState.js'
 import { useUiKitTranslation } from '../internal/translation.js'
 
 /**
@@ -161,6 +178,15 @@ export interface DataTableProps<T> {
   readonly rowKey?: (row: T, rowIndex: number) => string | number
   /** Renders a status row instead of content while rows are empty. */
   readonly loading?: boolean
+  /**
+   * The heading level of the stock empty placeholder's title (rendered
+   * through the built-in EmptyState). Set it to whatever level continues
+   * the real page's own heading order at the point this table sits --
+   * see EmptyState's headingLevel note for the full reasoning. Defaults
+   * to EmptyState's own 'h6' floor: a host that does not pass it keeps
+   * byte-identical behavior.
+   */
+  readonly emptyHeadingLevel?: EmptyStateHeadingLevel
   /** Table density; defaults to 'medium'. */
   readonly size?: 'small' | 'medium'
   /**
@@ -242,6 +268,7 @@ export function DataTable<T>({
   emptyTitle,
   emptyDescription,
   emptyAction,
+  emptyHeadingLevel,
   sx,
 }: DataTableProps<T>) {
   const { t } = useUiKitTranslation()
@@ -384,39 +411,55 @@ export function DataTable<T>({
             </TableRow>
           </TableHead>
           <TableBody>
-            {rows.length === 0 && loading && (
+            {rows.length === 0 && (
               <TableRow>
-                <TableCell colSpan={span} align="center" sx={{ border: 0 }}>
+                <TableCell
+                  colSpan={span}
+                  align="center"
+                  sx={{ border: 0, padding: 0 }}
+                >
+                  {/* The loading live region mounts (empty) for the whole
+                      empty phase, so a refresh that flips into loading
+                      fills an existing region instead of mounting one
+                      together with its text -- see the file header. The
+                      empty-phase region has no children and therefore
+                      zero height: it is rendered, never display:none,
+                      because a hidden region would not be live. */}
                   <Box
                     role="status"
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 1.5,
-                      paddingY: 4,
-                      color: 'text.secondary',
-                    }}
+                    sx={
+                      loading
+                        ? {
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 1.5,
+                            paddingY: 4,
+                            color: 'text.secondary',
+                          }
+                        : { display: 'flex' }
+                    }
                   >
-                    <CircularProgress
-                      size={22}
-                      aria-label={t('dataTable.loading')}
-                    />
-                    {t('dataTable.loading')}
+                    {loading ? (
+                      <>
+                        <CircularProgress
+                          size={22}
+                          aria-label={t('dataTable.loading')}
+                        />
+                        {t('dataTable.loading')}
+                      </>
+                    ) : null}
                   </Box>
-                </TableCell>
-              </TableRow>
-            )}
-            {rows.length === 0 && !loading && (
-              <TableRow>
-                <TableCell colSpan={span} sx={{ border: 0, padding: 0 }}>
-                  <EmptyState
-                    variant="empty"
-                    title={emptyTitle}
-                    description={emptyDescription}
-                    action={emptyAction}
-                    sx={{ paddingY: 4, paddingX: 2 }}
-                  />
+                  {!loading && (
+                    <EmptyState
+                      variant="empty"
+                      title={emptyTitle}
+                      description={emptyDescription}
+                      action={emptyAction}
+                      headingLevel={emptyHeadingLevel}
+                      sx={{ paddingY: 4, paddingX: 2 }}
+                    />
+                  )}
                 </TableCell>
               </TableRow>
             )}

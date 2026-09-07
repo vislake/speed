@@ -79,8 +79,20 @@ export function AppThemeProvider({
     () => createAppTheme(projectTokens, tenantOverrides),
     [projectTokens, tenantOverrides],
   )
+  // The active MUI locale language, kept in step with the i18n instance.
+  // The initial useState(i18n.language) snapshot cannot be the whole story:
+  // the subscription below attaches in an effect, and React runs child
+  // effects before parent effects -- a child that switches language inside
+  // its own mount effect emits 'languageChanged' before this listener
+  // exists, and swapping in a fresh i18n instance never emits an event for
+  // the language it was created on. Both are recovered by re-adopting the
+  // instance's LIVE language every time the listener (re)attaches: an
+  // event that fired too early to be heard is reflected in i18n.language
+  // by the time this effect runs, and an event heard here updates state as
+  // usual.
   const [language, setLanguage] = useState(i18n.language)
   useEffect(() => {
+    setLanguage(i18n.language)
     const onLanguageChanged = (next: string) => setLanguage(next)
     i18n.on('languageChanged', onLanguageChanged)
     return () => {

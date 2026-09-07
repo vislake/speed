@@ -170,6 +170,29 @@ describe('ConfirmDialog', () => {
     expect(onCancel).not.toHaveBeenCalled()
   })
 
+  it('doubleConfirm: arming the confirm is announced through a live region (P2-9 regression)', async () => {
+    // PRE-FIX (P2-9): the first confirm click re-labeled the button but
+    // nothing announced the armed state -- a label change under focus is
+    // not something a screen reader reports reliably, so a non-visual
+    // user pressing confirm once and waiting heard nothing about the
+    // second click they owe. POST-FIX: a polite live region sits inside
+    // the dialog (empty until armed, so the arm is a text change inside
+    // an existing region, not a region mounting together with its text)
+    // and fills with the confirm-again label on the first click.
+    const { getByRole, queryByRole } = setup({
+      variant: 'danger',
+      doubleConfirm: true,
+    })
+    const region = getByRole('status')
+    expect(region).toHaveTextContent('')
+    const user = userEvent.setup()
+    await user.click(getByRole('button', { name: zhCN.confirmDialog.confirmLabel }))
+    expect(region).toHaveTextContent(zhCN.confirmDialog.confirmAgainLabel)
+    expect(
+      queryByRole('button', { name: zhCN.confirmDialog.confirmAgainLabel }),
+    ).toBeInTheDocument()
+  })
+
   it('doubleConfirm: the override confirmLabel does not leak into the re-armed step', async () => {
     const { getByRole } = setup({
       variant: 'danger',

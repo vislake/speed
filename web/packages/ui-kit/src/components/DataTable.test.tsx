@@ -19,7 +19,10 @@ import { switchLanguage } from '@speed/i18n'
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import enUS from '../locales/en-US.json' with { type: 'json' }
 import { renderWithProviders } from '../../test-utils/render.js'
-import { expectNoAxeViolations } from '../../test-utils/axe.js'
+import {
+  expectNoAxeViolations,
+  runHeadingOrderCheck,
+} from '../../test-utils/axe.js'
 import { emittedStyleText } from '../../test-utils/emitted-css.js'
 import { DataTable } from './DataTable.js'
 import type { DataTableColumn, DataTableProps } from './DataTable.js'
@@ -159,6 +162,45 @@ describe('DataTable', () => {
     expect(
       utils.getByText(zhCN.emptyState.empty.description),
     ).toBeInTheDocument()
+  })
+
+  it('announces the loading state on the empty-then-refresh path through a live region that already exists (P2-6 regression)', () => {
+    // PRE-FIX (P2-6): the role="status" region rendered only while
+    // loading, so on the empty-table refresh path (rows stay empty,
+    // loading flips false -> true) the region appeared in the same commit
+    // as its text. A live region announces content changes that follow
+    // its own existence, never text that mounts together with it, so that
+    // refresh's loading announcement was silent. POST-FIX: the region is
+    // mounted (empty, visually silent) for the whole empty phase and the
+    // loading text fills it on refresh -- a text change inside a region
+    // the screen reader already knows. The same DOM node must survive the
+    // transition, which is what makes the later text change an
+    // announcement rather than another mount. A stateful host drives the
+    // flip (the refresh is the host's own action): RTL's rerender would
+    // replace the provider tree and remount the table, which is exactly
+    // the mount the fix must prevent.
+    function RefreshHarness() {
+      const [loading, setLoading] = useState(false)
+      return (
+        <>
+          <button type="button" onClick={() => setLoading(true)}>
+            refresh
+          </button>
+          <DataTable
+            rows={[]}
+            columns={BASE_COLUMNS}
+            rowKey={keyOf}
+            loading={loading}
+          />
+        </>
+      )
+    }
+    const utils = renderWithProviders(<RefreshHarness />)
+    const region = utils.getByRole('status')
+    expect(region).toHaveTextContent('')
+    fireEvent.click(utils.getByRole('button', { name: 'refresh' }))
+    expect(region).toHaveTextContent(zhCN.dataTable.loading)
+    expect(utils.getByRole('progressbar')).toBeInTheDocument()
   })
 
   it('overrides the empty placeholder slots', () => {
@@ -675,8 +717,59 @@ describe('DataTable', () => {
     await expectNoAxeViolations()
   })
 
-  it('passes axe over the loading and empty states', async () => {
+  it('passes axe over the loading state', async () => {
     renderTable({ rows: [], loading: true })
     await expectNoAxeViolations()
+  })
+
+  it('passes axe over the empty placeholder state', async () => {
+    renderTable({ rows: [] })
+    await expectNoAxeViolations()
+  })
+
+  describe('the empty placeholder under a real page heading (P2-3)', () => {
+    // Regression for the reviewer finding (web-base-packages ui-kit P2-3):
+    // the axe case that claimed to cover the empty state rendered the
+    // table with loading: true, so the stock EmptyState placeholder never
+    // rendered at all -- and a component-level render has no ancestor
+    // heading anyway -- which left the real surface's h1 -> h6 skip
+    // invisible to the package suite. The reference-app notes surface is
+    // exactly that real shape: a page h1 above an empty table whose stock
+    // placeholder defaults to the h6 heading level. These two cases
+    // supply the h1 themselves (the same mechanism EmptyState.test.tsx
+    // uses) so the skip is reachable, mirroring that suite's pair: the
+    // stock default under a real h1 still skips (a compatibility floor,
+    // not a claim that h6 is correct), and supplying the level that
+    // continues the page order removes the violation entirely.
+
+    it('still skips to the stock h6 default under a real h1 when no emptyHeadingLevel is given', async () => {
+      renderWithProviders(
+        <div>
+          <h1>Notes</h1>
+          <DataTable rows={[]} columns={BASE_COLUMNS} rowKey={keyOf} />
+        </div>,
+      )
+      expect(document.querySelector('h6')).not.toBeNull()
+      const violations = await runHeadingOrderCheck()
+      expect(violations.length).toBeGreaterThan(0)
+    })
+
+    it('continues the page heading order when emptyHeadingLevel is supplied', async () => {
+      renderWithProviders(
+        <div>
+          <h1>Notes</h1>
+          <DataTable
+            rows={[]}
+            columns={BASE_COLUMNS}
+            rowKey={keyOf}
+            emptyHeadingLevel="h2"
+          />
+        </div>,
+      )
+      expect(document.querySelector('h6')).toBeNull()
+      expect(document.querySelector('h2')).not.toBeNull()
+      const violations = await runHeadingOrderCheck()
+      expect(violations).toHaveLength(0)
+    })
   })
 })

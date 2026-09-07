@@ -36,10 +36,19 @@
  *
  * Escape and backdrop clicks call onCancel (never onConfirm); while
  * confirmLoading is set both exits are inert.
+ *
+ * Arming is announced: under the doubleConfirm guard a visually hidden
+ * polite live region (role="status") sits inside the dialog, empty while
+ * the confirm is unarmed, and fills with the confirm-again label the
+ * moment the first click arms the button. The button relabels itself
+ * (visual feedback) but a label change under focus is not something a
+ * screen reader reports reliably; the live region is the non-visual
+ * channel for "the next click will confirm".
  */
 
 import { useEffect, useId, useState } from 'react'
 import type { ReactNode } from 'react'
+import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Dialog from '@mui/material/Dialog'
 import DialogActions from '@mui/material/DialogActions'
@@ -148,6 +157,32 @@ export function ConfirmDialog({
         <DialogContentText id={messageId}>
           {message ?? t('confirmDialog.message')}
         </DialogContentText>
+        {/* The arming live region. Mounted (empty) while the dialog shows
+            under the doubleConfirm guard -- a region that appeared
+            together with its text could not announce the arm -- and
+            filled when the first click arms the confirm. Visually hidden
+            through the clip technique (never display:none: a hidden
+            region would not be live). */}
+        {variant === 'danger' && doubleConfirm ? (
+          <Box
+            component="p"
+            role="status"
+            sx={{
+              clip: 'rect(0 0 0 0)',
+              clipPath: 'inset(50%)',
+              height: 1,
+              width: 1,
+              overflow: 'hidden',
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              whiteSpace: 'nowrap',
+              margin: 0,
+            }}
+          >
+            {armed ? t('confirmDialog.confirmAgainLabel') : ''}
+          </Box>
+        ) : null}
       </DialogContent>
       <DialogActions>
         <Button onClick={handleRequestClose} disabled={busy} color="inherit">

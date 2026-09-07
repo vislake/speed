@@ -8,33 +8,15 @@
 
 import { act } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import axe from 'axe-core'
 import { useTranslation, switchLanguage } from '@speed/i18n'
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import enUS from '../locales/en-US.json' with { type: 'json' }
 import { renderWithProviders } from '../../test-utils/render.js'
-import { expectNoAxeViolations } from '../../test-utils/axe.js'
+import {
+  expectNoAxeViolations,
+  runHeadingOrderCheck,
+} from '../../test-utils/axe.js'
 import { EmptyState } from './EmptyState.js'
-
-/**
- * Runs ONLY axe-core's heading-order rule over the current document and
- * returns its violations, unlike expectNoAxeViolations (test-utils/axe.js)
- * which runs the full page-oriented rule set and asserts none exist. This
- * component's own tests otherwise render EmptyState with no ancestor
- * heading at all, so the full run above can never reach a heading-order
- * violation regardless of what level EmptyState's title renders as -- the
- * exact gap the account-ui audit named. Scoping to one rule lets these
- * two tests supply a real h1 ancestor and assert on the skip directly,
- * without adopting the page-level rules (document-title, html-has-lang,
- * region) the shared harness disables for good reason (see its own
- * header comment) but that are irrelevant to heading-order anyway.
- */
-async function runHeadingOrderCheck(): Promise<readonly axe.Result[]> {
-  const result = await axe.run(document, {
-    runOnly: { type: 'rule', values: ['heading-order'] },
-  })
-  return result.violations
-}
 
 describe('EmptyState', () => {
   it('renders the empty variant with its built-in zh-CN texts by default', () => {

@@ -12,13 +12,19 @@
  * upload in flight is host state, running against host transport code.
  *
  * Announcements: when a row leaves `uploading` for `succeeded` or
- * `failed`, the component announces the settle once in a single polite
- * live region (role="status"), stored structurally and rendered in the
- * language active at render time. Only status transitions announce --
- * rows the host seeds on mount, progress-only changes and rows a host
- * heals directly from `failed` to `succeeded` stay quiet -- and a retry
- * (a `failed` row returning to `uploading`) clears the region first, so a
- * repeat of an identical failure re-announces instead of sitting silent.
+ * `failed` -- or joins the queue already settled, its transfer having run
+ * entirely in host code before an `uploading` commit ever rendered -- the
+ * component announces the settle once in a single polite live region
+ * (role="status"), stored structurally and rendered in the language
+ * active at render time. Rows the host seeds on mount, rows appended as
+ * `uploading`, progress-only changes and rows a host heals directly from
+ * `failed` to `succeeded` stay quiet. Two repeat paths stay audible in
+ * the region, whose text is the only thing a screen reader hears: a
+ * retry (a `failed` row returning to `uploading`) clears the region
+ * first, and a settle whose announcement text equals the standing one (a
+ * second same-name row reaching the same outcome) empties the region and
+ * re-announces a tick later -- identical text is not a change, and a
+ * live region only speaks about changes.
  *
  * Render shape: rows render as cards below the trigger once the queue has
  * content; an empty `rows` renders no queue at all. Each row's action-
@@ -119,13 +125,28 @@ const HiddenFileInput = styled('input')({
   width: 1,
 })
 
-/** The last settle, for the live region. Rendered at render time in the active language. */
-type Announcement = { readonly kind: 'uploaded' | 'failed'; readonly name: string } | null
+/**
+ * The last settle, for the live region. Rendered at render time in the
+ * active language. `rowId` distinguishes two rows that announce the same
+ * text (same name, same outcome): the region itself cannot re-speak
+ * identical text, so the settle logic uses the row identity to decide
+ * when a clear-then-reannounce is owed.
+ */
+type Announcement = {
+  readonly kind: 'uploaded' | 'failed'
+  readonly name: string
+  readonly rowId: string
+} | null
 
 /** One commit's announcement effect, derived by diffing `rows` against the previous render's. */
 type AnnouncementChange =
   | { readonly type: 'clear' }
-  | { readonly type: 'announce'; readonly kind: 'uploaded' | 'failed'; readonly name: string }
+  | {
+      readonly type: 'announce'
+      readonly kind: 'uploaded' | 'failed'
+      readonly name: string
+      readonly rowId: string
+    }
   | null
 
 /** Clamp a progress fraction to [0, 1] and scale it to a percent for MUI. */
@@ -158,14 +179,48 @@ export function FileUploader({
   const previousRowsRef = useRef<readonly FileUploaderRow[] | null>(null)
   const [dragDepth, setDragDepth] = useState(0)
 
-  // Diff the rows against the previous commit to find status transitions:
-  // only they announce. Mounted rows (the first commit) are seeded and
-  // stay quiet; an empty commit clears any standing announcement; a row
+  // Mirror of the announcement state for the diff effect below: that
+  // effect must compare an incoming settle against the announcement the
+  // previous commit rendered, and it must not re-run on every
+  // announcement change (its deps stay `[rows]`, or re-running would
+  // re-arm its timers). A pure per-render copy of this component's own
+  // state written during render.
+  const announcementRef = useRef<Announcement>(null)
+  announcementRef.current = announcement
+  // The deferred re-announcement of a settle whose text repeats the
+  // standing one (see the diff effect). Owned across effect instances;
+  // cleared only when superseded, when the queue empties, or on unmount.
+  const reannounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Unmount backstop: a pending re-announcement must never setState on an
+  // unmounted component. The mount-only shape keeps this cleanup from
+  // running between the effect's own re-runs.
+  useEffect(() => {
+    return () => {
+      if (reannounceTimerRef.current !== null) {
+        clearTimeout(reannounceTimerRef.current)
+        reannounceTimerRef.current = null
+      }
+    }
+  }, [])
+
+  // Diff the rows against the previous commit to find settles: a row
+  // leaving `uploading` announces; a row appended already settled (its
+  // transfer ran entirely in host code, so no uploading commit ever
+  // rendered) announces too -- only rows the host seeds on mount (the
+  // first commit, previous === null) and rows appended as `uploading`
+  // stay quiet. An empty commit clears any standing announcement; a row
   // returning to `uploading` (a retry) clears it so an identical later
-  // failure re-announces; a row leaving `uploading` announces the settle,
-  // the last one in list order winning a commit with several. Every other
-  // flip (a host healing a failed row straight to succeeded) is not a
-  // transfer transition and announces nothing.
+  // failure re-announces; the last settle in list order wins a commit
+  // with several; every other flip (a host healing a failed row straight
+  // to succeeded) is not a transfer settle and announces nothing.
+  //
+  // A settle whose announcement text equals the standing one (a second
+  // same-name row reaching the same outcome) empties the region and
+  // re-announces on the next tick: a live region only speaks when its
+  // text changes, so identical text sitting on top of identical text
+  // would otherwise be silent -- the same clear-then-refill the retry
+  // path relies on.
   useEffect(() => {
     const previous = previousRowsRef.current
     previousRowsRef.current = rows
@@ -174,12 +229,27 @@ export function FileUploader({
     }
     if (rows.length === 0) {
       setAnnouncement(null)
+      if (reannounceTimerRef.current !== null) {
+        clearTimeout(reannounceTimerRef.current)
+        reannounceTimerRef.current = null
+      }
       return
     }
     let change: AnnouncementChange = null
     for (const row of rows) {
       const before = previous.find((candidate) => candidate.id === row.id)
-      if (before === undefined || before.status === row.status) {
+      if (before === undefined) {
+        if (row.status !== 'uploading') {
+          change = {
+            type: 'announce',
+            kind: row.status === 'succeeded' ? 'uploaded' : 'failed',
+            name: row.name,
+            rowId: row.id,
+          }
+        }
+        continue
+      }
+      if (before.status === row.status) {
         continue
       }
       if (row.status === 'uploading') {
@@ -189,6 +259,7 @@ export function FileUploader({
           type: 'announce',
           kind: row.status === 'succeeded' ? 'uploaded' : 'failed',
           name: row.name,
+          rowId: row.id,
         }
       }
     }
@@ -196,15 +267,38 @@ export function FileUploader({
       return
     }
     const nextChange = change
-    setAnnouncement((current) => {
-      if (nextChange.type === 'clear') {
-        return current === null ? current : null
+    if (nextChange.type === 'clear') {
+      setAnnouncement((current) => (current === null ? current : null))
+      return
+    }
+    const standing = announcementRef.current
+    const repeatsStandingText =
+      standing !== null &&
+      standing.kind === nextChange.kind &&
+      standing.name === nextChange.name
+    if (repeatsStandingText) {
+      setAnnouncement(null)
+      if (reannounceTimerRef.current !== null) {
+        clearTimeout(reannounceTimerRef.current)
       }
-      return current !== null &&
-        current.kind === nextChange.kind &&
-        current.name === nextChange.name
-        ? current
-        : { kind: nextChange.kind, name: nextChange.name }
+      reannounceTimerRef.current = setTimeout(() => {
+        reannounceTimerRef.current = null
+        setAnnouncement((current) =>
+          current === null
+            ? {
+                kind: nextChange.kind,
+                name: nextChange.name,
+                rowId: nextChange.rowId,
+              }
+            : current,
+        )
+      }, 0)
+      return
+    }
+    setAnnouncement({
+      kind: nextChange.kind,
+      name: nextChange.name,
+      rowId: nextChange.rowId,
     })
   }, [rows])
 

@@ -20,6 +20,28 @@ export interface AxeAssertionOptions {
 }
 
 /**
+ * Run ONLY axe-core's heading-order rule over the current document and
+ * return its violations, unlike expectNoAxeViolations (below) which runs
+ * the full page-oriented rule set and asserts none exist. Components
+ * whose heading level depends on the real page's own heading order
+ * (EmptyState and the DataTable empty placeholder render a real heading
+ * element whose correct level only the host knows) are otherwise tested
+ * with no ancestor heading at all, so the full run above can never reach
+ * a heading-order violation regardless of what level they render as --
+ * the exact gap the account-ui audit named. Scoping to one rule lets
+ * those tests supply a real h1 ancestor and assert on the skip directly,
+ * without adopting the page-level rules (document-title, html-has-lang,
+ * region) the shared harness disables for good reason (see its own
+ * header comment) but that are irrelevant to heading-order anyway.
+ */
+export async function runHeadingOrderCheck(): Promise<readonly axe.Result[]> {
+  const result = await axe.run(document, {
+    runOnly: { type: 'rule', values: ['heading-order'] },
+  })
+  return result.violations
+}
+
+/**
  * Assert the current document has no axe violations, with
  * color-contrast disabled (jsdom cannot compute colors -- see header).
  */

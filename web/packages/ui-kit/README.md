@@ -19,7 +19,7 @@ string lives in the bilingual `ui-kit` namespace registered through
 | `theme/createAppTheme.ts` | `createAppTheme`, `AppTheme` |
 | `theme/AppThemeProvider.tsx` | `AppThemeProvider`, `AppThemeProviderProps` |
 | `components/PageHeader.tsx` | `PageHeader`, `PageHeaderProps`, `PageHeaderBreadcrumb` |
-| `components/EmptyState.tsx` | `EmptyState`, `EmptyStateProps`, `EmptyStateVariant` |
+| `components/EmptyState.tsx` | `EmptyState`, `EmptyStateProps`, `EmptyStateVariant`, `EmptyStateHeadingLevel` |
 | `components/ConfirmDialog.tsx` | `ConfirmDialog`, `ConfirmDialogProps`, `ConfirmDialogVariant` |
 | `components/FileUploader.tsx` | `FileUploader`, `FileUploaderProps`, `FileUploaderRow`, `FileUploaderRowStatus` |
 | `components/FormField.tsx` | `FormField`, `FormFieldProps`, `FormFieldRenderState`, `REQUIRED_ERROR_KEY` |
@@ -252,9 +252,13 @@ the failed state showing the rejection's message (host-written and
 host-translated, the same contract as the form family's error text);
 the row's retry affordance reports up and the host hands the same
 `File` back to its transport with a fresh context. Settles announce
-once each in a single polite live region; a retry clears it first, so
-an identical later failure re-announces instead of sitting silent. This
-exact composition -- the `UploadPanel` above rendered beside the
+once each in a single polite live region -- a row the host appends
+already failed (no uploading phase was ever rendered) announces like a
+settle that passed through uploading -- and a retry clears the region
+first, so an identical later failure re-announces instead of sitting
+silent; a second same-name row reaching the same outcome as a standing
+announcement re-announces through a clear-then-refill on the next tick.
+This exact composition -- the `UploadPanel` above rendered beside the
 `MembersPage` of `src/usage-example.test.tsx` (a `DataTable` screen
 whose sorting, selection, filtering and pagination are all controlled
 from host state), the panel's transport a scripted fetch stub answering
@@ -373,7 +377,10 @@ behavior every caller had before this prop existed, it is not usually
 the right level. The visual size stays fixed regardless of
 `headingLevel` -- MUI's `component` override changes the semantic tag,
 never the `variant="h6"` look, the same style/semantics split
-`PageHeader`'s `h1` and every section's own `h2` already rely on.
+`PageHeader`'s `h1` and every section's own `h2` already rely on. The
+same obligation extends to an empty `DataTable`'s stock placeholder:
+`DataTable` forwards the level through its own `emptyHeadingLevel`
+prop (default `'h6'`, unchanged for hosts that do not pass it).
 
 ### ConfirmDialog
 
@@ -509,8 +516,15 @@ footer with namespace labels; `count: -1` (unknown total, infinite
 scroll) switches the counter to the no-total wording. A `loading` table
 shows a status row only while `rows` is empty (never blanks content
 mid-read); an empty table renders the stock EmptyState placeholder,
-overridable via `emptyTitle`/`emptyDescription`/`emptyAction`. Extra
-props: `rowKey?`, `size?` ('small' | 'medium'), `sx?`.
+overridable via `emptyTitle`/`emptyDescription`/`emptyAction`, whose
+title level the host continues the page's heading order through
+`emptyHeadingLevel?` (default `'h6'` -- see the EmptyState section for
+why the stock default cannot be right for every page). The loading
+announcement is a live region mounted empty for the whole empty phase
+and filled on refresh (same rule as FileUploader's region: a live
+region announces content changes that follow its own existence, never
+text that mounts with it), so the empty-list-then-refresh path is
+audible. Extra props: `rowKey?`, `size?` ('small' | 'medium'), `sx?`.
 
 **Horizontal-scroll container is a stated, tested contract, not an
 accident of implementation**: the table always renders inside MUI's
@@ -634,9 +648,15 @@ wraps onto a second line instead of overflowing a narrow queue card --
 purely additive CSS, no prop or behavior change. Settles announce in a single polite
 live region (`role="status"`, rendered only while the queue has
 content), stored structurally and rendered in the language active at
-render time: only a row leaving `uploading` announces (a retry clears
-the region first, so an identical later failure re-announces), while
-rows the host seeds on mount and progress-only changes stay quiet.
+render time: a row leaving `uploading` announces, and so does a row the
+host appends already settled (its transfer ran entirely in host code,
+with no uploading commit in between); rows the host seeds on mount,
+rows appended as `uploading` and progress-only changes stay quiet. A
+retry clears the region first so an identical later failure
+re-announces, and a settle whose announcement text would repeat the
+standing one (a second same-name row reaching the same outcome) empties
+the region and re-announces a tick later -- a live region only speaks
+when its text changes.
 Props: `rows` (required), `onSelectFiles?`, `onCancel?`, `onRetry?`,
 `onRemove?`, `multiple?`, `accept?`, `allowDrop?`, `disabled?`,
 `chooseFilesLabel?`, `sx?`.

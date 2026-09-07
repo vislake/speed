@@ -578,6 +578,51 @@ describe('FileUploader', () => {
       expect(view.getByRole('status')).toHaveTextContent('')
     })
 
+    it('announces a row the host appends already failed, with no uploading phase ever rendered (P2-7 regression)', () => {
+      // The upload failed so fast the host never committed an uploading
+      // row for it: the failed row is appended directly. The old
+      // announcement condition waited for an uploading -> settle
+      // transition, so an appended settled row was skipped exactly like a
+      // mount-seeded one -- the code over-applied the comment's
+      // mount-time-only exemption. Appending an uploading row still
+      // announces nothing.
+      const view = renderHarness({
+        rows: [uploadingRow('r1', 'a.jpg')],
+      })
+      view.setRows([uploadingRow('r1', 'a.jpg'), failedRow('r2', 'b.jpg', 'boom')])
+      expect(view.getByRole('status')).toHaveTextContent(failedAnnouncement('b.jpg'))
+
+      view.setRows([
+        uploadingRow('r1', 'a.jpg'),
+        failedRow('r2', 'b.jpg', 'boom'),
+        uploadingRow('r3', 'c.jpg'),
+      ])
+      expect(view.getByRole('status')).toHaveTextContent(failedAnnouncement('b.jpg'))
+    })
+
+    it('re-announces when a second same-name row reaches the same outcome as the standing announcement (P2-8 regression)', async () => {
+      // Row b shares row a's name and reaches the same failed outcome.
+      // Its announcement text equals the standing one, and a live region
+      // only speaks when its text changes -- so the region must empty
+      // first and re-fill a beat later, exactly the mechanism the retry
+      // path already relies on (see "clears the region on a retry"). The
+      // intermediate empty state is what proves the re-announcement: the
+      // final text alone is indistinguishable from the standing one.
+      const view = renderHarness({ rows: [uploadingRow('a', 'scan.jpg')] })
+      view.setRows([failedRow('a', 'scan.jpg', 'boom')])
+      expect(view.getByRole('status')).toHaveTextContent(failedAnnouncement('scan.jpg'))
+
+      view.setRows([
+        failedRow('a', 'scan.jpg', 'boom'),
+        failedRow('b', 'scan.jpg', 'boom'),
+      ])
+      expect(view.getByRole('status')).toHaveTextContent('')
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      })
+      expect(view.getByRole('status')).toHaveTextContent(failedAnnouncement('scan.jpg'))
+    })
+
     it('clears a standing announcement when the queue empties, and a later pick is quiet until its settle', () => {
       const view = renderHarness({
         rows: [uploadingRow('r1', 'a.jpg')],

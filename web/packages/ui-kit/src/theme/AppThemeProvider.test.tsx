@@ -7,6 +7,7 @@
  */
 
 import { act, render } from '@testing-library/react'
+import { useEffect } from 'react'
 import { useTheme } from '@mui/material/styles'
 import type { Theme } from '@mui/material/styles'
 import { enUS, zhCN } from '@mui/material/locale'
@@ -105,6 +106,67 @@ describe('AppThemeProvider', () => {
       await switchLanguage(i18n, 'en-US')
     })
     expect(i18n.language).toBe('en-US')
+  })
+
+  it('picks up a language a child switches to inside its own mount effect (P1-4 regression)', async () => {
+    // PRE-FIX (P1-4): AppThemeProvider snapshots i18n.language into state
+    // at first render and registers its languageChanged listener in an
+    // effect. React runs child effects before parent effects, so a child
+    // that switches language inside its own mount effect emits the event
+    // before the provider's listener exists -- the MUI built-in texts stay
+    // on the snapshot language permanently. POST-FIX: (re)attaching the
+    // listener re-adopts the instance's live language in the same effect,
+    // so a switch that fired before the listener existed is recovered at
+    // attach time instead of being lost.
+    const i18n = createUiKitI18n('zh-CN')
+    let seen: Theme | undefined
+    function SwitchingChild() {
+      useEffect(() => {
+        void switchLanguage(i18n, 'en-US')
+      }, [])
+      return null
+    }
+    render(
+      <I18nextProvider i18n={i18n}>
+        <AppThemeProvider i18n={i18n}>
+          <ThemeProbe onTheme={(t) => (seen = t)} />
+          <SwitchingChild />
+        </AppThemeProvider>
+      </I18nextProvider>,
+    )
+    await act(async () => {})
+    expect(i18n.language).toBe('en-US')
+    const enLabel = enUS.components?.MuiTablePagination?.defaultProps?.labelRowsPerPage
+    expect(paginationLabel(seen)).toBe(enLabel)
+    const zhLabel = zhCN.components?.MuiTablePagination?.defaultProps?.labelRowsPerPage
+    expect(paginationLabel(seen)).not.toBe(zhLabel)
+  })
+
+  it('adopts the language of a swapped-in i18n instance without waiting for an event (P1-4 regression)', () => {
+    // PRE-FIX (P1-4): the effect re-subscribes to a new i18n instance when
+    // the prop changes identity, but the language state still holds the
+    // first instance's snapshot -- a new instance never emits
+    // languageChanged for the language it was created on, so MUI built-in
+    // texts stay in the old instance's language forever. POST-FIX: the
+    // re-attach re-adopts the new instance's live language.
+    const first = createUiKitI18n('zh-CN')
+    const second = createUiKitI18n('en-US')
+    const seen: Theme[] = []
+    const tree = (i18n: ReturnType<typeof createUiKitI18n>) => (
+      <I18nextProvider i18n={i18n}>
+        <AppThemeProvider i18n={i18n}>
+          <ThemeProbe onTheme={(t) => seen.push(t)} />
+        </AppThemeProvider>
+      </I18nextProvider>
+    )
+    const { rerender } = render(tree(first))
+    const zhLabel = zhCN.components?.MuiTablePagination?.defaultProps?.labelRowsPerPage
+    expect(paginationLabel(seen[0])).toBe(zhLabel)
+    rerender(tree(second))
+    expect(second.language).toBe('en-US')
+    const enLabel = enUS.components?.MuiTablePagination?.defaultProps?.labelRowsPerPage
+    expect(paginationLabel(seen.at(-1))).toBe(enLabel)
+    expect(paginationLabel(seen.at(-1))).not.toBe(zhLabel)
   })
 
   it('renders children inside the theme context', () => {
