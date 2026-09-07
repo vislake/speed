@@ -1855,3 +1855,83 @@ func TestAuditCapturePlugin_WithTenantSession_NestedTransactionRollback_InnerWri
 		t.Errorf("published events = %+v, want outer-1 then outer-2 creates", events)
 	}
 }
+
+// TestAuditCapturePlugin_WithTenantSession_SecondRollbackToSameSavepoint_DiscardedRegionNeverPublishes
+// pins the regression that closed the savepoint-aware buffer's own residual:
+// a ROLLBACK TO SAVEPOINT does not destroy its savepoint on either supported
+// dialect (SQLite and PostgreSQL both retain the named savepoint after
+// rolling back to it, so a caller may legally roll back to the same
+// still-live savepoint a second time), and the buffer must mirror that.
+// Before this fix the first rollback-to closed the savepoint's frame, so
+// writes appended after it were invisible to the second rollback-to: the
+// discard-2 create was pruned from the database by that second rollback but
+// still rode the outer commit's publish — a ghost audit event for a row that
+// never came into existence, exactly the class this mechanism exists to
+// eliminate (before the fix the outer commit published three events —
+// outer-1, discard-2, outer-2 — one of them for a row the database had
+// discarded; now exactly the two committed rows' events).
+func TestAuditCapturePlugin_WithTenantSession_SecondRollbackToSameSavepoint_DiscardedRegionNeverPublishes(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	err := dbkit.WithTenantSession(ctx, db, func(tx *gorm.DB) error {
+		if err := tx.Create(&testutil.Widget{ID: "outer-1", TenantID: "tenant-a", Name: "committed", Value: 1}).Error; err != nil {
+			return err
+		}
+		if err := tx.SavePoint("audit_reused_sp").Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&testutil.Widget{ID: "discard-1", TenantID: "tenant-a", Name: "rolled-back-first", Value: 2}).Error; err != nil {
+			return err
+		}
+		if err := tx.RollbackTo("audit_reused_sp").Error; err != nil {
+			return err
+		}
+		// The rollback-to above left the savepoint live on both dialects, so
+		// a second rollback-to of the same name is legal — and work done
+		// since the first rollback sits inside the still-live savepoint's
+		// region once more, discarded by the second rollback.
+		if err := tx.Create(&testutil.Widget{ID: "discard-2", TenantID: "tenant-a", Name: "rolled-back-second", Value: 3}).Error; err != nil {
+			return err
+		}
+		if err := tx.RollbackTo("audit_reused_sp").Error; err != nil {
+			return err
+		}
+		return tx.Create(&testutil.Widget{ID: "outer-2", TenantID: "tenant-a", Name: "committed-too", Value: 4}).Error
+	})
+	if err != nil {
+		t.Fatalf("WithTenantSession() error = %v", err)
+	}
+
+	// Database ground truth first: only the two outer rows may exist — the
+	// first rollback discards discard-1, and the second discards discard-2,
+	// whose create was in flight between the two rollbacks of the same
+	// still-live savepoint.
+	for _, id := range []string{"outer-1", "outer-2"} {
+		var count int64
+		if err := db.Raw(`SELECT COUNT(*) FROM widgets WHERE id = ?`, id).Scan(&count).Error; err != nil {
+			t.Fatalf("%s count query: %v", id, err)
+		}
+		if count != 1 {
+			t.Errorf("row count for %s = %d, want 1 (the row committed with the outer transaction)", id, count)
+		}
+	}
+	for _, id := range []string{"discard-1", "discard-2"} {
+		var count int64
+		if err := db.Raw(`SELECT COUNT(*) FROM widgets WHERE id = ?`, id).Scan(&count).Error; err != nil {
+			t.Fatalf("%s count query: %v", id, err)
+		}
+		if count != 0 {
+			t.Errorf("row count for %s = %d, want 0 (the row must be rolled back in the database)", id, count)
+		}
+	}
+
+	events := bus.captured()
+	if len(events) != 2 {
+		t.Fatalf("captured %d events, want exactly 2 (outer-1 and outer-2 creates only; the discarded savepoint-region creates must never be published — discard-2 least of all, since a rollback-to of a savepoint the first rollback-to left live is what discarded it)", len(events))
+	}
+	if events[0].ResourceID != "outer-1" || events[1].ResourceID != "outer-2" {
+		t.Errorf("published events = %+v, want outer-1 then outer-2 creates", events)
+	}
+}

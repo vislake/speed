@@ -222,8 +222,10 @@ type auditBufferCtxKey struct{}
 // this mechanism exists to close. beginSavepoint/rollbackToSavepoint (fed by
 // the plugin's raw-statement observer, see afterSavepointSQL) mark the
 // event index each savepoint opened at and prune everything appended since
-// a discarded savepoint, so only events whose writes survive the outer
-// commit are ever drained.
+// the savepoint's region opened — a rollback-to keeps the target savepoint
+// itself live (both dialects retain it), so its frame keeps pruning until
+// the transaction's own end — and only events whose writes survive the
+// outer commit are ever drained.
 type auditBuffer struct {
 	mu         sync.Mutex
 	events     []pkgcore.Event
@@ -233,9 +235,12 @@ type auditBuffer struct {
 // auditSavepointMark records that a SAVEPOINT named name is open, and that
 // eventsAt is the length of the buffer when it opened — every event
 // appended at or after eventsAt belongs to the savepoint's region and must
-// be pruned if a rollback-to discards the savepoint. Frames are ordered
-// oldest first (a stack), since SQL savepoints nest: rolling back to one
-// discards every later savepoint too.
+// be pruned if a rollback-to discards that region of work. Frames are
+// ordered oldest first (a stack), since SQL savepoints nest: rolling back
+// to one discards every later savepoint too — though, mirroring the SQL, a
+// rolled-back-to savepoint's own frame survives the rollback (see
+// rollbackToSavepoint), so it can keep pruning events its still-live
+// savepoint later discards.
 type auditSavepointMark struct {
 	name     string
 	eventsAt int
@@ -306,12 +311,21 @@ func (b *auditBuffer) beginSavepoint(name string) {
 }
 
 // rollbackToSavepoint prunes every event appended since the most recent
-// open savepoint named name, and closes that savepoint and every savepoint
-// opened after it: a ROLLBACK TO SAVEPOINT discards all work done since the
-// target savepoint opened, inner savepoints included, and events describing
-// discarded work must never be published. It mirrors the SQL semantics for
-// a rollback-to of a savepoint that no longer exists (rolled back already,
-// or never opened): the database ignores it, so the buffer prunes nothing.
+// open savepoint named name, and closes every savepoint opened after it —
+// but never the named savepoint itself: a ROLLBACK TO SAVEPOINT discards
+// all work done since the target savepoint opened, inner savepoints
+// included, while both supported dialects retain the target (SQLite and
+// PostgreSQL both leave a rolled-back-to savepoint live, so a caller may
+// legally roll back to the same savepoint a second time), and events
+// describing discarded work must never be published. The target's frame
+// therefore stays open with its original eventsAt: a second rollback-to of
+// the same still-live savepoint continues truncating the buffer to the same
+// point, exactly as the database keeps reverting to the same savepoint.
+// Only the transaction's own end closes a frame — drain, which
+// WithTenantSession calls after the outer transaction committed. It mirrors
+// the SQL semantics for a rollback-to of a savepoint that no longer exists
+// (rolled back already through an enclosing savepoint, released, or never
+// opened): the database ignores it, so the buffer prunes nothing.
 func (b *auditBuffer) rollbackToSavepoint(name string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -324,7 +338,13 @@ func (b *auditBuffer) rollbackToSavepoint(name string) {
 			b.events[j] = pkgcore.Event{}
 		}
 		b.events = b.events[:cut]
-		b.savepoints = b.savepoints[:i]
+		// The frames after the target's are savepoints the database just
+		// destroyed (rolling back to a savepoint discards every savepoint
+		// established after it) — drop them. The target's own frame stays:
+		// rollback-to does not destroy its savepoint on either dialect, and
+		// keeping the frame is what lets a second rollback-to of the same
+		// still-live savepoint prune events appended since the first one.
+		b.savepoints = b.savepoints[:i+1]
 		return
 	}
 }
