@@ -34,9 +34,11 @@ const defaultAnalyticsBufferSize = 1024
 // Stop delivers every event still buffered into the aggregator before
 // returning -- the shutdown counterpart of the fail-open rule above. The
 // "never silently lost" promise holds across the Stop boundary: an event
-// is dropped only where dropping is explicit (a full buffer, or a Record
-// made after Stop has latched closed), and every such drop is counted by
-// Dropped().
+// is lost only where the loss is explicit and counted (a full buffer, a
+// Record made after Stop has latched closed, or a buffered event whose
+// Ingest into the aggregator failed -- deliver counts all three into
+// Dropped(), the third added so a delivery failure is not a silent loss
+// any more than a full buffer is).
 //
 // # No idempotency dedup this round
 //
@@ -128,15 +130,23 @@ func (r *AnalyticsRecorder) drop(ctx context.Context, event UsageEvent) {
 	)
 }
 
-// Dropped returns the number of events dropped so far -- because the
-// buffer was full, or because the recorder had already been stopped when
-// Record was called -- for a host to wire into its own metrics.
+// Dropped returns the number of events lost so far -- because the buffer
+// was full, because the recorder had already been stopped when Record was
+// called, or because a buffered event's Ingest into the aggregator failed
+// (deliver counts that too) -- for a host to wire into its own metrics.
 func (r *AnalyticsRecorder) Dropped() int64 { return r.dropped.Load() }
 
 // Start runs the background flush loop until ctx is done or Stop is
 // called. Safe to call with one loop running at a time: a Start while a
-// loop is already running is a no-op, and a Start after a completed Stop
-// runs a fresh loop with the new ctx.
+// loop is already running is a no-op, and a Start after the running loop
+// has exited -- a completed Stop, or a canceled ctx, which run clears the
+// started flag for itself on exit (see run) -- runs a fresh loop with the
+// new ctx. A fresh loop consumes whatever the previous one left buffered,
+// so events Recorded between a cancel and the restart are delivered, not
+// lost. Calling Start immediately after canceling the previous ctx,
+// before the exiting loop has finished its own exit, is still a no-op by
+// the "one loop at a time" rule; wait for the exit (Stop, or observe the
+// loop's end) before restarting.
 func (r *AnalyticsRecorder) Start(ctx context.Context) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -153,23 +163,51 @@ func (r *AnalyticsRecorder) Start(ctx context.Context) {
 }
 
 // run drains r.events into r.aggregator until stopped. A per-event
-// Ingest failure is logged and does not stop the loop -- one malformed or
-// transiently failing event must not silence the rest of the buffer,
-// which is the whole point of a fail-open tier. stop and done are passed
-// as arguments, never read off the receiver: Start and Stop exchange them
-// under mu, and the goroutine must not touch fields the caller is
-// mutating.
-func (r *AnalyticsRecorder) run(ctx context.Context, stop <-chan struct{}, done chan<- struct{}) {
+// Ingest failure is logged and counted into Dropped (see deliver) and
+// does not stop the loop -- one malformed or transiently failing event
+// must not silence the rest of the buffer, which is the whole point of a
+// fail-open tier. stop and done are passed as arguments, never read off
+// the receiver: Start and Stop exchange them under mu, and the goroutine
+// must not touch fields the caller is mutating.
+//
+// On exit it clears the started flag for its own loop generation unless
+// Stop is already handling that: a loop that ends because Stop closed
+// stop leaves the clearing (and the drain) to Stop's own post-wait code,
+// while a loop that ends because ctx was canceled has no Stop to do it --
+// without the clearing, started would stay true forever, a later Start
+// would no-op, and Record would buffer into a loop that would never run
+// again (reviewer finding P3-metering-14). Buffered events survive the
+// exit: the stopped latch is NOT set here, so a Record made after the
+// cancel still buffers honestly, and whatever sits in the buffer when the
+// next Start runs a fresh loop -- or when a later Stop drains -- is
+// delivered then. The generation check (r.done == done) makes the
+// clearing a no-op when a newer Start has already replaced the channels.
+func (r *AnalyticsRecorder) run(ctx context.Context, stop <-chan struct{}, done chan struct{}) {
 	defer close(done)
 	for {
 		select {
 		case event := <-r.events:
 			r.deliver(ctx, event)
 		case <-stop:
+			r.clearStartedIfCurrent(done)
 			return
 		case <-ctx.Done():
+			r.clearStartedIfCurrent(done)
 			return
 		}
+	}
+}
+
+// clearStartedIfCurrent clears the started flag when the loop that is
+// exiting is still the live generation, so a later Start can run a fresh
+// loop. A Stop that initiated this exit clears the flag itself after
+// waiting on done (see Stop); the clearing here is idempotent with that,
+// and is what makes a ctx-canceled loop leave Start restartable.
+func (r *AnalyticsRecorder) clearStartedIfCurrent(done chan struct{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.done == done {
+		r.started = false
 	}
 }
 
@@ -238,11 +276,17 @@ func (r *AnalyticsRecorder) drain() {
 }
 
 // deliver attempts to ingest event into the aggregator, logging -- never
-// propagating -- a per-event failure. Shared by the flush loop and Stop's
-// drain so both honor the identical contract: one bad event must not
-// stop the rest of the buffer from being delivered.
+// propagating -- a per-event failure, and counting the failed event into
+// Dropped (reviewer finding P2-metering-11): a buffered event whose
+// Ingest fails is a lost event exactly like a full-buffer drop -- it will
+// never reach the summary row or the real-time counter -- so the
+// fail-open tier's "an event is dropped, or delivered; it is never
+// silently lost" accounting must count it. Shared by the flush loop and
+// Stop's drain so both honor the identical contract: one bad event must
+// not stop the rest of the buffer from being delivered.
 func (r *AnalyticsRecorder) deliver(ctx context.Context, event UsageEvent) {
 	if err := r.aggregator.Ingest(ctx, event); err != nil {
+		r.dropped.Add(1)
 		obs.FromContext(ctx).Warn("metering.analytics_ingest_failed",
 			"error", err,
 			"tenant_id", event.TenantID,

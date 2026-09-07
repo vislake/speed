@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/go/metering/internal/testutil"
 	"github.com/vislake/speed/go/metering/migrations"
@@ -125,18 +126,25 @@ func TestDispatcher_RunOnce_DeliveryFailure_LeavesRowPendingWithAttemptRecorded(
 		t.Fatalf("delivered = %d, want 0 (the aggregator's own database connection is closed)", delivered)
 	}
 
-	pending, err := claimPendingOutboxRecords(ctx, db, 10)
+	// Read the row back directly rather than through the claim query: a
+	// failed row sits inside its re-claim window (RetryAfter is in the
+	// future), which is exactly what the claim query must refuse to
+	// return.
+	got, found, err := findOutboxByIdempotencyKey(ctx, db, "tenant-a", "idem-1")
 	if err != nil {
-		t.Fatalf("claimPendingOutboxRecords: %v", err)
+		t.Fatalf("findOutboxByIdempotencyKey: %v", err)
 	}
-	if len(pending) != 1 {
-		t.Fatalf("pending rows = %d, want 1 (the row must not be lost)", len(pending))
+	if !found {
+		t.Fatal("the outbox row is gone after the failed delivery -- the row must not be lost")
 	}
-	if pending[0].Attempts != 1 {
-		t.Errorf("Attempts = %d, want 1", pending[0].Attempts)
+	if got.Attempts != 1 {
+		t.Errorf("Attempts = %d, want 1", got.Attempts)
 	}
-	if pending[0].LastError == "" {
+	if got.LastError == "" {
 		t.Error("LastError is empty, want the delivery failure's message")
+	}
+	if got.RetryAfter == nil || !got.RetryAfter.After(time.Now()) {
+		t.Errorf("RetryAfter = %v, want a future moment (the failed row is scheduled for a later re-claim, not left claimable immediately)", got.RetryAfter)
 	}
 }
 
@@ -195,6 +203,17 @@ func TestDispatcher_CrashMidDelivery_RowIsRecoveredOnTheNextRun(t *testing.T) {
 	}
 	if recovered.Attempts < 1 {
 		t.Errorf("recovered.Attempts = %d, want at least 1 (the failed attempt was recorded)", recovered.Attempts)
+	}
+
+	// The crashed attempt scheduled the row's re-claim at the failure time
+	// plus the retry delay -- in real time, the poll interval must elapse
+	// before the row is claimable again. The recovery dispatcher below
+	// stands in for the process restarting after that interval, so the
+	// row's retry_after is moved into the past first, deterministically,
+	// in place of waiting out the delay.
+	backdated := time.Now().Add(-time.Second)
+	if updateErr := dispatcherDB.Model(&OutboxRecord{}).Where("id = ?", enqueued.ID).Update("retry_after", backdated).Error; updateErr != nil {
+		t.Fatalf("backdate retry_after: %v", updateErr)
 	}
 
 	// A fresh, healthy dispatcher -- standing in for the process restarting
@@ -426,14 +445,19 @@ func TestDispatcher_ConcurrentStartAndStop_NoDataRace(t *testing.T) {
 }
 
 // TestDispatcher_RunOnce_FailedRowsAtTheHead_DoNotStarveNewerRows pins
-// the claim-query finding: claimPendingOutboxRecords ordered purely by
-// created_at, so a pile of permanently failing rows at the head of the
-// queue (rows Enqueue-era validation could never produce but an older
-// build or a corruption could leave behind -- here: an empty Feature,
-// which delivery-time validation refuses forever) filled every batch and
-// a healthy row enqueued behind them was never even claimed. The claim
-// must consider Attempts so that never-failed rows are attempted before
-// already-failed ones, whatever their age.
+// the pile half of the claim-query fairness finding: rows Enqueue-era
+// validation could never produce but an older build or a corruption could
+// leave behind -- here: an empty Feature, which delivery-time validation
+// refuses forever -- fail every attempt, and a pile of them at the head
+// of the queue must not keep a healthy row enqueued behind them from
+// being claimed. The claim query this test pins (migration 0005's
+// schedule shape, see claimPendingOutboxRecords) makes the whole pile
+// ineligible for the retry delay after the poison cycle, so the healthy
+// row is claimed on the very next cycle; the ordering this replaced
+// (attempts ASC) bought the same outcome by ranking never-failed rows as
+// a class, at the price of starving failed rows under a flood -- the
+// other half of the finding, pinned by
+// TestDispatcher_RunOnce_OnceFailedRow_IsStillRetriedUnderSteadyArrivals.
 func TestDispatcher_RunOnce_FailedRowsAtTheHead_DoNotStarveNewerRows(t *testing.T) {
 	d, agg, db := newTestDispatcher(t)
 	d.batchSize = 50
@@ -444,20 +468,24 @@ func TestDispatcher_RunOnce_FailedRowsAtTheHead_DoNotStarveNewerRows(t *testing.
 	for i := 0; i < poisonCount; i++ {
 		rec := newTestOutboxRecord(fmt.Sprintf("poison-%02d", i), "tenant-p", fmt.Sprintf("idem-poison-%02d", i))
 		rec.Feature = "" // validation poison: delivery can never succeed
-		// Backdate the pile a full hour: the fresh row's created_at is the
-		// wall clock at Enqueue, so it must be strictly newer than every
-		// poison row at any execution speed -- a fast setup would otherwise
-		// land it inside the pile's created_at window and the pre-fix
-		// created_at-only claim (the bug this test pins) would deliver it by
-		// accident, a false green in plain mode.
-		rec.CreatedAt = poisonAt.Add(-time.Hour).Add(time.Duration(i) * time.Millisecond)
+		// Backdate the pile a full hour (both timestamps: RetryAfter is
+		// the claim's schedule key, CreatedAt its tiebreak): the fresh
+		// row's CreatedAt is the wall clock at Enqueue, so it must be
+		// strictly newer than every poison row at any execution speed -- a
+		// fast setup would otherwise land it inside the pile's timestamp
+		// window and the pre-fix created_at-only claim (the bug this test
+		// pins) would deliver it by accident, a false green in plain mode.
+		at := poisonAt.Add(-time.Hour).Add(time.Duration(i) * time.Millisecond)
+		rec.CreatedAt = at
+		rec.RetryAfter = &at
 		if _, err := insertOutboxRecord(ctx, db, rec); err != nil {
 			t.Fatalf("insertOutboxRecord(poison-%02d): %v", i, err)
 		}
 	}
 
 	// One full cycle: every poison row fails once and stays pending, now
-	// carrying Attempts = 1 -- the state a real pile of failing rows has.
+	// carrying Attempts = 1 and a RetryAfter a retry delay away -- the
+	// state a real pile of failing rows has.
 	delivered, err := d.RunOnce(ctx)
 	if err != nil {
 		t.Fatalf("RunOnce (poison cycle): %v", err)
@@ -465,16 +493,16 @@ func TestDispatcher_RunOnce_FailedRowsAtTheHead_DoNotStarveNewerRows(t *testing.
 	if delivered != 0 {
 		t.Fatalf("delivered during the poison cycle = %d, want 0 (every poison row must fail)", delivered)
 	}
-	pending, err := claimPendingOutboxRecords(ctx, db, poisonCount)
-	if err != nil {
-		t.Fatalf("claimPendingOutboxRecords: %v", err)
+	poisonRows := pendingRowsForTest(t, ctx, db, poisonCount)
+	if len(poisonRows) != poisonCount {
+		t.Fatalf("pending rows after the poison cycle = %d, want %d", len(poisonRows), poisonCount)
 	}
-	if len(pending) != poisonCount {
-		t.Fatalf("pending rows after the poison cycle = %d, want %d", len(pending), poisonCount)
-	}
-	for _, rec := range pending {
+	for _, rec := range poisonRows {
 		if rec.Attempts != 1 {
 			t.Fatalf("poison row %s Attempts = %d, want 1", rec.ID, rec.Attempts)
+		}
+		if rec.RetryAfter == nil || !rec.RetryAfter.After(time.Now()) {
+			t.Fatalf("poison row %s RetryAfter = %v, want a future moment (each failed row waits out its re-claim window)", rec.ID, rec.RetryAfter)
 		}
 	}
 
@@ -489,7 +517,7 @@ func TestDispatcher_RunOnce_FailedRowsAtTheHead_DoNotStarveNewerRows(t *testing.
 		t.Fatalf("RunOnce (fresh cycle): %v", err)
 	}
 	if delivered != 1 {
-		t.Fatalf("delivered = %d, want 1 (the fresh row must be claimed ahead of the %d already-failed head rows)", delivered, poisonCount)
+		t.Fatalf("delivered = %d, want 1 (the fresh row must be claimed while the %d already-failed head rows wait out their re-claim windows)", delivered, poisonCount)
 	}
 
 	got, err := agg.RealtimeCount("tenant-a", "ai.generation", event.OccurredAt)
@@ -500,11 +528,233 @@ func TestDispatcher_RunOnce_FailedRowsAtTheHead_DoNotStarveNewerRows(t *testing.
 		t.Errorf("RealtimeCount = %v, want 5 (the fresh row was delivered exactly once)", got)
 	}
 
-	remaining, err := claimPendingOutboxRecords(ctx, db, poisonCount+1)
-	if err != nil {
-		t.Fatalf("claimPendingOutboxRecords (final): %v", err)
-	}
+	// The pile is untouched by the fresh cycle: still pending, still on
+	// Attempts = 1 -- each row waits out its re-claim window instead of
+	// being retried every cycle, and is never dropped.
+	remaining := pendingRowsForTest(t, ctx, db, poisonCount)
 	if len(remaining) != poisonCount {
 		t.Errorf("pending rows after the fresh cycle = %d, want %d (the poison pile is still retried, never dropped)", len(remaining), poisonCount)
 	}
+	for _, rec := range remaining {
+		if rec.Attempts != 1 {
+			t.Errorf("poison row %s Attempts = %d, want 1 (no pile row may be retried before its re-claim window -- the retry delay spaces attempts honestly)", rec.ID, rec.Attempts)
+		}
+	}
+}
+
+// pendingRowsForTest reads every pending outbox row directly from the
+// table, bypassing the claim query's eligibility filter: the claim query
+// exists to select the rows whose re-claim window has arrived, so tests
+// asserting on rows still inside their window (a freshly failed pile, a
+// row awaiting its first retry) must read the table itself.
+func pendingRowsForTest(t *testing.T, ctx context.Context, db *gorm.DB, limit int) []OutboxRecord {
+	t.Helper()
+	var recs []OutboxRecord
+	if err := db.WithContext(ctx).Where("status = ?", outboxStatusPending).Limit(limit).Find(&recs).Error; err != nil {
+		t.Fatalf("find pending rows: %v", err)
+	}
+	return recs
+}
+
+// TestDispatcher_RunOnce_OnceFailedRow_IsStillRetriedUnderSteadyArrivals
+// is the P1-metering-10 regression at the Dispatcher level: the claim
+// query this round replaced ranked never-failed rows (Attempts 0) as a
+// strict class ahead of every already-failed row, so under a sustained
+// enqueue rate -- where every batch filled with never-failed rows -- a
+// row that had failed ONCE was never claimed again: permanent starvation
+// of exactly the rows retry exists to reach. Under the schedule ordering
+// (retry_after, migration 0005) the once-failed row is claimable again
+// the moment its re-claim window opens, and because its schedule slot
+// predates every row enqueued afterwards, no flood of new arrivals can
+// push it out of the batch: it is retried -- and here, recovered -- on
+// the very next cycle.
+func TestDispatcher_RunOnce_OnceFailedRow_IsStillRetriedUnderSteadyArrivals(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "metering_dispatcher_starvation.sqlite")
+	db := openAndMigrate(t, dsn)
+	brokenConn := closedDB(t, openAndMigrate(t, dsn))
+	ctx := context.Background()
+
+	event := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: "idem-once-failed", OccurredAt: time.Now()}
+	enqueued, err := Enqueue(ctx, db, event)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// Cycle 1: delivery fails once -- a transient hiccup, not a poison
+	// row: the aggregator's database connection is closed for this one
+	// cycle only, exactly the failure a recovery is meant to retry.
+	dBroken := NewDispatcher(db, NewAggregator(NewSummaryRepository(brokenConn)))
+	dBroken.batchSize = 5
+	delivered, err := dBroken.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce (failure cycle): %v", err)
+	}
+	if delivered != 0 {
+		t.Fatalf("delivered during the failure cycle = %d, want 0", delivered)
+	}
+
+	// The row's re-claim window opens one retry delay after the failure;
+	// move its retry_after into the past deterministically, in place of
+	// waiting the delay out.
+	backdated := time.Now().Add(-time.Second)
+	if updateErr := db.Model(&OutboxRecord{}).Where("id = ?", enqueued.ID).Update("retry_after", backdated).Error; updateErr != nil {
+		t.Fatalf("backdate retry_after: %v", updateErr)
+	}
+
+	// From cycle 2 on, a healthy dispatcher races the once-failed row
+	// against a steady flood: every cycle enqueues one full batch of
+	// fresh rows before RunOnce claims one batch, so each batch could
+	// fill entirely with never-failed rows -- which is exactly what the
+	// pre-fix attempts-class ordering did, every cycle, forever.
+	dHealthy := NewDispatcher(db, NewAggregator(NewSummaryRepository(db)))
+	dHealthy.batchSize = 5
+	const floodCycles = 10
+	for cycle := 0; cycle < floodCycles; cycle++ {
+		for i := 0; i < dHealthy.batchSize; i++ {
+			fresh := UsageEvent{
+				TenantID:       "tenant-a",
+				Feature:        "ai.generation",
+				Quantity:       1,
+				IdempotencyKey: fmt.Sprintf("idem-flood-%02d-%d", cycle, i),
+				OccurredAt:     time.Now(),
+			}
+			if _, enqueueErr := Enqueue(ctx, db, fresh); enqueueErr != nil {
+				t.Fatalf("Enqueue(flood %d/%d): %v", cycle, i, enqueueErr)
+			}
+		}
+		delivered, err = dHealthy.RunOnce(ctx)
+		if err != nil {
+			t.Fatalf("RunOnce (flood cycle %d): %v", cycle, err)
+		}
+		if delivered != dHealthy.batchSize {
+			t.Fatalf("flood cycle %d delivered %d, want %d (every claimed row delivers; the once-failed row recovered on cycle 0)", cycle, delivered, dHealthy.batchSize)
+		}
+	}
+
+	// The once-failed row: retried on the very first flood cycle and
+	// delivered exactly once, its single failed attempt recorded.
+	got, found, err := findOutboxByIdempotencyKey(ctx, db, "tenant-a", "idem-once-failed")
+	if err != nil {
+		t.Fatalf("findOutboxByIdempotencyKey: %v", err)
+	}
+	if !found {
+		t.Fatal("the once-failed outbox row is gone without ever being delivered")
+	}
+	if got.Status != outboxStatusDelivered {
+		t.Fatalf("once-failed row Status = %q after %d flood cycles, want %q -- the row that failed once must still be reached and delivered under steady new arrivals", got.Status, floodCycles, outboxStatusDelivered)
+	}
+	if got.Attempts != 1 {
+		t.Errorf("once-failed row Attempts = %d, want 1 (one failed attempt, then the recovery delivery)", got.Attempts)
+	}
+}
+
+// TestDispatcher_RetentionSweep_RetiresDeliveredRowsOlderThanRetention is
+// the P3-metering-16 regression: delivered outbox rows and the ingest
+// receipts their deliveries created used to stay on their tables forever
+// -- monotonic growth with every delivered event. Dispatcher's poll loop
+// now runs a bounded retention pass each cycle
+// (retireDeliveredOutboxRecords) that retires delivered rows which have
+// stayed delivered past the retention window, together with each row's
+// receipt, in one transaction. A delivered row younger than the window --
+// and every pending row, whose receipt is what makes its redelivery
+// idempotent -- is never touched.
+func TestDispatcher_RetentionSweep_RetiresDeliveredRowsOlderThanRetention(t *testing.T) {
+	d, _, db := newTestDispatcher(t)
+	d.interval = 10 * time.Millisecond
+	ctx := context.Background()
+
+	const n = 3
+	keys := make([]string, n)
+	for i := 0; i < n; i++ {
+		keys[i] = fmt.Sprintf("idem-retire-%d", i)
+		event := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: keys[i], OccurredAt: time.Now()}
+		if _, err := Enqueue(ctx, db, event); err != nil {
+			t.Fatalf("Enqueue(%d): %v", i, err)
+		}
+	}
+	delivered, err := d.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if delivered != n {
+		t.Fatalf("delivered = %d, want %d", delivered, n)
+	}
+
+	// Every delivery wrote an ingest receipt (IngestBillingGrade's fold):
+	// the guard whose retirement must wait for the row's own retirement.
+	receipts := NewIngestReceiptRepository(db)
+	tenantCtx := pkgcore.WithTenant(ctx, "tenant-a")
+	rows, err := receipts.List(tenantCtx)
+	if err != nil {
+		t.Fatalf("receipts List: %v", err)
+	}
+	if len(rows) != n {
+		t.Fatalf("receipts after delivery = %d, want %d", len(rows), n)
+	}
+
+	// Backdate the delivered rows past the retention window, the
+	// deterministic stand-in for the window elapsing.
+	past := time.Now().Add(-defaultOutboxRetention - time.Hour)
+	if updateErr := db.Model(&OutboxRecord{}).
+		Where("status = ?", outboxStatusDelivered).
+		Update("delivered_at", past).Error; updateErr != nil {
+		t.Fatalf("backdate delivered_at: %v", updateErr)
+	}
+
+	// The running poll loop's retention pass retires the rows and their
+	// receipts within a few cycles. Pre-fix there was no retention pass
+	// at all, so both waits time out: delivered rows grew without bound.
+	d.Start(ctx)
+	defer d.Stop()
+	waitFor(t, func() bool {
+		var remaining int64
+		if err := db.Model(&OutboxRecord{}).Where("status = ?", outboxStatusDelivered).Count(&remaining).Error; err != nil {
+			return false
+		}
+		return remaining == 0
+	})
+	waitFor(t, func() bool {
+		rows, err := receipts.List(tenantCtx)
+		return err == nil && len(rows) == 0
+	})
+}
+
+// TestDispatcher_CancelThenStart_RestartsThePollLoop is the
+// P3-metering-14 lifecycle finding in its Dispatcher form: when the poll
+// loop exits because its ctx was canceled -- not because Stop closed the
+// stop channel -- the started flag used to stay set forever, so a later
+// Start was a permanent no-op and the dispatcher never polled again. run
+// now clears the started flag for its own loop generation on exit, so a
+// canceled ctx leaves Start restartable.
+func TestDispatcher_CancelThenStart_RestartsThePollLoop(t *testing.T) {
+	d, agg, db := newTestDispatcher(t)
+	d.interval = 10 * time.Millisecond
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	d.Start(ctx1)
+	cancel1()
+
+	// Wait for the canceled loop to actually exit. Pre-fix this never
+	// happens: the started flag stays set forever, so waitFor fails here
+	// (the defect the finding names -- Start after a cancel-driven stop
+	// was a permanent no-op).
+	waitFor(t, func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return !d.started
+	})
+
+	// Start must run a fresh loop that genuinely polls again.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	d.Start(ctx2)
+
+	event := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: "idem-restart", OccurredAt: time.Now()}
+	if _, err := Enqueue(context.Background(), db, event); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	waitFor(t, func() bool {
+		got, err := agg.RealtimeCount("tenant-a", "ai.generation", event.OccurredAt)
+		return err == nil && got == 1
+	})
 }

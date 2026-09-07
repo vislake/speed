@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"testing"
+	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -50,6 +51,8 @@ func TestModule_Options_WireIntoTheirTargets(t *testing.T) {
 		WithAnalyticsBufferSize(7),
 		WithDispatchInterval(9),
 		WithDispatchBatchSize(11),
+		WithDispatchRetryDelay(13*time.Second),
+		WithOutboxRetention(17*time.Hour),
 	)
 
 	if m.aggregator.bucket != PeriodBucketDaily {
@@ -67,10 +70,22 @@ func TestModule_Options_WireIntoTheirTargets(t *testing.T) {
 	if m.dispatcher.batchSize != 11 {
 		t.Errorf("dispatcher.batchSize = %d, want 11", m.dispatcher.batchSize)
 	}
+	if m.dispatcher.retryDelay != 13*time.Second {
+		t.Errorf("dispatcher.retryDelay = %v, want 13s", m.dispatcher.retryDelay)
+	}
+	if m.dispatcher.retention != 17*time.Hour {
+		t.Errorf("dispatcher.retention = %v, want 17h", m.dispatcher.retention)
+	}
 }
 
 func TestModule_Options_NonPositiveValuesAreIgnored(t *testing.T) {
-	m := NewModule(nil, WithAnalyticsBufferSize(0), WithDispatchInterval(-1), WithDispatchBatchSize(-5))
+	m := NewModule(nil,
+		WithAnalyticsBufferSize(0),
+		WithDispatchInterval(-1),
+		WithDispatchBatchSize(-5),
+		WithDispatchRetryDelay(0),
+		WithOutboxRetention(-time.Hour),
+	)
 	if cap(m.analytics.events) != defaultAnalyticsBufferSize {
 		t.Errorf("analytics buffer capacity = %d, want the unchanged default %d", cap(m.analytics.events), defaultAnalyticsBufferSize)
 	}
@@ -79,6 +94,12 @@ func TestModule_Options_NonPositiveValuesAreIgnored(t *testing.T) {
 	}
 	if m.dispatcher.batchSize != defaultDispatchBatchSize {
 		t.Errorf("dispatcher.batchSize = %d, want the unchanged default %d", m.dispatcher.batchSize, defaultDispatchBatchSize)
+	}
+	if m.dispatcher.retryDelay != defaultDispatchRetryDelay {
+		t.Errorf("dispatcher.retryDelay = %v, want the unchanged default %v", m.dispatcher.retryDelay, defaultDispatchRetryDelay)
+	}
+	if m.dispatcher.retention != defaultOutboxRetention {
+		t.Errorf("dispatcher.retention = %v, want the unchanged default %v", m.dispatcher.retention, defaultOutboxRetention)
 	}
 }
 

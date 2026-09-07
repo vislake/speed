@@ -56,6 +56,7 @@ func Enqueue(ctx context.Context, tx *gorm.DB, event UsageEvent) (*OutboxRecord,
 		return nil, err
 	}
 
+	now := time.Now()
 	rec := &OutboxRecord{
 		ID:             uuid.NewString(),
 		TenantID:       event.TenantID,
@@ -65,7 +66,11 @@ func Enqueue(ctx context.Context, tx *gorm.DB, event UsageEvent) (*OutboxRecord,
 		OccurredAt:     occurredAt,
 		Metadata:       metadata,
 		Status:         outboxStatusPending,
-		CreatedAt:      time.Now(),
+		// RetryAfter starts at CreatedAt: a never-failed row is claimable
+		// from birth. Only a failed delivery attempt moves it (see
+		// markOutboxAttemptFailed).
+		RetryAfter: &now,
+		CreatedAt:  now,
 	}
 
 	// insertOutboxRecord reports a duplicate (tenant_id, idempotency_key)
@@ -111,8 +116,11 @@ func Enqueue(ctx context.Context, tx *gorm.DB, event UsageEvent) (*OutboxRecord,
 // errOutboxConflictRowVanished reports the unreachable-in-practice corner
 // where a duplicate (tenant_id, idempotency_key) insert skipped via ON
 // CONFLICT DO NOTHING but the read-back that follows finds no row: some
-// other writer deleted it between the two statements. Nothing in this
-// round deletes outbox rows (delivery only marks them delivered), so the
+// other writer deleted it between the two statements. Nothing can: only
+// the retention sweep deletes outbox rows at all, it deletes delivered
+// rows only (never pending ones, which is the state this read-back runs
+// against), and the sweep is driven by the same process's Dispatcher
+// loop rather than a concurrent writer on the caller's transaction. The
 // branch exists for completeness only; a caller retrying Enqueue gets the
 // correct outcome either way, since a vanished row makes the retry a
 // plain first insert again. It is deliberately a plain package-internal

@@ -73,8 +73,13 @@ const tableIngestReceipts = "metering_ingest_receipts"
 // AnalyticsRecorder keeps calling the plain Ingest, never
 // IngestBillingGrade -- see AnalyticsRecorder's own "No idempotency dedup
 // this round" doc comment for why paying for a durable seen-key ledger
-// contradicts that tier's cheap, in-memory, best-effort positioning. This
-// table only ever grows from billing-grade traffic Dispatcher delivers.
+// contradicts that tier's cheap, in-memory, best-effort positioning. The
+// table only ever grows from billing-grade traffic Dispatcher delivers,
+// and its growth is bounded, not open-ended: Dispatcher's retention sweep
+// retires each receipt together with its delivered outbox row once the
+// row has stayed delivered past the retention window (see
+// retireDeliveredOutboxRecords) -- a receipt lives exactly as long as the
+// dedup answer it guards is still answerable against a live outbox row.
 type IngestReceipt struct {
 	// ID is the ingested UsageEvent's own IdempotencyKey.
 	ID string `gorm:"column:id;primaryKey;size:200"`

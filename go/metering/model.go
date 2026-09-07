@@ -135,12 +135,24 @@ type OutboxRecord struct {
 	// Attempts counts failed delivery attempts, incremented by
 	// markOutboxAttemptFailed. It never causes a row to stop being
 	// retried -- see Dispatcher's doc comment: billing-grade delivery
-	// retries indefinitely, it does not dead-letter.
+	// retries indefinitely, it does not dead-letter. Since migration 0005
+	// it is history only: the claim query no longer orders by it (see
+	// RetryAfter for what replaced that ordering).
 	Attempts int `gorm:"column:attempts;not null;default:0"`
 	// LastError is the most recent delivery failure's message, truncated
 	// to fit the column -- never a stack trace or internal detail beyond
 	// what Aggregator.Ingest's own error already reports.
-	LastError   string     `gorm:"column:last_error;size:500;not null;default:''"`
+	LastError string `gorm:"column:last_error;size:500;not null;default:''"`
+	// RetryAfter is the earliest moment this row may be claimed again --
+	// the per-row re-claim schedule migration 0005 added. Enqueue sets it
+	// to the row's own CreatedAt, so a never-failed row is claimable from
+	// birth; markOutboxAttemptFailed moves it to the failure time plus the
+	// dispatcher's retry delay, so a failed row re-enters the candidate
+	// set at a moment in the future instead of re-joining the queue head.
+	// See claimPendingOutboxRecords' doc comment for the full fairness
+	// argument. NULL is a legacy-only state (rows written before 0005),
+	// treated as the row's CreatedAt by the claim query.
+	RetryAfter  *time.Time `gorm:"column:retry_after"`
 	CreatedAt   time.Time  `gorm:"column:created_at;not null"`
 	DeliveredAt *time.Time `gorm:"column:delivered_at"`
 }

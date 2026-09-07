@@ -131,6 +131,32 @@ func WithDispatchBatchSize(n int) Option {
 	}
 }
 
+// WithDispatchRetryDelay overrides how long a failed delivery attempt
+// keeps its outbox row out of the candidate set (default
+// defaultDispatchRetryDelay): the row's retry_after moves to the failure
+// time plus this delay, which is what spaces retries and keeps a
+// re-failed row from re-joining the queue head (see Dispatcher's
+// "Retry is scheduled, not priority-classed" doc comment). d <= 0 is
+// ignored.
+func WithDispatchRetryDelay(d time.Duration) Option {
+	return func(m *Module) {
+		if d > 0 {
+			m.dispatcher.retryDelay = d
+		}
+	}
+}
+
+// WithOutboxRetention overrides how long delivered outbox rows and their
+// ingest receipts stay on the table before the retention sweep retires
+// them (default defaultOutboxRetention). d <= 0 is ignored.
+func WithOutboxRetention(d time.Duration) Option {
+	return func(m *Module) {
+		if d > 0 {
+			m.dispatcher.retention = d
+		}
+	}
+}
+
 // NewModule returns a Module whose tables live in db. Constructing a
 // Module performs no I/O: opening and migrating db is the host's
 // responsibility, done before Bootstrap ever calls Register.

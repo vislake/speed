@@ -3,6 +3,7 @@ package metering
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,10 +23,19 @@ import (
 // period publishes exactly one event rather than one per subsequent
 // event -- resetting only implicitly, when a new period's counterEntry is
 // created fresh (see realtimeKey embedding the period start in its key).
+//
+// seeded records that this entry has been reconstructed from the durable
+// UsageSummary row for its bucket (ensureSeeded): the first touch of a
+// key in a process -- a restart, or merely a key no event has hit since
+// the process started -- starts from the summary's quantity rather than
+// from zero, and latches notifiedOverage when that quantity already meets
+// the bucket's threshold. See Aggregator's "Reconstruction after a
+// restart" doc comment for the full argument.
 type counterEntry struct {
 	mu              sync.Mutex
 	quantity        float64
 	notifiedOverage bool
+	seeded          bool
 }
 
 // Aggregator is the in-process aggregation backend
@@ -70,6 +80,52 @@ type counterEntry struct {
 // Aggregator itself (any staleness in a caller's view of usage comes from
 // where in AnalyticsRecorder's or Dispatcher's own queue an event is
 // sitting, not from Aggregator internals).
+//
+// # Reconstruction after a restart
+//
+// The counters are in-process state: they die with the process, while the
+// UsageSummary rows they mirror are durable. If a fresh Aggregator simply
+// started at zero, a mid-period restart would under-report usage until
+// enough new events arrived -- and its overage latch would be unset, so a
+// tenant whose durable usage already crossed a threshold would cross
+// "again" on the first post-restart event and fire a second
+// EventOverageThresholdCrossed for one period (reviewer finding
+// P2-metering-12). Aggregator therefore reconstructs each counter from
+// its bucket's summary row on the key's first touch in the process
+// (ensureSeeded, run by Ingest and IngestBillingGrade before the event's
+// own write and by RealtimeCount on a map miss): quantity starts at the
+// summary's quantity, and the overage latch is set when that quantity
+// already meets the bucket's threshold -- the crossing is a durable fact
+// once the summary holds it, so it must not fire again. This is the
+// per-key, lazy equivalent of a startup-time backfill, which this module
+// cannot do: UsageSummary is tenant-scoped, so reading every tenant's
+// rows at once would require the cross-tenant system-context path, which
+// metering is not on this codebase's sanctioned list for. Every key a
+// host actually touches post-restart reconstructs correctly; a key nobody
+// touches has nothing to under-report to. The billing-grade redelivery
+// path needs one extra rule on top: an alreadyIngested redelivery (the
+// receipt already exists) must NOT add its delta, because the seed read
+// happened after the earlier delivery's fold committed and therefore
+// already includes it -- adding again would double-count. The crash
+// window between a fold's commit and its counter increment is closed by
+// the seed, not by the redelivery: a redelivered event after a restart
+// reconstructs a counter that already holds its fold.
+//
+// # Expired periods are evicted, never resident forever
+//
+// A counterEntry lives per (tenant, feature, period), and periods end:
+// without eviction the map would grow without bound for the process
+// lifetime, one entry per bucket a tenant ever used (reviewer finding
+// P2-metering-13). Ingest and IngestBillingGrade therefore sweep, under
+// mu and at most once per period boundary crossed, every entry whose
+// period predates the event's own -- see sweepExpiredCountersLocked. The
+// sweep is safe against a concurrent add for a swept key because the
+// summary row already holds that add (the add only ever follows its own
+// committed upsert): a later event or read for the expired period
+// re-seeds from the summary and loses nothing. Entries are recreated by
+// a later touch of their period -- a query for an old period, a
+// backdated event -- and retired again at the next crossed boundary;
+// residency is bounded by traffic, not by the calendar.
 type Aggregator struct {
 	summaries *SummaryRepository
 
@@ -79,6 +135,11 @@ type Aggregator struct {
 
 	counters sync.Map // string -> *counterEntry
 	mu       sync.Mutex
+	// sweptThrough is the newest period start a sweep has run for, guarded
+	// by mu: a sweep runs only when an event's period start is newer, so
+	// the full-map walk happens at most once per period boundary crossed
+	// rather than on every Ingest.
+	sweptThrough time.Time
 }
 
 // NewAggregator returns an Aggregator over summaries, with the default
@@ -113,7 +174,7 @@ func realtimeKey(tenantID, feature string, periodStart time.Time) string {
 //
 // A zero event.OccurredAt is treated as time.Now().
 //
-// Persistence precedes the counter and the overage latch, mirroring
+// Persistence precedes the counter delta and the overage latch, mirroring
 // IngestBillingGrade's own persist-then-count order: an event whose
 // summary-row write fails is refused before the real-time counter or the
 // notifiedOverage latch is touched, so a later event that first reaches
@@ -143,31 +204,48 @@ func (a *Aggregator) Ingest(ctx context.Context, event UsageEvent) error {
 	}
 
 	tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID(event.TenantID))
-	if err := a.upsertSummary(tenantCtx, event.Feature, start, end, event.Quantity); err != nil {
+
+	// The seed read and the upsert run under the same mu acquisition, in
+	// that order: the counter entry must be reconstructed from the summary
+	// state BEFORE this event's own delta lands in it, or the delta would
+	// be counted twice (once by the seed, once by applyDelta below).
+	a.mu.Lock()
+	entry, err := a.ensureSeeded(tenantCtx, event.TenantID, event.Feature, start)
+	if err == nil {
+		err = upsertSummaryInto(tenantCtx, a.summaries, event.Feature, start, end, event.Quantity)
+	}
+	a.sweepExpiredCountersLocked(start)
+	a.mu.Unlock()
+	if err != nil {
 		return err
 	}
 
-	quantity, crossed := a.ingestRealtime(event.TenantID, event.Feature, start, event.Quantity)
+	quantity, crossed := a.applyDelta(entry, event.Feature, event.Quantity)
 	if crossed {
 		a.publishOverageCrossed(ctx, event, start, end, quantity, occurredAt)
 	}
 	return nil
 }
 
-// ingestRealtime increments the in-process counter for (tenantID, feature,
-// periodStart) by delta, returning the counter's new value and whether
-// this call is the one that first crossed a configured overage threshold
-// within this period.
+// ensureSeeded returns the counter entry for (tenantID, feature, start),
+// creating it if needed and reconstructing it from the bucket's durable
+// UsageSummary row on the key's first touch in this process -- the
+// restart-reconstruction mechanism the Aggregator type's own doc comment
+// describes. The reconstruction runs under the entry's own mutex, so two
+// concurrent first touches (an Ingest and a RealtimeCount for the same
+// key) read the same summary value and only one of them performs the
+// read; callers that need the reconstruction ordered before their own
+// summary write hold a.mu across this call and that write (see Ingest).
+// tenantCtx must carry the tenant the summary row lives under.
 //
-// Both callers (Ingest and IngestBillingGrade) run it only after the
-// event's usage has durably persisted -- the summary upsert, or the
-// receipt-plus-summary transaction -- so the increment and the
-// notifiedOverage latch below are never committed for an event whose
-// persistence failed: a refused event leaves the latch open, and a later
-// event that crosses can still be the one to publish
-// EventOverageThresholdCrossed.
-func (a *Aggregator) ingestRealtime(tenantID, feature string, periodStart time.Time, delta float64) (quantity float64, crossed bool) {
-	key := realtimeKey(tenantID, feature, periodStart)
+// A bucket with no summary row yet seeds to zero (record-not-found is not
+// an error); an Aggregator with no summaries repository (a pure-counter
+// construction) seeds to zero without reading. On a genuine read error
+// the entry is left unseeded and the error returned, so a later call
+// retries the reconstruction rather than silently running from zero past
+// a durable history.
+func (a *Aggregator) ensureSeeded(tenantCtx context.Context, tenantID, feature string, start time.Time) (*counterEntry, error) {
+	key := realtimeKey(tenantID, feature, start)
 	entryAny, _ := a.counters.LoadOrStore(key, &counterEntry{})
 	entry, ok := entryAny.(*counterEntry)
 	if !ok {
@@ -176,6 +254,49 @@ func (a *Aggregator) ingestRealtime(tenantID, feature string, periodStart time.T
 		panic("metering: a.counters holds a value that is not a *counterEntry")
 	}
 
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.seeded {
+		return entry, nil
+	}
+	if a.summaries == nil {
+		entry.seeded = true
+		return entry, nil
+	}
+	existing, err := a.summaries.FindByID(tenantCtx, summaryID(feature, start))
+	if err != nil && !hasCode(err, dbkit.ErrRecordNotFound.Code) {
+		return nil, err
+	}
+	if err == nil {
+		entry.quantity = existing.Quantity
+		// The overage latch is reconstructed too: once the durable summary
+		// holds a quantity at or above this bucket's threshold, the
+		// crossing has happened -- whether the pre-restart process managed
+		// to publish its event or died between the fold and the publish,
+		// the latch must be set or the first post-restart event would fire
+		// the crossing a second time for one period.
+		if threshold, hasThreshold := a.thresholds.resolve(feature); hasThreshold && entry.quantity >= threshold {
+			entry.notifiedOverage = true
+		}
+	}
+	entry.seeded = true
+	return entry, nil
+}
+
+// applyDelta folds delta into an already-seeded counter entry, returning
+// the counter's new value and whether this call is the one that first
+// crossed a configured overage threshold within this period. The caller
+// hands in the entry ensureSeeded returned and runs this only after the
+// event's usage has durably persisted -- the summary upsert, or the
+// receipt-plus-summary transaction -- so the increment and the
+// notifiedOverage latch below are never committed for an event whose
+// persistence failed: a refused event leaves the latch open, and a later
+// event that crosses can still be the one to publish
+// EventOverageThresholdCrossed. IngestBillingGrade additionally calls it
+// only when its fold actually applied the event (not for an
+// alreadyIngested redelivery), since a redelivered event's delta is
+// already inside the entry via its seed -- see that method's doc comment.
+func (a *Aggregator) applyDelta(entry *counterEntry, feature string, delta float64) (quantity float64, crossed bool) {
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 
@@ -192,19 +313,32 @@ func (a *Aggregator) ingestRealtime(tenantID, feature string, periodStart time.T
 
 // RealtimeCount returns the real-time counter's current value for
 // (tenantID, feature) within the calendar period at contains, or (0, nil)
-// when no event has been ingested for that bucket yet.
+// when no event has been ingested for that bucket yet. A key this process
+// has never touched is reconstructed from its durable UsageSummary row
+// first (ensureSeeded), so a read immediately after a restart reflects
+// the period's history rather than reporting zero until the first new
+// event arrives.
 func (a *Aggregator) RealtimeCount(tenantID, feature string, at time.Time) (float64, error) {
 	start, _, err := periodBounds(at, a.bucket)
 	if err != nil {
 		return 0, err
 	}
-	v, ok := a.counters.Load(realtimeKey(tenantID, feature, start))
+	key := realtimeKey(tenantID, feature, start)
+	v, ok := a.counters.Load(key)
 	if !ok {
-		return 0, nil
+		if a.summaries == nil {
+			return 0, nil
+		}
+		tenantCtx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID(tenantID))
+		entry, err := a.ensureSeeded(tenantCtx, tenantID, feature, start)
+		if err != nil {
+			return 0, err
+		}
+		v = entry
 	}
 	entry, ok := v.(*counterEntry)
 	if !ok {
-		// Unreachable: see ingestRealtime's identical guard.
+		// Unreachable: see ensureSeeded's identical guard.
 		panic("metering: a.counters holds a value that is not a *counterEntry")
 	}
 	entry.mu.Lock()
@@ -212,17 +346,53 @@ func (a *Aggregator) RealtimeCount(tenantID, feature string, at time.Time) (floa
 	return entry.quantity, nil
 }
 
-// upsertSummary folds delta into the UsageSummary row for (feature,
-// start) under tenantCtx's tenant, creating the row on its first event
-// within the period. See the Aggregator type's own doc comment for why
-// this runs under a.mu.
-func (a *Aggregator) upsertSummary(tenantCtx context.Context, feature string, start, end time.Time, delta float64) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return upsertSummaryInto(tenantCtx, a.summaries, feature, start, end, delta)
+// sweepExpiredCountersLocked evicts every resident counter entry whose
+// period predates start -- the newest period boundary an Ingest has seen
+// -- retiring the map's expired-period entries at most once per boundary
+// crossed rather than on every call (sweptThrough remembers the last
+// sweep's boundary; only a strictly newer start triggers another walk).
+// Callers must hold a.mu, which both ingest paths do when they call it,
+// so no concurrent add for a swept key can be mid-flight against the
+// Delete; an add that committed before the sweep already landed in the
+// key's summary row, and a later touch of the expired period re-seeds
+// from that row, so eviction loses nothing (see the Aggregator type's own
+// "Expired periods are evicted" doc comment).
+func (a *Aggregator) sweepExpiredCountersLocked(start time.Time) {
+	if !start.After(a.sweptThrough) {
+		return
+	}
+	a.sweptThrough = start
+	a.counters.Range(func(key, _ any) bool {
+		if periodFromRealtimeKey(key).Before(start) {
+			a.counters.Delete(key)
+		}
+		return true
+	})
 }
 
-// upsertSummaryInto is upsertSummary's connection-agnostic core: the exact
+// periodFromRealtimeKey extracts the period start realtimeKey embedded in
+// key (the RFC 3339 rendering after the last "|"). The last segment is
+// always the period start, whatever the tenant or feature segments hold;
+// an unparseable key (impossible for keys this Aggregator wrote) simply
+// never matches the eviction predicate and stays resident.
+func periodFromRealtimeKey(key any) time.Time {
+	s, ok := key.(string)
+	if !ok {
+		return time.Time{}
+	}
+	idx := strings.LastIndex(s, "|")
+	if idx < 0 {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, s[idx+1:])
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// upsertSummaryInto is the summary-upsert core Ingest and
+// IngestBillingGrade's transaction path both use: the exact
 // same find-or-create/update sequence, run against whichever
 // *SummaryRepository the caller hands it -- a.summaries for the plain
 // Ingest path, or one freshly built over an open transaction for
@@ -328,21 +498,40 @@ func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) e
 
 	tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID(event.TenantID))
 
+	// The seed read runs before the fold, under the same mu acquisition:
+	// the counter must be reconstructed from the summary state as it is
+	// BEFORE this call's fold -- if the fold then commits, applyDelta adds
+	// the delta on top of that base exactly once. When the fold reports
+	// alreadyIngested instead, no delta is added at all: the seed read
+	// happened after the earlier delivery's own fold committed, so the
+	// entry already holds this event -- in the same process the earlier
+	// delivery's applyDelta added it, and across a restart the seed read
+	// reconstructed it from the summary row that fold wrote. Adding again
+	// would double-count either way. This is what makes the crash window
+	// between a fold's commit and its counter increment close across a
+	// restart: the redelivered event's own delta is inside the summary,
+	// and the seed hands it back to the counter (see the Aggregator
+	// type's "Reconstruction after a restart" doc comment).
 	a.mu.Lock()
-	alreadyIngested, err := a.foldIntoSummaryOnce(tenantCtx, event, start, end)
+	entry, err := a.ensureSeeded(tenantCtx, event.TenantID, event.Feature, start)
+	var alreadyIngested bool
+	if err == nil {
+		alreadyIngested, err = a.foldIntoSummaryOnce(tenantCtx, event, start, end)
+	}
+	a.sweepExpiredCountersLocked(start)
 	a.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	if alreadyIngested {
 		// An earlier attempt's transaction already committed both the
-		// receipt and the summary delta; this call applies nothing. See
-		// IngestReceipt's doc comment -- this is the recovered case, not
-		// an error.
+		// receipt and the summary delta; this call applies nothing beyond
+		// the reconstruction the seed already did. See IngestReceipt's doc
+		// comment -- this is the recovered case, not an error.
 		return nil
 	}
 
-	quantity, crossed := a.ingestRealtime(event.TenantID, event.Feature, start, event.Quantity)
+	quantity, crossed := a.applyDelta(entry, event.Feature, event.Quantity)
 	if crossed {
 		a.publishOverageCrossed(ctx, event, start, end, quantity, occurredAt)
 	}

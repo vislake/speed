@@ -255,3 +255,87 @@ func waitFor(t *testing.T, cond func() bool) {
 		t.Fatal("condition was never satisfied before the deadline")
 	}
 }
+
+// TestAnalyticsRecorder_IngestFailure_CountsIntoDropped is the
+// P2-metering-11 regression: a buffered event whose delivery into the
+// aggregator fails (an Ingest error) is a lost event exactly like a
+// full-buffer drop -- it will never reach the summary row or the
+// real-time counter -- but deliver() used to only log it, leaving
+// Dropped() at zero while events vanished. Delivery failures now count
+// into the same counter the explicit drops do, so a host's drop metric
+// tells the whole truth about the fail-open tier. The failure is
+// injected deterministically with no database involved: an aggregator
+// whose period bucket is misconfigured refuses every Ingest with
+// ErrInvalidPeriodBucket after validation passes.
+func TestAnalyticsRecorder_IngestFailure_CountsIntoDropped(t *testing.T) {
+	agg := newTestAggregator(t)
+	agg.bucket = "not-a-period-bucket" // validate passes; periodBounds refuses
+	r := NewAnalyticsRecorder(agg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.Start(ctx)
+	defer r.Stop()
+
+	at := time.Now()
+	if err := r.Record(context.Background(), UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: "idem-failing", OccurredAt: at}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	// The flush loop delivers, Ingest fails, and the failure must be
+	// counted. Pre-fix the event vanished with Dropped() still at 0, so
+	// this wait times out.
+	waitFor(t, func() bool { return r.Dropped() == 1 })
+}
+
+// TestAnalyticsRecorder_CancelThenStart_RestartsTheLoopAndDeliversBuffered
+// is the P3-metering-14 regression: when the flush loop exits because its
+// ctx was canceled -- not because Stop closed the stop channel -- the
+// started flag used to stay set forever, so a later Start was a permanent
+// no-op and every Record after the cancel was silently stuffed into a
+// buffer nothing would ever drain. run now clears the started flag for
+// its own loop generation on exit (without setting the stopped latch), so
+// a canceled ctx leaves Start restartable and events recorded during the
+// gap are buffered honestly -- delivered by the fresh loop, counted drops
+// never, silence never.
+func TestAnalyticsRecorder_CancelThenStart_RestartsTheLoopAndDeliversBuffered(t *testing.T) {
+	agg := newTestAggregator(t)
+	r := NewAnalyticsRecorder(agg)
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	r.Start(ctx1)
+	cancel1()
+
+	// Wait for the canceled loop to actually exit. Pre-fix this never
+	// happens: the started flag stays set forever, so waitFor fails here
+	// (the defect the finding names -- Start after a cancel-driven stop
+	// was a permanent no-op and Record buffered into nothing).
+	waitFor(t, func() bool {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return !r.started
+	})
+
+	// A Record during the dead gap is buffered, not dropped: the stopped
+	// latch was not set by the cancel, so the event is honestly awaiting
+	// the next loop.
+	at := time.Now()
+	if err := r.Record(context.Background(), UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 3, IdempotencyKey: "idem-gap", OccurredAt: at}); err != nil {
+		t.Fatalf("Record(during the dead gap): %v", err)
+	}
+	if dropped := r.Dropped(); dropped != 0 {
+		t.Fatalf("Dropped() during the dead gap = %d, want 0 (the event was buffered, not dropped)", dropped)
+	}
+
+	// Start must run a fresh loop, and the fresh loop must deliver the
+	// event recorded during the gap.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	r.Start(ctx2)
+	waitFor(t, func() bool {
+		got, err := agg.RealtimeCount("tenant-a", "ai.generation", at)
+		return err == nil && got == 3
+	})
+	if dropped := r.Dropped(); dropped != 0 {
+		t.Errorf("Dropped() = %d, want 0 (the buffered event was delivered by the restarted loop, never dropped)", dropped)
+	}
+}

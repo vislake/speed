@@ -82,15 +82,20 @@ func TestSummaryRepository_AssertIsolated(t *testing.T) {
 // --- Outbox: plain *gorm.DB functions ---------------------------------------
 
 func newTestOutboxRecord(id, tenantID, idempotencyKey string) *OutboxRecord {
+	now := time.Now()
 	return &OutboxRecord{
 		ID:             id,
 		TenantID:       tenantID,
 		Feature:        "ai.generation",
 		Quantity:       1,
 		IdempotencyKey: idempotencyKey,
-		OccurredAt:     time.Now(),
+		OccurredAt:     now,
 		Status:         outboxStatusPending,
-		CreatedAt:      time.Now(),
+		// RetryAfter starts at CreatedAt, exactly as Enqueue schedules a
+		// never-failed row (see outbox.go); a test that backdates
+		// CreatedAt afterwards must backdate RetryAfter with it.
+		RetryAfter: &now,
+		CreatedAt:  now,
 	}
 }
 
@@ -223,30 +228,47 @@ func TestClaimPendingOutboxRecords(t *testing.T) {
 	}
 }
 
-// TestClaimPendingOutboxRecords_LeastFailedFirst pins the claim query's
-// anti-starvation ordering: among pending rows, never-failed rows
-// (Attempts 0) are claimed before already-failed ones, whatever their
-// age, so a pile of permanently failing rows at the head of the queue
-// (older, high-Attempts) can never occupy a whole batch ahead of a fresh
-// row. Within one Attempts tier the oldest row still goes first -- the
-// FIFO order the sibling test above pins -- so the two orderings
-// disagree only exactly where the starvation hazard lives.
-func TestClaimPendingOutboxRecords_LeastFailedFirst(t *testing.T) {
+// TestClaimPendingOutboxRecords_OrderedByRetrySchedule pins the claim
+// query's schedule semantics -- the ordering migration 0005 introduced to
+// replace the attempts-class ordering (reviewer finding P1-metering-10):
+// only pending rows whose retry_after has arrived are claimable, and they
+// come back oldest-scheduled first. A row that failed once and whose
+// re-claim window has opened is claimed before a never-failed row
+// enqueued after it (its schedule slot is older), while a row still
+// inside its window -- however long it has waited -- is not claimable at
+// all. RetryAfter is CreatedAt for never-failed rows, so the sibling test
+// above's FIFO among fresh rows is the same order the schedule produces
+// for them.
+func TestClaimPendingOutboxRecords_OrderedByRetrySchedule(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
+	now := time.Now()
 
-	// An older row that has already failed three times...
-	failed := newTestOutboxRecord("failed-3", "tenant-a", "idem-failed-3")
-	failed.Attempts = 3
-	failed.CreatedAt = time.Now().Add(-time.Hour)
-	if _, err := insertOutboxRecord(ctx, db, failed); err != nil {
-		t.Fatalf("insertOutboxRecord(failed): %v", err)
+	backdate := func(rec *OutboxRecord, at time.Time) *OutboxRecord {
+		rec.CreatedAt = at
+		rec.RetryAfter = &at
+		return rec
 	}
-	// ...and a brand-new row that has never been attempted.
-	fresh := newTestOutboxRecord("fresh-0", "tenant-a", "idem-fresh-0")
-	fresh.CreatedAt = time.Now()
+
+	// A row that failed once an hour ago, whose re-claim window (failure
+	// time plus the retry delay) has long since opened...
+	onceFailed := backdate(newTestOutboxRecord("failed-once", "tenant-a", "idem-failed-once"), now.Add(-time.Hour))
+	onceFailed.Attempts = 1
+	if _, err := insertOutboxRecord(ctx, db, onceFailed); err != nil {
+		t.Fatalf("insertOutboxRecord(onceFailed): %v", err)
+	}
+	// ...a brand-new never-failed row...
+	fresh := backdate(newTestOutboxRecord("fresh-0", "tenant-a", "idem-fresh-0"), now)
 	if _, err := insertOutboxRecord(ctx, db, fresh); err != nil {
 		t.Fatalf("insertOutboxRecord(fresh): %v", err)
+	}
+	// ...and a row still inside its re-claim window: its retry_after is
+	// an hour away, so it must not be claimable at all this call.
+	inWindow := backdate(newTestOutboxRecord("in-window", "tenant-a", "idem-in-window"), now.Add(-time.Hour))
+	inWindow.Attempts = 5
+	inWindow.RetryAfter = ptrTime(now.Add(time.Hour))
+	if _, err := insertOutboxRecord(ctx, db, inWindow); err != nil {
+		t.Fatalf("insertOutboxRecord(inWindow): %v", err)
 	}
 
 	got, err := claimPendingOutboxRecords(ctx, db, 10)
@@ -254,12 +276,15 @@ func TestClaimPendingOutboxRecords_LeastFailedFirst(t *testing.T) {
 		t.Fatalf("claimPendingOutboxRecords: %v", err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("claimPendingOutboxRecords returned %d rows, want 2", len(got))
+		t.Fatalf("claimPendingOutboxRecords returned %d rows, want 2 (the in-window row is not claimable)", len(got))
 	}
-	if got[0].ID != "fresh-0" || got[1].ID != "failed-3" {
-		t.Errorf("claimPendingOutboxRecords order = [%s, %s], want never-failed-first [fresh-0, failed-3]", got[0].ID, got[1].ID)
+	if got[0].ID != "failed-once" || got[1].ID != "fresh-0" {
+		t.Errorf("claimPendingOutboxRecords order = [%s, %s], want schedule order [failed-once, fresh-0] (the once-failed row's re-claim slot is older than the fresh row's birth)", got[0].ID, got[1].ID)
 	}
 }
+
+// ptrTime returns a pointer to t, for seeding nullable timestamp columns.
+func ptrTime(t time.Time) *time.Time { return &t }
 
 func TestMarkOutboxDelivered(t *testing.T) {
 	db := newTestDB(t)
@@ -300,22 +325,35 @@ func TestMarkOutboxAttemptFailed(t *testing.T) {
 		t.Fatalf("insertOutboxRecord: %v", err)
 	}
 
-	if err := markOutboxAttemptFailed(ctx, db, "rec-1", "boom"); err != nil {
+	retryAfter := time.Now().Add(time.Hour)
+	if err := markOutboxAttemptFailed(ctx, db, "rec-1", "boom", retryAfter); err != nil {
 		t.Fatalf("markOutboxAttemptFailed: %v", err)
 	}
 
-	pending, err := claimPendingOutboxRecords(ctx, db, 10)
-	if err != nil {
-		t.Fatalf("claimPendingOutboxRecords: %v", err)
+	var pending []OutboxRecord
+	if err := db.WithContext(ctx).Where("status = ?", outboxStatusPending).Find(&pending).Error; err != nil {
+		t.Fatalf("find pending rows: %v", err)
 	}
 	if len(pending) != 1 {
-		t.Fatalf("claimPendingOutboxRecords = %d rows, want 1 (still pending, per Dispatcher's indefinite-retry contract)", len(pending))
+		t.Fatalf("pending rows = %d, want 1 (still pending, per Dispatcher's indefinite-retry contract)", len(pending))
 	}
 	if pending[0].Attempts != 1 {
 		t.Errorf("Attempts = %d, want 1", pending[0].Attempts)
 	}
 	if pending[0].LastError != "boom" {
 		t.Errorf("LastError = %q, want %q", pending[0].LastError, "boom")
+	}
+	if pending[0].RetryAfter == nil || !pending[0].RetryAfter.Equal(retryAfter) {
+		t.Errorf("RetryAfter = %v, want %v (the failed row is scheduled for its next claim, not left claimable immediately)", pending[0].RetryAfter, retryAfter)
+	}
+	// The row is not claimable until its retry_after arrives: the claim
+	// query must refuse it, whatever the queue behind it holds.
+	claimable, err := claimPendingOutboxRecords(ctx, db, 10)
+	if err != nil {
+		t.Fatalf("claimPendingOutboxRecords: %v", err)
+	}
+	if len(claimable) != 0 {
+		t.Errorf("claimPendingOutboxRecords returned %d rows, want 0 (the row is inside its re-claim window)", len(claimable))
 	}
 }
 
@@ -363,6 +401,73 @@ func TestTruncateError_DoesNotSplitAMultiByteRune(t *testing.T) {
 	}
 }
 
+// TestTruncateError_ShortInvalidUTF8_IsSanitized is the reviewer finding
+// P3-metering-15 regression in its unit form: truncateError's short-value
+// fast path returned cause untouched whenever it fit the column, so a
+// SHORT cause carrying an invalid byte sequence was stored raw -- and
+// PostgreSQL refuses exactly that on the failure-record write
+// (SQLSTATE 22021), taking the record of a failure down with the failure
+// it recorded. The column safety must hold at ANY length, not only past
+// the truncation point: invalid bytes are rendered as the Unicode
+// replacement character (strings.ToValidUTF8), never passed through and
+// never silently dropped. The fixed shape mirrors go/sharing's
+// truncateAccessLogValue and go/authn's truncateClientField -- the third
+// instance of the rune-safe helper this codebase now carries in three
+// modules.
+func TestTruncateError_ShortInvalidUTF8_IsSanitized(t *testing.T) {
+	// A short value (well under the 500-byte bound) whose middle byte is
+	// an invalid UTF-8 sequence -- what a caller-supplied error string
+	// with raw bytes in it can look like at any length.
+	cause := "upstream said: ok\xff\xfe then failed"
+	if len(cause) >= maxLastErrorLength {
+		t.Fatalf("test cause is %d bytes, want a SHORT cause (under %d) so the pre-fix fast path is what returns it", len(cause), maxLastErrorLength)
+	}
+	got := truncateError(cause)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncateError(short invalid-UTF-8 cause) = invalid UTF-8: %q (PostgreSQL would refuse this write with SQLSTATE 22021)", got)
+	}
+	if got == cause {
+		t.Errorf("truncateError(short invalid-UTF-8 cause) passed the raw bytes through unchanged: %q", got)
+	}
+	if !strings.Contains(got, "\uFFFD") {
+		t.Errorf("truncateError = %q, want the invalid bytes rendered as the replacement character", got)
+	}
+	if strings.Contains(got, "\xff") || strings.Contains(got, "\xfe") {
+		t.Errorf("truncateError = %q, want no raw invalid bytes left in it", got)
+	}
+}
+
+// TestMarkOutboxAttemptFailed_ShortInvalidUTF8Cause_StoredValueIsSanitized
+// pins the same finding at the write path itself, mirroring the existing
+// long-cause stored-value test: a short cause carrying invalid bytes is
+// stored sanitized -- the stored value is the assertion target, exactly
+// as PostgreSQL would validate it on its way into the column.
+func TestMarkOutboxAttemptFailed_ShortInvalidUTF8Cause_StoredValueIsSanitized(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	rec := newTestOutboxRecord("rec-invalid", "tenant-a", "idem-invalid")
+	if _, err := insertOutboxRecord(ctx, db, rec); err != nil {
+		t.Fatalf("insertOutboxRecord: %v", err)
+	}
+
+	cause := "provider replied with raw bytes \xff\xfe and then died"
+	if err := markOutboxAttemptFailed(ctx, db, rec.ID, cause, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("markOutboxAttemptFailed: %v", err)
+	}
+
+	var pending []OutboxRecord
+	if err := db.WithContext(ctx).Where("id = ?", rec.ID).Find(&pending).Error; err != nil {
+		t.Fatalf("find row by id: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("rows = %d, want 1", len(pending))
+	}
+	if !utf8.ValidString(pending[0].LastError) {
+		t.Errorf("stored LastError = invalid UTF-8: %q (PostgreSQL would refuse this write with SQLSTATE 22021)", pending[0].LastError)
+	}
+}
+
 // TestMarkOutboxAttemptFailed_LongMultiByteCause_StoredValueStaysValidUTF8
 // pins the finding at the write path itself -- the stored value is the
 // assertion target, exactly as PostgreSQL would validate it on its way
@@ -380,13 +485,16 @@ func TestMarkOutboxAttemptFailed_LongMultiByteCause_StoredValueStaysValidUTF8(t 
 
 	// 200 three-byte runes: comfortably over the 500-byte column bound.
 	cause := strings.Repeat("界", 200)
-	if err := markOutboxAttemptFailed(ctx, db, rec.ID, cause); err != nil {
+	if err := markOutboxAttemptFailed(ctx, db, rec.ID, cause, time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("markOutboxAttemptFailed: %v", err)
 	}
 
-	pending, err := claimPendingOutboxRecords(ctx, db, 10)
-	if err != nil {
-		t.Fatalf("claimPendingOutboxRecords: %v", err)
+	// Read the row back directly rather than through the claim query: the
+	// row now sits inside its re-claim window, which is exactly what the
+	// claim query must refuse to return.
+	var pending []OutboxRecord
+	if err := db.WithContext(ctx).Where("id = ?", rec.ID).Find(&pending).Error; err != nil {
+		t.Fatalf("find row by id: %v", err)
 	}
 	if len(pending) != 1 {
 		t.Fatalf("pending rows = %d, want 1", len(pending))

@@ -548,3 +548,209 @@ func (failingEventBus) Publish(context.Context, pkgcore.Event) error {
 func (failingEventBus) Subscribe(string, pkgcore.EventHandler) {}
 
 var _ pkgcore.EventBus = failingEventBus{}
+
+// TestAggregator_RealtimeCount_AfterRestart_ReflectsSummaryHistory is the
+// P2-metering-12 regression in its read form: the real-time counters are
+// in-process state, so a fresh Aggregator over the same database (a
+// mid-period restart) used to answer RealtimeCount from an empty map --
+// zero until enough new events arrived -- under-reporting the period's
+// history to every quota check and dashboard read that runs before the
+// first post-restart event. ensureSeeded reconstructs a counter from its
+// bucket's durable UsageSummary row on the key's first touch, so the
+// restarted aggregator reflects the full period history immediately.
+func TestAggregator_RealtimeCount_AfterRestart_ReflectsSummaryHistory(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	first := NewAggregator(NewSummaryRepository(db))
+	for i := 0; i < 3; i++ {
+		if err := first.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 2, IdempotencyKey: idem(i), OccurredAt: at}); err != nil {
+			t.Fatalf("Ingest(%d): %v", i, err)
+		}
+	}
+
+	// The simulated restart: a fresh Aggregator over the SAME database,
+	// whose in-process counters start empty.
+	restarted := NewAggregator(NewSummaryRepository(db))
+	got, err := restarted.RealtimeCount("tenant-a", "ai.generation", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount after restart: %v", err)
+	}
+	if got != 6 {
+		t.Errorf("RealtimeCount after restart = %v, want 6 (the period history reconstructed from the summary row, not 0)", got)
+	}
+
+	// A key with no usage at all still answers zero, and a read only ever
+	// reconstructs the key it was asked about.
+	never, err := restarted.RealtimeCount("tenant-a", "never-recorded", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount(never recorded): %v", err)
+	}
+	if never != 0 {
+		t.Errorf("RealtimeCount(never recorded) = %v, want 0", never)
+	}
+}
+
+// TestAggregator_IngestBillingGrade_AfterRestart_RedeliveryAndNewEvents
+// is the P2-metering-12 regression in its billing-grade form, pinning the
+// alreadyIngested path's interplay with the reconstruction: after a
+// restart, a redelivered event (its receipt and summary fold committed
+// before the "crash") must leave the reconstructed counter exactly where
+// the summary says -- no double count, no under-count -- and a genuinely
+// new event must then apply on top of that reconstructed base. The crash
+// window between a fold's commit and its counter increment is closed by
+// the seed read itself: the summary row that fold wrote is what the
+// fresh process reconstructs from.
+func TestAggregator_IngestBillingGrade_AfterRestart_RedeliveryAndNewEvents(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	first := NewAggregator(NewSummaryRepository(db))
+	firstEvent := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 7, IdempotencyKey: "idem-crash-window", OccurredAt: at}
+	if err := first.IngestBillingGrade(ctx, firstEvent); err != nil {
+		t.Fatalf("IngestBillingGrade (first delivery): %v", err)
+	}
+
+	// The simulated restart: a fresh Aggregator over the SAME database.
+	restarted := NewAggregator(NewSummaryRepository(db))
+
+	// The redelivery (the outbox row was still pending when the process
+	// died): its receipt already exists, so the fold is a no-op -- and the
+	// reconstructed counter must already hold the event exactly once.
+	if err := restarted.IngestBillingGrade(ctx, firstEvent); err != nil {
+		t.Fatalf("IngestBillingGrade (redelivery after restart): %v", err)
+	}
+	got, err := restarted.RealtimeCount("tenant-a", "ai.generation", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount: %v", err)
+	}
+	if got != 7 {
+		t.Errorf("RealtimeCount after redelivery = %v, want 7 (the event applied exactly once across the restart -- pre-fix the counter stayed 0, the fold's delta never reaching it)", got)
+	}
+
+	// A genuinely new event applies on top of the reconstructed base.
+	secondEvent := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 3, IdempotencyKey: "idem-new-after-restart", OccurredAt: at}
+	if err = restarted.IngestBillingGrade(ctx, secondEvent); err != nil {
+		t.Fatalf("IngestBillingGrade (new event): %v", err)
+	}
+	got, err = restarted.RealtimeCount("tenant-a", "ai.generation", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount: %v", err)
+	}
+	if got != 10 {
+		t.Errorf("RealtimeCount after the new event = %v, want 10 (7 reconstructed + 3 applied -- pre-fix only the new event's 3 landed)", got)
+	}
+}
+
+// TestAggregator_Restart_ReconstructsOverageLatch_NoDoubleFire is the
+// P2-metering-12 regression for the overage half: the notifiedOverage
+// latch is in-process state too, so a restarted aggregator used to start
+// with every latch open -- and a tenant whose durable usage already
+// crossed a threshold before the restart crossed "again" on the first
+// post-restart event, publishing a second EventOverageThresholdCrossed
+// for one period. The reconstruction latches from the summary row (a
+// quantity at or above the threshold means the crossing durably
+// happened), so the edge fires exactly once per period whatever the
+// restart count.
+func TestAggregator_Restart_ReconstructsOverageLatch_NoDoubleFire(t *testing.T) {
+	db := newTestDB(t)
+	threshold := 5.0
+	bus := pkgcore.NewMemoryEventBus()
+	var captured capturedEvents
+	bus.Subscribe(EventOverageThresholdCrossed, captured.handler)
+	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	first := NewAggregator(NewSummaryRepository(db))
+	first.thresholds = OverageThresholds{Default: &threshold}
+	first.bus = bus
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if err := first.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 2, IdempotencyKey: idem(i), OccurredAt: at}); err != nil {
+			t.Fatalf("Ingest(%d): %v", i, err)
+		}
+	}
+	if len(captured.events) != 1 {
+		t.Fatalf("first process published %d overage event(s), want exactly 1", len(captured.events))
+	}
+
+	// The simulated restart: a fresh Aggregator over the SAME database.
+	restarted := NewAggregator(NewSummaryRepository(db))
+	restarted.thresholds = OverageThresholds{Default: &threshold}
+	restarted.bus = bus
+
+	// The read reconstructs the counter (6, the full period history) --
+	// and latches, since the durable summary already meets the threshold.
+	got, err := restarted.RealtimeCount("tenant-a", "ai.generation", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount after restart: %v", err)
+	}
+	if got != 6 {
+		t.Errorf("RealtimeCount after restart = %v, want 6 (pre-fix: 0 -- the period history under-reported)", got)
+	}
+
+	// A post-restart event large enough to cross from zero must NOT
+	// publish a second crossing: the reconstruction latched.
+	if err := restarted.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 5, IdempotencyKey: idem(3), OccurredAt: at}); err != nil {
+		t.Fatalf("Ingest(after restart): %v", err)
+	}
+	if len(captured.events) != 1 {
+		t.Errorf("published %d overage event(s) across the restart, want exactly 1 (pre-fix the restarted process fired the crossing a second time)", len(captured.events))
+	}
+}
+
+// TestAggregator_Ingest_ExpiredPeriodEntriesAreEvicted is the
+// P2-metering-13 regression: counter entries live per
+// (tenant, feature, period), and periods end -- without eviction the
+// in-process map kept every period's entries for the process lifetime,
+// growing without bound. Ingest and IngestBillingGrade sweep, at most
+// once per period boundary crossed, every resident entry whose period
+// predates the event's own (sweepExpiredCountersLocked), so advancing
+// past a period retires the old entries instead of letting them sit
+// forever.
+func TestAggregator_Ingest_ExpiredPeriodEntriesAreEvicted(t *testing.T) {
+	agg := newTestAggregator(t)
+	agg.bucket = PeriodBucketDaily
+	ctx := context.Background()
+	day1 := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	day2 := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+
+	// Two buckets on day 1: two distinct (tenant, feature) pairs, to make
+	// the sweep retire more than one entry.
+	for i := 0; i < 3; i++ {
+		if err := agg.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: idem(i), OccurredAt: day1}); err != nil {
+			t.Fatalf("Ingest(day1 a/%d): %v", i, err)
+		}
+	}
+	if err := agg.Ingest(ctx, UsageEvent{TenantID: "tenant-b", Feature: "api.calls", Quantity: 1, IdempotencyKey: "idem-b-day1", OccurredAt: day1}); err != nil {
+		t.Fatalf("Ingest(day1 b): %v", err)
+	}
+	if n := lenCounters(t, agg); n != 2 {
+		t.Fatalf("resident entries during day 1 = %d, want 2", n)
+	}
+
+	// The first event of day 2 crosses the period boundary: the sweep
+	// retires both day-1 entries, leaving only the new day-2 entry.
+	if err := agg.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: "idem-day2", OccurredAt: day2}); err != nil {
+		t.Fatalf("Ingest(day2): %v", err)
+	}
+	n := lenCounters(t, agg)
+	if n != 1 {
+		t.Errorf("resident entries after the day-2 ingest = %d, want 1 -- pre-fix the day-1 entries stayed resident forever (permanent, unbounded residency)", n)
+	}
+	day2Start := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
+	if _, ok := agg.counters.Load(realtimeKey("tenant-a", "ai.generation", day2Start)); !ok {
+		t.Errorf("the day-2 entry itself is missing after the sweep")
+	}
+}
+
+// lenCounters returns how many entries the aggregator's counter map
+// currently holds. Test-only: the map is package-internal, and the count
+// is read only when no other goroutine is mutating the aggregator.
+func lenCounters(t *testing.T, agg *Aggregator) int {
+	t.Helper()
+	n := 0
+	agg.counters.Range(func(_, _ any) bool { n++; return true })
+	return n
+}

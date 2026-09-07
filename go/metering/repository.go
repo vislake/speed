@@ -3,6 +3,7 @@ package metering
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -10,6 +11,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/pkgcore"
 )
 
 // SummaryRepository is the tenant-scoped accessor for
@@ -82,23 +84,41 @@ func findOutboxByIdempotencyKey(ctx context.Context, db *gorm.DB, tenantID, idem
 	return &rec, true, nil
 }
 
-// claimPendingOutboxRecords returns up to limit outboxStatusPending rows:
-// never-failed rows (Attempts 0) first, then oldest-first within each
-// Attempts tier. The Attempts ordering is what keeps a pile of
-// permanently failing rows at the head of the queue from starving the
-// healthy rows enqueued behind them -- see Dispatcher's "Failed rows
-// never jump the queue" doc comment for the full argument; created_at
-// still breaks ties within a tier, so the queue stays FIFO among rows
-// that have failed the same number of times. It is a read only -- it
-// does not mark anything as in-flight -- because this round runs exactly
-// one in-process Dispatcher; see Dispatcher's and OutboxRecord's doc
-// comments for what a second concurrent dispatcher process would need
-// that this round does not build.
+// claimPendingOutboxRecords returns up to limit pending outbox rows whose
+// retry_after has arrived, in schedule order: the row whose RetryAfter is
+// oldest goes first, with CreatedAt breaking ties. RetryAfter is
+// CreatedAt for a never-failed row and the failure time plus the
+// dispatcher's retry delay for an already-failed one (see
+// markOutboxAttemptFailed), so this is exactly go/jobs' scheduled_at
+// discipline: a failed row re-enters the candidate set at a moment in the
+// future rather than re-joining the queue head. That single property
+// delivers both fairness directions the ordering before it could not hold
+// at once (see Dispatcher's "Retry is scheduled, not priority-classed" doc
+// comment):
+//
+//   - A pile of permanently failing rows cannot occupy batch after batch
+//     ahead of healthy rows: each pile row is ineligible for the retry
+//     delay after every failure, and every row enqueued while it waits
+//     sorts ahead of it.
+//   - A row that failed once is reached the moment its re-claim window
+//     opens, whatever the arrival rate of never-failed rows behind it: no
+//     number of new rows can push its schedule slot later than the delay
+//     itself.
+//
+// It is a read only -- it does not mark anything as in-flight -- because
+// this round runs exactly one in-process Dispatcher; see Dispatcher's and
+// OutboxRecord's doc comments for what a second concurrent dispatcher
+// process would need that this round does not build. The now cutoff is
+// time.Now(), computed here rather than by the database so a caller --
+// or a test seeding rows around the boundary -- reasons about the same
+// clock the query compares against.
 func claimPendingOutboxRecords(ctx context.Context, db *gorm.DB, limit int) ([]OutboxRecord, error) {
+	now := time.Now()
 	var recs []OutboxRecord
 	err := db.WithContext(ctx).
 		Where("status = ?", outboxStatusPending).
-		Order("attempts ASC, created_at ASC").
+		Where("retry_after IS NULL OR retry_after <= ?", now).
+		Order("COALESCE(retry_after, created_at) ASC, created_at ASC").
 		Limit(limit).
 		Find(&recs).Error
 	return recs, err
@@ -124,13 +144,18 @@ func markOutboxDelivered(ctx context.Context, db *gorm.DB, id string, deliveredA
 	return db.WithContext(ctx).Save(&rec).Error
 }
 
-// markOutboxAttemptFailed increments id's Attempts and records cause as
-// its LastError, leaving Status untouched (still outboxStatusPending) so
-// the row is retried on the next Dispatcher cycle -- billing-grade
-// delivery retries indefinitely, per Dispatcher's own doc comment. cause
-// is truncated to fit OutboxRecord.LastError's column width, always on a
-// UTF-8 rune boundary (see truncateError).
-func markOutboxAttemptFailed(ctx context.Context, db *gorm.DB, id string, cause string) error {
+// markOutboxAttemptFailed increments id's Attempts, records cause as its
+// LastError, and schedules the row's next claim at retryAfter, leaving
+// Status untouched (still outboxStatusPending) so the row is retried --
+// billing-grade delivery retries indefinitely, per Dispatcher's own doc
+// comment. retryAfter is the caller's re-claim policy (Dispatcher passes
+// the failure time plus its own retry delay): the claim query
+// (claimPendingOutboxRecords) refuses the row until that moment, which is
+// what spaces retries honestly and keeps a re-failed row from re-joining
+// the queue head (see that function's doc comment). cause is truncated to
+// fit OutboxRecord.LastError's column width, always valid UTF-8 and never
+// splitting a multi-byte rune (see truncateError).
+func markOutboxAttemptFailed(ctx context.Context, db *gorm.DB, id string, cause string, retryAfter time.Time) error {
 	var rec OutboxRecord
 	err := db.WithContext(ctx).Where("id = ?", id).First(&rec).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -141,26 +166,110 @@ func markOutboxAttemptFailed(ctx context.Context, db *gorm.DB, id string, cause 
 	}
 	rec.Attempts++
 	rec.LastError = truncateError(cause)
+	rec.RetryAfter = &retryAfter
 	return db.WithContext(ctx).Save(&rec).Error
+}
+
+// retireDeliveredOutboxRecords deletes up to limit outbox rows that have
+// been delivered and have stayed delivered past olderThan, together with
+// the ingest receipt each delivered row's fold created -- the retention
+// half of the outbox lifecycle (see Dispatcher's "Retention: delivered
+// rows and receipts are retired" doc comment): without it both tables
+// grew without bound, delivered rows forever and receipts with them.
+//
+// What the sweep can safely delete, and only that: a row is retired only
+// in the outboxStatusDelivered state (never a pending row -- pending rows
+// are the retry queue, and their receipts are the dedup guard that makes
+// their redelivery safe), only once it has stayed delivered for the
+// whole retention window (a host's caller retrying an Enqueue whose
+// answer it never saw resolves against the existing row while it lives;
+// after the window both the row and its receipt are gone and a
+// re-enqueued key is a genuinely new event -- the same horizon every
+// outbox retention policy assumes, documented in Dispatcher's doc
+// comment), and only a bounded batch per call (limit), so a large
+// backlog of dead rows costs one bounded slice of one poll cycle rather
+// than a full-table purge.
+//
+// Each row's two deletes run in one dbkit.WithTenantSession transaction
+// under the row's own tenant -- the outbox delete by row id plus a
+// status guard (a row that stopped being delivered between the read and
+// the delete, e.g. a concurrent Enqueue conflict path, is left alone and
+// its receipt with it), the receipt delete keyed by the row's
+// (tenant, idempotency_key), with the tenant-scoping plugin scoping it
+// to the session's tenant exactly as it scopes every other write in this
+// module. Rows are selected oldest-delivered first so the same rows are
+// not re-read across calls.
+//
+// Returns how many rows were retired (both deletes committed). On a
+// per-row error it stops and surfaces the error -- the rows that were
+// not yet retired still match on the next call, so an interrupted sweep
+// is convergent rather than duplicated.
+func retireDeliveredOutboxRecords(ctx context.Context, db *gorm.DB, olderThan time.Time, limit int) (int, error) {
+	var recs []OutboxRecord
+	err := db.WithContext(ctx).
+		Where("status = ? AND delivered_at <= ?", outboxStatusDelivered, olderThan).
+		Order("delivered_at ASC, id ASC").
+		Limit(limit).
+		Find(&recs).Error
+	if err != nil {
+		return 0, err
+	}
+	retired := 0
+	for _, rec := range recs {
+		tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID(rec.TenantID))
+		err := dbkit.WithTenantSession(tenantCtx, db, func(tx *gorm.DB) error {
+			res := tx.Where("id = ? AND status = ?", rec.ID, outboxStatusDelivered).Delete(&OutboxRecord{})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				// The row stopped being delivered between the read and
+				// this delete (nothing in this module does that, but the
+				// guard costs nothing) -- leave its receipt alone too.
+				return nil
+			}
+			retired++
+			return tx.Where("id = ?", rec.IdempotencyKey).Delete(&IngestReceipt{}).Error
+		})
+		if err != nil {
+			return retired, err
+		}
+	}
+	return retired, nil
 }
 
 // maxLastErrorLength mirrors OutboxRecord.LastError's column size.
 const maxLastErrorLength = 500
 
-// truncateError bounds cause to maxLastErrorLength bytes, never writing
-// more into the database than the column can hold, and never splitting a
-// multi-byte UTF-8 rune: a byte-level cut through a rune leaves invalid
-// UTF-8 in the string, which SQLite stores happily but PostgreSQL refuses
-// on the very write this truncation feeds (SQLSTATE 22021, invalid byte
-// sequence for encoding "UTF8") -- taking the failure-record write down
-// with the failure it was recording. The cut backs off to the nearest
-// rune boundary; only the final, partial rune can straddle the cut, so
-// at most three bytes ever come off.
+// truncateError makes cause safe for OutboxRecord.LastError's column at
+// ANY length, the rune-safe-helper shape go/sharing's
+// truncateAccessLogValue and go/authn's truncateClientField already
+// established (this module's copy is the third instance of the shape):
+// it never writes more bytes than the column can hold, and the stored
+// value is always valid UTF-8. A value that is short AND valid passes
+// through untouched; anything else is first sanitized -- invalid byte
+// sequences rendered as the Unicode replacement character via
+// strings.ToValidUTF8, exactly the sharing helper's choice, never
+// silently dropped, since dropping bytes could concatenate two arbitrary
+// byte runs into a different valid value -- and the sanitized result is
+// then byte-bounded. The byte bound is the conservative direction on
+// PostgreSQL, where VARCHAR(n) counts characters, and it is enforced on
+// a UTF-8 boundary: a byte-level cut through a rune would leave invalid
+// UTF-8 in the string, which SQLite stores happily but PostgreSQL
+// refuses on the very write this truncation feeds (SQLSTATE 22021,
+// invalid byte sequence for encoding "UTF8") -- taking the
+// failure-record write down with the failure it was recording. The cut
+// backs off to the nearest rune boundary; only the final, partial rune
+// can straddle the cut, so at most three bytes ever come off.
 func truncateError(cause string) string {
-	if len(cause) <= maxLastErrorLength {
+	if len(cause) <= maxLastErrorLength && utf8.ValidString(cause) {
 		return cause
 	}
-	cut := cause[:maxLastErrorLength]
+	sanitized := strings.ToValidUTF8(cause, "\uFFFD")
+	if len(sanitized) <= maxLastErrorLength {
+		return sanitized
+	}
+	cut := sanitized[:maxLastErrorLength]
 	for len(cut) > 0 && !utf8.ValidString(cut) {
 		cut = cut[:len(cut)-1]
 	}

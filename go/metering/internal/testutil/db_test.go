@@ -38,8 +38,11 @@ func TestNewSQLite_AppliesMeteringMigrationsFromZero(t *testing.T) {
 		"idx_metering_usage_summaries_feature",
 		"uq_metering_outbox_records_tenant_idempotency",
 		// 0004 replaced 0002's (status, created_at) index with
-		// (status, attempts, created_at) -- see that file's header for why.
-		"idx_metering_outbox_records_status_attempts_created",
+		// (status, attempts, created_at), and 0005 replaced that in turn
+		// with (status, retry_after) when the claim query's ordering moved
+		// from attempts to the retry schedule -- see those files' headers
+		// for why.
+		"idx_metering_outbox_records_status_retry_after",
 	}
 	var gotIndexes []string
 	if err := db.Raw(
