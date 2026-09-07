@@ -1,16 +1,24 @@
 package admin
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/vislake/speed/go/admin/internal/testutil"
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/notification"
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/rbac"
 )
 
 // fakeNotifier records every Dispatch call it receives, standing in for a
@@ -63,7 +71,45 @@ func newTestImpersonationService(t *testing.T, notifier Notifier) (*Impersonatio
 	// TestImpersonationService_Start_* tests in
 	// impersonation_service_locale_test.go.
 	svc.attach(reg.EventBus(), reg.AuditActions, notifier, nil, nil)
+	// rbacSvc is deliberately NOT left nil the way authnSvc and members
+	// are: Start refuses while it is nil (its own doc comment -- the
+	// P2-3 follow-up's gate), and nearly every test in this file calls
+	// Start. Attach a real, Attach()-ed *rbac.Service over the same db,
+	// exactly as a wired host's post-Bootstrap Module.AttachRBAC would;
+	// the pre-attach refusal itself is pinned separately, by
+	// TestImpersonationService_Start_BeforeAttachRBAC_Refused.
+	svc.attachRBAC(newAttachedRBAC(t, db))
 	return svc, reg
+}
+
+// newAttachedRBAC returns a real, Attach()-ed *rbac.Service over db --
+// the minimal construction go/rbac permits (its own migrations applied
+// from zero, a fresh Kernel.Bootstrap, and Module.Attach), the same shape
+// buildTestAdminModule's env.RBAC goes through for the full-graph tests.
+// The lightweight service tests need a non-nil rbacSvc only because
+// Start's own gate demands one; nothing here ever invokes the service's
+// methods, which is why this construction -- whose frozen catalog carries
+// none of admin's declared permissions -- is sufficient.
+func newAttachedRBAC(t *testing.T, db *gorm.DB) *rbac.Service {
+	t.Helper()
+	registry := dbkit.NewMigrationRegistry()
+	if err := registry.Register(rbacMigrationModule{}); err != nil {
+		t.Fatalf("register rbac's migrations: %v", err)
+	}
+	if err := registry.Apply(t.Context(), db, dbkit.DialectSQLite); err != nil {
+		t.Fatalf("apply rbac's migrations: %v", err)
+	}
+	rbacModule := rbac.NewModule(db)
+	reg, err := pkgcore.NewKernel().Bootstrap(t.Context(), rbacModule)
+	if err != nil {
+		t.Fatalf("bootstrap the rbac module: %v", err)
+	}
+	svc, err := rbacModule.Attach(reg)
+	if err != nil {
+		t.Fatalf("rbacModule.Attach() error = %v", err)
+	}
+	t.Cleanup(func() { _ = svc.Close() })
+	return svc
 }
 
 // startTestGrant starts a grant with an explicit Locale -- "a request WITH
@@ -83,6 +129,106 @@ func startTestGrant(t *testing.T, svc *ImpersonationService) *ImpersonationGrant
 		t.Fatalf("Start() error = %v", err)
 	}
 	return grant
+}
+
+// --- P2-3 follow-up: fail-closed while the rbac service is unattached ---
+
+// TestImpersonationService_Start_BeforeAttachRBAC_Refused is the P2-3
+// follow-up's regression test: on the unfixed code, Start with a nil
+// rbacSvc silently returned a grant -- the "impersonation grant must not
+// outlive its administrator's admin:impersonate permission" guarantee
+// (the endIfNoLongerPermitted machinery, onRoleBindingRevoked and
+// onRoleChanged) switched off with no error and no log, so a host that
+// never called Module.AttachRBAC issued grants the module could never
+// automatically end. Start must now refuse with ErrRBACServiceRequired --
+// the same named error RoleService.require answers on the identical seam
+// -- and write no grant.
+//
+// The service is built through the in-package constructor and run through
+// attach first -- the Module.Register path that flips the attached flag
+// (P2-4's fix) -- with AttachRBAC deliberately NOT called, so Start
+// passes the ErrImpersonationNotWired gate and reaches the rbac gate this
+// test exists for. (An unattached service is refused by the earlier gate
+// with a different code, pinned by
+// TestImpersonationService_Start_UnwiredService_Refused.)
+func TestImpersonationService_Start_BeforeAttachRBAC_Refused(t *testing.T) {
+	db := testutil.NewDB(t)
+	svc := newImpersonationService(NewImpersonationRepository(db))
+	reg := newTestRegistry()
+	svc.attach(reg.EventBus(), reg.AuditActions, nil, nil, nil)
+
+	_, err := svc.Start(context.Background(), StartInput{
+		AdminUserID:    "admin-1",
+		TargetUserID:   "user-1",
+		TargetTenantID: "tenant-1",
+		Reason:         "support ticket #42",
+		Locale:         "zh-CN",
+	})
+	if !isCode(err, ErrRBACServiceRequired.Code) {
+		t.Fatalf("Start() error = %v, want %s (a grant must not be born while the automatic permission-revocation end cannot run)",
+			err, ErrRBACServiceRequired.Code)
+	}
+
+	active, listErr := svc.ListActive(context.Background())
+	if listErr != nil {
+		t.Fatalf("ListActive() error = %v", listErr)
+	}
+	if len(active) != 0 {
+		t.Fatalf("ListActive() = %+v, want no grant ever written while Module.AttachRBAC has not been called", active)
+	}
+}
+
+// TestImpersonationService_RoleRevokedBeforeAttachRBAC_Warns pins the
+// event-side half of the same closure: a rbac revocation event delivered
+// while rbacSvc is still nil must not be dropped without a trace -- on
+// the unfixed code both review paths returned silently, so a grant born
+// under older code in a host that never wired AttachRBAC would outlive
+// its administrator's revoked permission with nothing logged at all.
+// Each review path now Warns, naming the cause (the rbac service is not
+// attached) for the operator who can fix the wiring.
+//
+// The service is built through the in-package constructor and run through
+// attach first, exactly like the Start-refusal test above: the shape that
+// matches the Warn's scenario is a host whose Module.Register ran (the
+// attached flag is set) but whose post-Bootstrap Module.AttachRBAC call
+// never happened.
+func TestImpersonationService_RoleRevokedBeforeAttachRBAC_Warns(t *testing.T) {
+	db := testutil.NewDB(t)
+	svc := newImpersonationService(NewImpersonationRepository(db))
+	reg := newTestRegistry()
+	svc.attach(reg.EventBus(), reg.AuditActions, nil, nil, nil)
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	ctx := obs.WithLogger(context.Background(), logger)
+
+	// A role-binding revoke inside rbac.SystemDomain -- the event that
+	// matters (onRoleBindingRevoked's own doc comment).
+	revoked := pkgcore.Event{
+		Type:    rbac.EventRoleBindingRevoked,
+		Payload: rbac.RoleBindingChangedEvent{TenantID: string(rbac.SystemDomain), UserID: "admin-1"},
+	}
+	if err := svc.onRoleBindingRevoked(ctx, revoked); err != nil {
+		t.Fatalf("onRoleBindingRevoked() error = %v, want nil (a subscriber must never fail its publisher)", err)
+	}
+
+	// A role redefinition in the same domain (rbac.EventRoleChanged names
+	// no single subject -- its own doc comment).
+	changed := pkgcore.Event{
+		Type:    rbac.EventRoleChanged,
+		Payload: rbac.RoleChangedEvent{TenantID: string(rbac.SystemDomain), RoleID: "role-1"},
+	}
+	if err := svc.onRoleChanged(ctx, changed); err != nil {
+		t.Fatalf("onRoleChanged() error = %v, want nil (a subscriber must never fail its publisher)", err)
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, "rbac service is not attached") {
+		t.Fatalf("log output = %q, want a Warn naming the unattached rbac service on the revocation path", logged)
+	}
+	if strings.Count(logged, "rbac service is not attached") != 2 {
+		t.Fatalf("log output = %q, want BOTH review paths (role-binding revoke and role change) to Warn", logged)
+	}
 }
 
 // --- Start: validation --------------------------------------------------

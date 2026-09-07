@@ -73,6 +73,10 @@ func waitForSendRecord(t *testing.T, env testAdminEnv, tenant pkgcore.TenantID, 
 // dispatch validate() ever refused.
 func TestImpersonationService_Start_NoLocale_ResolvesThroughAuthn_RealDispatch(t *testing.T) {
 	env := buildTestAdminModule(t)
+	// Start refuses while the rbac service is unattached (its own doc
+	// comment -- the P2-3 follow-up's gate), so wire the env's real
+	// Attach()-ed *rbac.Service exactly as a wired host does.
+	env.Admin.AttachRBAC(env.RBAC)
 	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
 		t.Fatalf("RegisterHandler() error = %v", err)
 	}
@@ -114,6 +118,10 @@ func TestImpersonationService_Start_NoLocale_ResolvesThroughAuthn_RealDispatch(t
 // against the same real, non-fake notification pipeline.
 func TestImpersonationService_Start_ExplicitLocale_UsedVerbatim_RealDispatch(t *testing.T) {
 	env := buildTestAdminModule(t)
+	// Start refuses while the rbac service is unattached (its own doc
+	// comment -- the P2-3 follow-up's gate), so wire the env's real
+	// Attach()-ed *rbac.Service exactly as a wired host does.
+	env.Admin.AttachRBAC(env.RBAC)
 	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
 		t.Fatalf("RegisterHandler() error = %v", err)
 	}
@@ -158,6 +166,10 @@ func TestImpersonationService_Start_ExplicitLocale_UsedVerbatim_RealDispatch(t *
 // and NotifierFailure refusal tests -- no grant row is ever written.
 func TestImpersonationService_Start_UnknownTarget_RefusedWithNoGrant(t *testing.T) {
 	env := buildTestAdminModule(t)
+	// Start refuses while the rbac service is unattached (its own doc
+	// comment -- the P2-3 follow-up's gate), so wire the env's real
+	// Attach()-ed *rbac.Service exactly as a wired host does.
+	env.Admin.AttachRBAC(env.RBAC)
 	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
 		t.Fatalf("RegisterHandler() error = %v", err)
 	}
@@ -195,6 +207,10 @@ func TestImpersonationService_Start_UnknownTarget_RefusedWithNoGrant(t *testing.
 // for an account with no real standing in the tenant.
 func TestImpersonationService_Start_TargetNotAMember_RefusedWithNoGrant(t *testing.T) {
 	env := buildTestAdminModule(t)
+	// Start refuses while the rbac service is unattached (its own doc
+	// comment -- the P2-3 follow-up's gate), so wire the env's real
+	// Attach()-ed *rbac.Service exactly as a wired host does.
+	env.Admin.AttachRBAC(env.RBAC)
 	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
 		t.Fatalf("RegisterHandler() error = %v", err)
 	}

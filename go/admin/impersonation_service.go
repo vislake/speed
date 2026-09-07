@@ -122,14 +122,31 @@ type ImpersonationService struct {
 	// until Module.AttachRBAC is called -- the same post-Bootstrap-only
 	// wiring RoleService's own rbacSvc field requires (role.go's own doc
 	// comment has the full reasoning for why this cannot be a
-	// construction-time option). Tolerated as nil by skipping the
-	// automatic-end check entirely: the per-request grant.Active check
+	// construction-time option).
+	//
+	// Unlike the Register-time seams above (bus, notifier, authnSvc,
+	// members -- each enforced by a mandatory With* option failing
+	// Bootstrap), AttachRBAC is a host-performed call nothing in this
+	// module can enforce at Bootstrap, so a host that never wires it runs
+	// the whole impersonation surface with the automatic
+	// permission-revocation end silently off. The earlier tolerance --
+	// "skip the automatic-end check; the per-request grant.Active check
 	// pipeline.go's ImpersonationMiddleware already performs still gates
-	// every request regardless, so the worst case before AttachRBAC has
-	// run is "a revoked administrator's grant survives until its natural
-	// 30-minute expiry" rather than an unbounded window -- and in a
-	// correctly wired host AttachRBAC runs immediately after Bootstrap,
-	// before any real traffic, making that window unreachable in practice.
+	// every request, so the worst case is a revoked administrator's grant
+	// surviving until its natural 30-minute expiry, a window unreachable
+	// in a correctly wired host where AttachRBAC runs immediately after
+	// Bootstrap, before any real traffic" -- is sound for the correctly
+	// wired host but says nothing about the never-wired one, which is
+	// exactly the host this follow-up exists for. Start therefore refuses
+	// while rbacSvc is nil (ErrRBACServiceRequired, mirroring
+	// RoleService.require's fail-closed gate on this very seam): a grant
+	// born before AttachRBAC could outlive its administrator's
+	// admin:impersonate permission with no reconciliation ever able to
+	// end it, so no grant is born. The two event-driven review functions
+	// additionally Warn rather than silently skip should an event ever
+	// reach them while rbacSvc is still nil -- defense in depth for a
+	// grant born under older code surviving a rolling upgrade into an
+	// unwired host, say.
 	rbacSvc *rbac.Service
 
 	// now is the clock, overridden by tests; time.Now in production.
@@ -206,7 +223,12 @@ type StartInput struct {
 // Start opens a new impersonation grant, exactly as docs/internal/23-admin.md
 // section 4 describes: it is refused with ErrImpersonationNotWired when
 // Module.Register has not yet attached the service's mandatory host seams
-// (P2-4's fix -- see below), and otherwise
+// (P2-4's fix -- the gate below, checked before anything else), and with
+// ErrRBACServiceRequired while the *rbac.Service the automatic
+// permission-revocation end needs has not been attached through
+// Module.AttachRBAC (P2-3's fix -- checked immediately after the P2-4
+// gate, before every other validation, in mirror of RoleService.require's
+// own fail-closed ordering on the very same seam), and otherwise
 // (ErrImpersonationReasonRequired, ErrImpersonationTargetRequired,
 // ErrImpersonationSelfNotAllowed, ErrImpersonationTargetForbidden,
 // ErrImpersonationTargetNotFound, ErrImpersonationTargetNotMember) before
@@ -250,6 +272,10 @@ type StartInput struct {
 // validate-and-notify pass below skipped. attach runs during Register and
 // always carries the full mandatory seam set, so a correctly wired host
 // never sees this refusal; it exists to make the half-built shape loud.
+// It is not the only pre-start gate: the rbac gate immediately below
+// (P2-3's fix) closes the window attach cannot -- the post-Bootstrap
+// AttachRBAC seam a correctly wired host must also clear before a grant
+// can be born.
 func (s *ImpersonationService) Start(ctx context.Context, in StartInput) (*ImpersonationGrant, error) {
 	if !s.attached {
 		// Before attach has run, none of the mandatory seams below is
@@ -257,6 +283,24 @@ func (s *ImpersonationService) Start(ctx context.Context, in StartInput) (*Imper
 		// with a named error rather than write a grant nobody has
 		// validated or notified (P2-4's fix -- Start's own doc comment).
 		return nil, ErrImpersonationNotWired
+	}
+	// The automatic permission-revocation end (onRoleBindingRevoked /
+	// onRoleChanged, P2-3's fix) runs only once Module.AttachRBAC has
+	// attached a real *rbac.Service -- a host-performed, post-Bootstrap
+	// wiring step nothing else in this module can enforce (see rbacSvc's
+	// own doc comment). A grant born while it is missing could outlive
+	// its administrator's own admin:impersonate permission with no
+	// reconciliation ever able to end it -- the never-wired host is the
+	// unbounded version of the momentary window a correctly wired host
+	// has. Start therefore refuses, mirroring RoleService.require's
+	// fail-closed gate on the very same seam (role.go), rather than
+	// issuing a grant the module cannot stand behind. It sits after the
+	// attached gate above (P2-4's fix), which refuses a service
+	// Module.Register never attached with ErrImpersonationNotWired
+	// first; the two gates close different windows, and each keeps its
+	// own named error.
+	if s.rbacSvc == nil {
+		return nil, ErrRBACServiceRequired
 	}
 	if in.Reason == "" {
 		return nil, ErrImpersonationReasonRequired
@@ -722,8 +766,20 @@ func (s *ImpersonationService) onRoleChanged(ctx context.Context, evt pkgcore.Ev
 // rather than propagated -- the caller is an event-bus subscriber, which
 // must never fail the publisher's own Publish call (rbac's own
 // org.member.removed reap documents the identical constraint).
+//
+// A nil rbacSvc is Warn-logged rather than silently skipped -- the P2-3
+// follow-up: Start's own gate makes this branch unreachable while no
+// grant can exist (its doc comment), but a grant born under older code in
+// a host that never called Module.AttachRBAC would otherwise outlive its
+// administrator's revoked permission with no trace at all, which is
+// precisely the silence this Warn exists to prevent.
 func (s *ImpersonationService) reviewGrantsForAdmin(ctx context.Context, adminUserID string) {
-	if s.rbacSvc == nil || adminUserID == "" {
+	if s.rbacSvc == nil {
+		obs.FromContext(ctx).Warn("admin skipped the automatic permission-revocation check for an impersonating administrator because the rbac service is not attached; Module.AttachRBAC has not been called",
+			"admin_user_id", adminUserID)
+		return
+	}
+	if adminUserID == "" {
 		return
 	}
 	grants, err := s.repo.ListActive(ctx, s.now())
@@ -742,9 +798,11 @@ func (s *ImpersonationService) reviewGrantsForAdmin(ctx context.Context, adminUs
 
 // reviewAllLiveGrants is reviewGrantsForAdmin's whole-ledger counterpart
 // for onRoleChanged, which names no single administrator to narrow the
-// scan to.
+// scan to. A nil rbacSvc is Warn-logged rather than silently skipped, for
+// the identical reason reviewGrantsForAdmin's own nil branch documents.
 func (s *ImpersonationService) reviewAllLiveGrants(ctx context.Context) {
 	if s.rbacSvc == nil {
+		obs.FromContext(ctx).Warn("admin skipped the automatic permission-revocation check for live impersonation grants because the rbac service is not attached; Module.AttachRBAC has not been called")
 		return
 	}
 	grants, err := s.repo.ListActive(ctx, s.now())

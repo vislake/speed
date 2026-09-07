@@ -23,7 +23,7 @@
 "admin.compliance_module_required" = "本次部署缺少 compliance 模块，审计检索不可用。"
 "admin.notification_module_required" = "本次部署缺少 notification 模块，模拟登录无法通知目标用户。"
 "admin.queue_required" = "本次部署缺少任务队列，审计导出无法异步执行。"
-"admin.rbac_service_required" = "rbac 服务尚未接入，角色管理功能不可用。"
+"admin.rbac_service_required" = "rbac 服务尚未接入，角色管理与模拟登录功能不可用。"
 "admin.roles_system_domain_forbidden" = "不能在平台运维域内管理角色或角色绑定。"
 "admin.usage_modules_not_wired" = "本次部署未接入 metering 或 billing 模块，用量看板不可用。"
 "admin.export_operator_required" = "发起审计导出必须提供操作员用户 ID。"

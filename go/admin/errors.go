@@ -142,15 +142,20 @@ var (
 	ErrQueueRequired = apperr.Internal("admin.queue_required")
 
 	// ErrRBACServiceRequired is returned by every RoleService (D8) method
-	// when Module.AttachRBAC has not been called yet. Unlike the six
-	// wiring errors above, this is NOT a Register-time (Bootstrap)
-	// failure: rbac.Service does not exist until the host calls
-	// rbacModule.Attach(reg), which must run strictly AFTER Bootstrap
-	// returns -- a full cycle later than admin's own Register runs. See
-	// role.go's own RoleService doc comment and Module.AttachRBAC for the
-	// full reasoning. A request reaching D8's HTTP surface before the
-	// host has called AttachRBAC gets this refusal instead of a
-	// nil-service panic.
+	// and by ImpersonationService.Start (D5) when Module.AttachRBAC has
+	// not been called yet. Unlike the six wiring errors above, this is
+	// NOT a Register-time (Bootstrap) failure: rbac.Service does not
+	// exist until the host calls rbacModule.Attach(reg), which must run
+	// strictly AFTER Bootstrap returns -- a full cycle later than admin's
+	// own Register runs. See role.go's own RoleService doc comment and
+	// Module.AttachRBAC for the full reasoning. A request reaching D8's
+	// HTTP surface before the host has called AttachRBAC gets this
+	// refusal instead of a nil-service panic; an impersonation Start gets
+	// it instead of issuing a grant that could outlive its
+	// administrator's admin:impersonate permission -- the automatic
+	// permission-revocation end of a live grant (P2-3's fix) depends on
+	// the same attached service (impersonation_service.go's own rbacSvc
+	// doc comment).
 	ErrRBACServiceRequired = apperr.Internal("admin.rbac_service_required")
 
 	// ErrRolesSystemDomainForbidden is returned by every RoleService (D8)

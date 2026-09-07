@@ -304,7 +304,15 @@ func (m *Module) Export() *ExportService { return m.exportSvc }
 // permission is later revoked (see impersonation_service.go's
 // endIfNoLongerPermitted for the mechanism) -- the identical
 // post-Bootstrap-only timing constraint applies, since the check calls
-// rbac.Service.Can.
+// rbac.Service.Can. And because that automatic end is the only thing
+// standing between a revoked administrator and a still-live grant,
+// ImpersonationService.Start refuses with ErrRBACServiceRequired until
+// this call has run (impersonation_service.go's own rbacSvc doc comment)
+// -- the same fail-closed gate every RoleService method above applies, on
+// the very same seam. Calling this before Bootstrap, or not at all, thus
+// leaves D8's whole surface AND impersonation grant-starting failing
+// closed rather than a nil-service panic or a grant the module could
+// never automatically end.
 func (m *Module) AttachRBAC(svc *rbac.Service) {
 	m.roles.attach(svc)
 	m.impersonation.attachRBAC(svc)

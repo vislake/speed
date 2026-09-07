@@ -78,6 +78,10 @@ func (c *eventCapture) events() []pkgcore.Event { return c.got }
 // records carry empty display names, so this test fails there.
 func TestActorName_ImpersonationEventsCarryBothDisplayNames(t *testing.T) {
 	env := buildTestAdminModule(t)
+	// Start refuses while the rbac service is unattached (its own doc
+	// comment -- the P2-3 follow-up's gate), so wire the env's real
+	// Attach()-ed *rbac.Service exactly as a wired host does.
+	env.Admin.AttachRBAC(env.RBAC)
 	// Start dispatches the mandatory impersonation-started notification
 	// onto the real queue; registering the real delivery handler keeps that
 	// job from bouncing as an unknown task type, exactly as the locale

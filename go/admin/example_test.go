@@ -14,15 +14,29 @@ package admin_test
 // silently, with target-existence and membership validation and the
 // mandatory security notification all skipped (the shape the exported
 // half-built constructor handed out); it now fails closed with a named
-// error before anything is written. The full start/lookup/end lifecycle
-// with validation, notification and audit wired for real requires
-// Register, which in turn needs real authn, org, compliance and
-// notification modules wired in -- see AGENTS.md's wiring section and
-// examples/reference-app/cmd/server for the full composition -- so that
-// lifecycle is pinned by the module's own suites
-// (impersonation_service_locale_test.go and module_test.go) rather than
-// reconstructed here, exactly as ExampleNewExportService defers its real
-// path to export_test.go.
+// error before anything is written.
+//
+// Behind that first gate sits P2-3's second one, guarding what the
+// Register-time seams cannot: Module.AttachRBAC is host-performed and
+// strictly post-Bootstrap (its own doc comment, and rbacSvc's field doc,
+// give the full reasoning), and until it has attached a real
+// *rbac.Service, Start refuses with ErrRBACServiceRequired -- no grant
+// can be born while the automatic permission-revocation end
+// (onRoleBindingRevoked / onRoleChanged) that must be able to stop it is
+// unattached. That second refusal is reachable only once attach has run,
+// a state no exported surface reaches without Register, which in turn
+// needs real authn, org, compliance and notification modules wired in
+// (see AGENTS.md's wiring section and examples/reference-app/cmd/server
+// for the full composition) -- so it, and the whole start/lookup/end
+// lifecycle with validation, notification and audit wired for real, are
+// pinned by the module's own in-package suites
+// (impersonation_service_test.go's
+// TestImpersonationService_Start_BeforeAttachRBAC_Refused, plus the
+// impersonation_service_locale_test.go and module_test.go lifecycles)
+// rather than reconstructed here, exactly as ExampleNewExportService
+// defers its real path to export_test.go. ExampleModule_AttachRBAC below
+// demonstrates the same post-Bootstrap AttachRBAC seam from D8's side,
+// where the exported surface can reach it.
 
 import (
 	"context"
@@ -57,6 +71,10 @@ func Example() {
 	// seams -- the state every consumer sees until Bootstrap runs -- Start
 	// fails closed with a named error instead of starting a grant whose
 	// target was never validated and who was never notified (P2-4's fix).
+	// P2-3's ErrRBACServiceRequired gate sits behind this one, guarding
+	// the post-Bootstrap AttachRBAC seam that no Register-time attach can
+	// carry (Start's own doc comment; the header above explains why only
+	// the in-package suites can reach that second refusal).
 	_, err = module.Impersonation().Start(ctx, admin.StartInput{
 		AdminUserID:    "admin-1",
 		TargetUserID:   "user-1",
