@@ -14,9 +14,16 @@ import (
 // this test exists so the suite itself — subscript, waitFor,
 // assertPayloadSequence and all — is exercised inside this package's own
 // unit test run, not only via a caller two modules away.
+//
+// The in-memory bus is single-process: the factory returns the same
+// instance twice, the faithful two-instance model of a one-replica
+// deployment (see the package doc comment), under which every
+// cross-instance assertion reduces to an ordinary local-delivery check the
+// bus satisfies.
 func TestAssertConforms_MemoryEventBus(t *testing.T) {
 	t.Parallel()
-	AssertConforms(t, func() pkgcore.EventBus {
-		return pkgcore.NewMemoryEventBus()
+	AssertConforms(t, func() (pkgcore.EventBus, pkgcore.EventBus) {
+		bus := pkgcore.NewMemoryEventBus()
+		return bus, bus
 	})
 }

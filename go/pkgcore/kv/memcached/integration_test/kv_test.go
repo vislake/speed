@@ -27,6 +27,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bradfitz/gomemcache/memcache"
+
 	"github.com/vislake/speed/go/pkgcore"
 	kvmemcached "github.com/vislake/speed/go/pkgcore/kv/memcached"
 	"github.com/vislake/speed/go/pkgcore/kvstoretest"
@@ -317,18 +319,51 @@ func TestKVStore_CarriesBinaryValues(t *testing.T) {
 // pkgcore.NewMemoryKVStore and kv/redis's own integration tier runs against
 // a real Redis -- against a real Memcached, so drift between the three
 // registered KVStore implementations is caught here once instead of
-// pairwise. Every store AssertConforms's subtests build shares one
-// Memcached container and client (one container per test file), which is
-// safe because NewKVStore holds no per-instance state of its own -- it is a
-// thin wrapper over the shared client, unlike EventBus, which is why no
-// per-store cleanup is needed here.
+// pairwise. Every pair of stores AssertConforms's subtests build sits on
+// two independent gomemcache clients to one container (one container per
+// test file): the suite's cross-instance assertions -- a value set through
+// one instance must be visible through the other -- are the contract-suite
+// form of verifying the MultiReplicaSafe bit this implementation declares
+// when it registers, and they need genuinely independent connections to
+// mean anything. NewKVStore holds no per-instance state of its own -- it is
+// a thin wrapper over its client, unlike EventBus, which is why no per-store
+// cleanup is needed here.
 func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 	ctx := context.Background()
-	client := startMemcachedClient(t, ctx)
+	clientA, clientB := startMemcachedClientPair(t, ctx)
 
-	kvstoretest.AssertConforms(t, func() pkgcore.KVStore {
-		return kvmemcached.NewKVStore(client)
+	kvstoretest.AssertConforms(t, func() (pkgcore.KVStore, pkgcore.KVStore) {
+		return kvmemcached.NewKVStore(clientA), kvmemcached.NewKVStore(clientB)
 	})
+}
+
+// TestKVStore_DataDoesNotSurviveRestart_ConsistentWithItsHonestDeclaration
+// runs the mirror of the shared survives-restart protocol
+// (kvstoretest.AssertDoesNotSurviveRestart) against this implementation's
+// real backend: register.go honestly declares no SurvivesRestart --
+// Memcached is a pure in-memory cache with no persistence mechanism of any
+// kind -- and this test verifies the factual basis of that non-declaration:
+// a value written before a genuine restart of the Memcached container is
+// gone afterwards. A future change that declared SurvivesRestart over this
+// backend would contradict a verified loss rather than an unexamined
+// assumption.
+func TestKVStore_DataDoesNotSurviveRestart_ConsistentWithItsHonestDeclaration(t *testing.T) {
+	ctx := context.Background()
+	container, hostPort := startMemcachedPersistent(t, ctx)
+
+	kvstoretest.AssertDoesNotSurviveRestart(t,
+		func() pkgcore.KVStore {
+			return kvmemcached.NewKVStore(memcache.New(hostPort))
+		},
+		func() {
+			if err := container.Stop(ctx, nil); err != nil {
+				t.Fatalf("stop memcached container: %v", err)
+			}
+			if err := container.Start(ctx); err != nil {
+				t.Fatalf("restart memcached container: %v", err)
+			}
+			waitForMemcachedReady(t, ctx, hostPort)
+		})
 }
 
 // TestKVStore_ConcurrentIncrementsLoseNoUpdates is the first mandatory

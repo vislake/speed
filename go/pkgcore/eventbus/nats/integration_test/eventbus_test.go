@@ -747,17 +747,26 @@ func TestEventBus_Close_SparesAPeerConsumer(t *testing.T) {
 // same suite eventbus/redis's own integration tier runs against a real
 // Redis -- against a real JetStream-enabled NATS server, so drift between
 // the two distributed EventBus implementations is caught here once instead
-// of pairwise. Every bus AssertConforms's subtests build shares one
-// connection to one container and is closed on this test's cleanup,
-// mirroring how every other test in this file manages an EventBus's
-// lifetime.
+// of pairwise. Every pair of buses AssertConforms's subtests build sits on
+// two independent connections to one container (the same two-replica shape
+// the cross-replica tests in this file use): each NewEventBus call is a
+// genuine bus instance with its own durable consumer on every stream it
+// subscribes to, so the suite's cross-instance subtests -- the assertions
+// that make the suite able to see remote delivery at all, and the
+// contract-suite form of verifying the MultiReplicaSafe bit this
+// implementation declares when it registers -- run against a genuinely
+// distributed pair. Both buses of every pair are closed on this test's
+// cleanup, mirroring how every other test in this file manages an
+// EventBus's lifetime.
 func TestEventBus_ConformsToEventBusContract(t *testing.T) {
 	ctx := context.Background()
-	conn := startNATSConn(t, ctx)
+	connA, connB := startNATSConnPair(t, ctx)
 
-	eventbustest.AssertConforms(t, func() pkgcore.EventBus {
-		bus := eventbusnats.NewEventBus(conn)
-		t.Cleanup(bus.Close)
-		return bus
+	eventbustest.AssertConforms(t, func() (pkgcore.EventBus, pkgcore.EventBus) {
+		busA := eventbusnats.NewEventBus(connA)
+		busB := eventbusnats.NewEventBus(connB)
+		t.Cleanup(busA.Close)
+		t.Cleanup(busB.Close)
+		return busA, busB
 	})
 }

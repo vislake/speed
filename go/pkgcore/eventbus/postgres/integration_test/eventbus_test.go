@@ -4,6 +4,7 @@ package postgres_test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -121,18 +122,26 @@ func sequenceOf(evt pkgcore.Event) (float64, bool) {
 // TestEventBus_AssertConforms runs the shared eventbustest suite against a
 // real PostgreSQL server, the same conformance proof every pkgcore.EventBus
 // implementation must pass (see eventbustest's own doc comment). One
-// container, one pool, backs a fresh EventBus with a fresh replicaID per
-// subtest, so subtests never share cursor state.
+// container, one pool, backs a fresh pair of EventBus instances with fresh
+// replicaIDs per subtest, so subtests never share cursor state. The two
+// instances of each pair -- distinct replicaIDs sharing one pool -- are the
+// real two-replica shape this file's fan-out test proves delivery for, so
+// the suite's cross-instance subtests -- the assertions that make the suite
+// able to see remote delivery at all, and the contract-suite form of
+// verifying the MultiReplicaSafe bit this implementation declares when it
+// registers -- run against a genuinely distributed pair.
 func TestEventBus_AssertConforms(t *testing.T) {
 	ctx := context.Background()
 	pool := startPostgresPool(t, ctx)
 
 	seq := 0
-	eventbustest.AssertConforms(t, func() pkgcore.EventBus {
+	eventbustest.AssertConforms(t, func() (pkgcore.EventBus, pkgcore.EventBus) {
 		seq++
-		bus := eventbuspostgres.NewEventBus(pool, "conform-replica")
-		t.Cleanup(bus.Close)
-		return bus
+		busA := eventbuspostgres.NewEventBus(pool, fmt.Sprintf("conform-replica-a-%d", seq))
+		busB := eventbuspostgres.NewEventBus(pool, fmt.Sprintf("conform-replica-b-%d", seq))
+		t.Cleanup(busA.Close)
+		t.Cleanup(busB.Close)
+		return busA, busB
 	})
 }
 

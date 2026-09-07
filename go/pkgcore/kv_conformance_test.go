@@ -24,9 +24,16 @@ import (
 // retrofit (Phase 1) generalized how a Kernel resolves and validates its
 // KVStore seam — this is what proves the retrofit did not silently change
 // NewMemoryKVStore's own behavior for its existing callers.
+//
+// The in-memory store is single-process, so the factory returns the same
+// instance twice: the faithful two-instance model of a one-replica
+// deployment (see kvstoretest's package doc comment), under which the
+// suite's cross-instance assertions reduce to ordinary single-store checks
+// the store satisfies.
 func TestMemoryKVStore_ConformsToKVStoreContract(t *testing.T) {
 	t.Parallel()
-	kvstoretest.AssertConforms(t, func() pkgcore.KVStore {
-		return pkgcore.NewMemoryKVStore()
+	kvstoretest.AssertConforms(t, func() (pkgcore.KVStore, pkgcore.KVStore) {
+		store := pkgcore.NewMemoryKVStore()
+		return store, store
 	})
 }

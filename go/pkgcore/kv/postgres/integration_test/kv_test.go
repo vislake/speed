@@ -501,19 +501,59 @@ func TestKVStore_ConcurrentCompareAndSwapSetIfAbsent_ExactlyOneWinner(t *testing
 // against a real Redis -- against a real PostgreSQL, so drift between the
 // three KVStore implementations under the deployment-composition retrofit's
 // N registered implementations per seam is caught here once instead of
-// pairwise. Every store AssertConforms's subtests build shares one
-// PostgreSQL container and pool (one container per test file), which is
-// safe because NewKVStore holds no per-instance state of its own -- it is a
-// thin wrapper over the shared pool -- and every subtest derives its own
-// key from its own test name (kvstoretest.conformKey), so no two subtests
-// ever collide on a row.
+// pairwise. Every pair of stores AssertConforms's subtests build sits on
+// two independent connection pools to one container (one container per test
+// file): the suite's cross-instance assertions -- a value set through one
+// instance must be visible through the other -- are the contract-suite form
+// of verifying the MultiReplicaSafe bit this implementation declares when
+// it registers, and they need genuinely independent connections to mean
+// anything. NewKVStore holds no per-instance state of its own -- it is a
+// thin wrapper over its pool -- and every subtest derives its own key from
+// its own test name (kvstoretest.conformKey), so no two subtests ever
+// collide on a row.
 func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 	ctx := context.Background()
-	pool := startPostgresPool(t, ctx)
+	poolA := startPostgresPool(t, ctx)
+	poolB, err := pgxpool.NewWithConfig(ctx, poolA.Config())
+	if err != nil {
+		t.Fatalf("pgxpool.NewWithConfig: %v", err)
+	}
+	t.Cleanup(poolB.Close)
 
-	kvstoretest.AssertConforms(t, func() pkgcore.KVStore {
-		return kvpostgres.NewKVStore(pool)
+	kvstoretest.AssertConforms(t, func() (pkgcore.KVStore, pkgcore.KVStore) {
+		return kvpostgres.NewKVStore(poolA), kvpostgres.NewKVStore(poolB)
 	})
+}
+
+// TestKVStore_DeclaredSurvivesRestart_ProvenAgainstContainerRestart runs
+// the shared survives-restart protocol (kvstoretest.AssertSurvivesRestart)
+// against this implementation's real backend: the registration in
+// register.go declares pkgcore.SurvivesRestart, and this test is the
+// verification that the declaration is real -- a value written before a
+// genuine restart of the PostgreSQL container must be readable afterwards.
+// The protocol drives the restart itself; the closures supply the pieces
+// only this backend can: a store over the persistent fixture's pool (which
+// redials the fixed advertised address on its own), and a restart that
+// stops and starts the container and waits until the pool answers a Ping
+// again -- so the post-restart read fails only if the data is genuinely
+// gone.
+func TestKVStore_DeclaredSurvivesRestart_ProvenAgainstContainerRestart(t *testing.T) {
+	ctx := context.Background()
+	container, pool := startPostgresPersistent(t, ctx)
+
+	kvstoretest.AssertSurvivesRestart(t,
+		func() pkgcore.KVStore {
+			return kvpostgres.NewKVStore(pool)
+		},
+		func() {
+			if err := container.Stop(ctx, nil); err != nil {
+				t.Fatalf("stop postgres container: %v", err)
+			}
+			if err := container.Start(ctx); err != nil {
+				t.Fatalf("restart postgres container: %v", err)
+			}
+			waitForPostgresReady(t, ctx, pool)
+		})
 }
 
 // TestKVStore_TTLJudgedByTheDatabaseClockNotTheApplicationClock is the

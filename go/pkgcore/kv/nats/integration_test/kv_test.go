@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/vislake/speed/go/pkgcore"
@@ -450,61 +449,35 @@ func TestKVStore_ConcurrentCompareAndSwapSetIfAbsent_ExactlyOneWins(t *testing.T
 	}
 }
 
-// TestKVStore_ReconnectAfterServerRestart_ResumesOperation proves this
-// package's declared pkgcore.SurvivesRestart capability is real: a value
-// written before the server restarts is still readable after it comes back
-// (JetStream's default File storage persists across a stop/start of the same
-// container, which never removes its filesystem the way Terminate would),
-// and the client -- built with nats.Connect's own default reconnect
-// behaviour, untouched -- resumes ordinary operation once reconnected,
-// without this package's own code doing anything to notice or recover from
-// the disconnect.
-func TestKVStore_ReconnectAfterServerRestart_ResumesOperation(t *testing.T) {
+// TestKVStore_DeclaredSurvivesRestart_RunsTheSharedVerification proves this
+// package's declared pkgcore.SurvivesRestart capability is real by running
+// the shared survives-restart protocol (kvstoretest.AssertSurvivesRestart):
+// a value written before the server restarts must still be readable after
+// it comes back (JetStream's default File storage persists across a
+// stop/start of the same container, which never removes its filesystem the
+// way Terminate would), and the client -- built with nats.Connect's own
+// default reconnect behaviour, untouched -- resumes ordinary operation once
+// reconnected, without this package's own code doing anything to notice or
+// recover from the disconnect. The protocol drives the restart itself; the
+// closures supply the pieces only this backend can: a store over the
+// restart-aware fixture's connection, and a restart that stops and starts
+// the container and blocks until the connection has reconnected, so the
+// protocol's post-restart read happens against a live connection.
+func TestKVStore_DeclaredSurvivesRestart_RunsTheSharedVerification(t *testing.T) {
 	ctx := context.Background()
 	container, conn := startNATSConnWithContainer(t, ctx)
 
-	kv, err := kvnats.NewKVStore(ctx, conn, "reconnect-test")
-	if err != nil {
-		t.Fatalf("NewKVStore() error = %v, want nil", err)
-	}
-
-	if err := kv.Set(ctx, "before-restart", []byte("v1"), 0); err != nil {
-		t.Fatalf("Set() before restart error = %v, want nil", err)
-	}
-
-	reconnected := make(chan struct{}, 1)
-	conn.SetReconnectHandler(func(*nats.Conn) {
-		select {
-		case reconnected <- struct{}{}:
-		default:
-		}
-	})
-
-	if err := container.Stop(ctx, nil); err != nil {
-		t.Fatalf("stop nats container: %v", err)
-	}
-	if err := container.Start(ctx); err != nil {
-		t.Fatalf("restart nats container: %v", err)
-	}
-
-	select {
-	case <-reconnected:
-	case <-time.After(30 * time.Second):
-		t.Fatal("client did not reconnect within 30s of the server restarting")
-	}
-
-	value, found, err := kv.Get(ctx, "before-restart")
-	if err != nil || !found || string(value) != "v1" {
-		t.Fatalf("Get() after reconnect = (%q, %t, %v), want (\"v1\", true, nil): data must survive the restart", value, found, err)
-	}
-
-	if err := kv.Set(ctx, "after-restart", []byte("v2"), 0); err != nil {
-		t.Fatalf("Set() after reconnect error = %v, want nil", err)
-	}
-	value, found, err = kv.Get(ctx, "after-restart")
-	if err != nil || !found || string(value) != "v2" {
-		t.Errorf("Get() = (%q, %t, %v), want (\"v2\", true, nil)", value, found, err)
-	}
+	kvstoretest.AssertSurvivesRestart(t,
+		func() pkgcore.KVStore {
+			kv, err := kvnats.NewKVStore(ctx, conn, "survives-restart-it")
+			if err != nil {
+				t.Fatalf("NewKVStore() error = %v, want nil", err)
+			}
+			return kv
+		},
+		func() {
+			restartNATSContainer(t, ctx, container, conn)
+		})
 }
 
 // TestInit_RegistersKVNatsOnTheSharedRegistry_WithCapabilities is the
@@ -538,12 +511,30 @@ func TestInit_RegistersKVNatsOnTheSharedRegistry_WithCapabilities(t *testing.T) 
 // pkgcore.NewMemoryKVStore and kv/redis's own integration tier runs against
 // a real Redis -- against a real, JetStream-enabled NATS, so drift between
 // the three registered KVStore implementations is caught here once instead
-// of pairwise. Every store AssertConforms's subtests build shares one store
-// instance (backed by one container's one bucket), which is safe because
-// kvStore holds no per-instance mutable state of its own.
+// of pairwise. Every pair of stores AssertConforms's subtests build sits on
+// two independent connections to one container's one bucket: the suite's
+// cross-instance assertions -- a value set through one instance must be
+// visible through the other -- are the contract-suite form of verifying the
+// MultiReplicaSafe bit this implementation declares when it registers, and
+// they need genuinely independent connections to mean anything. kvStore
+// holds no per-instance mutable state of its own, which is what makes the
+// two connections over one shared bucket safe to reuse across subtests.
 func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
-	kv := newStore(t, context.Background())
-	kvstoretest.AssertConforms(t, func() pkgcore.KVStore { return kv })
+	ctx := context.Background()
+	connA, connB := startNATSConnPair(t, ctx)
+
+	storeA, err := kvnats.NewKVStore(ctx, connA, "kv-conform-it")
+	if err != nil {
+		t.Fatalf("NewKVStore() on the first connection error = %v, want nil", err)
+	}
+	storeB, err := kvnats.NewKVStore(ctx, connB, "kv-conform-it")
+	if err != nil {
+		t.Fatalf("NewKVStore() on the second connection error = %v, want nil", err)
+	}
+
+	kvstoretest.AssertConforms(t, func() (pkgcore.KVStore, pkgcore.KVStore) {
+		return storeA, storeB
+	})
 }
 
 // TestKVStore_NewKVStore_RefusesAdoptedMemoryStorageBucket is the regression

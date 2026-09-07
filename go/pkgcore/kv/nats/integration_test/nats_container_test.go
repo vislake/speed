@@ -64,12 +64,66 @@ func startNATSConn(t *testing.T, ctx context.Context) *nats.Conn {
 	return connectToContainer(t, ctx, container)
 }
 
-// startNATSConnWithContainer is startNATSConn's counterpart for the one test
-// that needs to stop and restart its own container mid-test
-// (TestKVStore_ReconnectAfterServerRestart_ResumesOperation): it hands back
-// the container itself alongside the connection, rather than closing over it
-// invisibly, and differs from startNATSConn in two ways that test alone
-// needs:
+// startNATSConnPair starts one disposable JetStream-enabled NATS container
+// and returns two independent client connections to it -- standing in for
+// two replicas of a deployment sharing one broker, the shape the shared
+// contract suite's cross-instance assertions need (its factories build two
+// store instances, and those assertions only mean anything when the two
+// instances are genuinely independent connections).
+func startNATSConnPair(t *testing.T, ctx context.Context) (*nats.Conn, *nats.Conn) {
+	t.Helper()
+
+	container, err := tcnats.Run(ctx, natsImage)
+	if err != nil {
+		t.Fatalf("start nats testcontainer: %v", err)
+	}
+	t.Cleanup(func() {
+		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
+			t.Errorf("terminate nats testcontainer: %v", terminateErr)
+		}
+	})
+
+	return connectToContainer(t, ctx, container), connectToContainer(t, ctx, container)
+}
+
+// restartNATSContainer stops and starts container and blocks until conn has
+// reconnected to it, failing the test if the reconnect does not happen
+// within 30s. The survives-restart proofs drive their container restart
+// through this helper: the shared protocols' post-restart factory call and
+// reads must run against a reconnected connection, or they would fail on
+// the dead connection rather than on genuinely lost data.
+func restartNATSContainer(t *testing.T, ctx context.Context, container *tcnats.NATSContainer, conn *nats.Conn) {
+	t.Helper()
+
+	reconnected := make(chan struct{}, 1)
+	conn.SetReconnectHandler(func(*nats.Conn) {
+		select {
+		case reconnected <- struct{}{}:
+		default:
+		}
+	})
+
+	if err := container.Stop(ctx, nil); err != nil {
+		t.Fatalf("stop nats container: %v", err)
+	}
+	if err := container.Start(ctx); err != nil {
+		t.Fatalf("restart nats container: %v", err)
+	}
+
+	select {
+	case <-reconnected:
+	case <-time.After(30 * time.Second):
+		t.Fatal("client did not reconnect within 30s of the server restarting")
+	}
+}
+
+// startNATSConnWithContainer is startNATSConn's counterpart for the tests
+// that stop and restart their own container mid-test (the shared
+// survives-restart proofs, see
+// TestKVStore_DeclaredSurvivesRestart_RunsTheSharedVerification): it hands
+// back the container itself alongside the connection, rather than closing
+// over it invisibly, and differs from startNATSConn in two ways those tests
+// alone need:
 //
 //   - It connects with a short PingInterval/MaxPingsOutstanding, unlike
 //     startNATSConn's plain default -- nats.go's own default PingInterval is

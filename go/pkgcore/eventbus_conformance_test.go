@@ -23,9 +23,16 @@ import (
 // retrofit (Phase 1) generalized how a Kernel resolves and validates its
 // EventBus seam — this is what proves the retrofit did not silently change
 // NewMemoryEventBus's own behavior for its existing callers.
+//
+// The in-memory bus is single-process, so the factory returns the same
+// instance twice: the faithful two-instance model of a one-replica
+// deployment (see eventbustest's package doc comment), under which the
+// suite's cross-instance assertions reduce to ordinary local-delivery
+// checks the bus satisfies.
 func TestMemoryEventBus_ConformsToEventBusContract(t *testing.T) {
 	t.Parallel()
-	eventbustest.AssertConforms(t, func() pkgcore.EventBus {
-		return pkgcore.NewMemoryEventBus()
+	eventbustest.AssertConforms(t, func() (pkgcore.EventBus, pkgcore.EventBus) {
+		bus := pkgcore.NewMemoryEventBus()
+		return bus, bus
 	})
 }

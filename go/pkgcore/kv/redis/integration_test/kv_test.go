@@ -418,16 +418,57 @@ func TestKVStore_ConcurrentIncrementsLoseNoUpdates(t *testing.T) {
 // pkgcore.NewMemoryKVStore -- against a real Redis, so drift between the
 // two KVStore implementations under the deployment-composition retrofit's N
 // registered implementations per seam is caught here once instead of
-// pairwise. Every store AssertConforms's subtests build shares one Redis
-// container and client (one container per test file), which is safe because
-// NewKVStore holds no per-instance state of its own -- it is a thin wrapper
-// over the shared client, unlike EventBus, which is why no per-store cleanup
-// is needed here.
+// pairwise. Every pair of stores AssertConforms's subtests build sits on
+// two independent go-redis clients to one container (one container per test
+// file): the suite's cross-instance assertions -- a value set through one
+// instance must be visible through the other -- are the contract-suite form
+// of verifying the MultiReplicaSafe bit this implementation declares when
+// it registers, and they need genuinely independent connections to mean
+// anything. NewKVStore holds no per-instance state of its own -- it is a
+// thin wrapper over its client, unlike EventBus, which is why no per-store
+// cleanup is needed here.
 func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 	ctx := context.Background()
-	client := startRedisClient(t, ctx)
+	clientA, clientB := startRedisClientPair(t, ctx)
 
-	kvstoretest.AssertConforms(t, func() pkgcore.KVStore {
-		return kvredis.NewKVStore(client)
+	kvstoretest.AssertConforms(t, func() (pkgcore.KVStore, pkgcore.KVStore) {
+		return kvredis.NewKVStore(clientA), kvredis.NewKVStore(clientB)
 	})
+}
+
+// TestKVStore_DeclaredSurvivesRestart_ProvenAgainstContainerRestart runs
+// the shared survives-restart protocol (kvstoretest.AssertSurvivesRestart)
+// against this implementation's real backend: the registration in
+// register.go declares pkgcore.SurvivesRestart, and this test is the
+// verification that the declaration is real -- a value written before a
+// genuine restart of the Redis container must be readable afterwards. The
+// protocol drives the restart itself; the closures supply the pieces only
+// this backend can: a store over the persistent fixture's client (which
+// redials the fixed advertised address on its own), and a restart that lets
+// the forced one-second RDB snapshot fire, stops and starts the container,
+// and waits until the restarted server answers a PING -- so the post-restart
+// read fails only if the data is genuinely gone.
+func TestKVStore_DeclaredSurvivesRestart_ProvenAgainstContainerRestart(t *testing.T) {
+	ctx := context.Background()
+	container, client := startRedisPersistent(t, ctx)
+
+	kvstoretest.AssertSurvivesRestart(t,
+		func() pkgcore.KVStore {
+			return kvredis.NewKVStore(client)
+		},
+		func() {
+			// The fixture forces "save 1 1": the snapshot fires within about
+			// a second of the write. Waiting it out before the stop makes
+			// the proof rest on a snapshot that demonstrably landed, not on
+			// a shutdown-time save that could mask a backend which only
+			// looks durable while it is running.
+			time.Sleep(1500 * time.Millisecond)
+			if err := container.Stop(ctx, nil); err != nil {
+				t.Fatalf("stop redis container: %v", err)
+			}
+			if err := container.Start(ctx); err != nil {
+				t.Fatalf("restart redis container: %v", err)
+			}
+			waitForRedisReady(t, ctx, client)
+		})
 }

@@ -6,12 +6,42 @@
 // implementation — built-in or host-supplied through pkgcore.WithKVStore —
 // must pass, so drift between implementations is caught here once instead of
 // pairwise (see docs/internal/03-deployment-modes.md).
+//
+// # The two-instance shape
+//
+// AssertConforms builds its stores through a factory returning TWO
+// instances — the shape of a deployment, not of a single store. A
+// single-process implementation (the in-memory store) returns the same
+// instance twice: a one-replica deployment's "second instance" is its own
+// one instance, and every cross-instance assertion below reduces to an
+// ordinary single-store check it satisfies. A shared-backend implementation
+// (Redis, NATS JetStream, PostgreSQL, Memcached) returns two genuinely
+// independent connections, and the same assertions become the checks that
+// make the suite able to see what such an implementation exists for: that a
+// write made through one connection is visible through another. This is
+// also the contract-suite form of verifying the MultiReplicaSafe capability
+// bit such an implementation declares about itself when it registers: the
+// bit claims exactly that a second instance of the same deployment observes
+// what the first one wrote, and these assertions check that claim against
+// the pair the factory builds. Every integration leg whose implementation
+// declares the bit runs this suite against a real pair; an implementation
+// that cannot satisfy the claim fails here, the same way Kernel.Bootstrap
+// fails an assembly whose resolved implementation cannot satisfy the
+// deployment mode's requirements (ErrCapabilityUnsatisfied), but at the
+// level of the implementation's actual behaviour rather than its
+// declaration.
+//
+// SurvivesRestart, the other capability bit KVStore implementations can
+// declare, is verified separately by AssertSurvivesRestart: it needs a
+// restart of whatever process holds the data between the write and the
+// read, which no per-subtest factory pair can express.
 package kvstoretest
 
 import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -27,13 +57,15 @@ const (
 	conformExpiryWait = 5 * conformShortTTL
 )
 
-// AssertConforms verifies that the KVStore factory returns satisfies the
-// contract documented on pkgcore.KVStore. Each subtest calls factory to get
-// its own store instance and operates on keys it derives from the subtest
+// AssertConforms verifies that the pair of KVStores the factory returns —
+// two instances of one deployment, per the package doc comment — satisfies
+// the contract documented on pkgcore.KVStore. Each subtest calls factory to
+// get its own store pair and operates on keys it derives from the subtest
 // name (see conformKey), so subtests sharing a long-lived backing store (as
 // the Redis integration leg does, one container per test file) never
 // collide on key names even though AssertConforms does not require factory
-// to return an empty store.
+// to return empty stores. The single-instance checks run against the
+// pair's first store; the cross-instance ones use both.
 //
 // What AssertConforms checks, in order: Get on a key that was never set
 // reports a miss, not an error; Set followed by Get round-trips the exact
@@ -57,13 +89,15 @@ const (
 // (set-if-absent), and on an existing key succeeds only when old matches the
 // stored value, leaving the value untouched on a mismatch; and a call made
 // with an already-cancelled context fails with that context's error instead
-// of performing the operation.
-func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
+// of performing the operation. Then the cross-instance assertions: a value
+// set through one instance is readable through the other, and a delete
+// through one instance removes the key for the other.
+func AssertConforms(t *testing.T, factory func() (pkgcore.KVStore, pkgcore.KVStore)) {
 	t.Helper()
 
 	t.Run("get_on_a_never_set_key_reports_a_miss_not_an_error", func(t *testing.T) {
 		t.Helper()
-		store := factory()
+		store, _ := factory()
 		key := conformKey(t, "never-set")
 
 		val, found, err := store.Get(context.Background(), key)
@@ -80,7 +114,7 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 
 	t.Run("set_then_get_round_trips_the_exact_bytes", func(t *testing.T) {
 		t.Helper()
-		store := factory()
+		store, _ := factory()
 		key := conformKey(t, "round-trip")
 		want := []byte("kvstoretest payload")
 
@@ -101,7 +135,7 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 
 	t.Run("delete_removes_the_key_and_is_a_no_op_on_an_absent_one", func(t *testing.T) {
 		t.Helper()
-		store := factory()
+		store, _ := factory()
 		key := conformKey(t, "delete")
 
 		if err := store.Set(context.Background(), key, []byte("gone soon"), 0); err != nil {
@@ -121,7 +155,7 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 
 	t.Run("a_short_ttl_expires_while_no_ttl_survives_the_same_wait", func(t *testing.T) {
 		t.Helper()
-		store := factory()
+		store, _ := factory()
 		expiring := conformKey(t, "expiring")
 		persistent := conformKey(t, "persistent")
 
@@ -148,7 +182,7 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 
 	t.Run("incr_by_float_starts_from_zero_and_accumulates", func(t *testing.T) {
 		t.Helper()
-		store := factory()
+		store, _ := factory()
 		key := conformKey(t, "counter")
 
 		got, err := store.IncrByFloat(context.Background(), key, 2.5)
@@ -170,7 +204,7 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 
 	t.Run("incr_by_float_with_a_binary_inexact_delta_rounds_correctly_per_implementation", func(t *testing.T) {
 		t.Helper()
-		store := factory()
+		store, _ := factory()
 		key := conformKey(t, "binary-inexact")
 
 		// 0.1 has no exact float64 representation, so accumulating it three
@@ -231,7 +265,7 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 
 	t.Run("incr_by_float_on_a_non_numeric_value_fails_and_leaves_it_unchanged", func(t *testing.T) {
 		t.Helper()
-		store := factory()
+		store, _ := factory()
 		key := conformKey(t, "non-numeric")
 		want := []byte("not a number")
 
@@ -254,7 +288,7 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 
 	t.Run("incr_by_float_with_ttl_on_a_missing_key_attaches_the_ttl_which_then_expires_it", func(t *testing.T) {
 		t.Helper()
-		store := factory()
+		store, _ := factory()
 		key := conformKey(t, "incr-ttl-missing")
 
 		got, err := store.IncrByFloatWithTTL(context.Background(), key, 3, conformShortTTL)
@@ -278,7 +312,7 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 
 	t.Run("incr_by_float_with_ttl_on_a_live_key_accumulates_without_extending_its_expiry", func(t *testing.T) {
 		t.Helper()
-		store := factory()
+		store, _ := factory()
 		key := conformKey(t, "incr-ttl-live")
 
 		// Give the key a short-lived expiry first, then increment it again
@@ -306,7 +340,7 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 
 	t.Run("incr_by_float_with_ttl_of_zero_or_less_on_a_missing_key_behaves_like_incr_by_float", func(t *testing.T) {
 		t.Helper()
-		store := factory()
+		store, _ := factory()
 
 		for _, ttl := range []time.Duration{0, -time.Second} {
 			key := conformKey(t, "incr-ttl-noexpiry") + ":" + ttl.String()
@@ -325,7 +359,7 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 
 	t.Run("incr_by_float_with_ttl_on_a_non_numeric_value_fails_and_leaves_it_unchanged", func(t *testing.T) {
 		t.Helper()
-		store := factory()
+		store, _ := factory()
 		key := conformKey(t, "incr-ttl-non-numeric")
 		want := []byte("not a number")
 
@@ -348,7 +382,7 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 
 	t.Run("compare_and_swap_set_if_absent_then_matched_swap_then_mismatch_leaves_it_untouched", func(t *testing.T) {
 		t.Helper()
-		store := factory()
+		store, _ := factory()
 		key := conformKey(t, "cas")
 
 		// A missing key matches only an empty expectation: set-if-absent.
@@ -387,7 +421,7 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 
 	t.Run("a_cancelled_context_fails_without_performing_the_operation", func(t *testing.T) {
 		t.Helper()
-		store := factory()
+		store, _ := factory()
 		key := conformKey(t, "cancelled")
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -410,6 +444,68 @@ func AssertConforms(t *testing.T, factory func() pkgcore.KVStore) {
 			t.Errorf("Get() with a live context after a cancelled Set = (found=%v, err=%v), want (false, nil)", found, err)
 		}
 	})
+
+	t.Run("a_value_set_on_one_instance_is_readable_on_the_other", func(t *testing.T) {
+		t.Helper()
+		storeA, storeB := factory()
+		if err := checkValueVisibleAcrossInstances(storeA, storeB, conformKey(t, "cross-instance-round-trip")); err != nil {
+			t.Error(err)
+		}
+	})
+
+	t.Run("a_delete_on_one_instance_is_visible_on_the_other", func(t *testing.T) {
+		t.Helper()
+		storeA, storeB := factory()
+		if err := checkDeleteVisibleAcrossInstances(storeA, storeB, conformKey(t, "cross-instance-delete")); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+// checkValueVisibleAcrossInstances verifies that a value set through one
+// store instance is readable through another, with the exact bytes — the
+// property MultiReplicaSafe declares about a shared-backend implementation.
+// It returns an error describing the first broken property instead of
+// failing a test directly, so the suite's subtests and this package's own
+// teeth-style tests (see assert_conforms_test.go) can both drive it.
+func checkValueVisibleAcrossInstances(storeA, storeB pkgcore.KVStore, key string) error {
+	want := []byte("kvstoretest cross-instance payload")
+
+	if err := storeA.Set(context.Background(), key, want, 0); err != nil {
+		return fmt.Errorf("Set() on the first instance error = %w, want nil", err)
+	}
+
+	got, found, err := storeB.Get(context.Background(), key)
+	if err != nil {
+		return fmt.Errorf("Get() on the second instance error = %w, want nil", err)
+	}
+	if !found {
+		return errors.New("Get() on the second instance found = false, want true: a write through one instance must be visible through another")
+	}
+	if !bytes.Equal(got, want) {
+		return fmt.Errorf("Get() on the second instance value = %q, want %q", got, want)
+	}
+	return nil
+}
+
+// checkDeleteVisibleAcrossInstances verifies that a delete through one
+// store instance removes the key for another.
+func checkDeleteVisibleAcrossInstances(storeA, storeB pkgcore.KVStore, key string) error {
+	if err := storeA.Set(context.Background(), key, []byte("gone"), 0); err != nil {
+		return fmt.Errorf("Set() on the first instance error = %w, want nil", err)
+	}
+	if _, found, err := storeB.Get(context.Background(), key); err != nil || !found {
+		return fmt.Errorf("Get() on the second instance before the delete = (found=%v, err=%w), want (true, nil)", found, err)
+	}
+
+	if err := storeB.Delete(context.Background(), key); err != nil {
+		return fmt.Errorf("Delete() on the second instance error = %w, want nil", err)
+	}
+
+	if _, found, err := storeA.Get(context.Background(), key); err != nil || found {
+		return fmt.Errorf("Get() on the first instance after the other instance's delete = (found=%v, err=%w), want (false, nil)", found, err)
+	}
+	return nil
 }
 
 // conformKey derives a key from t's name and suffix, so subtests sharing a

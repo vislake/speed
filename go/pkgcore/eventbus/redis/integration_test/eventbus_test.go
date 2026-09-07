@@ -680,17 +680,26 @@ func TestEventBus_Close_SparesAPeerGroup(t *testing.T) {
 // pkgcore.NewMemoryEventBus -- against a real Redis, so drift between the
 // two EventBus implementations under the deployment-composition retrofit's
 // N registered implementations per seam is caught here once instead of
-// pairwise. Every bus AssertConforms's subtests build shares one Redis
-// container and client (one container per test file, per this package's own
-// doc comment) and is closed on this test's cleanup, mirroring how every
-// other test in this file manages an EventBus's lifetime.
+// pairwise. Every pair of buses AssertConforms's subtests build shares one
+// Redis container and client (one container per test file, per this
+// package's own doc comment): each NewEventBus call is a genuine bus
+// instance with its own consumer group on every stream it subscribes to, so
+// the two-instance factory is the real two-replica shape, and the suite's
+// cross-instance subtests -- the assertions that make the suite able to see
+// remote delivery at all, and the contract-suite form of verifying the
+// MultiReplicaSafe bit this implementation declares when it registers -- run
+// against a genuinely distributed pair. Both buses of every pair are closed
+// on this test's cleanup, mirroring how every other test in this file
+// manages an EventBus's lifetime.
 func TestEventBus_ConformsToEventBusContract(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
 
-	eventbustest.AssertConforms(t, func() pkgcore.EventBus {
-		bus := eventbusredis.NewEventBus(client)
-		t.Cleanup(bus.Close)
-		return bus
+	eventbustest.AssertConforms(t, func() (pkgcore.EventBus, pkgcore.EventBus) {
+		busA := eventbusredis.NewEventBus(client)
+		busB := eventbusredis.NewEventBus(client)
+		t.Cleanup(busA.Close)
+		t.Cleanup(busB.Close)
+		return busA, busB
 	})
 }
