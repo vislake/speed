@@ -61,28 +61,34 @@ import (
 // deployment's own processes, that needs to independently verify a token
 // this Service signed.
 //
-// Only SigningKeyStatusActive and SigningKeyStatusRetiring keys are
-// included -- never SigningKeyStatusPending, unlike the internal
-// verification path's ListVerifiableByPurpose. See
+// Only SigningKeyStatusActive and SigningKeyStatusRetiring keys that are
+// also WITHIN their validity window at this instant are included -- never
+// SigningKeyStatusPending, unlike the internal verification path's
+// ListVerifiableByPurpose, and never a key whose NotAfter has passed: an
+// external verifier has no relationship to this deployment's expiry scan
+// at all, so an expired key left in the active/retiring set by a scan that
+// has not run yet must not stay published for verifiers to trust. See
 // SigningKeyRepository.ListByPurposeAndStatuses's own doc comment
-// (repository.go) for why: a pending key is safe for THIS deployment's own
-// replicas to trust ahead of its propagation window, but an external
-// verifier has no relationship to that window at all and should not learn
-// about a key this deployment has not started using yet.
+// (repository.go) for the status half, and keyInValidity (service.go) for
+// the boundary.
 //
-// A purpose with no active or retiring key returns an empty key set
-// ({"keys":[]}), never an error: a JWKS with zero keys is a legitimate, if
-// unusual, answer, and returning an error here would give an external
-// verifier no way to tell "not configured yet" apart from "you asked
-// wrong".
+// A purpose with no in-validity active or retiring key returns an empty
+// key set ({"keys":[]}), never an error: a JWKS with zero keys is a
+// legitimate, if unusual, answer, and returning an error here would give
+// an external verifier no way to tell "not configured yet" apart from
+// "you asked wrong".
 func (s *Service) ExportJWKS(ctx context.Context, purpose string) (jose.JSONWebKeySet, error) {
 	rows, err := s.signingKeys.ListByPurposeAndStatuses(ctx, purpose, SigningKeyStatusActive, SigningKeyStatusRetiring)
 	if err != nil {
 		return jose.JSONWebKeySet{}, err
 	}
 
+	now := s.now()
 	keys := make([]jose.JSONWebKey, 0, len(rows))
 	for _, row := range rows {
+		if !keyInValidity(row, now) {
+			continue
+		}
 		pub, err := x509.ParsePKIXPublicKey(row.PublicKey)
 		if err != nil {
 			return jose.JSONWebKeySet{}, fmt.Errorf("pki: parse public key for kid %q: %w", row.ID, err)

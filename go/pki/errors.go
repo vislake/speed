@@ -70,9 +70,15 @@ var (
 	ErrKeyNotFound = apperr.NotFound("pki.key_not_found")
 
 	// ErrNoActiveKey reports that Service.ActiveSigner was asked for a
-	// purpose with no key currently in SigningKeyStatusActive -- either
-	// EnsurePurpose was never called for it, or (in a later round) every
-	// key for it has been revoked with nothing yet promoted to replace it.
+	// purpose with no key it can currently sign with: no key is in
+	// SigningKeyStatusActive (EnsurePurpose was never called for it, or
+	// every key for it has been revoked with nothing yet promoted to
+	// replace it), or the active key is outside its validity window --
+	// before its NotBefore or past its NotAfter, the time x state cross
+	// product keyInValidity (service.go) refuses at key-take time. The one
+	// answer for all three leaves a caller nothing to distinguish; each is
+	// repaired by the same path (EnsurePurpose's bootstrap or self-heal,
+	// or the expiry scan's rotation).
 	ErrNoActiveKey = apperr.NotFound("pki.no_active_key")
 
 	// ErrAlgorithmUnsupportedBySigner reports that the requested algorithm

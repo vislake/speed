@@ -85,12 +85,15 @@ package main
 //     go/compliance's retention_sweep_window_test.go, each against a real
 //     StandaloneQueue).
 //
-//   - pki's signing-key expiry scan IS genuinely periodic on the
-//     standalone queue -- EnqueueExpiryScan carries no idempotency key,
-//     each tick is its own independent occurrence, and the scan's guarded
-//     status-updated state machine makes overlapping scans safe. The
+//   - pki's signing-key expiry scan is window-scoped like the sweeps --
+//     go/pki/job.go's expiryScanIdempotencyKey names its enqueue's
+//     window-start, so on this app's StandaloneQueue the scan runs at
+//     most once per DefaultExpiryScanWindow hour, and the rotation flow
+//     test compresses that window below its own tick cadence through
+//     cfg.PKIExpiryScanWindow so each test tick runs a real scan. The
 //     resulting key rotation is proven end to end in
-//     periodic_pki_scan_flow_test.go.
+//     periodic_pki_scan_flow_test.go, and the window semantics themselves
+//     in go/pki's enqueue_window_test.go.
 
 import (
 	"bytes"
@@ -118,7 +121,9 @@ import (
 //
 // One second is a deliberate floor, not an arbitrary "fast": every tick
 // writes to the app's SQLite file (the sweep's per-tenant enqueue merging
-// into the resolved job, the pki scan's fresh enqueue), while the queue's
+// into the resolved job, the pki scan's fresh enqueue -- fresh because
+// the rotation test compresses the scan window below the tick cadence,
+// cfg.PKIExpiryScanWindow), while the queue's
 // own connection pool writes the same file to claim and complete the job
 // the tick enqueued. A read-then-write job such as the expiry sweep must
 // upgrade its transaction's shared lock to a write lock mid-flight, and

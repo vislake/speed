@@ -135,6 +135,19 @@ type CAService struct {
 	// mirroring Service.queue's identical field and optional-queue
 	// contract.
 	queue jobs.Queue
+
+	// now is the clock EnqueueCRLRegenerate reads to place the enqueue in
+	// its DefaultCRLRegenerateWindow window (crlRegenerateWindowStart). It
+	// is a field, not a time.Now() call at the enqueue site, so the window
+	// a regeneration is enqueued under is deterministic in tests -- the
+	// same clock-seam pattern Service.now provides for the expiry scan --
+	// while defaulting to the real clock for every production call.
+	now func() time.Time
+
+	// crlRegenerateWindow is the period one CRL-regeneration idempotency
+	// key covers (DefaultCRLRegenerateWindow; see that constant's doc
+	// comment for the window semantics and the sizing obligation).
+	crlRegenerateWindow time.Duration
 }
 
 // NewCAService returns a CAService that signs through signer (recorded on
@@ -142,11 +155,13 @@ type CAService struct {
 // certificates and (round 3) the revocation ledger revocations.
 func NewCAService(signer Signer, signerName string, authorities *AuthorityRepository, certificates *CertificateRepository, revocations *CertificateRevocationRepository) *CAService {
 	return &CAService{
-		signer:       signer,
-		signerName:   signerName,
-		authorities:  authorities,
-		certificates: certificates,
-		revocations:  revocations,
+		signer:              signer,
+		signerName:          signerName,
+		authorities:         authorities,
+		certificates:        certificates,
+		revocations:         revocations,
+		now:                 time.Now,
+		crlRegenerateWindow: DefaultCRLRegenerateWindow,
 	}
 }
 

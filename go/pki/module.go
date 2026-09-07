@@ -18,29 +18,75 @@ import (
 const moduleName = "pki"
 
 // The permissions pki contributes to the platform's permission catalog.
-// Enforcement belongs to rbac; pki only declares that these exist and what
-// they are called.
+// Enforcement belongs to rbac and to the host's router gate; pki only
+// declares that these exist and what they are called.
 //
-// PermissionRevoke and PermissionRotate are round 3's additions -- round
-// 1's AGENTS.md reserved both names ahead of time, deliberately undeclared
-// while the module could not yet perform either operation. Both now have a
-// real operation behind them: PermissionRevoke gates the HTTP revoke
-// operations (handler.go), and PermissionRotate names the rotation this
-// module has performed automatically since round 2 (lifecycle.go's
-// ScanExpiry) and can now also perform on demand (Service.PromoteNow) --
-// neither permission is enforced by anything in this module (rbac's job,
-// per this file's own doc comment), so declaring PermissionRotate now, with
-// no HTTP operation gated by it yet, is not the same "prepare for later"
-// round 1 refused: the capability itself is real and already running, only
-// a manual, permission-gated trigger for it is still future work.
+// # The evaluation domain is part of each permission's meaning
+//
+// rbac evaluates every permission inside SOME tenant's scope
+// (Subject{TenantID, UserID}), and pki's tables span two data domains
+// (docs/internal/04-data-and-tenancy.md): pki_signing_keys and
+// pki_authorities are platform data with no tenant at all, while
+// pki_certificates is tenant data. A host's gate must therefore evaluate
+// the signing-key permission under the PLATFORM domain (rbac.SystemDomain
+// -- the domain admin's own admin:* permissions are evaluated in, per
+// go/admin's wiring), NEVER under the request's tenant domain: a single
+// tenant's grant of a platform-level permission would otherwise stop token
+// issuance for the whole deployment at once. The certificate permission
+// is evaluated in the request's own tenant domain, like every
+// tenant-scoped permission. This module itself performs no permission
+// check (rbac's job, per this file's own doc comment); the obligation is
+// recorded here and in go/pki/AGENTS.md's HTTP-surface section so a host
+// gate cannot improvise a wrong domain.
+//
+// Round 3 declared ONE permission for both revoke operations
+// (PermissionRevoke, "pki:revoke", covering "a signing key or a
+// certificate"). The platform-domain finding split it -- one name
+// spanning two data domains is wrong in whichever single domain it is
+// evaluated in -- and the old name is now declared by no one, so rbac's
+// attach-time catalog freeze refuses a grant of it rather than half
+// meaning something. PermissionRead and PermissionIssue's declared
+// coverage similarly spans the module's two domains where no HTTP
+// operation exists yet: pki:read's HTTP surface today is platform
+// material only (see its own comment), and pki:issue has NO HTTP
+// operation at all -- a future HTTP issuance surface must split it the
+// same way before it lands, never add a "pki:issue" operation on one
+// domain or the other.
 const (
-	// PermissionRead covers reading signing keys, authorities and
-	// certificates.
+	// PermissionRead covers the read operations of this module's HTTP
+	// surface: the key-lifecycle JWKS export, an authority-chain JWKS
+	// export and an authority's CRL fetch (handler.go). All three serve
+	// platform material -- pki_signing_keys / pki_authorities public keys
+	// and CRL documents, the material the deployment intends external
+	// verifiers to fetch -- and none of them reads pki_certificates
+	// (certificate reads have no HTTP operation today). A future HTTP
+	// surface that reads tenant certificates must declare its own
+	// tenant-domain permission rather than reusing this one.
 	PermissionRead = "pki:read"
-	// PermissionIssue covers creating CAs and issuing certificates.
+	// PermissionIssue covers creating CAs and issuing certificates. It has
+	// no HTTP operation behind it today (issuance stays Go-only), so no
+	// gate evaluates it yet -- see this const block's own doc comment for
+	// why a future HTTP issuance surface must split it into a platform CA
+	// permission and a tenant certificate permission before it lands,
+	// rather than mounting either operation under this two-domain name.
 	PermissionIssue = "pki:issue"
-	// PermissionRevoke covers revoking a signing key or a certificate.
-	PermissionRevoke = "pki:revoke"
+	// PermissionRevokeSigningKey gates PkiRevokeSigningKey (handler.go):
+	// revoking one row of pki_signing_keys, platform data -- a platform
+	// operation whose permission MUST be evaluated in the platform domain
+	// (rbac.SystemDomain), never in the request tenant's domain: a key
+	// this deployment signs every tenant's tokens with must not be
+	// revocable by a grant a single tenant's administrator holds. Splitting
+	// this half out of round 3's two-domain PermissionRevoke is what makes
+	// the platform domain enforceable at all: as long as one name covered
+	// both revokes, any single domain left half of it wrong.
+	PermissionRevokeSigningKey = "pki:revoke_signing_key"
+	// PermissionRevokeCertificate gates PkiRevokeCertificate (handler.go):
+	// revoking one row of pki_certificates, tenant data -- a tenant-level
+	// operation whose permission is evaluated in the request's own tenant
+	// domain, like every tenant-scoped permission. A tenant's certificate
+	// administrator holding this can revoke that tenant's certificates,
+	// and nothing else.
+	PermissionRevokeCertificate = "pki:revoke_certificate"
 	// PermissionRotate covers manually triggering key rotation
 	// (Service.PromoteNow) -- automatic rotation (the expiry scan) needs no
 	// permission check, since nothing external calls it.
@@ -250,13 +296,15 @@ type Module struct {
 	// Service.queue's own doc comment.
 	queue jobs.Queue
 
-	// cacheTTL, propagationWindow and renewalLeadTime are Service's
-	// constructor arguments, defaulted to DefaultCacheTTL/
-	// DefaultPropagationWindow/DefaultRenewalLeadTime and overridable via
-	// WithCacheTTL/WithPropagationWindow/WithRenewalLeadTime.
+	// cacheTTL, propagationWindow, renewalLeadTime and expiryScanWindow are
+	// Service's constructor arguments, defaulted to DefaultCacheTTL/
+	// DefaultPropagationWindow/DefaultRenewalLeadTime/DefaultExpiryScanWindow
+	// and overridable via WithCacheTTL/WithPropagationWindow/
+	// WithRenewalLeadTime/WithExpiryScanWindow.
 	cacheTTL          time.Duration
 	propagationWindow time.Duration
 	renewalLeadTime   time.Duration
+	expiryScanWindow  time.Duration
 
 	signingKeys  *SigningKeyRepository
 	authorities  *AuthorityRepository
@@ -324,6 +372,20 @@ func WithRenewalLeadTime(d time.Duration) Option {
 	return func(m *Module) { m.renewalLeadTime = d }
 }
 
+// WithExpiryScanWindow overrides DefaultExpiryScanWindow: the period one
+// expiry-scan idempotency key covers (job.go -- EnqueueExpiryScan places
+// each enqueue in the window its clock read falls in, so same-window
+// enqueues collapse into one job and later windows run the scan again).
+// The override exists for two kinds of host: one whose scheduler interval
+// approaches or exceeds the default hour (the dedup is void when every
+// tick lands in a fresh window, so such a host must widen the window), and
+// a test compressing the window below its own tick cadence to drive
+// per-tick scans within test time (examples/reference-app's
+// periodic_pki_scan_flow_test does exactly that).
+func WithExpiryScanWindow(d time.Duration) Option {
+	return func(m *Module) { m.expiryScanWindow = d }
+}
+
 // NewModule returns a Module whose tables live in db, signing through
 // LocalSigner unless overridden by WithSigner. Constructing a Module
 // performs no I/O: opening and migrating db, and registering
@@ -336,6 +398,7 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 		cacheTTL:          DefaultCacheTTL,
 		propagationWindow: DefaultPropagationWindow,
 		renewalLeadTime:   DefaultRenewalLeadTime,
+		expiryScanWindow:  DefaultExpiryScanWindow,
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -350,7 +413,7 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 	m.localKeys = NewLocalKeyRepository(db)
 	m.revocations = NewCertificateRevocationRepository(db)
 
-	m.service = NewService(m.signer, m.signerName, m.signingKeys, m.cacheTTL, m.propagationWindow, m.renewalLeadTime)
+	m.service = NewService(m.signer, m.signerName, m.signingKeys, m.cacheTTL, m.propagationWindow, m.renewalLeadTime, m.expiryScanWindow)
 	m.ca = NewCAService(m.signer, m.signerName, m.authorities, m.certificates, m.revocations)
 	return m
 }
@@ -416,9 +479,13 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // that touches m.db.
 //
 // It declares pki's permissions (round 3 adding PermissionRevoke and
-// PermissionRotate to round 1's PermissionRead/PermissionIssue), its audit
-// vocabulary (round 3 adding AuditActionKeyRevoke/
-// AuditActionCertificateRevoke) and its configuration schema, and declares
+// PermissionRotate to round 1's PermissionRead/PermissionIssue; the
+// platform-domain round replacing PermissionRevoke with the split
+// PermissionRevokeSigningKey and PermissionRevokeCertificate -- see that
+// const block's own doc comment for why no one permission may span the
+// module's two data domains), its audit vocabulary (round 3 adding
+// AuditActionKeyRevoke/AuditActionCertificateRevoke) and its
+// configuration schema, and declares
 // the five signing-key/certificate lifecycle events (events.go). It hands
 // the registry's EventBus to both Service and CAService (attachBus) so the
 // key-set cache can invalidate itself on its own published events and
@@ -437,7 +504,8 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.Permissions.Add(
 		PermissionRead,
 		PermissionIssue,
-		PermissionRevoke,
+		PermissionRevokeSigningKey,
+		PermissionRevokeCertificate,
 		PermissionRotate,
 	); err != nil {
 		return err

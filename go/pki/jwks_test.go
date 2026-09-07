@@ -59,6 +59,56 @@ func TestService_ExportJWKS_ContainsOnlyActiveAndRetiring(t *testing.T) {
 	}
 }
 
+// TestService_ExportJWKS_ExcludesKeysOutsideTheirValidityWindow pins the
+// JWKS-publishing half of the validity-window enforcement: the published
+// set filters by status AND by validity, so an active or retiring key
+// whose NotAfter has passed is never offered to an external verifier --
+// before the enforcement round the status filter alone kept publishing
+// expired keys for as long as their rows stayed in those statuses (until
+// the scan job happened to advance them).
+func TestService_ExportJWKS_ExcludesKeysOutsideTheirValidityWindow(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return base }
+
+	seed := func(id, status string, notBefore, notAfter time.Time) {
+		t.Helper()
+		k := newTestSigningKey(id, "authn.access_token", status)
+		pub, _, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatalf("ed25519.GenerateKey: %v", err)
+		}
+		der, err := marshalPKIXForTest(pub)
+		if err != nil {
+			t.Fatalf("marshal public key: %v", err)
+		}
+		k.PublicKey = der
+		k.NotBefore = notBefore
+		k.NotAfter = notAfter
+		if err := svc.signingKeys.Create(ctx, k); err != nil {
+			t.Fatalf("Create(%s): %v", id, err)
+		}
+	}
+	// One in-validity active key and one retiring key whose NotAfter has
+	// passed -- the exact shape an expired key left in the retiring set
+	// by a scan that has not run yet takes.
+	seed("kid-active-valid", SigningKeyStatusActive, base.Add(-time.Hour), base.Add(365*24*time.Hour))
+	seed("kid-retiring-expired", SigningKeyStatusRetiring, base.Add(-2*time.Hour), base.Add(-time.Nanosecond))
+
+	jwks, err := svc.ExportJWKS(ctx, "authn.access_token")
+	if err != nil {
+		t.Fatalf("ExportJWKS: %v", err)
+	}
+	var got []string
+	for _, k := range jwks.Keys {
+		got = append(got, k.KeyID)
+	}
+	if len(got) != 1 || got[0] != "kid-active-valid" {
+		t.Fatalf("ExportJWKS kids = %v, want exactly the in-validity active key kid-active-valid (regression: an expired key must not stay published)", got)
+	}
+}
+
 func TestService_ExportJWKS_EmptyForUnknownPurpose(t *testing.T) {
 	svc := newTestService(t)
 	jwks, err := svc.ExportJWKS(context.Background(), "no.such.purpose")

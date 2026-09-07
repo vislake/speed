@@ -15,7 +15,7 @@ func newReclaimTestService(t *testing.T) (*Service, *LocalKeyRepository) {
 	t.Helper()
 	db := newTestDB(t)
 	signer := NewLocalSigner(db)
-	svc := NewService(signer, "local", NewSigningKeyRepository(db), DefaultCacheTTL, DefaultPropagationWindow, DefaultRenewalLeadTime)
+	svc := NewService(signer, "local", NewSigningKeyRepository(db), DefaultCacheTTL, DefaultPropagationWindow, DefaultRenewalLeadTime, DefaultExpiryScanWindow)
 	t.Cleanup(func() { _ = svc.Close() })
 	return svc, NewLocalKeyRepository(db)
 }
@@ -230,7 +230,7 @@ func TestService_ReclaimRetired_ContinuesPastAFailedDestroy(t *testing.T) {
 			"keyref-absent":  ErrKeyNotFound,
 		},
 	}
-	svc := NewService(stub, "stub", NewSigningKeyRepository(db), DefaultCacheTTL, DefaultPropagationWindow, DefaultRenewalLeadTime)
+	svc := NewService(stub, "stub", NewSigningKeyRepository(db), DefaultCacheTTL, DefaultPropagationWindow, DefaultRenewalLeadTime, DefaultExpiryScanWindow)
 	t.Cleanup(func() { _ = svc.Close() })
 	ctx := context.Background()
 

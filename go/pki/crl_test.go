@@ -297,6 +297,8 @@ func TestCAService_EnqueueCRLRegenerate_Enqueues(t *testing.T) {
 	ca := newTestCAService(t)
 	queue := &recordingQueue{}
 	ca.attachQueue(queue)
+	windowA := time.Date(2026, 9, 7, 10, 15, 0, 0, time.UTC)
+	ca.now = func() time.Time { return windowA }
 
 	if err := ca.EnqueueCRLRegenerate(context.Background()); err != nil {
 		t.Fatalf("EnqueueCRLRegenerate: %v", err)
@@ -309,6 +311,9 @@ func TestCAService_EnqueueCRLRegenerate_Enqueues(t *testing.T) {
 	}
 	if queue.tasks[0].TenantID != platformCRLRegenerateTenantID {
 		t.Errorf("task TenantID = %q, want %q", queue.tasks[0].TenantID, platformCRLRegenerateTenantID)
+	}
+	if want := crlRegenerateIdempotencyKey(crlRegenerateWindowStart(windowA, ca.crlRegenerateWindow)); queue.tasks[0].IdempotencyKey != want {
+		t.Errorf("task IdempotencyKey = %q, want %q (the windowed key of the enqueue's clock read)", queue.tasks[0].IdempotencyKey, want)
 	}
 }
 

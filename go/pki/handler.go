@@ -31,6 +31,34 @@ const pemContentType = "application/x-pem-file; charset=utf-8"
 // a signing key, revoke a certificate, and the three read operations
 // (key-lifecycle JWKS, authority-chain JWKS, authority CRL).
 //
+// # Permission gating is the host's, per operation and per domain
+//
+// This Handler performs no permission check of its own -- enforcement
+// belongs to the host's rbac gate, exactly like every other module whose
+// handler leaves authorization to the host. What a host's gate must check,
+// operation by operation, is fixed by the module's declared permissions
+// (module.go) and by the data domain each operation touches:
+//
+//   - PkiRevokeSigningKey acts on pki_signing_keys, PLATFORM data: it must
+//     be gated on PermissionRevokeSigningKey, evaluated under the platform
+//     domain (rbac.SystemDomain), NEVER in the request tenant's domain -- a
+//     tenant-domain grant would let one tenant's administrator stop token
+//     issuance for every tenant. This is the module's one operation whose
+//     correct evaluation domain is not the request's.
+//   - PkiRevokeCertificate acts on pki_certificates, TENANT data: it must
+//     be gated on PermissionRevokeCertificate, evaluated in the request's
+//     own tenant domain.
+//   - The three read operations (PkiGetKeyJwks, PkiGetAuthorityJwks,
+//     PkiGetAuthorityCrl) serve platform public-key material and CRL
+//     documents -- the material external verifiers are meant to fetch --
+//     gated on PermissionRead.
+//
+// Round 3 declared one spanning PermissionRevoke for both revoke
+// operations; the platform-domain finding split it (module.go's const
+// block documents why one name spanning the module's two data domains is
+// wrong in whichever single domain it is evaluated in), and this
+// per-operation table is the shape a gate must implement.
+//
 // # Tenant context: read only where the underlying data needs it
 //
 // Unlike every other module's HTTP surface, pki's own tables span two data
@@ -41,7 +69,10 @@ const pemContentType = "application/x-pem-file; charset=utf-8"
 // pkgcore.MustTenantFromContext, never from a request parameter, header or
 // body, per root CLAUDE.md's multi-tenant isolation rule) -- the other four
 // operations never do, because the rows they touch have no tenant column
-// to scope by.
+// to scope by. (The tenant's absence from the DATA access is unrelated to
+// the permission domain above: PkiRevokeSigningKey reads no tenant from
+// the request and yet its permission must still be evaluated under the
+// platform domain.)
 //
 // # Audit trail
 //

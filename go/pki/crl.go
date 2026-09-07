@@ -210,6 +210,51 @@ func (s *CAService) RegenerateAllCRLs(ctx context.Context) ([]string, error) {
 // job.go's taskTypeExpiryScan doc comment gives for that task.
 const taskTypeCRLRegenerate = "pki.crl_regenerate"
 
+// DefaultCRLRegenerateWindow is the period one CRL-regeneration idempotency
+// key covers: a regeneration is enqueued under the key of the
+// DefaultCRLRegenerateWindow window (crlRegenerateWindowStart) its enqueue
+// falls in, so the same-window duplicates a multi-replica scheduler
+// produces collapse into one job, while an enqueue in a later window is a
+// NEW job and regenerates again -- the identical window semantics
+// DefaultExpiryScanWindow documents for the expiry-scan task, with the
+// identical reasoning: without a key, N replicas at a 1-minute cadence
+// fire N regenerations a minute, each GenerateCRL run producing its own
+// full document and advancing the authority's crl_number register (wasted
+// work and write churn -- the generated documents are identical in
+// substance, only the register numbers differ); with a key but no window,
+// jobs' unconditional idempotency would give exactly one regeneration per
+// database file, and a default-validity CRL (DefaultCRLValidity, seven
+// days) would outlive its NextUpdate with no scheduled refresh at all.
+//
+// The window must be significantly larger than the host's scheduler
+// interval, or every tick lands in a fresh window and the dedup is void --
+// the reference host's 1-minute cadence against this one-hour default is a
+// 60:1 ratio (the expiry-scan window's own doc comment makes the same
+// point).
+const DefaultCRLRegenerateWindow = time.Hour
+
+// crlRegenerateWindowStart is the CRL-regeneration window the enqueue at
+// now belongs to -- the absolute-clock boundary now.Truncate(window) lands
+// in, the twin of job.go's expiryScanWindowStart: every replica agrees on
+// the boundary regardless of its own location, since Truncate is on the
+// absolute clock, never a timezone-local calendar cut.
+func crlRegenerateWindowStart(now time.Time, window time.Duration) time.Time {
+	return now.Truncate(window)
+}
+
+// crlRegenerateIdempotencyKey derives the jobs idempotency key of one
+// CRL-regeneration window, mirroring job.go's expiryScanIdempotencyKey:
+// the operation one key names is "the regeneration of windowStart", never
+// "some regeneration or other". windowStart is the
+// DefaultCRLRegenerateWindow window start the enqueue belongs to
+// (crlRegenerateWindowStart). The "pki.crl_regenerate:" prefix keeps the
+// key inside the task's own namespace within the shared queue store, and
+// the RFC 3339 window stamp keeps the key readable in DeadLetterJobs while
+// staying unambiguous.
+func crlRegenerateIdempotencyKey(windowStart time.Time) string {
+	return "pki.crl_regenerate:" + windowStart.UTC().Format(time.RFC3339)
+}
+
 // platformCRLRegenerateTenantID is the fixed jobs.Task.TenantID every
 // CRL-regeneration task is enqueued under -- job.go's platformScanTenantID
 // exists for the expiry-scan task specifically (its own doc comment already
@@ -225,14 +270,26 @@ const platformCRLRegenerateTenantID = pkgcore.TenantID("_pki_platform_crl")
 // module's `crl:current` fetch operation (handler.go serves whatever
 // GenerateCRL last wrote; it never generates on the read path itself).
 // Carries no payload, mirroring Service.EnqueueExpiryScan's identical "read
-// everything at run time" shape. No idempotency key: like the expiry scan,
-// each regeneration tick is its own independent occurrence. GenerateCRL is
-// safe to run concurrently with itself -- its persist step is a guarded CAS
-// on the authority's crl_number register (repository.go's
-// UpdateCRLIfCurrent), so overlapping ticks converge on sequential numbers,
-// each landing its own document, instead of collapsing into a
-// last-writer-wins overwrite of one number (the pre-arbitration bug this
-// comment once claimed was impossible).
+// everything at run time" shape.
+//
+// The task carries a window-scoped idempotency key
+// (crlRegenerateIdempotencyKey, DefaultCRLRegenerateWindow): the enqueues
+// of one window -- a multi-replica scheduler whose replicas each tick the
+// same schedule instant, a manual re-run -- collapse into one job, so
+// regeneration runs at most once per window however many replicas tick,
+// while an enqueue in a later window is a new job and regenerates again --
+// the exact window semantics job.go's EnqueueExpiryScan documents (and the
+// same reason that task's doc comment gives for why a windowed key beats
+// both a keyless task and a window-less key). A regeneration job that
+// dead-letters poisons only its own window.
+//
+// GenerateCRL remains safe to run concurrently with itself -- its persist
+// step is a guarded CAS on the authority's crl_number register
+// (repository.go's UpdateCRLIfCurrent), so two jobs of DIFFERENT windows
+// overlapping in execution converge on sequential numbers, each landing its
+// own document, instead of collapsing into a last-writer-wins overwrite of
+// one number (the pre-arbitration bug this comment once claimed was
+// impossible) -- the windowed key only removes the same-window duplicates.
 //
 // A nil queue (Module constructed without WithQueue) reports a plain error,
 // the identical "no queue wired" answer Service.EnqueueExpiryScan gives.
@@ -241,8 +298,9 @@ func (s *CAService) EnqueueCRLRegenerate(ctx context.Context) error {
 		return errors.New("pki: no queue wired")
 	}
 	_, err := s.queue.Enqueue(ctx, jobs.Task{
-		Type:     taskTypeCRLRegenerate,
-		TenantID: platformCRLRegenerateTenantID,
+		Type:           taskTypeCRLRegenerate,
+		TenantID:       platformCRLRegenerateTenantID,
+		IdempotencyKey: crlRegenerateIdempotencyKey(crlRegenerateWindowStart(s.now(), s.crlRegenerateWindow)),
 	})
 	return err
 }

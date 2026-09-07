@@ -51,6 +51,11 @@ const DefaultCacheTTL = 30 * time.Second
 //     The pending/propagation-window dance is for ROTATION, not bootstrap:
 //     see lifecycle.go's StageDueRotations, PromoteDuePending and
 //     RetireDueRetiring, which the jobs-driven expiry scan (job.go) drives.
+//     When the purpose's active key has fallen out of its validity window
+//     and no pending successor is in flight, EnsurePurpose heals the
+//     purpose itself -- revokes the expired key and creates an in-validity
+//     replacement -- so a purpose never stays dead waiting for a scan tick
+//     that may not be wired.
 //   - ActiveSigner and VerificationKeys read through this Service's
 //     process-local key-set cache (cache.go) rather than querying the
 //     database on every call, invalidated by this module's own published
@@ -60,6 +65,44 @@ const DefaultCacheTTL = 30 * time.Second
 //     Algorithm matches the requested one on a repeated call -- see
 //     AGENTS.md's Known limitations, carried forward from round 1
 //     unchanged.
+//
+// # Validity is enforced at key-take time, never expressed through status
+//
+// A signing key's NotBefore/NotAfter are enforced on EVERY read path at
+// the moment the key is taken -- ActiveSigner refuses an out-of-validity
+// active key with ErrNoActiveKey, VerificationKeys offers only
+// in-validity keys, ExportJWKS publishes only in-validity keys, and
+// EnsurePurpose treats an out-of-validity active key as no key at all
+// (healing as described above). Status and validity are two independent
+// axes: the state machine's statuses say how far rotation has progressed,
+// while the validity window says whether the key may be USED at this
+// instant, and the two can disagree (an "active" key whose NotAfter
+// passed because the expiry scan has not run yet). Before the enforcement
+// round, not_after appeared in exactly one query -- the expiry scan's
+// staging query -- so whether an expired key kept signing and verifying
+// depended on whether the scan had run, and the reference app's
+// KeySource consumers (authn's Signer/Verifier) took keys by status
+// alone.
+//
+// The boundary direction, chosen and written down rather than defaulted:
+// both ends of the window are INCLUSIVE (a key is valid at its NotAfter
+// and refused a moment later), the identical boundary crypto/x509 applies
+// to a certificate's validity window. For the verify path the choice is
+// strict now-filtering, NOT judgment by a token's issue time -- pki never
+// parses the credentials it enables (VerificationKeys returns public keys
+// and metadata only, per the KeySource shape), so the token issue time is
+// not available where the key is chosen. The availability cost of strict
+// now-filtering is bounded by the rotation design itself: the expiry scan
+// demotes an active key to retiring (its last possible signing instant)
+// when its replacement activates, which the rotation lead time schedules
+// a default of thirty days before NotAfter -- so tokens signed by an
+// in-validity key normally outlive their key's NotAfter only when a host
+// declares a maxCredentialLifetime close to or beyond its renewal lead
+// time, which such a host must size itself (WithRenewalLeadTime). The
+// security failure being bought off is unbounded and scan-dependent: an
+// expired key accepted on every path until the scan happens to advance
+// its status -- which, in the limit, means an expired key accepted
+// forever on a host that never runs the scan.
 type Service struct {
 	signer      Signer
 	signerName  string
@@ -86,6 +129,16 @@ type Service struct {
 	propagationWindow time.Duration
 	renewalLeadTime   time.Duration
 
+	// expiryScanWindow is the period one expiry-scan idempotency key covers
+	// (DefaultExpiryScanWindow unless the host overrides it through
+	// WithExpiryScanWindow): EnqueueExpiryScan (job.go) places each enqueue
+	// in the window its clock read falls in, so same-window enqueues from a
+	// multi-replica scheduler collapse into one job and later windows get
+	// their own. A window at or below the host's scheduler interval voids
+	// the dedup -- every tick lands in a fresh window -- so hosts whose
+	// cadence approaches the default must size the window themselves.
+	expiryScanWindow time.Duration
+
 	// queue is the jobs.Queue EnqueueExpiryScan schedules the expiry-scan
 	// task on (job.go). It is nil until attachQueue runs (Module.Register,
 	// only when the host supplied one via WithQueue) -- a nil queue is a
@@ -103,7 +156,14 @@ type Service struct {
 // no reason to override it; a value <=0 disables the cache, reading through
 // to the database on every call -- the setting tests that want to observe
 // every write immediately use).
-func NewService(signer Signer, signerName string, signingKeys *SigningKeyRepository, cacheTTL, propagationWindow, renewalLeadTime time.Duration) *Service {
+//
+// expiryScanWindow is the period one expiry-scan idempotency key covers
+// (see Service.expiryScanWindow's own doc comment); a value <=0 falls back
+// to DefaultExpiryScanWindow.
+func NewService(signer Signer, signerName string, signingKeys *SigningKeyRepository, cacheTTL, propagationWindow, renewalLeadTime, expiryScanWindow time.Duration) *Service {
+	if expiryScanWindow <= 0 {
+		expiryScanWindow = DefaultExpiryScanWindow
+	}
 	return &Service{
 		signer:            signer,
 		signerName:        signerName,
@@ -112,6 +172,7 @@ func NewService(signer Signer, signerName string, signingKeys *SigningKeyReposit
 		now:               time.Now,
 		propagationWindow: propagationWindow,
 		renewalLeadTime:   renewalLeadTime,
+		expiryScanWindow:  expiryScanWindow,
 	}
 }
 
@@ -201,9 +262,30 @@ func (s *Service) publish(ctx context.Context, evt pkgcore.Event) {
 // a retiring overlap period that must eventually cover maxCredentialLifetime.
 //
 // Idempotent in the sense a caller needs at bootstrap: if purpose already
-// has an active key, EnsurePurpose returns nil without creating a second
-// one. It does not currently verify that the existing key's Algorithm
-// matches the algorithm argument -- see AGENTS.md's Known limitations.
+// has an active key WITHIN its validity window, EnsurePurpose returns nil
+// without creating a second one. It does not currently verify that the
+// existing key's Algorithm matches the algorithm argument -- see AGENTS.md's
+// Known limitations.
+//
+// # Self-healing an out-of-validity active key
+//
+// Validity is enforced at key-take time (see this type's own doc comment),
+// so an active key whose NotAfter has passed -- the expiry scan never ran,
+// or ran too late -- is refused by ActiveSigner. EnsurePurpose must not
+// then answer "already has an active key" about that expired row and leave
+// the purpose dead until a scan tick: when the purpose's active key is out
+// of validity AND no pending successor is in flight (the scan staged one
+// but stopped before promoting it -- in which case the scan, or a host's
+// PromoteNow, owns the rotation and bootstrap must not churn the purpose
+// with a second candidate), EnsurePurpose revokes the expired key through
+// the same guarded transition and event Service.RevokeSigningKey uses --
+// revoking is what frees the active slot for a replacement, since the
+// partial unique index allows one active row per purpose, and what tells
+// every replica's cache the key is gone -- and falls through to create an
+// in-validity replacement in the same call. Revoking rather than silently
+// overwriting keeps the expired key's fate on the record: its row carries
+// the RevocationReason and the EventSigningKeyRevoked event reaches the
+// same subscribers an operator-initiated revoke reaches.
 //
 // This is the BOOTSTRAP path, not rotation: it creates a key and marks it
 // SigningKeyStatusActive in the same call, synchronously, with no
@@ -211,7 +293,11 @@ func (s *Service) publish(ctx context.Context, evt pkgcore.Event) {
 // with no active key has never signed anything -- there is no multi-replica
 // cache-propagation race to protect against on a kid nothing has verified
 // yet. Rotating an EXISTING active key goes through the pending/
-// propagation-window path instead -- see lifecycle.go.
+// propagation-window path instead -- see lifecycle.go. (The self-heal's
+// revoke-then-create has the same bounded staleness profile as any
+// revocation -- a replica whose cache still holds the revoked kid can
+// keep using it for at most the cache TTL, exactly like RevokeSigningKey's
+// own documented behavior.)
 func (s *Service) EnsurePurpose(ctx context.Context, purpose, algorithm string, maxCredentialLifetime time.Duration) error {
 	if purpose == "" {
 		return fmt.Errorf("pki: EnsurePurpose requires a non-empty purpose")
@@ -220,14 +306,44 @@ func (s *Service) EnsurePurpose(ctx context.Context, purpose, algorithm string, 
 		return fmt.Errorf("pki: EnsurePurpose requires a positive maxCredentialLifetime")
 	}
 
-	_, err := s.signingKeys.FindActiveByPurpose(ctx, purpose)
+	now := s.now()
+	active, err := s.signingKeys.FindActiveByPurpose(ctx, purpose)
 	if err == nil {
-		// Already has an active key -- nothing to bootstrap. A future
-		// round may decide what an Algorithm mismatch here means (error?
-		// rotate?); see AGENTS.md's Known limitations.
-		return nil
-	}
-	if !isNoActiveKey(err) {
+		if keyInValidity(*active, now) {
+			// Already has an in-validity active key -- nothing to
+			// bootstrap. A future round may decide what an Algorithm
+			// mismatch here means (error? rotate?); see AGENTS.md's Known
+			// limitations.
+			return nil
+		}
+		// The active key is out of validity. Heal only when no USABLE
+		// pending successor is in flight -- see this method's own doc
+		// comment. A pending key the scan staged is itself out of validity
+		// only when the scan stopped so long that even the staged rotation
+		// expired; leaving that row behind would let the next scan tick
+		// promote a dead key into the very active slot this heal is about
+		// to fill, so it is revoked alongside the expired active key.
+		pending, listErr := s.signingKeys.ListByPurposeAndStatuses(ctx, purpose, SigningKeyStatusPending)
+		if listErr != nil {
+			return listErr
+		}
+		for i := range pending {
+			if keyInValidity(pending[i], now) {
+				// A usable successor is staged; the scan (or PromoteNow)
+				// promotes it. Bootstrap must not create a rival.
+				return nil
+			}
+		}
+		for i := range pending {
+			if _, revokeErr := s.RevokeSigningKey(ctx, pending[i].ID, expiredKeyRevokeReason); revokeErr != nil {
+				return revokeErr
+			}
+		}
+		if _, revokeErr := s.RevokeSigningKey(ctx, active.ID, expiredKeyRevokeReason); revokeErr != nil {
+			return revokeErr
+		}
+		// Fall through: the active slot is free, create a fresh key below.
+	} else if !isNoActiveKey(err) {
 		return err
 	}
 
@@ -240,7 +356,10 @@ func (s *Service) EnsurePurpose(ctx context.Context, purpose, algorithm string, 
 		return fmt.Errorf("pki: marshal public key for purpose %q: %w", purpose, err)
 	}
 
-	now := s.now().UTC()
+	// The key's validity window is anchored to the same clock read the
+	// existence check above used -- a fresh key must be in validity from
+	// the instant this call decided the purpose needed one.
+	now = now.UTC()
 	key := &SigningKey{
 		ID:              uuid.NewString(),
 		Purpose:         purpose,
@@ -255,6 +374,19 @@ func (s *Service) EnsurePurpose(ctx context.Context, purpose, algorithm string, 
 		RetiringOverlap: maxCredentialLifetime,
 	}
 	if err := s.signingKeys.Create(ctx, key); err != nil {
+		// The write is arbitrated by uq_pki_signing_keys_active_purpose (at
+		// most one active row per purpose), so this can fail one way only:
+		// a concurrent replica's heal created its replacement between this
+		// call's existence check and its insert. That is not a failure of
+		// THIS call -- the goal state (an in-validity active key) exists --
+		// so re-read and confirm rather than surfacing a unique-violation
+		// error to a caller whose purpose was just healed. The re-read is
+		// authoritative either way: a purpose that still lacks an
+		// in-validity active key after the failed insert genuinely has a
+		// store problem and must not be answered as healed.
+		if healed, reErr := s.signingKeys.FindActiveByPurpose(ctx, purpose); reErr == nil && keyInValidity(*healed, s.now()) {
+			return nil
+		}
 		return fmt.Errorf("pki: store signing key for purpose %q: %w", purpose, err)
 	}
 	s.cache.invalidate(purpose)
@@ -275,10 +407,34 @@ func (s *Service) EnsurePurpose(ctx context.Context, purpose, algorithm string, 
 	return nil
 }
 
+// expiredKeyRevokeReason is the RevocationReason EnsurePurpose records
+// when its self-heal revokes a key that fell out of its validity window
+// (see EnsurePurpose's own doc comment). It deliberately reads as a
+// machine cause, distinct from an operator's incident reason, so the row
+// (and the audit view that surfaces RevocationReason) can tell the two
+// apart.
+const expiredKeyRevokeReason = "signing key expired past its NotAfter before rotation completed; EnsurePurpose created a replacement"
+
+// keyInValidity reports whether key's validity window covers now: the key
+// is usable from NotBefore through NotAfter, both ends inclusive -- the
+// identical boundary crypto/x509 applies to a certificate's validity
+// window (valid AT NotAfter, invalid a moment later). This is the single
+// predicate behind every read path's validity enforcement (ActiveSigner,
+// VerificationKeys, ExportJWKS and EnsurePurpose's existence check), so
+// the boundary is defined in exactly one place.
+func keyInValidity(key SigningKey, now time.Time) bool {
+	return !now.Before(key.NotBefore) && !now.After(key.NotAfter)
+}
+
 // ActiveSigner returns the kid, algorithm and a context-aware signing
 // function for purpose's currently active key. ErrNoActiveKey if
-// EnsurePurpose was never called for purpose (or, in a later round, if
-// every key for it has since been revoked).
+// EnsurePurpose was never called for purpose, if every key for it has
+// since been revoked, or if the purpose's active key is outside its
+// validity window -- the last checked AT THE MOMENT THE KEY IS TAKEN,
+// against the service clock, so a key whose NotAfter passes between cache
+// loads is refused on the very next call, never served for the remainder
+// of a cache TTL (see this type's own doc comment for the boundary
+// choice).
 //
 // It reads through the key-set cache (cache.go): a cache hit costs no
 // database round trip, and a miss loads and populates every status the
@@ -293,7 +449,13 @@ func (s *Service) ActiveSigner(ctx context.Context, purpose string) (string, str
 	if err != nil {
 		return "", "", nil, err
 	}
-	if entry.active == nil {
+	now := s.now()
+	if entry.active == nil || !keyInValidity(*entry.active, now) {
+		// No active key, or the active key is not usable at this instant
+		// (before its NotBefore, past its NotAfter). Both answer the same:
+		// this purpose has no usable signer right now -- the answer that
+		// fails closed, and the answer the state machine's rotation (or
+		// EnsurePurpose's self-heal) eventually repairs.
 		return "", "", nil, ErrNoActiveKey
 	}
 	keyRef := entry.active.KeyRef
@@ -304,13 +466,22 @@ func (s *Service) ActiveSigner(ctx context.Context, purpose string) (string, str
 }
 
 // VerificationKeys returns every key for purpose that is still safe to
-// verify against -- see SigningKeyRepository.ListVerifiableByPurpose for
-// exactly which statuses that is. The anonymous return-slice element type
-// is not a stylistic choice: a named type here would break structural
-// satisfaction of authn's KeySource (docs/internal/22-pki.md's "authn's
-// integration" section explains why two packages' named types can never
-// satisfy one another structurally), so it is written out in full, matching
-// KeySource's own declaration exactly.
+// verify against: the keys SigningKeyRepository.ListVerifiableByPurpose
+// returns by status -- pending, active or retiring -- that are ALSO within
+// their validity window at this instant. The status filter alone is not
+// the whole answer: a key the expiry scan has not retired yet but whose
+// NotAfter has passed is still "retiring" as far as the status vocabulary
+// goes, and offering it would let a verifier accept tokens signed by an
+// expired key -- which is exactly why the validity check runs here, at the
+// moment the keys are taken, against the service clock, never against the
+// state machine's statuses. (The strict now-filtering choice and its
+// bounded availability cost are this type's own doc comment's subject.)
+// The anonymous return-slice element type is not a stylistic choice: a
+// named type here would break structural satisfaction of authn's KeySource
+// (docs/internal/22-pki.md's "authn's integration" section explains why
+// two packages' named types can never satisfy one another structurally),
+// so it is written out in full, matching KeySource's own declaration
+// exactly.
 func (s *Service) VerificationKeys(ctx context.Context, purpose string) ([]struct {
 	KID       string
 	Algorithm string
@@ -321,12 +492,16 @@ func (s *Service) VerificationKeys(ctx context.Context, purpose string) ([]struc
 	if err != nil {
 		return nil, err
 	}
+	now := s.now()
 	out := make([]struct {
 		KID       string
 		Algorithm string
 		Public    crypto.PublicKey
 	}, 0, len(entry.verifiable))
 	for _, row := range entry.verifiable {
+		if !keyInValidity(row, now) {
+			continue
+		}
 		pub, err := x509.ParsePKIXPublicKey(row.PublicKey)
 		if err != nil {
 			return nil, fmt.Errorf("pki: parse public key for kid %q: %w", row.ID, err)

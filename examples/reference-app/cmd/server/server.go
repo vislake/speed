@@ -1174,17 +1174,25 @@ type serverConfig struct {
 	// test-override shape Mailer and Memberships below use.
 	PeriodicTaskInterval time.Duration
 
-	// PKIPropagationWindow and PKIRenewalLeadTime override pki's rotation
-	// timing when non-zero: buildServer applies pki.WithPropagationWindow
-	// and pki.WithRenewalLeadTime only for values above zero, so the zero
-	// default (what configFromEnv always leaves them at) keeps the
-	// module's own DefaultPropagationWindow / DefaultRenewalLeadTime in
-	// force, byte-identical to the fields never having existed. The pki
-	// flow test injects a renewal lead time past a signing key's validity
-	// so the very next expiry scan stages its replacement within test
-	// time.
+	// PKIPropagationWindow, PKIRenewalLeadTime and PKIExpiryScanWindow
+	// override pki's rotation timing and its expiry-scan idempotency window
+	// when non-zero: buildServer applies pki.WithPropagationWindow,
+	// pki.WithRenewalLeadTime and pki.WithExpiryScanWindow only for values
+	// above zero, so the zero default (what configFromEnv always leaves
+	// them at) keeps the module's own DefaultPropagationWindow /
+	// DefaultRenewalLeadTime / DefaultExpiryScanWindow in force,
+	// byte-identical to the fields never having existed. The pki flow test
+	// injects a renewal lead time past a signing key's validity so the very
+	// next expiry scan stages its replacement within test time, and a scan
+	// window below its own one-second tick cadence so every test tick lands
+	// in a fresh window and each tick really runs a scan (the production
+	// default window is an hour against this app's one-minute scheduler
+	// tick -- one scan per hour, the cadence the rotation design needs --
+	// which would stall the test's stage-then-promote proof across window
+	// boundaries no test time can wait out).
 	PKIPropagationWindow time.Duration
 	PKIRenewalLeadTime   time.Duration
+	PKIExpiryScanWindow  time.Duration
 
 	// Mailer overrides the console mailer the standalone Preset resolves
 	// for the "mailer" seam when set. configFromEnv sets it to a real
@@ -2011,11 +2019,12 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// drained like every other registered handler but never scheduled:
 	// this app consumes no X.509/CRL surface, so regenerating a CRL
 	// nobody reads would be work for its own sake (periodic_scheduler.go's
-	// doc comment and go/pki/AGENTS.md record that honestly). The two
-	// rotation knobs below are applied only when a test injects them: a
-	// zero PKIPropagationWindow or PKIRenewalLeadTime (what configFromEnv
-	// always leaves them at) keeps pki's own DefaultPropagationWindow /
-	// DefaultRenewalLeadTime in force, byte-identical to this app's
+	// doc comment and go/pki/AGENTS.md record that honestly). The three
+	// knobs below are applied only when a test injects them: a zero
+	// PKIPropagationWindow, PKIRenewalLeadTime or PKIExpiryScanWindow
+	// (what configFromEnv always leaves them at) keeps pki's own
+	// DefaultPropagationWindow / DefaultRenewalLeadTime /
+	// DefaultExpiryScanWindow in force, byte-identical to this app's
 	// pre-round rotation behavior.
 	pkiOpts := []pki.Option{pki.WithQueue(standaloneQueue)}
 	if cfg.PKIPropagationWindow > 0 {
@@ -2023,6 +2032,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	}
 	if cfg.PKIRenewalLeadTime > 0 {
 		pkiOpts = append(pkiOpts, pki.WithRenewalLeadTime(cfg.PKIRenewalLeadTime))
+	}
+	if cfg.PKIExpiryScanWindow > 0 {
+		pkiOpts = append(pkiOpts, pki.WithExpiryScanWindow(cfg.PKIExpiryScanWindow))
 	}
 	pkiModule := pki.NewModule(db, pkiOpts...)
 

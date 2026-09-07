@@ -114,7 +114,8 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 
 	t.Run("permissions", func(t *testing.T) {
 		assertContainsAll(t, reg.Permissions.Permissions(), []string{
-			PermissionRead, PermissionIssue, PermissionRevoke, PermissionRotate,
+			PermissionRead, PermissionIssue, PermissionRevokeSigningKey,
+			PermissionRevokeCertificate, PermissionRotate,
 		})
 	})
 
@@ -204,6 +205,53 @@ func TestModule_Register_WithQueue_ClaimsTheExpiryScanHandler(t *testing.T) {
 	}
 	if _, ok := reg.Jobs.Handlers()[taskTypeCRLRegenerate]; !ok {
 		t.Errorf("Register did not claim taskTypeCRLRegenerate despite WithQueue")
+	}
+}
+
+// TestModule_Register_RevokePermissionsAreSplitByDataDomain pins the
+// permission-split half of the platform-domain finding: no single
+// permission may cover both the signing-key revoke (a platform-level
+// operation on pki_signing_keys, whose permission must be evaluated in the
+// platform domain -- rbac.SystemDomain -- never in a request tenant's
+// domain) and the certificate revoke (a tenant-level operation on
+// pki_certificates, whose permission is evaluated in the request tenant's
+// own domain). One name spanning the two leaves half of it wrong in
+// whichever domain it is evaluated in: a tenant-domain holder of the
+// platform half could stop the whole deployment's token issuance. The
+// declared catalog is therefore the exact five-name set below -- the old
+// spanning "pki:revoke" name is declared by NO ONE, so a grant of it is
+// refused by rbac's own attach-time catalog freeze rather than half
+// meaning something. Written with literal strings, not the module
+// constants, so this regression also runs against pre-fix code (where the
+// catalog still carried the spanning name) and fails there.
+func TestModule_Register_RevokePermissionsAreSplitByDataDomain(t *testing.T) {
+	db := newTestDB(t)
+	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), NewModule(db))
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	got := make(map[string]bool)
+	for _, permission := range reg.Permissions.Permissions() {
+		got[permission] = true
+	}
+	want := []string{
+		"pki:read",
+		"pki:issue",
+		"pki:revoke_signing_key",
+		"pki:revoke_certificate",
+		"pki:rotate",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("declared permission set = %v, want exactly %v (regression: one spanning pki:revoke covered both a platform and a tenant operation)", got, want)
+	}
+	for _, permission := range want {
+		if !got[permission] {
+			t.Errorf("declared permission set = %v, missing %q", got, permission)
+		}
+	}
+	if got["pki:revoke"] {
+		t.Errorf("declared permission set still contains the spanning %q; a grant of it would cover both a platform and a tenant operation in whichever single domain it is evaluated in", "pki:revoke")
 	}
 }
 

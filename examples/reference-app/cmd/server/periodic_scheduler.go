@@ -66,11 +66,20 @@ import (
 //     through the real host wiring.
 //   - pki's signing-key expiry scan, one platform-level task per tick
 //     (Service.EnqueueExpiryScan: pki's keys are platform data, so the
-//     scan carries no tenant at all). This is what actually drives the
-//     signing-key lifecycle state machine (pending -> active -> retiring
-//     -> retired) in this app -- without these enqueues, the boot key
-//     authn signs with would simply age out of its rotation policy with
-//     nobody ever staging its replacement.
+//     scan carries no tenant at all), whose enqueue carries a
+//     window-scoped idempotency key (go/pki/job.go's
+//     expiryScanIdempotencyKey, DefaultExpiryScanWindow -- one hour
+//     against this app's one-minute tick, a 60:1 ratio): on this app's
+//     StandaloneQueue the scan therefore runs at most once per window,
+//     per-minute ticks collapsing into the hour's one job, which is all
+//     the day-scale rotation cadence needs. This is what actually drives
+//     the signing-key lifecycle state machine (pending -> active ->
+//     retiring -> retired) in this app -- without these enqueues, the
+//     boot key authn signs with would simply age out of its rotation
+//     policy with nobody ever staging its replacement. (The rotation
+//     flow test compresses the window below its own tick cadence through
+//     cfg.PKIExpiryScanWindow; the window semantics themselves are
+//     proven in go/pki's own enqueue_window_test.go.)
 //
 // What is deliberately NOT scheduled here, and why:
 //
@@ -145,10 +154,11 @@ func startPeriodicTaskScheduler(ctx context.Context, interval time.Duration, ten
 
 // runPeriodicTasks performs one scheduler tick: one expiry-sweep enqueue
 // and one retention-sweep enqueue per unique tenant in tenants, then one
-// signing-key expiry-scan enqueue. Every enqueue failure is logged and
-// left for the next tick to retry -- enqueues are durable row inserts, so
-// a failed one changes nothing and the mechanism stays exactly as due as
-// it was.
+// signing-key expiry-scan enqueue (window-scoped, so same-window ticks
+// collapse into one job -- see startPeriodicTaskScheduler's doc comment).
+// Every enqueue failure is logged and left for the next tick to retry --
+// enqueues are durable row inserts, so a failed one changes nothing and
+// the mechanism stays exactly as due as it was.
 func runPeriodicTasks(ctx context.Context, tenants map[string]pkgcore.TenantID, lifecycle *storage.LifecycleService, retention *compliance.RetentionService, signingKeys *pki.Service) {
 	log := obs.FromContext(ctx)
 	seen := make(map[pkgcore.TenantID]struct{}, len(tenants))

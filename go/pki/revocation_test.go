@@ -120,7 +120,7 @@ func TestService_RevokeSigningKey_UnknownKID(t *testing.T) {
 func TestService_RevokeSigningKey_InvalidatesTheCacheAndExcludesFromReads(t *testing.T) {
 	db := newTestDB(t)
 	signer := NewLocalSigner(db)
-	svc := NewService(signer, "local", NewSigningKeyRepository(db), time.Hour, DefaultPropagationWindow, DefaultRenewalLeadTime)
+	svc := NewService(signer, "local", NewSigningKeyRepository(db), time.Hour, DefaultPropagationWindow, DefaultRenewalLeadTime, DefaultExpiryScanWindow)
 	t.Cleanup(func() { _ = svc.Close() })
 	ctx := context.Background()
 

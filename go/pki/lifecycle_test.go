@@ -432,7 +432,7 @@ func TestService_ScanExpiry_RunsPromoteRetireStageInOrder(t *testing.T) {
 func TestService_ScanExpiry_FallsBackToServiceDefaults(t *testing.T) {
 	db := newTestDB(t)
 	signer := NewLocalSigner(db)
-	svc := NewService(signer, "local", NewSigningKeyRepository(db), DefaultCacheTTL, time.Hour, time.Hour)
+	svc := NewService(signer, "local", NewSigningKeyRepository(db), DefaultCacheTTL, time.Hour, time.Hour, DefaultExpiryScanWindow)
 	t.Cleanup(func() { _ = svc.Close() })
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -496,12 +496,21 @@ func TestService_PromoteNow_PromotesPastTheWindow_AndDemotesThePrevious(t *testi
 	now := time.Now().UTC()
 	svc.now = func() time.Time { return now }
 
+	// The fixtures' validity windows are anchored to the pinned clock (not
+	// newTestSigningKey's own wall-clock read, which can land a moment
+	// AFTER now): this test's final ActiveSigner assertion evaluates the
+	// promoted key against the pinned clock, and validity is enforced at
+	// key-take time.
 	previous := newTestSigningKey("kid-previous", "authn.access_token", SigningKeyStatusActive)
+	previous.NotBefore = now
+	previous.NotAfter = now.Add(24 * time.Hour)
 	if err := svc.signingKeys.Create(ctx, previous); err != nil {
 		t.Fatalf("seed previous active key: %v", err)
 	}
 	pending := newTestSigningKey("kid-pending", "authn.access_token", SigningKeyStatusPending)
 	pending.CreatedAt = now.Add(-2 * time.Hour)
+	pending.NotBefore = now.Add(-2 * time.Hour)
+	pending.NotAfter = now.Add(24 * time.Hour)
 	if err := svc.signingKeys.Create(ctx, pending); err != nil {
 		t.Fatalf("seed pending key: %v", err)
 	}
@@ -558,7 +567,7 @@ func TestService_PromoteNow_NoPendingKey_ErrKeyNotFound(t *testing.T) {
 func TestService_PromoteNow_ZeroPropagationWindow_FallsBackToServiceDefault(t *testing.T) {
 	db := newTestDB(t)
 	signer := NewLocalSigner(db)
-	svc := NewService(signer, "local", NewSigningKeyRepository(db), DefaultCacheTTL, time.Hour, time.Hour)
+	svc := NewService(signer, "local", NewSigningKeyRepository(db), DefaultCacheTTL, time.Hour, time.Hour, DefaultExpiryScanWindow)
 	t.Cleanup(func() { _ = svc.Close() })
 	ctx := context.Background()
 	now := time.Now().UTC()

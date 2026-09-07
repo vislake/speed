@@ -205,6 +205,89 @@ func TestSigningKeyRepository_ListByPurposeAndStatuses_FiltersByExactStatusSet(t
 	}
 }
 
+// TestSigningKeyRepository_PromoteToActive_ConcurrentCalls_ExactlyOneWinner
+// is the state-arbitration pin behind the expiry scan's concurrency-safety
+// claim (P1-1's arbitration check, recorded in go/pki/AGENTS.md's round
+// entry): the pending -> active + active -> retiring transitions are two
+// guarded single-statement UPDATEs inside one transaction -- each matching
+// only a row still in the status the caller read -- NOT a Go-level
+// read-modify-write of a row the caller would blindly save. Whatever the
+// interleaving of concurrent scans (two replicas whose jobs of different
+// windows overlap, the shape the windowed idempotency keys permit), exactly
+// one PromoteToActive call wins for a given pending key and the losers
+// report ErrKeyNotFound: no double promotion, no blind overwrite, no row
+// left half-transitioned. The database arbiter is the status predicate in
+// each UPDATE's WHERE clause, identical on SQLite and PostgreSQL -- SQLite
+// serialization hides nothing here, because the guard lives in the
+// statement, not in the dialect.
+//
+// The rig mirrors TestCAService_GenerateCRL_ConcurrentCalls_EveryCallLandsItsOwnNumber's
+// (crl_test.go): 8 goroutines released through a closed channel, no sleeps,
+// 25 trials, fresh keys per trial.
+func TestSigningKeyRepository_PromoteToActive_ConcurrentCalls_ExactlyOneWinner(t *testing.T) {
+	const (
+		goroutines = 8
+		trials     = 25
+	)
+	ctx := context.Background()
+
+	for trial := 0; trial < trials; trial++ {
+		repo := NewSigningKeyRepository(newTestDB(t))
+		now := time.Now().UTC()
+		active := newTestSigningKey("kid-active", "authn.access_token", SigningKeyStatusActive)
+		if err := repo.Create(ctx, active); err != nil {
+			t.Fatalf("trial %d: Create(active): %v", trial, err)
+		}
+		pending := newTestSigningKey("kid-pending", "authn.access_token", SigningKeyStatusPending)
+		if err := repo.Create(ctx, pending); err != nil {
+			t.Fatalf("trial %d: Create(pending): %v", trial, err)
+		}
+
+		errs := make([]error, goroutines)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				errs[i] = repo.PromoteToActive(ctx, pending.ID, active.ID, now)
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+
+		winners := 0
+		for i, err := range errs {
+			if err == nil {
+				winners++
+				continue
+			}
+			if !apperrIs(err, ErrKeyNotFound) {
+				t.Fatalf("trial %d: PromoteToActive goroutine %d error = %v, want ErrKeyNotFound for every losing call", trial, i, err)
+			}
+		}
+		if winners != 1 {
+			t.Fatalf("trial %d: %d of %d concurrent PromoteToActive calls succeeded, want exactly 1 -- two calls promoting the same pending key means the transition is not database-arbitrated", trial, winners, goroutines)
+		}
+
+		gotPending, err := repo.FindByID(ctx, pending.ID)
+		if err != nil {
+			t.Fatalf("trial %d: FindByID(pending): %v", trial, err)
+		}
+		if gotPending.Status != SigningKeyStatusActive {
+			t.Fatalf("trial %d: pending key status after the concurrent promotion = %q, want %q", trial, gotPending.Status, SigningKeyStatusActive)
+		}
+		gotActive, err := repo.FindByID(ctx, active.ID)
+		if err != nil {
+			t.Fatalf("trial %d: FindByID(active): %v", trial, err)
+		}
+		if gotActive.Status != SigningKeyStatusRetiring {
+			t.Fatalf("trial %d: previous active key status after the concurrent promotion = %q, want %q", trial, gotActive.Status, SigningKeyStatusRetiring)
+		}
+	}
+}
+
 // TestSigningKeyRepository_AssertNotTenantScoped proves pki_signing_keys is
 // platform data (docs/internal/04-data-and-tenancy.md): the tenant-scoping
 // plugin must never filter it, and a row is visible regardless of which (or

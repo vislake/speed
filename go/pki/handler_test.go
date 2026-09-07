@@ -32,7 +32,7 @@ import (
 func newHandlerHarness(t *testing.T) (*Handler, *Service, *CAService) {
 	t.Helper()
 	db := newTestDB(t)
-	svc := NewService(NewLocalSigner(db), "local", NewSigningKeyRepository(db), DefaultCacheTTL, DefaultPropagationWindow, DefaultRenewalLeadTime)
+	svc := NewService(NewLocalSigner(db), "local", NewSigningKeyRepository(db), DefaultCacheTTL, DefaultPropagationWindow, DefaultRenewalLeadTime, DefaultExpiryScanWindow)
 	t.Cleanup(func() { _ = svc.Close() })
 	ca := NewCAService(NewLocalSigner(db), "local", NewAuthorityRepository(db), NewCertificateRepository(db), NewCertificateRevocationRepository(db))
 

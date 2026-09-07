@@ -9,18 +9,26 @@ package main
 // of ScanExpiry advances the signing-key state machine over the real
 // pki_signing_keys rows.
 //
-// The mechanism is genuinely periodic on this app's queue, unlike
-// storage's expiry sweep. The sweep's deterministic per-tenant idempotency
-// key collides with StandaloneQueue's permanent idempotency, so each
-// tenant gets exactly one sweep per database file -- the first-ever one
-// (periodic_scheduler_flow_test.go's header records that residual
-// limitation, and its two-boot test proves that one sweep really removes
-// an expired object's row and bytes when an expired object exists).
-// EnqueueExpiryScan carries NO idempotency key -- each tick is its own
-// independent occurrence, and the scan's guarded, status-checked state
-// transitions make overlapping scans safe -- so this test can observe a
-// real rotation complete: the purpose's boot key staged over by a
-// successor and demoted to retiring.
+// The enqueues are window-scoped (go/pki/job.go's expiryScanIdempotencyKey,
+// DefaultExpiryScanWindow), so on this app's StandaloneQueue -- which holds
+// a resolved idempotency key forever (go/jobs) -- the scan would run at
+// most once per hour-long window in production, per-minute ticks
+// collapsing into the window's one job: exactly the cadence the day-scale
+// rotation design needs (a 30-day renewal lead against a one-year default
+// key validity), and exactly why the windowed-key round exists (a keyless
+// task -- each tick its own independent occurrence, the shape this test
+// file's older header recorded -- lets every replica's tick run a
+// redundant scan; the window semantics themselves are pinned against a
+// real queue in go/pki's own enqueue_window_test.go). A rotation needs a
+// stage on one scan run and a promotion on a LATER one (the propagation
+// window separates them), so this test compresses the scan window below
+// its own one-second tick cadence (cfg.PKIExpiryScanWindow =
+// pkiFlowScanWindow): every test tick lands in a fresh window, each tick
+// really enqueues a fresh job, and the test can observe a real rotation
+// complete within seconds -- the purpose's boot key staged over by a
+// successor and demoted to retiring. What the compressed window does NOT
+// re-prove is the windowing itself; that is the module's proof, and this
+// file's header says so rather than duplicating it.
 //
 // What the test drives, and what it only watches:
 //
@@ -38,18 +46,22 @@ package main
 //     key -> retiring) can only be produced by expiryScanHandler runs that
 //     real ticks enqueued and the real queue worker drained.
 //   - The test's only timing nudge is the same test-override serverConfig
-//     fields every flow test uses: cfg.PKIPropagationWindow and
-//     cfg.PKIRenewalLeadTime (buildServer applies pki.WithPropagationWindow
-//     / pki.WithRenewalLeadTime for non-zero values). PKIRenewalLeadTime is
+//     fields every flow test uses: cfg.PKIPropagationWindow,
+//     cfg.PKIRenewalLeadTime and cfg.PKIExpiryScanWindow (buildServer
+//     applies pki.WithPropagationWindow / pki.WithRenewalLeadTime /
+//     pki.WithExpiryScanWindow for non-zero values). PKIRenewalLeadTime is
 //     set LONGER than the key validity EnsurePurpose grants (one year,
 //     go/pki's defaultKeyValidity), so the boot key is "nearing expiry"
 //     from the moment it exists and the first scan tick after the sign-in
 //     stages its replacement; PKIPropagationWindow is 400ms instead of the
 //     150s default, so a scan tick past that window promotes the staged
-//     key. The rotation math itself is real: the scan reads the real key
-//     rows' NotAfter/RetiringOverlap columns and the real clock; only the
-//     policy constants are compressed, exactly like the compressed cadence
-//     of periodicFlowTickInterval itself.
+//     key; PKIExpiryScanWindow is 100ms instead of the one-hour default so
+//     each one-second tick lands in a fresh idempotency window and really
+//     runs a scan (see pkiFlowScanWindow's own comment). The rotation math
+//     itself is real: the scan reads the real key rows'
+//     NotAfter/RetiringOverlap columns and the real clock; only the policy
+//     constants are compressed, exactly like the compressed cadence of
+//     periodicFlowTickInterval itself.
 //   - Observation is the same second-connection reach the audit flow test
 //     uses (TestBuildServer_NoteCreate_PersistsAuditEvent): buildServer
 //     hands out neither its *gorm.DB nor module services, so a second
@@ -103,6 +115,18 @@ const pkiFlowPropagationWindow = 400 * time.Millisecond
 // one-year key is "nearing expiry" from its very first scan tick onward.
 const pkiFlowRenewalLeadTime = 400 * 24 * time.Hour
 
+// pkiFlowScanWindow is the cfg.PKIExpiryScanWindow the rotation test
+// injects: 100ms in place of go/pki's DefaultExpiryScanWindow (one hour).
+// The test ticks every second (periodicFlowTickInterval) and needs EACH
+// tick to run a real scan -- staging on one, promotion on the next -- so
+// the window must be smaller than the tick cadence, making every tick land
+// in a fresh window and enqueue a fresh job. This is the test-compression
+// half of the override go/pki's WithExpiryScanWindow option exists for (its
+// own doc comment names exactly this use); the production default keeps
+// its 60:1 ratio to this app's one-minute scheduler cadence, and the
+// windowing itself is proven in the module, not re-proven here.
+const pkiFlowScanWindow = 100 * time.Millisecond
+
 // signingKeyRotationDeadline bounds the poll below. The happy path is fast
 // (a stage on the first tick after the sign-in, a promotion on the next
 // tick, which the one-second cadence puts well past the propagation
@@ -121,6 +145,7 @@ func TestBuildServer_PeriodicScheduler_PKIExpiryScan_RotatesBootKey(t *testing.T
 		cfg.PeriodicTaskInterval = periodicFlowTickInterval
 		cfg.PKIPropagationWindow = pkiFlowPropagationWindow
 		cfg.PKIRenewalLeadTime = pkiFlowRenewalLeadTime
+		cfg.PKIExpiryScanWindow = pkiFlowScanWindow
 	})
 
 	// The observer: a second connection to the same SQLite file the

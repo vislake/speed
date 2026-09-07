@@ -52,6 +52,14 @@ const (
 // plain *gorm.DB rather than dbkit.Repository[T]. Its isolation is proven by
 // tenancytest.AssertNotTenantScoped.
 //
+// The row's data domain also fixes the domain its permission gate must be
+// evaluated in: an HTTP operation on this row (the signing-key revoke,
+// handler.go) is gated on pki.PermissionRevokeSigningKey evaluated under
+// the PLATFORM domain (rbac.SystemDomain) -- never under a request
+// tenant's domain, where a single tenant's grant would reach every other
+// tenant's tokens. The same split logic is why round 3's one
+// two-domain "pki:revoke" permission was split (module.go).
+//
 // # No private key column, ever
 //
 // SignerName and KeyRef are the only pointers to the actual key material:

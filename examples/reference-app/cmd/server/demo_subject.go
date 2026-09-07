@@ -373,42 +373,36 @@ var demoRouteGuards = map[string]string{
 	sharingSharesRoutePath: sharingResource,
 	// pki's path was a KNOWN, PRE-EXISTING GAP (routePublic) when this
 	// table first grew an entry for it: pki mounts a real, fine-grained
-	// permission vocabulary (pki.PermissionRead/Issue/Revoke/Rotate) and
-	// its handler performs no identity check of its own -- the
-	// storage-style shape this table's own doc comment describes, which
-	// normally means router gating -- but demoPermissionFor's binary
-	// read/write split cannot express four distinct permissions, so this
-	// router-level gate was simply never added when pki's HTTP surface
-	// landed. It is gated for real now: pkiResource marks the path
-	// non-public, and guardModuleRoute substitutes pkiPermissionFor (see
-	// its own doc comment) for demoPermissionFor specifically for this
-	// path, since GET (JWKS/CRL export) and POST (the two round-3 revoke
-	// operations -- signing-key and certificate) need pki's own
-	// Read/Revoke permissions, not a generic write bucket pki never
-	// declares.
+	// permission vocabulary (pki.PermissionRead/Issue/Rotate plus the two
+	// revoke permissions) and its handler performs no identity check of
+	// its own -- the storage-style shape this table's own doc comment
+	// describes, which normally means router gating -- but
+	// demoPermissionFor's binary read/write split cannot express distinct
+	// permissions, so this router-level gate was simply never added when
+	// pki's HTTP surface landed. It is gated for real now, and the
+	// platform-domain round replaced the generic branch with its own
+	// guard: pkiRouteSentinel marks the path non-public, and
+	// guardModuleRoute dispatches it to guardPkiRoute (never
+	// demoPermissionFor), whose pkiPermissionFor selects between pki's
+	// own Read and the two split revoke permissions by route, and whose
+	// subject resolver pins the signing-key revoke's evaluation to
+	// rbac.SystemDomain -- the platform-domain half of pki's permission
+	// contract (go/pki/module.go), without which a tenant's owner role
+	// (seedDemoGrants grants every declared permission in every demo
+	// tenant) would reach the platform signing key and stop token
+	// issuance for every tenant at once.
 	//
-	// What this narrower fix does NOT reach, left as follow-up for
-	// whoever owns pki's reference-app wiring: PermissionIssue and
-	// PermissionRotate are declared but have no HTTP operation in this
-	// round's fragment at all (issuance and manual rotation stay Go-only
-	// per go/pki/api/openapi.yaml's own header), so there is nothing yet
-	// to gate for either; and pki_revokeSigningKey acts on
-	// pki_signing_keys, which is platform data with no tenant column at
-	// all (its own openapi.yaml description), so granting PermissionRevoke
-	// to a tenant's BuiltinRoleOwner -- as seedDemoGrants does, purely to
-	// demonstrate the gate closing on someone who lacks it -- hands that
-	// tenant's owner a lever that reaches every OTHER tenant's signing
-	// material too. A real deployment should restrict PermissionRevoke to
-	// a platform-admin role instead, and a follow-up round should give
-	// pki a genuine per-operation check (or a DataScope split between the
-	// tenant-scoped certificate revoke and the platform-wide signing-key
-	// one) rather than relying on this router-level gate alone.
-	pkiRoutePath: pkiResource,
+	// What this gate does NOT reach, left as follow-up for whoever owns
+	// pki's reference-app wiring: PermissionIssue and PermissionRotate
+	// have no HTTP operation in the fragment at all (issuance and manual
+	// rotation stay Go-only per go/pki/api/openapi.yaml's own header), so
+	// there is nothing yet to gate for either.
+	pkiRoutePath: pkiRouteSentinel,
 
-	// integration's path is one of two entries in this table whose value is
-	// never read as a plain "resource" (admin's, just below, is the
-	// other) -- guardModuleRoute special-cases it to
-	// guardIntegrationRoute, which derives resource and action from this
+	// integration's path is one of the entries in this table whose value is
+	// never read as a plain "resource" (admin's, just below, is another,
+	// and pki's, just above, a third) -- guardModuleRoute special-cases it
+	// to guardIntegrationRoute, which derives resource and action from this
 	// module's own three-segment permission names directly, never from
 	// rbac.Permission/splitPermission's "<resource>:<action>" round trip,
 	// and dispatches between the module's TWO permission pairs by sub-path
@@ -458,6 +452,13 @@ var demoRouteGuards = map[string]string{
 // routePublic and from any real resource string, so a reader (and
 // guardModuleRoute's own switch) cannot confuse it with either.
 const adminRouteSentinel = "ADMIN_SPECIAL_CASED_ROUTE"
+
+// pkiRouteSentinel marks demoRouteGuards' pki entry, dispatched by
+// guardModuleRoute to guardPkiRoute -- the same sentinel shape
+// adminRouteSentinel uses, for the same reason: pki's signing-key revoke
+// must be evaluated under rbac.SystemDomain (see guardPkiRoute), a domain
+// shift no generic demoPermissionFor(resource) gate can express.
+const pkiRouteSentinel = "PKI_SPECIAL_CASED_ROUTE"
 
 // orgRouteSentinel marks demoRouteGuards' entry for go/org's mounted
 // route. guardModuleRoute dispatches it to guardOrgRoute instead of the
@@ -536,34 +537,88 @@ var notesResource = mustResourceOf(notes.PermissionRead, notes.PermissionWrite)
 // permissions storage actually declares either.
 var storageResource = mustResourceOf(storage.PermissionRead, storage.PermissionWrite)
 
-// pkiResource is the resource half of pki's permission strings, derived the
-// same way notesResource and storageResource are. It exists only to give
-// demoRouteGuards[pkiRoutePath] a non-routePublic value; guardModuleRoute
-// never calls demoPermissionFor(pkiResource) for this path -- it uses
-// pkiPermissionFor instead, since pki's real action vocabulary
-// (Read/Issue/Revoke/Rotate) is not the generic read/write pair
-// demoPermissionFor assumes.
-var pkiResource = mustResourceOf(pki.PermissionRead, pki.PermissionRevoke)
+// pkiSigningKeyRevokePrefix is the request-path prefix of the ONE pki
+// operation whose permission must be evaluated in the platform domain --
+// POST /api/v1/pki/signing-keys/{kid}/revoke. Its subject (below) pins the
+// tenant to rbac.SystemDomain for exactly this prefix and nothing else.
+const pkiSigningKeyRevokePrefix = pkiRoutePath + "/signing-keys/"
 
-// pkiPermissionFor selects the permission a pki request must hold, mirroring
-// demoPermissionFor's GET/HEAD-vs-everything-else split but naming pki's own
-// two round-3 HTTP-reachable permissions directly rather than a generic
-// write bucket pki never declares. Of pki's four declared permissions, only
-// PermissionRead and PermissionRevoke have an HTTP operation in this
-// round's fragment at all (go/pki/api/openapi.yaml): the three GET
-// operations export a JWKS or a CRL (PermissionRead), and the two POST
-// operations both revoke something -- a signing key or a certificate
-// (PermissionRevoke). PermissionIssue and PermissionRotate stay ungated
-// here because nothing under this path invokes them over HTTP yet -- see
-// demoRouteGuards' own pkiRoutePath entry for the full reasoning and what
-// remains open.
+// pkiPermissionFor selects the permission a pki request must hold, from the
+// request's route alone -- never a header, query parameter or body field,
+// for the same reason demoPermissionFor's own doc comment gives. Of pki's
+// declared permissions, only PermissionRead and the two revoke permissions
+// have an HTTP operation in the fragment at all (go/pki/api/openapi.yaml):
+// the three GET operations export a JWKS or a CRL (PermissionRead), and
+// the two POST operations revoke a signing key or a certificate -- gated on
+// pki.PermissionRevokeSigningKey and pki.PermissionRevokeCertificate
+// respectively, the split that replaced round 3's single two-domain
+// "pki:revoke" (go/pki/module.go's const block documents why one
+// permission spanning pki_signing_keys and pki_certificates is wrong in
+// whichever single domain it is evaluated in). PermissionIssue and
+// PermissionRotate stay ungated here because nothing under this path
+// invokes them over HTTP yet. A request that matches neither revoke
+// sub-path and is not a read is denied -- "" makes
+// rbac.RequirePermissionFunc fail closed.
 func pkiPermissionFor(r *http.Request) string {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		return pki.PermissionRead
-	default:
-		return pki.PermissionRevoke
 	}
+	if strings.HasPrefix(r.URL.Path, pkiSigningKeyRevokePrefix) {
+		return pki.PermissionRevokeSigningKey
+	}
+	if strings.HasPrefix(r.URL.Path, pkiRoutePath+"/certificates/") {
+		return pki.PermissionRevokeCertificate
+	}
+	return ""
+}
+
+// pkiSubjectResolverFor returns the subject resolver guardPkiRoute plugs
+// into rbac.WithSubjectResolver: the demo subject (demoSubjectResolverFor)
+// with one deliberate mutation -- a request against the signing-key revoke
+// operation has its subject's tenant pinned to rbac.SystemDomain.
+//
+// The pin is the platform-domain half of pki's permission contract
+// (go/pki/module.go): pki_revokeSigningKey acts on pki_signing_keys, which
+// is platform data with no tenant column at all, and evaluating its
+// permission in the request tenant's domain would let a single tenant's
+// grant of pki:revoke_signing_key stop token issuance for every tenant at
+// once -- the demo's own owner role grants every declared permission in
+// every demo tenant, which is exactly the lever that must NOT reach the
+// platform signing key. Pinning the tenant makes the check ask "does this
+// user hold pki:revoke_signing_key under rbac.SystemDomain", the same
+// domain-shift adminSubjectResolver (demo_admin.go) applies to every
+// admin:* permission. The user half is untouched: the pin only relocates
+// where the user's grant must live, it never invents a user. A demo
+// header user therefore cannot revoke a signing key at all -- seedDemoGrants
+// grants demo users only in their tenant domains -- and only a real
+// platform-staff account holding the owner role under SystemDomain
+// (seedDemoPlatformStaff, demo_admin.go) can.
+func pkiSubjectResolverFor(headerDisabled bool) func(*http.Request) (rbac.Subject, bool) {
+	resolve := demoSubjectResolverFor(headerDisabled)
+	return func(r *http.Request) (rbac.Subject, bool) {
+		sub, ok := resolve(r)
+		if !ok {
+			return rbac.Subject{}, false
+		}
+		if strings.HasPrefix(r.URL.Path, pkiSigningKeyRevokePrefix) {
+			sub.TenantID = rbac.SystemDomain
+		}
+		return sub, true
+	}
+}
+
+// guardPkiRoute wraps pki's mounted fragment routes in rbac's permission
+// gate, in the same shape guardAdminRoute (demo_admin.go) wraps admin's:
+// rbac.RequirePermissionFunc with pki's own per-route permission selector
+// and pki's own subject resolver (the SystemDomain pin above). It is what
+// replaces the generic guardModuleRoute branch pki used before the
+// platform-domain round, which evaluated the then-spanning pki:revoke
+// permission in the request tenant's domain for both revoke operations.
+func guardPkiRoute(az rbac.Authorizer, handler http.Handler, demoHeaderDisabled bool) http.Handler {
+	return rbac.RequirePermissionFunc(az, pkiPermissionFor,
+		rbac.WithSubjectResolver(pkiSubjectResolverFor(demoHeaderDisabled)),
+	)(handler)
 }
 
 // integrationPermissionFor selects the permission a request against
@@ -1423,10 +1478,18 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, org
 	if resource == adminRouteSentinel {
 		return guardAdminRoute(az, handler), nil
 	}
+	if resource == pkiRouteSentinel {
+		// pki's own gate, not the generic action-selector branch below:
+		// the signing-key revoke must be evaluated under
+		// rbac.SystemDomain, a subject-domain shift no generic
+		// demoPermissionFor(resource) gate can express. See guardPkiRoute.
+		return guardPkiRoute(az, handler, demoHeaderDisabled), nil
+	}
 	if resource == integrationRouteSentinel {
-		// Not just a different action selector (like pki below) -- a
-		// wholly different gate, bypassing rbac.RequirePermissionFunc
-		// entirely. See integrationRouteSentinel's own doc comment for why.
+		// Not just a different action selector (like sharing/ai-gateway
+		// below) -- a wholly different gate, bypassing
+		// rbac.RequirePermissionFunc entirely. See
+		// integrationRouteSentinel's own doc comment for why.
 		return guardIntegrationRoute(az, handler, demoHeaderDisabled), nil
 	}
 	if resource == billingRouteSentinel {
@@ -1444,15 +1507,13 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, org
 		// alone).
 		return guardOrgRoute(az, handler, orgDeps, demoHeaderDisabled), nil
 	}
-	// pki, sharing and ai-gateway all need their own action selector, not
-	// demoPermissionFor's generic read/write split -- see pkiPermissionFor's,
+	// sharing and ai-gateway need their own action selector, not
+	// demoPermissionFor's generic read/write split -- see
 	// sharingPermissionFor's and aiGatewayPermissionFor's own doc comments.
-	// billing never reaches this branch: billingRouteSentinel's dispatch
-	// above already returned guardBillingRoute's own gate.
+	// pki, integration, billing and org never reach this branch: their
+	// sentinels' dispatch above already returned their own gates.
 	permissionFor := demoPermissionFor(resource)
 	switch path {
-	case pkiRoutePath:
-		permissionFor = pkiPermissionFor
 	case sharingSharesRoutePath:
 		permissionFor = sharingPermissionFor
 	case aiGatewayRoutePath:

@@ -43,12 +43,19 @@ func TestService_EnqueueExpiryScan_NoQueueWired(t *testing.T) {
 // TestService_EnqueueExpiryScan_ShapesTheTask proves the task Enqueue
 // receives: the fixed taskTypeExpiryScan type, the fixed
 // platformScanTenantID (pki_signing_keys is platform data with no real
-// tenant to put here -- see platformScanTenantID's own doc comment), and no
-// payload.
+// tenant to put here -- see platformScanTenantID's own doc comment), no
+// payload, and the window-scoped idempotency key naming the
+// DefaultExpiryScanWindow window the enqueue's clock read falls in -- the
+// key that makes a multi-replica scheduler's same-window enqueues collapse
+// into one job (enqueue_window_test.go pins the collapse and the window
+// boundary on a real queue). The clock is pinned so the expected key is
+// exact: windowA is 10:15 UTC, whose one-hour window starts at 10:00 UTC.
 func TestService_EnqueueExpiryScan_ShapesTheTask(t *testing.T) {
 	svc := newTestService(t)
 	queue := &recordingQueue{}
 	svc.attachQueue(queue)
+	windowA := time.Date(2026, 9, 7, 10, 15, 0, 0, time.UTC)
+	svc.now = func() time.Time { return windowA }
 
 	if err := svc.EnqueueExpiryScan(context.Background()); err != nil {
 		t.Fatalf("EnqueueExpiryScan: %v", err)
@@ -65,6 +72,9 @@ func TestService_EnqueueExpiryScan_ShapesTheTask(t *testing.T) {
 	}
 	if len(task.Payload) != 0 {
 		t.Errorf("task.Payload = %q, want empty", task.Payload)
+	}
+	if want := expiryScanIdempotencyKey(expiryScanWindowStart(windowA, svc.expiryScanWindow)); task.IdempotencyKey != want {
+		t.Errorf("task.IdempotencyKey = %q, want %q (the windowed key of the enqueue's clock read)", task.IdempotencyKey, want)
 	}
 }
 
