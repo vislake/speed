@@ -295,16 +295,38 @@ decision.
 
 ## Layout
 
+Every file, because a partial list of what a suite contains invites the
+same false sense of coverage a partial list of what it skips does. The
+tier each spec sits in is the tag in its own `test(...)` call, not this
+table -- read the file when it matters.
+
 | Path | What it holds |
 |---|---|
 | `password-sign-in.spec.ts` | Signing in, being refused, the SMS channel, a single-tenant account's scope |
 | `registration.spec.ts` | Creating an account, the policy refusals, the duplicate-address conflict |
-| `notes-surface.spec.ts` | The tenant-scoped business surface: read, write, the row that appears |
-| `authorization.spec.ts` | What a read-only member may do, and tenant isolation across a switch |
+| `self-service-signup.spec.ts` | A practice registering itself: it gets in, and can do an owner's work |
+| `provisioning-recovery.spec.ts` | A registration whose clinic failed to open on the first try still gets in |
+| `org-invitation-sign-in.spec.ts` | An invited colleague accepts and can then work in that organization |
 | `session-lifecycle.spec.ts` | Signing out, the session-ended branch, signing back in, reloading |
+| `restart-survival.spec.ts` | A member signs in against a process that booted over an existing database |
+| `back-button.spec.ts` | Back moves the view and keeps the person signed in; no full reload |
+| `authorization.spec.ts` | What a read-only member may do, and tenant isolation across a switch |
+| `notes-surface.spec.ts` | The tenant-scoped business surface: read, write, the row that appears |
+| `offline-save.spec.ts` | A save that fails offline keeps the text and blames the network |
 | `account-surface.spec.ts` | Sessions, sign-in history, social bindings, two-step verification |
+| `sessions-are-distinguishable.spec.ts` | Telling your own sign-ins apart, and the address each was made from |
+| `current-clinic-is-visible.spec.ts` | Which clinic the work lands in, including one a registration just created |
+| `tenant-landing.spec.ts` | Where a multi-clinic account lands, and that it lands somewhere |
+| `home-is-self-consistent.spec.ts` | The home surface does not promise cards it has none of |
+| `visible-controls.spec.ts` | Every control in the chrome is legible against what is behind it |
+| `deployment-serves-the-app.spec.ts` | The address serves the app, mounts it, and loads without a failed asset |
+| `offered-channels-work.spec.ts` | A channel the product offers either works or says why it cannot |
+| `core-journey.pending.spec.ts` | The product's reason to exist, in four blocks: case and photo, generate and compare, share with the patient, what it cost |
 | `test-utils/accounts.ts` | The seeded demo accounts and the grants each one carries |
 | `test-utils/journeys.ts` | Shared journey steps and every en-US string the specs assert on |
+| `test-utils/servers.ts` | Booting a server one spec owns, for the specs whose subject is a server's own lifecycle or configuration |
+| `test-utils/invitations.ts` | Setting up a real invitation, including reading its token from the mail the server prints |
+| `test-utils/fake-image-provider.mjs` | The stand-in for the vendor the smile simulation calls, with a refusal mode |
 
 Specs are named for the journey they cover, never `e2e.spec.ts`, and
 shared helpers live in `test-utils/` rather than being copied between
@@ -346,13 +368,17 @@ tier's green says only what that tier selected.
 
 **Not gated at all, and why:**
 
-- **A registration whose clinic provisioning failed converging on
-  retry.** The recovery is real (`dcd091c`), but driving it needs a way
-  to make provisioning fail on purpose; the switch
-  (`APP_FAIL_SELF_SERVICE_PROVISION`) is agreed and not landed. Until
-  then this suite can say the retry did not regress, not that it
-  converges.
 - **A generation that fails giving the credits back.** The fake vendor
   can now refuse (`FAKE_IMAGE_FAIL=1`), but the balance it should
   restore has no surface to read, so the gate waits on block D.
 - **Team management and the admin console.** No browser surface exists.
+
+The provisioning-recovery entry used to sit in this list, and what moved
+it out is worth keeping: the recovery was real from the day `dcd091c`
+landed, but nothing could make provisioning fail on purpose, so this
+suite could only say the retry had not regressed -- never that it
+converges. `APP_FAIL_SELF_SERVICE_PROVISION` closed that gap and
+provisioning-recovery.spec.ts now asserts the convergence itself. The
+lesson is about the two claims rather than the switch: "it did not
+regress" and "it works" read alike in a report and are not the same
+statement, and only one of them was available.
