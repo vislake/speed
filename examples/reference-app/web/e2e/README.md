@@ -353,6 +353,45 @@ Reported as a finding: a returning member of a multi-location practice
 should land somewhere predictable, which is a host-side ordering
 decision.
 
+## The product brief, and which parts a browser can reach
+
+The acceptance question is not "do the gates pass" but "can a dental
+practice do what this product was described as doing". Checked against
+the brief, item by item, because a suite that only reports on what it
+covers cannot say what it is missing.
+
+| Brief item | Reachable in a browser |
+|---|---|
+| Secure practice accounts | Yes -- registration, sign-in, sessions, MFA |
+| Patient photo upload | Yes -- block A |
+| AI smile transformation | Yes -- block B (locally; see the deployment boundary below) |
+| Multiple smile / tooth-shade options | Yes -- three styles, three shades, a strength |
+| Before/after comparison | Yes -- in the clinic and on the patient's page |
+| Ability to regenerate | Yes -- changing the options and pressing Simulate starts an ordinary second generation |
+| Mobile and desktop responsive | Yes -- every gate runs on chromium, webkit and an iPad viewport |
+| Patient-facing shareable link | Yes -- block C |
+| Credit / usage system | Yes -- block D, balance and ledger |
+| Multi-location account support | Yes -- the tenant switcher, and the clinic named on every work surface |
+| **Download the result** | **No surface** -- the practice can share a link, but nothing offers the image itself |
+| **Team / user management** | **No surface** -- invitations work through the API only, so a practice cannot add a colleague by clicking |
+| **Subscription billing** | **No surface** -- credits are visible, but nothing shows or changes a plan |
+| **Usage analytics** | **No surface** |
+| **Admin dashboard** | **No surface** |
+
+The five with no surface are not gated, and deliberately so: a gate
+against a surface nobody has designed would be inventing the design.
+They are listed because "the core journey works" and "the product is
+what it was described as" are different claims, and this suite can only
+speak to the first.
+
+Team management is the one worth singling out. An invitation is a real,
+working flow (`org-invitation-sign-in.spec.ts` drives it), but its setup
+steps go through the API because there is no team surface to click --
+so a practice that hires a second dentist cannot add them, and the gate
+that proves invitations work had to reach around the product to set
+itself up. That gap is invisible from the gate's green result, which is
+exactly why it is written here.
+
 ## Layout
 
 Every file, because a partial list of what a suite contains invites the
