@@ -135,9 +135,14 @@ export const DEMO_PASSWORD = process.env.E2E_DEMO_PASSWORD ?? 'e2e-demo-password
 
 export default defineConfig({
   testDir: './e2e',
-  // The @pending gates describe surfaces that do not exist yet
-  // (core-journey.pending.spec.ts: the upload / generate / compare /
-  // share / cost journey the product is for). They are written ahead of
+  // The @pending gates describe surfaces or defects that are not closed
+  // yet (core-journey.pending.spec.ts: the upload / generate / compare /
+  // share / cost journey the product is for; sessions-are-
+  // distinguishable, offered-channels-work, self-service-signup,
+  // visible-controls, current-clinic-is-visible, home-is-self-consistent
+  // and offline-save each carry their own open acceptance blocker -- the
+  // last four pass on the fixed tree and wait only on the acceptance
+  // session's re-run to leave @pending). They are written ahead of
   // delivery on purpose -- each one is the acceptance criterion for a
   // block, checkable the day it lands -- but a suite that is permanently
   // red says nothing, so the default run leaves them out and they are

@@ -26,6 +26,7 @@ import type { ReactElement } from 'react'
 import { describe, expect, it } from 'vitest'
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
 import enUS from './locales/en-US.json' with { type: 'json' }
+import { jsonResponse } from './test-utils/real-client.js'
 import { makeRealClientRig } from './test-utils/real-client.js'
 import { demoServer } from './test-utils/demo-server.js'
 import { renderWithAppServices } from './test-utils/render.js'
@@ -82,6 +83,32 @@ describe('useBrandName', () => {
   it('falls back when the config fetch fails, without throwing', async () => {
     const rig = makeRealClientRig(() => {
       throw new TypeError('network down')
+    })
+    const { findByText } = renderWithAppServices(<BrandProbe />, {
+      session: rig.session,
+      api: rig.api,
+    })
+    expect(await findByText(zhCN.brand.fallback)).toBeInTheDocument()
+  })
+
+  it('falls back when a shape-mismatched 200 answers the config fetch, without throwing', async () => {
+    // The reference-app-web acceptance guard for the config render: the
+    // Public-config wire shape is a hand-maintained seam (no spec
+    // fragment exists for either config endpoint), and a 200 whose body
+    // is not that shape -- an empty {} document, with no `config`
+    // member at all -- must read as "no brand configured" and render
+    // the fallback. Before the null-guard this threw a TypeError while
+    // rendering the AppBar brand on every page: a shape-mismatched 200
+    // white-screened the app, and no error boundary exists below this
+    // hook to catch it.
+    const server = demoServer({
+      publicConfig: { config: { 'brand.site_name': 'Demo Smile Lab' }, features: [] },
+    })
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'GET' && call.path === '/api/config/public') {
+        return jsonResponse(200, {})
+      }
+      return server(call)
     })
     const { findByText } = renderWithAppServices(<BrandProbe />, {
       session: rig.session,

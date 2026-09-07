@@ -253,6 +253,12 @@ export interface DemoServerOptions {
    * method is that binding answers; default undefined -- every unbind
    * succeeds. */
   readonly refuseUnbindIdentityId?: string
+  /** The authorize_url a GET of the social-authorize endpoint answers
+   * with (the add area's session request, whose redirect_uri query the
+   * app's channels carry). Defaults to a benign https destination;
+   * the account-view protocol-guard journeys script a hostile scheme
+   * here to prove the host refuses it. */
+  readonly socialAuthorizeUrl?: string
 }
 
 /** What an issued access token stands for: the principal it belongs to
@@ -301,6 +307,14 @@ const NOTE_TEXT_LIMIT = 4000
 const SESSION_PATH = /^\/api\/v1\/authn\/sessions\/([^/]+)$/
 const IDENTITY_PATH = /^\/api\/v1\/authn\/identities\/([^/]+)$/
 const SOCIAL_CALLBACK_PATH = /^\/api\/v1\/authn\/social\/([^/]+)\/callback$/
+const SOCIAL_AUTHORIZE_PATH = /^\/api\/v1\/authn\/social\/([^/]+)\/authorize$/
+
+/** The authorize URL the demo answers with unless the option scripts
+ * another one -- a benign https destination, so a journey that ever
+ * drives the add area's authorize click without scripting its own
+ * answer goes somewhere harmless instead of nowhere. */
+const DEFAULT_SOCIAL_AUTHORIZE_URL =
+  'https://sso.example.test/authorize?channel=demo'
 
 /** The demo's three sessions: the current one on the rig's own session
  * id (the same row every token-issuing answer names) plus two active
@@ -378,6 +392,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     initialLoginAttempts,
     initialIdentities = [],
     refuseUnbindIdentityId,
+    socialAuthorizeUrl = DEFAULT_SOCIAL_AUTHORIZE_URL,
   } = options
   // The account state is stateful per responder instance (a revoke
   // marks a row for later list answers, an exchange appends a bound
@@ -695,6 +710,17 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       }
       identities.splice(identityIndex, 1)
       return new Response(null, { status: 204 })
+    }
+    const authorizePathMatch = SOCIAL_AUTHORIZE_PATH.exec(call.path)
+    if (call.method === 'GET' && authorizePathMatch !== null) {
+      // The add area's authorize request: the session operation a
+      // channel click drives. The answer carries whatever authorize_url
+      // the option scripts -- the host's protocol guard is the thing
+      // under test when a journey answers a non-http(s) scheme here,
+      // exactly the shape a misconfigured or compromised provider
+      // answer would arrive in.
+      principalOf(call)
+      return jsonResponse(200, { authorize_url: socialAuthorizeUrl })
     }
     const callbackPathMatch = SOCIAL_CALLBACK_PATH.exec(call.path)
     if (call.method === 'POST' && callbackPathMatch !== null) {

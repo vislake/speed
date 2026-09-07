@@ -84,12 +84,26 @@ export function useAppServices(): AppServices {
  * brand.site_name value: the server's answer verbatim when it is a
  * non-empty string, the app namespace's fallback while loading, on
  * error, or when the value is not a string.
+ *
+ * The config access is null-guarded twice over, because this hook
+ * renders in the AppBar on every page: the Public-config wire shape is
+ * a hand-maintained seam (config-fetcher.ts's PublicConfigResponse --
+ * no OpenAPI fragment exists for either config endpoint), and a 200
+ * whose body is not that shape -- a `{}` document, a non-object answer
+ * -- must read as "no brand configured" and render the fallback, never
+ * throw during render. `data?.config` alone would not be enough: a
+ * truthy `data` with no `config` member is exactly what a
+ * shape-mismatched 200 hands back, and reading `[key]` off the missing
+ * member is a render-time TypeError on the page's most-mounted surface
+ * (reference-app-web acceptance: a shape-mismatched config answer must
+ * not white-screen the app -- no error boundary exists below this
+ * hook).
  */
 export function useBrandName(): string {
   const { api } = useAppServices()
   const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
   const { data } = usePublicConfig(api)
-  const value = data?.config[BRAND_SITE_NAME_CONFIG_KEY]
+  const value = data?.config?.[BRAND_SITE_NAME_CONFIG_KEY]
   if (typeof value === 'string' && value.length > 0) {
     return value
   }

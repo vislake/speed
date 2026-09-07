@@ -20,15 +20,22 @@
  * are host configuration: the five demo providers of the app's binding
  * parser, each carrying the redirect URI of the app's own callback
  * route for that channel -- the <origin>/callback/social/<provider>
- * convention the account-ui usage example's host uses. A real
+ * convention the account-ui usage example's host uses, with the origin
+ * read from the running page (window.location.origin) so a channel
+ * whose callback lives on this app never points at a host that does
+ * not resolve where the app runs. A real
  * deployment serves that route (its SPA fallback delivering index.html
  * and the code/state exchange routing into the binding fragment); this
  * round's shell serves no such route, so the bridge from a callback
  * path to the binding fragment stays the recorded follow-up, and the
- * journeys never click an add-area button. The view's one navigation
- * duty is the authorize click itself: the section reports the
- * channel's URL upward and the view performs window.location.assign --
- * the host's own act, never one the package performs.
+ * browser journeys never click an add-area button (the unit journeys
+ * do, with window.location stubbed -- see account-view.test.tsx). The
+ * view's one navigation duty is the authorize click itself: the
+ * section reports the channel's URL upward and the view performs
+ * window.location.assign --
+ * the host's own act, never one the package performs -- after refusing
+ * any URL whose protocol is not http(s) with the surface's coded error
+ * text (see handleAuthorizeUrl).
  *
  * The account surface deliberately sits outside the notes surface's
  * permission gate: the authn identity-domain endpoints require only a
@@ -38,7 +45,9 @@
  * server rule the app does not have.
  */
 
+import { useState } from 'react'
 import type { ReactElement } from 'react'
+import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import {
@@ -53,8 +62,17 @@ import { useTranslation } from '@speed/i18n'
 import { useAppServices } from '../app-services.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 
-/** This app's origin, the root of every demo channel's callback route. */
-const DEMO_APP_ORIGIN = 'https://app.example.test'
+/**
+ * The origin the demo channels' callback routes are rooted at. This is
+ * the running app's own origin -- never a hard-coded host: the
+ * callback route lives on this app (its SPA fallback delivers the
+ * binding fragment), so a channel whose redirect target points at some
+ * other host is a channel whose authorization no one would ever land
+ * back from. An earlier constant (https://app.example.test) named a
+ * host that does not resolve anywhere the app runs; window.location.
+ * origin is the one host that is guaranteed to be this page's own.
+ */
+const DEMO_APP_ORIGIN = window.location.origin
 
 /**
  * The add area's channels: the app's demo provider set, each with the
@@ -108,10 +126,33 @@ export function AccountView({
 }: AccountViewProps): ReactElement {
   const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
   const { session } = useAppServices()
+  const [authorizeError, setAuthorizeError] = useState<string | null>(null)
 
-  /** The authorize click's one navigation: land the browser on the
-   * channel's callback route (the section never navigates itself). */
+  /**
+   * The authorize click's one navigation: land the browser on the
+   * channel's authorization URL (the section never navigates itself).
+   * The URL arrives from the session (a server-composed string, not a
+   * local constant), and the navigation hands the browser to whatever
+   * that string names -- so the host's last act before assigning is a
+   * protocol check: only http(s) URLs are destinations a sign-in flow
+   * may send a person to. Anything else (a javascript: or data: URL
+   * from a misconfigured or compromised provider answer, a string that
+   * does not parse as a URL at all) is refused with the surface's coded
+   * error text instead of being assigned to the window.
+   */
   function handleAuthorizeUrl(url: string): void {
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      setAuthorizeError('authorizeUrlRefused')
+      return
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      setAuthorizeError('authorizeUrlRefused')
+      return
+    }
+    setAuthorizeError(null)
     window.location.assign(url)
   }
 
@@ -127,6 +168,11 @@ export function AccountView({
       >
         {t('account.intro')}
       </Typography>
+      {authorizeError !== null && (
+        <Alert severity="error" role="alert" sx={{ marginBottom: 3 }}>
+          {t(`account.errors.${authorizeError}`)}
+        </Alert>
+      )}
       {bindingTarget !== undefined && (
         <Box sx={{ marginBottom: 3 }}>
           <BindingCallbackHandler

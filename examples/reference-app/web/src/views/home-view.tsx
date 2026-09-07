@@ -19,8 +19,10 @@ import type { ReactElement } from 'react'
 import { Box, Card, CardContent, Typography } from '@mui/material'
 import { useFeature } from '@speed/api-client/react'
 import { useTranslation } from '@speed/i18n'
+import { EmptyState } from '@speed/ui-kit'
 import { useAppServices, useBrandName } from '../app-services.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
+import { CurrentClinicLine } from './current-clinic.js'
 
 /** The demo flag keys, as the reference app's own notes module declares
  * them -- a hand-kept host copy of internal/notes/module.go's exported
@@ -78,10 +80,15 @@ export function HomeView(): ReactElement {
       <Typography component="h1" variant="h4" sx={{ fontWeight: 600 }}>
         {brand}
       </Typography>
+      {/* The clinic-context line sits at page-title level, under the
+          h1: a person landing here must be able to see which clinic
+          the page is scoped to from the work area itself, never only
+          from the chrome (current-clinic.tsx has the full story). */}
+      <CurrentClinicLine />
       <Typography variant="body1" sx={{ mt: 1, color: 'text.secondary' }}>
         {t('home.intro')}
       </Typography>
-      {enabled.length > 0 && (
+      {enabled.length > 0 ? (
         <>
           <Typography component="h2" variant="h6" sx={{ mt: 4 }}>
             {t('features.heading')}
@@ -104,6 +111,21 @@ export function HomeView(): ReactElement {
             ))}
           </Box>
         </>
+      ) : (
+        // No flag the server resolves is enabled: the surface says so
+        // in its own words instead of leaving the intro sentence
+        // pointing at nothing. The promise-to-blank-space shape this
+        // replaces (home.intro used to say "the cards below show the
+        // features...", with no mechanism in the app able to enable
+        // any) is what the home-is-self-consistent acceptance gate
+        // refuses.
+        <EmptyState
+          variant="empty"
+          title={t('home.emptyTitle')}
+          description={t('home.emptyDescription')}
+          headingLevel="h2"
+          sx={{ marginTop: 2 }}
+        />
       )}
     </Box>
   )

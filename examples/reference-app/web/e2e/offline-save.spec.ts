@@ -8,15 +8,21 @@
  *
  * The first is already true and this gate keeps it that way -- if the
  * field were cleared, a clinician would have to retype a patient record
- * from memory, which is how records get wrong. The second is not: the
- * surface renders "Something went wrong. Try again later.", which sends
- * a clinician looking for a product fault while the answer is their
- * router. The app already ships the right sentence for this --
- * notes.errors.client, "Could not reach the server. Check your
- * connection and try again." -- and simply never reaches it, so this is
- * a code-mapping defect rather than missing copy: the same shape as the
- * envelope-contract defect, where good text sat behind a code that never
- * arrived.
+ * from memory, which is how records get wrong. The second is the
+ * surface's client.network mapping: the submit-failure path must
+ * resolve the api-client's transport code to the surface's own
+ * notes.errors.client text ("Could not reach the server. Check your
+ * connection and try again."), never the generic fallback -- the
+ * code-mapping shape of the envelope-contract defect, where good text
+ * sits behind a code that never arrives. (When this gate was written
+ * the defect was believed open; on the closing round's verification the
+ * mapping -- and both tests below -- pass against the real server, so
+ * the gate's job from its first green run is to keep the mapping
+ * honest. The @pending tag stays until the acceptance session's re-run
+ * drops it: each test adds sign-ins to a suite that shares one demo
+ * server, and the go/authn per-account limit (five per minute) makes
+ * joining the default run a suite-budget decision, not a mapping
+ * decision.)
  *
  * The network is cut by routing the page's own API calls to failure
  * rather than by stopping a server, so the gate does not depend on how

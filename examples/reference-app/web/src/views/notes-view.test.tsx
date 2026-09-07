@@ -121,6 +121,23 @@ function noteCreates(rig: RealClientRig): number {
 }
 
 describe('NotesView', () => {
+  it('names the clinic being worked in at page-title level, under the heading', async () => {
+    // The acceptance shape for the notes surface (current-clinic-is-
+    // visible): a person writing a patient record must see which
+    // clinic the record will land in from where they are writing --
+    // the clinic's display name inside the main content, under the
+    // page heading -- never only in the chrome's tenant switcher.
+    const rig = makeRealClientRig(demoServer({ initialNotes: [NOTE_ONE] }))
+    await signInWithPassword(rig)
+    const view = renderNotes(rig)
+    await view.findByRole('heading', { level: 1 })
+    expect(
+      await view.findByText(
+        zhCN.clinic.currentClinic.replace('{{name}}', zhCN.tenants.acme),
+      ),
+    ).toBeInTheDocument()
+  })
+
   it('gates on the read: the pending spinner stands in until the list answers, then the rows render', async () => {
     let release: (() => void) | undefined
     const gate = new Promise<void>((resolve) => {
@@ -239,6 +256,42 @@ describe('NotesView', () => {
     // The refusal came back before any refetch: still the one read.
     expect(noteCreates(rig)).toBe(1)
     expect(notesGets(rig)).toBe(1)
+  })
+
+  it('renders the surface\'s client text when a create fails at the transport (client.network)', async () => {
+    // The offline-save acceptance shape at the unit tier: a create
+    // whose request dies at the transport (the api-client normalizes
+    // the rejection to client.network -- here a responder that throws
+    // a raw TypeError, the same failure the e2e gate cuts with
+    // route.abort) must render the surface's own notes.errors.client
+    // text, never the generic fallback -- the code-mapping defect the
+    // gate exists to keep closed (the browser proof is the
+    // offline-save gate; this pins the mapping where the default CI
+    // can run it).
+    const server = demoServer()
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === '/api/v1/notes') {
+        throw new TypeError('network down')
+      }
+      return server(call)
+    })
+    await signInWithPassword(rig)
+    const view = renderNotes(rig)
+    const user = userEvent.setup()
+    await view.findByText(zhCN.notes.list.emptyTitle)
+
+    const input = view.getByLabelText(zhCN.notes.create.textLabel)
+    await user.type(input, NOTE_ONE_TEXT)
+    await user.click(
+      view.getByRole('button', { name: zhCN.notes.create.submit }),
+    )
+
+    const alert = await view.findByRole('alert')
+    expect(alert).toHaveTextContent(zhCN.notes.errors.client)
+    expect(alert).not.toHaveTextContent(zhCN.notes.errors.unknown)
+    // The draft survived the transport failure, ready to resubmit
+    // once the network is back.
+    expect(input).toHaveValue(NOTE_ONE_TEXT)
   })
 
   it('fails closed on a refetch 403 even though the previous read is still cached (reference-app-web.md P1-1)', async () => {

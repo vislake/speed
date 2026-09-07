@@ -17,7 +17,9 @@
     "backToSignIn": "返回登录"
   },
   "home": {
-    "intro": "您的微笑模拟工作台。下方卡片展示当前租户已启用的功能。"
+    "intro": "您的微笑模拟工作台。这里显示的内容取决于本诊所已启用的功能。",
+    "emptyTitle": "尚未启用任何功能",
+    "emptyDescription": "请联系管理员为本诊所启用功能。启用后功能会显示在这里。"
   },
   "features": {
     "heading": "已启用功能",
@@ -54,10 +56,16 @@
   },
   "account": {
     "heading": "账户",
-    "intro": "管理您的登录会话、最近登录记录与已关联的社交账号，并设置双重验证。"
+    "intro": "管理您的登录会话、最近登录记录与已关联的社交账号，并设置双重验证。",
+    "errors": {
+      "authorizeUrlRefused": "该登录链接不是安全的网页地址，未予打开。"
+    }
   },
   "tenants": {
     "acme": "Acme 牙科诊所",
     "globex": "Globex 牙科诊所"
+  },
+  "clinic": {
+    "currentClinic": "当前诊所：{{name}}"
   }
 }

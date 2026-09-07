@@ -24,7 +24,8 @@
  * everything else. Served account text (device strings) is server
  * data, not copy, and travels in the journey verbatim.
  *
- * Six journeys: the zh default render over the served lists (one read
+ * Six journeys plus the authorize navigation guard: the zh default
+ * render over the served lists (one read
  * per list, zero MFA calls -- the MFA surface is idle-only by
  * contract), the en-US leg of that render, a single session revoked
  * in place, the double-confirmed revoke-others flow with its counted
@@ -33,10 +34,12 @@
  * exchange held open by a gated answer, its pending notice resting
  * until the release, then the identities refetch landing the bound
  * row and the host's onBound cue firing exactly once. The authorize
- * clicks are never exercised -- the add-area buttons navigate the
- * window (the view's one navigation duty), and jsdom answers
- * navigation with a Not-implemented error; the binding side of the
- * journey is the callback route, which needs no navigation.
+ * clicks -- the add-area buttons -- are exercised with window.location
+ * stubbed whole (jsdom's own location carries a non-configurable,
+ * non-implemented `assign`; see stubLocationAssign): an http(s)
+ * authorize URL is assigned to the window, its redirect_uri rooted at
+ * the running page's origin, while a URL of any other protocol is
+ * refused with the surface's coded error text and never assigned.
  */
 
 import { act, waitFor, within } from '@testing-library/react'
@@ -216,6 +219,122 @@ describe('AccountView', () => {
     expect(historyCalls[0]?.authorization).toBe('Bearer access-1')
     expect(callsFor(rig, 'GET', '/api/v1/authn/identities')).toHaveLength(1)
     expect(rig.calls).toHaveLength(4)
+  })
+
+  /** The authorize-URL journeys drive the add area's Google channel. */
+  const AUTHORIZE_PROVIDER = 'google'
+  /** A benign server-answered authorize URL: https, the only protocol a
+   * sign-in flow may send a person to. */
+  const GOOD_AUTHORIZE_URL =
+    'https://accounts.example.test/oauth2/authorize?appid=demo-1'
+
+  /** The authorize GETs the journey observed, by provider. */
+  function authorizeCalls(
+    rig: RealClientRig,
+    provider: string,
+  ): RealCall[] {
+    return rig.calls.filter(
+      (call) =>
+        call.method === 'GET' &&
+        call.path === `/api/v1/authn/social/${provider}/authorize`,
+    )
+  }
+
+  /** Replaces window.location for one journey: jsdom's own location
+   * object carries a non-configurable, non-writable `assign` that throws
+   * "Not implemented: navigation" when called, so the journey swaps the
+   * whole location (the window's `location` property IS configurable)
+   * for a stub whose assign records the destination instead of
+   * navigating. The original descriptor is restored afterwards. */
+  function stubLocationAssign(
+    onAssign: (url: string) => void,
+  ): () => void {
+    const original = Object.getOwnPropertyDescriptor(window, 'location')
+    if (original === undefined) {
+      throw new Error('no window.location descriptor to stub')
+    }
+    const stub: Location = {
+      ...window.location,
+      assign: (url: string) => onAssign(url),
+    }
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: stub,
+    })
+    return () => {
+      Object.defineProperty(window, 'location', original)
+    }
+  }
+
+  it('assign the window to a served http(s) authorize URL, its redirect_uri rooted at this app\'s own origin', async () => {
+    const rig = makeRealClientRig(
+      demoServer({ socialAuthorizeUrl: GOOD_AUTHORIZE_URL }),
+    )
+    await signInWithPassword(rig)
+    let assigned: string | null = null
+    const restore = stubLocationAssign((url) => {
+      assigned = url
+    })
+    try {
+      const view = renderAccount(rig)
+      await view.findByText(accountUiZhCN.bindings.addSectionTitle)
+      const user = userEvent.setup()
+      await user.click(
+        view.getByRole('button', {
+          name: accountUiZhCN.bindings.provider.google,
+        }),
+      )
+      await waitFor(() => expect(assigned).toBe(GOOD_AUTHORIZE_URL))
+      // No refusal rendered: the navigation happened.
+      expect(view.queryByRole('alert')).not.toBeInTheDocument()
+      // The redirect_uri the session request carried names THIS app's
+      // own origin -- the callback route lives on this app, and an
+      // origin constant naming a host that resolves nowhere (the
+      // earlier https://app.example.test) would send every
+      // authorization somewhere no one ever lands back from.
+      const authorize = authorizeCalls(rig, AUTHORIZE_PROVIDER)[0]
+      expect(authorize?.query).toContain(
+        `redirect_uri=${encodeURIComponent(
+          `${window.location.origin}/callback/social/${AUTHORIZE_PROVIDER}`,
+        )}`,
+      )
+    } finally {
+      restore()
+    }
+  })
+
+  it('refuse a served authorize URL that is not http(s): no navigation, the coded error text', async () => {
+    // The URL arrives from the session -- a server-composed string,
+    // never a local constant -- and the host's navigation hands the
+    // browser to whatever that string names. A provider answer (or a
+    // compromised session seam) that returns a javascript: or data:
+    // URL must be refused before the window is assigned to it: the
+    // host's last act before navigating is the protocol check.
+    const rig = makeRealClientRig(
+      demoServer({ socialAuthorizeUrl: 'javascript:alert("compromised")' }),
+    )
+    await signInWithPassword(rig)
+    let assigned = false
+    const restore = stubLocationAssign(() => {
+      assigned = true
+    })
+    try {
+      const view = renderAccount(rig)
+      await view.findByText(accountUiZhCN.bindings.addSectionTitle)
+      const user = userEvent.setup()
+      await user.click(
+        view.getByRole('button', {
+          name: accountUiZhCN.bindings.provider.google,
+        }),
+      )
+      await view.findByRole('alert')
+      expect(view.getByRole('alert')).toHaveTextContent(
+        zhCN.account.errors.authorizeUrlRefused,
+      )
+      expect(assigned).toBe(false)
+    } finally {
+      restore()
+    }
   })
 
   it('speaks the active language over the served state', async () => {

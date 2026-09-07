@@ -73,6 +73,7 @@ import type { DataTableColumn } from '@speed/ui-kit'
 import { DataTable, EmptyState, FormField, FormLayout } from '@speed/ui-kit'
 import { useForm } from 'react-hook-form'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
+import { CurrentClinicLine } from './current-clinic.js'
 
 /** The notes text limit the server handler enforces (kept in step with
  * the notes module's own limit so a client-side refusal and a server
@@ -269,6 +270,14 @@ export function NotesView(): ReactElement {
       <Typography component="h1" variant="h4" sx={{ fontWeight: 600 }}>
         {t('notes.heading')}
       </Typography>
+      {/* The clinic-context line sits at page-title level, under the
+          h1: a person writing a patient record here must be able to
+          see which clinic the record will land in from where they are
+          writing, never only from the chrome (current-clinic.tsx has
+          the full story -- the acceptance story is a practice manager
+          who cannot tell whether a switch changed where their work
+          goes). */}
+      <CurrentClinicLine />
       <Typography
         variant="body1"
         color="text.secondary"

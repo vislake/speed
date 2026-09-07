@@ -54,20 +54,8 @@ import { useTranslation } from '@speed/i18n'
 import { TenantSwitcher } from '@speed/tenancy-ui'
 import type { TenantOption } from '@speed/tenancy-ui'
 import { useAppServices } from '../app-services.js'
+import { DEMO_TENANTS } from '../demo-tenants.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
-
-interface DemoTenant {
-  readonly id: string
-  /** The app-namespace key carrying the tenant's display name (no
-   * roster endpoint exists in the demo; names are host copy). */
-  readonly nameKey: string
-}
-
-/** The demo's seeded tenants, in server order. */
-export const DEMO_TENANTS: readonly DemoTenant[] = [
-  { id: 'tenant-acme', nameKey: 'tenants.acme' },
-  { id: 'tenant-globex', nameKey: 'tenants.globex' },
-]
 
 /** The tenant-scoped query-key prefix the app's data queries namespace
  * under (['tenant', tenantId, ...]); the eviction below removes whole

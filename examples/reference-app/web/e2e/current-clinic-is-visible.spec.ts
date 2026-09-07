@@ -29,7 +29,13 @@
  * whole point.
  */
 import { expect, test } from '@playwright/test'
-import { DEMO_OWNER } from './test-utils/accounts.js'
+// DEMO_READER, not DEMO_OWNER: this gate only reads (both demo
+// tenants hold the reader's membership, so the cross-clinic switch is
+// legal for it), and the suite spends sign-ins deliberately -- the
+// demo server's per-account limit (go/authn's ratelimit.go: five per
+// account per minute) is shared with the gates that need the owner's
+// write grant, so a read-only gate never draws on the owner's budget.
+import { DEMO_READER } from './test-utils/accounts.js'
 import {
   APP_TEXT,
   openSurface,
@@ -39,11 +45,24 @@ import {
   switchTenant,
 } from './test-utils/journeys.js'
 
+// Both tests were tagged @pending while the defect they found was open:
+// no surface named the clinic it was scoped to, and a switch produced no
+// announcement at all -- the acceptance story in the file header. The
+// surfaces now render the clinic-context line at page-title level (the
+// host's CurrentClinicLine on the home and notes surfaces) and the
+// tenant switcher announces its committed switch through its live
+// region; both tests pass against the fixed tree (the closing round's
+// verification). The tag stays until the acceptance session's re-run
+// drops it: each test adds sign-ins to a suite that shares one demo
+// server, and the go/authn per-account limit (five per minute) makes
+// joining the default run a suite-budget decision, not a visibility
+// decision. Dropping @pending then turns them into ordinary regression
+// gates.
 test(
   'the clinic being worked in is named in the main content, not only in the chrome',
   { tag: '@pending' },
   async ({ page }) => {
-    await signInAs(page, DEMO_OWNER)
+    await signInAs(page, DEMO_READER)
     const clinic = await readCurrentTenant(page)
 
     // On every surface where a person does or reads work. The home
@@ -63,7 +82,7 @@ test(
   'switching clinic says so, and the new clinic is named where the work is',
   { tag: '@pending' },
   async ({ page }) => {
-    await signInAs(page, DEMO_OWNER)
+    await signInAs(page, DEMO_READER)
     await openSurface(page, APP_TEXT.navNotes)
     const from = await readCurrentTenant(page)
     const to = otherTenant(from)

@@ -17,10 +17,14 @@
  * anything else -- rather than a whole-page audit, because a gate that
  * fails for a decorative caption is a gate people learn to ignore.
  *
- * The ratio is computed in the page from resolved colours, walking up for
- * the first non-transparent background the way a browser composites one.
- * That is what makes it catch the real defect: both colours were fully
- * legitimate on their own, and only their pairing was wrong.
+ * The ratio is computed in the page from resolved colours,
+ * alpha-compositing every layer from the control upward exactly the way
+ * a browser composites one (the naive "first non-transparent
+ * background" walk that preceded this discarded the alpha of
+ * translucent layers like the nav's selected-item tint and misreported
+ * what a browser renders -- see backgroundOf below). That is what makes
+ * it catch the real defect: both colours were fully legitimate on their
+ * own, and only their pairing was wrong.
  */
 import { expect, test } from '@playwright/test'
 import { DEMO_OWNER, DEMO_READER } from './test-utils/accounts.js'
@@ -60,17 +64,51 @@ async function chromeContrast(page: import('@playwright/test').Page): Promise<Co
       return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
     }
 
-    /** The first ancestor background a browser would actually composite onto. */
+    /**
+     * The background a browser actually renders the control over:
+     * every layer from the element itself upward, alpha-composited the
+     * way the browser composites them, stopping at the first opaque
+     * layer and finishing over white when the document background is
+     * itself transparent. A naive "first non-transparent background"
+     * walk is NOT the same thing, and this gate lived with that bug
+     * once: MUI's selected nav item paints a semi-transparent
+     * primary tint (rgba(37, 99, 235, 0.08)) over the white drawer,
+     * and the naive walk treated that translucent layer as an opaque
+     * primary background -- discarding its alpha for the luminance
+     * math -- and reported the Home link at 3.45:1, where the browser
+     * composites it to a pale tint under dark text at ~16:1. WCAG's
+     * question is what the rendered pixel is, so the composited pixel
+     * is what this measures.
+     */
     const backgroundOf = (element: Element): [number, number, number, number] => {
       let node: Element | null = element
-      while (node !== null) {
+      // A premultiplied accumulator: each layer contributes its colour
+      // times its own alpha times what is still uncovered.
+      let red = 0
+      let green = 0
+      let blue = 0
+      let alpha = 0
+      while (node !== null && alpha < 1) {
         const parsed = parseColor(getComputedStyle(node).backgroundColor)
         if (parsed !== null && parsed[3] > 0) {
-          return parsed
+          const remaining = 1 - alpha
+          red += parsed[0] * parsed[3] * remaining
+          green += parsed[1] * parsed[3] * remaining
+          blue += parsed[2] * parsed[3] * remaining
+          alpha += parsed[3] * remaining
         }
         node = node.parentElement
       }
-      return [255, 255, 255, 1]
+      if (alpha < 1) {
+        // The document background is transparent: the browser paints
+        // the page's own backdrop, white for this suite's context.
+        const remaining = 1 - alpha
+        red += 255 * remaining
+        green += 255 * remaining
+        blue += 255 * remaining
+        alpha = 1
+      }
+      return [red / alpha, green / alpha, blue / alpha, 1]
     }
 
     const chrome = [
@@ -100,13 +138,23 @@ async function chromeContrast(page: import('@playwright/test').Page): Promise<Co
   })
 }
 
-// Tagged @pending only because the defect they found is still open: on
-// the day this was written both tests failed, naming the tenant switcher
-// and the sign-out control at 1:1 and the Home nav link at 3.45:1. They
-// leave @pending the moment the colours are fixed, and from then on they
-// are an ordinary regression gate. (playwright.config.ts's grepInvert
-// keeps a known-failing gate out of the default run; asking for it by
-// name is `E2E_INCLUDE_PENDING=1 pnpm test:e2e --grep @pending`.)
+// These two tests were tagged @pending while the defect they found was
+// open: on the day they were written both failed, naming the tenant
+// switcher and the sign-out control at 1:1 -- both rendered in the
+// AppBar's own primary blue on the AppBar's own primary blue, the exact
+// silent-failure shape this suite exists for -- plus a third reading,
+// the Home nav link at 3.45:1, which turned out to be this suite's own
+// measurement bug (a translucent selected-item tint measured as if it
+// were opaque; see backgroundOf above). The colours are fixed
+// (tenancy-ui's trigger and auth-ui's sign-out button inherit the
+// surface's contrastText) and the measurement now composites the way a
+// browser does; both tests pass against the fixed tree (the closing
+// round's verification). The tag stays until the acceptance session's
+// re-run drops it: each test adds sign-ins to a suite that shares one
+// demo server, and the go/authn per-account limit (five per minute)
+// makes joining the default run a suite-budget decision, not a colour
+// decision. Dropping @pending then turns them into ordinary regression
+// gates.
 test('every control in the signed-in chrome is legible against its background', {
   tag: ['@pending', '@deployment'],
 }, async ({ page }) => {

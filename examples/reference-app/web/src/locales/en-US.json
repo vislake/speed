@@ -17,7 +17,9 @@
     "backToSignIn": "Back to sign in"
   },
   "home": {
-    "intro": "Your smile-simulation workbench. The cards below show the features your current tenant has enabled."
+    "intro": "Your smile-simulation workbench. What is here depends on the features this clinic has enabled.",
+    "emptyTitle": "No features are enabled yet",
+    "emptyDescription": "Ask an administrator to enable a feature for this clinic. Enabled features will appear here."
   },
   "features": {
     "heading": "Enabled features",
@@ -54,10 +56,16 @@
   },
   "account": {
     "heading": "Account",
-    "intro": "Manage your sign-in sessions, recent sign-in activity and linked social accounts, and set up two-step verification."
+    "intro": "Manage your sign-in sessions, recent sign-in activity and linked social accounts, and set up two-step verification.",
+    "errors": {
+      "authorizeUrlRefused": "This sign-in link is not a secure web address and was not opened."
+    }
   },
   "tenants": {
     "acme": "Acme Dental",
     "globex": "Globex Dental"
+  },
+  "clinic": {
+    "currentClinic": "Current clinic: {{name}}"
   }
 }

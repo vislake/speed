@@ -3,7 +3,10 @@
  * the server's Public config answer carries. The heading is the served
  * brand, the intro is app copy, and each feature card exists exactly
  * while its flag is enabled in the answer -- an empty feature list
- * renders no "Enabled features" heading at all. The four-way matrix
+ * renders no "Enabled features" heading, and instead the surface's own
+ * honest empty state (never a promise of cards it has none of). Once a
+ * session is signed in the clinic it runs under is named at
+ * page-title level under the heading. The four-way matrix
  * (none, each flag alone, both) pins that data-driven shape, with the
  * card copy asserted through the app's own zh-CN fixture.
  */
@@ -11,7 +14,10 @@
 import { describe, expect, it } from 'vitest'
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import { demoServer } from '../test-utils/demo-server.js'
-import { makeRealClientRig } from '../test-utils/real-client.js'
+import {
+  makeRealClientRig,
+  signInWithPassword,
+} from '../test-utils/real-client.js'
 import { renderWithAppServices } from '../test-utils/render.js'
 import {
   FEATURE_PREMIUM_UPSELL,
@@ -65,6 +71,63 @@ describe('HomeView', () => {
     expect(
       view.queryByText(zhCN.features.premiumUpsell.title),
     ).not.toBeInTheDocument()
+  })
+
+  it('says honestly that no feature is enabled, never pointing at blank space', async () => {
+    // The home-is-self-consistent acceptance shape: the intro never
+    // promises cards the server did not enable (the earlier copy -- "the
+    // cards below show the features..." -- hung over blank space for
+    // every tenant, forever, because no surface in the app can enable a
+    // feature), and an empty feature list renders the surface's own
+    // empty state instead of a heading over a void.
+    const rig = makeRealClientRig(
+      demoServer({
+        publicConfig: {
+          config: { 'brand.site_name': BRAND },
+          features: [],
+        },
+      }),
+    )
+    const view = renderWithAppServices(<HomeView />, {
+      session: rig.session,
+      api: rig.api,
+    })
+    await view.findByText(BRAND)
+    expect(await view.findByText(zhCN.home.emptyTitle)).toBeInTheDocument()
+    expect(
+      view.getByText(zhCN.home.emptyDescription),
+    ).toBeInTheDocument()
+    // The intro renders the shipped bundle text -- which no longer
+    // contains the cards-below promise the gate refuses (bundle values
+    // are quoted from the JSON fixture, never inline).
+    expect(view.getByText(zhCN.home.intro)).toBeInTheDocument()
+  })
+
+  it('names the clinic being worked in at page-title level once signed in', async () => {
+    // The acceptance shape for the home surface (current-clinic-is-
+    // visible): the clinic the session runs under is named inside the
+    // main content, under the page heading -- "which clinic am I in" is
+    // a question a person asks before they act, and the chrome alone
+    // cannot answer it for someone looking at their work.
+    const rig = makeRealClientRig(
+      demoServer({
+        publicConfig: {
+          config: { 'brand.site_name': BRAND },
+          features: [],
+        },
+      }),
+    )
+    await signInWithPassword(rig)
+    const view = renderWithAppServices(<HomeView />, {
+      session: rig.session,
+      api: rig.api,
+    })
+    await view.findByText(BRAND)
+    expect(
+      await view.findByText(
+        zhCN.clinic.currentClinic.replace('{{name}}', zhCN.tenants.acme),
+      ),
+    ).toBeInTheDocument()
   })
 
   it('renders the plain flag\'s card only while that flag is enabled', async () => {

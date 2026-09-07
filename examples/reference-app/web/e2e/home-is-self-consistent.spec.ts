@@ -32,9 +32,17 @@ const PROMISE_OF_CARDS = 'The cards below show the features'
 /** ui-kit's empty-state title, which the surface is expected to reuse. */
 const EMPTY_STATE_TITLES = /no data yet|nothing to show|no features/i
 
-// @pending while the promise still hangs over blank space: the gate
-// fails today, which is its present evidence. It leaves @pending when the
-// surface either shows cards or says honestly that it has none.
+// Tagged @pending while the promise still hung over blank space: the
+// gate failed, which was its present evidence. The intro no longer
+// makes the promise (its copy changed with the empty-state round) and a
+// surface with no enabled feature renders its own empty state; the gate
+// passes against the fixed tree (the closing round's verification) --
+// the PROMISE_OF_CARDS probe above still exists to catch a
+// reintroduction, exactly as written. The tag stays until the
+// acceptance session's re-run drops it: each test adds a sign-in to a
+// suite that shares one demo server, and the go/authn per-account limit
+// (five per minute) makes joining the default run a suite-budget
+// decision, not a content decision.
 test('the home surface does not promise cards it has none of', {
   tag: ['@pending', '@deployment'],
 }, async ({ page }) => {
