@@ -138,6 +138,71 @@ func TestEnsureJobsSchema_UpgradesLegacyTableWithoutClaimedBy(t *testing.T) {
 	}
 }
 
+// TestEnsureJobsSchema_UpgradesLegacyQueueWritersTableWithoutStaleAt is the
+// queue_writers twin of the upgrade test above: a queue_writers table
+// created by a release predating the stale_at column must come out of
+// ensureJobsSchema with the column present, its pre-existing row intact and
+// carrying NULL stale_at -- the marker acquireWriterRegistration reads as
+// "written by a pre-column release" -- and the legacy-row takeover must
+// then work against the upgraded table end to end.
+func TestEnsureJobsSchema_UpgradesLegacyQueueWritersTableWithoutStaleAt(t *testing.T) {
+	db := dbtest.NewSQLite(t)
+	legacy := `CREATE TABLE ` + queueWritersTable + ` (
+		id             INTEGER NOT NULL PRIMARY KEY,
+		owner          VARCHAR(64) NOT NULL,
+		last_heartbeat TIMESTAMP NOT NULL
+	)`
+	if err := db.Exec(legacy).Error; err != nil {
+		t.Fatalf("create legacy queue_writers table: %v", err)
+	}
+	// A row exactly as a crashed pre-column writer left it.
+	if err := db.Exec(`INSERT INTO `+queueWritersTable+` (id, owner, last_heartbeat) VALUES (1, 'legacy-writer', ?)`, time.Now().Add(-10*time.Second)).Error; err != nil {
+		t.Fatalf("insert into legacy queue_writers table: %v", err)
+	}
+
+	if err := ensureJobsSchema(context.Background(), db); err != nil {
+		t.Fatalf("ensureJobsSchema() over a legacy queue_writers table error = %v", err)
+	}
+	// Idempotent over the upgraded table too.
+	if err := ensureJobsSchema(context.Background(), db); err != nil {
+		t.Fatalf("second ensureJobsSchema() over the upgraded table error = %v", err)
+	}
+
+	got := struct {
+		Owner    string     `gorm:"column:owner"`
+		StaleAt  *time.Time `gorm:"column:stale_at"`
+		LastBeat time.Time  `gorm:"column:last_heartbeat"`
+	}{}
+	if err := db.Raw(`SELECT owner, last_heartbeat, stale_at FROM ` + queueWritersTable + ` WHERE id = 1`).Scan(&got).Error; err != nil {
+		t.Fatalf("read back upgraded queue_writers row: %v", err)
+	}
+	if got.Owner != "legacy-writer" {
+		t.Errorf("owner = %q, want %q (the upgrade must leave the pre-existing row intact)", got.Owner, "legacy-writer")
+	}
+	if got.StaleAt != nil {
+		t.Errorf("stale_at = %v, want nil (a pre-column row must keep the NULL marker, never a made-up stale moment)", got.StaleAt)
+	}
+
+	// The legacy-row takeover works against the upgraded table: refused
+	// while the row's last heartbeat is younger than the conservative
+	// window...
+	if err := acquireWriterRegistration(context.Background(), db, testWriterOwner, time.Now(), 2*time.Second); !errors.Is(err, ErrQueueWriterActive) {
+		t.Fatalf("acquire against the upgraded legacy row error = %v, want ErrQueueWriterActive", err)
+	}
+	// ...taken over once it is older (age the row the way time does).
+	if err := db.Exec(`UPDATE `+queueWritersTable+` SET last_heartbeat = ? WHERE id = 1`, time.Now().Add(-2*legacyRegistrationStaleAfter)).Error; err != nil {
+		t.Fatalf("age the legacy row: %v", err)
+	}
+	if err := acquireWriterRegistration(context.Background(), db, testWriterOwner, time.Now(), 2*time.Second); err != nil {
+		t.Fatalf("acquire past the aged legacy row error = %v, want nil (the takeover is the crash recovery)", err)
+	}
+	// The taken-over row now carries a real stale moment: a live sibling is
+	// refused again.
+	if err := acquireWriterRegistration(context.Background(), db, "other-owner", time.Now(), 2*time.Second); !errors.Is(err, ErrQueueWriterActive) {
+		t.Fatalf("acquire against the taken-over row error = %v, want ErrQueueWriterActive", err)
+	}
+}
+
 // TestJobRecord_NotTenantScoped is the mandatory isolation-assertion suite
 // (root CLAUDE.md, backend coding standard §3.3) for platform data:
 // jobRecord must NOT be affected by dbkit's tenant-scoping plugin, since
@@ -606,7 +671,7 @@ func TestUpdateProgress(t *testing.T) {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 
-	if err := updateProgress(context.Background(), db, rec.ID, 42, "working"); err != nil {
+	if err := updateProgress(context.Background(), db, testWriterOwner, rec.ID, 42, "working"); err != nil {
 		t.Fatalf("updateProgress() error = %v", err)
 	}
 
@@ -647,7 +712,7 @@ func TestUpdateProgress_AfterTerminalState_DoesNotTouchRow(t *testing.T) {
 	}
 
 	// The late progress report from an attempt that raced the Cancel.
-	if perr := updateProgress(context.Background(), db, rec.ID, 42, "still working"); perr != nil {
+	if perr := updateProgress(context.Background(), db, testWriterOwner, rec.ID, 42, "still working"); perr != nil {
 		t.Fatalf("updateProgress() error = %v (a no-op write is success, not an error)", perr)
 	}
 
@@ -676,7 +741,7 @@ func TestCompleteSucceeded(t *testing.T) {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 
-	moved, err := completeSucceeded(context.Background(), db, rec.ID, Result{Data: []byte("done")}, time.Now())
+	moved, err := completeSucceeded(context.Background(), db, testWriterOwner, rec.ID, Result{Data: []byte("done")}, time.Now())
 	if err != nil || !moved {
 		t.Fatalf("completeSucceeded() = (%v, %v), want (true, nil)", moved, err)
 	}
@@ -710,7 +775,7 @@ func TestCompleteSucceeded_ClearsStaleErrorFromEarlierRetry(t *testing.T) {
 	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
-	if _, err := completeRetrying(context.Background(), db, rec.ID, "first attempt failed", time.Now(), time.Now()); err != nil {
+	if _, err := completeRetrying(context.Background(), db, testWriterOwner, rec.ID, "first attempt failed", time.Now(), time.Now()); err != nil {
 		t.Fatalf("completeRetrying() error = %v", err)
 	}
 
@@ -722,7 +787,7 @@ func TestCompleteSucceeded_ClearsStaleErrorFromEarlierRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second claimOne() error = %v", err)
 	}
-	if moved, succErr := completeSucceeded(context.Background(), db, rec.ID, Result{Data: []byte("done")}, time.Now()); succErr != nil || !moved {
+	if moved, succErr := completeSucceeded(context.Background(), db, testWriterOwner, rec.ID, Result{Data: []byte("done")}, time.Now()); succErr != nil || !moved {
 		t.Fatalf("completeSucceeded() = (%v, %v), want (true, nil)", moved, succErr)
 	}
 
@@ -752,7 +817,7 @@ func TestCompleteSucceeded_NoOpWhenNotRunning(t *testing.T) {
 		t.Fatalf("markCancelled() error = %v", err)
 	}
 
-	moved, err := completeSucceeded(context.Background(), db, rec.ID, Result{Data: []byte("done")}, time.Now())
+	moved, err := completeSucceeded(context.Background(), db, testWriterOwner, rec.ID, Result{Data: []byte("done")}, time.Now())
 	if err != nil {
 		t.Fatalf("completeSucceeded() error = %v, want nil (no-op, not an error)", err)
 	}
@@ -769,6 +834,51 @@ func TestCompleteSucceeded_NoOpWhenNotRunning(t *testing.T) {
 	}
 }
 
+// TestCompleteSucceeded_NoOpWhenRowClaimedByAnotherWriter is the ownership
+// half of the completion guard: a row that is StatusRunning under ANOTHER
+// writer's claim — the state a second writer's reset-and-re-claim of the
+// first writer's mid-Handle row leaves behind — must not be settled by the
+// first writer's completion write. Fails on the pre-fix write, whose WHERE
+// named only id and status: the stale execution's success lands on the
+// sibling's running row, marking it succeeded with this attempt's result
+// while the sibling is still inside Handle — the secondary harm of the
+// writer-takeover double-execution defect, and exactly why the no-op must
+// never be read as a concurrent Cancel (see worker.go's
+// logDiscardedOutcome).
+func TestCompleteSucceeded_NoOpWhenRowClaimedByAnotherWriter(t *testing.T) {
+	db := newTestDB(t)
+	rec := fixtureRecord("tenant-a", "t")
+	if _, err := insertRecord(context.Background(), db, rec); err != nil {
+		t.Fatalf("insertRecord() error = %v", err)
+	}
+	// The row is running — but under a claim this completion does not own.
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), "other-owner"); err != nil {
+		t.Fatalf("claimOne() error = %v", err)
+	}
+
+	moved, err := completeSucceeded(context.Background(), db, testWriterOwner, rec.ID, Result{Data: []byte("stale success")}, time.Now())
+	if err != nil {
+		t.Fatalf("completeSucceeded() error = %v, want nil (no-op, not an error)", err)
+	}
+	if moved {
+		t.Fatal("completeSucceeded() = true, want false: the row runs under another writer's claim, so this writer's completion must report no transition")
+	}
+
+	got, err := findByID(context.Background(), db, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("findByID() error = %v", err)
+	}
+	if got.Status != string(StatusRunning) {
+		t.Errorf("Status = %q, want %q (a stale completion must not settle a row another writer is executing)", got.Status, StatusRunning)
+	}
+	if got.ClaimedBy != "other-owner" {
+		t.Errorf("ClaimedBy = %q, want %q (the row must stay under the executing writer's claim)", got.ClaimedBy, "other-owner")
+	}
+	if len(got.Result) != 0 {
+		t.Errorf("Result = %q, want empty (a stale completion must not write its result into another writer's row)", got.Result)
+	}
+}
+
 func TestCompleteRetrying(t *testing.T) {
 	db := newTestDB(t)
 	rec := fixtureRecord("tenant-a", "t")
@@ -780,7 +890,7 @@ func TestCompleteRetrying(t *testing.T) {
 	}
 
 	next := time.Now().Add(10 * time.Second).UTC().Truncate(time.Second)
-	if moved, err := completeRetrying(context.Background(), db, rec.ID, "transient failure", next, time.Now()); err != nil || !moved {
+	if moved, err := completeRetrying(context.Background(), db, testWriterOwner, rec.ID, "transient failure", next, time.Now()); err != nil || !moved {
 		t.Fatalf("completeRetrying() = (%v, %v), want (true, nil)", moved, err)
 	}
 
@@ -809,7 +919,7 @@ func TestCompleteDeadLetter(t *testing.T) {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 
-	moved, err := completeDeadLetter(context.Background(), db, rec.ID, "permanent failure", time.Now())
+	moved, err := completeDeadLetter(context.Background(), db, testWriterOwner, rec.ID, "permanent failure", time.Now())
 	if err != nil {
 		t.Fatalf("completeDeadLetter() error = %v", err)
 	}
@@ -856,7 +966,7 @@ func TestCompleteDeadLetter_NoTransitionWhenAlreadyCancelled(t *testing.T) {
 		t.Fatalf("markCancelled() error = %v", err)
 	}
 
-	moved, err := completeDeadLetter(context.Background(), db, rec.ID, "permanent failure", time.Now())
+	moved, err := completeDeadLetter(context.Background(), db, testWriterOwner, rec.ID, "permanent failure", time.Now())
 	if err != nil {
 		t.Fatalf("completeDeadLetter() error = %v, want nil (no-op, not an error)", err)
 	}
@@ -925,7 +1035,7 @@ func TestMarkCancelled_IdempotentOnAlreadyTerminal(t *testing.T) {
 	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
-	if moved, err := completeSucceeded(context.Background(), db, rec.ID, Result{}, time.Now()); err != nil || !moved {
+	if moved, err := completeSucceeded(context.Background(), db, testWriterOwner, rec.ID, Result{}, time.Now()); err != nil || !moved {
 		t.Fatalf("completeSucceeded() = (%v, %v), want (true, nil)", moved, err)
 	}
 
@@ -1065,11 +1175,17 @@ func TestResetInterruptedRecords_OwnFreshClaimIsLeftAlone(t *testing.T) {
 
 // TestWriterRegistration_AcquireHeartbeatRelease covers the single-writer
 // registration lifecycle (queue_writers table): a fresh acquire succeeds, a
-// second acquire while the incumbent's heartbeat is fresh is refused with
-// ErrQueueWriterActive, the incumbent's heartbeat keeps its own row fresh,
-// a beat that names the wrong owner reaches nothing, an acquire past the
-// stale window steals the crashed incumbent's registration, and release
-// hands the table back so the next acquire succeeds immediately.
+// second acquire while the incumbent's registration is fresh is refused with
+// ErrQueueWriterActive, the incumbent's heartbeat keeps its own row fresh —
+// refreshing the stale moment the row carries — a beat that names the wrong
+// owner reaches nothing, an acquire after the incumbent's own stale moment
+// has passed steals the crashed incumbent's registration, and release hands
+// the table back so the next acquire succeeds immediately. The judgment
+// datum throughout is the stale moment the INCUMBENT authored (its own
+// stale window applied to its own last beat), never the acquiring side's
+// window: the "zero stale window makes the incumbent stale immediately"
+// semantics the pre-fix gate had — the shape of the cadence-mismatch
+// double-execution defect — is deliberately gone and pinned gone here.
 func TestWriterRegistration_AcquireHeartbeatRelease(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -1079,7 +1195,7 @@ func TestWriterRegistration_AcquireHeartbeatRelease(t *testing.T) {
 	if err := acquireWriterRegistration(ctx, db, testWriterOwner, now, stale); err != nil {
 		t.Fatalf("first acquireWriterRegistration() error = %v", err)
 	}
-	// A second acquire with a fresh heartbeat: refused, coded.
+	// A second acquire with a fresh registration: refused, coded.
 	err := acquireWriterRegistration(ctx, db, "other-owner", now.Add(100*time.Millisecond), stale)
 	if !errors.Is(err, ErrQueueWriterActive) {
 		t.Fatalf("second acquireWriterRegistration() error = %v, want ErrQueueWriterActive", err)
@@ -1088,15 +1204,16 @@ func TestWriterRegistration_AcquireHeartbeatRelease(t *testing.T) {
 		t.Fatalf("second acquireWriterRegistration() error = %v, want code %q", err, ErrQueueWriterActive.Code)
 	}
 
-	// Heartbeat: only the registered owner's own beat reaches the row.
-	ok, err := heartbeatWriterRegistration(ctx, db, "other-owner", now.Add(500*time.Millisecond))
+	// Heartbeat: only the registered owner's own beat reaches the row, and
+	// it refreshes the row's stale moment (now + the owner's own window).
+	ok, err := heartbeatWriterRegistration(ctx, db, "other-owner", now.Add(500*time.Millisecond), stale)
 	if err != nil {
 		t.Fatalf("heartbeatWriterRegistration(other) error = %v", err)
 	}
 	if ok {
 		t.Fatal("heartbeatWriterRegistration(other) = true, want false (only the registered owner may refresh its own row)")
 	}
-	ok, err = heartbeatWriterRegistration(ctx, db, testWriterOwner, now.Add(500*time.Millisecond))
+	ok, err = heartbeatWriterRegistration(ctx, db, testWriterOwner, now.Add(500*time.Millisecond), stale)
 	if err != nil {
 		t.Fatalf("heartbeatWriterRegistration(owner) error = %v", err)
 	}
@@ -1104,16 +1221,27 @@ func TestWriterRegistration_AcquireHeartbeatRelease(t *testing.T) {
 		t.Fatal("heartbeatWriterRegistration(owner) = false, want true")
 	}
 
-	// Still refused while the owner beats within the stale window...
+	// Still refused while the owner's authored stale moment (now + 500ms +
+	// 2s = now + 2.5s, refreshed by the beat above) has not passed...
 	err = acquireWriterRegistration(ctx, db, "successor", now.Add(1*time.Second), stale)
 	if !errors.Is(err, ErrQueueWriterActive) {
 		t.Fatalf("acquire against a beating owner error = %v, want ErrQueueWriterActive", err)
 	}
-	// ...and stolen once its heartbeat is older than the stale window (a
-	// zero stale window makes the incumbent stale immediately): the crashed
-	// writer's registration is taken over, exactly what a restart does.
-	if err := acquireWriterRegistration(ctx, db, "successor", now.Add(2*time.Second), 0); err != nil {
-		t.Fatalf("acquire past the stale window error = %v, want nil (the crashed incumbent's registration is stolen)", err)
+	// ...and STILL refused just before that moment with a ZERO stale window
+	// on the acquiring side: the taker's own window must never judge the
+	// incumbent. Fails on the pre-fix gate, whose "zero stale window makes
+	// the incumbent stale immediately" semantics let a fast-cadence taker
+	// steal a live incumbent beating at its own slower cadence — the
+	// double-execution defect this test pins closed.
+	err = acquireWriterRegistration(ctx, db, "successor", now.Add(2*time.Second+400*time.Millisecond), 0)
+	if !errors.Is(err, ErrQueueWriterActive) {
+		t.Fatalf("acquire before the incumbent's own stale moment error = %v, want ErrQueueWriterActive (the taker's own window must not judge the incumbent)", err)
+	}
+	// ...and stolen only once its own stale moment (now + 2.5s) has passed:
+	// the crashed writer's registration is taken over, exactly what a
+	// restart does.
+	if err := acquireWriterRegistration(ctx, db, "successor", now.Add(3*time.Second), 0); err != nil {
+		t.Fatalf("acquire past the incumbent's stale moment error = %v, want nil (the crashed incumbent's registration is stolen)", err)
 	}
 
 	// Release hands the table back: the successor (now the registered
@@ -1123,6 +1251,58 @@ func TestWriterRegistration_AcquireHeartbeatRelease(t *testing.T) {
 	}
 	if err := acquireWriterRegistration(ctx, db, "third", time.Now(), stale); err != nil {
 		t.Fatalf("acquire after release error = %v, want nil (release is the graceful handover)", err)
+	}
+}
+
+// TestWriterRegistration_LegacyRowWithoutStaleMoment pins the one judgment
+// a self-authored stale moment cannot serve: a registration row written by
+// a release that predated the stale_at column carries stale_at NULL — the
+// owner cadence that would let anyone convert its liveness into a stale
+// moment is unknowable (its writer's code is gone) — so the acquiring side
+// judges such a row by the conservative fixed window
+// (legacyRegistrationStaleAfter) applied to its last heartbeat instead:
+// refused while the row's heartbeat is younger than the window, taken over
+// once it is older. The row is seeded with NULL stale_at exactly as the
+// schema migration leaves a pre-column row.
+func TestWriterRegistration_LegacyRowWithoutStaleMoment(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	now := time.Now()
+	seed := func(heartbeat time.Time) {
+		if err := db.WithContext(ctx).Exec(`INSERT INTO `+queueWritersTable+` (id, owner, last_heartbeat, stale_at) VALUES (1, 'legacy-writer', ?, NULL)`, heartbeat).Error; err != nil {
+			t.Fatalf("seed legacy queue_writers row: %v", err)
+		}
+	}
+	remove := func() {
+		if err := db.WithContext(ctx).Exec(`DELETE FROM ` + queueWritersTable + ` WHERE id = 1`).Error; err != nil {
+			t.Fatalf("remove queue_writers row: %v", err)
+		}
+	}
+
+	// A legacy row whose last heartbeat is fresh (its pre-column writer is
+	// live, beating at a cadence this side cannot know): refused.
+	seed(now.Add(-10 * time.Second))
+	err := acquireWriterRegistration(ctx, db, testWriterOwner, now, 2*time.Second)
+	if !errors.Is(err, ErrQueueWriterActive) {
+		t.Fatalf("acquire against a fresh legacy row error = %v, want ErrQueueWriterActive", err)
+	}
+	remove()
+
+	// A legacy row whose last heartbeat is older than the conservative
+	// window (its pre-column writer is long dead): taken over.
+	seed(now.Add(-2 * legacyRegistrationStaleAfter))
+	if err := acquireWriterRegistration(ctx, db, testWriterOwner, now, 2*time.Second); err != nil {
+		t.Fatalf("acquire past a dead legacy row's heartbeat error = %v, want nil (the takeover is the crash recovery)", err)
+	}
+	got := struct {
+		Owner string `gorm:"column:owner"`
+	}{}
+	if err := db.WithContext(ctx).Raw(`SELECT owner FROM ` + queueWritersTable + ` WHERE id = 1`).Scan(&got).Error; err != nil {
+		t.Fatalf("read queue_writers row: %v", err)
+	}
+	if got.Owner != testWriterOwner {
+		t.Errorf("queue_writers owner = %q, want %q (the legacy row's takeover must write the new owner and a real stale moment)", got.Owner, testWriterOwner)
 	}
 }
 
@@ -1136,7 +1316,7 @@ func TestDeadLetterRecords(t *testing.T) {
 	if _, err := claimOne(context.Background(), db, *dead, time.Now(), testWriterOwner); err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
-	if moved, err := completeDeadLetter(context.Background(), db, dead.ID, "boom", time.Now()); err != nil {
+	if moved, err := completeDeadLetter(context.Background(), db, testWriterOwner, dead.ID, "boom", time.Now()); err != nil {
 		t.Fatalf("completeDeadLetter() error = %v", err)
 	} else if !moved {
 		t.Error("completeDeadLetter() moved = false, want true (the row was StatusRunning)")
@@ -1233,7 +1413,7 @@ func TestCompleteDeadLetter_OverlongCause_TruncatedToColumnWidth(t *testing.T) {
 	// settleFailedAttempt stores cause.Error()): 1500 characters past the
 	// column's 4000-character width.
 	longCause := strings.Repeat("x", 5500)
-	moved, err := completeDeadLetter(context.Background(), db, rec.ID, longCause, time.Now())
+	moved, err := completeDeadLetter(context.Background(), db, testWriterOwner, rec.ID, longCause, time.Now())
 	if err != nil || !moved {
 		t.Fatalf("completeDeadLetter() = (%v, %v), want (true, nil): the terminal transition must never be refused because the cause is overlong", moved, err)
 	}
@@ -1272,7 +1452,7 @@ func TestCompleteRetrying_OverlongCause_TruncatedToColumnWidth(t *testing.T) {
 
 	next := time.Now().Add(10 * time.Second).UTC().Truncate(time.Second)
 	longCause := strings.Repeat("x", 5500)
-	moved, err := completeRetrying(context.Background(), db, rec.ID, longCause, next, time.Now())
+	moved, err := completeRetrying(context.Background(), db, testWriterOwner, rec.ID, longCause, next, time.Now())
 	if err != nil || !moved {
 		t.Fatalf("completeRetrying() = (%v, %v), want (true, nil): the retry transition must never be refused because the cause is overlong", moved, err)
 	}
@@ -1315,7 +1495,7 @@ func TestUpdateProgress_OverlongMessage_TruncatedToColumnWidth(t *testing.T) {
 	// rune boundary, never split a character, and must fit the column's
 	// 1000-character width however wide the bytes are.
 	longMsg := strings.Repeat("é", 1500)
-	if err := updateProgress(context.Background(), db, rec.ID, 42, longMsg); err != nil {
+	if err := updateProgress(context.Background(), db, testWriterOwner, rec.ID, 42, longMsg); err != nil {
 		t.Fatalf("updateProgress() error = %v", err)
 	}
 

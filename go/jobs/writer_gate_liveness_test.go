@@ -37,14 +37,30 @@ import (
 // registration lapsed in exactly two places: the dispatcher blocks on the
 // worker handoff while every worker is busy (trigger 1) and it exits on
 // stopCh while Close waits for workers to finish their current Handle
-// (trigger 2). A lapse past writerStaleAfter lets a second Start steal the
+// (trigger 2). A lapse past the stale window lets a second Start steal the
 // registration, resetInterruptedRecords flips the first queue's mid-Handle
 // row back to pending, and the second queue claims and executes it a second
-// time. Every test here shrinks the stale window (q.writerStaleAfter, the
-// same field Start's acquire reads) so the lapse is reached in milliseconds
-// instead of the production two-second floor; the heartbeat cadence stays
-// the poll interval, an order of magnitude below the shrunken window, so a
-// live queue can never look stale in the fixed code.
+// time. Every test here shrinks the stale window on the INCUMBENT
+// (q.writerStaleAfter, the window the queue authors into its own
+// registration) so a lapse -- or a takeover, in the fourth test -- is
+// reached in milliseconds instead of the production two-second floor; the
+// heartbeat cadence stays the poll interval, an order of magnitude below
+// the shrunken window, so a live queue can never look stale in the fixed
+// code.
+//
+// The fourth regression arms the two sides DIFFERENTLY -- the incumbent
+// beating at a cadence slower than the TAKER's own stale window -- the
+// asymmetry the writer gate's judgment itself used to get wrong: before
+// registrations carried their own stale moment (store.go's stale_at,
+// authored by the owner from its own window), the taker judged the
+// incumbent by the taker's OWN window, so an incumbent beating slower than
+// that window looked crashed between beats and a second Start stole a live
+// writer's mid-Handle row into a double execution. The three liveness
+// tests below all set both sides to the same 150ms -- a construction that
+// could never expose the asymmetry, and whose inline comments used to
+// bless it ("the acquiring side judges staleness against its own window");
+// the overrides on the acquiring side are gone, because that judgment no
+// longer exists.
 
 // twoPoolSQLite opens two independent connection pools over one private
 // temp-file SQLite database -- the shape of two processes sharing one jobs
@@ -166,6 +182,9 @@ func TestStandaloneQueue_SecondStart_DispatcherBlockedOnHandoff_StillRefused(t *
 		WithTenantConcurrencyLimit(2),
 	}
 	q1 := NewStandaloneQueue(db1, opts...)
+	// q1's OWN stale window, shrunk so the lapse this test pins reaches its
+	// takeover threshold in milliseconds: the number q1's registration
+	// authors into its stale moment, which is what a taker judges.
 	q1.writerStaleAfter = 150 * time.Millisecond
 	if err := q1.RegisterHandler(handler); err != nil {
 		t.Fatalf("q1 RegisterHandler() error = %v", err)
@@ -207,7 +226,13 @@ func TestStandaloneQueue_SecondStart_DispatcherBlockedOnHandoff_StillRefused(t *
 	time.Sleep(q1.writerStaleAfter + 3*q1.pollInterval)
 
 	q2 := NewStandaloneQueue(db2, opts...)
-	q2.writerStaleAfter = 150 * time.Millisecond // the acquiring side judges staleness against its own window
+	// No stale-window override on the ACQUIRING side, deliberately: the
+	// taker's own window plays no part in judging the incumbent -- q1's
+	// registration carries its own stale moment (q1's override above),
+	// refreshed by q1's own beats, and that is the only number judged.
+	// (Pre-fix this site shrank both sides to one value and commented that
+	// "the acquiring side judges staleness against its own window" -- the
+	// cadence asymmetry this file's bottom regression pins.)
 	if err := q2.RegisterHandler(handler); err != nil {
 		t.Fatalf("q2 RegisterHandler() error = %v", err)
 	}
@@ -284,6 +309,9 @@ func TestStandaloneQueue_SecondStart_DuringCloseDrain_StillRefused(t *testing.T)
 		WithTenantConcurrencyLimit(2),
 	}
 	q1 := NewStandaloneQueue(db1, opts...)
+	// q1's OWN stale window, shrunk so the lapse this test pins reaches its
+	// takeover threshold in milliseconds: the number q1's registration
+	// authors into its stale moment, which is what a taker judges.
 	q1.writerStaleAfter = 150 * time.Millisecond
 	if err := q1.RegisterHandler(handler); err != nil {
 		t.Fatalf("q1 RegisterHandler() error = %v", err)
@@ -334,7 +362,13 @@ dispatcherGone:
 	time.Sleep(q1.writerStaleAfter + 3*q1.pollInterval)
 
 	q2 := NewStandaloneQueue(db2, opts...)
-	q2.writerStaleAfter = 150 * time.Millisecond // the acquiring side judges staleness against its own window
+	// No stale-window override on the ACQUIRING side, deliberately: the
+	// taker's own window plays no part in judging the incumbent -- q1's
+	// registration carries its own stale moment (q1's override above),
+	// refreshed by q1's own beats, and that is the only number judged.
+	// (Pre-fix this site shrank both sides to one value and commented that
+	// "the acquiring side judges staleness against its own window" -- the
+	// cadence asymmetry this file's bottom regression pins.)
 	if err := q2.RegisterHandler(handler); err != nil {
 		t.Fatalf("q2 RegisterHandler() error = %v", err)
 	}
@@ -389,6 +423,9 @@ func TestStandaloneQueue_SecondStart_IdleQueuePastStaleWindow_StillRefused(t *te
 		WithWorkerCount(1),
 	}
 	q1 := NewStandaloneQueue(db1, opts...)
+	// q1's OWN stale window, shrunk so the lapse this test pins reaches its
+	// takeover threshold in milliseconds: the number q1's registration
+	// authors into its stale moment, which is what a taker judges.
 	q1.writerStaleAfter = 150 * time.Millisecond
 	if err := q1.Start(context.Background()); err != nil {
 		t.Fatalf("q1 Start() error = %v", err)
@@ -404,7 +441,9 @@ func TestStandaloneQueue_SecondStart_IdleQueuePastStaleWindow_StillRefused(t *te
 	time.Sleep(2*q1.writerStaleAfter + 3*q1.pollInterval)
 
 	q2 := NewStandaloneQueue(db2, opts...)
-	q2.writerStaleAfter = 150 * time.Millisecond // same window on the acquiring side, so an idle-but-live queue cannot be stolen
+	// Again no override on the acquiring side: an idle-but-live queue
+	// cannot be stolen because ITS OWN beats keep its authored stale moment
+	// fresh -- not because the taker's window happens to match.
 	q2Err := q2.Start(context.Background())
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -415,5 +454,163 @@ func TestStandaloneQueue_SecondStart_IdleQueuePastStaleWindow_StillRefused(t *te
 		t.Error("second StandaloneQueue.Start() error = nil for an idle first queue whose own liveness beats kept its registration fresh -- want ErrQueueWriterActive")
 	} else if appErr, ok := apperr.As(q2Err); !ok || appErr.Code != ErrQueueWriterActive.Code {
 		t.Errorf("second StandaloneQueue.Start() error = %v, want code %q", q2Err, ErrQueueWriterActive.Code)
+	}
+}
+
+// TestStandaloneQueue_SecondStart_IncumbentCadenceSlowerThanTakersWindow_StillRefused
+// is the cadence-asymmetry regression the writer gate's judgment itself
+// used to get wrong. The incumbent here beats at a cadence SLOWER than the
+// taking side's stale window -- the two queues configured with different
+// poll intervals -- the shape the three tests above could never expose
+// (they overwrite both sides to the same 150ms, and their old inline
+// comment blessed the asymmetry as construction guidance). Pre-fix, the
+// taker judged the incumbent's registration by the TAKER's own stale
+// window, so an incumbent whose beats arrive slower than that window
+// looked crashed between beats: a second Start on the same database stole
+// the live incumbent's registration, resetInterruptedRecords flipped its
+// mid-Handle row back to pending, and the second queue's Handle on the
+// same job entered while the first was still in flight -- the double
+// execution this file's whole subject exists to prevent. Post-fix the
+// registration row carries the stale moment its OWNER authored (its own
+// window applied to its own beats), and the taker judges only that moment:
+// the same second Start, at the same instant, is refused.
+//
+// The cadences are the production shape scaled to milliseconds: the
+// incumbent polls once per second (beating every second, an order of
+// magnitude inside its own ten-second window -- a live queue can never
+// look stale under the fixed judgment), while the taker polls every ten
+// milliseconds with its stale window shrunk to 150ms -- standing in for
+// the default-configuration taker whose two-second floor sits below an
+// incumbent configured at a multi-second poll interval. 300ms after one
+// observed beat of the incumbent (150ms past the taker's window, 700ms
+// before the incumbent's next beat) is the deterministic moment at which
+// the pre-fix judgment steals and the fixed judgment refuses.
+func TestStandaloneQueue_SecondStart_IncumbentCadenceSlowerThanTakersWindow_StillRefused(t *testing.T) {
+	db1, db2 := twoPoolSQLite(t)
+
+	entered := make(chan struct{}, 8)
+	releaseCh := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseCh) }) }
+	t.Cleanup(release)
+	execs := &executionCounter{exec: make(map[string]int32)}
+	handler := NewHandlerFunc("writer-gate.cadence", func(_ context.Context, job *Job, _ ProgressFn) (Result, error) {
+		execs.add(string(job.ID))
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-releaseCh
+		return Result{}, nil
+	})
+
+	// The incumbent runs at its own cadence -- a one-second poll interval,
+	// its stale window computed from THAT (ten seconds, unshrunk). Its
+	// beats arrive every second, ten times inside its own window.
+	slowOpts := []Option{
+		WithPollInterval(time.Second),
+		WithWorkerCount(1),
+		WithTenantConcurrencyLimit(2),
+	}
+	q1 := NewStandaloneQueue(db1, slowOpts...)
+	if err := q1.RegisterHandler(handler); err != nil {
+		t.Fatalf("q1 RegisterHandler() error = %v", err)
+	}
+	if err := q1.Start(context.Background()); err != nil {
+		t.Fatalf("q1 Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = q1.Close(ctx)
+	})
+
+	id, err := q1.Enqueue(context.Background(), Task{Type: "writer-gate.cadence", TenantID: "tenant-a"})
+	if err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for q1's worker to enter Handle -- the mid-Handle window never opened")
+	}
+
+	// Anchor the takeover attempt to a REAL beat of the incumbent: poll the
+	// queue_writers row until last_heartbeat advances past q1's Start (q1's
+	// keeper beats once per second). Everything below is measured from that
+	// beat, so the incumbent's liveness at the takeover moment is a fact of
+	// the record, never an assumption about goroutine timing.
+	startReturned := time.Now()
+	var beatAt time.Time
+	beatDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(beatDeadline) {
+		var row struct {
+			LastHeartbeat time.Time `gorm:"column:last_heartbeat"`
+		}
+		if err := db1.WithContext(context.Background()).
+			Raw(`SELECT last_heartbeat FROM ` + queueWritersTable + ` WHERE id = 1`).
+			Scan(&row).Error; err == nil && row.LastHeartbeat.After(startReturned) {
+			beatAt = row.LastHeartbeat
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if beatAt.IsZero() {
+		t.Fatal("timed out waiting for q1's registration heartbeat to advance past its Start -- the keeper never beat")
+	}
+
+	// Sleep to 300ms after that beat: 150ms past the taking side's shrunken
+	// stale window below (the moment the pre-fix judgment calls the
+	// incumbent crashed), 700ms short of the incumbent's next beat (so the
+	// live beat this test judges cannot be refreshed away mid-Start).
+	time.Sleep(300 * time.Millisecond)
+
+	// The taker runs at the OTHER cadence -- ten milliseconds -- and its
+	// stale window is shrunk to 150ms: a window below the incumbent's
+	// one-second beat cadence, the exact ratio at which the pre-fix
+	// taker-judges-the-incumbent defect stole a live writer. Under the
+	// fixed judgment this number authors only the taker's OWN registration
+	// (which never lands -- the taker is refused), and plays no part in
+	// judging the incumbent's authored stale moment.
+	fastOpts := []Option{
+		WithPollInterval(10 * time.Millisecond),
+		WithWorkerCount(1),
+		WithTenantConcurrencyLimit(2),
+	}
+	q2 := NewStandaloneQueue(db2, fastOpts...)
+	q2.writerStaleAfter = 150 * time.Millisecond
+	if err := q2.RegisterHandler(handler); err != nil {
+		t.Fatalf("q2 RegisterHandler() error = %v", err)
+	}
+	q2Err := q2.Start(context.Background())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = q2.Close(ctx)
+	})
+
+	if q2Err == nil {
+		// Pre-fix failure evidence: the second writer stole the live
+		// incumbent's registration, reset its mid-Handle row and re-claimed
+		// it. Wait for its own Handle on the SAME job to enter while the
+		// first Handle is still in flight (release is still shut) -- the
+		// double execution, live, of a writer whose heartbeats were arriving
+		// on time throughout.
+		waitExecCount(t, execs, string(id), 2, 3*time.Second)
+		t.Errorf("second StandaloneQueue.Start() error = nil while the incumbent's own heartbeats were still arriving on time; Handle entered a second time for job %q with the first Handle still in flight (executions = %d)", id, execs.count(string(id)))
+	} else {
+		if appErr, ok := apperr.As(q2Err); !ok || appErr.Code != ErrQueueWriterActive.Code {
+			t.Errorf("second StandaloneQueue.Start() error = %v, want code %q", q2Err, ErrQueueWriterActive.Code)
+		}
+	}
+
+	release()
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	job := waitTerminal(t, q1, ctx, id)
+	if job.Status != StatusSucceeded {
+		t.Errorf("job Status = %v, want %v (job: %+v)", job.Status, StatusSucceeded, job)
+	}
+	if got := execs.count(string(id)); got != 1 {
+		t.Errorf("job %q Handle ran %d times, want exactly 1 -- a live incumbent beating at its own cadence must never be taken over", id, got)
 	}
 }

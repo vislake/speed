@@ -261,10 +261,14 @@ type StandaloneQueue struct {
 	// a token no earlier run ever used.
 	owner string
 
-	// writerStaleAfter is how long owner's registration row may go without
-	// a heartbeat (worker.go's runWriterHeartbeat, once per poll interval)
-	// before another Start treats it as a crashed writer's and steals it.
-	// Computed from the poll interval at construction; see writerStaleAfter.
+	// writerStaleAfter is the stale window this queue authors into its own
+	// queue_writers registration: the row's stale_at is written at acquire
+	// and refreshed at every heartbeat (worker.go's runWriterHeartbeat,
+	// once per poll interval) as beat time plus this window, and another
+	// Start judges the row stale (and steals it) only once that authored
+	// stale moment has passed -- never by a window derived from the
+	// taker's own configuration. Computed from this queue's own poll
+	// interval at construction; see writerStaleAfter.
 	writerStaleAfter time.Duration
 
 	// startMu serializes Start, and started records whether a Start has
@@ -317,16 +321,24 @@ func NewStandaloneQueue(db *gorm.DB, opts ...Option) *StandaloneQueue {
 	return q
 }
 
-// writerStaleAfter computes how long a writer registration may go without
-// a heartbeat before Start treats it as a crashed writer's and steals it
-// (see queueWritersTable and ErrQueueWriterActive). The heartbeat keeper
-// (worker.go's runWriterHeartbeat) beats once per poll interval, so the
-// window must comfortably exceed one poll interval -- a live queue must
-// never look stale to a concurrent Start just because its last beat was
-// recent -- and is floored at two seconds so a slow heartbeat cadence
-// cannot manufacture a false steal either. A crashed process's registration
-// is stolen at most this long after its last beat, which is also the
-// longest a restart waits to take over after a crash.
+// writerStaleAfter computes the stale window THIS queue authors into its
+// own writer registration (see queueWritersTable and
+// acquireWriterRegistration): the registration row's stale_at is written
+// at acquire and refreshed at every heartbeat as now + writerStaleAfter,
+// and a concurrent Start on the same database treats the row as a crashed
+// writer's -- and steals it -- only once that authored stale moment has
+// passed. The heartbeat keeper (worker.go's runWriterHeartbeat) beats once
+// per poll interval, so the window must comfortably exceed one poll
+// interval -- a live queue must never look stale to a concurrent Start just
+// because its last beat was recent -- and is floored at two seconds so a
+// very fast heartbeat cadence cannot shrink the window into fragility. A
+// crashed process's registration is stolen at most its own window after its
+// last beat, which is also the longest a restart waits to take over after
+// a crash. Because each queue authors its own window and takers judge only
+// what the row says, two queues configured with different poll intervals
+// each keep their own registrations out of each other's reach -- the
+// taker's own window never applies to the incumbent (see
+// writer_gate_liveness_test.go's cadence regression).
 func writerStaleAfter(pollInterval time.Duration) time.Duration {
 	const minWriterStaleAfter = 2 * time.Second
 	if d := 10 * pollInterval; d > minWriterStaleAfter {

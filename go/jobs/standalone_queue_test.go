@@ -88,6 +88,36 @@ func waitTerminal(t *testing.T, q *StandaloneQueue, ctx context.Context, id JobI
 	return pollJob(t, q, ctx, id, 3*time.Second, func(j *Job) bool { return j.Status.Terminal() })
 }
 
+// TestWriterStaleAfter_OwnWindowFromOwnPollInterval pins writerStaleAfter's
+// arithmetic -- the ten-poll-interval ratio and the two-second floor -- the
+// stale window a queue authors into its OWN registration (the row's
+// stale_at = last beat + this window). Both numbers are what keep a live
+// queue's authored stale moment always beyond its next beat (window >= ten
+// beats, beats arrive every poll interval), so no taker, whatever its own
+// cadence, can ever find a live incumbent stale. The function had no direct
+// tests before the cadence-mismatch round; its two boundary shapes are the
+// floor (any cadence whose tenfold stays under two seconds) and the ratio
+// (any cadence whose tenfold exceeds it).
+func TestWriterStaleAfter_OwnWindowFromOwnPollInterval(t *testing.T) {
+	cases := []struct {
+		name         string
+		pollInterval time.Duration
+		want         time.Duration
+	}{
+		{"the 200ms default hits the two-second floor", DefaultPollInterval, 2 * time.Second},
+		{"any sub-200ms cadence hits the two-second floor", 150 * time.Millisecond, 2 * time.Second},
+		{"a one-second cadence is ten seconds", time.Second, 10 * time.Second},
+		{"a five-second cadence is fifty seconds", 5 * time.Second, 50 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := writerStaleAfter(tc.pollInterval); got != tc.want {
+				t.Errorf("writerStaleAfter(%v) = %v, want %v", tc.pollInterval, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestStandaloneQueue_StartAndClose_Lifecycle(t *testing.T) {
 	q := newTestQueue(t)
 

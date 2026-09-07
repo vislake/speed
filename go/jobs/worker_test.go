@@ -200,6 +200,7 @@ func TestExecute_EmptyTenantID_FailsClosedWithoutCallingHandle(t *testing.T) {
 	}
 
 	rec := fixtureRunningRecord("", "corrupt.tenant") // TenantID deliberately empty
+	rec.ClaimedBy = q.owner                           // seeded under this queue's own claim, like every direct-execute seed below
 	if err := q.db.Create(rec).Error; err != nil {
 		t.Fatalf("seed corrupted record: %v", err)
 	}
@@ -271,6 +272,7 @@ func TestExecute_HandlerPanic_RecoversInsteadOfCrashingProcess(t *testing.T) {
 	}
 
 	rec := fixtureRunningRecord("tenant-a", "panics.always")
+	rec.ClaimedBy = q.owner
 	if err := q.db.Create(rec).Error; err != nil {
 		t.Fatalf("seed running record: %v", err)
 	}
@@ -335,6 +337,7 @@ func TestExecute_FailureHookPanic_RecoversInsteadOfCrashingProcess(t *testing.T)
 	rec := fixtureRunningRecord("tenant-a", "panics.on_failure")
 	rec.MaxRetries = 0 // exhausted on the very first attempt
 	rec.Attempts = 1   // matches the post-handoff state: runAttempt counted this first attempt
+	rec.ClaimedBy = q.owner
 	if err := q.db.Create(rec).Error; err != nil {
 		t.Fatalf("seed running record: %v", err)
 	}
@@ -410,6 +413,7 @@ func TestExecute_FinalFailureAfterCancel_DoesNotRunOnFailure(t *testing.T) {
 	rec := fixtureRunningRecord("tenant-a", "cancel-race.dead_letter")
 	rec.MaxRetries = 0 // exhausted on the very first attempt
 	rec.Attempts = 1   // matches the post-handoff state: runAttempt counted this first attempt
+	rec.ClaimedBy = q.owner
 	if err := q.db.Create(rec).Error; err != nil {
 		t.Fatalf("seed running record: %v", err)
 	}
@@ -488,6 +492,10 @@ func TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric(t *testi
 	control := fixtureRunningRecord("tenant-a", jobType)
 	control.MaxRetries = 0 // exhausted on the very first attempt
 	control.Attempts = 1
+	// Seeded under this queue's own claim, like the sibling tests above:
+	// the dead-letter write the control's genuine transition depends on
+	// carries claimed_by = owner.
+	control.ClaimedBy = q.owner
 	if err := q.db.Create(control).Error; err != nil {
 		t.Fatalf("seed control running record: %v", err)
 	}
@@ -499,6 +507,7 @@ func TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric(t *testi
 	rec := fixtureRunningRecord("tenant-a", jobType)
 	rec.MaxRetries = 0 // exhausted on the very first attempt
 	rec.Attempts = 1
+	rec.ClaimedBy = q.owner
 	if err := q.db.Create(rec).Error; err != nil {
 		t.Fatalf("seed running record: %v", err)
 	}
@@ -559,11 +568,17 @@ func TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric(t *testi
 // probe the row and log the cancellation explanation only when the row is
 // actually StatusCancelled (the cancel marker verified), and otherwise say
 // honestly that the row is no longer running, naming the state it found.
-// Deterministic by construction: each leg seeds a StatusRunning record, has
-// writer-a claim it, has writer-b's recovery reset it back to pending -- the
-// exact store-level steal -- and then executes one genuine Handle whose
-// outcome write must no-op. Fails on the pre-fix code, where each leg logs
-// its "job cancelled before its ..." line for the stolen row.
+// Deterministic by construction: each of the first three legs seeds a
+// StatusRunning record, has writer-a claim it, has writer-b's recovery reset
+// it back to pending -- the exact store-level steal -- and then executes one
+// genuine Handle whose outcome write must no-op. Leg 4 adds the stealing
+// writer's RE-CLAIM of the reset row: the row is running again -- under a
+// claim this queue does not own -- the state in which the pre-fix outcome
+// write (whose WHERE named only id and status) did not even no-op: it
+// settled the sibling's running row with this attempt's result. The fixed
+// write (WHERE ... AND claimed_by = owner) no-ops, and the probe logs its
+// running-under-another-writer Error line. Fails on the pre-fix code, where
+// each leg logs its "job cancelled before its ..." line for the stolen row.
 func TestExecute_NoOpOutcomeWrite_RowStolenByAnotherWriter_LogsHonestlyNotCancelled(t *testing.T) {
 	q := NewStandaloneQueue(newTestDB(t))
 	ctx := context.Background()
@@ -669,10 +684,56 @@ func TestExecute_NoOpOutcomeWrite_RowStolenByAnotherWriter_LogsHonestlyNotCancel
 		t.Errorf("missing the honest discarded-outcome line for the stolen row: %s", out)
 	}
 
-	// Every leg's row must still sit where the steal left it: the no-op
-	// outcome write neither recorded the outcome nor cancelled the job -- the
-	// row belongs to the stealing writer's recovery, exactly as it did before
-	// execute ran.
+	// Leg 4 -- the running-under-another-writer shape: the steal followed by
+	// the stealing writer's re-claim, so the row is StatusRunning under a
+	// claim this queue does not own while this attempt's Handle finishes. The
+	// outcome write must no-op (its WHERE names this writer's own claim), and
+	// the probe must log its running-under-another-writer Error line -- never
+	// the cancellation explanation, never the generic not-running warn. Fails
+	// on the pre-fix completion write, whose WHERE named only id and status:
+	// this attempt's success LANDED on the sibling's running row.
+	recReclaimed := fixtureRunningRecord("tenant-a", "discard.stolen.succeed")
+	if err := q.db.Create(recReclaimed).Error; err != nil {
+		t.Fatalf("seed running record: %v", err)
+	}
+	steal(recReclaimed)
+	var resetReclaimed jobRecord
+	if err := q.db.First(&resetReclaimed, "id = ?", recReclaimed.ID).Error; err != nil {
+		t.Fatalf("re-read reset record: %v", err)
+	}
+	if claimed, err := claimOne(ctx, q.db, resetReclaimed, time.Now(), "writer-c"); err != nil {
+		t.Fatalf("claimOne() error = %v", err)
+	} else if !claimed {
+		t.Fatalf("claimOne() = false, want true (the reset row must be claimable by its new writer)")
+	}
+	prevDefault := slog.Default()
+	var reclaimedBuf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&reclaimedBuf, nil)))
+	q.execute(*recReclaimed)
+	slog.SetDefault(prevDefault)
+	if succeededHandles != 2 {
+		t.Fatalf("Handle ran %d times, want exactly 2 (the leg must prove the job genuinely executed before judging its log lines)", succeededHandles)
+	}
+	if out := reclaimedBuf.String(); strings.Contains(out, "job cancelled before its outcome could be recorded") {
+		t.Errorf("stolen row logged as cancelled (reclaimed leg): %s -- a row another writer is executing is NOT a cancelled job", out)
+	} else if !strings.Contains(out, "running under another writer") {
+		t.Errorf("missing the running-under-another-writer Error line for the reclaimed row: %s", out)
+	}
+	gotReclaimed, err := findByID(context.Background(), q.db, JobID(recReclaimed.ID))
+	if err != nil {
+		t.Fatalf("findByID(%q) error = %v", recReclaimed.ID, err)
+	}
+	if gotReclaimed.Status != string(StatusRunning) {
+		t.Errorf("Status = %q, want %q (the discarded outcome must leave the reclaimed row running under its new writer, not settled and not cancelled)", gotReclaimed.Status, StatusRunning)
+	}
+	if gotReclaimed.ClaimedBy != "writer-c" {
+		t.Errorf("ClaimedBy = %q, want %q (the discarded outcome must not touch the row's ownership)", gotReclaimed.ClaimedBy, "writer-c")
+	}
+
+	// The first three legs' rows must still sit where the steal left them:
+	// the no-op outcome write neither recorded the outcome nor cancelled the
+	// job -- the row belongs to the stealing writer's recovery, exactly as it
+	// did before execute ran.
 	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-a")
 	for _, rec := range []*jobRecord{recSuccess, recRetry, recDead} {
 		got, err := q.Get(tenantCtx, JobID(rec.ID))
@@ -739,6 +800,10 @@ func TestExecute_SuccessWriteFailure_SchedulesRetry_InsteadOfLeavingRowRunning(t
 	rec := fixtureRunningRecord("tenant-a", "succeeds.once")
 	rec.Attempts = 1   // matches the post-handoff state: runAttempt counted this first attempt
 	rec.MaxRetries = 3 // retries remain after this attempt
+	// Seeded under this queue's own claim: the outcome and convergence
+	// writes carry claimed_by = owner, exactly as they do for a row this
+	// queue's dispatcher really claimed.
+	rec.ClaimedBy = q.owner
 	if err := q.db.Create(rec).Error; err != nil {
 		t.Fatalf("seed running record: %v", err)
 	}
@@ -808,6 +873,8 @@ func TestExecute_SuccessWriteFailure_OnFinalAttempt_DeadLettersWithCauseAndHook(
 	rec := fixtureRunningRecord("tenant-a", "succeeds.on_final_attempt")
 	rec.Attempts = 2   // matches the post-handoff state
 	rec.MaxRetries = 1 // exhausted: attempts(2) > MaxRetries(1)
+	// Seeded under this queue's own claim, like the sibling test above.
+	rec.ClaimedBy = q.owner
 	if err := q.db.Create(rec).Error; err != nil {
 		t.Fatalf("seed running record: %v", err)
 	}

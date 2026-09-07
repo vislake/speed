@@ -159,7 +159,7 @@ func (q *StandaloneQueue) runWriterHeartbeat() {
 // the operator resolves the two-writer situation the steal implies.
 func (q *StandaloneQueue) heartbeat() {
 	ctx := context.Background()
-	ok, err := heartbeatWriterRegistration(ctx, q.db, q.owner, time.Now())
+	ok, err := heartbeatWriterRegistration(ctx, q.db, q.owner, time.Now(), q.writerStaleAfter)
 	if err != nil {
 		obs.FromContext(ctx).Error("jobs: writer heartbeat failed", "error", err)
 		return
@@ -436,7 +436,7 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 		err = errStandaloneJobMissingTenant.WithParam("type", rec.Type).WithParam("job_id", rec.ID)
 	default:
 		progress := func(pct int, msg string) {
-			if perr := updateProgress(handleCtx, q.db, rec.ID, pct, msg); perr != nil {
+			if perr := updateProgress(handleCtx, q.db, q.owner, rec.ID, pct, msg); perr != nil {
 				log.Warn("jobs: persisting progress failed", "job_id", rec.ID, "error", perr)
 			}
 		}
@@ -448,7 +448,7 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 	now := time.Now()
 	bg := context.Background()
 	if err == nil {
-		moved, werr := completeSucceeded(bg, q.db, rec.ID, result, now)
+		moved, werr := completeSucceeded(bg, q.db, q.owner, rec.ID, result, now)
 		switch {
 		case werr != nil:
 			// Persisting the success result itself failed. The row is still
@@ -473,11 +473,12 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 			q.recordJobMetrics(rec.Type, StatusSucceeded, duration)
 		default:
 			// moved == false: the success write no-op'd -- the row was no
-			// longer StatusRunning when it landed. That is NOT proof of a
-			// concurrent Cancel: a row another writer reset and re-claimed
-			// after a writer-gate lapse no-ops the identical write.
-			// logDiscardedOutcome probes the row and reports what it
-			// actually says.
+			// longer this writer's to settle when the write landed (its
+			// WHERE names both the running status and this writer's own
+			// claim). That is NOT proof of a concurrent Cancel: a row
+			// another writer reset and re-claimed after a writer-gate lapse
+			// no-ops the identical write. logDiscardedOutcome probes the
+			// row and reports what it actually says.
 			if cancelled := q.logDiscardedOutcome(log, rec, durationMS, StatusSucceeded); cancelled {
 				job.Status = StatusCancelled
 			}
@@ -528,14 +529,16 @@ func (q *StandaloneQueue) settleFailedAttempt(log *slog.Logger, rec jobRecord, c
 	}
 
 	if rec.Attempts > rec.MaxRetries {
-		moved, werr := completeDeadLetter(bg, q.db, rec.ID, cause.Error(), now)
+		moved, werr := completeDeadLetter(bg, q.db, q.owner, rec.ID, cause.Error(), now)
 		if werr != nil {
 			log.Error("jobs: persisting dead letter failed", "job_id", rec.ID, "error", werr)
 			return
 		}
 		if !moved {
-			// The dead-letter write no-op'd: the row was no longer
-			// StatusRunning when it landed. Two causes, with opposite
+			// The dead-letter write no-op'd: the row was no longer this
+			// writer's to settle when the write landed (its WHERE names
+			// both the running status and this writer's own claim). Two
+			// causes, with opposite
 			// meanings -- a concurrent Cancel (markCancelled) already moved
 			// the row out of StatusRunning, in which case the persisted
 			// terminal state is StatusCancelled and Cancel wins over the
@@ -586,7 +589,7 @@ func (q *StandaloneQueue) settleFailedAttempt(log *slog.Logger, rec jobRecord, c
 	// success branch above and the dead-letter branch both give: a
 	// concurrent Cancel can no-op the write, and a record emitted ahead of
 	// the write would show a cancelled Job as retrying.
-	moved, werr := completeRetrying(bg, q.db, rec.ID, cause.Error(), now.Add(delay), now)
+	moved, werr := completeRetrying(bg, q.db, q.owner, rec.ID, cause.Error(), now.Add(delay), now)
 	switch {
 	case werr != nil:
 		log.Error("jobs: persisting retry failed", "job_id", rec.ID, "error", werr)
@@ -605,18 +608,22 @@ func (q *StandaloneQueue) settleFailedAttempt(log *slog.Logger, rec jobRecord, c
 
 // logDiscardedOutcome is execute's response to an outcome write that
 // no-op'd -- completeSucceeded/completeRetrying/completeDeadLetter reported
-// moved == false, meaning the row was no longer StatusRunning when the
-// conditional write landed. It probes the row to classify that no-op
-// honestly, because a plain no-op has two causes with opposite meanings: a
-// concurrent Cancel (Queue.Cancel's markCancelled won the race and the row
-// is StatusCancelled -- discardedStatus, the terminal status the no-op'd
-// write was trying to persist, is then the truthful record, logged as the
-// discarded_outcome attribute), or another writer's
+// moved == false, meaning the row was no longer this writer's to settle
+// when the conditional write landed (the write's WHERE names both the
+// running status AND the writer's own claim, store.go). It probes the row
+// to classify that no-op honestly, because a plain no-op has causes with
+// opposite meanings: a concurrent Cancel (Queue.Cancel's markCancelled won
+// the race and the row is StatusCancelled -- discardedStatus, the terminal
+// status the no-op'd write was trying to persist, is then the truthful
+// record, logged as the discarded_outcome attribute), or another writer's
 // resetInterruptedRecords/claimOne stealing the row after a writer-gate
-// lapse (the row is back in Pending, Running under a different claimed_by,
-// or already settled by the other execution -- the very first symptom of a
-// double execution, which the pre-fix code's blanket cancellation
-// explanation erased exactly when it mattered). Returns whether the row was
+// lapse -- the row back in Pending, running under the other writer's claim,
+// or already settled by the other execution: the first symptom of a double
+// execution, which the pre-fix code's blanket cancellation explanation
+// erased exactly when it mattered. The strongest of those shapes, a row
+// STILL RUNNING under another writer's claim (the other execution is in
+// flight right now), is logged at Error with its own message; the other
+// stolen shapes fall through to the Warn below. Returns whether the row was
 // genuinely StatusCancelled, so the caller mirrors that state onto its
 // in-memory Job only then. A probe that cannot read the row logs the
 // failure and answers false: the discard is logged, its cause is not
@@ -633,6 +640,19 @@ func (q *StandaloneQueue) logDiscardedOutcome(log *slog.Logger, rec jobRecord, d
 			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS,
 			"discarded_outcome", string(discardedStatus))
 		return true
+	}
+	if found.Status == string(StatusRunning) {
+		// A no-op'd write can only leave the row running when it runs under
+		// a claim this writer does not own -- the no-op itself proves the
+		// row did not match this writer's own claim an instant ago, and a
+		// row a single writer owns cannot change owner within one attempt.
+		// Another writer is executing this job RIGHT NOW while this attempt
+		// finishes: the double execution the writer gate exists to prevent,
+		// logged as such -- never as a cancellation.
+		log.Error("jobs: outcome not persisted: the row is running under another writer, outcome discarded",
+			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS,
+			"discarded_outcome", string(discardedStatus), "row_status", found.Status, "claimed_by", found.ClaimedBy)
+		return false
 	}
 	log.Warn("jobs: outcome not persisted: row not running when the write landed, outcome discarded",
 		"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS,

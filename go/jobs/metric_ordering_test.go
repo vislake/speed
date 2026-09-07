@@ -82,6 +82,10 @@ func TestExecute_SuccessAfterCancel_RecordsNoSuccessMetricOrLog(t *testing.T) {
 	// the cancelled Job's expected absence indistinguishable from a
 	// never-instrumented run).
 	control := fixtureRunningRecord("tenant-a", jobType)
+	// Both legs are seeded under this queue's own claim, like every other
+	// direct-execute seed in the package: the outcome write that settles an
+	// attempt carries claimed_by = owner.
+	control.ClaimedBy = q.owner
 	if err := q.db.Create(control).Error; err != nil {
 		t.Fatalf("seed control running record: %v", err)
 	}
@@ -91,6 +95,7 @@ func TestExecute_SuccessAfterCancel_RecordsNoSuccessMetricOrLog(t *testing.T) {
 	// attempt's success path runs -- the same deterministic race the
 	// dead-letter tests construct.
 	rec := fixtureRunningRecord("tenant-a", jobType)
+	rec.ClaimedBy = q.owner
 	if err := q.db.Create(rec).Error; err != nil {
 		t.Fatalf("seed running record: %v", err)
 	}
@@ -179,6 +184,7 @@ func TestExecute_RetryAfterCancel_RecordsNoRetryMetricOrLog(t *testing.T) {
 	control := fixtureRunningRecord("tenant-a", jobType)
 	control.MaxRetries = 5
 	control.Attempts = 1 // matches the post-handoff state: runAttempt counted this first attempt
+	control.ClaimedBy = q.owner
 	if err := q.db.Create(control).Error; err != nil {
 		t.Fatalf("seed control running record: %v", err)
 	}
@@ -188,6 +194,7 @@ func TestExecute_RetryAfterCancel_RecordsNoRetryMetricOrLog(t *testing.T) {
 	rec := fixtureRunningRecord("tenant-a", jobType)
 	rec.MaxRetries = 5
 	rec.Attempts = 1
+	rec.ClaimedBy = q.owner
 	if err := q.db.Create(rec).Error; err != nil {
 		t.Fatalf("seed running record: %v", err)
 	}
