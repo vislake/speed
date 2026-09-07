@@ -53,6 +53,9 @@ type IntegrationCreateWebhookSubscriptionRequest struct {
 
 // IntegrationCreatedAPIKey Service.Create's (and Service.Rotate's) result: the one and only place the raw key value is ever available. key is never logged and never returned again by any other operation.
 type IntegrationCreatedAPIKey struct {
+	// AuditRecordMissing True only when the key was created and is usable but this operation's own bookkeeping did not fully land: for integration_createAPIKey, the creation audit record was not written; for integration_rotateAPIKey, the predecessor's revocation (and the audit record of it) did not complete, so the caller must not assume the predecessor is revoked. Absent or false: every record was written normally. The gap is a platform bookkeeping failure, never a defect of the key.
+	AuditRecordMissing *bool `json:"auditRecordMissing,omitempty"`
+
 	// CreatedBy The authn user id of whoever issued this key.
 	CreatedBy *string    `json:"createdBy,omitempty"`
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
@@ -70,10 +73,13 @@ type IntegrationCreatedAPIKey struct {
 
 // IntegrationCreatedWebhookSubscription Service.CreateWebhookSubscription's result: the one and only place the raw signing secret is ever available, mirroring round 1's IntegrationCreatedAPIKey "shown once" contract. secret is never logged and never returned again by any other operation.
 type IntegrationCreatedWebhookSubscription struct {
-	Active     *bool      `json:"active,omitempty"`
-	CreatedAt  *time.Time `json:"createdAt,omitempty"`
-	CreatedBy  *string    `json:"createdBy,omitempty"`
-	EventTypes *[]string  `json:"eventTypes,omitempty"`
+	Active *bool `json:"active,omitempty"`
+
+	// AuditRecordMissing True only when the subscription was created and is delivering but the operation's audit record was not written -- a platform bookkeeping gap, never a defect of the subscription or its secret. Absent or false: the record was written normally.
+	AuditRecordMissing *bool      `json:"auditRecordMissing,omitempty"`
+	CreatedAt          *time.Time `json:"createdAt,omitempty"`
+	CreatedBy          *string    `json:"createdBy,omitempty"`
+	EventTypes         *[]string  `json:"eventTypes,omitempty"`
 
 	// ID Application-generated UUID. Pass this to update, delete or restore.
 	ID *string `json:"id,omitempty"`

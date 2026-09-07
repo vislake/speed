@@ -202,19 +202,23 @@ func (h *Handler) IntegrationCreateAPIKey(w http.ResponseWriter, r *http.Request
 	})
 	if err != nil {
 		if created != nil {
-			// Partial failure: the key row committed, but a post-commit leg
-			// (its audit record) failed. Service.Create returns both halves
-			// in that case (see its own doc comment), and this handler must
-			// surface the created key too -- key material is shown exactly
-			// once and is never reproduced by List, so a caller sent away
-			// with only the error would lose the credential of a key that
-			// genuinely exists and works. The error envelope's
-			// "created_api_key" parameter carries the full created-key
-			// response so the caller can persist the material and decide
-			// how to handle the audit gap.
+			// Partial failure: the key row committed, but its post-commit
+			// audit record failed. Service.Create returns both halves in
+			// that case (see its own doc comment). The operation SUCCEEDED
+			// as far as the caller is concerned -- the key exists and
+			// works, and key material is shown exactly once and never
+			// reproduced by List -- so the handler answers the operation's
+			// ORDINARY success with the credential in its normal field and
+			// the response's auditRecordMissing field true, declaring the
+			// gap. The credential must never ride in an error envelope:
+			// error responses flow into logs, tickets and bug reports, a
+			// distribution channel success bodies do not enter.
 			obs.FromContext(ctx).Warn("integration api key created but its audit record failed",
 				"id", created.ID, "created_by", created.CreatedBy, "error", err)
-			writeError(w, withErrorParam(err, "created_api_key", toCreatedAPIKeyResponse(created)))
+			resp := toCreatedAPIKeyResponse(created)
+			auditGap := true
+			resp.AuditRecordMissing = &auditGap
+			writeJSON(w, http.StatusCreated, resp)
 			return
 		}
 		writeError(w, err)
@@ -275,16 +279,25 @@ func (h *Handler) IntegrationRotateAPIKey(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		if created != nil {
 			// Partial failure: the replacement key was created and committed,
-			// but the predecessor's revocation failed (Service.Rotate returns
-			// both halves -- see its own doc comment). The created key must
-			// reach the caller either way -- it is shown exactly once and
-			// never reproduced -- so the error envelope's "created_api_key"
-			// parameter carries the full created-key response alongside the
-			// revocation error, letting the caller persist the new key and
-			// see that the old one is still live.
-			obs.FromContext(ctx).Warn("integration api key rotated but the predecessor revocation failed",
+			// but a leg after it failed -- the predecessor's revocation, or
+			// (when the failure came from Rotate's own internal Create) the
+			// replacement's creation audit record (Service.Rotate returns
+			// both halves -- see its own doc comment). Either way the
+			// operation SUCCEEDED as far as the caller is concerned -- the
+			// replacement exists and works, and its material is shown
+			// exactly once and never reproduced -- so the handler answers
+			// the operation's ORDINARY success with the credential in its
+			// normal field and the response's auditRecordMissing field
+			// true: a caller seeing it must not assume the predecessor is
+			// revoked (the rotation's bookkeeping did not complete), and
+			// must persist the replacement from the success response. The
+			// credential never rides in an error envelope.
+			obs.FromContext(ctx).Warn("integration api key rotated but its bookkeeping did not complete",
 				"predecessor_id", keyID, "id", created.ID, "error", err)
-			writeError(w, withErrorParam(err, "created_api_key", toCreatedAPIKeyResponse(created)))
+			resp := toCreatedAPIKeyResponse(created)
+			auditGap := true
+			resp.AuditRecordMissing = &auditGap
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 		writeError(w, err)
@@ -375,19 +388,25 @@ func (h *Handler) IntegrationCreateWebhookSubscription(w http.ResponseWriter, r 
 	})
 	if err != nil {
 		if created != nil {
-			// Partial failure: the subscription row committed, but a
-			// post-commit leg (its audit record) failed. Service.
+			// Partial failure: the subscription row committed, but its
+			// post-commit audit record failed. Service.
 			// CreateWebhookSubscription returns both halves in that case
-			// (see its own doc comment), and this handler must surface the
-			// created subscription too -- its signing secret is shown
-			// exactly once and never reproduced, so a caller sent away with
-			// only the error would lose the secret of a subscription that
-			// genuinely exists and is already delivering events signed with
-			// it. The error envelope's "created_webhook_subscription"
-			// parameter carries the full created-subscription response.
+			// (see its own doc comment). The operation SUCCEEDED as far as
+			// the caller is concerned -- the subscription exists and is
+			// already delivering events signed with a secret that is shown
+			// exactly once and never reproduced -- so the handler answers
+			// the operation's ORDINARY success with the secret in its
+			// normal field and the response's auditRecordMissing field
+			// true, declaring the gap. The secret must never ride in an
+			// error envelope: error responses flow into logs, tickets and
+			// bug reports, a distribution channel success bodies do not
+			// enter.
 			obs.FromContext(ctx).Warn("integration webhook subscription created but its audit record failed",
 				"id", created.ID, "created_by", created.CreatedBy, "error", err)
-			writeError(w, withErrorParam(err, "created_webhook_subscription", toCreatedWebhookSubscriptionResponse(created)))
+			resp := toCreatedWebhookSubscriptionResponse(created)
+			auditGap := true
+			resp.AuditRecordMissing = &auditGap
+			writeJSON(w, http.StatusCreated, resp)
 			return
 		}
 		writeError(w, err)
@@ -602,20 +621,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", jsonContentType)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-// withErrorParam attaches (param, value) to err when err is an
-// *apperr.Error, returning err unchanged otherwise. It exists for the
-// partial-failure envelopes the create/rotate handlers write when a
-// post-commit leg failed and the created object must ride in the error
-// envelope's params (Service returns both halves; see Service.Create's own
-// doc comment): the error reaches those handlers typed as error, and only
-// the apperr decoration can carry params.
-func withErrorParam(err error, param string, value any) error {
-	if appErr, ok := apperr.As(err); ok {
-		return appErr.WithParam(param, value)
-	}
-	return err
 }
 
 // writeError writes err to w as a JSON {code, params} body -- the

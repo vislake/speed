@@ -63,13 +63,15 @@ paths:
         reproduces it.
 
         A failure recording the operation's audit event AFTER the key row
-        committed is answered as this operation's error with the full
-        created-key response carried in the error envelope's
-        created_api_key parameter: the key exists and works either way, and
-        key material is never shown twice, so the caller is expected to
-        persist it from whichever response arrives (the identical
-        partial-failure contract Service.Create's own doc comment
-        documents).
+        committed is answered as this operation's ordinary 201 success,
+        with the response's auditRecordMissing field true: the key exists
+        and works either way, and key material is never shown twice, so
+        the caller persists the credential from the success response and
+        the field declares the audit gap (the identical partial-failure
+        contract Service.Create's own doc comment documents). The
+        credential deliberately never rides in an error envelope: a 5xx
+        body carries no key material, because error responses flow into
+        logs, tickets and bug reports that success bodies do not.
       requestBody:
         required: false
         content:
@@ -160,13 +162,14 @@ paths:
         longer holds. ExpiresAt is NOT carried forward: the new key gets a
         fresh full-lifetime expiry. The two writes are not one database
         transaction; a failure revoking the predecessor after the
-        replacement was already created is reported as this operation's own
-        error, but the replacement key still exists (a safe-direction
-        surplus, never a lockout) and is carried in the error envelope's
-        created_api_key parameter, exactly once: key material is never
-        shown twice, so whichever response arrives, the caller persists the
-        new key from it -- see Service.Rotate's own doc comment for the
-        full argument.
+        replacement was already created is answered as this operation's
+        ordinary 200 success, with the response's auditRecordMissing field
+        true: the replacement key still exists either way (a safe-direction
+        surplus, never a lockout), key material is never shown twice, and
+        the field declares that the rotation's own bookkeeping did not
+        complete -- a caller seeing it true must not assume the predecessor
+        is revoked. See Service.Rotate's own doc comment for the full
+        argument.
       parameters:
         - $ref: '#/components/parameters/KeyID'
       responses:
@@ -219,13 +222,16 @@ paths:
         else this fragment exposes ever reproduces it.
 
         A failure recording the operation's audit event AFTER the
-        subscription row committed is answered as this operation's error
-        with the full created-subscription response carried in the error
-        envelope's created_webhook_subscription parameter: the subscription
-        exists and is already delivering either way, and its secret is never
-        shown twice, so the caller is expected to persist it from whichever
-        response arrives (the identical partial-failure contract
+        subscription row committed is answered as this operation's ordinary
+        201 success, with the response's auditRecordMissing field true: the
+        subscription exists and is already delivering either way, and its
+        secret is never shown twice, so the caller persists it from the
+        success response and the field declares the audit gap (the
+        identical partial-failure contract
         Service.CreateWebhookSubscription's own doc comment documents).
+        The secret deliberately never rides in an error envelope: a 5xx
+        body carries no secret material, because error responses flow into
+        logs, tickets and bug reports that success bodies do not.
       requestBody:
         required: true
         content:
@@ -464,6 +470,17 @@ components:
         expiresAt:
           type: string
           format: date-time
+        auditRecordMissing:
+          type: boolean
+          description: >-
+            True only when the key was created and is usable but this
+            operation's own bookkeeping did not fully land: for
+            integration_createAPIKey, the creation audit record was not
+            written; for integration_rotateAPIKey, the predecessor's
+            revocation (and the audit record of it) did not complete, so
+            the caller must not assume the predecessor is revoked. Absent
+            or false: every record was written normally. The gap is a
+            platform bookkeeping failure, never a defect of the key.
     IntegrationAPIKeySummary:
       type: object
       description: >-
@@ -581,6 +598,13 @@ components:
         createdAt:
           type: string
           format: date-time
+        auditRecordMissing:
+          type: boolean
+          description: >-
+            True only when the subscription was created and is delivering
+            but the operation's audit record was not written -- a platform
+            bookkeeping gap, never a defect of the subscription or its
+            secret. Absent or false: the record was written normally.
     IntegrationListWebhookSubscriptionsResponse:
       type: object
       properties:

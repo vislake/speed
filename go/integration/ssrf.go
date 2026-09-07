@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	obs "github.com/vislake/speed/go/observability"
 )
 
 // This file is go/integration's SSRF (server-side request forgery) defense
@@ -326,7 +328,21 @@ func newSafeHTTPClient(timeout time.Duration) *http.Client {
 			var lastErr error
 			for _, ip := range candidates {
 				if isBlockedIP(ip) {
-					lastErr = fmt.Errorf("%w: %s -> %s", errBlockedDialAddress, host, ip)
+					// The resolved address must NOT ride in the refusal text
+					// this transport returns: that text is persisted into the
+					// delivery row's last_error (webhook_delivery.go) and
+					// served back to the tenant through the delivery-log API,
+					// so echoing the resolution here would hand a tenant admin
+					// the identical internal-DNS reconnaissance oracle
+					// errors.go's own ErrWebhookURLBlocked comment rules out
+					// of the creation-time answer -- submit hostnames, read
+					// back the internal addresses they resolve to. The host
+					// (the caller's own) stays in the text; the IP detail
+					// belongs in the server-side log below, never in
+					// LastError.
+					obs.FromContext(ctx).Warn("integration refused a webhook dial to a blocked address",
+						"host", host, "ip", ip.String())
+					lastErr = fmt.Errorf("%w: %s", errBlockedDialAddress, host)
 					continue
 				}
 				// Dial the validated IP directly (not the original

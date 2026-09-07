@@ -91,68 +91,71 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, wantStatus in
 	}
 }
 
-// assertErrorCarriesCreated decodes rec's error envelope in ONE pass and
-// requires it to answer wantStatus with wantCode and carry paramKey (the
-// created-object parameter of the partial-failure surface -- the handler
-// answers these when a post-commit leg failed after the object itself
-// committed; see handler.go's integration_createAPIKey doc comment) holding
-// a non-empty created-object response whose "key"/"secret" material it
-// returns to the caller.
-func assertErrorCarriesCreated(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantCode, paramKey string) map[string]any {
+// assertAuditGapSuccess decodes rec's success body in ONE pass and requires
+// it to answer wantStatus with NO error-envelope field (neither code nor
+// params -- the P0-closing invariant: a created credential never rides in an
+// error envelope, because error responses flow into logs, tickets and bug
+// reports that success bodies do not) and the response's own
+// auditRecordMissing field true, returning the raw body so the caller can
+// assert its credential material sits in its normal field.
+func assertAuditGapSuccess(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int) map[string]any {
 	t.Helper()
 	if rec.Code != wantStatus {
 		t.Fatalf("status = %d, want %d (body %q)", rec.Code, wantStatus, rec.Body.String())
 	}
-	var got api.IntegrationError
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+	var raw map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&raw); err != nil {
 		t.Fatalf("decode response body %q: %v", rec.Body.String(), err)
 	}
-	if got.Code == nil || *got.Code != wantCode {
-		t.Fatalf("error code = %v, want %q", got.Code, wantCode)
+	for _, forbidden := range []string{"code", "params"} {
+		if _, present := raw[forbidden]; present {
+			t.Fatalf("the %d answer is an error envelope (carries %q): %v -- a created credential must never ride in an error envelope", wantStatus, forbidden, raw)
+		}
 	}
-	if got.Params == nil {
-		t.Fatalf("error envelope params = <nil>, want %s carried (body %q)", paramKey, rec.Body.String())
+	if gap, _ := raw["auditRecordMissing"].(bool); !gap {
+		t.Fatalf("auditRecordMissing = %v, want true (body %q)", raw["auditRecordMissing"], rec.Body.String())
 	}
-	created, ok := (*got.Params)[paramKey].(map[string]any)
-	if !ok {
-		t.Fatalf("params[%q] = %v, want the created-object response", paramKey, (*got.Params)[paramKey])
-	}
-	return created
+	return raw
 }
 
-// TestHandler_IntegrationCreateAPIKey_AuditFailure_CarriesCreatedKeyInParams
+// TestHandler_IntegrationCreateAPIKey_AuditFailure_AnswersCreatedWithAuditRecordMissing
 // is the HTTP half of the audit-failure material-retention fix (Service
 // level pinned in service_test.go's
 // TestService_Create_AuditFailureAfterCommit_ReturnsKeyWithError): when the
-// key row committed but its audit record failed, the handler must answer
-// the error AND carry the created key in the envelope's params, so the
-// caller is never left without the one-time key material. Before the fix
-// the handler dropped the created half (Service returned nil) and the raw
-// key was lost to everyone.
-func TestHandler_IntegrationCreateAPIKey_AuditFailure_CarriesCreatedKeyInParams(t *testing.T) {
+// key row committed but its audit record failed, the handler answers the
+// operation's ORDINARY success -- the key in its normal field, never in an
+// error envelope's params -- plus the response's auditRecordMissing field
+// true, so the caller persists the one-time key material AND knows the
+// audit record is missing. Before this P0 was closed the handler answered a
+// 500 whose params carried the plaintext credential: error responses flow
+// into logs, tickets and bug reports, a distribution channel no credential
+// may ride in. (Failing before: 500 + params.created_api_key.key; passing
+// after: 201 + key in place + auditRecordMissing true.)
+func TestHandler_IntegrationCreateAPIKey_AuditFailure_AnswersCreatedWithAuditRecordMissing(t *testing.T) {
 	h, m := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
 	m.service.bus = errBus{}
 
 	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys", map[string]any{})
-	created := assertErrorCarriesCreated(t, rec, http.StatusInternalServerError, "integration.internal_error", "created_api_key")
+	created := assertAuditGapSuccess(t, rec, http.StatusCreated)
 	if rawKey, _ := created["key"].(string); rawKey == "" {
-		t.Fatalf("the carried created key has no key material: %v", created)
+		t.Fatalf("the success answer has no key material in its key field: %v", created)
 	}
 }
 
-// TestHandler_IntegrationRotateAPIKey_PartialFailure_CarriesCreatedKeyInParams
+// TestHandler_IntegrationRotateAPIKey_PartialFailure_AnswersRotatedWithAuditRecordMissing
 // is the HTTP half of Rotate's partial-failure contract: when a leg after
 // the replacement key's creation fails -- the predecessor's revocation
 // failing, or (deterministically here) the replacement's own audit record
-// failing -- the handler must answer the error AND carry the created
-// replacement key in the envelope's params: the key material is shown
-// exactly once, and a caller that does not receive it can never learn the
-// credential of a live key this very call created. Before the fix the
-// handler wrote only the error and the replacement's one-time material was
-// dropped. (The revoke-leg partial itself is raced at the Service level in
+// failing -- the handler answers the operation's ORDINARY success with the
+// replacement key in its normal field (shown exactly once; a caller that
+// does not receive it can never learn the credential of a live key this
+// very call created) and auditRecordMissing true, so a caller never
+// assumes the predecessor is revoked. Before this P0 was closed the handler
+// answered a 500 whose params carried the plaintext replacement credential.
+// (The revoke-leg partial itself is raced at the Service level in
 // TestService_Rotate_RevokeFails_ReportsErrorWithNewKeyStillCreated; both
 // partial legs reach this identical handler branch.)
-func TestHandler_IntegrationRotateAPIKey_PartialFailure_CarriesCreatedKeyInParams(t *testing.T) {
+func TestHandler_IntegrationRotateAPIKey_PartialFailure_AnswersRotatedWithAuditRecordMissing(t *testing.T) {
 	h, m := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
 
 	// A real key to rotate, created while the audit bus is healthy.
@@ -171,23 +174,24 @@ func TestHandler_IntegrationRotateAPIKey_PartialFailure_CarriesCreatedKeyInParam
 	// the revoke-leg partial also produces.
 	m.service.bus = errBus{}
 	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/apikeys/"+*created.ID+"/rotate", nil)
-	if rec.Code == http.StatusOK {
-		t.Fatalf("rotate status = 200, want the partial failure reported as an error (body %q)", rec.Body.String())
-	}
-	createdKey := assertErrorCarriesCreated(t, rec, http.StatusInternalServerError, "integration.internal_error", "created_api_key")
+	createdKey := assertAuditGapSuccess(t, rec, http.StatusOK)
 	if rawKey, _ := createdKey["key"].(string); rawKey == "" {
-		t.Fatalf("the carried replacement key has no key material: %v", createdKey)
+		t.Fatalf("the rotated answer has no key material in its key field: %v", createdKey)
+	}
+	if rawID, _ := createdKey["id"].(string); rawID == "" || rawID == *created.ID {
+		t.Errorf("rotated id = %q, want a fresh id different from the predecessor %q", rawID, *created.ID)
 	}
 }
 
-// TestHandler_IntegrationCreateWebhookSubscription_AuditFailure_CarriesCreatedSubscriptionInParams
-// is the webhook twin of the create-key partial-failure surface: when the
-// subscription row committed but its audit record failed, the handler must
-// answer the error AND carry the created subscription (raw signing secret
-// included) in the envelope's params -- the secret is shown exactly once
-// and never reproduced, so a caller that does not receive it can never
-// verify this live subscription's deliveries.
-func TestHandler_IntegrationCreateWebhookSubscription_AuditFailure_CarriesCreatedSubscriptionInParams(t *testing.T) {
+// TestHandler_IntegrationCreateWebhookSubscription_AuditFailure_AnswersCreatedWithAuditRecordMissing
+// is the webhook twin of the create-key audit-gap surface: when the
+// subscription row committed but its audit record failed, the handler
+// answers the operation's ORDINARY success -- the raw signing secret in its
+// normal field, never in an error envelope's params -- plus
+// auditRecordMissing true. The secret is shown exactly once and never
+// reproduced, so the caller persists it from the success response and knows
+// the audit record is missing.
+func TestHandler_IntegrationCreateWebhookSubscription_AuditFailure_AnswersCreatedWithAuditRecordMissing(t *testing.T) {
 	// The webhook secret column needs its encrypting serializer registered
 	// before any WebhookSubscription row is written (the plain newTestDB
 	// that newTestHandler opens does not register it -- newWebhookTestDB
@@ -205,9 +209,9 @@ func TestHandler_IntegrationCreateWebhookSubscription_AuditFailure_CarriesCreate
 	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/webhooks", map[string]any{
 		"url": "https://example.com/hook", "eventTypes": []string{"test.thing.happened"},
 	})
-	created := assertErrorCarriesCreated(t, rec, http.StatusInternalServerError, "integration.internal_error", "created_webhook_subscription")
+	created := assertAuditGapSuccess(t, rec, http.StatusCreated)
 	if secret, _ := created["secret"].(string); secret == "" {
-		t.Fatalf("the carried created subscription has no secret material: %v", created)
+		t.Fatalf("the success answer has no secret material in its secret field: %v", created)
 	}
 }
 

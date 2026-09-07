@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/integration/api"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -305,6 +307,91 @@ func TestService_handleDeliveryJob_ReceiverError_MarksFailedAndRetries(t *testin
 	}
 	if deliveries[0].LastError == "" {
 		t.Error("LastError is empty after a failed attempt")
+	}
+}
+
+// TestHandler_IntegrationListWebhookDeliveries_BlockedDial_LastErrorNamesNoResolvedIP
+// is the delivery-log half of the dial-time SSRF oracle fix (the creation-
+// time half is pinned by ssrf_test.go's own asymmetry tests, and the
+// dial-time refusal mechanism itself by
+// TestNewSafeHTTPClient_RefusesLoopbackAtDialTime): when a delivery's
+// dial-time re-check refuses a hostname that resolves to
+// a blocked address, the refusal text persisted into the delivery row and
+// served back to the tenant through the delivery-log API must name NO
+// resolved address. The resolved internal IP is information the tenant
+// does not have -- for a hostname resolvable only inside the platform's own
+// network it is exactly the answer an internal-DNS reconnaissance oracle
+// would give, the same disclosure errors.go's own ErrWebhookURLBlocked
+// comment already rules out of the creation-time answer -- and the detail
+// belongs in the server-side log, never in LastError. Before this P0 was
+// closed the dial-time refusal text carried the resolved address shaped
+// "host -> 10.x.y.z", and the delivery-log API returned it to the tenant on
+// every read. (Failing before: LastError over the delivery-log API carries
+// the resolved loopback address of "localhost"; passing after: it names no
+// IP at all.)
+func TestHandler_IntegrationListWebhookDeliveries_BlockedDial_LastErrorNamesNoResolvedIP(t *testing.T) {
+	cipher, err := dbkit.NewCipher(testWebhookCipherKey)
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	dbkit.RegisterEncryptedSerializer(WebhookSecretSerializerName, cipher)
+
+	// A real composed handler over the default (guarded) webhook HTTP
+	// client: WithWebhookURLValidator(alwaysAllowURL) lets the subscription
+	// below be created for a hostname the production creation-time check
+	// would refuse, so the DIAL-time re-check is the only gate left -- the
+	// exact DNS-rebinding shape (a URL that validated at creation, whose
+	// destination is refused when the delivery actually connects).
+	h, m := newTestHandler(t, fixedSubject{userID: "user-1", ok: true},
+		WithEventMapping(testMapping), WithWebhookURLValidator(alwaysAllowURL))
+
+	// localhost resolves to a loopback address through the real resolver on
+	// any standard system (hosts file, no network) -- the deterministic
+	// stand-in for "internal-name -> 10.x.y.z". The port is never dialed:
+	// every resolved candidate is blocked before any connection is made.
+	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/webhooks", map[string]any{
+		"url": "http://localhost:1/hook", "eventTypes": []string{"test.thing.happened"},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	var created api.IntegrationCreatedWebhookSubscription
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	// One real delivery attempt through the guarded transport: the dial is
+	// refused as blocked, the row settles Failed with LastError.
+	svc := m.service
+	delivery := createPendingDelivery(t, svc, *created.ID)
+	if _, err := svc.handleDeliveryJob(ctxFor(testTenant), deliveryJob(delivery.ID, *created.ID)); err == nil {
+		t.Fatal("handleDeliveryJob = nil error, want the blocked-dial refusal to fail the attempt")
+	}
+
+	// Read the failure back through the delivery-log API -- the channel the
+	// tenant admin actually sees.
+	rec = doRequest(h, ctxFor(testTenant), http.MethodGet, "/api/v1/integration/webhooks/"+*created.ID+"/deliveries", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("deliveries status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	var list api.IntegrationListWebhookDeliveriesResponse
+	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+		t.Fatalf("decode deliveries response: %v", err)
+	}
+	if list.Deliveries == nil || len(*list.Deliveries) != 1 {
+		t.Fatalf("deliveries = %+v, want exactly one row (body %q)", list.Deliveries, rec.Body.String())
+	}
+	row := (*list.Deliveries)[0]
+	if row.LastError == nil {
+		t.Fatal("LastError is nil over the delivery-log API after a failed attempt")
+	}
+	if !strings.Contains(*row.LastError, "blocked") {
+		t.Fatalf("LastError = %q, want the blocked-destination refusal to be identifiable as such", *row.LastError)
+	}
+	for _, tok := range strings.Fields(*row.LastError) {
+		if net.ParseIP(tok) != nil {
+			t.Fatalf("LastError over the delivery-log API names the resolved address %q: %q -- an internal-DNS reconnaissance oracle for the tenant; the detail belongs in the server-side log, never in LastError", tok, *row.LastError)
+		}
 	}
 }
 
