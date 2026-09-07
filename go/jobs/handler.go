@@ -82,7 +82,16 @@ var _ Handler = handlerFunc{}
 // below for what each one guarantees about the dead-letter record of a
 // cancelled Job). Whatever OnFailure does is not retried or otherwise
 // observed by the queue. OnFailure receives the same rebuilt tenant context
-// Handle itself receives.
+// Handle itself receives. A panic inside OnFailure is recovered and logged
+// by BOTH queue implementations (this module's own worker.go's
+// invokeOnFailure, and queue/asynq/worker.go's invokeOnFailure — asynq's
+// library recover covers the handler call only, never its ErrorHandler,
+// which is where a hook panic would otherwise escape and crash the whole
+// process), never allowed to crash the worker process: a buggy hook may
+// fire compensation wrongly, but it cannot take every other tenant's
+// in-flight and queued Jobs down with it. Write hooks against the WEAKER
+// of the two ordering guarantees below; the panic containment is identical
+// on both.
 //
 // The two deployment modes' Queue implementations do NOT give OnFailure the
 // identical ordering guarantee relative to dead-letter persistence, and a

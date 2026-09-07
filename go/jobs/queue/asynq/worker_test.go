@@ -1,8 +1,11 @@
 package asynq
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -172,6 +175,25 @@ func (h *recordingFailureHook) OnFailure(_ context.Context, job *jobs.Job, _ err
 	h.calls = append(h.calls, job)
 }
 
+// panickingFailureHook records every OnFailure call it receives, then
+// panics -- the hook-author bug the recovery under test contains. The
+// record-before-panic ordering is what lets the test assert both halves:
+// the hook genuinely fired (count 1) AND its panic did not escape.
+type panickingFailureHook struct {
+	jobType string
+	calls   int
+}
+
+func (h *panickingFailureHook) Type() string { return h.jobType }
+func (h *panickingFailureHook) Handle(context.Context, *jobs.Job, jobs.ProgressFn) (jobs.Result, error) {
+	return jobs.Result{}, errors.New("not exercised by this test")
+}
+
+func (h *panickingFailureHook) OnFailure(context.Context, *jobs.Job, error) {
+	h.calls++
+	panic("on-failure hook panicked")
+}
+
 func TestQueue_HandleErrorAttempt(t *testing.T) {
 	t.Run("retries remain: FailureHook must not fire", func(t *testing.T) {
 		q := newTestQueue(t)
@@ -313,6 +335,36 @@ func TestQueue_HandleErrorAttempt(t *testing.T) {
 
 		if len(h.calls) != 0 {
 			t.Errorf("OnFailure called %d times, want 0: a concurrent Cancel already settled the Job as StatusCancelled, so its final failure's compensation must be discarded", len(h.calls))
+		}
+	})
+
+	t.Run("panicking FailureHook: recovered, the panic is recorded, nothing escapes to asynq's dispatch loop", func(t *testing.T) {
+		q := newTestQueue(t)
+		h := &panickingFailureHook{jobType: "always-panics-on-failure"}
+		if err := q.RegisterHandler(h); err != nil {
+			t.Fatalf("RegisterHandler() error = %v", err)
+		}
+		task := asynqlib.NewTaskWithHeaders("always-panics-on-failure", []byte("payload"), map[string]string{
+			headerTenantID:       "tenant-a",
+			headerIdempotencyKey: "op-1",
+		})
+
+		var buf bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&buf, nil))
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("handleErrorAttempt let OnFailure's panic escape instead of recovering it: %v", r)
+				}
+			}()
+			q.handleErrorAttempt(task, errors.New("permanent failure"), 3 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, log)
+		}()
+
+		if h.calls != 1 {
+			t.Errorf("OnFailure called %d times, want exactly 1", h.calls)
+		}
+		if !strings.Contains(buf.String(), "jobs: failure hook panicked") {
+			t.Errorf("log = %q, want the panic recorded as %q", buf.String(), "jobs: failure hook panicked")
 		}
 	})
 }

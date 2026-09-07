@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"math/rand/v2"
+	"runtime/debug"
 	"time"
 
 	asynqlib "github.com/hibiken/asynq"
@@ -301,7 +302,40 @@ func (q *Queue) handleErrorAttempt(t *asynqlib.Task, err error, retried, maxRetr
 	// hook whose own timeout is already a documented approximation.
 	hookCtx, cancel := context.WithTimeout(pkgcore.WithTenant(context.Background(), tenantID), q.defaultTimeout)
 	defer cancel()
-	hook.OnFailure(hookCtx, job, err)
+	invokeOnFailure(hookCtx, hook, job, err, log)
+}
+
+// invokeOnFailure calls hook.OnFailure for job, recovering a panic the
+// same way jobs' own worker.go's invokeOnFailure does for StandaloneQueue
+// -- see that function's doc comment for why this matters. OnFailure is
+// exactly as much a business-module-authored callback as Handle is, and
+// just as capable of panicking (a refund call against a malformed
+// job.Payload, for example). The containment is not free on this side of
+// the module: jobs' own invokeHandle doc comment notes that asynq's
+// processor.perform wraps its own handler call in a defer/recover, but
+// that recover covers ONLY ProcessTask -- the ErrorHandler (this package's
+// handleError) runs strictly outside it, in handleFailedMessage on asynq's
+// worker goroutine (processor.go, confirmed against the pinned v0.26.0
+// source), so a panic here would otherwise propagate out of the worker
+// goroutine and crash the whole process -- taking every replica's in-flight
+// work down with it. The FailureHook contract (jobs' handler.go) therefore
+// promises hook authors their panics are contained on BOTH queue
+// implementations; a hook written to that promise must not be able to kill
+// the worker either way. OnFailure returns nothing, so recovering here only
+// prevents a process crash; there is no result to hand back, matching
+// OnFailure's own "not retried or otherwise observed by the queue"
+// contract (handler.go). The panic value and stack are recorded as an
+// Error through the same structured logging convention jobs' own
+// invokeOnFailure uses, so the hook bug is operator-visible.
+func invokeOnFailure(ctx context.Context, hook jobs.FailureHook, job *jobs.Job, cause error, log *slog.Logger) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("jobs: failure hook panicked",
+				"job_id", string(job.ID), "job_type", job.Type,
+				"panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	hook.OnFailure(ctx, job, cause)
 }
 
 // processTask is the single asynqlib.HandlerFunc Queue.Start registers. It
