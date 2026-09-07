@@ -49,12 +49,14 @@ package observability
 //     the context logger where a context exists).
 //  2. Value-shaped, as a fallback net for secrets logged under an
 //     unsuspicious key: attribute string values and error texts are scanned
-//     for the canonical shapes secrets take -- "Bearer <token>", JWTs
+//     for the canonical shapes secrets take -- Authorization-header
+//     credentials ("Bearer <token>" and "Basic <base64>"), JWTs
 //     (eyJ...), provider-prefixed keys (sk_/pk_/rk_/sk-, AKIA, AIza,
 //     ghp_/github_pat_, xox*, glpat-), and credentials embedded in URLs
-//     (query parameters such as ?access_token=..., and userinfo). Matched
-//     regions are replaced by RedactedValue in place; surrounding text is
-//     preserved. Errors are masked, never dropped.
+//     (query parameters such as ?access_token=..., a bare query string
+//     that carries no URL at all, and userinfo, scheme case-insensitive).
+//     Matched regions are replaced by RedactedValue in place; surrounding
+//     text is preserved. Errors are masked, never dropped.
 //
 // The correlation fields this must never touch are the structured log
 // field names every module shares -- tenant_id, user_id, job_id (plus this
@@ -155,7 +157,7 @@ const RedactedValue = "[REDACTED]"
 // see neverRedactKeys for the belt-and-braces exemption from value
 // scanning.
 //
-// "token" is the one stem that cannot use a bare substring match: "token"
+// "token" is the stem that cannot use a bare substring match: "token"
 // is also a substring of "tokens", the ordinary plural for an LLM/usage
 // count (ai-gateway's PromptTokens/CompletionTokens), which the naive
 // substring rule swallowed with no warning -- ai-gateway's own gateway.go
@@ -173,6 +175,17 @@ const RedactedValue = "[REDACTED]"
 // "completionTokens" do not, since the "s" continuing the stem is a
 // lowercase letter and a lowercase continuation is the same word, not a
 // boundary.
+//
+// "key" is the second stem with a rule of its own, for the opposite
+// false-positive class: a bare substring match over-redacts this
+// repository's own correlation fields. "key_id" (go/integration logs an
+// API-key row's opaque id under it) and "credit_idempotency_key"
+// (examples/reference-app's smilesim logs the derived key of an orphaned
+// credit reservation under it -- the value the log line exists for) both
+// contain "key" as a bare substring yet hold references or derived
+// correlation identifiers, never credential material. keyStemMatches
+// (see below) gives "key" the same word-boundary treatment "token" has
+// and then narrows the reference-shaped compounds back out of the rule.
 //
 // One letter-glued join the boundary rule cannot see is nevertheless
 // secret-shaped: a run-together compound that ENDS with the stem.
@@ -214,14 +227,66 @@ var sensitiveStems = []string{
 }
 
 // stemMatches reports whether seg is marked sensitive by stem, dispatching
-// to the word-boundary and terminal-suffix rules for "token" and the
-// permissive substring rule for every other stem. See sensitiveStems' doc
-// comment for why the stems need different rules.
+// to the word-boundary and terminal-suffix rules for "token" and "key"
+// and the permissive substring rule for every other stem. See
+// sensitiveStems' doc comment for why the stems need different rules.
 func stemMatches(stem, seg string) bool {
-	if stem == "token" {
+	switch stem {
+	case "token":
 		return foldContainsWordASCII(seg, stem) || foldSuffixASCII(seg, stem)
+	case "key":
+		return keyStemMatches(seg)
 	}
 	return foldContainsASCII(seg, stem)
+}
+
+// keyStemMatches is the "key" stem's matcher. "key" gets the same
+// word-boundary and terminal-suffix treatment "token" has (see
+// sensitiveStems' doc comment): a bare substring rule would keep redacting
+// words that merely contain the letters as an interior fragment
+// ("keyboard", "keycloak" -- and, through the same permissiveness that
+// once swallowed "tokens", this repository's own correlation fields),
+// while the secret-shaped key names that exist in practice -- api_key,
+// x_api_key, private_key, signing_key, secret_key, dotted config segments
+// like "stripe_secret_key", run-together "apikey", camelCase "apiKey", and
+// bare "key" -- all carry "key" as a whole word or as the segment's
+// terminal run-together suffix, which is exactly what the word-boundary
+// and suffix rules match. A terminal-glued non-secret word that merely
+// ends in the letters ("monkey") stays redacted, the same accepted cost
+// the "token" stem's rule documents for "subtoken".
+//
+// Two reference-shaped compound classes are then exempted from that match,
+// because they name correlation identifiers rather than credentials and
+// the exemption narrows the rule without opening a hole (their values
+// still pass through the value-shape net -- see
+// TestRedact_KeyStemDoesNotOverRedactCorrelationReferences):
+//
+//   - an "_id"-suffixed segment ("key_id", "api_key_id"): the naming
+//     convention neverRedactKeys' own user_id/job_id entries follow, and
+//     an _id-marked attribute holds a row reference -- go/integration's
+//     "key_id" logs an API-key row's opaque id, precisely so an operator
+//     can tell which key failed its last-used update.
+//   - a segment ending in "idempotency_key" ("idempotency_key",
+//     "credit_idempotency_key"): the repository-wide derived-idempotency-
+//     key convention (go/jobs' queue metadata, go/metering's outbox,
+//     go/billing's credit ledger, go/notification's delivery key all
+//     derive the key from the operation's own identity -- hashed, never
+//     caller-supplied), whose values are correlation identifiers --
+//     examples/reference-app's smilesim logs "credit_idempotency_key"
+//     precisely so an operator can reconcile an orphaned reservation.
+//
+// Everything else the word-boundary match still catches redacts as
+// before, and the exemptions apply to the "key" stem only: "id_token",
+// "session_token" and friends keep redacting through the "token" stem
+// unchanged.
+func keyStemMatches(seg string) bool {
+	if !foldContainsWordASCII(seg, "key") && !foldSuffixASCII(seg, "key") {
+		return false
+	}
+	if foldSuffixASCII(seg, "_id") || foldSuffixASCII(seg, "idempotency_key") {
+		return false
+	}
+	return true
 }
 
 // neverRedactKeys are the correlation field names
@@ -261,8 +326,20 @@ const minSecretScanLen = 16
 // the caller (Resolve on a LogValuer, Error on an error) is reached
 // through safeRedactAttr's recover.
 func redactAttr(groups []string, a slog.Attr) (slog.Attr, bool) {
+	// An empty key matches no key-name rule: there is no segment to exempt
+	// and no segment that could be sensitive. It must not therefore bypass
+	// the value rules -- an empty key is exactly what slog's inline-group
+	// idiom (slog.Group("", ...)) attaches, and the built-in sinks render
+	// that group's children, and an empty-key scalar, normally, so an
+	// early return here was a total redaction bypass for values logged
+	// under an empty key (pinned by
+	// TestRedact_EmptyKeyAttributes_ValueRulesStillApply). The value rules
+	// below apply exactly as they do under a benign key: a group's
+	// children are still visited (the empty segment the key contributes to
+	// their path is inert -- it can neither be exempted nor match a stem),
+	// and a string or error value is still scanned for secret shapes.
 	if a.Key == "" {
-		return a, false
+		return redactAttrValue(a, groups, nil)
 	}
 
 	// The overwhelmingly common attribute key is a single segment: the
@@ -471,13 +548,21 @@ type secretShapePattern struct {
 var secretShapePatterns = []secretShapePattern{
 	{
 		// "Bearer <token>" and friends: the Authorization-header idiom, in
-		// attribute values and inside error texts alike. The token itself
-		// is masked; the "Bearer " marker survives, matching how the URL
-		// patterns below keep their parameter names and scheme -- the
-		// reader still learns WHAT was masked (a bearer credential, not,
-		// say, a session id) without ever seeing the credential.
-		gate: func(s string) bool { return foldContainsASCII(s, "bearer") },
-		re:   regexp.MustCompile(`(?i)(\bbearer\s+)([a-z0-9._~+/=-]{16,})`),
+		// attribute values and inside error texts alike. The credential
+		// itself is masked; the "Bearer "/"Basic " marker survives,
+		// matching how the URL patterns below keep their parameter names
+		// and scheme -- the reader still learns WHAT was masked (a bearer
+		// credential or a basic-auth pair, not, say, a session id) without
+		// ever seeing the credential. "Basic" shares the shape class
+		// because an upstream error echoes a basic-auth header the same
+		// way it echoes a bearer one, and the base64 body of an
+		// Authorization: Basic header is exactly the secret its name
+		// says; the run class covers base64's alphabet (including the '='
+		// padding a bearer token never carries).
+		gate: func(s string) bool {
+			return foldContainsASCII(s, "bearer") || foldContainsASCII(s, "basic")
+		},
+		re:   regexp.MustCompile(`(?i)(\b(?:bearer|basic)\s+)([a-z0-9._~+/=-]{16,})`),
 		repl: "${1}" + RedactedValue,
 	},
 	{
@@ -525,18 +610,30 @@ var secretShapePatterns = []secretShapePattern{
 		repl: RedactedValue,
 	},
 	{
-		// Credentials embedded in a URL query string. Only parameter names
-		// that are unambiguous secrets are recognized (access_token,
-		// api_key, client_secret, password, refresh_token, secret,
-		// session keys/tokens, signatures, bare "token"); deliberately not
-		// the ambiguous ones ("auth", "key", "code") whose values are
-		// often harmless. The parameter name survives, the value does not.
+		// Credentials embedded in a URL query string, and in a bare query
+		// string that carries no URL at all. Only parameter names that are
+		// unambiguous secrets are recognized (access_token, api_key,
+		// client_secret, password, refresh_token, secret, session
+		// keys/tokens, signatures, bare "token"); deliberately not the
+		// ambiguous ones ("auth", "key", "code") whose values are often
+		// harmless. The parameter name survives, the value does not.
+		//
+		// The parameter may sit at the very start of the scanned text, not
+		// only after a '?' or '&': the most natural way for a handler to
+		// log a query is the raw r.URL.RawQuery, which carries no leading
+		// '?', and captured form bodies and error echoes of them start
+		// with whatever the first parameter is -- so the anchor is
+		// (?:^|[?&]) and the gate's leading-anchor test is
+		// querySecretParamAtStart. (This pattern's shape is still only
+		// "a run of k=v pairs", never "a secret-looking word anywhere":
+		// a secret parameter in the middle of running prose still needs a
+		// '?' or '&' immediately before it.)
 		gate: func(s string) bool {
 			return strings.Contains(s, "=") &&
-				(strings.Contains(s, "://") || strings.Contains(s, "?"))
+				(strings.Contains(s, "://") || strings.Contains(s, "?") || querySecretParamAtStart(s))
 		},
 		re: regexp.MustCompile(
-			`(?i)([?&](?:access_token|access-token|api[_-]?key|apikey|authorization|` +
+			`(?i)((?:^|[?&])(?:access_token|access-token|api[_-]?key|apikey|authorization|` +
 				`client[_-]?secret|password|passwd|refresh_token|refresh-token|secret|` +
 				`session[_-]?key|session_token|session-token|sig|signature|token)=)([^&#"\s<>]+)`,
 		),
@@ -545,12 +642,56 @@ var secretShapePatterns = []secretShapePattern{
 	{
 		// userinfo embedded in a URL (https://user:password@host): the
 		// password half is masked, the username and the scheme survive.
+		// The (?i) fold exists because schemes are case-insensitive in the
+		// real world -- "HTTPS://ops:secret@host" is the same URL as its
+		// lowercase twin, and an error text echoing it may carry either
+		// spelling; every other shape class that needs case-insensitivity
+		// already carries (?i), this one was missed. The negated classes
+		// (username and password alphabets) contain no letters, so the
+		// fold changes nothing about them.
 		gate: func(s string) bool {
 			return strings.Contains(s, "://") && strings.Contains(s, "@")
 		},
-		re:   regexp.MustCompile(`([a-z][a-z0-9+.-]*://[^/@\s:]+:)([^@\s/]+)(@)`),
+		re:   regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://[^/@\s:]+:)([^@\s/]+)(@)`),
 		repl: "${1}" + RedactedValue + "${3}",
 	},
+}
+
+// querySecretParamNames mirrors the parameter-name alternation of the
+// URL-query pattern above -- the exact leading names a bare query string
+// can start with, compared byte-for-byte by querySecretParamAtStart (the
+// pattern's own alternation also admits the compact regex classes
+// api[_-]?key / client[_-]?secret / session[_-]?key, which this list
+// spells out in their concrete forms). It must be kept in step with that
+// alternation by hand; the provider-prefix pattern's gate already carries
+// the same established duplication, and the cost of drift is bounded and
+// one-directional -- a forgotten name here makes the gate skip a string
+// the regexp would have masked (under-redaction, which the value-shape
+// net's own test table is the backstop for), never the reverse.
+var querySecretParamNames = []string{
+	"access_token", "access-token", "api_key", "api-key", "apikey",
+	"authorization", "client_secret", "client-secret", "password", "passwd",
+	"refresh_token", "refresh-token", "secret", "session_key", "session-key",
+	"session_token", "session-token", "sig", "signature", "token",
+}
+
+// querySecretParamAtStart reports whether s begins with one of
+// querySecretParamNames immediately followed by '=' -- the leading shape
+// of a bare query string or captured form body (see the URL-query
+// pattern's own doc comment for why that shape matters). Allocation-free:
+// the name under test is a sub-slice of s ending at its first '='.
+func querySecretParamAtStart(s string) bool {
+	end := strings.IndexByte(s, '=')
+	if end <= 0 {
+		return false
+	}
+	name := s[:end]
+	for _, n := range querySecretParamNames {
+		if len(name) == len(n) && foldEqualASCII(name, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

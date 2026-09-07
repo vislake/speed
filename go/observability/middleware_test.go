@@ -13,6 +13,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -941,6 +943,294 @@ func TestAnnotateTenant_NoTenant_LeavesSpanUnmodified(t *testing.T) {
 	}
 	if _, ok := findAttr(spans[0].Attributes, obs.TenantIDKey); ok {
 		t.Errorf("expected no %s attribute with no tenant on context, got attributes: %v", obs.TenantIDKey, spans[0].Attributes)
+	}
+}
+
+// TestMiddleware_PanickingHandler_StillRecordsMetricsAndErrorSpan is the
+// regression for a hole in Middleware's "Every request gets counted here"
+// contract: the metric-recording and span-enriching block used to run
+// after next.ServeHTTP returned, with no defer, so a handler that panicked
+// unwound straight past this middleware -- the reference app's chain has
+// no recover middleware above this one, and net/http's own per-connection
+// recovery is the first thing a panic reaches -- and the request vanished
+// from both the metrics and the span status entirely (0 metrics collected,
+// and a span left with an unset status). The recording block now runs in a
+// defer, so a panic still produces the request's count/duration data point
+// -- labeled with the 500 this middleware records as its stand-in for a
+// response that never reached the client (see the defer's own comment) --
+// and an error-status span. The panic itself is deliberately NOT recovered
+// here: it keeps propagating to net/http's recovery above, exactly as it
+// would without this middleware in the chain. Fails before the fix
+// (verified): the collect below finds no counter series at all, and the
+// span's status code is Unset.
+func TestMiddleware_PanickingHandler_StillRecordsMetricsAndErrorSpan(t *testing.T) {
+	exp := setupTracerProvider(t)
+	reader := setupMeterProvider(t)
+
+	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		panic("probe: handler panic")
+	}))
+
+	// net/http's per-connection recovery sits ABOVE the whole handler
+	// chain; this test stands in for it at the edge so the panic does not
+	// fail the test itself.
+	func() {
+		defer func() { _ = recover() }()
+		handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, "/api/v1/notes", ""))
+	}()
+
+	rm := collect(t, reader)
+	counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+	if got := len(counter.DataPoints); got != 1 {
+		t.Fatalf("expected exactly 1 counter series for a panicking request, got %d: %v", got, counter.DataPoints)
+	}
+	labels := labelMap(counter.DataPoints[0].Attributes)
+	if labels["http.response.status_code"] != "500" {
+		t.Errorf("a panicking handler that wrote no response must be recorded with status 500, got labels: %v", labels)
+	}
+	if got := counter.DataPoints[0].Value; got != 1 {
+		t.Errorf("counter value = %v, want 1", got)
+	}
+
+	duration := findHistogram(t, findMetric(t, rm, requestDurationMetricName))
+	if got := duration.DataPoints[0].Count; got != 1 {
+		t.Errorf("duration sample count = %v, want 1 (the panicking request must still be timed)", got)
+	}
+
+	spans := exp.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected exactly 1 span, got %d", len(spans))
+	}
+	if got := spans[0].Status.Code; got != codes.Error {
+		t.Errorf("span status code for a panicking handler = %v, want %v (an error-status span)", got, codes.Error)
+	}
+}
+
+// TestMiddleware_InvalidUTF8Path_SanitizesBeforeTheLabel is the
+// label-formation-side regression for the invalid-UTF-8 route-label class
+// (the exporter-side, scrape-level regression lives in
+// exporter/prometheus/prometheus_test.go's
+// TestBuildReader_InvalidUTF8Path_NeverVoidsTheScrape): net/http
+// percent-decodes a request target byte-wise, so a %FF in the path
+// reaches Middleware as a raw invalid byte, and the http.route metric
+// label must never be formed from it -- the Prometheus exporter rejects an
+// invalid-UTF-8 label value on every Gather, which would void the whole
+// /metrics scrape (an unauthenticated DoS the route label's count and
+// length bounds never covered). The label must instead carry the Unicode
+// replacement rune in the invalid byte's place -- the request is still
+// counted, under a valid label -- while a valid path is never touched.
+// Fails before the fix (verified): the recorded route label is "/api/..."'
+// with the raw 0xFF byte in it and utf8.ValidString reports false.
+func TestMiddleware_InvalidUTF8Path_SanitizesBeforeTheLabel(t *testing.T) {
+	reader := setupMeterProvider(t)
+	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// A valid control request first, so the sanitizing path has a sibling
+	// to compare against in the same snapshot.
+	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, "/api/v1/notes", ""))
+
+	bad := httptest.NewRequest(http.MethodGet, "/api/%FFjunk", nil)
+	if utf8.ValidString(bad.URL.Path) {
+		t.Fatalf("test setup: URL.Path %q must not be valid UTF-8 for this regression to be exercised", bad.URL.Path)
+	}
+	handler.ServeHTTP(httptest.NewRecorder(), bad)
+
+	rm := collect(t, reader)
+	counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+	if got := len(counter.DataPoints); got != 2 {
+		t.Fatalf("expected 2 distinct counter series (the valid request and the sanitized invalid one), got %d: %v", got, counter.DataPoints)
+	}
+	for _, dp := range counter.DataPoints {
+		route := labelMap(dp.Attributes)["http.route"]
+		if !utf8.ValidString(route) {
+			t.Fatalf("recorded http.route label %q is not valid UTF-8: an invalid path byte reached the label value", route)
+		}
+	}
+	// The invalid request is still counted, under the sanitized label.
+	var sanitizedFound bool
+	for _, dp := range counter.DataPoints {
+		route := labelMap(dp.Attributes)["http.route"]
+		if route == "/api/"+string(utf8.RuneError)+"junk" {
+			sanitizedFound = true
+			if dp.Value != 1 {
+				t.Errorf("sanitized series recorded %v requests, want 1", dp.Value)
+			}
+		}
+	}
+	if !sanitizedFound {
+		t.Fatalf("expected a series labeled http.route=\"/api/<U+FFFD>junk\" (the invalid path sanitized); got: %v", counter.DataPoints)
+	}
+}
+
+// TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded is the regression
+// for the route limiter's first-come-first-served pre-emption: before a
+// host can register its real route table (obs.RegisterMountedRoutes), the
+// limiter's distinct-value budget was filled by whatever request traffic
+// arrived first, so 256 distinct garbage paths sent right after startup
+// collapsed every genuine route -- /api/v1/notes included -- to
+// RouteLabelOverflowValue for the process lifetime, with no bound
+// violated. With the route table seeded at construction (the register call
+// below, which Middleware snapshots when it builds the limiter), a real
+// route keeps its own series whatever garbage arrives. Fails before the
+// seeding lands (verified by removing the seeding loop in Middleware):
+// the series labeled http.route="/api/v1/notes" does not exist -- the real
+// route's request lands in the overflow bucket instead.
+func TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded(t *testing.T) {
+	reader := setupMeterProvider(t)
+
+	obs.RegisterMountedRoutes([]pkgcore.MountedRoute{
+		{Path: "/api/v1/notes"},
+		{Path: "/healthz"},
+	})
+	t.Cleanup(func() { obs.RegisterMountedRoutes(nil) })
+
+	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	// Saturate the distinct-value budget with attacker garbage -- exactly
+	// obs.MaxRouteLabelValues distinct paths, which without the seed
+	// exhaust the limiter before the real route below is ever requested.
+	for i := 0; i < obs.MaxRouteLabelValues; i++ {
+		path := fmt.Sprintf("/attacker-garbage-path-%d", i)
+		handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, path, ""))
+	}
+
+	// The real route, requested only after the budget is exhausted: it
+	// must still record its own series, not the overflow bucket.
+	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, "/api/v1/notes", ""))
+
+	rm := collect(t, reader)
+	counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+
+	var realRouteFound, overflowFound bool
+	var totalRecorded int64
+	for _, dp := range counter.DataPoints {
+		labels := labelMap(dp.Attributes)
+		totalRecorded += dp.Value
+		switch route := labels["http.route"]; route {
+		case "/api/v1/notes":
+			realRouteFound = true
+			if dp.Value != 1 {
+				t.Errorf("the real route's series recorded %v requests, want 1", dp.Value)
+			}
+		case obs.RouteLabelOverflowValue:
+			overflowFound = true
+			if want := int64(2); dp.Value != want {
+				t.Errorf("overflow bucket recorded %v requests, want %v (the two garbage paths the two seeded slots displaced)", dp.Value, want)
+			}
+		}
+	}
+	if !realRouteFound {
+		t.Fatalf("expected a series labeled http.route=\"/api/v1/notes\" after %d garbage paths: real routes must survive the budget being exhausted (pre-seed behavior collapses them to %q)",
+			obs.MaxRouteLabelValues, obs.RouteLabelOverflowValue)
+	}
+	if !overflowFound {
+		t.Errorf("expected the overflow bucket to still exist (2 garbage paths beyond the seeded budget); series: %v", counter.DataPoints)
+	}
+	if totalRecorded != int64(obs.MaxRouteLabelValues+1) {
+		t.Errorf("sum of all recorded requests = %v, want %v: a request was lost or double-counted",
+			totalRecorded, obs.MaxRouteLabelValues+1)
+	}
+
+	// Boundedness holds all the same: the budget is 256 slots of which the
+	// two seeds reserve two, so 254 garbage paths are tracked and the
+	// remaining 2 collapse to the single overflow bucket -- and the real
+	// route's request lands on its own pre-seeded series. A data point
+	// only materializes for a slot some request actually used, so the
+	// series count is 254 tracked garbage + 1 real route + 1 overflow
+	// bucket = obs.MaxRouteLabelValues, not one per budget slot.
+	const seededRoutes = 2
+	if got := len(counter.DataPoints); got != obs.MaxRouteLabelValues {
+		t.Fatalf("got %d distinct series, want exactly %d (%d budget slots - %d seeded routes that reserve but do not emit + 1 real route + 1 overflow bucket): the seed must not grow the bound",
+			got, obs.MaxRouteLabelValues, obs.MaxRouteLabelValues, seededRoutes)
+	}
+}
+
+// erroringMeterProvider and erroringMeter stand in for a MeterProvider
+// whose instrument construction fails, so
+// TestMiddleware_InstrumentConstructionError_IsReported can prove the
+// construction errors Middleware used to drop (requestCount, _ := ...)
+// are now routed to OTel's global error handler. The real SDK only errors
+// on genuinely invalid instrument configurations (and validates silently
+// where these probes would need it to fail), so the failure has to be
+// injected; embedding noop.Meter keeps the rest of the interface live for
+// anything Middleware (or a future edit of it) may call that this test
+// does not anticipate.
+type erroringMeterProvider struct {
+	metric.MeterProvider
+}
+
+type erroringMeter struct {
+	noop.Meter
+}
+
+func (erroringMeterProvider) Meter(string, ...metric.MeterOption) metric.Meter {
+	return erroringMeter{}
+}
+
+func (erroringMeter) Int64Counter(name string, _ ...metric.Int64CounterOption) (metric.Int64Counter, error) {
+	// The meter contract hands back a no-op instrument alongside the
+	// error, exactly like the real SDK does for an invalid registration;
+	// recording into it stays safe, which is what lets Middleware report
+	// the error instead of failing.
+	return noop.Int64Counter{}, fmt.Errorf("probe: cannot create counter %q", name)
+}
+
+func (erroringMeter) Float64Histogram(name string, _ ...metric.Float64HistogramOption) (metric.Float64Histogram, error) {
+	return noop.Float64Histogram{}, fmt.Errorf("probe: cannot create histogram %q", name)
+}
+
+// TestMiddleware_InstrumentConstructionError_IsReported is the regression
+// for Middleware dropping its instrument-construction errors
+// (requestCount, _ := meter.Int64Counter(...)): a construction error means
+// the meter handed back a no-op instrument, so requests would go
+// uncounted or untimed with no startup signal at all -- the silent-failure
+// mode a future rename or collision of these instrument names would
+// otherwise produce. Middleware now routes each construction error to
+// OTel's global error handler (stderr by default; captured here via
+// otel.SetErrorHandler), naming the instrument that failed. Fails before
+// the fix (verified): the capturing error handler is never invoked.
+func TestMiddleware_InstrumentConstructionError_IsReported(t *testing.T) {
+	var mu sync.Mutex
+	var reported []error
+	previous := otel.GetErrorHandler()
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		reported = append(reported, err)
+	}))
+	t.Cleanup(func() { otel.SetErrorHandler(previous) })
+
+	otel.SetMeterProvider(erroringMeterProvider{})
+
+	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	// Serving still works with the no-op instruments the erroring meter
+	// returned -- recording into them is safe, which is why the errors can
+	// be reported rather than fatal.
+	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, "/api/v1/notes", ""))
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reported) != 2 {
+		t.Fatalf("expected Middleware to report both instrument-construction errors to the OTel error handler, got %d: %v", len(reported), reported)
+	}
+	var sawCounter, sawDuration bool
+	for _, err := range reported {
+		msg := err.Error()
+		if strings.Contains(msg, requestCountMetricName) {
+			sawCounter = true
+		}
+		if strings.Contains(msg, requestDurationMetricName) {
+			sawDuration = true
+		}
+	}
+	if !sawCounter || !sawDuration {
+		t.Errorf("reported errors must name the failing instruments (%q and %q); got: %v", requestCountMetricName, requestDurationMetricName, reported)
 	}
 }
 

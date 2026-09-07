@@ -119,6 +119,17 @@ func WithOTLPInsecure(insecure bool) Option {
 // errors.Is instead of matching its message text.
 var ErrOTLPExporterNotRegistered = errors.New(`observability: OTLP endpoint configured but no OTLP exporter registered -- blank-import "github.com/vislake/speed/go/observability/exporter/otlp"`)
 
+// factoryMu guards otlpFactory and metricsReaderFactory. Both package
+// variables are written by exported Register functions -- called from
+// exporter subpackage init() functions in a real binary, but callable at
+// any time, and this package's own tests register stand-ins around
+// repeated Init calls -- and read by Init / initLocalExporters, so the
+// two need the same mutex discipline metricsHandlerMu provides for
+// currentMetricsHandler: without it, a registration racing a concurrent
+// Init is a genuine -race report (see factory_vars_test.go's
+// TestFactoryVars_ConcurrentRegisterAndInit_NoDataRace).
+var factoryMu sync.Mutex
+
 // otlpFactory is the constructor Init calls to build the OTLP/gRPC
 // exporter set once a caller supplies WithOTLPEndpoint. It starts out nil
 // -- Init's own doc comment on WithOTLPEndpoint's actionable error
@@ -157,6 +168,8 @@ var otlpFactory func(ctx context.Context, cfg Config, res *resource.Resource) (f
 // such subpackage, exactly as database/sql accepts for a duplicate driver
 // name.
 func RegisterOTLPExporters(f func(ctx context.Context, cfg Config, res *resource.Resource) (func(context.Context) error, error)) {
+	factoryMu.Lock()
+	defer factoryMu.Unlock()
 	otlpFactory = f
 }
 
@@ -194,6 +207,8 @@ var metricsReaderFactory func() (sdkmetric.Reader, http.Handler, error)
 // nothing registered is never left with no local telemetry at all --
 // only with no local *pull-based scrape* endpoint.
 func RegisterLocalMetricsReader(f func() (sdkmetric.Reader, http.Handler, error)) {
+	factoryMu.Lock()
+	defer factoryMu.Unlock()
 	metricsReaderFactory = f
 }
 
@@ -305,10 +320,13 @@ func Init(ctx context.Context, opts ...Option) (func(context.Context) error, err
 	}
 
 	if cfg.OTLPEndpoint != "" {
-		if otlpFactory == nil {
+		factoryMu.Lock()
+		factory := otlpFactory
+		factoryMu.Unlock()
+		if factory == nil {
 			return nil, ErrOTLPExporterNotRegistered
 		}
-		shutdown, err := otlpFactory(ctx, cfg, res)
+		shutdown, err := factory(ctx, cfg, res)
 		if err != nil {
 			return nil, err
 		}
@@ -367,8 +385,11 @@ func initLocalExporters(res *resource.Resource) (func(context.Context) error, er
 	// forgot the blank import had no signal at process start; discovery
 	// depended entirely on someone eventually probing /metrics.
 	metricsHandler := http.Handler(http.HandlerFunc(metricsUnavailable))
-	if metricsReaderFactory != nil {
-		reader, handler, err := metricsReaderFactory()
+	factoryMu.Lock()
+	readerFactory := metricsReaderFactory
+	factoryMu.Unlock()
+	if readerFactory != nil {
+		reader, handler, err := readerFactory()
 		if err != nil {
 			_ = tp.Shutdown(context.Background())
 			return nil, fmt.Errorf("observability: build local metrics reader: %w", err)

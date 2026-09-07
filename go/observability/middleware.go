@@ -2,7 +2,9 @@ package observability
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -305,10 +307,24 @@ func methodMetricLabel(method string) string {
 //     before it can become either routeLabelLimiter's map key or the
 //     label value itself (see MaxRouteLabelLength's own doc comment for
 //     why value SIZE, not just value COUNT, is its own exploitable
-//     dimension here). This does not require knowing an application's
-//     real route set in advance -- it just stops minting new distinct
-//     values, and bloating any single one of them, once comfortably past
-//     what any real, bounded route table could produce.
+//     dimension here), AND replaces any byte sequence that is not valid
+//     UTF-8 before the value can become a map key or a label -- a path
+//     whose percent-decoded bytes are invalid UTF-8 (net/http
+//     percent-decodes byte-wise, so %FF in a request target reaches this
+//     middleware as a raw 0xFF byte with no parse error anywhere) would
+//     otherwise hand the exporter a label value it refuses to encode,
+//     voiding the entire /metrics scrape for the life of the process (see
+//     sanitizeRouteLabel's own doc comment for that third, orthogonal
+//     dimension of the same unauthenticated-DoS class the count and
+//     length caps close). When the host registers the application's real
+//     route table (RegisterMountedRoutes), those routes are seeded into
+//     the limiter at construction, so the distinct-value budget cannot be
+//     exhausted by attacker garbage before a real route is ever requested
+//     (see routeLabelLimiter.seed). None of this requires knowing an
+//     application's real route set in advance -- the bounds just stop
+//     minting new distinct values, and bloating any single one of them,
+//     once comfortably past what any real, bounded route table could
+//     produce.
 //   - http.request.method comes from methodMetricLabel(r.Method), never
 //     the raw token directly: the nine standard methods (net/http's
 //     MethodGet through MethodTrace constants) are recorded verbatim, so
@@ -342,17 +358,39 @@ func methodMetricLabel(method string) string {
 // by construction, so the method dimension is never approximate.
 func Middleware(next http.Handler) http.Handler {
 	meter := otel.Meter(instrumentationName)
-	requestCount, _ := meter.Int64Counter(
+	requestCount, err := meter.Int64Counter(
 		requestCountName,
 		metric.WithDescription("Number of HTTP requests handled, labeled by method, route and status code."),
 		metric.WithUnit("{request}"),
 	)
-	requestDuration, _ := meter.Float64Histogram(
+	if err != nil {
+		// A construction error means the meter could not register the
+		// instrument (an invalid name, or a conflicting registration of
+		// the same name) and handed back a no-op in its place -- requests
+		// would then go uncounted with no startup signal at all, the same
+		// silent-failure mode initLocalExporters' missing-reader warning
+		// exists to prevent. The error goes to OTel's global error handler
+		// (stderr by default, capturable via otel.SetErrorHandler) rather
+		// than being dropped; recording into the returned instrument stays
+		// safe either way, since a no-op instrument accepts every record.
+		otel.Handle(fmt.Errorf("observability: create %q counter instrument: %w", requestCountName, err))
+	}
+	requestDuration, err := meter.Float64Histogram(
 		requestDurationName,
 		metric.WithDescription("Duration of HTTP requests handled, labeled by method, route and status code."),
 		metric.WithUnit(requestDurationUnit),
 	)
+	if err != nil {
+		otel.Handle(fmt.Errorf("observability: create %q histogram instrument: %w", requestDurationName, err))
+	}
 	routeLabels := newRouteLabelLimiter(MaxRouteLabelValues)
+	// Seed the limiter with the application's real route table so the
+	// distinct-value budget cannot be exhausted by request-time garbage
+	// before a real route is ever requested -- see RegisterMountedRoutes'
+	// own doc comment.
+	for _, path := range registeredRoutePaths() {
+		routeLabels.seed(path)
+	}
 
 	instrumented := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -365,45 +403,72 @@ func Middleware(next http.Handler) http.Handler {
 		// tenant_id to this span from further down the chain.
 		AnnotateTenant(r.Context())
 
+		// The recording block below runs in a defer, not after
+		// next.ServeHTTP returns, so a handler that panics is still
+		// counted: the reference app's chain has no recover middleware
+		// above this one (net/http's per-connection recovery is the first
+		// thing a panic reaches), so without the defer a panicking handler
+		// would unwind straight past this middleware and vanish from both
+		// the metrics and the span status -- contradicting this
+		// middleware's own "Every request gets counted here" contract in
+		// its doc comment's "Where this sits in the chain" section.
+		panicked := true
+		defer func() {
+			// A handler that panicked before writing any response produced
+			// no status for the client at all (net/http aborts the
+			// connection). The 500 recorded here is this middleware's
+			// stand-in for "the request failed server-side": the
+			// statusRecorder's implicit-200 default would mislabel a
+			// request that never completed.
+			if panicked && !rec.wroteHeader {
+				rec.status = http.StatusInternalServerError
+			}
+
+			duration := time.Since(start).Seconds()
+			ctx := r.Context()
+
+			// Metric attrs bound BOTH request-controlled label dimensions
+			// before recording: http.request.method through
+			// methodMetricLabel(...) and http.route through
+			// routeLabels.label(...), never the raw token or raw path
+			// directly -- see the "Metric label cardinality caveats"
+			// section above for the live, unauthenticated exploit each
+			// bound closes. tenant_id is, and must remain, absent from
+			// this slice entirely: see middleware_test.go's
+			// TestMiddleware_MetricsExcludeTenant_NoPerTenantSeries for
+			// the negative control.
+			metricAttrs := []attribute.KeyValue{
+				httpMethodKey.String(methodMetricLabel(r.Method)),
+				httpRouteKey.String(routeLabels.label(r.URL.Path)),
+				httpStatusCodeKey.Int(rec.status),
+			}
+			requestCount.Add(ctx, 1, metric.WithAttributes(metricAttrs...))
+			requestDuration.Record(ctx, duration, metric.WithAttributes(metricAttrs...))
+
+			// The span, unlike the metrics above, always carries the exact
+			// raw method token and the exact raw path, never
+			// methodMetricLabel's or routeLabels' bounded values: a trace
+			// is not a Prometheus series, so it does not share the metric
+			// instruments' cardinality problem -- see the "Metric label
+			// cardinality caveats" section above, and
+			// docs/internal/09-observability.md for why Tempo tolerates
+			// high-cardinality dimensions that Prometheus cannot.
+			span := trace.SpanFromContext(ctx)
+			span.SetAttributes(
+				httpMethodKey.String(r.Method),
+				httpRouteKey.String(r.URL.Path),
+				httpStatusCodeKey.Int(rec.status),
+			)
+			// A panicking handler is an error even when it had already
+			// written a status below 500 before the panic: the request did
+			// not complete, and the span must say so.
+			if panicked || rec.status >= http.StatusInternalServerError {
+				span.SetStatus(codes.Error, http.StatusText(rec.status))
+			}
+		}()
+
 		next.ServeHTTP(rec, r)
-
-		duration := time.Since(start).Seconds()
-		ctx := r.Context()
-
-		// Metric attrs bound BOTH request-controlled label dimensions
-		// before recording: http.request.method through
-		// methodMetricLabel(...) and http.route through
-		// routeLabels.label(...), never the raw token or raw path directly
-		// -- see the "Metric label cardinality caveats" section above for
-		// the live, unauthenticated exploit each bound closes. tenant_id
-		// is, and must remain, absent from this slice entirely: see
-		// middleware_test.go's
-		// TestMiddleware_MetricsExcludeTenant_NoPerTenantSeries for the
-		// negative control.
-		metricAttrs := []attribute.KeyValue{
-			httpMethodKey.String(methodMetricLabel(r.Method)),
-			httpRouteKey.String(routeLabels.label(r.URL.Path)),
-			httpStatusCodeKey.Int(rec.status),
-		}
-		requestCount.Add(ctx, 1, metric.WithAttributes(metricAttrs...))
-		requestDuration.Record(ctx, duration, metric.WithAttributes(metricAttrs...))
-
-		// The span, unlike the metrics above, always carries the exact raw
-		// method token and the exact raw path, never methodMetricLabel's
-		// or routeLabels' bounded values: a trace is not a Prometheus
-		// series, so it does not share the metric instruments' cardinality
-		// problem -- see the "Metric label cardinality caveats" section
-		// above, and docs/internal/09-observability.md for why Tempo
-		// tolerates high-cardinality dimensions that Prometheus cannot.
-		span := trace.SpanFromContext(ctx)
-		span.SetAttributes(
-			httpMethodKey.String(r.Method),
-			httpRouteKey.String(r.URL.Path),
-			httpStatusCodeKey.Int(rec.status),
-		)
-		if rec.status >= http.StatusInternalServerError {
-			span.SetStatus(codes.Error, http.StatusText(rec.status))
-		}
+		panicked = false
 	})
 
 	// otelhttp.WithMeterProvider is pinned to a no-op provider so that
@@ -462,6 +527,69 @@ func AnnotateTenant(ctx context.Context) {
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String(TenantIDKey, string(tenant)))
 }
 
+// mountedRoutesMu guards mountedRoutePaths. Registration happens once at
+// host assembly time in a real binary, but this package's own tests call
+// RegisterMountedRoutes around repeated Middleware constructions (exactly
+// the repeated-call pattern init.go's metricsHandlerMu exists for), and
+// nothing forbids a host from registering at any time, so the snapshot is
+// mutex-guarded rather than a bare package variable.
+var (
+	mountedRoutesMu   sync.Mutex
+	mountedRoutePaths []string
+)
+
+// RegisterMountedRoutes hands Middleware the application's real route
+// table -- the paths of the pkgcore.MountedRoute values the host's modules
+// registered on their pkgcore.Registry (the registry's Routes registrar:
+// pkgcore.Registry.Routes.Routes()) -- so the route label limiter every
+// Middleware instance creates can reserve a place for each real route
+// BEFORE any request traffic arrives. Without that reservation, the
+// limiter's distinct-value budget (MaxRouteLabelValues) is
+// first-come-first-served: an attacker sending enough distinct garbage
+// paths right after startup fills the budget and collapses every genuine
+// route to RouteLabelOverflowValue for the life of the process -- per-route
+// metrics gone even though no bound was violated. A seeded route keeps its
+// slot whatever garbage arrives later; paths the table does not name
+// (host-level routes such as "/healthz", or routes added after this call)
+// are not seeded and remain subject to the ordinary bounded behavior.
+//
+// Call it once, at assembly time, before constructing the Middleware that
+// serves the traffic: Middleware snapshots the registered paths at
+// construction, so a later registration does not reach an already-built
+// handler. Last registration wins, and an empty (or nil) route list
+// clears any earlier registration -- the reset form this package's own
+// tests use between cases. The paths are truncated and UTF-8-sanitized
+// exactly like request-time labels when they are seeded, so the same
+// bounds apply to them (see routeLabelLimiter.seed).
+//
+// examples/reference-app does not call this yet: its buildServer mounts
+// module routes on the mux from the same registry table this function
+// consumes, but main.go's run constructs obs.Middleware without handing
+// the table over. The wiring is a one-line addition next to that
+// construction once a consumer round picks it up; until then, this
+// function is exercised by this package's own tests (and its behavior is
+// pinned by middleware_test.go's
+// TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded), which is what keeps
+// the mechanism honest while it waits for its host call site.
+func RegisterMountedRoutes(routes []pkgcore.MountedRoute) {
+	mountedRoutesMu.Lock()
+	defer mountedRoutesMu.Unlock()
+	mountedRoutePaths = make([]string, 0, len(routes))
+	for _, route := range routes {
+		if route.Path != "" {
+			mountedRoutePaths = append(mountedRoutePaths, route.Path)
+		}
+	}
+}
+
+// registeredRoutePaths returns a copy of the registered route paths, for
+// Middleware to snapshot into the limiter it builds.
+func registeredRoutePaths() []string {
+	mountedRoutesMu.Lock()
+	defer mountedRoutesMu.Unlock()
+	return append([]string(nil), mountedRoutePaths...)
+}
+
 // routeLabelLimiter bounds the number of distinct http.route metric label
 // values a single Middleware instance will ever emit to MaxRouteLabelValues,
 // collapsing every value seen after that into RouteLabelOverflowValue, AND
@@ -474,11 +602,12 @@ func AnnotateTenant(ctx context.Context) {
 // metric series per distinct URL path they send, whether or not it
 // matches a real route. MaxRouteLabelLength's own doc comment covers the
 // narrower, value-SIZE variant of that same exploit the count bound alone
-// does not close. The sibling http.request.method dimension is bounded by
-// its own mechanism (methodMetricLabel) -- a fixed set-collapse that needs
-// no per-instance state and therefore no count or length bound of its own
-// -- so this limiter is the route half of a two-dimension story, never the
-// whole of it.
+// does not close, and sanitizeRouteLabel's own doc comment the value
+// VALIDITY variant neither bound checks. The sibling http.request.method
+// dimension is bounded by its own mechanism (methodMetricLabel) -- a fixed
+// set-collapse that needs no per-instance state and therefore no count or
+// length bound of its own -- so this limiter is the route half of a
+// two-dimension story, never the whole of it.
 //
 // It is created once per Middleware call and shared, via the closure
 // Middleware returns, across every concurrent request that handler serves
@@ -487,7 +616,10 @@ func AnnotateTenant(ctx context.Context) {
 // its internal mutex sees exactly the concurrency a live server's request
 // goroutines already produce. middleware_test.go's
 // TestMiddleware_UnboundedRoutePaths_CardinalityIsBounded drives it
-// concurrently, under -race, for exactly this reason.
+// concurrently, under -race, for exactly this reason. At construction the
+// host's registered route table is seeded into it (see
+// RegisterMountedRoutes and seed), so real routes claim their budget
+// slots before any request traffic can.
 type routeLabelLimiter struct {
 	mu    sync.Mutex
 	seen  map[string]struct{}
@@ -508,20 +640,26 @@ func newRouteLabelLimiter(limit int) *routeLabelLimiter {
 // distinct values label can ever return stays fixed at limit+1 for the
 // lifetime of l.
 //
-// path is truncated to at most MaxRouteLabelLength bytes via
-// truncateRouteLabel BEFORE any of the above happens -- before it is
-// compared against or inserted into l.seen, and before it is returned --
-// so both l.seen's memory footprint and the value the caller goes on to
-// use as the actual metric attribute (see Middleware) are bounded by
-// MaxRouteLabelLength regardless of how long the caller's raw path is.
-// This is an orthogonal bound to the limit/RouteLabelOverflowValue
-// machinery above: truncation can make two distinct long paths collapse
-// into the same tracked value (both being effectively attacker garbage,
-// this is an acceptable, even desirable, side effect), but it never
-// changes how many distinct values l.seen can hold, and never by itself
-// produces RouteLabelOverflowValue.
+// path is passed through truncateRouteLabel (capped at MaxRouteLabelLength
+// bytes) and sanitizeRouteLabel (invalid UTF-8 replaced) BEFORE any of the
+// above happens -- before it is compared against or inserted into l.seen,
+// and before it is returned -- so both l.seen's memory footprint and the
+// value the caller goes on to use as the actual metric attribute (see
+// Middleware) are bounded by MaxRouteLabelLength and always valid UTF-8,
+// regardless of what the caller's raw path contains. The length bound is
+// orthogonal to the limit/RouteLabelOverflowValue machinery above:
+// truncation can make two distinct long paths collapse into the same
+// tracked value (both being effectively attacker garbage, this is an
+// acceptable, even desirable, side effect), but it never changes how many
+// distinct values l.seen can hold, and never by itself produces
+// RouteLabelOverflowValue. The UTF-8 sanitization likewise never produces
+// RouteLabelOverflowValue: an invalid path is still counted, under a
+// sanitized label, because "this request happened" remains true whatever
+// bytes its path carried -- see sanitizeRouteLabel for why validity (not
+// just count and length) is a bound this package must enforce at all.
 func (l *routeLabelLimiter) label(path string) string {
 	path = truncateRouteLabel(path)
+	path = sanitizeRouteLabel(path)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -533,6 +671,79 @@ func (l *routeLabelLimiter) label(path string) string {
 	}
 	l.seen[path] = struct{}{}
 	return path
+}
+
+// seed reserves a place for path in l's seen set without ever consulting
+// the limit-to-overflow machinery: used at construction time to pre-insert
+// the application's real routes (see RegisterMountedRoutes) so that
+// request-time garbage paths cannot exhaust the distinct-value budget and
+// collapse a real route to RouteLabelOverflowValue before the route is
+// ever requested. path goes through the same truncation and UTF-8
+// sanitization as label's inputs, so a seed can never occupy more than
+// MaxRouteLabelLength bytes or introduce an invalid-UTF-8 value into l.seen
+// (a real route is a valid string by construction, but the discipline is
+// uniform). Once the set is full -- only possible when a host registered
+// more routes than MaxRouteLabelValues, which is its own
+// beyond-any-planned-route-count signal -- further seeds are dropped.
+func (l *routeLabelLimiter) seed(path string) {
+	path = truncateRouteLabel(path)
+	path = sanitizeRouteLabel(path)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.seen) >= l.limit {
+		return
+	}
+	if _, ok := l.seen[path]; ok {
+		return
+	}
+	l.seen[path] = struct{}{}
+}
+
+// sanitizeRouteLabel replaces every maximal byte sequence in path that is
+// not valid UTF-8 with the Unicode replacement rune (U+FFFD), returning
+// path unchanged -- with no allocation -- when path is already valid.
+//
+// This is the route label's third bound, and it exists because neither
+// MaxRouteLabelValues nor MaxRouteLabelLength can see the failure it
+// closes: net/http percent-decodes (*http.Request).URL.Path byte-wise, so
+// a request target containing %FF (or any other invalid UTF-8 encoding)
+// reaches Middleware with the raw invalid byte in the path and no parse
+// error anywhere -- and, recorded verbatim as the http.route label, that
+// byte makes the Prometheus exporter refuse the entire series on every
+// Gather (client_golang validates label values: "label value ... is not
+// valid UTF-8"). The scrape then answers 500 with zero metrics -- not just
+// this middleware's, but every module's -- for the life of the process,
+// because the offending data point is cumulative and the limiter has
+// cached the raw path in its "seen" set. One unauthenticated request thus
+// permanently kills /metrics: the same unauthenticated-DoS class the count
+// and length caps exist for, through the dimension neither checks. The
+// exporter-side half of the defense (promhttp.ContinueOnError, so a single
+// bad series costs only itself) is wired in
+// go/observability/exporter/prometheus; this function is the
+// label-formation-side half that keeps the class from ever reaching the
+// exporter through this middleware's route dimension.
+//
+// Replacement, rather than rejection or overflow-collapse, is the choice
+// because the request still happened and must still be counted: an
+// attacker's invalid path is attacker garbage, and counting it under a
+// sanitized label keeps the count honest while remaining bounded (the
+// sanitized value can never collide with a legitimate route, since a
+// legitimate path is valid UTF-8 and passes through unchanged, and it can
+// only shrink the distinct-value space by folding distinct invalid paths
+// onto identical replacement text). The scan runs only over the
+// already-truncated path (label truncates first), so per-request cost is
+// bounded by MaxRouteLabelLength bytes even when the raw path is a full
+// 1 MiB attacker request line.
+func sanitizeRouteLabel(path string) string {
+	if utf8.ValidString(path) {
+		return path
+	}
+	s := strings.ToValidUTF8(path, "\uFFFD")
+	if len(s) > MaxRouteLabelLength {
+		return truncateRouteLabel(s)
+	}
+	return s
 }
 
 // truncateRouteLabel caps path at MaxRouteLabelLength bytes, cutting on a

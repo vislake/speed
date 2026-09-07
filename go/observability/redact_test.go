@@ -3,6 +3,7 @@ package observability_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"log/slog"
@@ -34,6 +35,12 @@ const (
 		".abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789cd"
 	testJWE = testJWT + testJWETail
 )
+
+// testBasic is a real Basic-authorization credential value: the base64 of
+// "dummy:supersecretpassword", computed through the stdlib encoder here
+// (not a hand-written literal) so the fixture cannot drift from what a
+// genuine Authorization header would carry.
+var testBasic = "Basic " + base64.StdEncoding.EncodeToString([]byte("dummy:supersecretpassword"))
 
 // logThrough logs msg with args through a FromContext logger bound to buf
 // (via textLoggerCtx) and returns everything the sink rendered.
@@ -498,6 +505,53 @@ func TestRedact_SecretShapesInValues(t *testing.T) {
 			secret:   "", // gate hits but the shape requires 16+ key characters
 			wantKeep: []string{"the sk_ prefix alone is not a key"},
 		},
+		{
+			name:     "bare query string as whole value",
+			value:    "access_token=abcDEFgh1234567890&scope=read",
+			secret:   "abcDEFgh1234567890",
+			wantKeep: []string{"&scope=read"},
+			wantMask: []string{"access_token=" + obs.RedactedValue},
+		},
+		{
+			name:     "bare query string as first parameter",
+			value:    "password=sup3rSecretPw123456789&username=ops",
+			secret:   "sup3rSecretPw123456789",
+			wantKeep: []string{"&username=ops"},
+			wantMask: []string{"password=" + obs.RedactedValue},
+		},
+		{
+			name:     "bare benign query string untouched",
+			value:    "expand=charge&limit=25",
+			secret:   "", // no secret parameter name anywhere in the run
+			wantKeep: []string{"expand=charge&limit=25"},
+		},
+		{
+			name:     "password in url userinfo with uppercase scheme",
+			value:    "HTTPS://ops:sup3rSecretPw12345@db.internal:5432/pg",
+			secret:   "sup3rSecretPw12345",
+			wantKeep: []string{"HTTPS://ops:", "@db.internal:5432/pg"},
+			wantMask: []string{"HTTPS://ops:" + obs.RedactedValue + "@db.internal"},
+		},
+		{
+			name:     "basic auth credentials as whole value",
+			value:    "Basic " + base64.StdEncoding.EncodeToString([]byte("dummy:supersecretpassword")),
+			secret:   base64.StdEncoding.EncodeToString([]byte("dummy:supersecretpassword")),
+			wantKeep: []string{"Basic "},
+			wantMask: []string{"Basic " + obs.RedactedValue},
+		},
+		{
+			name:     "basic auth credentials embedded in text",
+			value:    "caller presented " + testBasic + " and was rejected",
+			secret:   testBasic,
+			wantKeep: []string{"caller presented", "and was rejected"},
+			wantMask: []string{"Basic " + obs.RedactedValue},
+		},
+		{
+			name:     "basic-auth prose untouched",
+			value:    "basic authentication is enabled on this endpoint",
+			secret:   "", // the word "basic" in prose is not a credential; the run after it is 15 chars, below secret strength
+			wantKeep: []string{"basic authentication is enabled on this endpoint"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -779,6 +833,162 @@ func TestRedact_ExemptKeysUnderSensitivePaths(t *testing.T) {
 		}
 		if strings.Contains(out, testSecret) {
 			t.Errorf("the secret must never reach the sink; got: %s", out)
+		}
+	})
+}
+
+// TestRedact_EmptyKeyAttributes_ValueRulesStillApply is the regression
+// for a total redaction bypass: redactAttr used to return an attribute
+// with an empty key untouched, on the theory that an empty key names no
+// secret. But slog's inline-group idiom -- slog.Group("", ...) -- attaches
+// an attribute whose key is empty while its VALUE is a group of named
+// children, and the built-in sinks render those children normally (an
+// empty group key adds no qualification, so the children appear inline,
+// and an empty-key scalar renders as ""=value), which made the early
+// return a live leak path: a password logged inside an empty-key group
+// reached the sink verbatim, and an empty-key string carrying a bearer
+// token skipped the value-shape scan entirely. An empty key must skip
+// only what is genuinely absent -- a key-name rule has nothing to match,
+// and an empty segment can neither be exempted nor sensitive -- while the
+// value rules still apply exactly as they do under a benign key: a
+// group's children are still visited, and a string or error value is
+// still scanned for secret shapes. Fails before the fix (verified): the
+// text sink renders "password=hunter2-super-secret" and the full bearer
+// token verbatim; passes after.
+func TestRedact_EmptyKeyAttributes_ValueRulesStillApply(t *testing.T) {
+	t.Run("empty-key group is recursed into", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := textLoggerCtx(context.Background(), &buf)
+
+		out := logThrough(ctx, &buf, "event",
+			slog.Group("", "username", "ops", "password", testSecret),
+		)
+
+		if strings.Contains(out, testSecret) {
+			t.Errorf("an empty-key group leaked its sensitive child's value into the sink; got: %s", out)
+		}
+		if !strings.Contains(out, obs.RedactedValue) {
+			t.Errorf("expected the sensitive child of the empty-key group to be redacted; got: %s", out)
+		}
+		if !strings.Contains(out, "username=ops") {
+			t.Errorf("expected the benign child of the empty-key group to survive; got: %s", out)
+		}
+	})
+
+	t.Run("empty-key string is value-scanned", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := textLoggerCtx(context.Background(), &buf)
+
+		out := logThrough(ctx, &buf, "event", slog.String("", testBearer))
+
+		if strings.Contains(out, testBearer) {
+			t.Errorf("an empty-key attribute leaked its secret-shaped value into the sink; got: %s", out)
+		}
+		if want := "Bearer " + obs.RedactedValue; !strings.Contains(out, want) {
+			t.Errorf("expected the bearer token under the empty key to be masked in place (%q); got: %s", want, out)
+		}
+	})
+
+	t.Run("benign empty-key values pass untouched", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := textLoggerCtx(context.Background(), &buf)
+
+		out := logThrough(ctx, &buf, "event",
+			slog.String("", "harmless-correlation-value-here"),
+			slog.Int("", 7),
+		)
+
+		if !strings.Contains(out, "harmless-correlation-value-here") {
+			t.Errorf("a benign empty-key string must survive value scanning; got: %s", out)
+		}
+		if !strings.Contains(out, "=7") {
+			t.Errorf("a numeric empty-key attribute must pass untouched; got: %s", out)
+		}
+		if strings.Contains(out, obs.RedactedValue) {
+			t.Errorf("nothing in this record is secret-shaped; got: %s", out)
+		}
+	})
+}
+
+// TestRedact_KeyStemDoesNotOverRedactCorrelationReferences is the
+// regression for the "key" stem's false-positive class: the stem used a
+// bare substring match, so any attribute whose name merely contained
+// "key" was redacted wholesale -- including correlation-only fields that
+// must stay queryable, exactly the class the "token" stem's word-boundary
+// treatment already closes. Two real call sites were damaged: the
+// reference-app integration module logs "key_id" holding an opaque API-key
+// row id (go/integration/authenticate.go -- an operator needs it to tell
+// which key failed its last-used update), and examples/reference-app's
+// smilesim service logs "credit_idempotency_key" holding the derived key
+// of an orphaned credit reservation precisely so an operator can reconcile
+// it (smilesim/service.go -- the value the log line exists for was masked).
+// Both names are references or derived correlation identifiers, never
+// credential material: "key_id" is an _id-suffixed row reference (the
+// naming convention neverRedactKeys' own user_id/job_id entries follow),
+// and a terminal "idempotency_key" compound is this repository's derived
+// idempotency-key convention (go/jobs, go/metering, go/billing,
+// go/notification all derive the key from the operation's own identity --
+// hashed, never caller-supplied), so both fall through the key rule to the
+// value-shape net. A genuinely secret-shaped key field -- api_key and its
+// family -- still redacts wholesale, and a secret-shaped VALUE logged
+// under a surviving reference name is still masked by the value net.
+// Fails before the fix (verified): "key_id" and "credit_idempotency_key"
+// both render "[REDACTED]" and the values never reach the sink.
+func TestRedact_KeyStemDoesNotOverRedactCorrelationReferences(t *testing.T) {
+	benign := []struct {
+		key, value string
+	}{
+		{"key_id", "550e8400-e29b-41d4-a716-446655440000"},
+		{"credit_idempotency_key", "credit-reservation-42-settlement-key"},
+		{"idempotency_key", "delivery-run-7-dedupe-key"},
+	}
+	for _, tc := range benign {
+		t.Run("reference/"+tc.key, func(t *testing.T) {
+			var buf bytes.Buffer
+			ctx := textLoggerCtx(context.Background(), &buf)
+
+			out := logThrough(ctx, &buf, "event", tc.key, tc.value)
+
+			if want := tc.key + "=" + tc.value; !strings.Contains(out, want) {
+				t.Errorf("correlation reference %q must render its value verbatim; got: %s", tc.key, out)
+			}
+			if strings.Contains(out, obs.RedactedValue) {
+				t.Errorf("attribute %q was wrongly redacted; got: %s", tc.key, out)
+			}
+		})
+	}
+
+	t.Run("secret-shaped key values still redact wholesale", func(t *testing.T) {
+		for _, key := range []string{"api_key", "signing_key", "x_api_key"} {
+			var buf bytes.Buffer
+			ctx := textLoggerCtx(context.Background(), &buf)
+
+			out := logThrough(ctx, &buf, "event", key, testSecret)
+
+			if strings.Contains(out, testSecret) {
+				t.Errorf("attribute %q leaked its value into the sink; got: %s", key, out)
+			}
+			if want := key + "=" + obs.RedactedValue; !strings.Contains(out, want) {
+				t.Errorf("expected %q to be replaced by %q; got: %s", key, obs.RedactedValue, out)
+			}
+		}
+	})
+
+	t.Run("secret-shaped value under a surviving reference name is still masked", func(t *testing.T) {
+		var buf bytes.Buffer
+		ctx := textLoggerCtx(context.Background(), &buf)
+
+		// key_id is not exempt from value scanning (only neverRedactKeys
+		// are), so a secret-shaped value under it is masked in place by
+		// the value net: the reference exemption narrows the key rule, it
+		// does not open a hole.
+		out := logThrough(ctx, &buf, "event", "key_id", testJWT)
+
+		if strings.Contains(out, testJWT) {
+			t.Errorf("a secret-shaped value under a surviving reference key leaked; got: %s", out)
+		}
+		if want := "key_id=" + obs.RedactedValue; !strings.Contains(out, want) {
+			t.Errorf("expected the JWT-shaped value under key_id to be masked in place (%q); got: %s", want, out)
 		}
 	})
 }

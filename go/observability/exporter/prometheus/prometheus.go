@@ -57,11 +57,27 @@ func init() {
 // registration" the moment it tried to register the same instrument names
 // again. A fresh registry per call sidesteps that entirely and keeps
 // repeated Init calls independent.
+//
+// The handler runs with promhttp.ContinueOnError rather than promhttp's
+// default HTTPErrorOnError: under the default, a single gather error turns
+// the whole scrape into a 500 with zero metrics served. One unscrapable
+// series (an instrument the exporter cannot translate into a valid
+// Prometheus family -- today, a recorded label value that is not valid
+// UTF-8) must cost only itself, not the /metrics endpoint -- the property
+// the endpoint's unauthenticated-DoS story depends on, and the reason
+// go/observability/Middleware itself sanitizes path bytes before they can
+// become label values (see the exporter test
+// TestBuildReader_OneUnscrapableSeries_DoesNotVoidTheScrape for the
+// negative control, and Middleware's route-label docs for the sanitizing
+// fix that keeps this mode's fallback from ever needing to fire for the
+// route dimension).
 func buildReader() (sdkmetric.Reader, http.Handler, error) {
 	registry := promclient.NewRegistry()
 	exporter, err := otelprom.New(otelprom.WithRegisterer(registry))
 	if err != nil {
 		return nil, nil, fmt.Errorf("observability/exporter/prometheus: build exporter: %w", err)
 	}
-	return exporter, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}), nil
+	return exporter, promhttp.HandlerFor(registry, promhttp.HandlerOpts{
+		ErrorHandling: promhttp.ContinueOnError,
+	}), nil
 }

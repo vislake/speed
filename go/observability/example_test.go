@@ -278,6 +278,36 @@ func ExampleMiddleware() {
 	// tenant_id ever a label: false
 }
 
+// ExampleRegisterMountedRoutes shows the host-side wiring that keeps the
+// route label limiter every Middleware constructs from being pre-empted
+// by request-time garbage: a host hands over the real route table it
+// assembled from its pkgcore.Registry (the same table it mounts on its
+// mux -- pkgcore.Registry.Routes.Routes()), and Middleware seeds its
+// limiter with those paths at construction, so 256 junk paths arriving
+// right after startup cannot collapse the app's genuine routes to the
+// overflow bucket. See middleware_test.go's
+// TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded for the behavioral
+// proof. The registration is a snapshot: register once, before
+// constructing the Middleware that serves the traffic.
+func ExampleRegisterMountedRoutes() {
+	observability.RegisterMountedRoutes([]pkgcore.MountedRoute{
+		{Path: "/api/v1/notes"},
+		{Path: "/healthz"},
+	})
+
+	// Middleware snapshots the registered paths when it is constructed;
+	// every Middleware built after this call (and before the next
+	// registration) seeds its limiter with them.
+	handler := observability.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	_ = handler
+
+	// Last registration wins; an empty list clears the seed (the form
+	// this package's own tests use to isolate one case from the next).
+	observability.RegisterMountedRoutes(nil)
+}
+
 // ExampleAnnotateTenant shows why AnnotateTenant exists as its own
 // function separate from Middleware: a trace Span is a shared mutable
 // object that survives every context fork downstream of where it was
