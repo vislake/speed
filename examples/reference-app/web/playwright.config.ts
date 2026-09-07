@@ -127,6 +127,18 @@ export const RESTART_API_PORT = runPort('E2E_RESTART_PORT', portBase + 3)
 export const INJECT_API_PORT = runPort('E2E_INJECT_PORT', portBase + 4)
 
 /**
+ * The port refund-on-failed-generation.spec.ts boots its own REFUSING
+ * image provider on.
+ *
+ * The run's shared provider answers successfully, which every other gate
+ * needs; a gate about what happens when a generation fails needs the
+ * opposite, and cannot have it by flipping the shared one. So it starts
+ * a second instance with FAKE_IMAGE_FAIL=1 and points its own server at
+ * that instead.
+ */
+export const REFUSING_IMAGE_PORT = runPort('E2E_REFUSING_IMAGE_PORT', portBase + 5)
+
+/**
  * The loopback address every local URL in this file names.
  *
  * `127.0.0.1` rather than `localhost`, and not a style preference: the

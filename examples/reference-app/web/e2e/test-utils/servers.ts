@@ -164,6 +164,36 @@ async function stop(child: ChildProcess): Promise<void> {
 }
 
 /**
+ * Boots a fake image provider a spec owns, and returns how to stop it.
+ *
+ * The run's shared provider answers successfully (playwright.config.ts's
+ * third webServer entry), which is what every gate about a working
+ * generation needs. A gate about a FAILED generation needs a provider
+ * that refuses, and flipping the shared one would break the others -- so
+ * it gets its own instance on its own port.
+ */
+export async function bootImageProvider(options: {
+  readonly port: string
+  readonly refuse: boolean
+}): Promise<OwnedServer> {
+  const deadline = Date.now() + 60_000
+  const child = spawn('node', ['e2e/test-utils/fake-image-provider.mjs'], {
+    cwd: fileURLToPath(new URL('../..', import.meta.url)),
+    env: {
+      ...process.env,
+      PORT: options.port,
+      ...(options.refuse ? { FAKE_IMAGE_FAIL: '1' } : {}),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  const said = capture(child)
+  if (!(await waitForHealthy(child, options.port, deadline))) {
+    throw new Error(`e2e: the fake image provider never became healthy: ${said()}`)
+  }
+  return { process: child, said, stop: () => stop(child) }
+}
+
+/**
  * Sends the page's /api calls to a spec's own server.
  *
  * Fetched by Playwright and handed back as this origin's own answer,

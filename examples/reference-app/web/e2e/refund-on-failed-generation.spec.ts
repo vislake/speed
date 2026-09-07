@@ -38,8 +38,8 @@
 import { expect, test } from '@playwright/test'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { INJECT_API_PORT } from '../playwright.config.js'
-import { bootServer, routeApiTo } from './test-utils/servers.js'
+import { INJECT_API_PORT, REFUSING_IMAGE_PORT } from '../playwright.config.js'
+import { bootImageProvider, bootServer, routeApiTo } from './test-utils/servers.js'
 import { DEMO_OWNER } from './test-utils/accounts.js'
 import {
   APP_TEXT,
@@ -55,6 +55,14 @@ const CREDITS_TEXT = {
   refundedRow: 'Simulation refunded',
   /** The row a charge renders as while the job is still running. */
   pendingRow: 'Simulation (in progress)',
+  /**
+   * How the panel says a generation is over and will not be retried
+   * (the app's smilesim.status.deadLetter copy). It renders as a row in
+   * the attempt list, not as an alert -- which is what the first version
+   * of this gate looked for, so it failed claiming the surface "never
+   * said so" while the surface said it plainly.
+   */
+  failedAttempt: 'This generation failed and cannot be retried.',
 } as const
 
 /** A patient photo: the smallest thing the server's own probe accepts. */
@@ -100,11 +108,30 @@ test(
   'a generation that fails gives the credits back, and says so in the ledger',
   { tag: '@pending' },
   async ({ page }) => {
+    // A REFUSING vendor of this spec's own, and a server pointed at it.
+    //
+    // The first version of this passed FAKE_IMAGE_FAIL to the Go server,
+    // which is not its switch at all -- it belongs to the fake provider
+    // process. The server was left with no
+    // APP_AI_GATEWAY_IMAGE_BASE_URL, so it reached for a real vendor and
+    // every generation failed for that reason instead. The gate went
+    // green either way, because it never got as far as the ledger: the
+    // probe that found this printed the ledger read and it was the CASE
+    // DETAIL page, still saying "Something went wrong. Try again later."
+    //
+    // Both explanations I had offered for the false pass were wrong. It
+    // was not short-circuiting at an entitlement refusal, and the
+    // success path was not producing a refund row. It was a switch
+    // handed to the wrong process, and the gate's own navigation never
+    // happening.
+    const vendor = await bootImageProvider({ port: REFUSING_IMAGE_PORT, refuse: true })
     const server = await bootServer({
       port: INJECT_API_PORT,
       databasePath,
-      // The vendor refuses. Nothing else is faked.
-      env: { FAKE_IMAGE_FAIL: '1' },
+      env: {
+        APP_AI_GATEWAY_IMAGE_BASE_URL: `http://127.0.0.1:${REFUSING_IMAGE_PORT}`,
+        APP_AI_GATEWAY_IMAGE_API_KEY: 'e2e-image-key',
+      },
     })
 
     try {
@@ -122,6 +149,7 @@ test(
       await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
       await openSurface(page, /cases|patients/i)
       await expect(page.getByRole('heading', { level: 1 })).toContainText(/cases|病例/i)
+      // PROBE: 每一步都必须真的到达
       await page.getByRole('button', { name: /new case|create case|add case/i }).click()
       await page
         .getByRole('textbox', { name: /case name|patient|reference/i })
@@ -138,7 +166,7 @@ test(
       // bad; a charge taken for work that failed silently is worse,
       // because nobody knows to look.
       await expect(
-        page.getByRole('alert').first(),
+        page.getByText(CREDITS_TEXT.failedAttempt).first(),
         'the generation failed and the surface never said so, so a practice is left waiting for a simulation that is not coming',
       ).toBeVisible({ timeout: 120_000 })
 
@@ -149,6 +177,13 @@ test(
       // server's own timing, not the browser's. A refund that arrives
       // eventually is correct; one that never arrives is the defect.
       await openSurface(page, CREDITS_TEXT.nav)
+      // On the credits surface, asserted rather than assumed: the false
+      // pass this gate used to give came from reading "the ledger" while
+      // still on the case detail page.
+      await expect(
+        page.getByRole('heading', { level: 1 }),
+        'the gate never reached the credits surface, so whatever it read next was not the ledger',
+      ).toContainText(/credits|额度/i)
       const ledger = page.getByRole('main')
       await expect
         .poll(async () => await ledger.innerText(), { timeout: 60_000 })
@@ -157,12 +192,19 @@ test(
       // And nothing is left sitting as a live charge for it. A pending
       // row that never resolves is the same defect wearing a different
       // face: the credits are reserved, unusable, and nobody was told.
-      await expect(
-        ledger.getByText(CREDITS_TEXT.pendingRow),
-        'a charge for the failed generation is still pending, so its credits are reserved against work that will never be delivered',
-      ).toHaveCount(0)
+      // Polled to settle: the refund and the pending row clearing are
+      // the same compensation, and the ledger is read through a fetch --
+      // a pending row that is still there for a moment is the queue
+      // working, while one that never clears is credits reserved
+      // against work that will never be delivered.
+      await expect
+        .poll(async () => await ledger.getByText(CREDITS_TEXT.pendingRow).count(), {
+          timeout: 60_000,
+        })
+        .toBe(0)
     } finally {
       await server.stop()
+      await vendor.stop()
     }
   },
 )
