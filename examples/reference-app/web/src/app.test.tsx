@@ -222,9 +222,13 @@ describe('AppView', () => {
     // The frame is up: the nav is frame chrome.
     await view.findByRole('link', { name: zhCN.nav.notes })
     // Brand in the AppBar and on the home heading: two rendered slots,
-    // one served value, one fetch.
+    // one served value, one fetch. The rig's answer enables no
+    // features, so the home panel under the heading is its honest
+    // empty state -- the intro renders only beside the card list its
+    // words describe, which a no-features answer does not show
+    // (home-view.test.tsx pins that rule).
     expect(view.getAllByText(BRAND)).toHaveLength(2)
-    expect(view.getByText(zhCN.home.intro)).toBeInTheDocument()
+    expect(view.getByText(zhCN.home.emptyTitle)).toBeInTheDocument()
 
     const homeLink = view.getByRole('link', { name: zhCN.nav.home })
     expect(homeLink).toHaveAttribute('href', '#/')
@@ -372,9 +376,13 @@ describe('AppView', () => {
     )
     expect(accountLink()).toHaveAttribute('aria-current', 'page')
 
-    // Unknown fragments: home content, nothing selected.
+    // Unknown fragments: home content, nothing selected. The home the
+    // default no-features rig serves is its honest empty state (the
+    // intro renders only beside the card list, which this rig never
+    // answers with), so the empty state's title is the home-content
+    // probe.
     navigateTo('#/definitely-not-a-route')
-    await view.findByText(zhCN.home.intro)
+    await view.findByText(zhCN.home.emptyTitle)
     expect(homeLink()).not.toHaveAttribute('aria-current')
     expect(notesLink()).not.toHaveAttribute('aria-current')
     expect(accountLink()).not.toHaveAttribute('aria-current')
@@ -506,7 +514,10 @@ describe('AppView', () => {
     )
     expect(view.getByRole('link', { name: enUS.nav.notes })).toBeInTheDocument()
     expect(view.getByRole('link', { name: enUS.nav.account })).toBeInTheDocument()
-    expect(view.getByText(enUS.home.intro)).toBeInTheDocument()
+    // The rig answers with no enabled features, so the home panel is
+    // its honest empty state and its title is app copy that answers
+    // the switch (the intro renders only beside the card list).
+    expect(view.getByText(enUS.home.emptyTitle)).toBeInTheDocument()
     expect(view.getAllByText(BRAND)).toHaveLength(2)
     expect(view.getByText(authUiEnUS.signOut.label)).toBeInTheDocument()
     // The demo roster's display names are app copy and switch language.
@@ -566,13 +577,19 @@ describe('AppView', () => {
     // mechanism), and the Public-config cache is re-asked -- the brand
     // (AppBar and home heading: two rendered slots) and the feature
     // cards converge on tenant-globex's answers instead of holding
-    // tenant-acme's.
+    // tenant-acme's, and the home panel's copy converges with them:
+    // the intro and the cards leave with tenant-acme's answers, the
+    // honest empty state arrives with tenant-globex's.
     await user.click(view.getByRole('button', { name: zhCN.tenants.acme }))
     await user.click(
       await view.findByRole('menuitem', { name: zhCN.tenants.globex }),
     )
     expect(await view.findAllByText(GLOBEX_BRAND)).toHaveLength(2)
-    expect(view.getByText(zhCN.home.intro)).toBeInTheDocument()
+    expect(view.getByText(zhCN.home.emptyTitle)).toBeInTheDocument()
+    expect(
+      view.queryByText(zhCN.home.intro),
+      'an answer with no enabled features must not render the intro that introduces the card list',
+    ).not.toBeInTheDocument()
     expect(
       view.queryByText(zhCN.features.smilePreview.title),
     ).not.toBeInTheDocument()

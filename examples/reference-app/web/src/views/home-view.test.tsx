@@ -1,14 +1,19 @@
 /**
  * HomeView contract: the signed-in landing surface renders only what
  * the server's Public config answer carries. The heading is the served
- * brand, the intro is app copy, and each feature card exists exactly
- * while its flag is enabled in the answer -- an empty feature list
- * renders no "Enabled features" heading, and instead the surface's own
- * honest empty state (never a promise of cards it has none of). Once a
- * session is signed in the clinic it runs under is named at
- * page-title level under the heading. The four-way matrix
- * (none, each flag alone, both) pins that data-driven shape, with the
- * card copy asserted through the app's own zh-CN fixture.
+ * brand and each feature card exists exactly while its flag is enabled
+ * in the answer -- an empty feature list renders no "Enabled features"
+ * heading, and instead the surface's own honest empty state (never a
+ * promise of cards it has none of). The intro is app copy that renders
+ * only beside the card section its words describe: framed over the
+ * empty state, its claim that what is here depends on the features
+ * this clinic has enabled would contradict the empty state's own
+ * description (nothing needs enabling, no one needs asking), so the
+ * two sentences never share one screen. Once a session is signed in
+ * the clinic it runs under is named at page-title level under the
+ * heading. The four-way matrix (none, each flag alone, both) pins that
+ * data-driven shape, with the card copy asserted through the app's own
+ * zh-CN fixture.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -118,9 +123,20 @@ describe('HomeView', () => {
     // never inline copy.
     expect(view.getByText(enUS.home.emptyTitle)).toBeInTheDocument()
     expect(view.getByText(enUS.home.emptyDescription)).toBeInTheDocument()
-    // The intro renders the shipped bundle text too -- which makes no
-    // cards-below promise the acceptance gate refuses.
-    expect(view.getByText(enUS.home.intro)).toBeInTheDocument()
+    // And the intro does not share this screen with them. Its claim
+    // that what is here depends on the features this clinic has
+    // enabled is true only where the resolved cards follow; over this
+    // honest empty state -- whose description says no feature needs
+    // enabling and no one needs asking -- it would tell the same
+    // reader the opposite thing two lines apart. The intro renders
+    // only beside the card list it describes (the cards-branch tests
+    // below pin that half), so a no-flags home never pairs the two
+    // sentences. This assertion failed before the fix, when the intro
+    // rendered above the empty state.
+    expect(
+      view.queryByText(enUS.home.intro),
+      'the no-features home must not say both "what is here depends on enabled features" and "no feature to enable"',
+    ).not.toBeInTheDocument()
   })
 
   it('names the clinic being worked in at page-title level once signed in', async () => {

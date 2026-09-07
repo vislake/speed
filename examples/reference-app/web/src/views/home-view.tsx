@@ -2,7 +2,8 @@
  * home-view.tsx -- the first real-data surface of the app: everything
  * on it renders from the server's Public config answer, never from a
  * local copy. The heading is the served brand name (the same
- * useBrandName every surface reads), the intro is app copy, and each
+ * useBrandName every surface reads), the intro is app copy that
+ * renders only beside the card section its words describe, and each
  * feature card exists only while the flag that gates it is on -- the
  * card list is data-driven over go/config's feature list, resolved
  * per key through useFeature's composition on the shared Public
@@ -85,11 +86,19 @@ export function HomeView(): ReactElement {
           the page is scoped to from the work area itself, never only
           from the chrome (current-clinic.tsx has the full story). */}
       <CurrentClinicLine />
-      <Typography variant="body1" sx={{ mt: 1, color: 'text.secondary' }}>
-        {t('home.intro')}
-      </Typography>
       {enabled.length > 0 ? (
         <>
+          {/* The intro renders only beside the card list its words
+              describe. Its claim that what is here depends on the
+              features this clinic has enabled is true exactly where
+              the resolved cards follow -- and it would contradict the
+              honest empty state below (whose description says no
+              feature needs enabling and no one needs asking) if it
+              framed the no-features home instead. The two sentences
+              never share one screen. */}
+          <Typography variant="body1" sx={{ mt: 1, color: 'text.secondary' }}>
+            {t('home.intro')}
+          </Typography>
           <Typography component="h2" variant="h6" sx={{ mt: 4 }}>
             {t('features.heading')}
           </Typography>
@@ -124,7 +133,12 @@ export function HomeView(): ReactElement {
         // (home.intro used to say "the cards below show the
         // features...", with no mechanism in the app able to enable
         // any) is what the home-is-self-consistent acceptance gate
-        // refuses.
+        // refuses. The intro paragraph itself does not frame this
+        // state either: its sentence about what is here depending on
+        // enabled features belongs beside the card list it describes
+        // (the cards branch above) and would contradict this
+        // description -- no feature needs enabling -- on the very same
+        // screen, so the no-features home renders without it.
         <EmptyState
           variant="empty"
           title={t('home.emptyTitle')}
