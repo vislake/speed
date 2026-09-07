@@ -201,11 +201,18 @@ type AuditEvent struct {
 	OnBehalfOfID          *string `gorm:"column:on_behalf_of_id;size:255"`
 	OnBehalfOfDisplayName *string `gorm:"column:on_behalf_of_display_name;size:255"`
 
-	// Action is the audit action string. A persister validates it against
-	// a module's registered pkgcore.Registry.AuditActions enumeration at
-	// emission time, not here -- Repository has no registrar of its own to
-	// check against, and by the time a record reaches Insert it has
-	// already been validated once, upstream.
+	// Action is the audit action string. Every one of the three paths that
+	// produces a record validates it against the host's registered
+	// pkgcore.Registry.AuditActions enumeration before this row exists --
+	// never here, since Repository has no registrar of its own to check
+	// against: Emit refuses an undeclared Input.Action at emission
+	// (ErrActionNotRegistered, emit.go); Module's write-captured subscriber
+	// refuses a derived "<resource_type>.<operation>" action no module ever
+	// declared (onWriteCaptured's gate, module.go); and the system-context
+	// subscriber's action is declared by this package's own Register
+	// (AuditActionSystemContextEntered). A record reaching Insert has
+	// therefore already been validated once, upstream, whichever mechanism
+	// produced it.
 	Action string `gorm:"column:action;size:255;not null"`
 
 	// ResourceType, ResourceID and ResourceDisplayName are the flattened

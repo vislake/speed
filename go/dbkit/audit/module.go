@@ -4,7 +4,9 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -67,6 +69,19 @@ const AuditActionSystemContextEntered = tenancySystemContextEnteredEventType
 // (AuditActionSystemContextEntered) it declares.
 type Module struct {
 	repo *Repository
+	// actions is the host's audit-action enumeration, captured from
+	// reg.AuditActions in Register. It is the registrar the write-captured
+	// gate checks (onWriteCaptured): the capture plugin itself runs at
+	// dbkit's root tier with no registrar in reach and after the write has
+	// already committed, so this persister -- the one place every captured
+	// event crosses before a row exists -- is where the derived action is
+	// validated against the declared vocabulary. Consulted live at event
+	// time (never snapshotted in Register, which runs before every other
+	// module has registered), the same way Emit consults the registrar it
+	// is handed per call. Nil only for a Module on which Register has not
+	// run, which is also a Module whose subscriptions were never installed
+	// and that therefore receives no events at all.
+	actions pkgcore.AuditActionRegistrar
 }
 
 // New returns a Module persisting into db. db is expected to come from
@@ -103,7 +118,12 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // Register implements pkgcore.Module. Per the interface's contract ("It
 // must not perform I/O; it only declares"), it declares Module's one
 // published event type, the audit action it records on tenancy's behalf,
-// and installs its three subscriptions.
+// and installs its three subscriptions -- and it captures the host's
+// AuditActionRegistrar on the Module, the registrar onWriteCaptured's
+// vocabulary gate consults at event time (see that handler's doc comment;
+// the registrar is deliberately consulted live rather than snapshotted,
+// because Register runs before every other module has registered its own
+// actions).
 //
 // It also declares dbkit.EventWriteCaptured on reg.Events, even though
 // that event's Type constant is defined in dbkit's root package: dbkit
@@ -111,6 +131,7 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // and Module is that event's one real subscriber and therefore its
 // closest thing to an owning module for cataloging purposes.
 func (m *Module) Register(reg *pkgcore.Registry) error {
+	m.actions = reg.AuditActions
 	if err := reg.Events.Publishes(
 		pkgcore.EventDecl{
 			Type:        dbkit.EventWriteCaptured,
@@ -139,26 +160,59 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 var _ pkgcore.Module = (*Module)(nil)
 
 // onWriteCaptured normalizes a dbkit.WriteCapturedEvent into an AuditEvent
-// and persists it. Action defaults to "<resource_type>.<operation>" (e.g.
+// and persists it. Action is derived as "<resource_type>.<operation>" (e.g.
 // "note.create") -- deliberately honest about what a generic diff-capture
-// can know, per this round's scope-freeze report; a business module
-// wanting a qualified action name uses Emit instead.
+// can know; a business module wanting a qualified action name uses Emit
+// instead -- and the derived action is validated against the host's
+// declared audit-action enumeration BEFORE anything is persisted: an
+// action no module ever registered through AuditActionRegistrar.Add is
+// refused with a structured alert (auditCaptureActionRefused), never
+// silently written. This is the capture path's mirror of Emit's own
+// ErrActionNotRegistered gate (emit.go), and it lives here, in the
+// persister, because that gate's two preconditions -- a registrar in
+// reach, and a position before the row exists -- both hold at this one
+// choke point that every captured event crosses, on every replica, and
+// neither holds at the capture plugin itself (dbkit's root tier runs
+// after the write has already durably committed, with no registrar of its
+// own -- see audit_capture.go's own doc comment on why it alerts rather
+// than fails closed). A host wiring the capture plugin therefore declares
+// the vocabulary its Auditable models actually produce -- each
+// "<AuditResourceType>.<operation>" pair, e.g. "note.create" alongside
+// the qualified "notes.note.create" an Emit caller records -- through its
+// own module's Register, exactly as it declares the actions it Emits.
+// Without that declaration the rows are refused, because a row under an
+// action nobody declared is invisible to every query surface that filters
+// on the declared enumeration (compliance.AuditQuery and the consoles
+// built on it): to a compliance question, such a row and no row at all
+// are the same answer, and the undeclared action is precisely the case
+// AuditActionRegistrar exists to keep out of the table.
 //
 // A payload that does not decode as a WriteCapturedEvent (neither the
 // concrete struct the standalone in-memory bus delivers, nor the JSON map
 // shape the distributed bus's Redis Streams transport reconstructs it as)
 // is dropped without failing the handler chain, mirroring go/config's
 // itemChangedFromWire convention: an event this subscriber cannot make
-// sense of must not wedge every other subscriber of the same event.
+// sense of must not wedge every other subscriber of the same event. The
+// vocabulary refusal is the same shape for the same reason -- the write
+// the event describes has already committed, so there is nothing left to
+// fail closed through, and the alert is this path's whole fulfilment of
+// the shared never-drop rule, exactly like the capture plugin's own
+// publish-failure alert.
 func (m *Module) onWriteCaptured(ctx context.Context, evt pkgcore.Event) error {
 	payload, ok := writeCapturedFromWire(evt.Payload)
 	if !ok {
 		return nil
 	}
 
+	action := payload.ResourceType + "." + payload.Operation
+	if !slices.Contains(m.actions.Actions(), action) {
+		auditCaptureActionRefused(ctx, payload, action)
+		return nil
+	}
+
 	row := &AuditEvent{
 		ID:         auditDeterministicEventID(dbkit.EventWriteCaptured, payload.OccurredAt, payload.TenantID, payload.ResourceType, payload.ResourceID, payload.Operation, string(payload.Actor.Type), payload.Actor.ID),
-		Action:     payload.ResourceType + "." + payload.Operation,
+		Action:     action,
 		TenantID:   payload.TenantID,
 		OccurredAt: payload.OccurredAt,
 	}
@@ -168,6 +222,36 @@ func (m *Module) onWriteCaptured(ctx context.Context, evt pkgcore.Event) error {
 	row.SetResult(Result{Success: true})
 	row.Changes = changesJSON(payload.Before, payload.After)
 	return m.repo.InsertIdempotent(ctx, row)
+}
+
+// auditCaptureActionRefused reports, as a structured alert, that
+// onWriteCaptured refused to persist a captured write whose derived action
+// no module ever declared on the host's AuditActionRegistrar -- see
+// onWriteCaptured's own doc comment for the full reasoning. The refusal
+// cannot be an error return: the write the event describes has already
+// durably committed, so nothing can be rolled back or failed closed
+// through, and returning an error here would wedge every other subscriber
+// of the same event (or, on the distributed bus, retry the refusal
+// forever). It is therefore reported through log/slog directly --
+// mirroring auditPublishFailed's alert-not-fail idiom and its reason for
+// reaching for slog rather than obs.FromContext: this package is a
+// subpackage of dbkit, which sits at the same depth as go/observability in
+// the module dependency graph and cannot import it (see go/dbkit/AGENTS.md's
+// "One dependency, and why there is only one"). The message is a constant
+// string; every variable goes into snake_case key-value attributes shared
+// with the rest of the codebase's logging convention (the same attribute
+// names auditPublishFailed uses, plus the refused action itself), so an
+// operator reading this line has every field needed to declare the missing
+// action or investigate.
+func auditCaptureActionRefused(ctx context.Context, payload dbkit.WriteCapturedEvent, action string) {
+	slog.Default().ErrorContext(ctx, "audit: refusing write-captured event under an undeclared audit action",
+		"action", action,
+		"table", payload.Table,
+		"resource_type", payload.ResourceType,
+		"resource_id", payload.ResourceID,
+		"operation", payload.Operation,
+		"tenant_id", payload.TenantID,
+	)
 }
 
 // onRecorded normalizes a RecordedEvent (Emit's own event type) into an

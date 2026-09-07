@@ -76,6 +76,14 @@ func TestModule_Register_DeclaresEventsAndTheSystemContextAuditAction(t *testing
 
 func TestModule_OnWriteCaptured_PersistsAuditEvent(t *testing.T) {
 	reg, m := newRegisteredModule(t)
+	// A captured write's derived action ("<resource_type>.<operation>") is
+	// only persisted when the owning module declared it on the registrar --
+	// onWriteCaptured's gate. This test declares the vocabulary its payload
+	// derives ("note.create" from note + create) the way a host wiring the
+	// capture plugin would.
+	if err := reg.AuditActions.Add("note.create"); err != nil {
+		t.Fatalf("AuditActions.Add() error = %v", err)
+	}
 
 	admin := pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: "admin-1", DisplayName: "Grace"}
 	payload := dbkit.WriteCapturedEvent{
@@ -134,7 +142,12 @@ func TestModule_OnWriteCaptured_JSONMapPayload_PersistsAuditEvent(t *testing.T) 
 	// into interface{} on delivery), proving writeCapturedFromWire's
 	// map[string]any branch against real JSON semantics rather than a
 	// hand-built map.
-	_, m := newRegisteredModule(t)
+	reg, m := newRegisteredModule(t)
+	// Declare the derived action ("note.update") this payload's capture
+	// would produce, the way a host wiring the plugin must.
+	if err := reg.AuditActions.Add("note.update"); err != nil {
+		t.Fatalf("AuditActions.Add() error = %v", err)
+	}
 
 	original := dbkit.WriteCapturedEvent{
 		Actor:        pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"},
@@ -178,6 +191,48 @@ func TestModule_OnWriteCaptured_UnrecognizedPayload_DropsWithoutError(t *testing
 	}
 	if len(rows) != 0 {
 		t.Errorf("ListByTenant() = %+v, want no rows persisted for an undecodable payload", rows)
+	}
+}
+
+// TestModule_OnWriteCaptured_UndeclaredDerivedAction_RefusedWithAlert
+// pins the capture-vocabulary gate: a captured write's derived action
+// ("<resource_type>.<operation>", e.g. "note.create") is persisted only
+// when some module declared it on the AuditActionRegistrar -- the same
+// declared enumeration Emit validates its own Input.Action against
+// (ErrActionNotRegistered). The ungated behavior silently wrote the row
+// under the derived action, landing an action no module ever declared on
+// the one table a compliance query filters by the declared vocabulary:
+// rows under an undeclared action are as invisible to that query as rows
+// that never existed.
+func TestModule_OnWriteCaptured_UndeclaredDerivedAction_RefusedWithAlert(t *testing.T) {
+	reg, m := newRegisteredModule(t)
+	// Deliberately declare NOTHING for the "note" resource: the registrar
+	// carries only what Module.Register itself declared
+	// (AuditActionSystemContextEntered), so "note.create" is undeclared.
+
+	err := reg.Events.Bus().Publish(context.Background(), pkgcore.Event{
+		Type:     dbkit.EventWriteCaptured,
+		TenantID: "tenant-a",
+		Payload: dbkit.WriteCapturedEvent{
+			Actor:        pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"},
+			TenantID:     "tenant-a",
+			ResourceType: "note",
+			ResourceID:   "note-1",
+			Operation:    "create",
+			After:        map[string]any{"title": "Meeting notes"},
+			OccurredAt:   time.Now(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	rows, err := m.repo.ListByTenant(context.Background(), "tenant-a")
+	if err != nil {
+		t.Fatalf("ListByTenant() error = %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("ListByTenant() = %+v, want no rows -- a captured write whose derived action no module declared must be refused, never silently persisted", rows)
 	}
 }
 
@@ -353,7 +408,12 @@ func TestChangesJSON_Populated_MarshalsBoth(t *testing.T) {
 // real deployment's replicas would also share, and asserts exactly one row
 // results, not two.
 func TestModule_OnWriteCaptured_DeliveredToMultipleReplicas_PersistsExactlyOnce(t *testing.T) {
-	_, m := newRegisteredModule(t)
+	reg, m := newRegisteredModule(t)
+	// Declare the derived action ("note.create") this payload's capture
+	// would produce, the way a host wiring the plugin must.
+	if err := reg.AuditActions.Add("note.create"); err != nil {
+		t.Fatalf("AuditActions.Add() error = %v", err)
+	}
 
 	original := dbkit.WriteCapturedEvent{
 		Actor:        pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"},
