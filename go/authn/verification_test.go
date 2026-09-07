@@ -264,6 +264,54 @@ func TestLoginWithSMSCode_WrongCode_Refused(t *testing.T) {
 	}
 }
 
+// TestLoginWithSMSCode_AuthMetricCountsTheChannel is the F3 regression: the
+// SMS-code sign-in channel is brute-forceable (a six-digit code behind a
+// per-target wrong-guess budget, the 10th wrong guess refused) and yet
+// recorded nothing on authCountMetricName/authDurationMetricName -- the
+// metric vocabulary covered password login, refresh and MFA challenge
+// only, so an operator alerting on sign-in failure rate saw a dashboard
+// that looked like login coverage and was a quarter of it. A wrong guess
+// here is refused and must land under operation=login_sms (authOpSMSCodeLogin);
+// before that operation value existed, no data point carries it and
+// authCounterValue fails the test.
+//
+// Deliberately not t.Parallel(): it swaps the process-wide global otel
+// MeterProvider (see setupAuthMetricsMeterProvider's own doc comment).
+func TestLoginWithSMSCode_AuthMetricCountsTheChannel(t *testing.T) {
+	reader := setupAuthMetricsMeterProvider(t)
+	var buf bytes.Buffer
+	f := newSMSServiceFixture(t, &buf)
+	registerPhoneUser(t, f, testPhone, testTenantA)
+
+	if err := f.svc.RequestSMSCode(t.Context(), RequestSMSCodeInput{Phone: testPhone, IP: "203.0.113.9"}); err != nil {
+		t.Fatalf("RequestSMSCode() error = %v", err)
+	}
+	real := extractSentCode(t, &buf)
+	wrong := "000000"
+	if wrong == real {
+		wrong = "111111"
+	}
+
+	if _, err := f.svc.LoginWithSMSCode(t.Context(), SMSLoginInput{Phone: testPhone, Code: wrong, IP: "203.0.113.9"}); err == nil {
+		t.Fatal("LoginWithSMSCode(wrong code) error = nil, want a refusal")
+	}
+
+	// "login_sms" is the operation value the fix adds (authOpSMSCodeLogin
+	// in service.go). The literal is asserted rather than the constant so
+	// the fail-before run of this regression is a behavioral one -- no
+	// data point carries the label -- instead of a compile error; a
+	// future rename of the constant's value breaks this assertion, which
+	// is the same pin the constant reference would give.
+	count := collectAuthMetric(t, reader, authCountMetricName)
+	if got := authCounterValue(t, count, "login_sms", authOutcomeFailed); got != 1 {
+		t.Errorf("%s{operation=login_sms,outcome=failed} = %d, want 1", authCountMetricName, got)
+	}
+	duration := collectAuthMetric(t, reader, authDurationMetricName)
+	if got := authHistogramCount(t, duration, "login_sms", authOutcomeFailed); got != 1 {
+		t.Errorf("%s{operation=login_sms,outcome=failed} count = %d, want 1", authDurationMetricName, got)
+	}
+}
+
 // TestLoginWithSMSCode_CodeIsSingleUse proves a code cannot be replayed
 // after a successful verification.
 func TestLoginWithSMSCode_CodeIsSingleUse(t *testing.T) {

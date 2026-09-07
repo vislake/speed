@@ -27,18 +27,29 @@ import (
 const InstrumentationName = "github.com/vislake/speed/go/authn"
 
 // Metric instrument names registerAuthMetrics wires under
-// InstrumentationName -- the login success/failure rate, MFA challenge
-// volume, and token refresh failure rate row
-// docs/internal/09-observability.md's must-instrument table requires
-// for the authentication domain. One counter and one histogram cover all
-// three: each is sliced by its "operation" attribute (authOpLogin/
-// authOpRefresh/authOpMFAChallenge) and "outcome" attribute
-// (authOutcomeSucceeded/authOutcomeFailed), so "login failure rate" is
+// InstrumentationName -- the sign-in failure rate, MFA challenge volume,
+// and token refresh failure rate row docs/internal/09-observability.md's
+// must-instrument table requires for the authentication domain. One
+// counter and one histogram cover all three: each is sliced by its
+// "operation" attribute (authOpLogin/authOpSMSCodeLogin/authOpRefresh/
+// authOpMFAChallenge) and "outcome" attribute (authOutcomeSucceeded/
+// authOutcomeFailed), so "password sign-in failure rate" is
 // authCountMetricName{operation=login,outcome=failed} over the same
-// operation's succeeded count, and "MFA challenge volume" is the sum of
+// operation's succeeded count, the SMS-code channel's the same expression
+// under operation=login_sms, and "MFA challenge volume" is the sum of
 // authCountMetricName{operation=mfa_challenge,*} -- the identical
 // slice-by-status-attribute shape go/jobs' jobAttemptsMetricName and
 // go/notification's deliveryCountMetricName both already use.
+//
+// The operation values are per channel and deliberately do not cover every
+// sign-in channel: the social and enterprise-SSO channels carry no counts
+// at all, because their failure rates mostly track the condition of a
+// third-party provider or identity provider rather than an authn-side
+// attack. The two channels a caller can brute-force -- password and
+// SMS-code -- each have their own operation value, so no label ever
+// presents a wider coverage than the one feeding it; an operator who wants
+// every brute-forceable channel in one alert unions operation=login and
+// operation=login_sms.
 const (
 	authCountMetricName    = "authn.auth.count"
 	authDurationMetricName = "authn.auth.duration"
@@ -48,8 +59,21 @@ const (
 // carry -- a bounded, declared vocabulary (never tenant_id or user_id),
 // exactly one per instrumented Service method below.
 const (
-	authOpLogin        = "login"
-	authOpRefresh      = "refresh"
+	// authOpLogin is Service.Login, the email-or-phone plus password
+	// channel -- the channel credential stuffing targets, and the one
+	// operation the metric set's original vocabulary covered for
+	// sign-ins.
+	authOpLogin = "login"
+	// authOpSMSCodeLogin is Service.LoginWithSMSCode, the phone-plus-code
+	// channel: a six-digit code behind a per-target wrong-guess budget is
+	// brute-forceable, so its sign-in attempts belong on the same
+	// failure-rate watch as the password channel's, under their own
+	// channel-naming operation value.
+	authOpSMSCodeLogin = "login_sms"
+	// authOpRefresh is Service.Refresh, a refresh-token rotation.
+	authOpRefresh = "refresh"
+	// authOpMFAChallenge is Service.VerifyStepUp, a second-factor
+	// challenge.
 	authOpMFAChallenge = "mfa_challenge"
 )
 
@@ -73,7 +97,7 @@ func registerAuthMetrics() (metric.Int64Counter, metric.Float64Histogram) {
 	meter := otel.Meter(InstrumentationName)
 	count, _ := meter.Int64Counter(
 		authCountMetricName,
-		metric.WithDescription("Number of authentication operations completed, by operation (login, refresh, mfa_challenge) and resulting outcome (succeeded or failed). Failure rate for any operation is derivable from this by outcome."),
+		metric.WithDescription("Number of authentication operations completed, by operation (login, login_sms, refresh, mfa_challenge) and resulting outcome (succeeded or failed). Failure rate for any operation is derivable from this by outcome."),
 		metric.WithUnit("{operation}"),
 	)
 	duration, _ := meter.Float64Histogram(
@@ -89,11 +113,12 @@ func registerAuthMetrics() (metric.Int64Counter, metric.Float64Histogram) {
 // only -- deliberately never tenant_id or user_id, for the identical
 // cardinality reason go/jobs/standalone_queue.go's registerJobMetrics doc
 // comment gives. err's nilness alone decides the outcome: every one of
-// Login/Refresh/VerifyStepUp's early returns already report a non-nil error
-// on any refusal (bad credentials, rate-limited, revoked session, wrong MFA
-// code), so a plain nil check at the deferred call site is both sufficient
-// and immune to a future added return path being forgotten -- unlike an
-// explicit outcome flag threaded through every branch.
+// Login/LoginWithSMSCode/Refresh/VerifyStepUp's early returns already
+// report a non-nil error on any refusal (bad credentials, wrong SMS code,
+// rate-limited, revoked session, wrong MFA code), so a plain nil check at
+// the record site is both sufficient and immune to a future added return
+// path being forgotten -- unlike an explicit outcome flag threaded through
+// every branch.
 func (s *Service) recordAuthMetric(ctx context.Context, op string, start time.Time, err error) {
 	outcome := authOutcomeSucceeded
 	if err != nil {

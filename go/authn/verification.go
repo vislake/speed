@@ -398,6 +398,16 @@ func (s *Service) burnSMSCodeRequestWork() error {
 // The IP dimension (guard.CheckSMSVerifyIP) is unaffected and still checked
 // up front, since it does not create that property.
 func (s *Service) LoginWithSMSCode(ctx context.Context, in SMSLoginInput) (*TokenPair, error) {
+	start := time.Now()
+	pair, err := s.loginWithSMSCode(ctx, in)
+	s.recordAuthMetric(ctx, authOpSMSCodeLogin, start, err)
+	return pair, err
+}
+
+// loginWithSMSCode is LoginWithSMSCode's actual implementation, split out
+// for the identical shadow-avoidance reason service.go's Login doc comment
+// explains.
+func (s *Service) loginWithSMSCode(ctx context.Context, in SMSLoginInput) (*TokenPair, error) {
 	// The channel gate, mirroring login()'s own: with the flag off, a code
 	// -- even a genuinely correct one -- must not start a session.
 	if err := s.channelEnabled(ctx, FeatureFlagSMSLogin); err != nil {
