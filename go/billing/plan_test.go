@@ -14,7 +14,7 @@ import (
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
-func TestPlanStore_CreateAndGet(t *testing.T) {
+func TestPlanStore_CreateAndGetPlatformPlan(t *testing.T) {
 	store := NewPlanStore(newTestDB(t))
 	ctx := context.Background()
 
@@ -29,13 +29,18 @@ func TestPlanStore_CreateAndGet(t *testing.T) {
 	if plan.ID == "" {
 		t.Fatal("Create left plan.ID empty")
 	}
+	if !plan.IsPlatformWide() {
+		t.Fatal("Create left the no-tenant Plan not platform-wide")
+	}
 
-	got, err := store.Get(ctx, plan.ID)
+	// A no-tenant Plan is a platform-wide row -- the reader that names the
+	// scope it lives in is GetPlatformPlan.
+	got, err := store.GetPlatformPlan(ctx, plan.ID)
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf("GetPlatformPlan: %v", err)
 	}
 	if got.Key != "pro" || got.Name != "Pro" {
-		t.Errorf("Get returned %+v, want Key=pro Name=Pro", got)
+		t.Errorf("GetPlatformPlan returned %+v, want Key=pro Name=Pro", got)
 	}
 	if g, ok := got.Grant("seats"); !ok || g.Value != float64(5) {
 		// Grant.Value round-trips through JSON as float64 -- see
@@ -206,23 +211,188 @@ func uniqueKey() string {
 // generates a UUID whenever plan.ID is blank), but GORM's Save performs a
 // CREATE whenever the primary key is blank -- the Where clause
 // notwithstanding -- so on pre-fix code this call silently INSERTED a new
-// row (with id "") and returned nil, and a subsequent Get("") found the
-// ghost row the caller never meant to create.
+// row (with id "") and returned nil, and a subsequent Get found the ghost
+// row the caller never meant to create.
 func TestPlanStore_Update_EmptyID_RefusedNotSilentlyInserted(t *testing.T) {
 	store := NewPlanStore(newTestDB(t))
 	ctx := context.Background()
+	const scope = pkgcore.TenantID("tenant-a")
 
-	ghost := &Plan{Key: "ghost", Name: "Ghost"}
+	ghost := &Plan{TenantID: string(scope), Key: "ghost", Name: "Ghost"}
 	if err := ghost.SetGrants([]Grant{{FeatureKey: "seats", Value: int64(5)}}); err != nil {
 		t.Fatalf("SetGrants: %v", err)
 	}
 
-	err := store.Update(ctx, ghost) // ghost.ID is empty: names no row
+	err := store.Update(ctx, scope, ghost) // ghost.ID is empty: names no row
 	if !hasCode(err, ErrPlanNotFound.Code) {
 		t.Fatalf("Update with empty ID: err = %v, want %s (never a silent insert)", err, ErrPlanNotFound.Code)
 	}
-	if _, err := store.Get(ctx, ""); !hasCode(err, ErrPlanNotFound.Code) {
-		t.Errorf("Get(\"\") after the empty-ID Update: err = %v, want %s (the update must not have created a row with id \"\")", err, ErrPlanNotFound.Code)
+	if _, err := store.Get(ctx, scope, ""); !hasCode(err, ErrPlanNotFound.Code) {
+		t.Errorf("Get(scope, \"\") after the empty-ID Update: err = %v, want %s (the update must not have created a row with id \"\")", err, ErrPlanNotFound.Code)
+	}
+}
+
+// TestPlanStore_ScopedGet_OwnRowsOnly is P2-1's regression for the read
+// side: a Get naming tenant-a's scope must return only tenant-a's own
+// custom Plan, never tenant-b's -- on the pre-fix store (whose Get had no
+// scope at all) the same read crossed tenants freely. A platform-wide row
+// is not in any tenant's own scope either: it is read through
+// GetPlatformPlan, the named platform-level read.
+func TestPlanStore_ScopedGet_OwnRowsOnly(t *testing.T) {
+	store := NewPlanStore(newTestDB(t))
+	ctx := context.Background()
+	const a = pkgcore.TenantID("tenant-a")
+	const b = pkgcore.TenantID("tenant-b")
+
+	platform := &Plan{Key: "pro", Name: "Platform Pro"}
+	if err := store.Create(ctx, platform); err != nil {
+		t.Fatalf("Create platform plan: %v", err)
+	}
+	aPlan := &Plan{TenantID: string(a), Key: "pro", Name: "A's custom pro"}
+	if err := store.Create(ctx, aPlan); err != nil {
+		t.Fatalf("Create tenant-a plan: %v", err)
+	}
+	bPlan := &Plan{TenantID: string(b), Key: "pro", Name: "B's custom pro"}
+	if err := store.Create(ctx, bPlan); err != nil {
+		t.Fatalf("Create tenant-b plan: %v", err)
+	}
+
+	// A's scope reads A's own row...
+	got, err := store.Get(ctx, a, aPlan.ID)
+	if err != nil {
+		t.Fatalf("Get(tenant-a, own plan): %v", err)
+	}
+	if got.ID != aPlan.ID {
+		t.Errorf("Get(tenant-a) = plan %q, want tenant-a's own %q", got.ID, aPlan.ID)
+	}
+	// ...and never B's, never the platform's.
+	if _, err = store.Get(ctx, a, bPlan.ID); !hasCode(err, ErrPlanNotFound.Code) {
+		t.Errorf("Get(tenant-a, tenant-b's plan): err = %v, want %s -- the tenant scope must not read another tenant's custom plan (pre-fix: the unscoped Get returned it)", err, ErrPlanNotFound.Code)
+	}
+	if _, err = store.Get(ctx, a, platform.ID); !hasCode(err, ErrPlanNotFound.Code) {
+		t.Errorf("Get(tenant-a, platform plan): err = %v, want %s -- a platform-wide row is not in any tenant's own scope", err, ErrPlanNotFound.Code)
+	}
+
+	// The platform-level read reaches the platform row by name, and only
+	// the platform row.
+	gotPlatform, err := store.GetPlatformPlan(ctx, platform.ID)
+	if err != nil {
+		t.Fatalf("GetPlatformPlan(platform id): %v", err)
+	}
+	if gotPlatform.ID != platform.ID {
+		t.Errorf("GetPlatformPlan = plan %q, want the platform plan %q", gotPlatform.ID, platform.ID)
+	}
+	if _, err = store.GetPlatformPlan(ctx, aPlan.ID); !hasCode(err, ErrPlanNotFound.Code) {
+		t.Errorf("GetPlatformPlan(tenant-a's custom id): err = %v, want %s -- the platform read must refuse a tenant-custom row", err, ErrPlanNotFound.Code)
+	}
+	if _, err = store.GetPlatformPlan(ctx, bPlan.ID); !hasCode(err, ErrPlanNotFound.Code) {
+		t.Errorf("GetPlatformPlan(tenant-b's custom id): err = %v, want %s", err, ErrPlanNotFound.Code)
+	}
+}
+
+// TestPlanStore_ScopedUpdate_OwnRowsOnly is P2-1's regression for the
+// write side: an Update naming tenant-a's scope must not modify tenant-b's
+// custom Plan -- on the pre-fix store (whose Update had no scope at all)
+// the same update wrote tenant-b's row. The named scope must own the row
+// both as stored and as the plan struct carries it, so an update can
+// neither touch another tenant's row nor move one of the caller's own
+// rows into another scope.
+func TestPlanStore_ScopedUpdate_OwnRowsOnly(t *testing.T) {
+	store := NewPlanStore(newTestDB(t))
+	ctx := context.Background()
+	const a = pkgcore.TenantID("tenant-a")
+	const b = pkgcore.TenantID("tenant-b")
+
+	aPlan := &Plan{TenantID: string(a), Key: "pro", Name: "A's custom pro"}
+	if err := store.Create(ctx, aPlan); err != nil {
+		t.Fatalf("Create tenant-a plan: %v", err)
+	}
+	bPlan := &Plan{TenantID: string(b), Key: "pro", Name: "B's custom pro"}
+	if err := store.Create(ctx, bPlan); err != nil {
+		t.Fatalf("Create tenant-b plan: %v", err)
+	}
+
+	// A cross-scope update of B's row: refused, row untouched.
+	mutB := *bPlan
+	mutB.SetPrice(Money{Cents: 9999, Currency: "USD"})
+	if err := store.Update(ctx, a, &mutB); !hasCode(err, ErrPlanNotFound.Code) {
+		t.Errorf("Update(tenant-a, tenant-b's plan): err = %v, want %s (pre-fix: the unscoped Update wrote it)", err, ErrPlanNotFound.Code)
+	}
+	got, err := store.Get(ctx, b, bPlan.ID)
+	if err != nil {
+		t.Fatalf("Get(tenant-b, own plan): %v", err)
+	}
+	if got.Price() != bPlan.Price() {
+		t.Errorf("tenant-b's plan price after tenant-a's refused Update = %+v, want unchanged %+v", got.Price(), bPlan.Price())
+	}
+
+	// A scope-drifting update of A's OWN row (the struct's TenantID moved
+	// to B's scope): refused, row stays A's.
+	mutDrift := *aPlan
+	mutDrift.TenantID = string(b)
+	mutDrift.SetPrice(Money{Cents: 1111, Currency: "USD"})
+	if err = store.Update(ctx, a, &mutDrift); !hasCode(err, ErrPlanNotFound.Code) {
+		t.Errorf("Update(tenant-a, own row drifted to tenant-b's scope): err = %v, want %s -- an update must not move a row across scopes", err, ErrPlanNotFound.Code)
+	}
+	got, err = store.Get(ctx, a, aPlan.ID)
+	if err != nil {
+		t.Fatalf("Get(tenant-a, own plan): %v", err)
+	}
+	if got.TenantID != string(a) {
+		t.Errorf("tenant-a's plan TenantID after the refused drift = %q, want %q", got.TenantID, string(a))
+	}
+
+	// A within-scope update of A's own row: succeeds.
+	mutA := *aPlan
+	mutA.SetPrice(Money{Cents: 5555, Currency: "USD"})
+	if err = store.Update(ctx, a, &mutA); err != nil {
+		t.Fatalf("Update(tenant-a, own plan): %v", err)
+	}
+	got, err = store.Get(ctx, a, aPlan.ID)
+	if err != nil {
+		t.Fatalf("Get(tenant-a, own plan): %v", err)
+	}
+	if got.Price() != mutA.Price() {
+		t.Errorf("tenant-a's plan price after its own Update = %+v, want %+v", got.Price(), mutA.Price())
+	}
+}
+
+// TestPlanStore_ScopedUpdate_PlatformScope covers the platform face of
+// the same rule: an Update naming the platform scope writes platform-wide
+// rows and refuses tenant-custom ones, mirroring how a tenant scope
+// refuses everything outside itself.
+func TestPlanStore_ScopedUpdate_PlatformScope(t *testing.T) {
+	store := NewPlanStore(newTestDB(t))
+	ctx := context.Background()
+	const platform = pkgcore.TenantID(platformScopeSentinel)
+	const b = pkgcore.TenantID("tenant-b")
+
+	platformPlan := &Plan{Key: "pro", Name: "Platform Pro"}
+	if err := store.Create(ctx, platformPlan); err != nil {
+		t.Fatalf("Create platform plan: %v", err)
+	}
+	bPlan := &Plan{TenantID: string(b), Key: "pro", Name: "B's custom pro"}
+	if err := store.Create(ctx, bPlan); err != nil {
+		t.Fatalf("Create tenant-b plan: %v", err)
+	}
+
+	mutPlatform := *platformPlan
+	mutPlatform.SetPrice(Money{Cents: 7777, Currency: "USD"})
+	if err := store.Update(ctx, platform, &mutPlatform); err != nil {
+		t.Fatalf("Update(platform scope, platform plan): %v", err)
+	}
+	got, err := store.GetPlatformPlan(ctx, platformPlan.ID)
+	if err != nil {
+		t.Fatalf("GetPlatformPlan: %v", err)
+	}
+	if got.Price() != mutPlatform.Price() {
+		t.Errorf("platform plan price after the platform-scope Update = %+v, want %+v", got.Price(), mutPlatform.Price())
+	}
+
+	mutB := *bPlan
+	mutB.SetPrice(Money{Cents: 9999, Currency: "USD"})
+	if err := store.Update(ctx, platform, &mutB); !hasCode(err, ErrPlanNotFound.Code) {
+		t.Errorf("Update(platform scope, tenant-b's plan): err = %v, want %s", err, ErrPlanNotFound.Code)
 	}
 }
 
@@ -255,14 +425,17 @@ func TestErrPlanNotFound_Message_RendersTheLookedUpValue(t *testing.T) {
 		value string
 	}{
 		{
-			name:  "PlanStore.Get by unknown id",
-			err:   func() error { _, err := plans.Get(ctx, "plan-abc-123"); return err }(),
+			name: "PlanStore.Get by unknown id",
+			err: func() error {
+				_, err := plans.Get(ctx, pkgcore.TenantID("tenant-a"), "plan-abc-123")
+				return err
+			}(),
 			value: "plan-abc-123",
 		},
 		{
 			name: "PlanStore.Update by unknown id",
 			err: func() error {
-				return plans.Update(ctx, &Plan{ID: "plan-abc-123", Key: "pro", Name: "Pro"})
+				return plans.Update(ctx, pkgcore.TenantID("tenant-a"), &Plan{ID: "plan-abc-123", TenantID: "tenant-a", Key: "pro", Name: "Pro"})
 			}(),
 			value: "plan-abc-123",
 		},

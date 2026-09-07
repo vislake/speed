@@ -18,11 +18,14 @@ import "github.com/vislake/speed/go/pkgcore/apperr"
 // and go/metering's error indexes document for their own round boundaries.
 var (
 	// ErrPlanNotFound reports that no Plan exists for whatever was looked
-	// up: a plan id (PlanStore.Get/Update, SubscriptionService.Create) or a
-	// plan key (PlanStore.Resolve). Every call site decorates the error
-	// with the looked-up value under the shared "id" parameter name -- the
-	// same name the locale template interpolates -- never with a
-	// site-specific name the template would render as an empty slot.
+	// up in the scope it was looked up under: a plan id in a named scope
+	// (PlanStore.Get/GetPlatformPlan/Update, SubscriptionService.Create)
+	// or a plan key (PlanStore.Resolve) -- a row that exists but belongs
+	// to another scope answers the identical code, never a distinguishable
+	// refusal. Every call site decorates the error with the looked-up
+	// value under the shared "id" parameter name -- the same name the
+	// locale template interpolates -- never with a site-specific name the
+	// template would render as an empty slot.
 	ErrPlanNotFound = apperr.NotFound("billing.plan_not_found")
 
 	// ErrPlanKeyRequired reports that a Plan was saved with an empty Key.

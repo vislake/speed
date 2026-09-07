@@ -183,33 +183,35 @@ type CreateInput struct {
 // SubscriptionStatusCreated.
 //
 // in.PlanID must resolve, through plans, to a Plan the calling tenant may
-// actually subscribe to: either a platform-wide Plan (Plan.IsPlatformWide)
-// or a tenant-custom Plan owned by the ctx tenant itself. Plan is a
-// dual-domain table reached through a plain PlanStore with no ambient
-// tenant filter of its own (Plan's own doc comment) -- nothing else in the
-// write path stops a caller-supplied PlanID from naming another tenant's
-// private, negotiated Plan, and EntitlementsService.Check would then
-// silently apply that other tenant's Grants/quota limits to this tenant.
-// A PlanID that fails this check -- because it does not exist at all, or
-// exists but names a Plan outside the ctx tenant's own scope -- is refused
-// with the same ErrPlanNotFound either way, so a caller cannot use this
-// call to probe for another tenant's Plan ids.
+// actually subscribe to: either a tenant-custom Plan owned by the ctx
+// tenant itself or a platform-wide Plan. Plan is a dual-domain table
+// reached through a plain PlanStore with no ambient tenant filter of its
+// own (Plan's own doc comment), so the scope check lives in the lookup
+// itself: the tenant's own custom Plans are reached by PlanStore.Get,
+// the platform-wide catalog by PlanStore.GetPlatformPlan, and a PlanID
+// that names neither -- because it does not exist at all, or exists but
+// is another tenant's private, negotiated Plan, which would silently
+// apply that other tenant's Grants/quota limits to this tenant's
+// subscription -- is refused with the same ErrPlanNotFound either way, so
+// a caller cannot use this call to probe for another tenant's Plan ids.
 func (s *SubscriptionService) Create(ctx context.Context, in CreateInput) (*Subscription, error) {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	plan, err := s.plans.Get(ctx, in.PlanID)
+	_, err = s.plans.Get(ctx, tenant, in.PlanID)
+	if hasCode(err, ErrPlanNotFound.Code) {
+		// Not this tenant's own custom Plan -- the id may name the
+		// platform-wide Plan the subscription should be created against
+		// (a platform-wide row is not in any tenant's own scope; see
+		// GetPlatformPlan's doc comment). A foreign tenant's custom Plan
+		// misses this lookup too, so both cases still answer the same
+		// ErrPlanNotFound the first lookup produced.
+		_, err = s.plans.GetPlatformPlan(ctx, in.PlanID)
+	}
 	if err != nil {
 		return nil, err
-	}
-	if !plan.IsPlatformWide() && plan.TenantID != string(tenant) {
-		// Exists, but not visible to this tenant -- answer identically to
-		// "does not exist" (ErrPlanNotFound), never a distinguishing
-		// Forbidden, so this cannot be used to enumerate other tenants'
-		// Plan ids.
-		return nil, ErrPlanNotFound.WithParam("id", in.PlanID)
 	}
 
 	sub := &Subscription{

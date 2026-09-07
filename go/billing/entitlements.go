@@ -82,12 +82,23 @@ func (s *EntitlementsService) Check(ctx context.Context, featureKey string, requ
 		return Decision{Allowed: false, Reason: DecisionReasonNoSubscription}, nil
 	}
 
-	plan, err := s.plans.Get(ctx, sub.PlanID)
+	// A subscription may reference either a tenant-custom Plan of its own
+	// tenant or the platform-wide Plan it was created against -- never
+	// another tenant's custom Plan (SubscriptionService.Create's own scope
+	// guard). Resolve the reference the same way Create admitted it: the
+	// tenant's own scope first (PlanStore.Get), then the platform-wide
+	// catalog (PlanStore.GetPlatformPlan, whose doc comment explains why a
+	// platform-wide row is not in any tenant's own scope). A PlanID that
+	// names neither -- the plan was deleted out from under the
+	// subscription, or the row references a scope no lookup may reach --
+	// is treated exactly like "no subscription", since there is nothing
+	// left to grant against.
+	plan, err := s.plans.Get(ctx, tenant, sub.PlanID)
+	if hasCode(err, ErrPlanNotFound.Code) {
+		plan, err = s.plans.GetPlatformPlan(ctx, sub.PlanID)
+	}
 	if err != nil {
 		if hasCode(err, ErrPlanNotFound.Code) {
-			// The subscription's own Plan was deleted out from under it --
-			// treat exactly like "no subscription", since there is nothing
-			// left to grant against.
 			return Decision{Allowed: false, Reason: DecisionReasonNoSubscription}, nil
 		}
 		return Decision{}, err

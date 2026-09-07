@@ -193,24 +193,47 @@ func (s *PlanStore) Create(ctx context.Context, plan *Plan) error {
 	return fmt.Errorf("billing: create plan: %w", err)
 }
 
-// Update saves every field of plan, matched by ID. It returns
-// ErrPlanNotFound if no row with that ID exists -- including an empty ID,
-// which can never name a row: no stored Plan carries one (Create generates
-// a UUID whenever plan.ID is blank), so an empty-ID Update answers the same
-// coded not-found instead of reaching GORM's Save at all. That guard is
-// load-bearing, not defensive: Save performs a CREATE whenever the primary
-// key is blank (insert semantics keyed on the struct's own ID field, the
-// Where clause notwithstanding), so without it an Update whose plan.ID was
-// accidentally left empty would silently INSERT a new row and return nil.
-func (s *PlanStore) Update(ctx context.Context, plan *Plan) error {
+// Update saves every field of plan, matched by ID, scoped to the tenant
+// tenantID names: only a Plan that tenant actually owns -- its row's
+// TenantID is exactly the named scope -- can be updated, so tenantID's
+// value must equal the plan's own TenantID. The scope guard has two
+// halves: the WHERE clause matches the row by id AND by the named scope,
+// so a row owned by another tenant (or a platform-wide one, unless the
+// caller itself names the platform scope, platformScopeSentinel) matches
+// nothing and answers ErrPlanNotFound; and the plan struct being saved
+// must itself carry the named scope, refused before the database is
+// touched, so a scoped Update can never move one of the caller's own rows
+// into another tenant's scope or into the platform catalog by drifting
+// the field.
+//
+// It returns ErrPlanNotFound if no row with that ID exists in the named
+// scope -- including an empty ID, which can never name a row: no stored
+// Plan carries one (Create generates a UUID whenever plan.ID is blank), so
+// an empty-ID Update answers the same coded not-found instead of reaching
+// GORM's Save at all. That guard is load-bearing, not defensive: Save
+// performs a CREATE whenever the primary key is blank (insert semantics
+// keyed on the struct's own ID field, the Where clause notwithstanding),
+// so without it an Update whose plan.ID was accidentally left empty would
+// silently INSERT a new row and return nil.
+func (s *PlanStore) Update(ctx context.Context, tenantID pkgcore.TenantID, plan *Plan) error {
 	if plan.ID == "" {
+		return ErrPlanNotFound.WithParam("id", plan.ID)
+	}
+	if plan.TenantID != string(tenantID) {
+		// The plan being saved does not belong to the named scope -- the
+		// caller would be writing (or moving) a row outside its own. Same
+		// coded answer as "no such row", matching the module's
+		// anti-enumeration convention (see Create's own doc comment on
+		// SubscriptionService's identical refusal shape).
 		return ErrPlanNotFound.WithParam("id", plan.ID)
 	}
 	if len(plan.GrantsJSON) == 0 {
 		// See Create's identical guard: the grants column is NOT NULL.
 		plan.GrantsJSON = datatypes.JSON("[]")
 	}
-	res := s.db.WithContext(ctx).Where("id = ?", plan.ID).Select("*").Save(plan)
+	res := s.db.WithContext(ctx).
+		Where("id = ? AND tenant_id = ?", plan.ID, string(tenantID)).
+		Select("*").Save(plan)
 	if res.Error != nil {
 		return fmt.Errorf("billing: update plan %q: %w", plan.ID, res.Error)
 	}
@@ -220,10 +243,40 @@ func (s *PlanStore) Update(ctx context.Context, plan *Plan) error {
 	return nil
 }
 
-// Get returns the Plan with the given id, or ErrPlanNotFound.
-func (s *PlanStore) Get(ctx context.Context, id string) (*Plan, error) {
+// Get returns the Plan with the given id that the tenant scope tenantID
+// owns -- the row's TenantID must be exactly the named scope -- or
+// ErrPlanNotFound. A platform-wide Plan is not in any tenant's own scope:
+// read it through GetPlatformPlan. tenantID may itself be
+// platformScopeSentinel (""), in which case Get reads the platform
+// scope's own rows -- GetPlatformPlan is the same read under the name
+// that states what it crosses.
+func (s *PlanStore) Get(ctx context.Context, tenantID pkgcore.TenantID, id string) (*Plan, error) {
+	return s.getByIDAndScope(ctx, id, string(tenantID))
+}
+
+// GetPlatformPlan returns the platform-wide Plan with the given id, or
+// ErrPlanNotFound. It is the by-id read that crosses tenant scopes: the
+// row it reads (TenantID == platformScopeSentinel) is platform data,
+// visible to every tenant's lookup, so this read is not a scope violation
+// the way reading another tenant's custom Plan would be -- it is the
+// named, deliberate form of the platform-level read, used where a caller
+// knows the id names a platform-wide Plan (the subscription path: a
+// Subscription may reference either its tenant's own custom Plan or the
+// platform-wide Plan it was created against, and both
+// SubscriptionService.Create and EntitlementsService.Check resolve that
+// reference with Get-then-GetPlatformPlan). A tenant-custom row is
+// refused with ErrPlanNotFound even if the caller knows its id.
+func (s *PlanStore) GetPlatformPlan(ctx context.Context, id string) (*Plan, error) {
+	return s.getByIDAndScope(ctx, id, platformScopeSentinel)
+}
+
+// getByIDAndScope returns the Plan with the given id whose TenantID is
+// exactly scope, or ErrPlanNotFound.
+func (s *PlanStore) getByIDAndScope(ctx context.Context, id, scope string) (*Plan, error) {
 	var out Plan
-	err := s.db.WithContext(ctx).Where("id = ?", id).First(&out).Error
+	err := s.db.WithContext(ctx).
+		Where("id = ? AND tenant_id = ?", id, scope).
+		First(&out).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrPlanNotFound.WithParam("id", id)
 	}
@@ -319,17 +372,25 @@ func (s *PlanService) Create(ctx context.Context, plan *Plan) error {
 }
 
 // Update saves plan and publishes EventPlanChanged with Action "updated".
-func (s *PlanService) Update(ctx context.Context, plan *Plan) error {
-	if err := s.store.Update(ctx, plan); err != nil {
+// tenantID is the scope the update is confined to -- see PlanStore.Update
+// for the exact guard; a host updating a platform-wide Plan passes
+// platformScopeSentinel.
+func (s *PlanService) Update(ctx context.Context, tenantID pkgcore.TenantID, plan *Plan) error {
+	if err := s.store.Update(ctx, tenantID, plan); err != nil {
 		return err
 	}
 	s.publish(ctx, plan, "updated")
 	return nil
 }
 
-// Get returns the Plan with the given id, or ErrPlanNotFound.
-func (s *PlanService) Get(ctx context.Context, id string) (*Plan, error) {
-	return s.store.Get(ctx, id)
+// Get returns the Plan with the given id that the tenant scope tenantID
+// owns, or ErrPlanNotFound -- see PlanStore.Get. A platform-wide Plan is
+// read through PlanStore.GetPlatformPlan (the service offers no
+// platform-level Get passthrough: no caller of this service needs one
+// yet, and the store's own named method is the honest read for one that
+// does).
+func (s *PlanService) Get(ctx context.Context, tenantID pkgcore.TenantID, id string) (*Plan, error) {
+	return s.store.Get(ctx, tenantID, id)
 }
 
 // Resolve is PlanStore.Resolve's pass-through -- see that method's own doc
