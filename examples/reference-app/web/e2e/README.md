@@ -45,13 +45,32 @@ that (the session address-source check) and had never run anywhere;
 nothing catches this automatically, so it is a rule to hold when adding
 a gate rather than something the suite enforces.
 
-The budget is a hard ceiling, not untidiness. `go/authn` allows five
-sign-ins per account per minute, the whole local run finishes in about
-twenty-five seconds, and there are three seeded demo accounts — so every
-test competes for one minute's worth of the same three, and the owner
-account, which every write-gated test needs, is already at five. A sixth
-does not slow the suite: it turns it red on `429` in whichever test loses
-the race, a failure that says nothing about the product.
+The budget is a hard ceiling, not untidiness, and it has **two**
+dimensions — `go/authn`'s `ratelimit.go` is the authority for both:
+
+| Limit | Value | What it binds |
+|---|---|---|
+| `limitLoginByAccount` | 5 / minute | one demo account |
+| `limitLoginByIP` | 20 / minute | **the whole suite at once** |
+| `limitRegisterByIP` | 10 / hour | the specs that register |
+
+The per-account limit is the obvious one and the per-IP limit is the one
+that actually caps the suite's size: every test signs in from the same
+machine, so they all draw on one 20-per-minute pool, and the whole local
+run finishes in about twenty-five seconds — inside a single window. The
+default tier currently spends **17 of those 20**. Three sign-ins of
+headroom, for any new gate, on any account.
+
+That second dimension was missed when these tiers were first drawn (only
+the per-account limit was counted), and it changes the answer: switching
+a gate to a quieter demo account does **not** buy room, because the pool
+it is drawing on is not per-account. A new gate either fits in the three
+remaining slots or belongs in `@budget`, where the separate invocation
+gives it a fresh 20.
+
+Going over does not slow the suite down: it turns it red on `429` in
+whichever test loses the race, a failure that says nothing about the
+product.
 
 What keeps `@budget` a real tier rather than a graveyard: each run boots
 its own server, so a **separate invocation** starts with the rate-limit

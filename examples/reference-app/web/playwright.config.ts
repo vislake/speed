@@ -218,14 +218,21 @@ export default defineConfig({
   // could tell anyone what was still broken. An acceptance report cannot
   // be honest on top of that.
   //
-  // The budget is a real ceiling, not a tidiness preference. go/authn
-  // allows five sign-ins per account per minute and the whole local run
-  // finishes in about twenty-five seconds, so every test in it competes
-  // for one minute's worth of the same three demo accounts -- and the
-  // owner account, which every write-gated test needs, is already at
-  // five. Adding a sixth does not slow the suite down, it turns it red on
-  // 429 in whichever test happens to lose, which is a failure that says
-  // nothing about the product.
+  // The budget is a real ceiling, not a tidiness preference, and it has
+  // TWO dimensions (go/authn's ratelimit.go): five sign-ins per account
+  // per minute, and twenty per IP per minute. The second is the one that
+  // caps the suite -- every test signs in from the same machine, so they
+  // all draw on one twenty-per-minute pool, and the whole local run
+  // finishes inside a single window. The default tier spends seventeen
+  // of those twenty.
+  //
+  // Only the per-account limit was counted when these tiers were drawn,
+  // and the difference matters: moving a gate to a quieter demo account
+  // buys NO room, because the binding pool is not per-account. A new
+  // gate either fits in the three remaining slots or belongs in @budget,
+  // whose separate invocation gets a fresh twenty. Going over does not
+  // slow the suite down -- it turns it red on 429 in whichever test
+  // happens to lose, a failure that says nothing about the product.
   //
   // What makes @budget a real tier rather than a graveyard: each run
   // boots its own server, so a SEPARATE invocation starts with the
