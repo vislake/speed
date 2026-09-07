@@ -337,15 +337,24 @@ test.describe('the core journey', { tag: '@pending' }, () => {
       // message when it arrives, then later to show someone at home.
       //
       // Worth asserting rather than assuming now that the pair costs two
-      // token reads per visit. go/sharing settles a granted view only
-      // after the content has actually been served (ee20d37 -- before
-      // that, an unwired resolver or an interrupted stream permanently
-      // spent a limited share nobody saw), and this app mints its
-      // patient links with no view cap at all, so a second visit is
-      // supposed to work. This gate is what would notice if a cap
-      // appeared later: with one, the pair's two reads would spend it on
-      // the first visit and the patient's second look would be a
-      // refusal.
+      // token reads per visit.
+      //
+      // go/sharing's view accounting moved twice while this gate stood:
+      // first to settling a granted view only after the content was
+      // actually served (ee20d37 -- an unwired resolver or an
+      // interrupted stream had permanently spent a limited share nobody
+      // saw), then to a reserve -> confirm/refund shape (909161e --
+      // settling only afterwards meant a settle write that failed left a
+      // delivered share endlessly re-fetchable, the security mirror of
+      // the first hole). Both directions now hold at once.
+      //
+      // Neither touches this journey, because this app mints its patient
+      // links with no view cap at all (share-api.ts sends only
+      // resourceRef), so a second visit is supposed to work and does.
+      // What this gate is for is the day a cap appears: with one, the
+      // pair's two reads would spend it on the first visit and the
+      // patient's second look would be a refusal -- a consequence of a
+      // configuration change that nobody would connect to the patient.
       await patientPage.reload()
       await expectBeforeAndAfter(
         patientPage.getByRole('img'),
