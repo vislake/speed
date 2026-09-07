@@ -455,13 +455,19 @@ func (s *ObjectService) Upload(ctx context.Context, objectID string, contentLeng
 // storage.content_missing, storage.object_not_uploading) and runs no side
 // effect: a finalize that did not commit announces nothing, enqueues
 // nothing and logs nothing. One cleanup runs behind a lost finalize: when
-// the sanitizer rewrote the stored bytes (step 10) and the row the rewrite
-// describes is gone or doomed -- reclaimed, its window closed, or
-// mid-deletion -- the rewrite can be the only bytes left under the key, and
-// they are taken back (best effort) so a finalize that did not commit never
-// orphans them. A row another completion won is the exception: its own
-// writeback is the same sanitized content that completed row was finalized
-// from, so nothing is removed (the detail is at the cleanup site below).
+// the sanitizer rewrote the stored bytes (step 10) and the re-read finds
+// the row the rewrite describes gone or doomed -- reclaimed, its window
+// closed, or mid-deletion -- the rewrite can be the only bytes left under
+// the key, and they are taken back (best effort) so a finalize that did not
+// commit never orphans them. A row another completion won is the
+// exception: its own writeback is the same sanitized content that completed
+// row was finalized from, so nothing is removed (the detail is at the
+// cleanup site below). A re-read that itself fails narrows the cleanup
+// further: only its not-found shape -- the row genuinely vanished -- takes
+// the writeback back, and every other failure is reported unchanged with
+// nothing removed, since the row's state is unknown and may be exactly the
+// live completed row whose bytes must stay (the detail is at the cleanup
+// site below).
 //
 // Side effects follow the finalize, and neither can fail the call: an
 // image object's thumbnail derivation is enqueued on the module's queue
@@ -579,17 +585,37 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 		// they all sit behind the committed branch.
 		current, err := s.findByID(ctx, objectID)
 		if err != nil {
-			// The row vanished: the sweep reclaimed it. When the sanitizer
-			// rewrote the bytes first (changed), the writeback may be the
-			// only bytes left under the key -- the reclaim removed the row
-			// after its own byte removal, and a writeback landing between
-			// the two would outlive the row it describes. Take the writeback
-			// back (best effort -- in the other interleaving the reclaim
-			// already removed it, and the store's delete is idempotent) so a
-			// lost finalize never leaves orphaned content under the key. The
-			// take-back's own failure residue -- one-shot, nothing left to
-			// converge once the row is gone -- is the class AGENTS.md's Known
-			// limitations records alongside the deleting shape's.
+			// The re-read failed, and only one of its failure shapes means
+			// the row is genuinely gone: the not-found answer a row the
+			// reclaim removed reads as. When the sanitizer rewrote the
+			// bytes first (changed), a writeback landing between the
+			// reclaim's own byte removal and its row removal would be the
+			// only bytes left under the key, outliving the row it
+			// describes, so that shape takes the writeback back (best
+			// effort -- in the other interleaving the reclaim already
+			// removed it, and the store's delete is idempotent) and a lost
+			// finalize never leaves orphaned content under the key. Every
+			// other failure -- a transient database error, say -- leaves
+			// the row's true state unknown, and the row may be the live
+			// completed one a concurrent completion on another replica just
+			// won, whose own writeback is this pipeline's too: sanitize is
+			// deterministic over the same generation of bytes, so the bytes
+			// under the key are exactly what the completed row's finalized
+			// metadata describes, and deleting them on a guessed shape
+			// would empty a live completed object, the anomaly reads report
+			// as store_error, with nothing ever rewriting the key. Nothing
+			// is taken back for that shape; the error is reported
+			// unchanged, the same "a re-read that itself fails leaves the
+			// question unanswered, the store error is reported rather than
+			// guessed at" rule the derive worker follows (derive.go). The
+			// residue of the coincidence -- a non-not-found re-read failure
+			// while the row is gone or doomed leaves the writeback under a
+			// key nothing will revisit -- is the class AGENTS.md's Known
+			// limitations records, alongside the take-back's own failure
+			// residue.
+			if !hasCode(err, ErrObjectNotFound.Code) {
+				return Object{}, err
+			}
 			if changed {
 				if cleanupErr := st.DeleteObject(ctx, row.Key); cleanupErr != nil {
 					observability.FromContext(ctx).Warn("sanitized writeback removed after the object vanished",

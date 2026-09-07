@@ -19,6 +19,8 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 
+	"gorm.io/gorm"
+
 	"github.com/vislake/speed/go/storage/internal/testutil"
 )
 
@@ -1206,6 +1208,96 @@ func TestObjectService_Complete_KeepsTheWritebackWhenAnotherCompletionWon(t *tes
 	}
 	if current.State != ObjectStateCompleted {
 		t.Errorf("row %s state = %q after the completion, want %q", row.ID, current.State, ObjectStateCompleted)
+	}
+}
+
+// TestObjectService_Complete_KeepsTheWritebackWhenTheReReadFailsTransiently
+// pins the completed shape's failing re-read: another replica's completion
+// won the transition first, and the re-read this pipeline runs after its
+// own zero-row finalize fails with a transient database error -- anything
+// but the not-found answer a genuinely vanished row gives. The row's true
+// state is then unknown, and it may be exactly the live completed row
+// above, whose own writeback is this pipeline's too -- sanitize is
+// deterministic over the same generation of bytes -- so the bytes under the
+// key are what the completed row's finalized metadata describes, and
+// deleting them on a guessed shape would empty a live completed object, the
+// anomaly reads report as store_error, with nothing ever rewriting the key.
+// The completion reports the re-read error unchanged and takes nothing
+// back; once the transient failure passes, the object stays readable. (On
+// the pre-fix code this test failed with the key emptied -- the take-back
+// ran on any re-read error -- and the recovery read answered store_error.)
+// The genuine-vanished shape still takes the writeback back, pinned by
+// TestObjectService_Complete_TakesBackItsWritebackWhenTheReclaimWins.
+func TestObjectService_Complete_KeepsTheWritebackWhenTheReReadFailsTransiently(t *testing.T) {
+	svc, store, queue, bus := newTestService(t, nil)
+	ctx := serviceCtx("tenant-a")
+	row := createAndUpload(t, svc, ctx, jpegWithExif(t), "image/jpeg")
+
+	// The winning completion commits right after this pipeline read the
+	// bytes (the same stand-in as the completed-shape test above). The
+	// one-shot rejection is armed by the writeback hook -- the pipeline's
+	// own re-read is the next query, the finalize write that sits between
+	// them being an UPDATE, never a SELECT -- and consumed by that re-read,
+	// so the database answers every later query cleanly: the transient
+	// failure of a replica whose re-read coincides with a database hiccup,
+	// healed by the time the caller retries.
+	hooked := &hookedStore{fakeStore: store}
+	rejectNextQuery := false
+	svc.objects.db.Callback().Query().Before("gorm:query").
+		Register("storage:test_transient_reject", func(tx *gorm.DB) {
+			if rejectNextQuery {
+				rejectNextQuery = false
+				tx.AddError(errors.New("storage: injected transient database failure"))
+			}
+		})
+	hooked.onGet = func() {
+		current, err := svc.objects.FindByID(ctx, row.ID)
+		if err != nil {
+			t.Errorf("FindByID(%s): %v", row.ID, err)
+			return
+		}
+		current.State = ObjectStateCompleted
+		if _, err := svc.objects.finalizeUpload(ctx, current, time.Now()); err != nil {
+			t.Errorf("finalizeUpload(%s): %v", row.ID, err)
+		}
+	}
+	hooked.onPut = func() {
+		rejectNextQuery = true
+	}
+	svc.host = &fakeHost{store: hooked, bus: bus}
+
+	_, err := svc.Complete(ctx, row.ID)
+	assertCode(t, err, ErrInternal.Code)
+	if len(bus.events) != 0 {
+		t.Errorf("events = %d, want none -- a finalize that did not commit announces nothing", len(bus.events))
+	}
+	if len(queue.tasks) != 0 {
+		t.Errorf("tasks = %d, want none -- a finalize that did not commit enqueues nothing", len(queue.tasks))
+	}
+	current, err := svc.objects.FindByID(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("FindByID(%s) after the completion: %v", row.ID, err)
+	}
+	if current.State != ObjectStateCompleted {
+		t.Errorf("row %s state = %q after the completion, want %q", row.ID, current.State, ObjectStateCompleted)
+	}
+	want, ok := store.bytes(row.Key)
+	if !ok {
+		t.Fatal("the key lost its bytes -- the writeback is the live completed row's own content and must survive the re-read failure")
+	}
+	_, rc, err := svc.OpenContent(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("OpenContent(%s) after the transient failure passed: %v -- the object must stay readable", row.ID, err)
+	}
+	got, readErr := io.ReadAll(rc)
+	if readErr != nil {
+		t.Fatalf("reading the opened content: %v", readErr)
+	}
+	if err := rc.Close(); err != nil {
+		t.Fatalf("closing the opened content: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Error("the opened content is not the writeback the completed row was finalized from")
 	}
 }
 
