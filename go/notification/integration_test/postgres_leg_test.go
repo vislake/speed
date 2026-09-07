@@ -589,3 +589,132 @@ func TestPostgres_ConsentFlow_SingleWinnerVerifyAndDeliverabilityGate(t *testing
 		t.Errorf("console SMS delivered %d lines, want 2 (one per double opt-in send)", smsLines)
 	}
 }
+
+// TestPostgres_SendRecordSaveGuarded_GuardStatementRunsAgainstARealServer
+// executes the delivery log's guarded rewrite (notification's SaveGuarded)
+// against real PostgreSQL -- the second-dialect execution the unit tier
+// cannot provide, since it runs the statement only on SQLite, and the one
+// this module's PG leg had simply never driven before: settle's guarded
+// write is the statement whose dialect shape only the second dialect
+// exercises. Its value-vs-value comparison of this write's status against
+// the succeeded sentinel used to bind BOTH sides as parameters, an
+// expression whose type PostgreSQL resolves only through its implicit
+// text-typing of unknown parameters (42P18 the day either side stops being
+// plain text) -- the sentinel is bound as a literal now. This test pins
+// that every guarded outcome the statement promises -- the refused
+// downgrade, the allowed rewrite of a non-succeeded row, and the allowed
+// re-settle of a succeeded one -- lands through the real server's own
+// semantics, with the guard's refusal a (false, nil) answer rather than an
+// error.
+func TestPostgres_SendRecordSaveGuarded_GuardStatementRunsAgainstARealServer(t *testing.T) {
+	ctx := context.Background()
+	db := openNotificationPostgres(t, ctx, startPostgresContainer(t, ctx))
+	repo := notification.NewSendRecordRepository(db)
+
+	seed := func(id, key, status string) *notification.SendRecord {
+		t.Helper()
+		rec := &notification.SendRecord{
+			ID:              id,
+			TenantID:        "tenant-acme",
+			TypeKey:         "clinic.appointment_reminder",
+			Channel:         notification.ChannelEmail,
+			RecipientClass:  notification.RecipientClassUser,
+			RecipientUserID: "user-7",
+			Status:          status,
+			IdempotencyKey:  key,
+		}
+		if err := repo.Create(ctx, rec); err != nil {
+			t.Fatalf("Create %s: %v", id, err)
+		}
+		return rec
+	}
+	readBack := func(key string) *notification.SendRecord {
+		t.Helper()
+		rec, err := repo.ByTenantAndKey(ctx, "tenant-acme", key)
+		if err != nil {
+			t.Fatalf("ByTenantAndKey(%s): %v", key, err)
+		}
+		if rec == nil {
+			t.Fatalf("ByTenantAndKey(%s) = nil, want the seeded row", key)
+		}
+		return rec
+	}
+
+	// A settle that would downgrade a succeeded row is refused: (false,
+	// nil), no error, and the row untouched -- the never-downgrade guard
+	// decided by the UPDATE statement's own WHERE against a real server.
+	succeeded := seed("sr-pg-0001", "delivery-key-pg-1", notification.SendRecordStatusSucceeded)
+	loser := *succeeded
+	loser.Status = notification.SendRecordStatusFailed
+	loser.Error = "a later attempt failed"
+	landed, err := repo.SaveGuarded(ctx, &loser)
+	if err != nil {
+		t.Fatalf("SaveGuarded downgrade on real PostgreSQL: %v", err)
+	}
+	if landed {
+		t.Error("the downgrading guarded write landed, want the guard's (false, nil) refusal")
+	}
+	before := readBack("delivery-key-pg-1")
+	if before.Status != notification.SendRecordStatusSucceeded || before.Error != "" {
+		t.Errorf("row after the refused downgrade = status %q error %q, want the seeded succeeded row untouched", before.Status, before.Error)
+	}
+
+	// A re-settle of the same winner is allowed: the row is rewritten in
+	// place, created_at preserved (the guard passes for a succeeded writer).
+	// created_at is compared before-vs-after through the same read path: the
+	// module's postgres migrations declare naive TIMESTAMP columns (the
+	// SQLite-parity choice, no NOW() on either dialect), so a struct-side
+	// time in the local zone never equals a driver-side readback in UTC --
+	// the row-level property the guard promises is that the guarded UPDATE
+	// left the column's stored value untouched, which two identical reads
+	// pin directly.
+	resettle := *succeeded
+	resettle.Error = "re-settled by a later replay"
+	landed, err = repo.SaveGuarded(ctx, &resettle)
+	if err != nil {
+		t.Fatalf("SaveGuarded re-settle on real PostgreSQL: %v", err)
+	}
+	if !landed {
+		t.Error("the succeeded re-settle did not land, want the guard's (true, nil) allowance")
+	}
+	got := readBack("delivery-key-pg-1")
+	if got.Status != notification.SendRecordStatusSucceeded || got.Error != "re-settled by a later replay" {
+		t.Errorf("row after the re-settle = status %q error %q, want the rewrite landed", got.Status, got.Error)
+	}
+	if !got.CreatedAt.Equal(before.CreatedAt) {
+		t.Errorf("re-settled row created_at = %v, want the pre-write read %v (a guarded write never touches created_at)", got.CreatedAt, before.CreatedAt)
+	}
+
+	// A write over a non-succeeded row is allowed: the guard exists only
+	// to protect a succeeded row.
+	failed := seed("sr-pg-0002", "delivery-key-pg-2", notification.SendRecordStatusFailed)
+	failed.Error = "the first attempt failed"
+	if err := repo.Save(ctx, failed); err != nil {
+		t.Fatalf("Save the failed row's first error text: %v", err)
+	}
+	retry := *failed
+	retry.Error = "the second attempt failed"
+	landed, err = repo.SaveGuarded(ctx, &retry)
+	if err != nil {
+		t.Fatalf("SaveGuarded over the failed row on real PostgreSQL: %v", err)
+	}
+	if !landed {
+		t.Error("the guarded write over the failed row did not land, want (true, nil)")
+	}
+	if got := readBack("delivery-key-pg-2"); got.Status != notification.SendRecordStatusFailed || got.Error != "the second attempt failed" {
+		t.Errorf("row after the allowed rewrite = status %q error %q, want the second attempt's text", got.Status, got.Error)
+	}
+
+	// An id no row carries is a refusal, never a create and never an error.
+	ghost := *succeeded
+	ghost.ID = "sr-pg-9999"
+	ghost.IdempotencyKey = "delivery-key-pg-ghost"
+	ghost.Error = "a write for an id nobody seeded"
+	landed, err = repo.SaveGuarded(ctx, &ghost)
+	if err != nil {
+		t.Fatalf("SaveGuarded for an absent id on real PostgreSQL: %v", err)
+	}
+	if landed {
+		t.Error("the guarded write for an absent id landed, want (false, nil)")
+	}
+}

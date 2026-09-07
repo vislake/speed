@@ -268,9 +268,37 @@ func (r *SendRecordRepository) Save(ctx context.Context, rec *SendRecord) error 
 // serializes writers and each statement re-evaluates the guard on the
 // row's committed state, so the last write to land is whichever the guard
 // allowed -- never one that erases a succeeded row.
+//
+// The statement is dialect-neutral by construction: it executes on
+// PostgreSQL as well as SQLite, and the integration tier runs it against a
+// real PostgreSQL server (integration_test/postgres_leg_test.go's
+// TestPostgres_SendRecordSaveGuarded_GuardStatementRunsAgainstARealServer)
+// for exactly that reason -- the guarded write's dialect shape is
+// second-dialect behaviour no SQLite run exercises, and the module had
+// never executed this path on PostgreSQL until that leg existed. The
+// guard's comparison of this write's status against the succeeded sentinel
+// used to bind BOTH sides as parameters: a value-vs-value expression whose
+// type only PostgreSQL's implicit text-typing of unknown parameters
+// resolves (SQLite's dynamic typing accepts it by different means), which
+// makes the statement's meaning depend on an inference the caller never
+// asked for -- a status value of any other type would surface as 42P18
+// (could not determine data type of parameter) on PostgreSQL, invisible to
+// every SQLite run. The sentinel is therefore bound as a SQL literal,
+// spelled from the Go constant itself so the two cannot drift (see the
+// comment at the statement below); every other placeholder binds against a
+// column's type and stays a parameter.
 func (r *SendRecordRepository) SaveGuarded(ctx context.Context, rec *SendRecord) (landed bool, err error) {
 	res := r.db.WithContext(ctx).
-		Where("id = ? AND NOT (status = ? AND ? <> ?)", rec.ID, SendRecordStatusSucceeded, rec.Status, SendRecordStatusSucceeded).
+		// The guard's second comparison spells the sentinel as a literal
+		// rather than a fourth parameter: a comparison of two ?-bound
+		// values against each other is resolved by PostgreSQL's implicit
+		// text-typing of unknown parameters (SQLite's dynamic typing does
+		// the same by different means), and the statement must not depend
+		// on that inference -- a value whose type the caller ever changed
+		// (a typed status, say) would answer 42P18 where no SQLite run
+		// could see it. A value compared against the quoted constant needs
+		// no inference at all.
+		Where("id = ? AND NOT (status = ? AND ? <> '"+SendRecordStatusSucceeded+"')", rec.ID, SendRecordStatusSucceeded, rec.Status).
 		Select("*").
 		Omit("created_at").
 		Updates(rec)
