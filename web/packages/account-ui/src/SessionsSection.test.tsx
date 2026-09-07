@@ -9,15 +9,18 @@
  * string, the IP, the AMR tokens) render as answered, translated text
  * never appears in their place; the current session is marked and has no
  * revoke action while every other active session has exactly one;
- * revoked sessions stay listed, greyed out, with no action; the single
- * row revoke fires DELETE /api/v1/authn/sessions/{id} with the caller's
- * bearer token and the list refetches on success, while a 404 renders
- * the session_not_found alert and changes nothing; "sign out other
- * devices" is the only double-confirmed action (ui-kit danger dialog:
- * first click arms with the ui-kit confirm-again label, second click
- * revokes) and surfaces the server's revoked_count on success; loading,
- * empty and error states render their own placeholder, the error state
- * with a retry that refetches. Every scenario ends with an axe pass.
+ * revoked sessions stay listed, greyed out, with no action; a session
+ * whose stored expires_at has passed is a dead session rendered
+ * expired -- never a live device that stays revocable and arms "sign
+ * out other devices"; the single row revoke fires
+ * DELETE /api/v1/authn/sessions/{id} with the caller's bearer token and
+ * the list refetches on success, while a 404 renders the
+ * session_not_found alert and changes nothing; "sign out other devices"
+ * is the only double-confirmed action (ui-kit danger dialog: first
+ * click arms with the ui-kit confirm-again label, second click revokes)
+ * and surfaces the server's revoked_count on success; loading, empty
+ * and error states render their own placeholder, the error state with a
+ * retry that refetches. Every scenario ends with an axe pass.
  */
 
 import { describe, expect, it, afterEach } from 'vitest'
@@ -54,6 +57,11 @@ const UI_KIT_ZH = uiKitResources['zh-CN'] as unknown as {
 const T1 = '2026-07-30T08:30:00.000Z'
 const T2 = '2026-08-01T02:05:00.000Z'
 const T3 = '2026-08-02T14:20:00.000Z'
+// The expiry fixtures are fixed far past / far future stamps: expiry is
+// compared against the wall clock at render time, so a boundary-sitting
+// stamp would make the scenario nondeterministic.
+const PAST_EXPIRY = '2020-01-01T00:00:00.000Z'
+const FUTURE_EXPIRY = '2099-01-01T00:00:00.000Z'
 
 function session(overrides: Partial<AuthnSession> = {}): AuthnSession {
   return {
@@ -587,5 +595,113 @@ describe('SessionsSection', () => {
     expect(
       rig.calls.some((call) => call.method === 'POST' && call.path === REVOKE_OTHERS_PATH),
     ).toBe(false)
+  })
+
+  it('render an expired session as expired, not as a live device: a past expires_at greys the row out of every revoke path', async () => {
+    // The server answers only active/revoked (expiry is checked at use
+    // time, never written back), so before the fix a session whose
+    // stored expires_at had passed rendered as a live device forever:
+    // it stayed individually revocable and read as a logged-in device.
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, {
+          ...makePair(),
+          principal: {
+            user_id: 'user-1',
+            tenant_id: 'tenant-1',
+            session_id: 'current-1',
+          },
+        })
+      }
+      if (call.method === 'GET' && call.path === SESSIONS_PATH) {
+        return jsonResponse(200, {
+          sessions: [
+            session({
+              id: 'current-1',
+              is_current: true,
+              device: 'This laptop',
+              expires_at: FUTURE_EXPIRY,
+            }),
+            session({
+              id: 'live-1',
+              device: 'A live phone',
+              expires_at: FUTURE_EXPIRY,
+            }),
+            session({
+              id: 'dead-1',
+              device: 'An old tablet',
+              // Still status 'active': only the stored expiry gives it
+              // away.
+              expires_at: PAST_EXPIRY,
+            }),
+          ],
+        })
+      }
+      throw new Error(`unexpected ${call.method} ${call.path}`)
+    })
+    await signInWithPassword(rig)
+    renderWithProviders(<SessionsSection />)
+
+    // The expired row renders its own status badge, never as a live
+    // device...
+    expect(await screen.findByText('An old tablet')).toBeTruthy()
+    expect(
+      screen.getAllByText(zhCN.sessions.status.expired),
+    ).toHaveLength(1)
+    expect(
+      screen.queryByText(zhCN.sessions.status.revoked),
+    ).toBeNull()
+    // ...and carries no revoke affordance, while the live row keeps its
+    // own -- each action named after the row it belongs to.
+    expect(
+      screen.queryByRole('button', { name: revokeAriaOf('An old tablet') }),
+    ).toBeNull()
+    expect(
+      screen.getAllByRole('button', { name: revokeAriaOf('A live phone') }),
+    ).toHaveLength(1)
+    // The current-session rule is unchanged: the current row stays
+    // marked and unrevocable.
+    expect(screen.getByText(zhCN.sessions.current)).toBeTruthy()
+    expect(
+      screen.queryByRole('button', { name: revokeAriaOf('This laptop') }),
+    ).toBeNull()
+
+    await expectNoAxeViolations()
+  })
+
+  it('not arm "sign out other devices" for an expired session: only live other sessions count', async () => {
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, {
+          ...makePair(),
+          principal: {
+            user_id: 'user-1',
+            tenant_id: 'tenant-1',
+            session_id: 'current-1',
+          },
+        })
+      }
+      if (call.method === 'GET' && call.path === SESSIONS_PATH) {
+        return jsonResponse(200, {
+          sessions: [
+            session({ id: 'current-1', is_current: true }),
+            session({ id: 'dead-1', device: 'An old tablet', expires_at: PAST_EXPIRY }),
+          ],
+        })
+      }
+      throw new Error(`unexpected ${call.method} ${call.path}`)
+    })
+    await signInWithPassword(rig)
+    renderWithProviders(<SessionsSection />)
+
+    expect(await screen.findByText(zhCN.sessions.status.expired)).toBeTruthy()
+    // The only other session is dead: the bulk action has nothing to
+    // sign out and stays hidden -- before the fix the expired row
+    // counted as a live other and armed the action forever.
+    expect(
+      screen.queryByRole('button', { name: zhCN.sessions.revokeOthers.label }),
+    ).toBeNull()
+
+    await expectNoAxeViolations()
   })
 })

@@ -8,8 +8,13 @@
  * when the answer carries none), the raw IP and AMR values (AMR tokens
  * are opaque authentication-method references -- server vocabulary, not
  * text to translate -- so they render as-is in chips), created/last-seen
- * times, and a status badge telling an active session from a revoked
- * one.
+ * times, and a status badge telling an active session from a revoked or
+ * an expired one. Expiry is checked at use time and never written back
+ * to the row, so the server answers only active/revoked -- a row whose
+ * stored expires_at lies in the past is a dead session, rendered
+ * expired (greyed, with no revoke affordance) rather than a live device
+ * that stays individually revocable and arms "sign out other devices"
+ * forever.
  *
  * Actions: a session that is neither current nor revoked carries a
  * row-end sign-out button that revokes exactly that session, without a
@@ -95,6 +100,16 @@ function parseDate(iso: string | undefined): Date | null {
   return Number.isNaN(date.getTime()) ? null : date
 }
 
+/** Whether the row's stored expiry has passed. Server-side expiry is
+ * checked at use time and never written back to the row, so an active
+ * session whose expires_at lies in the past is a dead session, never a
+ * live device. A row without expires_at (an answer that does not carry
+ * the field) is never declared expired. */
+function isExpired(expiresAtIso: string | undefined, now = Date.now()): boolean {
+  const expiresAt = parseDate(expiresAtIso)
+  return expiresAt !== null && expiresAt.getTime() <= now
+}
+
 /** The pending-state placeholder: rows shaped like the content rows, read
  * aloud as one loading announcement, never a fake heading. */
 function SessionListSkeleton({ label }: { readonly label: string }) {
@@ -169,13 +184,16 @@ export function SessionsSection() {
   const busy =
     revokeSessionMutation.isPending || revokeOthersMutation.isPending
 
+  // An expired session is as dead as a revoked one: it never arms the
+  // section-top bulk action, which exists to sign out live devices.
   const hasRevocableOther =
     sessions !== undefined &&
     sessions.some(
       (session) =>
         session.id != null &&
         session.is_current !== true &&
-        session.status !== 'revoked',
+        session.status !== 'revoked' &&
+        !isExpired(session.expires_at),
     )
 
   async function handleRevokeSession(sessionId: string): Promise<void> {
@@ -299,14 +317,22 @@ export function SessionsSection() {
           {/* The rows are one real list: a screen-reader user hears each
               session as one item of a numbered set with a boundary
               between rows, never a flat div stack. The notices above are
-              page-level messages and stay outside the list. */}
-          <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none' }}>
+              page-level messages and stay outside the list. role="list"
+              keeps the list semantics under WebKit, which strips them
+              from a list-style-none ul. */}
+          <Box component="ul" role="list" sx={{ m: 0, p: 0, listStyle: 'none' }}>
             {sessions.map((session, index) => {
               const id = session.id ?? null
               const revoked = session.status === 'revoked'
+              // The server answers only active/revoked (expiry is
+              // checked at use time, never written back), so a row
+              // whose stored expires_at lies in the past is a dead
+              // session: render it expired, never as a live device.
+              const expired = !revoked && isExpired(session.expires_at)
               const current = session.is_current === true
-              const revocable = id !== null && !current && !revoked
-              const metaColor = revoked ? 'text.disabled' : 'text.secondary'
+              const revocable = id !== null && !current && !revoked && !expired
+              const dead = revoked || expired
+              const metaColor = dead ? 'text.disabled' : 'text.secondary'
               // Line 1 carries the friendliest label the answer offers (its
               // device string when present); the raw user_agent repeats as a
               // muted detail line only when line 1 is not already it.
@@ -354,7 +380,7 @@ export function SessionsSection() {
                       sx={{
                         minWidth: 0,
                         fontWeight: 500,
-                        color: revoked ? 'text.disabled' : 'text.primary',
+                        color: dead ? 'text.disabled' : 'text.primary',
                       }}
                     >
                       {deviceLabel}
@@ -380,6 +406,14 @@ export function SessionsSection() {
                           size="small"
                           variant="outlined"
                           label={t('sessions.status.revoked')}
+                          sx={{ color: 'text.disabled' }}
+                        />
+                      )}
+                      {expired && (
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label={t('sessions.status.expired')}
                           sx={{ color: 'text.disabled' }}
                         />
                       )}
@@ -444,9 +478,7 @@ export function SessionsSection() {
                           size="small"
                           variant="outlined"
                           label={amr}
-                          sx={
-                            revoked ? { color: 'text.disabled' } : undefined
-                          }
+                          sx={dead ? { color: 'text.disabled' } : undefined}
                         />
                       ))}
                     </Box>

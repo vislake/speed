@@ -32,7 +32,8 @@
     "loading": "正在加载会话",
     "current": "当前会话",
     "status": {
-      "revoked": "已退出"
+      "revoked": "已退出",
+      "expired": "已过期"
     },
     "deviceUnknown": "未知设备",
     "revokeAriaWithDevice": "退出此会话：{{device}}",

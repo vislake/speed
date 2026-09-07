@@ -32,7 +32,8 @@
     "loading": "Loading sessions",
     "current": "Current session",
     "status": {
-      "revoked": "Signed out"
+      "revoked": "Signed out",
+      "expired": "Expired"
     },
     "deviceUnknown": "Unknown device",
     "revokeAriaWithDevice": "Sign out this session: {{device}}",
