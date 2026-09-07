@@ -1074,6 +1074,7 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	t.Setenv("APP_DEMO_USERS_PASSWORD", "")
 	t.Setenv("APP_OBJECT_STORE_ROOT", "")
 	t.Setenv("APP_DISABLE_DEMO_USER_HEADER", "")
+	t.Setenv("APP_TRUSTED_PROXIES", "")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -1116,6 +1117,7 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	t.Setenv("APP_DEMO_USERS_PASSWORD", "env demo seed passphrase")
 	t.Setenv("APP_OBJECT_STORE_ROOT", "/var/lib/reference-app/objects")
 	t.Setenv("APP_DISABLE_DEMO_USER_HEADER", "1")
+	t.Setenv("APP_TRUSTED_PROXIES", " 172.16.0.0/12, 203.0.113.10 , ")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -1141,6 +1143,15 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	}
 	if !cfg.DisableDemoUserHeader {
 		t.Fatal("DisableDemoUserHeader = false, want true (APP_DISABLE_DEMO_USER_HEADER set to a non-empty value)")
+	}
+	wantProxies := []string{"172.16.0.0/12", "203.0.113.10"}
+	if len(cfg.TrustedProxies) != len(wantProxies) {
+		t.Fatalf("TrustedProxies = %v, want %v", cfg.TrustedProxies, wantProxies)
+	}
+	for i := range wantProxies {
+		if cfg.TrustedProxies[i] != wantProxies[i] {
+			t.Errorf("TrustedProxies[%d] = %q, want %q", i, cfg.TrustedProxies[i], wantProxies[i])
+		}
 	}
 	wantKey := []byte{
 		0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08,

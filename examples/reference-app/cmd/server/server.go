@@ -340,6 +340,24 @@ const (
 	// facing version of this same warning.
 	disableDemoUserHeaderEnv = "APP_DISABLE_DEMO_USER_HEADER"
 
+	// trustedProxiesEnv names the environment variable holding the
+	// comma-separated list of reverse-proxy addresses this deployment
+	// receives requests through -- the value configFromEnv hands
+	// authn.WithTrustedProxies (see serverConfig.TrustedProxies). This is
+	// the deployment declaration that lets authn's session/login-history
+	// records carry the REAL client address instead of the proxy's: on
+	// Fly.io, the address recorded before this variable existed was the
+	// platform's own (172.16.45.218 on the acceptance deployment), and
+	// declaring the Fly proxy ranges in fly.toml's [env] block is what
+	// recovers the client from the Fly-Client-IP header Fly's proxy
+	// overwrites on every request. Left unset (the default), this variable
+	// changes nothing -- every request keeps recording its direct
+	// connection address, which is the correct fail-closed shape for a
+	// host not behind a proxy, since a host that reads forwarding headers
+	// from an undeclared peer would let any direct client mint its own
+	// recorded address.
+	trustedProxiesEnv = "APP_TRUSTED_PROXIES"
+
 	// rootKeyPurposeConfigCipher, rootKeyPurposeOrgIndex,
 	// rootKeyPurposeNotificationIndex, rootKeyPurposePKILocalKeyCipher,
 	// rootKeyPurposeAuthnBlindIndex and rootKeyPurposeAuthnPIICipher are the
@@ -1011,6 +1029,27 @@ type serverConfig struct {
 	// contract just above.
 	DisableDemoUserHeader bool
 
+	// TrustedProxies is the authn.WithTrustedProxies declaration: the IP
+	// addresses and CIDR prefixes of the reverse proxies this deployment
+	// receives requests through, so authn's session/login-history records
+	// carry the real client address (recovered from the platform-injected
+	// Fly-Client-IP / X-Forwarded-For headers) instead of the proxy's
+	// address -- the Fly.io acceptance finding this round closes, where
+	// every recorded address was the proxy's internal 172.16.45.218.
+	// configFromEnv fills it from APP_TRUSTED_PROXIES, a comma-separated
+	// list (see trustedProxiesEnv); the empty default -- the zero-external-
+	// dependency `go run ./cmd/server` experience, and every test's
+	// config -- keeps authn's fail-closed behavior, every request
+	// recording its direct connection address, byte-identical to this
+	// field never having existed. A value whose entries are not IP
+	// addresses or CIDR prefixes refuses boot: authn.WithTrustedProxies
+	// validates its input at module construction (go/authn's newOptions).
+	// A deployment behind a proxy declares the proxy here or its records
+	// stay proxy-addressed; it must never declare an untrusted range, and
+	// the declared proxy must overwrite or strip forwarding headers it
+	// receives from its own clients, exactly as Fly.io's proxy does.
+	TrustedProxies []string
+
 	// WebDistDir names the directory holding this app's built frontend
 	// (the dist/ examples/reference-app/web's `pnpm build` emits) when
 	// this process should serve that frontend itself -- see frontend.go's
@@ -1249,6 +1288,26 @@ func resolveKey(rootKey []byte, purpose, individualEnv string, devDefault []byte
 	return key, nil
 }
 
+// splitTrustedProxies splits trustedProxiesEnv's comma-separated value into
+// the per-entry list serverConfig.TrustedProxies carries: trimmed, empty
+// entries dropped, empty input yielding nil. It never rejects an entry --
+// validation of the entries themselves is authn.WithTrustedProxies' job
+// (go/authn's newOptions refuses an entry that is neither an IP address nor
+// a CIDR prefix), so a typo'd declaration fails boot there, naming the
+// entry, rather than here.
+func splitTrustedProxies(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var proxies []string
+	for _, entry := range strings.Split(raw, ",") {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			proxies = append(proxies, entry)
+		}
+	}
+	return proxies
+}
+
 // configFromEnv reads serverConfig from the environment, defaulting to the
 // standalone deployment mode on SQLite so `go run ./cmd/server` genuinely
 // starts a working server with zero external dependencies.
@@ -1425,6 +1484,7 @@ func configFromEnv() (serverConfig, error) {
 		SMSGatewayURL:         os.Getenv(smsGatewayURLEnv),
 		DisableQueueWorker:    os.Getenv(disableQueueWorkerEnv) != "",
 		DisableDemoUserHeader: os.Getenv(disableDemoUserHeaderEnv) != "",
+		TrustedProxies:        splitTrustedProxies(os.Getenv(trustedProxiesEnv)),
 		WebDistDir:            os.Getenv(webDistEnv),
 		HostTenants:           demoHostTenants,
 		// Empty when unset: the demo-user seed is opt-in (its own doc
@@ -1824,6 +1884,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		authn.WithSocialProviders(cfg.SocialProviders...),
 		authn.WithRedirectAllowlist(cfg.RedirectAllowlist),
 		authn.WithTrustedProviders(cfg.TrustedProviders...),
+		// The trusted-proxy declaration (trustedProxiesEnv): the proxy
+		// addresses whose requests may carry the platform-injected
+		// forwarding headers authn reads, so this app's session and
+		// login-history records carry the real client address behind the
+		// Fly proxy instead of the proxy's own (the finding fly.toml's
+		// APP_TRUSTED_PROXIES declaration closes). Empty -- every local
+		// boot and every test -- is authn's fail-closed default, and a
+		// declaration with an entry that is neither an IP address nor a
+		// CIDR prefix refuses this NewModule call below.
+		authn.WithTrustedProxies(cfg.TrustedProxies...),
 		// The feature gate that makes authn's eight declared feature flags
 		// (authn.password_login, authn.sms_login, the five authn.social.*
 		// channels, authn.sso.oidc) effective at request time: the same

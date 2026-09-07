@@ -31,6 +31,23 @@ Every environment variable name this app's own bootstrap code declares and reads
 | `SPEED_DEMO_USERS_PASSWORD` | `APP_DEMO_USERS_PASSWORD` |
 | `PORT` | `PORT` (unchanged) |
 
+### `APP_TRUSTED_PROXIES`: declare the proxy so records carry the real client address
+
+`APP_TRUSTED_PROXIES` is a non-secret `[env]` variable (already set in this
+deployment's committed `fly.toml`): a comma-separated list of IP addresses
+and CIDR prefixes naming the reverse proxies requests arrive through. The
+app hands it to authn's `WithTrustedProxies`, which gates reading the
+platform-injected forwarding headers (`Fly-Client-IP` on Fly.io,
+`X-Forwarded-For` generally) on the request's direct peer being one of the
+declared proxies -- so a session or login-history record carries the real
+client address instead of the proxy's (this deployment recorded the proxy's
+internal `172.16.45.218` before the declaration existed), while a direct
+client that sets those headers itself still records its own connection
+address. Declared proxies must overwrite or strip forwarding headers they
+receive from their own clients, exactly as Fly.io's proxy does; left unset,
+every request records its direct connection address, the correct
+fail-closed default for a host not behind a proxy.
+
 ## Prerequisites
 
 - `flyctl` installed and authenticated (`fly auth login` or `fly auth signup`). Verified present in this environment as `flyctl v0.4.99`.

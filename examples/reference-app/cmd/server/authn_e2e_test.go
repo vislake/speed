@@ -38,6 +38,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -634,4 +635,166 @@ func TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen(t *t
 	if social.Tokens.AccessToken == "" || social.Tokens.RefreshToken == "" || social.Tokens.Principal.SessionID == "" {
 		t.Fatalf("social callback response carried no tokens: %+v", social)
 	}
+}
+
+// TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress is
+// the host-wiring regression for the Fly.io acceptance finding this round
+// closes: with the deployment's trusted proxy declared (serverConfig.
+// TrustedProxies, from APP_TRUSTED_PROXIES), the session and login-history
+// rows a sign-in writes must carry the REAL client address recovered from
+// the platform-injected forwarding header -- where the finding's deployment
+// recorded the proxy's own internal address (172.16.45.218) -- and WITHOUT
+// the declaration, a direct request carrying a spoofed forwarding header
+// must still record its own connection address (127.0.0.1: the httptest
+// listener's peer, which the tests below trust only in the first leg by
+// declaring loopback itself).
+//
+// The two legs drive the real composed server end to end -- register,
+// membership grant, sign-in, sessions list, login history -- exactly like
+// TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement, over a real
+// socket whose peer is 127.0.0.1, the one address a test can both declare
+// as trusted and observe as the connection address.
+func TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress(t *testing.T) {
+	// e2eRegisterIn proxies authnJSON for the two requests that must carry
+	// a forwarding header: the caller sets headers on the request itself,
+	// which authnJSON's signature cannot express.
+	e2eDo := func(t *testing.T, client *http.Client, method, urlStr string, headers map[string]string, body, out any) *http.Response {
+		t.Helper()
+		var reader io.Reader
+		if body != nil {
+			encoded, err := json.Marshal(body)
+			if err != nil {
+				t.Fatalf("marshal %s %s body: %v", method, urlStr, err)
+			}
+			reader = bytes.NewReader(encoded)
+		}
+		req, err := http.NewRequest(method, urlStr, reader)
+		if err != nil {
+			t.Fatalf("build %s %s request: %v", method, urlStr, err)
+		}
+		for name, value := range headers {
+			req.Header.Set(name, value)
+		}
+		if reader != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, urlStr, err)
+		}
+		if out != nil {
+			defer resp.Body.Close()
+			if decodeErr := json.NewDecoder(resp.Body).Decode(out); decodeErr != nil {
+				t.Fatalf("decode %s %s response: %v", method, urlStr, decodeErr)
+			}
+		}
+		return resp
+	}
+
+	// registerAndSignIn registers one account through the composed server,
+	// grants it membership of tenant-e2e, and signs it in, returning the
+	// sign-in's session id and the servers list/history responses' IPs.
+	accountSeq := 0
+	registerAndSignIn := func(t *testing.T, srv *httptest.Server, cfg serverConfig, client *http.Client,
+		registerHeaders, loginHeaders map[string]string,
+	) (sessionID string, sessionIP, historyIP string) {
+		t.Helper()
+		accountSeq++
+		email := fmt.Sprintf("clientip-%d@example.com", accountSeq)
+		var registered struct {
+			ID string `json:"id"`
+		}
+		resp := e2eDo(t, client, http.MethodPost, srv.URL+"/api/v1/authn/register", registerHeaders,
+			map[string]string{"email": email, "password": testPassword}, &registered)
+		if resp.StatusCode != http.StatusCreated {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("register status = %d, want %d; body = %s", resp.StatusCode, http.StatusCreated, body)
+		}
+		cfg.Memberships.Grant(registered.ID, "tenant-e2e")
+
+		var pair tokenPairResponse
+		loginResp := e2eDo(t, client, http.MethodPost, srv.URL+"/api/v1/authn/login/password", loginHeaders,
+			map[string]string{"identifier": email, "password": testPassword, "tenant_id": "tenant-e2e", "device": "clientip"}, &pair)
+		if loginResp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(loginResp.Body)
+			t.Fatalf("login status = %d, want %d; body = %s", loginResp.StatusCode, http.StatusOK, body)
+		}
+		if pair.Principal.SessionID == "" {
+			t.Fatalf("login response carried no session id: %+v", pair)
+		}
+
+		var sessionsList struct {
+			Sessions []struct {
+				ID string `json:"id"`
+				IP string `json:"ip"`
+			} `json:"sessions"`
+		}
+		authHeaders := map[string]string{"Authorization": "Bearer " + pair.AccessToken}
+		sessionsResp := e2eDo(t, client, http.MethodGet, srv.URL+"/api/v1/authn/sessions", authHeaders, nil, &sessionsList)
+		if sessionsResp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(sessionsResp.Body)
+			t.Fatalf("list sessions status = %d, want %d; body = %s", sessionsResp.StatusCode, http.StatusOK, body)
+		}
+		for _, s := range sessionsList.Sessions {
+			if s.ID == pair.Principal.SessionID {
+				sessionIP = s.IP
+			}
+		}
+		if sessionIP == "" {
+			t.Fatalf("sessions list has no entry for %q: %+v", pair.Principal.SessionID, sessionsList.Sessions)
+		}
+
+		var history struct {
+			Attempts []struct {
+				Method string `json:"method"`
+				Result string `json:"result"`
+				IP     string `json:"ip"`
+			} `json:"attempts"`
+		}
+		historyResp := e2eDo(t, client, http.MethodGet, srv.URL+"/api/v1/authn/login-history", authHeaders, nil, &history)
+		if historyResp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(historyResp.Body)
+			t.Fatalf("list login history status = %d, want %d; body = %s", historyResp.StatusCode, http.StatusOK, body)
+		}
+		for _, a := range history.Attempts {
+			if a.Method == "password" && a.Result == "success" {
+				historyIP = a.IP
+			}
+		}
+		if historyIP == "" {
+			t.Fatalf("login history has no successful password attempt: %+v", history.Attempts)
+		}
+		return pair.Principal.SessionID, sessionIP, historyIP
+	}
+
+	t.Run("declared proxy: the forwarded client address is recorded", func(t *testing.T) {
+		// Loopback is this test's stand-in for the Fly proxy: every
+		// request over the httptest listener comes from 127.0.0.1, so
+		// declaring it is the honest local twin of fly.toml declaring
+		// the Fly private ranges -- and the request carrying Fly-Client-IP
+		// records the address the platform forwarded, not 127.0.0.1.
+		srv, cfg, _, _ := buildAuthnE2EServer(t, func(cfg *serverConfig) {
+			cfg.TrustedProxies = []string{"127.0.0.0/8"}
+		})
+		forwarding := map[string]string{"Fly-Client-IP": "198.51.100.7"}
+		sessionID, sessionIP, historyIP := registerAndSignIn(t, srv, cfg, srv.Client(), forwarding, forwarding)
+		if sessionIP != "198.51.100.7" {
+			t.Errorf("session %s IP = %q, want the forwarded client %q (was the proxy before the fix)", sessionID, sessionIP, "198.51.100.7")
+		}
+		if historyIP != "198.51.100.7" {
+			t.Errorf("login-history IP = %q, want the forwarded client %q (was the proxy before the fix)", historyIP, "198.51.100.7")
+		}
+	})
+
+	t.Run("no declaration: a spoofed forwarding header changes nothing", func(t *testing.T) {
+		srv, cfg, _, _ := buildAuthnE2EServer(t)
+		spoof := map[string]string{"X-Forwarded-For": "198.51.100.7", "Fly-Client-IP": "198.51.100.7"}
+		sessionID, sessionIP, historyIP := registerAndSignIn(t, srv, cfg, srv.Client(), nil, spoof)
+		if sessionIP != "127.0.0.1" {
+			t.Errorf("session %s IP = %q, want the connection address %q (no proxy was declared to trust)", sessionID, sessionIP, "127.0.0.1")
+		}
+		if historyIP != "127.0.0.1" {
+			t.Errorf("login-history IP = %q, want the connection address %q", historyIP, "127.0.0.1")
+		}
+	})
 }
