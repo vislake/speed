@@ -25,13 +25,14 @@ import (
 // The fix this test pins is doc 10's own "automatic first, declaration
 // second" route, not hand-written audit.Emit at each write path: org's
 // OrgNode, Membership and Invitation models implement dbkit.Auditable,
-// buildServer wires dbkit.Options.AuditBus (with exactly those three
-// models in Options.AuditModels -- notes.Note deliberately excluded, since
-// notes records its own trail through audit.Emit), and go/dbkit/audit's
-// persister module turns the captured writes into rows under the
-// capture-derived actions org declares ("org.node.create"/"org.node.update",
-// "org.member.create"/"org.member.update", "org.invitation.create"/
-// "org.invitation.update"). Note what the assertion means by "removal" and
+// buildServer wires dbkit.Options.AuditBus (with Options.AuditModels set
+// to org's own exported org.AuditableModels() -- notes.Note is outside
+// that scope by construction, since notes records its own trail through
+// audit.Emit), and go/dbkit/audit's persister module turns the captured
+// writes into rows under the capture-derived actions org declares
+// ("org.node.create"/"org.node.update", "org.member.create"/
+// "org.member.update", "org.invitation.create"/"org.invitation.update").
+// Note what the assertion means by "removal" and
 // "delete" in that vocabulary: a member removal and a node delete are
 // mark-delete UPDATEs underneath, so the rows they leave are
 // "org.member.update" and "org.node.update" respectively, distinguishable
@@ -249,6 +250,90 @@ func TestOrgP1Audit_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentityRows
 	}
 }
 
+// TestOrgP1Audit_InvitationCreate_AuditRowCarriesNoAddressIndex extends the
+// org P1 regression to the third opted-in model -- Invitation -- and to the
+// one org write whose captured diff carries the invitee's address-derived
+// values. The invitation create must leave exactly one
+// "org.invitation.create" row (the forward half of the capture-scope
+// contract: Invitation sits inside the host's Options.AuditModels scope,
+// which is org's own org.AuditableModels() export, so a round that dropped
+// the model from that export would fail here, in the composed app, not in
+// a compliance query years later). And that row's changes diff must carry
+// NEITHER the address's blind index NOR the address itself. The index is
+// the case that matters: it is a stable linkable identifier of a guessable
+// address (see Invitation.EmailIndex's own doc comment in go/org), and the
+// audit trail is the most permanent and widest-audience exit it could
+// reach -- append-only with no delete by design, and tenant-readable
+// (compliance's audit query runs under an ordinary tenant context) where
+// the org rows themselves are subtree-readable -- so a raw index in the
+// diff would let a tenant member with audit read invite a guessed address,
+// read its index from their own row, and compare it against every other
+// invitation row of the tenant, confirming the address across subtrees
+// they cannot see. Invitation.EmailIndex therefore carries dbkit's
+// audit:"redact" capture opt-out, and the diff records the "[redacted]"
+// marker, never the digest; the plaintext address column is
+// serializer-redacted the same way and asserted here as the control.
+// Before this fix the create row carried the raw 64-hex index.
+func TestOrgP1Audit_InvitationCreate_AuditRowCarriesNoAddressIndex(t *testing.T) {
+	srv, cfg, mailer := buildOrgTestServer(t)
+	inviterToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "p1-invite-audit-owner")
+
+	// Invite into a freshly created node of the tenant's tree (created
+	// through the real route, exactly as org_flow_test's own invite leg
+	// does -- buildOrgTestServer's fresh database carries no pre-seeded
+	// org tree). The subject header names the acting identity org's
+	// invitation create resolves; that identity is not what this
+	// regression is about, so no Actor assertion follows.
+	var root orgNode
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", inviterToken, "",
+		map[string]string{"name": "P1 Invite Audit Group", "kind": "group"}, &root)
+	if root.ID == "" {
+		t.Fatalf("created root = %+v, want a non-empty id", root)
+	}
+
+	const inviteeEmail = "p1-invite-audit@example.com"
+	var invitation orgInvitation
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations", inviterToken, "p1-invite-audit-owner-actor",
+		map[string]string{"email": inviteeEmail, "nodeId": root.ID}, &invitation)
+	if invitation.ID == "" || invitation.Status != "pending" {
+		t.Fatalf("invitation = %+v, want a pending invitation carrying an id", invitation)
+	}
+	mail := mailer.last(t)
+	if len(mail.To) != 1 || mail.To[0] != inviteeEmail {
+		t.Fatalf("mail.To = %v, want exactly [%q]", mail.To, inviteeEmail)
+	}
+
+	// The composed trail holds exactly one org.invitation.create row for
+	// this invitation -- the F3 forward direction at the host: the model
+	// is genuinely inside the capture scope, whatever org.AuditableModels()
+	// currently declares.
+	rows := auditRowsForTenant(t, cfg, "tenant-acme")
+	var creates []auditRow
+	for _, row := range rows {
+		if row.Action == orgActionInvitationCreate && row.ResourceID == invitation.ID {
+			creates = append(creates, row)
+		}
+	}
+	if len(creates) != 1 {
+		t.Fatalf("org.invitation.create rows naming invitation %q = %+v, want exactly 1; all tenant rows = %+v",
+			invitation.ID, creates, rows)
+	}
+
+	// The F1 assertion: the create row's diff carries no usable
+	// address-derived value. The email_index column is audit-redacted
+	// (go/org's Invitation model), so the key may appear only with the
+	// "[redacted]" marker -- before this fix the raw blind index was
+	// recorded under it, and the failing assertion below read the raw
+	// 64-hex digest out of the row.
+	after := afterDiff(t, creates[0].Changes)
+	if v, ok := after["email_index"]; ok && v != "[redacted]" {
+		t.Fatalf("org.invitation.create changes carry the invitee's blind index as %v: the index must never reach the audit trail", v)
+	}
+	if v, ok := after["email"]; ok && v != "[redacted]" {
+		t.Fatalf("org.invitation.create changes carry the invitee's plaintext address as %v", v)
+	}
+}
+
 // orgAction* are the capture-derived audit actions this test asserts on.
 // They are spelled out (rather than importing go/org's constants) because
 // this file asserts on the WIRE-visible audit rows the composed app
@@ -256,9 +341,10 @@ func TestOrgP1Audit_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentityRows
 // literal -- the same reason org_flow_test.go decodes responses by field
 // name instead of importing go/org/api's generated types.
 const (
-	orgActionNodeCreate   = "org.node.create"
-	orgActionNodeUpdate   = "org.node.update"
-	orgActionMemberUpdate = "org.member.update"
+	orgActionNodeCreate       = "org.node.create"
+	orgActionNodeUpdate       = "org.node.update"
+	orgActionMemberUpdate     = "org.member.update"
+	orgActionInvitationCreate = "org.invitation.create"
 )
 
 // auditRow is the subset of go/dbkit/audit's AuditEvent this test reads.

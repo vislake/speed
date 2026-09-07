@@ -1764,11 +1764,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	//
 	// Org's models are captured, and notes' are not, through
 	// Options.AuditModels -- the per-model capture scope dbkit's Options
-	// gained for exactly this composition: Note is deliberately NOT in the
-	// list, because notes records its own trail through the declarative
-	// audit.Emit call notes/handler.go's NotesCreateNote makes after the
-	// note's transaction has committed (a genuinely separate persister
-	// connection remaining the simpler, clearer choice for notes, and its
+	// gained for exactly this composition: the scope is org's own
+	// declaration, org.AuditableModels(), consumed verbatim, so this app
+	// never keeps a hand-written list of org's Auditable models that could
+	// drift from org's (see that function's doc comment for the marker-
+	// added direction dbkit cannot check and org's own suite pins instead).
+	// Note is outside the scope by construction, and deliberately: notes
+	// records its own trail through the declarative audit.Emit call
+	// notes/handler.go's NotesCreateNote makes after the note's
+	// transaction has committed (a genuinely separate persister connection
+	// remaining the simpler, clearer choice for notes, and its
 	// "notes.note.create" rows the only record of a note write). Were the
 	// capture scope to include Note, every note create would land twice --
 	// once as the derived "note.create" row, once as the explicit
@@ -1777,11 +1782,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// which the persister's vocabulary gate refuses with a structured
 	// alert. The scope list is this app's explicit answer to "which
 	// Auditable models on this connection does the automatic mechanism
-	// own": org's three, nothing else. go/org/AGENTS.md's "Audit trail
-	// collection" section and go/dbkit/AGENTS.md's audit section carry the
-	// full contract; cmd/server/org_p1_audit_test.go pins the composed
-	// outcome (member removal and node delete during an impersonation
-	// session each leaving a dual-identity row).
+	// own": the ones org itself declares capturable, nothing else.
+	// go/org/AGENTS.md's "The audit trail" section and
+	// go/dbkit/AGENTS.md's audit section carry the full contract;
+	// cmd/server/org_p1_audit_test.go pins the composed outcome (member
+	// removal and node delete during an impersonation session each leaving
+	// a dual-identity row, and an invitation create leaving a row whose
+	// diff carries no address-derived value).
 	//
 	// The bus itself is constructed right below, BEFORE dbkit.Open, and
 	// the SAME instance is handed to Kernel.Bootstrap through
@@ -1854,15 +1861,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		DSN:     cfg.SQLitePath,
 		// Org's automatic write capture publishes on bus -- see the long
 		// comment above this call for why the bus exists before Open, and
-		// why the scope lists org's three models and deliberately nothing
-		// else (notes.Note stays out: its module records its own trail
-		// through audit.Emit).
-		AuditBus: bus,
-		AuditModels: []any{
-			org.OrgNode{},
-			org.Membership{},
-			org.Invitation{},
-		},
+		// why the scope is org's own exported declaration and deliberately
+		// nothing else (notes.Note stays out: its module records its own
+		// trail through audit.Emit).
+		AuditBus:    bus,
+		AuditModels: org.AuditableModels(),
 	})
 	if err != nil {
 		// The Redis client created above has no goroutine or connection
