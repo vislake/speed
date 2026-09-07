@@ -70,6 +70,23 @@ export function bindRequestFn(requestFn: RequestFn): void {
  * credential-less flag is per call. With it unset the options object
  * stays exactly the mapped call -- the flag key is only ever present
  * when declared, which hosts' exact-shape assertions rely on.
+ *
+ * What this seam deliberately does NOT declare, on any operation:
+ * RequestOptions.requireJsonBody. An operation's runtime response
+ * type T is erased here, so the seam has no information about whether
+ * the operation's spec declares a response body for the call it is
+ * forwarding -- and requiring a JSON document unconditionally would
+ * break the legitimate empty-success operations (204-style deletes,
+ * acceptance-only answers) the request function resolves as
+ * undefined. Document existence is therefore the consumer's guard:
+ * an operation that must carry a document in its 2xx body validates
+ * the body itself -- before touching any field -- and refuses an
+ * empty 2xx as a client.protocol ApiError. @speed/auth-core's
+ * parseIssued and the social authorize/callback parsers are the
+ * model; a new consumer of a body-declaring operation must guard the
+ * same way, because an unguarded empty 2xx escapes as a native
+ * TypeError that is not an ApiError and bypasses the package
+ * family's whole error contract.
  */
 function forward<T>(call: OrvalCall, omitAccessToken: boolean): Promise<T> {
   const requestFn = boundRequestFn
