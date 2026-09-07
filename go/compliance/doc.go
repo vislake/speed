@@ -46,12 +46,16 @@
 //   - ErasureService: Erase, the right-to-erasure entry point, bypassing
 //     the retention window and calling every participant's Erase callback
 //     under an audited system context.
-//   - ExportService: Export, the data-portability capability in full --
-//     every participant's Export data is aggregated into one JSON
-//     document, stored through the pkgcore.ObjectStore seam, and
-//     delivered to the requesting subject as a short-lived, single-view
-//     go/sharing.Share (round 2, once go/sharing had landed on main --
-//     see ExportDelivery and SharingCreator's own doc comments).
+//   - ExportService: Export, the tenant-data export capability in full --
+//     every participant's Export data for one tenant is aggregated into
+//     one JSON document -- the whole tenant's data bundle, never one
+//     subject's personal data; a subject-scoped ("this is your data")
+//     export is not built and would be a future round's work if the
+//     product needs that GDPR-shaped delivery -- stored through the
+//     pkgcore.ObjectStore seam, and delivered as a short-lived,
+//     single-view go/sharing.Share whose one-time token Export returns
+//     to its caller to relay (round 2, once go/sharing had landed on
+//     main -- see ExportDelivery and SharingCreator's own doc comments).
 //   - AuditQuery: a read-only query layer over dbkit/audit.Repository's
 //     existing, deliberately thin ListByTenant/Get surface, adding
 //     actor/resource/action/time-range/result filtering and (under a

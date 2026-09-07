@@ -99,16 +99,15 @@ var (
 
 	// ErrExportDeliveryFailed wraps a failed go/sharing.Service.Create
 	// call once ExportService.Export has already gathered and stored the
-	// manifest. No share link exists for the subject to retrieve the
-	// manifest with, so this is reported as its own coded failure rather
-	// than folded into ErrExportPartialFailure, which describes a
-	// participant gathering failure, not a delivery failure. The manifest
-	// Export gathered is not lost -- the caller still gets it, and its
-	// object key, back alongside this error -- but the stored object
-	// itself is deleted before Export returns (see Export's doc comment):
-	// an un-shareable copy of a subject's complete personal data must not
-	// persist in the object store, and admin retries must not accumulate
-	// such dumps.
+	// manifest. No share link exists to retrieve the manifest with, so
+	// this is reported as its own coded failure rather than folded into
+	// ErrExportPartialFailure, which describes a participant gathering
+	// failure, not a delivery failure. The manifest Export gathered is
+	// not lost -- the caller still gets it, and its object key, back
+	// alongside this error -- but the stored object itself is deleted
+	// before Export returns (see Export's doc comment): an un-shareable
+	// copy of a tenant's complete data must not persist in the object
+	// store, and admin retries must not accumulate such dumps.
 	ErrExportDeliveryFailed = apperr.Internal("compliance.export_delivery_failed")
 
 	// ErrExportTenantMismatch is returned by ExportService.Export when the

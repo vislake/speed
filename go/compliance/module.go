@@ -63,7 +63,7 @@ var configItemDecls = []pkgcore.ConfigItem{
 		Key:         ConfigExportDeliveryExpiry,
 		Type:        "duration",
 		Default:     defaultExportDeliveryExpiry,
-		Description: "How long a data-export download link (minted through go/sharing) stays valid. Deliberately much shorter than a general-purpose share's own default expiry, since an export bundles a subject's complete personal data.",
+		Description: "How long a data-export download link (minted through go/sharing) stays valid. Deliberately much shorter than a general-purpose share's own default expiry, since an export bundles a whole tenant's data.",
 		Group:       "compliance",
 		Min:         time.Hour,
 		Max:         72 * time.Hour,

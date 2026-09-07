@@ -24,10 +24,10 @@ const AuditActionExportRequest = "compliance.export.request"
 // ExportManifest is one data-export package: every registered
 // participant's own gathered data for one tenant, keyed by participant
 // Name, plus any per-participant gathering error. It is the JSON document
-// ExportService.Export stores through pkgcore.ObjectStore -- the whole of
-// this round's export scope, per this module's own doc comment: packaging
-// and storing the manifest, never delivering it to the subject (that is
-// go/sharing's job, once go/sharing has landed).
+// ExportService.Export stores through pkgcore.ObjectStore and then
+// delivers as a short-lived, single-view go/sharing.Share (round 2, see
+// deliverExport): the manifest is the tenant-level export bundle itself,
+// and the share is the credentialed window on the stored copy of it.
 type ExportManifest struct {
 	// Tenant is the tenant the export was gathered for.
 	Tenant pkgcore.TenantID `json:"tenant"`
@@ -64,25 +64,27 @@ const ConfigExportDeliveryExpiry = "compliance.export_delivery_expiry"
 // has configured none.
 //
 // This is deliberately far shorter than sharing's own 30-day
-// MaxExplicitShareLifetime: an export bundles a subject's complete personal
-// data into one downloadable package, so the window in which a leaked or
-// intercepted link stays usable must be measured in hours, not weeks --
+// MaxExplicitShareLifetime: an export bundles one tenant's complete data
+// -- potentially many subjects' records -- into a single downloadable
+// package, so the window in which a leaked or intercepted link stays
+// usable must be measured in hours, not weeks.
 // docs/internal/10-compliance-and-audit.md's data-export bullet describes
 // asynchronously generating the package and handing it off through
-// sharing, which this round reads as a one-time credentialed handoff to
-// the requesting subject, not an open, long-lived download link. 24 hours
-// is chosen as long enough for a subject to notice and follow a delivery
-// notification (a later round's job -- this round mints the share and
-// returns its token, see ExportDelivery) without leaving the window open
-// for days.
+// sharing, which this module reads as a one-time credentialed handoff:
+// Export mints the share and returns its token to the caller, who relays
+// the link to the export's recipient -- never an open, long-lived
+// download link. 24 hours is chosen as long enough for a relayed link to
+// reach its recipient and be used (a delivery-notification round is a
+// later round's job -- this round mints the share and returns its token,
+// see ExportDelivery) without leaving the window open for days.
 const defaultExportDeliveryExpiry = 24 * time.Hour
 
 // exportDeliveryMaxViews caps a data-export share at exactly one granted
 // view. The design alternative -- a password-protected share -- was
 // considered and rejected for this round: a password needs its own
-// delivery channel (the caller would have to relay it to the subject
-// separately from the link itself), which is more moving parts than this
-// round's scope, while a single-view, 256-bit-token share
+// delivery channel (the caller would have to relay it to the link's
+// recipient separately from the link itself), which is more moving parts
+// than this round's scope, while a single-view, 256-bit-token share
 // (sharing/token.go's newShareToken) already gives the "one-time
 // credentialed handoff" docs/internal/10-compliance-and-audit.md
 // describes: the token itself is the credential, and MaxViews=1 means the
@@ -178,11 +180,15 @@ type ExportResult struct {
 }
 
 // ExportService gathers every registered participant's exportable data
-// for one tenant into one ExportManifest, stores it through the
-// pkgcore.ObjectStore seam, and delivers it to the requesting subject as a
-// short-lived, single-view go/sharing.Share -- the data-portability half
-// of docs/internal/10-compliance-and-audit.md's data-export capability, in
-// full: gathering, storage and delivery, not gathering alone. Unlike
+// for one tenant into one tenant-level ExportManifest, stores it through
+// the pkgcore.ObjectStore seam, and delivers that bundle as a short-
+// lived, single-view go/sharing.Share whose one-time token it returns to
+// the caller to relay -- the data-export half of
+// docs/internal/10-compliance-and-audit.md's export capability, in full:
+// gathering, storage and delivery, not gathering alone. The export scope
+// is one whole tenant, never one data subject: a subject-scoped ("this is
+// your data") export is not built -- see doc.go's ExportService bullet
+// and this module's AGENTS.md for that recorded boundary. Unlike
 // RetentionService and ErasureService, Export needs no system context: it
 // only ever reads the caller's own ctx tenant, through each participant's
 // Export callback (typically backed by that participant's own tenant-
@@ -227,10 +233,12 @@ func exportObjectKey(tenant pkgcore.TenantID, id string) string {
 // Export gathers every registered participant's Export data (participants
 // that left Export nil are silently skipped -- a nil Export is documented
 // as a legal, common "not opted in" value, not a misconfiguration) for
-// the tenant ctx carries, wraps it into one ExportManifest, marshals it to
-// JSON, stores it through pkgcore.ObjectStore under a fresh, module-
-// namespaced key, and delivers it to the requesting subject as a
-// short-lived, single-view go/sharing.Share pointing at that key
+// the tenant ctx carries -- the bundle is that whole tenant's data,
+// never one subject's -- wraps it into one ExportManifest, marshals it
+// to JSON, stores it through pkgcore.ObjectStore under a fresh, module-
+// namespaced key, and delivers it as a short-lived, single-view
+// go/sharing.Share pointing at that key, returning the minted share's id
+// and one-time token to the caller in ExportResult.Delivery
 // (deliverExport's own doc comment for the expiry/view-limit choice). It
 // always returns a non-nil *ExportResult carrying whatever it actually
 // completed, even alongside a non-nil error -- never a zero-value return.
@@ -238,7 +246,7 @@ func exportObjectKey(tenant pkgcore.TenantID, id string) string {
 // Delivery requires a SharingCreator to have been wired through
 // Module.WithSharing; without one, Export refuses outright with
 // ErrSharingRequired before gathering anything, since a manifest this
-// module cannot hand to its subject is not a completed export.
+// module cannot deliver is not a completed export.
 //
 // Like Sweep and Erase, one participant's Export failing does not stop
 // the gathering of the rest: the failure lands in ExportManifest.Errors,
@@ -253,8 +261,8 @@ func exportObjectKey(tenant pkgcore.TenantID, id string) string {
 // as opposed to a participant failing to contribute data -- is reported as
 // ErrExportDeliveryFailed instead: ExportResult.ObjectKey and .Manifest
 // are still populated (the gather and store already succeeded), but
-// .Delivery is the zero value, since no share exists for the subject to
-// retrieve the export with. The stored object itself is deleted before
+// .Delivery is the zero value, since no share was minted for the export
+// to be retrieved through. The stored object itself is deleted before
 // Export returns in that case: a manifest no share can ever reference is
 // an un-shareable copy of the tenant's complete data with no legitimate
 // consumer path, and an admin retrying Export must re-gather and re-store
@@ -348,9 +356,9 @@ func (s *ExportService) Export(ctx context.Context, tenant pkgcore.TenantID) (*E
 
 	delivery, deliverErr := s.deliverExport(ctx, tenant, key)
 	if deliverErr != nil {
-		// A manifest that could not be handed to its subject must not
-		// stay stored: it is an un-shareable copy of the tenant's complete
-		// data with no legitimate consumer path, and leaving it behind
+		// A manifest that could not be delivered must not stay stored: it
+		// is an un-shareable copy of the tenant's complete data with no
+		// legitimate consumer path, and leaving it behind
 		// would let an admin's retried Export calls accumulate one such
 		// dump per attempt. Delete it before returning -- DeleteObject is
 		// idempotent, so a retry that re-gathers and re-stores fresh is
@@ -380,9 +388,10 @@ func (s *ExportService) Export(ctx context.Context, tenant pkgcore.TenantID) (*E
 // deliverExport hands the manifest stored under key off to go/sharing: a
 // single-view (exportDeliveryMaxViews), exportDeliveryExpiry(ctx, tenant)-
 // lived share naming key as its opaque ResourceRef. Sensitive is always
-// true -- an export is, by construction, a subject's complete personal
-// data, so it always qualifies for sharing's own sensitive-resource
-// confirmation audit (sharing.share.create_sensitive, go/sharing/
+// true -- an export is, by construction, one tenant's whole data bundle,
+// potentially many subjects' records, so it always qualifies for
+// sharing's own sensitive-resource confirmation audit
+// (sharing.share.create_sensitive, go/sharing/
 // AGENTS.md's "Sensitive-resource confirmation" section), independently of
 // and in addition to this module's own AuditActionExportRequest event.
 //
@@ -423,7 +432,7 @@ func (s *ExportService) deliverExport(ctx context.Context, tenant pkgcore.Tenant
 // defaultExportDeliveryExpiry rather than being honored, mirroring
 // RetentionWindow's own `<= 0` clamp on a configured retention window. A
 // zero or negative value is nonsense as a link lifetime -- it would hand
-// the requesting subject a share already expired (or long past) at mint
+// the link's recipient a share already expired (or long past) at mint
 // time -- and the reader is a host-supplied seam whose answer this module
 // cannot trust to be sensible, so the nonsense must resolve to the honest
 // default, never to an instantly dead link minted silently.
@@ -472,7 +481,7 @@ func (s *ExportService) exportDeliveryExpiry(ctx context.Context, tenant pkgcore
 // the zero value and the audit event's own Result reports the delivery
 // failure rather than any participant gathering failure, since a manifest
 // gathered without errors but never delivered is still not a completed
-// export from the requesting subject's point of view.
+// export from the requester's point of view.
 func (s *ExportService) emitExportAudit(ctx context.Context, tenant pkgcore.TenantID, key string, manifest ExportManifest, delivery ExportDelivery, deliverErr error) error {
 	changes := map[string]any{
 		"object_key":   key,
