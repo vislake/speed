@@ -17,11 +17,15 @@ theme factory, apps that need raw values) import data and types only.
 | `z-index.ts` | The eight MUI z-index slot names, MUI-default values |
 | `shadows.ts` | Layered rgba box shadows for elevation slots 1/2/4/8/16/24 |
 | `types.ts` | `SpeedTokens`, `DeepPartial`, `TokensOverride` |
-| `defaultTokens.ts` | The assembled tree, immutable by convention |
+| `defaultTokens.ts` | The assembled tree, deep-frozen at assembly |
 | `merge.ts` | `deepMerge(base, ...overrides)` |
 
-The tree is immutable-by-convention: sections are `readonly` in the types
-and tests deep-freeze inputs to prove `deepMerge` never mutates.
+The default tree is immutable by convention *and* by runtime: sections are
+`readonly` in the types, and the assembled tree is deep-frozen at module
+load. A write attempt through `defaultTokens` itself -- or through any
+branch a `deepMerge` result shares with it by identity -- throws in strict
+mode instead of silently polluting the tree every override starts from.
+Tests deep-freeze inputs to prove `deepMerge` never mutates.
 
 ## Why the naming mirrors the MUI theme shape
 
@@ -59,10 +63,15 @@ a React-bearing package just to override a palette. Semantics, all pinned in
 `merge.test.ts`:
 
 - no input mutation; copy-on-write -- untouched branches of the base keep
-  their identity, touched branches are rebuilt (fresh objects; a hostile
-  `__proto__` key lands as a non-enumerable own property, deep-merged but
-  invisible to every copy surface, so neither the result's prototype nor
-  any downstream `Object.assign`/spread copy can be polluted);
+  their identity, touched branches are rebuilt. Because `defaultTokens` is
+  deep-frozen at assembly, the shared branches of a merge over it are
+  frozen nodes too: a write through one throws in strict mode instead of
+  silently reaching the default tree, while rebuilt branches stay plain
+  objects owned by that result alone;
+- a hostile `__proto__` key lands as a non-enumerable own property,
+  deep-merged but invisible to every copy surface, so neither the result's
+  prototype nor any downstream `Object.assign`/spread copy can be
+  polluted;
 - the result is a faithful copy of the base -- every own key of `base`
   survives an override that omits it (`undefined` skipping applies to the
   override side only);
@@ -91,5 +100,5 @@ Shape drift (an unknown section, a string where a hex belongs) is a
 ## Development
 
 From `web/packages/tokens`: `pnpm lint`, `pnpm typecheck`, `pnpm test`
-(28 tests), `pnpm build` (emits `dist/`). No locales: this package carries
+(31 tests), `pnpm build` (emits `dist/`). No locales: this package carries
 no user-facing text.

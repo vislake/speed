@@ -21,6 +21,13 @@ import { defaultTokens, deepMerge, type TokensOverride } from './index'
 
 const HEX_COLOR = /^#[0-9A-F]{6}$/i
 
+// Pristine snapshots captured at module load, before any test can write
+// through a merged result: the isolation tests below prove the assembled
+// defaults stay byte-identical to these no matter what a merge result's
+// consumer tries.
+const DEFAULT_BEFORE = JSON.stringify(defaultTokens)
+const PRISTINE_ERROR_MAIN = defaultTokens.color.semantic.error.main
+
 describe('defaultTokens', () => {
   it('ships every semantic role with main, light, dark and contrastText hex colors', () => {
     const roles = [
@@ -160,5 +167,86 @@ describe('defaultTokens', () => {
     deepMerge(defaultTokens, { shape: { borderRadius: '8px' } })
     // @ts-expect-error overriding with an object where a string belongs is a shape error
     deepMerge(defaultTokens, { color: { divider: { main: '#000000' } } })
+  })
+})
+
+describe('defaultTokens shared-branch write enforcement', () => {
+  it('throws when a write would reach the frozen defaults through a shared branch', () => {
+    const merged = deepMerge(defaultTokens, {
+      color: { semantic: { primary: { main: '#000000' } } },
+    })
+    // The type layer seals the tree at every depth (readonly modifiers), so
+    // a real write needs the trigger channel the P1 finding names -- a JS
+    // consumer, an `any`, or a cast -- which is what the writable view
+    // below stands in for. The override rebuilt only the primary branch;
+    // untouched branches of the result ARE the defaultTokens nodes
+    // (copy-on-write sharing), so a write through one must throw in strict
+    // mode instead of silently polluting the module singleton. The default
+    // tree is deep-frozen at assembly (see defaultTokens.ts); these two
+    // writes sit at different sharing depths -- one branch the override
+    // never entered, one whole top-level section -- and both must refuse.
+    const writable = merged as unknown as {
+      color: { semantic: { error: { main: string } } }
+      typography: { fontFamily: { sans: string } }
+    }
+    const writeDeepSharedBranch = (): void => {
+      writable.color.semantic.error.main = '#DEADBEEF'
+    }
+    const writeTopLevelSharedBranch = (): void => {
+      writable.typography.fontFamily.sans = '"Helvetica Neue"'
+    }
+    expect(writeDeepSharedBranch).toThrow(TypeError)
+    expect(writeTopLevelSharedBranch).toThrow(TypeError)
+  })
+
+  it('keeps the defaults byte-identical after a write attempt through a shared branch', () => {
+    const merged = deepMerge(defaultTokens, {
+      color: { semantic: { primary: { main: '#000000' } } },
+    })
+    // Writable view: the cast stands in for the JS-consumer trigger channel
+    // that bypasses the type layer's readonly seal (see the throws-when
+    // test above).
+    const writable = merged as unknown as {
+      color: { semantic: { error: { main: string } } }
+    }
+    let attemptThrew = false
+    try {
+      // The branch this override never touched: the write must not land
+      // anywhere shared. Refusing loudly is the deep freeze's job (pinned
+      // by the throws-when test above); this test pins the outcome.
+      writable.color.semantic.error.main = '#DEADBEEF'
+    } catch {
+      attemptThrew = true
+    }
+    // No pollution: the branch the write aimed at still holds the pristine
+    // value, and the assembled defaults are byte-identical to the snapshot
+    // taken at module load.
+    expect(defaultTokens.color.semantic.error.main).toBe(PRISTINE_ERROR_MAIN)
+    expect(JSON.stringify(defaultTokens)).toBe(DEFAULT_BEFORE)
+    expect(attemptThrew).toBe(true)
+  })
+
+  it('reads only its own values in a later independent merge after a write attempt', () => {
+    const merged = deepMerge(defaultTokens, {
+      color: { semantic: { primary: { main: '#000000' } } },
+    })
+    const writable = merged as unknown as {
+      color: { semantic: { error: { main: string } } }
+    }
+    let attemptThrew = false
+    try {
+      writable.color.semantic.error.main = '#DEADBEEF'
+    } catch {
+      attemptThrew = true
+    }
+    // No leak: an independent merge after the attempt reads its own
+    // override and pristine defaults -- never the attempted value.
+    const tenantB = deepMerge(defaultTokens, { zIndex: { values: { modal: 1600 } } })
+    expect(tenantB.zIndex.values.modal).toBe(1600)
+    expect(tenantB.color.semantic.error.main).toBe(PRISTINE_ERROR_MAIN)
+    expect(tenantB.typography.fontFamily.sans).toBe(
+      defaultTokens.typography.fontFamily.sans,
+    )
+    expect(attemptThrew).toBe(true)
   })
 })

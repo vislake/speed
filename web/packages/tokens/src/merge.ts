@@ -17,7 +17,11 @@ import type { DeepPartial } from './types.js'
  * Semantics, in contract form (each is pinned by a test):
  * - No argument is ever mutated. Copy-on-write: a branch that no override
  *   touches is shared with `base` by identity; every branch some override
- *   does touch is rebuilt.
+ *   does touch is rebuilt. Because defaultTokens is deep-frozen at
+ *   assembly (see defaultTokens.ts), the shared branches of a merge over it
+ *   are frozen nodes: a write through one throws in strict mode instead of
+ *   silently reaching the default tree, while the rebuilt branches are
+ *   fresh objects owned by that result alone.
  * - The result is a faithful copy of `base`: every own key of `base`
  *   survives, even one whose value is `undefined` -- an override that
  *   omits a key never causes that key to vanish from the result.
