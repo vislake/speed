@@ -51,6 +51,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -70,6 +71,17 @@ const (
 	// nanosecond expiry header every stored value carries ahead of its
 	// payload. Zero means "no expiry."
 	envelopeExpiryLen = 8
+
+	// maxEnvelopeValueLen is the largest payload encodeEnvelope accepts: the
+	// envelope buffer's size is envelopeExpiryLen plus the payload, computed
+	// in the platform's int, and an addition that wraps would hand make a
+	// negative size to panic on. Values this long can only exist on a 32-bit
+	// platform -- a 64-bit one cannot allocate a slice within a few bytes of
+	// MaxInt -- and no real backend stores them either, JetStream's own max-
+	// message ceiling being far lower, but the size arithmetic must be unable
+	// to wrap on any platform: an overflowing payload is refused as an error
+	// rather than encoded (CodeQL go/allocation-size-overflow).
+	maxEnvelopeValueLen = math.MaxInt - envelopeExpiryLen
 
 	// kvFloatFormat, kvFloatPrecisionShortest and kvFloatBitSize mirror
 	// pkgcore's own unexported constants of the same name and purpose:
@@ -212,7 +224,11 @@ func (s *kvStore) Set(ctx context.Context, key string, value []byte, ttl time.Du
 		expiresAt = time.Now().Add(ttl)
 	}
 
-	if _, err := s.kv.Put(ctx, encodeKey(key), encodeEnvelope(value, expiresAt)); err != nil {
+	encoded, err := encodeEnvelope(value, expiresAt)
+	if err != nil {
+		return fmt.Errorf("pkgcore/kv/nats: set: %w", err)
+	}
+	if _, err := s.kv.Put(ctx, encodeKey(key), encoded); err != nil {
 		return fmt.Errorf("pkgcore/kv/nats: set: %w", err)
 	}
 	return nil
@@ -275,10 +291,13 @@ func (s *kvStore) IncrByFloat(ctx context.Context, key string, delta float64) (f
 		}
 
 		result := current + delta
-		encoded := encodeEnvelope(
+		encoded, err := encodeEnvelope(
 			strconv.AppendFloat(nil, result, kvFloatFormat, kvFloatPrecisionShortest, kvFloatBitSize),
 			expiresAt,
 		)
+		if err != nil {
+			return 0, fmt.Errorf("pkgcore/kv/nats: incr: %w", err)
+		}
 
 		if revision == 0 {
 			// nats.go's own Create sequence number 0 means "no message has
@@ -349,10 +368,13 @@ func (s *kvStore) IncrByFloatWithTTL(ctx context.Context, key string, delta floa
 		}
 
 		result := current + delta
-		encoded := encodeEnvelope(
+		encoded, err := encodeEnvelope(
 			strconv.AppendFloat(nil, result, kvFloatFormat, kvFloatPrecisionShortest, kvFloatBitSize),
 			expiresAt,
 		)
+		if err != nil {
+			return 0, fmt.Errorf("pkgcore/kv/nats: incr with ttl: %w", err)
+		}
 
 		if revision == 0 {
 			if _, err := s.kv.Create(ctx, encKey, encoded); err != nil {
@@ -484,7 +506,11 @@ func (s *kvStore) casCreate(ctx context.Context, encKey string, old, newVal []by
 	if len(old) != 0 {
 		return false, nil
 	}
-	if _, err := s.kv.Create(ctx, encKey, encodeEnvelope(newVal, time.Time{})); err != nil {
+	encoded, err := encodeEnvelope(newVal, time.Time{})
+	if err != nil {
+		return false, fmt.Errorf("pkgcore/kv/nats: cas: %w", err)
+	}
+	if _, err := s.kv.Create(ctx, encKey, encoded); err != nil {
 		if errors.Is(err, jetstream.ErrKeyExists) {
 			return false, nil
 		}
@@ -498,7 +524,11 @@ func (s *kvStore) casCreate(ctx context.Context, encKey string, old, newVal []by
 // present key; the entry's own expiry for a genuine value match), and maps a
 // lost race to (false, nil) rather than an error.
 func (s *kvStore) casWrite(ctx context.Context, encKey string, revision uint64, newVal []byte, expiresAt time.Time) (bool, error) {
-	if _, err := s.kv.Update(ctx, encKey, encodeEnvelope(newVal, expiresAt), revision); err != nil {
+	encoded, err := encodeEnvelope(newVal, expiresAt)
+	if err != nil {
+		return false, fmt.Errorf("pkgcore/kv/nats: cas: %w", err)
+	}
+	if _, err := s.kv.Update(ctx, encKey, encoded, revision); err != nil {
 		if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
 			return false, nil
 		}
@@ -522,8 +552,16 @@ func encodeKey(key string) string {
 // pkgcore.KVStore implementation's zero-value convention -- so that a
 // JetStream message, which carries no expiry concept of its own once bucket-
 // level TTL is left unused, still carries exactly the expiry pkgcore.KVStore
-// requires.
-func encodeEnvelope(value []byte, expiresAt time.Time) []byte {
+// requires. A payload too long to fit behind the header inside the platform
+// int the allocation size is computed in (see maxEnvelopeValueLen) is
+// refused with an error, never encoded through size arithmetic that would
+// wrap.
+func encodeEnvelope(value []byte, expiresAt time.Time) ([]byte, error) {
+	if len(value) > maxEnvelopeValueLen {
+		return nil, fmt.Errorf("value of %d bytes is too large to store: adding the %d-byte expiry header would overflow the size arithmetic",
+			len(value), envelopeExpiryLen)
+	}
+
 	var expiryNano int64
 	if !expiresAt.IsZero() {
 		expiryNano = expiresAt.UnixNano()
@@ -532,7 +570,7 @@ func encodeEnvelope(value []byte, expiresAt time.Time) []byte {
 	buf := make([]byte, envelopeExpiryLen+len(value))
 	binary.BigEndian.PutUint64(buf[:envelopeExpiryLen], uint64(expiryNano))
 	copy(buf[envelopeExpiryLen:], value)
-	return buf
+	return buf, nil
 }
 
 // decodeEnvelope is encodeEnvelope's inverse. data shorter than the expiry

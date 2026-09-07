@@ -20,9 +20,12 @@ package nats
 
 import (
 	"bytes"
+	"context"
+	"math"
 	"regexp"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // TestNewKVStore_PanicsOnNilConn pins that a nil connection is a wiring error
@@ -63,7 +66,10 @@ func TestEncodeDecodeEnvelope_RoundTrips(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			encoded := encodeEnvelope(tt.value, tt.expiresAt)
+			encoded, err := encodeEnvelope(tt.value, tt.expiresAt)
+			if err != nil {
+				t.Fatalf("encodeEnvelope() error = %v, want nil", err)
+			}
 			gotValue, gotExpiresAt, err := decodeEnvelope(encoded)
 			if err != nil {
 				t.Fatalf("decodeEnvelope() error = %v, want nil", err)
@@ -183,5 +189,42 @@ func TestEncodeKey_IsInjective(t *testing.T) {
 			t.Errorf("encodeKey(%q) and encodeKey(%q) both produced %q, want distinct keys never to collide", prior, key, encoded)
 		}
 		seen[encoded] = key
+	}
+}
+
+// TestKVStore_Set_EnvelopeSizeOverflowValueRefused pins the fix for the
+// allocation-size overflow CodeQL flagged in encodeEnvelope (rule id
+// go/allocation-size-overflow): the envelope buffer's size is header plus
+// payload, computed in the platform's int, and a payload length sitting
+// within envelopeExpiryLen bytes of the int maximum wraps that addition
+// negative, so make would panic on an allocation no such envelope can ever
+// need. The refusal is driven through the store's own Set -- the overflow
+// must surface as Set's error, never as a panic from the allocation itself.
+// The store is a bare &kvStore{} whose kv handle is nil, because this
+// package's constructor provisions a real JetStream bucket and needs a
+// server: the refusal must fire before the handle is ever touched.
+func TestKVStore_Set_EnvelopeSizeOverflowValueRefused(t *testing.T) {
+	t.Parallel()
+
+	store := &kvStore{}
+
+	// The value is synthesized, not allocated: only a 32-bit platform can
+	// hold a real slice anywhere near the int maximum, so no allocation can
+	// reproduce the wrap -- only a forged slice header can. unsafe.Slice is
+	// unusable for the forgery: the race detector's checkptr instrumentation
+	// dies on the declared length alone (fatal error: checkptr: unsafe.Slice
+	// result straddles multiple allocations), so the header is stamped by
+	// hand over the runtime slice-header layout instead, a construction
+	// nothing instruments. No byte of the forged slice is ever read -- which
+	// is the point: the store must refuse on the length alone.
+	var b byte
+	header := struct {
+		data uintptr
+		len  int
+		cap  int
+	}{data: uintptr(unsafe.Pointer(&b)), len: math.MaxInt - 1, cap: math.MaxInt - 1} // envelopeExpiryLen + len(value) wraps past MaxInt
+	value := *(*[]byte)(unsafe.Pointer(&header))
+	if err := store.Set(context.Background(), "k", value, 0); err == nil {
+		t.Fatal("Set() error = nil, want a refusal error for a value whose envelope size arithmetic would overflow")
 	}
 }

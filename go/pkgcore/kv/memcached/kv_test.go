@@ -3,8 +3,10 @@ package memcached
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/bradfitz/gomemcache/memcache"
 )
@@ -99,7 +101,10 @@ func TestEncodeDecodeEnvelope_RoundTrips(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			encoded := encodeEnvelope(tt.value, tt.expiresAt)
+			encoded, err := encodeEnvelope(tt.value, tt.expiresAt)
+			if err != nil {
+				t.Fatalf("encodeEnvelope() error = %v, want nil", err)
+			}
 			value, expiresAt, ok := decodeEnvelope(encoded)
 			if !ok {
 				t.Fatal("decodeEnvelope() ok = false, want true")
@@ -202,5 +207,41 @@ func TestIsLostCASRace_ClassifiesTheThreeRaceAnswers(t *testing.T) {
 	}
 	if isLostCASRace(nil) {
 		t.Error("isLostCASRace(nil) = true, want false")
+	}
+}
+
+// TestKVStore_Set_EnvelopeSizeOverflowValueRefused pins the fix for the
+// allocation-size overflow CodeQL flagged in encodeEnvelope (rule id
+// go/allocation-size-overflow): the envelope buffer's size is header plus
+// payload, computed in the platform's int, and a payload length sitting
+// within kvEnvelopeHeaderSize bytes of the int maximum wraps that addition
+// negative, so make would panic on an allocation no such envelope can ever
+// need. The refusal is driven through the store's own Set -- the overflow
+// must surface as Set's error, never as a panic from the allocation itself.
+func TestKVStore_Set_EnvelopeSizeOverflowValueRefused(t *testing.T) {
+	t.Parallel()
+
+	// The refusal fires before anything reaches the client, so the client
+	// may point at a dead address.
+	store := NewKVStore(memcache.New("127.0.0.1:1"))
+
+	// The value is synthesized, not allocated: only a 32-bit platform can
+	// hold a real slice anywhere near the int maximum, so no allocation can
+	// reproduce the wrap -- only a forged slice header can. unsafe.Slice is
+	// unusable for the forgery: the race detector's checkptr instrumentation
+	// dies on the declared length alone (fatal error: checkptr: unsafe.Slice
+	// result straddles multiple allocations), so the header is stamped by
+	// hand over the runtime slice-header layout instead, a construction
+	// nothing instruments. No byte of the forged slice is ever read -- which
+	// is the point: the store must refuse on the length alone.
+	var b byte
+	header := struct {
+		data uintptr
+		len  int
+		cap  int
+	}{data: uintptr(unsafe.Pointer(&b)), len: math.MaxInt - 1, cap: math.MaxInt - 1} // kvEnvelopeHeaderSize + len(value) wraps past MaxInt
+	value := *(*[]byte)(unsafe.Pointer(&header))
+	if err := store.Set(context.Background(), "k", value, 0); err == nil {
+		t.Fatal("Set() error = nil, want a refusal error for a value whose envelope size arithmetic would overflow")
 	}
 }

@@ -103,6 +103,17 @@ const (
 	// comment's "why TTL needs an envelope" section.
 	kvEnvelopeHeaderSize = 8
 
+	// maxEnvelopeValueLen is the largest payload encodeEnvelope accepts: the
+	// envelope buffer's size is kvEnvelopeHeaderSize plus the payload,
+	// computed in the platform's int, and an addition that wraps would hand
+	// make a negative size to panic on. Values this long can only exist on a
+	// 32-bit platform -- a 64-bit one cannot allocate a slice within a few
+	// bytes of MaxInt -- and no real backend stores them either, Memcached's
+	// own item-size cap being far lower, but the size arithmetic must be
+	// unable to wrap on any platform: an overflowing payload is refused as an
+	// error rather than encoded (CodeQL go/allocation-size-overflow).
+	maxEnvelopeValueLen = math.MaxInt - kvEnvelopeHeaderSize
+
 	// kvFloatFormat, kvFloatPrecisionShortest and kvFloatBitSize mirror
 	// pkgcore's own in-memory store's numeric encoding exactly: 'g' with
 	// shortest-round-trip precision at 64 bits, so a value IncrByFloat
@@ -212,9 +223,15 @@ func (s *kvStore) Set(ctx context.Context, key string, value []byte, ttl time.Du
 	}
 
 	expiresAt := expiryFromTTL(ttl)
+
+	encoded, err := encodeEnvelope(value, expiresAt)
+	if err != nil {
+		return fmt.Errorf("pkgcore/kv/memcached: set: %w", err)
+	}
+
 	item := &memcache.Item{
 		Key:        key,
-		Value:      encodeEnvelope(value, expiresAt),
+		Value:      encoded,
 		Expiration: physicalExptime(expiresAt),
 	}
 	if err := s.client.Set(item); err != nil {
@@ -289,9 +306,13 @@ func (s *kvStore) IncrByFloat(ctx context.Context, key string, delta float64) (f
 		newValue := strconv.AppendFloat(nil, result, kvFloatFormat, kvFloatPrecisionShortest, kvFloatBitSize)
 
 		if !found {
+			encoded, encodeErr := encodeEnvelope(newValue, time.Time{})
+			if encodeErr != nil {
+				return 0, fmt.Errorf("pkgcore/kv/memcached: incr: %w", encodeErr)
+			}
 			item := &memcache.Item{
 				Key:   key,
-				Value: encodeEnvelope(newValue, time.Time{}),
+				Value: encoded,
 			}
 			err = s.client.Add(item)
 			if isLostCASRace(err) {
@@ -303,9 +324,14 @@ func (s *kvStore) IncrByFloat(ctx context.Context, key string, delta float64) (f
 			return result, nil
 		}
 
+		encoded, err := encodeEnvelope(newValue, expiresAt)
+		if err != nil {
+			return 0, fmt.Errorf("pkgcore/kv/memcached: incr: %w", err)
+		}
+
 		item := &memcache.Item{
 			Key:        key,
-			Value:      encodeEnvelope(newValue, expiresAt),
+			Value:      encoded,
 			Expiration: physicalExptime(expiresAt),
 			CasID:      casID,
 		}
@@ -366,9 +392,13 @@ func (s *kvStore) IncrByFloatWithTTL(ctx context.Context, key string, delta floa
 		newValue := strconv.AppendFloat(nil, result, kvFloatFormat, kvFloatPrecisionShortest, kvFloatBitSize)
 
 		if !found {
+			encoded, encodeErr := encodeEnvelope(newValue, expiresAt)
+			if encodeErr != nil {
+				return 0, fmt.Errorf("pkgcore/kv/memcached: incr with ttl: %w", encodeErr)
+			}
 			item := &memcache.Item{
 				Key:        key,
-				Value:      encodeEnvelope(newValue, expiresAt),
+				Value:      encoded,
 				Expiration: physicalExptime(expiresAt),
 			}
 			err = s.client.Add(item)
@@ -381,9 +411,14 @@ func (s *kvStore) IncrByFloatWithTTL(ctx context.Context, key string, delta floa
 			return result, nil
 		}
 
+		encoded, err := encodeEnvelope(newValue, expiresAt)
+		if err != nil {
+			return 0, fmt.Errorf("pkgcore/kv/memcached: incr with ttl: %w", err)
+		}
+
 		item := &memcache.Item{
 			Key:        key,
-			Value:      encodeEnvelope(newValue, expiresAt),
+			Value:      encoded,
 			Expiration: physicalExptime(expiresAt),
 			CasID:      casID,
 		}
@@ -432,9 +467,13 @@ func (s *kvStore) CompareAndSwap(ctx context.Context, key string, old, newVal []
 				// An absent key matches only the empty expectation.
 				return false, nil
 			}
+			encoded, encodeErr := encodeEnvelope(newVal, time.Time{})
+			if encodeErr != nil {
+				return false, fmt.Errorf("pkgcore/kv/memcached: cas: %w", encodeErr)
+			}
 			item := &memcache.Item{
 				Key:   key,
-				Value: encodeEnvelope(newVal, time.Time{}),
+				Value: encoded,
 			}
 			err = s.client.Add(item)
 			if isLostCASRace(err) {
@@ -452,9 +491,14 @@ func (s *kvStore) CompareAndSwap(ctx context.Context, key string, old, newVal []
 			return false, nil
 		}
 
+		encoded, err := encodeEnvelope(newVal, expiresAt)
+		if err != nil {
+			return false, fmt.Errorf("pkgcore/kv/memcached: cas: %w", err)
+		}
+
 		item := &memcache.Item{
 			Key:        key,
-			Value:      encodeEnvelope(newVal, expiresAt),
+			Value:      encoded,
 			Expiration: physicalExptime(expiresAt),
 			CasID:      casID,
 		}
@@ -542,8 +586,16 @@ func expiryFromTTL(ttl time.Duration) time.Time {
 // encodeEnvelope prepends value with its kvEnvelopeHeaderSize-byte absolute
 // expiry timestamp (Unix nanoseconds, big-endian, zero meaning "never"),
 // verbatim -- value's own bytes, embedded NUL and all, are never
-// reinterpreted.
-func encodeEnvelope(value []byte, expiresAt time.Time) []byte {
+// reinterpreted. A payload too long to fit behind the header inside the
+// platform int the allocation size is computed in (see maxEnvelopeValueLen)
+// is refused with an error, never encoded through size arithmetic that
+// would wrap.
+func encodeEnvelope(value []byte, expiresAt time.Time) ([]byte, error) {
+	if len(value) > maxEnvelopeValueLen {
+		return nil, fmt.Errorf("value of %d bytes is too large to store: adding the %d-byte expiry header would overflow the size arithmetic",
+			len(value), kvEnvelopeHeaderSize)
+	}
+
 	envelope := make([]byte, kvEnvelopeHeaderSize+len(value))
 	var nanos uint64
 	if !expiresAt.IsZero() {
@@ -551,7 +603,7 @@ func encodeEnvelope(value []byte, expiresAt time.Time) []byte {
 	}
 	binary.BigEndian.PutUint64(envelope[:kvEnvelopeHeaderSize], nanos)
 	copy(envelope[kvEnvelopeHeaderSize:], value)
-	return envelope
+	return envelope, nil
 }
 
 // decodeEnvelope reverses encodeEnvelope. ok is false when stored is too
