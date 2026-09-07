@@ -87,7 +87,12 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // token-verification answers entered the enumeration with this
   // re-measurement, and composed-stack verification then kept
   // authn.token_invalid -- authn.authentication_required's citation
-  // moved to WHITELISTED_BEYOND_THIS_APP below, see its entry).
+  // moved to WHITELISTED_BEYOND_THIS_APP below, see its entry). A later
+  // rescan round's sentinel additions between ErrTenantMembershipUnavailable
+  // and ErrOAuthStateInvalid (the revocation-check and token-verification
+  // sentinels among them) shifted every citation from ErrOAuthStateInvalid
+  // to ErrSessionNotFound by exactly +12 lines; re-measured here against
+  // the current declaration sites).
   'authn.invalid_credentials': 'go/authn/errors.go:37 (ErrInvalidCredentials)',
   'authn.identifier_required': 'go/authn/errors.go:41 (ErrIdentifierRequired)',
   'authn.invalid_email': 'go/authn/errors.go:45 (ErrInvalidEmail)',
@@ -122,23 +127,23 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'authn.refresh_token_reused': 'go/authn/errors.go:119 (ErrRefreshTokenReused)',
   'authn.tenant_membership_required': 'go/authn/errors.go:125 (ErrTenantMembershipRequired)',
   'authn.tenant_membership_unavailable': 'go/authn/errors.go:131 (ErrTenantMembershipUnavailable)',
-  'authn.oauth_state_invalid': 'go/authn/errors.go:145 (ErrOAuthStateInvalid)',
-  'authn.redirect_uri_not_allowed': 'go/authn/errors.go:149 (ErrRedirectURINotAllowed)',
-  'authn.provider_unknown': 'go/authn/errors.go:154 (ErrProviderUnknown)',
-  'authn.social_exchange_failed': 'go/authn/errors.go:161 (ErrSocialExchangeFailed)',
-  'authn.identity_requires_binding': 'go/authn/errors.go:194 (ErrIdentityRequiresBinding)',
-  'authn.identity_already_bound': 'go/authn/errors.go:198 (ErrIdentityAlreadyBound)',
-  'authn.identity_not_found': 'go/authn/errors.go:204 (ErrIdentityNotFound)',
-  'authn.last_login_method': 'go/authn/errors.go:210 (ErrLastLoginMethod)',
-  'authn.rate_limited': 'go/authn/errors.go:242 (ErrRateLimited)',
-  'authn.account_locked': 'go/authn/errors.go:250 (ErrAccountLocked)',
-  'authn.channel_disabled': 'go/authn/errors.go:260 (ErrChannelDisabled)',
-  'authn.verification_code_invalid': 'go/authn/errors.go:268 (ErrVerificationCodeInvalid)',
-  'authn.mfa_not_enrolled': 'go/authn/errors.go:285 (ErrMFANotEnrolled)',
-  'authn.mfa_already_enrolled': 'go/authn/errors.go:289 (ErrMFAAlreadyEnrolled)',
-  'authn.mfa_invalid_code': 'go/authn/errors.go:295 (ErrMFAInvalidCode)',
-  'authn.step_up_required': 'go/authn/errors.go:299 (ErrStepUpRequired)',
-  'authn.session_not_found': 'go/authn/errors.go:308 (ErrSessionNotFound)',
+  'authn.oauth_state_invalid': 'go/authn/errors.go:157 (ErrOAuthStateInvalid)',
+  'authn.redirect_uri_not_allowed': 'go/authn/errors.go:161 (ErrRedirectURINotAllowed)',
+  'authn.provider_unknown': 'go/authn/errors.go:166 (ErrProviderUnknown)',
+  'authn.social_exchange_failed': 'go/authn/errors.go:173 (ErrSocialExchangeFailed)',
+  'authn.identity_requires_binding': 'go/authn/errors.go:206 (ErrIdentityRequiresBinding)',
+  'authn.identity_already_bound': 'go/authn/errors.go:210 (ErrIdentityAlreadyBound)',
+  'authn.identity_not_found': 'go/authn/errors.go:216 (ErrIdentityNotFound)',
+  'authn.last_login_method': 'go/authn/errors.go:222 (ErrLastLoginMethod)',
+  'authn.rate_limited': 'go/authn/errors.go:254 (ErrRateLimited)',
+  'authn.account_locked': 'go/authn/errors.go:262 (ErrAccountLocked)',
+  'authn.channel_disabled': 'go/authn/errors.go:272 (ErrChannelDisabled)',
+  'authn.verification_code_invalid': 'go/authn/errors.go:280 (ErrVerificationCodeInvalid)',
+  'authn.mfa_not_enrolled': 'go/authn/errors.go:297 (ErrMFANotEnrolled)',
+  'authn.mfa_already_enrolled': 'go/authn/errors.go:301 (ErrMFAAlreadyEnrolled)',
+  'authn.mfa_invalid_code': 'go/authn/errors.go:307 (ErrMFAInvalidCode)',
+  'authn.step_up_required': 'go/authn/errors.go:311 (ErrStepUpRequired)',
+  'authn.session_not_found': 'go/authn/errors.go:320 (ErrSessionNotFound)',
   // go/rbac/errors.go -- the permission-denied sentinel the notes route's
   // rbac gate answers with.
   'rbac.permission_denied': 'go/rbac/errors.go:56 (ErrPermissionDenied)',
