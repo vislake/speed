@@ -32,6 +32,8 @@ import (
 	"slices"
 	"strings"
 
+	"golang.org/x/mod/module"
+
 	"github.com/vislake/speed/go/saasctl/internal/template"
 )
 
@@ -314,11 +316,17 @@ func deriveModuleName(target string) (string, error) {
 // only letters, digits, dots, underscores and dashes, be neither "."
 // nor "..", and not end in a dot. The grammar is deliberately stricter
 // than Go's own (go mod init also accepts a leading dot and interior
-// runs of dots) -- every name this accepts is one `go mod init` accepts,
-// probed against go 1.25 -- so a project this command shapes always has
-// a go.mod `go mod tidy` will parse. Rejecting before anything is
-// created keeps a bad target from leaving a half-written directory
-// behind.
+// runs of dots), and a name that passes it must additionally pass
+// module.CheckImportPath -- the validator the go command itself runs on
+// a module path -- which is what refuses the reserved Windows device
+// names (CON, AUX, PRN, NUL, COM1-9, LPT1-9, case-insensitively) on
+// EVERY platform: the grammar alone would accept "aux", and "saasctl new
+// aux" would then fully write a project whose go.mod no go tool accepts.
+// The x/mod gate makes the "every accepted name is one `go mod init`
+// accepts" property true by construction rather than by a one-time
+// probe, so a project this command shapes always has a go.mod `go mod
+// tidy` will parse. Rejecting before anything is created keeps a bad
+// target from leaving a half-written directory behind.
 func validateModuleName(name string) error {
 	if name == "" {
 		return errors.New("the target directory has no base name to derive a module path from")
@@ -331,6 +339,9 @@ func validateModuleName(name string) error {
 	}
 	if strings.HasSuffix(name, ".") {
 		return fmt.Errorf("target base name %q is not a valid module path: it must not end in a dot", name)
+	}
+	if err := module.CheckImportPath(name); err != nil {
+		return fmt.Errorf("target base name %q is not a valid module path: %w", name, err)
 	}
 	return nil
 }

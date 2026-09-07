@@ -73,8 +73,18 @@ func assetPath(key, rel string) string {
 // embedded asset, stripped of its build-ignore marker (for .go files) and
 // token-substituted with the app name and speed root this run used. The
 // materialization test asserts byte equality against this, which pins the
-// generated project to the committed assets -- the assets are the tidy
-// goldens, so the byte comparison is also the go.mod golden check.
+// materialized file to its embedded asset byte for byte -- and deliberately
+// nothing more. In particular this is NOT a freshness check on the go.mod
+// documents: both sides of the comparison are the same asset, so a
+// go.mod.txt golden gone stale relative to what the speed modules now
+// require (a dependency a module gained since the goldens were last
+// tidied) passes this comparison unchanged. Nothing in the offline suite
+// detects that staleness, and nothing else automatic does either --
+// scaffold-verify's real tidy+build leg (one selection, on a schedule)
+// would silently repair a stale require set rather than fail on it.
+// Regenerating the five goldens through the real tidy procedure whenever
+// a speed module's dependency set changes is the only check that exists
+// (go/saasctl/AGENTS.md's Testing section).
 func wantContent(t *testing.T, key, rel, appName, speedRoot string) []byte {
 	t.Helper()
 	path := template.ProjectRoot + "/" + assetPath(key, rel)
@@ -321,10 +331,13 @@ func TestRollbackTargetRemovesFilesAndDirectoriesItCreated(t *testing.T) {
 // TestRunInvalidTargetNameIsUsageError drives names that cannot serve as
 // a module path through the whole command: each must exit 2 (a usage
 // error), print the usage text, and never create the target directory.
+// The reserved Windows device names (aux and its family) belong in the
+// list because the module-path validator refuses them on every platform,
+// not only on Windows (see validateModuleName's doc comment).
 func TestRunInvalidTargetNameIsUsageError(t *testing.T) {
 	t.Setenv(speedRootEnv, "")
 	root := testSpeedRoot(t)
-	badNames := []string{"..", ".", "", "my app", "app.", "-app", ".hidden"}
+	badNames := []string{"..", ".", "", "my app", "app.", "-app", ".hidden", "aux", "CON", "com1"}
 	for _, name := range badNames {
 		name := name
 		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
@@ -510,12 +523,20 @@ func TestValidateSelection(t *testing.T) {
 
 // TestValidateModuleNameAndDeriveModuleName pins the name grammar against
 // real go tooling behavior: every accepted name is one `go mod init`
-// accepts (probed against go 1.25), and the rejections -- leading dot,
-// leading dash, space, trailing dot, "." and ".." -- keep a generated
-// project's module path looking like a name. deriveModuleName takes the
-// base name from the lexically cleaned target, so a trailing ".." in the
-// target can never silently redirect the materialization into a parent
-// directory.
+// accepts (the x/mod gate inside validateModuleName makes the claim true
+// by construction -- module.CheckImportPath is the validator the go
+// command itself runs), and the rejections -- leading dot, leading dash,
+// space, trailing dot, "." and "..", and the reserved Windows device
+// names (aux, CON, com1, ...), which x/mod refuses on EVERY platform --
+// keep a generated project's module path looking like a name. The
+// windows-name half of the list is what the plain grammar could never
+// see: "aux" matches the pattern yet is not a module path any go tool
+// accepts, and the real `saasctl new aux` regression (exit 0 and a fully
+// written, unbuildable project before this gate existed) is covered at
+// the command level by TestRunInvalidTargetNameIsUsageError. deriveModuleName
+// takes the base name from the lexically cleaned target, so a trailing
+// ".." in the target can never silently redirect the materialization
+// into a parent directory.
 func TestValidateModuleNameAndDeriveModuleName(t *testing.T) {
 	accepted := []string{"myapp", "1app", "a..b", "app-name", "a_b", "App1"}
 	for _, name := range accepted {
@@ -523,7 +544,11 @@ func TestValidateModuleNameAndDeriveModuleName(t *testing.T) {
 			t.Errorf("validateModuleName(%q) = %v, want nil (go mod init accepts it)", name, err)
 		}
 	}
-	rejected := []string{"", ".", "..", "my app", "app.", "-app", ".hidden", "/"}
+	rejected := []string{
+		"", ".", "..", "my app", "app.", "-app", ".hidden", "/",
+		"aux", "AUX", "con", "CON", "nul", "NUL", "prn", "PRN",
+		"com1", "COM9", "lpt1", "LPT9",
+	}
 	for _, name := range rejected {
 		if err := validateModuleName(name); err == nil {
 			t.Errorf("validateModuleName(%q) = nil, want error", name)
