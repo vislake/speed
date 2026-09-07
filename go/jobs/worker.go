@@ -87,10 +87,14 @@ func jobContext(tenant pkgcore.TenantID) context.Context {
 // each successfully claimed one to dispatch, until q.stopCh is closed. It
 // is the one goroutine that writes runningPerTenant increments;
 // runWorker's decrements run concurrently with it by construction, so both
-// sides go through q.tenantMu. Every tick also refreshes this queue's
-// writer registration (heartbeat), so a live dispatcher is what keeps a
-// concurrent Start on the same database from mistaking this queue for a
-// crashed one.
+// sides go through q.tenantMu. The dispatcher deliberately does NOT refresh
+// the queue's writer registration: it cannot always reach its tick branch
+// (it blocks on the worker handoff while every worker is busy, and it exits
+// on stopCh while Close waits for workers to finish their current Handle),
+// so the registration heartbeat lives on its own goroutine instead --
+// runWriterHeartbeat -- which keeps a concurrent Start on the same database
+// from mistaking this queue for a crashed one while any worker may still be
+// executing a claimed row.
 func (q *StandaloneQueue) runDispatcher(dispatch chan<- jobRecord) {
 	defer q.wg.Done()
 	defer close(dispatch)
@@ -103,23 +107,56 @@ func (q *StandaloneQueue) runDispatcher(dispatch chan<- jobRecord) {
 		case <-q.stopCh:
 			return
 		case <-ticker.C:
-			q.heartbeat()
 			q.dispatchOnce(dispatch)
+		}
+	}
+}
+
+// runWriterHeartbeat refreshes this queue's queue_writers registration row
+// (store.go) on its own ticker, once per poll interval, until Close stops
+// it. It exists because the registration's freshness is the fence that
+// keeps a concurrent StandaloneQueue.Start on the same database from
+// stealing this queue's rows while a worker still holds one -- see
+// ErrQueueWriterActive and acquireWriterRegistration -- and the fence must
+// hold in exactly the two periods the dispatcher cannot beat: while it is
+// blocked handing a claimed Job to a worker that is busy (its tick branch
+// unreachable), and after it exits on stopCh while Close waits for workers
+// to finish their in-flight Handles (a graceful shutdown that outlives the
+// stale window must not open the gate mid-drain). Close therefore stops
+// this goroutine only after every worker has finished, immediately before
+// the registration itself is released. A heartbeat that fails to reach its
+// own row means the registration was stolen (its beats lapsed past the
+// stale window and a sibling took over) or removed -- the queue keeps
+// running rather than stopping mid-flight, which would strand every row it
+// has claimed, and the error is logged every tick until the operator
+// resolves the two-writer situation the steal implies.
+func (q *StandaloneQueue) runWriterHeartbeat() {
+	defer q.heartbeatWG.Done()
+	ticker := time.NewTicker(q.pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-q.heartbeatStopCh:
+			return
+		case <-ticker.C:
+			q.heartbeat()
 		}
 	}
 }
 
 // heartbeat refreshes this queue's queue_writers registration row (store.go)
 // so a concurrent StandaloneQueue.Start on the same database can tell a
-// live writer from a crashed one — see ErrQueueWriterActive and
-// acquireWriterRegistration. It rides the dispatcher's own tick, so no
-// extra goroutine or lifecycle is needed: while the dispatcher beats, this
-// queue is alive by definition. A heartbeat that fails to reach its own row
-// means the registration was stolen (its beats lapsed past the stale window
-// and a sibling took over) or removed — the queue keeps running rather than
-// stopping mid-flight, which would strand every row it has claimed, and the
-// error is logged every tick until the operator resolves the two-writer
-// situation the steal implies.
+// live writer from a crashed one -- see ErrQueueWriterActive and
+// acquireWriterRegistration. It runs on the dedicated keeper goroutine
+// runWriterHeartbeat (never on the dispatcher's own tick: the dispatcher
+// cannot reach its tick while blocked on the worker handoff or after Close
+// has shut it down, exactly the periods a held row must stay fenced), from
+// Start until Close's drain of in-flight Handles has finished. A heartbeat
+// that fails to reach its own row means the registration was stolen (its
+// beats lapsed past the stale window and a sibling took over) or removed --
+// the queue keeps running rather than stopping mid-flight, which would
+// strand every row it has claimed, and the error is logged every tick until
+// the operator resolves the two-writer situation the steal implies.
 func (q *StandaloneQueue) heartbeat() {
 	ctx := context.Background()
 	ok, err := heartbeatWriterRegistration(ctx, q.db, q.owner, time.Now())
@@ -425,9 +462,16 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 			log.Info("job succeeded", "job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
 			q.recordJobMetrics(rec.Type, StatusSucceeded, duration)
 		default:
-			log.Info("job cancelled before its success could be recorded, outcome discarded",
-				"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
-			job.Status = StatusCancelled
+			// moved == false: the success write no-op'd -- the row was no
+			// longer StatusRunning when it landed. That is NOT proof of a
+			// concurrent Cancel: a row another writer reset and re-claimed
+			// after a writer-gate lapse no-ops the identical write.
+			// logDiscardedOutcome probes the row and reports what it
+			// actually says.
+			if cancelled := q.logDiscardedOutcome(log, rec, durationMS,
+				"job cancelled before its success could be recorded, outcome discarded"); cancelled {
+				job.Status = StatusCancelled
+			}
 		}
 		return
 	}
@@ -439,24 +483,31 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 			return
 		}
 		if !moved {
-			// A concurrent Cancel (markCancelled) already moved the row out
-			// of StatusRunning while this final attempt was executing, so
-			// the dead-letter write was a no-op: the persisted terminal
-			// state is StatusCancelled, never StatusDeadLetter. Cancel wins
-			// over a concurrent final failure by design (Queue.Cancel's own
-			// doc comment), so this attempt's failure outcome -- and any
-			// compensation it would have triggered -- is discarded: OnFailure
-			// must NOT run, since its contract (handler.go) requires the
-			// dead-letter to actually have been persisted first, and a
-			// cancelled Job has no dead-letter. Nothing is recorded for it
-			// beyond this one truthful Info line: no dead-letter log, no
-			// dead-letter metric, no attempt-outcome metric -- the outcome
-			// was discarded, not dead-lettered, and ops dashboards must not
-			// show a cancelled Job as dead-lettered. The in-memory job
-			// mirrors the persisted terminal state instead.
-			log.Info("job cancelled before its final failure could dead-letter, outcome discarded",
-				"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
-			job.Status = StatusCancelled
+			// The dead-letter write no-op'd: the row was no longer
+			// StatusRunning when it landed. Two causes, with opposite
+			// meanings -- a concurrent Cancel (markCancelled) already moved
+			// the row out of StatusRunning, in which case the persisted
+			// terminal state is StatusCancelled and Cancel wins over the
+			// concurrent final failure by design (Queue.Cancel's own doc
+			// comment); or another writer's resetInterruptedRecords/claimOne
+			// stole the row after a writer-gate lapse, in which case this
+			// very no-op is the first evidence of a double execution and
+			// must be logged as such, never as a cancellation. Either way
+			// this attempt's failure outcome -- and any compensation it
+			// would have triggered -- is discarded: OnFailure must NOT run,
+			// since its contract (handler.go) requires the dead-letter to
+			// actually have been persisted first, and neither a cancelled
+			// nor a stolen Job has a dead-letter of this attempt's. Nothing
+			// further is recorded: no dead-letter log, no dead-letter
+			// metric, no attempt-outcome metric -- the outcome was
+			// discarded, not dead-lettered, and ops dashboards must not
+			// show it as dead-lettered. logDiscardedOutcome probes the row
+			// and picks the truthful record; the in-memory job mirrors the
+			// persisted state only for a genuine cancellation.
+			if cancelled := q.logDiscardedOutcome(log, rec, durationMS,
+				"job cancelled before its final failure could dead-letter, outcome discarded"); cancelled {
+				job.Status = StatusCancelled
+			}
 			return
 		}
 		// The transition report above (moved == true) is the one and only
@@ -497,10 +548,48 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 			"retry_in_ms", delay.Milliseconds(), "error", err)
 		q.recordJobMetrics(rec.Type, StatusRetrying, duration)
 	default:
-		log.Info("job cancelled before its failure could schedule a retry, outcome discarded",
-			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
-		job.Status = StatusCancelled
+		// moved == false: the retry write no-op'd -- the same two-cause
+		// no-op as the success and dead-letter branches (see
+		// logDiscardedOutcome), never cancellation by assumption.
+		if cancelled := q.logDiscardedOutcome(log, rec, durationMS,
+			"job cancelled before its failure could schedule a retry, outcome discarded"); cancelled {
+			job.Status = StatusCancelled
+		}
 	}
+}
+
+// logDiscardedOutcome is execute's response to an outcome write that
+// no-op'd -- completeSucceeded/completeRetrying/completeDeadLetter reported
+// moved == false, meaning the row was no longer StatusRunning when the
+// conditional write landed. It probes the row to classify that no-op
+// honestly, because a plain no-op has two causes with opposite meanings: a
+// concurrent Cancel (Queue.Cancel's markCancelled won the race and the row
+// is StatusCancelled -- the cancelMessage the caller passes is then the
+// truthful record), or another writer's resetInterruptedRecords/claimOne
+// stealing the row after a writer-gate lapse (the row is back in Pending,
+// Running under a different claimed_by, or already settled by the other
+// execution -- the very first symptom of a double execution, which the
+// pre-fix code's blanket cancellation explanation erased exactly when it
+// mattered). Returns whether the row was genuinely StatusCancelled, so the
+// caller mirrors that state onto its in-memory Job only then. A probe that
+// cannot read the row logs the failure and answers false: the discard is
+// logged, its cause is not guessed.
+func (q *StandaloneQueue) logDiscardedOutcome(log *slog.Logger, rec jobRecord, durationMS int64, cancelMessage string) bool {
+	found, err := findByID(context.Background(), q.db, JobID(rec.ID))
+	if err != nil {
+		log.Warn("jobs: outcome not persisted; row state unreadable, outcome discarded",
+			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS, "error", err)
+		return false
+	}
+	if found.Status == string(StatusCancelled) {
+		log.Info(cancelMessage,
+			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
+		return true
+	}
+	log.Warn("jobs: outcome not persisted: row not running when the write landed, outcome discarded",
+		"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS,
+		"row_status", found.Status, "claimed_by", found.ClaimedBy)
+	return false
 }
 
 // backoffDelay computes the exponential backoff before the next attempt,

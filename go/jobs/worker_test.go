@@ -537,3 +537,144 @@ func TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric(t *testi
 		t.Error("missing the cancelled-outcome Info line -- the one truthful record a cancelled Job's discarded failure is allowed to emit")
 	}
 }
+
+// TestExecute_NoOpOutcomeWrite_RowStolenByAnotherWriter_LogsHonestlyNotCancelled
+// is the regression for the unsound cancel inference in execute's three
+// outcome branches: when completeSucceeded/completeRetrying/completeDeadLetter
+// no-op'd (moved == false), the branches used to log "job cancelled before
+// its ..." for EVERY no-op, on the assumption that only a concurrent
+// Cancel's markCancelled could have moved the row out of StatusRunning. A
+// stolen row no-ops the identical write: after a writer-gate lapse, a second
+// queue's resetInterruptedRecords flips the first queue's mid-Handle row back
+// to StatusPending and re-claims it, so the first queue's outcome write finds
+// no running row -- and the pre-fix log then reported an ordinary
+// cancellation for a Job that genuinely executed and whose row was stolen,
+// erasing the very first evidence of a double execution. execute must now
+// probe the row and log the cancellation explanation only when the row is
+// actually StatusCancelled (the cancel marker verified), and otherwise say
+// honestly that the row is no longer running, naming the state it found.
+// Deterministic by construction: each leg seeds a StatusRunning record, has
+// writer-a claim it, has writer-b's recovery reset it back to pending -- the
+// exact store-level steal -- and then executes one genuine Handle whose
+// outcome write must no-op. Fails on the pre-fix code, where each leg logs
+// its "job cancelled before its ..." line for the stolen row.
+func TestExecute_NoOpOutcomeWrite_RowStolenByAnotherWriter_LogsHonestlyNotCancelled(t *testing.T) {
+	q := NewStandaloneQueue(newTestDB(t))
+	ctx := context.Background()
+
+	var succeededHandles, retriedHandles, deadLetteredHandles int
+	succeed := NewHandlerFunc("discard.stolen.succeed", func(context.Context, *Job, ProgressFn) (Result, error) {
+		succeededHandles++
+		return Result{Data: []byte("done")}, nil
+	})
+	fail := NewHandlerFunc("discard.stolen.fail", func(context.Context, *Job, ProgressFn) (Result, error) {
+		retriedHandles++
+		return Result{}, errors.New("transient failure")
+	})
+	deadLetter := NewHandlerFunc("discard.stolen.dead_letter", func(context.Context, *Job, ProgressFn) (Result, error) {
+		deadLetteredHandles++
+		return Result{}, errors.New("permanent failure")
+	})
+	for _, h := range []Handler{succeed, fail, deadLetter} {
+		if err := q.RegisterHandler(h); err != nil {
+			t.Fatalf("RegisterHandler() error = %v", err)
+		}
+	}
+
+	// steal moves rec from StatusRunning into another writer's reset: writer-a
+	// claims the row, then writer-b's Start-time recovery flips every row not
+	// claimed by writer-b back to pending -- the exact step that precedes a
+	// double execution after a writer-gate lapse. execute's subsequent Handle
+	// runs on a row the database no longer holds as running.
+	steal := func(rec *jobRecord) {
+		claimed, err := claimOne(ctx, q.db, *rec, time.Now(), "writer-a")
+		if err != nil {
+			t.Fatalf("claimOne() error = %v", err)
+		}
+		if !claimed {
+			t.Fatalf("claimOne() = false, want true (the seeded running record must be claimable)")
+		}
+		if err := resetInterruptedRecords(ctx, q.db, time.Now(), "writer-b"); err != nil {
+			t.Fatalf("resetInterruptedRecords() error = %v", err)
+		}
+	}
+
+	// runOne executes one leg: steal rec, execute a genuine Handle for it
+	// while capturing every log line the leg emits, and hand the buffer back.
+	runOne := func(rec *jobRecord) *bytes.Buffer {
+		steal(rec)
+		prevDefault := slog.Default()
+		var buf bytes.Buffer
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+		defer func() { slog.SetDefault(prevDefault) }()
+		q.execute(*rec)
+		return &buf
+	}
+
+	// Leg 1 -- the success branch: a genuinely executed, successful Handle
+	// whose success write finds the row already reset by another writer.
+	recSuccess := fixtureRunningRecord("tenant-a", "discard.stolen.succeed")
+	if err := q.db.Create(recSuccess).Error; err != nil {
+		t.Fatalf("seed running record: %v", err)
+	}
+	buf := runOne(recSuccess)
+	if succeededHandles != 1 {
+		t.Fatalf("Handle ran %d times, want exactly 1 (the leg must prove the job genuinely executed before judging its log lines)", succeededHandles)
+	}
+	if out := buf.String(); strings.Contains(out, "cancelled before its success could be recorded") {
+		t.Errorf("stolen row logged as cancelled: %s -- a row another writer reset is NOT a cancelled job; the cancel explanation erased the double-run evidence", out)
+	} else if !strings.Contains(out, "row not running when the write landed") {
+		t.Errorf("missing the honest discarded-outcome line for the stolen row: %s", out)
+	}
+
+	// Leg 2 -- the retry branch: a genuinely executed, failed Handle (retries
+	// remaining) whose retry write finds the row already reset.
+	recRetry := fixtureRunningRecord("tenant-a", "discard.stolen.fail")
+	recRetry.Attempts = 1 // matches the post-handoff state: runAttempt counted this first attempt
+	recRetry.MaxRetries = 5
+	if err := q.db.Create(recRetry).Error; err != nil {
+		t.Fatalf("seed running record: %v", err)
+	}
+	buf = runOne(recRetry)
+	if retriedHandles != 1 {
+		t.Fatalf("Handle ran %d times, want exactly 1 (the leg must prove the job genuinely executed before judging its log lines)", retriedHandles)
+	}
+	if out := buf.String(); strings.Contains(out, "cancelled before its failure could schedule a retry") {
+		t.Errorf("stolen row logged as cancelled: %s -- a row another writer reset is NOT a cancelled job; the cancel explanation erased the double-run evidence", out)
+	} else if !strings.Contains(out, "row not running when the write landed") {
+		t.Errorf("missing the honest discarded-outcome line for the stolen row: %s", out)
+	}
+
+	// Leg 3 -- the dead-letter branch: the same steal against the final,
+	// retries-exhausted attempt whose dead-letter write finds the row reset.
+	recDead := fixtureRunningRecord("tenant-a", "discard.stolen.dead_letter")
+	recDead.Attempts = 1   // matches the post-handoff state
+	recDead.MaxRetries = 0 // exhausted on the very first attempt
+	if err := q.db.Create(recDead).Error; err != nil {
+		t.Fatalf("seed running record: %v", err)
+	}
+	buf = runOne(recDead)
+	if deadLetteredHandles != 1 {
+		t.Fatalf("Handle ran %d times, want exactly 1 (the leg must prove the job genuinely executed before judging its log lines)", deadLetteredHandles)
+	}
+	if out := buf.String(); strings.Contains(out, "cancelled before its final failure could dead-letter") {
+		t.Errorf("stolen row logged as cancelled: %s -- a row another writer reset is NOT a cancelled job; the cancel explanation erased the double-run evidence", out)
+	} else if !strings.Contains(out, "row not running when the write landed") {
+		t.Errorf("missing the honest discarded-outcome line for the stolen row: %s", out)
+	}
+
+	// Every leg's row must still sit where the steal left it: the no-op
+	// outcome write neither recorded the outcome nor cancelled the job -- the
+	// row belongs to the stealing writer's recovery, exactly as it did before
+	// execute ran.
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	for _, rec := range []*jobRecord{recSuccess, recRetry, recDead} {
+		got, err := q.Get(tenantCtx, JobID(rec.ID))
+		if err != nil {
+			t.Fatalf("Get(%q) error = %v", rec.ID, err)
+		}
+		if got.Status != StatusPending {
+			t.Errorf("Status = %v, want %v (the discarded outcome must leave the stolen row pending, not cancelled and not settled)", got.Status, StatusPending)
+		}
+	}
+}

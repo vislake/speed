@@ -174,6 +174,21 @@ type StandaloneQueue struct {
 	closeOnce sync.Once
 	wg        sync.WaitGroup
 
+	// heartbeatStopCh, heartbeatStopOnce and heartbeatWG are the lifecycle
+	// of the writer-registration heartbeat keeper (worker.go's
+	// runWriterHeartbeat). The keeper must outlive stopCh -- Close keeps
+	// beating through its drain of in-flight Handles so the single-writer
+	// registration cannot lapse mid-drain -- so it is stopped by its own
+	// channel, not stopCh: Close closes heartbeatStopCh only after wg.Wait
+	// has returned (every worker finished), waits heartbeatWG for the keeper
+	// to exit, and only then releases the registration. heartbeatStopCh is
+	// created in NewStandaloneQueue; heartbeatStopOnce keeps a repeated
+	// Close from double-closing it. heartbeatWG deliberately excludes the
+	// keeper, which must NOT hold up wg.Wait's drain.
+	heartbeatStopCh   chan struct{}
+	heartbeatStopOnce sync.Once
+	heartbeatWG       sync.WaitGroup
+
 	// owner is this queue's writer-registration token (store.go's
 	// queue_writers table): the value every claim this queue makes stamps
 	// into jobRecord.ClaimedBy, and the identity under which Start acquires
@@ -185,9 +200,9 @@ type StandaloneQueue struct {
 	owner string
 
 	// writerStaleAfter is how long owner's registration row may go without
-	// a dispatcher heartbeat before another Start treats it as a crashed
-	// writer's and steals it. Computed from the poll interval at
-	// construction; see writerStaleAfter.
+	// a heartbeat (worker.go's runWriterHeartbeat, once per poll interval)
+	// before another Start treats it as a crashed writer's and steals it.
+	// Computed from the poll interval at construction; see writerStaleAfter.
 	writerStaleAfter time.Duration
 
 	// startMu serializes Start, and started records whether a Start has
@@ -230,6 +245,7 @@ func NewStandaloneQueue(db *gorm.DB, opts ...Option) *StandaloneQueue {
 		handlers:          make(map[string]Handler),
 		runningPerTenant:  make(map[pkgcore.TenantID]int),
 		stopCh:            make(chan struct{}),
+		heartbeatStopCh:   make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(q)
@@ -240,15 +256,15 @@ func NewStandaloneQueue(db *gorm.DB, opts ...Option) *StandaloneQueue {
 }
 
 // writerStaleAfter computes how long a writer registration may go without
-// a dispatcher heartbeat before Start treats it as a crashed writer's and
-// steals it (see queueWritersTable and ErrQueueWriterActive). Heartbeats
-// ride the dispatcher's poll tick (worker.go's heartbeat), so the window
-// must comfortably exceed one poll interval -- a live queue must never look
-// stale to a concurrent Start just because its last tick was recent -- and
-// is floored at two seconds so a slow dispatcher tick under load cannot
-// manufacture a false steal either. A crashed process's registration is
-// stolen at most this long after its last beat, which is also the longest a
-// restart waits to take over after a crash.
+// a heartbeat before Start treats it as a crashed writer's and steals it
+// (see queueWritersTable and ErrQueueWriterActive). The heartbeat keeper
+// (worker.go's runWriterHeartbeat) beats once per poll interval, so the
+// window must comfortably exceed one poll interval -- a live queue must
+// never look stale to a concurrent Start just because its last beat was
+// recent -- and is floored at two seconds so a slow heartbeat cadence
+// cannot manufacture a false steal either. A crashed process's registration
+// is stolen at most this long after its last beat, which is also the
+// longest a restart waits to take over after a crash.
 func writerStaleAfter(pollInterval time.Duration) time.Duration {
 	const minWriterStaleAfter = 2 * time.Second
 	if d := 10 * pollInterval; d > minWriterStaleAfter {
@@ -288,7 +304,9 @@ func (q *StandaloneQueue) handler(jobType string) Handler {
 // proven no live writer could still be executing those rows; see
 // resetInterruptedRecords), wires the "jobs.queue.depth",
 // "jobs.job.duration", "jobs.job.attempts" and "jobs.job.dead_letter"
-// metrics, then launches the dispatcher and worker goroutines.
+// metrics, then launches the writer-registration heartbeat keeper
+// (worker.go's runWriterHeartbeat), the dispatcher and the worker
+// goroutines.
 //
 // A Start that FAILED — a schema error, a writer-registration conflict, an
 // interrupted-row recovery failure — may be retried by calling Start again:
@@ -329,6 +347,13 @@ func (q *StandaloneQueue) Start(ctx context.Context) error {
 	}
 
 	dispatch := make(chan jobRecord)
+	// The heartbeat keeper (worker.go's runWriterHeartbeat) launches with the
+	// dispatcher and workers but lives on its own ticker and its own wait
+	// group: the registration must keep beating while the dispatcher blocks
+	// on the worker handoff and through Close's drain of in-flight Handles,
+	// so it is stopped only by Close, after wg.Wait, never by stopCh.
+	q.heartbeatWG.Add(1)
+	go q.runWriterHeartbeat()
 	q.wg.Add(1)
 	go q.runDispatcher(dispatch)
 	for i := 0; i < q.workerCount; i++ {
@@ -344,8 +369,12 @@ func (q *StandaloneQueue) Start(ctx context.Context) error {
 // itself cancel an in-flight Handle call: each one runs on a context
 // rooted independently of StandaloneQueue's own lifecycle (see jobContext and
 // execute), so that closing the queue never abruptly truncates a business
-// operation already underway. Close is idempotent and safe to call more
-// than once, or without a prior Start.
+// operation already underway. The writer-registration heartbeat keeper
+// (worker.go's runWriterHeartbeat) keeps beating through the whole drain --
+// a drain longer than writerStaleAfter must not let a concurrent Start
+// treat this still-executing queue as crashed -- and is stopped, and the
+// registration released, only once every worker has finished. Close is
+// idempotent and safe to call more than once, or without a prior Start.
 func (q *StandaloneQueue) Close(ctx context.Context) error {
 	q.depthGaugeMu.Lock()
 	q.closeOnce.Do(func() { close(q.stopCh) })
@@ -357,11 +386,20 @@ func (q *StandaloneQueue) Close(ctx context.Context) error {
 		// Graceful handover: with every worker stopped no row this queue
 		// claimed is mid-Handle any more, so releasing the writer
 		// registration lets a successor queue on the same database Start
-		// immediately instead of waiting out the stale window. Best-effort:
+		// immediately instead of waiting out the stale window. The
+		// registration's freshness fence must hold through the drain that
+		// just finished -- a drain longer than the stale window must not let
+		// a successor steal the registration and reset rows a worker was
+		// still executing -- so the heartbeat keeper (worker.go's
+		// runWriterHeartbeat, which runs on its own ticker and is NOT
+		// stopped by stopCh) is stopped only now, after wg.Wait, and the
+		// release runs strictly after the keeper has exited. Best-effort:
 		// a failed release ages out via the stale window regardless. The
 		// release runs on a ctx stripped of the caller's cancellation --
 		// Close may return ctx.Err while this goroutine still finishes the
 		// handover, and the release must not be abandoned mid-way.
+		q.heartbeatStopOnce.Do(func() { close(q.heartbeatStopCh) })
+		q.heartbeatWG.Wait()
 		if relErr := releaseWriterRegistration(context.WithoutCancel(ctx), q.db, q.owner); relErr != nil {
 			obs.FromContext(ctx).Warn("jobs: releasing writer registration failed", "error", relErr)
 		}

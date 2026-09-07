@@ -139,17 +139,21 @@ const createJobsIdempotencySQL = `CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_ten
 // enforces "one live writer per jobs table". StandaloneQueue.Start registers
 // this queue under its owner token (acquireWriterRegistration) and refuses to
 // start -- ErrQueueWriterActive -- while that row belongs to a live sibling
-// (its last_heartbeat within the stale window); the dispatcher refreshes the
-// heartbeat every poll tick; Close releases the row. A crashed process leaves
-// the row behind, and the next Start steals it once its heartbeat goes stale
-// (see StandaloneQueue.Start and writerStaleAfter) -- the same
-// crash-recovery shape the jobs table's own StatusRunning rows get from
-// resetInterruptedRecords, applied to the writer itself. The table is
-// bootstrapped alongside the jobs table (CREATE TABLE IF NOT EXISTS, exactly
-// like createJobsTableSQL) for the same reason: it is an implementation
-// detail of the standalone deployment mode with no other consumer. Row id is
-// pinned to 1 by convention; the primary key plus the id=1 upsert below are
-// what keep the table at exactly one row.
+// (its last_heartbeat within the stale window); a dedicated heartbeat
+// goroutine (worker.go's runWriterHeartbeat, decoupled from the dispatcher
+// so the registration stays fresh while a worker holds a row -- including
+// through the dispatcher's blocked handoff and through Close's drain of
+// in-flight Handles) refreshes it once per poll interval; Close releases the
+// row. A crashed process leaves the row behind, and the next Start steals it
+// once its heartbeat goes stale (see StandaloneQueue.Start and
+// writerStaleAfter) -- the same crash-recovery shape the jobs table's own
+// StatusRunning rows get from resetInterruptedRecords, applied to the
+// writer itself. The table is bootstrapped alongside the jobs table (CREATE
+// TABLE IF NOT EXISTS, exactly like createJobsTableSQL) for the same
+// reason: it is an implementation detail of the standalone deployment mode
+// with no other consumer. Row id is pinned to 1 by convention; the primary
+// key plus the id=1 upsert below are what keep the table at exactly one
+// row.
 const queueWritersTable = "queue_writers"
 
 const createQueueWritersTableSQL = `CREATE TABLE IF NOT EXISTS ` + queueWritersTable + ` (
