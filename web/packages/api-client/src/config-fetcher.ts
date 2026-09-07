@@ -16,7 +16,6 @@
  */
 
 import type { RequestFn, RequestOptions } from './client.js'
-import { ApiError, ERROR_CODE_PROTOCOL } from './errors.js'
 
 /**
  * Mirrors go/config.PathPublic. GET/HEAD, pre-auth; tenant resolved
@@ -66,25 +65,24 @@ export type ConfigFetchOptions = Pick<RequestOptions, 'signal'>
  * client.protocol ApiError instead of an `undefined` value that passes
  * for `PublicConfigResponse`/`SystemFeaturesResponse` until a consumer
  * reads a field off it.
+ *
+ * The refusal is the request's own, declared through
+ * `RequestOptions.requireJsonBody` (client.ts): the request loop knows
+ * the exchange's real outcome, so the client.protocol error it throws
+ * for an empty 2xx carries the actual HTTP status and attempt count --
+ * a wrapper around the RequestFn could only synthesize both (the
+ * hardcoded 0/1 that would otherwise misreport a retried exchange as
+ * one attempt that never reached a response).
  */
 async function requireConfigDocument<T>(
   api: RequestFn,
   path: string,
   options: ConfigFetchOptions | undefined,
 ): Promise<T> {
-  const data: T | undefined = await api<T>(path, {
+  return api<T>(path, {
     signal: options?.signal,
+    requireJsonBody: true,
   })
-  if (data === undefined) {
-    throw new ApiError({
-      status: 0,
-      code: ERROR_CODE_PROTOCOL,
-      attempts: 1,
-      message:
-        'The config endpoint answered an empty 2xx body; expected a JSON config document.',
-    })
-  }
-  return data
 }
 
 /**
@@ -95,10 +93,11 @@ async function requireConfigDocument<T>(
  * endpoint is pre-auth and ignores Authorization either way.
  *
  * Rejects the same `ApiError` (or raw `AbortError` on cancellation)
- * `api` itself would reject with, plus one refusal of its own: an
- * empty 2xx body (where a config document was required) rejects as
- * client.protocol rather than resolving `undefined` (see
- * {@link requireConfigDocument}).
+ * `api` itself would reject with, plus one refusal: an empty 2xx body
+ * (where a config document was required) rejects as client.protocol
+ * rather than resolving `undefined` -- raised by the request itself
+ * through `requireJsonBody`, so it carries the exchange's real status
+ * and attempt count (see {@link requireConfigDocument}).
  */
 export async function fetchPublicConfig(
   api: RequestFn,
@@ -119,10 +118,11 @@ export async function fetchPublicConfig(
  * by {@link fetchPublicConfig}, which returns `features` too.
  *
  * Rejects the same `ApiError` (or raw `AbortError` on cancellation)
- * `api` itself would reject with, plus one refusal of its own: an
- * empty 2xx body (where a features document was required) rejects as
- * client.protocol rather than resolving `undefined` (see
- * {@link requireConfigDocument}).
+ * `api` itself would reject with, plus one refusal: an empty 2xx body
+ * (where a features document was required) rejects as client.protocol
+ * rather than resolving `undefined` -- raised by the request itself
+ * through `requireJsonBody`, so it carries the exchange's real status
+ * and attempt count (see {@link requireConfigDocument}).
  */
 export async function fetchSystemFeatures(
   api: RequestFn,

@@ -101,9 +101,14 @@ above. Both path constants are hand-kept in sync with the Go side
 for these endpoints). Neither function accepts a tenant argument --
 both endpoints resolve tenant server-side from the request host. Also
 landed (config-web round, B2): `usePublicConfig` / `useFeature` in
-`src/react.ts`, exported from the isolated `./react` subpath (`react`
-is a required `peerDependency` of that subpath only -- the main entry
-stays dependency-free). Both hooks share one cache keyed by `RequestFn`
+`src/react.ts`, exported from the isolated `./react` subpath. The
+manifest declares `react` as a peer and marks it optional
+(`peerDependenciesMeta.react.optional`) -- npm peers are package-level,
+not per-subpath, so the optional marker is what keeps the main entry
+React-free in practice: a consumer that only uses the main entry
+installs no react, while a consumer of the `./react` subpath supplies
+it as its own dependency (the package's own suites resolve it from
+devDependencies). `src/package.json.test.ts` pins that metadata shape. Both hooks share one cache keyed by `RequestFn`
 identity via `useSyncExternalStore`: the first mounted consumer of a
 given `api` starts the one fetch, every other instance backed by the
 same `api` reads and re-renders off that shared state, and `refresh()`
@@ -118,7 +123,12 @@ config fetchers refuse an **empty** 2xx body (the RequestFn's own
 204-style empty-success shape) as a coded `client.protocol` error --
 go/config always writes a JSON document, so an empty answer is a
 broken one, and resolving `undefined` would pass for the typed
-document until a consumer reads a field off it -- and `useFeature`
+document until a consumer reads a field off it. The refusal is the
+request's own (`RequestOptions.requireJsonBody`, client.ts), so it
+carries the exchange's real status and attempt count rather than a
+wrapper-synthesized pair -- a 503/503/empty-200 exchange surfaces as
+attempts 3 / status 200, never the hardcoded 1/0 a fetcher-level
+error could only fake -- and `useFeature`
 null-guards `data.features` (absent/null reads as "nothing enabled",
 never a render-time throw), because the response shape is this
 hand-maintained seam and a payload violating it must fail softly.

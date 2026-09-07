@@ -22,13 +22,20 @@
  *      coalescing concurrent 401s onto a single in-flight refresh, and
  *      retry the original request exactly once (any method, outside
  *      the retry budget -- the refresh round performs no transient
- *      retry and never consumes one). A 401 on a credential-less
- *      request means authentication is required -- refreshing cannot
- *      provide it -- so it surfaces untouched, which also keeps a
- *      session's own refresh request (sent credential-less) from
- *      re-entering the refresh path. Refresh failure surfaces the
- *      original 401 as a distinguishable auth ApiError and is
- *      reported through the Reporter;
+ *      retry and never consumes one). The refresh round is a separate
+ *      exchange of its own (a host's refresh request travels through
+ *      this same client and carries its own timeout): the refused
+ *      attempt's timeout is suspended across it, so a refresh that
+ *      outlives timeoutMs never fires the attempt timeout into the
+ *      401 envelope read that follows a failed refresh -- the real
+ *      envelope (code and trace id) survives. A 401 on a
+ *      credential-less request
+ *      means authentication is required -- refreshing cannot provide
+ *      it -- so it surfaces untouched, which also keeps a session's
+ *      own refresh request (sent credential-less) from re-entering
+ *      the refresh path. Refresh failure surfaces the original 401 as
+ *      a distinguishable auth ApiError and is reported through the
+ *      Reporter;
  *   4. on 429/502/503/504, network failures and timeouts: retry only
  *      idempotent methods (GET/HEAD/OPTIONS), exponential full-jitter
  *      backoff per RetryPolicy, Retry-After honoured on 429 and 503.
@@ -38,13 +45,17 @@
  *      cancelled first, so the connection is released instead of left
  *      held by an unread response;
  *   5. normalize the outcome: 2xx bodies parse as JSON (empty bodies
- *      resolve undefined), and every failure rejects an ApiError --
- *      envelope errors keep the envelope's code (plus its traceId,
- *      params, message and details when the backend sent them --
- *      code is the only required wire field), everything else gets
- *      the reserved client.* vocabulary from errors.ts. A request
- *      body that cannot be JSON-serialized (a circular structure)
- *      rejects as client.protocol before anything is sent.
+ *      resolve undefined -- unless the request declared
+ *      `requireJsonBody`, which refuses an empty 2xx as client.protocol
+ *      with the exchange's real status and attempts), and every
+ *      failure rejects an ApiError -- envelope errors keep the
+ *      envelope's code (plus its traceId, params, message and details
+ *      when the backend sent them -- code is the only required wire
+ *      field), everything else gets the reserved client.* vocabulary
+ *      from errors.ts. A request body that cannot be JSON-serialized
+ *      (a circular structure, a top-level function or symbol, a
+ *      toJSON() that yields nothing) rejects as client.protocol before
+ *      anything is sent.
  *
  * The tenant never appears here: no tenant header exists anywhere in
  * the package (docs/internal/12-frontend.md) -- tenant context travels
@@ -111,13 +122,36 @@ export interface RequestOptions {
   /**
    * Query parameters, URL-encoded and appended to the path; null and
    * undefined entries are skipped. Put parameter values here, never in
-   * the path string.
+   * the path string. An array value is encoded as repeated parameters
+   * -- the form/explode convention a Go `r.URL.Query()` handler parses
+   * (`tag: ['a', 'b']` becomes `?tag=a&tag=b`), never comma-joined
+   * into one parameter; array entries must be scalars, and null or
+   * undefined entries are skipped inside arrays as at the top level.
    */
   query?: Readonly<
-    Record<string, string | number | boolean | null | undefined>
+    Record<
+      string,
+      | string
+      | number
+      | boolean
+      | ReadonlyArray<string | number | boolean>
+      | null
+      | undefined
+    >
   >
   /** JSON request body; serialized with the JSON content type. */
   body?: unknown
+  /**
+   * Declares that this request needs a JSON document in its 2xx body:
+   * an empty 2xx body (the client's own 204-style empty-success
+   * shape) then refuses as a client.protocol ApiError carrying the
+   * exchange's real status and attempt count -- never a resolved
+   * `undefined` that passes for the typed document. The config
+   * fetchers in config-fetcher.ts are the canonical users: both
+   * go/config endpoints always write a JSON document, so an empty
+   * answer there is a broken one.
+   */
+  requireJsonBody?: boolean
   /**
    * Caller cancellation: aborting the signal rejects with the raw
    * AbortError (no ApiError, no retry) so query layers (TanStack Query)
@@ -184,8 +218,13 @@ export interface ClientOptions {
    * turning their 401s into spurious auth failures.
    */
   refreshAccessToken?: () => Promise<boolean>
-  /** Abort requests that exceed this many milliseconds; absent, no
-   * internal timeout is armed. */
+  /** Abort an HTTP exchange that exceeds this many milliseconds;
+   * absent, no internal timeout is armed. The budget bounds one
+   * exchange -- a send plus its body read -- and covers stalled body
+   * reads the way it covers a stalled send. Time spent in the
+   * silent-401-refresh round does not count against it: the refresh
+   * is a separate exchange (a host's refresh request travels through
+   * this same client and carries its own timeout). */
   timeoutMs?: number
   /** Transient-retry budget and timing; defaults to
    * DEFAULT_RETRY_POLICY. */
@@ -233,6 +272,13 @@ interface HttpOutcome {
    * when the body is gone; a body already errored or absent is a
    * no-op. */
   cancelBody(): Promise<void>
+  /** Suspends the attempt's timeout timer across a gap that is not
+   * part of this HTTP exchange (the silent-401-refresh round), and
+   * re-arms it for the budget that was left. The caller-abort wiring
+   * is untouched by either. Both are no-ops when no timeout is
+   * configured or the timer is not paused. */
+  pauseTimeout(): void
+  resumeTimeout(): void
   /** Ends the attempt's timeout/abort wiring. Idempotent; safe to
    * call after the body settled by any path. */
   dispose(): void
@@ -351,16 +397,29 @@ function parseFieldErrors(entries: unknown[]): FieldError[] {
   return fieldErrors
 }
 
-/** Serializes the JSON body option; undefined means no body. */
-function serializeBody(body: unknown): string | undefined {
-  if (body === undefined) {
-    return undefined
-  }
+/** Serializes a JSON body option into wire text. A body that does not
+ * serialize to a string refuses with a TypeError -- symmetric with the
+ * circular-structure case -- instead of letting the request go out
+ * silently bodyless: JSON.stringify yields undefined (the value) for a
+ * top-level function, symbol, or a toJSON() that returns undefined,
+ * and none of those is a sendable JSON body. (An explicit `undefined`
+ * body never reaches this function: the caller's `body !== undefined`
+ * guard is the documented "no body" shape.) */
+function serializeBody(body: unknown): string {
   const serialized = JSON.stringify(body)
-  return serialized === undefined ? undefined : serialized
+  if (serialized === undefined) {
+    throw new TypeError(
+      'The request body does not serialize to a JSON string (a top-level undefined, function, or symbol).',
+    )
+  }
+  return serialized
 }
 
-/** Builds the wire URL: baseUrl + path, query parameters appended. */
+/** Builds the wire URL: baseUrl + path, query parameters appended. An
+ * array value becomes one repeated parameter per element (URLSearchParams
+ * append semantics -- the form/explode convention), so a multi-valued
+ * filter survives as `?tag=a&tag=b` instead of collapsing into a
+ * comma-joined `?tag=a,b` the backend would read as one literal value. */
 function buildUrl(
   baseUrl: string,
   path: string,
@@ -371,6 +430,15 @@ function buildUrl(
     const params = new URLSearchParams()
     for (const [key, value] of Object.entries(query)) {
       if (value === undefined || value === null) {
+        continue
+      }
+      if (Array.isArray(value)) {
+        for (const element of value) {
+          if (element === undefined || element === null) {
+            continue
+          }
+          params.append(key, String(element))
+        }
         continue
       }
       params.append(key, String(value))
@@ -474,9 +542,28 @@ function failureError(outcome: FailureOutcome, attempts: number): ApiError {
   })
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms)
+/** Sleeps `ms` milliseconds -- or rejects with the raw AbortError the
+ * moment `signal` aborts, so a cancelled request never sits out its
+ * full backoff: the retry is already moot, and the caller's
+ * cancellation should surface as promptly as it would mid-fetch. A
+ * signal that is already aborted rejects without arming a timer. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true) {
+    return Promise.reject(
+      new DOMException('The operation was aborted.', 'AbortError'),
+    )
+  }
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      reject(new DOMException('The operation was aborted.', 'AbortError'))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
   })
 }
 
@@ -590,6 +677,8 @@ export function createClient(options: ClientOptions): RequestFn {
     let timedOut = false
     let disposed = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    let timeoutDeadline = 0
+    let pausedRemaining: number | undefined
     let notifyAborted: (() => void) | undefined
     // Settles the moment this attempt is aborted while its body is
     // still being read -- by its own timeout or the caller's signal.
@@ -599,12 +688,57 @@ export function createClient(options: ClientOptions): RequestFn {
     const abortTrigger = new Promise<void>((resolve) => {
       notifyAborted = resolve
     })
+    const fireTimeout = (): void => {
+      timedOut = true
+      controller.abort()
+      notifyAborted?.()
+    }
+    const armTimeout = (delay: number): void => {
+      // Deadline bookkeeping on the clock the timers run on (the fake
+      // timers tests use fake Date too), so a suspended timer can be
+      // re-armed for exactly the budget that was left.
+      timeoutDeadline = Date.now() + delay
+      timer = setTimeout(fireTimeout, delay)
+    }
     if (timeoutMs !== undefined) {
-      timer = setTimeout(() => {
-        timedOut = true
-        controller.abort()
-        notifyAborted?.()
-      }, timeoutMs)
+      armTimeout(timeoutMs)
+    }
+    // The timeout bounds one HTTP exchange, never the gaps around it:
+    // pauseTimeout suspends the attempt timer (the caller-abort
+    // forwarding stays live -- cancellation wins over everything), and
+    // resumeTimeout re-arms it for exactly the budget that was left at
+    // the pause, so time spent in a paused gap never counts against
+    // the exchange. The silent-401-refresh round is the one paused
+    // gap -- it is a separate exchange of its own (a host's refresh
+    // request travels through this same client and carries its own
+    // timeout), so a refresh that outlives timeoutMs must not fire
+    // this attempt's timeout into the envelope read that follows a
+    // failed refresh, degrading the real 401 envelope to a synthetic
+    // client.http.401.
+    const pauseTimeout = (): void => {
+      if (timer === undefined) {
+        return
+      }
+      clearTimeout(timer)
+      timer = undefined
+      pausedRemaining = Math.max(0, timeoutDeadline - Date.now())
+    }
+    const resumeTimeout = (): void => {
+      if (pausedRemaining === undefined) {
+        return
+      }
+      const delay = pausedRemaining
+      pausedRemaining = undefined
+      if (delay <= 0) {
+        // A deadline that genuinely passed while paused fires on
+        // resume: the exchange's budget is spent. Unreachable for a
+        // delivered outcome -- the pause runs in the same microtask
+        // chain as the headers' arrival, before any timer macrotask
+        // can fire -- guarded for the bookkeeping's integrity.
+        fireTimeout()
+        return
+      }
+      armTimeout(delay)
     }
     const forwardAbort = (): void => {
       controller.abort()
@@ -692,6 +826,8 @@ export function createClient(options: ClientOptions): RequestFn {
           return result
         },
         cancelBody: () => cancelBody(response),
+        pauseTimeout,
+        resumeTimeout,
         dispose,
       }
       return outcome
@@ -756,9 +892,11 @@ export function createClient(options: ClientOptions): RequestFn {
 
     // The body does not change between attempts: serialize once, up
     // front, so a body that cannot be JSON-serialized (a circular
-    // structure) fails as a coded client.protocol ApiError -- a
+    // structure, a top-level function or symbol, a toJSON() that
+    // yields nothing) fails as a coded client.protocol ApiError -- a
     // request the client can never send -- instead of surfacing a
-    // bare TypeError out of the retry machinery.
+    // bare TypeError out of the retry machinery or going out
+    // silently bodyless.
     let bodyText: string | undefined
     if (requestOptions.body !== undefined) {
       try {
@@ -817,10 +955,12 @@ export function createClient(options: ClientOptions): RequestFn {
               const kind = read.kind === 'timeout' ? 'timeout' : 'network'
               if (idempotent && transientRetries < retryPolicy.maxAttempts - 1) {
                 transientRetries += 1
-                await sleep(retryDelayMs(transientRetries - 1, retryPolicy))
-                // An abort during the backoff cancels the retry: the
-                // next attempt must not fire after the caller
-                // cancelled.
+                // The signal-aware sleep rejects the raw AbortError
+                // the moment the caller cancels, so a cancelled
+                // request never sits out its backoff and no retry
+                // fires for it; the check after the sleep guards the
+                // instant between it settling and this continuation.
+                await sleep(retryDelayMs(transientRetries - 1, retryPolicy), signal)
                 throwIfAborted(signal)
                 continue
               }
@@ -832,6 +972,21 @@ export function createClient(options: ClientOptions): RequestFn {
             // caller.
             throwIfAborted(signal)
             if (body.trim() === '') {
+              if (requestOptions.requireJsonBody === true) {
+                // A declared need for a JSON document turns the
+                // client's own 204-style empty-success shape into a
+                // protocol violation -- refused here, inside the
+                // exchange, so the error carries the exchange's real
+                // status and attempt count (a wrapper around the
+                // RequestFn could only synthesize both).
+                throw new ApiError({
+                  status: outcome.status,
+                  code: ERROR_CODE_PROTOCOL,
+                  attempts,
+                  message:
+                    'The endpoint answered an empty 2xx body; expected a JSON document.',
+                })
+              }
               // 204-style: no content is a valid, empty success. Blank
               // counts as empty (some servers pad the bodyless response
               // with whitespace), symmetric with parseEnvelope treating
@@ -872,6 +1027,14 @@ export function createClient(options: ClientOptions): RequestFn {
               outcome.attachedToken
             ) {
               refreshed = true
+              // The refresh round is not part of this attempt's HTTP
+              // exchange: suspend the attempt timer across it so a
+              // refresh that outlives timeoutMs cannot fire the
+              // timeout into the envelope read below and degrade the
+              // real 401 envelope to a synthetic client.http.401 (its
+              // code and traceId lost). The caller-abort forwarding
+              // stays live across the pause -- cancellation wins.
+              outcome.pauseTimeout()
               const refreshedOk = await refreshOnce()
               // The caller may have aborted while the refresh was in
               // flight: cancellation wins -- never send the
@@ -890,13 +1053,15 @@ export function createClient(options: ClientOptions): RequestFn {
               }
               // Refresh failed: read the 401 body once and reuse it
               // for the report and the error, so the warning carries
-              // the envelope's code (and traceId, when the backend
+              // the envelope's code (and trace id, when the backend
               // sent one) -- correlating it to server logs -- instead
               // of firing blind. The read stays inside the attempt's
-              // abort scope: a stalled body cannot outlive the
-              // attempt's own timeout (the error degrades to an
-              // envelope-less one), and a caller abort mid-read
+              // abort scope: the timer is re-armed for the budget that
+              // was left at the pause, so a stalled body still cannot
+              // outlive the attempt's own timeout (the error degrades
+              // to an envelope-less one), and a caller abort mid-read
               // surfaces raw.
+              outcome.resumeTimeout()
               const envelope = await readEnvelope(outcome)
               reporter.warn('access token refresh failed', {
                 status: outcome.status,
@@ -904,7 +1069,10 @@ export function createClient(options: ClientOptions): RequestFn {
                   ? {}
                   : envelope.traceId === undefined
                     ? { code: envelope.code }
-                    : { code: envelope.code, traceId: envelope.traceId }),
+                    : {
+                        code: envelope.code,
+                        trace_id: envelope.traceId,
+                      }),
               })
               throw envelopeError(outcome, envelope, attempts)
             }
@@ -926,9 +1094,12 @@ export function createClient(options: ClientOptions): RequestFn {
             await outcome.cancelBody()
             const delay = retryDelayFor(outcome, transientRetries, retryPolicy)
             transientRetries += 1
-            await sleep(delay)
-            // An abort during the backoff cancels the retry: the next
-            // attempt must not fire after the caller cancelled.
+            // The signal-aware sleep rejects the raw AbortError the
+            // moment the caller cancels, so a cancelled request never
+            // sits out its backoff and no retry fires for it; the
+            // check after the sleep guards the instant between it
+            // settling and this continuation.
+            await sleep(delay, signal)
             throwIfAborted(signal)
             continue
           }
@@ -949,9 +1120,12 @@ export function createClient(options: ClientOptions): RequestFn {
       if (idempotent && transientRetries < retryPolicy.maxAttempts - 1) {
         const delay = retryDelayMs(transientRetries, retryPolicy)
         transientRetries += 1
-        await sleep(delay)
-        // An abort during the backoff cancels the retry: the next
-        // attempt must not fire after the caller cancelled.
+        // The signal-aware sleep rejects the raw AbortError the
+        // moment the caller cancels, so a cancelled request never
+        // sits out its backoff and no retry fires for it; the check
+        // after the sleep guards the instant between it settling and
+        // this continuation.
+        await sleep(delay, signal)
         throwIfAborted(signal)
         continue
       }

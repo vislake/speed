@@ -88,7 +88,11 @@ Both endpoints always write a JSON document, so `fetchPublicConfig` /
 own legitimate 204-style empty-success shape) as a coded
 `client.protocol` error instead of resolving `undefined` -- an empty
 answer stays distinguishable from real data, and a hook consumer never
-reads fields off a value that is not there.
+reads fields off a value that is not there. The refusal is raised by
+the request itself (each fetcher passes `requireJsonBody: true`), so
+it carries the exchange's real HTTP status and attempt count -- a
+503/503/empty-200 exchange surfaces as `attempts: 3, status: 200`,
+never a synthesized `attempts: 1, status: 0`.
 
 ```ts
 import { createClient } from '@speed/api-client'
@@ -174,10 +178,12 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   that is not JSON with a `code`, a timeout, a dead network) get a
   synthesized code in the reserved `client.` namespace:
   `client.network`, `client.timeout`, `client.protocol` (a 2xx whose
-  body is not JSON -- or a request body that cannot be
-  JSON-serialized, such as a circular structure, which rejects before
-  anything is sent), `client.http.<status>`. `error.attempts` reports
-  how many HTTP attempts were made.
+  body is not JSON -- or an empty 2xx when the request declared
+  `requireJsonBody` -- or a request body that cannot be
+  JSON-serialized, such as a circular structure or a top-level
+  function/symbol, which rejects before anything is sent),
+  `client.http.<status>`. `error.attempts` reports how many HTTP
+  attempts were made.
 - **Bearer auth without a storage API.** The token store is a plain
   two-method interface (`get(): string | null`, `set(token: string |
   null): void`); the memory implementation is the only one the package
@@ -208,7 +214,11 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   The refresh token itself is the host's business: a session layer
   (@speed/auth-core) holds it in its closure -- the authn API returns
   it in the response body and sets no refresh cookie -- and drives the
-  refresh operation; this package only defines the seam.
+  refresh operation; this package only defines the seam. The refresh
+  round is a separate exchange: `timeoutMs` bounds each HTTP exchange,
+  never the time spent in the refresh hook, so a refresh that outlives
+  the timeout cannot degrade the refused 401's own envelope (its code
+  and trace id) into a synthetic `client.http.401`.
 - **Transient retry, conservatively.** Only idempotent methods
   (GET/HEAD/OPTIONS) are retried, only on 429 (honouring `Retry-After`,
   capped at `maxDelayMs`), 502/503/504, network failures and timeouts.
@@ -229,7 +239,9 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   keeps aborting until the body has settled, so a server that answers
   headers and then stalls its body rejects with `client.timeout` (or
   the raw `AbortError`) instead of hanging the request on a half-open
-  response.
+  response. An abort during the retry backoff rejects just as
+  promptly: the backoff sleep itself races the caller's signal, so a
+  cancelled request never sits out its remaining delay.
 - **Structured reporting.** The reporter sink receives a constant
   English message plus snake_case attributes. The default sink writes
   to `console.error`/`console.warn` -- a stopgap until the M1 round

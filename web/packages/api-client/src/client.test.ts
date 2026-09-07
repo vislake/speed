@@ -374,6 +374,49 @@ describe('request shape', () => {
     expect(error.cause).toBeInstanceOf(TypeError)
     expect(standin.calls).toHaveLength(0)
   })
+
+  it('refuses a body JSON.stringify cannot serialize, instead of sending the request silently bodyless', async () => {
+    // Symmetric with the circular guard: a body that serializes to
+    // nothing -- JSON.stringify yields undefined (the value) for a
+    // top-level function or symbol -- is a request the client can
+    // never send as JSON, and must refuse as client.protocol before
+    // anything goes on the wire. (Before the fix it went out silently
+    // bodyless -- no body, no content-type -- and the "created"
+    // answer came back for a request the caller believed carried
+    // data.)
+    for (const body of [
+      (): Record<string, string> => ({ title: 'T' }),
+      Symbol('no-json'),
+    ]) {
+      const standin = scriptedStandin(jsonResponse(201, { id: 'n-1' }))
+      const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+      const error = await expectApiError(
+        api<{ id: string }>('/notes', { method: 'POST', body }),
+      )
+      expect(error.code, `body ${String(body)}`).toBe(ERROR_CODE_PROTOCOL)
+      expect(error.status).toBe(0)
+      expect(error.attempts).toBe(0)
+      expect(error.cause).toBeInstanceOf(TypeError)
+      expect(standin.calls).toHaveLength(0)
+    }
+  })
+
+  it('encodes an array query value as repeated parameters, never comma-joined', async () => {
+    // An array is the form/explode convention: tag=['a','b c',3] must
+    // reach the backend as three repeated parameters -- the shape a Go
+    // r.URL.Query() handler parses as a multi-valued key. (Before the
+    // fix the array was String()-ed whole, folding into one
+    // comma-joined ?tag=a,b c,3 the backend would read as a single
+    // literal value.)
+    const standin = scriptedStandin(jsonResponse(200, []))
+    const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
+    await api('/notes', {
+      query: { tag: ['a', 'b c', 3], keep: 'x' },
+    })
+    expect(recorded(standin).url).toBe(
+      `${BASE_URL}/notes?tag=a&tag=b+c&tag=3&keep=x`,
+    )
+  })
 })
 
 describe('successful responses', () => {
@@ -571,15 +614,17 @@ describe('401 and the refresh hook', () => {
     expect(error.attempts).toBe(1)
     expect(standin.calls).toHaveLength(1)
     // The warning reuses the same 401 body as the ApiError: it carries
-    // the envelope's code and traceId so it can be correlated to
-    // server logs.
+    // the envelope's code and trace id so it can be correlated to
+    // server logs -- under the reporter's snake_case key (the
+    // envelope's wire field stays camelCase traceId on the ApiError;
+    // only the report attribute is trace_id).
     expect(memory.warns).toEqual([
       {
         message: 'access token refresh failed',
         attrs: {
           status: 401,
           code: 'authn.session_expired',
-          traceId: 'trace-1',
+          trace_id: 'trace-1',
         },
       },
     ])
@@ -869,6 +914,115 @@ describe('401 and the refresh hook', () => {
     await expect(api<{ ok: boolean }>('/notes')).resolves.toEqual({ ok: true })
     expect(standin.calls).toHaveLength(2)
     expect(body.cancelled).toBe(true)
+  })
+
+  it('keeps the real 401 envelope when a failed refresh outlives timeoutMs', { timeout: 1000 }, async () => {
+    // The timeout/refresh cross case: a refresh hook configured WITH a
+    // timeoutMs, where the refresh round trip outlives the timeout and
+    // then fails. The timeout bounds one HTTP exchange -- never the
+    // refresh hook -- so the envelope read after the failed refresh
+    // must surface the real 401 envelope (authn.session_expired and
+    // its trace id), not a synthetic client.http.401. (Before the fix
+    // the attempt timer fired at timeoutMs into the refresh; the
+    // already-settled abort trigger then resolved the envelope read as
+    // a timeout, and the envelope -- code and trace id -- was lost.)
+    vi.useFakeTimers()
+    try {
+      const store = createMemoryAccessTokenStore()
+      store.set('stale-token')
+      let refreshCalls = 0
+      let releaseRefresh: (ok: boolean) => void = () => {}
+      const refreshGate = new Promise<boolean>((resolve) => {
+        releaseRefresh = resolve
+      })
+      const standin = scriptedStandin(jsonResponse(401, { ...SESSION_EXPIRED }))
+      const api = createClient({
+        baseUrl: BASE_URL,
+        fetch: standin.fetch,
+        accessTokenStore: store,
+        refreshAccessToken: () => {
+          refreshCalls += 1
+          return refreshGate
+        },
+        timeoutMs: 50,
+      })
+      const pending = api<{ ok: boolean }>('/notes')
+      // Flush until the 401 has started the refresh round.
+      for (let i = 0; i < 32 && refreshCalls === 0; i += 1) {
+        await Promise.resolve()
+      }
+      expect(refreshCalls).toBe(1)
+      // The refresh outlives the 50ms timeout by two orders of
+      // magnitude...
+      await vi.advanceTimersByTimeAsync(5000)
+      // ...and then fails: the session is still gone.
+      releaseRefresh(false)
+      const error = await expectApiError(pending)
+      expect(error.auth).toBe(true)
+      expect(error.code).toBe('authn.session_expired')
+      expect(error.traceId).toBe('trace-1')
+      expect(error.attempts).toBe(1)
+      expect(standin.calls).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the attempt timeout live for a stalled 401 body after a failed refresh', { timeout: 1000 }, async () => {
+    // The failure path's envelope read stays inside the attempt's
+    // abort scope: a 401 whose body stalls (headers arrived, body
+    // never comes) must still degrade to an envelope-less
+    // client.http.401 instead of hanging on the read. The timer is
+    // re-armed for the budget that was left at the pause once the
+    // failed refresh is out of the way -- if the pause were never
+    // resumed, this read would hang on the stalled stream.
+    vi.useFakeTimers()
+    try {
+      const store = createMemoryAccessTokenStore()
+      store.set('stale-token')
+      let refreshCalls = 0
+      let releaseRefresh: (ok: boolean) => void = () => {}
+      const refreshGate = new Promise<boolean>((resolve) => {
+        releaseRefresh = resolve
+      })
+      const body = gatedBody()
+      const standin = scriptedStandin(
+        new Response(body.stream, { status: 401 }),
+      )
+      const api = createClient({
+        baseUrl: BASE_URL,
+        fetch: standin.fetch,
+        accessTokenStore: store,
+        refreshAccessToken: () => {
+          refreshCalls += 1
+          return refreshGate
+        },
+        timeoutMs: 50,
+      })
+      const pending = api<{ ok: boolean }>('/notes')
+      for (let i = 0; i < 32 && refreshCalls === 0; i += 1) {
+        await Promise.resolve()
+      }
+      expect(refreshCalls).toBe(1)
+      // The refresh fails fast -- no fake time passes -- and the
+      // envelope read then genuinely starts on the stalled body.
+      releaseRefresh(false)
+      await waitForReadStart(body)
+      // Attach the rejection handler before the re-armed timer fires,
+      // so the rejection inside advanceTimersByTimeAsync is never
+      // unhandled.
+      const rejection = expectApiError(pending)
+      // The re-armed timer (the ~50ms that were left) fires into the
+      // stalled read: envelope-less degradation, never a hang.
+      await vi.advanceTimersByTimeAsync(50)
+      const error = await rejection
+      expect(error.auth).toBe(true)
+      expect(error.code).toBe('client.http.401')
+      expect(error.traceId).toBeUndefined()
+      expect(standin.calls).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -1323,6 +1477,59 @@ describe('caller cancellation', () => {
     await rejection
     expect(standin.calls).toHaveLength(1)
     expect(recorded(standin).signal?.aborted).toBe(true)
+  })
+
+  it('rejects a request aborted during the backoff promptly, without waiting out the delay', async () => {
+    // The backoff sleep races the caller's signal: an abort landing in
+    // the middle of a 2s Retry-After backoff rejects the request raw
+    // on the next microtask -- it never sits out the remaining delay,
+    // and no retry fires for the cancelled caller. (Before the fix the
+    // sleep ignored the signal: with the fake clock never advanced the
+    // promise was still pending at the assertion point below.)
+    vi.useFakeTimers()
+    try {
+      const standin = scriptedStandin(
+        textResponse(503, 'Service Unavailable', { 'retry-after': '2' }),
+      )
+      const api = createClient({
+        baseUrl: BASE_URL,
+        fetch: standin.fetch,
+        retryPolicy: DEFAULT_RETRY_POLICY,
+      })
+      const controller = new AbortController()
+      let settled = false
+      let reason: unknown
+      const pending = api<{ ok: boolean }>('/notes', {
+        signal: controller.signal,
+      }).then(
+        () => {
+          settled = true
+        },
+        (caught: unknown) => {
+          settled = true
+          reason = caught
+        },
+      )
+      // Let the 503 arrive and the 2000ms backoff arm.
+      await vi.advanceTimersByTimeAsync(0)
+      controller.abort()
+      // Flush microtasks only -- no timer advancement, so the 2000ms
+      // backoff is still pending. Only a sleep that aborts on the
+      // signal can have settled by now.
+      for (let i = 0; i < 32; i += 1) {
+        await Promise.resolve()
+      }
+      expect(settled).toBe(true)
+      expect(reason).toBeInstanceOf(DOMException)
+      if (reason instanceof DOMException) {
+        expect(reason.name).toBe('AbortError')
+      }
+      expect(isApiError(reason)).toBe(false)
+      expect(standin.calls).toHaveLength(1)
+      await pending
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

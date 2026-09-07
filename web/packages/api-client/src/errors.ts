@@ -34,10 +34,12 @@
  *                       string).
  *   client.protocol  -- the API JSON contract was violated on either
  *                       side of the wire: a 2xx whose body is not a
- *                       JSON object/array, or a request body that
- *                       cannot be JSON-serialized (a circular
- *                       structure) -- the latter rejects before
- *                       anything is sent.
+ *                       JSON object/array (an empty 2xx too, when the
+ *                       request declared `requireJsonBody`), or a
+ *                       request body that cannot be JSON-serialized
+ *                       (a circular structure, a top-level function
+ *                       or symbol, a toJSON() that yields nothing) --
+ *                       the latter rejects before anything is sent.
  *
  * Codes from a valid envelope always win over the client.* vocabulary:
  * a 401 carrying `authn.session_expired` surfaces as that code, with

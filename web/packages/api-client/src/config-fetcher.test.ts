@@ -18,7 +18,13 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createStandinFetch, hang, jsonResponse } from '../test-utils/fetch-standin'
+import {
+  createStandinFetch,
+  hang,
+  jsonResponse,
+  scriptedStandin,
+  textResponse,
+} from '../test-utils/fetch-standin'
 import { createClient } from './client.js'
 import {
   CONFIG_PUBLIC_PATH,
@@ -78,6 +84,40 @@ describe('fetchPublicConfig', () => {
       expect(caught.code).toBe(ERROR_CODE_PROTOCOL)
     }
     expect(standin.calls).toHaveLength(1)
+  })
+
+  it('reports the empty-document refusal with the real attempts and status of the exchange', async () => {
+    // The request actually was three HTTP attempts (two transient
+    // 503s, then an empty 200): the client.protocol refusal is raised
+    // inside the exchange, so it must carry that truth (attempts 3,
+    // status 200) instead of the hardcoded 1/0 a wrapper-level error
+    // used to synthesize -- which misreported a retried exchange as a
+    // single attempt that never reached a response.
+    const standin = scriptedStandin(
+      textResponse(503, 'Service Unavailable'),
+      textResponse(503, 'Service Unavailable'),
+      new Response(null, { status: 200 }),
+    )
+    const api = createClient({
+      baseUrl: '/api/v1',
+      fetch: standin.fetch,
+      retryPolicy: { maxAttempts: 3, initialDelayMs: 0, maxDelayMs: 0 },
+    })
+
+    let caught: unknown
+    try {
+      await fetchPublicConfig(api)
+    } catch (error) {
+      caught = error
+    }
+
+    expect(isApiError(caught)).toBe(true)
+    if (isApiError(caught)) {
+      expect(caught.code).toBe(ERROR_CODE_PROTOCOL)
+      expect(caught.status).toBe(200)
+      expect(caught.attempts).toBe(3)
+    }
+    expect(standin.calls).toHaveLength(3)
   })
 
   it('round-trips an empty features array as an array, not null or undefined', async () => {
