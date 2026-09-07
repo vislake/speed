@@ -343,6 +343,19 @@ test.describe('the core journey', { tag: '@pending' }, () => {
       cost,
       'the surface names the idea of a cost but never an amount, so a practice still cannot tell what this generation spent',
     ).toContainText(/\d/)
+    // NOT zero, and this closes a hole found by reading go/billing's own
+    // fragment before the surface existed: a tenant with no ledger rows
+    // answers an all-zero balance by design (a zero state rather than a
+    // missing-resource refusal, which is the right answer). So "a digit
+    // appears" is satisfied by "0", and a surface that charged nothing
+    // -- or displayed the charge wrongly -- would have passed a gate
+    // whose subject is what this generation spent. A generation that
+    // costs nothing is not a pay-per-use product; either the charge did
+    // not happen or the number is wrong, and both are worth failing on.
+    await expect(
+      cost,
+      'this generation is reported as costing zero, so either nothing was charged for it or the figure shown is wrong -- a pay-per-use product cannot say both that it charges and that this was free',
+    ).toContainText(/[1-9]/)
 
     // And the standing balance, somewhere a person can check it.
     // Reached through openSurface: below the md breakpoint the
