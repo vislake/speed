@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest'
 import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { switchLanguage } from '@speed/i18n'
+import { createAppTheme } from '@speed/ui-kit'
 import { SignOutButton } from './SignOutButton.js'
 import { renderWithProviders } from '../test-utils/render.js'
 import {
@@ -42,7 +43,55 @@ async function signIn(harness: Harness): Promise<void> {
   })
 }
 
+/** The WCAG 2.1 contrast ratio between two hex colours. */
+function contrastRatio(a: string, b: string): number {
+  const channel = (value: number): number => {
+    const c = value / 255
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+  }
+  const luminance = (hex: string): number => {
+    const value = hex.replace('#', '')
+    const r = Number.parseInt(value.slice(0, 2), 16)
+    const g = Number.parseInt(value.slice(2, 4), 16)
+    const b = Number.parseInt(value.slice(4, 6), 16)
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+  }
+  const lighter = Math.max(luminance(a), luminance(b))
+  const darker = Math.min(luminance(a), luminance(b))
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
 describe('SignOutButton', () => {
+  it('default the button to an inheriting color, never the primary palette color', async () => {
+    // Regression for the acceptance measurement that named the sign-out
+    // control at 1:1: a button defaulting to the primary palette color
+    // vanishes on the very surface it usually sits on -- an AppBar
+    // whose background IS the primary color (the reference-app header
+    // measured rgb(37,99,235) text on an rgb(37,99,235) background).
+    // color="inherit" makes the text follow the ambient color: the
+    // AppBar's own contrastText there, the surrounding text color on a
+    // plain surface.
+    const harness = makeHarness({ [LOGIN_PASSWORD]: () => makePair() })
+    await signIn(harness)
+    renderWithProviders(<SignOutButton session={harness.session} />)
+    const button = screen.getByRole('button', { name: LABEL_ZH })
+    expect(button).toHaveClass('MuiButton-colorInherit')
+    expect(button).not.toHaveClass('MuiButton-colorPrimary')
+    // The token relationship the inheritance relies on, guarded here
+    // because jsdom resolves no cascaded styles: while an AppBar keeps
+    // painting primary.main, its own contrastText must stay at WCAG AA
+    // distance from it, or an inherited control is legible nowhere.
+    // The composed real-browser proof is the reference-app
+    // visible-controls e2e gate.
+    const { theme } = createAppTheme()
+    const ratio = contrastRatio(
+      theme.palette.primary.main,
+      theme.palette.primary.contrastText,
+    )
+    expect(ratio).toBeGreaterThanOrEqual(4.5)
+    expect(theme.palette.primary.main).not.toBe(theme.palette.primary.contrastText)
+  })
+
   it('sign out on click, clearing the session token', async () => {
     const harness = makeHarness({
       [LOGIN_PASSWORD]: () => makePair(),

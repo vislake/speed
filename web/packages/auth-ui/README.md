@@ -364,7 +364,13 @@ deliberately quiet: it clears the session and flips the snapshot to
 anonymous, and the host's own auth-core hooks observe that flip -- the
 component never navigates and fires no completion callback. It renders
 whether or not the snapshot is authenticated; the host mounts it where
-a sign-out action belongs (typically app chrome).
+a sign-out action belongs (typically app chrome). The button renders
+with `color="inherit"`: mounted inside a coloured AppBar (whose
+background is the primary colour and whose own text is its
+contrastText), an inherited colour stays legible where a
+primary-coloured default would read primary-on-primary, which is how
+the reference-app's sign-out control once measured 1:1 against its own
+header.
 
 | Prop | Type | Notes |
 |---|---|---|

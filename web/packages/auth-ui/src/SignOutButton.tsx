@@ -20,6 +20,16 @@
  * Nothing here reads the session state: the button renders whether the
  * snapshot is authenticated or not, and the host mounts it where a
  * sign-out action belongs (typically app chrome).
+ *
+ * The button renders with `color="inherit"` by default, so its text
+ * follows the ambient text color instead of defaulting to the primary
+ * palette color: mounted inside a colored header (the common host
+ * placement, an AppBar whose background is the primary color), an
+ * inherited color resolves to the surface's own contrastText and stays
+ * legible where a primary-on-primary default would vanish (reference-
+ * app acceptance: the sign-out control once measured 1:1 against its
+ * own AppBar). On a plain surface the same inheritance resolves to the
+ * surrounding text color, which is equally safe.
  */
 
 import { useState } from 'react'
@@ -56,7 +66,17 @@ export function SignOutButton({ session }: SignOutButtonProps) {
 
   return (
     <>
-      <Button type="button" disabled={pending} onClick={() => void handleClick()}>
+      {/* Inherit the ambient text color: hosts mount this control inside
+          a colored AppBar whose own text is its contrastText -- the
+          default primary palette color reads primary-on-primary there
+          (the acceptance measurement that named the sign-out control at
+          1:1). See the file header for the full rationale. */}
+      <Button
+        type="button"
+        color="inherit"
+        disabled={pending}
+        onClick={() => void handleClick()}
+      >
         {t(pending ? 'signOut.busy' : 'signOut.label')}
       </Button>
       <InlineError code={errorCode} />
