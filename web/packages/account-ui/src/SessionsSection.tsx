@@ -53,6 +53,7 @@ import CircularProgress from '@mui/material/CircularProgress'
 import IconButton from '@mui/material/IconButton'
 import Skeleton from '@mui/material/Skeleton'
 import Typography from '@mui/material/Typography'
+import type { SxProps, Theme } from '@mui/material'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   getAuthnListSessionsQueryKey,
@@ -111,6 +112,23 @@ function parseDate(iso: string | undefined): Date | null {
 function isExpired(expiresAtIso: string | undefined, now = Date.now()): boolean {
   const expiresAt = parseDate(expiresAtIso)
   return expiresAt !== null && expiresAt.getTime() <= now
+}
+
+/** The visually-hidden recipe for the success live region while there is
+ * nothing to announce (the clip technique, the family's shape -- see
+ * product-shell's sr-only region and ui-kit's ConfirmDialog arming
+ * region): the region must stay in the accessibility tree to announce,
+ * so it is clipped, never display:none -- a hidden region would not be
+ * live. */
+const srOnlyRegionSx: SxProps<Theme> = {
+  clip: 'rect(0 0 0 0)',
+  clipPath: 'inset(50%)',
+  height: 1,
+  margin: 0,
+  overflow: 'hidden',
+  position: 'absolute',
+  whiteSpace: 'nowrap',
+  width: 1,
 }
 
 /** The pending-state placeholder: rows shaped like the content rows, read
@@ -314,15 +332,31 @@ export function SessionsSection() {
           {notice?.kind === 'revoke-failed' && (
             <InlineError code={notice.code} />
           )}
-          {notice?.kind === 'others-done' && (
-            <Alert
-              severity="success"
-              role="status"
-              sx={{ width: '100%', mb: 1.5 }}
-            >
-              {t('sessions.revokeOthers.done', { count: notice.count })}
-            </Alert>
-          )}
+          {/* The revoke-others success live region. It must never mount
+              together with its text: a role="status" region announces
+              only content changes that follow its own insertion, so a
+              success notice born in the same commit as the region would
+              be silent. The region therefore stands here for the whole
+              list phase -- mounted empty and visually silent (clipped,
+              never display:none) while there is nothing to announce --
+              and the notice commit fills the text into a region the
+              screen reader already knows, which is what makes the
+              announcement fire. The clip and the notice never coexist:
+              the same node shows the full success banner exactly while
+              it carries the text. */}
+          <Alert
+            severity="success"
+            role="status"
+            sx={
+              notice?.kind === 'others-done'
+                ? { width: '100%', mb: 1.5 }
+                : srOnlyRegionSx
+            }
+          >
+            {notice?.kind === 'others-done'
+              ? t('sessions.revokeOthers.done', { count: notice.count })
+              : ''}
+          </Alert>
           {/* The rows are one real list: a screen-reader user hears each
               session as one item of a numbered set with a boundary
               between rows, never a flat div stack. The notices above are

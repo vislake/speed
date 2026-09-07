@@ -14,8 +14,9 @@
  */
 
 import { StrictMode } from 'react'
+import { flushSync } from 'react-dom'
 import { describe, expect, it } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useAuthnListIdentities } from '@speed/api-sdk'
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
@@ -235,5 +236,64 @@ describe('BindingCallbackHandler', () => {
     expect(screen.queryByRole('alert')).toBeNull()
 
     await expectNoAxeViolations()
+  })
+
+  it('mount the pending live region empty on a retry re-entry, then fill it (mount-with-text regression)', async () => {
+    // PRE-FIX: the pending notice's role="status" region mounted together
+    // with its text on every entry into the pending state -- the initial
+    // mount and a retry's re-entry alike. A live region announces content
+    // changes that follow its own existence, never text that mounts with
+    // it, so the retry's re-entry was silent. POST-FIX: the text is gated
+    // behind a one-commit lag armed by an effect after the pending
+    // phase's first commit, so the region's first committed frame is
+    // empty whatever transition entered the phase, and the text fills an
+    // existing region a commit later. The assertion between the two
+    // commits below is what distinguishes the shapes: the region's text
+    // content must still be empty the moment the node re-appears on the
+    // retry (pre-fix it already holds the pending text). flushSync lands
+    // the retry's one commit synchronously, and the act scope holds back
+    // the post-commit effect that fills the region until this assertion
+    // has seen the birth frame.
+    let attempts = 0
+    makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === CALLBACK_PATH) {
+        attempts += 1
+        if (attempts === 1) {
+          // The external identity's verified email already belongs to
+          // another account whose auto-link conditions were not met.
+          return errorResponse(409, 'authn.identity_requires_binding')
+        }
+        return jsonResponse(200, { bound: true })
+      }
+      return errorResponse(500, 'internal')
+    })
+    let boundCount = 0
+    renderWithProviders(
+      <BindingCallbackHandler
+        provider="google"
+        code="code-1"
+        state="state-1"
+        onBound={() => {
+          boundCount += 1
+        }}
+      />,
+    )
+
+    await screen.findByRole('alert')
+    // The failed state carries no live region: nothing to announce.
+    expect(screen.queryByRole('status')).toBeNull()
+    act(() => {
+      flushSync(() => {
+        screen.getByRole('button', { name: zhCN.bindingCallback.retry }).click()
+      })
+      const region = screen.getByRole('status')
+      expect(region.textContent).toBe('')
+    })
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent(
+        zhCN.bindingCallback.pending,
+      ),
+    )
+    await waitFor(() => expect(boundCount).toBe(1))
   })
 })

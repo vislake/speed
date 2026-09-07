@@ -562,6 +562,92 @@ describe('SessionsSection', () => {
     await expectNoAxeViolations()
   })
 
+  it('announce the revoke-others success into a live region that stood empty from the list phase (mount-with-text regression)', async () => {
+    // PRE-FIX: the success notice's role="status" region rendered only
+    // while the notice existed, so the region mounted in the same commit
+    // as its text. A live region announces content changes that follow
+    // its own existence, never text that mounts together with it, so the
+    // revoke-others success was silent. POST-FIX: the region stands
+    // mounted (empty, visually silent) for the whole list phase and the
+    // notice commit fills the text into a region the screen reader
+    // already knows. The same DOM node must survive the transition,
+    // which is what makes the later text change an announcement rather
+    // than another mount.
+    const user = userEvent.setup()
+    let othersRevoked = false
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'GET' && call.path === SESSIONS_PATH) {
+        return jsonResponse(200, {
+          sessions: [
+            session({
+              id: 'current-1',
+              is_current: true,
+              device: 'This laptop',
+            }),
+            session({
+              id: 'other-1',
+              status: othersRevoked ? 'revoked' : 'active',
+            }),
+            session({
+              id: 'other-2',
+              status: othersRevoked ? 'revoked' : 'active',
+            }),
+          ],
+        })
+      }
+      if (call.method === 'POST' && call.path === REVOKE_OTHERS_PATH) {
+        othersRevoked = true
+        return jsonResponse(200, { revoked_count: 2 })
+      }
+      throw new Error(`unexpected ${call.method} ${call.path}`)
+    })
+    await signInWithPassword(rig)
+    renderWithProviders(<SessionsSection />)
+
+    await screen.findByRole('button', {
+      name: zhCN.sessions.revokeOthers.label,
+    })
+    // The live region stood mounted and empty while the list was up and
+    // nothing had been announced: its text is empty here, pre-fix the
+    // region does not exist at all. (The dialog is still closed, so this
+    // status query cannot collide with the ui-kit ConfirmDialog's own
+    // arming region.)
+    const status = screen.getByRole('status')
+    expect(status).toHaveTextContent('')
+
+    await user.click(
+      screen.getByRole('button', { name: zhCN.sessions.revokeOthers.label }),
+    )
+    const dialog = await screen.findByRole('dialog')
+    await user.click(
+      within(dialog).getByRole('button', {
+        name: zhCN.sessions.revokeOthers.confirmLabel,
+      }),
+    )
+    await user.click(
+      within(dialog).getByRole('button', {
+        name: UI_KIT_ZH.confirmDialog.confirmAgainLabel,
+      }),
+    )
+    // The success text filled the standing region -- the same node. The
+    // identity is asserted through a role query, which the ui-kit
+    // danger dialog's open state masks: the MUI modal stamps the app
+    // tree aria-hidden while the dialog shows (and through its closing
+    // transition), so the same-node check must wait for the dialog to
+    // finish closing and the app tree to become queryable again.
+    await waitFor(() =>
+      expect(status).toHaveTextContent(
+        zhCN.sessions.revokeOthers.done_other.replace('{{count}}', '2'),
+      ),
+    )
+    await waitFor(() => expect(screen.getByRole('status')).toBe(status))
+
+    await expectNoAxeViolations()
+  })
+
   it('close the revoke-others dialog on cancel without revoking anything', async () => {
     const user = userEvent.setup()
     const rig = makeRealClientRig(async (call) => {
