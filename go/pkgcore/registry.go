@@ -51,6 +51,17 @@ var ErrDuplicateAuditAction = errors.New("pkgcore: duplicate audit action")
 // registrations share the same Name.
 var ErrDuplicateRetentionParticipant = errors.New("pkgcore: duplicate retention participant")
 
+// ErrNilRetentionSweep is returned when a RetentionParticipant is registered
+// without its Sweep callback. Sweep is the one callback the retention role
+// makes mandatory: the retention sweep calls each registered participant's
+// Sweep once per (tenant, participant) pair, so a participant whose Sweep
+// were nil could never release its own soft-deleted rows -- its tenant data
+// would be retained forever while the sweep reported success. Such a
+// declaration is refused at registration rather than accepted and silently
+// skipped at sweep time. Nothing is registered when the call returns this
+// error.
+var ErrNilRetentionSweep = errors.New("pkgcore: retention participant has no Sweep callback")
+
 // ErrDuplicateModuleName is returned when two modules in a bootstrap set report the same Name.
 var ErrDuplicateModuleName = errors.New("pkgcore: duplicate module name")
 
@@ -375,7 +386,11 @@ type RetentionParticipant struct {
 	// context that already carries both tenant and system context -- the
 	// participant's own dbkit.Repository[T].HardDelete calls read both
 	// straight from ctx, never from a parameter this signature would have
-	// to carry separately.
+	// to carry separately. Sweep is the one callback registration makes
+	// mandatory: a participant with a nil Sweep is refused with
+	// ErrNilRetentionSweep rather than accepted and silently skipped by
+	// the sweep, which would retain its tenant data forever while the
+	// sweep reported success.
 	Sweep func(ctx context.Context, tenant TenantID, cutoff time.Time) (reaped int, err error)
 
 	// Erase immediately hard-deletes every row belonging to subject,
@@ -385,7 +400,10 @@ type RetentionParticipant struct {
 	// returns (0, nil) -- never an error -- so that re-running an erasure
 	// already partially applied elsewhere converges instead of failing
 	// forever; a genuine erasure failure (a transient database error, for
-	// example) is the only case that should return a non-nil err.
+	// example) is the only case that should return a non-nil err. Erase is
+	// optional at registration: a participant with nothing subject-shaped
+	// to erase -- a tenant-wide bundle, for example -- may leave it nil,
+	// and the erasure orchestration skips it.
 	Erase func(ctx context.Context, subject SubjectRef) (erased int, err error)
 
 	// Export returns the participant's own JSON-serializable data for
@@ -400,8 +418,10 @@ type RetentionParticipant struct {
 // right-to-erasure and data-export orchestration.
 type RetentionRegistrar interface {
 	// Add registers participants. It returns an error wrapping
-	// ErrDuplicateRetentionParticipant on a repeated Name. Nothing is
-	// registered when the call returns an error.
+	// ErrDuplicateRetentionParticipant on a repeated Name, and an error
+	// wrapping ErrNilRetentionSweep on a participant missing the one
+	// callback the retention role makes mandatory (Erase and Export may
+	// each be nil). Nothing is registered when the call returns an error.
 	Add(participants ...RetentionParticipant) error
 	// Participants returns every registered participant, in registration
 	// order.
@@ -818,6 +838,21 @@ type memoryRetentionRegistrar struct {
 func (r *memoryRetentionRegistrar) Add(participants ...RetentionParticipant) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Validation comes before the duplicate check so a participant with a
+	// nil Sweep reports itself as such rather than as a collision with
+	// whatever an earlier caller registered under the same Name. Sweep is
+	// the one callback the retention role makes mandatory: a participant
+	// without one could never release its own soft-deleted rows, and the
+	// sweep would have to skip it silently -- its tenant data retained
+	// forever while the sweep reported success -- so it is refused here
+	// instead. Erase and Export may each be nil, their own orchestrations
+	// skipping the participant. Either way the whole call registers
+	// nothing.
+	for _, p := range participants {
+		if p.Sweep == nil {
+			return fmt.Errorf("%w: %q", ErrNilRetentionSweep, p.Name)
+		}
+	}
 	keyOf := func(p RetentionParticipant) string { return p.Name }
 	if err := checkUnique(r.names, participants, keyOf, ErrDuplicateRetentionParticipant); err != nil {
 		return err

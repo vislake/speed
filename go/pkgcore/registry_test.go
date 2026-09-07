@@ -298,6 +298,132 @@ func TestConfigRegistrar_Items_PreservesDeclaration(t *testing.T) {
 	}
 }
 
+func TestRetentionRegistrar_Add_RefusesNilSweep(t *testing.T) {
+	sweep := func(context.Context, TenantID, time.Time) (int, error) { return 0, nil }
+	erase := func(context.Context, SubjectRef) (int, error) { return 0, nil }
+	wellFormed := func(name string) RetentionParticipant {
+		return RetentionParticipant{Name: name, Sweep: sweep, Erase: erase}
+	}
+
+	tests := []struct {
+		name       string
+		seed       []RetentionParticipant // registered before the call under test
+		call       []RetentionParticipant // the call under test
+		wantErr    error                  // sentinel the error must wrap
+		offender   string                 // participant Name the error must carry
+		wantStored int                    // participants stored after the refused call
+	}{
+		{
+			name:       "nil Sweep is refused",
+			seed:       []RetentionParticipant{wellFormed("notes.note")},
+			call:       []RetentionParticipant{{Name: "notes.attachment", Erase: erase}},
+			wantErr:    ErrNilRetentionSweep,
+			offender:   "notes.attachment",
+			wantStored: 1,
+		},
+		{
+			name: "one nil Sweep in a batch refuses the whole call",
+			call: []RetentionParticipant{
+				wellFormed("notes.note"),
+				{Name: "notes.attachment", Erase: erase},
+			},
+			wantErr:    ErrNilRetentionSweep,
+			offender:   "notes.attachment",
+			wantStored: 0,
+		},
+		{
+			name:       "nil-Sweep validation reports itself before a name collision",
+			seed:       []RetentionParticipant{wellFormed("notes.note")},
+			call:       []RetentionParticipant{{Name: "notes.note", Erase: erase}},
+			wantErr:    ErrNilRetentionSweep,
+			offender:   "notes.note",
+			wantStored: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+			if len(tt.seed) > 0 {
+				if err := reg.Retention.Add(tt.seed...); err != nil {
+					t.Fatalf("seed Add() error = %v, want nil", err)
+				}
+			}
+
+			err := reg.Retention.Add(tt.call...)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Add() error = %v, want it to wrap %v", err, tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.offender) {
+				t.Errorf("Add() error = %q, want it to name %q", err, tt.offender)
+			}
+			// A rejected call must store nothing from that call, leaving
+			// only the seed participants registered.
+			if got := len(reg.Retention.Participants()); got != tt.wantStored {
+				t.Errorf("after the refused Add() there are %d participants, want %d", got, tt.wantStored)
+			}
+		})
+	}
+}
+
+func TestRetentionRegistrar_Add_EraseAndExportMayStayNil(t *testing.T) {
+	noopSweep := func(context.Context, TenantID, time.Time) (int, error) { return 0, nil }
+
+	tests := []struct {
+		name          string
+		participant   RetentionParticipant
+		wantEraseNil  bool
+		wantExportNil bool
+	}{
+		{
+			name: "Export nil on a participant that did not opt into portability",
+			participant: RetentionParticipant{
+				Name:  "testutil.notes",
+				Sweep: noopSweep,
+				Erase: func(context.Context, SubjectRef) (int, error) { return 0, nil },
+			},
+			wantExportNil: true,
+		},
+		{
+			name: "Erase and Export nil on a sweep-only participant",
+			participant: RetentionParticipant{
+				// The sweep-only shape a tenant-wide bundle takes: nothing
+				// subject-shaped to erase, no export of its own.
+				Name:  "compliance.export_manifests",
+				Sweep: noopSweep,
+			},
+			wantEraseNil:  true,
+			wantExportNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
+			if err := reg.Retention.Add(tt.participant); err != nil {
+				t.Fatalf("Add() error = %v, want nil for a participant whose only mandatory callback is present", err)
+			}
+
+			got := reg.Retention.Participants()
+			if len(got) != 1 {
+				t.Fatalf("Participants() returned %d participants, want 1", len(got))
+			}
+			if got[0].Name != tt.participant.Name {
+				t.Errorf("participant Name = %q, want %q", got[0].Name, tt.participant.Name)
+			}
+			if got[0].Sweep == nil {
+				t.Error("registered participant lost its Sweep callback")
+			}
+			if (got[0].Erase == nil) != tt.wantEraseNil {
+				t.Errorf("registered participant Erase nil = %v, want %v", got[0].Erase == nil, tt.wantEraseNil)
+			}
+			if (got[0].Export == nil) != tt.wantExportNil {
+				t.Errorf("registered participant Export nil = %v, want %v", got[0].Export == nil, tt.wantExportNil)
+			}
+		})
+	}
+}
+
 func TestConfigRegistrar_Add_InvalidDeclarationReturnsError(t *testing.T) {
 	tests := []struct {
 		name    string
