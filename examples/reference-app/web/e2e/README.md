@@ -315,18 +315,44 @@ the en-US locale so the app's own language negotiation settles there from
 `navigator.languages` — which exercises the negotiation path and keeps
 every spec free of the CJK characters CI refuses outside `docs/internal`.
 
-## Not covered yet
+## Not covered yet, and one thing to read every green result against
 
-- **Demo accounts surviving a process restart** and **a really-invited
-  user signing in to the invited tenant**: both wait on the sign-in
-  membership fix, which is what makes them pass at all. They are the two
-  gates this suite is missing on purpose rather than by oversight.
-- **The CI pipeline.** `.github/workflows/e2e.yml` is still its stub
-  guard; wiring it (Go toolchain, `playwright install --with-deps`, the
-  artifact upload for traces) is the next step and belongs to whoever
-  owns that pipeline's round.
-- **Everything the product design calls for that has no UI yet** —
-  patient photo upload, the AI simulation and its before/after view,
-  share links, billing, team management, the admin console. The backends
-  for most of them exist; the browser surfaces do not, so there is
-  nothing for a browser to drive.
+**Nothing runs this suite automatically.** No workflow invokes Playwright
+at all: `.github/workflows/e2e.yml` is a stub whose guard step exits 1,
+and no other pipeline mentions `test:e2e`. So every green result from
+this suite is *somebody having run it*, at one moment, against one tree
+-- never a standing guarantee, and never a regression caught between
+runs. A report should say which tier, which engines and which
+environment it ran in, because "the suite is green" on its own does not
+distinguish a full three-engine pass from a default-tier run that never
+selected the gate in question. Wiring the pipeline (Go toolchain,
+`playwright install --with-deps`, the trace artifact upload) belongs to
+the roadmap's M4 e2e item.
+
+That distinction has already cost something: a round's verify step ran
+the default tier, went green, and had never executed the `@pending` gate
+that was its own acceptance criterion -- the gate was not selected. A
+tier's green says only what that tier selected.
+
+**Open defects with a gate waiting on them** (`pnpm test:e2e:pending`):
+
+| Gate | Waiting on |
+|---|---|
+| core-journey block C | the patient's page shows the result alone; the pair needs the share to carry both objects, not just an extra `<img>` |
+| core-journey block D | `go/billing` has no HTTP surface, so a credits view has nothing to call |
+| sessions-are-distinguishable | session rows still render raw User-Agent strings, so three sign-ins from one browser are three identical walls of text |
+| current-clinic-is-visible (one of three) | a self-service clinic is shown as a raw tenant id and named on no surface |
+| offered-channels-work | SMS cannot be configured in this demo, by decision |
+
+**Not gated at all, and why:**
+
+- **A registration whose clinic provisioning failed converging on
+  retry.** The recovery is real (`dcd091c`), but driving it needs a way
+  to make provisioning fail on purpose; the switch
+  (`APP_FAIL_SELF_SERVICE_PROVISION`) is agreed and not landed. Until
+  then this suite can say the retry did not regress, not that it
+  converges.
+- **A generation that fails giving the credits back.** The fake vendor
+  can now refuse (`FAKE_IMAGE_FAIL=1`), but the balance it should
+  restore has no surface to read, so the gate waits on block D.
+- **Team management and the admin console.** No browser surface exists.
