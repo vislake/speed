@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -106,26 +107,48 @@ func ledgerCounts(t *testing.T, gdb *gorm.DB) map[string]int {
 	return counts
 }
 
-// fullUniverseLedger is the ledger a fully migrated database carries.
+// fullUniverseLedger is the ledger a fully migrated database carries for
+// full.mod -- the four-module universe, no go/pki (a project that requires
+// pki too carries the five-module fullUniverseWithPKILedger below).
 //
 // The counts are drift guards against the modules' own migration sets:
 // authn ships eleven sqlite migration files (0001_create_users through
 // 0011_add_pending_mfa_factor_unique_index), config one
-// (0001_create_configs), org eight (0001_create_org_nodes,
+// (0001_create_configs), org nine (0001_create_org_nodes,
 // 0002_create_memberships, 0003_create_org_invitations,
 // 0004_add_soft_delete, 0005_unique_pending_invitation,
 // 0006_create_org_invitation_token_index, 0007_single_root,
-// 0008_single_root_live) and rbac three
+// 0008_single_root_live, 0009_memberships_user_lookup) and rbac three
 // (0001_create_rbac, 0002_add_soft_delete,
-// 0003_add_revoke_origin) -- 23 in total, tables configs,
+// 0003_add_revoke_origin) -- 24 in total, tables configs,
 // users, org_nodes and rbac_roles among them. A module adding or removing
 // a migration file fails the tests that pin these numbers, so the
 // expectation here is updated deliberately when the module's migration
-// set really changes, never silently.
+// set really changes, never silently -- and
+// TestFullUniverseLedgerCountsMatchTheModulesOwnMigrationTrees keeps this
+// map itself pinned to the modules' own migration trees, so a set that
+// moved without this map moving after it fails by naming the module and
+// both counts.
 var fullUniverseLedger = map[string]int{
 	"authn":  11,
 	"config": 1,
-	"org":    8,
+	"org":    9,
+	"rbac":   3,
+}
+
+// fullUniverseWithPKILedger is the ledger a fully migrated database carries
+// for full_with_pki.mod -- fullUniverseLedger plus go/pki, the shape every
+// saasctl-generated authn-containing selection's go.mod requires (pki
+// follows authn silently, never a --with choice of its own). pki ships nine
+// sqlite migration files (0001_create_pki_signing_keys through
+// 0009_widen_key_ref_columns) -- 33 in total. The same drift-guard rule as
+// fullUniverseLedger's owns its counts, and the same tree-pinning test
+// keeps both maps equal to the modules' own migration sets.
+var fullUniverseWithPKILedger = map[string]int{
+	"authn":  11,
+	"config": 1,
+	"org":    9,
+	"pki":    9,
 	"rbac":   3,
 }
 
@@ -144,7 +167,7 @@ func TestMigrateFreshDatabaseAppliesTheWholeRequiredUniverse(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := fmt.Sprintf("Migrated %s: applied 23 migration files (authn 11, config 1, org 8, rbac 3)\n", dbPath)
+	want := fmt.Sprintf("Migrated %s: applied 24 migration files (authn 11, config 1, org 9, rbac 3)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -177,15 +200,14 @@ func TestMigrate_PKIRequired_MigratesPKITablesToo(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := fmt.Sprintf("Migrated %s: applied 32 migration files (authn 11, config 1, org 8, pki 9, rbac 3)\n", dbPath)
+	want := fmt.Sprintf("Migrated %s: applied 33 migration files (authn 11, config 1, org 9, pki 9, rbac 3)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 
 	gdb := openDB(t, dbPath)
-	wantLedger := map[string]int{"authn": 11, "config": 1, "org": 8, "pki": 9, "rbac": 3}
-	if got := ledgerCounts(t, gdb); !reflect.DeepEqual(got, wantLedger) {
-		t.Errorf("ledger = %v, want %v", got, wantLedger)
+	if got := ledgerCounts(t, gdb); !reflect.DeepEqual(got, fullUniverseWithPKILedger) {
+		t.Errorf("ledger = %v, want %v", got, fullUniverseWithPKILedger)
 	}
 	for _, table := range []string{"schema_migrations", "configs", "users", "org_nodes", "rbac_roles", "pki_signing_keys", "pki_local_keys"} {
 		if !gdb.Migrator().HasTable(table) {
@@ -232,7 +254,7 @@ func TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument(t *testing.T) {
 	}
 
 	// The report names the database next to the go.mod...
-	want := fmt.Sprintf("Migrated %s: applied 23 migration files (authn 11, config 1, org 8, rbac 3)\n",
+	want := fmt.Sprintf("Migrated %s: applied 24 migration files (authn 11, config 1, org 9, rbac 3)\n",
 		filepath.Join(projectDir, "app.db"))
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
@@ -280,7 +302,7 @@ func TestMigrateRelativeDBPathAnchorsAtTheGoModArgument(t *testing.T) {
 	}
 
 	// The report names the database anchored next to the go.mod...
-	want := fmt.Sprintf("Migrated %s: applied 23 migration files (authn 11, config 1, org 8, rbac 3)\n",
+	want := fmt.Sprintf("Migrated %s: applied 24 migration files (authn 11, config 1, org 9, rbac 3)\n",
 		filepath.Join(projectDir, "rel.db"))
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
@@ -379,6 +401,73 @@ func TestAgentsMdMigrationCountsMatchTheRegistry(t *testing.T) {
 	}
 }
 
+// TestFullUniverseLedgerCountsMatchTheModulesOwnMigrationTrees pins the two
+// ledger maps at the top of this file to the modules' own shipped migration
+// sets -- the "the drift guard can itself not drift" half of their doc
+// comments. It derives each module's sqlite migration count from the
+// module's own Migrations() embed.FS, the very sqlite/*.sql tree
+// dbkit.MigrationRegistry.Apply reads when migrate runs (dbkit's
+// migrationFiles selection criterion: the non-directory *.sql entries under
+// the dialect's subdirectory), and requires both maps to carry it verbatim.
+// The recurrence this test closes: go/org's org-membership-query round added
+// 0009_memberships_user_lookup (0009, dual-dialect) and the ledger maps --
+// and every report expectation above -- still said org eight, a drift the
+// report assertions caught only by failing on the run's own output. A future
+// round adding a module's 0010_ file fails HERE too, naming the module, the
+// map's stale count and the count the module's own tree ships, until the
+// saasctl expectations move with it -- deliberately, never silently.
+func TestFullUniverseLedgerCountsMatchTheModulesOwnMigrationTrees(t *testing.T) {
+	gdb := openDB(t, filepath.Join(t.TempDir(), "ledger-pin.db"))
+
+	// Construct the five migration-shipping modules exactly the way migrate()
+	// does: authn and pki share one *pki.Module (buildAuthnAndPKI), the rest
+	// come from migrationUniverse's own constructors. Construction performs
+	// no I/O and touches nothing -- the modules exist so Migrations() can be
+	// read.
+	modules := make(map[string]pkgcore.Module, len(migrationUniverse))
+	authnMod, pkiMod, err := buildAuthnAndPKI(gdb)
+	if err != nil {
+		t.Fatalf("construct the %s and %s modules: %v", authnModuleName, pkiModuleName, err)
+	}
+	modules[authnModuleName] = authnMod
+	modules[pkiModuleName] = pkiMod
+	for _, candidate := range migrationUniverse {
+		if _, constructed := modules[candidate.name]; constructed {
+			continue
+		}
+		m, modErr := candidate.construct(gdb)
+		if modErr != nil {
+			t.Fatalf("construct the %s module: %v", candidate.name, modErr)
+		}
+		modules[candidate.name] = m
+	}
+
+	for _, candidate := range migrationUniverse {
+		entries, readErr := fs.ReadDir(modules[candidate.name].Migrations(), "sqlite")
+		if readErr != nil {
+			t.Fatalf("read the %s module's sqlite migration tree: %v", candidate.name, readErr)
+		}
+		shipped := 0
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+				continue
+			}
+			shipped++
+		}
+		if literal := fullUniverseWithPKILedger[candidate.name]; literal != shipped {
+			t.Errorf("fullUniverseWithPKILedger[%q] = %d, but the %s module's own sqlite migration tree ships %d migration files; sync the ledger when the module's migration set changes",
+				candidate.name, literal, candidate.name, shipped)
+		}
+		if candidate.name == pkiModuleName {
+			continue
+		}
+		if literal := fullUniverseLedger[candidate.name]; literal != shipped {
+			t.Errorf("fullUniverseLedger[%q] = %d, but the %s module's own sqlite migration tree ships %d migration files; sync the ledger when the module's migration set changes",
+				candidate.name, literal, candidate.name, shipped)
+		}
+	}
+}
+
 // TestMigrateRerunOverTheSameDatabaseReportsUpToDate: a second run
 // applies nothing -- the ledger already records every file, so the report
 // says so, and the database is left byte-for-byte the same shape.
@@ -397,7 +486,7 @@ func TestMigrateRerunOverTheSameDatabaseReportsUpToDate(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := fmt.Sprintf("%s is up to date: schema_migrations already records 23 migration files (authn 11, config 1, org 8, rbac 3)\n", dbPath)
+	want := fmt.Sprintf("%s is up to date: schema_migrations already records 24 migration files (authn 11, config 1, org 9, rbac 3)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -427,7 +516,7 @@ func TestMigrateAppliesOnlyWhatAGrowingGoModNewlyRequires(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("full-universe run exit code = %d, want 0; stderr:\n%s", code, stderr)
 	}
-	want = fmt.Sprintf("Migrated %s: applied 22 migration files (authn 11, org 8, rbac 3)\n", dbPath)
+	want = fmt.Sprintf("Migrated %s: applied 23 migration files (authn 11, org 9, rbac 3)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -499,7 +588,7 @@ func TestMigrateDistributedModeAppliesTheIdenticalSQLiteSchema(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	want := fmt.Sprintf("Migrated %s: applied 23 migration files (authn 11, config 1, org 8, rbac 3)\n", dbPath)
+	want := fmt.Sprintf("Migrated %s: applied 24 migration files (authn 11, config 1, org 9, rbac 3)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
@@ -529,7 +618,7 @@ func TestMigrateDistributedModeRerunReportsUpToDate(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("second run: exit code = %d, want 0; stderr:\n%s", code, stderr)
 	}
-	want := fmt.Sprintf("%s is up to date: schema_migrations already records 23 migration files (authn 11, config 1, org 8, rbac 3)\n", dbPath)
+	want := fmt.Sprintf("%s is up to date: schema_migrations already records 24 migration files (authn 11, config 1, org 9, rbac 3)\n", dbPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
