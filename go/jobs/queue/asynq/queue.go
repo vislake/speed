@@ -784,7 +784,20 @@ func (q *Queue) Get(ctx context.Context, id jobs.JobID) (*jobs.Job, error) {
 
 	cancelledAt, cerr := q.readCancelMarker(ctx, string(id))
 	if cerr != nil {
-		obs.FromContext(ctx).Warn("jobs: reading cancellation marker failed", "job_id", string(id), "error", cerr)
+		// Fail closed, restating dispatchAfterMarkerRead's own rationale
+		// (worker.go) on the reporting side: an unreadable cancellation
+		// state must never let a possibly-cancelled Job be reported as
+		// succeeded -- processTask records a cancelled task's skipped run
+		// as an ordinary asynq Completed, so a swallowed read failure
+		// would answer StatusSucceeded with an empty Result (the skip
+		// never writes one). The execution side chose bounce-class refusal
+		// because a transient outage should delay rather than lose; the
+		// reporting side's equivalent is returning this error for the
+		// caller to retry -- and the marker is permanent (the contract
+		// above), so a retry necessarily gets the right answer: a
+		// transient marker outage delays the report instead of corrupting
+		// it.
+		return nil, fmt.Errorf("jobs: read cancellation marker: %w", cerr)
 	}
 	return jobFromTaskInfo(info, cancelledAt), nil
 }
@@ -794,7 +807,12 @@ func (q *Queue) Get(ctx context.Context, id jobs.JobID) (*jobs.Job, error) {
 // effect -- Get() reports StatusCancelled from it unconditionally,
 // exactly mirroring StandaloneQueue's own markCancelled +
 // completeSucceeded/completeRetrying/completeDeadLetter no-op-when-not-
-// running guard.
+// running guard. "Unconditionally" carries one fail-closed exception: a
+// marker that cannot be READ (Redis answered an error, never "no
+// marker") makes Get() and DeadLetterJobs return an error rather than
+// report the Job's natural asynq state -- see Get's marker-read
+// handling above, which restates dispatchAfterMarkerRead's rationale on
+// the reporting side.
 //
 // Cancel deliberately does NOT call Inspector.DeleteTask for a not-yet-
 // running Job, even though that looks like the obvious way to stop asynq
@@ -912,7 +930,20 @@ func (q *Queue) DeadLetterJobs(ctx context.Context) ([]*jobs.Job, error) {
 				if !jobs.CallerMayAccess(ctx, tenantID) {
 					continue
 				}
-				cancelledAt, _ := q.readCancelMarker(ctx, info.ID)
+				cancelledAt, cerr := q.readCancelMarker(ctx, info.ID)
+				if cerr != nil {
+					// Fail closed, exactly as Get does above: an archived
+					// Job a concurrent Cancel may have settled as
+					// StatusCancelled (a Cancel landing during its terminal
+					// attempt -- handleErrorAttempt -- archives with the
+					// marker still intact) must never be reported as its
+					// natural StatusDeadLetter while that cancellation
+					// state cannot be read. The whole listing fails rather
+					// than silently misreporting one row; the marker is
+					// permanent, so a retried listing necessarily gets the
+					// right answer.
+					return nil, fmt.Errorf("jobs: read cancellation marker for job %s in queue %s: %w", info.ID, queueName, cerr)
+				}
 				result = append(result, jobFromTaskInfo(info, cancelledAt))
 			}
 			if len(infos) < pageSize {
