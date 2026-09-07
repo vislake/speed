@@ -29,6 +29,20 @@
  * cancel affordance (button, Escape, backdrop) are all disabled, so an
  * in-flight answer cannot be double-submitted or abandoned mid-rotation.
  * Re-opening the dialog resets every piece of per-attempt state.
+ *
+ * A verification that lost a concurrent-operation race (a sibling
+ * step-up -- or a tenant switch -- committed to the session while this
+ * code was in flight) answers with auth-core's
+ * OperationSupersededError: the submitted code genuinely verified
+ * server-side, but the elevation never landed -- the winner's session
+ * stands without it, and the losing pair was never applied. That is
+ * neither a failure nor a success: no error renders (collapsing to
+ * client.unknown would call the verified code a failure), and no
+ * onSuccess fires (re-running the gated operation under an elevation
+ * that does not exist would only draw a fresh 403 from the server).
+ * The dialog stays open with the code intact and the attempt
+ * retryable: with the race settled, the next submit verifies for
+ * real.
  */
 
 import { useEffect, useId, useState } from 'react'
@@ -42,6 +56,7 @@ import DialogTitle from '@mui/material/DialogTitle'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import type { AuthSession } from '@speed/auth-core'
+import { isOperationSuperseded } from '@speed/auth-core'
 import { useAccountUiErrorText } from './error-text.js'
 import { errorCodeOf, InlineError } from './inline-error.js'
 import { useAccountUiTranslation } from './translation.js'
@@ -112,6 +127,14 @@ export function StepUpChallenge({
       await session.verifyStepUp(value)
       onSuccess()
     } catch (error) {
+      if (isOperationSuperseded(error)) {
+        // This verification lost a concurrent-operation race (see the
+        // file header): the code verified server-side but the
+        // elevation never landed. Neither failure nor success -- no
+        // error text, no onSuccess; the dialog stays open and the
+        // attempt is retryable.
+        return
+      }
       const failure = errorCodeOf(error)
       if (failure === 'authn.mfa_invalid_code') {
         setFieldError(failure)

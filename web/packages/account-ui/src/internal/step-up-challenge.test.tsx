@@ -496,4 +496,92 @@ describe('StepUpChallenge', () => {
 
     await expectNoAxeViolations()
   })
+
+  it('treat a superseded verification as the lost race it is: no error, no onSuccess, retryable', async () => {
+    // A tenant switch committing through the same session while the
+    // code is in flight makes auth-core reject the verification with
+    // OperationSupersededError when its answer arrives: the code
+    // verified server-side but the elevation never landed -- the
+    // winner's session stands without it. The dialog must not render
+    // the client.unknown collapse (that would call a verified code a
+    // failure) and must not fire onSuccess (re-running the gated
+    // operation under an elevation that does not exist would only draw
+    // a fresh 403). The dialog stays open with the code intact: with
+    // the race settled, the next submit verifies for real.
+    let releaseVerify: () => void = () => undefined
+    const verifyGate = new Promise<void>((resolve) => {
+      releaseVerify = resolve
+    })
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'POST' && call.path === STEP_UP_PATH) {
+        await verifyGate
+        return jsonResponse(200, STEP_UP_BODY)
+      }
+      if (call.method === 'POST' && call.path === '/api/v1/authn/tenant/switch') {
+        return jsonResponse(
+          200,
+          makePair({
+            access_token: 'access-switched',
+            principal: {
+              user_id: 'user-1',
+              tenant_id: 'tenant-2',
+              session_id: 'session-1',
+            },
+          }),
+        )
+      }
+      return errorResponse(500, 'internal')
+    })
+    await signInWithPassword(rig)
+
+    let successCount = 0
+    let cancelCount = 0
+    renderWithProviders(
+      <StepUpChallenge
+        open
+        session={rig.session}
+        onSuccess={() => {
+          successCount += 1
+        }}
+        onCancel={() => {
+          cancelCount += 1
+        }}
+      />,
+    )
+    await userEvent.type(
+      screen.getByLabelText(zhCN.mfa.stepUp.codeLabel),
+      CODE,
+    )
+    await userEvent.click(verifyButtons().confirm)
+    // The verification request is in flight (the gate holds its
+    // answer) when the tenant switch commits.
+    await waitFor(() =>
+      expect(
+        rig.calls.filter(
+          (call) => call.method === 'POST' && call.path === STEP_UP_PATH,
+        ),
+      ).toHaveLength(1),
+    )
+    await rig.session.switchTenant('tenant-2')
+    expect(rig.store.get()).toBe('access-switched')
+    releaseVerify()
+    await waitFor(() => expect(verifyButtons().confirm).toBeEnabled())
+    // The lost race rendered nothing: no banner, no field error, no
+    // onSuccess, and the switch's session stands untouched.
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByText(zhCN.errors.authn.mfa_invalid_code)).toBeNull()
+    expect(successCount).toBe(0)
+    expect(cancelCount).toBe(0)
+    expect(rig.store.get()).toBe('access-switched')
+    // With the race settled, the same code verifies for real on the
+    // next submit.
+    await userEvent.click(verifyButtons().confirm)
+    await waitFor(() => expect(successCount).toBe(1))
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    await expectNoAxeViolations()
+  })
 })
