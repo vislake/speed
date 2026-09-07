@@ -3,6 +3,7 @@ package org
 import (
 	"context"
 	"embed"
+	"fmt"
 	"regexp"
 	"strconv"
 	"testing"
@@ -145,6 +146,46 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 			t.Errorf("Register declared %d config item(s); org declares none it cannot honour", len(got))
 		}
 	})
+}
+
+// TestModule_AuditableModels_IsExactlyTheMarkedModels pins org's exported
+// capture scope (AuditableModels, the slice a host hands to
+// dbkit.Options.AuditModels) to the models that actually carry the
+// dbkit.Auditable marker -- the "a model gained the marker while the
+// capture list forgot it" half of the AuditModels contract, the half dbkit
+// cannot check at Open: Open receives no model inventory (GORM's models
+// register lazily, per statement), so resolveAuditModels can refuse a
+// LISTED model whose marker a later round removed, but no mechanism can
+// notice a marker ADDED to a model the list forgot -- and a marker with no
+// capture list entry means that model's writes silently stop being
+// audited, the exact silent-gap shape this audit round exists to close.
+//
+// The model names below ARE the inventory: every org data model whose own
+// file declares `var _ dbkit.Auditable`. Adding the marker to another
+// model belongs to AuditableModels() and to this list in the same edit --
+// this test exists so that when one of the two moves without the other,
+// the divergence fails here, in org's own suite, instead of surfacing
+// years later as org audit rows that stopped landing.
+func TestModule_AuditableModels_IsExactlyTheMarkedModels(t *testing.T) {
+	want := map[string]bool{
+		"org.OrgNode":    true,
+		"org.Membership": true,
+		"org.Invitation": true,
+	}
+	got := map[string]bool{}
+	for _, m := range AuditableModels() {
+		got[fmt.Sprintf("%T", m)] = true
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("AuditableModels() is missing %s, the dbkit.Auditable model the capture scope must cover", name)
+		}
+	}
+	for name := range got {
+		if !want[name] {
+			t.Errorf("AuditableModels() lists %s, which is not one of the models carrying the dbkit.Auditable marker", name)
+		}
+	}
 }
 
 // TestModule_Register_DoesNotDeclareAuthnsEvent is the guard for the trap

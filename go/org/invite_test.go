@@ -132,16 +132,22 @@ func TestInviteService_Invite_CreatesStoresAndSends(t *testing.T) {
 // payload identifies the invitation and its context, and it must carry
 // NEITHER the invitee's address NOR the address's blind index.
 //
-// Why the blind index counts as much as the address: an HMAC digest of a
-// low-entropy value is dictionary-reversible for any holder with a candidate
-// list, and an event payload is written to a broker, logged by whoever
-// subscribes and often traced -- in the distributed deployment mode the
-// broker is a Redis Streams cross-process boundary. The in-process struct is
-// not the contract; the JSON form the bus actually carries is (events.go's
-// payload doc block), so the assertions run against the serialized payload:
-// no "email_index" key, and not the invitation's index value in the bytes.
-// A subscriber that must reach the invitee reads the invitation row through
-// org, where the address is encrypted at rest.
+// Why the blind index counts as much as the address: an HMAC blind index
+// of a low-entropy value is a stable linkable identifier -- the same
+// address always yields the same 64 hex characters under the same key,
+// across rows, tenants, time and systems -- and an event payload is
+// written to a broker, logged by whoever subscribes and often traced; in
+// the distributed deployment mode the broker is a Redis Streams
+// cross-process boundary. (It is NOT dictionary-reversible for a holder
+// without the key -- that is the mechanism's whole point -- but an oracle
+// or a key leak makes the stability equivalent to the address itself; see
+// Invitation.EmailIndex's doc comment in invitation.go for the full
+// argument.) The in-process struct is not the contract; the JSON form the
+// bus actually carries is (events.go's payload doc block), so the
+// assertions run against the serialized payload: no "email_index" key,
+// and not the invitation's index value in the bytes. A subscriber that
+// must reach the invitee reads the invitation row through org, where the
+// address is encrypted at rest.
 func TestInviteService_Invite_PublishedMemberInvited_ExposesNoBlindIndex(t *testing.T) {
 	f := newInviteFixture(t)
 	result := f.invite(t, "ada@example.test")

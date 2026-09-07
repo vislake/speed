@@ -45,15 +45,36 @@ const (
 	PermissionRemoveMember = "org:remove_member"
 )
 
+// The dbkit.Auditable resource labels OrgNode, Membership and Invitation
+// return from AuditResourceType (model.go, membership.go, invitation.go) --
+// the single source the whole audit vocabulary is built from. dbkit's
+// write-capture plugin derives a captured write's action as
+// "<label>.<operation>" (go/dbkit/audit_capture.go), and go/dbkit/audit's
+// persister derives the persisted action the same way (audit/module.go);
+// the AuditAction* constants below are constant expressions over exactly
+// these labels, so the three sides -- a model's AuditResourceType, the
+// declared vocabulary and the mechanism's own derivation -- can never
+// drift: a solo rename of a label here propagates through the models and
+// the declared actions in the same edit, where the earlier
+// two-independent-literal shape let a label rename silently change what
+// the mechanism derives while the declared actions kept their old
+// strings -- a mismatch the persister's vocabulary gate answers with an
+// alert and a dropped row, never an error.
+const (
+	AuditResourceTypeNode       = "org.node"
+	AuditResourceTypeMember     = "org.member"
+	AuditResourceTypeInvitation = "org.invitation"
+)
+
 // The audit actions org contributes to the audit vocabulary -- and the
-// exact vocabulary org's write paths actually produce. These six names are
-// derived automatically by dbkit's write-capture plugin
-// (go/dbkit/audit_capture.go) from each Auditable model's resource label
-// (AuditResourceTypeNode/Member/Invitation below) and the GORM processor
-// the write ran -- "create" or "update": org's rows are only ever created
-// or updated, since every delete org performs is a mark-delete UPDATE and
-// nothing in this module ever issues a physical DELETE, so no org write is
-// captured under a "delete" operation.
+// exact vocabulary org's write paths actually produce. Each is the
+// resource label above concatenated with the GORM processor the write
+// ran -- "create" or "update" -- the identical derivation dbkit's
+// write-capture plugin performs at capture time, so a declared action is
+// always a string the mechanism can genuinely derive: org's rows are only
+// ever created or updated, since every delete org performs is a
+// mark-delete UPDATE and nothing in this module ever issues a physical
+// DELETE, so no org write is captured under a "delete" operation.
 //
 // This block deliberately does NOT declare the semantic event-shaped
 // vocabulary an earlier round sketched (org.node.rename / org.node.move /
@@ -74,28 +95,48 @@ const (
 // does), because go/dbkit/audit's persister refuses -- with a structured
 // alert -- any captured event whose derived action no module declared.
 const (
-	AuditActionNodeCreate = "org.node.create"
-	AuditActionNodeUpdate = "org.node.update"
+	AuditActionNodeCreate = AuditResourceTypeNode + ".create"
+	AuditActionNodeUpdate = AuditResourceTypeNode + ".update"
 
-	AuditActionMemberCreate = "org.member.create"
-	AuditActionMemberUpdate = "org.member.update"
+	AuditActionMemberCreate = AuditResourceTypeMember + ".create"
+	AuditActionMemberUpdate = AuditResourceTypeMember + ".update"
 
-	AuditActionInvitationCreate = "org.invitation.create"
-	AuditActionInvitationUpdate = "org.invitation.update"
+	AuditActionInvitationCreate = AuditResourceTypeInvitation + ".create"
+	AuditActionInvitationUpdate = AuditResourceTypeInvitation + ".update"
 )
 
-// The dbkit.Auditable resource labels OrgNode, Membership and Invitation
-// return from AuditResourceType. dbkit's write-capture plugin derives the
-// actions declared above as "<label>.<operation>", so these strings are
-// load-bearing for the audit trail -- model and vocabulary share one
-// source here, exactly as table names and migrations do, so a rename can
-// never drift between the model's AuditResourceType and the declared
-// actions.
-const (
-	AuditResourceTypeNode       = "org.node"
-	AuditResourceTypeMember     = "org.member"
-	AuditResourceTypeInvitation = "org.invitation"
-)
+// AuditableModels returns the models org ships with the dbkit.Auditable
+// marker -- the module's own declaration of which of its writes the
+// automatic write-capture mechanism may capture. A host wiring that
+// mechanism on the connection org writes through lists this slice in
+// dbkit.Options.AuditModels, so the host's capture scope is this module's
+// own declaration rather than hand-kept literals:
+//
+//	dbkit.Open(ctx, dbkit.Options{
+//		Dialect: ..., DSN: ...,
+//		AuditBus:    bus,
+//		AuditModels: org.AuditableModels(),
+//	})
+//
+// The contract is asymmetric on purpose, and the asymmetry is dbkit's own,
+// not this module's: Open refuses an entry that lost the marker
+// (dbkit.invalid_audit_model -- a listed model whose Auditable marker a
+// later round removed must not be silently skipped), while nothing can
+// refuse a model that GAINED the marker while this list forgot it, because
+// Open receives no model inventory -- GORM's models register lazily, per
+// statement. The marker side of the contract is therefore this module's
+// own: adding dbkit.Auditable to an org model belongs in this list in the
+// same edit, and module_test.go's
+// TestModule_AuditableModels_IsExactlyTheMarkedModels pins the list to the
+// models that carry the marker so the two cannot silently diverge. A
+// model deliberately OUT of the list is out of the capture scope of every
+// host -- which is how a host keeps a same-connection Auditable model
+// owned by another recording path (the reference app's notes.Note, which
+// persists its own trail through audit.Emit) out of automatic capture:
+// org's list contains only org's models by construction.
+func AuditableModels() []any {
+	return []any{OrgNode{}, Membership{}, Invitation{}}
+}
 
 // The feature flags org contributes.
 //

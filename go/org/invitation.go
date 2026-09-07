@@ -108,13 +108,33 @@ type Invitation struct {
 	Email string `gorm:"column:email;serializer:org_email_enc;not null"`
 
 	// EmailIndex is the HMAC blind index of Email, the only way this table
-	// can be searched by address. It never rides an org event payload or an
-	// org HTTP response: a keyed digest of a low-entropy value is
-	// dictionary-reversible for any holder with a candidate list, which is
-	// why org.member.invited carries the invitation's id and a subscriber
-	// that must reach the invitee reads this row (events.go's MemberInvited
-	// doc comment states the same rule from the payload's side).
-	EmailIndex string `gorm:"column:email_index;size:64;not null;index"`
+	// can be searched by address. It never leaves org -- not in an event
+	// payload, not in an HTTP response, not in the audit trail -- and the
+	// reason is not that a keyed digest is hard to reverse. HMAC without
+	// the key is dictionary-resistant: only a key holder can compute index
+	// values for candidate addresses at all, which is the whole point of
+	// dbkit's blind-index mechanism (its key is host-injected and lives
+	// in-process). The real reason is that the index is a STABLE LINKABLE
+	// IDENTIFIER: the same address always yields the same 64 hex
+	// characters, on this table, across every tenant and every system that
+	// indexes addresses under the same key, and for as long as the key
+	// lives. Standing alone, that stability lets a holder of any collection
+	// of rows correlate an invitee across them -- across tenants, across
+	// time, across systems; combined with any oracle (a reader who invites
+	// a guessed address and reads its index back, the self-invite
+	// read-back) or a leaked key, the index is equivalent to the address
+	// itself, because the input space is a small dictionary of
+	// person-attributable strings. An address-derived value this stable
+	// must not reach any exit whose audience is wider than the row's own:
+	// org.member.invited carries the invitation's id and a subscriber that
+	// must reach the invitee reads this row (events.go's MemberInvited doc
+	// comment states the same rule from the payload's side), the HTTP
+	// responses never echo it (handler.go's toInvitationResponse), and the
+	// audit trail -- the most permanent exit of all, append-only with no
+	// delete by design, and tenant-readable where the org rows themselves
+	// are subtree-readable -- receives it only as the audit:"redact"
+	// marker the tag below declares, never the value.
+	EmailIndex string `gorm:"column:email_index;size:64;not null;index" audit:"redact"`
 
 	// InviterUserID is the member who issued the invitation.
 	InviterUserID string `gorm:"column:inviter_user_id;size:64;not null"`
@@ -166,18 +186,32 @@ func (i Invitation) IsPending(now time.Time) bool {
 // write-capture plugin attaches to every Invitation write's
 // WriteCapturedEvent -- from which go/dbkit/audit's persister derives the
 // declared "org.invitation.create" and "org.invitation.update" actions
-// (module.go's audit-action block). An invite records as
-// "org.invitation.create"; an acceptance and a revoke are compare-and-swap
-// status flips and record as "org.invitation.update". The invitee's Email
-// column is a GORM serializer field, so capture redacts it to
-// "[redacted]" automatically; EmailIndex (an HMAC digest) and TokenHash (a
-// SHA-256 digest) are safe to record. The deliberately narrow,
+// (module.go's audit-action block, composed from the label above). An
+// invite records as "org.invitation.create"; an acceptance and a revoke
+// are compare-and-swap status flips and record as
+// "org.invitation.update". What the trail records of the invitee is
+// deliberate and stated on the fields themselves: the Email column is a
+// GORM serializer field, so capture redacts it to "[redacted]"
+// automatically, and EmailIndex carries the audit:"redact" capture
+// opt-out and is captured the same way -- the audit row is the most
+// permanent exit a stable linkable identifier of a guessable address
+// could reach (append-only, no delete by design, tenant-readable where
+// the org rows themselves are subtree-readable), so the trail gets the
+// marker, never the value. TokenHash is recorded, deliberately, and the
+// credential context is why it is not same-family: the token is 32 fresh
+// random bytes per invitation, so its SHA-256 has no candidate space (no
+// dictionary to reverse with, key or no key), no stability to link on
+// (every invitation's hash is unique, even for the same address twice),
+// and no person-attributable meaning -- and the only entity a recorded
+// hash could ever confirm anything to is a holder of the token value
+// itself, who already holds the credential the confirmation is about (see
+// hashInvitationToken). The deliberately narrow,
 // non-tenant-scoped invitationTokenIndex row is NOT Auditable: it is
 // bookkeeping for the token, and its writes belong to no tenant -- see
 // that type's own doc comment. Captured only when a host wires
 // dbkit.Options.AuditBus on org's connection AND lists this model in its
-// Options.AuditModels scope; see go/org/AGENTS.md's "Audit trail
-// collection" section.
+// Options.AuditModels scope (org.AuditableModels() is the module's own
+// list); see go/org/AGENTS.md's "The audit trail" section.
 func (Invitation) AuditResourceType() string { return AuditResourceTypeInvitation }
 
 // compile-time check that Invitation satisfies dbkit.TenantScoped.

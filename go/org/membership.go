@@ -146,15 +146,15 @@ func (m Membership) GetDeletedAt() *time.Time { return m.DeletedAt }
 // resource kind "org.member", the label dbkit's automatic GORM write-capture
 // plugin attaches to every Membership write's WriteCapturedEvent -- from
 // which go/dbkit/audit's persister derives the declared "org.member.create"
-// and "org.member.update" actions (module.go's audit-action block). A
-// member addition records as "org.member.create"; a removal and a restore
-// are mark-delete/mark-clear UPDATEs underneath and both record as
-// "org.member.update", distinguishable by the written columns in the
-// changes diff (deleted_at set vs. cleared). Captured only when a host
-// wires dbkit.Options.AuditBus on org's connection AND lists this model in
-// its Options.AuditModels scope -- the reference app is the first host
-// fulfilling the contract; see go/org/AGENTS.md's "Audit trail collection"
-// section.
+// and "org.member.update" actions (module.go's audit-action block, composed
+// from the labels there). A member addition records as "org.member.create";
+// a removal and a restore are mark-delete/mark-clear UPDATEs underneath and
+// both record as "org.member.update", distinguishable by the written
+// columns in the changes diff (deleted_at set vs. cleared). Captured only
+// when a host wires dbkit.Options.AuditBus on org's connection AND sets
+// that connection's Options.AuditModels scope from org.AuditableModels()
+// -- the reference app is the first host fulfilling the contract; see
+// go/org/AGENTS.md's "The audit trail" section.
 func (Membership) AuditResourceType() string { return AuditResourceTypeMember }
 
 // compile-time check that Membership satisfies dbkit.TenantScoped.

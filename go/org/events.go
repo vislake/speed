@@ -132,13 +132,21 @@ type (
 	// It never carries the invitee's address, nor any derivation of it --
 	// the address's blind index included. An event payload is written to a
 	// broker, logged by whoever subscribes and often traced, and the blind
-	// index is not a safe surrogate for the address in any of those places:
-	// a keyed digest of a low-entropy value is dictionary-reversible for any
-	// holder with a candidate list, so carrying it would publish an offline
-	// oracle for the invitee's address across the process boundary. A
-	// subscriber that must reach the person reads the invitation row through
-	// org, where the address is encrypted at rest; the payload identifies
-	// the invitation and its context, nothing more.
+	// index is not a safe surrogate for the address in any of those places.
+	// The reason is not that the HMAC is weak: without the key, no holder
+	// can compute index values for candidate addresses, which is the whole
+	// point of the blind-index mechanism. It is that the index is a STABLE
+	// LINKABLE IDENTIFIER of a guessable, person-attributable value -- the
+	// same address yields the same 64 hex characters everywhere and
+	// forever under the same key -- so a payload carrying it would let
+	// every subscriber, logger and trace sink correlate the invitee across
+	// rows, tenants, time and systems, and any oracle or key leak makes it
+	// equivalent to the address itself (Invitation.EmailIndex's own doc
+	// comment in invitation.go carries the full argument, and
+	// toInvitationResponse in handler.go states the same rule for HTTP
+	// responses). A subscriber that must reach the person reads the
+	// invitation row through org, where the address is encrypted at rest;
+	// the payload identifies the invitation and its context, nothing more.
 	MemberInvited struct {
 		InvitationID  string `json:"invitation_id"`
 		NodeID        string `json:"node_id"`

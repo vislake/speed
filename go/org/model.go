@@ -130,12 +130,13 @@ func (n OrgNode) GetDeletedAt() *time.Time { return n.DeletedAt }
 // resource kind "org.node", the label dbkit's automatic GORM write-capture
 // plugin attaches to every OrgNode write's WriteCapturedEvent -- from which
 // go/dbkit/audit's persister derives the declared "org.node.create" and
-// "org.node.update" actions (module.go's audit-action block). Writes
-// against this model are captured only when a host wires
-// dbkit.Options.AuditBus on the connection org writes through AND lists
-// this model in that connection's Options.AuditModels scope -- go/org's
-// own AGENTS.md "Audit trail collection" section has the full wiring
-// contract, and the reference app is the first host fulfilling it. The
+// "org.node.update" actions (module.go's audit-action block, composed from
+// the labels there). Writes against this model are captured only when a
+// host wires dbkit.Options.AuditBus on the connection org writes through
+// AND sets that connection's Options.AuditModels scope from
+// org.AuditableModels() -- go/org's own AGENTS.md "The audit trail"
+// section has the full wiring contract, and the reference app is the first
+// host fulfilling it. The
 // label is also why the lock-touch UPDATE statements org's write paths
 // issue (touchLockByID and its callers) are recorded too: they are genuine
 // UPDATEs against an Auditable model, and the capture mechanism has no
