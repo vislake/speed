@@ -15,9 +15,13 @@
  * once the spend is permanent, and "refunded" once a failed job's
  * reservation was released back to available. A failed generation is
  * therefore observable here as its deduct row's refunded state and the
- * balance restored -- never a row that silently vanishes. The row's
- * reason is the server's own free text, displayed verbatim (the
- * fragment sanctions it), beside the date.
+ * balance restored -- never a row that silently vanishes. The reason
+ * a row's record carries is never displayed: go/billing's contract
+ * shapes it as a machine-readable annotation (ASCII-alphanumeric
+ * segments joined by ':', '_' or '-', never free text -- the very
+ * value the module copies into audit Changes rows), so it holds no
+ * meaning a translated row label does not already carry. The meta
+ * line under each label is the row's date alone.
  *
  * The gate shape mirrors notes-view.tsx's exactly: the read error is
  * classified first, because the error state is where every failure of
@@ -268,11 +272,15 @@ export function CreditsView(): ReactElement {
                       {t(ROW_TEXT_KEY[`${row.type}.${row.status}`] ??
                         'credits.rows.unknown')}
                     </Typography>
+                    {/* The meta line is the row's date alone. The
+                     * ledger's reason field never renders: go/billing's
+                     * contract makes it a machine annotation (the value
+                     * audit Changes rows copy verbatim), and the
+                     * translated label above is what the row means to
+                     * the reader -- a token beside it would say the
+                     * same thing in machine text. */}
                     <Typography variant="caption" color="text.secondary">
-                      {t('credits.rowMeta', {
-                        reason: row.reason,
-                        date: formatDate(row.createdAt),
-                      })}
+                      {formatDate(row.createdAt)}
                     </Typography>
                   </Box>
                   <Typography variant="body2" sx={{ whiteSpace: 'nowrap' }}>

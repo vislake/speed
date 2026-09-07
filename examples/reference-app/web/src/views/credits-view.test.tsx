@@ -41,7 +41,11 @@ import { describe, expect, it } from 'vitest'
 import uiKitZhCN from '../../../../../web/packages/ui-kit/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import enUS from '../locales/en-US.json' with { type: 'json' }
-import { demoServer } from '../test-utils/demo-server.js'
+import {
+  DEMO_CREDIT_SEED_REASON,
+  DEMO_SIMULATION_CREDIT_REASON,
+  demoServer,
+} from '../test-utils/demo-server.js'
 import type { RealClientRig } from '../test-utils/real-client.js'
 import {
   errorResponse,
@@ -181,19 +185,22 @@ describe('CreditsView', () => {
       ),
     ).toBeInTheDocument()
     // The ledger rows, newest first: the generation's confirmed deduct
-    // above the seed grant, its reason shown verbatim and its amount
-    // signed negative.
+    // above the seed grant, its amount signed negative. The meta line
+    // is the row's date; the reason the row carries must not render --
+    // go/billing's machine annotation (the same value audit Changes
+    // rows copy verbatim) holds no meaning the translated label above
+    // does not already carry, so the row shows label, date and amount,
+    // never the token (the pre-fix code rendered the reason verbatim
+    // beside the date, and this assertion failed on it).
     const rows = view.getAllByRole('listitem')
     expect(rows).toHaveLength(2)
     expect(rows[0]).toHaveTextContent(zhCN.credits.rows.deductConfirmed)
     expect(rows[0]).toHaveTextContent('-10')
-    expect(rows[0]).toHaveTextContent(
-      zhCN.credits.rowMeta
-        .replace('{{reason}}', 'smilesim:simulate')
-        .replace('{{date}}', createdAtText('zh-CN', DEMO_CREATED_AT)),
-    )
+    expect(rows[0]).toHaveTextContent(createdAtText('zh-CN', DEMO_CREATED_AT))
+    expect(rows[0]).not.toHaveTextContent(DEMO_SIMULATION_CREDIT_REASON)
     expect(rows[1]).toHaveTextContent(zhCN.credits.rows.grant)
     expect(rows[1]).toHaveTextContent('+1,000')
+    expect(rows[1]).not.toHaveTextContent(DEMO_CREDIT_SEED_REASON)
 
     // Both reads travelled the composed stack exactly once each.
     await waitFor(() => expect(balanceGets(rig)).toBe(1))

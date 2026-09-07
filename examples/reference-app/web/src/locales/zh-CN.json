@@ -217,7 +217,6 @@
       "deductRefunded": "模拟生成已退款",
       "unknown": "账目记录"
     },
-    "rowMeta": "{{reason}} · {{date}}",
     "errors": {
       "permissionDenied": "你没有查看本诊所额度的权限。",
       "internalError": "读取额度信息时服务出错，请稍后重试。",

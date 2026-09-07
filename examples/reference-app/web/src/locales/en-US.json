@@ -217,7 +217,6 @@
       "deductRefunded": "Simulation refunded",
       "unknown": "Ledger entry"
     },
-    "rowMeta": "{{reason}} · {{date}}",
     "errors": {
       "permissionDenied": "You do not have permission to view this clinic's credits.",
       "internalError": "The server could not read the credit information. Please try again.",
