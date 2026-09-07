@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
@@ -203,6 +205,48 @@ func (c *capturedEvents) itemChanged(t *testing.T) []ItemChangedEvent {
 		out = append(out, payload)
 	}
 	return out
+}
+
+// capturedLogs is a slog.Handler tests install on a context (through
+// obs.WithLogger) so a Warn the service emitted on a request path can be
+// asserted. Records are appended on the calling goroutine only, so no
+// locking is needed.
+type capturedLogs struct {
+	records []slog.Record
+}
+
+func (c *capturedLogs) Enabled(context.Context, slog.Level) bool { return true }
+
+func (c *capturedLogs) Handle(_ context.Context, r slog.Record) error {
+	c.records = append(c.records, r)
+	return nil
+}
+
+func (c *capturedLogs) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c *capturedLogs) WithGroup(string) slog.Handler      { return c }
+
+// warnedAbout fails the test unless a captured Warn record carries an
+// "item" attribute equal to wantItem.
+func (c *capturedLogs) warnedAbout(t *testing.T, wantItem string) {
+	t.Helper()
+	for _, r := range c.records {
+		if r.Level != slog.LevelWarn {
+			continue
+		}
+		var item string
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "item" {
+				if s, ok := a.Value.Any().(string); ok {
+					item = s
+				}
+			}
+			return true
+		})
+		if item == wantItem {
+			return
+		}
+	}
+	t.Fatalf("want a Warn naming item %q, captured records: %v", wantItem, c.records)
 }
 
 func TestService_Get_ServesSchemaDefaults(t *testing.T) {
@@ -879,6 +923,52 @@ func TestService_PublicSnapshot_SkipsAnItemWithNoValueAnywhere(t *testing.T) {
 	if values["brand.support_phone"] != "+1-555-0100" {
 		t.Fatalf("snapshot brand.support_phone = %#v, want the written row", values["brand.support_phone"])
 	}
+}
+
+func TestService_PublicSnapshot_SkipsAnItemWhoseStoredRowDoesNotDecode(t *testing.T) {
+	// The tolerance the unset case above earns is owed to its sibling
+	// bad-data shape: a stored row whose canonical text cannot be decoded
+	// under the item's declared type. That corrupt row must not take the
+	// pre-auth login surface down with an error for every tenant either --
+	// the item is skipped, its key absent from the snapshot, with a Warn
+	// naming it -- while a caller that must see the corruption reads the
+	// item through Get, which still reports it. The row cannot be written
+	// through Set (validation refuses a value that does not canonicalize),
+	// so it is planted directly in the table, the way a buggy or older
+	// writer would have left it.
+	items := []pkgcore.ConfigItem{
+		{Key: "brand.site_name", Type: "string", Default: "Smile Studio", Public: true, Description: "The tenant's display name", Group: "brand"},
+		{Key: "billing.retry_limit", Type: "int", Default: int(3), Public: true, Description: "How many payment retries an invoice gets", Group: "billing"},
+	}
+	db := openServiceTestDB(t)
+	svc, _ := attachServiceForTest(t, db, nil, items, nil)
+	if err := db.Create(&row{
+		Key:       "billing.retry_limit",
+		Scope:     string(ScopeSystem),
+		TenantID:  "",
+		Value:     "not-an-int",
+		UpdatedBy: "legacy-writer",
+		UpdatedAt: time.Now(),
+	}).Error; err != nil {
+		t.Fatalf("planting the corrupt row: %v", err)
+	}
+
+	logs := &capturedLogs{}
+	ctx := obs.WithLogger(context.Background(), slog.New(logs))
+	values, features, err := svc.PublicSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("PublicSnapshot with an undecodable stored row: %v", err)
+	}
+	if _, present := values["billing.retry_limit"]; present {
+		t.Fatal("an item whose stored row does not decode must be omitted from the snapshot, not present")
+	}
+	if values["brand.site_name"] != "Smile Studio" {
+		t.Fatalf("snapshot brand.site_name = %#v, want the schema default", values["brand.site_name"])
+	}
+	if len(features) != 0 {
+		t.Fatalf("snapshot features = %v, want none", features)
+	}
+	logs.warnedAbout(t, "billing.retry_limit")
 }
 
 func TestService_Refresh_InvalidatesRowsWrittenBehindItsBack(t *testing.T) {

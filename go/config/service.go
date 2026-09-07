@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/dbkit"
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
@@ -451,12 +452,14 @@ func (s *Service) EnabledFlags(ctx context.Context) ([]string, error) {
 // context's tenant, decoded and typed for JSON, plus the enabled feature
 // flag list. Sensitive items can never appear (pkgcore's declaration
 // validation makes Sensitive and Public mutually exclusive), so the
-// snapshot is safe to serve to anyone. An item that currently has no value
-// anywhere -- no row at any reachable scope and no declared Default, a
-// legal declaration whose module serves no value until one is set -- is
-// omitted from the snapshot, never a reason to fail the response. The
-// returned map is keyed by configuration key; JSON output sorts map keys,
-// keeping responses deterministic.
+// snapshot is safe to serve to anyone. An item the resolve walk cannot
+// serve is omitted from the snapshot, never a reason to fail the response:
+// that covers an item with no value anywhere -- no row at any reachable
+// scope and no declared Default, a legal declaration whose module serves
+// no value until one is set -- and an item whose stored row fails to
+// decode under its declared type, which is skipped with a Warn naming it.
+// The returned map is keyed by configuration key; JSON output sorts map
+// keys, keeping responses deterministic.
 func (s *Service) PublicSnapshot(ctx context.Context) (map[string]any, []string, error) {
 	values := make(map[string]any)
 	keys := make([]string, 0, len(s.schema.items))
@@ -468,18 +471,17 @@ func (s *Service) PublicSnapshot(ctx context.Context) (map[string]any, []string,
 	sort.Strings(keys)
 	for _, key := range keys {
 		item := s.schema.items[key]
-		canonical, _, err := s.resolve(ctx, item)
+		canonical, scope, err := s.resolve(ctx, item)
 		if err != nil {
-			// A Public item with no row at any reachable scope and no
-			// schema default has nothing to serve: skip it -- that key
+			// An item the resolve walk cannot serve is skipped -- that key
 			// absent from the snapshot -- rather than failing the whole
 			// response. The endpoint's contract is the platform-defaults
 			// fallback, never an error: a future module declaring a Public
 			// item without a Default (legal: "the module serves no value
 			// until one is set") must not take the pre-auth login surface
-			// down with a 404 for every tenant while ops has not written
-			// the row yet. Any other resolve failure is genuine and still
-			// fails the response.
+			// down for every tenant while ops has not written the row yet.
+			// Any other resolve failure is genuine -- the store itself
+			// refusing the read -- and still fails the response.
 			if isErrItemUnset(err) {
 				continue
 			}
@@ -487,7 +489,19 @@ func (s *Service) PublicSnapshot(ctx context.Context) (map[string]any, []string,
 		}
 		data, err := decodeValue(item.typ, canonical)
 		if err != nil {
-			return nil, nil, ErrStorage.WithCause(err)
+			// A stored row whose canonical text does not decode under the
+			// item's declared type -- a row a buggy or older writer left
+			// behind, or one edited outside the module -- is the sibling of
+			// the unset case above: the bad data belongs to this one item,
+			// so this one item is skipped, never the whole response. One
+			// corrupt row taking the pre-auth login surface down for every
+			// tenant would be the same outage the unset branch exists to
+			// prevent, reached one step later in the row's life. The skip
+			// is warned about, naming the item, so ops can find and fix the
+			// row; a caller that must see the corruption reads the item
+			// through Get, which still reports it.
+			obs.FromContext(ctx).Warn("config: skipping an item whose stored value cannot be decoded as its declared type", "item", item.key, "scope", string(scope))
+			continue
 		}
 		// A duration decodes to time.Duration, which JSON would render as
 		// its int64 nanosecond count. The public wire serves the canonical
@@ -679,11 +693,14 @@ func (s *Service) Close() error {
 
 // startPoller launches the anti-loss poller goroutine: every pollInterval
 // it calls Refresh against a timeout-bounded context. A Refresh error is
-// not fatal -- the poller retries on the next tick. Nothing here can log
-// (the module takes no logger), so the failure mode is silent-by-design
-// with the documented consequence that a cache the poller cannot reach
-// stays stale until it can; a host that needs to observe poller health can
-// call Refresh itself through the same code path and surface the error.
+// not fatal -- the poller retries on the next tick. Nothing here logs:
+// the poller runs against a bare background context carrying no logger,
+// and the module takes no logger of its own (request-path code logs only
+// through obs.FromContext's context logger, which a bare background
+// context does not carry), so the failure mode is silent-by-design with
+// the documented consequence that a cache the poller cannot reach stays
+// stale until it can; a host that needs to observe poller health can call
+// Refresh itself through the same code path and surface the error.
 func (s *Service) startPoller() {
 	if s.pollInterval <= 0 {
 		return
