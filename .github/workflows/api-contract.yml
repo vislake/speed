@@ -27,6 +27,45 @@ name: api-contract
 # fast-check run regardless of what changed, so its own compile enforcement
 # does not need to wait for full-ci the way the reference app's does).
 #
+# DIRECT-PUSH TRIGGER: every direct push to main, path-filtered on the
+# same set as the pull_request event above. main allows direct pushes
+# (18-cicd.md's branch-protection section) and that is the normal path
+# here, not an edge case -- most commits land on main by a direct push
+# rather than a merged pull request, the reasoning full-check.yml and
+# fast-check.yml record in place for their own push triggers -- and a
+# direct push carries no PR for the pull_request filter to see, so the
+# consistency gates below used to be silent on exactly the path where
+# spec commits land. The silence is documented by the drift instance this
+# trigger closes: on 2026-09-07 11:37, 880cf2a ("feat(authn): expose the
+# session expiry in the sessions list response") pushed
+# go/authn/api/openapi.yaml's new AuthnSession.expires_at field alone --
+# spec-first, by design -- while the committed authn-server.gen.go and
+# build/openapi/speed.yaml still carried no ExpiresAt on AuthnSession
+# (the file's only expires_at hits then were AuthnTokenPair's token
+# expiry pair), and 41e9892, nine minutes later, regenerated both. No run
+# of this workflow happened in that window: the reference app compiled
+# green throughout, since an added response field changes neither a
+# handler nor anything a build checks -- the compile-enforcement legs
+# below cannot see this drift class, only the porcelain consistency gates
+# can -- and the author's next commit closed it, not CI. With this
+# trigger the 880cf2a push itself runs the job and fails its authn
+# artifact and merged-document gates on the spot; a drift nobody ever
+# repairs stays red, not silently green.
+#
+# The push trigger shares the pull_request path set because the invariant
+# this pipeline checks can only be violated by a change to one of those
+# paths: a push touching only unrelated code cannot make a committed
+# artifact disagree with its spec, so an unfiltered push run would pay
+# the full job on every push for zero information. The twins run fully on
+# every push because their checks span every module; the path set is what
+# scopes this pipeline's, and cost control stays GitHub-native -- the
+# same filter duplicated under the push key, no third-party action.
+# Lockstep rule: the pull_request block, the push block and the PATH SET
+# comment below must name the same paths -- when a fragment joins, add
+# its api/ directory (and any generator config it needs) to all three.
+# The path set names this workflow itself, so the push that repairs a
+# forgotten path re-runs the repaired workflow on its own change.
+#
 # COVERAGE -- what genuinely runs today (in step order)
 #   * Consistency gates: every regeneration below is followed by a gate
 #     that fails the job when the committed artifact is not what the spec
@@ -416,6 +455,36 @@ on:
       - Taskfile.yml
       - .github/workflows/api-contract.yml
   workflow_dispatch:
+  # Direct pushes to main are the normal landing path here (18-cicd.md's
+  # branch-protection section) and carry no PR for the pull_request
+  # filter above to see, so a spec pushed without its regenerated artifact
+  # used to reach main with no run of this workflow at all -- the
+  # 880cf2a/41e9892 window the header records. Same path set as the
+  # pull_request block above: keep the two in lockstep when a fragment
+  # joins.
+  push:
+    branches: [main]
+    paths:
+      - examples/reference-app/internal/notes/api/**
+      - examples/reference-app/internal/cases/api/**
+      - examples/reference-app/internal/smilesim/api/**
+      - go/org/api/**
+      - go/storage/api/**
+      - web/orval.config.ts
+      - web/scripts/**
+      - web/packages/api-sdk/**
+      - go/authn/api/**
+      - go/billing/api/**
+      - go/notification/api/**
+      - go/sharing/api/**
+      - go/pki/api/**
+      - go/admin/api/**
+      - go/integration/api/**
+      - go/ai-gateway/api/**
+      - redocly.yaml
+      - build/openapi/**
+      - Taskfile.yml
+      - .github/workflows/api-contract.yml
 
 concurrency:
   group: api-contract-${{ github.event.pull_request.number || github.ref_name }}
