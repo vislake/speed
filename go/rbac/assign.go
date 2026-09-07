@@ -409,10 +409,12 @@ func (s *Service) RestoreRole(ctx context.Context, sub Subject, role string, sco
 	// exactly the three present-tense verbs define/assign/revoke), and
 	// RestoreRole's own documented semantics are AssignRole's -- "its whole
 	// job is to make a grant exist, exactly like AssignRole's" -- so the
-	// row records the restoration under the assign action; the resource
-	// names the role and the diff names the (user, node) tuple, which is
-	// the whole of what a reader needs to tell a restoration from a fresh
-	// insert at the same tuple.
+	// row records the restoration under the assign action. A restore and a
+	// fresh AssignRole at the same tuple therefore produce byte-identical
+	// rows (same action, same resource, same diff), and a reader does not
+	// need to distinguish them: either way the row means this authorization
+	// is now in effect, which is the whole of what an audit consumer of the
+	// assign action may rely on.
 	s.emitAudit(writeCtx, audit.Input{
 		Action:   AuditActionRoleAssign,
 		Resource: audit.Resource{Type: auditResourceRole, ID: def.ID, DisplayName: def.Key},

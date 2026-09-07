@@ -66,10 +66,14 @@ const (
 	// AuditActionRoleDefine records defining or editing a role.
 	AuditActionRoleDefine = "rbac.role.define"
 
-	// AuditActionRoleAssign records granting a role to a user.
+	// AuditActionRoleAssign records granting a role to a user -- or
+	// restoring one: RestoreRole's restoration emits under this same
+	// action (assign.go), so an rbac.role.assign row may record either.
+	// The two are not told apart on the row, because they need not be:
+	// both mean the same grant is in effect at the same tuple.
 	AuditActionRoleAssign = "rbac.role.assign"
 
-	// AuditActionRoleRevoke records withdrawing such a grant.
+	// AuditActionRoleRevoke records withdrawing a role grant.
 	AuditActionRoleRevoke = "rbac.role.revoke"
 )
 
