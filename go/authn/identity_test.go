@@ -2,9 +2,11 @@ package authn
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
@@ -739,5 +741,347 @@ func TestUserIdentityRepository_TouchLogin_ClearsAFieldTheProviderStoppedReporti
 	}
 	if len(raw) == 0 {
 		t.Error("the raw email column is empty: the column-level clear bypassed the at-rest encryption")
+	}
+}
+
+// Over-width provider-profile shapes for the truncation regressions below.
+// Each value exceeds its column's declared VARCHAR width (model.go's
+// column-width constants) by a margin that is fatal on PostgreSQL -- an
+// over-width write is refused with SQLSTATE 22001 -- while SQLite stores the
+// value verbatim: that asymmetry is the dual-dialect divergence the write
+// boundary closes. Each value is built as a recognizable HEAD at exactly the
+// column width followed by an over-width TAIL of a different rune, so a test
+// that finds the head stored proves truncation kept the value's beginning
+// and cut the end; the head is a multi-byte rune repeated, so a byte-based
+// cut (rather than the rune-based bound PostgreSQL's VARCHAR width counts
+// in) would leave invalid UTF-8 behind.
+var (
+	// overWidthName is 200 runes, past user_identities.display_name's and
+	// users.display_name's VARCHAR(128).
+	overWidthName = strings.Repeat("名", identityDisplayNameWidth) + strings.Repeat("尾", 72)
+	// overWidthAvatar is 610 runes, past user_identities.avatar_url's
+	// VARCHAR(512).
+	overWidthAvatar = strings.Repeat("a", identityAvatarURLWidth) + strings.Repeat("b", 98)
+	// overWidthSubject is 250 runes, past user_identities.external_id's
+	// VARCHAR(191).
+	overWidthSubject = strings.Repeat("x", identityExternalIDWidth) + strings.Repeat("y", 59)
+)
+
+// TestUserIdentityRepository_Create_BoundsProviderReportedFieldsToColumnWidths
+// is the write-boundary regression for user_identities' three provider-reported
+// columns: external_id, display_name and avatar_url are third-party strings
+// written straight into fixed-width columns, and before this round a sign-in
+// carrying an over-width profile succeeded on SQLite and failed on PostgreSQL
+// with SQLSTATE 22001 (real PG probe: display_name 200 chars -> VARCHAR(128),
+// avatar_url 610 -> VARCHAR(512), external_id 250 -> VARCHAR(191); SQLite
+// stored all three verbatim). The repository write boundary must bound each
+// to its column's width -- head preserved, cut at a rune boundary -- exactly
+// as SessionRepository.Create already bounds device/user_agent.
+func TestUserIdentityRepository_Create_BoundsProviderReportedFieldsToColumnWidths(t *testing.T) {
+	t.Parallel()
+
+	db := testutil.NewDB(t)
+	repo, repoErr := NewUserIdentityRepository(db)
+	if repoErr != nil {
+		t.Fatalf("NewUserIdentityRepository() error = %v", repoErr)
+	}
+
+	created := &UserIdentity{
+		UserID:      "user-1",
+		Provider:    ProviderGoogle,
+		ExternalID:  overWidthSubject,
+		DisplayName: overWidthName,
+		AvatarURL:   overWidthAvatar,
+	}
+	if createErr := repo.Create(t.Context(), created); createErr != nil {
+		t.Fatalf("Create() error = %v", createErr)
+	}
+
+	stored, err := repo.FindByID(t.Context(), created.ID)
+	if err != nil {
+		t.Fatalf("FindByID() error = %v", err)
+	}
+	if want := strings.Repeat("x", identityExternalIDWidth); stored.ExternalID != want {
+		t.Errorf("stored external_id = %d runes, want the %d-rune head (the raw over-width value was stored before the fix)", utf8.RuneCountInString(stored.ExternalID), identityExternalIDWidth)
+	}
+	if want := strings.Repeat("名", identityDisplayNameWidth); stored.DisplayName != want {
+		t.Errorf("stored display_name = %d runes, want the %d-rune head (the raw over-width value was stored before the fix)", utf8.RuneCountInString(stored.DisplayName), identityDisplayNameWidth)
+	}
+	if want := strings.Repeat("a", identityAvatarURLWidth); stored.AvatarURL != want {
+		t.Errorf("stored avatar_url = %d runes, want the %d-rune head (the raw over-width value was stored before the fix)", utf8.RuneCountInString(stored.AvatarURL), identityAvatarURLWidth)
+	}
+	// The bound is applied to the passed struct too, so the caller's copy
+	// matches what was stored.
+	if created.ExternalID != stored.ExternalID || created.DisplayName != stored.DisplayName || created.AvatarURL != stored.AvatarURL {
+		t.Error("the struct passed to Create still carries the over-width values after the call; the write boundary must bound it in place")
+	}
+
+	// A re-presented login carries the ORIGINAL over-width provider id, never
+	// the bounded form. FindByExternal must compare in the bounded form too,
+	// or the very next sign-in could never find the row this create wrote.
+	again, err := repo.FindByExternal(t.Context(), ProviderGoogle, overWidthSubject)
+	if err != nil {
+		t.Fatalf("FindByExternal(original over-width id) error = %v", err)
+	}
+	if again.ID != created.ID {
+		t.Errorf("FindByExternal(original over-width id) = identity %q, want the just-created %q", again.ID, created.ID)
+	}
+
+	// Values exactly AT the width are never cut (the same at-width guarantee
+	// the session truncation test pins).
+	exact := &UserIdentity{
+		UserID:      "user-1",
+		Provider:    ProviderGitHub,
+		ExternalID:  strings.Repeat("e", identityExternalIDWidth),
+		DisplayName: strings.Repeat("n", identityDisplayNameWidth),
+		AvatarURL:   strings.Repeat("a", identityAvatarURLWidth),
+	}
+	if createErr := repo.Create(t.Context(), exact); createErr != nil {
+		t.Fatalf("Create(at-width values) error = %v", createErr)
+	}
+	exactStored, err := repo.FindByID(t.Context(), exact.ID)
+	if err != nil {
+		t.Fatalf("FindByID(at-width identity) error = %v", err)
+	}
+	if exactStored.ExternalID != exact.ExternalID || exactStored.DisplayName != exact.DisplayName || exactStored.AvatarURL != exact.AvatarURL {
+		t.Error("at-width values were altered by the write boundary; only OVER-width values may be truncated")
+	}
+}
+
+// TestUserIdentityRepository_TouchLogin_BoundsAGrownProviderProfile is the
+// repository half of the "existing identity whose provider later grows"
+// regression: TouchLogin rewrites display_name and avatar_url from the
+// provider on EVERY login, so a value that outgrows its column between two
+// sign-ins must be bounded at this write -- before the fix, the very login
+// that refreshed the grown value failed on PostgreSQL with SQLSTATE 22001
+// while SQLite stored it, breaking an identity that used to sign in fine.
+func TestUserIdentityRepository_TouchLogin_BoundsAGrownProviderProfile(t *testing.T) {
+	t.Parallel()
+
+	db := testutil.NewDB(t)
+	repo, repoErr := NewUserIdentityRepository(db)
+	if repoErr != nil {
+		t.Fatalf("NewUserIdentityRepository() error = %v", repoErr)
+	}
+
+	created := &UserIdentity{
+		UserID:      "user-1",
+		Provider:    ProviderGoogle,
+		ExternalID:  "google-grown-1",
+		DisplayName: "Short Name",
+		AvatarURL:   "https://a.example/small.png",
+	}
+	if createErr := repo.Create(t.Context(), created); createErr != nil {
+		t.Fatalf("Create() error = %v", createErr)
+	}
+
+	now := time.Now()
+	grown := &UserIdentity{
+		ID:          created.ID,
+		DisplayName: overWidthName,
+		AvatarURL:   overWidthAvatar,
+	}
+	if touchErr := repo.TouchLogin(t.Context(), grown, now); touchErr != nil {
+		t.Fatalf("TouchLogin(grown profile) error = %v", touchErr)
+	}
+
+	stored, err := repo.FindByID(t.Context(), created.ID)
+	if err != nil {
+		t.Fatalf("FindByID() error = %v", err)
+	}
+	if want := strings.Repeat("名", identityDisplayNameWidth); stored.DisplayName != want {
+		t.Errorf("stored display_name = %d runes, want the %d-rune head of the grown name", utf8.RuneCountInString(stored.DisplayName), identityDisplayNameWidth)
+	}
+	if want := strings.Repeat("a", identityAvatarURLWidth); stored.AvatarURL != want {
+		t.Errorf("stored avatar_url = %d runes, want the %d-rune head of the grown URL", utf8.RuneCountInString(stored.AvatarURL), identityAvatarURLWidth)
+	}
+	if stored.LastLoginAt == nil || !stored.LastLoginAt.Equal(now) {
+		t.Errorf("stored last_login_at = %v, want %v", stored.LastLoginAt, now)
+	}
+	// The bound is applied to the passed struct too (documented on
+	// TouchLogin), so the caller's row matches what was stored.
+	if grown.DisplayName != stored.DisplayName || grown.AvatarURL != stored.AvatarURL {
+		t.Error("the struct passed to TouchLogin still carries the over-width values after the call")
+	}
+
+	// A later profile that SHRINKS back within the width still replaces the
+	// bounded prefix whole -- only over-width values are cut.
+	if touchErr := repo.TouchLogin(t.Context(), &UserIdentity{
+		ID: created.ID, DisplayName: "New Short", AvatarURL: "https://a.example/new.png",
+	}, now); touchErr != nil {
+		t.Fatalf("TouchLogin(within-width profile) error = %v", touchErr)
+	}
+	rewritten, err := repo.FindByID(t.Context(), created.ID)
+	if err != nil {
+		t.Fatalf("FindByID() error = %v", err)
+	}
+	if rewritten.DisplayName != "New Short" || rewritten.AvatarURL != "https://a.example/new.png" {
+		t.Errorf("stored profile after a within-width rewrite = (%q, %q), want the values verbatim", rewritten.DisplayName, rewritten.AvatarURL)
+	}
+}
+
+// TestService_SocialSignIn_BoundsAnOverWidthProviderProfile drives a social
+// sign-in whose provider reports an over-width profile end to end: the same
+// login must succeed identically on both dialects (before the fix it did on
+// SQLite and failed on PostgreSQL with 22001), and the identity row must
+// store the bounded values on every writer -- the first bind's insert and
+// the every-login refresh alike. The second callback additionally proves the
+// over-width EXTERNAL ID round-trips: the next sign-in carries the same raw
+// provider id and must find the row the first one created.
+func TestService_SocialSignIn_BoundsAnOverWidthProviderProfile(t *testing.T) {
+	t.Parallel()
+
+	const sharedEmail = "shared@example.com"
+
+	provider := &stubProvider{name: ProviderGoogle, identity: &ExternalIdentity{
+		ExternalID:    overWidthSubject,
+		Email:         sharedEmail,
+		EmailVerified: true,
+		Name:          overWidthName,
+		Avatar:        overWidthAvatar,
+	}}
+	f := newFederationFixture(t, provider, ProviderGoogle)
+	existing := f.registerUser(t, sharedEmail, testTenantA)
+
+	result, err := socialSignIn(t, f, provider, testTenantA)
+	if err != nil {
+		t.Fatalf("SocialCallback() error = %v", err)
+	}
+	if !result.AutoLinked {
+		t.Error("AutoLinked = false, want true for a verified, trusted match")
+	}
+	if result.Tokens == nil {
+		t.Fatal("Tokens = nil, want a session for the successful sign-in")
+	}
+
+	identity, err := f.svc.Identities().FindByExternal(t.Context(), ProviderGoogle, overWidthSubject)
+	if err != nil {
+		t.Fatalf("FindByExternal(original over-width id) error = %v", err)
+	}
+	if identity.ID != result.Identity.ID {
+		t.Errorf("identity row = %q, want the sign-in's %q", identity.ID, result.Identity.ID)
+	}
+	if want := strings.Repeat("x", identityExternalIDWidth); identity.ExternalID != want {
+		t.Errorf("stored external_id = %d runes, want the %d-rune head", utf8.RuneCountInString(identity.ExternalID), identityExternalIDWidth)
+	}
+	if want := strings.Repeat("名", identityDisplayNameWidth); identity.DisplayName != want {
+		t.Errorf("stored display_name = %d runes, want the %d-rune head", utf8.RuneCountInString(identity.DisplayName), identityDisplayNameWidth)
+	}
+	if want := strings.Repeat("a", identityAvatarURLWidth); identity.AvatarURL != want {
+		t.Errorf("stored avatar_url = %d runes, want the %d-rune head", utf8.RuneCountInString(identity.AvatarURL), identityAvatarURLWidth)
+	}
+
+	// Provider data never overwrites the user's own chosen name on the users
+	// row: the auto-link reuses the existing account untouched.
+	currentUser, err := f.svc.Users().FindByID(t.Context(), existing.ID)
+	if err != nil {
+		t.Fatalf("FindByID(user) error = %v", err)
+	}
+	if currentUser.DisplayName != "Test User" {
+		t.Errorf("users.display_name = %q, want the user-chosen %q; provider data must not overwrite it", currentUser.DisplayName, "Test User")
+	}
+
+	// The same over-width profile on the NEXT sign-in still resolves to this
+	// same identity (lookup bounded like the write) and signs the person in.
+	result2, err := socialSignIn(t, f, provider, testTenantA)
+	if err != nil {
+		t.Fatalf("second SocialCallback() error = %v", err)
+	}
+	if result2.Identity.ID != result.Identity.ID {
+		t.Errorf("second sign-in resolved to identity %q, want the first sign-in's %q", result2.Identity.ID, result.Identity.ID)
+	}
+	if result2.Tokens == nil {
+		t.Fatal("second sign-in returned no session")
+	}
+}
+
+// TestService_SocialSignIn_AccountMintBoundsTheProviderReportedName covers
+// the users.display_name writer the account mints own: a first social
+// sign-in provisions a brand-new user whose display name is the PROVIDER's
+// name, not the person's own typing, and the minted name must be bounded at
+// the write like the identity row's fields are. (Service.Register's refusal
+// of an over-width USER-CHOSEN name is a separate semantic, pinned by
+// TestHandler_Register_DisplayNameLengthIsValidated.) The sign-in itself is
+// refused here only for the fresh account's missing membership -- the
+// provisioning happened before that refusal, which is exactly what lets this
+// test inspect it.
+func TestService_SocialSignIn_AccountMintBoundsTheProviderReportedName(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubProvider{name: ProviderGoogle, identity: &ExternalIdentity{
+		ExternalID:    "google-mint-1",
+		Email:         "brand-new-mint@example.com",
+		EmailVerified: true,
+		Name:          overWidthName,
+	}}
+	f := newFederationFixture(t, provider, ProviderGoogle)
+
+	if _, err := socialSignIn(t, f, provider, testTenantA); err == nil {
+		t.Fatal("socialSignIn() unexpectedly succeeded; a fresh account has no membership yet")
+	} else if !hasCode(err, ErrTenantMembershipRequired.Code) {
+		t.Fatalf("socialSignIn() error = %v, want the membership refusal that follows successful provisioning", err)
+	}
+
+	created, err := f.svc.Users().FindByEmail(t.Context(), "brand-new-mint@example.com")
+	if err != nil {
+		t.Fatalf("the minted account was not provisioned: %v", err)
+	}
+	if want := strings.Repeat("名", displayNameWidth); created.DisplayName != want {
+		t.Errorf("users.display_name = %d runes, want the %d-rune head of the provider's name", utf8.RuneCountInString(created.DisplayName), displayNameWidth)
+	}
+
+	identity, err := f.svc.Identities().FindByExternal(t.Context(), ProviderGoogle, "google-mint-1")
+	if err != nil {
+		t.Fatalf("the minted identity was not provisioned: %v", err)
+	}
+	if want := strings.Repeat("名", identityDisplayNameWidth); identity.DisplayName != want {
+		t.Errorf("user_identities.display_name = %d runes, want the %d-rune head of the provider's name", utf8.RuneCountInString(identity.DisplayName), identityDisplayNameWidth)
+	}
+}
+
+// TestService_SocialSignIn_GrownProviderProfileIsBoundedOnTheRewrite is the
+// full-flow shape of the "existing identity whose provider later grows"
+// regression: the identity signs in fine while the provider's name and avatar
+// fit their columns, then the provider grows both past the widths. The very
+// next login refreshes the stored profile (TouchLogin) and must still succeed
+// with the grown values bounded at the write -- before the fix, that login
+// failed on PostgreSQL with 22001 (the refresh became a self-inflicted
+// account breaker) while SQLite stored the grown values verbatim.
+func TestService_SocialSignIn_GrownProviderProfileIsBoundedOnTheRewrite(t *testing.T) {
+	t.Parallel()
+
+	const sharedEmail = "grow@example.com"
+
+	provider := &stubProvider{name: ProviderGoogle, identity: &ExternalIdentity{
+		ExternalID:    "google-grown-flow-1",
+		Email:         sharedEmail,
+		EmailVerified: true,
+		Name:          "Short Provider Name",
+		Avatar:        "https://a.example/small.png",
+	}}
+	f := newFederationFixture(t, provider, ProviderGoogle)
+	f.registerUser(t, sharedEmail, testTenantA)
+
+	if _, err := socialSignIn(t, f, provider, testTenantA); err != nil {
+		t.Fatalf("first SocialCallback() error = %v", err)
+	}
+
+	// The provider's profile grows past both columns between two sign-ins.
+	provider.identity.Name = overWidthName
+	provider.identity.Avatar = overWidthAvatar
+
+	if _, err := socialSignIn(t, f, provider, testTenantA); err != nil {
+		t.Fatalf("second SocialCallback() error = %v (the grown profile must not break an existing identity's login)", err)
+	}
+
+	identity, err := f.svc.Identities().FindByExternal(t.Context(), ProviderGoogle, "google-grown-flow-1")
+	if err != nil {
+		t.Fatalf("FindByExternal() error = %v", err)
+	}
+	if want := strings.Repeat("名", identityDisplayNameWidth); identity.DisplayName != want {
+		t.Errorf("stored display_name = %d runes, want the %d-rune head of the grown name", utf8.RuneCountInString(identity.DisplayName), identityDisplayNameWidth)
+	}
+	if want := strings.Repeat("a", identityAvatarURLWidth); identity.AvatarURL != want {
+		t.Errorf("stored avatar_url = %d runes, want the %d-rune head of the grown URL", utf8.RuneCountInString(identity.AvatarURL), identityAvatarURLWidth)
 	}
 }

@@ -40,39 +40,78 @@ const (
 )
 
 // The migrations' VARCHAR widths are the schema authority for how long the
-// client-supplied strings this file's models carry may be: PostgreSQL
-// enforces a declared width (SQLSTATE 22001 on an over-width write) while
-// SQLite ignores it, so a value that fits on one dialect and overflows on
-// the other is a real dual-dialect divergence, not a theoretical one. The
-// constants below are this module's single statement of each bound, kept in
-// step with the migrations by the dual-dialect migration tests.
+// strings this file's models carry may be: PostgreSQL enforces a declared
+// width (SQLSTATE 22001 on an over-width write) while SQLite ignores it, so
+// a value that fits on one dialect and overflows on the other is a real
+// dual-dialect divergence, not a theoretical one. The constants below are
+// this module's single statement of each bound, kept in step with the
+// migrations by the dual-dialect migration tests.
 //
 // PostgreSQL counts CHARACTERS against a VARCHAR(n) width, so every bound is
 // applied in runes, never bytes: cutting a multi-byte rune in half would
 // produce invalid UTF-8 that PostgreSQL refuses for a different reason.
 //
-// The two diagnostic strings -- a session's device and user agent -- are
-// truncated at the repository write boundary by truncateClientField below,
-// so both dialects store identical values. A display name is different: it
-// is the user's own chosen identity text, not diagnostic noise, so an
-// over-long one is REFUSED at registration (Service.Register,
-// ErrDisplayNameTooLong) rather than silently shortened.
+// Whether an over-width value is refused or silently cut depends on who
+// supplied it. The per-column decisions:
+//
+//   - The diagnostic strings -- a session's device and user agent -- are
+//     client-supplied and truncated at the repository write boundary by
+//     truncateToColumnWidth below, so both dialects store identical values.
+//   - The provider-reported profile fields on user_identities --
+//     external_id, display_name and avatar_url -- are truncated at the same
+//     write boundary (UserIdentityRepository.Create and TouchLogin; see
+//     ExternalIdentity's doc comment for why every field of it is
+//     UNTRUSTED input from a third party). A provider value is not a user
+//     choice, and the sign-in must keep working whichever dialect the
+//     deployment runs, so the value is bounded rather than the login
+//     refused. FindByExternal applies the same bound to its lookup key,
+//     because a stored value and a lookup key can only meet when both are
+//     in the bounded form.
+//   - users.display_name has two kinds of writer with two different
+//     answers. The name the USER typed themselves (Service.Register) is
+//     REFUSED when it exceeds the width (ErrDisplayNameTooLong): it is
+//     their own chosen identity text, where a silent shortening would
+//     corrupt what they typed instead of only trimming noise. The name a
+//     social or SSO account mint carries from its provider
+//     (resolveSocialAccount and SSOService.resolveAccount) is truncated at
+//     the repository write boundary (UserRepository.Create), for the same
+//     reason the identity row's provider fields are: a first social
+//     sign-in must not succeed on SQLite and fail on PostgreSQL because of
+//     what the provider put in its profile.
 const (
 	// deviceColumnWidth is the VARCHAR width of sessions.device.
 	deviceColumnWidth = 255
 	// userAgentColumnWidth is the VARCHAR width of sessions.user_agent
 	// and login_attempts.user_agent.
 	userAgentColumnWidth = 512
-	// displayNameWidth is the VARCHAR width of users.display_name.
+	// displayNameWidth is the VARCHAR width of users.display_name
+	// (migration 0001). See the column-width doc comment above for why an
+	// over-width USER-CHOSEN name is refused at registration while an
+	// over-width name an account mint carries from a provider is
+	// truncated at the write boundary.
 	displayNameWidth = 128
+	// identityExternalIDWidth is the VARCHAR width of
+	// user_identities.external_id (migration 0005).
+	identityExternalIDWidth = 191
+	// identityDisplayNameWidth is the VARCHAR width of
+	// user_identities.display_name (migration 0005). It happens to equal
+	// displayNameWidth today, but the two are independent columns kept in
+	// step with their own migrations.
+	identityDisplayNameWidth = 128
+	// identityAvatarURLWidth is the VARCHAR width of
+	// user_identities.avatar_url (migration 0005).
+	identityAvatarURLWidth = 512
 )
 
-// truncateClientField bounds a client-supplied free-text value to width
-// runes before it is written into the VARCHAR(width) column it is destined
-// for -- see the column-width constants above for why the column, not the
-// request, is the authority. Values within the width (every ordinary login)
-// pass through untouched.
-func truncateClientField(s string, width int) string {
+// truncateToColumnWidth bounds an untrusted free-text value -- a
+// client-supplied diagnostic such as a session's device or user agent, or a
+// provider-reported profile field such as a display name or avatar URL -- to
+// width runes before it is written into the VARCHAR(width) column it is
+// destined for. See the column-width constants above for why the column, not
+// the request, is the authority, and for which over-width values are cut
+// here rather than refused by the caller. Values within the width (every
+// ordinary login) pass through untouched.
+func truncateToColumnWidth(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}

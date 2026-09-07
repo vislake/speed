@@ -136,6 +136,16 @@ func (r *UserRepository) applyIndexes(u *User) error {
 
 // Create inserts u, deriving its blind-index columns from its plaintext
 // identifiers first. u.ID is filled in when it is empty.
+//
+// DisplayName is bounded to users.display_name's VARCHAR width before the
+// insert (truncateToColumnWidth, model.go's column-width doc comment). The
+// service layer decides the width policy ABOVE this method: Service.Register
+// refuses the user's own over-width name with ErrDisplayNameTooLong before
+// it ever calls Create, so no user-chosen name reaches this bound -- what
+// reaches it is the social and SSO account mints' copy of the PROVIDER's
+// name (resolveSocialAccount and SSOService.resolveAccount), which must not
+// make a first sign-in succeed on SQLite and fail on PostgreSQL. Within-width
+// values (every registration) pass through untouched.
 func (r *UserRepository) Create(ctx context.Context, u *User) error {
 	if u.ID == "" {
 		u.ID = newID()
@@ -143,6 +153,7 @@ func (r *UserRepository) Create(ctx context.Context, u *User) error {
 	if u.Status == "" {
 		u.Status = UserStatusActive
 	}
+	u.DisplayName = truncateToColumnWidth(u.DisplayName, displayNameWidth)
 	if err := r.applyIndexes(u); err != nil {
 		return err
 	}
@@ -353,7 +364,7 @@ func NewSessionRepository(db *gorm.DB) (*SessionRepository, error) {
 //
 // Device and UserAgent are truncated to their columns' declared VARCHAR
 // widths before the insert (see model.go's column-width constants and
-// truncateClientField doc comments): both are client-supplied, and
+// truncateToColumnWidth doc comments): both are client-supplied, and
 // PostgreSQL enforces the migration's width where SQLite would silently
 // store an over-width value -- this boundary is where the two dialects are
 // made to agree.
@@ -364,8 +375,8 @@ func (r *SessionRepository) Create(ctx context.Context, s *Session) error {
 	if s.Status == "" {
 		s.Status = SessionStatusActive
 	}
-	s.Device = truncateClientField(s.Device, deviceColumnWidth)
-	s.UserAgent = truncateClientField(s.UserAgent, userAgentColumnWidth)
+	s.Device = truncateToColumnWidth(s.Device, deviceColumnWidth)
+	s.UserAgent = truncateToColumnWidth(s.UserAgent, userAgentColumnWidth)
 	return r.db.WithContext(ctx).Create(s).Error
 }
 
@@ -512,7 +523,7 @@ func (r *LoginAttemptRepository) Create(ctx context.Context, a *LoginAttempt) er
 	if a.ID == "" {
 		a.ID = newID()
 	}
-	a.UserAgent = truncateClientField(a.UserAgent, userAgentColumnWidth)
+	a.UserAgent = truncateToColumnWidth(a.UserAgent, userAgentColumnWidth)
 	return r.db.WithContext(ctx).Create(a).Error
 }
 

@@ -2,6 +2,7 @@ package authn
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -878,3 +879,90 @@ func TestSSOService_SaveConfig_IssuerChangeEvictsTheOldIssuerFromTheMemo(t *test
 // change here would be caught by TestSSOConfigRepository_AssertIsolated too,
 // but the type assertion makes the requirement readable without running it.
 var _ dbkit.TenantScoped = TenantSSOConfig{}
+
+// TestSSOService_Callback_BoundsOverWidthClaims is the enterprise-SSO twin
+// of the social channels' provider-field truncation regressions
+// (identity_test.go's TestService_SocialSignIn_BoundsAnOverWidthProviderProfile
+// and its grown-profile companion): the subject, name and picture an identity
+// provider puts in its ID token are third-party strings written into the same
+// fixed-width user_identities columns, so an over-width first token must not
+// succeed on SQLite and fail on PostgreSQL (SQLSTATE 22001) at first bind --
+// and a later token whose profile has GROWN must not break the binding it
+// refreshes.
+func TestSSOService_Callback_BoundsOverWidthClaims(t *testing.T) {
+	t.Parallel()
+
+	server := testutil.NewOIDCServer(t, "enterprise-client")
+	f := newSSOFixture(t, server)
+	writeSSOConfig(t, f, testTenantA, server, "enterprise-client", "example.com")
+	member := f.registerUser(t, "member@example.com", testTenantA)
+
+	overWidthSubject := strings.Repeat("s", identityExternalIDWidth) + strings.Repeat("t", 59)
+	overWidthName := strings.Repeat("名", identityDisplayNameWidth) + strings.Repeat("尾", 72)
+	overWidthPicture := strings.Repeat("p", identityAvatarURLWidth) + strings.Repeat("q", 98)
+
+	state, nonce := ssoAuthorize(t, f, testTenantA)
+	server.QueueIDToken(server.SignIDToken(t, testutil.IDTokenClaims{
+		Subject:       overWidthSubject,
+		Email:         "member@example.com",
+		EmailVerified: true,
+		Name:          overWidthName,
+		Picture:       overWidthPicture,
+		Nonce:         nonce,
+	}))
+
+	result, err := f.svc.SSO().Callback(t.Context(), SSOCallbackInput{
+		TenantID: testTenantA, Code: "the-code", State: state,
+	})
+	if err != nil {
+		t.Fatalf("Callback() error = %v", err)
+	}
+	if result.User.ID != member.ID {
+		t.Errorf("User.ID = %q, want the existing tenant member %q", result.User.ID, member.ID)
+	}
+	if result.Tokens == nil {
+		t.Fatal("Tokens = nil, want a session")
+	}
+
+	identity, err := f.svc.Identities().FindByExternal(t.Context(), SSOChannelName(testTenantA), overWidthSubject)
+	if err != nil {
+		t.Fatalf("FindByExternal(original over-width subject) error = %v", err)
+	}
+	if identity.ID != result.Identity.ID {
+		t.Errorf("identity row = %q, want the sign-in's %q", identity.ID, result.Identity.ID)
+	}
+	if want := strings.Repeat("s", identityExternalIDWidth); identity.ExternalID != want {
+		t.Errorf("stored external_id = %q-ish, want the %d-rune head of the subject", identity.ExternalID, identityExternalIDWidth)
+	}
+	if want := strings.Repeat("名", identityDisplayNameWidth); identity.DisplayName != want {
+		t.Errorf("stored display_name = %q-ish, want the %d-rune head of the claimed name", identity.DisplayName, identityDisplayNameWidth)
+	}
+	if want := strings.Repeat("p", identityAvatarURLWidth); identity.AvatarURL != want {
+		t.Errorf("stored avatar_url = %q-ish, want the %d-rune head of the claimed picture", identity.AvatarURL, identityAvatarURLWidth)
+	}
+
+	// A second callback whose token reports a grown name and picture still
+	// signs the member in: the refresh writes bounded values (TouchLogin),
+	// never a 22001 on PostgreSQL, and resolves to the same identity.
+	state2, nonce2 := ssoAuthorize(t, f, testTenantA)
+	server.QueueIDToken(server.SignIDToken(t, testutil.IDTokenClaims{
+		Subject:       overWidthSubject,
+		Email:         "member@example.com",
+		EmailVerified: true,
+		Name:          overWidthName,
+		Picture:       overWidthPicture,
+		Nonce:         nonce2,
+	}))
+	result2, err := f.svc.SSO().Callback(t.Context(), SSOCallbackInput{
+		TenantID: testTenantA, Code: "the-code-2", State: state2,
+	})
+	if err != nil {
+		t.Fatalf("second Callback() error = %v", err)
+	}
+	if result2.Identity.ID != result.Identity.ID {
+		t.Errorf("second sign-in resolved to identity %q, want the first sign-in's %q", result2.Identity.ID, result.Identity.ID)
+	}
+	if result2.Tokens == nil {
+		t.Fatal("second sign-in returned no session")
+	}
+}

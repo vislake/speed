@@ -51,7 +51,11 @@ type UserIdentity struct {
 	Email string `gorm:"serializer:authn_pii"`
 
 	// DisplayName and AvatarURL are what the provider reported about the
-	// person, refreshed on every sign-in through this identity.
+	// person, refreshed on every sign-in through this identity. Both are
+	// third-party strings landing in fixed-width columns, so they are
+	// bounded to their columns' VARCHAR widths at the repository write
+	// boundary (Create and TouchLogin; see model.go's column-width doc
+	// comment for the per-column decision), exactly like ExternalID.
 	DisplayName string `gorm:"column:display_name;size:128;not null"`
 	AvatarURL   string `gorm:"column:avatar_url;size:512;not null"`
 
@@ -87,19 +91,47 @@ func NewUserIdentityRepository(db *gorm.DB) (*UserIdentityRepository, error) {
 }
 
 // Create inserts identity, filling in its ID when empty.
+//
+// ExternalID, DisplayName and AvatarURL are provider-reported (see
+// ExternalIdentity's doc comment: every field of it is untrusted input from
+// a third party), so they are bounded to their columns' VARCHAR widths
+// before the insert -- the same repository write boundary that bounds the
+// client-supplied session diagnostics (SessionRepository.Create and
+// truncateToColumnWidth), where the two dialects are made to agree:
+// PostgreSQL enforces a declared width (SQLSTATE 22001) where SQLite would
+// silently store the over-width value. The bounds per column, and why each
+// of these is cut rather than refusing the sign-in, are model.go's
+// column-width doc comment. DisplayName and AvatarURL are display data, so
+// cutting them loses only the provider's excess; ExternalID is also a lookup
+// key, so it is bounded here, at the write, and FindByExternal applies the
+// same bound to its lookup argument -- a stored value and a lookup key can
+// only meet when both are in the bounded form. (Two genuinely distinct
+// provider accounts whose identifiers share the first identityExternalIDWidth
+// runes would collide on the unique index; no real provider issues subjects
+// anywhere near the width, and the alternative -- refusing the sign-in --
+// breaks a login that PostgreSQL alone would have broken.)
 func (r *UserIdentityRepository) Create(ctx context.Context, identity *UserIdentity) error {
 	if identity.ID == "" {
 		identity.ID = newID()
 	}
+	identity.ExternalID = truncateToColumnWidth(identity.ExternalID, identityExternalIDWidth)
+	identity.DisplayName = truncateToColumnWidth(identity.DisplayName, identityDisplayNameWidth)
+	identity.AvatarURL = truncateToColumnWidth(identity.AvatarURL, identityAvatarURLWidth)
 	return r.db.WithContext(ctx).Create(identity).Error
 }
 
 // FindByExternal returns the identity registered for (provider, externalID),
 // or ErrNotFound.
+//
+// The externalID argument is bounded to external_id's column width before
+// the comparison: Create stores the bounded form, so a lookup must compare
+// in the bounded form or an over-width provider identifier could never find
+// the row it created (and a second sign-in would mint a duplicate account
+// instead of logging the person in).
 func (r *UserIdentityRepository) FindByExternal(ctx context.Context, provider, externalID string) (*UserIdentity, error) {
 	var identity UserIdentity
 	err := r.db.WithContext(ctx).
-		Where("provider = ? AND external_id = ?", provider, externalID).
+		Where("provider = ? AND external_id = ?", provider, truncateToColumnWidth(externalID, identityExternalIDWidth)).
 		First(&identity).Error
 	if err != nil {
 		return nil, translate(err)
@@ -142,8 +174,18 @@ func (r *UserIdentityRepository) ListByUser(ctx context.Context, userID string) 
 // value, so the identity converges on what the provider most recently
 // reported. The columns are display data only -- this update is never a
 // lookup key and never touches the user row.
+//
+// The two provider-reported strings are bounded to their columns' VARCHAR
+// widths before the write, exactly as Create bounds them (model.go's
+// column-width doc comment): a provider whose profile LATER grows past a
+// column width must not break an existing identity -- the very login that
+// refreshed it would fail on PostgreSQL with SQLSTATE 22001 while SQLite
+// stored the grown value. The bound is applied to the passed struct itself,
+// so the caller's row matches what was stored.
 func (r *UserIdentityRepository) TouchLogin(ctx context.Context, identity *UserIdentity, at time.Time) error {
 	identity.LastLoginAt = &at
+	identity.DisplayName = truncateToColumnWidth(identity.DisplayName, identityDisplayNameWidth)
+	identity.AvatarURL = truncateToColumnWidth(identity.AvatarURL, identityAvatarURLWidth)
 	// The update stays on the struct path (with the reported columns
 	// explicitly Selected, which is what admits their zero values): that
 	// is the path that routes the email column through its at-rest
