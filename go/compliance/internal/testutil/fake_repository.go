@@ -119,3 +119,11 @@ func NewParticipant(name string, repo *FakeRepository) pkgcore.RetentionParticip
 // Erase or Export registers this alongside its real callback; the service
 // under test never invokes it.
 func NoopSweep(context.Context, pkgcore.TenantID, time.Time) (int, error) { return 0, nil }
+
+// NoopErase is an Erase callback that erases nothing and never fails: the
+// stub a sweep-only or export-only test participant carries to satisfy the
+// registrar's mandatory-Erase rule (pkgcore.ErrNilRetentionErase) without
+// pretending to own subject-shaped rows. A test double exercising only
+// Sweep or Export registers this alongside its real callback; the service
+// under test never invokes it.
+func NoopErase(context.Context, pkgcore.SubjectRef) (int, error) { return 0, nil }

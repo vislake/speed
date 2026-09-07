@@ -89,17 +89,30 @@ type exportDeliveryAfter struct {
 // exportManifestsParticipant returns the pkgcore.RetentionParticipant that
 // owns the export-manifest side of the module's retention story -- see this
 // file's own header comment. Its Sweep reaps tenant's stored export
-// manifests whose delivery share expired at or before cutoff; it has no
-// Erase (a manifest is a tenant-wide bundle, never a single subject's
-// rows, so a subject erasure must not destroy other subjects' delivered
-// packages) and no Export of its own. repo is the same *audit.Repository
-// the module reads its export events through, and store the ObjectStore
-// Export wrote the manifests to.
+// manifests whose delivery share expired at or before cutoff, and its
+// Erase answers every right-to-erasure request with an explicit
+// nothing-to-erase -- (0, nil) -- since a manifest is a tenant-wide
+// bundle, never a single subject's rows: destroying it on one subject's
+// request would destroy other subjects' delivered packages, so a subject
+// erasure must not touch it. Registration makes Erase mandatory
+// (pkgcore.ErrNilRetentionErase); stating the nothing-to-erase fact
+// explicitly is what keeps an erasure request from reporting full success
+// while silently skipping this participant. It has no Export of its own.
+// repo is the same *audit.Repository the module reads its export events
+// through, and store the ObjectStore Export wrote the manifests to.
 func exportManifestsParticipant(repo *audit.Repository, store pkgcore.ObjectStore) pkgcore.RetentionParticipant {
 	return pkgcore.RetentionParticipant{
 		Name: exportManifestsParticipantName,
 		Sweep: func(ctx context.Context, tenant pkgcore.TenantID, cutoff time.Time) (int, error) {
 			return sweepExportManifests(ctx, repo, store, tenant, cutoff)
+		},
+		// See the function's doc comment: nothing subject-shaped lives in
+		// a delivered manifest, so the module's declared erasure answer
+		// is an explicit (0, nil) -- never a nil Erase, which the
+		// registrar refuses and which would otherwise read as a silent
+		// skip in the erasure audit.
+		Erase: func(context.Context, pkgcore.SubjectRef) (int, error) {
+			return 0, nil
 		},
 	}
 }

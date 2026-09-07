@@ -182,6 +182,9 @@ func TestRetentionService_SweepTenant_ParticipantErrorIsPartialFailure(t *testin
 		Sweep: func(context.Context, pkgcore.TenantID, time.Time) (int, error) {
 			return 0, errFakeParticipant
 		},
+		// NoopErase satisfies the registrar's mandatory-Erase rule; the
+		// retention sweep under test never invokes it.
+		Erase: testutil.NoopErase,
 	}
 	if err := svc.retention.Add(failing); err != nil {
 		t.Fatalf("register failing participant: %v", err)

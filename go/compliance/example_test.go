@@ -85,6 +85,12 @@ func (m *exampleNotesModule) Register(reg *pkgcore.Registry) error {
 			}
 			return reaped, nil
 		},
+		// Erase is mandatory at registration too
+		// (pkgcore.ErrNilRetentionErase). This example model has no
+		// subject attribution of its own, so its answer to every
+		// right-to-erasure request is an explicit nothing-to-erase --
+		// (0, nil) -- declared here rather than left nil.
+		Erase: func(context.Context, pkgcore.SubjectRef) (int, error) { return 0, nil },
 	})
 }
 

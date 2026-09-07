@@ -120,11 +120,13 @@ func TestExportService_Export_GathersAndStoresParticipantData(t *testing.T) {
 func TestExportService_Export_SkipsParticipantsWithNoExportCallback(t *testing.T) {
 	svc, _, _, _ := newExportHarness(t)
 	noExport := pkgcore.RetentionParticipant{
-		// NoopSweep satisfies the registrar's mandatory-Sweep rule; the
-		// export service under test never invokes it. Erase stays nil too
-		// -- what this double is really proving is the nil-Export skip.
+		// NoopSweep and NoopErase satisfy the registrar's mandatory-Sweep
+		// and mandatory-Erase rules; the export service under test never
+		// invokes either. What this double is really proving is the
+		// nil-Export skip.
 		Name:  "testutil.no_export",
 		Sweep: testutil.NoopSweep,
+		Erase: testutil.NoopErase,
 	}
 	if err := svc.retention.Add(noExport); err != nil {
 		t.Fatalf("register no-export participant: %v", err)
@@ -149,10 +151,12 @@ func TestExportService_Export_ParticipantErrorIsPartialFailure(t *testing.T) {
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 
 	failing := pkgcore.RetentionParticipant{
-		// NoopSweep satisfies the registrar's mandatory-Sweep rule; the
-		// export service under test never invokes it.
+		// NoopSweep and NoopErase satisfy the registrar's mandatory-Sweep
+		// and mandatory-Erase rules; the export service under test never
+		// invokes either.
 		Name:  "testutil.failing_export",
 		Sweep: testutil.NoopSweep,
+		Erase: testutil.NoopErase,
 		Export: func(context.Context, pkgcore.TenantID) (any, error) {
 			return nil, errFakeParticipant
 		},
