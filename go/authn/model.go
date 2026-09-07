@@ -93,6 +93,12 @@ const (
 	// identityExternalIDWidth is the VARCHAR width of
 	// user_identities.external_id (migration 0005).
 	identityExternalIDWidth = 191
+	// identityProviderWidth is the VARCHAR width of
+	// user_identities.provider (migration 0005). The platform channel
+	// names are far shorter than it; the one value that must respect it
+	// is the enterprise "oidc:<tenant>" channel name, whose tenant-id
+	// budget is derived from it as oidc.go's ssoTenantIDMaxWidth.
+	identityProviderWidth = 64
 	// identityDisplayNameWidth is the VARCHAR width of
 	// user_identities.display_name (migration 0005). It happens to equal
 	// displayNameWidth today, but the two are independent columns kept in

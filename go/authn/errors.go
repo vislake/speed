@@ -231,6 +231,37 @@ var (
 	// server-side request forgery vector.
 	ErrSSOIssuerNotAllowed = apperr.Invalid("authn.sso_issuer_not_allowed")
 
+	// ErrSSOTenantIDTooLong is returned when a tenant id longer than the
+	// enterprise channel can represent enters the SSO path -- a tenant
+	// administrator saving their SSO configuration, or a member starting or
+	// completing an SSO sign-in under such a tenant. The synthetic
+	// "oidc:<tenant>" provider name identities are stored under sits in
+	// user_identities.provider, VARCHAR(64) (migration 0005), so a tenant
+	// id longer than ssoTenantIDMaxWidth runes cannot be represented at
+	// all: truncating the name would collide under the (provider,
+	// external_id) unique index and silently merge distinct tenants'
+	// identities. The refusal carries a "max_length" parameter and fires
+	// at configuration/entry time, never at a later login (see
+	// validateSSOTenantID in oidc.go).
+	ErrSSOTenantIDTooLong = apperr.Invalid("authn.sso_tenant_id_too_long")
+
+	// ErrSSOIssuerTooLong is returned when a tenant administrator's issuer
+	// URL would overflow tenant_sso_configs.issuer (VARCHAR(512), migration
+	// 0006). Configuration values are REFUSED rather than truncated -- a
+	// silently shortened issuer URL would point enterprise single sign-on
+	// at the wrong endpoint -- and the error names the field, carrying a
+	// "max_length" parameter.
+	ErrSSOIssuerTooLong = apperr.Invalid("authn.sso_issuer_too_long")
+
+	// ErrSSOClientIDTooLong is the client_id twin of ErrSSOIssuerTooLong,
+	// for tenant_sso_configs.client_id (VARCHAR(255), migration 0006).
+	ErrSSOClientIDTooLong = apperr.Invalid("authn.sso_client_id_too_long")
+
+	// ErrSSOAllowedDomainsTooLong is the allowed-domains twin of
+	// ErrSSOIssuerTooLong, for the stored whitespace-delimited list in
+	// tenant_sso_configs.allowed_domains (VARCHAR(1024), migration 0006).
+	ErrSSOAllowedDomainsTooLong = apperr.Invalid("authn.sso_allowed_domains_too_long")
+
 	// ErrSSODomainNotAllowed is returned when the identity provider
 	// asserted an email address outside the domains the tenant registered.
 	ErrSSODomainNotAllowed = apperr.Forbidden("authn.sso_domain_not_allowed")
@@ -392,6 +423,10 @@ var errorCodes = []string{
 	ErrLastLoginMethod.Code,
 	ErrSSONotConfigured.Code,
 	ErrSSOIssuerNotAllowed.Code,
+	ErrSSOTenantIDTooLong.Code,
+	ErrSSOIssuerTooLong.Code,
+	ErrSSOClientIDTooLong.Code,
+	ErrSSOAllowedDomainsTooLong.Code,
 	ErrSSODomainNotAllowed.Code,
 	ErrSSOTokenInvalid.Code,
 	ErrInternal.Code,

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -147,6 +148,89 @@ func (c *TenantSSOConfig) AllowsDomain(email string) bool {
 // compile-time check that TenantSSOConfig is tenant-scoped data.
 var _ dbkit.TenantScoped = TenantSSOConfig{}
 
+// The tenant_sso_configs and provider-column widths below are the schema
+// authority for the REFUSALS they feed, the same way model.go's column-width
+// constants are for the identity tables': PostgreSQL enforces a declared
+// width (SQLSTATE 22001 on an over-width write) while SQLite ignores it, so
+// a value that fits on one dialect and overflows on the other is a real
+// dual-dialect divergence. Whether an over-width value is refused or cut
+// depends on who supplied it -- model.go's doc comment makes the per-column
+// decision for the provider-reported and diagnostic strings (cut). A
+// tenant-administrator's OWN configuration values take the other branch:
+// they are REFUSED with a named error naming the field, never truncated.
+// Silently shortening an issuer URL would point enterprise single sign-on
+// at the wrong endpoint; a truncated client id or domain list would simply
+// not work. The refusals therefore live at both write surfaces --
+// SSOService.SaveConfig, where the administrator sees the answer while they
+// are looking at the form, and SSOConfigRepository's own Create and Update,
+// so no write path can slip an over-width value past the boundary.
+//
+// PostgreSQL counts CHARACTERS against a VARCHAR(n) width, so every bound
+// is applied in runes, never bytes.
+const (
+	// ssoIssuerWidth is the VARCHAR width of tenant_sso_configs.issuer
+	// (migration 0006).
+	ssoIssuerWidth = 512
+	// ssoClientIDWidth is the VARCHAR width of
+	// tenant_sso_configs.client_id (migration 0006).
+	ssoClientIDWidth = 255
+	// ssoAllowedDomainsWidth is the VARCHAR width of
+	// tenant_sso_configs.allowed_domains (migration 0006) -- the stored
+	// whitespace-delimited list SetAllowedDomains builds, not the input
+	// slice.
+	ssoAllowedDomainsWidth = 1024
+	// ssoTenantIDMaxWidth is the longest tenant id the enterprise channel
+	// can serve. The synthetic "oidc:<tenant>" provider name an SSO
+	// identity is stored under lands in user_identities.provider,
+	// VARCHAR(64) (migration 0005), whose width leaves 59 characters for
+	// the tenant after the "oidc:" prefix. Truncating the provider name is
+	// not an option: the (provider, external_id) unique index would then
+	// conflate two tenants' identities, silently merging distinct tenants'
+	// sign-ins. A tenant id longer than the budget therefore cannot use
+	// enterprise SSO at all, and it is REFUSED with ErrSSOTenantIDTooLong
+	// wherever it enters the SSO path (SaveConfig, AuthorizeURL and
+	// Callback) -- the host learns WHICH tenant name is too long at
+	// configuration/entry time, never through a broken identity write at
+	// some later sign-in.
+	ssoTenantIDMaxWidth = identityProviderWidth - len(ProviderOIDCPrefix)
+)
+
+// validateSSOConfigWidths refuses a configuration whose stored form would
+// overflow one of its columns on PostgreSQL, naming the field in the error
+// (ErrSSOIssuerTooLong, ErrSSOClientIDTooLong, ErrSSOAllowedDomainsTooLong,
+// each carrying a "max_length" parameter). See the width constants above for
+// why a configuration value is refused rather than truncated. It is the
+// single check behind both SSOConfigRepository.Create and .Update, so
+// SaveConfig and any direct repository writer meet the same refusal.
+func validateSSOConfigWidths(config *TenantSSOConfig) error {
+	if utf8.RuneCountInString(config.Issuer) > ssoIssuerWidth {
+		return ErrSSOIssuerTooLong.WithParam("max_length", ssoIssuerWidth)
+	}
+	if utf8.RuneCountInString(config.ClientID) > ssoClientIDWidth {
+		return ErrSSOClientIDTooLong.WithParam("max_length", ssoClientIDWidth)
+	}
+	if utf8.RuneCountInString(config.AllowedDomains) > ssoAllowedDomainsWidth {
+		return ErrSSOAllowedDomainsTooLong.WithParam("max_length", ssoAllowedDomainsWidth)
+	}
+	return nil
+}
+
+// validateSSOTenantID refuses a tenant id the enterprise channel cannot
+// represent: one longer than ssoTenantIDMaxWidth runes would make the
+// synthetic "oidc:<tenant>" provider name overflow user_identities.provider
+// (VARCHAR(64)) at the identity write, which PostgreSQL would refuse with a
+// raw 22001 where SQLite silently stored the value. The refusal
+// (ErrSSOTenantIDTooLong, carrying "max_length") fires at the three points
+// where a tenant id enters the SSO path -- SaveConfig, AuthorizeURL and
+// Callback -- so the host is told at configuration/entry time, never at a
+// random login.
+func validateSSOTenantID(tenantID pkgcore.TenantID) error {
+	if utf8.RuneCountInString(string(tenantID)) > ssoTenantIDMaxWidth {
+		return ErrSSOTenantIDTooLong.WithParam("max_length", ssoTenantIDMaxWidth)
+	}
+	return nil
+}
+
 // SSOConfigRepository is the tenant-scoped repository for TenantSSOConfig.
 //
 // It embeds dbkit.Repository[TenantSSOConfig] rather than holding a *gorm.DB,
@@ -162,6 +246,28 @@ type SSOConfigRepository struct {
 // to come from dbkit.Open so that the isolation plugin is installed.
 func NewSSOConfigRepository(db *gorm.DB) *SSOConfigRepository {
 	return &SSOConfigRepository{Repository: dbkit.NewRepository[TenantSSOConfig](db)}
+}
+
+// Create validates the configuration's column widths before delegating to
+// the embedded repository, so no write path -- SaveConfig or a direct
+// caller -- can land a value that SQLite would store and PostgreSQL would
+// refuse with SQLSTATE 22001. The refusal names the field
+// (validateSSOConfigWidths).
+func (r *SSOConfigRepository) Create(ctx context.Context, config *TenantSSOConfig) error {
+	if err := validateSSOConfigWidths(config); err != nil {
+		return err
+	}
+	return r.Repository.Create(ctx, config)
+}
+
+// Update validates the configuration's column widths before delegating to
+// the embedded repository, the same gate Create applies (see its doc
+// comment).
+func (r *SSOConfigRepository) Update(ctx context.Context, config *TenantSSOConfig) error {
+	if err := validateSSOConfigWidths(config); err != nil {
+		return err
+	}
+	return r.Repository.Update(ctx, config)
 }
 
 // Current returns the configuration of the tenant in ctx, or ErrNotFound.
@@ -286,20 +392,45 @@ func (s *SSOService) Configs() *SSOConfigRepository { return s.configs }
 
 // SaveConfig writes the calling tenant's configuration.
 //
-// The issuer is validated through the SSRF guard BEFORE anything is stored,
-// so a tenant administrator cannot persist a URL pointing at the deployment's
-// own network and have the server fetch it later. Validating at write time
-// rather than only at use time also means the administrator sees the error
-// while they are looking at the form.
+// The tenant id in context is the first thing validated: one longer than the
+// "oidc:<tenant>" channel name can represent (ssoTenantIDMaxWidth runes) is
+// REFUSED here, at configuration time, because no identity it ever resolves
+// could be stored under its tenant's channel name without overflowing
+// user_identities.provider on PostgreSQL (see validateSSOTenantID).
+//
+// The configuration values are then width-checked in their STORED forms
+// (issuer and client id are stored trimmed, the domain list lowercased and
+// joined), refused with an error naming the field rather than truncated:
+// this is a tenant administrator's own specification, and a silently
+// shortened issuer URL would point enterprise single sign-on at the wrong
+// endpoint (see the width constants' comment block). The repository applies
+// the same refusal as a backstop, so no write path can bypass it.
+//
+// Finally the issuer is validated through the SSRF guard BEFORE anything is
+// stored, so a tenant administrator cannot persist a URL pointing at the
+// deployment's own network and have the server fetch it later. Validating
+// at write time rather than only at use time also means the administrator
+// sees the error while they are looking at the form.
 func (s *SSOService) SaveConfig(ctx context.Context, in SSOConfigInput) (*TenantSSOConfig, error) {
 	tenantID, ok := pkgcore.TenantFromContext(ctx)
 	if !ok || tenantID == "" {
 		return nil, ErrTenantMembershipRequired
 	}
+	if err := validateSSOTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	stored := &TenantSSOConfig{
+		Issuer:   strings.TrimSpace(in.Issuer),
+		ClientID: strings.TrimSpace(in.ClientID),
+	}
+	stored.SetAllowedDomains(in.AllowedDomains)
+	if err := validateSSOConfigWidths(stored); err != nil {
+		return nil, err
+	}
 	if _, err := s.guard.ValidateURL(ctx, in.Issuer); err != nil {
 		return nil, ErrSSOIssuerNotAllowed.WithCause(err)
 	}
-	if strings.TrimSpace(in.ClientID) == "" {
+	if stored.ClientID == "" {
 		return nil, ErrSSOIssuerNotAllowed
 	}
 
@@ -316,8 +447,8 @@ func (s *SSOService) SaveConfig(ctx context.Context, in SSOConfigInput) (*Tenant
 		// issuer did not change, the forget drops a still-valid entry that
 		// the next discovery simply refetches.)
 		previousIssuer := existing.Issuer
-		existing.Issuer = strings.TrimSpace(in.Issuer)
-		existing.ClientID = strings.TrimSpace(in.ClientID)
+		existing.Issuer = stored.Issuer
+		existing.ClientID = stored.ClientID
 		existing.ClientSecret = in.ClientSecret
 		existing.Enabled = in.Enabled
 		existing.SetAllowedDomains(in.AllowedDomains)
@@ -330,8 +461,8 @@ func (s *SSOService) SaveConfig(ctx context.Context, in SSOConfigInput) (*Tenant
 		created := &TenantSSOConfig{
 			TenantID:     string(tenantID),
 			ID:           newID(),
-			Issuer:       strings.TrimSpace(in.Issuer),
-			ClientID:     strings.TrimSpace(in.ClientID),
+			Issuer:       stored.Issuer,
+			ClientID:     stored.ClientID,
 			ClientSecret: in.ClientSecret,
 			Enabled:      in.Enabled,
 		}
@@ -353,6 +484,19 @@ func (s *SSOService) SaveConfig(ctx context.Context, in SSOConfigInput) (*Tenant
 // commonly serves many tenants and many relying parties, so an ID token
 // captured from one flow is a plausible thing for an attacker to have.
 func (s *SSOService) AuthorizeURL(ctx context.Context, redirectURI, sessionBinding string) (string, error) {
+	// The tenant-width gate, before any state is issued: an over-long
+	// tenant id can never complete a sign-in (its "oidc:<tenant>"
+	// provider name would overflow user_identities.provider), so a state
+	// issued for it would only lead a member to a broken callback. A
+	// configuration row for such a tenant can only exist because it was
+	// written before the SaveConfig gate -- or straight through the
+	// repository -- so the entry path refuses it itself rather than
+	// trusting the write path to have done so. See validateSSOTenantID.
+	if tenantID, ok := pkgcore.TenantFromContext(ctx); ok {
+		if err := validateSSOTenantID(tenantID); err != nil {
+			return "", err
+		}
+	}
 	// The channel gate, before the tenant's SSO configuration is even
 	// read: a deployment that turned enterprise SSO off must not send
 	// anyone to an identity provider. The ctx's tenant (when the host's
@@ -447,6 +591,18 @@ type ssoClaims struct {
 func (s *SSOService) Callback(ctx context.Context, in SSOCallbackInput) (*SocialLoginResult, error) {
 	if in.TenantID == "" {
 		return nil, ErrSSONotConfigured
+	}
+	// The tenant-width gate: the callback route's tenant id becomes the
+	// "oidc:<tenant>" provider name an identity row would be stored under,
+	// so an over-long one is refused with the named error here rather than
+	// left to break the identity write with a raw 22001 on PostgreSQL.
+	// Under the fixed code paths this is unreachable -- SaveConfig and
+	// AuthorizeURL both refuse such a tenant before a flow can start -- and
+	// it exists so a flow begun before those gates existed answers the same
+	// named refusal instead of a random database error. See
+	// validateSSOTenantID.
+	if err := validateSSOTenantID(in.TenantID); err != nil {
+		return nil, err
 	}
 	// The channel gate on the same tenant-bearing context enabledConfig
 	// resolves with below, so a flow started while the flag was on cannot
@@ -784,6 +940,12 @@ func (s *SSOService) forget(issuer string) {
 // SSOChannelName returns the provider name an enterprise identity is stored
 // under for tenantID. It is exported so a support tool can look a binding up
 // without reconstructing the convention by hand.
+//
+// The name lands in user_identities.provider (VARCHAR(64)), so it only
+// exists for a tenant id within ssoTenantIDMaxWidth runes; SSOService
+// refuses an over-long tenant id at every point where it enters the SSO
+// path (ErrSSOTenantIDTooLong), so no binding is ever stored under a name
+// this function would return for such a tenant.
 func SSOChannelName(tenantID pkgcore.TenantID) string {
 	return ProviderOIDCPrefix + string(tenantID)
 }

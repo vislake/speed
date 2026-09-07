@@ -445,6 +445,36 @@ the tie-break, so every reader agrees and the next `SaveConfig` collapses back
 to one row by updating whichever row `Current` returned. See
 `TenantSSOConfig.TenantID` and `SSOConfigRepository.Current` in `oidc.go`.
 
+### The enterprise channel has a tenant-id budget, and the SSO configuration is refused, never truncated, past its column widths
+
+Both are the REFUSE branch of this module's dual-dialect width rule (the
+truncation round's per-column decisions are in `model.go`'s column-width doc
+comment): PostgreSQL enforces a declared `VARCHAR(n)` width where SQLite
+ignores it, and on these two surfaces the value cannot be cut.
+
+- **The tenant id.** An enterprise identity is stored under the synthetic
+  provider name `"oidc:" + tenantID`, which lands in
+  `user_identities.provider`, `VARCHAR(64)` (migration 0005) — so a tenant id
+  of 60 runes or more (the 59-rune budget is `oidc.go`'s
+  `ssoTenantIDMaxWidth`, derived from the column width minus the prefix) can
+  never be represented at all. Truncating the name is not an option: the
+  `(provider, external_id)` unique index would then conflate two tenants'
+  identities. `SSOService.SaveConfig`, `AuthorizeURL` and `Callback` all
+  refuse such a tenant id with `authn.sso_tenant_id_too_long`, so the host
+  learns which tenant name is too long at configuration/entry time — never
+  through a broken identity write at some later sign-in.
+- **The configuration values.** A tenant administrator's own specification
+  (`issuer` `VARCHAR(512)`, `client_id` `VARCHAR(255)`, `allowed_domains`
+  `VARCHAR(1024)`, migration 0006) is refused with an error naming the field
+  (`authn.sso_issuer_too_long`, `authn.sso_client_id_too_long`,
+  `authn.sso_allowed_domains_too_long`), never silently shortened — cutting
+  an issuer URL would point enterprise single sign-on at the wrong endpoint.
+  The refusals fire in `SaveConfig` (against the stored forms: trimmed issuer
+  and client id, the joined domain list) and again in
+  `SSOConfigRepository.Create`/`Update`, so no write path can slip an
+  over-width row past the boundary. Bounds are applied in runes, the count
+  PostgreSQL's width is in.
+
 ### Cost parameters are bootstrap config; policy is dynamic config
 
 `PasswordParams` (argon2id memory, iterations, parallelism) depends on the

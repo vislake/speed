@@ -966,3 +966,294 @@ func TestSSOService_Callback_BoundsOverWidthClaims(t *testing.T) {
 		t.Fatal("second sign-in returned no session")
 	}
 }
+
+// The width-regression fixtures below (and the regressions themselves) close
+// the two authn batch-2 findings that are the truncation round's siblings:
+// the same dual-dialect write divergence, on the two remaining surfaces
+// where the semantic is REFUSE, not cut.
+//
+//   - The tenant-id budget: user_identities.provider is VARCHAR(64)
+//     (migration 0005) and the enterprise channel name is "oidc:" plus the
+//     tenant id (ProviderOIDCPrefix, five runes), so a tenant id of 59
+//     runes is the longest enterprise SSO can serve and 60 runes is the
+//     shortest that overflows -- pinned by oidc.go's ssoTenantIDMaxWidth.
+//   - The configuration field widths are tenant_sso_configs' own columns
+//     (migration 0006): issuer VARCHAR(512), client_id VARCHAR(255),
+//     allowed_domains VARCHAR(1024), pinned by oidc.go's ssoIssuerWidth,
+//     ssoClientIDWidth and ssoAllowedDomainsWidth.
+//
+// The fixtures are plain rune counts rather than expressions over those
+// constants, and the expected error codes are string literals rather than
+// the sentinels, so the regressions compile and run unchanged against the
+// pre-fix code during a genuine fail-before pass (the constants and the
+// sentinels only exist after the fix). PostgreSQL counts characters against
+// a VARCHAR(n) width, so every fixture is built in runes.
+const (
+	// ssoTenantBudgetRunes is the longest tenant id the enterprise channel
+	// can serve (see the comment above).
+	ssoTenantBudgetRunes = 59
+	// ssoIssuerColumnWidth, ssoClientIDColumnWidth and
+	// ssoAllowedDomainsColumnWidth restate the tenant_sso_configs column
+	// widths from migration 0006.
+	ssoIssuerColumnWidth         = 512
+	ssoClientIDColumnWidth       = 255
+	ssoAllowedDomainsColumnWidth = 1024
+)
+
+var (
+	// overLongSSOTenantID is a tenant id one rune past the budget.
+	overLongSSOTenantID = pkgcore.TenantID(strings.Repeat("t", ssoTenantBudgetRunes+1))
+	// boundarySSOTenantID is a tenant id exactly at the budget -- the
+	// longest one the enterprise channel can represent.
+	boundarySSOTenantID = pkgcore.TenantID(strings.Repeat("t", ssoTenantBudgetRunes))
+)
+
+// ssoPublicIssuerLiteral is a publicly reachable literal https address the
+// SSRF guard admits without DNS, so the SaveConfig regressions below never
+// touch the network; the same literal the issuer-change memo test uses.
+const ssoPublicIssuerLiteral = "https://93.184.216.34/"
+
+var (
+	// overWidthIssuer is a valid https URL one rune past issuer's width.
+	overWidthIssuer = ssoPublicIssuerLiteral + strings.Repeat("i", ssoIssuerColumnWidth+1-len(ssoPublicIssuerLiteral))
+	// boundaryIssuer is a valid https URL exactly at issuer's width.
+	boundaryIssuer = ssoPublicIssuerLiteral + strings.Repeat("i", ssoIssuerColumnWidth-len(ssoPublicIssuerLiteral))
+	// overWidthClientID is one rune past client_id's width.
+	overWidthClientID = strings.Repeat("c", ssoClientIDColumnWidth+1)
+	// boundaryClientID is exactly at client_id's width.
+	boundaryClientID = strings.Repeat("c", ssoClientIDColumnWidth)
+	// overWidthAllowedDomains joins to one rune past allowed_domains'
+	// width.
+	overWidthAllowedDomains = []string{strings.Repeat("d", ssoAllowedDomainsColumnWidth+1)}
+	// boundaryAllowedDomains joins to exactly allowed_domains' width.
+	boundaryAllowedDomains = []string{strings.Repeat("d", ssoAllowedDomainsColumnWidth)}
+)
+
+// The expected codes for the width refusals, as literals (see the fixtures
+// comment above).
+const (
+	ssoTenantIDTooLongCode       = "authn.sso_tenant_id_too_long"
+	ssoIssuerTooLongCode         = "authn.sso_issuer_too_long"
+	ssoClientIDTooLongCode       = "authn.sso_client_id_too_long"
+	ssoAllowedDomainsTooLongCode = "authn.sso_allowed_domains_too_long"
+)
+
+// TestSSOService_SaveConfig_RefusesAnOverLongTenantID is finding (1)'s
+// configuration-time regression: a tenant id of 60 runes makes the synthetic
+// "oidc:<tenant>" provider name overflow user_identities.provider
+// (VARCHAR(64)) at the identity write of the first sign-in -- before the
+// fix, SaveConfig accepted and stored the configuration on SQLite, and the
+// tenant's first enterprise login then diverged: it worked on SQLite and was
+// refused by PostgreSQL with SQLSTATE 22001. Truncating the provider name is
+// not an option (it would collide under the (provider, external_id) unique
+// index and silently merge distinct tenants' identities), so the refusal
+// belongs at configuration time, where the host learns which tenant name is
+// too long -- never at a random login. The same named refusal must answer on
+// both dialects; the PostgreSQL leg re-runs this in the integration tier.
+func TestSSOService_SaveConfig_RefusesAnOverLongTenantID(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	ctx := pkgcore.WithTenant(t.Context(), overLongSSOTenantID)
+
+	_, err := f.svc.SSO().SaveConfig(ctx, SSOConfigInput{
+		Issuer: "https://93.184.216.34/oidc", ClientID: "client-id", Enabled: true,
+	})
+	assertErrorCode(t, err, ssoTenantIDTooLongCode)
+
+	if _, findErr := f.svc.SSO().Configs().Current(ctx); findErr == nil {
+		t.Error("a refused configuration must not have been persisted")
+	}
+}
+
+// TestSSOService_SaveConfig_RefusesOverWidthConfigFields is finding (2)'s
+// regression: a tenant administrator's configuration value longer than its
+// column (issuer VARCHAR(512), client_id VARCHAR(255), allowed_domains
+// VARCHAR(1024), migration 0006) is REFUSED with an error naming the field,
+// on both dialects -- before the fix, SQLite stored the value and PostgreSQL
+// refused the write with a raw 22001. Truncation is not the answer for an
+// administrator's own specification: a silently shortened issuer URL would
+// point enterprise single sign-on at the wrong endpoint.
+func TestSSOService_SaveConfig_RefusesOverWidthConfigFields(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		wantCode string
+		in       SSOConfigInput
+	}{
+		{
+			name:     "issuer one rune past 512",
+			wantCode: ssoIssuerTooLongCode,
+			in:       SSOConfigInput{Issuer: overWidthIssuer, ClientID: "client-id", Enabled: true},
+		},
+		{
+			name:     "client id one rune past 255",
+			wantCode: ssoClientIDTooLongCode,
+			in: SSOConfigInput{
+				Issuer: "https://93.184.216.34/oidc", ClientID: overWidthClientID, Enabled: true,
+			},
+		},
+		{
+			name:     "allowed domains one rune past 1024",
+			wantCode: ssoAllowedDomainsTooLongCode,
+			in: SSOConfigInput{
+				Issuer: "https://93.184.216.34/oidc", ClientID: "client-id",
+				AllowedDomains: overWidthAllowedDomains, Enabled: true,
+			},
+		},
+	}
+
+	f := newServiceFixture(t)
+	ctx := pkgcore.WithTenant(t.Context(), testTenantA)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := f.svc.SSO().SaveConfig(ctx, tc.in)
+			assertErrorCode(t, err, tc.wantCode)
+			if _, findErr := f.svc.SSO().Configs().Current(ctx); findErr == nil {
+				t.Error("a refused configuration must not have been persisted")
+			}
+		})
+	}
+}
+
+// TestSSOService_SaveConfig_AcceptsValuesAtTheColumnWidths is the honest
+// acceptance boundary of finding (2): values exactly AT their columns'
+// widths (512-rune issuer, 255-rune client id, a 1024-rune domain list)
+// still save and read back end to end.
+func TestSSOService_SaveConfig_AcceptsValuesAtTheColumnWidths(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	ctx := pkgcore.WithTenant(t.Context(), testTenantA)
+
+	if _, err := f.svc.SSO().SaveConfig(ctx, SSOConfigInput{
+		Issuer: boundaryIssuer, ClientID: boundaryClientID,
+		AllowedDomains: boundaryAllowedDomains, Enabled: true,
+	}); err != nil {
+		t.Fatalf("SaveConfig(boundary-width values) error = %v", err)
+	}
+
+	stored, err := f.svc.SSO().Configs().Current(ctx)
+	if err != nil {
+		t.Fatalf("Current() error = %v", err)
+	}
+	if stored.Issuer != boundaryIssuer {
+		t.Errorf("stored issuer is %d runes, want the %d-rune value", len([]rune(stored.Issuer)), ssoIssuerColumnWidth)
+	}
+	if len([]rune(stored.ClientID)) != ssoClientIDColumnWidth {
+		t.Errorf("stored client id is %d runes, want %d", len([]rune(stored.ClientID)), ssoClientIDColumnWidth)
+	}
+	if len([]rune(stored.AllowedDomains)) != ssoAllowedDomainsColumnWidth {
+		t.Errorf("stored allowed domains are %d runes, want %d", len([]rune(stored.AllowedDomains)), ssoAllowedDomainsColumnWidth)
+	}
+}
+
+// TestSSOConfigRepository_RefusesOverWidthConfigRows pins the repository as
+// the backstop write surface: a direct Create or Update carrying an
+// over-width value meets the same named refusal SaveConfig answers, so no
+// write path can land a value SQLite would store and PostgreSQL would refuse.
+func TestSSOConfigRepository_RefusesOverWidthConfigRows(t *testing.T) {
+	t.Parallel()
+
+	db := testutil.NewDB(t)
+	repo := NewSSOConfigRepository(db)
+	tenantID := pkgcore.TenantID("tenant-widths-backstop")
+	ctx := pkgcore.WithTenant(t.Context(), tenantID)
+
+	valid := &TenantSSOConfig{
+		TenantID: string(tenantID), ID: newID(),
+		Issuer: "https://idp.example.com", ClientID: "client-id", Enabled: true,
+	}
+	valid.SetAllowedDomains([]string{"example.com"})
+	if err := repo.Create(ctx, valid); err != nil {
+		t.Fatalf("create a within-width configuration: %v", err)
+	}
+
+	// An over-width Update is refused and leaves the stored row unchanged.
+	valid.Issuer = overWidthIssuer
+	assertErrorCode(t, repo.Update(ctx, valid), ssoIssuerTooLongCode)
+	stored, err := repo.Current(ctx)
+	if err != nil {
+		t.Fatalf("Current() error = %v", err)
+	}
+	if stored.Issuer != "https://idp.example.com" {
+		t.Errorf("a refused update changed the stored issuer to %q", stored.Issuer)
+	}
+
+	// A direct over-width Create is refused and persists nothing.
+	over := &TenantSSOConfig{
+		TenantID: string(tenantID), ID: newID(),
+		Issuer: overWidthIssuer, ClientID: "client-id", Enabled: true,
+	}
+	assertErrorCode(t, repo.Create(ctx, over), ssoIssuerTooLongCode)
+}
+
+// TestSSOService_AuthorizeURL_RefusesAnOverLongTenantID is finding (1)'s
+// entry-time regression: a configuration row for the over-long tenant can
+// exist (it was written before the SaveConfig gate, or straight through the
+// repository), so the entry path refuses the tenant itself before any state
+// is issued -- a state issued for such a tenant would only lead the member
+// to a callback whose identity write cannot succeed on PostgreSQL.
+func TestSSOService_AuthorizeURL_RefusesAnOverLongTenantID(t *testing.T) {
+	t.Parallel()
+
+	server := testutil.NewOIDCServer(t, "enterprise-client")
+	f := newSSOFixture(t, server)
+	writeSSOConfig(t, f, overLongSSOTenantID, server, "enterprise-client", "example.com")
+
+	_, err := f.svc.SSO().AuthorizeURL(
+		pkgcore.WithTenant(t.Context(), overLongSSOTenantID), ssoRedirectURI, "")
+	assertErrorCode(t, err, ssoTenantIDTooLongCode)
+}
+
+// TestSSOService_Callback_RefusesAnOverLongTenantID is finding (1)'s
+// last-line regression on the callback path: an over-long tenant id is
+// refused with the named error before anything else, so a flow begun before
+// the gates existed answers the same refusal instead of a raw 22001 from
+// the identity write it would otherwise reach.
+func TestSSOService_Callback_RefusesAnOverLongTenantID(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	_, err := f.svc.SSO().Callback(t.Context(), SSOCallbackInput{
+		TenantID: overLongSSOTenantID, Code: "code", State: "state",
+	})
+	assertErrorCode(t, err, ssoTenantIDTooLongCode)
+}
+
+// TestSSOService_ServesTheLongestRepresentableTenantID is finding (1)'s
+// honest acceptance boundary, end to end: a tenant id of exactly 59 runes --
+// whose "oidc:<tenant>" provider name is exactly 64 runes, the width of
+// user_identities.provider -- completes the full enterprise sign-in round
+// trip, resolving to an identity stored under SSOChannelName(boundaryTenant).
+func TestSSOService_ServesTheLongestRepresentableTenantID(t *testing.T) {
+	t.Parallel()
+
+	server := testutil.NewOIDCServer(t, "enterprise-client")
+	f := newSSOFixture(t, server)
+	writeSSOConfig(t, f, boundarySSOTenantID, server, "enterprise-client", "example.com")
+	member := f.registerUser(t, "member@example.com", boundarySSOTenantID)
+
+	state, nonce := ssoAuthorize(t, f, boundarySSOTenantID)
+	server.QueueIDToken(server.SignIDToken(t, testutil.IDTokenClaims{
+		Subject: "enterprise-subject-boundary", Email: "member@example.com",
+		EmailVerified: true, Nonce: nonce,
+	}))
+
+	result, err := f.svc.SSO().Callback(t.Context(), SSOCallbackInput{
+		TenantID: boundarySSOTenantID, Code: "the-code", State: state,
+	})
+	if err != nil {
+		t.Fatalf("Callback() error = %v", err)
+	}
+	if result.User.ID != member.ID {
+		t.Errorf("User.ID = %q, want the existing tenant member %q", result.User.ID, member.ID)
+	}
+	if result.Tokens == nil {
+		t.Fatal("Tokens = nil, want a session")
+	}
+	if result.Identity.Provider != SSOChannelName(boundarySSOTenantID) {
+		t.Errorf("Identity.Provider = %q, want %q", result.Identity.Provider, SSOChannelName(boundarySSOTenantID))
+	}
+}
