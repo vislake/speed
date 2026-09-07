@@ -577,3 +577,53 @@ async function openCaseWithSimulation(page: Page): Promise<void> {
     'blocks C and D start from a generated simulation, which block B is what produces',
   ).toBeVisible()
 }
+
+/**
+ * That opening a patient's photo does not spend money without saying so.
+ *
+ * The panel gives a photo with no simulation on it one automatic
+ * generation the moment it can act (photo-simulation-panel.tsx's
+ * autoPreviewStartedRef), and that is a deliberate product decision with
+ * a stated reason: the case page would otherwise open on nothing but
+ * pickers and a blank promise, so a practice's first look at a new
+ * patient photo is the comparison the auto-run produces. This gate does
+ * not argue with that.
+ *
+ * What it holds is the disclosure. A generation costs credits -- the
+ * product says so itself, in the line it renders AFTERWARDS ("This
+ * simulation cost N credits") -- so a dentist who opens a case to look
+ * at a photograph has spent money before touching a control, and learns
+ * the price only once it is gone. On a pay-per-use product that is the
+ * difference between a feature and a surprise on the invoice: nobody
+ * disputes the charge for a simulation they asked for, and nobody
+ * expects one for a page they opened.
+ *
+ * The bar is deliberately low, because the fix is a product decision and
+ * not this gate's to make: SOMETHING on the surface, before or as the
+ * automatic run happens, has to connect it to a cost. A line saying the
+ * preview uses a credit, a balance shown beside the panel, a first-visit
+ * note, or an explicit "generate the first preview" button that makes the
+ * spend a choice -- any of them passes. Silence does not.
+ */
+test(
+  'opening a case does not spend a credit without telling anyone',
+  { tag: '@pending' },
+  async ({ page }) => {
+    await signInAs(page, DEMO_OWNER)
+
+    const name = caseName()
+    await openSurface(page, UI_NAMES.navCases)
+    await createCaseWithPhoto(page, name)
+    await page.getByText(name).click()
+
+    // The work area as it stands the moment a photo is opened: whatever
+    // the automatic run is about to spend, this is everything the person
+    // was told about it.
+    const workArea = await page.getByRole('main').innerText()
+
+    expect(
+      workArea,
+      'opening a case starts a generation that spends credits, and nothing on the surface mentions a cost, a balance or a choice -- so a dentist who opened a patient photograph to look at it finds out what it cost only after the money is gone',
+    ).toMatch(/credit|cost|balance|charge/i)
+  },
+)
