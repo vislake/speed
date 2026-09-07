@@ -106,6 +106,30 @@ func (r *ShareRepository) byTokenHash(ctx context.Context, hash string) (*Share,
 // rows, reports won == false and inserts nothing, so no duplicate log row
 // can survive a lost race.
 //
+// The count-and-trail atomicity above holds for every failure INSIDE the
+// transaction; one failure sits OUTSIDE it, and this method answers that
+// cell below rather than leaving it to the caller's re-read loop. dbkit's
+// commit-time-failure cell (WithTenantSession's own doc comment and
+// go/dbkit/AGENTS.md's "commit-time failure" entry) is the commit itself
+// reported failed while the fn's writes actually stuck, durably and
+// together: the retried attempt then finds its WHERE clause no longer
+// matching -- the count it premised on is gone -- and must not read the
+// zero rows as "a concurrent writer took the view". The one state that
+// distinguishes "someone else committed" from "I committed" is the granted
+// log row: only this logical access's own winning attempt could have
+// inserted a row under grantedEntry.ID (minted once per logical access by
+// Service.accessLogEntry and carried unchanged through every retry of that
+// access), and the row commits in the same transaction as the increment it
+// trails, so a row present under that id means this access's own view was
+// already spent. The zero-row branch therefore probes for its own row
+// before reporting the loss: a row found answers won == true -- the caller
+// serves the access its committed attempt already paid for, no second view
+// is spent and no duplicate row written -- while an absent row leaves the
+// loss standing for the caller's re-read-and-retry loop to arbitrate
+// against the row's honest current state. (The probe is a model-anchored
+// First against the log table, so the tenant-scope plugin filters it like
+// any other read of this module's own rows.)
+//
 // This is a compare-and-swap guard expressed entirely through a WHERE
 // clause and a struct passed to Updates, deliberately NOT a raw SQL
 // increment (view_count = view_count + 1) reached through .Model(...): the
@@ -147,8 +171,12 @@ func (r *ShareRepository) byTokenHash(ctx context.Context, hash string) (*Share,
 // a legitimate won == false), and a retried attempt whose WHERE clause no
 // longer matches -- because the concurrent writer that caused the conflict
 // committed a view between the attempts -- affects zero rows and reports
-// won == false, never a double-count, so the retry changes nothing about
-// how Service.recordView interprets this method's answer.
+// won == false, never a double-count -- the one exception being the
+// recognition cell the paragraph above describes, where the retried
+// attempt's zero-row update finds its OWN granted row and answers
+// won == true, also never a second increment -- so in the ordinary
+// lost-race reading the retry changes nothing about how Service.recordView
+// interprets this method's answer.
 func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now time.Time, grantedEntry *AccessLogEntry) (won bool, err error) {
 	err = r.runGuardedWrite(ctx, func(tx *gorm.DB) error {
 		res := tx.
@@ -165,6 +193,31 @@ func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now t
 		won = res.RowsAffected == 1
 		if won && grantedEntry != nil {
 			return tx.Create(grantedEntry).Error
+		}
+		// A zero-row UPDATE is normally a lost CAS race against a
+		// concurrent writer -- report won == false and let the caller's
+		// re-read-and-retry loop (Service.recordView) arbitrate. One cell
+		// must not read as a loss: dbkit's commit-time-failure cell (see
+		// the doc comment above), where an earlier attempt of THIS
+		// logical access had its commit reported failed while the
+		// increment and the granted row actually stuck. The row is the
+		// one state that distinguishes "someone else committed" from "I
+		// committed": only this access's own winning attempt could have
+		// inserted a row under grantedEntry.ID, and the row commits in
+		// the same transaction as the increment it trails, so a row
+		// present under that id means this access's own view was already
+		// spent -- refusing would burn it on a MaxViews=1 share with no
+		// reclaim. The honest answer is won == true, and the caller
+		// serves the access its committed attempt already paid for. An
+		// absent row leaves the loss standing.
+		if !won && grantedEntry != nil {
+			var recorded AccessLogEntry
+			if probeErr := tx.Where("id = ?", grantedEntry.ID).First(&recorded).Error; probeErr == nil {
+				won = true
+				return nil
+			} else if !errors.Is(probeErr, gorm.ErrRecordNotFound) {
+				return probeErr
+			}
 		}
 		return nil
 	})
@@ -198,8 +251,21 @@ func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now t
 // exactly as it does for every other struct Updates call in this module,
 // and the WHERE clause's stale-or-free disjunction is re-evaluated on
 // every attempt of the guarded write's retry envelope (concurrency.go) --
-// a retried attempt that lost a genuine takeover race to another caller
-// affects zero rows and reports won == false, never two reservations.
+// a retried attempt that lost the race affects zero rows and reports
+// won == false, never two reservations. The refuser need not belong to
+// another caller, either: on dbkit's commit-time-failure cell
+// (WithTenantSession's own doc comment) a retried attempt can be losing to
+// its OWN earlier attempt -- the reservation that attempt committed is
+// still visible, still younger than viewReservationTimeout, and rightly
+// refuses the retry exactly as a live reservation refuses any other
+// contender. That self-reservation needs no behavior of its own here,
+// because a reservation is never a consumption: the losing attempt serves
+// nothing, so no view is spent, and the held reservation outlives
+// viewReservationTimeout into staleness, where the next access's
+// stale-or-free takeover (the "converged by the next access" half above)
+// or the expiry sweep's reservation arm (cleanup.go) converges it -- the
+// row state the takeover converges is the same whether the interrupted
+// serve was this caller's own earlier attempt or another caller's.
 func (r *ShareRepository) tryReserveView(ctx context.Context, share *Share, now time.Time) (won bool, err error) {
 	err = r.runGuardedWrite(ctx, func(tx *gorm.DB) error {
 		res := tx.

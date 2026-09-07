@@ -1025,7 +1025,18 @@ func (s *Service) confirmAccessView(ctx context.Context, share *Share, p AccessP
 // a way the failed log cannot undo -- a log-failed attempt can never
 // permanently exhaust a MaxViews=1 share (the log-write failure surfaces as
 // the attempt's store error and Access returns ErrInternal, and the share
-// still has its view for a genuine retry). The caller's grantedEntry is
+// still has its view for a genuine retry). That promise has one boundary,
+// inherited from dbkit's commit-time-failure cell (WithTenantSession's own
+// doc comment): when the COMMIT itself is reported failed after the count
+// and the row actually stuck, the failure is not an in-transaction log
+// failure, and the retried attempt can neither roll back what it cannot
+// see nor double-spend what it can. The repository answers that cell by
+// recognizing its own committed residue -- a retried attempt that finds
+// its own granted row already durably recorded reports won == true rather
+// than won == false (tryRecordView's own doc comment) -- so this loop
+// serves the access whose view its committed attempt already consumed
+// instead of refusing it and burning the view with no mechanism to reclaim
+// it. The caller's grantedEntry is
 // ONLY inserted by the specific attempt whose guarded UPDATE actually won,
 // so a CAS loss that hands the view to a concurrent viewer never writes a
 // duplicate log row.

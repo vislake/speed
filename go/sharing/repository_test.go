@@ -146,6 +146,98 @@ func TestShareRepository_TryRecordView_StaleViewCountLosesTheRace(t *testing.T) 
 	}
 }
 
+// TestShareRepository_TryRecordView_RetriedAttemptRecognizesItsOwnRecordedAccess
+// pins the idempotency half of tryRecordView's answer to dbkit's
+// commit-time-failure cell (WithTenantSession's doc comment and
+// go/dbkit/AGENTS.md's "commit-time failure" known limitation): a
+// WithTenantSession non-nil return does not prove the attempt committed
+// nothing -- a commit reported failed can leave its writes durably present
+// -- so a retried attempt must not read "my WHERE clause no longer
+// matched" as "a concurrent writer took the view". The one state that
+// distinguishes "someone else committed" from "I committed" is the granted
+// log row: only one logical access's own winning attempt inserts a row
+// carrying its grantedEntry.ID (minted once per Service.Access call and
+// carried unchanged through every one of that call's retries), and that
+// row commits in the same transaction as the increment it trails. A
+// retried attempt that finds its own row already durably recorded is
+// looking at its own earlier attempt's committed residue: the view was
+// already consumed by THIS access, so the attempt must report won == true
+// -- the caller then serves the content the access already paid for --
+// rather than won == false, which would refuse the access and burn the
+// view on a MaxViews=1 share with no mechanism to reclaim it.
+//
+// The first tryRecordView below models the misreported attempt's durable
+// residue honestly: it commits the increment and the granted row for real.
+// The database-level failure that would have reported that commit as
+// failed cannot be manufactured deterministically from this module's side
+// (it needs dbkit's own deferred-constraint or commit-time-lock machinery,
+// against a schema this module deliberately keeps free of foreign keys) --
+// but the residue it leaves is exactly the state this retried call sees,
+// which is the state the recognition must answer for. On the pre-fix code
+// this retried call reports won == false and the test fails.
+func TestShareRepository_TryRecordView_RetriedAttemptRecognizesItsOwnRecordedAccess(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	share := newTestShare("share-1", now)
+	one := 1
+	share.MaxViews = &one
+	if err := repo.Create(ctx, share); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// The logical access's one granted log row, carrying the ID every one
+	// of its retried attempts shares (Service.accessLogEntry's shape).
+	entry := &AccessLogEntry{
+		ID:          "entry-share-1",
+		TenantModel: dbkit.TenantModel{TenantID: "tenant-a"},
+		ShareID:     share.ID,
+		OccurredAt:  now,
+		Outcome:     AccessOutcomeGranted,
+	}
+
+	// First attempt: wins the CAS and commits the count and its trail
+	// together.
+	won, err := repo.tryRecordView(ctx, share, now, entry)
+	if err != nil {
+		t.Fatalf("tryRecordView (first): %v", err)
+	}
+	if !won {
+		t.Fatalf("tryRecordView (first) = false, want true")
+	}
+
+	// Retried attempt with the SAME stale premise (this copy still says
+	// ViewCount 0) and the SAME granted row: the residue of the first
+	// attempt is durably present, exactly as the commit-time-failure cell
+	// leaves it for the attempt that follows.
+	won, err = repo.tryRecordView(ctx, share, now, entry)
+	if err != nil {
+		t.Fatalf("tryRecordView (retried): %v", err)
+	}
+	if !won {
+		t.Fatalf("tryRecordView (retried) = false, want true -- the retried attempt's own committed residue must be recognized as its access, not misread as someone else's win")
+	}
+
+	// The recognition must not have spent a second view or written a
+	// duplicate row: the share still holds exactly the one view the first
+	// attempt consumed, and the log holds exactly the one granted row.
+	fresh, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if fresh.ViewCount != 1 {
+		t.Errorf("ViewCount = %d after recognition, want 1 -- a recognized retry must not spend a second view", fresh.ViewCount)
+	}
+	logs, err := NewAccessLogRepository(repo.db).listByShare(ctx, share.ID)
+	if err != nil {
+		t.Fatalf("listByShare: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Errorf("access log rows = %d, want 1 -- a recognized retry must not write a duplicate granted row", len(logs))
+	}
+}
+
 // TestShareRepository_TryReserveView_TakesAndRefusesTheLiveReservation
 // pins the reserve half of the access route's reserve/confirm/refund
 // shape: a MaxViews-limited share takes exactly one in-flight reservation,
