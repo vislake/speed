@@ -41,7 +41,11 @@
  * answered locally with the same notice rather than sent into the
  * server's deliberately collapsed invalid-code refusal (authn answers
  * a spent login code exactly like a wrong one), and only a fresh code
- * -- a resend, or a request for a changed phone -- can sign in.
+ * -- a resend, or a request for a changed phone -- can sign in. The
+ * spent-code memory clears only when a fresh code is actually issued:
+ * a resend the send policy refuses (authn.rate_limited being the
+ * likeliest refusal) issues none, and the exhausted code stays refused
+ * locally rather than becoming resubmittable.
  *
  * The collapse is deliberate, and it is the pre-authentication half of
  * an asymmetry the step-up/MFA channel's honest spent-vs-never-valid
@@ -105,34 +109,46 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
   // code step, never while an error is showing.
   const [codeUsed, setCodeUsed] = useState(false)
   // The exact code a superseded answer proved spent, kept until the
-  // next code request starts a new code session: a re-submission of
-  // this string is refused locally with the used-code notice instead
-  // of a doomed round-trip into the server's collapsed invalid-code
-  // refusal. That reach -- this browser, until the next code request --
-  // is the whole boundary of this mitigation, a design cost rather
-  // than a defect to fix by splitting (see the file header): the
-  // server cannot tell this client its code was used without telling
-  // every caller the same, so a refresh, a new tab or another device
-  // re-submitting this same exhausted code gets the server's collapsed
-  // answer, and the honest verdict is payable only locally, only while
-  // the truth is still in this memory.
+  // next code request ISSUES a fresh code -- a request the server
+  // refuses (rate-limited, transport) issues none, and this memory
+  // survives it, for the old code is no less spent -- at which point a
+  // re-submission of this string is refused locally with the used-code
+  // notice instead of a doomed round-trip into the server's collapsed
+  // invalid-code refusal. That reach -- this browser, until a fresh
+  // code arrives -- is the whole boundary of this mitigation, a design
+  // cost rather than a defect to fix by splitting (see the file
+  // header): the server cannot tell this client its code was used
+  // without telling every caller the same, so a refresh, a new tab or
+  // another device re-submitting this same exhausted code gets the
+  // server's collapsed answer, and the honest verdict is payable only
+  // locally, only while the truth is still in this memory.
   const [spentCode, setSpentCode] = useState<string | null>(null)
 
   const requestCode = useCallback(
     async (phone: string) => {
       setErrorCode(null)
-      // A fresh code starts a new code session: the previous one's
-      // used-code notice and spent-code memory describe a code the new
-      // request invalidates.
+      // A request does not yet open a new code session: whether one
+      // opens is the server's answer. The used-code notice clears for
+      // the attempt, but the spent-code memory below is released only
+      // once a fresh code was actually issued -- in the success path --
+      // because a refused request (rate-limited, transport) leaves the
+      // previous code spent: forgetting it here would send the
+      // exhausted code into a doomed round-trip against the server's
+      // collapsed invalid-code refusal on the very next submit.
       setCodeUsed(false)
-      setSpentCode(null)
       setSendingCode(true)
       try {
         await session.requestSMSCode({ phone })
-        // A fresh code was just issued: any code typed against the one
-        // it replaces (a changed phone, a resend) is stale, so the code
-        // field starts empty for the new session. Harmless no-op on
-        // the first send, where no code was ever typed.
+        // A fresh code was just issued: a new code session opens now.
+        // The previous session's spent-code memory describes a code
+        // this request invalidates, and only on the issued code may it
+        // clear -- never at request start, or a refused resend would
+        // forget the old code is spent. Any code typed against the one
+        // the new code replaces (a changed phone, a resend) is stale
+        // too, so the code field starts empty for the new session.
+        // Harmless no-op on the first send, where no code was ever
+        // typed.
+        setSpentCode(null)
         form.resetField('code', { defaultValue: '' })
         setSentTo(phone)
         setStep('code')
@@ -201,8 +217,10 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
 
   const editPhone = (): void => {
     setErrorCode(null)
-    // Leaving the code step clears its attempt state: a re-entry
-    // always runs requestCode, which starts a fresh code session.
+    // Leaving the code step clears its attempt state: the code-entry
+    // surface unmounts with it, and re-entering requires a code
+    // request the server accepts -- a fresh code session, whatever the
+    // requestCode attempt below starts, only opens on the issued code.
     setCodeUsed(false)
     setSpentCode(null)
     setStep('phone')

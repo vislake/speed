@@ -582,4 +582,209 @@ describe('SMSSignInForm', () => {
       code: '654321',
     })
   })
+
+  it('retain the spent-code memory across a refused resend: the exhausted code is still answered locally', async () => {
+    // A code request that is REFUSED issues no fresh code, so the
+    // spent-code memory the superseded answer left behind must survive
+    // it: the rate-limited resend (the likeliest refusal -- the send
+    // policy just answered one request) does not make the exhausted
+    // code resubmittable. Pre-fix the memory cleared as the resend
+    // STARTED rather than when a fresh code actually arrived, so this
+    // re-submission rode into the server's collapsed invalid-code
+    // refusal -- the dead-code round-trip this regression pins shut.
+    let requestCount = 0
+    let loginAttempts = 0
+    let releaseSms!: () => void
+    const smsGate = new Promise<void>((resolve) => {
+      releaseSms = resolve
+    })
+    const harness = makeHarness({
+      [REQUEST_SMS_CODE]: () => {
+        requestCount += 1
+        if (requestCount > 1) {
+          // The resend trips the send policy: no fresh code arrives.
+          throw apiError(429, 'authn.rate_limited')
+        }
+        return undefined
+      },
+      [LOGIN_PASSWORD]: () => makePair(),
+      [LOGIN_SMS]: (call) => {
+        loginAttempts += 1
+        const body = call.options?.body as { code?: unknown } | undefined
+        if (loginAttempts > 1 && body?.code === CODE) {
+          // The consumed-code answer: the first submit's 2xx already
+          // spent this code server-side.
+          throw apiError(401, 'authn.verification_code_invalid')
+        }
+        return smsGate.then(() => makePair())
+      },
+    })
+    const onSignedIn = vi.fn()
+    renderWithProviders(
+      <SMSSignInForm session={harness.session} onSignedIn={onSignedIn} />,
+    )
+    await requestCode(PHONE)
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toBeInTheDocument(),
+    )
+    const user = userEvent.setup()
+    const codeInput = screen.getByLabelText(
+      zhCN.smsSignIn.codeLabel,
+    ) as HTMLInputElement
+    await user.type(codeInput, CODE)
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.submit }),
+    )
+    // The winning password login commits while the SMS login is in
+    // flight; the SMS answer then settles as superseded, spending the
+    // code.
+    await act(async () => {
+      await harness.session.loginWithPassword({
+        identifier: 'alice@example.com',
+        password: 'pw',
+      })
+    })
+    await act(async () => {
+      releaseSms()
+    })
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        zhCN.smsSignIn.codeUsed,
+      ),
+    )
+    // The resend is refused: the form renders the send-policy answer
+    // and no fresh code arrived.
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.resendCode }),
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        zhCN.errors.authn.rate_limited,
+      ),
+    )
+    expect(harness.calls).toHaveLength(4)
+    // The exhausted code is typed again: still spent -- the refused
+    // resend changed nothing -- so the re-submission is answered
+    // locally with the used-code notice, never by a network round-trip
+    // into the server's invalid-code refusal.
+    await user.clear(codeInput)
+    await user.type(codeInput, CODE)
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.submit }),
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        zhCN.smsSignIn.codeUsed,
+      ),
+    )
+    expect(harness.calls).toHaveLength(4)
+    expect(loginAttempts).toBe(1)
+    expect(codeInput.value).toBe('')
+    expect(
+      screen.queryByText(zhCN.errors.authn.verification_code_invalid),
+    ).toBeNull()
+    expect(onSignedIn).not.toHaveBeenCalled()
+    expect(harness.store.get()).toBe('access-1')
+  })
+
+  it('clear the spent-code memory on a successful resend: the old code rides to the server again, a fresh code signs in', async () => {
+    // The mirror of the refused-resend retention above: a resend the
+    // server ACCEPTS issues a fresh code and opens a new code session,
+    // whose boundary is the memory's stated reach -- the spent code
+    // clears with the session, the old code is no longer refused
+    // locally (it rides to the server's collapsed answer once more),
+    // and the fresh code verifies normally. This leg passes by
+    // accident of the pre-fix timing too (the memory cleared at request
+    // start); it pins the success path so the corrected clear cannot
+    // regress it.
+    let loginAttempts = 0
+    let releaseSms!: () => void
+    const smsGate = new Promise<void>((resolve) => {
+      releaseSms = resolve
+    })
+    const harness = makeHarness({
+      [REQUEST_SMS_CODE]: () => undefined,
+      [LOGIN_PASSWORD]: () => makePair(),
+      [LOGIN_SMS]: (call) => {
+        loginAttempts += 1
+        const body = call.options?.body as { code?: unknown } | undefined
+        if (loginAttempts > 1 && body?.code === CODE) {
+          // The consumed-code answer for the spent code: the first
+          // submit's 2xx already spent it server-side.
+          throw apiError(401, 'authn.verification_code_invalid')
+        }
+        return smsGate.then(() => makePair())
+      },
+    })
+    const onSignedIn = vi.fn()
+    renderWithProviders(
+      <SMSSignInForm session={harness.session} onSignedIn={onSignedIn} />,
+    )
+    await requestCode(PHONE)
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toBeInTheDocument(),
+    )
+    const user = userEvent.setup()
+    const codeInput = screen.getByLabelText(
+      zhCN.smsSignIn.codeLabel,
+    ) as HTMLInputElement
+    await user.type(codeInput, CODE)
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.submit }),
+    )
+    // The winning password login commits while the SMS login is in
+    // flight; the SMS answer then settles as superseded, spending the
+    // code.
+    await act(async () => {
+      await harness.session.loginWithPassword({
+        identifier: 'alice@example.com',
+        password: 'pw',
+      })
+    })
+    await act(async () => {
+      releaseSms()
+    })
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        zhCN.smsSignIn.codeUsed,
+      ),
+    )
+    // The resend is accepted: a fresh code session opens, the used
+    // notice clears and the code field starts empty.
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.resendCode }),
+    )
+    await waitFor(() => expect(harness.calls).toHaveLength(4))
+    await waitFor(() =>
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument(),
+    )
+    expect(codeInput.value).toBe('')
+    // The old spent code is no longer in the fresh session's memory:
+    // re-submitting it rides to the server once more, drawing the
+    // collapsed invalid-code answer.
+    await user.type(codeInput, CODE)
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.submit }),
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        zhCN.errors.authn.verification_code_invalid,
+      ),
+    )
+    expect(harness.calls).toHaveLength(5)
+    // The recovery is the fresh code: it verifies normally and signs
+    // in.
+    await user.clear(codeInput)
+    await user.type(codeInput, '654321')
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.submit }),
+    )
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
+    expect(harness.calls).toHaveLength(6)
+    expect(harness.calls[5]?.options?.body).toEqual({
+      phone: PHONE,
+      code: '654321',
+    })
+    expect(harness.store.get()).toBe('access-1')
+  })
 })
