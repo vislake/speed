@@ -148,8 +148,20 @@ describe('SimulationShareAction', () => {
         'the share control must produce an absolute, copyable URL carrying both halves',
       ).toHaveValue(expected)
 
-      // The expiry the server resolved is shown beside the link.
-      expect(view.getByText(/^Link expires /)).toBeInTheDocument()
+      // The expiry the server resolved is shown beside the link -- with
+      // the date actually substituted, never the literal "{date}" a
+      // single-braced bundle value renders (i18next interpolates
+      // {{name}}, so cases.share.expiresOn must carry double braces in
+      // both languages).
+      const expiry = view.getByText(/^Link expires /)
+      expect(
+        expiry.textContent,
+        'the expiry line renders the placeholder itself -- cases.share.expiresOn uses single braces and i18next does not interpolate them',
+      ).not.toContain('{date}')
+      expect(
+        expiry.textContent,
+        'the expiry line carries no real date, so it tells a practice nothing about how long the link stays usable',
+      ).toMatch(/\d/)
 
       const mints = shareMints(view)
       expect(mints).toHaveLength(2)

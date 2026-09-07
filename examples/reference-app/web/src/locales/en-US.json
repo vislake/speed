@@ -20,8 +20,8 @@
   },
   "home": {
     "intro": "Your smile-simulation workbench. What is here depends on the features this clinic has enabled.",
-    "emptyTitle": "No features are enabled yet",
-    "emptyDescription": "Ask an administrator to enable a feature for this clinic. Enabled features will appear here."
+    "emptyTitle": "Nothing to show yet",
+    "emptyDescription": "This clinic's work lives in the navigation — Cases for patients and smile simulations, Credits for the balance, Notes for the team. Everything here is ready to use, with no feature to enable and no one to ask."
   },
   "features": {
     "heading": "Enabled features",
@@ -147,7 +147,7 @@
     "share": {
       "action": "Share with patient",
       "linkLabel": "Share link",
-      "expiresOn": "Link expires {date}",
+      "expiresOn": "Link expires {{date}}",
       "errors": {
         "permissionDenied": "You don't have permission to share results with patients. Ask an owner of your clinic.",
         "rateLimited": "Too many share links were created just now. Wait a moment and try again.",

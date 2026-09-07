@@ -112,10 +112,16 @@ export function HomeView(): ReactElement {
           </Box>
         </>
       ) : (
-        // No flag the server resolves is enabled: the surface says so
-        // in its own words instead of leaving the intro sentence
-        // pointing at nothing. The promise-to-blank-space shape this
-        // replaces (home.intro used to say "the cards below show the
+        // No flag the server resolves is enabled. The empty state must
+        // stay true for the population that actually meets it -- a
+        // practice that just registered itself, whose account IS the
+        // administrator and whose whole journey works from that account
+        // (the new-practice acceptance gate's finding). So the copy
+        // never claims the clinic's features are disabled and never
+        // points at an administrator to enable anything: it says the
+        // panel has nothing to show and names where the work actually
+        // lives. The promise-to-blank-space shape this section replaced
+        // (home.intro used to say "the cards below show the
         // features...", with no mechanism in the app able to enable
         // any) is what the home-is-self-consistent acceptance gate
         // refuses.

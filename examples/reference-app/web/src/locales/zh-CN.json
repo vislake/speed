@@ -20,8 +20,8 @@
   },
   "home": {
     "intro": "您的微笑模拟工作台。这里显示的内容取决于本诊所已启用的功能。",
-    "emptyTitle": "尚未启用任何功能",
-    "emptyDescription": "请联系管理员为本诊所启用功能。启用后功能会显示在这里。"
+    "emptyTitle": "还没有可展示的内容",
+    "emptyDescription": "本诊所的工作都在导航里：病例、额度与记事，全部可直接使用——无需启用任何功能，也不用找任何人开通。"
   },
   "features": {
     "heading": "已启用功能",
@@ -147,7 +147,7 @@
     "share": {
       "action": "分享给患者",
       "linkLabel": "分享链接",
-      "expiresOn": "链接于 {date} 到期",
+      "expiresOn": "链接于 {{date}} 到期",
       "errors": {
         "permissionDenied": "您没有权限向患者分享结果。如需分享，请联系诊所的负责人。",
         "rateLimited": "分享链接创建得太频繁，请稍后再试。",

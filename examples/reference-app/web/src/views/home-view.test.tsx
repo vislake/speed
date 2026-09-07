@@ -12,6 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import enUS from '../locales/en-US.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
 import { demoServer } from '../test-utils/demo-server.js'
 import {
@@ -73,13 +74,17 @@ describe('HomeView', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('says honestly that no feature is enabled, never pointing at blank space', async () => {
-    // The home-is-self-consistent acceptance shape: the intro never
-    // promises cards the server did not enable (the earlier copy -- "the
-    // cards below show the features..." -- hung over blank space for
-    // every tenant, forever, because no surface in the app can enable a
-    // feature), and an empty feature list renders the surface's own
-    // empty state instead of a heading over a void.
+  it('a clinic with no enabled feature is told the truth, never to seek an administrator', async () => {
+    // The self-registered-practice shape -- the population the
+    // new-practice gate meets, a real registrant whose server answer
+    // enables nothing. The old copy -- "No features are enabled yet",
+    // "Ask an administrator to enable a feature for this clinic" -- told
+    // a practice that just registered itself that nothing works and to
+    // go find the one person who does not exist: the registrant IS the
+    // administrator, nothing in the app was ever disabled, and the
+    // whole journey works from that very account. The surface instead
+    // says something true: the work lives in the navigation, and
+    // nothing needs to be enabled or asked for.
     const rig = makeRealClientRig(
       demoServer({
         publicConfig: {
@@ -88,19 +93,34 @@ describe('HomeView', () => {
         },
       }),
     )
-    const view = renderWithAppServices(<HomeView />, {
-      session: rig.session,
-      api: rig.api,
-    })
+    const view = renderWithAppServices(
+      <HomeView />,
+      {
+        session: rig.session,
+        api: rig.api,
+      },
+      { language: 'en-US' },
+    )
     await view.findByText(BRAND)
-    expect(await view.findByText(zhCN.home.emptyTitle)).toBeInTheDocument()
     expect(
-      view.getByText(zhCN.home.emptyDescription),
-    ).toBeInTheDocument()
-    // The intro renders the shipped bundle text -- which no longer
-    // contains the cards-below promise the gate refuses (bundle values
-    // are quoted from the JSON fixture, never inline).
-    expect(view.getByText(zhCN.home.intro)).toBeInTheDocument()
+      view.queryByText('No features are enabled yet'),
+      'the empty-feature home must not claim a fresh clinic has disabled features',
+    ).not.toBeInTheDocument()
+    expect(
+      view.queryByText(
+        'Ask an administrator to enable a feature for this clinic. Enabled features will appear here.',
+      ),
+      'the empty-feature home must not send a self-registered practice to an administrator who does not exist',
+    ).not.toBeInTheDocument()
+    // The true guide takes their place: the panel has nothing to show,
+    // and the clinic's work -- named, ready, needing no one -- is the
+    // honest answer. The assertions quote the shipped bundle fixtures,
+    // never inline copy.
+    expect(view.getByText(enUS.home.emptyTitle)).toBeInTheDocument()
+    expect(view.getByText(enUS.home.emptyDescription)).toBeInTheDocument()
+    // The intro renders the shipped bundle text too -- which makes no
+    // cards-below promise the acceptance gate refuses.
+    expect(view.getByText(enUS.home.intro)).toBeInTheDocument()
   })
 
   it('names the clinic being worked in at page-title level once signed in', async () => {
