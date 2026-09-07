@@ -40,6 +40,8 @@
 
 "notification.dispatch_invalid" = "该通知请求不合法:{{.field}}。"
 
+"notification.dispatch_params_not_allowed" = "通知类型 {{.type_key}} 不允许参数 {{.params}} 到达接收方。"
+
 "notification.message_not_found" = "该消息不存在。"
 
 "notification.sms_sender_required" = "通知服务缺少短信发送通道的配置。"

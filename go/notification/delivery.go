@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -89,6 +91,18 @@ type Dispatch struct {
 	// placeholders spell out (render.go's renderContent). It is also part
 	// of the delivery key derivation, so two dispatches that differ only
 	// in parameters are two deliveries.
+	//
+	// Params is the RECIPIENT-VISIBLE channel: everything in it persists
+	// into the recipient's inbox row and comes back out through the inbox
+	// API, so only what the type's own declaration marks recipient-visible
+	// may ride it (pkgcore.NotificationType.RecipientVisibleParams).
+	// DeliveryService.Dispatch refuses a parameter outside that
+	// declaration, and the delivery path narrows a payload that
+	// nevertheless carries one (a job enqueued before the declaration
+	// existed, say) down to the declared list before anything renders or
+	// persists (recipientVisibleOnly below) -- delivery-internal context
+	// such as an operator's free-text justification or an actor's user id
+	// must never travel here.
 	Params map[string]any `json:"params"`
 
 	// OccurrenceID names the delivery OCCURRENCE this Dispatch is -- the
@@ -419,9 +433,17 @@ func (s *DeliveryService) SendRecords() *SendRecordRepository { return s.sendRec
 // one is refused with pkgcore.ErrNoTenant, because the job and every record
 // it writes belong to a tenant. A Dispatch whose payload cannot be marshaled
 // -- a Params map holding a channel or function, say -- is refused with
-// ErrDispatchInvalid naming the "params" field.
+// ErrDispatchInvalid naming the "params" field. A Dispatch whose Params
+// carry a parameter the named type's declaration does not mark
+// recipient-visible is refused with ErrDispatchParamsNotAllowed before
+// anything is enqueued: a type with static copy declares an empty list, so
+// delivery-internal context (an operator's justification, an actor's user
+// id) can never ride Params into the recipient's row or API.
 func (s *DeliveryService) Dispatch(ctx context.Context, d Dispatch) (jobs.JobID, error) {
 	if err := d.validate(); err != nil {
+		return "", err
+	}
+	if err := s.checkParamsRecipientVisible(d); err != nil {
 		return "", err
 	}
 	if s.queue == nil {
@@ -440,6 +462,99 @@ func (s *DeliveryService) Dispatch(ctx context.Context, d Dispatch) (jobs.JobID,
 		TenantID: tenantID,
 		Payload:  payload,
 	})
+}
+
+// recipientVisibleParams returns the parameter names the type named typeKey
+// declares recipient-visible, and whether the type declares any restriction
+// at all. An undeclared type answers unrestricted: its key is resolved --
+// and refused with ErrTypeNotFound when absent -- at delivery time, exactly
+// as before. A nil RecipientVisibleParams, the pre-annotation legacy value
+// (pkgcore.NotificationType's own field doc), also answers unrestricted, so
+// no pre-existing type changes behaviour: the restriction engages only when
+// a type's declaration states its recipient-visible list explicitly, the
+// empty list included.
+func (s *DeliveryService) recipientVisibleParams(typeKey string) ([]string, bool) {
+	typ, err := s.prefs.lookupType(typeKey)
+	if err != nil {
+		return nil, false
+	}
+	if typ.RecipientVisibleParams == nil {
+		return nil, false
+	}
+	return typ.RecipientVisibleParams, true
+}
+
+// paramsOutside returns the sorted names of every key of params that is not
+// in allowed -- the offending set a refusal names. Sorting keeps the set
+// deterministic across replicas, so the same refusal carries the same
+// "params" answer everywhere.
+func paramsOutside(params map[string]any, allowed []string) []string {
+	set := make(map[string]struct{}, len(allowed))
+	for _, name := range allowed {
+		set[name] = struct{}{}
+	}
+	var offending []string
+	for name := range params {
+		if _, ok := set[name]; !ok {
+			offending = append(offending, name)
+		}
+	}
+	slices.Sort(offending)
+	return offending
+}
+
+// checkParamsRecipientVisible refuses a Dispatch whose Params carry a
+// parameter name the type's declaration does not mark recipient-visible
+// (ErrDispatchParamsNotAllowed, naming the type and the offending keys). A
+// type with static copy declares an empty list, so a dispatch carrying
+// anything at all for it is refused here, at the enqueue boundary, where
+// the caller can still do something about it.
+func (s *DeliveryService) checkParamsRecipientVisible(d Dispatch) error {
+	allowed, restricted := s.recipientVisibleParams(d.TypeKey)
+	if !restricted {
+		return nil
+	}
+	if offending := paramsOutside(d.Params, allowed); len(offending) > 0 {
+		return ErrDispatchParamsNotAllowed.
+			WithParam("type_key", d.TypeKey).
+			WithParam("params", strings.Join(offending, ","))
+	}
+	return nil
+}
+
+// recipientVisibleOnly narrows d to the parameters its type's declaration
+// marks recipient-visible, returning d unchanged when the type declares no
+// restriction or the payload already carries none outside it. runDelivery
+// applies it to every payload that reaches the delivery path -- including
+// jobs enqueued before the type's declaration restricted its params, which
+// Dispatch's own refusal never saw: such a payload still delivers, but
+// nothing it carries beyond the declaration renders into copy, derives into
+// the delivery key, or persists into the inbox row. The narrowing is a pure
+// function of the declaration, so every replica and every retry narrows the
+// same payload to the same result.
+func (s *DeliveryService) recipientVisibleOnly(d Dispatch) Dispatch {
+	allowed, restricted := s.recipientVisibleParams(d.TypeKey)
+	if !restricted || len(d.Params) == 0 {
+		return d
+	}
+	if len(paramsOutside(d.Params, allowed)) == 0 {
+		return d
+	}
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, name := range allowed {
+		allowedSet[name] = struct{}{}
+	}
+	subset := make(map[string]any, len(allowed))
+	for name, value := range d.Params {
+		if _, ok := allowedSet[name]; ok {
+			subset[name] = value
+		}
+	}
+	if len(subset) == 0 {
+		subset = nil
+	}
+	d.Params = subset
+	return d
 }
 
 // Type implements jobs.Handler.
@@ -477,6 +592,10 @@ func (s *DeliveryService) runDelivery(ctx context.Context, d Dispatch) error {
 	if !ok {
 		return pkgcore.ErrNoTenant
 	}
+	// Narrow the payload to the type's recipient-visible parameters before
+	// any render, key derivation or row write (recipientVisibleOnly's own
+	// doc comment).
+	d = s.recipientVisibleOnly(d)
 	switch d.Recipient.Class {
 	case RecipientClassUser:
 		return s.deliverToUser(ctx, string(tenantID), d)
@@ -620,7 +739,10 @@ func (s *DeliveryService) deliverInbox(ctx context.Context, tenantID string, d D
 // will write. The row's Params column carries the JSON of the template
 // parameters that produced the copy, so a later re-render (a locale change,
 // say) needs no re-parse of the source dispatch; a dispatch with no
-// parameters stores the NULL column, never the JSON "null".
+// parameters stores the NULL column, never the JSON "null". Only parameters
+// the type's declaration marks recipient-visible can reach this column:
+// runDelivery narrows the payload before this method runs (recipientVisibleOnly),
+// so the row is safe to serve back through the inbox API as it stands.
 func (s *DeliveryService) buildInboxRow(_ context.Context, d Dispatch, group, key string) (*InboxMessage, error) {
 	parts, err := renderContent(s.catalog(), d.Locale, d.TypeKey, ChannelInApp, d.Params)
 	if err != nil {
@@ -1100,7 +1222,12 @@ func (s *DeliveryService) sendRecordFor(tenantID string, d Dispatch, channel str
 // deliberate resend of identical content is a new occurrence, and the
 // caller names it by dispatching under a fresh marker -- without one, two
 // dispatches of identical content stay the one delivery the replay probe
-// dedupes, which is what keeps a queue retry from double-sending.
+// dedupes, which is what keeps a queue retry from double-sending. By the
+// time the key is derived the payload's parameters are already narrowed to
+// the type's recipient-visible set (runDelivery applies recipientVisibleOnly
+// first), so the key never depends on delivery-internal context -- the
+// narrowing is a pure function of the declaration, giving every replica and
+// every retry the same key for the same payload.
 func deriveDeliveryKey(tenantID string, d Dispatch, channel string) (string, error) {
 	seed := deliveryKeySeed{
 		TenantID:       tenantID,

@@ -162,8 +162,8 @@ var (
 
 // The delivery group: every error the outbound-delivery pipeline
 // (DeliveryService, delivery.go) can return on its public surface. The
-// group's members each carry a "field" parameter naming the offending part
-// of a Dispatch.
+// group's members each carry a parameter naming the offending part of a
+// Dispatch (most commonly "field").
 var (
 	// ErrDispatchInvalid reports a Dispatch that cannot be delivered: a
 	// missing type key, a missing or unknown recipient class, a user
@@ -174,6 +174,23 @@ var (
 	// hands it, so a malformed payload dies at the API boundary or dead-
 	// letters, never half-delivers.
 	ErrDispatchInvalid = apperr.Invalid("notification.dispatch_invalid")
+
+	// ErrDispatchParamsNotAllowed reports a Dispatch whose Params carry a
+	// parameter name the named notification type's declaration does not
+	// mark recipient-visible (pkgcore.NotificationType.RecipientVisibleParams):
+	// the type's templates cannot interpolate it, and were it enqueued it
+	// would persist verbatim into the recipient's inbox row and inbox API --
+	// the leak channel internal context (an operator's justification, an
+	// administrator's user id) must never ride. A type that declares its
+	// recipient-visible list is enforced strictly; a type whose declaration
+	// leaves the list nil (the pre-annotation legacy value) stays
+	// unrestricted, so no pre-existing type changes behaviour. The refusal
+	// names the type in "type_key" and the offending keys in "params";
+	// DeliveryService.Dispatch refuses before anything is enqueued, and the
+	// delivery path narrows a payload that nevertheless reaches it (a job
+	// enqueued before the declaration existed) down to the declared list
+	// before rendering or persisting (delivery.go's recipientVisibleOnly).
+	ErrDispatchParamsNotAllowed = apperr.Invalid("notification.dispatch_params_not_allowed")
 )
 
 // The inbox group: every error the in-app inbox's read surface can return --

@@ -29,8 +29,10 @@ package notification
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -2170,5 +2172,132 @@ func TestDelivery_ContactDeliveryOfAnUndeclaredType_NeverReachesTheTransport(t *
 	rec = env.sendRecordByChannel(t, ctx, d, ChannelEmail)
 	if rec == nil || rec.Status != SendRecordStatusSucceeded {
 		t.Fatalf("record after the declared delivery = %+v, want succeeded", rec)
+	}
+}
+
+// annotatedAppointmentType is the fixture appointment declaration carrying
+// the recipient-visible-params annotation: it declares exactly the two
+// names its templates interpolate (render_test.go's renderTestParams), the
+// way a declaring business module states which parameters may reach its
+// recipients (pkgcore.NotificationType.RecipientVisibleParams -- the P1
+// fix's contract, whose owner is the type's own declaration).
+var annotatedAppointmentType = pkgcore.NotificationType{
+	Key:                    fixtureTypeAppointment,
+	Group:                  "appointments",
+	DefaultChannels:        []string{ChannelInApp, ChannelEmail, ChannelSMS},
+	Unsubscribable:         true,
+	RecipientVisibleParams: []string{"patient_name", "appointment_time"},
+}
+
+// TestDelivery_Dispatch_RefusesParamsOutsideRecipientVisibleDeclaration is
+// the allowlist-governance test at the enqueue boundary: once a type's
+// declaration states which parameters may reach its recipient, a dispatch
+// carrying anything else is refused with ErrDispatchParamsNotAllowed --
+// naming the type and the sorted offending keys -- before anything is
+// enqueued. This is what makes the P1 fix structural rather than a matter
+// of caller memory: admin's impersonation notice declares the EMPTY list
+// (go/admin module.go), so internal context (an operator's free-text
+// reason, an administrator's user id) cannot even be dispatched for it,
+// and any future type's params surface is decided by declaration, never by
+// whatever a dispatch happens to carry.
+func TestDelivery_Dispatch_RefusesParamsOutsideRecipientVisibleDeclaration(t *testing.T) {
+	env := newDeliveryEnv(t)
+	env.prefs.attachTypes(fixtureRegistrar{types: []pkgcore.NotificationType{annotatedAppointmentType}})
+	ctx := tenantCtx(deliveryTenant)
+
+	d := deliveryDispatch()
+	d.Params = maps.Clone(renderTestParams)
+	d.Params["reason"] = "investigating suspected fraud on this account"
+	d.Params["admin_user_id"] = "admin-1"
+	_, err := env.svc.Dispatch(ctx, d)
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Code != ErrDispatchParamsNotAllowed.Code {
+		t.Fatalf("Dispatch() error = %v, want %s", err, ErrDispatchParamsNotAllowed.Code)
+	}
+	if got := appErr.Params["type_key"]; got != fixtureTypeAppointment {
+		t.Errorf("refusal type_key = %v, want %q", got, fixtureTypeAppointment)
+	}
+	if got := appErr.Params["params"]; got != "admin_user_id,reason" {
+		t.Errorf("refusal params = %v, want the sorted offending keys %q", got, "admin_user_id,reason")
+	}
+	if len(env.queue.tasks) != 0 {
+		t.Errorf("queue holds %d tasks after the refused dispatch, want none", len(env.queue.tasks))
+	}
+
+	// The declared parameters themselves still dispatch, enqueue and
+	// deliver untouched: the allowlist governs both directions.
+	if err := env.dispatchAndAttempt(t, deliveryDispatch()); err != nil {
+		t.Fatalf("dispatch of the declared parameters: %v", err)
+	}
+}
+
+// TestDelivery_StalePayloadParams_NarrowedBeforeRowAndKey is the
+// allowlist-governance test at the persistence boundary: a delivery job
+// whose payload carries a parameter outside the type's declaration -- a job
+// enqueued before the declaration existed, which Dispatch's own refusal
+// never saw -- must still deliver (the notice is not lost), but nothing
+// beyond the declaration may derive into the delivery key or persist into
+// the inbox row. The row is the recipient-visible surface (the inbox API
+// serves it back as it stands), so the narrowing -- delivery.go's
+// recipientVisibleOnly, applied to every payload that reaches the delivery
+// path -- is what makes the P1 fix hold for payloads of any age, not just
+// for dispatches validated at the enqueue boundary today.
+func TestDelivery_StalePayloadParams_NarrowedBeforeRowAndKey(t *testing.T) {
+	env := newDeliveryEnv(t)
+	env.prefs.attachTypes(fixtureRegistrar{types: []pkgcore.NotificationType{annotatedAppointmentType}})
+	env.resolver.byUser[deliveryUser] = deliveryAddresses
+	ctx := tenantCtx(deliveryTenant)
+
+	stale := deliveryDispatch()
+	stale.Params = maps.Clone(renderTestParams)
+	stale.Params["reason"] = "investigating suspected fraud on this account"
+	stale.Params["admin_user_id"] = "admin-1"
+	// The payload shape a pre-declaration job has: marshaled straight into
+	// the queue, so Dispatch's refusal never saw it.
+	payload, err := json.Marshal(stale)
+	if err != nil {
+		t.Fatalf("marshal stale payload: %v", err)
+	}
+	if err := env.attempt(t, payload); err != nil {
+		t.Fatalf("attempt over the stale payload returned %v, want nil (the delivery converges; only the undeclared params are narrowed)", err)
+	}
+
+	// The delivery ran under the NARROWED payload: its derived key, send
+	// record, inbox row and rendered copy all derive from the declared
+	// parameters alone, so the row is looked up under the narrowed key.
+	clean := env.svc.recipientVisibleOnly(stale)
+	row := env.inboxRowByChannel(t, ctx, clean)
+	if row == nil {
+		t.Fatal("no inbox row for the narrowed stale payload, want the in-app delivery to succeed")
+	}
+	if len(row.Params) == 0 {
+		t.Fatal("narrowed payload inbox row carries no params, want the declared ones persisted")
+	}
+	var got map[string]any
+	if err := json.Unmarshal(row.Params, &got); err != nil {
+		t.Fatalf("unmarshal row params: %v", err)
+	}
+	for _, forbidden := range []string{"reason", "admin_user_id"} {
+		if _, ok := got[forbidden]; ok {
+			t.Errorf("inbox row params carry %q, want it narrowed out of the recipient-visible row (the P1 leak channel)", forbidden)
+		}
+	}
+	for _, declared := range []string{"patient_name", "appointment_time"} {
+		if _, ok := got[declared]; !ok {
+			t.Errorf("inbox row params lack the declared parameter %q, want it preserved", declared)
+		}
+	}
+
+	// Every outbound surface is clean: the email renders the declared
+	// parameters and nothing of the internal context.
+	mails := env.host.mailer.messages()
+	if len(mails) != 1 {
+		t.Fatalf("mailer delivered %d messages for the stale payload, want the one email", len(mails))
+	}
+	if !strings.Contains(mails[0].Text, "王芳") {
+		t.Errorf("mail text = %q, want the declared parameter rendered into the copy", mails[0].Text)
+	}
+	if strings.Contains(mails[0].Text, "fraud") {
+		t.Errorf("mail text %q embeds the internal reason, want it absent from every recipient-visible surface", mails[0].Text)
 	}
 }

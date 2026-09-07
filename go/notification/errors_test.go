@@ -42,6 +42,7 @@ var errorCatalog = []struct {
 
 	// The delivery group (delivery.go).
 	{"ErrDispatchInvalid", ErrDispatchInvalid, "notification.dispatch_invalid", http.StatusBadRequest},
+	{"ErrDispatchParamsNotAllowed", ErrDispatchParamsNotAllowed, "notification.dispatch_params_not_allowed", http.StatusBadRequest},
 
 	// The inbox group (repository.go and handler.go).
 	{"ErrMessageNotFound", ErrMessageNotFound, "notification.message_not_found", http.StatusNotFound},
