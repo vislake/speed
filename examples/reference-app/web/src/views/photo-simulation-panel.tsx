@@ -116,7 +116,7 @@ const STATUS_TEXT_KEY: Readonly<Record<string, string>> = {
  * the flat cost Simulate reserves for one generation). The block-D
  * surface shows this number next to a completed generation -- a
  * generation must say what it cost -- and the mirror is pinned to the
- * Go source by photo-simulation-cost.test.ts, so the displayed price
+ * Go source by simulation-cost-lockstep.test.ts, so the displayed price
  * cannot drift from the reserved amount without a failing test.
  */
 export const SIMULATION_CREDIT_COST = 10
