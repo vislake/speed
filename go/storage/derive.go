@@ -300,22 +300,30 @@ func (s *DeriveService) DeriveThumbnail(ctx context.Context, objectID string) er
 	}
 	// The insert is where this service converges with a delete that marked
 	// or removed the object while the bytes above were decoded and written:
-	// insertDerivativeIfAbsent's object-state gate (repository.go) refuses --
-	// in the same transaction as the insert -- when the object's own row is
-	// gone or no longer completed. That atomicity is what the re-read this
-	// service used to perform here after its byte write could not give: no
-	// interleaving can slip a row past a completed deletion anymore. A
-	// refused insert means the bytes this run just wrote have no row that
-	// can reference them, so they are dropped (best effort -- a failed drop
-	// leaves at worst orphaned bytes, never a row pointing at them) and the
-	// run converges on nil, no different from a derive that found nothing
-	// to do.
+	// insertDerivativeIfAbsent (repository.go) answers with either a refusal
+	// or a real error. The refusal is the object-state gate speaking, in the
+	// same transaction as the insert -- the object's own row is gone or no
+	// longer completed, refused with an atomicity no re-read this service
+	// used to perform after its byte write could give, so no interleaving
+	// can slip a row past a completed deletion anymore. A real error is the
+	// database itself failing the row write. Both answers leave the bytes
+	// this run just wrote with no row that can reference them -- the refused
+	// insert because the object is gone or doomed, the errored one because
+	// the transaction rolled back without inserting -- so both take the same
+	// cleanup: the bytes are dropped (best effort -- a failed drop leaves at
+	// worst orphaned bytes, never a row pointing at them). The two paths
+	// then part on what the run reports: a refusal means the object is gone
+	// and there is nothing left to converge on, so the run answers nil, no
+	// different from a derive that found nothing to do -- while an error is
+	// a real failure the queue retries, and the retry re-derives and
+	// re-inserts from scratch, which is exactly why the orphaned bytes must
+	// not survive it.
 	refused, err := s.derivatives.insertDerivativeIfAbsent(ctx, derivative)
-	if err != nil {
-		return err
-	}
-	if refused {
+	if err != nil || refused {
 		s.dropDerivativeBytes(ctx, st, objectID, derivKey)
+		if err != nil {
+			return err
+		}
 		return nil
 	}
 	observability.FromContext(ctx).Info("thumbnail derived",

@@ -15,6 +15,8 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/storage/internal/testutil"
+
+	"gorm.io/gorm"
 )
 
 // newDeriveHarness returns a DeriveService and an ObjectService sharing one
@@ -558,6 +560,60 @@ func TestDeriveService_DeriveThumbnail_DropsItsBytesWhenTheObjectDisappears(t *t
 				t.Errorf("object %s gained %d derivative rows from a converged derive", row.ID, len(rows))
 			}
 		})
+	}
+}
+
+// TestDeriveService_DeriveThumbnail_DropsItsBytesWhenTheRowWriteFails pins the
+// err half of the insert gate's contract, the mirror of the refused half
+// above: a refused insert means the object is gone and the run converges on
+// nil with its just-written bytes dropped, while a real insert error -- the
+// database failing the row write itself, not the gate refusing it -- must
+// leave the same trace: the transaction rolled back without inserting a row,
+// so the bytes this run wrote have nothing referencing them, and they are
+// dropped before the error is reported. The run still returns the error, on
+// purpose -- a refusal has nothing left to converge on, but an errored write
+// is a real failure the queue retries, and the retry re-derives from scratch,
+// which is exactly why the orphaned bytes must not survive it. (On the
+// pre-fix code this test failed: the err branch returned immediately, leaving
+// the just-written bytes under the derivative key with no row anywhere
+// referencing them.)
+//
+// The failure is injected on the derivative row's insert itself, through the
+// Create processor -- the insert is a Create, so only a Create-processor
+// rejection can reach it -- armed for the run's one and only Create, the
+// transaction's final statement after the object-state gate and the
+// existence check have both passed.
+func TestDeriveService_DeriveThumbnail_DropsItsBytesWhenTheRowWriteFails(t *testing.T) {
+	derive, svc, store, _, _ := newDeriveHarness(t, nil)
+	ctx := serviceCtx("tenant-a")
+	row := createAndUpload(t, svc, ctx, testutil.PNG(t, 400, 300), "image/png")
+	if _, err := svc.Complete(ctx, row.ID); err != nil {
+		t.Fatalf("Complete(%s): %v", row.ID, err)
+	}
+
+	rejected := false
+	derive.derivatives.db.Callback().Create().Before("gorm:create").
+		Register("storage:test_derivative_insert_reject", func(tx *gorm.DB) {
+			if !rejected {
+				rejected = true
+				tx.AddError(errors.New("storage: injected derivative insert failure"))
+			}
+		})
+
+	err := derive.DeriveThumbnail(ctx, row.ID)
+	if !rejected {
+		t.Fatal("the injected insert rejection never fired -- the derivative insert did not route through the Create processor")
+	}
+	assertCode(t, err, ErrInternal.Code)
+	if _, ok := store.bytes(thumbKey(t, "tenant-a", row.ID)); ok {
+		t.Error("the failed run left its just-written bytes under the derivative key with no row referencing them")
+	}
+	rows, err := derive.derivatives.listByObject(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("listByObject(%s): %v", row.ID, err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("object %s gained %d derivative rows from a run whose insert failed", row.ID, len(rows))
 	}
 }
 
