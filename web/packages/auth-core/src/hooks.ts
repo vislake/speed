@@ -25,7 +25,7 @@
  * server authorizes.
  */
 
-import { useSyncExternalStore } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 import type {
   AuthDomain,
   AuthSession,
@@ -99,23 +99,44 @@ export function attachSession(session: AuthSession): void {
   notifyListeners()
 }
 
+/** The snapshot rendered on the server. Server rendering has no
+ * session -- attachSession runs in browser bootstrap code, never
+ * during a server render -- so the anonymous snapshot is the only
+ * answer that cannot mismatch the hydrated client's first paint. The
+ * module constant is referentially stable, which useSyncExternalStore
+ * requires of the server snapshot across calls. */
+function getServerSnapshot(): AuthSnapshot {
+  return NO_SESSION_SNAPSHOT
+}
+
 /** The full auth snapshot. Re-renders on every snapshot change --
  * state, principal or permission sets. Before attachSession, returns
  * the stable anonymous snapshot. */
 export function useAuthState(): AuthSnapshot {
-  return useSyncExternalStore(subscribe, getSnapshot)
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
 }
 
 /** The tenant the principal is currently signed into, or null while
  * anonymous and when the principal carries no tenant_id (a
- * system-domain principal, for example). */
+ * system-domain principal, for example).
+ *
+ * The returned { tenantId } object is referentially stable for a given
+ * tenant: it changes identity only when the tenant_id itself changes
+ * (a switch), not on re-renders, refreshes or step-ups. A hook that
+ * embeds the result in a query key or an effect dependency therefore
+ * sees one stable key for the whole stay in a tenant, instead of a
+ * fresh object every render defeating the memoization -- the identity
+ * a host's tenant-namespaced cache key is built from. */
 export function useCurrentTenant(): { tenantId: string } | null {
   const snapshot = useAuthState()
   const tenantId = snapshot.principal?.tenant_id
-  if (typeof tenantId !== 'string' || tenantId === '') {
-    return null
-  }
-  return { tenantId }
+  return useMemo(
+    () =>
+      typeof tenantId === 'string' && tenantId !== ''
+        ? { tenantId }
+        : null,
+    [tenantId],
+  )
 }
 
 /** Whether the principal holds the permission in the domain's

@@ -20,13 +20,16 @@
  */
 
 import { act, cleanup, renderHook } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToString } from 'react-dom/server'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   LOGIN_PASSWORD,
   LOGOUT,
   makeHarness,
   makePair,
   principal,
+  REFRESH,
   SWITCH_TENANT,
 } from '../test-utils/session-harness'
 import {
@@ -97,6 +100,47 @@ describe('attached to a scripted session', () => {
     await act(async () => {
       await harness.session.switchTenant('tenant-2')
     })
+    expect(result.current).toEqual({ tenantId: 'tenant-2' })
+  })
+
+  it('keeps one referentially stable tenant object for the whole stay in a tenant', async () => {
+    // P3-12: useCurrentTenant used to mint a fresh { tenantId }
+    // object on every render, so a consumer embedding the result in a
+    // memoized query key or an effect dependency saw a new identity on
+    // every re-render -- the referential instability that silently
+    // defeated a host's tenant-namespaced cache keys. The object
+    // identity now changes only when the tenant_id itself changes.
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [REFRESH]: () => makePair({ access_token: 'access-3' }),
+      [SWITCH_TENANT]: () =>
+        makePair({
+          access_token: 'access-2',
+          principal: principal('user-1', 'tenant-2'),
+        }),
+    })
+    attachSession(harness.session)
+    const { result } = renderHook(() => useCurrentTenant())
+    await act(async () => {
+      await harness.session.loginWithPassword(credentials)
+    })
+    const first = result.current
+    expect(first).toEqual({ tenantId: 'tenant-1' })
+    // A same-tenant re-login and a silent refresh -- transitions that
+    // used to hand every re-render a fresh object -- keep the identity.
+    await act(async () => {
+      await harness.session.loginWithPassword(credentials)
+    })
+    expect(result.current).toBe(first)
+    await act(async () => {
+      await harness.session.refresh()
+    })
+    expect(result.current).toBe(first)
+    // The identity changes exactly when the tenant does.
+    await act(async () => {
+      await harness.session.switchTenant('tenant-2')
+    })
+    expect(result.current).not.toBe(first)
     expect(result.current).toEqual({ tenantId: 'tenant-2' })
   })
 
@@ -282,5 +326,41 @@ describe('attached to a scripted session', () => {
       await second.session.loginWithPassword(credentials)
     })
     expect(result.current).toEqual({ tenantId: 'tenant-1' })
+  })
+})
+
+describe('server rendering', () => {
+  /** The probe renderToString exercises: reads the auth state through
+   * the real hook and renders its state word. */
+  function ServerProbe() {
+    const snapshot = useAuthState()
+    return createElement('div', null, snapshot.state)
+  }
+
+  it('renders the anonymous snapshot on the server, even with an authenticated session attached', async () => {
+    // P3-13: useAuthState used to call useSyncExternalStore without a
+    // getServerSnapshot. Server rendering has no session -- attachSession
+    // runs in browser bootstrap code -- so the server answer must be the
+    // stable anonymous snapshot, never the attached session's. To prove
+    // the getServerSnapshot path really is the one used, this renders
+    // with an authenticated session attached (the state a client-side
+    // only implementation would have served) and asserts the server
+    // still renders anonymous, without a React warning.
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+    })
+    attachSession(harness.session)
+    await act(async () => {
+      await harness.session.loginWithPassword(credentials)
+    })
+    expect(harness.session.getSnapshot().state).toBe('authenticated')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const html = renderToString(createElement(ServerProbe))
+      expect(html).toBe('<div>anonymous</div>')
+      expect(errorSpy).not.toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 })
