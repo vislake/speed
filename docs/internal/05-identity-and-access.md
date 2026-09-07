@@ -225,6 +225,18 @@ type Membership struct {
 
 ---
 
+> **实现状态注记（2026-09-08，authn P1 修复轮：上文 authn 轮注记"会话与撤销"一条对动态配置项的说法已成历史）——本注记不是设计正文，设计正文保持原样；当前实现状态以根目录 CLAUDE.md 的 Repository Status 为准。**
+>
+> authn 轮注记"会话与撤销"一条称两种模式"均可通过动态配置项 `authn.session_revocation_immediate` 选择"。该说法不成立，本轮 P1 修复（立即吊销从未在出厂组合中接通）以三个修正落地：
+>
+> - **`authn.session_revocation_immediate` 配置项与 `ConfigKeyImmediateRevocation` 常量已删除。** 它是"声明了却从未被读取"的悬空开关：没有任何代码读它，设置它毫无效果；而且结构上不可能兑现其描述——吊销模式在 `SessionManager` 构造时固定，并决定哪些吊销会被记入吊销表，请求期读到的值无法给 natural 模式的 manager 补装强制。模式的唯一真实选择器是构造期选项 `WithRevocationMode`。
+> - **立即模式的强制现在是默认接线，不再需要宿主仪式。** `NewService` 把自己构造的 `*SessionManager` 挂为它交出的 `Verifier`（`Service.Verifier()`）的吊销源，`Middleware` 在每次验证成功的请求上默认查询该源（显式 `WithRevocationChecker` 覆盖它）。natural 模式（模块默认）下 `IsRevoked` 不碰存储、恒答 false，默认接线零成本；immediate 模式每次请求一次 KV 读，即该模式文档所写的代价。修复前吊销检查只是 `Middleware` 的可选 option，参考应用与消费者骨架都没传——吊销表记了却无人查询，被吊销会话的未过期 access token 一直用到自然过期，重放防盗响应因此对攻击者手里的**当前** token 无能为力。
+> - **参考应用以立即模式运行**（`authn.WithRevocationMode(authn.RevocationModeImmediate)`），作为强制机制的强制第一消费者：无论哪条吊销路径（用户登出、会话自助下线、重放检测撤销）都立即切断同一 access token——`authn_e2e_test.go` 的吊销腿新增"被吊销会话的同一未过期 access token 的下一请求被拒（`authn.session_revoked`）"断言。
+>
+> 已作废 refresh token 被重放 ⇒ 撤销整个 token 族与 session、发布 `authn.session.replay_detected` 事件的部分不受影响，继续准确。动态配置项整体"声明而尚未被读回"的读通缺口是平台级状态（`go/authn/AGENTS.md` 的 Known limitations 有记录），与本轮删除的这一个结构性死开关无关。
+
+---
+
 > **实现状态注记（2026-09-03，auth-ui 轮：本文两处点名 `@speed/auth-ui` 的设计以修正形状落地）——本注记不是设计正文，设计正文保持原样；当前实现状态以根目录 CLAUDE.md 的 Repository Status 为准。**
 >
 > 落地的 `@speed/auth-ui`（登录组件家族：`SignInScreen`/`PasswordSignInForm`/`SMSSignInForm`/`RegisterForm`/`SocialSignInSection`/`SocialCallbackHandler`/`SignOutButton`/`SessionEndedScreen`）使上文两处设想可以对照记录偏差：

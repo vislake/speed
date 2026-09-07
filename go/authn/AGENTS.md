@@ -58,7 +58,7 @@ import in the other direction is a merge blocker rather than a style note.
 | `WithKeySource`, `WithBlindIndexKey` | **Required.** No safe default exists for either. `WithKeySource` replaced `WithSigningKeys` in the pki-integration round (breaking, no back-compat path) -- see "Tokens and passwords" below. |
 | `WithMembershipReader` | The seam through which membership is asked. Absent means "refuse", not "allow". |
 | `WithFeatureGate` | Makes this module's declared feature flags (`authn.password_login`, `authn.sms_login`, the five `authn.social.*` channels, `authn.sso.oidc`) effective at request time. `*config.Service` satisfies the `FeatureGate` interface structurally. See "Feature flags are enforced through a host-supplied gate" below. |
-| `WithClock`, `WithIssuer`, `WithAccessTokenTTL`, `WithRefreshTokenTTL`, `WithSessionTTL`, `WithRevocationMode`, `WithPasswordParams`, `WithPasswordPolicy` | Everything else. A nil or non-positive value leaves the default in place. |
+| `WithClock`, `WithIssuer`, `WithAccessTokenTTL`, `WithRefreshTokenTTL`, `WithSessionTTL`, `WithRevocationMode`, `WithPasswordParams`, `WithPasswordPolicy` | Everything else. A nil or non-positive value leaves the default in place. `WithRevocationMode(RevocationModeImmediate)` needs no companion middleware wiring — enforcement is default — see "Immediate revocation is enforced by default, not by host ceremony". |
 | `WithSMSSender`, `WithDeploymentMode`, `WithSMSCodeTTL`, `WithSMSCodeMaxAttempts` | The phone-login transport and its lifetime/attempt budget. See "A distributed deployment must wire an `SMSSender`" below for what `WithDeploymentMode` is for. |
 | `WithTrustedProxies(proxies ...string)` | The IP addresses and CIDR prefixes of the reverse proxies requests arrive through, so `Handler.clientIP` recovers the real client address from the `X-Forwarded-For` chain those proxies append instead of recording the proxy itself -- see "Every recorded address is the client's, gated on host-declared trusted proxies" below. Empty (the default) keeps every request recording its direct connection address. |
 | `WithVendorClientIPHeaders(headers ...VendorClientIPHeader)` | The per-header opt-in that authorizes reading a single-hop vendor client-address header (`VendorClientIPHeaderFlyClientIP`, wire value `Fly-Client-IP`) for a request whose peer is a declared trusted proxy. The `VendorClientIPHeader` set is closed -- any other value is refused at wiring time -- and the default is none. See "Every recorded address is the client's, gated on host-declared trusted proxies" below for why the trusted-proxy declaration alone must never authorize such a header. |
@@ -120,7 +120,7 @@ unenforced there until that one-line wiring lands with its config service.
 | `RequireAuthenticated(next)` | Per-route enforcement. |
 | `NewPrincipalResolver()` | Adapts the verified `Principal` to `tenancy.Resolver`. |
 | `PrincipalFromContext`, `WithPrincipal` | Context access. |
-| `RevocationChecker`, `WithRevocationChecker` | The immediate-revocation enforcement point. |
+| `RevocationChecker`, `WithRevocationChecker` | The session-revocation question, and the explicit-checker override. Enforcement is default-wired: a `Service` attaches its own `*SessionManager` to the `Verifier` it hands out, and `Middleware` consults that source with no option at all — see "Immediate revocation is enforced by default, not by host ceremony" below. |
 
 ### HTTP surface (spec-first)
 
@@ -255,6 +255,26 @@ exploited horizontal-privilege-escalation entry point in a multi-tenant product.
 The same rule governs revocation: an immediate-mode check that cannot reach the
 key-value store returns `ErrRevocationCheckFailed`, and the middleware refuses.
 A revocation check that could not run is not a revocation check that passed.
+
+### Immediate revocation is enforced by default, not by host ceremony
+
+`RevocationModeImmediate` promises that sign-out takes effect on outstanding
+access tokens at once, and the shipped composition gets that promise with no
+extra wiring step: `NewService` attaches its own `*SessionManager` as the
+revocation source of the `Verifier` `Service.Verifier()` hands out, and
+`Middleware` consults that source on every request whose token verifies (an
+explicit `WithRevocationChecker` replaces the source for a `Middleware` built
+over a bare `NewVerifier`, or when the revocation authority is not the session
+manager). Natural mode — the module default — answers false without touching
+the store, so the check costs nothing there; immediate mode pays one
+key-value read per request, its documented price.
+
+This default was the P1 hole: the checker used to be an optional
+`MiddlewareOption`, nothing in the shipped composition (the reference app, the
+consumer skeletons) passed it, and immediate-mode revocations were recorded on
+the list nobody consulted — a revoked session's unexpired access token kept
+working to its natural expiry, which made the refresh-replay theft response
+powerless against the thief's CURRENT token. Selecting `WithRevocationMode(RevocationModeImmediate)` now genuinely enforces, and `examples/reference-app` runs in immediate mode as the mandatory first consumer of the enforced mechanism. There is deliberately no dynamic-configuration twin of the option; see Known limitations for the deleted `authn.session_revocation_immediate` item.
 
 ### Sign-in must not answer what it refuses to answer
 
@@ -870,6 +890,7 @@ rather than trying to synchronize on the exact step boundary.
 | Registration reports a duplicate identifier as a conflict, which makes it an account-enumeration oracle in a way sign-in deliberately is not. | Closing it means answering every registration with "check your inbox" and moving the conflict into an email, which needs the delivery and verification flows. |
 | `sessions.ip_region` and `login_attempts.ip_region` ship empty. | Resolving an IP to a region needs a local GeoIP database whose licence has to clear the licence scanner first (`docs/internal/05-identity-and-access.md` says so explicitly). The columns exist now so no later table migration is needed. |
 | The declared dynamic-config items are not yet read back at runtime; the values are injected through options with the same defaults. | The schema is declared, which is what a module owes the config module. The read-through binding lands with the block that needs a live value. |
+| `ConfigKeyImmediateRevocation` (`authn.session_revocation_immediate`) was declared as a bool dynamic-config item and is now DELETED (P1). | It was declared-but-never-read: its description promised that setting it enforces immediate revocation, and no code read it — and no runtime read could ever deliver what the description promised, because the revocation mode is fixed at `SessionManager` construction and gates which revocations are even recorded, so a value read at request time cannot retrofit enforcement onto a natural-mode manager. The mode's one real selector is the `WithRevocationMode` construction option ("Immediate revocation is enforced by default, not by host ceremony" above). Reintroducing a dynamic switch needs the typed-config read-through binding the row above records as unbuilt, plus a mode that can change at runtime without contradicting natural mode's zero-cost model — not this round's design. |
 | The frontend half of this module's API contract — the generated authn surface of `@speed/api-sdk` — has no runtime end-to-end consumer against a real server yet (a browser driving a live backend). | Runtime consumption is discharged in form since the auth-ui round: `@speed/auth-ui`'s `src/usage-example.test.tsx` compiles and executes the composed sign-in family over a real `@speed/api-client` — `createClient` with a memory access-token store and an injectable fetch whose stand-in answers genuine `Response` objects, bound through the same `bindRequestFn` seam a host's client binds — driving a password sign-in, a silent credential-less refresh (the retried request carries the fresh token), and a server-side session death whose refused refresh converges the snapshot to anonymous, six requests pinned in order. The generated half stays compile-consumed in-workspace by `@speed/auth-core`; `@speed/auth-ui`'s public `RegisterForm` callback (the generated `AuthnUser`) adds a second type-level consumer. What remains is the browser-and-real-server leg, landing with the reference-app shells and the e2e pipeline. |
 | A brand-new account provisioned by an unmatched, trusted external identity (social or enterprise SSO) cannot sign in until something makes it an active member of the requested tenant. | Membership is `org`'s data and this module fails closed on it by design (see "Fail closed on membership"). The account and its identity are provisioned regardless — only the session is refused — so a later membership grant (or an `org`-round subscriber reacting to `authn.user.created`) lets the same sign-in succeed with no further action here. `examples/reference-app`'s `authn_e2e_test.go` sidesteps the same limitation the same honest way — register, grant, then sign in — for exactly this reason. |
 | The reference app has no seed-data path, so `demoMemberships` (`examples/reference-app/cmd/server/server.go`) starts empty in production wiring: `task dev`'s server compiles, serves every operation and enforces every rule correctly, but no demo account can actually reach a tenant without `Taskfile.yml`'s `seed` task, which itself is a stub awaiting `org`+`billing`. | This module's own wiring is complete (reference-app first-consumer status, CI matrix rows, integration tier — see this file's "Testing" section); what remains is `org`'s membership data, out of this module's scope by design (see the row above). |
