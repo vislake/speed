@@ -52,15 +52,27 @@ var ErrDuplicateAuditAction = errors.New("pkgcore: duplicate audit action")
 var ErrDuplicateRetentionParticipant = errors.New("pkgcore: duplicate retention participant")
 
 // ErrNilRetentionSweep is returned when a RetentionParticipant is registered
-// without its Sweep callback. Sweep is the one callback the retention role
-// makes mandatory: the retention sweep calls each registered participant's
-// Sweep once per (tenant, participant) pair, so a participant whose Sweep
-// were nil could never release its own soft-deleted rows -- its tenant data
-// would be retained forever while the sweep reported success. Such a
-// declaration is refused at registration rather than accepted and silently
-// skipped at sweep time. Nothing is registered when the call returns this
-// error.
+// without its Sweep callback. Sweep is mandatory at registration: the
+// retention sweep calls each registered participant's Sweep once per
+// (tenant, participant) pair, so a participant whose Sweep were nil could
+// never release its own soft-deleted rows -- its tenant data would be
+// retained forever while the sweep reported success. Such a declaration is
+// refused at registration rather than accepted and silently skipped at
+// sweep time. Nothing is registered when the call returns this error.
 var ErrNilRetentionSweep = errors.New("pkgcore: retention participant has no Sweep callback")
+
+// ErrNilRetentionErase is returned when a RetentionParticipant is
+// registered without its Erase callback. Erase is mandatory at
+// registration, exactly as Sweep is: the erasure orchestration calls each
+// registered participant's Erase once per right-to-erasure request, so a
+// participant whose Erase were nil would leave its rows for the subject
+// untouched while the request answered full success to the data subject --
+// a silently incomplete answer to a legally-deadlined obligation, the
+// right-to-erasure twin of the false success a nil Sweep would produce for
+// a retention sweep. Such a declaration is refused at registration rather
+// than accepted and silently skipped at erasure time. Nothing is
+// registered when the call returns this error.
+var ErrNilRetentionErase = errors.New("pkgcore: retention participant has no Erase callback")
 
 // ErrDuplicateModuleName is returned when two modules in a bootstrap set report the same Name.
 var ErrDuplicateModuleName = errors.New("pkgcore: duplicate module name")
@@ -386,11 +398,10 @@ type RetentionParticipant struct {
 	// context that already carries both tenant and system context -- the
 	// participant's own dbkit.Repository[T].HardDelete calls read both
 	// straight from ctx, never from a parameter this signature would have
-	// to carry separately. Sweep is the one callback registration makes
-	// mandatory: a participant with a nil Sweep is refused with
-	// ErrNilRetentionSweep rather than accepted and silently skipped by
-	// the sweep, which would retain its tenant data forever while the
-	// sweep reported success.
+	// to carry separately. Sweep is mandatory at registration: a
+	// participant with a nil Sweep is refused with ErrNilRetentionSweep
+	// rather than accepted and silently skipped by the sweep, which would
+	// retain its tenant data forever while the sweep reported success.
 	Sweep func(ctx context.Context, tenant TenantID, cutoff time.Time) (reaped int, err error)
 
 	// Erase immediately hard-deletes every row belonging to subject,
@@ -401,15 +412,23 @@ type RetentionParticipant struct {
 	// already partially applied elsewhere converges instead of failing
 	// forever; a genuine erasure failure (a transient database error, for
 	// example) is the only case that should return a non-nil err. Erase is
-	// optional at registration: a participant with nothing subject-shaped
-	// to erase -- a tenant-wide bundle, for example -- may leave it nil,
-	// and the erasure orchestration skips it.
+	// mandatory at registration, exactly as Sweep is: a participant with a
+	// nil Erase is refused with ErrNilRetentionErase rather than accepted
+	// and silently skipped by the erasure orchestration -- which would
+	// answer a right-to-erasure request with full success while the
+	// participant's rows for the subject stayed untouched. A participant
+	// with genuinely nothing subject-shaped to erase -- a tenant-wide
+	// bundle, for example -- declares exactly that with an explicit Erase
+	// returning (0, nil): "nothing to erase" is a fact the participant
+	// states, never something the orchestration guesses.
 	Erase func(ctx context.Context, subject SubjectRef) (erased int, err error)
 
 	// Export returns the participant's own JSON-serializable data for
-	// tenant, for the compliance data-export gathering step. Nil when the
-	// participant has not opted into export -- a nil Export is a legal,
-	// common value, not a misconfiguration.
+	// tenant, for the compliance data-export gathering step. Export is the
+	// one callback registration leaves optional -- nil when the
+	// participant has not opted into export, a legal, common value, not a
+	// misconfiguration. Its absence costs a missing export, never a false
+	// success.
 	Export func(ctx context.Context, tenant TenantID) (data any, err error)
 }
 
@@ -419,9 +438,10 @@ type RetentionParticipant struct {
 type RetentionRegistrar interface {
 	// Add registers participants. It returns an error wrapping
 	// ErrDuplicateRetentionParticipant on a repeated Name, and an error
-	// wrapping ErrNilRetentionSweep on a participant missing the one
-	// callback the retention role makes mandatory (Erase and Export may
-	// each be nil). Nothing is registered when the call returns an error.
+	// wrapping ErrNilRetentionSweep or ErrNilRetentionErase on a
+	// participant missing one of the two callbacks the retention role
+	// makes mandatory (Export is the one callback that may be nil).
+	// Nothing is registered when the call returns an error.
 	Add(participants ...RetentionParticipant) error
 	// Participants returns every registered participant, in registration
 	// order.
@@ -839,18 +859,23 @@ func (r *memoryRetentionRegistrar) Add(participants ...RetentionParticipant) err
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// Validation comes before the duplicate check so a participant with a
-	// nil Sweep reports itself as such rather than as a collision with
-	// whatever an earlier caller registered under the same Name. Sweep is
-	// the one callback the retention role makes mandatory: a participant
-	// without one could never release its own soft-deleted rows, and the
-	// sweep would have to skip it silently -- its tenant data retained
-	// forever while the sweep reported success -- so it is refused here
-	// instead. Erase and Export may each be nil, their own orchestrations
-	// skipping the participant. Either way the whole call registers
-	// nothing.
+	// nil Sweep or a nil Erase reports itself as such rather than as a
+	// collision with whatever an earlier caller registered under the same
+	// Name. Both callbacks are mandatory at registration, for the same
+	// reason in each direction: a participant without a Sweep could never
+	// release its own soft-deleted rows, and the sweep would have to skip
+	// it silently -- its tenant data retained forever while the sweep
+	// reported success; a participant without an Erase would leave its
+	// rows for the subject untouched while a right-to-erasure request
+	// reported full success to the data subject. Each is refused here
+	// instead. Export is the one callback that may be nil. Either way the
+	// whole call registers nothing.
 	for _, p := range participants {
 		if p.Sweep == nil {
 			return fmt.Errorf("%w: %q", ErrNilRetentionSweep, p.Name)
+		}
+		if p.Erase == nil {
+			return fmt.Errorf("%w: %q", ErrNilRetentionErase, p.Name)
 		}
 	}
 	keyOf := func(p RetentionParticipant) string { return p.Name }
