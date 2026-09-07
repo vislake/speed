@@ -756,11 +756,16 @@ func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d
 // the retry that follows a verification probes fresh and delivers. An
 // unsubscribed or bounced contact is terminal -- no retry changes the
 // answer -- and is recorded as a skipped send under the contact's own
-// channel. A verified contact proceeds to its channel's transport, and a
-// permanent transport refusal marks the tenant's own contact bounced
-// (MarkBounced) before the attempt is recorded -- the delivery job's
-// hard-failure leg; writing the platform blacklist is a later round's work
-// (blacklist.go's doc comment records the boundary).
+// channel. Before any channel's transport runs, the type registry is
+// consulted and a type nobody declared is terminal-refused and recorded
+// (see the gate below) -- the contact path's half of the undeclared-type
+// refusal the user path makes through ResolveForDelivery, which no channel
+// exists to record under there. A verified contact then proceeds to its
+// channel's transport, and a permanent transport refusal marks the
+// tenant's own contact bounced (MarkBounced) before the attempt is
+// recorded -- the delivery job's hard-failure leg; writing the platform
+// blacklist is a later round's work (blacklist.go's doc comment records
+// the boundary).
 func (s *DeliveryService) deliverToContact(ctx context.Context, tenantID string, d Dispatch) error {
 	contact, err := s.contacts.EnsureDeliverable(ctx, d.Recipient.ContactID)
 	if err != nil {
@@ -797,6 +802,23 @@ func (s *DeliveryService) deliverToContact(ctx context.Context, tenantID string,
 	}
 	if done {
 		return nil
+	}
+
+	// The type registry is consulted before anything renders: an undeclared
+	// type carries no declared channels, no preference-matrix entry and no
+	// unsubscribe decision -- and its copy would render anyway whenever a
+	// locale bundle happens to carry the <type_key>.<channel>.<part> ids,
+	// which is exactly the harmful half of a module that ships its
+	// templates but forgets reg.Notifications.Add. A message that went out
+	// past every preference and opt-out decision the declaration owns is
+	// the delivery this refusal exists to prevent (deliverToUser refuses
+	// the same type through ResolveForDelivery before any channel exists).
+	// The refusal is terminal and recorded under the contact's own channel,
+	// and the job stops -- the same recorded-stop shape the corrupt
+	// unknown-channel row below takes, since no retry can declare a type
+	// nobody declared.
+	if _, err := s.prefs.lookupType(d.TypeKey); err != nil {
+		return s.failAndStop(ctx, tenantID, rec, err)
 	}
 
 	switch contact.Channel {

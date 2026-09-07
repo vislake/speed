@@ -31,9 +31,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -62,6 +64,32 @@ const (
 var deliveryAddresses = UserAddresses{
 	Email: "patient@example.com",
 	Phone: "+8613800138000",
+}
+
+// ghostContactType is the fixture type the delivery env's taxonomy never
+// declares (it is absent from fixtureTypes) but whose email copy the
+// widened catalog below carries -- the exact harmful precondition for a
+// delivery that must be refused: a module that shipped its locale template
+// resources under the <type_key>.<channel>.<part> convention without ever
+// calling reg.Notifications.Add. The key lives under its own module
+// prefix, exactly as a second business module's ids would (the i18n
+// builder keeps every module in its own "<module>." id space).
+const ghostContactType = "clinic-billing.bill_ready"
+
+// billReadyFixtureFS is that undeclared module's bilingual template
+// bundle: the email copy for ghostContactType in both languages, with
+// identical id sets -- the shape every declaring module's locale files
+// have (render_test.go's clinicFixtureFS documents the convention), minus
+// the declaration itself.
+var billReadyFixtureFS = fstest.MapFS{
+	"zh-CN.toml": &fstest.MapFile{Data: []byte(`
+"clinic-billing.bill_ready.email.subject" = "您的账单已就绪"
+"clinic-billing.bill_ready.email.body_text" = "{{.patient_name}} 您好，您的账单已生成，详情请登录查看。"
+`)},
+	"en-US.toml": &fstest.MapFile{Data: []byte(`
+"clinic-billing.bill_ready.email.subject" = "Your bill is ready"
+"clinic-billing.bill_ready.email.body_text" = "Hi {{.patient_name}}, your bill is ready. Sign in for details."
+`)},
 }
 
 // recordingSMSSender is an SMSSender test double that keeps every message
@@ -1970,5 +1998,92 @@ func TestDelivery_ContactVerifiedOnAnUnknownChannel_RecordsAndStops(t *testing.T
 	}
 	if rec.Status != SendRecordStatusFailed {
 		t.Errorf("record status = %s, want %s", rec.Status, SendRecordStatusFailed)
+	}
+}
+
+// TestDelivery_ContactDeliveryOfAnUndeclaredType_NeverReachesTheTransport
+// pins the type-registry gate on the external-contact delivery path: an
+// undeclared type must be refused before anything renders or sends, even
+// when the merged catalog carries the type's copy -- the harmful half of a
+// module that ships locale template resources but forgets
+// reg.Notifications.Add -- because a message that went out would bypass
+// the preference matrix, the unsubscribe decision and the declared default
+// channel strategy the declaration owns. The refusal is terminal and
+// recorded under the contact's own channel; declaring the type restores
+// ordinary delivery.
+func TestDelivery_ContactDeliveryOfAnUndeclaredType_NeverReachesTheTransport(t *testing.T) {
+	env := newDeliveryEnv(t)
+	ctx := tenantCtx(deliveryTenant)
+
+	// Widen the env's catalog with the undeclared module's own bundle; the
+	// env's taxonomy (fixtureTypes, attached in newDeliveryEnv) never
+	// declares ghostContactType.
+	builder := i18n.NewBuilder()
+	if err := builder.AddModule("clinic", clinicFixtureFS); err != nil {
+		t.Fatalf("AddModule(clinic): %v", err)
+	}
+	if err := builder.AddModule("clinic-billing", billReadyFixtureFS); err != nil {
+		t.Fatalf("AddModule(clinic-billing): %v", err)
+	}
+	env.host.catalog = builder.Build()
+
+	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
+		Channel:    ChannelEmail,
+		Address:    "wangfang@external.example.com",
+		ConsentRef: "consent-ref-1",
+	})
+	if err != nil {
+		t.Fatalf("create the verified contact: %v", err)
+	}
+
+	d := Dispatch{
+		TypeKey: ghostContactType,
+		Recipient: DispatchRecipient{
+			Class:     RecipientClassExternal,
+			ContactID: contact.ID,
+		},
+		Locale: "zh-CN",
+		Params: renderTestParams,
+	}
+
+	// Leg one: the type is undeclared. The attempt must stop terminally
+	// (no error for the queue to retry), record the refusal as a failed
+	// send, and never touch the transport.
+	if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
+		t.Fatalf("attempt for the undeclared type returned %v, want the terminal recorded stop (no queue retry)", attemptErr)
+	}
+	if mails := env.host.mailer.messages(); len(mails) != 0 {
+		t.Errorf("the undeclared type's delivery reached the mailer (%d messages), want the registry refusal before any transport", len(mails))
+	}
+	rec := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if rec == nil {
+		t.Fatal("no send record for the undeclared type's attempt, want the terminal refusal recorded")
+	}
+	if rec.Status != SendRecordStatusFailed {
+		t.Errorf("record status = %s, want %s", rec.Status, SendRecordStatusFailed)
+	}
+	if rec.Error != ErrTypeNotFound.Code {
+		t.Errorf("record error = %q, want the type-not-found code %q", rec.Error, ErrTypeNotFound.Code)
+	}
+
+	// Leg two: the module declares its type; the same delivery renders and
+	// sends exactly as any declared type's does, converging the earlier
+	// failed record onto succeeded.
+	ghost := pkgcore.NotificationType{
+		Key:             ghostContactType,
+		Group:           "billing",
+		DefaultChannels: []string{ChannelEmail},
+		Unsubscribable:  true,
+	}
+	env.prefs.attachTypes(fixtureRegistrar{types: append(slices.Clone(fixtureTypes), ghost)})
+	if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
+		t.Fatalf("attempt for the now-declared type: %v", attemptErr)
+	}
+	if mails := env.host.mailer.messages(); len(mails) != 1 {
+		t.Errorf("mailer delivered %d messages, want exactly the declared type's 1", len(mails))
+	}
+	rec = env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if rec == nil || rec.Status != SendRecordStatusSucceeded {
+		t.Fatalf("record after the declared delivery = %+v, want succeeded", rec)
 	}
 }
