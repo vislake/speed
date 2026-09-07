@@ -190,12 +190,16 @@ export function LoginHistorySection() {
           headingLevel="h2"
         />
       ) : attempts === undefined ? (
-        // The only state left is one the query machine cannot produce
-        // (no data, no pending, no error -- no placeholderData is in
-        // play, so a settled query always carries data): render the
-        // loading branch rather than an empty answer, so a future
-        // contract drift can never read an unresolved load as "no
-        // sign-in history".
+        // attempts is data?.attempts, and the generated
+        // AuthnListLoginHistoryResponse marks `.attempts` optional, so
+        // this branch is reachable from a settled query: a type-legal
+        // 200 whose body omits the key (e.g. `{}`) lands here with no
+        // pending and no error. The query is settled, so nothing re-arms
+        // the loading branch and the skeleton keeps rendering until a
+        // later answer carries the key -- that never-resolving skeleton
+        // screen is a known defect, queued as a separate fix. Rendering
+        // the skeleton rather than the empty state keeps an unresolved
+        // load from ever being read as "no sign-in history".
         <HistoryListSkeleton label={t('history.loading')} />
       ) : attempts.length === 0 ? (
         <EmptyState

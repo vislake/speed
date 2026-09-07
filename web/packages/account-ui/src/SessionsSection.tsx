@@ -286,12 +286,16 @@ export function SessionsSection() {
           headingLevel="h2"
         />
       ) : sessions === undefined ? (
-        // The only state left is one the query machine cannot produce
-        // (no data, no pending, no error -- no placeholderData is in
-        // play, so a settled query always carries data): render the
-        // loading branch rather than an empty answer, so a future
-        // contract drift can never read an unresolved load as "no
-        // sessions".
+        // sessions is data?.sessions, and the generated
+        // AuthnListSessionsResponse marks `.sessions` optional, so this
+        // branch is reachable from a settled query: a type-legal 200
+        // whose body omits the key (e.g. `{}`) lands here with no
+        // pending and no error. The query is settled, so nothing re-arms
+        // the loading branch and the skeleton keeps rendering until a
+        // later answer carries the key -- that never-resolving skeleton
+        // screen is a known defect, queued as a separate fix. Rendering
+        // the skeleton rather than the empty state keeps an unresolved
+        // load from ever being read as "no sessions".
         <SessionListSkeleton label={t('sessions.loading')} />
       ) : sessions.length === 0 ? (
         <EmptyState

@@ -302,12 +302,16 @@ export function SocialBindingsSection({
           headingLevel="h2"
         />
       ) : rows === undefined ? (
-        // The only state left is one the query machine cannot produce
-        // (no data, no pending, no error -- no placeholderData is in
-        // play, so a settled query always carries data): render the
-        // loading branch rather than nothing, so a future contract
-        // drift can never make the social-bindings block silently
-        // vanish.
+        // identities is data?.identities, and the generated
+        // AuthnListIdentitiesResponse marks `.identities` optional, so
+        // this branch is reachable from a settled query: a type-legal
+        // 200 whose body omits the key (e.g. `{}`) lands here with no
+        // pending and no error. The query is settled, so nothing re-arms
+        // the loading branch and the skeleton keeps rendering until a
+        // later answer carries the key -- that never-resolving skeleton
+        // screen is a known defect, queued as a separate fix. Rendering
+        // the skeleton rather than nothing keeps an unresolved load from
+        // making the social-bindings block silently vanish.
         <BindingListSkeleton label={t('bindings.loading')} />
       ) : showEmptyState ? (
         <EmptyState
