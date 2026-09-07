@@ -483,6 +483,65 @@ func (r *RoleBindingRepository) claimByUser(ctx context.Context, userID string) 
 	})
 }
 
+// reattributeToNodeDeletion is the member-restored side's mirror inverse of
+// claimByUser: ONE currently soft-deleted binding -- reaped or claimed by
+// the member-removal, revoke_origin = 'member-removal' -- is re-attributed
+// back to the node-deletion origin. Service.onMemberRestored runs it for
+// each of a restored member's rows whose node does not resolve at
+// re-instatement time (see bindingNodeLivesAtMemberRestore in reap.go), and
+// it exists because the member's own return cannot re-open a grant whose
+// OTHER structural precondition -- the node it is scoped to -- is still
+// missing: re-attributing the row to the node-deletion origin hands it back
+// to the node's own fate, where only a future org.node.restored (which by
+// definition fires only when the node is genuinely visible again) can lift
+// it, exactly like every other grant the deletion reaped. Without the
+// reverse claim the row would stay stranded under the member-removal origin
+// forever -- no node restore ever touches that origin -- or, before this
+// round, come back live with the member while the node was still gone (the
+// P1-rbac-reinstate-node escalation; see that method's doc comment).
+//
+// The UPDATE is deliberately guarded to the row's id AND its current
+// member-removal origin, so a deliberate RevokeRole row (which the caller's
+// origin filter never admits in the first place) and a row a concurrent
+// writer already moved -- restored, or re-claimed by a later removal, or
+// re-attributed by a redelivered restore event -- are never touched by this
+// write: the guard is the row's own say over who may re-own it. Like the
+// forward claim it is a plain re-attribution with no event of its own -- no
+// decision any replica could serve changes with it (the row stays revoked
+// either way), so nothing is published and no cache entry is dropped -- and
+// it stays idempotent under redelivery. changed reports whether the UPDATE
+// matched the row: false with a nil error means a concurrent writer already
+// moved the row, the caller's goal achieved or mooted by that writer, which
+// the restore-side loop classifies silent exactly as it classifies
+// Restore's own ErrRecordNotFound race.
+//
+// An error is reported rather than swallowed; the handler decides how to
+// log it. The UPDATE is scoped to ctx's tenant by the isolation plugin's
+// update callback and runs inside dbkit.WithTenantSession so layer 3
+// (PostgreSQL row-level security) is engaged, exactly like claimByUser.
+func (r *RoleBindingRepository) reattributeToNodeDeletion(ctx context.Context, id string) (bool, error) {
+	if _, err := pkgcore.MustTenantFromContext(ctx); err != nil {
+		return false, err
+	}
+
+	m := RoleBinding{RevokeOrigin: revokeOriginNodeDeletion}
+	var rowsAffected int64
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.
+			Where("id = ?", id).
+			Where("deleted_at IS NOT NULL").
+			Where("revoke_origin = ?", revokeOriginMemberRemoval).
+			Select("RevokeOrigin").
+			Updates(&m)
+		rowsAffected = res.RowsAffected
+		return res.Error
+	})
+	if err != nil {
+		return false, err
+	}
+	return rowsAffected > 0, nil
+}
+
 // Find returns the one binding that grants userID the role roleID at
 // exactly nodeID (empty nodeID meaning tenant-wide), inside the tenant ctx
 // carries. It reports ErrBindingNotFound when there is none.

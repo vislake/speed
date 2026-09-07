@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 
 	"gorm.io/gorm"
 
@@ -61,11 +62,16 @@ import (
 // node's return (the member-removal reap's claim step, claimByUser,
 // re-attributes such rows to the member-removal the moment the member
 // leaves, leaving the user's own member-restore event -- which fires only
-// when the membership is genuinely live again -- as their only
-// resurrection path). The restore side un-marks each matching row BY ID
-// through RoleBindingRepository.Restore, announcing each restored grant
-// with EventRoleBindingRestored exactly as the deletion side announces
-// each revoked one.
+// when the membership is genuinely live again -- as their resurrection
+// path). The member-restore side re-verifies the row's other structural
+// precondition in turn: a row whose node is STILL gone when the member
+// returns is not un-marked -- it is re-attributed to the node-deletion
+// origin (RoleBindingRepository.reattributeToNodeDeletion) and waits for
+// the node's own restore, never returning to Can while the node is hidden
+// (see bindingNodeLivesAtMemberRestore). The restore side un-marks each
+// matching row BY ID through RoleBindingRepository.Restore, announcing
+// each restored grant with EventRoleBindingRestored exactly as the
+// deletion side announces each revoked one.
 //
 // The module boundary is the reason this is a subscription at all, and the
 // shape of the code below is dictated by what the boundary permits:
@@ -646,6 +652,27 @@ func (s *Service) onMemberRestored(ctx context.Context, evt pkgcore.Event) error
 // publishBindingChanged), so every replica converges exactly as it does on
 // a manual restore.
 //
+// # The structural-precondition gate (P1-rbac-reinstate-node)
+//
+// The org.member.restored event asserts ONE of the two facts a revoked
+// member-removal row's grant depends on -- the membership is visible
+// again. The other, the node a node-scoped row is scoped to, is not
+// asserted by anything in the event, and it must be re-verified before any
+// row is un-marked: a restored member whose row the removal claimed while
+// her node was deleted (or whose node was deleted while she was gone)
+// must not regain a grant at a node org still hides. Can -- the coarse
+// gate this module's HTTP surface answers -- never consults node liveness
+// at decision time (scope.go), so the reap discipline is the entire
+// protection of that gate, and a re-instatement that skipped the check
+// re-opened it: the three-step sequence (delete the node -> remove the
+// member -> restore the member) made the binding on the deleted node live
+// again and Can answered allowed. Every member-removal row scoped to a
+// node therefore passes through bindingNodeLivesAtMemberRestore before any
+// role resolution; a row whose node cannot be verified stays revoked (see
+// that method for the two dispositions). The node-restored path has no
+// equivalent gate by design: its event asserts the node's own visibility,
+// which is the fact its rows wait on.
+//
 // A row whose role can no longer be resolved is left revoked with a Warn,
 // the identical treatment the revoke side gives an unresolvable row -- a
 // role cannot die through this module, so the anomaly is worth one log
@@ -859,7 +886,13 @@ func (s *Service) reinstateRoleBindingsForNode(ctx context.Context, evt pkgcore.
 // exactly as revokeReapedBindings leaves an unresolvable row in place.
 // Rows not carrying origin are skipped before any role resolution -- the
 // marker decides, and the row sets a subscriber may hold are otherwise
-// full of rows that must stay revoked.
+// full of rows that must stay revoked. For a member-restored pass (origin
+// is revokeOriginMemberRemoval) a node-scoped row must additionally clear
+// the structural-precondition gate bindingNodeLivesAtMemberRestore -- a
+// member's own return cannot re-open a grant whose node org still hides --
+// and a row the gate declines is skipped here, re-attributed or left in
+// place by that method (see reinstateRoleBindings' doc comment for the
+// full rationale).
 //
 // Two restore outcomes are classified silent, mirroring assign.go's
 // RestoreRole treatment of its own restore races: dbkit.ErrRecordNotFound
@@ -879,6 +912,15 @@ func (s *Service) reinstateReapedBindings(ctx context.Context, evt pkgcore.Event
 	resolvedRoles := make(map[string]*Role, len(revoked))
 	for _, binding := range revoked {
 		if binding.RevokeOrigin != origin {
+			continue
+		}
+		if origin == revokeOriginMemberRemoval && binding.NodeID != "" &&
+			!s.bindingNodeLivesAtMemberRestore(ctx, log, evt, binding) {
+			// The node the row is scoped to does not resolve (or cannot be
+			// verified): the member's own return cannot re-open it. The
+			// helper decided the row's disposition -- re-attributed to the
+			// node-deletion origin when the node is genuinely gone, left
+			// under the member-removal origin when the answer was unknown.
 			continue
 		}
 		role, ok := resolvedRoles[binding.RoleID]
@@ -910,4 +952,84 @@ func (s *Service) reinstateReapedBindings(ctx context.Context, evt pkgcore.Event
 				"role", role.Key, "error", err)
 		}
 	}
+}
+
+// bindingNodeLivesAtMemberRestore is the member-restored re-instatement's
+// structural-precondition gate, the fix for the P1-rbac-reinstate-node
+// finding: a revoked row that the member-removal reap wrote or claimed is
+// un-marked by the member's own org.member.restored event only when the
+// OTHER fact the row's grant depends on -- the node it is scoped to --
+// still exists in the org tree, re-verified here through the host's
+// SubtreeResolver (the module's one permitted window onto the tree; it
+// never imports org). The event asserts the membership; it says nothing
+// about the node, and Can, the coarse gate, never consults node liveness
+// at decision time (only DataScope's row-level narrowing does, and a
+// reinstated row must not rely on that: the deny-then-narrow layering
+// only tolerates a dangling LIVE binding; a re-instatement that re-opened
+// a revoked one at a dead node would hand Can an allowed answer for the
+// full node-deleted window). Every member-removal row scoped to a node
+// passes through here before any role resolution in
+// reinstateReapedBindings; the node-restored path needs no equivalent
+// gate, because its own event asserts the node's visibility.
+//
+// Three outcomes:
+//
+//  1. The node resolves (ok=true and a non-empty path): the row's two
+//     preconditions hold -- true.
+//
+//  2. The node does not resolve (ok=false, or an empty path): the row is
+//     re-attributed to the node-deletion origin
+//     (RoleBindingRepository.reattributeToNodeDeletion), the mirror
+//     inverse of the removal claim, and left revoked -- so a later
+//     org.node.restored re-instates it exactly like every other grant the
+//     deletion reaped, and a node that never returns keeps it revoked.
+//     Logged at Warn: a restored member whose grant stays down while her
+//     node is gone is exactly the surprise an operator will search logs
+//     for, and the re-attribution is the state change that explains it.
+//
+//  3. No SubtreeResolver is wired, or the resolver errors: the answer is
+//     unknown, and the re-instatement fails closed -- the row stays
+//     revoked under the member-removal origin, never re-attributed
+//     (without an answer the code must not presume the node dead and hand
+//     the row to an event that may never fire). A later delivery of the
+//     same restore event, or the member's next removal-and-restore cycle
+//     (whose claim rewrites the origin), re-checks it. Logged at Warn
+//     with the reason.
+//
+// ctx is the event-tenant context onMemberRestored rebuilt, so the
+// resolver is asked under the tenant whose bindings are being
+// re-instated, exactly as the repository calls around it run.
+func (s *Service) bindingNodeLivesAtMemberRestore(ctx context.Context, log *slog.Logger, evt pkgcore.Event, binding RoleBinding) bool {
+	nodeID := binding.NodeID
+	if s.subtree == nil {
+		log.Warn("rbac could not verify a restored member's binding node: no SubtreeResolver is wired; leaving the binding revoked",
+			"event_type", evt.Type, "user_id", binding.UserID, "node_id", nodeID, "role_id", binding.RoleID)
+		return false
+	}
+
+	nodePath, ok, err := s.subtree.NodePath(ctx, nodeID)
+	if err != nil {
+		log.Warn("rbac could not verify a restored member's binding node through the SubtreeResolver; leaving the binding revoked",
+			"event_type", evt.Type, "user_id", binding.UserID, "node_id", nodeID, "role_id", binding.RoleID, "error", err)
+		return false
+	}
+	if ok && nodePath != "" {
+		return true
+	}
+
+	if changed, err := s.bindings.reattributeToNodeDeletion(ctx, binding.ID); err != nil {
+		log.Warn("rbac could not re-attribute a restored member's binding to the node-deletion origin",
+			"event_type", evt.Type, "user_id", binding.UserID, "node_id", nodeID, "role_id", binding.RoleID, "error", err)
+		return false
+	} else if !changed {
+		// A concurrent writer moved the row -- restored it, re-claimed it,
+		// or re-attributed it -- between the enumeration and this write.
+		// The desired end state is that writer's to describe; the
+		// classified-silent treatment mirrors Restore's own race
+		// classification.
+		return false
+	}
+	log.Warn("rbac left a restored member's binding revoked: its node does not resolve; re-attributed to the node-deletion origin, awaiting the node's own restore",
+		"event_type", evt.Type, "user_id", binding.UserID, "node_id", nodeID, "role_id", binding.RoleID)
+	return false
 }

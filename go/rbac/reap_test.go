@@ -2,6 +2,7 @@ package rbac
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -876,7 +877,16 @@ func TestService_OnMemberRestored_ReinstatesTheReapedBindingsAndSparesEveryoneEl
 	// touched and no tenant-a restore may touch either -- stay revoked. A
 	// re-instatement that spilled across either boundary would restore
 	// access in a tenant no org event said anything about.
-	svc, reg := newTestServiceWithRegistry(t)
+	//
+	// The node-scoped half of the fixture needs a SubtreeResolver proving
+	// node-1 still exists: the re-instatement re-verifies each row's node
+	// through the seam before un-marking it (P1-rbac-reinstate-node), and
+	// node-1 here was never deleted -- only the member's removal reaped her
+	// writer binding -- so a resolver that resolves it is the accurate
+	// stand-in for org's live tree.
+	svc, reg := newTestServiceWithRegistry(t, WithSubtreeResolver(&stubResolver{
+		paths: map[string]string{"node-1": "/tenant-a/node-1"},
+	}))
 
 	restored := Subject{TenantID: "tenant-a", UserID: "user-gone"}
 	sameUserOtherTenant := Subject{TenantID: "tenant-b", UserID: "user-gone"}
@@ -1261,6 +1271,226 @@ func TestService_OnMemberRestored_RestoreOnOneReplica_ConvergesTheOther(t *testi
 	}
 	if !ok {
 		t.Fatal("replica B still denies a grant the member restore re-instated on replica A")
+	}
+}
+
+func TestService_OnMemberRestored_NodeDeletedAtMemberRestore_StaysRevokedUntilTheNodeReturns(t *testing.T) {
+	// The P1-rbac-reinstate-node regression this round closes, in the
+	// ordering the finding named: the node is deleted FIRST (the
+	// node-deletion reap revokes the member's row with the node-deletion
+	// origin), THEN the member is removed -- the member-removal reap's
+	// claim step re-attributes the still-revoked row to the member-removal
+	// origin -- and THEN the member is restored WHILE THE NODE STAYS
+	// DELETED. The member restore must not re-open the row: the event
+	// asserts the membership is visible again, but the row's other
+	// structural precondition -- the node it is scoped to -- is still
+	// missing, and Can, the coarse gate, never consults node liveness at
+	// decision time. Before this round the member restore un-marked every
+	// member-removal row it enumerated regardless of its node, the binding
+	// on the deleted node went live again, and Can answered allowed -- the
+	// escalation. The row must stay revoked until the NODE returns, which
+	// is exactly what the re-attribution half of the fix arranges: a row
+	// whose node does not resolve at member-restore time is handed back to
+	// the node-deletion origin, where the node's own org.node.restored --
+	// and only that event -- can lift it, exactly like every other grant
+	// the deletion reaped.
+	//
+	// Pre-fix this test fails at the first post-restore assertion, with
+	// Can == true.
+	//
+	// The probe order below matters: the event-count assertions come before
+	// the live probes, because probing a live binding revokes and restores
+	// it, which would pollute the recorder.
+	tree := &stubResolver{paths: map[string]string{"node-1": "/tenant-a/node-1"}}
+	svc, reg := newTestServiceWithRegistry(t, WithSubtreeResolver(tree))
+	member := Subject{TenantID: "tenant-a", UserID: "user-member"}
+	ctx := tenantCtx("tenant-a")
+	grant(t, svc, member, "reader", Scope{NodeID: "node-1"}, "notes:read")
+
+	// Node deletion: org's tree now hides node-1 -- the resolver answers
+	// "no such node" from here on, the same way org's own repository hides
+	// a mark-deleted node from the host resolver -- and the reap revokes
+	// the binding with the node-deletion origin.
+	delete(tree.paths, "node-1")
+	publishNodeDeleted(t, reg, "tenant-a", deletedNode{DeletedNodeIds: []string{"node-1"}})
+
+	// Member removal while the node is gone: nothing live to withdraw, but
+	// the claim step re-attributes her still-revoked row to the
+	// member-removal origin -- the row becomes hers to lose, which is
+	// exactly what the restore below must not exploit while the node is
+	// still gone.
+	publishMemberRemoved(t, reg, "tenant-a", removedMember{UserID: member.UserID})
+
+	// Member restore while the node stays deleted: the binding must NOT
+	// come back. Can must stay false for as long as the node is gone.
+	rec := recordEvents(reg)
+	publishMemberRestored(t, reg, "tenant-a", restoredMember{UserID: member.UserID})
+
+	if ok, err := svc.Can(context.Background(), member, "read", "notes"); err != nil || ok {
+		t.Fatalf("the binding on the still-deleted node went live with the member restore: Can = %v, %v; want false while the node is gone", ok, err)
+	}
+	if got := len(rec.ofType(EventRoleBindingRestored)); got != 0 {
+		t.Fatalf("the member restore published %d %s events, want 0 (the node is still deleted)", got, EventRoleBindingRestored)
+	}
+	rows, err := svc.bindings.RevokedByUser(ctx, member.UserID)
+	if err != nil {
+		t.Fatalf("listing the restored member's revoked bindings: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d revoked rows for the restored member, want 1", len(rows))
+	}
+	if rows[0].RevokeOrigin != revokeOriginNodeDeletion {
+		t.Errorf("the row's revoke_origin after the member restore = %q, want %q (the restore must hand the row back to the node's deletion)",
+			rows[0].RevokeOrigin, revokeOriginNodeDeletion)
+	}
+
+	// The node comes back: org's tree shows node-1 again and the node
+	// restore re-instates the row the member restore declined -- the
+	// legitimate resurrection path, the one the re-attribution exists to
+	// preserve.
+	tree.paths["node-1"] = "/tenant-a/node-1"
+	publishNodeRestored(t, reg, "tenant-a", restoredNode{NodeID: "node-1"})
+
+	if ok, canErr := svc.Can(context.Background(), member, "read", "notes"); canErr != nil || !ok {
+		t.Fatalf("the binding was not re-instated by the node's own restore: Can = %v, %v", ok, canErr)
+	}
+	if got := len(rec.ofType(EventRoleBindingRestored)); got != 1 {
+		t.Fatalf("got %d %s events, want exactly 1 (the node restore, not the member restore)", got, EventRoleBindingRestored)
+	}
+	rows, err = svc.bindings.RevokedByUser(ctx, member.UserID)
+	if err != nil {
+		t.Fatalf("listing the restored member's revoked bindings: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("the restored member still has %d revoked bindings after the node's return", len(rows))
+	}
+}
+
+func TestService_OnMemberRestored_NodeDeletedWhileMemberGone_StaysRevokedUntilTheNodeReturns(t *testing.T) {
+	// The same P1-rbac-reinstate-node property in its second ordering: the
+	// member is removed FIRST, while her binding at node-1 is live -- the
+	// member-removal reap revokes it with the member-removal origin -- and
+	// only THEN is the node deleted. Its reap finds nothing live left at
+	// the node to withdraw and nothing to claim (her row already carries
+	// the removal's origin), so the row the member restore later enumerates
+	// is her own removal's -- and yet the node, the row's other structural
+	// precondition, is gone by the time she returns. Restoring her while
+	// the node stays deleted must not un-mark the row any more than it may
+	// in the first ordering: the member-removal origin says the removal
+	// wrote the revoke, never that the node still stands behind the grant.
+	// The re-instatement re-verifies node liveness the same way, hands the
+	// row back to the node-deletion origin, and only the node's own return
+	// lifts it -- which also keeps her grant's fate identical to every
+	// other grant the node's deletion reaped at the same node.
+	//
+	// Pre-fix this test fails at the first post-restore assertion, with
+	// Can == true.
+	tree := &stubResolver{paths: map[string]string{"node-1": "/tenant-a/node-1"}}
+	svc, reg := newTestServiceWithRegistry(t, WithSubtreeResolver(tree))
+	member := Subject{TenantID: "tenant-a", UserID: "user-member"}
+	ctx := tenantCtx("tenant-a")
+	grant(t, svc, member, "reader", Scope{NodeID: "node-1"}, "notes:read")
+
+	publishMemberRemoved(t, reg, "tenant-a", removedMember{UserID: member.UserID})
+	if ok, _ := svc.Can(context.Background(), member, "read", "notes"); ok {
+		t.Fatal("the member's grant survived the removal")
+	}
+
+	delete(tree.paths, "node-1")
+	publishNodeDeleted(t, reg, "tenant-a", deletedNode{DeletedNodeIds: []string{"node-1"}})
+
+	rec := recordEvents(reg)
+	publishMemberRestored(t, reg, "tenant-a", restoredMember{UserID: member.UserID})
+
+	if ok, err := svc.Can(context.Background(), member, "read", "notes"); err != nil || ok {
+		t.Fatalf("the binding on the still-deleted node went live with the member restore: Can = %v, %v; want false while the node is gone", ok, err)
+	}
+	if got := len(rec.ofType(EventRoleBindingRestored)); got != 0 {
+		t.Fatalf("the member restore published %d %s events, want 0 (the node is still deleted)", got, EventRoleBindingRestored)
+	}
+	rows, err := svc.bindings.RevokedByUser(ctx, member.UserID)
+	if err != nil {
+		t.Fatalf("listing the restored member's revoked bindings: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d revoked rows for the restored member, want 1", len(rows))
+	}
+	if rows[0].RevokeOrigin != revokeOriginNodeDeletion {
+		t.Errorf("the row's revoke_origin after the member restore = %q, want %q (the restore must hand the row back to the node's deletion)",
+			rows[0].RevokeOrigin, revokeOriginNodeDeletion)
+	}
+
+	tree.paths["node-1"] = "/tenant-a/node-1"
+	publishNodeRestored(t, reg, "tenant-a", restoredNode{NodeID: "node-1"})
+
+	if ok, canErr := svc.Can(context.Background(), member, "read", "notes"); canErr != nil || !ok {
+		t.Fatalf("the binding was not re-instated by the node's own restore: Can = %v, %v", ok, canErr)
+	}
+	if got := len(rec.ofType(EventRoleBindingRestored)); got != 1 {
+		t.Fatalf("got %d %s events, want exactly 1 (the node restore, not the member restore)", got, EventRoleBindingRestored)
+	}
+}
+
+func TestService_OnMemberRestored_NodeUnverifiable_FailsClosed(t *testing.T) {
+	// The re-instatement gate cannot verify a node-scoped row when the
+	// host wired no SubtreeResolver, or when the resolver errors -- and
+	// "cannot verify" must fail closed, never default back to the old
+	// un-mark-anyway behavior: that default is exactly the P1 this round
+	// closes. A row the gate cannot verify stays revoked under the
+	// member-removal origin (never re-attributed -- without an answer the
+	// code must not presume the node dead and hand the row to an event
+	// that may never fire), and a later delivery of the same restore event
+	// re-checks it. A tenant-wide row carries no node to verify and comes
+	// back regardless -- the no-org-module host keeps working.
+	//
+	// Both legs fail before the fix: with the row un-marked by the member
+	// restore, Can answers true.
+	//
+	// Leg 1: no SubtreeResolver wired at all.
+	svc, reg := newTestServiceWithRegistry(t)
+	sub := Subject{TenantID: "tenant-a", UserID: "user-gone"}
+	grant(t, svc, sub, "reader", Scope{}, "notes:read")
+	grant(t, svc, sub, "writer", Scope{NodeID: "node-1"}, "notes:write")
+
+	publishMemberRemoved(t, reg, "tenant-a", removedMember{UserID: sub.UserID})
+	publishMemberRestored(t, reg, "tenant-a", restoredMember{UserID: sub.UserID})
+
+	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || !ok {
+		t.Fatalf("the tenant-wide grant did not come back without any resolver: Can = %v, %v", ok, err)
+	}
+	if ok, err := svc.Can(context.Background(), sub, "write", "notes"); err != nil || ok {
+		t.Fatalf("the node-scoped grant was re-instated with no resolver to verify its node: Can = %v, %v; want false", ok, err)
+	}
+	rows, err := svc.bindings.RevokedByUser(tenantCtx("tenant-a"), sub.UserID)
+	if err != nil {
+		t.Fatalf("listing the restored member's revoked bindings: %v", err)
+	}
+	if len(rows) != 1 || rows[0].NodeID != "node-1" {
+		t.Fatalf("revoked rows after the restore = %+v, want exactly the node-1 row", rows)
+	}
+	if rows[0].RevokeOrigin != revokeOriginMemberRemoval {
+		t.Errorf("the unverifiable row's revoke_origin = %q, want %q (an unknown answer must not presume the node dead)",
+			rows[0].RevokeOrigin, revokeOriginMemberRemoval)
+	}
+
+	// Leg 2: a resolver that errors -- the tree is unreachable, which must
+	// be distinguishable from "no such node" and fail the same closed way.
+	svc2, reg2 := newTestServiceWithRegistry(t, WithSubtreeResolver(&stubResolver{err: errors.New("tree unreachable")}))
+	sub2 := Subject{TenantID: "tenant-a", UserID: "user-gone"}
+	grant(t, svc2, sub2, "writer", Scope{NodeID: "node-1"}, "notes:write")
+	publishMemberRemoved(t, reg2, "tenant-a", removedMember{UserID: sub2.UserID})
+	publishMemberRestored(t, reg2, "tenant-a", restoredMember{UserID: sub2.UserID})
+
+	if ok, canErr := svc2.Can(context.Background(), sub2, "write", "notes"); canErr != nil || ok {
+		t.Fatalf("the node-scoped grant was re-instated while the resolver was erroring: Can = %v, %v; want false", ok, canErr)
+	}
+	rows, err = svc2.bindings.RevokedByUser(tenantCtx("tenant-a"), sub2.UserID)
+	if err != nil {
+		t.Fatalf("listing the restored member's revoked bindings: %v", err)
+	}
+	if len(rows) != 1 || rows[0].RevokeOrigin != revokeOriginMemberRemoval {
+		t.Fatalf("revoked rows after the restore = %+v, want exactly the node-1 row with the %q origin",
+			rows, revokeOriginMemberRemoval)
 	}
 }
 
