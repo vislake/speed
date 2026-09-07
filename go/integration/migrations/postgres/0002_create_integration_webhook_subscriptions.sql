@@ -21,6 +21,16 @@
 -- request, so a URL whose DNS answer changed after creation is never
 -- silently trusted either.
 --
+-- url's VARCHAR(2048) also flows, verbatim, into the audit trail:
+-- webhook_service.go's emitWebhookAudit puts row.URL into the audit
+-- event's resource_display_name, whose own column is VARCHAR(255) -- a
+-- source wider than its target. That is deliberate and handled at the
+-- audit write path (go/dbkit/audit's Repository.Insert cuts
+-- caller-supplied content to its columns, recording each cut in a
+-- structured warning; see go/dbkit/audit/AGENTS.md's "Column bounds"
+-- section), so a legal long URL is stored cut, never refused after this
+-- subscription's mutation has committed.
+--
 -- event_types is a JSON array of PUBLIC event type strings
 -- (webhook_model.go's own doc comment spells out why this is never the
 -- internal pkgcore.Event.Type vocabulary), stored as TEXT rather than a

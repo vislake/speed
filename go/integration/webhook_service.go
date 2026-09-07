@@ -503,6 +503,17 @@ func (s *Service) toSummary(row WebhookSubscription) (WebhookSubscriptionSummary
 
 // emitWebhookAudit records one audit event for a WebhookSubscription
 // mutation, mirroring Service.emit's identical shape for API keys.
+//
+// row.URL -- a VARCHAR(2048) column (see the migration files) -- travels
+// verbatim into audit.Resource.DisplayName, which audit_events stores in
+// resource_display_name (VARCHAR(255)): a source wider than its target,
+// by deliberate design. The fitting happens at the audit write path, not
+// here: go/dbkit/audit's Repository.Insert cuts caller-supplied content
+// to its columns (an over-long URL is legal content and is stored cut at
+// 255 runes, with the cut recorded in a structured warning -- see
+// go/dbkit/audit/AGENTS.md's "Column bounds" section), so a legal long
+// URL must never fail this audit event after the subscription row has
+// already committed.
 func (s *Service) emitWebhookAudit(ctx context.Context, action string, row *WebhookSubscription) error {
 	if err := audit.Emit(ctx, s.bus, s.auditActions, audit.Input{
 		Action:   action,

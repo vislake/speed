@@ -11,9 +11,11 @@
 -- dbkit.TenantModel.
 --
 -- This is the SQLite copy; see the postgres/ sibling for the full rationale
--- of every column. Dialect differences stop at the allowed SQL surface: no
--- dialect-specific types, no native arrays, no JSONB, no gen_random_uuid(),
--- no NOW().
+-- of every column -- including url's relationship to the audit trail's
+-- narrower resource_display_name (VARCHAR(255)), handled at the audit
+-- write path rather than here. Dialect differences stop at the allowed SQL
+-- surface: no dialect-specific types, no native arrays, no JSONB, no
+-- gen_random_uuid(), no NOW().
 CREATE TABLE integration_webhook_subscriptions (
     id           VARCHAR(36)   NOT NULL,
     tenant_id    VARCHAR(64)   NOT NULL,

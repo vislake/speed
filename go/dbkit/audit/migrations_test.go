@@ -3,6 +3,9 @@ package audit
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"regexp"
+	"strconv"
 	"testing"
 	"time"
 
@@ -12,6 +15,7 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/audit/migrations"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -165,4 +169,89 @@ func TestMigrations_Apply_Postgres_RoundTrip(t *testing.T) {
 	}
 	prepareMigrationsPostgresSchema(t, db)
 	runMigrationRoundTrip(t, db, dbkit.DialectPostgres)
+}
+
+// TestMigrations_ColumnWidths_MatchTheColumnBoundConstants keeps the two
+// authorities model.go's column-bounds constants document themselves as
+// tracking -- the migration files' VARCHAR(n) declarations, and through
+// them the gorm size tags on AuditEvent's fields -- in step mechanically,
+// on both dialects. The constants are what repository.go's Insert enforces
+// at the write boundary (see fitEventToColumns), so a width that drifts
+// between the migrations and the constants would mean a value the module
+// believes it has fitted to its column is still rejected by one dialect
+// with 22001 -- the exact divergence class the write-boundary enforcement
+// exists to close. The two dialect files' CREATE TABLE statements must
+// also agree with each other, per the files' own "structurally identical"
+// claim. changes (TEXT) and occurred_at (TIMESTAMP) are unbounded and are
+// excluded by construction.
+func TestMigrations_ColumnWidths_MatchTheColumnBoundConstants(t *testing.T) {
+	declared := map[string]int{
+		"id":                        idColumnRunes,
+		"actor_type":                actorTypeColumnRunes,
+		"actor_id":                  actorIDColumnRunes,
+		"actor_display_name":        actorDisplayNameColumnRunes,
+		"on_behalf_of_type":         onBehalfOfTypeColumnRunes,
+		"on_behalf_of_id":           onBehalfOfIDColumnRunes,
+		"on_behalf_of_display_name": onBehalfOfDisplayNameColumnRunes,
+		"action":                    actionColumnRunes,
+		"resource_type":             resourceTypeColumnRunes,
+		"resource_id":               resourceIDColumnRunes,
+		"resource_display_name":     resourceDisplayNameColumnRunes,
+		"failure_reason":            failureReasonColumnRunes,
+		"tenant_id":                 tenantIDColumnRunes,
+		"ip":                        ipColumnRunes,
+		"user_agent":                userAgentColumnRunes,
+		"trace_id":                  traceIDColumnRunes,
+	}
+
+	readWidths := func(t *testing.T, dialectDir string) map[string]int {
+		t.Helper()
+		raw, err := fs.ReadFile(migrations.FS, dialectDir+"/0001_create_audit_events.sql")
+		if err != nil {
+			t.Fatalf("read %s/0001_create_audit_events.sql: %v", dialectDir, err)
+		}
+		widths := make(map[string]int, len(declared))
+		for column := range declared {
+			re := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(column) + `\s+VARCHAR\((\d+)\)`)
+			m := re.FindStringSubmatch(string(raw))
+			if m == nil {
+				t.Fatalf("column %q not found as a VARCHAR declaration in %s/0001_create_audit_events.sql", column, dialectDir)
+			}
+			n, err := strconv.Atoi(m[1])
+			if err != nil {
+				t.Fatalf("parse VARCHAR width of %q in %s/0001_create_audit_events.sql: %v", column, dialectDir, err)
+			}
+			widths[column] = n
+		}
+		return widths
+	}
+
+	postgres := readWidths(t, "postgres")
+	sqlite := readWidths(t, "sqlite")
+
+	for column, want := range declared {
+		if got := postgres[column]; got != want {
+			t.Errorf("postgres/0001 declares %s VARCHAR(%d), the column-bound constant says %d", column, got, want)
+		}
+		if got := sqlite[column]; got != want {
+			t.Errorf("sqlite/0001 declares %s VARCHAR(%d), the column-bound constant says %d", column, got, want)
+		}
+		if postgres[column] != sqlite[column] {
+			t.Errorf("%s is VARCHAR(%d) on postgres but VARCHAR(%d) on sqlite -- the two dialect files claim different schemas", column, postgres[column], sqlite[column])
+		}
+	}
+
+	// Every bounded column the postgres file declares must be covered by
+	// the constants above -- a gap would leave a column the write-boundary
+	// enforcement silently ignores.
+	raw, err := fs.ReadFile(migrations.FS, "postgres/0001_create_audit_events.sql")
+	if err != nil {
+		t.Fatalf("re-read postgres migration: %v", err)
+	}
+	columnRE := regexp.MustCompile(`(?m)^\s*([a-z_]+)\s+VARCHAR\(`)
+	for _, m := range columnRE.FindAllStringSubmatch(string(raw), -1) {
+		if _, covered := declared[m[1]]; !covered {
+			t.Errorf("postgres migration declares VARCHAR column %q with no column-bound constant -- add it to the constant set", m[1])
+		}
+	}
 }

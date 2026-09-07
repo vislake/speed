@@ -36,9 +36,21 @@
 -- (docs/internal/10-compliance-and-audit.md's by-time-range retrieval
 -- need).
 --
--- ip/user_agent/trace_id are request-context metadata, empty when the
--- action producing a row had no such context (a background job, an event
--- subscriber).
+-- ip/user_agent/trace_id are three reserved request-context columns: the
+-- schema declares them (they were part of the original design shape
+-- docs/internal/10-compliance-and-audit.md describes), but NO code writes
+-- them today -- neither collection mechanism's payload type carries a
+-- field for any of them, so every row stores the empty string. Do not
+-- read an empty value as information: "empty" does not mean "this record
+-- came from a background job with no request context"; it means the
+-- column has no writer at all. They are reserved for a future
+-- request-context carrier (the shape pkgcore's WithActor/ActorFromContext
+-- already sets for identity) that HTTP layers would populate and the
+-- audit write paths would read when present -- go/dbkit/audit/AGENTS.md's
+-- "Column inventory" section and model.go's IP field doc comment carry
+-- the standing account. model.go's field comments were updated
+-- alongside this one in the same round, so all three say the same
+-- thing.
 --
 -- No column here is ever updated or deleted by application code -- see
 -- go/dbkit/audit/repository.go's own doc comment on why Repository

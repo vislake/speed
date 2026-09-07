@@ -1,13 +1,18 @@
 package audit
 
 import (
+	"bytes"
 	"context"
 	"embed"
+	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
@@ -328,6 +333,232 @@ func TestRepository_ListByTenant_EmptyTenantID_ReturnsPlatformEvents(t *testing.
 	}
 	if len(got) != 1 || got[0].ID != platformEvt.ID {
 		t.Fatalf("ListByTenant(\"\") = %+v, want exactly the platform-level event %s", got, platformEvt.ID)
+	}
+}
+
+// captureSlogDefault swaps slog.Default() for a text handler writing into
+// a buffer this returns, restoring the previous default logger on test
+// cleanup. It is this package's twin of go/dbkit/audit_capture_test.go's
+// own captureSlogDefault (each test package needs its own copy, since a
+// helper living in one package's _test.go is unreachable from the other) --
+// itself modeled on go/pkgcore/registry_test.go's identical swap. slog's
+// default logger is process-global, so a test using this must not run in
+// parallel with another that also touches it; none of this file's tests
+// call t.Parallel.
+func captureSlogDefault(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return &buf
+}
+
+// TestRepository_Insert_CutsOverWideDescriptiveFieldsToTheirColumnBounds
+// pins the write-boundary enforcement repository.go's Insert applies to
+// audit_events' descriptive columns (see fitEventToColumns' doc comment
+// and model.go's column-bounds constants for why the cut happens in Go
+// rather than being left to the database): under PostgreSQL an over-long
+// value fails the INSERT with error 22001 and the whole record is lost,
+// while SQLite does not enforce VARCHAR lengths at all -- the two dialects
+// disagreeing about the same row is exactly the divergence the cut
+// removes. SQLite cannot show the 22001 half of the story, so, mirroring
+// go/sharing's identical "SQLite-only tier cannot see an over-long value
+// fail" note (model.go there), this test pins the Go-side cut directly:
+// the stored row never carries more than the column's rune bound, the cut
+// is rune-safe (a 300-rune multibyte value is cut at 255 runes, not 255
+// bytes), a value at the exact bound survives verbatim, an invalid-UTF-8
+// value is sanitized to the replacement character (PostgreSQL refuses raw
+// invalid bytes with 22021), and every changed value is recorded in a
+// structured warning -- the truncation trace repository.go's own doc
+// comment promises. The PostgreSQL leg of the same proof -- where the
+// fail-before behavior is a genuine 22001 refusal -- lives in
+// integration_test/postgres_column_bounds_test.go.
+func TestRepository_Insert_CutsOverWideDescriptiveFieldsToTheirColumnBounds(t *testing.T) {
+	db := openAuditTestDB(t)
+	repo := NewRepository(db)
+	logs := captureSlogDefault(t)
+	ctx := context.Background()
+
+	// 300 three-byte runes: cutting at 255 bytes would split a character
+	// and store garbage; cutting at 255 runes must store exactly 255.
+	longURL := strings.Repeat("€", 300)
+	longActor := strings.Repeat("a", 300)
+	longReason := strings.Repeat("r", 1200)
+	longUA := strings.Repeat("u", 700)
+	evt := sampleEvent()
+	evt.SetResource(Resource{Type: "integration.webhook_subscription", ID: "wh-1", DisplayName: longURL})
+	evt.SetActor(pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: "admin-1", DisplayName: longActor})
+	evt.SetOnBehalfOf(&pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1", DisplayName: strings.Repeat("b", 300)})
+	evt.SetResult(Result{Success: false, FailureReason: longReason})
+	evt.IP = strings.Repeat("1", 100)
+	evt.UserAgent = longUA
+	evt.TraceID = strings.Repeat("t", 100)
+	if err := repo.Insert(ctx, evt); err != nil {
+		t.Fatalf("Insert(over-wide descriptive fields) error = %v, want nil (the fields must be cut, not the row refused)", err)
+	}
+
+	got, err := repo.Get(ctx, evt.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("Get() = nil, want the inserted event")
+	}
+
+	if n := utf8.RuneCountInString(got.ResourceDisplayName); n != resourceDisplayNameColumnRunes {
+		t.Errorf("stored resource_display_name is %d runes, want the %d-rune bound (a rune-safe cut, not a byte cut)", n, resourceDisplayNameColumnRunes)
+	}
+	if got.ResourceDisplayName != string([]rune(longURL)[:resourceDisplayNameColumnRunes]) {
+		t.Error("stored resource_display_name is not the original value cut at the rune bound")
+	}
+	if n := utf8.RuneCountInString(got.ActorDisplayName); n != actorDisplayNameColumnRunes {
+		t.Errorf("stored actor_display_name is %d runes, want %d", n, actorDisplayNameColumnRunes)
+	}
+	if n := utf8.RuneCountInString(got.FailureReason); n != failureReasonColumnRunes {
+		t.Errorf("stored failure_reason is %d runes, want %d", n, failureReasonColumnRunes)
+	}
+	if n := utf8.RuneCountInString(got.IP); n != ipColumnRunes {
+		t.Errorf("stored ip is %d runes, want %d", n, ipColumnRunes)
+	}
+	if n := utf8.RuneCountInString(got.UserAgent); n != userAgentColumnRunes {
+		t.Errorf("stored user_agent is %d runes, want %d", n, userAgentColumnRunes)
+	}
+	if n := utf8.RuneCountInString(got.TraceID); n != traceIDColumnRunes {
+		t.Errorf("stored trace_id is %d runes, want %d", n, traceIDColumnRunes)
+	}
+	onBehalfOf, ok := got.OnBehalfOf()
+	if !ok {
+		t.Fatal("stored on_behalf_of is absent, want it present")
+	}
+	if n := utf8.RuneCountInString(onBehalfOf.DisplayName); n != onBehalfOfDisplayNameColumnRunes {
+		t.Errorf("stored on_behalf_of_display_name is %d runes, want %d", n, onBehalfOfDisplayNameColumnRunes)
+	}
+
+	// Every cut must have left a trace: one warning per changed field,
+	// naming the field and its limit.
+	logText := logs.String()
+	for _, want := range []string{
+		"audit: audit event field value changed to fit its column",
+		"actor_display_name", "on_behalf_of_display_name", "resource_display_name",
+		"failure_reason", "ip", "user_agent", "trace_id",
+		"reason=column_width",
+	} {
+		if !strings.Contains(logText, want) {
+			t.Errorf("truncation warning log does not mention %q; got:\n%s", want, logText)
+		}
+	}
+
+	// A value exactly at its bound must survive verbatim, with no warning.
+	boundary := strings.Repeat("c", resourceDisplayNameColumnRunes)
+	atBound := sampleEvent()
+	atBound.SetResource(Resource{Type: "note", ID: "note-1", DisplayName: boundary})
+	if boundErr := repo.Insert(ctx, atBound); boundErr != nil {
+		t.Fatalf("Insert(value exactly at the bound) error = %v", boundErr)
+	}
+	readBound, readErr := repo.Get(ctx, atBound.ID)
+	if readErr != nil {
+		t.Fatalf("Get(boundary) error = %v", readErr)
+	}
+	if readBound.ResourceDisplayName != boundary {
+		t.Errorf("value at the exact bound was changed to %d runes, want it verbatim", utf8.RuneCountInString(readBound.ResourceDisplayName))
+	}
+	after := logs.String()
+	if strings.Count(after, "audit: audit event field value changed to fit its column") != strings.Count(logText, "audit: audit event field value changed to fit its column") {
+		t.Error("an at-the-bound value produced a truncation warning, want none")
+	}
+}
+
+// TestRepository_Insert_SanitizesInvalidUTF8InDescriptiveFields pins the
+// invalid-UTF-8 half of fitColumnValue: a UTF-8-encoded PostgreSQL
+// database refuses raw invalid bytes with error 22021 (SQLite again stores
+// them silently), so the write boundary sanitizes each consecutive invalid
+// run to a single replacement character (U+FFFD) -- never by dropping the
+// bytes, which could concatenate two arbitrary byte runs into a different
+// valid value -- and records the change in a structured warning.
+func TestRepository_Insert_SanitizesInvalidUTF8InDescriptiveFields(t *testing.T) {
+	db := openAuditTestDB(t)
+	repo := NewRepository(db)
+	logs := captureSlogDefault(t)
+	ctx := context.Background()
+
+	// "\xff\xfe" is one consecutive run of invalid bytes.
+	evt := sampleEvent()
+	evt.SetResource(Resource{Type: "note", ID: "note-1", DisplayName: "a\xff\xfeb"})
+	if err := repo.Insert(ctx, evt); err != nil {
+		t.Fatalf("Insert(invalid UTF-8) error = %v, want nil (the value must be sanitized, not the row refused)", err)
+	}
+	got, err := repo.Get(ctx, evt.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	want := "a�b" // one replacement character for the whole invalid run
+	if got.ResourceDisplayName != want {
+		t.Errorf("stored resource_display_name = %q, want %q (one U+FFFD per consecutive invalid run)", got.ResourceDisplayName, want)
+	}
+	if !strings.Contains(logs.String(), "reason=invalid_utf8") {
+		t.Errorf("sanitization warning not recorded; got:\n%s", logs.String())
+	}
+}
+
+// TestRepository_Insert_RefusesOverWideIdentifierFields pins the
+// identifier/vocabulary half of fitEventToColumns: an over-wide value in
+// one of the fields that identify the record or its subject -- the fields
+// whose silent cutting would rewrite the record's own identity -- is a
+// caller bug and is refused with ErrEventFieldTooLong before the write,
+// on every dialect alike (leaving it to the database would let SQLite
+// store the row silently while PostgreSQL refuses it with 22001). The
+// refusal must also leave no row behind.
+func TestRepository_Insert_RefusesOverWideIdentifierFields(t *testing.T) {
+	db := openAuditTestDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+
+	cases := []struct {
+		name   string
+		field  string
+		mutate func(evt *AuditEvent)
+	}{
+		{"ID", "ID", func(evt *AuditEvent) { evt.ID = strings.Repeat("i", idColumnRunes+1) }},
+		{"ActorID", "ActorID", func(evt *AuditEvent) {
+			evt.SetActor(pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: strings.Repeat("u", actorIDColumnRunes+1), DisplayName: "Ada"})
+		}},
+		{"ResourceID", "ResourceID", func(evt *AuditEvent) {
+			evt.SetResource(Resource{Type: "note", ID: strings.Repeat("n", resourceIDColumnRunes+1), DisplayName: "x"})
+		}},
+		{"Action", "Action", func(evt *AuditEvent) { evt.Action = strings.Repeat("a", actionColumnRunes+1) }},
+		{"TenantID", "TenantID", func(evt *AuditEvent) { evt.TenantID = strings.Repeat("t", tenantIDColumnRunes+1) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			evt := sampleEvent()
+			tc.mutate(evt)
+			err := repo.Insert(ctx, evt)
+			if err == nil {
+				t.Fatalf("Insert(over-wide %s) error = nil, want ErrEventFieldTooLong", tc.field)
+			}
+			if !errors.Is(err, ErrEventFieldTooLong) {
+				t.Fatalf("Insert(over-wide %s) error = %v, want it to wrap ErrEventFieldTooLong", tc.field, err)
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("Insert(over-wide %s) error %q does not name the offending field", tc.field, err)
+			}
+			if rows, listErr := repo.ListByTenant(ctx, "tenant-a"); listErr != nil {
+				t.Fatalf("ListByTenant() error = %v", listErr)
+			} else if len(rows) != 0 {
+				t.Errorf("ListByTenant() returned %d rows after the refusal, want 0 (the refusal must happen before any write)", len(rows))
+			}
+		})
+	}
+
+	// The descriptive columns must NOT be refused by the same enforcement:
+	// an over-wide display name is legal content and is cut, not refused
+	// (covered in depth by the cut test above -- this guards the boundary
+	// between the two classes).
+	legal := sampleEvent()
+	legal.SetResource(Resource{Type: "note", ID: "note-1", DisplayName: strings.Repeat("d", resourceDisplayNameColumnRunes+1)})
+	if err := repo.Insert(ctx, legal); err != nil {
+		t.Errorf("Insert(over-wide display name) error = %v, want nil -- descriptive fields are cut, never refused", err)
 	}
 }
 

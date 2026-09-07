@@ -11,6 +11,87 @@ import (
 // auditEventsTable is the shared audit_events table name.
 const auditEventsTable = "audit_events"
 
+// The column bounds of audit_events' bounded VARCHAR columns that can
+// receive caller-supplied content, declared by the migrations that create
+// the table (migrations/{postgres,sqlite}/0001_create_audit_events.sql) --
+// THE MIGRATIONS ARE THE AUTHORITY: these constants exist so the write
+// path (repository.go's Insert, via fitEventToColumns) can enforce the
+// schema's own widths in Go instead of leaving the database to do it, and
+// they must track the migration files' VARCHAR(n) declarations and the
+// gorm size tags on the fields below (both dialects, both files) -- a
+// mismatch means a value this module believes it has handled is still
+// rejected by one dialect. PostgreSQL enforces VARCHAR(n) at the database
+// and refuses an over-long value with error 22001, failing the INSERT and
+// losing the whole record; SQLite ignores the bound entirely, which is
+// why the SQLite-only unit tier cannot see an over-long value fail --
+// the cut tests in repository_test.go pin the Go-side enforcement
+// instead, and the integration tier's postgres_column_bounds_test.go
+// re-proves it against a real server. migrations_test.go's
+// TestMigrations_ColumnWidths_MatchTheColumnBoundConstants keeps the two
+// in step mechanically.
+//
+// The bounds split into two classes, enforced differently by
+// fitEventToColumns (see that function's own doc comment for the
+// reasoning):
+//
+//   - The descriptive/content columns -- display names, a failure reason,
+//     request metadata -- are CUT to their column's width, and each cut is
+//     recorded in a structured warning: an over-long value there is legal
+//     content (a webhook URL, a user agent), never a caller bug, and how
+//     wide its own source is is the source's business, never this table's.
+//     Two real wider-than-target pairings found by audit review --
+//     integration's webhook URL (VARCHAR(2048),
+//     go/integration/webhook_model.go) and sharing's resource_ref
+//     (VARCHAR(512), go/sharing/model.go), both flowing into
+//     resource_display_name -- are covered by this one enforcement point,
+//     which is exactly why the enforcement lives here and not at either
+//     source. (The "(a cut column)" annotations below mark the class.)
+//
+//   - The columns NOT listed here -- id, actor_type, actor_id,
+//     on_behalf_of_type, on_behalf_of_id, action, resource_type,
+//     resource_id, tenant_id -- are identifier or vocabulary columns:
+//     UUIDs this module or its callers generate, registered action
+//     strings, host-chosen tenant ids. An over-wide value there is a
+//     caller bug, not legal content, and silently cutting it would
+//     rewrite the record's own identity (a truncated id no longer
+//     deduplicates or reads back correctly), so fitEventToColumns refuses
+//     those with ErrEventFieldTooLong instead -- loudly, on both
+//     dialects alike, never a PostgreSQL-only 22001.
+const (
+	// actorTypeColumnRunes bounds actor_type.
+	actorTypeColumnRunes = 32
+	// actorIDColumnRunes bounds actor_id.
+	actorIDColumnRunes = 255
+	// actorDisplayNameColumnRunes bounds actor_display_name (a cut column).
+	actorDisplayNameColumnRunes = 255
+	// onBehalfOfTypeColumnRunes bounds on_behalf_of_type.
+	onBehalfOfTypeColumnRunes = 32
+	// onBehalfOfIDColumnRunes bounds on_behalf_of_id.
+	onBehalfOfIDColumnRunes = 255
+	// onBehalfOfDisplayNameColumnRunes bounds on_behalf_of_display_name (a cut column).
+	onBehalfOfDisplayNameColumnRunes = 255
+	// actionColumnRunes bounds action.
+	actionColumnRunes = 255
+	// resourceTypeColumnRunes bounds resource_type.
+	resourceTypeColumnRunes = 255
+	// resourceIDColumnRunes bounds resource_id.
+	resourceIDColumnRunes = 255
+	// resourceDisplayNameColumnRunes bounds resource_display_name (a cut column).
+	resourceDisplayNameColumnRunes = 255
+	// failureReasonColumnRunes bounds failure_reason (a cut column).
+	failureReasonColumnRunes = 1000
+	// tenantIDColumnRunes bounds tenant_id.
+	tenantIDColumnRunes = 64
+	// ipColumnRunes bounds ip (a cut column, reserved -- see the IP field's doc comment).
+	ipColumnRunes = 64
+	// userAgentColumnRunes bounds user_agent (a cut column, reserved -- see the IP field's doc comment).
+	userAgentColumnRunes = 500
+	// traceIDColumnRunes bounds trace_id (a cut column, reserved -- see the IP field's doc comment).
+	traceIDColumnRunes = 64
+	// idColumnRunes bounds the primary key id.
+	idColumnRunes = 36
+)
+
 // Resource identifies what an audited action was performed on: the
 // flattened form of the "Resource" element of docs/internal/10-compliance-
 // and-audit.md's six-element AuditEvent shape (Actor, OnBehalfOf, Action,
@@ -34,8 +115,11 @@ type Result struct {
 // AuditEvent is one append-only record of "who did what to what, and what
 // happened" -- the six-element shape docs/internal/10-compliance-and-audit.
 // md defines (Actor, OnBehalfOf, Action, Resource, Result, Changes), plus
-// the Context fields (OccurredAt, IP, UserAgent, TraceID, TenantID) every
-// record carries regardless of which module produced it.
+// the context fields every record carries regardless of which module
+// produced it: OccurredAt and TenantID. The schema additionally declares
+// three request-context columns (IP, UserAgent, TraceID) that NO code
+// writes today -- see the IP field's own doc comment for what "reserved"
+// means here, and never read an empty one of them as information.
 //
 // Every element except OnBehalfOf is flattened directly onto columns
 // (ActorType/ID/DisplayName, ResourceType/ID/DisplayName, Success/
@@ -63,6 +147,19 @@ type Result struct {
 // dbkit's tenant-scoping plugin and dbkit.Repository[T], both of which fail
 // a query closed the moment its context carries no tenant, which is
 // exactly the platform-level case this table must still serve.
+//
+// That same deliberate absence carries an emergent safety property worth
+// naming because it is load-bearing: AuditEvent cannot be used as
+// dbkit.Repository[T]'s type argument at all (TenantScoped is that
+// generic's constraint), so Repository[T]'s HardDelete method -- the
+// compliance-erasure path go/dbkit/hard_delete.go ships for tenant-scoped
+// models -- can never be instantiated against the audit trail. Alongside
+// audit.Repository's own lack of any delete method, that makes two
+// independent application-layer paths that could erase an audit trail,
+// one of them closed at compile time rather than by convention. Adding a
+// GetTenantID method to AuditEvent for any other reason would silently
+// remove the type-level protection; go/dbkit/audit/AGENTS.md's data-domain
+// section records the same warning.
 // model_test.go's TestAuditEvent_DoesNotImplementTenantScoped and
 // TestAuditEvent_VisibilityDoesNotDependOnTenantContext are the standing
 // proof (see that file's own doc comment for why they do not use
@@ -144,10 +241,24 @@ type AuditEvent struct {
 	// shape.
 	TenantID string `gorm:"column:tenant_id;size:64;not null"`
 
-	// IP, UserAgent and TraceID are request-context metadata captured
-	// alongside the action; each is the empty string when the action that
-	// produced this record had no such context (a background job, an
-	// event subscriber reacting to another module's fact).
+	// IP, UserAgent and TraceID are three request-context columns the
+	// schema declares but NO code writes today: neither collection
+	// mechanism's payload type (RecordedEvent, dbkit.WriteCapturedEvent)
+	// carries a field for any of them, so every row stores the empty
+	// string. They are reserved for a future request-context carrier --
+	// the shape pkgcore's WithActor/ActorFromContext already sets for
+	// identity -- that HTTP layers would populate and the audit write
+	// paths would read when present. Until that carrier exists, do NOT
+	// read an empty value here as information: "empty" does not mean
+	// "this record came from a background job with no request context"
+	// (the framing earlier revisions of this comment used, which dressed
+	// an always-empty column as a conditionally-empty one); it means the
+	// column has no writer at all. go/dbkit/audit/AGENTS.md's "Column
+	// inventory" section carries the standing three-question account (who
+	// fills each column, when, and what an unfillable case stores) for
+	// every column of this table, these three included. The migration
+	// files' comments were updated alongside this one in the same round,
+	// so all three say the same thing.
 	IP        string `gorm:"column:ip;size:64;not null"`
 	UserAgent string `gorm:"column:user_agent;size:500;not null"`
 	TraceID   string `gorm:"column:trace_id;size:64;not null"`

@@ -115,10 +115,33 @@ type RecordedEvent struct {
 // action was always a documentation and mapping contract, and Emit is now
 // the thing that contract gates.
 //
-// A publish failure is returned to the caller, never swallowed -- per
-// docs/internal/10-compliance-and-audit.md's rule that an audit-write
-// failure must alert and never be silently dropped, matching the automatic
-// capture plugin's own loud-failure contract.
+// A publish failure is returned to the caller, never swallowed: that is
+// Emit's half of docs/internal/10-compliance-and-audit.md's rule that an
+// audit-write failure must alert and never be silently dropped. The other
+// half is the caller's: a caller that discards Emit's returned error has
+// done the very silent drop the rule exists to prevent, and nothing inside
+// this package can detect it after the fact -- the obligation is written
+// into the contract because the contract is the only place this package
+// can hold it (the same shape as go/notification's UserAddressResolver
+// obligation sentence: "the obligation is written into the contract
+// because the contract is the only place this module can hold it"). The
+// reference app and go/authn model the recommended caller half -- a
+// failure is logged as a structured error (authn/handler.go's recordAudit
+// logs "authn audit event emit failed" with the action and error), never
+// dropped without a trace.
+//
+// This is deliberately NOT the automatic capture plugin's contract, the
+// way an earlier revision of this comment claimed: the plugin runs after
+// the write it describes has already durably committed (audit_capture.go's
+// own doc comment says exactly that, and why), so it has nothing left to
+// roll back or fail closed through and reports a structured alert instead
+// -- alert-and-continue is the plugin's whole fulfilment of the shared
+// rule, the drop half being inherent to its post-commit position. Emit's
+// position is different: the persister's write has not happened yet, so
+// Emit CAN fail closed, by returning the error -- and the caller half then
+// belongs to the caller. The division of fulfilment is recorded in
+// go/dbkit/audit/AGENTS.md's Collection section, the two mechanisms'
+// shared home.
 func Emit(ctx context.Context, bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, in Input) error {
 	if !slices.Contains(actions.Actions(), in.Action) {
 		return fmt.Errorf("%w: %q", ErrActionNotRegistered, in.Action)

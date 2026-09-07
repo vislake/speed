@@ -193,6 +193,17 @@ func WithTenantSession(ctx context.Context, db *gorm.DB, fn func(tx *gorm.DB) er
 	// The transaction above has now genuinely committed. Publish whatever
 	// this transaction's own writes buffered — never before this point,
 	// and never at all had the transaction returned a non-nil error above.
+	//
+	// This is also the collection-to-persistence crash window this
+	// function's design leaves open — a process death between the commit
+	// returning and the publishes below (and the audit persister's own
+	// inserts) landing leaves a committed business write with no audit row
+	// and no trace that one was owed. The window is shared by audit.Emit's
+	// path, cannot be closed without resurrecting the SQLITE_BUSY
+	// self-deadlock this mechanism replaced, and is recorded, with its
+	// detection story, in go/dbkit/audit/AGENTS.md's
+	// "Collection-to-persistence crash window" section — the two
+	// mechanisms' common home — not only here.
 	if auditEnabled {
 		plugin.publishBuffered(ctx, buf)
 	}
