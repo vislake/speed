@@ -51,6 +51,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { DEMO_OWNER, DEMO_READER } from './test-utils/accounts.js'
 import {
+  openSurface,
   readCurrentTenant,
   signInAs,
   switchTenant,
@@ -102,10 +103,15 @@ test.describe('the core journey', { tag: '@pending' }, () => {
     await signInAs(page, DEMO_OWNER)
 
     // Reachable at all: the journey's entrance must be in the frame's own
-    // navigation, not behind a URL only its author knows.
-    const casesEntry = page.getByRole('link', { name: UI_NAMES.navCases })
-    await expect(casesEntry, 'a practice must be able to reach its cases from the nav').toBeVisible()
-    await casesEntry.click()
+    // navigation, not behind a URL only its author knows. Reached through
+    // openSurface rather than by clicking a nav link directly, because a
+    // link is only VISIBLE on a wide screen -- below the md breakpoint
+    // AppShell collapses the navigation behind the menu button, and a
+    // dentist reaching this surface on the iPad they show patients does
+    // it through that menu. Asserting the link's visibility instead made
+    // this gate accuse the product of having no entrance on the one
+    // device the product is most often held in.
+    await openSurface(page, UI_NAMES.navCases)
 
     // One step, not two. The backend takes a case's photos as storage
     // object ids it already holds (cases.CreateCaseInput.PhotoObjectIDs),
@@ -149,7 +155,7 @@ test.describe('the core journey', { tag: '@pending' }, () => {
     const name = caseName()
 
     await signInAs(page, DEMO_OWNER)
-    await page.getByRole('link', { name: UI_NAMES.navCases }).click()
+    await openSurface(page, UI_NAMES.navCases)
     await page.getByRole('button', { name: UI_NAMES.newCase }).click()
     await page.getByRole('textbox', { name: UI_NAMES.caseNameField }).fill(name)
     const chooser = page.waitForEvent('filechooser')
@@ -169,7 +175,7 @@ test.describe('the core journey', { tag: '@pending' }, () => {
     // the way a shift change happens at a front desk.
     await signInAs(page, DEMO_READER)
     await switchTenant(page, clinic)
-    await page.getByRole('link', { name: UI_NAMES.navCases }).click()
+    await openSurface(page, UI_NAMES.navCases)
     await expect(
       page.getByText(name),
       'a colleague in the same practice cannot see the case, so the patient gets a second chart',
@@ -293,7 +299,7 @@ test.describe('the core journey', { tag: '@pending' }, () => {
  * is the point at which guessing stops.
  */
 async function openCaseWithPhoto(page: Page): Promise<void> {
-  await page.getByRole('link', { name: UI_NAMES.navCases }).click()
+  await openSurface(page, UI_NAMES.navCases)
   const firstCase = page.getByRole('listitem').first()
   await expect(
     firstCase,

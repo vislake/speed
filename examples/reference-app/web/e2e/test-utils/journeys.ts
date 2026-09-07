@@ -342,10 +342,7 @@ export async function expectOnSurface(page: Page, heading: string): Promise<void
  * Opening the drawer first is what a person does, not a workaround: on a
  * narrow screen the menu button is the navigation.
  */
-export async function openSurface(
-  page: Page,
-  name: typeof APP_TEXT.navHome | typeof APP_TEXT.navNotes | typeof APP_TEXT.navAccount,
-): Promise<void> {
+export async function openSurface(page: Page, name: string | RegExp): Promise<void> {
   const link = page.getByRole('link', { name })
   const reachable = await link.isVisible().catch(() => false)
   if (reachable) {
@@ -353,7 +350,16 @@ export async function openSurface(
     return
   }
 
-  await page.getByRole('button', { name: SHELL_TEXT.openNav }).click()
+  const menu = page.getByRole('button', { name: SHELL_TEXT.openNav })
+  if (!(await menu.isVisible().catch(() => false))) {
+    // Neither the link nor the menu that would hold it: the surface has
+    // no entrance at all. Said here rather than left to a click timeout,
+    // which reads like a slow page instead of a missing navigation.
+    throw new Error(
+      `e2e: no way to reach ${String(name)} -- the frame shows neither that nav entry nor the menu button that would hold it`,
+    )
+  }
+  await menu.click()
   await link.waitFor({ state: 'visible' })
   await link.click()
 
