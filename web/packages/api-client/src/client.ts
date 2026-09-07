@@ -39,11 +39,12 @@
  *      its refresh request is refused the refresh path at runtime the
  *      same way). Caller cancellation is never muted by the pause: an
  *      abort landing during the refresh round races the round's wait
- *      and rejects the request raw, and the round that request
- *      started settles as a failed refresh so the shared slot is
- *      freed for the 401s that follow. Refresh failure surfaces the
- *      original 401 as a distinguishable auth ApiError and is
- *      reported through the Reporter;
+ *      and rejects the request raw -- the flight itself races no
+ *      signal, so only the aborting request detaches, and the waiters
+ *      already joined on the round still get the hook's real outcome
+ *      when it settles. Refresh failure surfaces the original 401 as
+ *      a distinguishable auth ApiError and is reported through the
+ *      Reporter;
  *   4. on 429/502/503/504, network failures and timeouts: retry only
  *      idempotent methods (GET/HEAD/OPTIONS), exponential full-jitter
  *      backoff per RetryPolicy, Retry-After honoured on 429 and 503.
@@ -214,11 +215,13 @@ export interface ClientOptions {
    * ApiError. Never called more than once per request; concurrent 401s
    * share one in-flight refresh. A caller abort landing while the
    * round is in flight rejects the request with the raw AbortError on
-   * the next microtask -- the round's wait races the caller's signal
-   * like every other wait in the request loop -- and an abort by the
-   * request that started the round settles it as a failed refresh, so
-   * the single-flight slot is freed for the 401s that follow instead
-   * of staying occupied by a round whose outcome nobody waits for.
+   * the next microtask -- the round's wait races the caller's own
+   * signal like every other wait in the request loop, so each joined
+   * request is bounded by its own signal -- while the flight itself
+   * races no signal: it settles when the hook settles, whatever
+   * happened to the request that started it, so an initiator that gave
+   * up mid round never settles a possibly-successful refresh as a
+   * failure for the waiters already joined on it.
    *
    * The hook fires only for a refused request that itself presented a
    * bearer token. A 401 on a credential-less request means the
@@ -954,7 +957,7 @@ export function createClient(options: ClientOptions): RequestFn {
   const refreshOnce =
     refreshHook === undefined
       ? undefined
-      : (signal: AbortSignal | undefined): Promise<boolean> => {
+      : (): Promise<boolean> => {
           if (refreshInFlight === null) {
             refreshInFlight = (async (): Promise<boolean> => {
               try {
@@ -974,26 +977,30 @@ export function createClient(options: ClientOptions): RequestFn {
                 } finally {
                   inRefreshHookCall = false
                 }
-                // The flight is bound to the request that starts it:
-                // that request's caller abort settles the round as a
-                // failed refresh (below), so a round whose initiator
-                // gave up is not left occupying the single-flight slot
-                // -- the slot-clearing finally runs, and the next 401
-                // starts a fresh round instead of joining one whose
-                // outcome nobody is waiting for. The host hook itself
-                // is not cancellable and keeps running; its late
-                // settlement is discarded. (A host whose hook is
-                // internally single-flighted -- @speed/auth-core's
-                // session.refresh -- makes a fresh invocation on the
-                // freed slot harmless.)
-                return await raceWithAbort(hookOutcome, signal)
-              } catch {
-                // The starting request's signal aborted before the
-                // hook settled (the only rejection this race can
-                // carry). The waiting requests converge on the
-                // ordinary failed-refresh path -- a finite answer,
-                // never a hang on a round nobody started for.
-                return false
+                // The flight is shared by every request whose 401
+                // joins it -- the initiator and each waiter alike --
+                // and no signal races the flight itself: it settles
+                // when the hook settles, and its outcome is the hook's
+                // real one. Every joining request races the flight
+                // against its OWN signal at its own call site (the
+                // request loop below), so an abort detaches only the
+                // request that aborted and every waiter with a live
+                // signal is still bounded by that signal. Binding the
+                // round to the request that started it would be a
+                // conflation, not a trade-off: an initiator that gave
+                // up mid round must not settle the round as a failed
+                // refresh for the requests already joined on it -- the
+                // hook may succeed and write a fresh token into the
+                // store while the waiters were told it failed (an
+                // auth:true answer -- the host's basis for judging the
+                // session ended -- for a session the refresh just
+                // saved). The slot is freed the moment the hook
+                // settles; a 401 that arrives before then joins the
+                // in-flight round rather than firing a sibling
+                // invocation -- a second simultaneous presentation of
+                // the same refresh token, which the authn server reads
+                // as theft.
+                return await hookOutcome
               } finally {
                 refreshInFlight = null
               }
@@ -1183,17 +1190,14 @@ export function createClient(options: ClientOptions): RequestFn {
               // nothing left for it to abort: an abort landing during
               // the round has to race the refresh wait itself. The
               // await below therefore runs the same signal race the
-              // backoff sleeps run -- the caller's cancellation
+              // backoff sleeps run -- this request's cancellation
               // rejects it with the raw AbortError on the next
-              // microtask, never wrapped, never retried -- and the
-              // flight, bound to this request, settles as a failed
-              // refresh so the single-flight slot is freed for the
-              // requests that follow (see refreshOnce).
+              // microtask, never wrapped, never retried, detaching
+              // only this request: the flight itself races no signal,
+              // so the requests already joined on it still get the
+              // hook's real outcome when it settles (see refreshOnce).
               outcome.pauseTimeout()
-              const refreshedOk = await raceWithAbort(
-                refreshOnce(signal),
-                signal,
-              )
+              const refreshedOk = await raceWithAbort(refreshOnce(), signal)
               // The caller may have aborted while the refresh was in
               // flight: cancellation wins -- never send the
               // post-refresh retry, never deliver an auth error

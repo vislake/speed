@@ -1625,19 +1625,19 @@ describe('caller cancellation', () => {
     await observed
   })
 
-  it('frees the single-flight slot when the starting request aborts, so a later 401 starts a fresh refresh instead of joining the dead round', async () => {
-    // The poisoning shape: the first request's refresh never settles
-    // and its caller gives up; a second, independent request then 401s
-    // on the same client. Before the fix the first abort raced
-    // nothing, so the dead flight stayed in the slot: the second
-    // request joined it (the hook was never invoked again --
-    // refreshCalls stayed 1) and its own abort raced nothing either --
-    // both requests hung and every 401 path of that client was dead
-    // for the process lifetime. The flight is now bound to the request
-    // that started it: that request's abort settles the round as a
-    // failed refresh and the slot-clearing finally runs, so the second
-    // request starts a fresh round (the hook is invoked again) and its
-    // own abort rejects it raw.
+  it('keeps the round alive when the starting request aborts: a later 401 joins it, never a second hook invocation', async () => {
+    // The round is shared, not owned by the request that started it:
+    // that request's abort detaches only itself (its own call-site
+    // race rejects it raw), while the flight settles only when the
+    // hook settles. A later, independent 401 arriving while the round
+    // is still in flight therefore joins it -- the hook is not invoked
+    // again (a fresh invocation would present the same refresh token a
+    // second time while the first round still holds it, which the
+    // authn server reads as theft) -- and the later request's own
+    // abort rejects it raw in turn: each waiter is bounded by its own
+    // signal. (Before the fix the starting request's abort settled the
+    // whole round as a failed refresh, so the later 401 started a
+    // fresh round and invoked the hook a second time.)
     const store = createMemoryAccessTokenStore()
     store.set('stale-token')
     let refreshCalls = 0
@@ -1651,6 +1651,7 @@ describe('caller cancellation', () => {
       accessTokenStore: store,
       refreshAccessToken: () => {
         refreshCalls += 1
+        // A refresh that never settles: no host wiring will end it.
         return new Promise<boolean>(() => {})
       },
     })
@@ -1668,9 +1669,8 @@ describe('caller cancellation', () => {
       await Promise.resolve()
     }
     expect(refreshCalls).toBe(1)
-    // The first caller gives up mid-refresh. Before the fix this
-    // rejected nothing (the flight was awaited bare) and left the slot
-    // occupied by the never-settling round.
+    // The first caller gives up mid-refresh: the round is orphaned,
+    // not dead -- nothing settles it but the hook itself.
     firstController.abort()
     await expectSettled(() => firstReason !== undefined)
     expect(firstReason).toBeInstanceOf(DOMException)
@@ -1678,9 +1678,9 @@ describe('caller cancellation', () => {
       expect(firstReason.name).toBe('AbortError')
     }
     expect(isApiError(firstReason)).toBe(false)
-    // The second, independent request with its own controller: the
-    // slot must be free again -- a fresh round starts (the hook is
-    // invoked a second time), never a join onto the dead flight.
+    // The second, independent request with its own controller: its 401
+    // joins the round still in flight -- the hook is never invoked a
+    // second time -- and its own abort rejects it raw.
     const secondController = new AbortController()
     let secondReason: unknown
     const second = api<{ ok: boolean }>('/notes', {
@@ -1691,10 +1691,17 @@ describe('caller cancellation', () => {
         secondReason = caught
       },
     )
-    for (let i = 0; i < 64 && refreshCalls < 2; i += 1) {
+    for (let i = 0; i < 64 && standin.calls.length < 2; i += 1) {
       await Promise.resolve()
     }
-    expect(refreshCalls).toBe(2)
+    // Flush well past the second request's own 401 branch: by the time
+    // it decides the round's fate -- join the in-flight flight (the
+    // honest shape) or start a sibling round (the pre-fix shape, which
+    // invokes the hook again) -- it must still be the one round.
+    for (let i = 0; i < 200; i += 1) {
+      await Promise.resolve()
+    }
+    expect(refreshCalls).toBe(1)
     secondController.abort()
     await expectSettled(() => secondReason !== undefined)
     expect(secondReason).toBeInstanceOf(DOMException)
@@ -1707,6 +1714,80 @@ describe('caller cancellation', () => {
     expect(standin.calls).toHaveLength(2)
     await first
     await second
+  })
+
+  it('lets requests already joined onto the flight succeed when the initiator aborts and the refresh then succeeds', async () => {
+    // The conflation shape: the single-flight round used to be bound
+    // to the initiating request's own signal -- that request's abort
+    // settled the WHOLE round as a failed refresh (the race rejection
+    // was caught and turned into false), so a request that had already
+    // joined was told "refresh failed" -- an auth:true ApiError, the
+    // host's basis for judging the session ended -- even while the
+    // hook went on to succeed and write a fresh token into the store.
+    // The initiator's abort must detach only the initiator: the joined
+    // request is bounded by its own (live) signal, so it must receive
+    // the hook's real outcome -- a retry with the fresh token, and
+    // success.
+    const store = createMemoryAccessTokenStore()
+    store.set('stale-token')
+    let refreshCalls = 0
+    let releaseRefresh: (ok: boolean) => void = () => {}
+    const refreshGate = new Promise<boolean>((resolve) => {
+      releaseRefresh = resolve
+    })
+    const standin = scriptedStandin(
+      jsonResponse(401, { ...SESSION_EXPIRED }),
+      jsonResponse(401, { ...SESSION_EXPIRED, traceId: 'trace-2' }),
+      jsonResponse(200, { notes: ['two'] }),
+    )
+    const api = createClient({
+      baseUrl: BASE_URL,
+      fetch: standin.fetch,
+      accessTokenStore: store,
+      refreshAccessToken: () => {
+        refreshCalls += 1
+        return refreshGate
+      },
+    })
+    const initiatorController = new AbortController()
+    const initiator = expectRawAbort(
+      api<{ ok: boolean }>('/notes', {
+        signal: initiatorController.signal,
+      }),
+    )
+    // Flush until the initiator's 401 has started the refresh round.
+    for (let i = 0; i < 32 && refreshCalls === 0; i += 1) {
+      await Promise.resolve()
+    }
+    expect(refreshCalls).toBe(1)
+    // A second request 401s while the round is in flight and joins it.
+    const joiner = api<{ notes: string[] }>('/notes')
+    for (let i = 0; i < 64 && standin.calls.length < 2; i += 1) {
+      await Promise.resolve()
+    }
+    // Let the joiner's refused attempt reach the joined wait before
+    // the round's fate is decided.
+    for (let i = 0; i < 64; i += 1) {
+      await Promise.resolve()
+    }
+    // The initiator gives up mid round -- and the hook then succeeds,
+    // storing the fresh token.
+    initiatorController.abort()
+    store.set('fresh-token')
+    releaseRefresh(true)
+    await initiator
+    // The already-joined request heard nothing of the initiator's
+    // abort: its own signal never fired, so it gets the hook's real
+    // outcome and its retry with the fresh token succeeds. (Before the
+    // fix the initiator's abort settled the shared round as a failed
+    // refresh, so the joiner was told the refresh failed and this
+    // rejected with an auth:true ApiError instead.)
+    await expect(joiner).resolves.toEqual({ notes: ['two'] })
+    expect(recorded(standin, 2).headers.get('authorization')).toBe(
+      'Bearer fresh-token',
+    )
+    expect(refreshCalls).toBe(1)
+    expect(standin.calls).toHaveLength(3)
   })
 
   it('never delivers a 2xx for a caller that aborts mid-read -- even when the body never settles', { timeout: 1000 }, async () => {
