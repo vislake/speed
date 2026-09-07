@@ -191,7 +191,7 @@ func TestModule_RegisterDeclaresItsSurface(t *testing.T) {
 	for _, want := range []string{
 		ConfigKeyPasswordMinLength, ConfigKeyPasswordMaxLength,
 		ConfigKeyAccessTokenTTL, ConfigKeyRefreshTokenTTL,
-		ConfigKeySessionTTL, ConfigKeyImmediateRevocation,
+		ConfigKeySessionTTL,
 		ConfigKeyTrustedProviders, ConfigKeyOAuthStateTTL,
 		ConfigKeyGoogleClientID, ConfigKeyGoogleClientSecret,
 		ConfigKeyGitHubClientID, ConfigKeyGitHubClientSecret,

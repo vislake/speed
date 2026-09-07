@@ -60,6 +60,15 @@ const (
 	// request. Cost: one key-value read per request. Consequence: sign-out
 	// takes effect at once, which regulated deployments require.
 	//
+	// The consultation is wired by default, not by host ceremony: a
+	// Service attaches this manager to the Verifier it hands out, and
+	// Middleware consults that source unless the host passed an explicit
+	// WithRevocationChecker -- so a host that selects this mode through
+	// WithRevocationMode gets its enforcement without a second, forgettable
+	// wiring step (this default was the P1 hole: the middleware used to
+	// consult only an explicit option, and the shipped composition passed
+	// none).
+	//
 	// The list only ever holds sessions that are revoked AND not yet
 	// naturally expired, with a TTL of one access-token lifetime, so it
 	// stays proportional to the revocation rate rather than to the number

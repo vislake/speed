@@ -31,6 +31,17 @@ const (
 // its access token's natural expiry. *SessionManager implements it; the
 // interface exists so Middleware depends on the question rather than on the
 // whole session machinery.
+//
+// A revocation source is consulted on every request whose token verifies.
+// Two sources exist, and an explicit one wins: WithRevocationChecker's, or
+// -- when the host supplied none -- the source the Verifier itself carries.
+// A Service attaches its own *SessionManager to the Verifier it hands out,
+// so the default composition -- Middleware(service.Verifier()) -- consults
+// the service's session manager with no option at all, and a natural-mode
+// manager answers false without touching the store (RevocationModeNatural's
+// own doc comment). Only a Middleware built over a bare NewVerifier with no
+// WithRevocationChecker has nothing to consult, which is exactly the bare
+// primitive's shape.
 type RevocationChecker interface {
 	// IsRevoked reports whether sessionID is revoked. An error means the
 	// question could not be answered, which Middleware treats as a
@@ -68,10 +79,13 @@ type middlewareConfig struct {
 type MiddlewareOption func(*middlewareConfig)
 
 // WithRevocationChecker makes Middleware consult checker for every verified
-// token, which is what turns RevocationModeImmediate from a stored list into
-// an enforced one. Without it, revocation takes effect on the refresh path
-// only and outstanding access tokens live out their natural lifetime -- which
-// is exactly RevocationModeNatural, and is the right default.
+// token instead of the source the verifier itself carries. An explicit
+// checker is the override, not the only way in: a Service attaches its own
+// *SessionManager to the Verifier it hands out, so immediate revocation is
+// enforced in the default composition with no option at all -- this option
+// exists for a Middleware built over a bare NewVerifier, or for a host whose
+// revocation source is not its own session manager (a shared revocation
+// authority across several modules, say).
 func WithRevocationChecker(checker RevocationChecker) MiddlewareOption {
 	return func(c *middlewareConfig) {
 		if checker != nil {
@@ -122,8 +136,20 @@ func Middleware(verifier *Verifier, opts ...MiddlewareOption) func(http.Handler)
 				return
 			}
 
-			if cfg.revocation != nil {
-				revoked, err := cfg.revocation.IsRevoked(r.Context(), principal.SessionID)
+			// The revocation source: an explicit WithRevocationChecker
+			// wins; otherwise the verifier itself may carry one -- a
+			// Service attaches its own *SessionManager to the Verifier it
+			// hands out, which is what enforces RevocationModeImmediate in
+			// the default composition (no option required). A natural-mode
+			// manager answers false without touching the store; only a
+			// bare NewVerifier over no option leaves nothing to consult
+			// (RevocationChecker's own doc comment).
+			checker := cfg.revocation
+			if checker == nil {
+				checker = verifier.revocation
+			}
+			if checker != nil {
+				revoked, err := checker.IsRevoked(r.Context(), principal.SessionID)
 				if err != nil {
 					// Fail closed. The alternative -- treat an
 					// unreachable revocation list as "not

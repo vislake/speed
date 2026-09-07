@@ -363,6 +363,24 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 		return nil, err
 	}
 
+	// The revocation source every Middleware built over this service's
+	// verifier consults BY DEFAULT: the manager itself. RevocationMode
+	// immediate's own doc comment promises that the revocation list is
+	// "what Middleware consults on every authenticated request", and this
+	// attachment is what makes that promise hold in the default
+	// composition -- a host that builds authn.Middleware(service.Verifier())
+	// with no options at all gets the check, no WithRevocationChecker
+	// required. A natural-mode manager answers false without touching the
+	// store, so the attachment costs nothing under the module's own
+	// default mode. Middleware's WithRevocationChecker option replaces
+	// this source with an explicit one for hosts that want it. This was
+	// the P1 wiring hole: the checker used to be an optional
+	// MiddlewareOption that nothing in the shipped composition passed, so
+	// immediate-mode revocations were recorded on the list and never
+	// consulted -- a revoked session's unexpired access token kept working
+	// to its natural expiry.
+	verifier.revocation = manager
+
 	authCount, authDuration := registerAuthMetrics()
 
 	svc := &Service{

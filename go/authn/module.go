@@ -76,11 +76,6 @@ const (
 	ConfigKeyRefreshTokenTTL = "authn.refresh_token_ttl"
 	// ConfigKeySessionTTL bounds a session however often it is refreshed.
 	ConfigKeySessionTTL = "authn.session_ttl"
-	// ConfigKeyImmediateRevocation switches sign-out from natural expiry
-	// to the KVStore-backed revocation list Middleware consults. It is a
-	// configuration value rather than a deployment-mode branch: both modes
-	// work in both deployment modes.
-	ConfigKeyImmediateRevocation = "authn.session_revocation_immediate"
 )
 
 // FeatureFlagPasswordLogin gates password sign-in as a channel. A deployment
@@ -367,8 +362,20 @@ func WithSessionTTL(d time.Duration) Option {
 	}
 }
 
-// WithRevocationMode selects natural expiry or the immediate revocation list.
-// An unrecognised mode is ignored, leaving the default.
+// WithRevocationMode selects natural expiry or the immediate revocation
+// list. An unrecognised mode is ignored, leaving the default.
+//
+// This option is the ONE selector: immediate mode records every revoked
+// session on the shared key-value store and the middleware every host builds
+// over Service.Verifier consults that list by default, so selecting
+// RevocationModeImmediate genuinely enforces sign-out on outstanding access
+// tokens -- no separate middleware option to forget. There is deliberately
+// no dynamic-configuration twin of this option (the schema used to declare
+// one, authn.session_revocation_immediate, and nothing ever read it; it is
+// deleted because a value read at request time could not deliver what its
+// description promised -- the mode is fixed at SessionManager construction
+// and gates which revocations are even recorded -- see AGENTS.md's
+// revocation section).
 func WithRevocationMode(mode RevocationMode) Option {
 	return func(o *options) {
 		if mode == RevocationModeNatural || mode == RevocationModeImmediate {
@@ -911,13 +918,6 @@ func configItems() []pkgcore.ConfigItem {
 			Max:         365 * 24 * time.Hour,
 			Group:       moduleName,
 			Description: "Maximum lifetime of a session, however often it is refreshed.",
-		},
-		{
-			Key:         ConfigKeyImmediateRevocation,
-			Type:        "bool",
-			Default:     false,
-			Group:       moduleName,
-			Description: "Enforces session revocation on every request through the shared key-value store, instead of waiting for access tokens to expire.",
 		},
 		{
 			Key:         ConfigKeyTrustedProviders,

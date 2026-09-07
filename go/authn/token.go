@@ -367,6 +367,20 @@ type Verifier struct {
 	purpose   string
 	cfg       tokenConfig
 	parser    *jwt.Parser
+
+	// revocation is the session-revocation question asked about a token
+	// AFTER it has verified: whether its session was signed out ahead of
+	// natural expiry. A Service attaches its own *SessionManager here when
+	// it builds the Verifier it hands out (see Service.Verifier), which is
+	// what makes immediate revocation enforced in the default composition
+	// -- Middleware consults this source unless the host supplied an
+	// explicit WithRevocationChecker. It is nil on a bare NewVerifier, and
+	// it is set once at Service construction and never mutated afterwards,
+	// so Verifier stays safe for concurrent use. Consulted by Middleware,
+	// never by Verify itself: a session-liveness answer needs an
+	// I/O-capable store, and token verification stays pure (Verify's own
+	// doc comment).
+	revocation RevocationChecker
 }
 
 // NewVerifier returns a Verifier for tokens signed under

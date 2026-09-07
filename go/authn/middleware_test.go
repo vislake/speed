@@ -470,3 +470,103 @@ func TestPrincipalFromContext_IgnoresAnEmptyPrincipal(t *testing.T) {
 		t.Error("PrincipalFromContext() reported a zero-value Principal as authenticated")
 	}
 }
+
+// TestMiddleware_ServiceVerifier_ImmediateMode_RefusesTheRevokedSessionsAccessToken
+// is the P1 regression for the revocation wiring hole this round closes: the
+// service wires its own *SessionManager as the revocation source of the
+// Verifier it hands out, and Middleware consults that source by default, so
+// the composition the shipped apps use -- Middleware(service.Verifier())
+// with not a single MiddlewareOption -- refuses the next request carrying
+// the same unexpired access token after a logout. Before the fix the check
+// never ran (cfg.revocation stayed nil unless the host remembered
+// WithRevocationChecker), so the revoked session's access token kept working
+// for its whole natural lifetime.
+func TestMiddleware_ServiceVerifier_ImmediateMode_RefusesTheRevokedSessionsAccessToken(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t, WithRevocationMode(RevocationModeImmediate))
+	f.registerUser(t, "revoke-immediate@example.com", testTenantA)
+
+	pair, err := f.svc.Login(t.Context(), LoginInput{
+		Identifier: "revoke-immediate@example.com", Password: testPassword, IP: "203.0.113.9",
+	})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	request := func() *httptest.ResponseRecorder {
+		var out observed
+		handler := Middleware(f.svc.Verifier())(observingHandler(&out))
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/notes", nil)
+		req.Header.Set(authorizationHeader, "Bearer "+pair.AccessToken)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if !out.called && rec.Code == http.StatusOK {
+			t.Error("the handler did not run")
+		}
+		return rec
+	}
+
+	// The token works while its session is alive...
+	if rec := request(); rec.Code != http.StatusOK {
+		t.Fatalf("request before the logout status = %d, want %d (body %q)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// ...a logout revokes the session (markRevoked records it on the
+	// immediate-revocation list)...
+	if err := f.svc.Logout(t.Context(), pair.Principal.SessionID); err != nil {
+		t.Fatalf("Logout() error = %v", err)
+	}
+
+	// ...and the SAME unexpired access token is refused on its very next
+	// request -- refused now, not at its natural expiry. This is the whole
+	// point of RevocationModeImmediate.
+	rec := request()
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("request after the logout status = %d, want %d (body %q)", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+	if got := decodeErrorBody(t, rec).Code; got != ErrSessionRevoked.Code {
+		t.Errorf("error code = %q, want %q", got, ErrSessionRevoked.Code)
+	}
+}
+
+// TestMiddleware_ServiceVerifier_NaturalMode_LeavesTheAccessTokenToItsNaturalExpiry
+// pins the other half of the default: RevocationModeNatural stays the
+// module's default, and under it a logout deliberately leaves the unexpired
+// access token working -- natural expiry is that mode's documented cost
+// tradeoff, not a hole. The default composition consults the service's
+// session manager either way; the mode is what decides whether the check
+// costs anything and what a revoked session means. If the default mode ever
+// flipped to immediate, or SessionManager.IsRevoked stopped being
+// mode-gated, this test fails.
+func TestMiddleware_ServiceVerifier_NaturalMode_LeavesTheAccessTokenToItsNaturalExpiry(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	f.registerUser(t, "revoke-natural@example.com", testTenantA)
+
+	pair, err := f.svc.Login(t.Context(), LoginInput{
+		Identifier: "revoke-natural@example.com", Password: testPassword, IP: "203.0.113.9",
+	})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	if err := f.svc.Logout(t.Context(), pair.Principal.SessionID); err != nil {
+		t.Fatalf("Logout() error = %v", err)
+	}
+
+	var out observed
+	handler := Middleware(f.svc.Verifier())(observingHandler(&out))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/notes", nil)
+	req.Header.Set(authorizationHeader, "Bearer "+pair.AccessToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request after the logout status = %d, want %d (body %q)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !out.called {
+		t.Error("the handler did not run")
+	}
+}
