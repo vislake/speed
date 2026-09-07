@@ -48,7 +48,7 @@ import {
   TENANT_NAMES,
   expectOutsideDemoOrganizations,
   expectSignedIn,
-  readCurrentTenant,
+  readTenantOptions,
   submitPasswordSignIn,
   visitSignIn,
 } from './test-utils/journeys.js'
@@ -106,9 +106,27 @@ test('an invited colleague accepts and can then sign in to that organization', a
   await acceptInvitationAsFreshUser(request, inviteeUserId, token)
 
   // The step that decides whether the product works: the invitee signs in
-  // through the browser and lands in an organization.
+  // through the browser and can now work in the organization that
+  // invited them.
+  //
+  // Asserted on the clinics the switcher OFFERS, not on the one the
+  // frame opened. This assertion used to read
+  // `TENANT_NAMES.toContain(await readCurrentTenant(page))` -- the
+  // invitee lands in a demo practice -- which was true only while an
+  // invitee had exactly one tenant. Self-service registration now gives
+  // every registrant a clinic of their own, so an invitee has two and
+  // the one they land in is whichever the membership answer returned
+  // first, an order this suite has documented as not fixed. The gate
+  // went red on all three engines the moment that landed, naming a
+  // clinic called "Workspace" -- the invitee's own -- which is not a
+  // product defect at all: the invitation worked, and the assertion was
+  // about ordering.
   await visitSignIn(page)
   await submitPasswordSignIn(page, invitee, INVITEE_PASSWORD)
   await expectSignedIn(page)
-  expect(TENANT_NAMES).toContain(await readCurrentTenant(page))
+  const clinics = await readTenantOptions(page)
+  expect(
+    clinics.filter((clinic) => (TENANT_NAMES as readonly string[]).includes(clinic)),
+    `after accepting, the invitee cannot work in the organization that invited them -- their clinics are ${clinics.join(' , ')}`,
+  ).not.toHaveLength(0)
 })

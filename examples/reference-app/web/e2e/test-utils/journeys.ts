@@ -259,6 +259,29 @@ export async function expectOutsideDemoOrganizations(page: Page): Promise<void> 
 }
 
 /**
+ * The clinics this person can work in, read from the switcher's own menu.
+ *
+ * The list, not the landing. Which tenant a sign-in with no tenant named
+ * lands in is NOT fixed -- authn takes the first the host's membership
+ * answer returns, and that order is not guaranteed -- so an assertion
+ * about where someone landed is an assertion about ordering. Since
+ * self-service registration gives every registrant a clinic of their
+ * own, anyone who was also invited somewhere has two, and "did the
+ * invitation work" cannot be answered by looking at which one the frame
+ * opened on.
+ *
+ * Leaves the menu closed, so a caller can keep driving the page.
+ */
+export async function readTenantOptions(page: Page): Promise<string[]> {
+  const current = await readTenantLabel(page)
+  await page.getByRole('button', { name: current }).click()
+  const options = await page.getByRole('menuitem').allTextContents()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('menuitem')).toHaveCount(0)
+  return options.map((option) => option.replace(/\s+/g, ' ').trim()).filter((o) => o !== '')
+}
+
+/**
  * Switches the frame to another tenant through the header's switcher
  * (@speed/tenancy-ui's TenantSwitcher, which renders a MUI Menu -- its
  * entries carry the menuitem role, not option).
