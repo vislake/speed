@@ -5,15 +5,16 @@
 // same version -- the lockstep plan releases them all together, so a project
 // either moves every speed module or none. `upgrade` performs that
 // all-or-nothing rewrite on the project's go.mod and nothing else:
-// third-party requires, replace directives, comments and formatting are
-// left exactly as the Go toolchain maintains them.
+// third-party requires, replace and exclude directives, comments and
+// formatting are left exactly as the Go toolchain maintains them.
 //
 // The rewrite is a structured edit through golang.org/x/mod/modfile, the Go
 // team's own parser and printer for go.mod files -- this module's single
 // third-party dependency, justified here -- rather than a text substitution
-// over raw bytes. A go.mod is full of places a version string resembles but
-// must not touch (third-party require lines, replace blocks, comments), and
-// a hand-rolled text rewrite would corrupt a file's formatting and comments
+// over raw bytes. A go.mod is full of places a version string resembles
+// but must not touch (third-party require lines, replace and exclude
+// blocks, comments), and a hand-rolled text rewrite would corrupt a file's
+// formatting and comments
 // the moment the consumer's go.mod had been touched by go mod tidy or any
 // other Go tool. Parse/rewrite/Format round-trips every line the toolchain
 // itself writes; the only bytes that differ afterwards are the version
@@ -21,12 +22,15 @@
 //
 // The rewrite is validated offline before anything is written: the result
 // parses, every speed require carries the target version, the replace
-// directives are exactly the input's, and no replace directive pins a speed
-// module to a module version other than the target -- a module-to-module
-// replace of a speed module wins over its require line at build time, so a
-// stale pin would silently build the very pre-upgrade version the rewrite
-// just claimed to remove (local-directory replaces -- the transition-state
-// and local-checkout shape -- carry no version and are never pinned, so they
+// directives are exactly the input's, and neither of the two directives
+// that can defeat a require rewrite -- replace and exclude -- stands
+// against the target: a module-to-module replace of a speed module wins
+// over its require line at build time, so a stale pin would silently build
+// the very pre-upgrade version the rewrite just claimed to remove, and an
+// exclude of a speed module at the target version makes the go command
+// refuse that version, so the module resolves to some other version or the
+// build fails (local-directory replaces -- the transition-state and
+// local-checkout shape -- carry no version and are never pinned, so they
 // are untouched by this rule). Nothing here contacts a module proxy or a
 // registry -- until M4's first release nothing is published, so the target
 // version is a required --version argument, never discovered -- and the
@@ -67,12 +71,15 @@ const usage = `Usage: saasctl upgrade [flags] [go.mod]
 Upgrade a speed consumer project to a new lockstep release: rewrite every
 require of a github.com/vislake/speed/go/* module in the project's go.mod
 to --version, and leave everything else -- third-party requires, replace
-directives, comments, formatting -- untouched. A go.mod whose replace
-directives pin a speed module to a module version other than --version is
-refused, pin or no pin on the require lines: the replace wins at build
-time, so upgrading over it would report a clean lockstep move of a project
-that still builds the old module. The go.mod argument names the project's
-go.mod file, defaulting to ./go.mod.
+and exclude directives, comments, formatting -- untouched. A go.mod whose
+replace or exclude directives contradict --version is refused, pin or no
+pin on the require lines: a replace that pins a speed module to a module
+version other than --version wins over its require line at build time, and
+an exclude of a speed module at --version itself makes the go command
+refuse that version, so the module resolves elsewhere or the build fails.
+Upgrading over either would report a clean lockstep move of a project that
+does not actually build the lockstep version. The go.mod argument names
+the project's go.mod file, defaulting to ./go.mod.
 
 Until the first release (M4) nothing is published, so the target version is
 never discovered: it is always the required --version flag, in the
@@ -150,16 +157,18 @@ func reportError(stderr io.Writer, err error) int {
 // release-version form. It returns the number of require lines whose
 // version changed (0 when the file already carries the target everywhere),
 // and the byte-identical input when nothing changed. It never touches
-// third-party requires, replace directives, comments or formatting -- the
-// output differs from the input only in the version tokens of speed module
-// requires -- and every changed result passes the offline self-check before
-// it is returned.
+// third-party requires, replace and exclude directives, comments or
+// formatting -- the output differs from the input only in the version
+// tokens of speed module requires -- and every changed result passes the
+// offline self-check before it is returned.
 //
-// A go.mod whose replace directives pin a speed module to a module version
-// other than target is refused (see selfCheck), whether or not the require
-// lines themselves changed: such a replace wins over its require line at
-// build time, so a clean upgrade report would be a lie about what the
-// project would actually build.
+// A go.mod whose replace or exclude directives defeat the rewritten
+// requires is refused (see selfCheck), whether or not the require lines
+// themselves changed: a module-to-module replace of a speed module wins
+// over its require line at build time, and an exclude of a speed module at
+// target itself makes the go command refuse the version every rewritten
+// require line claims -- either way a clean upgrade report would be a lie
+// about what the project would actually build.
 //
 // The module set is derived from the data itself, never hardcoded. An
 // error is returned when data does not parse, when no speed module is
@@ -175,7 +184,7 @@ func Rewrite(data []byte, target string) ([]byte, int, error) {
 	if !hasSpeedRequire(f) {
 		return nil, 0, errors.New("no github.com/vislake/speed/go/* requires found; nothing to rewrite")
 	}
-	if err = checkReplacePins(f, target); err != nil {
+	if err = checkVersionDefeatingDirectives(f, target); err != nil {
 		return nil, 0, err
 	}
 	replaces := replaceKeys(f)
@@ -321,10 +330,11 @@ func replaceKeys(f *modfile.File) []replaceKey {
 // selfCheck runs the offline structural checks the upgrade contract
 // promises before a rewritten go.mod is written anywhere: every speed
 // require carries exactly the target version -- a non-lockstep go.mod is
-// the one broken state this tool must never produce -- and the replace
-// directives are the input's own. It is callable with hand-crafted files
-// (the tests exercise it with a mixed-version go.mod the rewrite itself
-// could never produce).
+// the one broken state this tool must never produce -- no replace or
+// exclude directive defeats that claim (checkVersionDefeatingDirectives),
+// and the replace directives are the input's own. It is callable with
+// hand-crafted files (the tests exercise it with a mixed-version go.mod
+// the rewrite itself could never produce).
 func selfCheck(f *modfile.File, target string, want []replaceKey) error {
 	for _, req := range f.Require {
 		if !strings.HasPrefix(req.Mod.Path, modulePrefix) {
@@ -334,7 +344,7 @@ func selfCheck(f *modfile.File, target string, want []replaceKey) error {
 			return fmt.Errorf("self-check failed: %s is required at %s, not the lockstep version %s", req.Mod.Path, req.Mod.Version, target)
 		}
 	}
-	if err := checkReplacePins(f, target); err != nil {
+	if err := checkVersionDefeatingDirectives(f, target); err != nil {
 		return err
 	}
 	if got := replaceKeys(f); !slices.Equal(got, want) {
@@ -343,22 +353,43 @@ func selfCheck(f *modfile.File, target string, want []replaceKey) error {
 	return nil
 }
 
-// checkReplacePins refuses a go.mod whose replace directives pin a speed
-// module to a module version other than target. A module-to-module replace
-// -- `replace github.com/vislake/speed/go/authn => <module> <version>` --
-// takes precedence over the require line at build time: go resolves the
-// module to whatever the replace names, so a require rewritten to target
-// while a replace still pins the module at an older version builds the old
-// module. An upgrade that reported clean over such a file would be a lie
-// about the lockstep version the project actually builds, so the refusal
-// names the pin and the goal version. The check is deliberately scoped to
-// the replace TARGET being a speed module at a concrete version: a
-// directory replace (the transition-state and local-checkout shape, whose
-// right-hand side is a path and carries no version) is the tool's own
-// sanctioned pre-release development form and is never pinned to a version,
-// and a replace of a speed module onto a NON-speed module is a genuine fork
-// the tool cannot version-judge -- both pass.
-func checkReplacePins(f *modfile.File, target string) error {
+// checkVersionDefeatingDirectives refuses a go.mod whose replace or exclude
+// directives would defeat the version claim of a rewrite to target. Replace
+// and exclude are the complete set of go.mod directives that can make what
+// a project actually builds disagree with its require lines, and the rule
+// and its whole instance list are pinned together here -- a future third
+// directive with the same power must be added to this comment and to a loop
+// below at the same time. Each instance defeats the requires in its own
+// way:
+//
+//   - replace: a module-to-module replace -- `replace
+//     github.com/vislake/speed/go/authn =>
+//     github.com/vislake/speed/go/authn v0.1.0` -- takes precedence over
+//     the require line at build time: go resolves the module to whatever
+//     the replace names, so a require rewritten to target while a replace
+//     still pins the module at an older version builds the old module. The
+//     refusal names the pin and the goal version. The check is deliberately
+//     scoped to the replace TARGET being a speed module at a concrete
+//     version: a directory replace (the transition-state and local-checkout
+//     shape, whose right-hand side is a path and carries no version) is the
+//     tool's own sanctioned pre-release development form and is never
+//     pinned to a version, and a replace of a speed module onto a NON-speed
+//     module is a genuine fork the tool cannot version-judge -- both pass.
+//
+//   - exclude: an exclude of a speed module at target itself -- `exclude
+//     github.com/vislake/speed/go/authn v1.0.0` -- tells the go command
+//     that version is unusable, so a require line the rewrite just set to
+//     target cannot be honored: the module resolves to some other version
+//     when the module graph offers one, and the build fails when it does
+//     not. Either way the project does not build the lockstep version every
+//     require now claims. An exclude of a speed module at any other version
+//     forbids nothing the rewritten requires ask for, and an exclude of a
+//     NON-speed module is never the rewrite's business -- both pass.
+//
+// An upgrade that reported clean over either defeating shape would be a lie
+// about the version the project actually builds, so each refusal names its
+// directive and the pinned version.
+func checkVersionDefeatingDirectives(f *modfile.File, target string) error {
 	for _, r := range f.Replace {
 		if !strings.HasPrefix(r.Old.Path, modulePrefix) {
 			continue
@@ -371,6 +402,14 @@ func checkReplacePins(f *modfile.File, target string) error {
 		}
 		if r.New.Version != target {
 			return fmt.Errorf("self-check failed: replace directive pins %s to %s at %s, not the lockstep version %s -- remove or update the replace before upgrading", r.Old.Path, r.New.Path, r.New.Version, target)
+		}
+	}
+	for _, e := range f.Exclude {
+		if !strings.HasPrefix(e.Mod.Path, modulePrefix) {
+			continue
+		}
+		if e.Mod.Version == target {
+			return fmt.Errorf("self-check failed: exclude directive rules out %s at %s, the lockstep version -- remove or update the exclude before upgrading", e.Mod.Path, e.Mod.Version)
 		}
 	}
 	return nil

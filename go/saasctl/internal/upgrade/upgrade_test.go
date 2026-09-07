@@ -411,6 +411,123 @@ func TestRunRefusesAStaleSpeedModuleReplacePinAndLeavesTheFileUntouched(t *testi
 	}
 }
 
+// TestSelfCheckDetectsSpeedModuleExcludeAtGoalVersion is the P2 regression
+// for the version-defeating-directives check: an exclude directive naming a
+// speed module at the goal version itself survives the rewrite (excludes are
+// left untouched by contract) and defeats every require line the rewrite
+// claims: the go command never selects an excluded version, so the module
+// resolves to some other version when the module graph offers one and the
+// build fails when it does not -- either way the project does not build the
+// lockstep version the requires now all name. A self-check that passed over
+// such a file would report a clean lockstep upgrade of a project that cannot
+// build the version it claims, so it must refuse, naming the exclude and the
+// version.
+func TestSelfCheckDetectsSpeedModuleExcludeAtGoalVersion(t *testing.T) {
+	data := []byte(`module example.com/app
+
+go 1.25.0
+
+require github.com/vislake/speed/go/authn v0.2.0
+
+exclude github.com/vislake/speed/go/authn v0.2.0
+`)
+	f, err := modfile.Parse("go.mod", data, nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	err = selfCheck(f, "v0.2.0", replaceKeys(f))
+	if err == nil {
+		t.Fatal("selfCheck passed a go.mod whose exclude rules out the goal version of a speed module, want refusal")
+	}
+	for _, want := range []string{
+		"exclude",
+		"github.com/vislake/speed/go/authn",
+		"v0.2.0",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("selfCheck error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// TestSelfCheckAcceptsBenignExcludes pins the two exclude shapes the refusal
+// must NOT catch: an exclude of a NON-speed module at the goal version
+// forbids nothing the rewrite claims (third-party modules are never
+// rewritten to the lockstep version), and an exclude of a speed module at
+// any other version forbids a version no require line names after the
+// rewrite -- the go command can still select the goal version for that
+// module, which is all the rewritten requires ask.
+func TestSelfCheckAcceptsBenignExcludes(t *testing.T) {
+	data := []byte(`module example.com/app
+
+go 1.25.0
+
+require github.com/vislake/speed/go/authn v0.2.0
+
+exclude github.com/example/third-party v0.2.0
+
+exclude github.com/vislake/speed/go/authn v0.1.0
+`)
+	f, err := modfile.Parse("go.mod", data, nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := selfCheck(f, "v0.2.0", replaceKeys(f)); err != nil {
+		t.Errorf("selfCheck refused harmless excludes: %v", err)
+	}
+}
+
+// TestRewriteRefusesASpeedModuleExcludeAtTheGoalVersion drives the whole P2
+// scenario at the Rewrite level: requires at v0.1.0 plus an exclude ruling
+// out authn at v0.2.0 -- the very version the rewrite targets -- exactly the
+// consumer shape that produced the finding (a released version found broken
+// and excluded, the lockstep target later landing on it). Before the fix the
+// rewrite ignored exclude directives entirely: it rewrote the requires to
+// the goal version, passed the self-check (only the replaces were compared)
+// and reported clean over a go.mod the go command cannot build at the
+// claimed version; the refusal must now name the exclude and change nothing.
+func TestRewriteRefusesASpeedModuleExcludeAtTheGoalVersion(t *testing.T) {
+	orig := readFixture(t, "pinned_exclude.go.mod")
+	out, changed, err := Rewrite(orig, "v0.2.0")
+	if err == nil {
+		t.Fatalf("Rewrite succeeded (changed=%d) over an exclude ruling out the goal version of a speed module, want refusal", changed)
+	}
+	if changed != 0 || out != nil {
+		t.Errorf("Rewrite returned changed=%d out=%q alongside its error", changed, out)
+	}
+	for _, want := range []string{"exclude", "v0.2.0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// TestRunRefusesASpeedModuleExcludeAtTheGoalVersionAndLeavesTheFileUntouched
+// drives the same scenario through the command entry point: exit code 1,
+// the exclude named on stderr, and the go.mod on disk byte-for-byte
+// unchanged.
+func TestRunRefusesASpeedModuleExcludeAtTheGoalVersionAndLeavesTheFileUntouched(t *testing.T) {
+	orig := readFixture(t, "pinned_exclude.go.mod")
+	path := writeTempFile(t, "go.mod", orig)
+	code, stdout, stderr := runUpgrade("--version", "v0.2.0", path)
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "saasctl upgrade:") || !strings.Contains(stderr, "exclude") || !strings.Contains(stderr, "v0.2.0") {
+		t.Errorf("stderr %q does not report the refused exclude", stderr)
+	}
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if !bytes.Equal(onDisk, orig) {
+		t.Errorf("refused run modified the file on disk")
+	}
+}
+
 // equalReplaceKeys compares two sorted replace-key slices.
 func equalReplaceKeys(a, b []replaceKey) bool {
 	if len(a) != len(b) {
