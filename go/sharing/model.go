@@ -310,7 +310,33 @@ const (
 // embedded base to widen, and its own migrations add rejecting triggers as
 // a second backstop -- because audit rows are platform evidence a
 // compliance process relies on, while an access log is tenant data whose
-// append-only property matters but is not evidence. This table carries no
+// append-only property matters but is not evidence.
+//
+// The stronger form is also the wrong form HERE, for a second, decisive
+// reason: what AuditEvent's trigger pair protects is undeletability, and
+// audit_events must be undeletable while this table must not be.
+// audit_events is platform data whose erasure paths are closed by design
+// -- no Update or Delete method, a Repository[T] that cannot even be
+// instantiated against it (HardDelete, the compliance-erasure path, needs
+// TenantScoped, which AuditEvent deliberately does not implement), and
+// the rejecting triggers as the database-level backstop -- it is the
+// durable record a compliance process reads but never erases.
+// sharing_access_log, by contrast, is tenant data that a compliance
+// regime must be able to delete: retention sweeps and right-to-erasure
+// reach this table through the module's own retention participant, whose
+// callbacks run dbkit.Repository[T].HardDelete (the contract
+// pkgcore.RetentionParticipant's own doc comment describes), and
+// AccessLogEntry's TenantScoped shape is exactly what makes that path
+// instantiable. A DELETE-rejecting trigger here would block precisely
+// that path. No conflict exists today only because this module registers
+// no retention participant of its own (nothing in go/sharing calls
+// Registry.Retention.Add); the moment the direction that every
+// tenant-data module registers one lands, a trigger would collide with
+// the participant's own HardDelete. The trigger pair belongs on the one
+// table that must outlive every erasure regime, not on a table an erasure
+// regime must be able to reach.
+//
+// This table carries no
 // such backstop: nothing in sharing_access_log's migrations rejects an
 // UPDATE or DELETE, which is precisely why the convention this comment
 // states is the whole of its immutability.
