@@ -30,14 +30,58 @@ import (
 // so a host with many tenants schedules one task per tenant.
 const taskTypePoll = "billing.poll_pending_payments"
 
-// pollIdempotencyKey derives the jobs idempotency key of a tenant's poll
-// task from the tenant id, per the rule that an idempotency key derives
-// from the business operation, never random -- the identical shape
-// go/storage's expirySweepIdempotencyKey uses for its own per-tenant sweep:
-// two enqueues for the same tenant's poll (a scheduler with two replicas, a
-// manual re-run) collapse into one job.
-func pollIdempotencyKey(tenant pkgcore.TenantID) string {
-	return "billing.poll:" + string(tenant)
+// pollIdempotencyWindowSize is the period one poll idempotency key
+// covers, mirroring go/storage's expirySweepWindowSize and go/compliance's
+// retentionSweepWindowSize exactly: a poll is enqueued under the key of
+// the pollIdempotencyWindowSize window (pollWindowStart) its enqueue falls
+// in, so the same-window duplicates the original key existed to collapse
+// -- a scheduler with two replicas, a manual re-run -- still merge into
+// one job, while an enqueue in a later window becomes a NEW job and the
+// poll runs again. The window is what makes the poll periodic at all:
+// jobs' idempotency is unconditional for one key on StandaloneQueue (a
+// resolved key is held forever), so a tenant-only key would give each
+// tenant exactly one poll task per database file -- the pre-window
+// design's recorded residual -- and, worse, a poll job that dead-letters
+// would poison its tenant forever, since every later enqueue would keep
+// returning the dead job's id. A dead-lettered job now poisons only its
+// own window; the next window's enqueue is a fresh key and runs. The
+// window is chosen equal to DefaultPollStuckAfter (15 minutes), the
+// poll's own detection granularity: a poll cadence finer than the stuck
+// threshold has nothing extra to detect (no row is poll-eligible until it
+// has sat Pending for StuckAfter), and the window bounds a stuck
+// payment's unpolled time to at most one StuckAfter after it becomes
+// stuck -- the fallback keeps detecting newly-stuck payments on the same
+// scale its own threshold names, which an hour-scale window (the
+// day-scale sweeps' choice) would soften to hour-granularity detection.
+const pollIdempotencyWindowSize = DefaultPollStuckAfter
+
+// pollWindowStart is the poll window the enqueue at now belongs to -- the
+// absolute boundary now.Truncate(pollIdempotencyWindowSize) lands in, the
+// twin of storage's expirySweepWindowStart. Two replicas enqueuing within
+// the same window share one key (and one job); a tick in a later window
+// gets its own. Truncation is on the absolute clock, never a
+// timezone-local calendar cut, so every replica agrees on the boundary
+// regardless of its own location.
+func pollWindowStart(now time.Time) time.Time {
+	return now.Truncate(pollIdempotencyWindowSize)
+}
+
+// pollIdempotencyKey derives the jobs idempotency key of one poll window
+// for a tenant, per the rule that an idempotency key derives from the
+// business operation, never random -- the identical shape go/storage's
+// expirySweepIdempotencyKey uses for its own per-tenant sweep: the
+// operation one key names is "the poll of windowStart", not "some poll or
+// other" -- a periodic task's identity inherently includes WHICH period
+// it is for. windowStart is the pollIdempotencyWindowSize window start
+// the enqueue belongs to (pollWindowStart). Two enqueues for the same
+// tenant's poll inside one window (a scheduler with two replicas, a
+// manual re-run) collapse into one job; a dead-lettered job poisons only
+// its own window; and an enqueue in a later window resolves a fresh key
+// and the poll runs again -- a stuck PaymentEvent is actively polled as
+// long as a host keeps scheduling EnqueuePoll, instead of once per tenant
+// lifetime.
+func pollIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) string {
+	return "billing.poll:" + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
 }
 
 // DefaultPollStuckAfter is how long a PaymentEvent may sit at
@@ -86,6 +130,13 @@ type PollingService struct {
 	gateways map[string]PaymentGateway
 	queue    jobs.Queue
 
+	// now is the clock both Poll and EnqueuePoll read: Poll's own stuck
+	// cutoff (listPending's now.Add(-stuckAfter)) and EnqueuePoll's window
+	// placement (pollWindowStart). It is a field, not a time.Now() call at
+	// each site, so both the poll cutoff and the window an enqueue lands
+	// under are deterministic in tests -- the same clock-seam pattern
+	// go/storage's expiry sweep uses -- while defaulting to the real clock
+	// for every production call.
 	now        func() time.Time
 	stuckAfter time.Duration
 	batchLimit int
@@ -179,8 +230,17 @@ func (s *PollingService) Poll(ctx context.Context) error {
 // EnqueuePoll enqueues the poll task for the tenant ctx carries -- the
 // host-facing schedule point, matching go/storage's EnqueueExpirySweep and
 // go/pki's EnqueueExpiryScan: a host with workers runs this on its own
-// timer per tenant, and the task's per-tenant idempotency key collapses
-// concurrent enqueues into one job.
+// timer per tenant, relying on the task's window-scoped idempotency key
+// (pollIdempotencyKey) to collapse the enqueues of one
+// pollIdempotencyWindowSize window into one job. An enqueue whose clock
+// has moved into a later window (pollWindowStart) is a new job and runs
+// again -- this is what makes the poll periodic on queues whose
+// idempotency is unconditional (StandaloneQueue holds a resolved key
+// forever, so a tenant-only key would poll a tenant exactly once per
+// database file, and a dead-lettered poll would silence its tenant's
+// later enqueues entirely), and what keeps one dead-lettered poll window
+// from poisoning its tenant's later windows; see pollIdempotencyKey's doc
+// comment for the full window semantics.
 //
 // ctx must carry a tenant. With no queue wired (nil -- Module constructed
 // without WithQueue), this fails with a plain error: polling is optional
@@ -197,7 +257,7 @@ func (s *PollingService) EnqueuePoll(ctx context.Context) error {
 	_, err = s.queue.Enqueue(ctx, jobs.Task{
 		Type:           taskTypePoll,
 		TenantID:       tenant,
-		IdempotencyKey: pollIdempotencyKey(tenant),
+		IdempotencyKey: pollIdempotencyKey(tenant, pollWindowStart(s.now())),
 	})
 	return err
 }

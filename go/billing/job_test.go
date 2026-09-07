@@ -266,11 +266,17 @@ func TestPollingService_EnqueuePoll_NoTenant(t *testing.T) {
 	}
 }
 
-func TestPollingService_EnqueuePoll_EnqueuesWithPerTenantIdempotencyKey(t *testing.T) {
+func TestPollingService_EnqueuePoll_EnqueuesWithWindowScopedIdempotencyKey(t *testing.T) {
 	events := NewPaymentEventRepository(newTestDB(t))
 	q := &fakeQueue{}
 	svc := newPollingService(events, nil, q)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	// Pin the service's clock so the window the enqueue lands under is
+	// deterministic (poll_window_test.go covers the window semantics
+	// against a real queue; this test pins the key's shape).
+	enqueuedAt := time.Date(2026, 9, 7, 10, 15, 0, 0, time.UTC)
+	svc.now = func() time.Time { return enqueuedAt }
 
 	if err := svc.EnqueuePoll(ctx); err != nil {
 		t.Fatalf("EnqueuePoll: %v", err)
@@ -285,8 +291,9 @@ func TestPollingService_EnqueuePoll_EnqueuesWithPerTenantIdempotencyKey(t *testi
 	if task.TenantID != "tenant-a" {
 		t.Errorf("TenantID = %q, want tenant-a", task.TenantID)
 	}
-	if task.IdempotencyKey != pollIdempotencyKey("tenant-a") {
-		t.Errorf("IdempotencyKey = %q, want %q", task.IdempotencyKey, pollIdempotencyKey("tenant-a"))
+	want := pollIdempotencyKey("tenant-a", pollWindowStart(enqueuedAt))
+	if task.IdempotencyKey != want {
+		t.Errorf("IdempotencyKey = %q, want %q (the key must name the enqueue's own poll window)", task.IdempotencyKey, want)
 	}
 }
 
