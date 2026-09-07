@@ -87,6 +87,56 @@
       "noPhotos": "这份病例还没有照片。",
       "photoAlt": "患者照片 {{index}}"
     },
+    "sim": {
+      "title": "微笑模拟",
+      "styleGroup": "笑容风格",
+      "shadeGroup": "牙齿色泽",
+      "strengthLabel": "强度",
+      "style": {
+        "subtle": "含蓄",
+        "natural": "自然",
+        "bright": "灿烂"
+      },
+      "shade": {
+        "natural": "自然",
+        "white": "亮白",
+        "ultraWhite": "极白"
+      },
+      "strengthPercent": "强度 {{value}}%",
+      "simulate": "模拟微笑",
+      "status": {
+        "starting": "正在启动微笑模拟…",
+        "pending": "微笑模拟已排队，等待开始…",
+        "running": "正在生成微笑模拟…",
+        "retrying": "生成遇到问题，正在自动重试…",
+        "succeeded": "已生成",
+        "deadLetter": "这次生成失败，无法重试。",
+        "cancelled": "这次生成已取消。"
+      },
+      "compareLabel": "前后对比",
+      "resultAlt": "模拟后的微笑",
+      "attemptSummary": "{{style}}笑容 · {{shade}}牙齿 · {{strength}}",
+      "attemptDate": "发起于 {{date}}",
+      "attemptsHeading": "该照片的模拟记录",
+      "noAttempts": "还没有从这张照片生成过模拟。",
+      "errors": {
+        "invalidRequest": "请求无法识别，请重试。",
+        "photoObjectIdRequired": "需要选择照片才能开始模拟。",
+        "unsupportedSmileStyle": "该笑容风格不在可选范围内。",
+        "unsupportedToothShade": "该牙齿色泽不在可选范围内。",
+        "strengthOutOfRange": "强度必须大于 0 且不超过最大值。",
+        "recipientNotInTenant": "要通知的人不是本诊所的成员。",
+        "entitlementDenied": "当前方案不包含微笑模拟功能。",
+        "insufficientCredits": "积分不足以生成一次模拟，请先补充积分。",
+        "jobNotFound": "找不到这次生成任务。",
+        "simulationNotFound": "这张照片没有对应的模拟记录。",
+        "outputNotReady": "结果尚未生成完成。",
+        "outputNotFound": "结果图片已不可用。",
+        "internalError": "服务器出了点问题，请稍后重试。",
+        "client": "无法连接服务器，请检查网络后重试。",
+        "unknown": "出了点问题，请稍后重试。"
+      }
+    },
     "errors": {
       "invalidRequest": "请求无法识别，请重试。",
       "subjectUnresolved": "无法识别您的登录身份，请重新登录后再试。",

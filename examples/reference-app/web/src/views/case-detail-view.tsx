@@ -1,7 +1,11 @@
 /**
  * case-detail-view.tsx -- one case's page in the reference-app web
  * host: the case read through the generated cases_getCase hook over a
- * tenant-namespaced key, its photos rendered from their stored bytes.
+ * tenant-namespaced key, its photos rendered from their stored bytes,
+ * and each photo carrying its smile-simulation workbench
+ * (photo-simulation-panel.tsx, the block-B surface: option pickers, the
+ * async generation with its honest status, and the before/after
+ * comparison once a generation completes).
  *
  * The photos are visible through the blob-URL pattern: each photo's
  * bytes are fetched through the api-client seam (the generated
@@ -23,121 +27,23 @@
  */
 
 import type { ReactElement } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Typography from '@mui/material/Typography'
 import {
   getCasesGetCaseQueryKey,
-  getCasesGetPhotoContentQueryKey,
   useCasesGetCase,
-  useCasesGetPhotoContent,
 } from '@speed/api-sdk'
-import type { CasesPhoto } from '@speed/api-sdk'
 import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import { RouteGuard } from '@speed/layout-kit'
 import { EmptyState } from '@speed/ui-kit'
-import {
-  casesErrorCodeOf,
-  casesErrorTextKey,
-} from '../cases-errors.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import { useDateFormatter } from '../use-date-formatter.js'
+import { CasePhoto } from './case-photo.js'
+import { PhotoSimulationPanel } from './photo-simulation-panel.js'
 import { CasesSurfaceHeading } from './case-surface-heading.js'
-
-/** Decodes a base64 payload into its bytes (binary-safe: atob hands
- * back a binary string; the char-code loop keeps every byte). The
- * explicit ArrayBuffer-backed type keeps the result a valid BlobPart
- * under TypeScript 5.9's typed-array generics. */
-function base64ToBytes(contentBase64: string): Uint8Array<ArrayBuffer> {
-  const binary = atob(contentBase64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-  return bytes
-}
-
-/** One photo of the case: its bytes fetched through the photo-content
- * operation and rendered from a blob URL that this component owns and
- * revokes. */
-function CasePhoto({
-  caseId,
-  photo,
-  index,
-}: {
-  readonly caseId: string
-  readonly photo: CasesPhoto
-  /** The 1-based position for the photo's accessible name. */
-  readonly index: number
-}): ReactElement {
-  const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const currentTenant = useCurrentTenant()
-  const tenantId = currentTenant?.tenantId ?? null
-
-  const contentKey = useMemo(
-    () => [
-      'tenant',
-      tenantId,
-      ...getCasesGetPhotoContentQueryKey(caseId, photo.object_id),
-    ],
-    [tenantId, caseId, photo.object_id],
-  )
-  const contentQuery = useCasesGetPhotoContent(caseId, photo.object_id, {
-    query: { queryKey: contentKey, enabled: tenantId !== null },
-  })
-
-  // The blob URL the img renders: created when the bytes arrive,
-  // revoked when they are replaced or the photo leaves the page. The
-  // effect owns exactly the URL it created -- revoking the previous
-  // URL is the cleanup of the previous effect run, so a session that
-  // renders many photos never leaks.
-  const [objectUrl, setObjectUrl] = useState<string | null>(null)
-  useEffect(() => {
-    const data = contentQuery.data
-    if (data === undefined) {
-      return
-    }
-    const bytes = base64ToBytes(data.content_base64)
-    const url = URL.createObjectURL(
-      new Blob([bytes], { type: data.media_type }),
-    )
-    setObjectUrl(url)
-    return () => {
-      URL.revokeObjectURL(url)
-    }
-  }, [contentQuery.data])
-
-  const alt = t('cases.detail.photoAlt', { index })
-
-  if (contentQuery.isError) {
-    return (
-      <Typography variant="body2" color="text.secondary">
-        {t(casesErrorTextKey(casesErrorCodeOf(contentQuery.error)))}
-      </Typography>
-    )
-  }
-  if (objectUrl === null) {
-    return <Box sx={{ height: 180 }} />
-  }
-  return (
-    <Box
-      component="img"
-      src={objectUrl}
-      alt={alt}
-      sx={{
-        display: 'block',
-        maxWidth: 320,
-        maxHeight: 240,
-        objectFit: 'contain',
-        borderRadius: 1,
-        border: '1px solid',
-        borderColor: 'divider',
-      }}
-    />
-  )
-}
 
 /** One case's page. */
 export function CaseDetailView({
@@ -192,7 +98,10 @@ export function CaseDetailView({
                   {record.patient_ref}
                 </Typography>
               )}
-              <Typography variant="h6" sx={{ marginTop: 3, marginBottom: 1 }}>
+              <Typography
+                variant="h6"
+                sx={{ marginTop: 3, marginBottom: 1 }}
+              >
                 {t('cases.detail.photosHeading')}
               </Typography>
               {record.photos.length === 0 ? (
@@ -203,17 +112,23 @@ export function CaseDetailView({
                 <Box
                   sx={{
                     display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: 2,
+                    flexDirection: 'column',
+                    gap: 3,
                   }}
                 >
                   {record.photos.map((photo, position) => (
-                    <CasePhoto
-                      key={photo.object_id}
-                      caseId={caseId}
-                      photo={photo}
-                      index={position + 1}
-                    />
+                    <Box key={photo.object_id}>
+                      <CasePhoto
+                        caseId={caseId}
+                        photo={photo}
+                        index={position + 1}
+                      />
+                      <PhotoSimulationPanel
+                        caseId={caseId}
+                        photo={photo}
+                        index={position + 1}
+                      />
+                    </Box>
                   ))}
                 </Box>
               )}

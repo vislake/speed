@@ -11,18 +11,28 @@
  *
  *   pnpm test:e2e:pending
  *
- * They stay out of the default run for a structural reason, not an
+ * Block B's two tests now PASS too (the block-B surface shipped: the
+ * case photo carries the option pickers, the async generation with its
+ * honest status, and the before/after comparison; the run's own
+ * throwaway OpenAI-compatible images provider -- fake-image-provider.mjs
+ * under e2e/test-utils, wired in playwright.config.ts -- is what lets a
+ * freshly booted server complete the generation deterministically). To
+ * run the passing B gates alone while C and D are still open:
+ *
+ *   pnpm exec playwright test --grep "block B"
+ *
+ * The gates stay out of the default run for a structural reason, not an
  * implementation one: go/authn's per-IP login budget (limitLoginByIP,
  * 20 attempts per minute) is the standing ceiling the default suite is
  * sized against -- the pre-block-A default run already sits at roughly
- * 19 login attempts, and block A's journeys add the sign-ins that push
- * the composed default run over the budget mid-suite (the org-invitation
+ * 19 login attempts, and the core-journey gates' sign-ins push the
+ * composed default run over the budget mid-suite (the org-invitation
  * and password-sign-in specs start answering authn.rate_limited). A
  * block whose gate rides the same demo accounts and the same per-IP
  * budget cannot join the default run until the suite's budget question
  * is answered (a per-suite rate allowance, dedicated demo accounts, or
- * fewer sign-ins elsewhere) -- recorded here as the reason these two
- * gates stay in the deliberate selection. Blocks B, C and D fail today,
+ * fewer sign-ins elsewhere) -- recorded here as the reason these four
+ * gates stay in the deliberate selection. Blocks C and D fail today,
  * and that is their present value: an
  * acceptance review found that a signed-in practice can reach nothing but
  * a notes scratchpad and an account page, while the backends for the
@@ -201,18 +211,28 @@ test.describe('the core journey', { tag: '@pending' }, () => {
     await signInAs(page, DEMO_OWNER)
     await openCaseWithPhoto(page)
 
-    // The choices a person can actually make, by name rather than by
-    // count: a dentist tells a patient "let's try the natural one", so
-    // the words matter more than the number of buttons.
+    // The choices a person can actually make, option by option: a
+    // dentist tells a patient "let's try the natural one", so the words
+    // matter more than the number of controls. Each option is queried
+    // by its own accessible name (a radio's label) rather than by bare
+    // text -- a locator reconciliation, not a design instruction: with
+    // the documented vocabulary as visible copy, the word "white" is a
+    // substring of the "ultra-white" option's label, so a bare text
+    // query for it matches two options at once and Playwright's
+    // strictness fails the gate no matter what any UI labels its
+    // options. The option name is the label's text, exactly as a person
+    // sees it.
+    const styleGroup = page.getByRole('group', { name: /style|smile/i })
     for (const style of ['subtle', 'natural', 'bright'] as const) {
       await expect(
-        page.getByRole('group', { name: /style|smile/i }).getByText(new RegExp(style, 'i')),
+        styleGroup.getByRole('radio', { name: new RegExp(`^${style}$`, 'i') }),
         `the ${style} smile style must be offerable to a patient`,
       ).toBeVisible()
     }
-    for (const shade of ['natural', 'white', 'ultra'] as const) {
+    const shadeGroup = page.getByRole('group', { name: /shade|colour|color/i })
+    for (const shade of ['natural', 'white', 'ultra-white'] as const) {
       await expect(
-        page.getByRole('group', { name: /shade|colour|color/i }).getByText(new RegExp(shade, 'i')),
+        shadeGroup.getByRole('radio', { name: new RegExp(`^${shade}$`, 'i') }),
         `the ${shade} tooth shade must be offerable to a patient`,
       ).toBeVisible()
     }

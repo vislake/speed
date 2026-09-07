@@ -1,15 +1,15 @@
 /**
  * codes-alignment.test.ts -- the reference-app shell's reachable-error
- * alignment suite: every server-emittable error code the shell's five
+ * alignment suite: every server-emittable error code the shell's six
  * surfaces can be answered with (the auth-ui sign-in/session family, the
  * account-ui signed-in family, the tenancy-ui switch family, the notes
- * create surface and the cases surface) is rendered through a
- * reachable-error whitelist, and this suite pins the whitelists to the
- * server codes themselves.
+ * create surface, the cases surface and the smile-simulation surface the
+ * block-B round added) is rendered through a reachable-error whitelist,
+ * and this suite pins the whitelists to the server codes themselves.
  *
  * The server side of the comparison is GO_PINNED below: a hand-maintained
  * enumeration of the codes the Go side of this app can answer with on
- * these four surfaces, each entry carrying the source citation of the
+ * these six surfaces, each entry carrying the source citation of the
  * sentinel that defines it (go/authn/errors.go for the authn codes, the
  * go/rbac and notes-module sentinels for the others). The shell side is
  * derived, never copied: the auth-ui / account-ui / tenancy-ui
@@ -58,7 +58,10 @@ import { ERROR_TEXT_CODES as AUTH_UI_ERROR_TEXT_CODES } from '../../../../web/pa
 import { ERROR_TEXT_CODES as ACCOUNT_UI_ERROR_TEXT_CODES } from '../../../../web/packages/account-ui/src/internal/error-text.js'
 import { ERROR_TEXT_CODES as TENANCY_UI_ERROR_TEXT_CODES } from '../../../../web/packages/tenancy-ui/src/internal/error-text.js'
 import { CASES_ERROR_TEXT_KEYS } from './cases-errors.js'
+import { SMILE_SIM_ERROR_TEXT_KEYS } from './smile-sim-errors.js'
 import { NOTE_ERROR_TEXT_KEYS } from './views/notes-view.js'
+import zhCN from './locales/zh-CN.json' with { type: 'json' }
+import enUS from './locales/en-US.json' with { type: 'json' }
 
 /**
  * The server-emittable codes of this app's four surfaces, each cited to
@@ -189,6 +192,33 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // site).
   'cases.internal_error': 'examples/reference-app/cmd/server/cases.go:58 (casesErrInternal)',
   'cases.invalid_request_body': 'examples/reference-app/cmd/server/cases.go:66 (casesInvalidRequestBody)',
+  // examples/reference-app/internal/smilesim/options.go -- the option
+  // validation sentinels (named declarations the block-B round's web
+  // surface made reachable text for the first time).
+  'smilesim.unsupported_smile_style': 'examples/reference-app/internal/smilesim/options.go:154 (ErrUnsupportedSmileStyle)',
+  'smilesim.unsupported_tooth_shade': 'examples/reference-app/internal/smilesim/options.go:158 (ErrUnsupportedToothShade)',
+  'smilesim.strength_out_of_range': 'examples/reference-app/internal/smilesim/options.go:162 (ErrStrengthOutOfRange)',
+  // examples/reference-app/cmd/server/smilesim.go -- the smile-simulation
+  // surface's handler-level sentinels (the internal envelope, the
+  // simulate route's request-shape refusals, the recipient gate, the
+  // poll/content routes' not-found answers and the simulation-content
+  // route's refusals the block-B round added).
+  'smilesim.internal_error': 'examples/reference-app/cmd/server/smilesim.go:55 (smileSimErrInternal)',
+  'smilesim.invalid_request_body': 'examples/reference-app/cmd/server/smilesim.go:66 (smilesimErrInvalidRequestBody)',
+  'smilesim.photo_object_id_required': 'examples/reference-app/cmd/server/smilesim.go:70 (smilesimErrPhotoObjectIDRequired)',
+  'smilesim.simulation_not_found': 'examples/reference-app/cmd/server/smilesim.go:82 (smileSimErrSimulationNotFound)',
+  'smilesim.output_not_ready': 'examples/reference-app/cmd/server/smilesim.go:86 (smileSimErrOutputNotReady)',
+  'smilesim.output_not_found': 'examples/reference-app/cmd/server/smilesim.go:91 (smileSimErrOutputNotFound)',
+  'smilesim.recipient_not_in_tenant': 'examples/reference-app/cmd/server/smilesim.go:446 (smilesimErrRecipientNotInTenant)',
+  // go/jobs/job.go -- the not-found sentinel the job-status handler
+  // passes through for an unknown or another tenant's job id.
+  'jobs.job_not_found': 'go/jobs/job.go:186 (ErrJobNotFound)',
+  // go/billing/errors.go -- the credit-reservation refusal a simulate
+  // answers when the tenant's balance cannot cover one generation.
+  'billing.insufficient_credits': 'go/billing/errors.go:70 (ErrInsufficientCredits)',
+  // go/ai-gateway/errors.go -- the entitlement-gate refusal a simulate
+  // answers for a tenant whose subscription lacks the image model.
+  'aigateway.entitlement_denied': 'go/ai-gateway/errors.go:42 (ErrEntitlementDenied)',
 }
 
 /**
@@ -243,7 +273,7 @@ function nonClientCodes(codes: readonly string[]): string[] {
   return codes.filter((code) => !code.startsWith('client.'))
 }
 
-/** The five whitelists by surface, for failure messages that name the
+/** The six whitelists by surface, for failure messages that name the
  * list a drift was found in. */
 const SURFACE_WHITELISTS: Readonly<Record<string, readonly string[]>> = {
   'auth-ui sign-in/session': AUTH_UI_ERROR_TEXT_CODES,
@@ -251,6 +281,7 @@ const SURFACE_WHITELISTS: Readonly<Record<string, readonly string[]>> = {
   'tenancy-ui tenant switch': TENANCY_UI_ERROR_TEXT_CODES,
   'notes create surface': Object.keys(NOTE_ERROR_TEXT_KEYS),
   'cases surface': Object.keys(CASES_ERROR_TEXT_KEYS),
+  'smile-simulation surface': Object.keys(SMILE_SIM_ERROR_TEXT_KEYS),
 }
 
 /** A citation's path, line and sentinel identifier. */
@@ -317,10 +348,54 @@ describe('reachable-error whitelists vs the server code set', () => {
     // sixteen cases sentinels the block-A round's cases surface added
     // (nine domain codes in internal/cases/service.go, five photo
     // route codes in cmd/server/cases_photos.go, and the two
-    // handler-level envelopes in cmd/server/cases.go). The size
-    // guard makes a GO_PINNED edit (in either direction) fail loudly
-    // here rather than silently through the subset assertions below.
-    expect(Object.keys(GO_PINNED)).toHaveLength(54)
+    // handler-level envelopes in cmd/server/cases.go) + the thirteen
+    // smile-simulation sentinels the block-B round's web surface added
+    // (seven app-side handler sentinels in cmd/server/smilesim.go, the
+    // three option-validation sentinels in internal/smilesim/options.go
+    // that round named, and the three gateway/queue sentinels a
+    // simulate call can surface from go/jobs, go/billing and
+    // go/ai-gateway). The size guard makes a GO_PINNED edit (in either
+    // direction) fail loudly here rather than silently through the
+    // subset assertions below.
+    expect(Object.keys(GO_PINNED)).toHaveLength(67)
+  })
+
+  it('renders a bilingual text for every reachable smile-simulation code', () => {
+    // Regression (c) of the block-B gate: a code this surface can be
+    // answered with must resolve to HUMAN text in both languages --
+    // never a missing key that would render a raw code. The whitelist
+    // itself is pinned to the server sentinels by the directions above;
+    // this test pins the other half, that every whitelisted code's text
+    // key actually exists in both app bundles, resolves to a non-empty
+    // string, and is never the unknown fallback (an entry that maps to
+    // the fallback is a code with no text of its own).
+    const textOf = (bundle: Record<string, unknown>, key: string): string => {
+      const value = key
+        .split('.')
+        .reduce<unknown>(
+          (node, segment) =>
+            typeof node === 'object' && node !== null
+              ? (node as Record<string, unknown>)[segment]
+              : undefined,
+          bundle,
+        )
+      return typeof value === 'string' ? value : ''
+    }
+    const unknownEn = textOf(enUS, 'cases.sim.errors.unknown')
+    const unknownZh = textOf(zhCN, 'cases.sim.errors.unknown')
+    expect(unknownEn).not.toBe('')
+    expect(unknownZh).not.toBe('')
+    for (const [code, textKey] of Object.entries(SMILE_SIM_ERROR_TEXT_KEYS)) {
+      if (code.startsWith('client.')) {
+        continue
+      }
+      const en = textOf(enUS, textKey)
+      const zh = textOf(zhCN, textKey)
+      expect(en, `${code} maps to ${textKey}, which is missing or empty in en-US`).not.toBe('')
+      expect(zh, `${code} maps to ${textKey}, which is missing or empty in zh-CN`).not.toBe('')
+      expect(en, `${code} maps to ${textKey}, which resolves to the unknown fallback`).not.toBe(unknownEn)
+      expect(zh, `${code} maps to ${textKey}, which resolves to the unknown fallback`).not.toBe(unknownZh)
+    }
   })
 
   it('whitelists every code the server can answer with (GO_PINNED is covered)', () => {

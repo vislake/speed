@@ -327,6 +327,31 @@ export interface DemoServerOptions {
     readonly media_type: string
     readonly content_base64: string
   }
+  /** Refuses every POST /api/v1/smile-simulation/simulate with this
+   * coded answer -- a suite scripts the refusals its surface must
+   * render (the credit reservation's billing.insufficient_credits, the
+   * entitlement gate's aigateway.entitlement_denied); default
+   * undefined -- every simulate succeeds. */
+  readonly simulateRefusal?: {
+    readonly status: number
+    readonly code: string
+  }
+  /** Refuses every simulation-content read (GET /api/v1/smile-simulation/
+   * photos/{photoObjectID}/simulations/{jobID}/content) with this coded
+   * answer; default undefined -- a succeeded simulation's content is
+   * served. */
+  readonly simulationContentRefusal?: {
+    readonly status: number
+    readonly code: string
+  }
+  /** The simulation-content answer a succeeded simulation serves (the
+   * media type the probe assigned and the stored bytes); default the
+   * demo payload below, distinct from the photo payload so a journey
+   * can tell before from after by content. */
+  readonly simulationContent?: {
+    readonly media_type: string
+    readonly content_base64: string
+  }
 }
 
 /** What an issued access token stands for: the principal it belongs to
@@ -360,6 +385,35 @@ function bodyObject(call: RealCall): Record<string, unknown> {
  * without the requested grant with (ErrPermissionDenied). */
 const NOTES_DENIED_CODE = 'rbac.permission_denied'
 
+/** The effective options of a simulate body: the documented defaults
+ * (natural smile, natural shade, full strength -- the same defaults
+ * internal/smilesim's DefaultSimulationOptions declares) with each
+ * explicitly-present dimension overridden. The real service applies the
+ * same defaulting, so an options-less body generates like the real
+ * server's no-options call and the echoed options always carry the
+ * effective set. */
+function effectiveSimulationOptions(body: Record<string, unknown>): {
+  smile_style: string
+  tooth_shade: string
+  strength: number
+} {
+  const requested =
+    typeof body.options === 'object' && body.options !== null
+      ? (body.options as Record<string, unknown>)
+      : {}
+  const smileStyle =
+    typeof requested.smile_style === 'string'
+      ? requested.smile_style
+      : 'natural'
+  const toothShade =
+    typeof requested.tooth_shade === 'string'
+      ? requested.tooth_shade
+      : 'natural'
+  const strength =
+    typeof requested.strength === 'number' ? requested.strength : 1
+  return { smile_style: smileStyle, tooth_shade: toothShade, strength }
+}
+
 /** The created_at every demo note answer carries -- the same fixed demo
  * epoch the register answer uses, so journeys can pin rendered times. */
 const DEMO_NOTE_CREATED_AT = '2026-09-04T00:00:00Z'
@@ -392,6 +446,17 @@ const CASE_PATH = /^\/api\/v1\/cases\/([^/]+)$/
 const CASE_PHOTO_CONTENT_PATH =
   /^\/api\/v1\/cases\/([^/]+)\/photos\/([^/]+)\/content$/
 
+/** The parameterized smile-simulation paths (the block-B surface's read
+ * legs). The simulate route is exact-keyed in the switch, so its path
+ * never falls through to these; the job-status route is exact-keyed
+ * with one parameter; the enumeration path's $ anchor keeps the content
+ * path (which carries a deeper suffix) from matching it. */
+const SIMULATION_JOB_PATH = /^\/api\/v1\/smile-simulation\/jobs\/([^/]+)$/
+const SIMULATION_LIST_PATH =
+  /^\/api\/v1\/smile-simulation\/photos\/([^/]+)\/simulations$/
+const SIMULATION_CONTENT_PATH =
+  /^\/api\/v1\/smile-simulation\/photos\/([^/]+)\/simulations\/([^/]+)\/content$/
+
 /** The created_at every demo case answer carries -- the same fixed demo
  * epoch the notes answers use, so journeys can pin rendered times. */
 const DEMO_CASE_CREATED_AT = DEMO_NOTE_CREATED_AT
@@ -401,6 +466,13 @@ const DEMO_CASE_CREATED_AT = DEMO_NOTE_CREATED_AT
  * -- not a decodable image (the demo never renders it), but a stable,
  * assertable payload. */
 const DEMO_PHOTO_CONTENT_BASE64 = 'cGhvdG8tYnl0ZXM='
+
+/** The simulation-result bytes every simulation-content answer serves
+ * unless a suite scripts its own: the base64 of the ASCII payload
+ * "simulation-result-bytes", deliberately distinct from the photo
+ * payload above so a journey can prove the before/after pair shows two
+ * different images. */
+const DEMO_SIMULATION_CONTENT_BASE64 = 'c2ltdWxhdGlvbi1yZXN1bHQtYnl0ZXM='
 
 /** The demo's three sessions: the current one on the rig's own session
  * id (the same row every token-issuing answer names) plus two active
@@ -488,6 +560,12 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       media_type: 'image/png',
       content_base64: DEMO_PHOTO_CONTENT_BASE64,
     },
+    simulateRefusal,
+    simulationContentRefusal,
+    simulationContent = {
+      media_type: 'image/png',
+      content_base64: DEMO_SIMULATION_CONTENT_BASE64,
+    },
   } = options
   // The account state is stateful per responder instance (a revoke
   // marks a row for later list answers, an exchange appends a bound
@@ -539,6 +617,38 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   // The object ids the demo's photo-upload answers hand out, counting
   // per responder instance like the note and case ids.
   let nextObjectId = 1
+  // The smile-simulation ledger: every job this responder accepted,
+  // keyed by its job id and remembered in creation order. Each job's
+  // live status advances deterministically per job-status read --
+  // pending (no read yet), running (one read), succeeded (two or more)
+  // -- so a journey that polls the status route observes an honest
+  // queued -> generating -> generated progression that always
+  // terminates, and the enumeration and content answers read the same
+  // ledger the status route advances.
+  const simulationJobs = new Map<
+    string,
+    {
+      photo_object_id: string
+      options: { smile_style: string; tooth_shade: string; strength: number }
+      reads: number
+      created_at: string
+    }
+  >()
+  const simulationJobOrder: string[] = []
+  let nextSimulationJobId = 1
+
+  /** The live status of one accepted job under this responder's
+   * deterministic progression (see the ledger comment above). */
+  function simulationStatusOf(jobID: string): string {
+    const job = simulationJobs.get(jobID)
+    if (job === undefined) {
+      return ''
+    }
+    if (job.reads >= 2) {
+      return 'succeeded'
+    }
+    return job.reads === 1 ? 'running' : 'pending'
+  }
   // The accounts a register answered, mapped to the clinic their
   // registration provisioned (the web mirror of the composed stack's
   // self-service signup, cmd/server/self_service.go): the account's own
@@ -829,6 +939,34 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         nextObjectId += 1
         return jsonResponse(201, { object_id: objectId })
       }
+      case 'POST /api/v1/smile-simulation/simulate': {
+        // The bearer is resolved (and an anonymous simulate fails loudly
+        // as the harness bug it is) even though the answer carries no
+        // principal: starting a simulation is tenant-member work like
+        // every other smilesim route.
+        principalOf(call)
+        if (simulateRefusal !== undefined) {
+          return errorResponse(simulateRefusal.status, simulateRefusal.code)
+        }
+        const body = bodyObject(call)
+        const photoObjectID =
+          typeof body.photo_object_id === 'string'
+            ? body.photo_object_id.trim()
+            : ''
+        if (photoObjectID === '') {
+          return errorResponse(400, 'smilesim.photo_object_id_required')
+        }
+        const jobID = `job-${nextSimulationJobId}`
+        nextSimulationJobId += 1
+        simulationJobs.set(jobID, {
+          photo_object_id: photoObjectID,
+          options: effectiveSimulationOptions(body),
+          reads: 0,
+          created_at: DEMO_CASE_CREATED_AT,
+        })
+        simulationJobOrder.push(jobID)
+        return jsonResponse(202, { job_id: jobID })
+      }
       case 'GET /api/v1/authn/sessions':
         return jsonResponse(200, { sessions })
       case 'GET /api/v1/authn/login-history':
@@ -978,6 +1116,91 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         return errorResponse(404, 'cases.photo_not_found')
       }
       return jsonResponse(200, casesPhotoContent)
+    }
+    const simulationJobMatch = SIMULATION_JOB_PATH.exec(call.path)
+    if (call.method === 'GET' && simulationJobMatch !== null) {
+      // The job-status poll, and the read that advances the job's
+      // deterministic progression (see the ledger comment above): a
+      // journey that polls observes pending -> running -> succeeded.
+      const jobID = simulationJobMatch[1]
+      if (jobID === undefined) {
+        // Unreachable: the matcher above guarantees the group; kept as a
+        // guard so the ledger lookups below can name a definite string.
+        throw new Error(`demo-server: ${call.path} matched without a job id`)
+      }
+      const job = simulationJobs.get(jobID)
+      if (job === undefined) {
+        return errorResponse(404, 'jobs.job_not_found')
+      }
+      job.reads += 1
+      const status = simulationStatusOf(jobID)
+      const answer: Record<string, unknown> = {
+        status,
+        options: job.options,
+      }
+      if (status === 'succeeded') {
+        answer.output_object_id = `sim-out-${jobID}`
+      }
+      return jsonResponse(200, answer)
+    }
+    const simulationListMatch = SIMULATION_LIST_PATH.exec(call.path)
+    if (call.method === 'GET' && simulationListMatch !== null) {
+      const principal = principalOf(call)
+      const photoObjectID = simulationListMatch[1]
+      if (photoObjectID === undefined) {
+        // Unreachable, same shape as the job-status guard above.
+        throw new Error(`demo-server: ${call.path} matched without a photo id`)
+      }
+      void principal
+      const rows = [...simulationJobOrder]
+        .reverse()
+        .filter((jobID) => {
+          const job = simulationJobs.get(jobID)
+          return job?.photo_object_id === photoObjectID
+        })
+        .map((jobID) => {
+          const job = simulationJobs.get(jobID)
+          if (job === undefined) {
+            throw new Error(`demo-server: ledger row ${jobID} missing`)
+          }
+          const status = simulationStatusOf(jobID)
+          const row: Record<string, unknown> = {
+            job_id: jobID,
+            photo_object_id: job.photo_object_id,
+            options: job.options,
+            status,
+            created_at: job.created_at,
+          }
+          if (status === 'succeeded') {
+            row.output_object_id = `sim-out-${jobID}`
+          }
+          return row
+        })
+      return jsonResponse(200, { simulations: rows })
+    }
+    const simulationContentMatch = SIMULATION_CONTENT_PATH.exec(call.path)
+    if (call.method === 'GET' && simulationContentMatch !== null) {
+      principalOf(call)
+      const photoObjectID = simulationContentMatch[1]
+      const jobID = simulationContentMatch[2]
+      if (photoObjectID === undefined || jobID === undefined) {
+        // Unreachable, same shape as the job-status guard above.
+        throw new Error(`demo-server: ${call.path} matched without its ids`)
+      }
+      const job = simulationJobs.get(jobID)
+      if (job === undefined || job.photo_object_id !== photoObjectID) {
+        return errorResponse(404, 'smilesim.simulation_not_found')
+      }
+      if (simulationStatusOf(jobID) !== 'succeeded') {
+        return errorResponse(404, 'smilesim.output_not_ready')
+      }
+      if (simulationContentRefusal !== undefined) {
+        return errorResponse(
+          simulationContentRefusal.status,
+          simulationContentRefusal.code,
+        )
+      }
+      return jsonResponse(200, simulationContent)
     }
     const callbackPathMatch = SOCIAL_CALLBACK_PATH.exec(call.path)
     if (call.method === 'POST' && callbackPathMatch !== null) {

@@ -64,11 +64,14 @@ const appDir = fileURLToPath(new URL('.', import.meta.url))
 const serverDir = fileURLToPath(new URL('..', import.meta.url))
 
 /**
- * The three ports one run needs: the Go server, the vite server, and the
+ * The four ports one run needs: the Go server, the vite server, the
  * second Go process restart-survival.spec.ts starts over the same
- * database. Picked at random per run rather than fixed, and set through
- * the environment for the same reason the database path below is -- the
- * runner chooses, every worker inherits.
+ * database, and -- since the block-B gates -- the throwaway
+ * OpenAI-compatible images provider (fake-image-provider.mjs) the Go
+ * server's smile-simulation pipeline reaches. Picked at random per run
+ * rather than fixed, and set through the environment for the same
+ * reason the database path below is -- the runner chooses, every worker
+ * inherits.
  *
  * Fixed ports were the original shape (8091 and 5191, chosen only to stay
  * clear of a developer's own 5173 and 8080) and they were wrong for a
@@ -106,13 +109,14 @@ function runPort(variable: string, chosen: number): string {
 
 const apiPort = runPort('E2E_API_PORT', portBase)
 const webPort = runPort('E2E_WEB_PORT', portBase + 1)
+const imageProviderPort = runPort('E2E_IMAGE_PROVIDER_PORT', portBase + 2)
 
 /**
  * The port restart-survival.spec.ts starts its second server on, exported
  * so the spec reads the run's own choice rather than defaulting to one of
  * its own -- the identical reason SERVER_LOG_PATH below is exported.
  */
-export const RESTART_API_PORT = runPort('E2E_RESTART_PORT', portBase + 2)
+export const RESTART_API_PORT = runPort('E2E_RESTART_PORT', portBase + 3)
 
 /**
  * The loopback address every local URL in this file names.
@@ -338,6 +342,15 @@ export default defineConfig({
             APP_DB_PATH: databasePath,
             APP_DEPLOYMENT_MODE: 'standalone',
             APP_DEMO_USERS_PASSWORD: DEMO_PASSWORD,
+            // The smile-simulation pipeline's provider: the block-B
+            // gates generate a real simulation, and the only way a
+            // freshly booted server can complete one is against this
+            // run's own throwaway OpenAI-compatible images endpoint
+            // (the entry below). The key is deliberately a fixed
+            // non-secret value -- it authenticates nothing, exactly like
+            // the demo passphrase above.
+            APP_AI_GATEWAY_IMAGE_BASE_URL: `http://${loopback}:${imageProviderPort}`,
+            APP_AI_GATEWAY_IMAGE_API_KEY: 'e2e-image-key',
           },
         },
         {
@@ -353,6 +366,21 @@ export default defineConfig({
           stdout: 'pipe',
           stderr: 'pipe',
           env: { REFERENCE_APP_API_PROXY: `http://${loopback}:${apiPort}` },
+        },
+        {
+          // The throwaway OpenAI-compatible images endpoint: answers
+          // every /images/edits with a fixed, deterministic image, so a
+          // generation the block-B gates start completes on the real
+          // composed stack with no live provider anywhere (see that
+          // script's own header).
+          command: `node e2e/test-utils/fake-image-provider.mjs`,
+          cwd: appDir,
+          url: `http://${loopback}:${imageProviderPort}/healthz`,
+          timeout: 30_000,
+          reuseExistingServer: false,
+          stdout: 'pipe',
+          stderr: 'pipe',
+          env: { PORT: imageProviderPort },
         },
       ],
 })

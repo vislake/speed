@@ -87,6 +87,56 @@
       "noPhotos": "No photos on this case yet.",
       "photoAlt": "Patient photo {{index}}"
     },
+    "sim": {
+      "title": "Smile simulation",
+      "styleGroup": "Smile style",
+      "shadeGroup": "Tooth shade",
+      "strengthLabel": "Strength",
+      "style": {
+        "subtle": "Subtle",
+        "natural": "Natural",
+        "bright": "Bright"
+      },
+      "shade": {
+        "natural": "Natural",
+        "white": "White",
+        "ultraWhite": "Ultra-white"
+      },
+      "strengthPercent": "{{value}}% strength",
+      "simulate": "Simulate smile",
+      "status": {
+        "starting": "Starting the smile simulation…",
+        "pending": "The smile simulation is queued…",
+        "running": "Generating the smile simulation…",
+        "retrying": "The smile simulation hit a snag and is retrying…",
+        "succeeded": "Generated",
+        "deadLetter": "This generation failed and cannot be retried.",
+        "cancelled": "This generation was cancelled."
+      },
+      "compareLabel": "Before and after",
+      "resultAlt": "Simulated smile",
+      "attemptSummary": "{{style}} smile · {{shade}} teeth · {{strength}}",
+      "attemptDate": "Requested {{date}}",
+      "attemptsHeading": "Simulations of this photo",
+      "noAttempts": "Nothing generated from this photo yet.",
+      "errors": {
+        "invalidRequest": "The request could not be understood. Try again.",
+        "photoObjectIdRequired": "A photo is required to start a simulation.",
+        "unsupportedSmileStyle": "That smile style is not one of the offered choices.",
+        "unsupportedToothShade": "That tooth shade is not one of the offered choices.",
+        "strengthOutOfRange": "The strength must be more than zero and no more than full.",
+        "recipientNotInTenant": "The person to notify is not a member of this clinic.",
+        "entitlementDenied": "This clinic's plan does not include smile simulation.",
+        "insufficientCredits": "Not enough credits for one simulation. Add credits and try again.",
+        "jobNotFound": "This generation can no longer be found.",
+        "simulationNotFound": "No simulation exists for this photo.",
+        "outputNotReady": "The result is not ready yet.",
+        "outputNotFound": "The result image is no longer available.",
+        "internalError": "Something went wrong on the server. Try again later.",
+        "client": "Could not reach the server. Check your connection and try again.",
+        "unknown": "Something went wrong. Try again later."
+      }
+    },
     "errors": {
       "invalidRequest": "The request could not be understood. Try again.",
       "subjectUnresolved": "Your sign-in could not be recognized. Sign in again and retry.",
