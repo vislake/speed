@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"os"
 	"time"
 
@@ -250,6 +251,18 @@ type options struct {
 	// OAuth cookie regardless of what r.TLS says. See WithSecureCookies.
 	secureCookies bool
 
+	// trustedProxies is WithTrustedProxies' raw input: the IP addresses
+	// and CIDR prefixes of the reverse proxies this deployment receives
+	// requests through. newOptions compiles it into trustedProxyNets,
+	// refusing an entry that is neither an IP address nor a CIDR prefix.
+	trustedProxies []string
+
+	// trustedProxyNets is trustedProxies in matchable form: one
+	// netip.Prefix per entry, a bare address as its own /32 or /128. It is
+	// what Service carries and handler.go's clientIP consults -- see
+	// WithTrustedProxies for what declaring a proxy changes.
+	trustedProxyNets []netip.Prefix
+
 	// featureGate makes the module's declared feature flags effective at
 	// request time; nil keeps every channel enabled. See FeatureGate.
 	featureGate FeatureGate
@@ -420,11 +433,50 @@ func WithOAuthStateTTL(d time.Duration) Option {
 // hosts run. This is bootstrap configuration (root CLAUDE.md's "values that
 // vary by environment"), set once by the host at startup from its own
 // knowledge of its topology (e.g. an SPEED_TLS_TERMINATED env var), rather
-// than inferred per request from a client-controlled header the way
-// X-Forwarded-For is deliberately NOT trusted by handler.go's clientIP: a
-// host that is not actually behind TLS anywhere must never pass true here.
+// than inferred per request from a client-controlled header -- the same
+// reason handler.go's clientIP reads X-Forwarded-For only from a request
+// whose peer is a declared trusted proxy (WithTrustedProxies), with no such
+// gate available for a header asserting TLS: a host that is not actually
+// behind TLS anywhere must never pass true here.
 func WithSecureCookies(secure bool) Option {
 	return func(o *options) { o.secureCookies = secure }
+}
+
+// WithTrustedProxies names the reverse proxies requests are received
+// through, so handler.go's clientIP can recover the real client address
+// from the forwarding headers those proxies inject ("Fly-Client-IP" on
+// Fly.io, "X-Forwarded-For" generally) instead of recording the proxy
+// itself -- the session/login-history defect the reference app's Fly.io
+// deployment exposed, where every recorded address was the proxy's
+// internal 172.16.x one.
+//
+// A request's recorded address (the rate-limiter key, the session row, the
+// login-history row) is otherwise its direct connection address,
+// RemoteAddr. That fallback stays, and this option only widens it for the
+// requests that genuinely came through a declared proxy: the forwarding
+// headers are read ONLY when the request's RemoteAddr is one of the
+// declared proxies, so a direct client that sets Fly-Client-IP or
+// X-Forwarded-For itself changes nothing -- the spoof this gating exists
+// to keep out. This is bootstrap configuration, declared once by the host
+// at startup from its own knowledge of its topology (an operator behind a
+// proxy knows the proxy's address; the module never guesses), exactly like
+// WithSecureCookies.
+//
+// Each entry is an IP address or a CIDR prefix -- "203.0.113.10", or
+// "172.16.0.0/12" for a whole proxy range. An entry that is neither is
+// refused at wiring time (newOptions): it can never match a peer, so
+// accepting it would silently keep recording the proxy address this option
+// was meant to fix. A declared proxy must overwrite or strip forwarding
+// headers it receives from its own clients, so a client cannot smuggle a
+// header through the proxy it is trusted for: Fly.io's proxy overwrites
+// headerFlyClientIP on every request it forwards, which is why a Fly
+// deployment can declare its proxy ranges outright; a generic reverse
+// proxy must be configured to do the same.
+//
+// The default is EMPTY: no proxy declared, every request records its
+// direct connection address exactly as this module always did.
+func WithTrustedProxies(proxies ...string) Option {
+	return func(o *options) { o.trustedProxies = append(o.trustedProxies, proxies...) }
 }
 
 // WithFederationHTTPClient replaces the HTTP client the ENTERPRISE single
@@ -535,7 +587,35 @@ func newOptions(opts []Option) (options, error) {
 		}
 		cfg.smsSender = NewConsoleSMSSender(os.Stdout)
 	}
+	// Compile the host-declared trusted-proxy list. An entry that is
+	// neither an IP address nor a CIDR prefix cannot be a proxy peer, so
+	// it is refused here -- failing closed at wiring time rather than
+	// silently never matching, which would quietly keep recording the
+	// proxy address WithTrustedProxies was meant to fix.
+	for _, entry := range cfg.trustedProxies {
+		prefix, err := parseTrustedProxy(entry)
+		if err != nil {
+			return options{}, err
+		}
+		cfg.trustedProxyNets = append(cfg.trustedProxyNets, prefix)
+	}
+	cfg.trustedProxies = nil
 	return cfg, nil
+}
+
+// parseTrustedProxy validates one WithTrustedProxies entry -- an IP
+// address or a CIDR prefix -- into the netip.Prefix form peer matching
+// needs. A bare address becomes its own /32 or /128; anything else (a
+// hostname, a range without CIDR syntax, a zoned address) is refused with
+// an error naming the entry.
+func parseTrustedProxy(entry string) (netip.Prefix, error) {
+	if prefix, err := netip.ParsePrefix(entry); err == nil {
+		return prefix.Masked(), nil
+	}
+	if addr, err := netip.ParseAddr(entry); err == nil && addr.Zone() == "" {
+		return netip.PrefixFrom(addr.Unmap(), addr.Unmap().BitLen()), nil
+	}
+	return netip.Prefix{}, fmt.Errorf("authn: trusted proxy %q is not an IP address or CIDR prefix", entry)
 }
 
 // Module implements pkgcore.Module for authn.

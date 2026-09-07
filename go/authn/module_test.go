@@ -392,3 +392,44 @@ func TestConfigItems_AreValidDeclarations(t *testing.T) {
 		})
 	}
 }
+
+// TestWithTrustedProxies_ValidatesItsEntries pins WithTrustedProxies'
+// fail-closed wiring contract: an entry that is neither an IP address nor
+// a CIDR prefix is refused at construction time (it can never match a
+// request peer, so accepting it would silently keep recording the proxy
+// address the option exists to fix), while a bare address compiles to its
+// own /32 or /128 and a prefix is masked -- the forms Service carries and
+// handler.go's clientIP matches peers against.
+func TestWithTrustedProxies_ValidatesItsEntries(t *testing.T) {
+	t.Parallel()
+
+	keys := testutil.NewKeySource(t, "kid-active")
+	db := testutil.NewDB(t)
+
+	cfg, err := newOptions([]Option{
+		WithKeySource(keys),
+		WithBlindIndexKey(testutil.BlindIndexKey()),
+		WithTrustedProxies("203.0.113.10", "172.16.0.0/12", "2001:db8::/32"),
+	})
+	if err != nil {
+		t.Fatalf("newOptions() error = %v", err)
+	}
+	want := []string{"203.0.113.10/32", "172.16.0.0/12", "2001:db8::/32"}
+	if len(cfg.trustedProxyNets) != len(want) {
+		t.Fatalf("compiled %d trusted proxies, want %d", len(cfg.trustedProxyNets), len(want))
+	}
+	for i, raw := range want {
+		if got := cfg.trustedProxyNets[i].String(); got != raw {
+			t.Errorf("trustedProxyNets[%d] = %s, want %s", i, got, raw)
+		}
+	}
+
+	for _, entry := range []string{"proxy.internal.example", "172.16.0.0-172.16.255.255", "10.0.0.0/8/8"} {
+		t.Run(entry, func(t *testing.T) {
+			if _, err := NewModule(db, WithKeySource(keys), WithBlindIndexKey(testutil.BlindIndexKey()),
+				WithTrustedProxies(entry)); err == nil {
+				t.Error("NewModule() error = nil, want a rejection naming the entry")
+			}
+		})
+	}
+}

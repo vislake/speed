@@ -271,8 +271,10 @@ type Session struct {
 	// Device, UserAgent and IP describe the client, for the owner's device
 	// list. Device and UserAgent are client-supplied free text, truncated
 	// to their columns' widths at the repository write boundary (see the
-	// column-width constants above); IP is the socket peer's address and
-	// cannot exceed its column.
+	// column-width constants above); IP is the address handler.go's
+	// clientIP resolved for the request -- the direct connection address,
+	// or the forwarding header a declared trusted proxy's request carried
+	// (WithTrustedProxies) -- and cannot exceed its column.
 	Device    string `gorm:"size:255;not null"`
 	UserAgent string `gorm:"column:user_agent;size:512;not null"`
 	IP        string `gorm:"column:ip;size:45;not null"`

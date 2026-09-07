@@ -3,6 +3,7 @@ package authn
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -243,6 +244,15 @@ type Service struct {
 	// r.TLS. See that option's doc comment.
 	secureCookies bool
 
+	// trustedProxies is WithTrustedProxies' compiled value: the IP
+	// addresses and CIDR prefixes of the reverse proxies this deployment
+	// receives requests through. Handler.clientIP reads a request's
+	// forwarding headers only when its direct connection address is within
+	// one of them; empty keeps the module's original behavior, every
+	// request recording its direct connection address. See that option's
+	// doc comment.
+	trustedProxies []netip.Prefix
+
 	// authCount and authDuration back the
 	// "authn.auth.count"/"authn.auth.duration" instruments
 	// registerAuthMetrics wires from NewService. recordAuthMetric guards
@@ -376,6 +386,7 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 		recoveryCodes:      recoveryCodes,
 		issuer:             cfg.issuer,
 		secureCookies:      cfg.secureCookies,
+		trustedProxies:     slices.Clone(cfg.trustedProxyNets),
 
 		authCount:    authCount,
 		authDuration: authDuration,

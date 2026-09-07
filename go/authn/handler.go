@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -240,17 +241,141 @@ func auditFailureReason(err error) string {
 	return "unknown"
 }
 
+// headerFlyClientIP and headerXForwardedFor are the forwarding headers
+// this module reads when the request's direct peer is a declared trusted
+// proxy (see clientIP and WithTrustedProxies): Fly-Client-IP, the address
+// Fly.io's proxy overwrites on every request it forwards, and
+// X-Forwarded-For, the chain of proxies a request passed through that
+// generic reverse proxies append to. They are deliberately only ever read
+// under the trusted-peer gate clientIP enforces -- never for a request
+// whose RemoteAddr is not a declared proxy.
+const (
+	headerFlyClientIP   = "Fly-Client-IP"
+	headerXForwardedFor = "X-Forwarded-For"
+)
+
 // clientIP extracts the requesting client's address from r, for the rate
-// limiter and the login/session records. It reads RemoteAddr's host part
-// only -- never X-Forwarded-For, which an untrusted client can set to
-// whatever it likes; a deployment behind a real proxy terminates that header
-// into RemoteAddr before this handler ever sees the request.
-func clientIP(r *http.Request) string {
-	host := r.RemoteAddr
+// limiter and the login/session records.
+//
+// The address a deployment behind a reverse proxy wants recorded is the
+// client's, not the proxy's: the platform-injected forwarding headers
+// (headerFlyClientIP on Fly.io, headerXForwardedFor generally) carry it,
+// but a header is only what it claims to be when the proxy -- not an
+// arbitrary client -- wrote it. So the derivation is gated on the
+// host-declared trusted-proxy list Service carries (WithTrustedProxies):
+// the forwarding headers are read ONLY when the request's direct
+// connection address (RemoteAddr) is one of the declared proxies, and
+// every other request records its direct connection address, exactly as
+// this method always did. A direct client can never mint a recorded
+// address by setting a header: it is not a declared proxy, so its headers
+// are never read.
+//
+// For a request from a declared proxy, headerFlyClientIP is read first
+// when present -- Fly.io's proxy overwrites it per request, making it the
+// platform's own answer rather than a chain to parse -- and
+// headerXForwardedFor second. A proxy appends the peer it saw to
+// X-Forwarded-For, so the header may carry entries the client itself
+// supplied in front of the proxy's own; the chain is therefore walked
+// from the right -- the end the trusted proxies appended -- stripping the
+// entries that name declared proxies until the first entry that names no
+// declared proxy, the address the leftmost trusted proxy actually saw, is
+// found. An entry that does not parse as an IP address (an empty slot, a
+// hostname) ends the walk with no answer: the chain is not what this
+// deployment's proxies write, and recording the peer is the honest result
+// rather than an address guessed past a malformed entry.
+func (h *Handler) clientIP(r *http.Request) string {
+	peer := remoteAddrHost(r.RemoteAddr)
+	if len(h.svc.trustedProxies) == 0 || !peerWithinAny(peer, h.svc.trustedProxies) {
+		return peer
+	}
+	if client, ok := flyClientIP(r.Header.Get(headerFlyClientIP)); ok {
+		return client
+	}
+	if client, ok := xForwardedForClientIP(r.Header.Get(headerXForwardedFor), h.svc.trustedProxies); ok {
+		return client
+	}
+	return peer
+}
+
+// remoteAddrHost extracts the host part of a RemoteAddr -- "host:port",
+// or a bracketed "[::1]:port" -- returning the address unchanged when it
+// carries no port.
+func remoteAddrHost(remoteAddr string) string {
+	host := remoteAddr
 	if idx := strings.LastIndex(host, ":"); idx != -1 && !strings.Contains(host[idx:], "]") {
 		host = host[:idx]
 	}
 	return strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+}
+
+// peerWithinAny reports whether peer is an IP address contained in one of
+// nets -- the gate that decides whether a request's forwarding headers may
+// be read at all. An unparseable peer (a hostname, an empty RemoteAddr) is
+// never within a proxy range, so its request stays on the connection-
+// address path.
+func peerWithinAny(peer string, nets []netip.Prefix) bool {
+	addr, err := netip.ParseAddr(peer)
+	if err != nil {
+		return false
+	}
+	return peerWithinAddr(addr.Unmap(), nets)
+}
+
+// flyClientIP validates and canonicalizes a headerFlyClientIP value. Only
+// the first comma-separated entry is read -- Fly.io's proxy sets a single
+// value, overwriting whatever the client sent -- and an entry that does
+// not parse as an IP address reports not-ok, sending the caller on to
+// headerXForwardedFor or, failing that, the connection address, rather
+// than recording a value no proxy wrote.
+func flyClientIP(value string) (string, bool) {
+	entry := value
+	if idx := strings.IndexByte(entry, ','); idx != -1 {
+		entry = entry[:idx]
+	}
+	addr, err := netip.ParseAddr(strings.TrimSpace(entry))
+	if err != nil {
+		return "", false
+	}
+	return addr.Unmap().String(), true
+}
+
+// xForwardedForClientIP recovers the client address from an
+// headerXForwardedFor chain, walking it from the right and stripping the
+// entries that name declared proxies -- see clientIP's doc comment for
+// the full reasoning and fail-closed rule.
+func xForwardedForClientIP(value string, trusted []netip.Prefix) (string, bool) {
+	entries := strings.Split(value, ",")
+	for i := len(entries) - 1; i >= 0; i-- {
+		addr, err := netip.ParseAddr(strings.TrimSpace(entries[i]))
+		if err != nil {
+			// A proxy appends only bare peer addresses, so an entry
+			// that does not parse means the chain is not one this
+			// deployment's proxies wrote -- report no answer rather
+			// than guessing past it.
+			return "", false
+		}
+		addr = addr.Unmap()
+		if peerWithinAddr(addr, trusted) {
+			continue
+		}
+		return addr.String(), true
+	}
+	// Every entry names a declared proxy: the client is itself on the
+	// trusted side of the chain, invisible to this walk. The caller
+	// records the direct connection address, the only untrusted fact it
+	// holds.
+	return "", false
+}
+
+// peerWithinAddr is peerWithinAny's parsed-address half, shared with
+// xForwardedForClientIP's chain walk.
+func peerWithinAddr(addr netip.Addr, nets []netip.Prefix) bool {
+	for _, net := range nets {
+		if net.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 // deref returns *p, or "" for a nil p -- every optional string field the
@@ -288,9 +413,10 @@ func str(s string) *string {
 // a reverse proxy, with this process only ever seeing plaintext HTTP on its
 // own listener -- so the host, who knows its own topology, forces it through
 // that option rather than this handler trusting any client-supplied signal
-// (the same reasoning clientIP's doc comment gives for never reading
-// X-Forwarded-For). A host not actually serving over HTTPS anywhere must
-// never pass it.
+// (the same reasoning clientIP's doc comment gives for reading forwarding
+// headers only from a request whose peer is a declared trusted proxy, never
+// from a client that can set its own). A host not actually serving over
+// HTTPS anywhere must never pass it.
 func (h *Handler) ensurePreAuthCookie(w http.ResponseWriter, r *http.Request) (string, error) {
 	if cookie, err := r.Cookie(preAuthCookieName); err == nil && cookie.Value != "" {
 		return cookie.Value, nil
@@ -352,7 +478,7 @@ func (h *Handler) AuthnRegister(w http.ResponseWriter, r *http.Request) {
 		Password:    req.Password,
 		DisplayName: deref(req.DisplayName),
 		Locale:      deref(req.Locale),
-		IP:          clientIP(r),
+		IP:          h.clientIP(r),
 	})
 	if err != nil {
 		writeAppError(w, err)
@@ -386,7 +512,7 @@ func (h *Handler) AuthnLoginWithPassword(w http.ResponseWriter, r *http.Request)
 		TenantID:   pkgcore.TenantID(deref(req.TenantID)),
 		Device:     deref(req.Device),
 		UserAgent:  r.UserAgent(),
-		IP:         clientIP(r),
+		IP:         h.clientIP(r),
 	})
 	if err != nil {
 		// A failed sign-in is a pre-auth event: no tenant is attested,
@@ -414,7 +540,7 @@ func (h *Handler) AuthnRequestSMSCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.RequestSMSCode(r.Context(), RequestSMSCodeInput{Phone: req.Phone, IP: clientIP(r)}); err != nil {
+	if err := h.svc.RequestSMSCode(r.Context(), RequestSMSCodeInput{Phone: req.Phone, IP: h.clientIP(r)}); err != nil {
 		writeAppError(w, err)
 		return
 	}
@@ -437,7 +563,7 @@ func (h *Handler) AuthnLoginWithSMSCode(w http.ResponseWriter, r *http.Request) 
 		TenantID:  pkgcore.TenantID(deref(req.TenantID)),
 		Device:    deref(req.Device),
 		UserAgent: r.UserAgent(),
-		IP:        clientIP(r),
+		IP:        h.clientIP(r),
 	})
 	if err != nil {
 		// Pre-auth event, exactly as the password leg above: no tenant
@@ -556,7 +682,7 @@ func (h *Handler) AuthnSocialCallback(w http.ResponseWriter, r *http.Request, pr
 		SessionBinding: BindingFromCookie(cookie),
 		TenantID:       pkgcore.TenantID(deref(req.TenantID)),
 		UserAgent:      r.UserAgent(),
-		IP:             clientIP(r),
+		IP:             h.clientIP(r),
 	})
 	if err != nil {
 		writeAppError(w, err)
@@ -718,7 +844,7 @@ func (h *Handler) AuthnVerifyStepUp(w http.ResponseWriter, r *http.Request) {
 		writeAppError(w, err)
 		return
 	}
-	pair, err := h.svc.VerifyStepUp(r.Context(), principal, req.Code, clientIP(r))
+	pair, err := h.svc.VerifyStepUp(r.Context(), principal, req.Code, h.clientIP(r))
 	if err != nil {
 		writeAppError(w, err)
 		return

@@ -60,6 +60,7 @@ import in the other direction is a merge blocker rather than a style note.
 | `WithFeatureGate` | Makes this module's declared feature flags (`authn.password_login`, `authn.sms_login`, the five `authn.social.*` channels, `authn.sso.oidc`) effective at request time. `*config.Service` satisfies the `FeatureGate` interface structurally. See "Feature flags are enforced through a host-supplied gate" below. |
 | `WithClock`, `WithIssuer`, `WithAccessTokenTTL`, `WithRefreshTokenTTL`, `WithSessionTTL`, `WithRevocationMode`, `WithPasswordParams`, `WithPasswordPolicy` | Everything else. A nil or non-positive value leaves the default in place. |
 | `WithSMSSender`, `WithDeploymentMode`, `WithSMSCodeTTL`, `WithSMSCodeMaxAttempts` | The phone-login transport and its lifetime/attempt budget. See "A distributed deployment must wire an `SMSSender`" below for what `WithDeploymentMode` is for. |
+| `WithTrustedProxies(proxies ...string)` | The IP addresses and CIDR prefixes of the reverse proxies requests arrive through, so `Handler.clientIP` recovers the real client address from the forwarding headers those proxies inject (`Fly-Client-IP` on Fly.io, `X-Forwarded-For` generally) instead of recording the proxy itself -- see "Every recorded address is the client's, gated on host-declared trusted proxies" below. Empty (the default) keeps every request recording its direct connection address. |
 
 ### Feature flags are enforced through a host-supplied gate
 
@@ -623,8 +624,36 @@ production topology — TLS terminated at a load balancer or reverse proxy, the
 Go process itself only ever seeing plaintext HTTP — so a host serving HTTPS
 externally must pass it (it knows its own topology; the handler deliberately
 never infers the scheme from a client-supplied header, the same reasoning
-`clientIP`'s doc comment gives for ignoring `X-Forwarded-For`). A host not
-actually serving over HTTPS anywhere must not pass it.
+`clientIP`'s doc comment gives for reading forwarding headers only from a
+request whose peer is a declared trusted proxy, never from a client that can
+set its own). A host not actually serving over HTTPS anywhere must not pass
+it.
+
+### Every recorded address is the client's, gated on host-declared trusted proxies
+
+The address this module records -- the per-IP rate-limiter key, the `Session.IP`
+column, the `LoginAttempt.IP` login-history column, the address carried by the
+session and login events -- is resolved by `Handler.clientIP` (handler.go). The
+resolution has one trusted-proxy-aware shape, shipped to close the reference
+app's Fly.io finding (every recorded address was the proxy's internal
+`172.16.45.218`, never the client's): a request's direct connection address
+(`RemoteAddr`) is the answer UNLESS the host declared the proxies it receives
+requests through (`WithTrustedProxies`) AND that request's peer is one of
+them, in which case the platform-injected forwarding headers are read --
+`Fly-Client-IP` first (Fly.io's proxy overwrites it per request), then
+`X-Forwarded-For`, walked from the right and stripping the entries that name
+declared proxies until the first untrusted entry, the address the leftmost
+trusted proxy actually saw, is found. Everything else -- no proxies declared,
+a peer that is not one of them, a malformed chain, a chain naming only
+proxies -- falls back to the connection address. That gate is what keeps a
+direct client from minting its own recorded address with a spoofed header: a
+header is only read from a request whose peer the HOST declared trustworthy.
+Entries that are neither IP addresses nor CIDR prefixes are refused at wiring
+time (`newOptions`), and a declared proxy must overwrite or strip forwarding
+headers it receives from its own clients, so a client cannot smuggle a header
+through the proxy it is trusted for (Fly.io's proxy does; a generic reverse
+proxy must be configured to). The module never guesses a proxy range or a
+header's provenance from the request itself.
 
 ### `RevokeSession` on someone else's session answers 404, never 403
 

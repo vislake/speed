@@ -1811,3 +1811,313 @@ func TestHandler_DeploymentModeConsistency_SMSFlow(t *testing.T) {
 // strPtr returns a pointer to s, for building spec-generated request types
 // whose optional fields are pointers.
 func strPtr(s string) *string { return &s }
+
+// ---------------------------------------------------------------------------
+// Trusted-proxy client-IP derivation (handler.go's clientIP), the
+// regression suite for the reference-app Fly.io finding: every recorded
+// session/login-history address was the proxy's (172.16.45.218), never the
+// real client's, because the platform-injected forwarding headers
+// (Fly-Client-IP / X-Forwarded-For) were never read. The fix gates header
+// reading on a host-declared trusted-proxy list (WithTrustedProxies), so
+// the two halves of the finding each get their own pinned shape: with the
+// proxies declared, a request from one of them records the forwarded
+// client address; without them (or from a peer that is not one), a request
+// carrying spoofed forwarding headers still records its connection
+// address. The derivation tests below exercise clientIP directly; the
+// flow test drives the whole sign-in path and reads the recorded rows and
+// responses back.
+
+// signInFrom issues a password sign-in for identifier on h over a request
+// whose direct connection address is peer (r.RemoteAddr) and which carries
+// the given headers -- the request shape clientIP's trusted-proxy gate
+// decides on. doHandlerJSON cannot produce one: httptest.NewRequest always
+// originates from its own fixed 192.0.2.1 address.
+func signInFrom(h *Handler, identifier, peer string, headers [][2]string) *httptest.ResponseRecorder {
+	body, err := json.Marshal(api.AuthnLoginWithPasswordRequest{
+		Identifier: identifier,
+		Password:   testPassword,
+	})
+	if err != nil {
+		panic(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", bytes.NewReader(body))
+	req.RemoteAddr = peer
+	for _, kv := range headers {
+		req.Header.Set(kv[0], kv[1])
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestHandler_ClientIP_DeclaredProxyForwardingHeaders_ResolvesTheRealClient
+// is regression (a) at the derivation level: with the proxies declared
+// (WithTrustedProxies("203.0.113.0/24")), a request whose direct peer is
+// one of them carries the real client in the platform-injected forwarding
+// headers, and clientIP must return that address -- where the pre-fix code
+// returned the proxy (the finding's 172.16.45.218). Fly-Client-IP wins
+// when present (Fly.io's proxy overwrites it per request); X-Forwarded-For
+// is walked from the right, stripping entries that name declared proxies,
+// so a client's own spoofed prefix entries can never displace the address
+// the trusted proxy appended.
+func TestHandler_ClientIP_DeclaredProxyForwardingHeaders_ResolvesTheRealClient(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(t, WithTrustedProxies("203.0.113.0/24"))
+
+	t.Run("fly client ip wins", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "203.0.113.10:443"
+		req.Header.Set(headerFlyClientIP, "198.51.100.7")
+		if got := h.clientIP(req); got != "198.51.100.7" {
+			t.Errorf("clientIP = %q, want the Fly-Client-IP value %q", got, "198.51.100.7")
+		}
+	})
+	t.Run("x-forwarded-for single value", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "203.0.113.10:443"
+		req.Header.Set(headerXForwardedFor, "198.51.100.7")
+		if got := h.clientIP(req); got != "198.51.100.7" {
+			t.Errorf("clientIP = %q, want the X-Forwarded-For value %q", got, "198.51.100.7")
+		}
+	})
+	t.Run("x-forwarded-for chain strips trailing trusted proxies", func(t *testing.T) {
+		// client -> proxy A -> this proxy: A appended the client, this
+		// proxy appended A. Walking from the right strips A (declared)
+		// and finds the client.
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "203.0.113.10:443"
+		req.Header.Set(headerXForwardedFor, "198.51.100.7, 203.0.113.9")
+		if got := h.clientIP(req); got != "198.51.100.7" {
+			t.Errorf("clientIP = %q, want the address the leftmost trusted proxy saw, %q", got, "198.51.100.7")
+		}
+	})
+	t.Run("client spoof entries left of the appended address change nothing", func(t *testing.T) {
+		// The client sent its own X-Forwarded-For; the trusted proxy
+		// appended the real peer behind it. The rightmost untrusted
+		// entry is the proxy's own answer.
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "203.0.113.10:443"
+		req.Header.Set(headerXForwardedFor, "192.0.2.66, 198.51.100.7")
+		if got := h.clientIP(req); got != "198.51.100.7" {
+			t.Errorf("clientIP = %q, want %q (the appended address, never the client-supplied prefix)", got, "198.51.100.7")
+		}
+	})
+	t.Run("no forwarding headers falls back to the peer", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "203.0.113.10:443"
+		if got := h.clientIP(req); got != "203.0.113.10" {
+			t.Errorf("clientIP = %q, want the peer %q when no header carries an address", got, "203.0.113.10")
+		}
+	})
+	t.Run("malformed chain falls back to the peer", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "203.0.113.10:443"
+		req.Header.Set(headerXForwardedFor, "198.51.100.7, not-an-ip")
+		if got := h.clientIP(req); got != "203.0.113.10" {
+			t.Errorf("clientIP = %q, want the peer %q for a chain no trusted proxy wrote", got, "203.0.113.10")
+		}
+	})
+	t.Run("all-trusted chain falls back to the peer", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "203.0.113.10:443"
+		req.Header.Set(headerXForwardedFor, "203.0.113.9, 203.0.113.10")
+		if got := h.clientIP(req); got != "203.0.113.10" {
+			t.Errorf("clientIP = %q, want the peer %q when the chain names only proxies", got, "203.0.113.10")
+		}
+	})
+	t.Run("unparseable fly client ip falls through to x-forwarded-for", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "203.0.113.10:443"
+		req.Header.Set(headerFlyClientIP, "garbage")
+		req.Header.Set(headerXForwardedFor, "198.51.100.7")
+		if got := h.clientIP(req); got != "198.51.100.7" {
+			t.Errorf("clientIP = %q, want the X-Forwarded-For value %q when Fly-Client-IP is malformed", got, "198.51.100.7")
+		}
+	})
+}
+
+// TestHandler_ClientIP_SpoofedHeaders_NeverBeatTheConnectionAddress is
+// regression (b) at the derivation level: WITHOUT the trusted-proxy
+// configuration -- or with it, but for a request whose peer is not a
+// declared proxy -- a direct request carrying a spoofed Fly-Client-IP or
+// X-Forwarded-For still resolves to the connection address. A naive fix
+// that read the headers unconditionally fails this test; the pre-fix code
+// passes it trivially, which is exactly why it exists alongside the
+// trusted-proxy cases above: the two together pin the honest shape.
+func TestHandler_ClientIP_SpoofedHeaders_NeverBeatTheConnectionAddress(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no proxies declared", func(t *testing.T) {
+		h, _ := newTestHandler(t)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "198.51.100.9:4500"
+		req.Header.Set(headerXForwardedFor, "203.0.113.99")
+		req.Header.Set(headerFlyClientIP, "203.0.113.99")
+		if got := h.clientIP(req); got != "198.51.100.9" {
+			t.Errorf("clientIP = %q, want the connection address %q (no proxy was declared to trust)", got, "198.51.100.9")
+		}
+	})
+	t.Run("peer is not a declared proxy", func(t *testing.T) {
+		h, _ := newTestHandler(t, WithTrustedProxies("203.0.113.0/24"))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "198.51.100.9:4500"
+		req.Header.Set(headerXForwardedFor, "203.0.113.99")
+		req.Header.Set(headerFlyClientIP, "203.0.113.99")
+		if got := h.clientIP(req); got != "198.51.100.9" {
+			t.Errorf("clientIP = %q, want the connection address %q (a direct client is not a declared proxy)", got, "198.51.100.9")
+		}
+	})
+}
+
+// TestHandler_LoginThroughDeclaredProxy_RecordsAndReportsTheClientAddress
+// is the finding's shape end to end (regressions (a) and (c)): through the
+// real sign-in handler, with the proxy declared, a request from the proxy
+// carrying the forwarded client address lands that address -- not the
+// proxy's -- in the session row, the login-history row, the sessions
+// response and the login-history response; and a direct request carrying a
+// spoofed header still lands its own connection address in all four.
+func TestHandler_LoginThroughDeclaredProxy_RecordsAndReportsTheClientAddress(t *testing.T) {
+	h, f := newTestHandler(t, WithTrustedProxies("203.0.113.0/24"))
+	const realClient = "198.51.100.7"
+	const directPeer = "192.0.2.55:4321"
+
+	// The forwarded leg: a request from the declared proxy. The recorded
+	// address must be the client's, where the pre-fix code recorded the
+	// proxy (the probe that opened this round failed here with the proxy
+	// address in the session row).
+	forwarded := f.registerUser(t, "forwarded@example.com", testTenantA)
+	rec := signInFrom(h, "forwarded@example.com", "203.0.113.10:443",
+		[][2]string{{headerXForwardedFor, realClient}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("forwarded login status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	wirePair := decodeBody[api.AuthnTokenPair](t, rec)
+	forwardedPrincipal := Principal{
+		UserID:    forwarded.ID,
+		TenantID:  testTenantA,
+		SessionID: *wirePair.Principal.SessionID,
+	}
+
+	// The direct leg: no proxy in front, a spoofed header. The recorded
+	// address must stay the connection address.
+	direct := f.registerUser(t, "direct@example.com", testTenantA)
+	spoofRec := signInFrom(h, "direct@example.com", directPeer,
+		[][2]string{{headerFlyClientIP, "6.6.6.6"}, {headerXForwardedFor, "6.6.6.6"}})
+	if spoofRec.Code != http.StatusOK {
+		t.Fatalf("direct login status = %d, want %d; body = %s", spoofRec.Code, http.StatusOK, spoofRec.Body.String())
+	}
+	spoofWirePair := decodeBody[api.AuthnTokenPair](t, spoofRec)
+	directPrincipal := Principal{
+		UserID:    direct.ID,
+		TenantID:  testTenantA,
+		SessionID: *spoofWirePair.Principal.SessionID,
+	}
+
+	rows, err := f.svc.ListSessions(t.Context(), forwarded.ID)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if got := rowIP(rows, *wirePair.Principal.SessionID); got != realClient {
+		t.Errorf("session row IP = %q, want the forwarded client %q (was the proxy before the fix)", got, realClient)
+	}
+	attempts, err := f.svc.ListLoginHistory(t.Context(), forwarded.ID, 0)
+	if err != nil {
+		t.Fatalf("ListLoginHistory: %v", err)
+	}
+	attempt := attemptRow(attempts, *wirePair.Principal.SessionID)
+	if attempt == nil {
+		t.Fatalf("no login-history row for session %q in %+v", *wirePair.Principal.SessionID, attempts)
+	}
+	if attempt.IP != realClient {
+		t.Errorf("login-history row IP = %q, want the forwarded client %q (was the proxy before the fix)", attempt.IP, realClient)
+	}
+	directRows, err := f.svc.ListSessions(t.Context(), direct.ID)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if got := rowIP(directRows, *spoofWirePair.Principal.SessionID); got != "192.0.2.55" {
+		t.Errorf("spoofed direct session row IP = %q, want the connection address %q", got, "192.0.2.55")
+	}
+
+	// The responses carry the same addresses the rows do.
+	var sessionsResp api.AuthnListSessionsResponse
+	rec2 := doHandlerJSON(t, h, http.MethodGet, "/api/v1/authn/sessions", nil, &forwardedPrincipal)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("list sessions status = %d, want %d", rec2.Code, http.StatusOK)
+	}
+	sessionsResp = decodeBody[api.AuthnListSessionsResponse](t, rec2)
+	if got := sessionResponseIP(*sessionsResp.Sessions, *wirePair.Principal.SessionID); got != realClient {
+		t.Errorf("sessions response IP = %q, want the forwarded client %q", got, realClient)
+	}
+
+	var historyResp api.AuthnListLoginHistoryResponse
+	historyRec := doHandlerJSON(t, h, http.MethodGet, "/api/v1/authn/login-history", nil, &forwardedPrincipal)
+	if historyRec.Code != http.StatusOK {
+		t.Fatalf("list login history status = %d, want %d", historyRec.Code, http.StatusOK)
+	}
+	historyResp = decodeBody[api.AuthnListLoginHistoryResponse](t, historyRec)
+	if got := attemptResponseIP(*historyResp.Attempts, attempt.ID); got != realClient {
+		t.Errorf("login-history response IP = %q, want the forwarded client %q", got, realClient)
+	}
+
+	var directSessions api.AuthnListSessionsResponse
+	directSessionsRec := doHandlerJSON(t, h, http.MethodGet, "/api/v1/authn/sessions", nil, &directPrincipal)
+	if directSessionsRec.Code != http.StatusOK {
+		t.Fatalf("list sessions (direct) status = %d, want %d", directSessionsRec.Code, http.StatusOK)
+	}
+	directSessions = decodeBody[api.AuthnListSessionsResponse](t, directSessionsRec)
+	if got := sessionResponseIP(*directSessions.Sessions, *spoofWirePair.Principal.SessionID); got != "192.0.2.55" {
+		t.Errorf("spoofed direct sessions response IP = %q, want the connection address %q", got, "192.0.2.55")
+	}
+}
+
+// rowIP returns the IP of the first of rows whose session id is sessionID,
+// or "" when no row matches.
+func rowIP(rows []Session, sessionID string) string {
+	for i := range rows {
+		if rows[i].ID == sessionID {
+			return rows[i].IP
+		}
+	}
+	return ""
+}
+
+// attemptRow returns the first attempt whose session id is sessionID --
+// the successful sign-in's own login-history row -- or nil when no attempt
+// matches.
+func attemptRow(attempts []LoginAttempt, sessionID string) *LoginAttempt {
+	for i := range attempts {
+		if attempts[i].SessionID == sessionID {
+			return &attempts[i]
+		}
+	}
+	return nil
+}
+
+// sessionResponseIP returns the dereferenced IP of the first session whose
+// id is sessionID, or "" when no session matches.
+func sessionResponseIP(sessions []api.AuthnSession, sessionID string) string {
+	for i := range sessions {
+		if sessions[i].ID != nil && *sessions[i].ID == sessionID {
+			if sessions[i].IP != nil {
+				return *sessions[i].IP
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// attemptResponseIP is sessionResponseIP for the login-history response,
+// keyed on the attempt's own id (the wire type carries no session id).
+func attemptResponseIP(attempts []api.AuthnLoginAttempt, attemptID string) string {
+	for i := range attempts {
+		if attempts[i].ID != nil && *attempts[i].ID == attemptID {
+			if attempts[i].IP != nil {
+				return *attempts[i].IP
+			}
+			return ""
+		}
+	}
+	return ""
+}
