@@ -380,7 +380,7 @@ stays with the reference-app shells.
 | `react`, `react-dom` | peer (required, ^18 or ^19) | the host owns the React tree |
 | `@mui/material` | peer (required, ^9) | the `Button`/`Menu`/`MenuItem` primitives and the ambient theme |
 | `@emotion/react`, `@emotion/styled` | peer (required, ^11) | MUI's own runtime requirements |
-| `@speed/auth-core` | dependency | `TenantSwitcherProps.session` is the `AuthSession` type, so a consumer resolving the published `.d.ts` needs the specifier declared as a dependency; today `src/` imports it type-only |
+| `@speed/auth-core` | dependency | `TenantSwitcherProps.session` is the `AuthSession` type and `src/TenantSwitcher.tsx` imports the runtime helper `isOperationSuperseded` -- the guard that recognizes a switch answer superseded by a sibling session operation and reconciles it by re-issuing the switch instead of surfacing a failure -- so the specifier is a runtime import, not a type-only one |
 | `@speed/i18n` | dependency | the namespace registration and the translation hook every string renders through |
 
 `@speed/ui-kit` (theme provider used only by the test tree),
