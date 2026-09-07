@@ -177,14 +177,20 @@ applied.
 
 ## How a gate here has gone wrong
 
-Every item below is a real defect found in THIS suite, most of them in
-one day, and they are all one mistake: **the gate measured something
-adjacent to the property instead of the property.** They are written
-down because the next person adding a gate will reach for the same
-convenient locator, and because two of them were about to accuse the
-product of a defect it did not have -- which is the most expensive thing
-an acceptance suite can do. A false accusation spends a round's work on
-nothing and teaches everyone to discount the next report.
+Every item below is a real defect found in THIS suite, and most of them
+are one mistake: **the gate measured something adjacent to the property
+instead of the property.** The last three are its relatives -- the right
+question asked of the wrong population, a setting given to the wrong
+process, and a convenient check trusted over an authoritative one -- and
+they belong here because they produced the same result: an answer that
+was not about the product.
+
+They are written down for two reasons. The next person adding a gate
+will reach for the same convenient locator. And several of these were a
+step from accusing the product of a defect it did not have, which is the
+most expensive thing an acceptance suite can do: a false accusation
+spends a round's work on nothing and teaches everyone to discount the
+next report.
 
 **A locator that stands in for the element you mean.**
 `getByRole('listitem').first()` clicked the frame's Home nav entry, not
@@ -255,6 +261,37 @@ passed and ask what it would have let through. That found two of them.
 and never created anything, so every block-B gate failed the moment
 block B's surface landed. If a comment describes behaviour, the code has
 to have it.
+
+**The right question asked of the wrong population.** Twice, and both
+times the question itself was correct. The clinic-name gate asked "can a
+person tell which clinic they are working in" only of clinics configured
+before the server booted -- so it stayed green while a self-service
+clinic showed a raw tenant id on every surface. The four core-journey
+gates ask "can a practice do the work" only of seeded demo accounts,
+which boot-time seeding hands an entitlement and credits; a real
+registrant gets neither, and a browser walk-through of the same journey
+stopped at "This clinic's plan does not include smile simulation" while
+all four were passing. When a gate signs in, ask whose account it is and
+what that account was given.
+
+**A switch handed to the wrong process.** The refund gate passed
+FAKE_IMAGE_FAIL -- the fake PROVIDER's variable -- to the Go server, so
+the server had no image provider configured at all and every generation
+failed for an unrelated reason. It went green either way, because it
+also never navigated to the surface it claimed to read: the probe that
+found it printed the "ledger" and got the case detail page. Two wrong
+explanations were offered before the probe, both plausible, both wrong.
+When a gate spans processes, name which process each setting belongs to.
+
+**My own check standing in for the authoritative one.** Three times in a
+day. `grep -E '(passed|failed)' | tail -1` silently dropped "5 failed"
+and reported 17 passed. A grep whose backslash the shell ate reported a
+digit assertion missing when it was there. And a hand-written CJK regex
+over e2e/ found nothing while the repository's own tools/scan_cjk.py
+found thirteen -- browser snapshots in a gitignored directory, which the
+scanner sees because it walks the tree rather than the index. Where an
+authoritative tool exists, a quick check can locate but must not
+conclude.
 
 **A gate that runs nowhere.** One test skipped itself unless
 `E2E_BASE_URL` was set and did not carry `@deployment`, so the
