@@ -706,7 +706,16 @@ func decodeEnvelope(stored []byte) (value []byte, expiresAt time.Time, ok bool) 
 	}
 	nanos := binary.BigEndian.Uint64(stored[:kvEnvelopeHeaderSize])
 	if nanos != 0 {
-		expiresAt = time.Unix(0, int64(nanos)) //nolint:gosec // G115: nanos only ever comes back from a uint64(int64) cast encodeEnvelope itself made on a non-negative UnixNano value (any real wall-clock time is positive), so the reverse conversion here never wraps
+		// nanos is the uint64(int64) bit pattern of an encode-side
+		// expiresAt.UnixNano(), and this conversion is its exact reverse.
+		// It wraps only once the stored count reaches 2^63, which no
+		// encode can produce before 2262-04-11 -- past that instant
+		// UnixNano itself overflows int64, and such an envelope decodes
+		// to a pre-1970 instant that reads as already expired, never as
+		// one that lives forever. The 2262-year horizon is a real
+		// boundary this store accepts as its deliberate TTL limit, not
+		// something the conversion can outrun.
+		expiresAt = time.Unix(0, int64(nanos)) //nolint:gosec // G115: the uint64->int64 narrowing wraps only at the deliberate 2262 TTL horizon above; gosec cannot see the bound, so the suppression stays
 	}
 	return stored[kvEnvelopeHeaderSize:], expiresAt, true
 }
