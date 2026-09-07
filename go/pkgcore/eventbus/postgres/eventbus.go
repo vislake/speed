@@ -161,12 +161,39 @@ const (
 //     shrink the catch-up side of this window -- most single connection
 //     blips now recover inside that call instead of surfacing as a
 //     duplicate at all -- but a failure that outlasts every retry still
-//     redelivers rather than silently drops. This is the same trade
+//     redelivers rather than silently drops. One exception to the
+//     never-loss half of that argument exists, and it is the price of
+//     the wedge property below: a row whose LOCAL delivery is still in
+//     progress when the catch-up scan passes it (the scan skips rows
+//     named in the in-flight set rather than re-running handlers that
+//     are already running, and its advance cannot stay behind one row
+//     while delivering later ones) is never fetched again, so a crash
+//     -- or a panic, which also skips the mark -- landing in that
+//     delivery after the pass is not redelivered on restart. Rows whose
+//     local delivery is not in progress keep the argument in full.
+//     This is the same trade
 //     eventbus/redis documents for its own cross-process path
 //     ("at-least-once-ish but not retried"): a host whose handlers are
 //     not idempotent must de-duplicate itself, by event id or by the
 //     payload's own natural key, exactly as it would have to for
 //     eventbus/redis.
+//   - A local handler that never returns (a wedged handler) stalls
+//     nothing but its own row. Publish's in-flight bookkeeping spans the
+//     synchronous handler loop, but the catch-up poller's gate only
+//     withholds a Type while a raised Publish has not yet recorded its
+//     row's id -- the insert's own round trip, nothing more. A wedged
+//     handler's row id is long since recorded, so the scan proceeds and
+//     skips exactly that row -- which is being delivered right now, on
+//     the publishing goroutine -- while every other row of the Type,
+//     committed by any replica, keeps being delivered and advanced past
+//     on the ordinary schedule. The wedged row itself is advanced past
+//     too, because one monotone watermark cannot both deliver later
+//     rows and stay behind an earlier one; its handlers keep running for
+//     as long as the publishing process lives, and the never-loss
+//     exception above is what a crash of that delivery means afterwards.
+//     This mirrors the wedge every broker-backed bus documents for a
+//     handler that never acknowledges, with the difference that here the
+//     wedge cannot take the Type's other rows down with it.
 //   - Unlike eventbus/redis, THIS implementation genuinely survives a
 //     replica's own restart without losing events published while it was
 //     down, provided the restarting process is built with the SAME
@@ -206,46 +233,80 @@ type EventBus struct {
 	// delivery-critical section against every other one: Publish's
 	// per-Type in-flight bookkeeping and local-delivery marks (below) and
 	// the catch-up poller's per-batch check of that bookkeeping plus its
-	// cursor read and outbox fetch, and its per-row mark check and
-	// pruning. The lock is deliberately
-	// NEVER held while a handler runs: Publish's own synchronous local
-	// delivery and deliverPendingForType's catch-up loop both invoke every
-	// handler outside it, which is what makes a handler's re-entrant
-	// Publish (or Subscribe) on this same bus safe instead of a
-	// self-deadlock.
+	// cursor read and outbox fetch, and its per-row check and pruning.
+	// The lock is deliberately NEVER held while a handler runs: Publish's
+	// own synchronous local delivery and deliverPendingForType's catch-up
+	// loop both invoke every handler outside it, which is what makes a
+	// handler's re-entrant Publish (or Subscribe) on this same bus safe
+	// instead of a self-deadlock.
 	//
 	// What the lock actually buys is the no-double-delivery argument
 	// between the two delivery paths for one (replicaID, event Type)
 	// cursor row. Publish raises the Type's in-flight count BEFORE its
 	// outbox insert can make a row visible (the insert is that visibility
-	// point) and drops it only AFTER its local handlers ran and the row id
-	// was recorded in locallyDelivered. The poller's in-flight check,
-	// cursor read and fetch share one critical section, so a fetch that
-	// sees the count at zero can only run entirely before a concurrent
-	// Publish's insert commits, or entirely after that Publish recorded
-	// its mark -- it can never catch a committed row in the gap between
-	// the row's local handlers running and that delivery being recorded.
-	// A locally delivered row therefore always reaches the catch-up scan
-	// carrying its mark, and the scan skips it (advancing past it without
-	// re-running its handlers) instead of redelivering it; a fetch that
-	// races a Publish the other way -- seeing the raised count -- skips
-	// the batch entirely and lets that Publish's own local delivery handle
-	// its row, which the next catch-up cycle picks up if the publish
-	// covered less than the batch would have.
+	// point) and records the committed row's id in inFlightRows once the
+	// insert has returned and the publish has handlers to run, dropping
+	// the count and the id only when Publish returns -- after the local
+	// handlers ran and the row id was recorded in locallyDelivered. The
+	// poller's in-flight check, cursor read and fetch share one critical
+	// section, so a fetch that passes the check can only run entirely
+	// before a concurrent Publish's insert commits, or entirely after that
+	// Publish recorded its mark, or -- the case the per-row skip exists
+	// for -- while that Publish's handlers are running, with the row's id
+	// sitting in inFlightRows so the scan skips exactly that row instead
+	// of delivering it a second time. The one gap the per-row record
+	// cannot cover is a row committed while its publisher's insert has not
+	// returned yet: the id is unknown until it does, so the row would be
+	// visible and yet unidentifiable. That gap is what the count closes --
+	// while it exceeds the number of recorded ids, at least one such
+	// publish is out, and the check withholds the Type. A locally
+	// delivered row therefore always reaches the catch-up scan carrying
+	// its mark (or an in-flight record the scan skips), and the scan
+	// advances past it without re-running its handlers; a fetch that
+	// races a Publish the other way -- seeing a raised count with
+	// unrecorded ids -- skips the batch entirely and lets that Publish's
+	// own local delivery handle its row, which the next catch-up cycle
+	// picks up if the publish covered less than the batch would have.
 	deliverMu sync.Mutex
 
-	// inFlight counts, per event Type, the Publish calls on this instance
-	// whose local delivery has not fully completed yet -- the count is
-	// raised before the outbox insert and dropped after the local handlers
-	// ran and the row's id was recorded in locallyDelivered (the drop is
-	// deferred, so even a panicking handler cannot wedge the poller; a
-	// panic also skips the mark, so the poller re-delivers the row rather
-	// than the panicked local path silently swallowing it). While the
-	// count is non-zero the Type's committed rows are being handled
-	// synchronously, or are about to be marked, so the catch-up poller
-	// must not fetch them; once it reaches zero, every row that publish
-	// committed already carries its mark. Guarded by deliverMu.
+	// inFlight counts, per event Type, this instance's Publish calls for
+	// that Type that have raised the guard below but not yet returned:
+	// raised before the outbox insert can make a row visible, dropped by a
+	// deferred function when Publish returns, so the count spans the
+	// insert and the local handler loop. Its only poller-facing role is
+	// the unrecorded-id signal: while the count exceeds the number of ids
+	// recorded in inFlightRows for the Type, at least one raised Publish
+	// has not yet learned its row's id, so its row could be committed and
+	// visible while this instance still cannot name it -- a fetch could
+	// catch such a row between its commit and the local delivery that will
+	// mark it, so the poller withholds the Type for exactly that window
+	// (see deliverPendingForType). The count is deliberately NOT a wedge
+	// guard: a Publish wedged inside a local handler has long since
+	// recorded its row's id, so count and recorded ids agree and the
+	// poller proceeds, skipping exactly the wedged row. The deferred drop
+	// means a panic cannot leave a count behind (a panic also skips the
+	// mark, leaving the row for the poller -- see Publish's own doc
+	// comment). Guarded by deliverMu.
 	inFlight map[string]int
+
+	// inFlightRows records, per event Type, the ids of committed outbox
+	// rows whose synchronous local delivery -- Publish's own handler loop
+	// -- is in progress. An id is recorded once the row's INSERT has
+	// returned (the row is committed by then, which is what makes it
+	// fetchable) and the Publish found at least one local handler to run,
+	// and it is removed by the same deferred drop that lowers the count,
+	// only after the row was recorded in locallyDelivered. While an id is
+	// recorded, the catch-up poller skips exactly that row -- its handlers
+	// are running, or are about to run and then mark it -- rather than
+	// abandoning the whole Type, which is what lets a wedged local handler
+	// (one that never returns) stall nothing but its own row: every other
+	// row of the Type keeps being delivered, and the wedged row is not
+	// re-fetched once the scan has advanced past it (see
+	// deliverPendingForType's doc comment for the trade that advance
+	// makes). A Publish that found no local handler records nothing: it
+	// will never deliver the row itself, so the row must stay visible to
+	// the poller, which is its delivery. Guarded by deliverMu.
+	inFlightRows map[string]map[int64]struct{}
 
 	// locallyDelivered records, per event Type, the outbox row ids whose
 	// handlers this instance's own synchronous Publish path has already
@@ -309,6 +370,7 @@ func NewEventBus(pool *pgxpool.Pool, replicaID string) *EventBus {
 		replicaID:        replicaID,
 		handlers:         make(map[string][]pkgcore.EventHandler),
 		inFlight:         make(map[string]int),
+		inFlightRows:     make(map[string]map[int64]struct{}),
 		locallyDelivered: make(map[string]map[int64]struct{}),
 		ctx:              ctx,
 		cancel:           cancel,
@@ -406,19 +468,42 @@ func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 	}
 
 	// Raise this Type's in-flight count BEFORE the insert below can make
-	// the row visible to the catch-up poller, and drop it only after the
+	// the row visible to the catch-up poller, and drop it (with the row's
+	// id, once recorded) only when this function returns -- after the
 	// local handlers ran and the row id was recorded in locallyDelivered
-	// (the block near the end of this function) -- see deliverMu's own doc
-	// comment for why this ordering is the no-double-delivery argument.
-	// defer guarantees the count is dropped on every path out of this
-	// function, including a handler panic, so a wedged publish can never
-	// stall the poller; a panic also skips the mark, leaving the poller to
-	// deliver the row rather than the panicked local path swallowing it.
+	// (the block near the end of this function). The count's role is the
+	// no-double-delivery argument's transient-insert half: while it
+	// exceeds the ids recorded in inFlightRows, the poller withholds the
+	// Type, and a row committed in that window is never fetched before its
+	// local delivery is recorded (see deliverMu's own doc comment). The
+	// defer makes sure neither the count nor a recorded id outlives this
+	// call on ANY path out of it -- including a handler panic, which also
+	// skips the mark below, so the panicked row is left for the poller to
+	// deliver rather than the panicked local path silently swallowing it
+	// (unless the poller has already advanced past the row while it was in
+	// flight -- the trade deliverPendingForType's doc comment describes).
+	// What the defer does NOT buy is immunity from a handler that never
+	// returns: the count spans the synchronous handler loop below, so a
+	// wedged handler keeps this call's count and recorded id up for as
+	// long as it runs. That is deliberate -- it is exactly what makes the
+	// poller skip the wedged row rather than re-run its handlers -- and it
+	// cannot stall the poller's OTHER deliveries, because the poller's
+	// gate only withholds the Type while an id is unrecorded, and this
+	// call's id is recorded before its handlers run (see below).
+	recordedInFlightID := false
+	var id int64
 	b.deliverMu.Lock()
 	b.inFlight[evt.Type]++
 	b.deliverMu.Unlock()
 	defer func() {
 		b.deliverMu.Lock()
+		if recordedInFlightID {
+			ids := b.inFlightRows[evt.Type]
+			delete(ids, id)
+			if len(ids) == 0 {
+				delete(b.inFlightRows, evt.Type)
+			}
+		}
 		b.inFlight[evt.Type]--
 		if b.inFlight[evt.Type] == 0 {
 			delete(b.inFlight, evt.Type)
@@ -426,18 +511,39 @@ func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 		b.deliverMu.Unlock()
 	}()
 
-	id, err := insertOutboxAndNotify(ctx, b.pool, evt.Type, string(evt.TenantID), payload)
+	id, err = insertOutboxAndNotify(ctx, b.pool, evt.Type, string(evt.TenantID), payload)
 	if err != nil {
 		return fmt.Errorf("pkgcore/eventbus/postgres: publish event %q: %w", evt.Type, err)
 	}
 
-	// Local handlers run WITHOUT deliverMu held (the in-flight count above
-	// is what keeps the catch-up poller from racing them), synchronously
-	// and in registration order on this goroutine, exactly as on the
-	// in-memory bus. A handler's own re-entrant Publish on this bus takes
-	// deliverMu only for its brief in-flight bookkeeping, never blocking
-	// on this call's lock, because this call no longer holds it.
+	// Local handlers run WITHOUT deliverMu held (the in-flight record
+	// below is what keeps the catch-up poller from racing them),
+	// synchronously and in registration order on this goroutine, exactly
+	// as on the in-memory bus. A handler's own re-entrant Publish on this
+	// bus takes deliverMu only for its brief in-flight bookkeeping, never
+	// blocking on this call's lock, because this call no longer holds it.
 	handlers := b.handlersFor(evt.Type)
+	if len(handlers) > 0 {
+		// Record the committed row's id in inFlightRows before its handlers
+		// run, naming it for the poller's per-row skip while this call's
+		// synchronous delivery is in progress (the window between this
+		// record and the mark below) -- and only when there IS a local
+		// delivery in progress: a publish that found no handler will never
+		// deliver the row itself, so the row must stay visible to the
+		// poller, which is its delivery. Between the row's commit and this
+		// record the raised count exceeds the recorded ids, so the poller
+		// withholds the Type (the count's role above; see also deliverMu's
+		// own doc comment).
+		b.deliverMu.Lock()
+		ids := b.inFlightRows[evt.Type]
+		if ids == nil {
+			ids = make(map[int64]struct{})
+			b.inFlightRows[evt.Type] = ids
+		}
+		ids[id] = struct{}{}
+		recordedInFlightID = true
+		b.deliverMu.Unlock()
+	}
 	failures := make([]error, 0, len(handlers))
 	for i, h := range handlers {
 		if err := h(ctx, evt); err != nil {
@@ -455,12 +561,15 @@ func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 		// tests pin. The mark tells the poller's scan to skip this row
 		// rather than run its handlers again. The mark must land BEFORE
 		// the deferred in-flight drop above runs (it executes as this
-		// function returns), so any fetch the drop unblocks can only ever
-		// see an already-marked row -- the ordering deliverMu's own doc
-		// comment's no-double-delivery argument depends on. A replica with
-		// no local subscriber to evt.Type records nothing: the row simply
-		// waits in the outbox for whichever OTHER replica (or a later
-		// Subscribe on this one) discovers it.
+		// function returns), so whatever the drop unblocks -- a fetch the
+		// count had been withholding -- can only ever see an already-marked
+		// row, never a row whose local delivery is done but unrecorded;
+		// for a row the poller already passed while this delivery was in
+		// flight, the mark is simply dead on arrival (see
+		// deliverPendingForType). A replica with no local subscriber to
+		// evt.Type records nothing: the row simply waits in the outbox for
+		// whichever OTHER replica (or a later Subscribe on this one)
+		// discovers it.
 		b.deliverMu.Lock()
 		marked := b.locallyDelivered[evt.Type]
 		if marked == nil {
@@ -621,16 +730,35 @@ func (b *EventBus) deliverPending(ctx context.Context) {
 // can ever move the cursor past rows the scan has not handled yet.
 //
 // Each batch is fetched inside one brief deliverMu critical section: the
-// section first skips the Type entirely when a Publish on this same
-// instance is delivering it locally right now -- see deliverMu's own doc
-// comment for why that check, the cursor read and the fetch must share
-// the section to rule out double delivery -- then reads the cursor and
-// fetches the batch. Every handler runs outside deliverMu
-// (deliverOutboxRow). Rows are then handled one at a time: a row whose id
-// the local path already marked is skipped -- that mark IS this instance's
-// synchronous delivery of the row, so running its handlers again would
-// duplicate it -- while an unmarked row is delivered normally. Every row,
-// marked or not, is then advanced past, outside deliverMu; on a failure
+// section first withholds the Type while a Publish on this same instance
+// has raised its in-flight count without yet recording its row's id --
+// see deliverMu's own doc comment for why that check, the cursor read and
+// the fetch must share the section to rule out double delivery. That
+// window is the insert's own round trip and nothing more: a Publish whose
+// row is recorded in inFlightRows -- a wedged handler included -- does
+// NOT withhold the Type. The section then reads the cursor and fetches
+// the batch. Every handler runs outside deliverMu (deliverOutboxRow).
+// Rows are then handled one at a time: a row whose id the local path
+// already marked is skipped -- that mark IS this instance's synchronous
+// delivery of the row, so running its handlers again would duplicate it
+// -- and so is a row whose id sits in inFlightRows, whose local delivery
+// is running right now on the publishing goroutine (see Publish); a row
+// that is neither is delivered normally. Every row, marked or in flight
+// or not, is then advanced past, outside deliverMu. That advance past an
+// in-flight row is the deliberate trade this per-row gate makes, and the
+// reason it can pass the row while its local delivery is still running:
+// one monotone watermark cannot both advance past the later rows of the
+// Type -- which must keep being delivered while an earlier row's local
+// handler is wedged -- and stay behind the wedged row. A wedged local
+// handler therefore stalls nothing but its own row: the scan skips the
+// row (re-running its handlers would invoke a handler that is already
+// running) and the row's delivery is owed to the local path that is
+// still running it, while every other row of the Type is delivered and
+// advanced past normally. The cost is on the crash side: a row whose
+// local delivery crashes or panics AFTER the scan passed it is not
+// redelivered on restart -- the scan already covered it -- whereas rows
+// whose local delivery is not in flight keep the full handle-then-advance
+// argument below. On an advance failure
 // the scan stops and is retried from the unadvanced persisted cursor on
 // the next call (at-least-once; a marked row is no worse for it, since
 // the next scan skips it again rather than redelivering it -- see the
@@ -657,14 +785,22 @@ func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) 
 		// deliverMu's own doc comment), so deliverMu stays held across
 		// them but is released before any handler runs.
 		b.deliverMu.Lock()
-		if b.inFlight[eventType] > 0 {
-			// A local Publish on this instance is delivering eventType
-			// synchronously right now and will mark every row it covers
-			// before its in-flight count drops. Anything this scan would
-			// have fetched is either already being handled there or not
-			// yet committed, so skip the whole batch: the next catch-up
-			// cycle (a NOTIFY or the next listenBlock timeout) delivers
-			// what that Publish did not, and delivery stays at-least-once.
+		if b.inFlight[eventType] > len(b.inFlightRows[eventType]) {
+			// At least one local Publish of eventType has raised its
+			// in-flight count but not yet recorded its row's id: its
+			// INSERT has not returned, so its row may be committed and
+			// visible at any moment while this instance still cannot name
+			// it -- a fetch right now could catch such a row between its
+			// commit and the local delivery that will mark it, so the
+			// whole batch is withheld. The window is the insert's own
+			// round trip, and the next catch-up cycle (a NOTIFY or the
+			// next listenBlock timeout) delivers what that Publish did
+			// not. A Publish wedged inside its local handlers does NOT
+			// land here -- its row's id is recorded, so the count and the
+			// recorded set agree and the scan proceeds, skipping exactly
+			// that row below -- which is what keeps a wedged handler from
+			// stalling the Type's other rows (see this function's doc
+			// comment for the trade the skip's advance makes).
 			b.deliverMu.Unlock()
 			return
 		}
@@ -697,18 +833,27 @@ func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) 
 		for _, row := range rows {
 			// A brief deliverMu section per row answers the skip question:
 			// whether THIS instance's own Publish path already ran this
-			// row's handlers (see locallyDelivered). Reading under the
-			// lock synchronizes against the concurrent mark and prune
-			// writers; the answer itself cannot change underneath this
-			// scan, because a row fetched here was committed before this
-			// batch's snapshot, so any local publish of it completed its
-			// mark before this batch's critical section began -- the
-			// argument deliverMu's own doc comment makes.
+			// row's handlers (the locallyDelivered mark) or is running them
+			// right now (the inFlightRows record). Reading under the lock
+			// synchronizes against the concurrent mark, record and prune
+			// writers. A row fetched here was committed before this batch's
+			// critical section began, so a local publish that covered it is
+			// in exactly one of three states at this check: still in flight
+			// (its id is recorded -- skip it: its handlers are running, or
+			// about to run, on the publishing goroutine and will mark it),
+			// already completed and marked (skip it: running its handlers
+			// again would duplicate the delivery), or completed WITHOUT
+			// marking -- which only a handler panic leaves behind, since
+			// the mark precedes the in-flight drop -- and the row is
+			// delivered here, exactly the redelivery Publish's doc comment
+			// promises for a panic, for as long as the scan has not already
+			// passed the row.
 			b.deliverMu.Lock()
 			_, alreadyLocal := b.locallyDelivered[eventType][row.id]
+			_, localDeliveryInFlight := b.inFlightRows[eventType][row.id]
 			b.deliverMu.Unlock()
 
-			if !alreadyLocal {
+			if !alreadyLocal && !localDeliveryInFlight {
 				if panicked := b.deliverOutboxRow(ctx, row); panicked {
 					// A handler panicked while delivering this row: the row
 					// is not marked, the cursor is not advanced, and this
