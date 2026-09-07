@@ -85,7 +85,15 @@
  * generation. Logout ends the session on the caller's own intent,
  * and the bump makes everything that started under the old
  * generation lose when it settles late -- an in-flight refresh
- * cannot resurrect the ended session. A refresh-side clear is the
+ * cannot resurrect the ended session. A logout that is itself
+ * pre-empted -- a concurrent user operation committed while its
+ * request was in flight -- is not a silent no-op either: its
+ * revocation has already taken effect server-side, so when the
+ * winner kept the held refresh token (a tenant switch or a step-up,
+ * which continue the very session the revocation ended) the local
+ * state converges to signed-out exactly as an un-pre-empted logout
+ * would; only a winner that replaced the token (a different login)
+ * or already cleared stands. A refresh-side clear is the
  * server's own verdict (it refused the held token), and it happens
  * only where the generation checks above it already excluded a
  * committed sibling, so no late refresh exists to fend off (refresh
@@ -249,7 +257,16 @@ export interface AuthSession {
     request: AuthnSocialCallbackRequest,
   ): Promise<AuthSnapshot>
   /** Ends the session: the server revokes it, the store empties and
-   * the snapshot returns to anonymous. */
+   * the snapshot returns to anonymous. A logout pre-empted by a
+   * concurrent user operation -- one whose response committed while
+   * this request was in flight -- is not a silent no-op: the
+   * revocation it asked for has already taken effect server-side, so
+   * when the winner kept the held refresh token (a tenant switch or a
+   * step-up continuing the session the revocation ended) the local
+   * state still converges to signed-out; only a winner that replaced
+   * the token (a different login) or already cleared stands. Resolves
+   * on either outcome; rejects the raw ApiError on a failed request,
+   * changing nothing. */
   logout(): Promise<void>
   /** Switches the session to another tenant the principal belongs to;
    * the server mints a new access token and the held refresh token
@@ -774,12 +791,50 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
 
     async logout(): Promise<void> {
       const opGeneration = generation
+      // The refresh token of the session this logout speaks for: the
+      // revocation request goes out with the access token then in the
+      // store, and the held refresh token is that session's family.
+      // When the request is pre-empted below, comparing the winner's
+      // held token against this one tells a session the revocation
+      // ended from one it never touched.
+      const revokedSessionToken = refreshToken
       await authnLogout()
       if (generation !== opGeneration) {
-        // Another user operation committed while the logout request
-        // was in flight: the local state belongs to that operation --
-        // the server revoked the old session, but this logout must
-        // not clear a session that superseded it.
+        // Pre-empted: another user operation committed while the
+        // logout request was in flight, and the revocation this call
+        // asked for has already taken effect server-side. This logout
+        // must not silently no-op: when the winner continued the very
+        // session the revocation ended -- a tenant switch or a step-up
+        // keeps the held refresh token, since their responses mint no
+        // new one, so a kept token identifies the same session -- the
+        // winner's committed state speaks for a session that is dead
+        // server-side, and leaving it in place keeps the user who
+        // clicked sign-out signed in locally until the next 401
+        // converges it. The local state converges to signed-out
+        // instead: the operation this call started was a logout and
+        // its server side has already ended the session the winner's
+        // state describes. A winner that replaced the token is a
+        // different session -- a concurrent login -- which the
+        // revocation never touched (the request spoke for the old
+        // session only), so it stands: a logout for the old session
+        // must not erase a new one. A winner that already cleared
+        // left anonymous state in place. (The check keys on
+        // the spec's token contract: a switch or step-up whose answer
+        // minted a token where the spec says none is minted falls
+        // through to the stand-aside branch and converges on the next
+        // refused refresh, like any other contract-violating answer.)
+        if (
+          revokedSessionToken !== null &&
+          refreshToken === revokedSessionToken
+        ) {
+          clearLocal()
+          // Bump, like the un-pre-empted logout: everything that
+          // started under the winner's generation must lose when it
+          // settles late -- no refresh can resurrect the session this
+          // logout just ended.
+          generation += 1
+          notify()
+        }
         return
       }
       clearLocal()

@@ -320,6 +320,75 @@ describe('logout', () => {
     expect(harness.store.get()).toBe('access-2')
     expect(harness.session.getSnapshot().principal?.user_id).toBe('user-2')
   })
+
+  it('converges to signed-out when a same-session switch pre-empts the logout', async () => {
+    // The reviewer finding, the mirror on this path of the api-client
+    // refresh-flight finding: the logout request revokes the session
+    // server-side (immediate revocation in the shipped composition),
+    // but a concurrent switchTenant whose response lands first commits
+    // under the pre-logout generation -- and a switch keeps the held
+    // refresh token, so it continues the very session the logout's
+    // revocation ends. The pre-empted logout used to return silently,
+    // leaving the user who clicked sign-out signed in locally on a
+    // session the server has ended, until the next 401 converged it.
+    // A pre-empted logout must not silently no-op: the operation it
+    // started was a logout and its server-side revocation succeeded,
+    // so the local state converges to signed-out -- the pre-empting
+    // operation's own committed state must not swallow it.
+    let releaseSwitch!: (pair: unknown) => void
+    const switchGate = new Promise((resolve) => {
+      releaseSwitch = resolve
+    })
+    let releaseLogout!: () => void
+    const logoutGate = new Promise<void>((resolve) => {
+      releaseLogout = resolve
+    })
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [SWITCH_TENANT]: () => switchGate,
+      [LOGOUT]: () => logoutGate,
+    })
+    await harness.session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    const seen = snapshotLog(harness.session)
+    // A tenant switch is in flight when the user clicks sign-out: both
+    // operations capture the same pre-commit generation.
+    const switching = harness.session.switchTenant('tenant-2')
+    const logoutRequest = harness.session.logout()
+    // The switch's response lands first and commits. It kept the held
+    // refresh token (a switch mints no new one), so its committed
+    // state describes the same session the logout's revocation is
+    // about to end.
+    releaseSwitch(
+      makePair({
+        access_token: 'access-2',
+        principal: principal('user-1', 'tenant-2'),
+      }),
+    )
+    await expect(switching).resolves.toMatchObject({
+      state: 'authenticated',
+      principal: { tenant_id: 'tenant-2' },
+    })
+    expect(harness.store.get()).toBe('access-2')
+    // The logout's own revocation resolves now, pre-empted by the
+    // switch's commit. The user who clicked sign-out is signed out:
+    // the state the pre-empting operation committed spoke for the
+    // session the revocation just ended.
+    releaseLogout()
+    await logoutRequest
+    expect(harness.store.get()).toBeNull()
+    expect(harness.session.getSnapshot()).toEqual({
+      state: 'anonymous',
+      principal: null,
+      permissionSets: { tenant: null, system: null },
+    })
+    await expect(harness.session.refresh()).resolves.toBe(false)
+    // Subscribers heard the convergence: the last notified snapshot is
+    // the anonymous one.
+    expect(seen.at(-1)?.state).toBe('anonymous')
+  })
 })
 
 describe('switch tenant', () => {
