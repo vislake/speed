@@ -1010,6 +1010,12 @@ func (p *auditCapturePlugin) inCaptureScope(auditable Auditable) bool {
 //     half of the concern: a column tagged for redaction is captured
 //     exactly like a serializer field, as auditRedactedFieldValue, on the
 //     model author's own say-so rather than on this plugin's inference.
+//     The same declaration also covers a column that is not sensitive in
+//     itself but holds a stable linkable identifier of a sensitive value —
+//     a blind-index digest of an address is the canonical shape: see
+//     auditRedactTagKey's own doc comment for the two kinds and
+//     go/org/invitation.go's EmailIndex, the first production use of the
+//     marker for that second kind.
 const auditRedactedFieldValue = "[redacted]"
 
 // auditRedactTagKey and auditRedactTagValue are the model-side capture
@@ -1017,13 +1023,28 @@ const auditRedactedFieldValue = "[redacted]"
 //
 //	Email string `gorm:"column:email;size:255" audit:"redact"`
 //
-// marks its column as too sensitive for the audit trail. The declaration
-// is a separate struct-tag key from gorm's own (never an option smuggled
-// into the `gorm:"..."` tag, which GORM parses and which this plugin must
-// not stake a meaning on), so a model opting into capture can mark any of
-// its own plaintext columns without touching GORM's schema vocabulary, and
-// a model that never opts into capture at all carries an inert tag. The
-// tag key is deliberately this package's own ("audit") rather than a
+// marks its column as too sensitive for the audit trail. Two kinds of
+// column carry the marker. The first is a plaintext column holding
+// something sensitive in itself -- an email or phone a module chose to
+// store unencrypted, a display name that is itself PII: the trail would
+// otherwise record the plaintext verbatim. The second is a column holding
+// a value that is NOT sensitive in itself but is a stable linkable
+// identifier of one -- most commonly an HMAC blind index (dbkit's own
+// BlindIndex) of a low-entropy value like an address: the digest is not
+// the address, but the same address always yields the same digest under
+// the same key, across rows, tenants, time and systems, and any oracle or
+// key leak makes it equivalent to the address, so a digest recorded in
+// the append-only, wide-audience trail is a correlation handle the model
+// author chose to keep out of it. The marker does not distinguish the two
+// kinds -- both are the model author's declaration that the column must
+// not appear in the trail -- and a serializer field never needs it, since
+// the serializer branch redacts automatically. The declaration is a
+// separate struct-tag key from gorm's own (never an option smuggled into
+// the `gorm:"..."` tag, which GORM parses and which this plugin must not
+// stake a meaning on), so a model opting into capture can mark any of its
+// own plaintext columns without touching GORM's schema vocabulary, and a
+// model that never opts into capture at all carries an inert tag. The tag
+// key is deliberately this package's own ("audit") rather than a
 // hypothetical shared convention: dbkit's write capture is the audit
 // mechanism in this ecosystem, and only its parser reads the key. The
 // fieldValuesMap doc comment and go/dbkit/AGENTS.md's "Audit trail
@@ -1063,11 +1084,16 @@ const (
 // an ordinary plaintext column holds something too sensitive for the audit
 // trail — the "expensive half" of capture redaction that no automatic
 // criterion (a serializer is the only automatic one) can see. The
-// declaration is read off schema.Field.Tag, which GORM's schema parser
-// populates with the model field's complete struct tag, so the marker
-// travels on the same reflection data fieldValuesMap already walks. It is
-// checked with Lookup so a tag key carrying any OTHER value (a different
-// tool's "audit" convention, an empty marker) is inert, never a redaction.
+// declaration equally covers a column holding a stable linkable
+// identifier of a sensitive value (a blind index of a low-entropy input
+// is the canonical case — see auditRedactTagKey's doc comment), since no
+// automatic criterion can tell a deterministic digest from an ordinary
+// column either. The declaration is read off schema.Field.Tag, which
+// GORM's schema parser populates with the model field's complete struct
+// tag, so the marker travels on the same reflection data fieldValuesMap
+// already walks. It is checked with Lookup so a tag key carrying any
+// OTHER value (a different tool's "audit" convention, an empty marker) is
+// inert, never a redaction.
 func fieldValuesMap(stmt *gorm.Statement) map[string]any {
 	if stmt.Schema == nil {
 		return nil
