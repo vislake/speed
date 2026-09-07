@@ -85,15 +85,22 @@
 //     retried: when Publish returns, replicas may not have run their
 //     handlers yet. Every entry is acknowledged after its handlers ran,
 //     whatever they returned -- deliberately forgoing JetStream's own
-//     stronger MaxDeliver/AckWait redelivery machinery for handler errors,
-//     in order to keep this implementation's observable behaviour identical
-//     to eventbus/redis's documented contract, which the same
-//     eventbustest.AssertConforms suite checks for both. A message whose
-//     remote handler panicked is the one exception: it is left
-//     unacknowledged rather than acked as delivered, its panic is logged
-//     (see runRemoteHandler), and JetStream's own redelivery then re-
-//     delivers it after the consumer's AckWait window. Redelivery, retries
-//     and dead-letter handling belong to the jobs queue, built for them.
+//     redelivery machinery for handler errors, in order to keep this
+//     implementation's observable behaviour identical to eventbus/redis's
+//     documented contract, which the same eventbustest.AssertConforms suite
+//     checks for both. A message whose remote handler panicked is the one
+//     exception, and its redelivery is bounded (see deliverRemote): the
+//     message is negatively acknowledged rather than acked as delivered
+//     and redelivered at panicRedeliveryDelay intervals, each redelivery
+//     re-invoking only the panicked handler values, never the message's
+//     whole fan-out -- so healthy sibling handlers run exactly once -- and
+//     the consumer's own MaxDeliver (eventMaxDeliver) caps the attempts
+//     server-side while an in-process ledger enforces the same budget, so a
+//     still-panicking handler settles the message with a logged terminal
+//     after the budget instead of an unbounded redelivery loop that would
+//     eventually suspend the consumer entirely once MaxAckPending was
+//     reached. Redelivery, retries and dead-letter handling for ordinary
+//     handler failures belong to the jobs queue, built for them.
 //   - Payloads cross the process boundary as JSON. The shape survives -- a
 //     struct becomes a map[string]any -- but the concrete Go type does not.
 //     Handlers on the publishing replica receive the original payload
@@ -216,6 +223,31 @@ const (
 	// eventGroupCleanupTimeout.
 	eventCleanupTimeout = time.Second
 
+	// eventMaxDeliver is the MaxDeliver of every durable consumer this bus
+	// creates: the total number of delivery attempts one message is allowed
+	// -- the first delivery counts as the first -- before JetStream itself
+	// stops redelivering it. JetStream's own default is unlimited, which is
+	// exactly the unbounded-redelivery hole this constant closes. It is the
+	// broker-side half of the bounded budget a panicking remote handler's
+	// message gets, the direct analogue of eventbus/postgres's
+	// maxPanickedRowAttempts, and the same budget deliverRemote's in-process
+	// redelivery ledger enforces message by message (see deliverRemote): the
+	// two bounds agree, and whichever fires first settles the message.
+	eventMaxDeliver = 4
+
+	// panicRedeliveryDelay is the redelivery spacing deliverRemote asks for
+	// when a message's delivery panicked: it negatively acknowledges the
+	// message with this delay instead of leaving it to the consumer's
+	// AckWait, mirroring eventbus/postgres's panicRetryDelay between two
+	// retry rounds of one row. The spacing keeps a burst of panicking
+	// messages from burning a message's whole budget in milliseconds before
+	// a transient panic has had a chance to clear, and keeps the retry
+	// cadence visible to an operator rather than a hot loop; the consumer's
+	// AckWait remains the backstop redelivery cadence for a message left
+	// unacknowledged because this process died or lost its connection
+	// mid-delivery.
+	panicRedeliveryDelay = time.Second
+
 	// headerSrc and headerTenant are the message headers every publish
 	// stamps, the direct analogue of eventbus/redis's "src"/"tenant" stream
 	// fields.
@@ -256,6 +288,35 @@ type EventBus struct {
 type busReader struct {
 	mu         sync.Mutex
 	consumeCtx jetstream.ConsumeContext
+}
+
+// panicRetryLedger is the in-process redelivery bookkeeping of ONE consumer
+// incarnation of one event type: it records, keyed by the message's stream
+// sequence, which handler values of a message's first delivery panicked and
+// therefore still owe their delivery. runReader hands each incarnation its
+// own fresh ledger (see runReader), and every access runs on that
+// incarnation's own dispatch goroutine -- the type's handlers run serially
+// there -- so the ledger needs no lock of its own. A ledger is abandoned
+// with the incarnation it belongs to: a reader restart destroys the old
+// consumer's delivery state (or, when the consumer survived a transient
+// error, redelivers its old unacknowledged messages onto the new
+// ConsumeContext as if fresh, against the new incarnation's empty ledger),
+// so a record can never outlive the messages it names.
+type panicRetryLedger struct {
+	records map[uint64]*panicRetryRecord
+}
+
+// panicRetryRecord is one message's entry in a panicRetryLedger: the decoded
+// event the redeliveries re-invoke with, and the handler values -- from the
+// subscription snapshot the first delivery ran -- that still owe their
+// delivery of it. Storing the values themselves, never positions or names,
+// is what lets a redelivery re-invoke exactly the still-panicking handlers
+// (and a re-registered subscription of the type can never drag a new handler
+// into an old message's retries), mirroring eventbus/postgres's own
+// panicRetry record.
+type panicRetryRecord struct {
+	evt  pkgcore.Event
+	owed []pkgcore.EventHandler
 }
 
 // NewEventBus returns a pkgcore.EventBus that delivers between replicas
@@ -567,15 +628,22 @@ func (b *EventBus) runReader(eventType string, r *busReader) {
 	streamName := streamNameForEventType(eventType)
 	subject := eventSubject(eventType)
 	consumerName := busConsumerName(b.instanceID)
-	handler := b.remoteHandlerFor(eventType)
 
 	for {
 		if b.ctx.Err() != nil {
 			return
 		}
 
+		// One fresh redelivery ledger per consumer incarnation: a
+		// recreated consumer starts a new sequence space, and one that
+		// survived a transient error redelivers its old unacknowledged
+		// messages onto the new ConsumeContext as if fresh, so every round
+		// of this loop delivers against an empty ledger and a record can
+		// never outlive the messages it names (see panicRetryLedger).
+		ledger := &panicRetryLedger{records: make(map[uint64]*panicRetryRecord)}
+
 		restart := make(chan struct{}, 1)
-		consumeCtx, err := b.startConsuming(streamName, subject, consumerName, handler, restart)
+		consumeCtx, err := b.startConsuming(streamName, subject, consumerName, b.remoteHandlerFor(eventType, ledger), restart)
 		if err != nil {
 			// b.ctx was cancelled while retrying: the bus closed under us.
 			return
@@ -618,6 +686,12 @@ func (b *EventBus) startConsuming(streamName, subject, consumerName string, hand
 			FilterSubject: subject,
 			DeliverPolicy: jetstream.DeliverNewPolicy,
 			AckPolicy:     jetstream.AckExplicitPolicy,
+			// MaxDeliver bounds redeliveries broker-side: a message whose
+			// delivery panicked is negatively acknowledged rather than
+			// acked, and this cap is what stops JetStream redelivering it
+			// without bound even when this process is not answering (see
+			// eventMaxDeliver and deliverRemote).
+			MaxDeliver: eventMaxDeliver,
 		})
 		if err != nil {
 			b.sleepRetry()
@@ -649,27 +723,52 @@ func (b *EventBus) sleepRetry() {
 }
 
 // remoteHandlerFor returns the jetstream.MessageHandler that delivers
-// eventType's remote messages to this instance's subscribers.
-func (b *EventBus) remoteHandlerFor(eventType string) jetstream.MessageHandler {
+// eventType's remote messages to this instance's subscribers, carrying the
+// redelivery ledger of the consumer incarnation that will drive it (see
+// runReader): every redelivery decision a delivery makes is accounted for in
+// that incarnation's own ledger, never in a shared one.
+func (b *EventBus) remoteHandlerFor(eventType string, ledger *panicRetryLedger) jetstream.MessageHandler {
 	return func(msg jetstream.Msg) {
-		b.deliverRemote(eventType, msg)
+		b.deliverRemote(eventType, msg, ledger)
 	}
 }
 
 // deliverRemote runs one message another instance published: a message this
 // instance published itself is acknowledged without dispatch, because the
 // Publish call already ran the local handlers synchronously; everything else
-// is reconstructed from the JSON body and handed to the registered
-// handlers, then acknowledged regardless of what they returned -- unless a
-// handler panicked, in which case the message is deliberately left
-// unacknowledged: a handler whose side effects never ran (or only partly
-// ran) must not be acked as delivered, and its panic is logged so the
-// failure leaves a trace an operator can act on (see runRemoteHandler).
-// JetStream's own redelivery machinery then redelivers the unacked message
-// after the consumer's AckWait, which is exactly the honest at-least-once
-// shape for a panicked handler -- see the package doc comment's delivery
-// note.
-func (b *EventBus) deliverRemote(eventType string, msg jetstream.Msg) {
+// is reconstructed from the JSON body and handed to the registered handlers,
+// then acknowledged regardless of what they returned. A message whose
+// delivery panicked is the exception, and its redelivery is bounded rather
+// than unbounded:
+//
+//   - The first delivery of a message runs the whole fan-out, in
+//     registration order. A handler that panicked is recovered and logged
+//     (see runRemoteHandler), and its value -- with the decoded event -- is
+//     recorded in the incarnation's panicRetryLedger under the message's
+//     stream sequence. The message is then negatively acknowledged with a
+//     panicRedeliveryDelay redelivery spacing: never acked as delivered,
+//     since a handler whose side effects never ran was not delivered, and
+//     never left to the consumer's AckWait, which remains only the backstop
+//     cadence for a message left unacknowledged because this process died
+//     or lost its connection mid-delivery.
+//   - Every redelivery re-invokes ONLY the recorded handler values -- never
+//     the message's whole fan-out -- so a panicking handler can never re-run
+//     its healthy siblings, which saw the message exactly once on its first
+//     delivery and keep receiving every later message of the type exactly
+//     once.
+//   - A message whose recorded handlers all complete on some round is
+//     acknowledged and dropped from the ledger. One whose handler is still
+//     panicking on its eventMaxDeliver-th delivery -- the same budget the
+//     consumer's own MaxDeliver enforces server-side -- settles: the record
+//     is dropped and the message terminated with a terminal log line (see
+//     abandonPanickedMessage), the logged dead-letter of this mechanism --
+//     never an unbounded redelivery loop, and never the consumer stall an
+//     endless accumulation of unacknowledged messages used to cause once
+//     MaxAckPending was reached.
+//
+// See the package doc comment's delivery note for the contract in one
+// paragraph.
+func (b *EventBus) deliverRemote(eventType string, msg jetstream.Msg, ledger *panicRetryLedger) {
 	headers := msg.Headers()
 	if headers.Get(headerSrc) == b.instanceID {
 		_ = msg.Ack()
@@ -687,22 +786,90 @@ func (b *EventBus) deliverRemote(eventType string, msg jetstream.Msg) {
 	}
 	evt := pkgcore.Event{Type: eventType, TenantID: pkgcore.TenantID(tenant), Payload: payload}
 
-	panicked := false
-	for _, h := range b.handlersFor(eventType) {
-		if b.runRemoteHandler(evt, h) {
-			panicked = true
-		}
-	}
-	if panicked {
-		// Not acknowledged: the message stays unacked on the consumer, so
-		// JetStream redelivers it after the consumer's AckWait window -- and
-		// each panic is logged. A permanently panicking handler is a
-		// programming bug an operator must fix or remove; meanwhile the
-		// redelivery cadence keeps the failure visible instead of acked
-		// away.
+	meta, err := msg.Metadata()
+	if err != nil {
+		// A message whose delivery metadata cannot be read cannot be counted
+		// toward any redelivery budget, so its delivery cannot be retried
+		// boundedly; like a body that does not decode, it is dropped rather
+		// than wedging the reader. Every message a JetStream consumer
+		// delivers carries metadata, so this is the same
+		// unreachable-in-practice guard the corrupt-body branch is.
+		_ = msg.Ack()
 		return
 	}
-	_ = msg.Ack()
+
+	streamSeq := meta.Sequence.Stream
+	rec := ledger.records[streamSeq]
+	if rec == nil {
+		// First delivery of this message (or the first since this consumer
+		// incarnation began, which starts from a fresh ledger): the whole
+		// fan-out runs, and any handler whose invocation panicked owes its
+		// delivery.
+		var owed []pkgcore.EventHandler
+		for _, h := range b.handlersFor(eventType) {
+			if b.runRemoteHandler(evt, h) {
+				owed = append(owed, h)
+			}
+		}
+		if len(owed) == 0 {
+			_ = msg.Ack()
+			return
+		}
+		if meta.NumDelivered >= eventMaxDeliver {
+			// A first-seen delivery past the budget: only reachable when a
+			// message's ledger record was lost with an earlier consumer
+			// incarnation and the message kept being redelivered; it must
+			// not re-enter the budget from scratch, so it settles now.
+			b.abandonPanickedMessage(ledger, eventType, streamSeq, meta.NumDelivered, msg)
+			return
+		}
+		ledger.records[streamSeq] = &panicRetryRecord{evt: evt, owed: owed}
+		_ = msg.NakWithDelay(panicRedeliveryDelay)
+		return
+	}
+
+	// A redelivery of a message whose earlier delivery panicked: ONLY the
+	// recorded handler values are re-invoked, never the message's whole
+	// fan-out, so a panicking sibling can never re-run its healthy siblings
+	// (each invocation is recovered and logged by runRemoteHandler).
+	stillOwed := make([]pkgcore.EventHandler, 0, len(rec.owed))
+	for _, h := range rec.owed {
+		if b.runRemoteHandler(rec.evt, h) {
+			stillOwed = append(stillOwed, h)
+		}
+	}
+	if len(stillOwed) == 0 {
+		// Every still-owed handler completed on this round: the message's
+		// delivery is complete.
+		delete(ledger.records, streamSeq)
+		_ = msg.Ack()
+		return
+	}
+	if meta.NumDelivered >= eventMaxDeliver {
+		// The budget is exhausted on this last allowed delivery: the message
+		// settles honestly -- logged terminal, terminated, never redelivered
+		// again.
+		b.abandonPanickedMessage(ledger, eventType, streamSeq, meta.NumDelivered, msg)
+		return
+	}
+	rec.owed = stillOwed
+	_ = msg.NakWithDelay(panicRedeliveryDelay)
+}
+
+// abandonPanickedMessage settles a message whose panicking handlers
+// exhausted their eventMaxDeliver redelivery budget: it is dropped from the
+// ledger, reported with a terminal log line -- the logged dead-letter of
+// this mechanism, mirroring eventbus/postgres's own budget-exhaustion
+// settlement -- and terminated, so JetStream never redelivers it again
+// regardless of the consumer's MaxDeliver.
+func (b *EventBus) abandonPanickedMessage(ledger *panicRetryLedger, eventType string, streamSeq, attempts uint64, msg jetstream.Msg) {
+	delete(ledger.records, streamSeq)
+	slog.Default().Error("pkgcore/eventbus/nats: panicking remote handler exhausted its redelivery budget; message abandoned",
+		"event_type", eventType,
+		"stream_seq", streamSeq,
+		"attempts", attempts,
+	)
+	_ = msg.Term()
 }
 
 // runRemoteHandler invokes one handler for a remote event, containing the
@@ -711,8 +878,11 @@ func (b *EventBus) deliverRemote(eventType string, msg jetstream.Msg) {
 // replica from nats.go's own dispatch goroutine. The handler's error is not
 // observable by any publisher either; it is dropped by design, see the
 // package doc comment's delivery note. A recovered panic is reported (and
-// logged): the caller leaves the message unacknowledged rather than acking
-// a delivery whose side effects never ran.
+// logged): the caller retries that handler value's delivery on a bounded
+// redelivery budget rather than treating a delivery whose side effects
+// never ran as done (see deliverRemote), and a value that is still
+// panicking when the budget is exhausted settles the message with a
+// terminal log line (see abandonPanickedMessage).
 //
 // pkgcore is the dependency floor of the workspace and cannot import
 // go/observability, so this reaches for log/slog directly, the same
@@ -721,7 +891,7 @@ func (b *EventBus) runRemoteHandler(evt pkgcore.Event, h pkgcore.EventHandler) (
 	defer func() {
 		if r := recover(); r != nil {
 			panicked = true
-			slog.Default().Error("pkgcore/eventbus/nats: remote handler panicked; message left unacknowledged",
+			slog.Default().Error("pkgcore/eventbus/nats: remote handler panicked; this handler's delivery is retried on a bounded redelivery budget",
 				"event_type", evt.Type,
 				"panic", fmt.Sprintf("%v", r),
 			)

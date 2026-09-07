@@ -222,18 +222,22 @@ const (
 //     rather than an unbounded redelivery loop (see retryPanickedRows).
 //     Healthy sibling handlers therefore run exactly once even while
 //     their sibling panics on every attempt. The broker-backed twins
-//     reach comparable ends by other mechanisms: eventbus/redis's reader
-//     consumes only new entries (a ">" cursor), so an unacked panicked
-//     entry is never refetched -- no retry, no stall, no sibling re-run;
-//     it simply sits pending, visible to an operator -- while
-//     eventbus/nats leaves the message unacknowledged and JetStream
-//     redelivers it after the consumer's AckWait, re-running the whole
-//     fan-out each time at the broker's own cadence. Neither has a
-//     reader-driven scan that refetches the same row forever, which is
-//     exactly why only this implementation needs the attempt budget. A
-//     row whose LOCAL delivery panics (Publish does not recover) is left
-//     unmarked for the catch-up scan, which then gives it exactly this
-//     treatment.
+//     reach comparable ends by their own mechanisms: eventbus/redis's
+//     reader consumes only new entries (a ">" cursor), so an unacked
+//     panicked entry is never refetched -- no retry, no stall, no sibling
+//     re-run; it simply sits pending, visible to an operator -- while
+//     eventbus/nats negatively acknowledges the message and JetStream
+//     redelivers it at panicRedeliveryDelay intervals, each redelivery
+//     re-invoking only the panicked handler values (never the message's
+//     whole fan-out) until the eventMaxDeliver budget is exhausted, when
+//     the message settles with a terminal log line (see that package's
+//     deliverRemote). Each backend therefore bounds a panicked delivery's
+//     redelivery by the mechanism that drives it: this one's retry pass is
+//     self-driven by the scan, so it needed its own attempt budget, while
+//     the broker-backed twins' redeliveries are bounded broker- and
+//     ledger-side. A row whose LOCAL delivery panics (Publish does not
+//     recover) is left unmarked for the catch-up scan, which then gives it
+//     exactly this treatment.
 //   - Unlike eventbus/redis, THIS implementation genuinely survives a
 //     replica's own restart without losing events published while it was
 //     down, provided the restarting process is built with the SAME
@@ -974,13 +978,15 @@ func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) 
 				// maxPanickedRowAttempts attempts the row settles with a
 				// terminal log line -- never an unbounded hot loop, unlike
 				// the wedge this branch used to cause by returning before
-				// the advance (and unlike eventbus/nats's broker-managed
-				// unacked-message redelivery, which re-runs the whole
-				// fan-out on every JetStream AckWait; eventbus/redis reads
-				// only new entries with a ">" cursor, so its unacked
-				// panicked entries are never refetched at all -- the reader
-				// stalls nothing and re-runs nothing, which is why neither
-				// of those needs a cap and this scan does).
+				// the advance (the broker-backed twins bound their own
+				// panicked-delivery redeliveries by their own mechanisms:
+				// eventbus/nats's negatively-acknowledged messages are
+				// redelivered only up to the eventMaxDeliver budget --
+				// re-invoking just the panicked handler values each round --
+				// and eventbus/redis reads only new entries with a ">"
+				// cursor, so its unacked panicked entries are never
+				// refetched at all -- the reader stalls nothing and re-runs
+				// nothing).
 				b.deliverMu.Lock()
 				rec := b.panicRetries[eventType][row.id]
 				if rec == nil {
