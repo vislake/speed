@@ -2970,8 +2970,14 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		// task this replica can never execute is pointless to enqueue, so
 		// the ticker that enqueues the wired mechanisms' tasks -- storage's
 		// per-tenant expiry sweep and compliance's per-tenant retention
-		// sweep over cfg.HostTenants, plus pki's signing-key expiry scan --
-		// only starts once the queue worker did. See periodic_scheduler.go.
+		// sweep over the scheduler's tenant universe, plus pki's
+		// signing-key expiry scan -- only starts once the queue worker
+		// did. The universe is the configured host tenants joined with
+		// go/admin's D3 tenant ledger (periodic_scheduler.go's
+		// periodicTenantUniverse), so a self-registered clinic -- a tenant
+		// this app's own registration flow provisions at runtime, never a
+		// cfg.HostTenants value -- is swept from the tick after its org
+		// root's ledger row lands. See periodic_scheduler.go.
 		// context.Background(), never ctx, per
 		// startPeriodicTaskScheduler's own doc comment: the enqueues must
 		// keep running until cleanup's own periodicTaskSchedulerStop call,
@@ -2979,7 +2985,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		periodicTaskSchedulerStop = startPeriodicTaskScheduler(
 			context.Background(),
 			cfg.PeriodicTaskInterval,
-			cfg.HostTenants,
+			newPeriodicTenantUniverse(cfg.HostTenants, adminModule.Tenants()),
 			storageModule.LifecycleService(),
 			complianceModule.Retention(),
 			pkiModule.Service(),
