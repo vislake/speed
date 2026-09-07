@@ -4,10 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
-
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
+	"strings"
 
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/jobs"
@@ -44,6 +41,24 @@ import (
 // and the SAME idempotent org/rbac writes (org's own handleUserCreated
 // exists for exactly this redelivery reason, go/org/events.go) instead of
 // fabricating a second clinic for one account.
+//
+// # What the clinic is called
+//
+// The clinic's identity is its org root's name -- the row the tenant's
+// own organization tree starts with -- and the registration form already
+// collects the name a practice gives itself: auth-ui's register surface
+// asks for a display name ("Northside Dental" in the acceptance journeys),
+// authn stores it on the user row, and the self-service clinic is the
+// registrant's own organization, so the display name IS the clinic's
+// name here. This host therefore names the clinic's org root after the
+// registrant's authn display name (read back through authn's own
+// repository accessor at provisioning time -- the user-created event's
+// payload deliberately carries no personal data, authn.UserCreatedPayload's
+// own contract), falling back to the catalog's default workspace name
+// (clinicRootName) when the account registered without one or the read
+// fails. The root name is org data like every other node name: a single
+// language-neutral-or-registrant-chosen string, renamed by the tenant the
+// moment it means something else to them.
 //
 // # Where the chain hooks: a host subscription, installed after the seeds
 //
@@ -91,20 +106,19 @@ import (
 // in-process bus never redelivers), and the account cannot re-register,
 // so a clinic that never appeared would strand the registrant in the dead
 // end this file exists to close. Every step of provision is idempotent --
-// the tenant is derived from the user id, org's tree and membership
-// writes and rbac's role and grant writes reconcile, and the ledger row
-// below is a silent no-op on a repeat -- which is what makes a FAILED
-// attempt retryable: the retry job scheduled on the app's own job queue
-// (scheduleProvisionRetry) re-runs the same provision until it succeeds,
-// converging the clinic exactly as a redelivered event would have. The
-// job row is the durable record of the unfinished work: it survives a
-// restart, so a process that dies between the failed attempt and the
-// retry's success loses nothing -- the next boot's queue start
-// re-dispatches the due retry (jobs' Start recovers and re-claims it).
-// The queue's own retry budget and dead-letter close the loop: past the
-// last attempt the job dead-letters with the final cause on its row and
-// in the log, the operator signal that this provisioning needs a human
-// rather than another attempt.
+// the tenant is derived from the user id, and org's tree and membership
+// writes and rbac's role and grant writes reconcile on a repeat -- which
+// is what makes a FAILED attempt retryable: the retry job scheduled on
+// the app's own job queue (scheduleProvisionRetry) re-runs the same
+// provision until it succeeds, converging the clinic exactly as a
+// redelivered event would have. The job row is the durable record of the
+// unfinished work: it survives a restart, so a process that dies between
+// the failed attempt and the retry's success loses nothing -- the next
+// boot's queue start re-dispatches the due retry (jobs' Start recovers
+// and re-claims it). The queue's own retry budget and dead-letter close
+// the loop: past the last attempt the job dead-letters with the final
+// cause on its row and in the log, the operator signal that this
+// provisioning needs a human rather than another attempt.
 //
 // The 201 semantics that result are the honest ones: register answers 201
 // exactly when the account exists. The clinic is already there whenever
@@ -118,12 +132,18 @@ import (
 // (self-service-signup.spec.ts) never sees that window, because it signs
 // in after a registration whose synchronous attempt succeeded.
 //
-// The self_service_clinics ledger below is written only once provision
-// has completed every step (see provision), so boot-time re-discovery
-// never names a clinic whose org/rbac half is missing -- a clinic whose
-// provisioning never completed has no ledger row, and its retry job row,
-// not a ledger row, is the record the next boot re-dispatches
-// (sign_in_memberships.go's clinics scan set reads the ledger only).
+// No host-side ledger stands behind any of this. A completed clinic is
+// the org rows a previous boot left in the database -- the clinic's org
+// tree, the membership and the grants are the whole of the durable
+// record, and the sign-in store's "which tenants does this account belong
+// to" answer reads them directly through org's own cross-tenant query
+// (sign_in_memberships.go's doc comment records the self_service_clinics
+// ledger's retirement in the same round), so a boot against a database a
+// previous boot provisioned clinics into needs no re-discovery pass and
+// keeps every clinic owner's sign-in working. A clinic whose provisioning
+// never completed has no boot-time record to re-discover either -- its
+// retry job row, not a host bookkeeping row, is what the next boot's
+// queue start re-dispatches.
 type selfServiceProvisioner struct {
 	// orgModule is the module whose TreeService and MemberService the
 	// clinic's org rows are created through, under the clinic tenant's own
@@ -134,17 +154,16 @@ type selfServiceProvisioner struct {
 	// owner grant are ensured through (EnsureBuiltinRoles then
 	// AssignRole, the same order seedDemoGrants uses).
 	rbacService *rbac.Service
-	// clinics is the durable ledger recording every provisioned clinic
-	// tenant (below), the boot-time re-discovery source for the
-	// membership store's clinics scan set.
-	clinics *selfServiceClinics
-	// memberships is the sign-in membership store the new clinic tenant
-	// is registered into, so authn's "which tenants does this account
-	// belong to" question finds the clinic the org rows already answer
-	// for.
-	memberships *signInMemberships
+	// authnSvc is the service whose user repository the clinic's name is
+	// read from: the registrant's authn display name, the name this host
+	// gives the clinic's org root. The user-created event payload carries
+	// no personal data, so the name is read back from the row the
+	// registration already wrote, under the same service accessor the
+	// demo's own user-address resolver uses for identity rows.
+	authnSvc *authn.Service
 	// catalog is the merged message catalog the clinic's org root is
-	// named from (reg.Locales(), non-nil once Bootstrap has run -- the
+	// named from when the registrant registered no display name
+	// (reg.Locales(), non-nil once Bootstrap has run -- the
 	// subscription is installed after Bootstrap, so it is always non-nil
 	// here).
 	catalog *i18n.Catalog
@@ -244,12 +263,15 @@ type selfServiceProvisionTask struct {
 // selfServiceProvisionJobHandler is the jobs.Handler for
 // selfServiceProvisionTaskType: it re-runs the clinic provisioning whose
 // synchronous attempt failed. Every step provision takes is idempotent,
-// so the handler converges the clinic wherever the earlier attempt died
-// -- even one that completed the org and rbac halves and failed only on
-// the ledger write is finished by a re-run that lands last on a silent
-// no-op (selfServiceClinics.add). A failed attempt returns its error and
-// the queue does the rest: retry with backoff while attempts remain, then
-// a dead-letter whose row and log carry the last cause.
+// so the handler converges the clinic wherever the earlier attempt died:
+// a re-run lands the org tree root on a re-read when the root already
+// exists, leaves an already-present membership where it is, and
+// reconciles the built-in roles and the owner grant instead of
+// recreating them, so a retry that arrives after another run completed
+// the clinic finishes as a success rather than a duplicate-key failure.
+// A failed attempt returns its error and the queue does the rest: retry
+// with backoff while attempts remain, then a dead-letter whose row and
+// log carry the last cause.
 //
 // wireSelfService registers it directly on the app's standalone queue
 // rather than declaring it on a module registry: the registry's handler
@@ -331,13 +353,13 @@ func (p *selfServiceProvisioner) scheduleProvisionRetry(ctx context.Context, use
 }
 
 // provision creates (or ensures, on a redelivery or a retry) the whole
-// clinic shape for userID in tenant clinic: the org tree root, the
-// membership, the
-// built-in roles, the owner grant, the durable ledger row and the
-// membership store's scan-set entry. Every step is idempotent and every
-// step runs under the clinic tenant's own context -- org's tree and
-// membership rows and rbac's role and binding rows are all tenant data,
-// and nothing here reads or writes across a tenant boundary.
+// clinic shape for userID in tenant clinic: the org tree root (named
+// after the name the registrant gave at registration, or the catalog
+// default), the membership, the built-in roles and the owner grant. Every
+// step is idempotent and every step runs under the clinic tenant's own
+// context -- org's tree and membership rows and rbac's role and binding
+// rows are all tenant data, and nothing here reads or writes across a
+// tenant boundary.
 func (p *selfServiceProvisioner) provision(ctx context.Context, userID string, clinic pkgcore.TenantID) error {
 	// failProvision is the regression suite's injection point
 	// (selfServiceProvisioner's own doc comment): armed, it fails this
@@ -355,18 +377,18 @@ func (p *selfServiceProvisioner) provision(ctx context.Context, userID string, c
 	// the tenant's root node, created when it has none, re-read when a
 	// concurrent delivery (a second replica's identical provisioning) won
 	// the creation race. The name and kind are org's own auto-created-root
-	// defaults, so the node this host writes for a tenant-less registration
-	// is exactly the node org itself would have written had the
-	// registration event carried a tenant (see clinicRootName's doc
-	// comment).
-	root, created, err := ensureClinicRoot(tenantCtx, p.orgModule.Tree(), p.clinicRootName(tenantCtx))
+	// defaults when the registrant registered none of their own (see
+	// clinicRootName's doc comment), and the registrant's own display
+	// name otherwise -- the product answer for what a self-registered
+	// clinic is called (this file's header).
+	root, created, err := ensureClinicRoot(tenantCtx, p.orgModule.Tree(), p.clinicRootNameFor(userID, tenantCtx))
 	if err != nil {
 		return fmt.Errorf("reference-app: ensure the clinic's org root: %w", err)
 	}
 	log := obs.FromContext(ctx)
 	if created {
 		log.Debug("reference-app: created the clinic's org root",
-			"tenant_id", clinic, "root_node_id", root.ID)
+			"tenant_id", clinic, "root_node_id", root.ID, "root_name", root.Name)
 	}
 
 	// The membership: one seat per person per tenant; an already-present
@@ -388,35 +410,58 @@ func (p *selfServiceProvisioner) provision(ctx context.Context, userID string, c
 	if err := p.rbacService.AssignRole(tenantCtx, rbac.Subject{TenantID: clinic, UserID: userID}, rbac.BuiltinRoleOwner, rbac.Scope{}); err != nil {
 		return fmt.Errorf("reference-app: grant the clinic owner role: %w", err)
 	}
-
-	// The ledger row and the store's scan-set entry: recorded only once
-	// the org and rbac halves have all landed, so a boot-time
-	// re-discovery never names a clinic whose rows are half-written (the
-	// idempotent steps above would converge such a clinic on the next
-	// delivery; the ledger row's late write keeps the window where the
-	// store would scan it in a broken state empty).
-	if err := p.clinics.add(ctx, clinic, userID); err != nil {
-		return fmt.Errorf("reference-app: record the clinic tenant in the self-service ledger: %w", err)
-	}
-	p.memberships.addClinicTenant(clinic)
 	return nil
 }
 
-// clinicRootName renders the name of a clinic's org root from the merged
-// catalog, mirroring org's own defaultWorkspaceName (go/org/events.go):
-// the message id is org's own auto-created-root name (its zh-CN value is
-// the Chinese word for "workspace", go/org/locales/{zh-CN,en-US}.toml)
-// and is referenced by its literal string the same way this app's role
-// seeding references rbac's "rbac.role.member" description id
-// (demo_subject.go's seedDemoReaderRole) -- a coordination point between
-// this host's glue and the module that owns the message, never a new
-// piece of copy living in Go. The locale is the platform default
-// (zh-CN), exactly org's own choice for its auto-created roots: this
-// node is created before anybody has expressed a preference, and the
-// tenant renames it the moment it means something else to them. A
-// missing catalog or message falls back to the tenant id -- an
-// identifier is not user-facing text, the same fallback org's own
-// function documents.
+// clinicRootNameFor renders the name a clinic's org root is created with:
+// the name the registrant typed into the register form's display-name
+// field when they typed one, the catalog's default workspace name
+// otherwise. A self-registered clinic is its registrant's own
+// organization, so "what this clinic is called" is answered by the same
+// name the registration surface asked for -- never by the derived tenant
+// id, which is exactly what the acceptance gate 944b1cc forbids the UI to
+// show as a clinic's identity.
+//
+// The display name is read from authn's own user row (p.authnSvc's
+// repository accessor -- FindByID on the identity-domain users table,
+// the same read path this app's demo resolvers use), never from the
+// user-created event's payload, whose contract is to carry no personal
+// data. The lookup is best-effort by design: an unreadable or blank name
+// degrades to the catalog default rather than failing the provisioning --
+// a clinic with a generic root name is fully functional, and the tenant
+// renames the node the moment the name matters to them. The default
+// itself comes from org's own message (org.default_workspace_name,
+// rendered in the platform default locale exactly as org's auto path
+// renders it), never from Go copy.
+func (p *selfServiceProvisioner) clinicRootNameFor(userID string, tenantCtx context.Context) string {
+	if p.authnSvc != nil && userID != "" {
+		user, err := p.authnSvc.Users().FindByID(tenantCtx, userID)
+		if err == nil && strings.TrimSpace(user.DisplayName) != "" {
+			return strings.TrimSpace(user.DisplayName)
+		}
+		if err != nil {
+			obs.FromContext(tenantCtx).Warn("reference-app could not read the registrant's display name for the clinic root",
+				"user_id", userID, "error", err)
+		}
+	}
+	return p.clinicRootName(tenantCtx)
+}
+
+// clinicRootName renders the fallback name of a clinic's org root from
+// the merged catalog, mirroring org's own defaultWorkspaceName
+// (go/org/events.go): the message id is org's own auto-created-root name
+// (its zh-CN value is the Chinese word for "workspace",
+// go/org/locales/{zh-CN,en-US}.toml) and is referenced by its literal
+// string the same way this app's role seeding references rbac's
+// "rbac.role.member" description id (demo_subject.go's
+// seedDemoReaderRole) -- a coordination point between this host's glue
+// and the module that owns the message, never a new piece of copy living
+// in Go. The locale is the platform default (zh-CN), exactly org's own
+// choice for its auto-created roots: this node is created before anybody
+// has expressed a preference, and the tenant renames it the moment it
+// means something else to them. A missing catalog or message falls back
+// to the tenant id -- an identifier is not user-facing text, the same
+// fallback org's own function documents.
 func (p *selfServiceProvisioner) clinicRootName(ctx context.Context) string {
 	fallback := func() string {
 		tenant, err := pkgcore.MustTenantFromContext(ctx)
@@ -523,99 +568,18 @@ func userIDFromUserCreatedPayload(payload any) (string, bool) {
 	return "", false
 }
 
-// selfServiceClinicsTable is the durable ledger of every self-service
-// clinic tenant this host has provisioned. Its rows are the boot-time
-// re-discovery source for the membership store's clinics scan set
-// (sign_in_memberships.go's addClinicTenant): org's memberships table
-// already carries the real membership facts and survives restarts, but
-// the "which tenants does this account belong to" question has to know
-// WHERE to look for them, and the configured-host-tenant universe alone
-// cannot name a tenant that was born at runtime -- so the ledger exists to
-// answer "which self-service tenants are there", nothing more. The
-// org/rbac rows remain the authority on membership and grants.
-const selfServiceClinicsTable = "self_service_clinics"
-
-// createSelfServiceClinicsTableSQL is executed imperatively, with a plain
-// CREATE TABLE IF NOT EXISTS -- the same bootstrapping pattern this app's
-// own bookkeeping tables already use (internal/smilesim's
-// creditReservationsTable, internal/cases's tables; see
-// internal/smilesim/reservation_store.go's own doc comment for why such
-// app-level tables do not join dbkit.MigrationRegistry). The statement is
-// portable across both dbkit dialects anyway, matching the backend coding
-// standard's dual-dialect rule, even though only SQLite is exercised by
-// this app today.
-//
-// Rows are platform data, like go/jobs' own jobRecord and go/config's row
-// (root CLAUDE.md's data-domain census entries for both): the ledger must
-// be listed wholesale at boot (one query over every row), an access
-// pattern dbkit.Repository[T]'s tenant-injecting plugin cannot serve, so
-// it carries no tenant scoping at all -- a clinic tenant is a value in the
-// tenant_id column, never a context this table is read under.
-const createSelfServiceClinicsTableSQL = `CREATE TABLE IF NOT EXISTS ` + selfServiceClinicsTable + ` (
-	tenant_id  VARCHAR(64) NOT NULL PRIMARY KEY,
-	user_id    VARCHAR(64) NOT NULL,
-	created_at TIMESTAMP NOT NULL
-)`
-
-// selfServiceClinic is one ledger row: a provisioned clinic tenant and
-// the registrant whose self-service registration created it. user_id is
-// recorded for operational attribution (which account owns which clinic);
-// nothing in the sign-in path reads it.
-type selfServiceClinic struct {
-	TenantID  string    `gorm:"column:tenant_id;primaryKey;size:64"`
-	UserID    string    `gorm:"column:user_id;size:64"`
-	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
-}
-
-// selfServiceClinics is the ledger store over this app's own database
-// connection -- the same connection every module shares, never a second
-// pool.
-type selfServiceClinics struct {
-	db *gorm.DB
-}
-
-// EnsureSchema creates the ledger table when it does not exist yet.
-func (c *selfServiceClinics) EnsureSchema(ctx context.Context) error {
-	return c.db.WithContext(ctx).Exec(createSelfServiceClinicsTableSQL).Error
-}
-
-// add records one provisioned clinic tenant. The insert carries
-// clause.OnConflict{DoNothing: true}, so a repeated add of the same
-// clinic tenant is a silent no-op rather than a duplicate-key error
-// (measured: a plain Create of an existing tenant_id answers the driver's
-// duplicate-key error on this stack, whatever the old doc comment's
-// "no-op" claim said), which is what lets the provisioning path call this
-// on every run -- a retry job converging a clinic whose earlier steps
-// another run already completed lands here last and must not fail the
-// whole provision -- without special-casing repeats. OnConflict DoNothing
-// is portable across both dbkit dialects (the same clause go/config's and
-// go/ai-gateway's own idempotent inserts use).
-func (c *selfServiceClinics) add(ctx context.Context, tenant pkgcore.TenantID, userID string) error {
-	return c.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&selfServiceClinic{
-		TenantID: string(tenant),
-		UserID:   userID,
-	}).Error
-}
-
-// list returns every provisioned clinic tenant, in ledger order.
-func (c *selfServiceClinics) list(ctx context.Context) ([]selfServiceClinic, error) {
-	var rows []selfServiceClinic
-	if err := c.db.WithContext(ctx).Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	return rows, nil
-}
-
 // wireSelfService installs the self-service signup chain into a composed
-// server: it re-discovers every already-provisioned clinic from the
-// durable ledger (a boot against a database a previous boot provisioned
-// clinics into must keep those clinics' owners sign-in-able), subscribes
-// the provisioner to authn's user-created event, and registers the retry
-// job's handler on the standalone queue the caller hands in -- the queue
-// a failed synchronous provisioning attempt enqueues its recovery onto
-// (scheduleProvisionRetry), whose job rows survive a restart and are
-// re-dispatched by the next boot's queue start. failProvision is the
-// regression suite's failure-injection hook (nil in every production
+// server: it subscribes the provisioner to authn's user-created event and
+// registers the retry job's handler on the standalone queue the caller
+// hands in -- the queue a failed synchronous provisioning attempt enqueues
+// its recovery onto (scheduleProvisionRetry), whose job rows survive a
+// restart and are re-dispatched by the next boot's queue start. Nothing
+// else needs wiring -- the clinic's org rows are the whole of the durable
+// record, and the sign-in store reads them directly through org's own
+// cross-tenant query (sign_in_memberships.go), so a boot against a
+// database a previous boot provisioned clinics into needs no re-discovery
+// pass and keeps every clinic owner's sign-in working. failProvision is
+// the regression suite's failure-injection hook (nil in every production
 // wiring; a test arms it through serverConfig.failSelfServiceProvision
 // before calling buildServer), handed to the provisioner it builds.
 //
@@ -641,29 +605,11 @@ func (c *selfServiceClinics) list(ctx context.Context) ([]selfServiceClinic, err
 // memberships, grants and first-tenant resolution all stay as the seed
 // made them), which is the residual cost of the ordering discriminator
 // under a genuinely concurrent multi-replica boot.
-func wireSelfService(ctx context.Context, reg *pkgcore.Registry, db *gorm.DB, orgModule *org.Module, rbacService *rbac.Service, memberships *signInMemberships, queue *jobs.StandaloneQueue, failProvision func(userID string) error) error {
-	clinics := &selfServiceClinics{db: db}
-	if err := clinics.EnsureSchema(ctx); err != nil {
-		return fmt.Errorf("reference-app: ensure the self-service clinic ledger schema: %w", err)
-	}
-
-	rows, err := clinics.list(ctx)
-	if err != nil {
-		return fmt.Errorf("reference-app: read the self-service clinic ledger: %w", err)
-	}
-	for _, row := range rows {
-		// A clinic a previous boot provisioned must be visible to the
-		// sign-in store in THIS boot too: the org membership rows are
-		// already in the database, and the clinics scan set is what tells
-		// authn's "which tenants" question where to look for them.
-		memberships.addClinicTenant(pkgcore.TenantID(row.TenantID))
-	}
-
+func wireSelfService(ctx context.Context, reg *pkgcore.Registry, orgModule *org.Module, rbacService *rbac.Service, authnSvc *authn.Service, queue *jobs.StandaloneQueue, failProvision func(userID string) error) error {
 	provisioner := &selfServiceProvisioner{
 		orgModule:     orgModule,
 		rbacService:   rbacService,
-		clinics:       clinics,
-		memberships:   memberships,
+		authnSvc:      authnSvc,
 		catalog:       reg.Locales(),
 		queue:         queue,
 		failProvision: failProvision,

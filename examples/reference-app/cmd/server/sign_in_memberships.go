@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"sort"
+	"errors"
 	"sync"
 
 	"github.com/vislake/speed/go/authn"
@@ -10,7 +10,20 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/rbac"
+	"github.com/vislake/speed/go/tenancy"
 )
+
+// signInTenantEnumerationPurpose is the pkgcore.SystemPurpose this app
+// declares for the one system-context grant its sign-in path takes:
+// TenantsOf's cross-tenant "which tenants does this user belong to" read
+// of org's memberships table. The declaration mirrors a module's own
+// Register-time declaration of the purposes it takes system contexts for
+// (pkgcore.RegisterSystemPurpose is idempotent), and the grant itself is
+// taken through tenancy.WithSystemContext, whose
+// tenancy.system_context.entered event is the audit trail every use of
+// the escape hatch must carry. buildServer registers the purpose at the
+// same point it attaches the store's org-backed half.
+const signInTenantEnumerationPurpose pkgcore.SystemPurpose = "reference-app.sign_in_tenant_enumeration"
 
 // orgCodeIs reports whether err is a go/org application error carrying
 // code -- the matching convention go/org/errors.go's own index documents:
@@ -32,22 +45,42 @@ func orgCodeIs(err error, code string) bool {
 //
 // # Customer memberships are org's rows, read live
 //
-// Every customer-tenant membership question is answered from org's real,
-// persistent memberships table -- MemberService.Get under the tenant
-// context this store rebuilds from the tenant asked about, the same "host
-// glue reads org's rows" shape go/admin's impersonation-target membership
-// check (impersonation_service.go's MembershipChecker) already established.
-// One source of truth: an account that really accepted an org invitation
-// through org's own HTTP flow, a demo account the boot-time seed placed
-// into org (demo_users.go's addDemoOrgMembership), and a self-registered
-// account whose registration provisioned its own clinic (self_service.go),
-// are members because their rows exist -- in this process and in the next
-// one. A restart against the same database loses neither, which is exactly
-// the property an in-process roster could never give: before this store
-// read org, a real accepted invitation (or a seeded demo account) that
-// predated the current process answered "not a member" forever after the
-// process that created it exited, authn refusing every sign-in with 403
-// authn.tenant_membership_required no matter how real the row was.
+// Both customer-tenant questions are answered from org's real, persistent
+// memberships table -- MemberService.Get under the tenant context this
+// store rebuilds from the tenant asked about for the pair question, and
+// MemberService.TenantsOf under a system context for the enumeration
+// question. One source of truth: an account that really accepted an org
+// invitation through org's own HTTP flow, a demo account the boot-time seed
+// placed into org (demo_users.go's addDemoOrgMembership), and a
+// self-registered account whose registration provisioned its own clinic
+// (self_service.go), are members because their rows exist -- in this
+// process and in the next one. A restart against the same database loses
+// neither, which is exactly the property an in-process roster could never
+// give: before this store read org, a real accepted invitation (or a seeded
+// demo account) that predated the current process answered "not a member"
+// forever after the process that created it exited, authn refusing every
+// sign-in with 403 authn.tenant_membership_required no matter how real the
+// row was.
+//
+// # The enumeration question is org's own query now, not a host scan
+//
+// The "which tenants does this user belong to" half used to be answered by
+// scanning this store's OWN tenant lists -- the configured host tenants
+// plus every self-service clinic the host had provisioned (a second,
+// durable ledger, self_service.go's self_service_clinics table) -- asking
+// org's per-tenant Get once per candidate. That scan set was the host's
+// guess at "every tenant that could hold one of this user's memberships",
+// and anything the host had not been told about was invisible to it: a
+// clinic provisioned after boot was only reachable because the provisioning
+// path registered it in the ledger and the in-memory scan set, and the
+// ledger existed only to rebuild that scan set after a restart. Both lists
+// retired when org grew the real query (go/org's MemberService.TenantsOf,
+// the round that closed this gap): org's own memberships table already
+// carried every fact the scan existed to discover, so the host's parallel
+// machinery -- the universe, the clinics scan set, addClinicTenant, the
+// ledger's every reader -- was deleted rather than kept. A clinic created
+// after boot is answered from its org row with no host list to update, and
+// a restart needs no re-discovery pass at all.
 //
 // What is NOT answered from org is the rbac.SystemDomain pseudo-tenant
 // ("system", rbac/subject.go): the platform-operations domain has no org
@@ -68,6 +101,19 @@ func orgCodeIs(err error, code string) bool {
 // the pair to answer with -- the reader prefers org's row over this roster
 // whenever both could answer, so a real org fact always wins over a stale
 // shortcut.
+//
+// # The system context the enumeration takes, and its audit trail
+//
+// TenantsOf is a cross-tenant read, and org serves it only to a system
+// context (org.system_context_required otherwise -- the same gate dbkit's
+// own HardDelete carries). This store obtains that grant through
+// tenancy.WithSystemContext, the audited wrapper, with the purpose this
+// app declares (signInTenantEnumerationPurpose) and the account itself as
+// the actor -- the account asking, at its own no-tenant sign-in, which
+// tenants it belongs to, a question the platform's design reserves for the
+// authn side of the house. Every grant publishes a
+// tenancy.system_context.entered event, so the enumeration is audited on
+// every use exactly like the escape hatch's own contract demands.
 type signInMemberships struct {
 	mu sync.Mutex
 	// granted holds the in-process grants: rbac.SystemDomain seats plus
@@ -81,25 +127,11 @@ type signInMemberships struct {
 	// alone, which is fine because buildServer always attaches before any
 	// request can reach authn.
 	org *org.MemberService
-	// universe is every tenant this host knows (the configured host
-	// tenants), sorted, the scan set for the "which tenants does this user
-	// belong to" question -- see TenantsOf's doc comment for why the
-	// question has to be asked per tenant.
-	universe []pkgcore.TenantID
-	// clinics is every SELF-SERVICE tenant this host has provisioned (the
-	// clinic a registration creates, self_service.go). It is the second
-	// scan set TenantsOf consults, after universe: the configured host
-	// tenants stay the tenants a configured account can ever reach, while
-	// a self-registered account's own clinic lives outside that set by
-	// construction (self_service.go's clinicTenantOf derives the id from
-	// the registrant's user id, never from cfg.HostTenants), and its
-	// sign-in must still find the org membership row that lets it act in
-	// the clinic. addClinicTenant is called by the provisioning path for
-	// a new clinic and at every boot from the durable self_service_clinics
-	// ledger (self_service.go's wireSelfService), which is what keeps a
-	// clinic-owner's sign-in working after a restart that re-reads the
-	// rows org's own memberships table already carries.
-	clinics []pkgcore.TenantID
+	// bus is the event bus the audited system-context grant for the
+	// enumeration question is published on (tenancy.WithSystemContext's
+	// parameter). Set by the same attach that sets org; the two halves of
+	// the store's org-backed answer arrive together.
+	bus pkgcore.EventBus
 }
 
 // newSignInMemberships returns an empty membership store.
@@ -108,27 +140,17 @@ func newSignInMemberships() *signInMemberships {
 }
 
 // attach binds the org-backed half of the store: the MemberService whose
-// rows answer customer-tenant questions, and the host's own configured
-// tenant universe (the values of cfg.HostTenants -- the tenants every
-// configured org root and invitation live in). The self-service clinics
-// provisioning creates (self_service.go) reach the same org scan through
-// their own list (addClinicTenant), which wireSelfService fills from the
-// durable ledger at every boot. buildServer calls attach once, right
-// after it has built both; until then the store answers from granted
+// rows answer customer-tenant questions, and the bus every audited
+// system-context grant for the enumeration question is published on.
+// buildServer calls attach once, after Bootstrap has composed the module
+// set (the bus exists only then) and before any request -- or demo seed
+// sign-in -- can reach authn; until then the store answers from granted
 // alone.
-func (m *signInMemberships) attach(orgMembers *org.MemberService, hostTenants map[string]pkgcore.TenantID) {
-	seen := make(map[pkgcore.TenantID]struct{}, len(hostTenants))
-	universe := make([]pkgcore.TenantID, 0, len(hostTenants))
-	for _, tenant := range hostTenants {
-		if _, dup := seen[tenant]; dup {
-			continue
-		}
-		seen[tenant] = struct{}{}
-		universe = append(universe, tenant)
-	}
-	sort.Slice(universe, func(i, j int) bool { return universe[i] < universe[j] })
+func (m *signInMemberships) attach(orgMembers *org.MemberService, bus pkgcore.EventBus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.org = orgMembers
-	m.universe = universe
+	m.bus = bus
 }
 
 // Grant records userID as an active member of tenant in the in-process
@@ -153,25 +175,6 @@ func (m *signInMemberships) Grant(userID string, tenant pkgcore.TenantID) {
 		}
 	}
 	m.granted[userID] = append(m.granted[userID], tenant)
-}
-
-// addClinicTenant records tenant (a self-service clinic) in the store's
-// second scan set, so TenantsOf asks org about it. Idempotent; called for
-// a newly provisioned clinic by self_service.go's provisioning path and
-// for every already-provisioned clinic at boot from the durable
-// self_service_clinics ledger (wireSelfService) -- the two calls are what
-// make a clinic-owner's no-tenant sign-in work in the process that
-// provisioned the clinic and in every later process booted against the
-// same database.
-func (m *signInMemberships) addClinicTenant(tenant pkgcore.TenantID) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, existing := range m.clinics {
-		if existing == tenant {
-			return
-		}
-	}
-	m.clinics = append(m.clinics, tenant)
 }
 
 // ActiveMembership implements authn.MembershipReader.
@@ -208,45 +211,39 @@ func (m *signInMemberships) ActiveMembership(ctx context.Context, userID string,
 
 // TenantsOf implements authn.MembershipReader.
 //
-// org's own schema has no single "every tenant this user belongs to"
-// answer: memberships are tenant-scoped rows, so the question has to be
-// asked per tenant. This host can afford to ask exactly that way because
-// the tenants it can ever hold an org membership in are a bounded, known
-// set -- the configured host tenants PLUS the self-service clinics
-// (addClinicTenant's doc comment) -- which is the "org-backed adapter for
-// a consumer with its own bounded tenant set" shape the pre-org store's
-// own doc comment already named as the honest option. The configured
-// universe is scanned first, then the clinics, so an account that holds
-// both a configured-tenant membership and a clinic membership keeps the
-// configured tenant's answer in front (the demo accounts' no-tenant
-// sign-in keeps landing in tenant-acme), and a self-registered account
-// whose only membership is its own clinic is answered from the clinic
-// scan. The roster's entries are folded in after the org scans,
-// de-duplicated, so a test shortcut never answers twice and a real org
-// row always answers first.
+// The customer-tenant half of the answer is org's own cross-tenant query
+// -- MemberService.TenantsOf (go/org/membership_tenants.go), one indexed
+// read of the memberships table that sees every tenant, boot-configured or
+// provisioned at run time, this process's or a previous one's. The org
+// answer is taken under the audited system context above and then folded
+// together with this store's roster entries, de-duplicated, so a test
+// shortcut never answers twice and a real org row always answers first --
+// exactly the precedence ActiveMembership gives the org rows.
 func (m *signInMemberships) TenantsOf(ctx context.Context, userID string) ([]pkgcore.TenantID, error) {
 	tenants := make([]pkgcore.TenantID, 0, 4)
 	seen := make(map[pkgcore.TenantID]struct{})
 
 	if m.org != nil {
-		// The clinics scan set is snapshotted under the lock: the set only
-		// ever grows, and a provisioning concurrent with a sign-in must
-		// either be visible to this scan or not -- never half-visible.
-		// universe, by contrast, is immutable once attach has run and is
-		// iterated directly.
-		m.mu.Lock()
-		clinics := append([]pkgcore.TenantID(nil), m.clinics...)
-		m.mu.Unlock()
-		scan := append(append([]pkgcore.TenantID(nil), m.universe...), clinics...)
-		for _, tenant := range scan {
-			_, err := m.org.Get(pkgcore.WithTenant(ctx, tenant), userID)
-			switch {
-			case err == nil:
-				tenants = append(tenants, tenant)
-				seen[tenant] = struct{}{}
-			case !orgCodeIs(err, org.ErrMembershipNotFound.Code):
-				return nil, err
-			}
+		if m.bus == nil {
+			// attach always sets org and bus together; an org-backed store
+			// with no bus could not audit its system-context grant, so the
+			// question is refused rather than answered unrecorded.
+			return nil, errors.New("reference-app: membership store has no event bus for its system-context grant")
+		}
+		sysCtx, err := tenancy.WithSystemContext(ctx, m.bus, pkgcore.SystemReason{
+			Actor:   userID,
+			Purpose: signInTenantEnumerationPurpose,
+		})
+		if err != nil {
+			return nil, err
+		}
+		orgTenants, err := m.org.TenantsOf(sysCtx, userID)
+		if err != nil {
+			return nil, err
+		}
+		for _, tenant := range orgTenants {
+			tenants = append(tenants, tenant)
+			seen[tenant] = struct{}{}
 		}
 	}
 

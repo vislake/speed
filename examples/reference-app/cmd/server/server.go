@@ -1975,13 +1975,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if memberships == nil {
 		memberships = newSignInMemberships()
 	}
-	// Bind the org-backed half of the membership store: from here on,
-	// customer-tenant membership questions are answered by org's own rows
-	// (sign_in_memberships.go's own doc comment). orgModule is already
-	// composed above, and cfg.HostTenants is this host's whole tenant
-	// universe -- the only tenants that can ever accrue an org memberships
-	// row in this app.
-	memberships.attach(orgModule.Members(), cfg.HostTenants)
+	// The org-backed half of the membership store is bound AFTER Bootstrap,
+	// at the site just below the kernel call: TenantsOf's audited
+	// system-context grant publishes on the bus Bootstrap finishes wiring,
+	// and no sign-in can reach authn before then anyway (see the attach
+	// call's own comment).
 	smsOutput := cfg.SMSOutput
 	if smsOutput == nil {
 		smsOutput = os.Stdout
@@ -2637,6 +2635,19 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: bootstrap kernel: %w", err)
 	}
+	// Bind the org-backed half of the membership store here, only now that
+	// Bootstrap has run: the store's enumeration answer
+	// (signInMemberships.TenantsOf) takes an audited system-context grant
+	// through tenancy.WithSystemContext, which publishes its audit event on
+	// the bus Bootstrap finished wiring (reg.EventBus), and the purpose the
+	// grant names must be declared before any sign-in can ask the question
+	// -- the same once-per-boot, idempotent declaration a module's Register
+	// makes for its own purposes. Nothing before this point can serve a
+	// sign-in: authn answers membership questions only inside a Login or
+	// Refresh call, and the first ones reach the store with the demo seeds
+	// below.
+	pkgcore.RegisterSystemPurpose(signInTenantEnumerationPurpose)
+	memberships.attach(orgModule.Members(), reg.EventBus())
 	// integrationModule's Attach must run after Bootstrap for the same
 	// reason config's and rbac's do just below: its Service reads
 	// reg.Events.Bus() and reg.AuditActions, which Bootstrap only finishes
@@ -2990,6 +3001,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// wireSmileSim's own doc comment).
 	wireSmileSim(mux, smileSimService, standaloneQueue, memberships, storageModule.ObjectService())
 
+	// wireClinicName mounts this host's own tenant-identity answer
+	// (cmd/server/clinic_name.go): the org root name of the tenant the
+	// caller's token is scoped to, the name the web renders for a clinic
+	// that did not exist at boot (self-service registration provisions
+	// it, naming the root after the registrant's display name) where the
+	// demo roster's static copy has no entry. Mounted here among the
+	// other hand-written app routes, behind the same chain every
+	// authenticated route sits behind.
+	wireClinicName(mux, orgModule.Tree())
+
 	// wireCasesRoutes mounts product round P2b's case domain
 	// (internal/cases, mounted in cmd/server/cases.go): the tenant-scoped
 	// Case records the P3 web UI will sit on, each grouping a patient
@@ -3220,15 +3241,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// registration and gets its own clinic tenant, org root, membership
 	// and owner grant before its 201 answer leaves (on the in-process
 	// bus, where the subscription's provisioning runs synchronously
-	// inside the register request itself). The standaloneQueue is handed
-	// in alongside for the failure half of that guarantee: a synchronous
-	// provisioning attempt that fails enqueues the retry job that
-	// converges the clinic (self_service.go's # Failure semantics), and
-	// the queue's worker was started above, so the retry runs on this
-	// same process's pool. cfg.failSelfServiceProvision rides along as
-	// the regression suite's failure-injection hook -- nil here, armed by
-	// a test's own serverConfig.
-	if wireErr := wireSelfService(ctx, reg, db, orgModule, rbacService, memberships, standaloneQueue, cfg.failSelfServiceProvision); wireErr != nil {
+	// inside the register request itself). The clinic's org root is named
+	// after the registrant's own authn display name (read through the
+	// authn service handed in here), and the standaloneQueue rides along
+	// for the failure half of the guarantee: a synchronous provisioning
+	// attempt that fails enqueues the retry job that converges the clinic
+	// (self_service.go's # Failure semantics), and the queue's worker was
+	// started above, so the retry runs on this same process's pool.
+	// cfg.failSelfServiceProvision rides along as the regression suite's
+	// failure-injection hook -- nil here, armed by a test's own
+	// serverConfig.
+	if wireErr := wireSelfService(ctx, reg, orgModule, rbacService, authnModule.Service(), standaloneQueue, cfg.failSelfServiceProvision); wireErr != nil {
 		_ = cleanup()
 		return nil, nil, nil, wireErr
 	}

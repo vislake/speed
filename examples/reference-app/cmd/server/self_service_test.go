@@ -28,9 +28,11 @@ import (
 // so the same journey must now land the account inside its own clinic
 // tenant with the org root, the membership and the owner grant it can act
 // on -- and that must survive the process restart that kills every
-// in-memory answer (the org rows and the durable clinic ledger answer on
-// their own, the same two-boot shape the demo-users and invitation suites
-// already pin for their own memberships).
+// in-memory answer: the org rows alone answer on restart (the "which
+// tenants" question reads them through org's own cross-tenant query --
+// the host's self_service_clinics ledger was retired in the same round;
+// see the no-ledger regression below), the same two-boot shape the
+// demo-users and invitation suites already pin for their own memberships.
 //
 // Failing before the fix: on the pre-self-service code this suite's first
 // test answered the browser-shaped sign-in with the 403 the deleted
@@ -42,11 +44,7 @@ import (
 // nothing would ever provision: the injected failure was consumed by the
 // one synchronous attempt, the authn.user.created event never fires
 // again, and no retry existed, so the browser-shaped sign-in stayed
-// refused forever. The ledger test beside it failed even earlier: a plain
-// Create of an existing tenant_id answered the driver's duplicate-key
-// error, contradicting the old "no-op" claim its doc comment made -- the
-// very failure the retry path must never trip on when it converges onto a
-// clinic another run already completed.
+// refused forever.
 
 // selfServiceFreshEmail is the account every journey below registers. The
 // @example.com suffix matches the flow tests' convention; the local part
@@ -254,9 +252,11 @@ func TestSelfServiceSignup_RegisterThenSignIn_LandsInTheCreatedClinic(t *testing
 // the browser-shaped sign-in lands in its clinic; the server shuts down
 // completely, and boot two against the same database proves the same
 // sign-in still lands there. The clinic's membership is an org row and
-// the clinic tenant itself is re-discovered from the durable
-// self_service_clinics ledger (wireSelfService), so nothing boot one held
-// in memory may be load-bearing -- the same two-boot shape the
+// the "which tenants" answer reads org's own memberships table directly
+// (MemberService.TenantsOf behind the sign-in store -- the
+// self_service_clinics ledger this suite's earlier rounds relied on for
+// boot-time re-discovery was retired in the same round), so nothing boot
+// one held in memory may be load-bearing -- the same two-boot shape the
 // demo-users and invitation suites use for their own memberships.
 func TestSelfServiceSignup_ClinicOwnerSignInSurvivesARestart(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "reference-app-self-service-restart.db")
@@ -289,8 +289,8 @@ func TestSelfServiceSignup_ClinicOwnerSignInSurvivesARestart(t *testing.T) {
 	}
 
 	// Boot two: the same browser-shaped sign-in must land in the same
-	// clinic -- the org membership row survives, and the ledger row tells
-	// this boot's sign-in store where to look for it.
+	// clinic -- the org membership row survives, and the sign-in store's
+	// answer reads it directly through org's own cross-tenant query.
 	srv2, cleanup2 := boot()
 	defer func() {
 		srv2.Close()
@@ -301,7 +301,7 @@ func TestSelfServiceSignup_ClinicOwnerSignInSurvivesARestart(t *testing.T) {
 	status, code, _, tenant = browserSignIn(t, srv2, selfServiceFreshEmail, selfServicePassword)
 	if status != http.StatusOK {
 		t.Fatalf("boot-two sign-in of the clinic owner: status = %d, code = %q, want %d "+
-			"(the clinic's org membership and ledger row must survive a restart)",
+			"(the clinic's org membership row must survive a restart)",
 			status, code, http.StatusOK)
 	}
 	if tenant != clinic {
@@ -362,9 +362,9 @@ func (f *failOnceProvisioning) observed() bool {
 // Failing before the fix (the retry wiring absent): register answered
 // 201, the injected failure was consumed by the one synchronous attempt,
 // and nothing ever ran provision again -- authn.user.created fires once
-// -- so the ledger never gained the clinic's row and the browser-shaped
-// sign-in stayed refused. The ledger poll below therefore timed out and
-// the test failed where it now passes.
+// -- so the clinic never gained the registrant's org membership row and
+// the browser-shaped sign-in stayed refused. The membership poll below
+// therefore timed out and the test failed where it now passes.
 func TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists(t *testing.T) {
 	inject := &failOnceProvisioning{}
 	cfg := testConfig(t)
@@ -390,46 +390,50 @@ func TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists(t *te
 	}
 	clinic := pkgcore.TenantID("tenant-" + userID)
 
-	// The clinic exists only once a provisioning attempt has run to
-	// completion: the ledger row is provision's last step. Poll the
-	// ledger for it through a second connection to the server's own
-	// database file (the same-shape second connection the audit suite's
-	// persister test uses) -- a read, so no authn rate-limit budget is
+	// The clinic exists only once a provisioning attempt has run far
+	// enough to land the registrant's org membership (the host's
+	// self_service_clinics ledger was retired in the round that moved the
+	// sign-in answer onto org's own memberships table, so the durable
+	// record of a completed provision is that row). Poll it through a
+	// second connection to the server's own database file (the
+	// same-shape second connection the audit suite's persister test
+	// uses), with the same filter org's own cross-tenant query applies --
+	// status "active", never soft-deleted (go/org/membership.go's
+	// MembershipStatusActive and go/org/membership_tenants.go's
+	// membershipTenantRow) -- a read, so no authn rate-limit budget is
 	// spent waiting for the retry.
-	ledgerCtx, cancelLedger := context.WithCancel(context.Background())
-	defer cancelLedger()
-	ledgerDB, err := dbkit.Open(ledgerCtx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
+	pollCtx, cancelPoll := context.WithCancel(context.Background())
+	defer cancelPoll()
+	pollDB, err := dbkit.Open(pollCtx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
 	if err != nil {
-		t.Fatalf("open the server's database for the ledger poll: %v", err)
+		t.Fatalf("open the server's database for the membership poll: %v", err)
 	}
 	defer func() {
-		if sqlDB, dbErr := ledgerDB.DB(); dbErr == nil {
+		if sqlDB, dbErr := pollDB.DB(); dbErr == nil {
 			_ = sqlDB.Close()
 		}
 	}()
-	ledger := &selfServiceClinics{db: ledgerDB}
 	deadline := time.Now().Add(15 * time.Second)
 	provisioned := false
-	var lastListErr error
+	var lastCountErr error
 	for !provisioned {
-		rows, listErr := ledger.list(ledgerCtx)
-		if listErr != nil {
+		var count int64
+		countErr := pollDB.Table("memberships").
+			Where("tenant_id = ? AND user_id = ? AND status = ? AND deleted_at IS NULL",
+				string(clinic), userID, "active").
+			Count(&count).Error
+		if countErr != nil {
 			// A transient busy on the shared SQLite file while the retry's
 			// own writes land is a reason to poll again, not to fail.
-			lastListErr = listErr
+			lastCountErr = countErr
 		} else {
-			lastListErr = nil
-			for _, row := range rows {
-				if row.TenantID == string(clinic) {
-					provisioned = true
-					break
-				}
-			}
+			lastCountErr = nil
+			provisioned = count > 0
 		}
 		if !provisioned {
 			if time.Now().After(deadline) {
-				t.Fatalf("the clinic %s never appeared in the ledger: register answered 201, the synchronous attempt failed, and no retry converged it -- the account is stranded (last ledger read error: %v)",
-					clinic, lastListErr)
+				t.Fatalf("the clinic %s never gained the registrant's membership: register answered 201, the synchronous attempt failed, and no retry converged it -- the account is stranded (last membership read error: %v)",
+					clinic, lastCountErr)
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
@@ -444,42 +448,5 @@ func TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists(t *te
 	}
 	if tenant != clinic {
 		t.Fatalf("sign-in after the retried provisioning landed the principal in tenant %q, want its clinic %q", tenant, clinic)
-	}
-}
-
-// TestSelfServiceClinicsLedger_RepeatedAddIsANoOp pins the ledger step's
-// idempotency: a second add of the same clinic tenant must be a silent
-// no-op, because the retry job (like any redelivered provisioning) runs
-// provision against a clinic another attempt may already have completed
-// -- and the ledger row is provision's LAST step, so a duplicate-key
-// error there would fail an otherwise-complete provisioning.
-//
-// Failing before the fix: a plain Create of an existing tenant_id
-// answered the driver's duplicate-key error, contradicting the old doc
-// comment's "no-op" claim and turning every convergence onto an
-// already-recorded clinic into a failure.
-func TestSelfServiceClinicsLedger_RepeatedAddIsANoOp(t *testing.T) {
-	ctx := context.Background()
-	db, err := dbkit.Open(ctx, dbkit.Options{
-		Dialect: dbkit.DialectSQLite,
-		DSN:     filepath.Join(t.TempDir(), "self-service-ledger.db"),
-	})
-	if err != nil {
-		t.Fatalf("dbkit.Open: %v", err)
-	}
-	defer func() {
-		if sqlDB, dbErr := db.DB(); dbErr == nil {
-			_ = sqlDB.Close()
-		}
-	}()
-	if err := db.Exec(createSelfServiceClinicsTableSQL).Error; err != nil {
-		t.Fatalf("create the clinic ledger table: %v", err)
-	}
-	c := &selfServiceClinics{db: db}
-	if err := c.add(ctx, pkgcore.TenantID("tenant-x"), "user-1"); err != nil {
-		t.Fatalf("first add of the clinic tenant: %v", err)
-	}
-	if err := c.add(ctx, pkgcore.TenantID("tenant-x"), "user-1"); err != nil {
-		t.Fatalf("repeated add of the same clinic tenant must be a no-op, got: %v", err)
 	}
 }
