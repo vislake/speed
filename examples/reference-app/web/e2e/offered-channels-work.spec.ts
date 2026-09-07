@@ -66,10 +66,57 @@ test(
     await page.getByRole('textbox', { name: 'Phone number' }).fill(VALID_PHONE)
     await page.getByRole('button', { name: 'Send code' }).click()
 
-    // Something answered: either the honest notice or the claim.
+    // SOMETHING has to answer, and this is now asserted rather than
+    // assumed -- because it turned out not to be true.
+    //
+    // With the read fixed, this gate passed: no claim of delivery
+    // appeared, so the branch below never ran. But the reason no claim
+    // appeared is that NOTHING appeared. Pressing Send code produces no
+    // notice at all, honest or otherwise -- the body reads
+    // "PASSWORD SMS CODE Phone number SEND CODE No account yet?
+    // REGISTER" after the press, exactly as before it.
+    //
+    // That is worse than the lie this gate was written for, and the gate
+    // was letting it through: a person who is told the wrong thing at
+    // least knows the button did something. Silence leaves them pressing
+    // it again. So the gate now fails on silence, and the timeout it
+    // used to wait out is the assertion instead of an accident.
+    // Required to SAY something, not merely to exist.
+    //
+    // auth-ui keeps an empty live region on the surface at all times so
+    // an announcement can be placed into it without a container
+    // appearing -- correct for a screen reader, and it satisfied a plain
+    // toBeVisible() while holding "". So this gate passed with the
+    // surface completely silent after Send code, which is the
+    // check-satisfied-by-absence trap this suite records elsewhere,
+    // reached through a container rather than a missing element.
+    //
+    // And polled rather than read once, which is what the empty region
+    // was hiding: the notice DOES arrive, a moment after the press. My
+    // first read was a point-in-time sample -- the fifth time this suite
+    // has made that mistake -- and it reported the surface as silent
+    // while the real defect, the claim of delivery, was a beat away. The
+    // wrong diagnosis was more alarming than the truth and would have
+    // sent a round looking for a missing notice that is not missing.
     const notice = page.getByRole('status').or(page.getByRole('alert'))
-    await expect(notice.first()).toBeVisible()
-    const text = (await page.getByRole('main').textContent()) ?? ''
+    await expect
+      .poll(
+        async () => (await notice.allTextContents()).join(' ').trim(),
+        { timeout: 15_000 },
+      )
+      .not.toBe('')
+
+    // Read from the BODY, not from a main landmark.
+    //
+    // The sign-in surface has no `main` -- there is no app frame yet,
+    // which is the whole point of a sign-in page -- so
+    // getByRole('main').textContent() waited out the full timeout and
+    // this gate failed with "locator.textContent: Test timeout"
+    // instead of naming the defect. That matters more than usual here:
+    // this gate is the acceptance criterion for the round now fixing
+    // the channel, and a criterion that cannot state what it wants
+    // leaves the person implementing it guessing.
+    const text = await page.locator('body').innerText()
 
     if (CLAIM_OF_DELIVERY.split(' ').every((word) => text.includes(word))) {
       // The surface claims a phone received a code. That must be true,
