@@ -129,8 +129,15 @@ type CreditTransaction struct {
 	Amount int64 `gorm:"column:amount;not null"`
 
 	// Reason is a short, caller-supplied note (e.g. "ai_generation:job_123",
-	// "promo:welcome_2026") -- free text for now; see AGENTS.md's Known
-	// limitations for why this round does not close it to an enum.
+	// "promo:welcome_2026"), declared a bounded phrase: every write path
+	// (CreditService's PreDeduct/Grant/Expire) validates it through
+	// validateReason before anything is written, so a row here can only
+	// ever carry the module's declared phrase shape -- ASCII letters and
+	// digits joined by ":" "_" or "-", at most 255 characters (the column's
+	// own width, size:255). The constraint is not closed to an enum --
+	// consumers name their own tags, job ids and policy periods -- but it
+	// is closed to prose; see CreditService's own doc comment for the full
+	// rationale (the same text travels verbatim into the audit trail).
 	Reason string `gorm:"column:reason;size:255;not null"`
 
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime;not null"`

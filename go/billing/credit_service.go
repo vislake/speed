@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,6 +28,21 @@ const billingCreditBalancesTableName = billingCreditBalancesTable
 // docs/internal/06-billing-and-metering.md's reserve -> confirm/refund
 // pattern for "pay-per-use that might fail" business operations, plus the
 // two single-phase paths (Grant, Expire).
+//
+// # The Reason contract
+//
+// Every one of the three inputs that accepts a Reason (PreDeductInput,
+// GrantInput, ExpireInput) declares it a bounded phrase, enforced by
+// validateReason before anything is written: a non-empty reason must be a
+// phrase of ASCII letters and digits joined by ":" "_" or "-" (the shape
+// of this module's own documented vocabulary -- "ai_generation:job_123",
+// "plan:pro:monthly_included", "expiry:2026-09-policy"), at most 255
+// characters. The constraint is not stylistic: the same reason is copied
+// verbatim into the audit trail's changes column (emitCreditAudit), and
+// go/dbkit/audit's Diff content contract (its emit.go doc comment)
+// forbids free text there -- a reason is machine-readable annotation with
+// a declared shape, never prose a caller could slip PII into, so nothing
+// that reaches the permanent audit column was ever free-form.
 //
 // # Concurrency safety
 //
@@ -81,6 +97,42 @@ type CreditService struct {
 	// separate query issued only after commit (what this round's fix
 	// replaced) would not be.
 	testHookAfterBalanceDelta func()
+}
+
+// reasonMaxRunes bounds a non-empty credit-operation reason at the ledger
+// column's own width (CreditTransaction.Reason -- gorm size:255, and the
+// migrations' VARCHAR(255); see go/dbkit/audit's column-bounds discussion
+// for why a width the schema declares is enforced in Go too, on both
+// dialects alike, rather than left to PostgreSQL's 22001 to refuse
+// mid-transaction). The reason pattern below is ASCII-only, so byte length
+// and rune count are the same value.
+const reasonMaxRunes = 255
+
+// reasonPhrasePattern is the declared shape of a valid credit-operation
+// reason: one or more ASCII letter-or-digit segments joined by ":", "_" or
+// "-" -- "ai_generation:job_123", "plan:pro:monthly_included",
+// "expiry:2026-09-policy". The shape admits this module's whole documented
+// vocabulary (domain tags, job ids, policy periods) and nothing prose-like:
+// no whitespace, no punctuation outside the three separators, no way to
+// write an email address, a name or a sentence.
+var reasonPhrasePattern = regexp.MustCompile(`^[A-Za-z0-9]+(?:[:_-][A-Za-z0-9]+)*$`)
+
+// validateReason enforces the module's declared bounded-phrase constraint
+// on a credit-operation reason (see CreditService's own doc comment for
+// the contract's full rationale). An empty reason is legal -- Reason is
+// optional on every input. A non-empty reason violating the phrase shape
+// or the reasonMaxRunes bound is refused with ErrInvalidReason, before any
+// database work: the same text would otherwise land verbatim in the audit
+// trail's changes column, which dbkit/audit's Diff content contract
+// (go/dbkit/audit/emit.go) holds to a no-free-text standard.
+func validateReason(reason string) error {
+	if reason == "" {
+		return nil
+	}
+	if len(reason) > reasonMaxRunes || !reasonPhrasePattern.MatchString(reason) {
+		return ErrInvalidReason
+	}
+	return nil
 }
 
 // NewCreditService returns a CreditService over db. db is expected to come
@@ -158,8 +210,10 @@ type PreDeductInput struct {
 	// second, genuinely new reservation. It becomes the resulting
 	// CreditTransaction's own ID -- see PreDeduct's doc comment.
 	IdempotencyKey string
-	// Reason is a short, free-text note on the resulting ledger entry
-	// (e.g. "ai_generation:job_123").
+	// Reason is a short, machine-readable note on the resulting ledger
+	// entry (e.g. "ai_generation:job_123"), declared a bounded phrase and
+	// validated by validateReason -- see CreditService's own doc comment
+	// for the declared shape and why the constraint exists. Optional.
 	Reason string
 }
 
@@ -199,6 +253,9 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 	}
 	if in.IdempotencyKey == "" {
 		return nil, ErrIdempotencyKeyRequired
+	}
+	if err := validateReason(in.Reason); err != nil {
+		return nil, err
 	}
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
@@ -415,8 +472,11 @@ func (s *CreditService) resolve(
 type GrantInput struct {
 	// Amount is the credit count to add. Must be strictly positive.
 	Amount int64
-	// Reason is a short, free-text note (e.g. "plan:pro:monthly_included",
-	// "promo:welcome_2026").
+	// Reason is a short, machine-readable note (e.g.
+	// "plan:pro:monthly_included", "promo:welcome_2026"), declared a
+	// bounded phrase and validated by validateReason -- see CreditService's
+	// own doc comment for the declared shape and why the constraint
+	// exists. Optional.
 	Reason string
 }
 
@@ -427,6 +487,9 @@ type GrantInput struct {
 func (s *CreditService) Grant(ctx context.Context, in GrantInput) (*CreditTransaction, error) {
 	if in.Amount <= 0 {
 		return nil, ErrInvalidAmount.WithParam("amount", in.Amount)
+	}
+	if err := validateReason(in.Reason); err != nil {
+		return nil, err
 	}
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
@@ -475,7 +538,10 @@ type ExpireInput struct {
 	// Amount is the credit count to remove from Available. Must be
 	// strictly positive.
 	Amount int64
-	// Reason is a short, free-text note (e.g. "expiry:2026-09-policy").
+	// Reason is a short, machine-readable note (e.g.
+	// "expiry:2026-09-policy"), declared a bounded phrase and validated by
+	// validateReason -- see CreditService's own doc comment for the
+	// declared shape and why the constraint exists. Optional.
 	Reason string
 }
 
@@ -500,6 +566,9 @@ type ExpireInput struct {
 func (s *CreditService) Expire(ctx context.Context, in ExpireInput) (*CreditTransaction, error) {
 	if in.Amount <= 0 {
 		return nil, ErrInvalidAmount.WithParam("amount", in.Amount)
+	}
+	if err := validateReason(in.Reason); err != nil {
+		return nil, err
 	}
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
@@ -733,7 +802,13 @@ func (s *CreditService) readBalanceForAudit(ctx context.Context, session *gorm.D
 // tenant's resulting balance: resultingBalance, read by the caller via
 // readBalanceForAudit from INSIDE the same transaction that applied this
 // operation's delta (see that function's own doc comment for why it must
-// be read there and not here, after commit). A nil resultingBalance --
+// be read there and not here, after commit). The reason is safe in the
+// Changes copy because this module declares it a bounded phrase and
+// enforces that at every reason-taking entry point (validateReason)
+// before anything is written -- the audit trail receives the same
+// machine-readable phrase the ledger row carries, never free text a
+// caller could slip PII into, per go/dbkit/audit's Diff content contract.
+// A nil resultingBalance --
 // that in-transaction read having failed, already logged by
 // readBalanceForAudit -- simply omits the two balance fields from the
 // payload; it must never turn an already-succeeded credit mutation into

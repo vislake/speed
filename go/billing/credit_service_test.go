@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -859,4 +860,105 @@ func changesAfterOrNil(c *audit.Diff, key string) any {
 		return nil
 	}
 	return c.After[key]
+}
+
+// TestCreditService_Reason_NonPhraseRefused pins the declared bounded-phrase
+// constraint on credit-operation reasons (validateReason): a reason that is
+// not a bounded phrase of ASCII letters, digits and ':' '_' '-' separators,
+// or that exceeds the ledger column's 255-character bound, is refused with
+// ErrInvalidReason before anything is written. The constraint exists
+// because the reason is copied verbatim into the audit trail's changes
+// column (emitCreditAudit), and dbkit/audit's Diff content contract
+// (go/dbkit/audit/emit.go) forbids free text there -- a reason carrying
+// prose (an email address, a complaint) would be carved into the one table
+// no code can ever delete from. The ungated behavior accepted any string
+// and wrote it into both the ledger row and the audit diff.
+func TestCreditService_Reason_NonPhraseRefused(t *testing.T) {
+	svc := newCreditService(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	calls := []struct {
+		name string
+		call func(reason string) error
+	}{
+		{"Grant", func(reason string) error {
+			_, err := svc.Grant(ctx, GrantInput{Amount: 10, Reason: reason})
+			return err
+		}},
+		{"PreDeduct", func(reason string) error {
+			_, err := svc.PreDeduct(ctx, PreDeductInput{Amount: 10, IdempotencyKey: "reserve-reason-test", Reason: reason})
+			return err
+		}},
+		{"Expire", func(reason string) error {
+			_, err := svc.Expire(ctx, ExpireInput{Amount: 10, Reason: reason})
+			return err
+		}},
+	}
+	refused := []string{
+		"refund for alice@example.com", // prose, whitespace
+		"Refund For Alice",             // prose, capitals + whitespace
+		"ai_generation:job_123 extra",  // trailing prose
+		":leading-separator",           // separator outside a phrase
+		"trailing:",                    // separator outside a phrase
+		"a::b",                         // doubled separator
+		strings.Repeat("a", 256),       // over the 255-character column bound
+	}
+	for _, tc := range calls {
+		for _, reason := range refused {
+			if err := tc.call(reason); !hasCode(err, ErrInvalidReason.Code) {
+				t.Errorf("%s(Reason=%q): err = %v, want %s", tc.name, reason, err, ErrInvalidReason.Code)
+			}
+		}
+	}
+
+	// Nothing was written by any refused call: the ledger is empty.
+	rows, err := svc.Transactions(ctx)
+	if err != nil {
+		t.Fatalf("Transactions() error = %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("Transactions() returned %d rows, want 0 -- a refused reason must fail before anything is written", len(rows))
+	}
+
+	// A bounded phrase -- the module's own documented vocabulary -- still
+	// succeeds on every entry point, each on its own tenant so one call's
+	// balance movement never starves the next.
+	phraseCalls := []struct {
+		name string
+		call func() error
+	}{
+		{"Grant", func() error {
+			_, err := svc.Grant(pkgcore.WithTenant(context.Background(), "phrase-grant"), GrantInput{Amount: 10, Reason: "promo:welcome_2026"})
+			return err
+		}},
+		{"PreDeduct", func() error {
+			// A grant first, so the reservation has an Available balance to
+			// reserve from.
+			reserveCtx := pkgcore.WithTenant(context.Background(), "phrase-reserve")
+			if _, err := svc.Grant(reserveCtx, GrantInput{Amount: 10, Reason: "seed"}); err != nil {
+				return err
+			}
+			_, err := svc.PreDeduct(reserveCtx, PreDeductInput{Amount: 10, IdempotencyKey: "reserve-phrase", Reason: "ai_generation:job-1"})
+			return err
+		}},
+		{"Expire", func() error {
+			// A grant first, so the expire has an Available balance to take.
+			grantCtx := pkgcore.WithTenant(context.Background(), "phrase-expire")
+			if _, err := svc.Grant(grantCtx, GrantInput{Amount: 10, Reason: "seed"}); err != nil {
+				return err
+			}
+			_, err := svc.Expire(grantCtx, ExpireInput{Amount: 10, Reason: "expiry:2026-09-policy"})
+			return err
+		}},
+	}
+	for _, tc := range phraseCalls {
+		if err := tc.call(); err != nil {
+			t.Errorf("%s with a bounded-phrase reason: err = %v, want nil", tc.name, err)
+		}
+	}
+
+	// An absent reason stays legal: reason is optional.
+	if _, err := svc.Grant(ctx, GrantInput{Amount: 10}); err != nil {
+		t.Errorf("Grant with no reason: err = %v, want nil", err)
+	}
 }

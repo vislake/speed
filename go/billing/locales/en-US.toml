@@ -25,6 +25,8 @@
 
 "billing.invalid_amount" = "Amount {{.amount}} is invalid; it must be a positive number."
 
+"billing.invalid_reason" = "The reason is not a bounded phrase: a reason must be made of letters and digits joined by \":\", \"_\" or \"-\" (e.g. \"ai_generation:job_123\"), at most 255 characters."
+
 "billing.idempotency_key_required" = "An idempotency key is required."
 
 "billing.insufficient_credits" = "The tenant's available credit balance cannot cover {{.amount}} credits."

@@ -67,6 +67,16 @@ var (
 	// second, genuinely new operation.
 	ErrIdempotencyKeyRequired = apperr.Invalid("billing.idempotency_key_required")
 
+	// ErrInvalidReason reports a credit-operation Reason that violates
+	// the module's declared bounded-phrase constraint (validateReason):
+	// a non-empty reason must be a phrase of ASCII letters, digits and
+	// ':' '_' '-' separators, at most 255 characters long. The
+	// constraint is declared and enforced because the reason is copied
+	// verbatim into the audit trail's changes column (emitCreditAudit),
+	// where dbkit/audit's Diff content contract forbids free text that
+	// could carry PII.
+	ErrInvalidReason = apperr.Invalid("billing.invalid_reason")
+
 	// ErrInsufficientCredits reports that a PreDeduct's requested amount
 	// exceeds the tenant's available credit balance. The reservation
 	// was NOT made; no credit_transaction row exists for this attempt.

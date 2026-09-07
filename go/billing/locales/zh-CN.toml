@@ -22,6 +22,8 @@
 
 "billing.invalid_amount" = "金额 {{.amount}} 非法，必须是正数。"
 
+"billing.invalid_reason" = "原因不是受限短语：原因须由字母和数字以 \":\"、\"_\" 或 \"-\" 连接而成（例如 \"ai_generation:job_123\"），长度不超过 255 个字符。"
+
 "billing.idempotency_key_required" = "必须提供幂等键。"
 
 "billing.insufficient_credits" = "租户可用信用点余额不足以覆盖 {{.amount}} 点。"
