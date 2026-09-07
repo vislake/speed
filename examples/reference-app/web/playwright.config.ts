@@ -349,7 +349,33 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 1 : 0,
+  // NO RETRIES, ANYWHERE -- and this is a decision rather than a
+  // default. It used to be `process.env.CI ? 1 : 0`, which would have
+  // made a CI run strictly weaker than a local one: a gate failing its
+  // first attempt and passing its second reports green, and nobody sees
+  // the first.
+  //
+  // Every flake this suite has had was a DEFECT IN THE GATE, not noise:
+  // a decode state read one `evaluateAll` after the element count
+  // reached two (expectBeforeAndAfter's own note), an `isVisible()`
+  // asked before the frame rendered (openSurface), five more
+  // point-in-time reads that `readSettledText` replaced, and a refusal
+  // gate locking out its own account across engines. A single retry
+  // would have hidden all of them, and the one that mattered most --
+  // the disclosure gate that ACCUSED a round of not doing work it had
+  // done -- would have been hidden intermittently, which is worse than
+  // either outcome.
+  //
+  // This file's own comments say it twice already: "a false red is not
+  // a cheap failure", and "once a gate is known to flake, its red stops
+  // being read". A retry count is the mechanism that makes both true.
+  //
+  // If the e2e pipeline lands (M4) and a genuinely environmental flake
+  // appears -- a browser download hiccup, a runner slow enough to pass
+  // a 60s test timeout -- the answer is to fix the gate or raise that
+  // timeout. Should retries ever be truly necessary, the reasoning goes
+  // here, in writing, next to what it costs.
+  retries: 0,
   reporter: process.env.CI ? [['github'], ['list']] : [['list']],
   timeout: 60_000,
   expect: { timeout: 10_000 },
