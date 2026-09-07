@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -388,5 +389,82 @@ func TestImpersonationService_Start_AdminKeepsPermissionViaOtherRole_GrantSurviv
 
 	if _, ok := env.Admin.Impersonation().Lookup(context.Background(), grant.ID); !ok {
 		t.Fatal("Lookup() = false after revoking only ONE of two granting roles, want the grant to survive (roleB still grants admin:impersonate)")
+	}
+}
+
+// TestImpersonationService_Start_NotificationRow_CarriesNoInternalParams is
+// the P1 leak's regression at the row the impersonated user actually reads:
+// the mandatory notice's in_app_messages row is tenant data served back to
+// its recipient through the inbox API, and on unfixed main its params
+// column held the operator's free-text reason and the administrator's user
+// id verbatim -- notification's delivery persisted Dispatch.Params exactly
+// as admin dispatched it. Driven through the REAL notification pipeline
+// (buildTestAdminModule's genuine wiring -- no fakeNotifier anywhere), the
+// notice must still land, but its row must carry no params at all.
+func TestImpersonationService_Start_NotificationRow_CarriesNoInternalParams(t *testing.T) {
+	env := buildTestAdminModule(t)
+	env.Admin.AttachRBAC(env.RBAC)
+	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
+		t.Fatalf("RegisterHandler() error = %v", err)
+	}
+
+	const tenant = pkgcore.TenantID("tenant-notice-leak")
+	root, err := env.Org.Tree().CreateRoot(pkgcore.WithTenant(context.Background(), tenant), "Notice Leak Co", "workspace")
+	if err != nil {
+		t.Fatalf("CreateRoot() error = %v", err)
+	}
+	targetID := registerTestUser(t, env, "notice-leak-target@example.com", "en-US")
+	if _, addErr := env.Org.Members().Add(pkgcore.WithTenant(context.Background(), tenant), targetID, root.ID); addErr != nil {
+		t.Fatalf("Members().Add() error = %v", addErr)
+	}
+
+	const operatorReason = "investigating suspected fraud on this account"
+	grant, err := env.Admin.Impersonation().Start(context.Background(), StartInput{
+		AdminUserID:    "admin-notice-leak",
+		TargetUserID:   targetID,
+		TargetTenantID: tenant,
+		Reason:         operatorReason,
+		Locale:         "en-US",
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if grant.ID == "" {
+		t.Fatal("Start() returned a grant with no id")
+	}
+
+	// Poll for the notice's inbox row -- the recipient-visible record of
+	// this delivery -- through notification's own repository over the
+	// shared database.
+	repo := notification.NewRepository(env.DB)
+	var row *notification.InboxMessage
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		rows, listErr := repo.ListForRecipient(
+			pkgcore.WithTenant(context.Background(), tenant),
+			targetID, notificationGroupSecurity, 20, 0)
+		if listErr != nil {
+			t.Fatalf("ListForRecipient() error = %v", listErr)
+		}
+		for i := range rows {
+			if rows[i].TypeKey == NotificationTypeImpersonationStarted {
+				row = &rows[i]
+				break
+			}
+		}
+		if row != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if row == nil {
+		t.Fatal("no admin.impersonation_started inbox row landed for the target within the deadline")
+	}
+
+	if len(row.Params) != 0 {
+		t.Fatalf("impersonation notice inbox row params = %q, want none -- the recipient-visible row must not carry the operator's reason (%q) or the administrator's user id", string(row.Params), operatorReason)
+	}
+	if strings.Contains(string(row.Params), "admin-notice-leak") {
+		t.Fatalf("impersonation notice inbox row params %q embeds the administrator's user id, want it absent from the recipient-visible row", string(row.Params))
 	}
 }

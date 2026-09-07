@@ -3,6 +3,7 @@ package admin
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"sync"
@@ -378,6 +379,71 @@ func TestImpersonationService_Start_DispatchesMandatoryNotification(t *testing.T
 	tenant, ok := pkgcore.TenantFromContext(notifier.contexts[0])
 	if !ok || tenant != "tenant-1" {
 		t.Fatalf("dispatch tenant = %q, ok=%v, want tenant-1", tenant, ok)
+	}
+}
+
+// TestImpersonationService_Start_NotificationParams_CarryNoInternalFields
+// is the P1 finding's regression at the dispatch's own construction site:
+// on unfixed main the mandatory security notice's Params carried the
+// platform operator's free-text reason and the administrator's user id
+// verbatim -- and every downstream surface (the persistent tenant-data
+// inbox row, the inbox API) serves Params as received, so the impersonated
+// user themselves read the operator's "why am I looking at this account"
+// justification and one party's identity data. The dispatch must now carry
+// NO parameters at all: the type's copy is static, its declaration marks
+// zero recipient-visible params (module.go's reg.Notifications.Add call),
+// so there is nothing legitimate for Params to carry. And because nothing
+// but Params used to distinguish one start's notice from the next in the
+// delivery key, each start now names its own fresh OccurrenceID -- the
+// first-class per-delivery marker notification provides -- so the
+// mandatory notice still arrives once per simulated login, never deduped
+// into the previous start's row.
+func TestImpersonationService_Start_NotificationParams_CarryNoInternalFields(t *testing.T) {
+	notifier := &fakeNotifier{}
+	svc, _ := newTestImpersonationService(t, notifier)
+
+	start := func(reason string) {
+		t.Helper()
+		if _, err := svc.Start(context.Background(), StartInput{
+			AdminUserID:    "admin-1",
+			TargetUserID:   "user-1",
+			TargetTenantID: "tenant-1",
+			Reason:         reason,
+			Locale:         "zh-CN",
+		}); err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+	}
+	start("investigating suspected fraud on this account")
+	start("investigating suspected fraud on this account")
+
+	if len(notifier.dispatches) != 2 {
+		t.Fatalf("got %d notification dispatches, want exactly 2", len(notifier.dispatches))
+	}
+	for i, d := range notifier.dispatches {
+		if len(d.Params) != 0 {
+			t.Fatalf("dispatch %d Params = %v, want none -- the impersonated user must never receive the operator's reason or the administrator's user id through the notification params channel", i, d.Params)
+		}
+		raw, err := json.Marshal(d)
+		if err != nil {
+			t.Fatalf("marshal dispatch %d: %v", i, err)
+		}
+		payload := string(raw)
+		if strings.Contains(payload, "fraud") {
+			t.Fatalf("dispatch %d payload %s embeds the operator's reason text, want the internal justification to travel nowhere the recipient can read", i, payload)
+		}
+		if strings.Contains(payload, "admin-1") {
+			t.Fatalf("dispatch %d payload %s embeds the administrator's user id, want it absent from the recipient-visible dispatch", i, payload)
+		}
+	}
+	// Two starts of identical content are two deliveries: each carries a
+	// fresh occurrence marker, or the second simulated login would be
+	// deduped into the first start's row and never announced at all.
+	if notifier.dispatches[0].OccurrenceID == "" {
+		t.Fatal("dispatch OccurrenceID is empty, want a fresh per-start occurrence marker so every simulated login sends its own notice")
+	}
+	if notifier.dispatches[0].OccurrenceID == notifier.dispatches[1].OccurrenceID {
+		t.Fatalf("two starts share OccurrenceID %q, want distinct markers per start", notifier.dispatches[0].OccurrenceID)
 	}
 }
 

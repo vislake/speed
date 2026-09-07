@@ -429,6 +429,21 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		Key:             NotificationTypeImpersonationStarted,
 		Group:           notificationGroupSecurity,
 		DefaultChannels: []string{notification.ChannelInApp, notification.ChannelEmail},
+		// RecipientVisibleParams: []string{} (the empty list is a real
+		// declaration, never "unset") marks the boundary the impersonation
+		// notice must hold: its copy is static, so nothing about a start is
+		// parameterized and NOTHING may ride the dispatch's params channel
+		// to the recipient. Before this declaration existed the dispatch
+		// stuffed the operator's free-text reason and the administrator's
+		// user id into Params, and notification persisted them verbatim
+		// into the impersonated user's own inbox row and inbox API -- the
+		// P1 leak: the mandatory security notice handed the impersonated
+		// user the operator's "why am I looking at this account"
+		// justification and one party's identity data. notification
+		// enforces the declaration (ErrDispatchParamsNotAllowed at
+		// Dispatch, narrowing at delivery), so a future edit that wants to
+		// say anything per-start must extend this list consciously.
+		RecipientVisibleParams: []string{},
 		// Unsubscribable: false is what makes D5's "mandatory,
 		// non-unsubscribable security notification" requirement REAL (P1-1's
 		// fix): pkgcore.NotificationType.Unsubscribable reports whether

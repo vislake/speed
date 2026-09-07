@@ -324,6 +324,19 @@ func TestModule_Register_DeclaresPermissionsAuditActionsAndNotificationType(t *t
 			if nt.Unsubscribable {
 				t.Error("NotificationTypeImpersonationStarted is Unsubscribable, want a mandatory type recipients cannot opt out of (Unsubscribable false)")
 			}
+			// The impersonation notice's declaration must mark ZERO
+			// recipient-visible params (an empty list, never nil -- nil is
+			// the legacy "no restriction" value): the notice's copy is
+			// static, so nothing may ride its dispatch's params channel to
+			// the target. Before this declaration the dispatch handed the
+			// impersonated user the operator's reason and the
+			// administrator's user id verbatim through that channel (the
+			// P1 finding); notification enforces the declared list, so the
+			// leak cannot return unless this declaration is widened on
+			// purpose.
+			if nt.RecipientVisibleParams == nil || len(nt.RecipientVisibleParams) != 0 {
+				t.Errorf("NotificationTypeImpersonationStarted RecipientVisibleParams = %v, want the empty list -- the static-copy notice may carry no recipient-visible parameters", nt.RecipientVisibleParams)
+			}
 		}
 	}
 	if !foundType {

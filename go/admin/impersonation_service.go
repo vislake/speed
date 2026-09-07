@@ -2,6 +2,8 @@ package admin
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -606,9 +608,34 @@ func (s *ImpersonationService) validateTargetMembership(ctx context.Context, in 
 // already carry TargetTenantID's system-context grant, exactly like
 // validateTargetMembership -- writing the notification's delivery job into
 // the TARGET tenant's own queue and tables is itself a cross-tenant write
-// this module must not perform silently. There is deliberately no grant id
-// to log or to hand to the dispatch: the notification's Params carry only
-// admin_user_id and reason, so nothing here depends on one.
+// this module must not perform silently.
+//
+// The dispatch deliberately carries NO Params: the notice's copy is static
+// (its templates interpolate nothing -- see locales/{zh-CN,en-US}.toml),
+// its type declaration marks zero recipient-visible parameters (module.go's
+// RecipientVisibleParams: []string{}), and notification enforces that
+// boundary -- so nothing about this start can ride the params channel into
+// the target's inbox row or inbox API. Before this boundary existed the
+// dispatch handed the target the operator's free-text reason and the
+// administrator's user id verbatim: an impersonation reason's mandatory
+// semantics are exactly "why am I looking at this account", and the target
+// is precisely the party an investigation must not brief (the P1 finding).
+// The reason and the administrator's identity stay where they belong -- the
+// grant row and the dual-identity audit trail -- and the operator's
+// internal justification travels nowhere the recipient can read.
+//
+// What DOES reach the dispatch is a fresh per-start OccurrenceID. Params
+// used to be the only thing distinguishing one start's notice from the
+// next in notification's derived delivery key, so a start whose notice
+// carried nothing at all would be deduped into the previous start's row and
+// never announced -- a silent end to D5's "every simulated login sends
+// it". The occurrence marker is notification's first-class channel for
+// "identical content, new occurrence" (it never renders and never persists
+// into the inbox row), and a fresh marker per start keeps each simulated
+// login its own delivery while a queue retry of one job still converges on
+// that job's own record. There is deliberately no grant id here either: the
+// notification is enqueued BEFORE the grant row exists (Start's own doc
+// comment), so the grant id is not yet born at this point.
 //
 // A nil notifier is tolerated by returning nil (no error, nothing
 // attempted): reachable only from an in-package test attach that wires no
@@ -616,13 +643,17 @@ func (s *ImpersonationService) validateTargetMembership(ctx context.Context, in 
 // run at all (ErrImpersonationNotWired, P2-4), and Module.Register always
 // attaches a real notifier, since WithNotification is a mandatory Register
 // option -- so this branch never sees production. Every OTHER failure here
-// -- the dispatch itself was refused -- is P1-1's own fix: it is returned
-// as a real error rather than logged and swallowed, so Start refuses the
-// whole call instead of returning success over a notification nobody will
-// ever receive.
+// -- the dispatch itself was refused, an occurrence id could not be drawn --
+// is P1-1's own fix: it is returned as a real error rather than logged and
+// swallowed, so Start refuses the whole call instead of returning success
+// over a notification nobody will ever receive.
 func (s *ImpersonationService) dispatchStartNotification(ctx context.Context, in StartInput, locale string) error {
 	if s.notifier == nil {
 		return nil
+	}
+	occurrenceID, err := newImpersonationNoticeOccurrenceID()
+	if err != nil {
+		return ErrImpersonationNotificationUnavailable.WithCause(err)
 	}
 	if _, err := s.notifier.Dispatch(ctx, notification.Dispatch{
 		TypeKey: NotificationTypeImpersonationStarted,
@@ -630,17 +661,30 @@ func (s *ImpersonationService) dispatchStartNotification(ctx context.Context, in
 			Class:  notification.RecipientClassUser,
 			UserID: in.TargetUserID,
 		},
-		Locale: locale,
-		Params: map[string]any{
-			"admin_user_id": in.AdminUserID,
-			"reason":        in.Reason,
-		},
+		Locale:       locale,
+		OccurrenceID: occurrenceID,
 	}); err != nil {
 		obs.FromContext(ctx).Warn("admin could not dispatch the mandatory impersonation-started notification",
 			"target_user_id", in.TargetUserID, "error", err)
 		return ErrImpersonationNotificationUnavailable.WithCause(err)
 	}
 	return nil
+}
+
+// newImpersonationNoticeOccurrenceID returns a fresh, per-start occurrence
+// marker for the mandatory notice's dispatch: 16 random bytes hex-encoded,
+// the same shape as the grant id (newGrantID) but with none of its
+// semantics -- this value is not a credential, it only has to be distinct
+// across starts so notification's derived delivery key treats each start's
+// notice as its own delivery (dispatchStartNotification's own doc comment).
+// A random draw keeps the marker stateless -- no counter to persist, no
+// input an adversary could predict to correlate two starts.
+func newImpersonationNoticeOccurrenceID() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // resolveNotificationLocale answers the locale dispatchStartNotification
