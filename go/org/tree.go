@@ -55,6 +55,19 @@ type TreeService struct {
 	// this module's tree events. Nil publishes nothing, which is what a
 	// TreeService constructed outside a bootstrapped host does.
 	host hostSeams
+
+	// restoreGate, when set (in-package tests only), is invoked by Restore
+	// between its initial read and its write transaction, and nowhere else.
+	// It exists so tree_test.go's deterministic re-parent-race regression can
+	// hold one Restore open -- its read of the row done, nothing written yet
+	// -- while a competing sequence of real service calls commits, pinning the
+	// window Restore's in-transaction re-read closes. No other tree operation
+	// has such a point: Move, CreateChild and Delete read everything they
+	// trust inside their transactions, while Restore is the one call whose
+	// pre-transaction read feeds a later write, which is exactly what makes
+	// the window real. Nil (the state every host-constructed service is in,
+	// and the default NewTreeService leaves) makes the invocation a no-op.
+	restoreGate func()
 }
 
 // nodeMemberGuard reports whether any membership is bound to one of the given
@@ -917,51 +930,122 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 // rootDepth), which is what CreateRoot wrote and what nothing else may
 // change.
 //
-// # Atomicity against a concurrent cascade delete of the parent
+// # Atomicity against concurrent parent changes: cascade delete, and re-parent
 //
-// The initial findByIDIncludingDeleted read below stays its own, separate,
-// read-only call: existing.ParentID cannot itself go stale in a way that
-// matters, since nothing changes a soft-deleted row's ParentID before it is
-// restored (Move only ever touches live rows). What DOES need to be atomic
-// is the parent-liveness CHECK and the restore WRITE together: the original
-// shape here (a plain s.Get(parentID) read, then a separate
-// s.repo.Restore call) left exactly the window a concurrent cascade
+// What needs to be atomic is the parent-liveness CHECK and the restore WRITE
+// together: the original shape here (a plain s.Get(parentID) read, then a
+// separate s.repo.Restore call) left exactly the window a concurrent cascade
 // TreeService.Delete of the ancestor could land in, committing between the
 // two and leaving the freshly restored node under a now-dead parent -- the
 // corrupt state this method's own "refuses to land a node on a dead parent"
 // section above exists to rule out.
 //
 // The fix runs both steps inside ONE dbkit.WithTenantSession transaction,
-// parent-lock first: lockLiveNode's blind, no-prior-read touch-update on
-// existing.ParentID either blocks until a concurrent cascade delete of that
-// same parent resolves (and then correctly fails to match once it commits),
-// or takes the lock itself, in which case a delete of THAT parent starting
+// parent-lock first: lockLiveNode's blind, no-prior-read touch-update on the
+// row's parent either blocks until a concurrent cascade delete of that same
+// parent resolves (and then correctly fails to match once it commits), or
+// takes the lock itself, in which case a delete of THAT parent starting
 // afterward blocks behind this transaction instead of racing it -- so the
-// restore write that follows, inside the same transaction, can never
-// observe a parent that was live at lock time but dead by the time the
-// restore itself commits. withRetry wraps the whole thing for the same
-// contention reasons Move's own doc comment gives.
+// restore write that follows, inside the same transaction, can never observe
+// a parent that was live at lock time but dead by the time the restore
+// itself commits. withRetry wraps the whole thing for the same contention
+// reasons Move's own doc comment gives.
+//
+// # The initial read is a hint; the transaction re-reads the row it restores
+//
+// The lock argument above only holds once the locked parent is the row's
+// CURRENT parent -- and nothing makes the initial findByIDIncludingDeleted
+// read current. It is its own, separate, read-only call taken before this
+// transaction opens, and no lock or condition serializes two concurrent
+// Restores before either enters its write transaction. A soft-deleted row's
+// ParentID never changes on its own (Move only rewrites live rows), but that
+// describes the row's resting state, not what a competing path can do while
+// this call is in flight: Restore of the same row, Move of it to a new
+// parent, Delete of it again -- three ordinary, documented operations -- can
+// commit entirely between this call's read and its lock. This call then
+// locks the OLD parent, which is live and matches, and would write a path
+// derived from it into a row whose ParentID names the NEW parent:
+// resurrecting exactly the Path/ParentID contradiction path.go calls corrupt
+// (TestTreeService_Restore_RestoreMoveDeleteRace_RestoresUnderCurrentParent
+// reproduces it).
+//
+// The transaction therefore re-reads the row itself
+// (Repository.findByIDIncludingDeletedTx) right after its first lock and
+// derives the parent from THAT read; when the re-read's ParentID differs
+// from the locked one, the transaction locks the parent the re-read names
+// and restores under it. The write is additionally conditioned on the id of
+// the parent actually locked (restoreNodeTx's parent_id predicate), so even
+// a re-parent landing in the gap between the re-read and its lock fails the
+// write closed instead of overwriting the row's placement with a stale one.
 func (s *TreeService) Restore(ctx context.Context, nodeID string) (*OrgNode, error) {
 	existing, err := s.repo.findByIDIncludingDeleted(ctx, nodeID)
 	if err != nil {
 		return nil, err
+	}
+	if s.restoreGate != nil {
+		s.restoreGate()
 	}
 
 	err = withRetry(func() error {
 		return dbkit.WithTenantSession(ctx, s.repo.db, func(tx *gorm.DB) error {
 			if existing.IsRoot() {
 				// A root's canonical placement is built from its own id alone;
-				// no parent is locked or re-expressed against.
-				return restoreNodeTx(tx, nodeID, buildPath("", nodeID), rootDepth)
+				// no parent is locked or re-expressed against. A root's
+				// parent_id is the empty sentinel and nothing can change it,
+				// so the outer read's root-ness decision cannot go stale.
+				return restoreNodeTx(tx, nodeID, "", buildPath("", nodeID), rootDepth)
 			}
+			// Lock the parent the outer read named -- this touch keeps its
+			// position as the transaction's first statement, the SQLite
+			// read-then-write hazard discipline every caller of lockLiveNode
+			// follows. The lock's failure is not yet an answer: the outer
+			// read was a hint, and the row may no longer sit under this
+			// parent at all.
 			parent, lockErr := lockLiveNode(tx, existing.ParentID)
-			if lockErr != nil {
-				if errors.Is(lockErr, gorm.ErrRecordNotFound) {
-					return ErrRestoreParentNotLive.
-						WithParam("node_id", nodeID).
-						WithParam("parent_id", existing.ParentID)
-				}
+			if lockErr != nil && !errors.Is(lockErr, gorm.ErrRecordNotFound) {
 				return ErrInternal.WithCause(lockErr)
+			}
+			// Re-read the row INSIDE this transaction -- the parent lock taken
+			// above serializes the only operations that can change a
+			// soft-deleted row's ParentID (a competing restore must lock the
+			// row's current parent) -- and derive the parent from THAT read.
+			// See Restore's doc comment for the competing restore -> move ->
+			// delete sequence this closes.
+			current, readErr := s.repo.findByIDIncludingDeletedTx(tx, nodeID)
+			if readErr != nil {
+				// gorm.ErrRecordNotFound (the row vanished since the outer read
+				// -- only a host-level hard delete can do that) passes through
+				// unwrapped so Restore's outer mapping answers the same
+				// ErrNodeNotFound the ctx-bound read would; anything else is
+				// wrapped the same way that read wraps it.
+				if !errors.Is(readErr, gorm.ErrRecordNotFound) {
+					return ErrInternal.WithCause(readErr)
+				}
+				return readErr
+			}
+			switch {
+			case parent != nil && current.ParentID == parent.ID:
+				// The hinted parent is the row's current one, live, and held
+				// by this transaction -- the ordinary case.
+			case current.ParentID == existing.ParentID:
+				// The hinted parent is genuinely the row's parent and is not
+				// live: the honest refusal, naming the parent the row still
+				// sits under.
+				return ErrRestoreParentNotLive.
+					WithParam("node_id", nodeID).
+					WithParam("parent_id", current.ParentID)
+			default:
+				// The row was re-parented while this call was in flight: lock
+				// the parent the re-read names and restore under it.
+				parent, lockErr = lockLiveNode(tx, current.ParentID)
+				if lockErr != nil {
+					if errors.Is(lockErr, gorm.ErrRecordNotFound) {
+						return ErrRestoreParentNotLive.
+							WithParam("node_id", nodeID).
+							WithParam("parent_id", current.ParentID)
+					}
+					return ErrInternal.WithCause(lockErr)
+				}
 			}
 			// Re-express the restored row under this locked parent's CURRENT
 			// path -- see Restore's doc comment above -- deriving nothing from
@@ -976,7 +1060,7 @@ func (s *TreeService) Restore(ctx context.Context, nodeID string) (*OrgNode, err
 			if depth > s.maxDepth {
 				return ErrMaxDepthExceeded.WithParam("max_depth", s.maxDepth)
 			}
-			return restoreNodeTx(tx, nodeID, path, depth)
+			return restoreNodeTx(tx, nodeID, parent.ID, path, depth)
 		})
 	})
 	if err != nil {
@@ -1004,12 +1088,21 @@ func (s *TreeService) Restore(ctx context.Context, nodeID string) (*OrgNode, err
 // restoreNodeTx clears deleted_at/deleted_by on the node identified by id --
 // and writes the path/depth placement the row is restored into -- inside an
 // already-open transaction, mirroring dbkit.Repository[OrgNode].Restore's own
-// conditional shape (deleted_at IS NOT NULL, so a live or never-existing row
-// reports gorm.ErrRecordNotFound rather than silently no-opping) without
-// opening a second transaction of its own -- TreeService.Restore needs this
-// write in the SAME transaction as its parent-liveness lock and the locked
-// parent's path read, which the promoted, single-call Restore method cannot
-// express.
+// conditional shape without opening a second transaction of its own --
+// TreeService.Restore needs this write in the SAME transaction as its
+// parent-liveness lock and the locked parent's path read, which the
+// promoted, single-call Restore method cannot express.
+//
+// The write is conditioned on the row still sitting under parentID -- the id
+// of the parent Restore actually locked, whose current path the caller
+// derived the placement from. A live or never-existing row reports
+// gorm.ErrRecordNotFound rather than silently no-opping (deleted_at IS NOT
+// NULL), and so does a row re-parented after that lock was taken (the
+// parent_id predicate): Restore's outer mapping turns the first into the
+// contract-correct ErrNodeNotFound, and the second is the fail-closed answer
+// for a re-parent that landed in the gap between Restore's in-transaction
+// re-read and its lock -- the stale placement is never written over a row
+// that no longer claims the locked parent.
 //
 // path/depth are the restored row's re-expressed placement under the parent
 // Restore locked (see TreeService.Restore's own doc comment): the one UPDATE
@@ -1017,11 +1110,12 @@ func (s *TreeService) Restore(ctx context.Context, nodeID string) (*OrgNode, err
 // never carry a Path/Depth that disagrees with the live parent chain it
 // returns to. The caller derives the placement from a validated parent path
 // and passes the tenant root's own canonical placement (buildPath("", id),
-// rootDepth) for a root restore.
-func restoreNodeTx(tx *gorm.DB, id, path string, depth int) error {
+// rootDepth, with parentID the empty sentinel) for a root restore.
+func restoreNodeTx(tx *gorm.DB, id, parentID, path string, depth int) error {
 	res := tx.
 		Where("id = ?", id).
 		Where("deleted_at IS NOT NULL").
+		Where("parent_id = ?", parentID).
 		Unscoped().
 		Select("DeletedAt", "DeletedBy", "Path", "Depth").
 		Updates(&OrgNode{DeletedAt: nil, DeletedBy: "", Path: path, Depth: depth})

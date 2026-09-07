@@ -159,8 +159,12 @@ func (r *Repository) byIDs(ctx context.Context, ids []string) ([]OrgNode, error)
 // auto-scope plugin silently hides a mark-deleted row from.
 //
 // TreeService.Restore needs exactly this: to read a node's stored ParentID
-// BEFORE deciding whether restoring it is safe, and a mark-deleted node's
-// own row is precisely the one an ordinary, scoped read cannot see.
+// before deciding whether restoring it is safe, and a mark-deleted node's
+// own row is precisely the one an ordinary, scoped read cannot see. What it
+// observes is a HINT, never a trusted fact: Restore re-reads the row inside
+// its write transaction before anything is derived from it (see Restore's
+// own doc comment), so this call is the one place its answer may be stale
+// without consequence.
 //
 // db.Unscoped() is GORM's own general query-scope bypass (the same one
 // soft_delete.go's plugin checks and skips); it disables only the
@@ -171,15 +175,39 @@ func (r *Repository) byIDs(ctx context.Context, ids []string) ([]OrgNode, error)
 // collapsing "never existed" and "belongs to another tenant" the same way
 // FindByID already does.
 func (r *Repository) findByIDIncludingDeleted(ctx context.Context, id string) (*OrgNode, error) {
-	var node OrgNode
+	var node *OrgNode
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.Unscoped().Where("id = ?", id).First(&node).Error
+		n, err := r.findByIDIncludingDeletedTx(tx, id)
+		if err != nil {
+			return err
+		}
+		node = n
+		return nil
 	})
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		return nil, ErrNodeNotFound
 	case err != nil:
 		return nil, ErrInternal.WithCause(err)
+	}
+	return node, nil
+}
+
+// findByIDIncludingDeletedTx is findByIDIncludingDeleted's in-transaction
+// sibling: the same Unscoped, still-fully-tenant-scoped read, but on an
+// already-open transaction's tx instead of opening a session of its own.
+//
+// TreeService.Restore needs this variant for the re-read it takes INSIDE
+// the transaction that locks the parent and performs the restore write --
+// see Restore's doc comment for why that re-read is the authoritative one.
+// Unlike the ctx-bound form it reports gorm.ErrRecordNotFound unwrapped for
+// an id with no row in the tx's tenant, leaving the error's mapping to the
+// caller (Restore's own outer mapping turns it into ErrNodeNotFound exactly
+// as the ctx-bound form would).
+func (r *Repository) findByIDIncludingDeletedTx(tx *gorm.DB, id string) (*OrgNode, error) {
+	var node OrgNode
+	if err := tx.Unscoped().Where("id = ?", id).First(&node).Error; err != nil {
+		return nil, err
 	}
 	return &node, nil
 }

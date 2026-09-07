@@ -1653,6 +1653,131 @@ func TestTreeService_Restore_WouldLandBeyondMaxDepth_Refused(t *testing.T) {
 	}
 }
 
+// TestTreeService_Restore_RestoreMoveDeleteRace_RestoresUnderCurrentParent
+// is the org-restore-race regression proof: a competing sequence --
+// Restore(child), Move(child, newParent), Delete(child) again -- racing a
+// second Restore(child) that read the row BEFORE that sequence committed
+// used to land child LIVE with ParentID = newParent but a materialized Path
+// naming the OLD parent. restoreNodeTx wrote Path/Depth conditioned only on
+// id and deleted_at IS NOT NULL, never touching or checking ParentID, so its
+// write matched the re-deleted row and resurrected it under a path its own
+// ParentID contradicts -- the state path.go calls "corrupt, not a supported
+// state", with subtree-scope consequences in both directions and a two-way
+// data-scope mismatch once the row feeds rbac through ScopeService.Path.
+// The stale ingredient is Restore's initial findByIDIncludingDeleted read,
+// taken outside its transaction and reused by every retry: nothing
+// serializes two concurrent Restores before either enters its write
+// transaction, so the row can be restored, moved and re-deleted entirely
+// between that read and the write that follows it. Two concurrent PURE
+// restores cannot expose this (the second one's write matches nothing once
+// the first made the row live); the sandwich Move and Delete are required.
+//
+// # Why a deterministic gate rather than racing rounds
+//
+// The window sits between two phases of the SAME call -- Restore's initial
+// read and its write transaction -- with no blocking point between them an
+// outside test could use to force the interleaving. Goroutine scheduling and
+// SQLite's busy-handler timing decide who wins each file-lock handoff, and
+// the corrupt outcome needs the competing path to win three consecutive
+// handoffs: its own Restore locks the SAME parent the parked call later
+// locks, so a first-handoff loss fails closed instead (the module's own
+// "Atomicity" section in tree.go argues that half). The stress-round shape
+// of this file's other TestTreeService_Concurrent* tests therefore exposes
+// this only probabilistically, never on demand. Restore accordingly carries
+// one test-only pause point -- the restoreGate field, invoked between the
+// read and the retry, inert unless a test sets it -- so this test parks the
+// racing Restore after its read, commits the competing sequence through the
+// real service methods, then resumes it and asserts the landed row. Before
+// the fix the resumed call restores under the stale parent; after the fix
+// its in-transaction re-read sees the current parent, locks it, and
+// re-expresses the row under it.
+func TestTreeService_Restore_RestoreMoveDeleteRace_RestoresUnderCurrentParent(t *testing.T) {
+	db := newTestDB(t)
+	tree := newTestTreeOn(t, db)
+	ctx := tenantCtx("tenant-a")
+
+	root := mustCreateRoot(t, tree, ctx, "root")
+	p1 := mustCreateChild(t, tree, ctx, root.ID, "p1")
+	p2 := mustCreateChild(t, tree, ctx, root.ID, "p2")
+	child := mustCreateChild(t, tree, ctx, p1.ID, "child")
+	if err := tree.Delete(ctx, child.ID, false); err != nil {
+		t.Fatalf("Delete(child): %v", err)
+	}
+
+	// Park one Restore between its initial read and its write transaction.
+	// Only the FIRST invocation parks (the competing path's own later
+	// Restore passes straight through): a sync.Once cannot express that here,
+	// because Once holds its mutex while the parked function blocks.
+	readDone := make(chan struct{})
+	resume := make(chan struct{})
+	tree.restoreGate = func() {
+		select {
+		case <-readDone:
+			// already parked once -- not the call this test is holding
+		default:
+			close(readDone)
+			<-resume
+		}
+	}
+
+	type restoreResult struct {
+		node *OrgNode
+		err  error
+	}
+	result := make(chan restoreResult, 1)
+	go func() {
+		node, err := tree.Restore(ctx, child.ID)
+		result <- restoreResult{node: node, err: err}
+	}()
+	<-readDone // the parked Restore has read child (deleted, under p1).
+
+	// The competing path, through the real service methods: restore child,
+	// move it under p2, delete it again.
+	if _, err := tree.Restore(ctx, child.ID); err != nil {
+		t.Fatalf("competing Restore(child): %v", err)
+	}
+	if _, err := tree.Move(ctx, child.ID, p2.ID); err != nil {
+		t.Fatalf("competing Move(child, p2): %v", err)
+	}
+	if err := tree.Delete(ctx, child.ID, false); err != nil {
+		t.Fatalf("competing Delete(child): %v", err)
+	}
+	// The premise, pinned: child is soft-deleted again, now under p2.
+	row, err := tree.repo.findByIDIncludingDeleted(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("read child row after the competing sequence: %v", err)
+	}
+	if row.DeletedAt == nil || row.ParentID != p2.ID {
+		t.Fatalf("premise broken: child = %+v, want soft-deleted under %s", row, p2.ID)
+	}
+
+	close(resume)
+
+	var got restoreResult
+	select {
+	case got = <-result:
+	case <-time.After(10 * time.Second):
+		t.Fatal("parked Restore never resumed once its gate opened")
+	}
+	if got.err != nil {
+		t.Fatalf("parked Restore failed: %v", got.err)
+	}
+
+	p2Current, err := tree.Get(ctx, p2.ID)
+	if err != nil {
+		t.Fatalf("Get(p2): %v", err)
+	}
+	if got.node.ParentID != p2.ID {
+		t.Errorf("restored child ParentID = %q, want %q", got.node.ParentID, p2.ID)
+	}
+	wantPath := buildPath(p2Current.Path, child.ID)
+	if got.node.Path != wantPath {
+		t.Errorf("restored child Path = %q, want %q (p2's CURRENT path + its own id): the row must be re-expressed under the parent the in-transaction re-read saw, not the stale parent the read-before-the-race named",
+			got.node.Path, wantPath)
+	}
+	assertNoOrphans(t, db, ctx, "restore raced by restore->move->delete")
+}
+
 // assertNoOrphans is the tree invariant every one of this file's concurrent
 // stress tests re-checks after each round: every currently-live node's
 // stored ParentID either is the empty-root sentinel or names another
