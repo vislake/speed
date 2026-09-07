@@ -899,6 +899,98 @@ func TestAuditCapturePlugin_SerializerField_RedactsRatherThanCrashOrLeak(t *test
 	}
 }
 
+// auditCaptureMarkedWidget is a throwaway Auditable model carrying one
+// plaintext column a model author marked with the capture opt-out tag
+// (`audit:"redact"` — see fieldValuesMap's doc comment in audit_capture.go
+// for the declaration's shape), used only by
+// TestAuditCapturePlugin_PlaintextMarkedColumn_Redacts to reproduce the
+// write-capture plugin's handling of a model-side declared opt-out, the
+// "expensive half" of capture redaction: serializer fields are redacted
+// automatically (auditCaptureSecretWidget above), but a model can also
+// hold a genuinely sensitive value in an ordinary plaintext column, and
+// the marker is how its author says so.
+type auditCaptureMarkedWidget struct {
+	ID       string `gorm:"primaryKey;size:26"`
+	TenantID string `gorm:"primaryKey;size:26;not null"`
+	Email    string `gorm:"column:email;size:255;not null" audit:"redact"`
+	Name     string `gorm:"column:name;size:255;not null"`
+}
+
+// TableName pins the table name so it does not depend on GORM's
+// pluralization of an unexported type name.
+func (auditCaptureMarkedWidget) TableName() string { return "audit_capture_marked_widgets" }
+
+// GetTenantID satisfies dbkit's tenant-scoping contract, which
+// dbkit.Open's plugin chain requires of every model it processes.
+func (w auditCaptureMarkedWidget) GetTenantID() pkgcore.TenantID {
+	return pkgcore.TenantID(w.TenantID)
+}
+
+// AuditResourceType satisfies dbkit.Auditable.
+func (auditCaptureMarkedWidget) AuditResourceType() string { return "marked_widget" }
+
+// TestAuditCapturePlugin_PlaintextMarkedColumn_Redacts pins the model-side
+// capture opt-out: a field whose model declares `audit:"redact"` — a real,
+// plaintext-sensitive column — must be captured as the redacted marker,
+// never as its plaintext value, even though no GORM serializer is involved
+// (the serializer branch of fieldValuesMap cannot see this field, which is
+// exactly the gap the marker closes: before the marker existed, the only
+// redaction the capture path performed was on serializer fields, and a
+// plaintext column carrying PII — an email, a phone number — leaked
+// verbatim into the audit trail's Before/After maps the moment its model
+// opted into capture).
+func TestAuditCapturePlugin_PlaintextMarkedColumn_Redacts(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(`CREATE TABLE audit_capture_marked_widgets (
+		id        VARCHAR(26)  NOT NULL,
+		tenant_id VARCHAR(26)  NOT NULL,
+		email     VARCHAR(255) NOT NULL,
+		name      VARCHAR(255) NOT NULL,
+		PRIMARY KEY (tenant_id, id)
+	)`).Error; err != nil {
+		t.Fatalf("create audit_capture_marked_widgets table: %v", err)
+	}
+
+	const plaintextEmail = "ada@example.com"
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	w := &auditCaptureMarkedWidget{ID: "w1", TenantID: "tenant-a", Email: plaintextEmail, Name: "Ada"}
+	if err := db.WithContext(ctx).Create(w).Error; err != nil {
+		t.Fatalf("Create() error = %v, want the write to succeed for a model with a marked column", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want exactly 1", len(events))
+	}
+	got, ok := events[0].After["email"]
+	if !ok {
+		t.Fatalf("After = %+v, want an \"email\" key (the marker redacts the value; it does not drop the column from the diff)", events[0].After)
+	}
+	gotStr, ok := got.(string)
+	if !ok {
+		t.Fatalf("After[\"email\"] = %#v (%T), want a plain redacted string", got, got)
+	}
+	if gotStr != "[redacted]" {
+		t.Errorf("After[\"email\"] = %q, want the redacted marker \"[redacted]\" (must never be the plaintext email)", gotStr)
+	}
+	if gotStr == plaintextEmail {
+		t.Fatalf("After[\"email\"] leaked the plaintext email into the audit trail")
+	}
+	// The unmarked control column is captured normally: the marker is
+	// per-field, never a whole-model opt-out.
+	if got := events[0].After["name"]; got != "Ada" {
+		t.Errorf("After[\"name\"] = %v, want the plaintext value \"Ada\" for an unmarked column", got)
+	}
+
+	// The concrete downstream requirement: audit.changesJSON
+	// (go/dbkit/audit/module.go) and RedisEventBus.Publish both json.Marshal
+	// this map, so a captured value must always be JSON-marshalable.
+	if _, err := json.Marshal(events[0].After); err != nil {
+		t.Fatalf("json.Marshal(After) error = %v, want captured field values to always be JSON-marshalable", err)
+	}
+}
+
 // TestAuditCapturePlugin_Restore_CapturesOnlyTheColumnsItWrites pins the
 // same After-scoping regression as the soft-delete test above, for the
 // inverse write: Restore (repository.go) issues the identical two-column,

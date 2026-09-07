@@ -897,28 +897,65 @@ func auditableOf(stmt *gorm.Statement) (Auditable, bool) {
 	return nil, false
 }
 
-// auditRedactedFieldValue replaces the captured value of any GORM
-// serializer field — dbkit's own encrypted-field mechanism
-// (RegisterEncryptedSerializer, `gorm:"serializer:<name>"`) included — in a
+// auditRedactedFieldValue replaces the captured value of a sensitive
+// field — one of the two classes fieldValuesMap redacts — in a
 // WriteCapturedEvent's Before/After maps, mirroring go/config's identical
-// "[redacted]" convention for its own Sensitive item change events.
+// "[redacted]" convention for its own Sensitive item change events. The
+// key stays present under the column's own name, so a reader of the diff
+// knows the write touched the column without ever seeing its value.
 //
-// Two independent problems make this necessary, not just desirable. First,
-// field.ValueOf on a serializer field does not return the field's plain
-// value at all: GORM wraps it in a *schema.serializer that embeds a
-// self-referential *schema.Field (function-typed ValueOf/Set/ReflectValueOf
-// fields), which json.Marshal cannot encode ("encountered a cycle via
-// *schema.Field") — fatal to both onward paths, RedisEventBus.Publish's
-// whole-payload marshal in distributed mode and audit.changesJSON's
-// Diff marshal in standalone mode. Second, even if it could be unwrapped,
-// the raw pre-serialization struct value is the *plaintext* — the very
-// thing dbkit's encrypted serializer exists to keep off disk — so writing
-// it into the audit trail unencrypted would be a PII leak this repository's
-// own "do not write plaintext PII into logs, traces or API responses" rule
-// forbids. Redacting is therefore the only capture this plugin may take of
-// a serializer field on its own, with no cipher key of its own to decrypt
-// or re-derive anything from.
+// The two classes, and why each needs redacting:
+//
+//   - A GORM serializer field — dbkit's own encrypted-field mechanism
+//     (RegisterEncryptedSerializer, `gorm:"serializer:<name>"`) included.
+//     Two independent problems make redaction necessary, not just
+//     desirable. First, field.ValueOf on a serializer field does not
+//     return the field's plain value at all: GORM wraps it in a
+//     *schema.serializer that embeds a self-referential *schema.Field
+//     (function-typed ValueOf/Set/ReflectValueOf fields), which
+//     json.Marshal cannot encode ("encountered a cycle via
+//     *schema.Field") — fatal to both onward paths,
+//     RedisEventBus.Publish's whole-payload marshal in distributed mode
+//     and audit.changesJSON's Diff marshal in standalone mode. Second,
+//     even if it could be unwrapped, the raw pre-serialization struct
+//     value is the *plaintext* — the very thing dbkit's encrypted
+//     serializer exists to keep off disk. Redacting is therefore the only
+//     capture this plugin may take of a serializer field on its own, with
+//     no cipher key of its own to decrypt or re-derive anything from.
+//
+//   - A plaintext column whose model author declared the capture opt-out
+//     tag (auditRedactTag). No serializer is involved — the field is an
+//     ordinary column holding a value the model's own author knows is
+//     sensitive (an email or phone the module chose to store in
+//     plaintext, a display name that is itself PII) — and nothing in the
+//     schema marks it. The serializer branch cannot see such a field, and
+//     capturing it would leak the plaintext into the audit trail the same
+//     way, so the marker is the model-side declaration that closes that
+//     half of the concern: a column tagged for redaction is captured
+//     exactly like a serializer field, as auditRedactedFieldValue, on the
+//     model author's own say-so rather than on this plugin's inference.
 const auditRedactedFieldValue = "[redacted]"
+
+// auditRedactTagKey and auditRedactTagValue are the model-side capture
+// opt-out: a field declared
+//
+//	Email string `gorm:"column:email;size:255" audit:"redact"`
+//
+// marks its column as too sensitive for the audit trail. The declaration
+// is a separate struct-tag key from gorm's own (never an option smuggled
+// into the `gorm:"..."` tag, which GORM parses and which this plugin must
+// not stake a meaning on), so a model opting into capture can mark any of
+// its own plaintext columns without touching GORM's schema vocabulary, and
+// a model that never opts into capture at all carries an inert tag. The
+// tag key is deliberately this package's own ("audit") rather than a
+// hypothetical shared convention: dbkit's write capture is the audit
+// mechanism in this ecosystem, and only its parser reads the key. The
+// fieldValuesMap doc comment and go/dbkit/AGENTS.md's "Audit trail
+// collection" section carry the full rationale and the behavior contract.
+const (
+	auditRedactTagKey   = "audit"
+	auditRedactTagValue = "redact"
+)
 
 // fieldValuesMap returns every schema field of stmt's ReflectValue, keyed
 // by DB column name. It returns nil when stmt carries no schema or its
@@ -943,6 +980,18 @@ const auditRedactedFieldValue = "[redacted]"
 // comment for why) is captured as auditRedactedFieldValue instead of its
 // real value. A serializer field always has a real column, so the empty-
 // DBName skip above never interacts with the redaction.
+//
+// A field whose model declared the capture opt-out tag
+// (auditRedactTagKey/auditRedactTagValue, e.g. `audit:"redact"`) is
+// captured identically: the marker is the model author's declaration that
+// an ordinary plaintext column holds something too sensitive for the audit
+// trail — the "expensive half" of capture redaction that no automatic
+// criterion (a serializer is the only automatic one) can see. The
+// declaration is read off schema.Field.Tag, which GORM's schema parser
+// populates with the model field's complete struct tag, so the marker
+// travels on the same reflection data fieldValuesMap already walks. It is
+// checked with Lookup so a tag key carrying any OTHER value (a different
+// tool's "audit" convention, an empty marker) is inert, never a redaction.
 func fieldValuesMap(stmt *gorm.Statement) map[string]any {
 	if stmt.Schema == nil {
 		return nil
@@ -965,6 +1014,10 @@ func fieldValuesMap(stmt *gorm.Statement) map[string]any {
 			// association field): nothing truthful to capture under its
 			// column name, and no column name exists to key it by — see the
 			// function's doc comment.
+			continue
+		}
+		if redact, _ := field.Tag.Lookup(auditRedactTagKey); redact == auditRedactTagValue {
+			out[field.DBName] = auditRedactedFieldValue
 			continue
 		}
 		if field.Serializer != nil {
