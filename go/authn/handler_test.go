@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/authn/internal/totp"
 	"github.com/vislake/speed/go/dbkit/audit"
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -739,6 +741,55 @@ func TestHandler_Logout_ValidPrincipal_RecordsSessionRevokeAuditEvent(t *testing
 	// The acting principal's tenant claim -- authn's only source of a
 	// tenant on its own routes (recordAudit's tenant argument).
 	auditTenantIs(t, evt, pair.Principal.TenantID)
+}
+
+// TestHandler_NilBus_LogsTheInoperativeAuditStateOnce is the regression for
+// the P3 finding that recordAudit's nil-bus branch was quieter than its
+// Emit-failure branch: an Emit that fails mid-publish logs at Error, while a
+// Handler constructed without a bus -- a permanent state in which NONE of
+// the module's declared audit actions will ever be recorded -- returned
+// silently on every audited operation, so a host that mis-wired its Handler
+// by hand would never hear about it. The fix announces the inoperative
+// state once per Handler, at Error level, on the first audited operation
+// (see recordAudit and nilBusWarned): before it, no log line exists at all.
+//
+// The deliberate once-per-Handler shape is itself pinned here: a second
+// audited operation on the same bus-less Handler must not add a second
+// line, since the NewHandler contract sanctions a bus-less construction and
+// per-operation Error lines would drown the operator who chose it.
+func TestHandler_NilBus_LogsTheInoperativeAuditStateOnce(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	h := NewHandler(f.svc, nil, nil)
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	register := func(email string) {
+		t.Helper()
+		raw, err := json.Marshal(api.AuthnRegisterRequest{Email: strPtr(email), Password: testPassword})
+		if err != nil {
+			t.Fatalf("marshal register body: %v", err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/register", bytes.NewReader(raw))
+		req = req.WithContext(obs.WithLogger(req.Context(), logger))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+		}
+	}
+
+	// Two audited operations on the same bus-less Handler: the first
+	// announces the inoperative state, the second must stay quiet.
+	register("nil-bus@example.com")
+	register("nil-bus-2@example.com")
+
+	const wantLine = "authn audit recording is inoperative"
+	if got := strings.Count(buf.String(), wantLine); got != 1 {
+		t.Fatalf("the inoperative-audit line appeared %d time(s) after two audited operations on a nil-bus Handler, want exactly 1; log:\n%s", got, buf.String())
+	}
 }
 
 // The eight tests below close a code-review gap the P2-5 round's own

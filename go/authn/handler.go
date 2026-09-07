@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vislake/speed/go/authn/api"
@@ -60,6 +61,15 @@ type Handler struct {
 	bus          pkgcore.EventBus
 	auditActions pkgcore.AuditActionRegistrar
 	mux          *http.ServeMux
+
+	// nilBusWarned makes recordAudit's nil-bus signal (below) one-shot: a
+	// Handler built without a bus leaves every declared audit action
+	// unrecorded for its whole life, and that permanent inoperative state
+	// is announced once -- at the first audited operation, not per
+	// operation -- because the NewHandler contract sanctions a deliberate
+	// bus-less construction, and per-operation Error lines would drown the
+	// very operator who chose it.
+	nilBusWarned sync.Once
 }
 
 // NewHandler returns a Handler serving svc's operations. Its routing is
@@ -139,10 +149,13 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 // Register declares, through audit.Emit -- the declarative collection
 // mechanism go/dbkit/audit documents, exactly as notes.Handler's own
 // recordNoteCreatedAudit uses it (see that method's doc comment for the
-// mechanism itself). h.bus nil is treated exactly like notes' handler
-// treats it: nothing is recorded, and the operation that already
-// succeeded (or failed, for a login-failure record) is unaffected either
-// way.
+// mechanism itself). h.bus nil means nothing is recorded and the operation
+// that already succeeded (or failed, for a login-failure record) is
+// unaffected either way, exactly as notes' handler treats it -- but unlike
+// notes' handler, the inoperative state itself is announced: the first
+// audited operation logs it once at Error (see nilBusWarned), so a Handler
+// a host wired without a bus is never silently deaf for the rest of its
+// life.
 //
 // tenantID is the tenant the recorded action happened in: the acting
 // Principal's own TenantID claim wherever one exists, empty for a
@@ -218,6 +231,15 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 // audit-write failure must not turn that answer into something else.
 func (h *Handler) recordAudit(ctx context.Context, tenantID pkgcore.TenantID, actorID, action string, resource audit.Resource, result audit.Result) {
 	if h.bus == nil {
+		// The PERMANENT no-bus failure must not be quieter than the
+		// transient one below (an Emit failure logs at Error): a Handler
+		// built without a bus never records any of the 9 declared actions,
+		// for its whole life, and that state is announced once at Error --
+		// see nilBusWarned's own doc comment for why once rather than per
+		// operation.
+		h.nilBusWarned.Do(func() {
+			obs.FromContext(ctx).Error("authn audit recording is inoperative: Handler was built with no event bus, so no audit action this module declares will ever be recorded by it")
+		})
 		return
 	}
 	if actorID != "" {

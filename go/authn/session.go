@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 
 	obs "github.com/vislake/speed/go/observability"
@@ -120,6 +121,16 @@ type SessionManager struct {
 	refreshTTL time.Duration
 	sessionTTL time.Duration
 	accessTTL  time.Duration
+
+	// auditActions is the registrar the replay-response audit record
+	// (emitReplayAudit) validates its action string against. It is nil
+	// until module.go's Register wires it from the host's
+	// pkgcore.Registry, right after reg.AuditActions.Add has declared the
+	// actions -- the same post-Add wiring SSOService's own service-layer
+	// emit receives -- so a manager assembled directly through
+	// NewSessionManager (every unit test in this package) records no audit
+	// rows, exactly like the handler's nil-bus short-circuit.
+	auditActions pkgcore.AuditActionRegistrar
 }
 
 // NewSessionManager assembles a SessionManager. kv and bus are the pkgcore
@@ -336,8 +347,9 @@ func (m *SessionManager) commitRotation(ctx context.Context, record *RefreshToke
 	return session, issued, nil
 }
 
-// handleReplay revokes the whole family and its session, publishes the
-// security event, and returns the error the caller must surface.
+// handleReplay revokes the whole family and its session, records the
+// response in the audit trail (see emitReplayAudit), publishes the security
+// event, and returns the error the caller must surface.
 func (m *SessionManager) handleReplay(ctx context.Context, record *RefreshToken) error {
 	now := m.now()
 	if _, err := m.tokens.RevokeFamily(ctx, record.FamilyID, now); err != nil {
@@ -345,10 +357,10 @@ func (m *SessionManager) handleReplay(ctx context.Context, record *RefreshToken)
 	}
 
 	// The replayed session is loaded once and shared with the revoke path
-	// below, so its own tenant can ride on the replay event without a
-	// second lookup. A session row that is already gone -- Revoke tolerates
-	// that, and the replay event must still fire -- leaves the event's
-	// tenant empty rather than failing the detection.
+	// below, so its own tenant can ride on the replay event and the audit
+	// record without a second lookup. A session row that is already gone --
+	// Revoke tolerates that, and the replay event must still fire -- leaves
+	// the event's tenant empty rather than failing the detection.
 	session, err := m.sessions.FindByID(ctx, record.SessionID)
 	switch {
 	case err == nil:
@@ -363,6 +375,7 @@ func (m *SessionManager) handleReplay(ctx context.Context, record *RefreshToken)
 	if session != nil {
 		tenantID = pkgcore.TenantID(session.CurrentTenantID)
 	}
+	m.emitReplayAudit(ctx, record, tenantID)
 	m.publish(ctx, pkgcore.Event{
 		Type:     EventSessionReplayDetected,
 		TenantID: tenantID,
@@ -373,6 +386,64 @@ func (m *SessionManager) handleReplay(ctx context.Context, record *RefreshToken)
 		},
 	})
 	return ErrRefreshTokenReused
+}
+
+// emitReplayAudit records a detected replay response in the audit trail,
+// through audit.Emit -- the same declarative collection mechanism
+// recordAudit (handler.go) uses for this module's other session changes.
+// handleReplay is the record's site: it is the single choke point through
+// which every detection passes (an already-rotated token presented again,
+// and a lost consume race, both funnel here), it holds the token record and
+// revoked session the row must name, and no HTTP handler could record this
+// at all -- a refresh request is credential-less by design, so the handler
+// that answers its 401 has no principal and no session to attribute a row
+// to. Recording here also covers every non-HTTP caller of Service.Refresh.
+//
+// The row reuses AuditActionSessionRevoke, the same action the handler's
+// owner-initiated revocations record under, because the response IS a
+// session revoke: the whole family and the session end, with
+// RevokeReasonReplay the reason. Owner-initiated rows record Success=true;
+// this one records the refused credential presentation the way every other
+// refused presentation in this module's trail reads (a failed sign-in: a
+// user.login row with Success=false), with RevokeReasonReplay as the
+// FailureReason -- the same vocabulary value the revoked session row itself
+// stores in its revoke_reason column, so the trail and the session table
+// agree, and a replay response is never mistaken for a logout. The action's
+// own doc (events.go) states the same ambiguity in place.
+//
+// Attribution: the row's actor is the account owner -- record.UserID, set
+// explicitly on ctx -- because the refresh path attests no identity at all:
+// the presented credential WAS the identity, and it was refused, so there
+// is no authenticating layer upstream to vouch for an actor. The id is the
+// authoritative attribution, exactly as recordAudit's own doc says of its
+// actors; no display name is resolved here because this manager holds no
+// users repository. The tenant is the one the revoked session itself acted
+// in -- its CurrentTenantID -- or none when the session row is already
+// gone, the same tenant the replay event's payload carries, layered
+// unconditionally so an ambient context tenant can never leak onto the row.
+//
+// The emit is best-effort, like recordAudit: the family and session are
+// already revoked and the caller is about to receive the 401, so an
+// audit-write failure must not change that answer -- it is logged at Error
+// for the operator instead. The bus is non-nil by construction
+// (NewSessionManager refuses a nil one); the registrar is the only
+// nil-capable input, and a nil one -- a directly assembled manager, before
+// module.go's Register wiring -- skips the record silently, mirroring
+// SSOService's own nil-registrar short-circuit.
+func (m *SessionManager) emitReplayAudit(ctx context.Context, record *RefreshToken, tenantID pkgcore.TenantID) {
+	if m.auditActions == nil {
+		return
+	}
+	actx := pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: record.UserID})
+	actx = pkgcore.WithTenant(actx, tenantID)
+	if err := audit.Emit(actx, m.bus, m.auditActions, audit.Input{
+		Action:   AuditActionSessionRevoke,
+		Resource: audit.Resource{Type: "session", ID: record.SessionID},
+		Result:   audit.Result{Success: false, FailureReason: RevokeReasonReplay},
+	}); err != nil {
+		obs.FromContext(ctx).Error("authn replay-response audit event emit failed",
+			"user_id", record.UserID, "session_id", record.SessionID, "error", err)
+	}
 }
 
 // RevokeOthers signs out every one of userID's sessions EXCEPT

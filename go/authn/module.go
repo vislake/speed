@@ -791,15 +791,21 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.AuditActions.Add(auditActions...); err != nil {
 		return err
 	}
-	// The same registrar backs SSOService's own audit.Emit calls (oidc.go's
-	// emitConfigSavedAudit): SaveConfig, the one site for
-	// AuditActionSSOConfigure, writes from the service layer, where no
-	// Handler exists to record it. The wire must come after the Add above
-	// -- Emit itself checks the action string against this registrar before
+	// The same registrar backs the service layer's own audit.Emit calls --
+	// two sites, neither one a layer a Handler exists in. SaveConfig, the
+	// one site for AuditActionSSOConfigure, writes from the SSO service
+	// (oidc.go's emitConfigSavedAudit); SessionManager.handleReplay
+	// records a detected refresh-token replay (session.go's
+	// emitReplayAudit), which no handler could record: a refresh request
+	// is credential-less, so the handler answering its 401 has no identity
+	// to attribute a row to. The wire must come after the Add above --
+	// Emit itself checks the action string against this registrar before
 	// publishing -- and it stays nil for a Service assembled directly
-	// through NewService, whose SaveConfig then records nothing, exactly
-	// like the handler's own nil-bus short-circuit below.
+	// through NewService, whose SaveConfig and replay detection then
+	// record nothing, exactly like the handler's own nil-bus short-circuit
+	// below.
 	svc.sso.auditActions = reg.AuditActions
+	svc.sessions.auditActions = reg.AuditActions
 	// reg.AuditActions is handed to NewHandler so its own audit.Emit calls
 	// (see handler.go's recordAudit) validate against the exact
 	// AuditActionRegistrar the 9 actions above were just declared on --

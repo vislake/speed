@@ -18,6 +18,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
+	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -988,6 +989,114 @@ func TestService_Refresh_ActualReplayStillRevokesTheFamily(t *testing.T) {
 	}
 	if n := f.events.Count(EventSessionRevoked); n != 1 {
 		t.Fatalf("EventSessionRevoked fired %d times for an actual replay, want 1", n)
+	}
+}
+
+// TestService_Refresh_ActualReplay_LeavesADurableAuditRecord is the
+// regression for the P1 finding that a detected refresh-token replay left
+// no durable record: the module audits an ordinary wrong password but not a
+// detected credential theft, so a theft that was correctly stopped left no
+// trace anyone could query afterwards. It drives the real service path --
+// register, sign in, refresh (which rotates the family), then present the
+// now-consumed token again -- through the same construction a host uses (a
+// Module registered on a real pkgcore.Registry, exactly module.go's
+// Register runs in production, so the registrar wiring under test is the
+// real one), and asserts the response lands in the audit trail: an
+// authn.session.revoke record with Success=false and RevokeReasonReplay as
+// the FailureReason, attributed to the account owner and stamped with the
+// tenant the revoked session acted in -- the same shape that tells the
+// record apart from an owner-initiated logout, which records Success=true
+// under the same action. The detection's own behavior (family rotation,
+// session revocation, the two events) is pinned here too, so the record
+// cannot be bought by weakening it. Before the fix, nothing durable exists:
+// findAuditEvent fails the flow with its no-audit-event error, since not a
+// single EventRecorded event reaches the bus.
+//
+// The replay path also writes no login-attempt row -- refresh is not a
+// sign-in attempt -- pinned by the history-count assertion below (the one
+// row is the password sign-in itself, and stays one through refresh and
+// replay).
+func TestService_Refresh_ActualReplay_LeavesADurableAuditRecord(t *testing.T) {
+	t.Parallel()
+
+	members := testutil.NewMemberships()
+	module := newTestModule(t, WithMembershipReader(members))
+	bus := pkgcore.NewMemoryEventBus()
+	recorder := testutil.NewEventRecorder()
+	recorder.Subscribe(bus, audit.EventRecorded, EventSessionReplayDetected, EventSessionRevoked)
+	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	if err := module.Register(reg); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	svc := module.Service()
+
+	user, err := svc.Register(t.Context(), RegisterInput{
+		Email: "replay-audit@example.com", Password: testPassword, DisplayName: "Replay Victim",
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	members.Add(user.ID, testTenantA)
+
+	pair, err := svc.Login(t.Context(), LoginInput{Identifier: "replay-audit@example.com", Password: testPassword})
+	if err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	history, err := svc.ListLoginHistory(t.Context(), user.ID, 100)
+	if err != nil {
+		t.Fatalf("ListLoginHistory() error = %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("login history holds %d rows after the sign-in, want 1", len(history))
+	}
+
+	// First refresh rotates the family; the second presents the now-consumed
+	// token again -- a genuine replay, not a retry after a server-side
+	// failure.
+	if _, refreshErr := svc.Refresh(t.Context(), pair.RefreshToken); refreshErr != nil {
+		t.Fatalf("first Refresh() error = %v", refreshErr)
+	}
+	if _, replayErr := svc.Refresh(t.Context(), pair.RefreshToken); !hasCode(replayErr, ErrRefreshTokenReused.Code) {
+		t.Fatalf("replayed Refresh() error = %v, want code %q", replayErr, ErrRefreshTokenReused.Code)
+	}
+
+	// The detection still does what it always did: the security event fires
+	// and the session's end is announced.
+	if n := recorder.Count(EventSessionReplayDetected); n != 1 {
+		t.Fatalf("EventSessionReplayDetected fired %d times for an actual replay, want 1", n)
+	}
+	if n := recorder.Count(EventSessionRevoked); n != 1 {
+		t.Fatalf("EventSessionRevoked fired %d times for an actual replay, want 1", n)
+	}
+
+	// And now it also leaves the record the fix ships: one audit row under
+	// the session-revoke action, refused-presentation shape, attributable
+	// to the owner and tenant-stamped -- indistinguishable from nothing at
+	// all before the fix, and distinguishable from a logout after it.
+	evt := findAuditEvent(t, recorder, AuditActionSessionRevoke)
+	if evt.Result.Success {
+		t.Errorf("Result.Success = true, want false: the replayed refresh was refused (401)")
+	}
+	if evt.Result.FailureReason != RevokeReasonReplay {
+		t.Errorf("Result.FailureReason = %q, want %q (RevokeReasonReplay, the vocabulary the revoked session row itself carries)", evt.Result.FailureReason, RevokeReasonReplay)
+	}
+	if evt.Resource.Type != "session" || evt.Resource.ID != pair.Principal.SessionID {
+		t.Errorf("Resource = %+v, want {Type: session, ID: %s}", evt.Resource, pair.Principal.SessionID)
+	}
+	if evt.Actor.Type != pkgcore.ActorTypeUser || evt.Actor.ID != user.ID {
+		t.Errorf("Actor = %+v, want {Type: %s, ID: %s} (the account owner)", evt.Actor, pkgcore.ActorTypeUser, user.ID)
+	}
+	auditTenantIs(t, evt, pair.Principal.TenantID)
+
+	// The replay added no login-attempt row: refresh is not a sign-in
+	// attempt, whatever the state of its audit record.
+	history, err = svc.ListLoginHistory(t.Context(), user.ID, 100)
+	if err != nil {
+		t.Fatalf("ListLoginHistory() error = %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("login history holds %d rows after refresh and replay, want 1 (the sign-in only)", len(history))
 	}
 }
 

@@ -7,11 +7,14 @@ import (
 // Domain event types this module publishes, following
 // "<module>.<entity>.<action>".
 //
-// Publishing is how authn reaches everything it must not import. The
-// notification module subscribes to these and decides what to send; org
-// subscribes to EventUserCreated to provision whatever a new user needs.
-// authn imports neither, and the arrangement is what keeps the dependency
-// graph acyclic while still letting a new sign-in cause an email.
+// Publishing is how authn reaches everything it must not import. A
+// subscriber reacts under its own access control -- org subscribes to
+// EventUserCreated to provision whatever a new user needs -- and no
+// subscriber exists for most of these today: which of them have delivery
+// wired, and what wiring one takes, is stated on each security-relevant
+// event's own doc rather than assumed (see EventSessionReplayDetected's).
+// authn imports none of its subscribers, and the arrangement is what keeps
+// the dependency graph acyclic.
 //
 // The one thing that does NOT travel this way is a synchronous verification
 // code, which has to be delivered inside the request that asked for it and so
@@ -35,8 +38,24 @@ const (
 	// EventSessionReplayDetected is published when a consumed refresh
 	// token is presented again. It is one of the very few signals that
 	// detects a stolen credential automatically, so it is a first-class
-	// event rather than a log line: the notification module turns it into
-	// the security notice the account owner cannot switch off.
+	// event rather than a log line -- and the detection is never silent:
+	// the response also records a durable, attributable audit row under
+	// AuditActionSessionRevoke (SessionManager.handleReplay's
+	// emitReplayAudit: Success=false with RevokeReasonReplay as the
+	// FailureReason), so a replay is queryable in the trail whatever a
+	// subscriber does with the event.
+	//
+	// No notification consumer is wired for it. The notification module
+	// subscribes to no authn event, and authn declares no notification
+	// type, so no host can dispatch the owner-facing "cannot switch off"
+	// security notice through notification's own Dispatch today (Dispatch
+	// refuses a type no module declared). Wiring that notice means
+	// declaring it as a transactional, non-unsubscribable notification type
+	// on the registry (Register) with its bilingual templates in this
+	// module's locale bundles, and dispatching it where the replay is
+	// detected -- or having a subscriber turn this event into such a
+	// dispatch -- with the account owner's address resolved at delivery
+	// through the host's UserAddressResolver seam.
 	EventSessionReplayDetected = "authn.session.replay_detected"
 
 	// EventTenantSwitched is published when a session changes which
@@ -77,7 +96,17 @@ const (
 	AuditActionUserRegister = "authn.user.register"
 	// AuditActionUserLogin records a sign-in.
 	AuditActionUserLogin = "authn.user.login"
-	// AuditActionSessionRevoke records a session being signed out.
+	// AuditActionSessionRevoke records a session being signed out -- or
+	// revoked automatically because a consumed refresh token was replayed:
+	// the replay response emits under this same action from the session
+	// manager (session.go's emitReplayAudit), so an authn.session.revoke
+	// row may record either an owner-initiated revocation or a replay
+	// response. The two are told apart on the row because they must be --
+	// the replay row is the durable record of a suspected credential
+	// theft, and a reader must never mistake it for a logout: an
+	// owner-initiated revocation records Success=true, a replay response
+	// Success=false with RevokeReasonReplay as the FailureReason (the
+	// replayed refresh was refused, the 401 the row accompanies).
 	AuditActionSessionRevoke = "authn.session.revoke"
 	// AuditActionTenantSwitch records a session changing its active tenant.
 	AuditActionTenantSwitch = "authn.tenant.switch"
