@@ -37,13 +37,22 @@ catalog) and is non-negotiable here.
   localStorage, navigator) are guarded and injectable; tests run
   deterministically in Node. New browser touches go through the same
   inject-or-guard pattern.
-- **Instance options are internal to createI18n.** i18next's option
-  surface is an implementation detail here (v26 internals that shaped the
-  code: `initAsync` defaults true and must be false for synchronous
-  readiness; supportedLngs gains an internal `cimode` entry that
-  readSupportedLanguages filters; `missingKeyHandler` only dispatches with
-  `saveMissing`). Consuming code never sets these; when the wrapper
-  version moves, re-verify them against the runtime before changing tests.
+- **Instance options are internal to createI18n, and only some are pinned
+  by tests.** i18next's option surface is an implementation detail here
+  (v26 internals that shaped the code: `initAsync` defaults true and is
+  set false for synchronous readiness; supportedLngs gains an internal
+  `cimode` entry that readSupportedLanguages filters; `missingKeyHandler`
+  dispatches only with `saveMissing`). The "pins the discipline options"
+  test in create.test.ts asserts exactly what createI18n must keep for
+  the no-fallback discipline: `fallbackLng === false`, `load ===
+  'currentOnly'`, `saveMissing === true`, supportedLngs extended with
+  `cimode`, and a `missingKeyHandler` installed as a function.
+  `initAsync: false` is asserted nowhere -- only its observable
+  consequence, an instance that is synchronously ready when createI18n
+  returns, is what tests and SSR-rendered first paint rely on. Consuming
+  code never sets any of these; when the wrapper version moves, re-verify
+  each against the runtime before changing tests, and pin `initAsync`
+  while there.
 
 ## React bindings
 

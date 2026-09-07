@@ -125,11 +125,15 @@ installed. A key missing in the loaded language therefore:
 
 The registration-time parity and coverage checks are the companion
 guarantee: whole-language or whole-key gaps surface at registration as
-errors, and gaps that appear later (a key deleted from one language) are
-the visible render-as-key + warning path -- no silent zh text under an
-en-US UI. Tests prove both: registration rejects imbalanced bundles, and
-a key removed from the loaded language renders as the key while the other
-language's fixture text is asserted absent.
+errors. A gap that appears after registration cannot be driven through
+this package's API -- registerNamespace validates key-set parity and
+refuses a second registration, and i18next's own removal is per
+language-and-namespace, never per key -- so the tests prove the render
+path by removing the whole en-US bundle of a registered namespace
+(instance.removeResourceBundle) while zh-CN still holds the key, then
+rendering in en-US: the key renders as itself, the zh-CN text is asserted
+absent, and the missing-key warning fires. A genuine single-key deletion
+would take that same render path, but no package API can express it.
 
 ## MUI locale linkage
 
