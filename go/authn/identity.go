@@ -473,7 +473,7 @@ func (s *Service) signInWithExternalIdentity(ctx context.Context, external *Exte
 		identity.AvatarURL = external.Avatar
 		result.User, result.Identity = user, identity
 	case errors.Is(err, ErrNotFound):
-		user, created, linkErr := s.resolveSocialAccount(ctx, external)
+		user, created, linkErr := s.resolveSocialAccount(ctx, external, in.IP, in.UserAgent)
 		if linkErr != nil {
 			return nil, linkErr
 		}
@@ -529,7 +529,11 @@ func (s *Service) signInWithExternalIdentity(ctx context.Context, external *Exte
 // squat the address of a user who has not registered yet, and would then let a
 // later, genuinely verified login link straight into that squatted account.
 // The address is kept on the identity row, where it is display data.
-func (s *Service) resolveSocialAccount(ctx context.Context, external *ExternalIdentity) (*User, bool, error) {
+func (s *Service) resolveSocialAccount(
+	ctx context.Context,
+	external *ExternalIdentity,
+	ip, userAgent string,
+) (*User, bool, error) {
 	email := strings.TrimSpace(external.Email)
 	linkable := email != "" && external.EmailVerified && s.providerIsTrusted(external.Provider)
 
@@ -545,6 +549,11 @@ func (s *Service) resolveSocialAccount(ctx context.Context, external *ExternalId
 				"email_verified", external.EmailVerified,
 				"provider_trusted", s.providerIsTrusted(external.Provider),
 			)
+			// The refusal is the account's own security signal -- an
+			// external identity claimed this account's address and was
+			// refused -- and belongs in its login history like every
+			// other failed sign-in, not only in the log line above.
+			s.recordRequiresBinding(ctx, MethodSocial, existing.ID, email, ip, userAgent)
 			return nil, false, ErrIdentityRequiresBinding
 		case !errors.Is(err, ErrNotFound) && !hasCode(err, ErrInvalidEmail.Code):
 			return nil, false, err
@@ -581,6 +590,37 @@ func (s *Service) resolveSocialAccount(ctx context.Context, external *ExternalId
 		},
 	})
 	return user, true, nil
+}
+
+// recordRequiresBinding leaves the login-history row a sign-in refused with
+// ErrIdentityRequiresBinding must leave. The refusal is a failed attempt
+// like any other, and the account an external identity resolved to by
+// address is entitled to see "an identity claimed this address and was
+// refused" on its own security page -- the same signal the password
+// channel's failure records give their account. userID is that resolved
+// account, or empty for a refusal that happened before any account lookup
+// (oidc.go's unverified-claim refusal, which must not disclose whether the
+// claimed address is registered, and which therefore leaves an anonymous
+// row exactly like an attempt against an identifier that matched no
+// account). claimedEmail is never stored: only its blind index is, which is
+// all login attempts ever carry of an identifier.
+func (s *Service) recordRequiresBinding(ctx context.Context, method, userID, claimedEmail, ip, userAgent string) {
+	index := ""
+	if claimedEmail != "" {
+		if value, err := s.users.EmailIndexOf(claimedEmail); err == nil {
+			index = value
+		}
+	}
+	s.record(ctx, &LoginAttempt{
+		UserID:          userID,
+		IdentifierIndex: index,
+		Method:          method,
+		Result:          LoginResultFailure,
+		FailureReason:   FailureReasonRequiresBinding,
+		IP:              ip,
+		UserAgent:       userAgent,
+		CreatedAt:       s.now(),
+	})
 }
 
 // createIdentity inserts the external identity row for userID.

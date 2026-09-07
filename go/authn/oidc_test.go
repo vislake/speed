@@ -246,7 +246,7 @@ func TestSSOService_Callback_RefusesWhenNotAMember(t *testing.T) {
 	server := testutil.NewOIDCServer(t, "enterprise-client")
 	f := newSSOFixture(t, server)
 	writeSSOConfig(t, f, testTenantA, server, "enterprise-client", "example.com")
-	f.registerUser(t, "outsider@example.com") // no membership of testTenantA
+	outsider := f.registerUser(t, "outsider@example.com") // no membership of testTenantA
 
 	state, nonce := ssoAuthorize(t, f, testTenantA)
 	server.QueueIDToken(server.SignIDToken(t, testutil.IDTokenClaims{
@@ -257,6 +257,26 @@ func TestSSOService_Callback_RefusesWhenNotAMember(t *testing.T) {
 		TenantID: testTenantA, Code: "code", State: state,
 	})
 	assertErrorCode(t, err, ErrIdentityRequiresBinding.Code)
+
+	// The refusal resolved the claim to the outsider's own account and is
+	// the account's security signal -- "an enterprise identity claimed
+	// this account's address and was refused" -- so it must land in that
+	// account's login history, not only in a log line.
+	history, err := f.svc.ListLoginHistory(t.Context(), outsider.ID, 10)
+	if err != nil {
+		t.Fatalf("ListLoginHistory() error = %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("ListLoginHistory() = %d rows after a refused SSO auto-link, want exactly 1 (the refusal itself); rows: %+v", len(history), history)
+	}
+	if got := history[0]; got.UserID != outsider.ID ||
+		got.Method != MethodOIDC ||
+		got.Result != LoginResultFailure ||
+		got.FailureReason != FailureReasonRequiresBinding {
+		t.Errorf("refusal row = {user_id: %q, method: %q, result: %q, failure_reason: %q}, want {user_id: %q, method: %q, result: %q, failure_reason: %q}",
+			got.UserID, got.Method, got.Result, got.FailureReason,
+			outsider.ID, MethodOIDC, LoginResultFailure, FailureReasonRequiresBinding)
+	}
 }
 
 // TestSSOService_Callback_RefusesAnUnverifiedEmail is the first linking
@@ -270,7 +290,6 @@ func TestSSOService_Callback_RefusesAnUnverifiedEmail(t *testing.T) {
 	f := newSSOFixture(t, server)
 	writeSSOConfig(t, f, testTenantA, server, "enterprise-client", "example.com")
 	member := f.registerUser(t, "member2@example.com", testTenantA)
-	_ = member
 
 	state, nonce := ssoAuthorize(t, f, testTenantA)
 	server.QueueIDToken(server.SignIDToken(t, testutil.IDTokenClaims{
@@ -281,6 +300,44 @@ func TestSSOService_Callback_RefusesAnUnverifiedEmail(t *testing.T) {
 		TenantID: testTenantA, Code: "code", State: state,
 	})
 	assertErrorCode(t, err, ErrIdentityRequiresBinding.Code)
+
+	// The refusal happened BEFORE any account lookup -- whether the
+	// claimed address is registered must not be disclosed, not even
+	// through the login history -- so the row it leaves must not name the
+	// account the claim happened to match, and member's own history stays
+	// empty.
+	ownerHistory, err := f.svc.ListLoginHistory(t.Context(), member.ID, 10)
+	if err != nil {
+		t.Fatalf("ListLoginHistory() error = %v", err)
+	}
+	if len(ownerHistory) != 0 {
+		t.Fatalf("ListLoginHistory() = %d rows after an unverified-claim refusal, want 0: the pre-lookup refusal must not attribute the attempt to the claimed address's owner; rows: %+v", len(ownerHistory), ownerHistory)
+	}
+
+	// The refusal is still an attempted sign-in and must leave a row of
+	// its own -- userless and keyed on the claimed address's blind index,
+	// the exact shape an attempt against an identifier that matched no
+	// account takes.
+	anonymous, err := f.svc.LoginHistory().ListByUser(t.Context(), "", 10)
+	if err != nil {
+		t.Fatalf("ListByUser(anonymous) error = %v", err)
+	}
+	if len(anonymous) != 1 {
+		t.Fatalf("ListByUser(anonymous) = %d rows after an unverified-claim refusal, want exactly 1 (the refusal itself); rows: %+v", len(anonymous), anonymous)
+	}
+	wantIndex, idxErr := f.svc.users.EmailIndexOf("member2@example.com")
+	if idxErr != nil {
+		t.Fatalf("EmailIndexOf() error = %v", idxErr)
+	}
+	if got := anonymous[0]; got.UserID != "" ||
+		got.IdentifierIndex != wantIndex ||
+		got.Method != MethodOIDC ||
+		got.Result != LoginResultFailure ||
+		got.FailureReason != FailureReasonRequiresBinding {
+		t.Errorf("refusal row = {user_id: %q, identifier_index: %q, method: %q, result: %q, failure_reason: %q}, want {user_id: \"\", identifier_index: %q, method: %q, result: %q, failure_reason: %q}",
+			got.UserID, got.IdentifierIndex, got.Method, got.Result, got.FailureReason,
+			wantIndex, MethodOIDC, LoginResultFailure, FailureReasonRequiresBinding)
+	}
 }
 
 // TestSSOService_Callback_RefusesADomainNotOnTheTenantsAllowlist is the

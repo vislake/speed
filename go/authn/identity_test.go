@@ -111,6 +111,25 @@ func TestService_SocialSignIn_AutoLinkRules(t *testing.T) {
 				if f.events.Count(EventIdentityBound) != 0 {
 					t.Error("a refused auto-link must not publish authn.identity.bound")
 				}
+				// The refusal is itself a security signal for the account
+				// the identity resolved to -- "an external identity claimed
+				// this account's email and was refused" -- and must land in
+				// that account's own login history, not only in a log line.
+				history, listErr := f.svc.ListLoginHistory(t.Context(), existing.ID, 10)
+				if listErr != nil {
+					t.Fatalf("ListLoginHistory() error = %v", listErr)
+				}
+				if len(history) != 1 {
+					t.Fatalf("ListLoginHistory() = %d rows after a refused auto-link, want exactly 1 (the refusal itself); rows: %+v", len(history), history)
+				}
+				if got := history[0]; got.UserID != existing.ID ||
+					got.Method != MethodSocial ||
+					got.Result != LoginResultFailure ||
+					got.FailureReason != FailureReasonRequiresBinding {
+					t.Errorf("refusal row = {user_id: %q, method: %q, result: %q, failure_reason: %q}, want {user_id: %q, method: %q, result: %q, failure_reason: %q}",
+						got.UserID, got.Method, got.Result, got.FailureReason,
+						existing.ID, MethodSocial, LoginResultFailure, FailureReasonRequiresBinding)
+				}
 				return
 			}
 			if err != nil {

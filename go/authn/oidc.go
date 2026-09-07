@@ -776,7 +776,7 @@ func (s *SSOService) signIn(ctx context.Context, config *TenantSSOConfig, extern
 		identity.AvatarURL = external.Avatar
 		result.User, result.Identity = user, identity
 	case errors.Is(err, ErrNotFound):
-		user, created, linkErr := s.resolveAccount(ctx, config, external)
+		user, created, linkErr := s.resolveAccount(ctx, config, external, in.IP, in.UserAgent)
 		if linkErr != nil {
 			return nil, linkErr
 		}
@@ -836,7 +836,12 @@ func (s *SSOService) signIn(ctx context.Context, config *TenantSSOConfig, extern
 // The membership condition cannot apply to the mint -- the account does not
 // exist yet, so there is nothing to be a member of -- but the mint grants
 // neither membership nor a session (see Callback's doc comment).
-func (s *SSOService) resolveAccount(ctx context.Context, config *TenantSSOConfig, external *ExternalIdentity) (*User, bool, error) {
+func (s *SSOService) resolveAccount(
+	ctx context.Context,
+	config *TenantSSOConfig,
+	external *ExternalIdentity,
+	ip, userAgent string,
+) (*User, bool, error) {
 	email := strings.TrimSpace(external.Email)
 	if email == "" {
 		return nil, false, ErrSSOTokenInvalid
@@ -849,6 +854,14 @@ func (s *SSOService) resolveAccount(ctx context.Context, config *TenantSSOConfig
 			"tenant_id", config.TenantID,
 			"domain_allowed", true,
 		)
+		// The refusal is still a failed sign-in attempt and leaves an
+		// anonymous login-history row, keyed on the claimed address's
+		// blind index alone: no account was looked up (and none may be --
+		// this branch exists precisely so the refusal cannot disclose
+		// whether the address is registered), so no row may name an
+		// account either, and the row takes the exact shape an attempt
+		// against an identifier that matched no account takes.
+		s.svc.recordRequiresBinding(ctx, MethodOIDC, "", email, ip, userAgent)
 		return nil, false, ErrIdentityRequiresBinding
 	}
 
@@ -865,6 +878,12 @@ func (s *SSOService) resolveAccount(ctx context.Context, config *TenantSSOConfig
 				"user_id", existing.ID,
 				"already_a_member", member,
 			)
+			// The refusal resolved the claim to the existing account and
+			// is that account's own security signal -- an enterprise
+			// identity claimed this address and was refused -- so it
+			// lands in the account's login history like every other
+			// failed sign-in.
+			s.svc.recordRequiresBinding(ctx, MethodOIDC, existing.ID, email, ip, userAgent)
 			return nil, false, ErrIdentityRequiresBinding
 		}
 		return existing, false, nil
