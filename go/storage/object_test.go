@@ -1301,6 +1301,93 @@ func TestObjectService_Complete_KeepsTheWritebackWhenTheReReadFailsTransiently(t
 	}
 }
 
+// TestObjectService_Complete_RollsBackTheWritebackWhenTheFinalizeFails pins
+// the err shape of the finalize, the mirror of the lost-finalize shapes
+// above: those commit zero rows (the conditional write refused the
+// transition), while this one errors outright -- the database failing the
+// finalize UPDATE itself. By then the writeback has already replaced the
+// key's bytes with the shorter sanitized copy, and the row most likely still
+// stands uploading, carrying the declared size of the original upload:
+// leaving the writeback in place would make the caller's own retry probe the
+// stored bytes, compare the short length against the declared size, and
+// refuse with storage.size_mismatch -- a server-side two-store divergence
+// reported as a client data problem, and permanent, because nothing rewrites
+// the key while the row stays uploading. The pipeline still holds the
+// pre-rewrite bytes it read, so it rolls the writeback back by restoring
+// them; the retry then re-probes the restored bytes, re-sanitizes
+// (deterministically) and completes honestly. (On the pre-fix code this test
+// failed: the stored bytes stayed the stripped short copy, and the retry was
+// refused with storage.size_mismatch.)
+//
+// The failure is injected on the finalize UPDATE itself, through the Update
+// processor: the lost-finalize tests above inject on the Query processor,
+// and gorm's processor routing means a Query callback can never see an
+// UPDATE -- which is exactly why none of them can reach this shape. The
+// rejection is one-shot, armed from the pipeline's start: the finalize is
+// the completion's one and only UPDATE, so the first Update-processor
+// statement consumes it, and the retry below runs clean.
+func TestObjectService_Complete_RollsBackTheWritebackWhenTheFinalizeFails(t *testing.T) {
+	svc, store, queue, bus := newTestService(t, nil)
+	ctx := serviceCtx("tenant-a")
+	original := jpegWithExif(t)
+	row := createAndUpload(t, svc, ctx, original, "image/jpeg")
+
+	rejected := false
+	svc.objects.db.Callback().Update().Before("gorm:update").
+		Register("storage:test_finalize_reject", func(tx *gorm.DB) {
+			if !rejected {
+				rejected = true
+				tx.AddError(errors.New("storage: injected finalize failure"))
+			}
+		})
+
+	_, err := svc.Complete(ctx, row.ID)
+	if !rejected {
+		t.Fatal("the injected finalize rejection never fired -- the finalize did not route through the Update processor")
+	}
+	assertCode(t, err, ErrInternal.Code)
+	if len(bus.events) != 0 {
+		t.Errorf("events = %d, want none -- a finalize that errored announces nothing", len(bus.events))
+	}
+	if len(queue.tasks) != 0 {
+		t.Errorf("tasks = %d, want none -- a finalize that errored enqueues nothing", len(queue.tasks))
+	}
+
+	// The rollback: the key holds the pre-rewrite bytes again, the bytes the
+	// still-uploading row's declared size names.
+	stored, ok := store.bytes(row.Key)
+	if !ok {
+		t.Fatal("the key lost its bytes")
+	}
+	if !bytes.Equal(stored, original) {
+		t.Errorf("after the failed finalize the key holds %d bytes, want the original %d restored -- the sanitized writeback must not outlive the finalize that refused it", len(stored), len(original))
+	}
+	assertStillUploading(t, svc, ctx, row.ID)
+
+	// The retry completes honestly over the restored bytes: re-probed,
+	// re-sanitized and finalized with metadata describing the stored copy.
+	completed, err := svc.Complete(ctx, row.ID)
+	if err != nil {
+		t.Fatalf("Complete retry after the rollback: %v", err)
+	}
+	stripped, ok := store.bytes(row.Key)
+	if !ok {
+		t.Fatal("the key lost its bytes at the retry")
+	}
+	if len(stripped) >= len(original) {
+		t.Fatalf("retried sanitized bytes are not shorter than the original upload (%d >= %d)", len(stripped), len(original))
+	}
+	if completed.State != ObjectStateCompleted {
+		t.Errorf("retried state = %q, want %q", completed.State, ObjectStateCompleted)
+	}
+	if completed.Size == nil || *completed.Size != int64(len(stripped)) {
+		t.Errorf("retried size = %v, want %d (the sanitized length)", completed.Size, len(stripped))
+	}
+	if completed.ChecksumSHA256 == nil || *completed.ChecksumSHA256 != sha256HexDigest(stripped) {
+		t.Errorf("retried digest = %v, want the digest of the stored bytes", completed.ChecksumSHA256)
+	}
+}
+
 // TestObjectService_Reads_CompletedRowsOnly pins the visibility rule Get and
 // OpenContent share: an object that is not completed reads exactly like an
 // object that does not exist -- uploading and deleting rows included -- and

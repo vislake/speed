@@ -546,6 +546,44 @@ invocation full-check.yml's integration-tiers job runs for this module:
   point guaranteed to follow any writeback (closing the deleting shape; the
   vanished shape's row is already gone when its writeback lands, so only a
   key sweep reaches it). Recorded here rather than pretended away.
+- **A failed finalize's writeback rollback is one-shot best-effort
+  (2026-09-07).** When `Complete`'s finalize write errors outright -- as
+  opposed to committing zero rows, the lost-finalize shapes above -- the
+  pipeline rolls its sanitizer writeback back by restoring the pre-rewrite
+  bytes it still holds (object.go's finalize-err branch): the row almost
+  always still stands uploading, carrying the declared size of the original
+  upload, and only the restore keeps the caller's own retry -- which
+  re-probes, re-sanitizes (deterministically) and re-finalizes over the
+  restored bytes -- from refusing with `storage.size_mismatch`, a
+  server-side two-store divergence reported as a client data problem. The
+  rollback is one best-effort `PutObject`; a failure is warned about, never
+  retried, and leaves that divergence as residue: the sanitized short bytes
+  stay under a key whose uploading row names the longer originals, the
+  retry refuses with `size_mismatch`, and the upload stays uncompletable
+  until its window closes and the expiry sweep reclaims the row and its
+  bytes together. The rollback can also land after a concurrent completion
+  on another replica won the transition while this finalize was failing --
+  the interleaving where the row is completed by the winner with bytes
+  identical to this writeback (sanitize is deterministic over the same
+  generation), and the restore then overwrites them with the unsanitized
+  originals, a live completed row whose stored bytes contradict its own
+  metadata. That residue needs the same narrow coincidence as the
+  take-back's own: a genuine database failure at the exact moment another
+  replica completes the same object (a lost race answers zero rows, not an
+  error -- PostgreSQL row locks serialize the two conditional writes), so
+  it is reachable only across the replicas of a distributed deployment.
+  Within one process the per-object lock serializes completions, and the
+  only other actor that can flip an uploading row is the expiry sweep,
+  which touches only rows whose window has closed -- and a finalize whose
+  window closed at write time answers zero rows (a lost finalize), not an
+  error -- so the err shape's row is the untouched uploading one except
+  when the window closed under the pipeline in the same instant the write
+  itself failed; the restore then lands inside the sweep's own reclaim
+  race, bounded or converged exactly like the writeback's (a still-listed
+  window-closed row is reclaimed by the next sweep, bytes and all; a
+  restore landing between the reclaim's byte removal and its row removal
+  leaves the orphan-keys residue above). Recorded here rather than
+  pretended away.
 
 ## Deferred and not shipped (with reasons)
 

@@ -568,6 +568,38 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 	row.ChecksumSHA256 = &digest
 	done, err := s.objects.finalizeUpload(ctx, row, time.Now())
 	if err != nil {
+		// A finalize that errors (as opposed to committing zero rows, the
+		// lost-finalize shapes below) is the database failing the write, not
+		// a transition that lost a race: the row almost always still stands
+		// uploading, carrying the declared size and checksum of the bytes as
+		// uploaded, and a writeback that already replaced those bytes with
+		// the shorter sanitized copy would contradict it -- the caller's own
+		// retry would probe the stored bytes, compare the short length
+		// against the declared size, and refuse with storage.size_mismatch:
+		// a server-side two-store divergence reported as a client data
+		// problem, and permanent, because nothing rewrites the key while the
+		// row stays uploading. The pre-rewrite bytes are still in hand
+		// (raw), so the writeback is rolled back by restoring them, best
+		// effort -- an error is a state the caller may retry, and the retry
+		// re-probes, re-sanitizes (deterministically) and re-finalizes over
+		// the restored bytes and completes honestly. (The alternative of
+		// deleting the key instead would leave the retry answering
+		// storage.content_missing for a row whose window is still open -- an
+		// upload destroyed by a transient database failure; the lost-finalize
+		// shapes below delete only because those shapes mean the upload is
+		// over regardless. Deleting on the err shape, and the mirror-image
+		// shape of rewriting only after a successful finalize -- which would
+		// briefly leave a row marked completed whose stored bytes are the
+		// unsanitized originals -- would each move the contradiction onto the
+		// other side of the two stores; the rollback restores the agreement
+		// between them instead.) A restore that itself fails leaves the
+		// pre-fix contradiction as residue, recorded in AGENTS.md.
+		if changed {
+			if restoreErr := st.PutObject(ctx, row.Key, bytes.NewReader(raw)); restoreErr != nil {
+				observability.FromContext(ctx).Warn("sanitized writeback not rolled back after the finalize failed",
+					"object_id", objectID, "error", restoreErr)
+			}
+		}
 		return Object{}, err
 	}
 	if !done {
