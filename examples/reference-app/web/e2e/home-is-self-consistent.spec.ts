@@ -18,7 +18,7 @@
  * sentence and leave a void".
  */
 import { expect, test } from '@playwright/test'
-import { DEMO_OWNER } from './test-utils/accounts.js'
+import { DEMO_ACME_ONLY } from './test-utils/accounts.js'
 import { signInAs } from './test-utils/journeys.js'
 
 /**
@@ -35,10 +35,10 @@ const EMPTY_STATE_TITLES = /no data yet|nothing to show|no features/i
 // @pending while the promise still hangs over blank space: the gate
 // fails today, which is its present evidence. It leaves @pending when the
 // surface either shows cards or says honestly that it has none.
-test('the home surface does not promise cards it has none of', { tag: '@pending' }, async ({
-  page,
-}) => {
-  await signInAs(page, DEMO_OWNER)
+test('the home surface does not promise cards it has none of', {
+  tag: ['@pending', '@deployment'],
+}, async ({ page }) => {
+  await signInAs(page, DEMO_ACME_ONLY)
 
   const main = page.getByRole('main')
   await expect(main.getByRole('heading', { level: 1 })).toBeVisible()

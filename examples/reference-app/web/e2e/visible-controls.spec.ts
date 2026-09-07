@@ -23,7 +23,7 @@
  * legitimate on their own, and only their pairing was wrong.
  */
 import { expect, test } from '@playwright/test'
-import { DEMO_OWNER } from './test-utils/accounts.js'
+import { DEMO_OWNER, DEMO_READER } from './test-utils/accounts.js'
 import { signInAs } from './test-utils/journeys.js'
 
 /** WCAG 2.1 AA for normal-sized text. */
@@ -108,7 +108,7 @@ async function chromeContrast(page: import('@playwright/test').Page): Promise<Co
 // keeps a known-failing gate out of the default run; asking for it by
 // name is `E2E_INCLUDE_PENDING=1 pnpm test:e2e --grep @pending`.)
 test('every control in the signed-in chrome is legible against its background', {
-  tag: '@pending',
+  tag: ['@pending', '@deployment'],
 }, async ({ page }) => {
   await signInAs(page, DEMO_OWNER)
 
@@ -124,12 +124,15 @@ test('every control in the signed-in chrome is legible against its background', 
   ).toEqual([])
 })
 
-test('the chrome stays legible on a phone', { tag: '@pending' }, async ({ page }) => {
+test('the chrome stays legible on a phone', { tag: ['@pending', '@deployment'] }, async ({ page }) => {
+  // A different account from the test above, so neither approaches the
+  // per-account sign-in budget when this runs against a long-lived
+  // deployment (playwright.config.ts's deployment-mode note).
   // The same controls wrap onto a second row at this width, which is
   // where a colour problem tends to hide: the row a designer never
   // screenshotted.
   await page.setViewportSize({ width: 390, height: 844 })
-  await signInAs(page, DEMO_OWNER)
+  await signInAs(page, DEMO_READER)
 
   const illegible = (await chromeContrast(page)).filter(
     (control) => control.ratio < MINIMUM_CONTRAST,

@@ -110,12 +110,38 @@ export async function submitPasswordSignIn(
 export async function signInAs(page: Page, account: DemoAccount): Promise<void> {
   await visitSignIn(page)
   await submitPasswordSignIn(page, account.email, account.password)
-  // The sign-out control, not a nav link: below the md breakpoint the
-  // AppShell collapses its navigation behind the menu button, so a nav
-  // link is absent from the DOM until a person opens the drawer. Waiting
-  // on one made this helper quietly desktop-only, which a spec that
-  // resizes to a phone found the hard way.
-  await expect(page.getByRole('button', { name: SESSION_TEXT.signOut })).toBeVisible()
+
+  // Wait for whichever settles first: the frame, or a refusal. Waiting
+  // only for the frame turned every refused sign-in into "Sign out is not
+  // visible after 10s", which says nothing about why -- and against a
+  // real deployment the why is almost always mundane: the seeded accounts
+  // were registered with whatever APP_DEMO_USERS_PASSWORD that deployment
+  // was given, while this suite defaults to its own local one. Racing the
+  // two outcomes is what lets the failure name its own cause.
+  //
+  // The frame is identified by the sign-out control rather than a nav
+  // link, because below the md breakpoint AppShell collapses its
+  // navigation behind the menu button and no nav link is in the DOM until
+  // a person opens the drawer -- which quietly made this helper
+  // desktop-only until a spec that resizes to a phone found out.
+  const frame = page.getByRole('button', { name: SESSION_TEXT.signOut })
+  const refusal = page
+    .getByRole('alert')
+    .filter({ hasText: AUTH_ERROR_TEXT.invalidCredentials })
+  await Promise.race([
+    frame.waitFor({ state: 'visible' }).catch(() => undefined),
+    refusal.waitFor({ state: 'visible' }).catch(() => undefined),
+  ])
+
+  if (await refusal.isVisible()) {
+    const hint =
+      process.env.E2E_BASE_URL !== undefined && process.env.E2E_DEMO_PASSWORD === undefined
+        ? ` Deployment mode needs E2E_DEMO_PASSWORD set to ${process.env.E2E_BASE_URL}'s own APP_DEMO_USERS_PASSWORD; the suite default only matches a server this config started.`
+        : ''
+    throw new Error(`e2e: ${account.email} was refused at sign-in.${hint}`)
+  }
+
+  await expect(frame).toBeVisible()
 }
 
 /**

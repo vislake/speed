@@ -29,7 +29,9 @@
 import { expect, test } from '@playwright/test'
 import { SIGN_IN_TEXT } from './test-utils/journeys.js'
 
-test('the address serves an HTML document, not an API answer', async ({ page }) => {
+test('the address serves an HTML document, not an API answer', { tag: '@deployment' }, async ({
+  page,
+}) => {
   const response = await page.goto('/')
 
   expect(response, 'the root path answered nothing at all').not.toBeNull()
@@ -45,7 +47,9 @@ test('the address serves an HTML document, not an API answer', async ({ page }) 
   ).toContain('text/html')
 })
 
-test('the served page mounts the application and shows its sign-in surface', async ({ page }) => {
+test('the served page mounts the application and shows its sign-in surface', {
+  tag: '@deployment',
+}, async ({ page }) => {
   await page.goto('/')
 
   // The mount point the host page provides, filled by the app's own
@@ -59,7 +63,9 @@ test('the served page mounts the application and shows its sign-in surface', asy
   await expect(page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel })).toBeVisible()
 })
 
-test('the page loads without a failed asset or a console error', async ({ page }) => {
+test('the page loads without a failed asset or a console error', { tag: '@deployment' }, async ({
+  page,
+}) => {
   const failures: string[] = []
   page.on('console', (message) => {
     if (message.type() === 'error') {

@@ -9,9 +9,48 @@ pnpm test:e2e                     # boots both servers, runs every journey
 pnpm test:e2e --headed            # watch it happen
 pnpm exec playwright show-report  # the last run's report
 
-# drive an already-running deployment instead of booting one
+# the gates for defects still open, asked for by name
+E2E_INCLUDE_PENDING=1 pnpm test:e2e --grep @pending
+
+# drive an already-running deployment: ONLY the @deployment gates run
 E2E_BASE_URL=https://your-deployment.example pnpm test:e2e
 ```
+
+## Two environments, and why the suite is not the same in both
+
+Against the local servers this file's config boots, every gate runs.
+Against a real deployment only the ones tagged `@deployment` do, and
+that restriction is not a convenience -- the others are *wrong* there.
+
+The suite signs in 38 times across its files, nearly always as the same
+account. Locally that is free: the config starts a fresh server per run,
+so `go/authn`'s in-memory rate-limit counters begin at zero and the whole
+suite finishes in about twenty seconds. A deployment is a long-running
+process. The counters accumulate, the network adds latency, and partway
+through a run the suite locks its own account out -- after which every
+remaining test fails on `429` rather than on its subject, producing a
+wall of red that says nothing about the product. That happened, and the
+results had to be thrown away.
+
+So `@deployment` marks the gates that need no sign-in, or one, and the
+deployment-mode sign-ins are spread across the three seeded accounts so
+none of them approaches its own per-minute budget.
+
+The usual fix -- sign in once and reuse the session across tests through
+Playwright's `storageState` -- **cannot work on this product, by
+design**: the access token lives in memory and the refresh token in a
+closure, and neither is ever written to storage (`@speed/api-client`'s
+memory store, `@speed/auth-core`'s session). That is the correct security
+decision, so the suite works within it instead of asking for it to be
+weakened. The cost is real and worth stating plainly: reverifying a
+login-heavy journey after a deployment is a local exercise, and an
+acceptance report should say which environment it was run in rather than
+claiming "verified" without qualification.
+
+**Adding a gate:** if it signs in more than once, leave it untagged --
+it belongs to the local tier. If it must run against a deployment, keep
+it to one sign-in and pick an account the neighbouring `@deployment`
+gates are not using.
 
 The first run compiles the Go server, which takes minutes; later runs
 reuse the build cache and the whole suite finishes in seconds.

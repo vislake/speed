@@ -156,6 +156,26 @@ export default defineConfig({
   //
   //   E2E_INCLUDE_PENDING=1 pnpm test:e2e --grep @pending
   grepInvert: process.env.E2E_INCLUDE_PENDING === undefined ? /@pending/ : undefined,
+  // Against a REAL DEPLOYMENT, only the specs tagged @deployment run.
+  //
+  // The rest are not merely slower there, they are wrong there. This
+  // suite signs in 38 times across 11 files, nearly always as the same
+  // account, which is free against the local server -- a fresh process
+  // per run, so go/authn's in-memory rate-limit counters start at zero
+  // and the whole suite finishes in twenty seconds. A deployment is a
+  // long-running process: the counters accumulate, the network adds
+  // latency, and the suite locks its own account out. Every later test
+  // then fails on 429 rather than on its subject, which produces a wall
+  // of red that says nothing about the product.
+  //
+  // So deployment mode is a deliberately small set: the gates that need
+  // no sign-in, or one. Reusing a signed-in session across tests -- the
+  // usual answer -- is impossible here by design: this product keeps the
+  // access token in memory and the refresh token in a closure, writing
+  // neither to storage, so there is no storageState to save. That is the
+  // right security decision and this suite works within it rather than
+  // asking for it to be weakened.
+  grep: external ? /@deployment/ : undefined,
   // One worker: the specs share one server, and that server's own
   // per-account rate limiting and progressive lockout (go/authn's
   // ratelimit.go) make concurrent sign-in attempts against the same demo
