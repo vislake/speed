@@ -2,7 +2,9 @@ package compliance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/vislake/speed/go/dbkit/audit"
@@ -395,5 +397,65 @@ func TestErasureService_Erase_ParticipantPartialCountSurvivesError(t *testing.T)
 	}
 	if events[0].Result.Success {
 		t.Error("audit Result.Success = true, want false -- the participant error must still mark the request failed")
+	}
+}
+
+// TestErasureService_Erase_ChangesRecordClassificationNeverErrorText pins
+// the audit-trail content rule for the erasure path: a participant whose
+// Erase callback failed must appear in the audit event's Changes as a
+// classification (the participant's name, marked failed) -- never with the
+// callback's error text verbatim. An erasure-path error can carry the
+// erased subject's own identifier (a repository error naming the rows it
+// could not delete, a storage error quoting the request), and the changes
+// column is the one place on the audit table from which nothing can ever
+// be removed: carving the erased subject's identifier into the very table
+// erasure must not touch would defeat the erasure's whole purpose. The
+// error text's home is the structured log (behind the redaction layer) and
+// the returned ErasureResult.Errors -- never the permanent audit record.
+func TestErasureService_Erase_ChangesRecordClassificationNeverErrorText(t *testing.T) {
+	// The subject id appears in the failing participant's error text --
+	// the carving shape this test guards against.
+	carving := errors.New("erasing subject-1 rows failed: connection refused")
+	partial := pkgcore.RetentionParticipant{
+		// NoopSweep satisfies the registrar's mandatory-Sweep rule; the
+		// erasure service under test never invokes it.
+		Name:  "testutil.carving",
+		Sweep: testutil.NoopSweep,
+		Erase: func(context.Context, pkgcore.SubjectRef) (int, error) {
+			return 0, carving
+		},
+	}
+	svc, captured := newErasureServiceWith(t, partial)
+	tenant := pkgcore.TenantID("tenant-a")
+
+	_, err := svc.Erase(pkgcore.WithTenant(context.Background(), tenant), pkgcore.SubjectRef{TenantID: tenant, SubjectID: "subject-1"}, testErasureActor)
+	if !hasCode(err, ErrErasurePartialFailure.Code) {
+		t.Fatalf("Erase error = %v, want %s", err, ErrErasurePartialFailure.Code)
+	}
+
+	events := *captured
+	if len(events) != 1 {
+		t.Fatalf("captured audit events = %d, want 1", len(events))
+	}
+	changes := events[0].Changes
+	if changes == nil {
+		t.Fatal("audit event Changes = nil, want the erased/errors breakdown")
+	}
+	errs, ok := changes.After["errors"].(map[string]string)
+	if !ok {
+		t.Fatalf("Changes.After[\"errors\"] = %T, want map[string]string -- the classification map, never the raw errors", changes.After["errors"])
+	}
+	if got := errs["testutil.carving"]; got != erasureAuditErrorMarker {
+		t.Errorf("Changes errors[testutil.carving] = %q, want the classification marker %q", got, erasureAuditErrorMarker)
+	}
+	raw, marshalErr := json.Marshal(changes)
+	if marshalErr != nil {
+		t.Fatalf("json.Marshal(Changes) error = %v", marshalErr)
+	}
+	if strings.Contains(string(raw), carving.Error()) {
+		t.Errorf("the participant error text %q was carved into the audit trail Changes: %s", carving.Error(), raw)
+	}
+	if strings.Contains(string(raw), "subject-1") {
+		t.Errorf("the erased subject's identifier leaked into the audit trail Changes through the participant error: %s", raw)
 	}
 }

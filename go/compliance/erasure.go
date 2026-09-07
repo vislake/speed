@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vislake/speed/go/dbkit/audit"
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy"
 )
@@ -29,6 +30,18 @@ const erasureFallbackActorID = "compliance.right_to_erasure"
 // once per participant): one AuditEvent records the whole request, with
 // Changes carrying the per-participant breakdown.
 const AuditActionErasureRequest = "compliance.erasure.request"
+
+// erasureAuditErrorMarker is the value emitErasureAudit records for each
+// failed participant under Changes["errors"]: the participant's name is
+// the map key, this constant the classification. The audit record says
+// WHO failed and THAT it failed -- never the error text itself, which can
+// carry the erased subject's own identifier and would be carved, byte for
+// byte, into the one column on the one table erasure must not touch (see
+// emitErasureAudit's doc comment). The error text's homes are the
+// returned ErasureResult.Errors and the structured log (this file's
+// participant-failure log call, behind go/observability's redaction
+// layer) -- never the permanent audit record.
+const erasureAuditErrorMarker = "failed"
 
 // ErasureResult is Erase's outcome: how many rows each registered
 // participant erased for the requested subject, and any per-participant
@@ -139,10 +152,14 @@ func newErasureService() *ErasureService {
 //
 // The whole request, once every participant has run, is recorded as
 // exactly one AuditActionErasureRequest audit event via dbkit/audit.Emit,
-// with Resource naming the subject and Changes carrying the full per-
-// participant erased/error breakdown. A failure to publish that audit
-// event is reported by wrapping ErrAuditRecordFailed -- see that error's
-// own doc comment for why it is surfaced rather than swallowed.
+// with Resource naming the subject and Changes carrying the per-
+// participant erased breakdown plus a classification-only record of which
+// participants failed (participant name + erasureAuditErrorMarker -- never
+// the participant error's text, which can carry the erased subject's own
+// identifier; see emitErasureAudit's doc comment). A failure to publish
+// that audit event is reported by wrapping ErrAuditRecordFailed -- see
+// that error's own doc comment for why it is surfaced rather than
+// swallowed.
 func (s *ErasureService) Erase(ctx context.Context, subject pkgcore.SubjectRef, requestedBy pkgcore.Actor) (ErasureResult, error) {
 	if subject.TenantID == "" || subject.SubjectID == "" {
 		return ErasureResult{}, ErrEmptySubjectRef
@@ -210,6 +227,16 @@ func (s *ErasureService) Erase(ctx context.Context, subject pkgcore.SubjectRef, 
 			// silently drop them from the record of an irreversible
 			// operation because the callback also errored.
 			result.Errors[p.Name] = err
+			// The participant error's text is logged here -- behind
+			// go/observability's redaction layer -- never written into the
+			// audit record's Changes: an erasure-path error can carry the
+			// erased subject's own identifier, and the changes column is on
+			// the one table erasure must not touch (see
+			// erasureAuditErrorMarker's doc comment). The returned
+			// ErasureResult.Errors keeps the error available to this call's
+			// own caller; this log line keeps it available to operators.
+			obs.FromContext(sysCtx).Error("compliance: erasure participant failed",
+				"participant", p.Name, "error", err)
 		}
 	}
 
@@ -225,12 +252,26 @@ func (s *ErasureService) Erase(ctx context.Context, subject pkgcore.SubjectRef, 
 // emitErasureAudit records one AuditActionErasureRequest event for a
 // completed request, using dbkit/audit.Emit against the pre-elevation
 // ctx -- see RetentionService.emitSweepAudit's identical convention.
+//
+// Changes["errors"] carries a classification only -- each failed
+// participant's name mapped to erasureAuditErrorMarker -- deliberately
+// never the participant error's text: dbkit/audit's Diff content contract
+// (emit.go) forbids sensitive content in the changes column, and this
+// path's errors are the sharpest case of that rule, because an
+// erasure-path participant error can carry the erased subject's own
+// identifier (a repository error naming the rows it could not delete).
+// Writing that text verbatim would permanently carve the identifier into
+// the audit table -- the one table erasure must not touch: nothing can
+// ever delete the row the text landed on. The text is logged at the
+// failure site in Erase (behind go/observability's redaction layer) and
+// returned to the caller in ErasureResult.Errors, which are its two
+// legitimate homes.
 func (s *ErasureService) emitErasureAudit(ctx context.Context, result ErasureResult) error {
 	changes := map[string]any{"erased": result.Erased}
 	if result.HasErrors() {
 		errs := make(map[string]string, len(result.Errors))
-		for name, err := range result.Errors {
-			errs[name] = err.Error()
+		for name := range result.Errors {
+			errs[name] = erasureAuditErrorMarker
 		}
 		changes["errors"] = errs
 	}
