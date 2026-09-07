@@ -2154,8 +2154,12 @@ func TestDelivery_ContactDeliveryOfAnUndeclaredType_NeverReachesTheTransport(t *
 	}
 
 	// Leg two: the module declares its type; the same delivery renders and
-	// sends exactly as any declared type's does, converging the earlier
-	// failed record onto succeeded.
+	// sends exactly as any declared type's does. The dispatch now carries
+	// only the parameter the declared copy actually references (the bill
+	// email renders {{.patient_name}} alone) -- appointment_time is
+	// copy-inert for this copy, and a declared type's dispatch carrying a
+	// parameter no template references is refused at the enqueue boundary
+	// under the copy gate, exactly as the bill's own writer would learn.
 	ghost := pkgcore.NotificationType{
 		Key:             ghostContactType,
 		Group:           "billing",
@@ -2163,13 +2167,16 @@ func TestDelivery_ContactDeliveryOfAnUndeclaredType_NeverReachesTheTransport(t *
 		Unsubscribable:  true,
 	}
 	env.prefs.attachTypes(fixtureRegistrar{types: append(slices.Clone(fixtureTypes), ghost)})
-	if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
+	declared := d
+	declared.Params = maps.Clone(d.Params)
+	delete(declared.Params, "appointment_time")
+	if attemptErr := env.dispatchAndAttempt(t, declared); attemptErr != nil {
 		t.Fatalf("attempt for the now-declared type: %v", attemptErr)
 	}
 	if mails := env.host.mailer.messages(); len(mails) != 1 {
 		t.Errorf("mailer delivered %d messages, want exactly the declared type's 1", len(mails))
 	}
-	rec = env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	rec = env.sendRecordByChannel(t, ctx, declared, ChannelEmail)
 	if rec == nil || rec.Status != SendRecordStatusSucceeded {
 		t.Fatalf("record after the declared delivery = %+v, want succeeded", rec)
 	}
@@ -2299,5 +2306,152 @@ func TestDelivery_StalePayloadParams_NarrowedBeforeRowAndKey(t *testing.T) {
 	}
 	if strings.Contains(mails[0].Text, "fraud") {
 		t.Errorf("mail text %q embeds the internal reason, want it absent from every recipient-visible surface", mails[0].Text)
+	}
+}
+
+// overDeclaredAppointmentType is a fixture appointment declaration whose
+// recipient-visible annotation is WIDER than its own copy: it declares an
+// extra recipient-visible name -- internal_marker -- that no template of
+// the type references. Such a declaration is the exact general root of the
+// P1 leak: on a restricted type the declared list is the whole gate, so a
+// value no copy anywhere uses would still be allowed to ride verbatim into
+// the inbox row and API. Copy governance must refuse it regardless of what
+// the declaration says.
+var overDeclaredAppointmentType = pkgcore.NotificationType{
+	Key:                    fixtureTypeAppointment,
+	Group:                  "appointments",
+	DefaultChannels:        []string{ChannelInApp, ChannelEmail, ChannelSMS},
+	Unsubscribable:         true,
+	RecipientVisibleParams: []string{"patient_name", "appointment_time", "internal_marker"},
+}
+
+// TestDelivery_Dispatch_RefusesParamsNoTemplateReferences is the
+// copy-governance test at the enqueue boundary: a dispatch whose Params
+// carry a parameter name no copy template of the type references is
+// refused with ErrDispatchParamsUnreferenced -- naming the type and the
+// offending keys -- before anything is enqueued. The copy gate applies
+// whether or not the type's declaration restricts its recipient-visible
+// list: leg 1 drives the fixture's legacy unrestricted declaration (nil
+// RecipientVisibleParams, the shape on which the declaration gate has
+// nothing to refuse, so the copy gate is the whole protection against a
+// copy-inert parameter riding through), and leg 2 drives a restricted
+// declaration that itself lists the unreferenced parameter -- the
+// annotation's word is not the copy's, and a value no template uses must
+// not reach the row even when a declaration says it may.
+func TestDelivery_Dispatch_RefusesParamsNoTemplateReferences(t *testing.T) {
+	// Leg 1: the unrestricted fixture type. The P1-2 recipient-visible
+	// gate has nothing to refuse (nil list = legacy unrestricted), so a
+	// copy-inert parameter must be refused by the copy gate alone.
+	env := newDeliveryEnv(t)
+	ctx := tenantCtx(deliveryTenant)
+
+	d := deliveryDispatch()
+	d.Params = maps.Clone(renderTestParams)
+	d.Params["internal_marker"] = "occurrence-42"
+	_, err := env.svc.Dispatch(ctx, d)
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Code != ErrDispatchParamsUnreferenced.Code {
+		t.Fatalf("Dispatch() error = %v, want %s", err, ErrDispatchParamsUnreferenced.Code)
+	}
+	if got := appErr.Params["type_key"]; got != fixtureTypeAppointment {
+		t.Errorf("refusal type_key = %v, want %q", got, fixtureTypeAppointment)
+	}
+	if got := appErr.Params["params"]; got != "internal_marker" {
+		t.Errorf("refusal params = %v, want the offending key %q", got, "internal_marker")
+	}
+	if len(env.queue.tasks) != 0 {
+		t.Errorf("queue holds %d tasks after the refused dispatch, want none", len(env.queue.tasks))
+	}
+
+	// The parameters the copy DOES reference still dispatch, enqueue and
+	// deliver untouched: the copy gate governs both directions.
+	if err := env.dispatchAndAttempt(t, deliveryDispatch()); err != nil {
+		t.Fatalf("dispatch of the copy's own parameters: %v", err)
+	}
+
+	// Leg 2: a restricted declaration that itself admits the unreferenced
+	// parameter. The recipient-visible gate passes it (the declaration
+	// lists it), so only the copy gate stands between it and the row.
+	declared := newDeliveryEnv(t)
+	declared.prefs.attachTypes(fixtureRegistrar{types: []pkgcore.NotificationType{overDeclaredAppointmentType}})
+	dd := deliveryDispatch()
+	dd.Params = maps.Clone(renderTestParams)
+	dd.Params["internal_marker"] = "occurrence-42"
+	_, derr := declared.svc.Dispatch(ctx, dd)
+	dappErr, dok := apperr.As(derr)
+	if !dok || dappErr.Code != ErrDispatchParamsUnreferenced.Code {
+		t.Fatalf("Dispatch() over a declaration that lists the unreferenced parameter = %v, want %s -- the copy gate must not defer to the declaration", derr, ErrDispatchParamsUnreferenced.Code)
+	}
+	if got := dappErr.Params["params"]; got != "internal_marker" {
+		t.Errorf("refusal params = %v, want the offending key %q", got, "internal_marker")
+	}
+	if len(declared.queue.tasks) != 0 {
+		t.Errorf("queue holds %d tasks after the refused dispatch, want none", len(declared.queue.tasks))
+	}
+}
+
+// TestDelivery_StalePayloadParams_UnreferencedParam_DroppedBeforeRowAndKey
+// is the copy-governance test at the persistence boundary: a delivery job
+// whose payload carries a parameter no template of the type references --
+// a job enqueued before the copy gate existed, which Dispatch's own
+// refusal never saw -- must still deliver (the message is not lost), but
+// the copy-inert parameter must not derive into the delivery key and must
+// not persist into the inbox row: the row stores exactly the parameters
+// its own copy was rendered from, which is what the inbox API serves back.
+func TestDelivery_StalePayloadParams_UnreferencedParam_DroppedBeforeRowAndKey(t *testing.T) {
+	env := newDeliveryEnv(t)
+	env.resolver.byUser[deliveryUser] = deliveryAddresses
+	ctx := tenantCtx(deliveryTenant)
+
+	stale := deliveryDispatch()
+	stale.Params = maps.Clone(renderTestParams)
+	stale.Params["internal_marker"] = "occurrence-42"
+	// The payload shape a pre-gate job has: marshaled straight into the
+	// queue, so Dispatch's refusal never saw it.
+	payload, err := json.Marshal(stale)
+	if err != nil {
+		t.Fatalf("marshal stale payload: %v", err)
+	}
+	if err := env.attempt(t, payload); err != nil {
+		t.Fatalf("attempt over the stale payload returned %v, want nil (the delivery converges; only the copy-inert parameter is dropped)", err)
+	}
+
+	// No delivery may exist under the marker-bearing key: a parameter no
+	// copy renders must not distinguish the delivery (OccurrenceID is the
+	// first-class field for that). On unfixed code the delivery ran under
+	// exactly this key and the row under it carried the marker verbatim.
+	full := deliveryDispatch()
+	full.Params = maps.Clone(stale.Params)
+	if row := env.inboxRowByChannel(t, ctx, full); row != nil {
+		t.Fatalf("inbox row exists under the marker-bearing delivery key with params %s, want the copy-inert parameter kept out of the key derivation and the row", row.Params)
+	}
+
+	// The delivery itself landed under the copy's own parameters, and the
+	// row persists exactly them -- nothing more.
+	clean := deliveryDispatch()
+	clean.Params = maps.Clone(renderTestParams)
+	row := env.inboxRowByChannel(t, ctx, clean)
+	if row == nil {
+		t.Fatal("no inbox row under the copy-parameter delivery key, want the in-app delivery to succeed there")
+	}
+	if len(row.Params) == 0 {
+		t.Fatal("inbox row carries no params, want the copy's own parameters persisted")
+	}
+	var got map[string]any
+	if err := json.Unmarshal(row.Params, &got); err != nil {
+		t.Fatalf("unmarshal row params: %v", err)
+	}
+	if !maps.Equal(got, renderTestParams) {
+		t.Errorf("inbox row params = %v, want exactly the copy's own parameters %v -- a parameter no template references must not ride through into the recipient-visible row", got, renderTestParams)
+	}
+
+	// The outbound copy still renders the referenced parameters: the
+	// dropped parameter changed nothing a recipient sees.
+	mails := env.host.mailer.messages()
+	if len(mails) != 1 {
+		t.Fatalf("mailer delivered %d messages for the stale payload, want the one email", len(mails))
+	}
+	if !strings.Contains(mails[0].Text, "王芳") {
+		t.Errorf("mail text = %q, want the referenced parameter rendered into the copy", mails[0].Text)
 	}
 }

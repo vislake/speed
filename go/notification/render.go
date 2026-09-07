@@ -86,6 +86,79 @@ func renderContent(catalog *i18n.Catalog, locale, typeKey, channel string, param
 	return out, nil
 }
 
+// copyParamsForChannel returns the subset of params the copy of typeKey on
+// channel in locale actually renders, and whether that copy could be
+// established at all. ok is false when no copy could be rendered (a nil
+// catalog, a missing template part, a locale the catalog does not know) --
+// callers must keep params untouched on !ok, since nothing is known about
+// which parameters the copy depends on; the delivery's own render failure
+// is the honest referee for an unrenderable copy, never this probe.
+//
+// A parameter is kept exactly when the copy depends on it: rendering the
+// channel's parts with the parameter removed produces output identical to
+// the full-parameter render only when no part's output ever reflected the
+// parameter, so a removed-parameter render that errors or differs proves
+// the copy needs the parameter, and one that matches byte for byte proves
+// it does not. The probe never drops a parameter whose removal would
+// change the copy, by construction: what survives is precisely the set
+// whose removal leaves every rendered part untouched, which is also
+// exactly the set the copy was rendered from.
+//
+// The kept set is a pure function of (catalog, locale, typeKey, channel,
+// params) -- rendering is deterministic and the probe has no side effects
+// -- so every replica and every retry narrows the same payload to the
+// same result.
+func copyParamsForChannel(catalog *i18n.Catalog, locale, typeKey, channel string, params map[string]any) (map[string]any, bool) {
+	if catalog == nil {
+		return nil, false
+	}
+	full, err := renderContent(catalog, locale, typeKey, channel, params)
+	if err != nil {
+		return nil, false
+	}
+	if len(params) == 0 {
+		return nil, true
+	}
+	kept := make(map[string]any, len(params))
+	for name, value := range params {
+		probe := make(map[string]any, len(params)-1)
+		for k, v := range params {
+			if k != name {
+				probe[k] = v
+			}
+		}
+		if len(probe) == 0 {
+			probe = nil
+		}
+		parts, err := renderContent(catalog, locale, typeKey, channel, probe)
+		if err != nil {
+			// Removing the parameter broke the copy: the templates need it
+			// in a way the rendering depends on. Keep it.
+			kept[name] = value
+			continue
+		}
+		if !sameRenderedParts(parts, full) {
+			kept[name] = value
+		}
+	}
+	return kept, true
+}
+
+// sameRenderedParts reports whether two part maps are identical, part for
+// part -- the byte-for-byte comparison copyParamsForChannel's removal
+// probe judges a parameter's copy dependence by.
+func sameRenderedParts(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for part, text := range a {
+		if b[part] != text {
+			return false
+		}
+	}
+	return true
+}
+
 // renderTypeDescription renders one notification type's directory copy --
 // the Description the type directory (handler.go's NotificationListTypes)
 // serves alongside each declared type -- in the locale the request

@@ -88,21 +88,39 @@ type Dispatch struct {
 
 	// Params supplies the interpolation values the type's templates
 	// reference, keyed by the names the templates' own {{.name}}
-	// placeholders spell out (render.go's renderContent). It is also part
-	// of the delivery key derivation, so two dispatches that differ only
-	// in parameters are two deliveries.
+	// placeholders spell out (render.go's renderContent). Params is also
+	// part of the delivery key derivation, so two dispatches that differ
+	// only in parameters are two deliveries.
 	//
-	// Params is the RECIPIENT-VISIBLE channel: everything in it persists
-	// into the recipient's inbox row and comes back out through the inbox
-	// API, so only what the type's own declaration marks recipient-visible
-	// may ride it (pkgcore.NotificationType.RecipientVisibleParams).
-	// DeliveryService.Dispatch refuses a parameter outside that
-	// declaration, and the delivery path narrows a payload that
-	// nevertheless carries one (a job enqueued before the declaration
-	// existed, say) down to the declared list before anything renders or
-	// persists (recipientVisibleOnly below) -- delivery-internal context
-	// such as an operator's free-text justification or an actor's user id
-	// must never travel here.
+	// Params is the RECIPIENT-VISIBLE channel: a parameter the delivered
+	// copy renders persists into the recipient's inbox row -- the in-app
+	// delivery stores the parameters the row's own copy was rendered from,
+	// which the inbox API serves back (normalized to an empty object,
+	// never absent) -- while a parameter no delivered copy renders travels
+	// nowhere at all. Two boundaries govern what may ride here, each
+	// enforced by delivery itself rather than left to a writer's memory:
+	//
+	//   - the type's DECLARATION (pkgcore.NotificationType.
+	//     RecipientVisibleParams) decides which parameters may reach the
+	//     recipient at all. DeliveryService.Dispatch refuses a parameter
+	//     outside it with ErrDispatchParamsNotAllowed, and the delivery
+	//     path narrows a payload that nevertheless carries one (a job
+	//     enqueued before the declaration restricted its params) down to
+	//     the declared list before anything renders or persists
+	//     (recipientVisibleOnly below). Delivery-internal context -- an
+	//     operator's free-text justification, an actor's user id -- never
+	//     belongs here.
+	//   - the type's own COPY decides which parameters it actually uses.
+	//     A parameter no template of the type references would render
+	//     nowhere and yet still ride verbatim through the inbox row, so
+	//     Dispatch refuses one with ErrDispatchParamsUnreferenced, and the
+	//     delivery path drops it from a payload that nevertheless carries
+	//     one (a job enqueued before this rule) before anything renders,
+	//     derives into the delivery key or persists (copyParamsForChannel
+	//     below). A caller that wants to distinguish two otherwise
+	//     identical deliveries names a fresh OccurrenceID -- the
+	//     first-class per-occurrence marker, which never renders and never
+	//     persists -- never a copy-inert parameter.
 	Params map[string]any `json:"params"`
 
 	// OccurrenceID names the delivery OCCURRENCE this Dispatch is -- the
@@ -433,17 +451,26 @@ func (s *DeliveryService) SendRecords() *SendRecordRepository { return s.sendRec
 // one is refused with pkgcore.ErrNoTenant, because the job and every record
 // it writes belong to a tenant. A Dispatch whose payload cannot be marshaled
 // -- a Params map holding a channel or function, say -- is refused with
-// ErrDispatchInvalid naming the "params" field. A Dispatch whose Params
-// carry a parameter the named type's declaration does not mark
-// recipient-visible is refused with ErrDispatchParamsNotAllowed before
-// anything is enqueued: a type with static copy declares an empty list, so
-// delivery-internal context (an operator's justification, an actor's user
-// id) can never ride Params into the recipient's row or API.
+// ErrDispatchInvalid naming the "params" field. Two further refusals guard
+// the Params channel itself, in order: a parameter the named type's
+// declaration does not mark recipient-visible is refused with
+// ErrDispatchParamsNotAllowed (a type with static copy declares an empty
+// list, so delivery-internal context -- an operator's justification, an
+// actor's user id -- can never ride Params into the recipient's row or
+// API), and a parameter no copy template of the type references is refused
+// with ErrDispatchParamsUnreferenced (such a parameter would render
+// nowhere yet still round-trip through the inbox row; distinguishing two
+// otherwise identical deliveries is OccurrenceID's job, never a
+// copy-inert parameter's). Both refusals answer before anything is
+// enqueued, while the caller can still act on them.
 func (s *DeliveryService) Dispatch(ctx context.Context, d Dispatch) (jobs.JobID, error) {
 	if err := d.validate(); err != nil {
 		return "", err
 	}
 	if err := s.checkParamsRecipientVisible(d); err != nil {
+		return "", err
+	}
+	if err := s.checkParamsReferenced(d); err != nil {
 		return "", err
 	}
 	if s.queue == nil {
@@ -520,6 +547,74 @@ func (s *DeliveryService) checkParamsRecipientVisible(d Dispatch) error {
 			WithParam("params", strings.Join(offending, ","))
 	}
 	return nil
+}
+
+// checkParamsReferenced refuses a Dispatch whose Params carry a parameter
+// name no copy template of the named type references in the locale the
+// copy will render in (ErrDispatchParamsUnreferenced, naming the type and
+// the offending keys). Such a parameter renders into no copy and yet would
+// still ride verbatim into the inbox row and API -- the exact route by
+// which a value nobody's copy uses reaches the recipient -- and the only
+// legitimate use a copy-inert parameter ever had, distinguishing two
+// otherwise identical deliveries, is OccurrenceID's first-class job. It is
+// the structural half of Dispatch.Params' own doc comment, and it applies
+// to every type whether or not the type's declaration restricts its
+// recipient-visible list: declaration governs exposure, copy governs use,
+// and a parameter must satisfy both.
+//
+// The copy is probed through the merged catalog at the enqueue boundary --
+// rendering is a pure function, so probing costs nothing a dispatch does
+// not already pay at delivery time -- and only a channel whose copy fully
+// renders counts toward the referenced union: a channel with a missing or
+// unrenderable template contributes nothing, and a dispatch whose type has
+// no renderable copy at all is not judged here (its delivery would fail
+// with its own render refusal). A nil catalog (a service exercised before
+// Register attached the host registry) skips the gate entirely: nothing
+// could render from it either. A type the registry does not declare is
+// skipped too: such a dispatch can never deliver (the delivery path's own
+// undeclared-type refusal -- a recorded terminal stop on the contact
+// path -- is the authority there), so copy governance for it would only
+// pre-empt the refusal the module already answers with.
+func (s *DeliveryService) checkParamsReferenced(d Dispatch) error {
+	if len(d.Params) == 0 {
+		return nil
+	}
+	if _, err := s.prefs.lookupType(d.TypeKey); err != nil {
+		return nil
+	}
+	catalog := s.catalog()
+	if catalog == nil {
+		return nil
+	}
+	locale := deliveryLocale(d)
+	referenced := make(map[string]struct{})
+	verified := false
+	for channel := range channelRenderParts {
+		kept, ok := copyParamsForChannel(catalog, locale, d.TypeKey, channel, d.Params)
+		if !ok {
+			continue
+		}
+		verified = true
+		for name := range kept {
+			referenced[name] = struct{}{}
+		}
+	}
+	if !verified {
+		return nil
+	}
+	var offending []string
+	for name := range d.Params {
+		if _, ok := referenced[name]; !ok {
+			offending = append(offending, name)
+		}
+	}
+	if len(offending) == 0 {
+		return nil
+	}
+	slices.Sort(offending)
+	return ErrDispatchParamsUnreferenced.
+		WithParam("type_key", d.TypeKey).
+		WithParam("params", strings.Join(offending, ","))
 }
 
 // recipientVisibleOnly narrows d to the parameters its type's declaration
@@ -650,6 +745,26 @@ func (s *DeliveryService) deliverToUser(ctx context.Context, tenantID string, d 
 // double-delivery this probe exists to prevent.
 func (s *DeliveryService) deliverUserChannel(ctx context.Context, tenantID string, d Dispatch, group, channel string) error {
 	rec := s.sendRecordFor(tenantID, d, channel)
+
+	// Narrow the payload to the parameters THIS channel's own copy
+	// templates actually reference before the delivery key derives and
+	// anything renders or persists (copyParamsForChannel's doc comment):
+	// the in-app row must persist exactly the parameters its own copy was
+	// rendered from, and a parameter no copy on this channel renders must
+	// not distinguish the delivery either. The narrowing is a pure
+	// function of the copy, and it never errors -- a copy that cannot
+	// render keeps the payload untouched, and the channel's own render
+	// refusal below stays the honest referee.
+	if len(d.Params) > 0 {
+		if kept, ok := copyParamsForChannel(s.catalog(), d.Locale, d.TypeKey, channel, d.Params); ok {
+			if len(kept) == 0 {
+				d.Params = nil
+			} else {
+				d.Params = kept
+			}
+		}
+	}
+
 	key, err := deriveDeliveryKey(tenantID, d, channel)
 	if err != nil {
 		return err
@@ -740,9 +855,13 @@ func (s *DeliveryService) deliverInbox(ctx context.Context, tenantID string, d D
 // parameters that produced the copy, so a later re-render (a locale change,
 // say) needs no re-parse of the source dispatch; a dispatch with no
 // parameters stores the NULL column, never the JSON "null". Only parameters
-// the type's declaration marks recipient-visible can reach this column:
-// runDelivery narrows the payload before this method runs (recipientVisibleOnly),
-// so the row is safe to serve back through the inbox API as it stands.
+// the type's declaration marks recipient-visible AND the in-app copy
+// itself renders can reach this column: runDelivery narrows the payload
+// before this method runs (recipientVisibleOnly), and deliverUserChannel
+// narrows it further to what this channel's own copy references
+// (copyParamsForChannel), so the column holds exactly the parameters the
+// row's title and body were rendered from -- which is what makes the row
+// safe to serve back through the inbox API as it stands.
 func (s *DeliveryService) buildInboxRow(_ context.Context, d Dispatch, group, key string) (*InboxMessage, error) {
 	parts, err := renderContent(s.catalog(), d.Locale, d.TypeKey, ChannelInApp, d.Params)
 	if err != nil {
@@ -1225,9 +1344,11 @@ func (s *DeliveryService) sendRecordFor(tenantID string, d Dispatch, channel str
 // dedupes, which is what keeps a queue retry from double-sending. By the
 // time the key is derived the payload's parameters are already narrowed to
 // the type's recipient-visible set (runDelivery applies recipientVisibleOnly
-// first), so the key never depends on delivery-internal context -- the
-// narrowing is a pure function of the declaration, giving every replica and
-// every retry the same key for the same payload.
+// first), and a user delivery's channel leg narrows them further to the
+// parameters that channel's own copy references (deliverUserChannel), so
+// the key never depends on delivery-internal context and never on a
+// parameter no rendered copy uses -- each narrowing is a pure function,
+// giving every replica and every retry the same key for the same payload.
 func deriveDeliveryKey(tenantID string, d Dispatch, channel string) (string, error) {
 	seed := deliveryKeySeed{
 		TenantID:       tenantID,

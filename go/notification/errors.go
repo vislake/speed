@@ -191,6 +191,24 @@ var (
 	// enqueued before the declaration existed) down to the declared list
 	// before rendering or persisting (delivery.go's recipientVisibleOnly).
 	ErrDispatchParamsNotAllowed = apperr.Invalid("notification.dispatch_params_not_allowed")
+
+	// ErrDispatchParamsUnreferenced reports a Dispatch whose Params carry a
+	// parameter name no copy template of the named notification type
+	// references in the locale the copy will render in: the parameter
+	// would render into no copy and yet still ride verbatim into the
+	// inbox row and API, and the one legitimate use a copy-inert parameter
+	// ever had -- distinguishing two otherwise identical deliveries -- is
+	// Dispatch.OccurrenceID's first-class job. It is the structural
+	// counterpart of ErrDispatchParamsNotAllowed: declaration governs
+	// which parameters may reach the recipient at all, copy governs which
+	// parameters the copy actually uses, and a parameter must satisfy
+	// both. The refusal names the type in "type_key" and the offending
+	// keys in "params"; DeliveryService.Dispatch refuses before anything
+	// is enqueued, and the delivery path drops a parameter from a payload
+	// that nevertheless reaches it (a job enqueued before this rule) per
+	// delivered channel before rendering or persisting (delivery.go's
+	// checkParamsReferenced and render.go's copyParamsForChannel).
+	ErrDispatchParamsUnreferenced = apperr.Invalid("notification.dispatch_params_unreferenced")
 )
 
 // The inbox group: every error the in-app inbox's read surface can return --
