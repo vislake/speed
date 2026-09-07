@@ -77,8 +77,11 @@ import (
 // The dial-time pin only applies to providers this module controls --
 // its two OpenAI-compatible built-ins, which satisfy httpClientSettable.
 // A third-party provider subpackage registered into ChatProviderRegistry
-// builds its own HTTP client and is outside this guard; that limit is
-// recorded in AGENTS.md's Known limitations.
+// or ImageProviderRegistry builds its own HTTP client and cannot carry
+// the guarded one, so the tenant-tier-plus-unguardable-provider
+// combination is refused at resolve time with ErrProviderNotSSRFGuardable
+// (guardTenantScopeDial) instead of silently dialing unguarded -- see
+// that function's own doc comment and errors.go.
 //
 // ErrBaseURLInvalid, ErrBaseURLBlocked and ErrBaseURLUnresolvable are
 // declared in errors.go, alongside this module's other error codes; this
@@ -275,6 +278,31 @@ const providerDialTimeout = 5 * time.Second
 // whose text then carries "destination ... blocked".
 var errBlockedDialAddress = errors.New("aigateway: provider call refused: destination resolves to a blocked address")
 
+// providerDialFunc performs the one TCP dial guardedProviderHTTPClient's
+// transport issues for a single validated candidate address. It is a
+// package-level function variable, not a private method, so a test can
+// replace it and observe exactly what the guard hands to the dialer --
+// the seam the dial-time pinning property is asserted through: the dialed
+// address must be the validated candidate's IP LITERAL, never the original
+// hostname, or the rebinding window this file's header comment closes
+// would be open (a re-resolution inside the dial would let a rebinding
+// DNS answer steer the connection). The default implementation builds a
+// fresh dialer per attempt, carrying providerDialTimeout exactly as the
+// pre-seam code did.
+var providerDialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: providerDialTimeout}
+	return dialer.DialContext(ctx, network, addr)
+}
+
+// resolveProviderHost resolves host the way guardedProviderHTTPClient's
+// transport needs it resolved at dial time. It is a package-level function
+// variable for the same reason providerDialFunc is: the dial-time pinning
+// property cannot be exercised against the real resolver in an offline
+// test, so the rebinding sequence (an answer that changes between
+// resolutions) is scripted through this seam -- see ssrf_test.go's
+// TestGuardedProviderHTTPClient_DialsTheValidatedIPLiteral.
+var resolveProviderHost = net.DefaultResolver.LookupIPAddr
+
 // guardedProviderTransportIdleTimeout is the IdleConnTimeout of the shared
 // transport guardedProviderHTTPClient uses: how long an idle keep-alive
 // connection to a vendor is kept for reuse before it is closed. Sane and
@@ -307,7 +335,6 @@ var guardedProviderHTTPClient = newGuardedProviderHTTPClient()
 // calls are bounded only by ctx -- the identical timeout posture the
 // providers' default clients already keep.
 func newGuardedProviderHTTPClient() *http.Client {
-	dialer := &net.Dialer{Timeout: providerDialTimeout}
 	transport := &http.Transport{
 		IdleConnTimeout:     guardedProviderTransportIdleTimeout,
 		MaxIdleConnsPerHost: 8,
@@ -321,7 +348,7 @@ func newGuardedProviderHTTPClient() *http.Client {
 			if literal := net.ParseIP(host); literal != nil {
 				candidates = []net.IP{literal}
 			} else {
-				resolved, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+				resolved, err := resolveProviderHost(ctx, host)
 				if err != nil {
 					return nil, err
 				}
@@ -340,7 +367,9 @@ func newGuardedProviderHTTPClient() *http.Client {
 				// hostname), so nothing in between this check and the
 				// connection performs a second, independent DNS lookup
 				// that a rebinding attacker could answer differently.
-				conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+				// The dial itself goes through providerDialFunc so a test
+				// can assert this property -- see that seam's own comment.
+				conn, err := providerDialFunc(ctx, network, net.JoinHostPort(ip.String(), port))
 				if err == nil {
 					return conn, nil
 				}
@@ -371,9 +400,10 @@ const maxProviderRedirects = 3
 // Gateway.resolve / resolveImage can install the SSRF-guarded client on a
 // freshly built provider whose credential resolved at the tenant tier. It
 // is deliberately an unexported, structural interface: hosts never see it,
-// and a third-party provider that does not implement it simply dials with
-// whatever client its own constructor built -- the boundary AGENTS.md's
-// Known limitations records.
+// and a third-party provider that does not implement it can never carry a
+// tenant-scope credential -- guardTenantScopeDial refuses that combination
+// with ErrProviderNotSSRFGuardable rather than letting the tenant-
+// influenced dial go out unguarded (see that error's own doc comment).
 type httpClientSettable interface {
 	setHTTPClient(c *http.Client)
 }
@@ -383,11 +413,23 @@ type httpClientSettable interface {
 // place the scope boundary this file's own header comment draws is
 // enforced on the dial path. resolve and resolveImage both call it after
 // every Build.
-func guardTenantScopeDial(provider any, scope CredentialScope) {
+//
+// A tenant-scope credential naming a provider that cannot carry the
+// guarded client is REFUSED with ErrProviderNotSSRFGuardable rather than
+// silently allowed to dial unguarded: a provider without httpClientSettable
+// has no rebinding-defeating dial-time re-check at all, which makes the
+// tenant-scope dial exactly as safe as the write-time-only validation
+// ssrf.go's own header comment says is not enough. Only the tenant tier is
+// refused -- the platform tier stays on the provider's own client by the
+// scope boundary, the operator's legitimate intranet-gateway default.
+func guardTenantScopeDial(provider any, scope CredentialScope) error {
 	if scope != CredentialScopeTenant {
-		return
+		return nil
 	}
-	if settable, ok := provider.(httpClientSettable); ok {
-		settable.setHTTPClient(guardedProviderHTTPClient)
+	settable, ok := provider.(httpClientSettable)
+	if !ok {
+		return ErrProviderNotSSRFGuardable
 	}
+	settable.setHTTPClient(guardedProviderHTTPClient)
+	return nil
 }

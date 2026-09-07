@@ -29,7 +29,14 @@ import (
 // key. A per-tenant limiter has no dimension for a caller that is not a
 // tenant; silently sharing one empty-string bucket across every tenantless
 // caller would merge callers the moment such a key was ever reused for a
-// quota or billing dimension.
+// quota or billing dimension. The tenantless path is therefore by design
+// UNTHROTTLED, never a shared bucket: before this rule the tenantless
+// callers shared one bounded bucket (wrong but bounded); after it they are
+// entirely unthrottled -- an accepted trade because only the host's own
+// in-process code can produce a tenantless call at all (HTTP-facing
+// tenants come from the request context, never from the request itself),
+// so no attacker-reachable request path ever reaches the limiter with no
+// tenant to key it on.
 //
 // Positioned as the FIRST check in the pipeline, before checkEntitlement:
 // a request-rate limit protects the gateway (and the vendor credentials it

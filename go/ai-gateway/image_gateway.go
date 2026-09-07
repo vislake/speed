@@ -70,6 +70,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/storage"
 )
 
@@ -182,8 +183,17 @@ func (g *Gateway) resolveImage(ctx context.Context, logicalModel string) (ImageP
 	// providers applies here -- see that call site's comment and ssrf.go's
 	// file header. It runs in the job worker too (callProvider re-resolves
 	// fresh at execution time), so a tenant BYOK image credential is
-	// dial-guarded wherever the job executes, on whichever replica.
-	guardTenantScopeDial(provider, cred.Scope)
+	// dial-guarded wherever the job executes, on whichever replica -- and an
+	// image provider that cannot carry the guarded client is refused with
+	// the same coded error, exactly like its chat twin.
+	if err := guardTenantScopeDial(provider, cred.Scope); err != nil {
+		// The identical decoration Gateway.resolve applies to the guard's
+		// coded refusal applies here -- see that call site's comment.
+		if appErr, ok := apperr.As(err); ok {
+			err = appErr.WithParam("provider", route.Provider).WithParam("model", logicalModel)
+		}
+		return nil, route, err
+	}
 	return provider, route, nil
 }
 

@@ -145,6 +145,28 @@ var (
 	ErrProviderConfigInvalid = apperr.Invalid("aigateway.provider_config_invalid").
 					WithCause(pkgcore.ErrMissingSeamConfig)
 
+	// ErrProviderNotSSRFGuardable reports Gateway.Chat/ChatStream/GenerateImage
+	// resolving a TENANT-tier credential to a provider that cannot be
+	// SSRF-guarded -- a provider not implementing this module's unexported
+	// httpClientSettable, which today means a third-party registration into
+	// ChatProviderRegistry/ImageProviderRegistry rather than one of the two
+	// module-native OpenAI-compatible built-ins. A tenant-scope credential
+	// is the caller's own influence over where the platform dials (ssrf.go's
+	// file header), and only a provider carrying the guarded client has the
+	// dial-time re-check that defeats DNS rebinding; the alternative --
+	// silently letting the tenant-influenced dial go out on the provider's
+	// own unguarded client -- is exactly the write-time-validation-only
+	// state ssrf.go exists to close. guardTenantScopeDial therefore refuses
+	// the combination at resolve time with this coded error, and the host's
+	// fix is a composition decision: route the logical model to a guardable
+	// provider, or let this provider resolve at the platform tier (the
+	// operator's own default, outside the guard by scope boundary, never by
+	// gap). Classified Invalid like ErrProviderConfigInvalid, since the
+	// stored credential itself is well-formed and the call is refused for a
+	// combination reason. Resolve-time decoration adds the provider and
+	// model params (gateway.go's resolve / image_gateway.go's resolveImage).
+	ErrProviderNotSSRFGuardable = apperr.Invalid("aigateway.provider_not_ssrf_guardable")
+
 	// ErrEmptyPrompt reports an ImageRequest whose Prompt is empty. Every
 	// ImageOperation requires one.
 	ErrEmptyPrompt = apperr.Invalid("aigateway.empty_prompt")

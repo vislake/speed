@@ -2,6 +2,7 @@ package aigateway
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -203,12 +204,17 @@ func TestIsBlockedIP(t *testing.T) {
 }
 
 // TestGuardedProviderHTTPClient_RefusesLoopbackAtDialTime proves the
-// dial-time half of this file's own SSRF defense: even a base URL that
-// somehow reached call time is refused at the point of actually
-// connecting, never dialed -- a tenant-tier credential's provider always
-// carries this client (the resolve-level tests below pin the wiring), so a
-// DNS answer that changed after the credential's validated write cannot
-// redirect a call into an internal address.
+// CHECK half of the dial-time defense: a dial whose address -- literal or
+// resolved -- is a blocked range is refused at the point of actually
+// connecting, never dialed. The dial address here is the httptest server's
+// literal loopback IP, so this test exercises the literal-IP branch with no
+// DNS at all: it proves isBlockedIP runs inside DialContext and refuses a
+// blocked literal. It does NOT prove the rebinding property -- that the
+// address actually handed to the dialer is the validated IP literal, never
+// a re-resolved hostname -- which is a tenant-tier credential's provider
+// always carrying this client plus the dial landing on the validated IP;
+// the wiring half is pinned by the resolve-level tests below, and the dial
+// half by TestGuardedProviderHTTPClient_DialsTheValidatedIPLiteral.
 func TestGuardedProviderHTTPClient_RefusesLoopbackAtDialTime(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -240,6 +246,80 @@ func TestGuardedProviderHTTPClient_AllowsPublicAddress(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "blocked") {
 		t.Fatalf("a public address was refused as blocked: %v", err)
+	}
+}
+
+// TestGuardedProviderHTTPClient_DialsTheValidatedIPLiteral pins the
+// rebinding-defeating property this file's own header comment names as the
+// whole reason the dial ring exists: the address handed to the dialer for a
+// HOSTNAME input is the IP LITERAL that the dial-time resolution itself
+// validated, never the hostname -- so nothing between the check and the
+// connection performs a second, independent DNS lookup a rebinding
+// attacker could answer differently. This is the property the two literal-
+// address dial tests above do not exercise (a literal loopback input needs
+// no resolution and a literal public input needs no pin), and it cannot be
+// built against the real resolver offline, which is exactly why the two
+// seams below exist: resolveProviderHost scripts the DNS answers (a
+// first-public-then-private sequence), and providerDialFunc records the
+// address an actual dial would connect to instead of opening a real
+// connection.
+//
+// Walk: the first guarded dial's resolution answers a public address; the
+// dial seam must receive exactly that address as an IP literal
+// ("93.184.216.34:443") and exactly ONE resolution may have happened -- a
+// second lookup between the check and the dial is precisely the window the
+// pin closes. A second guarded dial, answered by the rebinding attacker's
+// next (private) answer, is refused as blocked with the dial seam never
+// called. A regression that dials the raw hostname instead of the
+// validated IP fails the first assertion.
+func TestGuardedProviderHTTPClient_DialsTheValidatedIPLiteral(t *testing.T) {
+	answers := []net.IPAddr{
+		{IP: net.ParseIP("93.184.216.34")}, // public: the first resolution's answer
+		{IP: net.ParseIP("10.0.0.5")},      // private: a rebinding answer to a later resolution
+	}
+	resolutions := 0
+	origResolve := resolveProviderHost
+	resolveProviderHost = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		resolutions++
+		if resolutions > len(answers) {
+			return nil, errors.New("test resolver: no more scripted answers")
+		}
+		return []net.IPAddr{answers[resolutions-1]}, nil
+	}
+	defer func() { resolveProviderHost = origResolve }()
+
+	var dialed []string
+	origDial := providerDialFunc
+	providerDialFunc = func(_ context.Context, _, addr string) (net.Conn, error) {
+		dialed = append(dialed, addr)
+		return nil, errors.New("test dial: connection deliberately not opened")
+	}
+	defer func() { providerDialFunc = origDial }()
+
+	transport := newGuardedProviderHTTPClient().Transport.(*http.Transport)
+	ctx := context.Background()
+
+	if _, err := transport.DialContext(ctx, "tcp", "vendor.example.test:443"); err == nil {
+		t.Fatal("the first guarded dial unexpectedly succeeded")
+	}
+	if resolutions != 1 {
+		t.Fatalf("resolutions = %d, want exactly 1 -- a second lookup between the check and the dial is the rebinding window this pin closes", resolutions)
+	}
+	if len(dialed) != 1 || dialed[0] != "93.184.216.34:443" {
+		t.Fatalf("address handed to the dialer = %v, want exactly the validated public IP literal %q -- never the input hostname and never a later resolution's answer", dialed, "93.184.216.34:443")
+	}
+
+	// The same guarded dial again, with the next resolution now answering a
+	// private address: refused as blocked, and nothing reaches the dialer.
+	_, err := transport.DialContext(ctx, "tcp", "vendor.example.test:443")
+	if err == nil || !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("the second guarded dial error = %v, want the blocked-address refusal", err)
+	}
+	if resolutions != 2 {
+		t.Fatalf("resolutions = %d, want 2", resolutions)
+	}
+	if len(dialed) != 1 {
+		t.Fatalf("dial seam called %d times, want exactly once -- a blocked answer must never reach the dialer", len(dialed))
 	}
 }
 
@@ -328,5 +408,97 @@ func TestGateway_ResolveImage_TenantScopeCredential_GetsGuardedHTTPClient(t *tes
 	}
 	if got := provider.(*OpenAICompatibleImageProvider).httpClient; got == guardedProviderHTTPClient {
 		t.Fatal("platform-tier resolveImage was given the guarded HTTP client, want the provider's own client")
+	}
+}
+
+// TestGateway_Resolve_TenantScopeCredential_UnguardableProvider_Refused pins
+// the fail-closed rule for the tenant-tier dial guard: a provider that
+// cannot carry the guarded client (it does not implement httpClientSettable
+// -- a third-party registration, unlike this module's two OpenAI-compatible
+// built-ins) is REFUSED at resolve time when the credential that built it
+// resolved at the TENANT tier, never silently allowed to dial unguarded.
+// An unguardable provider has no rebinding-defeating dial-time re-check at
+// all, so allowing the combination would leave the tenant-influenced dial
+// at exactly the write-time-validation-only state the dial ring exists to
+// close. The platform tier stays allowed on the provider's own client --
+// the operator's intranet-gateway default, outside the guard by scope
+// boundary.
+func TestGateway_Resolve_TenantScopeCredential_UnguardableProvider_Refused(t *testing.T) {
+	provider := &fakeChatProvider{}
+	credentials := NewCredentialService(newTestDB(t))
+	sysCtx, err := pkgcore.WithSystemContext(context.Background(), systemTestCtx(t))
+	if err != nil {
+		t.Fatalf("WithSystemContext: %v", err)
+	}
+	if err = credentials.SetPlatformCredential(sysCtx, fakeProviderName, "sk-platform", ""); err != nil {
+		t.Fatalf("SetPlatformCredential: %v", err)
+	}
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	if err = credentials.SetTenantCredential(tenantCtx, fakeProviderName, "sk-tenant", "https://93.184.216.34/v1"); err != nil {
+		t.Fatalf("SetTenantCredential: %v", err)
+	}
+	g := NewGateway(credentials,
+		WithModelRoute("chat:default", fakeProviderName, "vendor-model-x"),
+		WithChatProviderRegistry(newFakeGatewayRegistry(t, provider)),
+	)
+
+	// fakeChatProvider deliberately implements no setHTTPClient, so the
+	// tenant-tier combination must be refused with the coded error naming
+	// the provider, never silently resolved onto an unguarded client.
+	_, _, err = g.resolve(tenantCtx, "chat:default")
+	if err == nil {
+		t.Fatal("resolve accepted a tenant-scope credential for an unguardable provider, want the coded ErrProviderNotSSRFGuardable refusal")
+	}
+	if got, ok := apperrCode(err); !ok || got != ErrProviderNotSSRFGuardable.Code {
+		t.Fatalf("resolve error = %v, want the coded ErrProviderNotSSRFGuardable", err)
+	}
+	if appErr, ok := apperr.As(err); ok {
+		if got := appErr.Params["provider"]; got != fakeProviderName {
+			t.Fatalf("provider param = %v, want %q -- the refusal must name the unguardable registration", got, fakeProviderName)
+		}
+	}
+
+	// The same unguardable provider resolving at the platform tier (a
+	// tenantless context, the operator's own default) is still allowed.
+	if _, _, err = g.resolve(context.Background(), "chat:default"); err != nil {
+		t.Fatalf("resolve of the platform-tier fallback was refused: %v", err)
+	}
+}
+
+// TestGateway_ResolveImage_TenantScopeCredential_UnguardableProvider_Refused
+// is the image-side twin of the chat resolve refusal above: the job
+// handler's resolveImage applies the identical tenant-tier guard, so an
+// image provider that cannot carry the guarded client must be refused for
+// a tenant BYOK credential wherever the job executes.
+func TestGateway_ResolveImage_TenantScopeCredential_UnguardableProvider_Refused(t *testing.T) {
+	provider := &fakeImageProvider{}
+	credentials := NewCredentialService(newTestDB(t))
+	sysCtx, err := pkgcore.WithSystemContext(context.Background(), systemTestCtx(t))
+	if err != nil {
+		t.Fatalf("WithSystemContext: %v", err)
+	}
+	if err = credentials.SetPlatformCredential(sysCtx, fakeImageProviderName, "sk-platform", ""); err != nil {
+		t.Fatalf("SetPlatformCredential: %v", err)
+	}
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	if err = credentials.SetTenantCredential(tenantCtx, fakeImageProviderName, "sk-tenant", "https://93.184.216.34/v1"); err != nil {
+		t.Fatalf("SetTenantCredential: %v", err)
+	}
+	g := NewGateway(credentials,
+		WithModelRoute("image:default", fakeImageProviderName, "dall-e-3"),
+		WithImageProviderRegistry(newFakeImageRegistry(t, provider)),
+	)
+
+	_, _, err = g.resolveImage(tenantCtx, "image:default")
+	if err == nil {
+		t.Fatal("resolveImage accepted a tenant-scope credential for an unguardable image provider, want the coded ErrProviderNotSSRFGuardable refusal")
+	}
+	if got, ok := apperrCode(err); !ok || got != ErrProviderNotSSRFGuardable.Code {
+		t.Fatalf("resolveImage error = %v, want the coded ErrProviderNotSSRFGuardable", err)
+	}
+
+	// The platform-tier fallback stays allowed, as on the chat side.
+	if _, _, err = g.resolveImage(context.Background(), "image:default"); err != nil {
+		t.Fatalf("resolveImage of the platform-tier fallback was refused: %v", err)
 	}
 }

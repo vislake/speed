@@ -9,6 +9,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/ratelimit"
 	"github.com/vislake/speed/go/storage"
 )
@@ -150,9 +151,23 @@ func (g *Gateway) resolve(ctx context.Context, logicalModel string) (ChatProvide
 	// influence over where this call dials, so its provider must dial
 	// through the SSRF-guarded client -- the dial-time re-check that closes
 	// the DNS-rebinding window between this credential's validated write
-	// and this call (ssrf.go's file header). A platform-tier row is the
-	// operator's own default and is left on the provider's ordinary client.
-	guardTenantScopeDial(provider, cred.Scope)
+	// and this call (ssrf.go's file header). A provider that cannot carry
+	// the guarded client (it does not implement httpClientSettable) is
+	// refused here rather than silently dialing unguarded -- the failure
+	// mode guardTenantScopeDial's own doc comment describes. A platform-
+	// tier row is the operator's own default and is left on the provider's
+	// ordinary client.
+	if err := guardTenantScopeDial(provider, cred.Scope); err != nil {
+		// The one error guardTenantScopeDial returns is the coded
+		// ErrProviderNotSSRFGuardable; apperr.As picks it out of the error
+		// interface so the route context the guard itself does not have can
+		// be attached as params (WithParam derives a new *apperr.Error; the
+		// shared sentinel stays untouched).
+		if appErr, ok := apperr.As(err); ok {
+			err = appErr.WithParam("provider", route.Provider).WithParam("model", logicalModel)
+		}
+		return nil, route, err
+	}
 	return provider, route, nil
 }
 

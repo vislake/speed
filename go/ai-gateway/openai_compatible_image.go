@@ -24,6 +24,19 @@ const imagesGenerationsPath = "/images/generations"
 // provider builds.
 const imagesEditsPath = "/images/edits"
 
+// imageResponseFormatB64JSON is the response_format this provider requests
+// on every image call, generation and edit alike: the string value
+// "b64_json" that makes an OpenAI-compatible images endpoint answer with
+// base64-encoded image bytes inside each data entry rather than a "url"
+// entry pointing at a vendor-hosted file. Requesting it explicitly is the
+// request half of this provider's single-encoding contract (see
+// openaiImageDataWire's doc comment): some vendors default response_format
+// to "url", and a url answer would require this provider to perform a
+// second, unauthenticated fetch of a vendor-hosted URL -- exactly what it
+// never does. The chat-side precedent for forcing a wire option over any
+// same-named Params entry is buildRequestBody's stream_options.
+const imageResponseFormatB64JSON = "b64_json"
+
 // OpenAICompatibleImageProvider implements ImageProvider against the
 // images-generation/images-edits REST schema shared by OpenAI itself and
 // OpenAI-compatible image hosts: JSON for text-to-image, multipart/
@@ -96,9 +109,13 @@ var _ ImageProvider = (*OpenAICompatibleImageProvider)(nil)
 
 // openaiImageDataWire is one generated image inside a
 // images-generations/images-edits response's "data" array. b64_json is the
-// only encoding this provider requests or accepts -- never a "url" entry,
-// which would require this provider to perform a second, unauthenticated
-// fetch of a vendor-hosted URL.
+// only encoding this provider requests (imageResponseFormatB64JSON is set
+// explicitly on every request, generation and edit alike) or accepts --
+// never a "url" entry, which would require this provider to perform a
+// second, unauthenticated fetch of a vendor-hosted URL. A vendor that
+// ignores the requested response_format and answers with a url entry is
+// refused by imageResultFromWire's zero-length check, since its data
+// entry carries no b64_json payload at all.
 type openaiImageDataWire struct {
 	B64JSON string `json:"b64_json"`
 }
@@ -139,6 +156,19 @@ type openaiImageResponseWire struct {
 // silently decoding it to the first image while recording the response's
 // own image_count would charge the tenant for images this pipeline never
 // delivers.
+//
+// The same enforcement has an empty-result half: a data entry whose
+// b64_json decoded to zero bytes is refused with
+// ErrProviderResponseInvalid, never delivered as a zero-byte successful
+// image. An empty b64_json value, and a "url"-shaped answer from a vendor
+// that ignored the requested response_format (its data entry carries a
+// URL this provider never reads, so B64JSON is empty), both decode to
+// exactly that. Requesting response_format explicitly (every request
+// carries it) is the first line of defense and makes the refusal a
+// correctable vendor problem rather than this provider's own mistake; the
+// zero-length check is the second, because a vendor is free to ignore the
+// request, and the empty string must never surface as a successful
+// zero-byte image with ImageCount 1.
 func imageResultFromWire(wire openaiImageResponseWire) (ImageResult, error) {
 	if len(wire.Data) == 0 {
 		return ImageResult{}, ErrProviderResponseInvalid.WithParam("reason", "no image data in response")
@@ -149,6 +179,9 @@ func imageResultFromWire(wire openaiImageResponseWire) (ImageResult, error) {
 	raw, err := base64.StdEncoding.DecodeString(wire.Data[0].B64JSON)
 	if err != nil {
 		return ImageResult{}, ErrProviderResponseInvalid.WithCause(err)
+	}
+	if len(raw) == 0 {
+		return ImageResult{}, ErrProviderResponseInvalid.WithParam("reason", "empty image data in response")
 	}
 	mime := http.DetectContentType(raw)
 
@@ -167,16 +200,22 @@ func imageResultFromWire(wire openaiImageResponseWire) (ImageResult, error) {
 }
 
 // buildImageGenerationBody builds the JSON wire body for a TextToImage
-// call, merging req.Params in first so that model/prompt always win over a
-// same-named Params entry -- the identical rule buildRequestBody enforces
-// for chat.
+// call, merging req.Params in first so that model/prompt/response_format
+// always win over a same-named Params entry -- the identical rule
+// buildRequestBody enforces for chat. response_format is this provider's
+// own forced option, the JSON twin of the multipart path's own
+// response_format field: the provider only ever accepts b64_json answers
+// (openaiImageDataWire's doc comment), so it asks for that encoding
+// explicitly on every request and a Params entry smuggling any other value
+// never reaches the wire (see imageResponseFormatB64JSON).
 func buildImageGenerationBody(req TextToImageRequest) ([]byte, error) {
-	body := make(map[string]any, len(req.Params)+2)
+	body := make(map[string]any, len(req.Params)+3)
 	for k, v := range req.Params {
 		body[k] = v
 	}
 	body["model"] = req.Model
 	body["prompt"] = req.Prompt
+	body["response_format"] = imageResponseFormatB64JSON
 
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -279,13 +318,15 @@ func writeImagePart(w *multipart.Writer, field string, img ImageBytes) error {
 
 // buildImageEditMultipart builds the multipart/form-data body for an
 // image-edit call (ImageToImage or Inpaint): "model" and "prompt" fields,
-// an "image" file part, an optional "mask" file part (Inpaint only, when
-// mask is non-nil), and every Params entry except "model" and "prompt" as
-// an additional form field -- the two reserved names are written above and
+// a "response_format" field (imageResponseFormatB64JSON -- the multipart
+// twin of the JSON path's forced response_format, for the same reason), an
+// "image" file part, an optional "mask" file part (Inpaint only, when mask
+// is non-nil), and every Params entry except the three reserved names as
+// an additional form field -- the reserved names are written above and
 // must win over a same-named Params entry, the identical invariant the
 // JSON path's buildImageGenerationBody enforces by overriding map keys
 // (buildRequestBody's own doc comment states the rule for chat). A Params
-// entry smuggling either name must never reach the wire as a duplicate
+// entry smuggling any of them must never reach the wire as a duplicate
 // form field: which duplicate a multipart parser honors is parser-defined,
 // so a duplicate could genuinely override the routed model or prompt on
 // some vendor.
@@ -302,6 +343,9 @@ func buildImageEditMultipart(model, prompt string, input ImageBytes, mask *Image
 	if err := w.WriteField("prompt", prompt); err != nil {
 		return nil, "", fmt.Errorf("aigateway: write prompt form field: %w", err)
 	}
+	if err := w.WriteField("response_format", imageResponseFormatB64JSON); err != nil {
+		return nil, "", fmt.Errorf("aigateway: write response_format form field: %w", err)
+	}
 	if err := writeImagePart(w, "image", input); err != nil {
 		return nil, "", err
 	}
@@ -311,7 +355,7 @@ func buildImageEditMultipart(model, prompt string, input ImageBytes, mask *Image
 		}
 	}
 	for k, v := range params {
-		if k == "model" || k == "prompt" {
+		if k == "model" || k == "prompt" || k == "response_format" {
 			// Already written above, from the routed values -- see this
 			// function's own doc comment.
 			continue

@@ -235,6 +235,128 @@ func TestOpenAICompatibleImageProvider_TextToImage_UsageClaimsMoreImagesThanDeli
 	}
 }
 
+// TestOpenAICompatibleImageProvider_TextToImage_RequestsB64JSONEncoding pins
+// the request half of this provider's single-encoding contract: every
+// images/generations call must explicitly ask for response_format
+// "b64_json", because some vendors default response_format to "url" -- and a
+// url answer would require this provider to perform a second,
+// unauthenticated fetch of a vendor-hosted URL, which it never does. A
+// Params entry smuggling any other response_format must never reach the
+// wire: the provider's own forced value wins over the merge, exactly the
+// model/prompt-wins rule and the chat side's stream_options precedent.
+func TestOpenAICompatibleImageProvider_TextToImage_RequestsB64JSONEncoding(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"b64_json": base64.StdEncoding.EncodeToString(tinyPNG)}},
+		})
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompatibleImageProvider(srv.URL, "sk-test")
+	_, err := p.TextToImage(context.Background(), TextToImageRequest{
+		Model:  "dall-e-3",
+		Prompt: "a bright smile",
+		// A smuggled response_format is exactly the shape that would defeat
+		// the provider's request-side guarantee if it won the merge.
+		Params: map[string]any{"response_format": "url"},
+	})
+	if err != nil {
+		t.Fatalf("TextToImage: %v", err)
+	}
+	// The literal "b64_json" is asserted, not the source constant, so this
+	// test genuinely runs -- and fails -- against a pre-fix provider whose
+	// request carries no response_format at all.
+	const wantEncoding = "b64_json"
+	if got, _ := gotBody["response_format"].(string); got != wantEncoding {
+		t.Fatalf("wire response_format = %v, want %q -- the provider must request b64_json explicitly, and a Params entry must not override it", gotBody["response_format"], wantEncoding)
+	}
+}
+
+// TestOpenAICompatibleImageProvider_ImageEdit_RequestsB64JSONEncoding is the
+// multipart twin of the JSON request-encoding test above: every
+// images/edits call must carry exactly one response_format field naming
+// b64_json, and a Params entry smuggling the name must never reach the wire
+// as a second, duplicate form field (which duplicate a multipart parser
+// honors is parser-defined -- the same reasoning model/prompt-wins applies).
+func TestOpenAICompatibleImageProvider_ImageEdit_RequestsB64JSONEncoding(t *testing.T) {
+	var gotForm *multipart.Form
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotForm = decodeMultipartRequest(t, r)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"b64_json": base64.StdEncoding.EncodeToString(tinyPNG)}},
+		})
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompatibleImageProvider(srv.URL, "sk-test")
+	_, err := p.ImageToImage(context.Background(), ImageToImageRequest{
+		Model:  "dall-e-3",
+		Prompt: "simulate a smile",
+		Input:  ImageBytes{Content: []byte("input-photo-bytes"), MIME: "image/jpeg"},
+		Params: map[string]any{"response_format": "url"},
+	})
+	if err != nil {
+		t.Fatalf("ImageToImage: %v", err)
+	}
+	// The literal "b64_json", for the same pre-fix-runnable reason the JSON
+	// path's twin test states.
+	const wantEncoding = "b64_json"
+	if got := gotForm.Value["response_format"]; len(got) != 1 || got[0] != wantEncoding {
+		t.Fatalf("wire response_format fields = %v, want exactly one naming %q -- a Params response_format entry must never reach the wire", got, wantEncoding)
+	}
+}
+
+// TestOpenAICompatibleImageProvider_TextToImage_EmptyImageData_Refused pins
+// the decode half of the same contract through the real call: a vendor that
+// ignores the requested response_format and answers with a "url" entry --
+// or an empty b64_json value -- delivers zero decodable bytes, and this
+// provider refuses that rather than reporting a zero-byte successful image
+// with ImageCount 1. Before the fix such an answer surfaced as a success;
+// after it, the call fails with the coded ErrProviderResponseInvalid.
+func TestOpenAICompatibleImageProvider_TextToImage_EmptyImageData_Refused(t *testing.T) {
+	// A url-shaped answer: the data entry carries only "url", never
+	// b64_json -- exactly what a vendor defaulting response_format to "url"
+	// produces when the provider's request (if any) is ignored.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"url": "https://vendor.example/images/0001.png"}},
+			"usage": map[string]any{
+				"image_count": 1,
+				"steps":       25,
+			},
+		})
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICompatibleImageProvider(srv.URL, "sk-test")
+	result, err := p.TextToImage(context.Background(), TextToImageRequest{Model: "dall-e-3", Prompt: "x"})
+	if err == nil {
+		t.Fatalf("TextToImage returned a success with %d image bytes -- a url/empty answer must be refused, never a zero-byte successful image", len(result.Image.Content))
+	}
+	if got, ok := apperrCode(err); !ok || got != ErrProviderResponseInvalid.Code {
+		t.Fatalf("TextToImage err = %v, want the coded ErrProviderResponseInvalid", err)
+	}
+}
+
+// TestImageResultFromWire_EmptyB64JSON_Refused pins the same empty-result
+// refusal at the decode level, where both endpoints (generation and edit)
+// converge: an entry whose b64_json is the empty string decodes to zero
+// bytes with a nil error -- the exact shape the old code let through as a
+// successful zero-byte image.
+func TestImageResultFromWire_EmptyB64JSON_Refused(t *testing.T) {
+	_, err := imageResultFromWire(openaiImageResponseWire{
+		Data: []openaiImageDataWire{{B64JSON: ""}},
+	})
+	if err == nil {
+		t.Fatal("imageResultFromWire accepted an empty b64_json entry as a successful image, want a refusal")
+	}
+	if got, ok := apperrCode(err); !ok || got != ErrProviderResponseInvalid.Code {
+		t.Fatalf("imageResultFromWire err = %v, want the coded ErrProviderResponseInvalid", err)
+	}
+}
+
 // --- ImageToImage / Inpaint (multipart) -------------------------------------
 
 // decodeMultipartRequest parses r's multipart/form-data body, returning the
