@@ -2813,6 +2813,41 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, nil, mountErr
 	}
 
+	// obs.RegisterMountedRoutes hands every obs.Middleware this process
+	// later constructs this app's REAL route table, so the route-label
+	// limiter the middleware builds (go/observability's cardinality bound
+	// on http.route -- obs.MaxRouteLabelValues distinct values, then a
+	// fixed overflow bucket) reserves a slot for each real route BEFORE
+	// any request traffic arrives. Without the reservation the budget is
+	// first-come-first-served: an attacker sending enough distinct garbage
+	// paths right after startup fills it, and every genuine route first
+	// requested afterwards -- /api/v1/notes, /healthz -- is recorded under
+	// obs.RouteLabelOverflowValue for the life of the process, per-route
+	// metrics gone even though no bound was violated. A seeded route keeps
+	// its slot whatever garbage arrives later (RegisterMountedRoutes' own
+	// doc comment; the mechanism's behavioral proof is
+	// go/observability/middleware_test.go's
+	// TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded).
+	//
+	// The table is the same one mountModuleRoutes just mounted on mux from
+	// reg.Routes.Routes() -- the pkgcore.MountedRoute values every module
+	// registered during Bootstrap -- plus this host's own two direct mux
+	// mounts above, which no module registered: /healthz and /metrics are
+	// host-level routes RegisterMountedRoutes' doc comment names as exactly
+	// the paths a host must add itself (paths the table does not name are
+	// not seeded and stay subject to the ordinary bounded behavior, so an
+	// operator's own routes would otherwise collapse right alongside the
+	// module ones). Registration is a snapshot consumed at obs.Middleware
+	// CONSTRUCTION, so it must happen here, at assembly time, before
+	// main.go's run builds the middleware that serves traffic -- not after
+	// the server starts listening. Last registration wins, and every
+	// buildServer call registers the same table, so the repeated calls
+	// this package's tests make are idempotent in effect.
+	obs.RegisterMountedRoutes(append([]pkgcore.MountedRoute{
+		{Path: healthzPath},
+		{Path: metricsPath},
+	}, reg.Routes.Routes()...))
+
 	// wireDemoNotification adds the reference app's demo glue on top of the
 	// mounted module routes: the subscription that turns notes' note-created
 	// event into a notification dispatch for the note's creator, and the
