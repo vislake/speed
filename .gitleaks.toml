@@ -12,7 +12,10 @@
 # files are exempted by path -- the allowlists block at the bottom of
 # this file lists them.
 #
-# Every exemption below is scoped to exact, named files; the scan keeps
+# Every exemption below is scoped to exact, named files -- the single
+# exception being the regex-scoped saasctl appconfig block at the very
+# bottom, which matches two exact Go identifier spellings rather than a
+# file -- and the scan keeps
 # firing on every other file in the tree and in the commit history (the
 # security pipeline's secrets job checks out the full history -- see
 # .github/workflows/security.yml). Real credentials must never enter
@@ -33,6 +36,26 @@
 # .github/workflows/security.yml downloads and checksum-verifies) run
 # against the real, current tree and full commit history before being
 # added, per that section's own file-by-file reasoning.
+#
+# One later exemption is scoped by regex rather than by path, because its
+# false positive is a different class from the fixture and placeholder
+# groups above: identifier references, not planted values. go/saasctl's
+# appconfig twin (go/saasctl/internal/appconfig/appconfig.go) names the
+# S3 secret key of a generated project's bootstrap surface -- the
+# S3SecretKeyEnv environment-variable-name constant (APP_S3_SECRET_KEY),
+# the Config.S3SecretKey field and its Config.S3SecretKeyFromEnv
+# provenance flag -- while the key's value is the APP_S3_SECRET_KEY
+# environment variable a host injects at runtime, never a literal in the
+# file. gitleaks' default generic-api-key rule matched the Go expression
+# `cfg.S3SecretKey, cfg.S3SecretKeyFromEnv` (introduced by commit
+# 6c20870, where it then stood at line 311) because the rule's span
+# tolerates the identifier's dots and the separating comma, and the
+# identifier alone clears the rule's entropy floor. The block at the
+# bottom allowlists the two exact identifier spellings the rule can
+# capture; scoping to those spellings rather than to the file keeps the
+# rule firing on genuine secret-shaped values everywhere else, this file
+# included, and was re-verified against the same pinned gitleaks 8.30.1
+# over the full history.
 
 title = "speed gitleaks config"
 
@@ -80,4 +103,10 @@ paths = [
 description = "go/pki/AGENTS.md: the flagged line is documentation prose describing the envelope-mode key-handling mechanism (\"...generates a real ed25519 key pair in-process, PKCS8-marshals the private half, and immediately wraps it with the external service's own encrypt operation...\") -- there is no literal secret value anywhere on the line, and gitleaks' generic-api-key rule is matching the prose's own high-entropy-looking run of words describing PKCS8 marshalling, not a credential"
 paths = [
   "go/pki/AGENTS.md",
+]
+
+[[allowlists]]
+description = "saasctl appconfig S3-secret-key identifier references: go/saasctl/internal/appconfig/appconfig.go names the S3 secret key of a generated project's bootstrap surface by identifier only -- the S3SecretKeyEnv environment-variable-name constant (APP_S3_SECRET_KEY), the Config.S3SecretKey field and its Config.S3SecretKeyFromEnv provenance flag -- while the key's value is the APP_S3_SECRET_KEY environment variable a host injects at runtime, never a literal in the file. The default generic-api-key rule flagged the Go expression `cfg.S3SecretKey, cfg.S3SecretKeyFromEnv` (introduced by commit 6c20870, line 311 then) because the rule's span tolerates the identifier's dots and the separating comma, and the identifier alone clears the rule's entropy floor; the match is an identifier reference, not a credential. Scoping the allowlist to the two exact identifier spellings rather than to the file keeps generic-api-key firing on genuine secret-shaped values everywhere else -- including any future literal value written into this same file"
+regexes = [
+  '''cfg\.S3SecretKey(?:FromEnv)?''',
 ]
