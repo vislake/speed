@@ -25,9 +25,11 @@ package main
 //     served and listed -- expiry alone removes nothing. Boot 2 runs with
 //     the normal gate and the flow tests' injected cadence
 //     (periodicFlowTickInterval); its very first
-//     tick enqueues tenant-acme's FIRST-ever expiry sweep (boot 1 never
-//     resolved the sweep's deterministic per-tenant idempotency key,
-//     because its scheduler never ran), the worker drains the task into
+//     tick enqueues tenant-acme's first expiry sweep in a fresh
+//     expirySweepWindowSize window (boot 1 never resolved any sweep key,
+//     because its scheduler never ran -- and the windowed key means boot
+//     2's later same-window ticks collapse into that first job rather
+//     than piling up), the worker drains the task into
 //     storage.LifecycleService's real sweep, and the sweep runs the real
 //     delete protocol. The expired object's row is gone -- observed
 //     through a second-connection storage.ObjectRepository, the same
@@ -35,10 +37,7 @@ package main
 //     second connection server_test.go's audit test opens -- its bytes are
 //     gone on the filesystem under cfg.ObjectStoreRoot, its metadata and
 //     content answer 404, and the list holds only the survivor, whose own
-//     row, bytes and reads are untouched. The test is shaped so it FAILS
-//     under the one-shot semantics it replaces: had boot 1 let a tick's
-//     sweep run (with nothing to delete), the key would be resolved
-//     forever on this queue and no later sweep could ever execute.
+//     row, bytes and reads are untouched.
 //
 //   - The compliance retention-sweep leg is the trigger-half twin of the
 //     storage leg above: TestBuildServer_PeriodicScheduler_RetentionSweep_
@@ -46,19 +45,19 @@ package main
 //     really hard-deletes an expired soft-deleted note's row end to end --
 //     the half go/compliance/AGENTS.md's Known limitations records as
 //     having no schedule point until the host wiring this test proves.
-//     Same two-boot shape, same reason: StandaloneQueue's permanent
-//     idempotency gives each database file exactly one retention sweep per
-//     tenant (the first-ever one), so boot 1 must leave the key
-//     unresolved. Boot 1 runs with the worker and scheduler disabled,
+//     Same two-boot shape, same reason: the sweep key must stay
+//     unresolved for boot 1 so boot 2's first tick demonstrably schedules
+//     the sweep. Boot 1 runs with the worker and scheduler disabled,
 //     hosts a live note and one soft-deleted with deleted_at backdated
 //     45 days (past the sweep's 30-day default window -- no product API
 //     ages deleted_at; the backdate goes through the same second-connection
 //     reach compliance_flow_test.go's softDeleteAndBackdate uses), and
 //     closes with both rows physically present -- age alone removes
 //     nothing. Boot 2 runs the normal gate with the injected cadence; its
-//     very first tick enqueues tenant-acme's FIRST-ever retention sweep
-//     (alongside the expiry sweep -- both wired mechanisms share the one
-//     tick, per periodic_scheduler.go), the worker drains the task into
+//     very first tick enqueues tenant-acme's first retention sweep in a
+//     fresh retentionSweepWindowSize window (alongside the expiry sweep --
+//     both wired mechanisms share the one tick, per periodic_scheduler.go),
+//     the worker drains the task into
 //     compliance's real retentionSweepHandler, and SweepTenant runs the
 //     notes participant's real HardDelete: the expired note's physical row
 //     is gone -- observed through the same second connection -- while the
@@ -69,19 +68,22 @@ package main
 //
 // What remains honestly limited:
 //
-//   - StandaloneQueue holds a resolved idempotency key forever (go/jobs:
-//     succeeded rows are never deleted), so on this queue each tenant gets
-//     exactly one expiry sweep per database file -- the first-ever one,
-//     whenever the host's scheduler first enqueues it, which is why the
-//     two-boot shape above must exist at all. An object whose retention
-//     deadline passes after that one sweep has run is never reaped on
-//     this queue; the bounded-idempotency distributed queue schedules a
-//     fresh sweep every tick, which is the design intent
-//     go/storage/cleanup.go's idempotency-key doc records. Module
-//     semantics (go/jobs, go/storage) are unchanged by this round; the
-//     residual limitation and its dated record live in this file's sweep
-//     test, in periodic_scheduler.go's doc comment, and in
-//     go/storage/AGENTS.md.
+//   - The sweep keys are window-scoped (go/storage/cleanup.go's
+//     expirySweepIdempotencyKey and go/compliance/retention.go's
+//     retentionSweepIdempotencyKey each name their enqueue's
+//     window-start), so on this app's StandaloneQueue -- which holds a
+//     resolved key forever (go/jobs) -- each tenant is swept at most once
+//     per hour-long window, not once per database file and not once per
+//     tick. That is why the two-boot shape above must exist at all (boot
+//     2's first tick must find no resolved key for its window), and why
+//     a host that needs tighter reaping bounds must enqueue more often
+//     than the module's window constant or shrink that constant. The
+//     pre-window design -- one sweep per database file ever, with a
+//     dead-lettered sweep poisoning its tenant forever -- and the dated
+//     records of it are closed: the windowed keying and its proofs live
+//     in the modules (go/storage's sweep_window_test.go,
+//     go/compliance's retention_sweep_window_test.go, each against a real
+//     StandaloneQueue).
 //
 //   - pki's signing-key expiry scan IS genuinely periodic on the
 //     standalone queue -- EnqueueExpiryScan carries no idempotency key,
@@ -285,7 +287,7 @@ func declareUploadWithExpiry(t *testing.T, srv *httptest.Server, token, user str
 }
 
 // observeExpirySweepEnd takes one full snapshot of the state the
-// first-ever expiry sweep must have produced and reports whether every
+// first expiry sweep must have produced and reports whether every
 // terminal property already holds. It reads raw HTTP statuses and raw row
 // and file probes -- no decode helper, whose status mismatch would kill
 // the test -- because a not-yet-converged snapshot is an intermediate
@@ -384,9 +386,9 @@ func errString(err error) string {
 // end to end -- the removal e2e the file header describes, over two real
 // boots of the composed server sharing one SQLite file and one
 // object-store directory. See the header for why the two-boot shape is
-// required (StandaloneQueue's permanent idempotency gives each database
-// file exactly one sweep per tenant: the first-ever one) and for the
-// residual limitation that shape leaves recorded.
+// required (the sweep keys are window-scoped, so boot 2's first tick must
+// find a fresh window whose key no enqueue ever resolved) and for what
+// the windowed keying leaves limited.
 //
 // Boot 1 runs with cfg.DisableQueueWorker set, the same gate that guards
 // both the worker and the scheduler (periodic_scheduler.go's doc comment),
@@ -402,7 +404,8 @@ func errString(err error) string {
 //
 // Boot 2 starts the same server over the same files with the normal gate
 // and the injected periodicFlowTickInterval cadence. Its first tick
-// enqueues tenant-acme's first-ever expiry sweep; the worker drains it
+// enqueues tenant-acme's first expiry sweep of a fresh window; the
+// worker drains it
 // into the
 // real LifecycleService sweep, which finds the expired completed object
 // and runs the real delete protocol. The test waits -- bounded, with no
@@ -412,9 +415,11 @@ func errString(err error) string {
 // is absent from the database (observed through a second connection, the
 // same reach server_test.go's audit test uses), and its bytes are absent
 // under cfg.ObjectStoreRoot, then asserts the survivor's row, bytes and
-// reads are all untouched. If the one-shot semantics this test replaces
-// were still in force, no sweep would ever run in boot 2 and the wait
-// would fail.
+// reads are all untouched. This leg proves the first sweep of a fresh
+// window really runs through the real host wiring; the periodicity of
+// later windows (and a dead-lettered window's non-poisoning) is the
+// modules' own real-queue proof (go/storage's sweep_window_test.go,
+// go/compliance's retention_sweep_window_test.go), not this e2e's.
 func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testing.T) {
 	cfg := periodicSweepTestConfig(t)
 	jpegBytes := jpegWithExif(t)
@@ -422,9 +427,10 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 	// ------------------------------------------------------------------
 	// Boot 1: host the expiring object and the survivor, with neither the
 	// queue worker nor the scheduler running (the same DisableQueueWorker
-	// gate), and let the deadline pass. Because no scheduler runs, the
-	// sweep's per-tenant idempotency key stays unresolved in this database
-	// file -- the precondition boot 2's first-ever sweep depends on.
+	// gate), and let the deadline pass. Because no scheduler runs, no
+	// sweep key is ever resolved in this database file -- the windowed key
+	// is resolved only by an enqueue -- the precondition boot 2's first
+	// sweep depends on.
 	// ------------------------------------------------------------------
 	boot1Cfg := cfg
 	boot1Cfg.DisableQueueWorker = true
@@ -497,7 +503,8 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 	// ------------------------------------------------------------------
 	// Boot 2: the restart. Same database file, same object-store
 	// directory, normal gate, the injected cadence. The scheduler's very
-	// first tick enqueues tenant-acme's first-ever expiry sweep, the
+	// first tick enqueues tenant-acme's first expiry sweep of a fresh
+	// window, the
 	// worker drains it, and the sweep finds the object boot 1 let expire.
 	// ------------------------------------------------------------------
 	boot2Cfg := cfg
@@ -553,7 +560,7 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 			break
 		}
 		if time.Now().After(convergenceDeadline) {
-			t.Fatalf("the first-ever expiry sweep never reached its terminal state within 90s; last observation: %s", detail)
+			t.Fatalf("the first expiry sweep never reached its terminal state within 90s; last observation: %s", detail)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -613,9 +620,9 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 // go/compliance/AGENTS.md's "no schedule point" Known-limitations entry
 // records the absence of -- over two real boots of the composed server
 // sharing one SQLite file, the same two-boot shape the storage expiry-sweep
-// leg above uses and for the same reason: StandaloneQueue's permanent
-// idempotency gives each database file exactly one retention sweep per
-// tenant, the first-ever one, so boot 1 must leave the key unresolved.
+// leg above uses and for the same reason: the sweep keys are
+// window-scoped, so boot 1 must leave every window's key unresolved for
+// boot 2's first tick to schedule the sweep.
 //
 // Boot 1 runs with cfg.DisableQueueWorker set -- the same gate that guards
 // the worker and the scheduler (periodic_scheduler.go's doc comment) -- so
@@ -631,7 +638,8 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 //
 // Boot 2 starts the same server over the same file with the normal gate
 // and the injected periodicFlowTickInterval cadence. Its first tick
-// enqueues tenant-acme's first-ever retention sweep -- alongside the
+// enqueues tenant-acme's first retention sweep of a fresh window --
+// alongside the
 // expiry sweep, since both wired mechanisms share the one tick, per
 // periodic_scheduler.go; nothing in boot 2 needs a signed-in user, the
 // sweep is tenant-scoped from the host's tenant map. The worker drains the
@@ -650,9 +658,9 @@ func TestBuildServer_PeriodicScheduler_RetentionSweep_ReapsExpiredSoftDeletedNot
 	// ------------------------------------------------------------------
 	// Boot 1: host the note to expire and the live survivor, with neither
 	// the queue worker nor the scheduler running (the same DisableQueueWorker
-	// gate). Because no scheduler runs, the retention sweep's per-tenant
-	// idempotency key stays unresolved in this database file -- the
-	// precondition boot 2's first-ever sweep depends on.
+	// gate). Because no scheduler runs, no retention-sweep key is ever
+	// resolved in this database file -- the windowed key is resolved only
+	// by an enqueue -- the precondition boot 2's first sweep depends on.
 	// ------------------------------------------------------------------
 	boot1Cfg := cfg
 	boot1Cfg.DisableQueueWorker = true
@@ -685,7 +693,8 @@ func TestBuildServer_PeriodicScheduler_RetentionSweep_ReapsExpiredSoftDeletedNot
 	// ------------------------------------------------------------------
 	// Boot 2: the restart. Same database file, normal gate, the injected
 	// cadence. The scheduler's very first tick enqueues tenant-acme's
-	// first-ever retention sweep, the worker drains it into the wired
+	// first retention sweep of a fresh window, the worker drains it into
+	// the wired
 	// retentionSweepHandler, and SweepTenant reaps the note boot 1 left
 	// expired.
 	// ------------------------------------------------------------------
@@ -715,7 +724,7 @@ func TestBuildServer_PeriodicScheduler_RetentionSweep_ReapsExpiredSoftDeletedNot
 			break
 		}
 		if time.Now().After(convergenceDeadline) {
-			t.Fatalf("the first-ever retention sweep never reaped the expired note within 90s (expired rows = %d, live rows = %d)",
+			t.Fatalf("the first retention sweep never reaped the expired note within 90s (expired rows = %d, live rows = %d)",
 				expiredRows, liveRows)
 		}
 		time.Sleep(200 * time.Millisecond)

@@ -24,45 +24,46 @@ import (
 //   - storage's per-tenant expiry sweep, one task per tenant the host
 //     serves (LifecycleService.EnqueueExpirySweep under a pkgcore tenant
 //     context -- the sweep itself runs tenant-scoped, so the tenant must
-//     travel on the task). The enqueue carries a deterministic per-tenant
-//     idempotency key whose design intent is to collapse concurrent
-//     replica enqueues into one in-flight sweep; under the asynq queue's
-//     bounded idempotency that intent holds. On this app's
-//     StandaloneQueue the same key is permanent (go/jobs: a resolved key
-//     is held forever, succeeded rows are never deleted), so each tenant
-//     gets exactly one sweep per database file -- the first-ever one,
-//     whenever the host's scheduler first enqueues it -- and every later
-//     tick's duplicate enqueue merges into that completed job. A
-//     standalone host therefore sweeps each tenant at most once per
-//     database file; an object whose retention deadline passes after that
-//     one sweep has run is never reaped on this queue, the residual
-//     limitation go/storage/AGENTS.md records. The sweep's one chance per
-//     file is exactly what periodic_scheduler_flow_test.go's two-boot
-//     test proves end to end: boot 1 lets a completed object expire with
-//     the scheduler disabled, boot 2's first-ever sweep must then remove
-//     that object's row and bytes through the real host wiring.
+//     travel on the task). The enqueue carries a deterministic idempotency
+//     key scoped to the expirySweepWindowSize window the enqueue falls in
+//     (go/storage/cleanup.go's expirySweepIdempotencyKey): the design
+//     intent is to collapse concurrent replica enqueues of ONE window into
+//     one in-flight sweep -- which is what same-window ticks do on both
+//     queues -- while the first tick of every later window resolves a
+//     fresh key. On this app's StandaloneQueue (where a resolved key is
+//     held forever, go/jobs) that means at most one sweep per tenant per
+//     window -- not one per database file, the pre-window design's
+//     residual: an object whose retention deadline passes is reaped by the
+//     next window's sweep, and a sweep job that dead-letters poisons only
+//     its own window. (The older once-per-file behaviour and its
+//     two-boot proof are recorded in go/storage/AGENTS.md's dated sweep
+//     entry.) What periodic_scheduler_flow_test.go's two-boot test proves
+//     end to end is unchanged in shape: boot 1 lets a completed object
+//     expire with the scheduler disabled, and boot 2's first sweep -- the
+//     first tick lands in a fresh window -- must remove that object's row
+//     and bytes through the real host wiring.
 //   - compliance's per-tenant retention sweep, one task per tenant the
 //     host serves (RetentionService.EnqueueRetentionSweep under a pkgcore
 //     tenant context -- the sweep runs tenant-scoped for the same reason
 //     the expiry sweep's does, so the tenant must travel on the task).
-//     The enqueue carries the deterministic per-tenant idempotency key
-//     go/compliance/retention.go derives, deliberately aligned with the
-//     expiry sweep's, so the two mechanisms share one schedule shape and
-//     one residual: on this app's StandaloneQueue each tenant gets exactly
-//     one retention sweep per database file -- the first-ever one -- and a
-//     soft-deleted row that ages past its retention window after that one
-//     sweep has run is never reaped, the same per-file limitation
-//     go/storage/AGENTS.md records for its own sweep
-//     (go/compliance/AGENTS.md's Known limitations entry records
-//     compliance's own copy). The one sweep drives every participant
-//     registered on the kernel's reg.Retention seat -- notes' soft-deleted
-//     notes and compliance's own stored export manifests alike -- so
-//     nothing else needs its own schedule point. The trigger-half proof
-//     is the same two-boot shape as the expiry sweep's:
+//     The enqueue carries the window-scoped idempotency key
+//     go/compliance/retention.go derives (retentionSweepIdempotencyKey),
+//     deliberately aligned with the expiry sweep's, so the two mechanisms
+//     share one schedule shape: on this app's StandaloneQueue at most one
+//     retention sweep per tenant per retentionSweepWindowSize window
+//     runs, later windows' ticks schedule the sweep again, and a
+//     dead-lettered sweep poisons only its own window -- so a soft-deleted
+//     row that ages past its retention window is hard-deleted by a later
+//     window's sweep, never retained until the database file happens to be
+//     replaced. The sweep drives every participant registered on the
+//     kernel's reg.Retention seat -- notes' soft-deleted notes and
+//     compliance's own stored export manifests alike -- so nothing else
+//     needs its own schedule point. The trigger-half proof is the same
+//     two-boot shape as the expiry sweep's:
 //     periodic_scheduler_flow_test.go's retention leg lets boot 1 leave a
 //     soft-deleted note 45 days past the default window with the scheduler
-//     disabled, and boot 2's first-ever sweep must then hard-delete that
-//     row through the real host wiring.
+//     disabled, and boot 2's first sweep must then hard-delete that row
+//     through the real host wiring.
 //   - pki's signing-key expiry scan, one platform-level task per tick
 //     (Service.EnqueueExpiryScan: pki's keys are platform data, so the
 //     scan carries no tenant at all). This is what actually drives the
