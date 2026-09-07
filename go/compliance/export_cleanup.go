@@ -41,11 +41,25 @@ package compliance
 // deleted objects, matching every row-based participant's documented
 // retry-convergence contract: the sweep probes each candidate object with
 // GetObject first and only counts a DeleteObject that removed something
-// that was there. Only events with Result.Success true are candidates --
-// a delivery-failed event's object was deleted by Export itself (or never
-// tracked at all), and an export whose audit record failed to write is
-// precisely the ErrAuditRecordFailed case Export already surfaces for
-// operator attention.
+// that was there.
+//
+// The candidate test is the delivered share's own expiry, deliberately
+// not the event's Result.Success flag -- judging "is there something to
+// reap" by "did the operation succeed" is the proxy that leaves garbage
+// behind: a PARTIAL export (one participant's Export callback failed
+// while others contributed) is still gathered, stored and delivered, and
+// its audit event records that as Success false (emitExportAudit's
+// `success := !manifest.HasErrors()`) while carrying the same
+// object_key and share_expires_at a full export's does. A partial
+// export's stored manifest expires exactly like a full export's, so it
+// must be reaped the same way, or every partial export leaves one stored
+// bundle behind forever. The rows the flag would once have excluded for
+// the right reason stay excluded by the expiry gate instead: a
+// delivery-failed event carries no share expiry at all -- Export deleted
+// the undeliverable object before emitting it (or never tracked one) --
+// and an export whose audit record failed to write leaves no event at
+// all, precisely the ErrAuditRecordFailed case Export already surfaces
+// for operator attention.
 //
 // A sweep reads the tenant's whole audit trail to find its candidates --
 // the same O(rows for the tenant) honest limitation AuditQuery documents
@@ -136,7 +150,14 @@ func sweepExportManifests(ctx context.Context, repo *audit.Repository, store pkg
 	prefix := fmt.Sprintf("compliance/exports/%s/", tenant)
 	reaped := 0
 	for _, evt := range events {
-		if evt.Action != AuditActionExportRequest || !evt.Success {
+		// Every AuditActionExportRequest event is a candidate, whatever
+		// its Result.Success says: a partial export's event reports
+		// Success false and still names a stored, delivered manifest with
+		// a real share expiry -- the gate below is that expiry, and the
+		// probe below that judges whether the object actually exists.
+		// Rows whose run failed before delivery carry no share expiry and
+		// fall out of the gate on their own.
+		if evt.Action != AuditActionExportRequest {
 			continue
 		}
 		var changes struct {
@@ -156,6 +177,11 @@ func sweepExportManifests(ctx context.Context, repo *audit.Repository, store pkg
 		if !strings.HasPrefix(delivery.ObjectKey, prefix) {
 			continue
 		}
+		// The delivery share's own expiry is the candidate gate: a zero
+		// share_expires_at means the run never delivered (its object was
+		// deleted by Export itself before the event was emitted), and an
+		// expiry still ahead of the cutoff means the delivery window is
+		// still live -- either way there is nothing expired to reap.
 		if delivery.ShareExpiresAt.IsZero() || delivery.ShareExpiresAt.After(cutoff) {
 			continue
 		}

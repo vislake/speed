@@ -50,12 +50,27 @@ func newManifestCleanupHarness(t *testing.T) (*RetentionService, *audit.Reposito
 // the shape emitExportAudit writes and changesJSON stores.
 func insertExportAuditRow(t *testing.T, repo *audit.Repository, tenant pkgcore.TenantID, id, key string, shareExpiresAt time.Time) {
 	t.Helper()
-	changes, err := json.Marshal(audit.Diff{After: map[string]any{
+	insertExportAuditRowWithResult(t, repo, tenant, id, key, shareExpiresAt, true, "", nil)
+}
+
+// insertExportAuditRowWithResult inserts one AuditActionExportRequest audit
+// row in any of the shapes emitExportAudit leaves: Success, FailureReason
+// and any extra After entries (beyond object_key, share_id,
+// share_expires_at and the participants list) supplied by the caller. A
+// partial export's row, for example, reports Success false with a
+// participants-failed reason and the per-participant errors map in After.
+func insertExportAuditRowWithResult(t *testing.T, repo *audit.Repository, tenant pkgcore.TenantID, id, key string, shareExpiresAt time.Time, success bool, failureReason string, extraAfter map[string]any) {
+	t.Helper()
+	after := map[string]any{
 		"object_key":       key,
 		"share_id":         "share-" + id,
 		"share_expires_at": shareExpiresAt,
 		"participants":     []string{},
-	}})
+	}
+	for k, v := range extraAfter {
+		after[k] = v
+	}
+	changes, err := json.Marshal(audit.Diff{After: after})
 	if err != nil {
 		t.Fatalf("marshal audit changes: %v", err)
 	}
@@ -68,10 +83,31 @@ func insertExportAuditRow(t *testing.T, repo *audit.Repository, tenant pkgcore.T
 	}
 	evt.SetActor(pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: "compliance.export", DisplayName: "compliance.export"})
 	evt.SetResource(audit.Resource{Type: "compliance.tenant", ID: string(tenant), DisplayName: string(tenant)})
-	evt.SetResult(audit.Result{Success: true})
+	evt.SetResult(audit.Result{Success: success, FailureReason: failureReason})
 	if err := repo.Insert(context.Background(), evt); err != nil {
 		t.Fatalf("insert export audit event: %v", err)
 	}
+}
+
+// seedPartialExportDelivery stores one manifest object under tenant's own
+// exportObjectKey namespace and records the audit row a REAL partial
+// export leaves for it -- Success false with the participants-failed
+// reason, Changes.After carrying the contributing participants and the
+// per-participant errors map alongside object_key and share_expires_at
+// (emitExportAudit's exact partial shape) -- the row whose stored object
+// the sweep must reap once its share expires. Returns the object key.
+func seedPartialExportDelivery(t *testing.T, repo *audit.Repository, store pkgcore.ObjectStore, tenant pkgcore.TenantID, id string, shareExpiresAt time.Time) string {
+	t.Helper()
+	key := exportObjectKey(tenant, id)
+	payload := []byte(`{"tenant":"` + string(tenant) + `","id":"` + id + `"}`)
+	if err := store.PutObject(context.Background(), key, bytes.NewReader(payload)); err != nil {
+		t.Fatalf("store manifest object %q: %v", key, err)
+	}
+	insertExportAuditRowWithResult(t, repo, tenant, id, key, shareExpiresAt, false, "participants failed: testutil.failing_export", map[string]any{
+		"participants": []string{"testutil.fake_note"},
+		"errors":       map[string]string{"testutil.failing_export": "gather failed"},
+	})
+	return key
 }
 
 // seedExportDelivery puts one manifest object under tenant's own
@@ -173,5 +209,52 @@ func TestExportManifestCleanup_SweepReapsOnlyExpiredDeliveries(t *testing.T) {
 	}
 	if got := again.Reaped[exportManifestsParticipantName]; got != 0 {
 		t.Fatalf("second SweepTenant reaped %s = %d, want 0 -- already-reaped manifests must not be recounted", exportManifestsParticipantName, got)
+	}
+}
+
+// TestExportManifestCleanup_SweepReapsExpiredPartialFailureExport is
+// P2-4's cleanup-half regression: a PARTIAL export -- one participant's
+// Export callback failed while others contributed -- is still gathered,
+// stored and delivered, and its audit event records that as Success
+// false (emitExportAudit's `success := !manifest.HasErrors()`), while
+// still carrying the same object_key and share_expires_at a full
+// export's event does. The sweep used to gate its candidates on
+// Result.Success true -- judging "is there something to reap" by "did the
+// operation succeed" -- so a partial export's stored manifest was never a
+// candidate and stayed in the object store forever, one stored bundle per
+// partial export. The honest gate is the delivery share's own expiry: a
+// partial export's manifest whose share expired past the retention
+// cutoff is reaped exactly like a full export's, one whose share is still
+// live survives untouched, and a re-run over the same rows converges to
+// 0.
+func TestExportManifestCleanup_SweepReapsExpiredPartialFailureExport(t *testing.T) {
+	svc, auditRepo, store := newManifestCleanupHarness(t)
+
+	expiredPartialKey := seedPartialExportDelivery(t, auditRepo, store, "tenant-a", "partial-expired", time.Now().Add(-40*24*time.Hour))
+	livePartialKey := seedPartialExportDelivery(t, auditRepo, store, "tenant-a", "partial-live", time.Now().Add(defaultExportDeliveryExpiry))
+
+	result, err := svc.SweepTenant(context.Background(), "tenant-a")
+	if err != nil {
+		t.Fatalf("SweepTenant: %v", err)
+	}
+	if result.HasErrors() {
+		t.Fatalf("SweepTenant errors = %v, want none", result.Errors)
+	}
+	if got := result.Reaped[exportManifestsParticipantName]; got != 1 {
+		t.Fatalf("SweepTenant reaped %s = %d, want exactly 1 (tenant-a's expired partial-failure manifest) -- on the unfixed code the Success gate skipped every partial export's stored dump", exportManifestsParticipantName, got)
+	}
+	if manifestObjectExists(t, store, expiredPartialKey) {
+		t.Error("tenant-a's expired partial-failure manifest should have been reaped")
+	}
+	if !manifestObjectExists(t, store, livePartialKey) {
+		t.Error("tenant-a's still-live partial-failure manifest must survive the sweep")
+	}
+
+	again, err := svc.SweepTenant(context.Background(), "tenant-a")
+	if err != nil {
+		t.Fatalf("second SweepTenant: %v", err)
+	}
+	if got := again.Reaped[exportManifestsParticipantName]; got != 0 {
+		t.Fatalf("second SweepTenant reaped %s = %d, want 0 -- already-reaped partial manifests must not be recounted", exportManifestsParticipantName, got)
 	}
 }
