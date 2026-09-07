@@ -21,10 +21,39 @@ const defaultModPath = "go.mod"
 // redactedMarker stands in for a secret variable's bytes in the rendered
 // value column. A secret is never printed: whatever the environment holds,
 // the output carries only this marker -- never the value itself, and never
-// a hint of its shape. Covers the two key variables (APP_CONFIG_KEY,
-// APP_ORG_INDEX_KEY) and the two credential variables of the infrastructure
-// groups (APP_S3_SECRET_KEY, APP_SMTP_PASSWORD).
+// a hint of its shape. This constant is only the marker's rendering; the
+// DECISION of which variables are secrets is the single redactedEnv list
+// below, which the row renderer (valueColumn) consults for every line.
 const redactedMarker = "[redacted]"
+
+// redactedEnv is the single, concentrated declaration of which bootstrap
+// variables' resolved values never print: the five key materials (the
+// config master key, the org blind-index HMAC key, authn's blind-index
+// HMAC key, authn's PII cipher key and pki's local-key cipher key) and
+// the two infrastructure credentials (the S3 secret key, the SMTP
+// password). Everything else on the bootstrap surface is connection
+// topology -- hosts, ports, paths, bucket names, URLs -- or a public
+// identifier (an S3 access key ID, an SMTP username), which this command
+// can carry: config print renders the operator's own environment back to
+// their own terminal and no CI or other pipeline runs it, so the output
+// has no wider audience, while the members of this list are the system's
+// durable secrets -- the bytes that unlock ciphertext, HMAC indexes and
+// remote credentials -- and an accidental paste of the output into a log
+// or ticket must not ship them. The decision lives here, once: the row
+// renderer consults this list for every line it prints, so a bootstrap
+// variable added to the surface in the future prints its plaintext by
+// default until someone declares it here -- this list is the checklist
+// that act is performed against, and the whole-output tests force every
+// added row past it either way.
+var redactedEnv = map[string]bool{
+	appconfig.ConfigKeyEnv:            true,
+	appconfig.OrgIndexKeyEnv:          true,
+	appconfig.AuthnBlindIndexKeyEnv:   true,
+	appconfig.AuthnPIICipherKeyEnv:    true,
+	appconfig.PKILocalKeyCipherKeyEnv: true,
+	appconfig.S3SecretKeyEnv:          true,
+	appconfig.SMTPPasswordEnv:         true,
+}
 
 // The unset-provenance text for each row that is not a scalar default: the
 // infrastructure seam a variable composes when unset, matching
@@ -56,6 +85,9 @@ The bootstrap variables:
   APP_DB_PATH             the SQLite database path
   APP_CONFIG_KEY          the configuration master key (64 hex characters)
   APP_ORG_INDEX_KEY       the org blind-index key (64 hex characters)
+  APP_AUTHN_BLIND_INDEX_KEY the authn blind-index HMAC key (64 hex characters)
+  APP_AUTHN_PII_CIPHER_KEY  the authn PII cipher key (64 hex characters)
+  APP_PKI_LOCAL_KEY_CIPHER_KEY the pki local-key cipher key (64 hex characters)
   APP_REDIS_ADDR          Redis address composing the eventbus/kv seams
   APP_S3_ENDPOINT         S3-compatible endpoint (with bucket/access/secret
                           key below, required together)
@@ -70,11 +102,14 @@ The bootstrap variables:
   APP_SMTP_PASSWORD       SMTP AUTH password (optional)
   APP_SMS_GATEWAY_URL     authn's HTTP SMS transport endpoint
 
-The two key variables and the S3 secret key / SMTP password are secrets:
+The five key variables (the config master key, the org index key, the
+authn blind-index HMAC key, the authn PII cipher key and the pki
+local-key cipher key) and the S3 secret key / SMTP password are secrets:
 their values never print, only a [redacted] marker in their place,
-whatever the environment holds. An S3 group or SMTP pair that is only
-partially set is refused, exactly as the generated app's own bootstrap
-refuses it.
+whatever the environment holds -- the redaction decision is redactedEnv's
+single declaration in print.go, and every rendered row consults it. An
+S3 group or SMTP pair that is only partially set is refused, exactly as
+the generated app's own bootstrap refuses it.
 
 Examples:
 
@@ -135,9 +170,11 @@ func reportError(stderr io.Writer, err error) int {
 // app's own bootstrap would refuse (an unparsable deployment mode, a
 // malformed key, or an incomplete S3/SMTP infrastructure group) -- and
 // renders one line per value: the label, the resolved value, and its
-// provenance. The two key variables and the S3 secret key / SMTP password
-// render as [redacted] in the value column whatever the environment
-// holds.
+// provenance. The value column of every row renders through valueColumn,
+// which consults the single redactedEnv declaration: the five key
+// variables, the S3 secret key and the SMTP password render as
+// [redacted] whatever the environment holds, every other variable prints
+// its resolved value.
 func print(modPath string) (string, error) {
 	proj, err := project.Read(modPath)
 	if err != nil {
@@ -148,36 +185,126 @@ func print(modPath string) (string, error) {
 		return "", err
 	}
 
-	var b strings.Builder
-	write := func(label, value, source string) {
-		fmt.Fprintf(&b, "%-16s %-12s %s\n", label, value, source)
-	}
-	write("deployment mode", string(cfg.DeploymentMode),
-		provenance(appconfig.DeploymentModeEnv, cfg.DeploymentModeFromEnv,
-			fmt.Sprintf("unset or empty (default %s)", cfg.DeploymentMode)))
-	write("port", cfg.Port,
-		provenance(appconfig.PortEnv, cfg.PortFromEnv, fmt.Sprintf("unset or empty (default %s)", cfg.Port)))
-	write("sqlite path", cfg.SQLitePath,
-		provenance(appconfig.DBPathEnv, cfg.SQLitePathFromEnv, fmt.Sprintf("unset or empty (default %s)", cfg.SQLitePath)))
-	write("config key", redactedMarker,
-		provenance(appconfig.ConfigKeyEnv, cfg.ConfigKeyFromEnv, "unset or empty (development default)"))
-	write("org index key", redactedMarker,
-		provenance(appconfig.OrgIndexKeyEnv, cfg.OrgIndexKeyFromEnv, "unset or empty (development default)"))
+	// One row per bootstrap variable, in the order the generated app's own
+	// config.go parses them (deployment mode, port, database path, the
+	// five key materials, then the infrastructure groups). Every row names
+	// its environment variable, so the renderer below can decide its value
+	// column against redactedEnv -- the per-line choices are this table.
+	rows := []struct {
+		label  string
+		env    string
+		value  string
+		source string
+	}{
+		{
+			"deployment mode", appconfig.DeploymentModeEnv, string(cfg.DeploymentMode),
+			provenance(appconfig.DeploymentModeEnv, cfg.DeploymentModeFromEnv,
+				fmt.Sprintf("unset or empty (default %s)", cfg.DeploymentMode)),
+		},
+		{
+			"port", appconfig.PortEnv, cfg.Port,
+			provenance(appconfig.PortEnv, cfg.PortFromEnv, fmt.Sprintf("unset or empty (default %s)", cfg.Port)),
+		},
+		{
+			"sqlite path", appconfig.DBPathEnv, cfg.SQLitePath,
+			provenance(appconfig.DBPathEnv, cfg.SQLitePathFromEnv, fmt.Sprintf("unset or empty (default %s)", cfg.SQLitePath)),
+		},
+		// The five key rows carry no value at all, not merely a redacted
+		// rendering of one: their raw bytes never enter this table, so the
+		// redaction cannot leak them through any future edit to valueColumn
+		// or the list -- the marker they render comes from redactedEnv
+		// declaring them secrets, the decision this file concentrates.
+		{
+			"config key", appconfig.ConfigKeyEnv, "",
+			provenance(appconfig.ConfigKeyEnv, cfg.ConfigKeyFromEnv, "unset or empty (development default)"),
+		},
+		{
+			"org index key", appconfig.OrgIndexKeyEnv, "",
+			provenance(appconfig.OrgIndexKeyEnv, cfg.OrgIndexKeyFromEnv, "unset or empty (development default)"),
+		},
+		{
+			"authn blind index key", appconfig.AuthnBlindIndexKeyEnv, "",
+			provenance(appconfig.AuthnBlindIndexKeyEnv, cfg.AuthnBlindIndexKeyFromEnv, "unset or empty (development default)"),
+		},
+		{
+			"authn pii cipher key", appconfig.AuthnPIICipherKeyEnv, "",
+			provenance(appconfig.AuthnPIICipherKeyEnv, cfg.AuthnPIICipherKeyFromEnv, "unset or empty (development default)"),
+		},
+		{
+			"pki local key cipher key", appconfig.PKILocalKeyCipherKeyEnv, "",
+			provenance(appconfig.PKILocalKeyCipherKeyEnv, cfg.PKILocalKeyCipherKeyFromEnv, "unset or empty (development default)"),
+		},
 
-	write("redis addr", cfg.RedisAddr, provenance(appconfig.RedisAddrEnv, cfg.RedisAddrFromEnv, unsetRedis))
-	write("s3 endpoint", cfg.S3Endpoint, provenance(appconfig.S3EndpointEnv, cfg.S3EndpointFromEnv, unsetS3Group))
-	write("s3 bucket", cfg.S3Bucket, provenance(appconfig.S3BucketEnv, cfg.S3BucketFromEnv, unsetS3Group))
-	write("s3 access key", cfg.S3AccessKey, provenance(appconfig.S3AccessKeyEnv, cfg.S3AccessKeyFromEnv, unsetS3Group))
-	write("s3 secret key", redactedMarker, provenance(appconfig.S3SecretKeyEnv, cfg.S3SecretKeyFromEnv, unsetS3Group))
-	write("s3 region", cfg.S3Region, provenance(appconfig.S3RegionEnv, cfg.S3RegionFromEnv, unsetS3Optional))
-	write("s3 use ssl", strconv.FormatBool(cfg.S3UseSSL),
-		provenance(appconfig.S3UseSSLEnv, cfg.S3UseSSLFromEnv, "unset or empty (default false)"))
-	write("smtp host", cfg.SMTPHost, provenance(appconfig.SMTPHostEnv, cfg.SMTPHostFromEnv, unsetSMTPGroup))
-	write("smtp port", smtpPortValue(cfg), provenance(appconfig.SMTPPortEnv, cfg.SMTPPortFromEnv, unsetSMTPGroup))
-	write("smtp username", cfg.SMTPUsername, provenance(appconfig.SMTPUsernameEnv, cfg.SMTPUsernameFromEnv, unsetSMTPOptional))
-	write("smtp password", redactedMarker, provenance(appconfig.SMTPPasswordEnv, cfg.SMTPPasswordFromEnv, unsetSMTPOptional))
-	write("sms gateway url", cfg.SMSGatewayURL, provenance(appconfig.SMSGatewayURLEnv, cfg.SMSGatewayURLFromEnv, unsetSMS))
+		{
+			"redis addr", appconfig.RedisAddrEnv, cfg.RedisAddr,
+			provenance(appconfig.RedisAddrEnv, cfg.RedisAddrFromEnv, unsetRedis),
+		},
+		{
+			"s3 endpoint", appconfig.S3EndpointEnv, cfg.S3Endpoint,
+			provenance(appconfig.S3EndpointEnv, cfg.S3EndpointFromEnv, unsetS3Group),
+		},
+		{
+			"s3 bucket", appconfig.S3BucketEnv, cfg.S3Bucket,
+			provenance(appconfig.S3BucketEnv, cfg.S3BucketFromEnv, unsetS3Group),
+		},
+		{
+			"s3 access key", appconfig.S3AccessKeyEnv, cfg.S3AccessKey,
+			provenance(appconfig.S3AccessKeyEnv, cfg.S3AccessKeyFromEnv, unsetS3Group),
+		},
+		{
+			"s3 secret key", appconfig.S3SecretKeyEnv, cfg.S3SecretKey,
+			provenance(appconfig.S3SecretKeyEnv, cfg.S3SecretKeyFromEnv, unsetS3Group),
+		},
+		{
+			"s3 region", appconfig.S3RegionEnv, cfg.S3Region,
+			provenance(appconfig.S3RegionEnv, cfg.S3RegionFromEnv, unsetS3Optional),
+		},
+		{
+			"s3 use ssl", appconfig.S3UseSSLEnv, strconv.FormatBool(cfg.S3UseSSL),
+			provenance(appconfig.S3UseSSLEnv, cfg.S3UseSSLFromEnv, "unset or empty (default false)"),
+		},
+		{
+			"smtp host", appconfig.SMTPHostEnv, cfg.SMTPHost,
+			provenance(appconfig.SMTPHostEnv, cfg.SMTPHostFromEnv, unsetSMTPGroup),
+		},
+		{
+			"smtp port", appconfig.SMTPPortEnv, smtpPortValue(cfg),
+			provenance(appconfig.SMTPPortEnv, cfg.SMTPPortFromEnv, unsetSMTPGroup),
+		},
+		{
+			"smtp username", appconfig.SMTPUsernameEnv, cfg.SMTPUsername,
+			provenance(appconfig.SMTPUsernameEnv, cfg.SMTPUsernameFromEnv, unsetSMTPOptional),
+		},
+		{
+			"smtp password", appconfig.SMTPPasswordEnv, cfg.SMTPPassword,
+			provenance(appconfig.SMTPPasswordEnv, cfg.SMTPPasswordFromEnv, unsetSMTPOptional),
+		},
+		{
+			"sms gateway url", appconfig.SMSGatewayURLEnv, cfg.SMSGatewayURL,
+			provenance(appconfig.SMSGatewayURLEnv, cfg.SMSGatewayURLFromEnv, unsetSMS),
+		},
+	}
+
+	var b strings.Builder
+	for _, r := range rows {
+		fmt.Fprintf(&b, "%-16s %-12s %s\n", r.label, valueColumn(r.env, r.value), r.source)
+	}
 	return b.String(), nil
+}
+
+// valueColumn renders one row's value column: redactedMarker when
+// redactedEnv declares the row's variable a secret, the resolved value
+// otherwise. Routing every row through this one renderer is what makes
+// the redaction decision the single redactedEnv list -- a future
+// sensitive variable whose row forgets to declare it there prints its
+// plaintext, which is exactly the state the list exists to make visible
+// (see redactedEnv's doc comment). A redacted row's resolved value never
+// reaches this function's output either way.
+func valueColumn(env, value string) string {
+	if redactedEnv[env] {
+		return redactedMarker
+	}
+	return value
 }
 
 // smtpPortValue renders the SMTP port column: blank when unset (0 would

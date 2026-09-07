@@ -1,9 +1,10 @@
 // Package appconfig parses the bootstrap environment surface of a generated
 // consumer project: APP_DEPLOYMENT_MODE, PORT, APP_DB_PATH, APP_CONFIG_KEY,
-// APP_ORG_INDEX_KEY, APP_REDIS_ADDR, the APP_S3_* group, the APP_SMTP_*
-// group and APP_SMS_GATEWAY_URL -- the full seventeen-variable surface --
-// resolved exactly as the generated project's own cmd/server/config.go
-// resolves them.
+// APP_ORG_INDEX_KEY, the three authn/pki key variables (APP_AUTHN_BLIND_INDEX_KEY,
+// APP_AUTHN_PII_CIPHER_KEY, APP_PKI_LOCAL_KEY_CIPHER_KEY), APP_REDIS_ADDR,
+// the APP_S3_* group, the APP_SMTP_* group and APP_SMS_GATEWAY_URL -- the
+// full twenty-variable surface -- resolved exactly as the generated
+// project's own cmd/server/config.go resolves them.
 //
 // saasctl's db and config commands must see what the app they act on would
 // see: db migrate opens the same SQLite path the app's configFromEnv would
@@ -12,7 +13,7 @@
 // would refuse to boot, on the identical incomplete infrastructure group.
 // This package is therefore a deliberate, test-pinned twin of the embedded
 // template file internal/template/project/cmd/server/config.go -- the same
-// seventeen variable names, the same defaults, the same completeness rules
+// twenty variable names, the same defaults, the same completeness rules
 // (an S3 group or an SMTP pair that is only partially set is refused, never
 // silently dropped to the Preset default), the same development key bytes
 // and the same malformed-value error texts, with the template's
@@ -41,7 +42,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// The seventeen environment variable names of a generated project's
+// The twenty environment variable names of a generated project's
 // bootstrap surface, exported because the command groups that render
 // provenance and the tests that pin template parity all name the same
 // variables.
@@ -64,6 +65,23 @@ const (
 	// OrgIndexKeyEnv names the environment variable holding the hex-encoded
 	// 32-byte HMAC key an org-wiring project's blind indexer is built from.
 	OrgIndexKeyEnv = "APP_ORG_INDEX_KEY"
+
+	// AuthnBlindIndexKeyEnv names the environment variable holding the
+	// hex-encoded 32-byte HMAC key an authn-wiring project's blind indexer
+	// is built from (authn.WithBlindIndexKey). Parsed in every composition,
+	// consumed only by authn-wiring ones -- the same uniform-surface
+	// doctrine OrgIndexKeyEnv's template comment states.
+	AuthnBlindIndexKeyEnv = "APP_AUTHN_BLIND_INDEX_KEY"
+
+	// AuthnPIICipherKeyEnv names the environment variable holding the
+	// hex-encoded 32-byte AES key that seals authn's encrypted PII columns
+	// (authn.RegisterPIISerializer).
+	AuthnPIICipherKeyEnv = "APP_AUTHN_PII_CIPHER_KEY"
+
+	// PKILocalKeyCipherKeyEnv names the environment variable holding the
+	// hex-encoded 32-byte AES key that seals go/pki's LocalSigner
+	// private-key column (pki.RegisterLocalKeySerializer).
+	PKILocalKeyCipherKeyEnv = "APP_PKI_LOCAL_KEY_CIPHER_KEY"
 
 	// RedisAddrEnv names the environment variable holding the Redis server
 	// address that composes a real, MultiReplicaSafe implementation for
@@ -153,6 +171,38 @@ var devOrgIndexKey = []byte{
 	0xe7, 0xe6, 0xe5, 0xe4, 0xe3, 0xe2, 0xe1, 0xe0,
 }
 
+// devBlindIndexKey, devPIICipherKey and devPKILocalKeyCipherKey are the
+// keys used when the respective environment variable above is unset: the
+// template's own dev family for the three authn/pki key materials,
+// byte-for-byte its copies -- devBlindIndexKey the 0x40..0x5f run
+// (authn.WithBlindIndexKey's indexer), devPIICipherKey the 0x60..0x7f run
+// (authn's PII serializer cipher), devPKILocalKeyCipherKey the 0x80..0x9f
+// run (pki's local-key serializer cipher), each visibly a placeholder,
+// each a distinct value (the template's doc comment explains why), and
+// each a FALLBACK only -- an environment value always wins. Like the
+// template's own copies, they are honest placeholders, never secrets a
+// real deployment should keep.
+var (
+	devBlindIndexKey = []byte{
+		0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
+		0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f,
+		0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,
+		0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f,
+	}
+	devPIICipherKey = []byte{
+		0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67,
+		0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f,
+		0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
+		0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f,
+	}
+	devPKILocalKeyCipherKey = []byte{
+		0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+		0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
+		0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
+		0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f,
+	}
+)
+
 // LookupEnv reads one environment variable. os.LookupEnv satisfies it; the
 // injectable shape exists so tests (and callers that want a different
 // source) can supply their own.
@@ -169,11 +219,14 @@ type LookupEnv func(key string) (string, bool)
 // print can render each value with its true provenance and refuse exactly
 // when the generated app would refuse to boot.
 type Config struct {
-	DeploymentMode pkgcore.DeploymentMode
-	Port           string
-	SQLitePath     string
-	ConfigKey      []byte
-	OrgIndexKey    []byte
+	DeploymentMode       pkgcore.DeploymentMode
+	Port                 string
+	SQLitePath           string
+	ConfigKey            []byte
+	OrgIndexKey          []byte
+	AuthnBlindIndexKey   []byte
+	AuthnPIICipherKey    []byte
+	PKILocalKeyCipherKey []byte
 
 	// RedisAddr, when non-empty, composes a real Redis-backed implementation
 	// of both the "eventbus" and "kv" seams -- see RedisAddrEnv's own doc
@@ -213,23 +266,26 @@ type Config struct {
 	// counts as unset, matching os.Getenv: the generated server cannot
 	// distinguish "set to empty" from "unset" either, and neither can this
 	// package.
-	DeploymentModeFromEnv bool
-	PortFromEnv           bool
-	SQLitePathFromEnv     bool
-	ConfigKeyFromEnv      bool
-	OrgIndexKeyFromEnv    bool
-	RedisAddrFromEnv      bool
-	S3EndpointFromEnv     bool
-	S3BucketFromEnv       bool
-	S3AccessKeyFromEnv    bool
-	S3SecretKeyFromEnv    bool
-	S3RegionFromEnv       bool
-	S3UseSSLFromEnv       bool
-	SMTPHostFromEnv       bool
-	SMTPPortFromEnv       bool
-	SMTPUsernameFromEnv   bool
-	SMTPPasswordFromEnv   bool
-	SMSGatewayURLFromEnv  bool
+	DeploymentModeFromEnv       bool
+	PortFromEnv                 bool
+	SQLitePathFromEnv           bool
+	ConfigKeyFromEnv            bool
+	OrgIndexKeyFromEnv          bool
+	AuthnBlindIndexKeyFromEnv   bool
+	AuthnPIICipherKeyFromEnv    bool
+	PKILocalKeyCipherKeyFromEnv bool
+	RedisAddrFromEnv            bool
+	S3EndpointFromEnv           bool
+	S3BucketFromEnv             bool
+	S3AccessKeyFromEnv          bool
+	S3SecretKeyFromEnv          bool
+	S3RegionFromEnv             bool
+	S3UseSSLFromEnv             bool
+	SMTPHostFromEnv             bool
+	SMTPPortFromEnv             bool
+	SMTPUsernameFromEnv         bool
+	SMTPPasswordFromEnv         bool
+	SMSGatewayURLFromEnv        bool
 }
 
 // Load resolves a generated project's bootstrap configuration for appName
@@ -238,7 +294,7 @@ type Config struct {
 // the SQLite default, which is the fixed defaultSQLitePath literal -- the
 // one default the generated app freezes rather than derives, so deriving
 // it from the module path here would fork on a module rename (see
-// defaultSQLitePath's own doc comment) -- reading the seventeen
+// defaultSQLitePath's own doc comment) -- reading the twenty
 // environment variables through lookup. The parse order, defaults,
 // completeness rules and failure texts mirror the generated configFromEnv
 // exactly, including its error contract: a mode that does not parse is
@@ -291,6 +347,31 @@ func Load(appName string, lookup LookupEnv) (Config, error) {
 	}
 	cfg.OrgIndexKeyFromEnv = orgIndexKeySet
 	cfg.OrgIndexKey = orgIndexKey
+
+	// The three authn/pki key materials resolve exactly like the two
+	// above: their own variable when set, their dev fallback otherwise.
+	// Parsed in every composition, consumed only by authn-wiring ones
+	// (each key's template Env doc comment says what it protects).
+	authnBlindIndexKey, authnBlindIndexKeySet, err := loadKey(appName, AuthnBlindIndexKeyEnv, devBlindIndexKey, lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.AuthnBlindIndexKeyFromEnv = authnBlindIndexKeySet
+	cfg.AuthnBlindIndexKey = authnBlindIndexKey
+
+	authnPIICipherKey, authnPIICipherKeySet, err := loadKey(appName, AuthnPIICipherKeyEnv, devPIICipherKey, lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.AuthnPIICipherKeyFromEnv = authnPIICipherKeySet
+	cfg.AuthnPIICipherKey = authnPIICipherKey
+
+	pkiLocalKeyCipherKey, pkiLocalKeyCipherKeySet, err := loadKey(appName, PKILocalKeyCipherKeyEnv, devPKILocalKeyCipherKey, lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.PKILocalKeyCipherKeyFromEnv = pkiLocalKeyCipherKeySet
+	cfg.PKILocalKeyCipherKey = pkiLocalKeyCipherKey
 
 	// redisAddr stays empty when unset, leaving the "eventbus" and "kv"
 	// seams on the Preset's in-process defaults -- see RedisAddrEnv's own
@@ -382,7 +463,7 @@ func Load(appName string, lookup LookupEnv) (Config, error) {
 	return cfg, nil
 }
 
-// loadKey resolves one of the two hex-encoded 32-byte key variables: the
+// loadKey resolves one of the five hex-encoded 32-byte key variables: the
 // dev default when the variable is unset or empty, the decoded value
 // otherwise. A value whose encoded length is not configKeyHexLength fails
 // with the template's length message; a value of the right length that is

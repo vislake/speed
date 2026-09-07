@@ -12,7 +12,7 @@ import (
 )
 
 // bootstrapEnvKeys lists the environment surface a generated project's
-// bootstrap reads -- the full seventeen variables appconfig resolves,
+// bootstrap reads -- the full twenty variables appconfig resolves,
 // exported for the tests and examples that must clear or restore them all.
 // The list mirrors the one internal/db's migrate tests carry, each
 // package's copy sitting next to the code that uses it.
@@ -22,6 +22,9 @@ var bootstrapEnvKeys = []string{
 	appconfig.DBPathEnv,
 	appconfig.ConfigKeyEnv,
 	appconfig.OrgIndexKeyEnv,
+	appconfig.AuthnBlindIndexKeyEnv,
+	appconfig.AuthnPIICipherKeyEnv,
+	appconfig.PKILocalKeyCipherKeyEnv,
 	appconfig.RedisAddrEnv,
 	appconfig.S3EndpointEnv,
 	appconfig.S3BucketEnv,
@@ -72,17 +75,17 @@ func fixture(t *testing.T, name string) string {
 // TestPrintResolvesAndRendersTheDocumentedDefaults: with an empty
 // environment, print renders what the generated app boots on with no
 // environment at all -- the standalone deployment mode, port 8080, the
-// fixed app.db path, the two development key bytes, and every
+// fixed app.db path, the five development key byte sequences (the two
+// original key materials plus the three authn/pki ones), and every
 // infrastructure seam left on its Preset default -- one line per value,
 // each sourced line naming the default (or the seam) it fell back to. The
-// key rows and the S3 secret key / SMTP password rows show only the
+// five key rows and the S3 secret key / SMTP password rows show only the
 // [redacted] marker in the value column.
 //
 // Before the appconfig twin covered the full bootstrap surface, this
-// rendered only the first five lines: the twelve infrastructure rows
-// below are the regression proof that config print now resolves the SAME
-// environment the generated app's own configFromEnv resolves, not a
-// truncated subset of it.
+// rendered only the first five lines: the rows below are the regression
+// proof that config print now resolves the SAME environment the generated
+// app's own configFromEnv resolves, not a truncated subset of it.
 func TestPrintResolvesAndRendersTheDocumentedDefaults(t *testing.T) {
 	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, nil)
 	if code != 0 {
@@ -96,6 +99,9 @@ func TestPrintResolvesAndRendersTheDocumentedDefaults(t *testing.T) {
 		"sqlite path      app.db       unset or empty (default app.db)\n" +
 		"config key       [redacted]   unset or empty (development default)\n" +
 		"org index key    [redacted]   unset or empty (development default)\n" +
+		"authn blind index key [redacted]   unset or empty (development default)\n" +
+		"authn pii cipher key [redacted]   unset or empty (development default)\n" +
+		"pki local key cipher key [redacted]   unset or empty (development default)\n" +
 		"redis addr                    unset or empty (eventbus/kv stay on the in-process default)\n" +
 		"s3 endpoint                   unset or empty (objectstore stays on the local-directory default)\n" +
 		"s3 bucket                     unset or empty (objectstore stays on the local-directory default)\n" +
@@ -124,23 +130,26 @@ func TestPrintResolvesAndRendersTheDocumentedDefaults(t *testing.T) {
 // per-row "from APP_*" provenance would have caught.
 func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, map[string]string{
-		appconfig.DeploymentModeEnv: "distributed",
-		appconfig.PortEnv:           "9090",
-		appconfig.DBPathEnv:         "db.sqlite",
-		appconfig.ConfigKeyEnv:      "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-		appconfig.OrgIndexKeyEnv:    "ffe0f1d2c3b4a5968778695a4b3c2d1e0f00112233445566778899aabbccddee",
-		appconfig.RedisAddrEnv:      "redis.internal:6379",
-		appconfig.S3EndpointEnv:     "s3.internal:9000",
-		appconfig.S3BucketEnv:       "smiles",
-		appconfig.S3AccessKeyEnv:    "AKIAEXAMPLE",
-		appconfig.S3SecretKeyEnv:    "s3cr3t",
-		appconfig.S3RegionEnv:       "us-east-1",
-		appconfig.S3UseSSLEnv:       "true",
-		appconfig.SMTPHostEnv:       "smtp.internal",
-		appconfig.SMTPPortEnv:       "587",
-		appconfig.SMTPUsernameEnv:   "mailer",
-		appconfig.SMTPPasswordEnv:   "hunter2",
-		appconfig.SMSGatewayURLEnv:  "http://sms.internal/send",
+		appconfig.DeploymentModeEnv:       "distributed",
+		appconfig.PortEnv:                 "9090",
+		appconfig.DBPathEnv:               "db.sqlite",
+		appconfig.ConfigKeyEnv:            "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+		appconfig.OrgIndexKeyEnv:          "ffe0f1d2c3b4a5968778695a4b3c2d1e0f00112233445566778899aabbccddee",
+		appconfig.AuthnBlindIndexKeyEnv:   "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+		appconfig.AuthnPIICipherKeyEnv:    "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+		appconfig.PKILocalKeyCipherKeyEnv: "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+		appconfig.RedisAddrEnv:            "redis.internal:6379",
+		appconfig.S3EndpointEnv:           "s3.internal:9000",
+		appconfig.S3BucketEnv:             "smiles",
+		appconfig.S3AccessKeyEnv:          "AKIAEXAMPLE",
+		appconfig.S3SecretKeyEnv:          "s3cr3t",
+		appconfig.S3RegionEnv:             "us-east-1",
+		appconfig.S3UseSSLEnv:             "true",
+		appconfig.SMTPHostEnv:             "smtp.internal",
+		appconfig.SMTPPortEnv:             "587",
+		appconfig.SMTPUsernameEnv:         "mailer",
+		appconfig.SMTPPasswordEnv:         "hunter2",
+		appconfig.SMSGatewayURLEnv:        "http://sms.internal/send",
 	})
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr)
@@ -153,6 +162,9 @@ func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 		"sqlite path      db.sqlite    from APP_DB_PATH\n" +
 		"config key       [redacted]   from APP_CONFIG_KEY\n" +
 		"org index key    [redacted]   from APP_ORG_INDEX_KEY\n" +
+		"authn blind index key [redacted]   from APP_AUTHN_BLIND_INDEX_KEY\n" +
+		"authn pii cipher key [redacted]   from APP_AUTHN_PII_CIPHER_KEY\n" +
+		"pki local key cipher key [redacted]   from APP_PKI_LOCAL_KEY_CIPHER_KEY\n" +
 		"redis addr       redis.internal:6379 from APP_REDIS_ADDR\n" +
 		"s3 endpoint      s3.internal:9000 from APP_S3_ENDPOINT\n" +
 		"s3 bucket        smiles       from APP_S3_BUCKET\n" +
@@ -228,18 +240,24 @@ func TestPrintRefusesIncompleteSMTPPair(t *testing.T) {
 func TestPrintNeverRendersTheKeyBytes(t *testing.T) {
 	configKeyHex := "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 	orgIndexKeyHex := "ffe0f1d2c3b4a5968778695a4b3c2d1e0f00112233445566778899aabbccddee"
+	authnBlindIndexKeyHex := "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+	authnPIICipherKeyHex := "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f"
+	pkiLocalKeyCipherKeyHex := "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f"
 	s3Secret := "correct-horse-battery-staple-s3"
 	smtpPassword := "correct-horse-battery-staple-smtp"
 	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, map[string]string{
-		appconfig.ConfigKeyEnv:    configKeyHex,
-		appconfig.OrgIndexKeyEnv:  orgIndexKeyHex,
-		appconfig.S3EndpointEnv:   "s3.internal:9000",
-		appconfig.S3BucketEnv:     "smiles",
-		appconfig.S3AccessKeyEnv:  "AKIAEXAMPLE",
-		appconfig.S3SecretKeyEnv:  s3Secret,
-		appconfig.SMTPHostEnv:     "smtp.internal",
-		appconfig.SMTPPortEnv:     "587",
-		appconfig.SMTPPasswordEnv: smtpPassword,
+		appconfig.ConfigKeyEnv:            configKeyHex,
+		appconfig.OrgIndexKeyEnv:          orgIndexKeyHex,
+		appconfig.AuthnBlindIndexKeyEnv:   authnBlindIndexKeyHex,
+		appconfig.AuthnPIICipherKeyEnv:    authnPIICipherKeyHex,
+		appconfig.PKILocalKeyCipherKeyEnv: pkiLocalKeyCipherKeyHex,
+		appconfig.S3EndpointEnv:           "s3.internal:9000",
+		appconfig.S3BucketEnv:             "smiles",
+		appconfig.S3AccessKeyEnv:          "AKIAEXAMPLE",
+		appconfig.S3SecretKeyEnv:          s3Secret,
+		appconfig.SMTPHostEnv:             "smtp.internal",
+		appconfig.SMTPPortEnv:             "587",
+		appconfig.SMTPPasswordEnv:         smtpPassword,
 	})
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr)
@@ -247,7 +265,7 @@ func TestPrintNeverRendersTheKeyBytes(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
-	for _, secret := range []string{configKeyHex, orgIndexKeyHex, s3Secret, smtpPassword} {
+	for _, secret := range []string{configKeyHex, orgIndexKeyHex, authnBlindIndexKeyHex, authnPIICipherKeyHex, pkiLocalKeyCipherKeyHex, s3Secret, smtpPassword} {
 		if strings.Contains(stdout, secret) {
 			t.Errorf("stdout leaks a secret variable's value; it must render only [redacted] markers")
 		}

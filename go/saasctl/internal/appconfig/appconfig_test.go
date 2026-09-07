@@ -62,24 +62,44 @@ func TestLoadDefaultsResolveTheGeneratedProjectsOwnDefaults(t *testing.T) {
 	if !bytes.Equal(cfg.OrgIndexKey, devOrgIndexKey) {
 		t.Errorf("OrgIndexKey is not the descending 0xff..0xe0 development default")
 	}
+	// The three authn/pki key materials fall back to their own dev byte
+	// runs when unset -- the same fallback semantics as the two keys
+	// above, asserted so the three new fields cannot silently resolve to
+	// something else (nil, zeros) while the template keeps its dev bytes.
+	if !bytes.Equal(cfg.AuthnBlindIndexKey, devBlindIndexKey) {
+		t.Error("AuthnBlindIndexKey is not the 0x40..0x5f development default")
+	}
+	if !bytes.Equal(cfg.AuthnPIICipherKey, devPIICipherKey) {
+		t.Error("AuthnPIICipherKey is not the 0x60..0x7f development default")
+	}
+	if !bytes.Equal(cfg.PKILocalKeyCipherKey, devPKILocalKeyCipherKey) {
+		t.Error("PKILocalKeyCipherKey is not the 0x80..0x9f development default")
+	}
 	if cfg.DeploymentModeFromEnv || cfg.PortFromEnv || cfg.SQLitePathFromEnv ||
-		cfg.ConfigKeyFromEnv || cfg.OrgIndexKeyFromEnv {
+		cfg.ConfigKeyFromEnv || cfg.OrgIndexKeyFromEnv ||
+		cfg.AuthnBlindIndexKeyFromEnv || cfg.AuthnPIICipherKeyFromEnv || cfg.PKILocalKeyCipherKeyFromEnv {
 		t.Error("an empty environment must record every field as not-from-env")
 	}
 }
 
 // TestLoadReadsSetVariables: each variable that carries a non-empty value
-// is parsed and recorded as from-env, with the two key variables decoding
+// is parsed and recorded as from-env, with the five key variables decoding
 // their hex into the 32 bytes they encode.
 func TestLoadReadsSetVariables(t *testing.T) {
 	configKeyHex := "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 	orgIndexKeyHex := "ffe0f1d2c3b4a5968778695a4b3c2d1e0f00112233445566778899aabbccddee"
+	authnBlindIndexKeyHex := "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+	authnPIICipherKeyHex := "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f"
+	pkiLocalKeyCipherKeyHex := "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f"
 	cfg, err := Load("cli-app", envFromMap(map[string]string{
-		DeploymentModeEnv: "Distributed",
-		PortEnv:           "9090",
-		DBPathEnv:         "/var/data/smile.db",
-		ConfigKeyEnv:      configKeyHex,
-		OrgIndexKeyEnv:    orgIndexKeyHex,
+		DeploymentModeEnv:       "Distributed",
+		PortEnv:                 "9090",
+		DBPathEnv:               "/var/data/smile.db",
+		ConfigKeyEnv:            configKeyHex,
+		OrgIndexKeyEnv:          orgIndexKeyHex,
+		AuthnBlindIndexKeyEnv:   authnBlindIndexKeyHex,
+		AuthnPIICipherKeyEnv:    authnPIICipherKeyHex,
+		PKILocalKeyCipherKeyEnv: pkiLocalKeyCipherKeyHex,
 	}))
 	if err != nil {
 		t.Fatalf("Load with a full environment failed: %v", err)
@@ -93,8 +113,21 @@ func TestLoadReadsSetVariables(t *testing.T) {
 	if want := []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f}; !bytes.Equal(cfg.ConfigKey, want) {
 		t.Errorf("ConfigKey does not decode to the hex it encoded")
 	}
+	// The three authn/pki key materials decode into the exact 32 bytes
+	// their hex encodes -- the env-set path is real, not a
+	// validation-only pass that would keep the dev bytes underneath.
+	if want := []byte{0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f}; !bytes.Equal(cfg.AuthnBlindIndexKey, want) {
+		t.Error("AuthnBlindIndexKey does not decode to the hex it encoded")
+	}
+	if want := []byte{0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f}; !bytes.Equal(cfg.AuthnPIICipherKey, want) {
+		t.Error("AuthnPIICipherKey does not decode to the hex it encoded")
+	}
+	if want := []byte{0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f}; !bytes.Equal(cfg.PKILocalKeyCipherKey, want) {
+		t.Error("PKILocalKeyCipherKey does not decode to the hex it encoded")
+	}
 	if !cfg.DeploymentModeFromEnv || !cfg.PortFromEnv || !cfg.SQLitePathFromEnv ||
-		!cfg.ConfigKeyFromEnv || !cfg.OrgIndexKeyFromEnv {
+		!cfg.ConfigKeyFromEnv || !cfg.OrgIndexKeyFromEnv ||
+		!cfg.AuthnBlindIndexKeyFromEnv || !cfg.AuthnPIICipherKeyFromEnv || !cfg.PKILocalKeyCipherKeyFromEnv {
 		t.Error("a full environment must record every field as from-env")
 	}
 }
@@ -166,17 +199,58 @@ func TestLoadOrgIndexKeySharesTheConfigKeyFailureShape(t *testing.T) {
 	}
 }
 
+// TestLoadAuthnPKIKeyVariablesShareTheConfigKeyFailureShape: the three
+// authn/pki key variables fail with the same messages as the config
+// master key, each naming its own variable -- the regression proof that
+// the env path these keys gained is real (length and hex validation
+// included), not a passthrough that would keep the dev bytes no matter
+// what the environment holds.
+func TestLoadAuthnPKIKeyVariablesShareTheConfigKeyFailureShape(t *testing.T) {
+	for _, tt := range []struct {
+		env   string
+		value string
+		want  string
+	}{
+		{env: AuthnBlindIndexKeyEnv, value: "abc", want: "cli-app: APP_AUTHN_BLIND_INDEX_KEY must hold 64 hex characters (a 32-byte key), got 3"},
+		{env: AuthnPIICipherKeyEnv, value: "abc", want: "cli-app: APP_AUTHN_PII_CIPHER_KEY must hold 64 hex characters (a 32-byte key), got 3"},
+		{env: PKILocalKeyCipherKeyEnv, value: "abc", want: "cli-app: APP_PKI_LOCAL_KEY_CIPHER_KEY must hold 64 hex characters (a 32-byte key), got 3"},
+	} {
+		_, err := Load("cli-app", envFromMap(map[string]string{tt.env: tt.value}))
+		if err == nil {
+			t.Errorf("Load accepted a short %s", tt.env)
+			continue
+		}
+		if err.Error() != tt.want {
+			t.Errorf("error = %q, want %q", err, tt.want)
+		}
+	}
+	encoded := strings.Repeat("z", 64)
+	for _, envName := range []string{AuthnBlindIndexKeyEnv, AuthnPIICipherKeyEnv, PKILocalKeyCipherKeyEnv} {
+		_, err := Load("cli-app", envFromMap(map[string]string{envName: encoded}))
+		if err == nil {
+			t.Errorf("Load accepted a non-hex %s", envName)
+			continue
+		}
+		if !strings.HasPrefix(err.Error(), "cli-app: "+envName+": ") {
+			t.Errorf("error = %q, want the cli-app: %s: prefix", err, envName)
+		}
+	}
+}
+
 // TestLoadSetButEmptyCountsAsUnset: a variable that is present but empty
 // resolves to the same default as an absent one and is not recorded as
 // from-env -- os.Getenv's own semantics, which the generated server and
 // this twin share.
 func TestLoadSetButEmptyCountsAsUnset(t *testing.T) {
 	cfg, err := Load("cli-app", envFromMap(map[string]string{
-		DeploymentModeEnv: "",
-		PortEnv:           "",
-		DBPathEnv:         "",
-		ConfigKeyEnv:      "",
-		OrgIndexKeyEnv:    "",
+		DeploymentModeEnv:       "",
+		PortEnv:                 "",
+		DBPathEnv:               "",
+		ConfigKeyEnv:            "",
+		OrgIndexKeyEnv:          "",
+		AuthnBlindIndexKeyEnv:   "",
+		AuthnPIICipherKeyEnv:    "",
+		PKILocalKeyCipherKeyEnv: "",
 	}))
 	if err != nil {
 		t.Fatalf("Load with all-empty variables failed: %v", err)
@@ -185,7 +259,8 @@ func TestLoadSetButEmptyCountsAsUnset(t *testing.T) {
 		t.Errorf("empty variables must resolve to the defaults, got %q/%q/%q", cfg.DeploymentMode, cfg.Port, cfg.SQLitePath)
 	}
 	if cfg.DeploymentModeFromEnv || cfg.PortFromEnv || cfg.SQLitePathFromEnv ||
-		cfg.ConfigKeyFromEnv || cfg.OrgIndexKeyFromEnv {
+		cfg.ConfigKeyFromEnv || cfg.OrgIndexKeyFromEnv ||
+		cfg.AuthnBlindIndexKeyFromEnv || cfg.AuthnPIICipherKeyFromEnv || cfg.PKILocalKeyCipherKeyFromEnv {
 		t.Error("set-but-empty variables must not be recorded as from-env")
 	}
 }
@@ -330,7 +405,7 @@ func TestLoadSMTPPortMustBeAValidNumber(t *testing.T) {
 }
 
 // envVarDeclPattern matches one "<identifier>Env = \"<VALUE>\"" constant
-// declaration, the exact shape every one of the seventeen bootstrap
+// declaration, the exact shape every one of the twenty bootstrap
 // variable names takes in both the template's config.go and this
 // package's own const block -- an identifier ending in the literal "Env"
 // assigned a quoted environment-variable-name string literal, on its own
@@ -376,6 +451,7 @@ func TestAppConfigEnvSetMatchesTheTemplateExactly(t *testing.T) {
 	twinVars := map[string]bool{
 		DeploymentModeEnv: true, PortEnv: true, DBPathEnv: true,
 		ConfigKeyEnv: true, OrgIndexKeyEnv: true,
+		AuthnBlindIndexKeyEnv: true, AuthnPIICipherKeyEnv: true, PKILocalKeyCipherKeyEnv: true,
 		RedisAddrEnv:  true,
 		S3EndpointEnv: true, S3BucketEnv: true, S3AccessKeyEnv: true, S3SecretKeyEnv: true,
 		S3RegionEnv: true, S3UseSSLEnv: true,
@@ -409,27 +485,30 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	}
 	src := string(content)
 
-	// The seventeen variable names and the one scalar default, declared in
+	// The twenty variable names and the one scalar default, declared in
 	// the template as <local name> = "<value>" inside its const block.
 	for local, want := range map[string]string{
-		"deploymentModeEnv": DeploymentModeEnv,
-		"portEnv":           PortEnv,
-		"dbPathEnv":         DBPathEnv,
-		"configKeyEnv":      ConfigKeyEnv,
-		"orgIndexKeyEnv":    OrgIndexKeyEnv,
-		"redisAddrEnv":      RedisAddrEnv,
-		"s3EndpointEnv":     S3EndpointEnv,
-		"s3BucketEnv":       S3BucketEnv,
-		"s3AccessKeyEnv":    S3AccessKeyEnv,
-		"s3SecretKeyEnv":    S3SecretKeyEnv,
-		"s3RegionEnv":       S3RegionEnv,
-		"s3UseSSLEnv":       S3UseSSLEnv,
-		"smtpHostEnv":       SMTPHostEnv,
-		"smtpPortEnv":       SMTPPortEnv,
-		"smtpUsernameEnv":   SMTPUsernameEnv,
-		"smtpPasswordEnv":   SMTPPasswordEnv,
-		"smsGatewayURLEnv":  SMSGatewayURLEnv,
-		"defaultPort":       defaultPort,
+		"deploymentModeEnv":       DeploymentModeEnv,
+		"portEnv":                 PortEnv,
+		"dbPathEnv":               DBPathEnv,
+		"configKeyEnv":            ConfigKeyEnv,
+		"orgIndexKeyEnv":          OrgIndexKeyEnv,
+		"authnBlindIndexKeyEnv":   AuthnBlindIndexKeyEnv,
+		"authnPIICipherKeyEnv":    AuthnPIICipherKeyEnv,
+		"pkiLocalKeyCipherKeyEnv": PKILocalKeyCipherKeyEnv,
+		"redisAddrEnv":            RedisAddrEnv,
+		"s3EndpointEnv":           S3EndpointEnv,
+		"s3BucketEnv":             S3BucketEnv,
+		"s3AccessKeyEnv":          S3AccessKeyEnv,
+		"s3SecretKeyEnv":          S3SecretKeyEnv,
+		"s3RegionEnv":             S3RegionEnv,
+		"s3UseSSLEnv":             S3UseSSLEnv,
+		"smtpHostEnv":             SMTPHostEnv,
+		"smtpPortEnv":             SMTPPortEnv,
+		"smtpUsernameEnv":         SMTPUsernameEnv,
+		"smtpPasswordEnv":         SMTPPasswordEnv,
+		"smsGatewayURLEnv":        SMSGatewayURLEnv,
+		"defaultPort":             defaultPort,
 	} {
 		// gofmt aligns "=" across a const block's declarations, so the
 		// number of spaces before it varies with the block's longest name
@@ -501,15 +580,24 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 
 	// The development key bytes, asserted as their byte-for-byte hex
 	// literals after whitespace normalization, so a template edit that
-	// reorders, adds or drops a byte fails here.
-	ascending := keyByteLiteral(devConfigKey)
-	descending := keyByteLiteral(devOrgIndexKey)
+	// reorders, adds or drops a byte fails here. All five dev keys are
+	// checked -- the three authn/pki ones joined the family when their
+	// environment variables did (the keys must resolve byte-identically
+	// whether the app boots or saasctl resolves them).
 	normalized := regexp.MustCompile(`\s+`).ReplaceAllString(src, "")
-	if !strings.Contains(normalized, ascending) {
-		t.Error("template's devConfigKey bytes drifted from the twin's ascending 0x00..0x1f sequence")
-	}
-	if !strings.Contains(normalized, descending) {
-		t.Error("template's devOrgIndexKey bytes drifted from the twin's descending 0xff..0xe0 sequence")
+	for _, key := range []struct {
+		name string
+		dev  []byte
+	}{
+		{"devConfigKey", devConfigKey},
+		{"devOrgIndexKey", devOrgIndexKey},
+		{"devBlindIndexKey", devBlindIndexKey},
+		{"devPIICipherKey", devPIICipherKey},
+		{"devPKILocalKeyCipherKey", devPKILocalKeyCipherKey},
+	} {
+		if !strings.Contains(normalized, keyByteLiteral(key.dev)) {
+			t.Errorf("template's %s bytes drifted from the twin's", key.name)
+		}
 	}
 
 	// The parse order: configFromEnv reads deployment mode first and the
@@ -524,6 +612,7 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	body = regexp.MustCompile(`(?m)//.*$`).ReplaceAllString(body, "")
 	parseOrder := []string{
 		"deploymentModeEnv", "portEnv", "dbPathEnv", "configKeyEnv", "orgIndexKeyEnv",
+		"authnBlindIndexKeyEnv", "authnPIICipherKeyEnv", "pkiLocalKeyCipherKeyEnv",
 		"redisAddrEnv", "s3EndpointEnv", "s3BucketEnv", "s3AccessKeyEnv", "s3SecretKeyEnv",
 		"s3UseSSLEnv", "smtpHostEnv", "smtpPortEnv", "s3RegionEnv", "smtpUsernameEnv",
 		"smtpPasswordEnv", "smsGatewayURLEnv",

@@ -414,3 +414,58 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+// TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig pins the
+// P1-2 fix's server side: every authn-wiring selection's server.go must
+// build the blind index, the PII cipher and the pki local-key cipher from
+// the cfg fields config.go resolves (APP_AUTHN_BLIND_INDEX_KEY /
+// APP_AUTHN_PII_CIPHER_KEY / APP_PKI_LOCAL_KEY_CIPHER_KEY, each with its
+// dev fallback), never from bare dev constants used unconditionally -- the
+// state in which an operator who set all the APP_* key variables was still
+// running on the committed public key bytes. The harm-amplifier sentence
+// that used to call that state "the same documented trade-off as
+// config.go's devConfigKey" (false: devConfigKey is a fallback behind an
+// env override, those constants had no override at all) must be gone from
+// every selection too. The "none" selection wires no authn, so it must
+// carry none of the three usages. The config.go half of the fix (the env
+// declarations, the parse blocks and the dev fallbacks) is pinned by
+// appconfig's own twin tests, which re-read that file.
+func TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig(t *testing.T) {
+	authnKeys := []string{
+		"dbkit.NewCipher(cfg.AuthnPIICipherKey)",
+		"dbkit.NewCipher(cfg.PKILocalKeyCipherKey)",
+		"authn.WithBlindIndexKey(cfg.AuthnBlindIndexKey)",
+	}
+	banished := []string{
+		"dbkit.NewCipher(devPIICipherKey)",
+		"dbkit.NewCipher(devPKILocalKeyCipherKey)",
+		"authn.WithBlindIndexKey(devBlindIndexKey)",
+		"same documented trade-off as config.go's devConfigKey",
+	}
+	for _, key := range validSelectionKeys {
+		path := ProjectRoot + "/selection/" + key + "/server.go"
+		content, err := fs.ReadFile(Project, path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		src := string(content)
+		if key == "none" {
+			for _, want := range authnKeys {
+				if strings.Contains(src, want) {
+					t.Errorf("%s (the authn-less selection) references %s; no authn module is wired there, so no key material may be consumed", key, want)
+				}
+			}
+			continue
+		}
+		for _, want := range authnKeys {
+			if !strings.Contains(src, want) {
+				t.Errorf("%s does not consume key material through %s; the skeleton must use the cfg-resolved key (env override with dev fallback), never a bare dev constant", key, want)
+			}
+		}
+		for _, banned := range banished {
+			if strings.Contains(src, banned) {
+				t.Errorf("%s still carries %q; unconditional dev-constant use (or its harm-amplifier justification) must be gone", key, banned)
+			}
+		}
+	}
+}

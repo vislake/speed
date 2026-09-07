@@ -11,7 +11,7 @@ import (
 	"github.com/vislake/speed/go/saasctl/internal/appconfig"
 )
 
-// bootstrapEnvKeys lists the full seventeen bootstrap variables a
+// bootstrapEnvKeys lists the full twenty bootstrap variables a
 // generated project's configuration reads; the dispatch tests clear them
 // all so a run starts from the same defaults a fresh shell would be in.
 // The list mirrors the ones internal/db and internal/config carry.
@@ -21,6 +21,9 @@ var bootstrapEnvKeys = []string{
 	appconfig.DBPathEnv,
 	appconfig.ConfigKeyEnv,
 	appconfig.OrgIndexKeyEnv,
+	appconfig.AuthnBlindIndexKeyEnv,
+	appconfig.AuthnPIICipherKeyEnv,
+	appconfig.PKILocalKeyCipherKeyEnv,
 	appconfig.RedisAddrEnv,
 	appconfig.S3EndpointEnv,
 	appconfig.S3BucketEnv,
@@ -132,7 +135,7 @@ func TestRunDBDispatchesThroughCLI(t *testing.T) {
 // TestRunConfigDispatchesThroughCLI drives `saasctl config print` through
 // the root dispatch -- the one place main.go and the config command group
 // meet -- against a go.mod in a temp directory: exit 0 and the full
-// seventeen-row provenance render on stdout, resolved from the module path
+// twenty-row provenance render on stdout, resolved from the module path
 // and the cleared environment. The print command's own behavior matrix
 // lives in internal/config's suite; this test only proves the dispatch
 // reaches it.
@@ -157,6 +160,9 @@ func TestRunConfigDispatchesThroughCLI(t *testing.T) {
 		"sqlite path      app.db       unset or empty (default app.db)\n" +
 		"config key       [redacted]   unset or empty (development default)\n" +
 		"org index key    [redacted]   unset or empty (development default)\n" +
+		"authn blind index key [redacted]   unset or empty (development default)\n" +
+		"authn pii cipher key [redacted]   unset or empty (development default)\n" +
+		"pki local key cipher key [redacted]   unset or empty (development default)\n" +
 		"redis addr                    unset or empty (eventbus/kv stay on the in-process default)\n" +
 		"s3 endpoint                   unset or empty (objectstore stays on the local-directory default)\n" +
 		"s3 bucket                     unset or empty (objectstore stays on the local-directory default)\n" +

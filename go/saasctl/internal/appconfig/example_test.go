@@ -28,10 +28,16 @@ func ExampleLoad() {
 	fmt.Println("sqlite path:", cfg.SQLitePath, "from env:", cfg.SQLitePathFromEnv)
 	fmt.Println("config key is the documented development default:", bytes.Equal(cfg.ConfigKey, devConfigKey))
 	fmt.Println("org index key is the documented development default:", bytes.Equal(cfg.OrgIndexKey, devOrgIndexKey))
+	fmt.Println("authn blind index key is the documented development default:", bytes.Equal(cfg.AuthnBlindIndexKey, devBlindIndexKey))
+	fmt.Println("authn pii cipher key is the documented development default:", bytes.Equal(cfg.AuthnPIICipherKey, devPIICipherKey))
+	fmt.Println("pki local key cipher key is the documented development default:", bytes.Equal(cfg.PKILocalKeyCipherKey, devPKILocalKeyCipherKey))
 	// Output:
 	// deployment mode: distributed from env: true
 	// port: 9090 from env: true
 	// sqlite path: app.db from env: false
 	// config key is the documented development default: true
 	// org index key is the documented development default: true
+	// authn blind index key is the documented development default: true
+	// authn pii cipher key is the documented development default: true
+	// pki local key cipher key is the documented development default: true
 }

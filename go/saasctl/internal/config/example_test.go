@@ -11,7 +11,7 @@ import (
 // arguments and no environment: the default go.mod path resolves to the
 // temp directory the example moves into, the app name derives from the
 // go.mod's module path, and every variable falls back to the generated
-// app's own default. The two key rows render as [redacted] with their
+// app's own default. The five key rows render as [redacted] with their
 // development-default provenance.
 func ExampleRun() {
 	dir, err := os.MkdirTemp("", "config-example")
@@ -81,6 +81,9 @@ go 1.25.0
 	// sqlite path      app.db       unset or empty (default app.db)
 	// config key       [redacted]   unset or empty (development default)
 	// org index key    [redacted]   unset or empty (development default)
+	// authn blind index key [redacted]   unset or empty (development default)
+	// authn pii cipher key [redacted]   unset or empty (development default)
+	// pki local key cipher key [redacted]   unset or empty (development default)
 	// redis addr                    unset or empty (eventbus/kv stay on the in-process default)
 	// s3 endpoint                   unset or empty (objectstore stays on the local-directory default)
 	// s3 bucket                     unset or empty (objectstore stays on the local-directory default)

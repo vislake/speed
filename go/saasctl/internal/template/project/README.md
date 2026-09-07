@@ -77,6 +77,9 @@ environment instead.
 | `APP_DEPLOYMENT_MODE` | `standalone` (default) or `distributed` |
 | `APP_CONFIG_KEY` | 64 hex characters: the master key the config module's cipher is built from |
 | `APP_ORG_INDEX_KEY` | 64 hex characters: the blind-index HMAC key; consumed only by compositions that wire the org module, parsed unconditionally so the bootstrap contract never changes with the selection |
+| `APP_AUTHN_BLIND_INDEX_KEY` | 64 hex characters: the HMAC key an authn-wiring composition's blind indexer is built from; parsed unconditionally for the same reason `APP_ORG_INDEX_KEY` is |
+| `APP_AUTHN_PII_CIPHER_KEY` | 64 hex characters: the AES key that seals authn's encrypted PII columns (email, phone, TOTP secrets); parsed unconditionally for the same reason `APP_ORG_INDEX_KEY` is |
+| `APP_PKI_LOCAL_KEY_CIPHER_KEY` | 64 hex characters: the AES key that seals go/pki's persisted signing-key column; parsed unconditionally for the same reason `APP_ORG_INDEX_KEY` is |
 | `APP_REDIS_ADDR` | Redis `host:port`; when set, composes a real Redis-backed implementation of both the "eventbus" and "kv" seams (unset leaves both on the Preset's in-process default) |
 | `APP_S3_ENDPOINT` | S3-compatible endpoint; together with the three variables below, composes a real ObjectStore for the "objectstore" seam -- all four are required together, a partial set is refused rather than silently ignored |
 | `APP_S3_BUCKET` | S3 bucket name |
@@ -95,15 +98,21 @@ provenance, refusing exactly when the generated app's own bootstrap would
 refuse -- see "Editing and regenerating" below.
 
 The committed dev keys are recognizable placeholders for zero-setup
-development, never secrets: `config.go` holds `devConfigKey` and
-`devOrgIndexKey`, and authn-wiring compositions carry three more
-(`devBlindIndexKey`, `devPIICipherKey`, `devPKILocalKeyCipherKey`) in
-`server.go`. A real deployment must replace every one of them with
-secret-manager material, and each key must stay stable across restarts:
-the blind-index key must stay identical across restarts or every
-already-stored email/phone blind index becomes unfindable; `devPIICipherKey`
-seals authn's encrypted PII columns (email, phone, TOTP secrets); and
-`devPKILocalKeyCipherKey` seals go/pki's own persisted signing-key column.
+development, never secrets: `config.go` holds all five of them --
+`devConfigKey`, `devOrgIndexKey`, `devBlindIndexKey`, `devPIICipherKey`
+and `devPKILocalKeyCipherKey` -- each a FALLBACK that applies only while
+its own environment variable above is unset, never a value that overrides
+a configured one. A real deployment must set all five `APP_*` key
+variables above from secret-manager material, or the committed bytes are
+what protect its production data. Each key must stay stable across
+restarts: the blind-index keys must stay identical across restarts or
+every already-stored email/phone blind index becomes unfindable;
+`devPIICipherKey` seals authn's encrypted PII columns (email, phone, TOTP
+secrets); and `devPKILocalKeyCipherKey` seals go/pki's own persisted
+signing-key column. Each dev key is a DIFFERENT byte sequence from every
+other one: dbkit's key-separation rule (never let one key double as two
+different AEAD or HMAC constructions) applies across modules, not only
+within one.
 
 ## What is wired -- and what is not
 
@@ -143,7 +152,7 @@ migrations to the project's SQLite database from the command line (the
 operator-driven twin of this app's own startup Apply), and `saasctl config
 print` shows how this project's bootstrap environment resolves -- each
 `APP_*` variable's value and provenance, with every secret-shaped value
-(the two key variables, the S3 secret key and the SMTP password) rendered
+(the five key variables, the S3 secret key and the SMTP password) rendered
 `[redacted]`. Dynamic-configuration value print and editing (the `configs`
 table's values with their tenant scopes and schema-driven redaction) and
 the web-side scaffolds are later `saasctl` rounds. Speed modules are
