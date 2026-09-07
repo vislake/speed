@@ -311,6 +311,41 @@ covers the dispatch refusal, and
 narrowing; the wire code and its HTTP status ride errors_test.go's
 literal code table.
 
+The P1-2 leak the declaration enforcement above closes was invited by the
+earlier framing of `Dispatch.Params`' own doc comment: the field read as
+an interpolation-only channel ("the values the type's templates
+reference"), and the persistence -- a parameter persists verbatim into the
+inbox row and API whether or not any template references it -- was left to
+inference, so admin's author reasonably read an unreferenced parameter as
+unused; P1-2 was invited by the contract, not by author carelessness. Copy
+governance is now structural
+rather than prose (2026-09): a parameter no copy template of the type
+references renders into nothing yet would still round-trip through the
+row, so `Dispatch` refuses it before anything is enqueued
+(`ErrDispatchParamsUnreferenced`, code
+`notification.dispatch_params_unreferenced`, naming the type in "type_key"
+and the offending keys in "params") -- applied to every DECLARED type
+whether or not its declaration restricts its recipient-visible list
+(declaration governs exposure, copy governs use, and a parameter must
+satisfy both; a type the registry does not declare is not judged here,
+its delivery being refused anyway by the delivery path's own
+undeclared-type gate) -- and a user delivery's channel leg narrows a
+payload that nevertheless reaches it -- a job enqueued before the copy
+gate existed -- down to the parameters that channel's own copy renders
+(render.go's `copyParamsForChannel`, a removal probe: a parameter whose
+removal leaves every rendered part byte-identical is dropped) before the
+delivery key derives or anything renders or persists, so the in-app row
+stores exactly the parameters its own copy was rendered from and the key
+never depends on a copy-inert parameter. Distinguishing two otherwise
+identical deliveries is `OccurrenceID`'s first-class job, never a
+copy-inert parameter's. The delivery suite pins both boundaries:
+`TestDelivery_Dispatch_RefusesParamsNoTemplateReferences` covers the
+dispatch refusal over an unrestricted AND an over-declared type (a
+restricted declaration that itself lists the unreferenced parameter), and
+`TestDelivery_StalePayloadParams_UnreferencedParam_DroppedBeforeRowAndKey`
+the stale-payload narrowing -- both fail on the pre-gate code, where the
+dispatch sailed through and the row carried the marker verbatim.
+
 Record semantics (`send_record.go`): `succeeded` is written only after the
 transport accepted the send, `failed` after a failure exhausted an attempt,
 `skipped` after a deliberate non-send whose reason will not change by
