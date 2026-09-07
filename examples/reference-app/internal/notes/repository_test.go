@@ -2,6 +2,7 @@ package notes
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
+	_ "github.com/vislake/speed/go/dbkit/dialect/sqlite"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
@@ -44,6 +46,52 @@ func newMigratedRepositoryWithDB(t *testing.T) (*Repository, *gorm.DB) {
 	}
 
 	return NewRepository(db), db
+}
+
+// newAuditCaptureRepository returns a Repository backed by a fresh,
+// per-test SQLite database -- migrated with this module's own real
+// Migrations(), exactly like newMigratedRepository -- whose dbkit.Open call
+// wires bus as dbkit.Options.AuditBus and deliberately leaves
+// Options.AuditModels empty: nil is dbkit's documented default capture
+// semantics, under which every Auditable model written through the
+// connection is captured. That is the host shape Note's plaintext
+// protection must survive -- a consumer wiring AuditBus without an
+// AuditModels restriction, or a future edit relaxing this app's own scope
+// list (see model.go's AuditResourceType doc comment, and the regression
+// test that drives this harness).
+//
+// The file's blank import of go/dbkit/dialect/sqlite registers the dialect
+// driver this Open call needs (newMigratedRepositoryWithDB's dbtest.NewSQLite
+// path registers the same driver for itself).
+func newAuditCaptureRepository(t *testing.T, bus pkgcore.EventBus) *Repository {
+	t.Helper()
+
+	dsn := filepath.Join(t.TempDir(), "audit-capture.sqlite")
+	db, err := dbkit.Open(context.Background(), dbkit.Options{
+		Dialect:  dbkit.DialectSQLite,
+		DSN:      dsn,
+		AuditBus: bus,
+	})
+	if err != nil {
+		t.Fatalf("open audit-capture sqlite database: %v", err)
+	}
+	t.Cleanup(func() {
+		sqlDB, dbErr := db.DB()
+		if dbErr != nil {
+			return
+		}
+		_ = sqlDB.Close()
+	})
+
+	registry := dbkit.NewMigrationRegistry()
+	if err := registry.Register(NewModule(db)); err != nil {
+		t.Fatalf("register notes module for migrations: %v", err)
+	}
+	if err := registry.Apply(context.Background(), db, dbkit.DialectSQLite); err != nil {
+		t.Fatalf("apply notes migrations: %v", err)
+	}
+
+	return NewRepository(db)
 }
 
 // notesHardDeletePurpose is the SystemPurpose the two hard-delete consumer

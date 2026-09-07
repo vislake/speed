@@ -47,8 +47,23 @@ type Note struct {
 	dbkit.TenantModel
 
 	// Text is the note's placeholder content. It stands in for whatever
-	// real field(s) a later milestone's module will actually need.
-	Text string `gorm:"column:text;size:4000;not null"`
+	// real field(s) a later milestone's module will actually need, and in
+	// this app's own domain the real content is patient data.
+	//
+	// The audit:"redact" struct tag is dbkit's model-side capture opt-out
+	// for a plaintext-sensitive column (go/dbkit/audit_capture.go's
+	// fieldValuesMap doc comment): whenever dbkit's automatic write-capture
+	// plugin captures this model on a connection whose capture scope admits
+	// Note, the text column travels as the "[redacted]" marker -- never as
+	// its plaintext -- while the column's key staying present keeps the
+	// fact that the write touched the column visible to a diff reader. A
+	// note's body is tenant user content that must never enter the
+	// append-only audit trail verbatim, and declaring that on the field
+	// itself makes the protection host-independent: it survives on any
+	// connection that captures Note, whatever a host's capture-scope list
+	// does (see the AuditResourceType doc comment below for why that
+	// host-side exclusion alone cannot be the whole protection).
+	Text string `gorm:"column:text;size:4000;not null" audit:"redact"`
 
 	// CreatorUserID is the user id of the note's creator, attributed by the
 	// host's SubjectResolver seam at create time (handler.go's
@@ -119,30 +134,56 @@ func (n Note) GetDeletedAt() *time.Time { return n.DeletedAt }
 
 // AuditResourceType implements dbkit.Auditable: it names notes' audit
 // resource kind "note", the label dbkit's automatic GORM write-capture
-// plugin would attach to a Note write's WriteCapturedEvent if a host
-// wired dbkit.Options.AuditBus for this model's database connection.
+// plugin attaches to a Note write's WriteCapturedEvent on any connection
+// whose capture scope admits Note.
 //
-// cmd/server's buildServer deliberately does NOT wire AuditBus for this
-// app's own shared connection -- see its own doc comment on the call to
-// dbkit.Open for a real, empirically-confirmed deadlock (SQLite allows
-// only one writer per file, and dbkit.Repository[Note]'s write transaction
-// is still open when that plugin's callback would fire) that the
-// automatic mechanism hits whenever the audit persister shares a database
-// file with the model being captured. Note implements Auditable anyway,
-// both because a future fix to that mechanism (or a host wiring a
-// dedicated audit connection) should not require touching this model
-// again, and because it is real, tested behavior in its own right (see
-// model_test.go's TestNote_AuditResourceType_ReturnsNote and
-// go/dbkit/example_test.go's ExampleAuditable).
+// This app's own shared connection is a wired one: cmd/server's
+// buildServer sets dbkit.Options.AuditBus on its dbkit.Open call (the
+// same bus instance Kernel.Bootstrap later receives through
+// WithEventBus), and that call's Options.AuditModels scope lists org's
+// three models and deliberately nothing else. Note stays off that list by
+// design -- one host-side list line -- because this module records its
+// own note trail declaratively through audit.Emit (handler.go's
+// NotesCreateNote, under the registered notes.note.create audit action):
+// admitting Note to the automatic scope would double-record creation, and
+// would do so with the note's full body, since dbkit's documented default
+// when Options.AuditModels is empty or nil is capture-everything -- every
+// Auditable model written through the connection lands, whole column
+// values included, in an append-only trail.
 //
-// This app's actual audit trail for note creation goes through the
-// declarative mechanism instead: handler.go's NotesCreateNote calls
-// audit.Emit explicitly, after h.repo.Create has already returned (so
-// after that write's own transaction has committed, which is exactly why
-// Emit's call site does not hit the same hazard) -- see
-// server_test.go's TestBuildServer_NoteCreate_PersistsAuditEvent for the
-// end-to-end proof that a real POST /api/v1/notes request produces a
-// persisted go/dbkit/audit.AuditEvent row with Action "notes.note.create".
+// That asymmetry is why the plaintext protection cannot live only in the
+// host's list line, where the model's own body cannot be read: a host
+// dropping or relaxing the list -- or a consumer wiring AuditBus on a
+// connection that writes this model under dbkit's default semantics --
+// would silently start capturing every note verbatim, with no test or
+// gate going red. The model-side half of the protection is therefore
+// declared here, on the model: Note.Text carries dbkit's audit:"redact"
+// capture opt-out (see that field's comment and go/dbkit/audit_capture.go's
+// fieldValuesMap doc comment), so even on a capturing connection the text
+// column travels as "[redacted]", never the plaintext. The tag travels
+// with the model wherever it is written, which a host wiring file cannot
+// do for the consumers of a library module; it is read only for Auditable
+// models, which is why Note keeps the marker (and with it a declared
+// resource kind) rather than dropping the interface and with it the
+// question. (An earlier wiring deliberately left AuditBus unwired
+// entirely because a same-file persister deadlocked under SQLite's single
+// writer; that hazard was dissolved by dbkit's buffered post-commit
+// publish, proven by audit_capture_test.go's
+// TestAuditCapturePlugin_WithTenantSession_SameFileSynchronousPersister_NoLongerDeadlocks,
+// so nothing in the current shape -- bus wired, Note excluded, Text
+// tagged -- rests on that old limitation.)
+//
+// This app's actual audit trail for note creation runs through the
+// declarative mechanism: handler.go's NotesCreateNote calls audit.Emit
+// explicitly, after h.repo.Create has already returned (so after that
+// write's own transaction has committed, which keeps Emit's write out of
+// Create's transaction) -- see server_test.go's
+// TestBuildServer_NoteCreate_PersistsAuditEvent for the end-to-end proof
+// that a real POST /api/v1/notes request produces a persisted
+// go/dbkit/audit.AuditEvent row with Action "notes.note.create", and
+// model_test.go's
+// TestNote_AuditCapture_DefaultScope_CapturesTextRedacted for the proof
+// that even a default-scope automatic capture carries no note body.
 func (Note) AuditResourceType() string { return "note" }
 
 // compile-time check that Note satisfies dbkit.TenantScoped.

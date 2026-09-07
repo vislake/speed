@@ -1,8 +1,13 @@
 package notes
 
 import (
+	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -61,15 +66,130 @@ func TestNote_ImplementsTenantScoped(t *testing.T) {
 // TestNote_AuditResourceType_ReturnsNote is a runtime-checkable companion
 // to model.go's compile-time `var _ dbkit.Auditable = Note{}` assertion,
 // pinning the exact resource-type string dbkit's automatic write-capture
-// plugin would label a Note write's WriteCapturedEvent with, were this
-// app's own database wired for it (see model.go's AuditResourceType doc
-// comment for why it deliberately is not, and for the declarative
-// audit.Emit path this app uses instead -- proved end to end by
-// server_test.go's TestBuildServer_NoteCreate_PersistsAuditEvent).
+// plugin labels a Note write's WriteCapturedEvent with on any connection
+// whose capture scope admits Note. On this app's own shared connection
+// the bus is wired but Note is deliberately left off the Open call's
+// Options.AuditModels scope, so no automatic capture happens here -- the
+// note trail runs through the declarative audit.Emit path instead (see
+// model.go's AuditResourceType doc comment for the full shape, and
+// server_test.go's TestBuildServer_NoteCreate_PersistsAuditEvent for the
+// end-to-end proof of that path).
 func TestNote_AuditResourceType_ReturnsNote(t *testing.T) {
 	var n Note
 	if got, want := n.AuditResourceType(), "note"; got != want {
 		t.Fatalf("AuditResourceType() = %q, want %q", got, want)
+	}
+}
+
+// notesCapturedBus is a pkgcore.EventBus test double that records every
+// WriteCapturedEvent published to it, mirroring go/dbkit's own
+// audit_capture_test.go capturedBus one layer down (which this package
+// cannot import, being an unexported type of dbkit's external test
+// package). Publish is synchronous, which is what makes the assertions
+// below deterministic: the write-capture plugin publishes after the
+// write's transaction commits, inside the same Create call, so by the time
+// repo.Create returns every event this test must see has been recorded.
+type notesCapturedBus struct {
+	mu     sync.Mutex
+	events []dbkit.WriteCapturedEvent
+}
+
+func (b *notesCapturedBus) Subscribe(string, pkgcore.EventHandler) {}
+
+func (b *notesCapturedBus) Publish(_ context.Context, evt pkgcore.Event) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	payload, ok := evt.Payload.(dbkit.WriteCapturedEvent)
+	if !ok {
+		return fmt.Errorf("notes_test: unexpected payload type %T", evt.Payload)
+	}
+	b.events = append(b.events, payload)
+	return nil
+}
+
+func (b *notesCapturedBus) captured() []dbkit.WriteCapturedEvent {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]dbkit.WriteCapturedEvent, len(b.events))
+	copy(out, b.events)
+	return out
+}
+
+var _ pkgcore.EventBus = (*notesCapturedBus)(nil)
+
+// TestNote_AuditCapture_DefaultScope_CapturesTextRedacted pins the
+// model-side half of the note-body plaintext protection (model.go's
+// audit:"redact" tag on Note.Text, and its AuditResourceType doc
+// comment): when a host wires dbkit.Options.AuditBus on a connection
+// without restricting Options.AuditModels -- nil is dbkit's documented
+// default capture semantics, under which every Auditable model written
+// through the connection is captured, whole column values included -- a
+// Note create must still never carry the note's body text into the
+// captured payload that lands in the append-only audit trail. Note.Text
+// is plaintext-sensitive tenant content (in this app's domain, the real
+// content later milestones' fields stand in for is patient data), so the
+// tag must make the captured "text" column travel as the "[redacted]"
+// marker: the key stays, because a diff reader must still see the write
+// touched the column, while the plaintext appears nowhere in the payload
+// (the exact payload the go/dbkit/audit persister serializes into
+// audit_events.changes).
+//
+// The test lives in this model's own test file, not in cmd/server's,
+// because the protection under test is declared on the model itself: it
+// must hold on ANY connection whose capture scope admits Note, which is
+// precisely the shape this app's own host-side exclusion (Note left off
+// cmd/server's Options.AuditModels list) cannot vouch for -- the tag is
+// the layer that survives that one host list line being dropped or
+// relaxed. It drives a real Note create through this package's real,
+// migrated Repository over a real migrated SQLite file (the
+// newAuditCaptureRepository harness), so it exercises the real capture
+// plugin against the real model end to end. Before the tag existed on
+// Note.Text, this test failed with the note body captured verbatim.
+func TestNote_AuditCapture_DefaultScope_CapturesTextRedacted(t *testing.T) {
+	bus := &notesCapturedBus{}
+	repo := newAuditCaptureRepository(t, bus)
+
+	const (
+		tenantID = "tenant-a"
+		body     = "note body that must never reach the audit trail verbatim"
+		creator  = "user-1"
+	)
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID(tenantID))
+	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: creator})
+
+	note := &Note{ID: uuid.NewString(), Text: body, CreatorUserID: creator}
+	if err := repo.Create(ctx, note); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 1 {
+		t.Fatalf("captured %d WriteCapturedEvents, want exactly 1 (the default capture scope must capture the Note create)", len(events))
+	}
+	evt := events[0]
+	if evt.ResourceType != "note" || evt.Operation != "create" || evt.Table != "notes" || evt.TenantID != tenantID {
+		t.Fatalf("captured event = (resource %q, operation %q, table %q, tenant %q), want (note, create, notes, %q)",
+			evt.ResourceType, evt.Operation, evt.Table, evt.TenantID, tenantID)
+	}
+
+	got, ok := evt.After["text"]
+	if !ok {
+		t.Fatalf("After = %+v, want a \"text\" key (the tag redacts the value; it does not drop the column from the diff)", evt.After)
+	}
+	if gotStr, isStr := got.(string); !isStr || gotStr != "[redacted]" {
+		t.Errorf("After[\"text\"] = %#v, want the redacted marker \"[redacted]\" (must never be the note body %q)", got, body)
+	}
+	for key, value := range evt.After {
+		if valueStr, isStr := value.(string); isStr && valueStr == body {
+			t.Errorf("After[%q] carries the note body verbatim into the captured payload", key)
+		}
+	}
+	// Control: the marker is per-field, never a whole-model opt-out.
+	// creator_user_id is an ordinary column and is captured with its real
+	// value, proving the write really was captured with live values and
+	// the marker on "text" is the tag's doing.
+	if got := evt.After["creator_user_id"]; got != creator {
+		t.Errorf("After[\"creator_user_id\"] = %#v, want %q (an unredacted control column must be captured normally)", got, creator)
 	}
 }
 

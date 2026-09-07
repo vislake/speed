@@ -282,12 +282,15 @@ func (h *Handler) resolveSubject(w http.ResponseWriter, r *http.Request) (string
 // recordNoteCreatedAudit records an AuditEvent for note's creation through
 // audit.Emit -- the declarative collection mechanism go/dbkit/audit
 // documents, used here instead of dbkit's automatic AuditBus-driven write
-// capture for the reason model.go's AuditResourceType doc comment gives in
-// full (a same-connection deadlock hazard under SQLite). Calling this
-// AFTER h.repo.Create has already returned is exactly what sidesteps that
-// hazard: by this point Create's own WithTenantSession transaction has
-// committed, so audit.Emit's own write against the same database opens a
-// fresh, uncontended session rather than nesting inside an open one.
+// capture, which this app's shared connection deliberately scopes off
+// Note: cmd/server's dbkit.Open call wires the bus but leaves Note off its
+// Options.AuditModels list, because this module records its own note trail
+// declaratively (see model.go's AuditResourceType doc comment for the
+// reason in full). Calling this AFTER h.repo.Create has already returned
+// keeps audit.Emit's own write out of Create's transaction: by this point
+// Create's own WithTenantSession transaction has committed, so Emit's
+// write against the same database opens a fresh, uncontended session
+// rather than nesting inside an open one.
 //
 // The recorded event is attributed to the creating user -- the SAME
 // creatorUserID NotesCreateNote resolved through the SubjectResolver seam
