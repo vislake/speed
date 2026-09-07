@@ -146,6 +146,22 @@ func WithDispatchRetryDelay(d time.Duration) Option {
 	}
 }
 
+// WithDispatchEscalationAttempts overrides the stated escalation horizon
+// of the billing-grade delivery contract's alert half (default
+// defaultDispatchEscalationAttempts): a permanently failing outbox row
+// whose failed delivery attempts reach this count stops being logged with
+// only the per-attempt Warn and is escalated to an Error-level alert on
+// this and every subsequent failed attempt, so operations can discover the
+// stuck row (see Dispatcher's "Escalation" doc comment). n <= 0 is
+// ignored.
+func WithDispatchEscalationAttempts(n int) Option {
+	return func(m *Module) {
+		if n > 0 {
+			m.dispatcher.escalationAttempts = n
+		}
+	}
+}
+
 // WithOutboxRetention overrides how long delivered outbox rows and their
 // ingest receipts stay on the table before the retention sweep retires
 // them (default defaultOutboxRetention). d <= 0 is ignored.

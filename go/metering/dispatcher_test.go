@@ -1,9 +1,12 @@
 package metering
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -757,4 +760,211 @@ func TestDispatcher_CancelThenStart_RestartsThePollLoop(t *testing.T) {
 		got, err := agg.RealtimeCount("tenant-a", "ai.generation", event.OccurredAt)
 		return err == nil && got == 1
 	})
+}
+
+// TestDispatcher_RunOnce_PermanentlyFailingRow_EscalatesToErrorPastTheStatedHorizon
+// is the P2 billing/metering observability regression: a billing-grade
+// delivery row whose sink permanently fails delivery was retried forever
+// with only a per-attempt Warn -- no cap, no escalation -- although the
+// documented billing-grade contract (docs/internal/06-billing-and-metering.md's
+// reliability-tier table: delivery failure "retries indefinitely, plus an
+// alert", restated on Dispatcher's own doc comment) promises exactly that
+// alert. The contract's alert half is implemented as an escalation horizon:
+// once a row's failed attempts reach the dispatcher's stated threshold
+// (defaultDispatchEscalationAttempts), its failure cadence switches from the
+// per-attempt Warn (metering.outbox_delivery_failed) to an Error
+// (metering.outbox_delivery_escalated) naming the row, repeated on every
+// subsequent failed attempt -- a permanently failing row is continuously
+// visible to log-based alerting on that Error key, so operations discovers
+// the stuck row within the stated horizon. Retry itself never stops and
+// nothing converges to a terminal state: the row stays pending and keeps
+// being retried, the escalation is a signal layered on the retry, not a cap
+// under it.
+func TestDispatcher_RunOnce_PermanentlyFailingRow_EscalatesToErrorPastTheStatedHorizon(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "metering_dispatcher_escalation.sqlite")
+	db := openAndMigrate(t, dsn)
+	brokenConn := closedDB(t, openAndMigrate(t, dsn))
+	d := NewDispatcher(db, NewAggregator(NewSummaryRepository(brokenConn))) // a sink that can never deliver
+	ctx := context.Background()
+
+	event := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: "idem-stuck", OccurredAt: time.Now()}
+	enqueued, err := Enqueue(ctx, db, event)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// The module's stated default escalation horizon: the failed-attempt
+	// count at which the delivery loop's per-attempt Warn becomes an
+	// escalated Error (defaultDispatchEscalationAttempts' doc comment states
+	// the wall-clock meaning at the default pacing).
+	const horizon = defaultDispatchEscalationAttempts
+
+	prevDefault := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+
+	// One delivery cycle against the permanently broken sink: the row is
+	// claimed (its re-claim window backdated below the claim cutoff, the
+	// deterministic stand-in for waiting out the retry delay), delivery
+	// fails, and the failed attempt is recorded -- the same cycle shape the
+	// existing retry regressions drive.
+	runFailureCycle := func() {
+		t.Helper()
+		delivered, cycleErr := d.RunOnce(ctx)
+		if cycleErr != nil {
+			t.Fatalf("RunOnce: %v", cycleErr)
+		}
+		if delivered != 0 {
+			t.Fatalf("delivered = %d, want 0 (the aggregator's own database connection is closed)", delivered)
+		}
+		backdated := time.Now().Add(-time.Second)
+		if updateErr := db.Model(&OutboxRecord{}).Where("id = ?", enqueued.ID).Update("retry_after", backdated).Error; updateErr != nil {
+			t.Fatalf("backdate retry_after: %v", updateErr)
+		}
+	}
+
+	// Below the stated horizon: only the ordinary per-attempt Warn cadence
+	// may appear -- no escalation line, no Error level, and the row is
+	// retried (never dropped, never converged to a terminal state).
+	for attempt := 1; attempt < horizon; attempt++ {
+		runFailureCycle()
+	}
+	row, found, err := findOutboxByIdempotencyKey(ctx, db, "tenant-a", "idem-stuck")
+	if err != nil {
+		t.Fatalf("findOutboxByIdempotencyKey: %v", err)
+	}
+	if !found {
+		t.Fatal("the permanently failing outbox row is gone before the stated horizon -- the row must never be dropped")
+	}
+	if row.Attempts != horizon-1 {
+		t.Fatalf("Attempts = %d after %d failed cycles, want %d", row.Attempts, horizon-1, horizon-1)
+	}
+	if row.Status != outboxStatusPending {
+		t.Fatalf("Status = %q before the horizon, want %q (the retry loop never converges a failing row to a terminal state)", row.Status, outboxStatusPending)
+	}
+	if out := buf.String(); strings.Contains(out, "metering.outbox_delivery_escalated") {
+		t.Errorf("escalation fired below the stated horizon: %s", out)
+	} else if got := strings.Count(out, "metering.outbox_delivery_failed"); got != horizon-1 {
+		t.Errorf("metering.outbox_delivery_failed lines = %d, want %d (one Warn per failed attempt below the horizon)", got, horizon-1)
+	}
+
+	// The horizon attempt itself is where the alert fires: the failure is
+	// logged at Error level under the escalation key, naming the stuck row.
+	runFailureCycle()
+	atHorizon := buf.String()
+	if !strings.Contains(atHorizon, "metering.outbox_delivery_escalated") {
+		t.Errorf("no escalation line at the stated horizon (attempt %d): %s", horizon, atHorizon)
+	}
+	if !strings.Contains(atHorizon, "level=ERROR") {
+		t.Errorf("escalation below Error level at the stated horizon: %s", atHorizon)
+	}
+	if !strings.Contains(atHorizon, "outbox_id="+enqueued.ID) {
+		t.Errorf("escalation line does not name the stuck row's id (%s): %s", enqueued.ID, atHorizon)
+	}
+	row, found, err = findOutboxByIdempotencyKey(ctx, db, "tenant-a", "idem-stuck")
+	if err != nil {
+		t.Fatalf("findOutboxByIdempotencyKey: %v", err)
+	}
+	if !found || row.Status != outboxStatusPending {
+		t.Fatalf("row at the horizon = %+v (found=%v), want Status=%q -- escalation is a signal, not a terminal transition", row, found, outboxStatusPending)
+	}
+	if row.Attempts != horizon {
+		t.Errorf("Attempts = %d at the horizon, want %d", row.Attempts, horizon)
+	}
+
+	// The escalation keeps firing on every later failed attempt, so the
+	// stuck row stays visible until it is fixed rather than alerting once
+	// and falling silent.
+	runFailureCycle()
+	if got := strings.Count(buf.String(), "metering.outbox_delivery_escalated"); got != 2 {
+		t.Errorf("escalation lines after %d failed attempts = %d, want 2 (one per failed attempt from the horizon on)", horizon+1, got)
+	}
+	row, found, err = findOutboxByIdempotencyKey(ctx, db, "tenant-a", "idem-stuck")
+	if err != nil {
+		t.Fatalf("findOutboxByIdempotencyKey: %v", err)
+	}
+	if !found || row.Status != outboxStatusPending {
+		t.Fatalf("row after the horizon = %+v (found=%v), want Status=%q -- still retried, never dead-lettered", row, found, outboxStatusPending)
+	}
+	if row.Attempts != horizon+1 {
+		t.Errorf("Attempts = %d after %d failed cycles, want %d", row.Attempts, horizon+1, horizon+1)
+	}
+	if row.LastError == "" {
+		t.Error("LastError is empty after the escalated failures, want the delivery failure's message")
+	}
+}
+
+// TestDispatcher_RunOnce_RowRecoveredBelowTheHorizon_NeverEscalates pins the
+// unaffected half of the escalation contract: escalation exists to surface
+// rows whose sink is permanently failing, so a row that fails a few times
+// below the stated horizon and then delivers normally -- the transient
+// failure every retry exists to ride out -- must never produce an escalation
+// line. Healthy rows and transient failures stay on the ordinary Warn
+// cadence; only a row that keeps failing past the stated horizon pages
+// operations.
+func TestDispatcher_RunOnce_RowRecoveredBelowTheHorizon_NeverEscalates(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "metering_dispatcher_escalation_recovery.sqlite")
+	db := openAndMigrate(t, dsn)
+	brokenConn := closedDB(t, openAndMigrate(t, dsn))
+	ctx := context.Background()
+
+	event := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 5, IdempotencyKey: "idem-recovering", OccurredAt: time.Now()}
+	enqueued, err := Enqueue(ctx, db, event)
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	prevDefault := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+
+	// One transient failure -- far below the stated horizon -- against the
+	// broken connection, then the sink recovers.
+	dBroken := NewDispatcher(db, NewAggregator(NewSummaryRepository(brokenConn)))
+	delivered, err := dBroken.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce (failure cycle): %v", err)
+	}
+	if delivered != 0 {
+		t.Fatalf("delivered during the failure cycle = %d, want 0", delivered)
+	}
+	backdated := time.Now().Add(-time.Second)
+	if updateErr := db.Model(&OutboxRecord{}).Where("id = ?", enqueued.ID).Update("retry_after", backdated).Error; updateErr != nil {
+		t.Fatalf("backdate retry_after: %v", updateErr)
+	}
+
+	// The healthy dispatcher completes the delivery on its next run.
+	dHealthy := NewDispatcher(db, NewAggregator(NewSummaryRepository(db)))
+	delivered, err = dHealthy.RunOnce(ctx)
+	if err != nil {
+		t.Fatalf("RunOnce (recovery): %v", err)
+	}
+	if delivered != 1 {
+		t.Fatalf("delivered = %d on recovery, want 1", delivered)
+	}
+
+	// The whole journey produced ordinary Warns at most -- never an
+	// escalation line.
+	if out := buf.String(); strings.Contains(out, "metering.outbox_delivery_escalated") {
+		t.Errorf("a row that recovered below the stated horizon escalated: %s", out)
+	} else if got := strings.Count(out, "metering.outbox_delivery_failed"); got != 1 {
+		t.Errorf("metering.outbox_delivery_failed lines = %d, want exactly 1 (the one transient failure)", got)
+	}
+
+	final, found, err := findOutboxByIdempotencyKey(ctx, db, "tenant-a", "idem-recovering")
+	if err != nil {
+		t.Fatalf("findOutboxByIdempotencyKey: %v", err)
+	}
+	if !found || final.Status != outboxStatusDelivered {
+		t.Fatalf("final row = %+v (found=%v), want Status=%q", final, found, outboxStatusDelivered)
+	}
+	got, err := dHealthy.aggregator.RealtimeCount("tenant-a", "ai.generation", event.OccurredAt)
+	if err != nil {
+		t.Fatalf("RealtimeCount: %v", err)
+	}
+	if got != 5 {
+		t.Errorf("RealtimeCount after recovery = %v, want 5 (the event was delivered exactly once)", got)
+	}
 }

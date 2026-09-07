@@ -26,6 +26,19 @@ const (
 	// always documented -- but measured from the failure itself rather
 	// than from queue position.
 	defaultDispatchRetryDelay = 2 * time.Second
+	// defaultDispatchEscalationAttempts is the stated escalation horizon
+	// for the billing-grade delivery contract's alert half (see
+	// Dispatcher's "Escalation" doc comment): a permanently failing outbox
+	// row whose failed delivery attempts reach this count is logged at
+	// Error level on that attempt and on every later failed one, where its
+	// per-attempt Warns stopped being enough for operations to notice it.
+	// At the module's default pacing (one retry per
+	// defaultDispatchRetryDelay, two seconds) the horizon is reached
+	// roughly two minutes after a row's first failure; a host that
+	// overrides the retry delay -- or the escalation count itself, via
+	// WithDispatchEscalationAttempts -- scales the wall-clock meaning with
+	// it.
+	defaultDispatchEscalationAttempts = 60
 	// defaultOutboxRetention is how long a delivered outbox row (and the
 	// ingest receipt its delivery created) stays on the table before the
 	// retention sweep retires both (see retireDeliveredOutboxRecords).
@@ -43,10 +56,11 @@ const (
 // rows and delivers each into Aggregator.Ingest, retrying INDEFINITELY on
 // failure rather than dropping (docs/internal/06-billing-and-metering.md's
 // billing-grade row: delivery failure retries indefinitely, plus an
-// alert). This round's implementation is an in-process goroutine (the
-// task's own scope explicitly allows a jobs-queue-driven poller as
-// later-round hardening); see AGENTS.md's Known limitations for exactly
-// what that costs.
+// alert). The alert half of that contract is the escalation described in
+// its own section below, implemented rather than promised. This round's
+// implementation is an in-process goroutine (the task's own scope
+// explicitly allows a jobs-queue-driven poller as later-round hardening);
+// see AGENTS.md's Known limitations for exactly what that costs.
 //
 // # Retry is scheduled, not priority-classed
 //
@@ -83,6 +97,31 @@ const (
 //     exactly the rows retry exists to reach. Reviewer finding
 //     P1-metering-10; see migration 0005.)
 //
+// # Escalation: the alert the billing-grade contract promises
+//
+// A row that fails forever is not a data-loss case -- it is an
+// observability one. docs/internal/06-billing-and-metering.md's
+// billing-grade row promises that a delivery failure "retries indefinitely,
+// plus an alert"; the retry half has always been real, and the alert half
+// is this: a row whose failed delivery attempts reach the stated escalation
+// horizon (escalationAttempts, default defaultDispatchEscalationAttempts,
+// host-tunable through Module.WithDispatchEscalationAttempts) switches its
+// failure cadence from the per-attempt Warn
+// (metering.outbox_delivery_failed) to an Error-level alert
+// (metering.outbox_delivery_escalated) naming the row -- outbox_id,
+// tenant_id, feature, the attempt count and the threshold. The alert
+// repeats on every subsequent failed attempt, so a stuck row stays
+// continuously visible to log-based alerting on that Error key instead of
+// alerting once and falling silent: operations discovers the row within
+// roughly escalationAttempts x the retry delay of its first failure (about
+// two minutes at the module's default pacing). The count is the row's own
+// durable Attempts, so the horizon survives a process restart. The
+// escalation is a signal layered on the retry, never a cap under it: the
+// row keeps being retried indefinitely exactly as before, never converges
+// to a terminal state, and a row that recovers -- fails below the horizon,
+// then delivers -- never escalates at all (the Dispatcher tests pin both
+// halves).
+//
 // # Retention: delivered rows and receipts are retired
 //
 // run also drives the outbox retention sweep
@@ -115,6 +154,12 @@ type Dispatcher struct {
 	batchSize  int
 	retryDelay time.Duration
 	retention  time.Duration
+	// escalationAttempts is the stated escalation horizon: a row whose
+	// failed delivery attempts reach this count is escalated from the
+	// per-attempt Warn to the Error-level alert described in the type's
+	// "Escalation" doc comment. See defaultDispatchEscalationAttempts for
+	// the default's wall-clock meaning.
+	escalationAttempts int
 
 	// mu guards every lifecycle field below, exactly as on
 	// AnalyticsRecorder. The poll goroutine reads stop/done only through
@@ -130,18 +175,20 @@ type Dispatcher struct {
 }
 
 // NewDispatcher returns a Dispatcher polling db for aggregator's pending
-// outbox rows, with the default interval, batch size, retry delay and
-// retention. Module's WithDispatchInterval / WithDispatchBatchSize /
-// WithDispatchRetryDelay / WithOutboxRetention options override the
-// fields Module wires (same package, see module.go).
+// outbox rows, with the default interval, batch size, retry delay,
+// escalation threshold and retention. Module's WithDispatchInterval /
+// WithDispatchBatchSize / WithDispatchRetryDelay /
+// WithDispatchEscalationAttempts / WithOutboxRetention options override
+// the fields Module wires (same package, see module.go).
 func NewDispatcher(db *gorm.DB, aggregator *Aggregator) *Dispatcher {
 	return &Dispatcher{
-		db:         db,
-		aggregator: aggregator,
-		interval:   defaultDispatchInterval,
-		batchSize:  defaultDispatchBatchSize,
-		retryDelay: defaultDispatchRetryDelay,
-		retention:  defaultOutboxRetention,
+		db:                 db,
+		aggregator:         aggregator,
+		interval:           defaultDispatchInterval,
+		batchSize:          defaultDispatchBatchSize,
+		retryDelay:         defaultDispatchRetryDelay,
+		retention:          defaultOutboxRetention,
+		escalationAttempts: defaultDispatchEscalationAttempts,
 	}
 }
 
@@ -285,7 +332,9 @@ func (d *Dispatcher) RunOnce(ctx context.Context) (delivered int, err error) {
 // deliverOne attempts to ingest rec into d.aggregator and mark it
 // delivered, reporting whether it succeeded. Every failure along the way
 // is logged rather than propagated -- see RunOnce's own doc comment for
-// why.
+// why. A failed delivery attempt is logged either as the per-attempt Warn
+// or, once the row's failed attempts reach the escalation horizon, as the
+// Error-level alert -- see the type's "Escalation" doc comment.
 //
 // It calls Aggregator.IngestBillingGrade, never the plain Ingest: this is
 // the billing-grade delivery path, and markOutboxDelivered below (the
@@ -311,12 +360,30 @@ func (d *Dispatcher) deliverOne(ctx context.Context, rec OutboxRecord) bool {
 				"outbox_id", rec.ID,
 			)
 		}
-		obs.FromContext(ctx).Warn("metering.outbox_delivery_failed",
-			"error", err,
-			"outbox_id", rec.ID,
-			"tenant_id", rec.TenantID,
-			"feature", rec.Feature,
-		)
+		// The alert half of the billing-grade delivery contract (see the
+		// type's "Escalation" doc comment): once this row's failed attempts
+		// reach the stated horizon -- this attempt is number
+		// rec.Attempts+1, rec.Attempts being the failures recorded before
+		// it -- the failure cadence switches from the per-attempt Warn to
+		// an Error-level alert naming the row, repeated on every later
+		// failed attempt so the stuck row stays visible until it is fixed.
+		if rec.Attempts+1 >= d.escalationAttempts {
+			obs.FromContext(ctx).Error("metering.outbox_delivery_escalated",
+				"error", err,
+				"outbox_id", rec.ID,
+				"tenant_id", rec.TenantID,
+				"feature", rec.Feature,
+				"attempts", rec.Attempts+1,
+				"escalation_threshold", d.escalationAttempts,
+			)
+		} else {
+			obs.FromContext(ctx).Warn("metering.outbox_delivery_failed",
+				"error", err,
+				"outbox_id", rec.ID,
+				"tenant_id", rec.TenantID,
+				"feature", rec.Feature,
+			)
+		}
 		return false
 	}
 
