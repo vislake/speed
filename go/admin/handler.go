@@ -184,6 +184,11 @@ func (h *Handler) AdminUpdateTenant(w http.ResponseWriter, r *http.Request, id s
 		status := tenancy.TenantStatus(*req.Status)
 		patch.Status = &status
 	}
+	// P2-pkgcore-actor-1: DisplayName is intentionally not resolved here --
+	// a Principal carries no display name (go/authn/token.go), and the
+	// record's actor is resolved against the users table at record time by
+	// TenantService.recordAudit instead (see its own doc comment), the one
+	// place every tenant-ledger edit funnels through.
 	actor := pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: callerID}
 	t, err := h.tenants.SetStatus(r.Context(), id, patch, actor)
 	if err != nil {

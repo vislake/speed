@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/compliance"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/jobs"
@@ -78,6 +79,14 @@ type ExportService struct {
 	// before Register runs.
 	bus          pkgcore.EventBus
 	auditActions pkgcore.AuditActionRegistrar
+
+	// authnSvc resolves the requesting operator's display name onto the
+	// ctx actor Handle installs (see Handle and resolveActorName). Nil
+	// until Module.Register calls attachAudit; WithAuthn is a mandatory
+	// production option, so this is never nil in a correctly wired
+	// Bootstrap, and a nil-seam unit fixture records id-only actors
+	// exactly as before.
+	authnSvc *authn.Service
 }
 
 // NewExportService returns an ExportService calling export and enqueuing
@@ -87,11 +96,14 @@ func NewExportService(export *compliance.ExportService, queue jobs.Queue) *Expor
 }
 
 // attachAudit gives the service the bus and audit-action registry Handle
-// needs to record admin.audit_export, both read from the host's
-// *pkgcore.Registry during Module.Register.
-func (s *ExportService) attachAudit(bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar) {
+// needs to record admin.audit_export -- plus the *authn.Service whose
+// users table Handle reads the requesting operator's display name from
+// (resolveActorName's own doc comment) -- all read from the host's
+// *pkgcore.Registry (and authn module) during Module.Register.
+func (s *ExportService) attachAudit(bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, authnSvc *authn.Service) {
 	s.bus = bus
 	s.auditActions = actions
+	s.authnSvc = authnSvc
 }
 
 // Enqueue validates tenantID and operatorUserID and enqueues one go/jobs
@@ -164,8 +176,16 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 	// pkgcore.ActorFromContext; without this, that event would carry a
 	// zero Actor for every admin-triggered export even though the
 	// operator identity was known and available the whole time.
+	//
+	// P2-pkgcore-actor-1: the actor is resolved against the users table
+	// here (resolveActorName) before it is layered on, so both this
+	// event and compliance's own carry the operator's display name, not
+	// an id-only Actor -- the worker context rebuilt from the job record
+	// has no other channel to learn it from, and the payload carries only
+	// the id Enqueue's HTTP caller resolved.
 	if payload.OperatorUserID != "" {
-		ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: payload.OperatorUserID})
+		ctx = pkgcore.WithActor(ctx, resolveActorName(ctx, s.authnSvc,
+			pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: payload.OperatorUserID}))
 	}
 
 	result, err := s.export.Export(ctx, job.TenantID)

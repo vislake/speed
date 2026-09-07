@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/dbkit/audit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy"
-
-	"github.com/vislake/speed/go/dbkit/audit"
 )
 
 // TenantService is D3's runtime: the operator-facing tenant ledger, kept
@@ -28,6 +28,14 @@ type TenantService struct {
 	// Handler.recordAudit.
 	bus          pkgcore.EventBus
 	auditActions pkgcore.AuditActionRegistrar
+
+	// authnSvc resolves the acting operator's display name onto audit
+	// records at record time (see recordAudit and resolveActorName). Nil
+	// until Module.Register calls attachAudit; WithAuthn is a mandatory
+	// production option, so this is never nil in a correctly wired
+	// Bootstrap, and a nil-seam unit fixture records id-only actors
+	// exactly as before.
+	authnSvc *authn.Service
 }
 
 // NewTenantService returns a TenantService over repo.
@@ -36,12 +44,15 @@ func NewTenantService(repo *TenantRepository) *TenantService {
 }
 
 // attachAudit gives the service what SetStatus needs to record an audit
-// event: the bus to publish on and the registry's frozen-by-use-time audit
-// action catalog, both read from the host's *pkgcore.Registry during
-// Module.Register.
-func (s *TenantService) attachAudit(bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar) {
+// event: the bus to publish on, the registry's frozen-by-use-time audit
+// action catalog, and the *authn.Service whose users table recordAudit
+// reads the acting operator's display name from (resolveActorName's own
+// doc comment), all read from the host's *pkgcore.Registry (and authn
+// module) during Module.Register.
+func (s *TenantService) attachAudit(bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, authnSvc *authn.Service) {
 	s.bus = bus
 	s.auditActions = actions
+	s.authnSvc = authnSvc
 }
 
 // Create is D3's manual-registration path: an operator registers a tenant
@@ -120,6 +131,13 @@ func (s *TenantService) SetStatus(ctx context.Context, tenantID string, patch Te
 
 // recordAudit emits admin.tenant.status_changed. It is a no-op (not an
 // error) when the host has not attached a bus yet.
+//
+// P2-pkgcore-actor-1: the caller-supplied actor (built by handler.go from
+// the operator's verified Principal user id alone -- see callerUserID) is
+// resolved against the users table here, at record time, so the row
+// carries the operator's display name rather than an id-only actor --
+// resolveActorName's own doc comment has the full policy, including what
+// stays id-only and why.
 func (s *TenantService) recordAudit(ctx context.Context, actor pkgcore.Actor, tenantID string, patch TenantPatch) {
 	if s.bus == nil {
 		return
@@ -131,7 +149,7 @@ func (s *TenantService) recordAudit(ctx context.Context, actor pkgcore.Actor, te
 	if patch.DisplayName != nil {
 		after["display_name"] = *patch.DisplayName
 	}
-	auditCtx := pkgcore.WithActor(ctx, actor)
+	auditCtx := pkgcore.WithActor(ctx, resolveActorName(ctx, s.authnSvc, actor))
 	err := audit.Emit(auditCtx, s.bus, s.auditActions, audit.Input{
 		Action: AuditActionTenantStatusChanged,
 		Resource: audit.Resource{

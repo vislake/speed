@@ -441,7 +441,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
 
 	bus := reg.EventBus()
-	m.tenants.attachAudit(bus, reg.AuditActions)
+	m.tenants.attachAudit(bus, reg.AuditActions, authnSvc)
 	m.impersonation.attach(bus, reg.AuditActions, m.notificationModule.Deliveries(), authnSvc, m.orgModule.Members())
 
 	m.search = NewSearchService(authnSvc, m.orgModule.Members(), m.tenants)
@@ -451,7 +451,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	m.auditSvc.attach(bus)
 
 	m.exportSvc = NewExportService(m.complianceModule.Export(), m.queue)
-	m.exportSvc.attachAudit(bus, reg.AuditActions)
+	m.exportSvc.attachAudit(bus, reg.AuditActions, authnSvc)
 	if err := reg.Jobs.Handle(jobTypeAuditExport, m.exportSvc); err != nil {
 		return err
 	}

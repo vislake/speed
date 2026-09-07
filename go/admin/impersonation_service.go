@@ -416,6 +416,14 @@ func isImpersonationGrantEnded(err error) bool {
 // (docs/internal/23-admin.md section 4.1's own explanation, which this
 // round's code realizes).
 //
+// P2-pkgcore-actor-1: both identities are resolved against the users
+// table here, at record time (resolveActorName), so a dual-identity row
+// carries both display names -- the impersonated target's on Actor and
+// the real administrator's on OnBehalfOf -- and stays readable after
+// either account is renamed or deleted. A system onBehalfOf (the
+// automatic end) and any id with no user row behind it stay id-only,
+// per resolveActorName's own policy.
+//
 // A publish failure is logged and swallowed: by the time this runs the
 // grant row has already committed (Start) or already been marked ended
 // (End), so surfacing an audit failure as the caller's own error would
@@ -425,8 +433,9 @@ func (s *ImpersonationService) recordAudit(ctx context.Context, action string, o
 	if s.bus == nil {
 		return
 	}
-	auditCtx := pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: targetUserID})
-	auditCtx = pkgcore.WithOnBehalfOf(auditCtx, onBehalfOf)
+	auditCtx := pkgcore.WithActor(ctx, resolveActorName(ctx, s.authnSvc,
+		pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: targetUserID}))
+	auditCtx = pkgcore.WithOnBehalfOf(auditCtx, resolveActorName(ctx, s.authnSvc, onBehalfOf))
 
 	var diff *audit.Diff
 	if after != nil {

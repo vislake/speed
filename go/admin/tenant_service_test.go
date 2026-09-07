@@ -32,7 +32,7 @@ func TestTenantService_HandleOrgNodeCreated_RootNode_LazilyRegisters(t *testing.
 	if err := reg.AuditActions.Add(AuditActionTenantStatusChanged); err != nil {
 		t.Fatalf("register audit action: %v", err)
 	}
-	svc.attachAudit(reg.EventBus(), reg.AuditActions)
+	svc.attachAudit(reg.EventBus(), reg.AuditActions, nil)
 
 	evt := pkgcore.Event{
 		Type:     org.EventNodeCreated,
@@ -229,7 +229,7 @@ func TestTenantService_SetStatus_RecordsAuditEvent(t *testing.T) {
 	if err := reg.AuditActions.Add(AuditActionTenantStatusChanged); err != nil {
 		t.Fatalf("register audit action: %v", err)
 	}
-	svc.attachAudit(reg.EventBus(), reg.AuditActions)
+	svc.attachAudit(reg.EventBus(), reg.AuditActions, nil)
 
 	ctx := context.Background()
 	if err := tenantRepo.Create(ctx, &Tenant{TenantID: "tenant-audit-1"}); err != nil {

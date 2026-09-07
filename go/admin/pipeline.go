@@ -189,6 +189,26 @@ func ImpersonationMiddleware(lookup GrantLookup) func(http.Handler) http.Handler
 			}
 
 			ctx := authn.WithPrincipal(r.Context(), targetPrincipal)
+
+			// P2-pkgcore-actor-1: DisplayName is deliberately left empty on
+			// both identities below. This middleware's whole context is the
+			// grant row (Lookup's contract) and the verified Principal --
+			// which carries no display name (go/authn/token.go) -- and it
+			// deliberately performs no user-record lookup of its own, so no
+			// honest name exists at this layer: filling the field would mean
+			// adding a users-store seam to the narrow GrantLookup contract
+			// and paying a lookup per impersonated request for a label only
+			// consumed if some downstream module happens to write an audit
+			// row. The impersonation audit events THEMSELVES --
+			// admin.impersonation.started/ended, the rows an investigation
+			// reads -- are not produced here but by ImpersonationService.
+			// recordAudit, which does resolve both names against the users
+			// table at record time (see its own doc comment). A future round
+			// wanting names on every DOWNSTREAM module's capture rows during
+			// an impersonated request would need either a user-lookup seam
+			// on this middleware or display names snapshot onto the grant
+			// row at Start time; neither exists today, and id-only ctx
+			// actors remain the honest record of what this layer knows.
 			ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: grant.TargetUserID})
 			ctx = pkgcore.WithOnBehalfOf(ctx, pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: adminPrincipal.UserID})
 			next.ServeHTTP(w, r.WithContext(ctx))
