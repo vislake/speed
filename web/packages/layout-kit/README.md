@@ -153,6 +153,9 @@ export interface RouteGuardProps {
   readonly children?: ReactNode
   readonly pendingFallback?: ReactNode
   readonly deniedFallback?: ReactNode
+  // ui-kit's own h1..h6 union; default 'h1'. Reaches only the default
+  // denied composition (see below).
+  readonly headingLevel?: EmptyStateProps['headingLevel']
   readonly onDenied?: () => void
 }
 ```
@@ -161,7 +164,19 @@ export interface RouteGuardProps {
 |---|---|
 | `'allowed'` | `children` |
 | `'pending'` | `pendingFallback`, or a default centered, labelled MUI `CircularProgress` |
-| `'denied'` | `deniedFallback`, or `@speed/ui-kit`'s own `EmptyState variant="noPermission"` -- the package's one concrete `ui-kit` coupling, never anything auth- or routing-shaped |
+| `'denied'` | `deniedFallback`, or `@speed/ui-kit`'s own `EmptyState variant="noPermission"` composed at `headingLevel` -- the package's one concrete `ui-kit` coupling, never anything auth- or routing-shaped |
+
+The default denied composition's title is the page's own heading: the
+gate replaces the page content it guards, so the fallback renders as
+an `h1` by default, and `headingLevel` (forwarded to ui-kit's own
+`EmptyState.headingLevel` contract) lets a host whose page heading
+precedes the gate pass the level that continues the page's order
+without a skip -- the usage example's page shape does exactly that,
+rendering its own `h1` and composing the gate below it at
+`headingLevel="h2"`. A host replacing the whole fallback through
+`deniedFallback` composes its own heading structure and needs none of
+this; `headingLevel` is consulted only when no `deniedFallback` is
+supplied.
 
 `onDenied` fires exactly once per transition *into* `'denied'` (a
 `useEffect` keyed on `status`, guarded so a re-render that leaves

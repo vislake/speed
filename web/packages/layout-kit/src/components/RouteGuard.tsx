@@ -19,8 +19,14 @@
  * `deniedFallback` defaults to `@speed/ui-kit`'s own
  * `EmptyState variant="noPermission"` -- the one concrete coupling this
  * package takes, already sanctioned for chrome/primitives, never
- * anything auth-shaped. `pendingFallback` defaults to a centered MUI
- * `CircularProgress` labelled from this package's own namespace.
+ * anything auth-shaped. The default denied composition replaces the
+ * page content the gate guards, so its title is the page's own
+ * heading: it renders as an `h1` by default, and `headingLevel` (the
+ * host control forwarded to ui-kit's own `EmptyState.headingLevel`)
+ * lets a host mounting the gate under a heading of its own continue
+ * the page's order without a skip. `pendingFallback` defaults to a
+ * centered MUI `CircularProgress` labelled from this package's own
+ * namespace.
  *
  * `onDenied` is a side-effect escape hatch (a router redirect,
  * telemetry) fired from an effect keyed on `status`, so it runs exactly
@@ -33,6 +39,7 @@ import type { ReactNode } from 'react'
 import Box from '@mui/material/Box'
 import CircularProgress from '@mui/material/CircularProgress'
 import { EmptyState } from '@speed/ui-kit'
+import type { EmptyStateProps } from '@speed/ui-kit'
 import { useLayoutKitTranslation } from '../internal/translation.js'
 
 export type RouteGuardStatus = 'allowed' | 'denied' | 'pending'
@@ -46,6 +53,16 @@ export interface RouteGuardProps {
   readonly pendingFallback?: ReactNode
   /** Overrides the default `'denied'` placeholder (ui-kit's `noPermission` EmptyState). */
   readonly deniedFallback?: ReactNode
+  /**
+   * The real heading element the default `'denied'` EmptyState's title
+   * renders as (forwarded to ui-kit's EmptyState, whose own heading
+   * contract this follows). The denied gate replaces the page content
+   * it guards, so the default is `'h1'` -- the fallback's title is the
+   * page's own heading; a host mounting the gate under a heading of
+   * its own passes the level that continues the page's order.
+   * Consulted only when `deniedFallback` is not supplied.
+   */
+  readonly headingLevel?: EmptyStateProps['headingLevel']
   /** Fires once per transition into `'denied'` -- never on every re-render. */
   readonly onDenied?: () => void
 }
@@ -60,6 +77,7 @@ export function RouteGuard({
   children,
   pendingFallback,
   deniedFallback,
+  headingLevel = 'h1',
   onDenied,
 }: RouteGuardProps) {
   const { t } = useLayoutKitTranslation()
@@ -102,5 +120,11 @@ export function RouteGuard({
     )
   }
 
-  return <>{deniedFallback ?? <EmptyState variant="noPermission" />}</>
+  return (
+    <>
+      {deniedFallback ?? (
+        <EmptyState variant="noPermission" headingLevel={headingLevel} />
+      )}
+    </>
+  )
 }

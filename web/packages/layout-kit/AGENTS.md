@@ -104,6 +104,20 @@ rule. The public surface is `src/index.ts`; everything under
   `ui-kit` import that carries authorization semantics — `ui-kit`
   itself has none to offer, and none should be added to it on this
   package's behalf.
+- **`RouteGuard`'s default denied composition renders at a page-level
+  `h1`, host-adjustable through `headingLevel`.** The denied gate
+  replaces the page content it guards, so the composed EmptyState's
+  title is the page's own heading by default (`h1`); `headingLevel`
+  (ui-kit's own `EmptyStateHeadingLevel` union, forwarded to the
+  EmptyState the default composes — the same shape auth-ui's
+  `SessionEndedScreen` gives its own whole-page placeholder) lets a
+  host whose page heading precedes the gate continue its order without
+  a skip. Only the default composition is affected: a host-supplied
+  `deniedFallback` owns its own heading structure entirely. Never drop
+  the heading forward back to ui-kit's stock `h6` default for the
+  gate's own fallback — that renders a heading level no page can start
+  at, and the package's denied-state axe scans pin the `h1` default
+  and the host-forwarded continuation.
 - **Accessibility is asserted, with recorded exceptions.** `AppShell`
   is page-level chrome (fixed header, nav drawer, main region), so its
   tests run axe with the `region` rule left **enabled** and its

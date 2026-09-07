@@ -48,7 +48,11 @@ function AppContent({ initialStatus }: { readonly initialStatus: RouteGuardStatu
           (page-has-heading-one is determinate in jsdom -- see the axe
           helper header). */}
       <h1>Protected screen</h1>
-      <RouteGuard status={status}>
+      {/* The gate guards a content region below the page's own h1, so
+          its default denied composition is forwarded the headingLevel
+          that continues the page's order -- h2 here (see RouteGuard's
+          headingLevel in the README). */}
+      <RouteGuard status={status} headingLevel="h2">
         <p>Protected screen content</p>
       </RouteGuard>
     </AppShell>
@@ -89,13 +93,21 @@ describe('README usage example', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('gates the content region on RouteGuard status, reusing ui-kit noPermission for denied', async () => {
+  it('gates the content region on RouteGuard status, reusing ui-kit noPermission for denied at the forwarded heading level', async () => {
     mockMatchMedia(true)
     const utils = renderWithProviders(<AppContent initialStatus="denied" />)
     expect(utils.queryByText('Protected screen content')).not.toBeInTheDocument()
+    // The example host keeps its own page h1 while the gate's default
+    // denied composition continues the page's order at the forwarded
+    // h2 -- pre-fix no headingLevel reached the fallback and its stock
+    // h6 fell out of the page's h1.
     expect(
-      utils.getByText(uiKitZhCN.emptyState.noPermission.title),
+      utils.getByRole('heading', {
+        level: 2,
+        name: uiKitZhCN.emptyState.noPermission.title,
+      }),
     ).toBeInTheDocument()
+    expect(utils.getByRole('heading', { level: 1, name: 'Protected screen' })).toBeInTheDocument()
   })
 
   it('opens and closes the mobile nav drawer via the shipped toggle labels', async () => {
