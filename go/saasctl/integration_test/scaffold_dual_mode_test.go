@@ -30,14 +30,19 @@
 // authn+org+rbac -- the richest selection, the one whose server.go also
 // exercises authn's "SMS sender" seam's three-way conditional-injection
 // switch (config.go's smsGatewayURLEnv doc comment) that a selection with
-// no authn module cannot touch at all. The other four selections' own
-// standalone-mode boot is proven by this SAME module's offline unit suite
-// (internal/new's golden byte-identity tests) plus the B4 procedure's own
-// real materialize-tidy-build-boot cycle recorded in AGENTS.md; their own
-// dual-mode CI coverage remains deferred, recorded as such in AGENTS.md's
-// Known limitations, exactly the same "representative subset, explicit
-// reason" shape root CLAUDE.md's Reference App section already blesses for
-// go/pki's X.509 layer and go/integration's two rounds.
+// no authn module cannot touch at all. The other four selections'
+// standalone-mode boot was proven once, by the B4 procedure's own real
+// materialize-tidy-build-boot cycle recorded in AGENTS.md; their
+// materialization is pinned byte-for-byte on every PR by this SAME
+// module's offline unit suite (internal/new's golden byte-identity tests
+// -- deliberately a pin of the materializer against the committed assets
+// and nothing more: it is not a tidy/build proof, and not a freshness
+// check on the go.mod goldens, which nothing automatic re-verifies
+// today). Their own dual-mode CI coverage remains deferred, recorded as
+// such in AGENTS.md's Known limitations, exactly the same
+// "representative subset, explicit reason" shape root CLAUDE.md's
+// Reference App section already blesses for go/pki's X.509 layer and
+// go/integration's two rounds.
 //
 // # What this does NOT prove
 //

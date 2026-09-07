@@ -64,7 +64,7 @@ func TestReadmeGoVersionMatchesGoModTxt(t *testing.T) {
 
 // envVarBacktickPattern matches a backtick-quoted, all-uppercase (with
 // digits and underscores) token in the README -- the exact shape every one
-// of the seventeen bootstrap environment variable names takes when the
+// of the twenty bootstrap environment variable names takes when the
 // README refers to it (e.g. APP_S3_ENDPOINT or PORT, each wrapped in a
 // pair of backticks).
 var envVarBacktickPattern = regexp.MustCompile("`([A-Z][A-Z0-9_]*)`")
@@ -188,9 +188,9 @@ func TestReadmeNamesOnlyRealDevKeyIdentifiers(t *testing.T) {
 // regression guard for TestProjectReadmeNamesTheShippedMaintenanceCommands
 // in embed_test.go: the "Editing and regenerating" section's own
 // [redacted]-secrets sentence must still name every secret-shaped print
-// row (the two key variables plus the two infrastructure credentials this
-// round adds), so the README's own description of `saasctl config print`
-// stays truthful once the command renders more than five lines.
+// row (the five key variables plus the two infrastructure credentials),
+// so the README's own description of `saasctl config print` stays
+// truthful once the command renders more than five lines.
 func TestReadmeEditingSectionStillNamesTheShippedCommands(t *testing.T) {
 	readme := readmeContent(t)
 	const section = "## Editing and regenerating"
