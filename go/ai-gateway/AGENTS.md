@@ -380,9 +380,19 @@ rate-limit call sites (the adjudicated P1). See "What round 4 adds".
   has a body twin, and unlike the address rule it survives the SSRF
   guards for ALLOWED destinations, since a non-2xx answer is the common
   error path of every provider call. The params now carry the status
-  code only; the body (bounded by `maxErrorBodyBytes`) goes to the
-  server-side log through `obs.FromContext` -- the observability
-  redaction layer -- where operators troubleshoot vendor failures from.
+  code only. A later ring of the same audit narrowed the server-side log
+  to match: the raw body (however bounded) is no longer logged there
+  either, because observability's redaction layer masks credential
+  shapes, never arbitrary echoed content -- and content-moderation-class
+  refusals routinely echo the refused request input into the error
+  envelope's free-text message. What reaches the log instead is the
+  vendor's own error contract: `error.type` / `error.code`, the
+  envelope's two enumeration fields, parsed from the JSON body (read at
+  most `maxErrorBodyBytes`) into the structured attributes `error_type` /
+  `error_code`; a body that is not the JSON envelope contributes no
+  attributes and the line carries the status code alone. What operators
+  lose is the vendor's prose; what they keep is the status and the two
+  coded fields vendors triage by.
 - Product decision, recorded not implemented: the stronger convergence --
   a platform-declared whitelist of base URLs only -- stays future product
   work; the legitimate capability (a tenant pointing its BYOK credential
@@ -397,8 +407,10 @@ rate-limit call sites (the adjudicated P1). See "What round 4 adds".
   pin the refusals through the service, the HTTP envelope and the
   composed stack; `ratelimit_test.go` pins that tenantless calls never
   consult the limiter; `openai_compatible_test.go` and
-  `openai_compatible_image_test.go` pin that a non-2xx error body lands
-  in the server-side log, never in the returned error's params.
+  `openai_compatible_image_test.go` pin that a non-2xx answer's raw body
+  reaches neither the returned error's params nor the server-side log --
+  the envelope's `error_type` / `error_code` attributes are what the log
+  carries, and a non-JSON body contributes nothing to it.
 
 ## Reference-app consumer
 

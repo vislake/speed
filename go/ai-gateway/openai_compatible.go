@@ -25,9 +25,9 @@ const chatCompletionsPath = "/chat/completions"
 const defaultHTTPTimeout = 60 * time.Second
 
 // maxErrorBodyBytes caps how much of a non-2xx response body
-// errorFromResponse reads for the server-side log, so a vendor that
-// answers an error page with an unbounded body cannot make this package
-// hold it all in memory.
+// errorFromResponse reads while looking for the vendor's JSON error
+// envelope, so a vendor that answers an error page with an unbounded body
+// cannot make this package scan it all.
 const maxErrorBodyBytes = 4096
 
 // streamScannerBufferBytes and streamScannerMaxBytes size the
@@ -172,27 +172,54 @@ func (p *OpenAICompatibleProvider) newHTTPRequest(ctx context.Context, body []by
 }
 
 // errorFromResponse builds ErrProviderRequestFailed from a non-2xx HTTP
-// response. The returned error's params carry ONLY the status code -- the
-// response body the dialed endpoint answered with is read (at most
-// maxErrorBodyBytes) and logged server-side through obs.FromContext(ctx),
-// hence through the observability redaction layer, never put into a
-// client-visible param. That is the response-reflux half of this module's
-// SSRF posture, the body twin of the no-IP-echo rule ErrBaseURLBlocked
-// pins for refusal answers (ssrf.go): an address, or a body, that the
-// server reached on the caller's behalf stays out of the answer handed
-// back to the caller who steered the dial. And unlike the refusal rule it
-// is not confined to blocked destinations: this echo channel is the
-// common error path of every provider call, so it would survive the SSRF
-// guards for any ALLOWED endpoint that answers with an error body --
-// which is why the body lives in the server-side log (where operators
-// troubleshoot vendor failures from) and not in the error's params.
+// response. The returned error's params carry ONLY the status code: the
+// answer the dialed endpoint gave stays out of what is handed back to the
+// caller who steered the dial -- the response-reflux half of this
+// module's SSRF posture, the body twin of the no-IP-echo rule
+// ErrBaseURLBlocked pins for refusal answers (ssrf.go). And unlike the
+// refusal rule it is not confined to blocked destinations: this echo
+// channel is the common error path of every provider call, so it would
+// survive the SSRF guards for any ALLOWED endpoint that answers with an
+// error body. Which is why the raw body is not logged server-side either:
+// provider error text is unbounded free text that routinely echoes the
+// request that failed -- content-moderation-class refusals quote the
+// input they refused -- and observability's redaction layer masks
+// credential shapes, never arbitrary echoed content (its own coverage
+// table records plaintext PII and full prompts as caller-declared). What
+// reaches the log instead is the vendor's own error contract, parsed from
+// the JSON body when it is one: the envelope's enumeration fields
+// (error.type / error.code) as structured attributes. A body that is not
+// the vendor's JSON error envelope -- an HTML error page, a reverse-proxy
+// banner, malformed JSON -- contributes no attributes, and the log line
+// carries the status code alone.
 func errorFromResponse(ctx context.Context, resp *http.Response) error {
-	limited := io.LimitReader(resp.Body, maxErrorBodyBytes)
-	raw, _ := io.ReadAll(limited)
-	obs.FromContext(ctx).Warn("aigateway: provider answered a non-2xx status",
-		"status_code", resp.StatusCode,
-		"response_body", string(raw))
+	var wire openaiErrorWire
+	// The envelope parse is best-effort and bounded at maxErrorBodyBytes:
+	// a non-JSON body, or an envelope longer than the bound, simply
+	// contributes no structured fields.
+	_ = json.NewDecoder(io.LimitReader(resp.Body, maxErrorBodyBytes)).Decode(&wire)
+	attrs := []any{"status_code", resp.StatusCode}
+	if wire.Error.Type != "" {
+		attrs = append(attrs, "error_type", wire.Error.Type)
+	}
+	if wire.Error.Code != "" {
+		attrs = append(attrs, "error_code", wire.Error.Code)
+	}
+	obs.FromContext(ctx).Warn("aigateway: provider answered a non-2xx status", attrs...)
 	return ErrProviderRequestFailed.WithParam("status", resp.StatusCode)
+}
+
+// openaiErrorWire is the error envelope a non-2xx response body may carry
+// (the shape OpenAI-compatible hosts answer refusals with), parsed down
+// to its two enumeration fields only. The envelope's message field is
+// deliberately not read: it is free text, the field content-moderation-
+// class refusals echo the refused request input into, so it must never
+// reach the log. See errorFromResponse's doc comment.
+type openaiErrorWire struct {
+	Error struct {
+		Type string `json:"type"`
+		Code string `json:"code"`
+	} `json:"error"`
 }
 
 // openaiChatMessageWire is the message shape inside a non-streaming

@@ -110,22 +110,66 @@ func TestOpenAICompatibleProvider_Chat_NonOKStatus_ReturnsProviderRequestFailed(
 	}
 }
 
-// TestOpenAICompatibleProvider_Chat_NonOKStatus_ErrorBodyLoggedNotReturned
-// is the response-reflux regression (SSRF ring 4, openai_compatible.go's
-// errorFromResponse): the dialed endpoint's non-2xx response body must
-// never travel back to the caller inside the returned error's params. The
-// caller steered this dial, so a body the server read on its behalf would
-// otherwise be echoed verbatim up to maxErrorBodyBytes -- an intranet
-// banner, an error page carrying internal paths and versions, a metadata
-// endpoint's credential document. The body keeps its troubleshooting value
-// in the server-side log of the ctx the call ran under (through
-// observability's redaction layer) instead, and the params carry the
-// status code only.
-func TestOpenAICompatibleProvider_Chat_NonOKStatus_ErrorBodyLoggedNotReturned(t *testing.T) {
-	const leakedBody = `{"error":{"message":"internal service error","detail":"intranet-echo-7f3c9"}}`
+// TestOpenAICompatibleProvider_Chat_NonOKStatus_EnvelopeFieldsOnlyInLog
+// is the response-reflux regression closing the raw-text sink (SSRF ring
+// 4 follow-up, openai_compatible.go's errorFromResponse): the dialed
+// endpoint's non-2xx response body must never travel back to the caller
+// inside the returned error's params -- the caller steered this dial, so
+// a body the server read on its behalf would otherwise be echoed verbatim
+// -- and no part of the raw body may enter the server-side log either.
+// Content-moderation-class refusals routinely echo the offending request
+// input into the envelope's free-text message, and observability's
+// redaction layer masks credential shapes, not arbitrary echoed content,
+// so the log must carry only the envelope's enumeration fields
+// (error.type / error.code), parsed from the JSON body, never its text.
+func TestOpenAICompatibleProvider_Chat_NonOKStatus_EnvelopeFieldsOnlyInLog(t *testing.T) {
+	const echoedFragment = "kumquat-arboretum-2f8a1"
+	const errorBody = `{"error":{"message":"refused: your input contained ` + echoedFragment + `","type":"invalid_request_error","code":"content_policy_violation"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(errorBody))
+	}))
+	defer srv.Close()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	ctx := obs.WithLogger(context.Background(), logger)
+
+	p := NewOpenAICompatibleProvider(srv.URL, "sk-test")
+	_, err := p.Chat(ctx, ChatRequest{
+		Model:    "gpt-4o-mini",
+		Messages: []ChatMessage{{Role: RoleUser, Content: "hi " + echoedFragment}},
+	})
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Code != ErrProviderRequestFailed.Code {
+		t.Fatalf("Chat err = %v, want ErrProviderRequestFailed", err)
+	}
+	if got, present := appErr.Params["body"]; present {
+		t.Fatalf("error params carry the dialed endpoint's response body %q -- the body must not be handed back to the caller who steered the dial", got)
+	}
+	if appErr.Params["status"] != http.StatusBadRequest {
+		t.Fatalf("status param = %v, want %d", appErr.Params["status"], http.StatusBadRequest)
+	}
+	logged := logBuf.String()
+	if strings.Contains(logged, echoedFragment) {
+		t.Fatalf("server-side log carries %q -- the request fragment the provider echoed back must not reach the log; log = %q", echoedFragment, logged)
+	}
+	if !strings.Contains(logged, "error_type=invalid_request_error") || !strings.Contains(logged, "error_code=content_policy_violation") {
+		t.Fatalf("server-side log lacks the envelope's parsed error_type/error_code; log = %q", logged)
+	}
+}
+
+// TestOpenAICompatibleProvider_Chat_NonOKStatus_NonJSONBodyNotLogged pins
+// the same boundary for a body that is not the vendor's JSON error
+// envelope -- an HTML error page or a reverse-proxy banner, the shape the
+// ring-4 intranet scenario worried about. The envelope parse contributes
+// no structured fields, and none of the body's text may appear in the
+// log: the line carries the status code alone.
+func TestOpenAICompatibleProvider_Chat_NonOKStatus_NonJSONBodyNotLogged(t *testing.T) {
+	const bannerFragment = "intranet-echo-7f3c9"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(leakedBody))
+		_, _ = w.Write([]byte("<html><body><h1>internal service error</h1><p>" + bannerFragment + "</p></body></html>"))
 	}))
 	defer srv.Close()
 
@@ -148,8 +192,8 @@ func TestOpenAICompatibleProvider_Chat_NonOKStatus_ErrorBodyLoggedNotReturned(t 
 	if appErr.Params["status"] != http.StatusInternalServerError {
 		t.Fatalf("status param = %v, want %d", appErr.Params["status"], http.StatusInternalServerError)
 	}
-	if logged := logBuf.String(); !strings.Contains(logged, "intranet-echo-7f3c9") {
-		t.Fatalf("server-side log does not carry the response body for troubleshooting; log = %q", logged)
+	if logged := logBuf.String(); strings.Contains(logged, bannerFragment) {
+		t.Fatalf("server-side log carries the non-JSON body's text %q; log = %q", bannerFragment, logged)
 	}
 }
 

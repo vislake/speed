@@ -129,18 +129,19 @@ func TestOpenAICompatibleImageProvider_TextToImage_NonOKStatus_ProviderRequestFa
 	}
 }
 
-// TestOpenAICompatibleImageProvider_TextToImage_NonOKStatus_ErrorBodyLoggedNotReturned
-// is the image-side mirror of the chat reflux regression
-// (TestOpenAICompatibleProvider_Chat_NonOKStatus_ErrorBodyLoggedNotReturned):
+// TestOpenAICompatibleImageProvider_TextToImage_NonOKStatus_EnvelopeFieldsOnlyInLog
+// is the image-side mirror of the chat raw-text-sink regression
+// (TestOpenAICompatibleProvider_Chat_NonOKStatus_EnvelopeFieldsOnlyInLog):
 // the image provider funnels its non-2xx answers through the same
-// errorFromResponse, so the dialed endpoint's response body must stay out
-// of the returned error's params (server-side log only), whichever of the
-// two provider families made the call.
-func TestOpenAICompatibleImageProvider_TextToImage_NonOKStatus_ErrorBodyLoggedNotReturned(t *testing.T) {
-	const leakedBody = `{"error":"image service internal detail: intranet-echo-9b2d1"}`
+// errorFromResponse, so the envelope's structured enumeration fields must
+// be what reaches the log -- never the raw body, whichever of the two
+// provider families made the call.
+func TestOpenAICompatibleImageProvider_TextToImage_NonOKStatus_EnvelopeFieldsOnlyInLog(t *testing.T) {
+	const echoedFragment = "quetzal-coastline-9b2d1"
+	const errorBody = `{"error":{"message":"refused: your prompt contained ` + echoedFragment + `","type":"invalid_request_error","code":"content_policy_violation"}}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(leakedBody))
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(errorBody))
 	}))
 	defer srv.Close()
 
@@ -149,7 +150,7 @@ func TestOpenAICompatibleImageProvider_TextToImage_NonOKStatus_ErrorBodyLoggedNo
 	ctx := obs.WithLogger(context.Background(), logger)
 
 	p := NewOpenAICompatibleImageProvider(srv.URL, "sk-test")
-	_, err := p.TextToImage(ctx, TextToImageRequest{Model: "dall-e-3", Prompt: "x"})
+	_, err := p.TextToImage(ctx, TextToImageRequest{Model: "dall-e-3", Prompt: "a portrait of " + echoedFragment})
 	appErr, ok := apperr.As(err)
 	if !ok || appErr.Code != ErrProviderRequestFailed.Code {
 		t.Fatalf("TextToImage err = %v, want ErrProviderRequestFailed", err)
@@ -157,11 +158,15 @@ func TestOpenAICompatibleImageProvider_TextToImage_NonOKStatus_ErrorBodyLoggedNo
 	if got, present := appErr.Params["body"]; present {
 		t.Fatalf("error params carry the dialed endpoint's response body %q -- the body must not be handed back to the caller who steered the dial", got)
 	}
-	if appErr.Params["status"] != http.StatusInternalServerError {
-		t.Fatalf("status param = %v, want %d", appErr.Params["status"], http.StatusInternalServerError)
+	if appErr.Params["status"] != http.StatusBadRequest {
+		t.Fatalf("status param = %v, want %d", appErr.Params["status"], http.StatusBadRequest)
 	}
-	if logged := logBuf.String(); !strings.Contains(logged, "intranet-echo-9b2d1") {
-		t.Fatalf("server-side log does not carry the response body for troubleshooting; log = %q", logged)
+	logged := logBuf.String()
+	if strings.Contains(logged, echoedFragment) {
+		t.Fatalf("server-side log carries %q -- the prompt fragment the provider echoed back must not reach the log; log = %q", echoedFragment, logged)
+	}
+	if !strings.Contains(logged, "error_type=invalid_request_error") || !strings.Contains(logged, "error_code=content_policy_violation") {
+		t.Fatalf("server-side log lacks the envelope's parsed error_type/error_code; log = %q", logged)
 	}
 }
 
