@@ -252,18 +252,24 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'smilesim.output_not_found': 'examples/reference-app/cmd/server/smilesim.go:91 (smileSimErrOutputNotFound)',
   'smilesim.recipient_not_in_tenant': 'examples/reference-app/cmd/server/smilesim.go:446 (smilesimErrRecipientNotInTenant)',
   // go/jobs/job.go -- the not-found sentinel the job-status handler
-  // passes through for an unknown or another tenant's job id.
-  'jobs.job_not_found': 'go/jobs/job.go:186 (ErrJobNotFound)',
+  // passes through for an unknown or another tenant's job id. (The
+  // payload-persistence warning block the docs round inserted above the
+  // record types shifted the declaration by fifteen lines; re-measured
+  // against the current site.)
+  'jobs.job_not_found': 'go/jobs/job.go:201 (ErrJobNotFound)',
   // go/billing/errors.go -- the credit-reservation refusal a simulate
-  // answers when the tenant's balance cannot cover one generation.
-  'billing.insufficient_credits': 'go/billing/errors.go:70 (ErrInsufficientCredits)',
+  // answers when the tenant's balance cannot cover one generation. (The
+  // ErrPlanNotFound doc rewrite at the top of the sentinel block shifted
+  // the declaration by three lines; re-measured against the current
+  // site. ErrInternal's citation below moved with it, the same +3.)
+  'billing.insufficient_credits': 'go/billing/errors.go:73 (ErrInsufficientCredits)',
   // go/billing/errors.go -- the handler-level envelope the credits
   // surface's two GETs fold an unclassifiable failure into (the block-D
   // round's own surface addition; billing.invalid_limit and
   // billing.invalid_request stay out of the enumeration because the
   // credits view never sends a limit -- the server's default window is
   // the read it needs -- so neither 400 is reachable on this surface).
-  'billing.internal_error': 'go/billing/errors.go:171 (ErrInternal)',
+  'billing.internal_error': 'go/billing/errors.go:174 (ErrInternal)',
   // go/ai-gateway/errors.go -- the entitlement-gate refusal a simulate
   // answers for a tenant whose subscription lacks the image model.
   'aigateway.entitlement_denied': 'go/ai-gateway/errors.go:42 (ErrEntitlementDenied)',
