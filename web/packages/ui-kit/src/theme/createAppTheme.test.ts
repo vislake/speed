@@ -13,6 +13,10 @@ import type { TokensOverride } from '@speed/tokens'
 import { createAppTheme } from './createAppTheme.js'
 
 const DEFAULT_BEFORE = JSON.stringify(defaultTokens)
+// Pristine snapshot taken at module load: the shared-branch enforcement
+// tests prove the assembled defaults stay byte-identical no matter what a
+// merged result's consumer tries to write through them.
+const PRISTINE_ERROR_MAIN = defaultTokens.color.semantic.error.main
 
 describe('createAppTheme token-to-theme mapping', () => {
   const { theme } = createAppTheme()
@@ -175,9 +179,11 @@ describe('createAppTheme layering', () => {
     const project: TokensOverride = { color: { semantic: { primary: { main: '#123456' } } } }
     const first = createAppTheme(project)
     expect(first.theme.palette.primary.main).toBe('#123456')
-    // The merged tree is readonly by convention, not by runtime; write
-    // into a rebuilt branch (the project layer rebuilt primary) and
-    // prove the sources stay byte-identical.
+    // Branches the project layer rebuilt (primary here) are plain objects
+    // owned by this result alone: a write there is local, unlike a write
+    // through a shared branch, which the deep-frozen defaults refuse (see
+    // the shared-branch write enforcement suite below). Prove the sources
+    // stay byte-identical.
     const merged = first.tokens as unknown as {
       color: { semantic: { primary: { main: string } } }
     }
@@ -196,5 +202,76 @@ describe('createAppTheme layering', () => {
     expect(Object.prototype.hasOwnProperty.call(tokens, '__proto__')).toBe(true)
     // The theme itself stays sane.
     expect(JSON.stringify(defaultTokens)).toBe(DEFAULT_BEFORE)
+  })
+})
+
+describe('createAppTheme shared-branch write enforcement', () => {
+  it('throws when a write through an untouched branch would reach the frozen defaults', () => {
+    const { tokens } = createAppTheme({
+      color: { semantic: { primary: { main: '#123456' } } },
+    })
+    // Writable view: the cast stands in for the JS-consumer trigger channel
+    // that bypasses the type layer's readonly seal (the same idiom the
+    // "never mutates its inputs" control test uses).
+    const writable = tokens as unknown as {
+      color: { semantic: { error: { main: string } } }
+    }
+    // The project layer rebuilt only the primary branch; the error branch
+    // of the result is still the defaultTokens node (copy-on-write
+    // sharing), which is deep-frozen at assembly -- so a write through it
+    // must throw in strict mode, not silently pollute the shared default
+    // tree every later tenant merge starts from.
+    const writeUntouchedBranch = (): void => {
+      writable.color.semantic.error.main = '#DEADBEEF'
+    }
+    expect(writeUntouchedBranch).toThrow(TypeError)
+  })
+
+  it('keeps the defaults byte-identical after a write attempt through a shared branch', () => {
+    const tenantA = createAppTheme({
+      color: { semantic: { primary: { main: '#123456' } } },
+    })
+    const writable = tenantA.tokens as unknown as {
+      color: { semantic: { error: { main: string } } }
+    }
+    let attemptThrew = false
+    try {
+      // The branch tenant A never overrode: the write must not land
+      // anywhere shared. Refusing loudly is the deep freeze's job (pinned
+      // by the throws-when test above); this test pins the outcome.
+      writable.color.semantic.error.main = '#DEADBEEF'
+    } catch {
+      attemptThrew = true
+    }
+    // No pollution: the branch the write aimed at still holds the pristine
+    // value, and the assembled defaults are byte-identical to the snapshot
+    // taken at module load.
+    expect(defaultTokens.color.semantic.error.main).toBe(PRISTINE_ERROR_MAIN)
+    expect(JSON.stringify(defaultTokens)).toBe(DEFAULT_BEFORE)
+    expect(attemptThrew).toBe(true)
+  })
+
+  it('reads only its own values in a later tenant merge after a write attempt', () => {
+    const tenantA = createAppTheme({
+      color: { semantic: { primary: { main: '#123456' } } },
+    })
+    const writable = tenantA.tokens as unknown as {
+      color: { semantic: { error: { main: string } } }
+    }
+    let attemptThrew = false
+    try {
+      writable.color.semantic.error.main = '#DEADBEEF'
+    } catch {
+      attemptThrew = true
+    }
+    // No leak: a later factory call for tenant B reads its own override
+    // and pristine defaults -- never the value tenant A tried to write.
+    const tenantB = createAppTheme({ zIndex: { values: { modal: 1600 } } })
+    expect(tenantB.tokens.zIndex.values.modal).toBe(1600)
+    expect(tenantB.tokens.color.semantic.error.main).toBe(PRISTINE_ERROR_MAIN)
+    expect(tenantB.tokens.typography.fontFamily.sans).toBe(
+      defaultTokens.typography.fontFamily.sans,
+    )
+    expect(attemptThrew).toBe(true)
   })
 })

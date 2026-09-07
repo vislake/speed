@@ -278,8 +278,12 @@ const appTheme = createAppTheme(projectTokens, tenantOverrides)
 
 Each layer is optional and merges copy-on-write through the tokens
 package's `deepMerge` (no input mutation; untouched branches stay shared
-by identity). The factory then maps the merged tree onto MUI's theme
-surface:
+by identity). The default tree those branches stay shared with is
+deep-frozen at assembly in `@speed/tokens`, so a write through a shared
+branch of the merged result throws in strict mode rather than polluting
+the defaults; only branches an override rebuilt are writable, and a write
+there is local to that result. The factory then maps the merged tree onto
+MUI's theme surface:
 
 | Token section | MUI theme slot | Adapter decision |
 |---|---|---|

@@ -8,8 +8,11 @@
  * Each layer is a diff against the one below it, merged through the
  * tokens package's deepMerge (copy-on-write: untouched branches stay
  * shared with the defaults by identity, no input is ever mutated, hostile
- * "__proto__" override keys land as inert own properties). The factory
- * then maps the merged tree onto MUI's createTheme surface:
+ * "__proto__" override keys land as inert own properties). The defaults
+ * themselves are deep-frozen at assembly in @speed/tokens, so a write
+ * through any shared branch of the merged tree throws in strict mode
+ * rather than polluting the tree every tenant merge starts from. The
+ * factory then maps the merged tree onto MUI's createTheme surface:
  *
  * - palette roles: each semantic role's main/light/dark/contrastText maps
  *   key for key; the neutral ramp aliases the MUI grey scale (steps 50-900
@@ -79,8 +82,12 @@ const ELEVATION_SLOTS = [1, 2, 4, 8, 16, 24] as const
 export interface AppTheme {
   /**
    * The merged token tree (defaults <- project <- tenant layers). Each
-   * untouched branch is shared by identity with defaultTokens; treat the
-   * tree as immutable and override through the factory's own arguments.
+   * untouched branch is shared by identity with defaultTokens, which is
+   * deep-frozen at assembly in @speed/tokens: a write through a shared
+   * branch throws in strict mode and can never reach the default tree.
+   * Branches an override layer rebuilt are plain objects owned by this
+   * result alone -- a write there is local and cannot reach defaultTokens
+   * or another result. Override through the factory's own arguments.
    */
   readonly tokens: SpeedTokens
   /**
