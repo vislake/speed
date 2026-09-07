@@ -72,13 +72,57 @@ const (
 // dbkit.ErrRecordNotFound for the other; List returning exactly the calling
 // tenant's own rows, never the other tenant's; Update and Delete succeeding
 // for the owning tenant; a cross-tenant Update or Delete attempt returning
-// dbkit.ErrRecordNotFound while leaving the real row and both tenants'
-// stored data untouched — including that it never falls back to creating a
-// phantom row under the attacking tenant, the specific failure mode
-// repository.go's own Update doc comment warns about; a forged TenantID set
-// directly on the struct passed to Create being silently overwritten by the
-// context's real tenant rather than trusted; and Create/List on a context
-// carrying no tenant at all failing closed with pkgcore.ErrNoTenant.
+// dbkit.ErrRecordNotFound while leaving the real row untouched — the
+// denied-update check compares every field of the row against its
+// pre-attempt state, because "the update was denied" and "the row is still
+// intact" are different facts and only the comparison proves both —
+// including that it never falls back to creating a phantom row under the
+// attacking tenant, the specific failure mode repository.go's own Update
+// doc comment warns about; a forged TenantID set directly on the struct
+// passed to Create being silently overwritten by the context's real tenant
+// rather than trusted — and the identical overwrite on the struct passed
+// to Update; and Create/List on a context carrying no tenant at all
+// failing closed with pkgcore.ErrNoTenant.
+//
+// The forged-Update check exists because Update's backfill is a separate
+// mechanism from Create's, and the more dangerous of the two. Create's
+// overwrite decides which tenant a brand-new row is inserted under;
+// Update's overwrite decides what tenant_id the SET clause writes into a
+// row the tenant-scoped WHERE clause has already matched. The backfill is
+// the Repository's own enforcement of that property — the same layer this
+// suite exercises — and a forged struct is exactly the shape that exposes
+// its removal: on a dbkit.Open connection the tenant-scope plugin's
+// immutability guard would refuse the mismatched payload outright (a
+// wrong-error failure), but on a plugin-less connection nothing would stop
+// the WHERE-scoped UPDATE from writing the forged tenant into the victim
+// row — a silent cross-tenant row transfer that no pre-existing denial
+// check in this suite, or in dbkit's own cross-tenant suite, notices,
+// because both only ever assert on denial paths, never on what a
+// successful update's payload carries. The check below forges the struct's
+// TenantID before a legitimate Update, exactly as the Create check does,
+// and asserts the backfill overwrites it in place — the one property whose
+// removal this suite detects on every connection shape.
+//
+// Shape asymmetry with AssertNotTenantScoped: that suite takes real,
+// caller-supplied operations (createFn/findFn), and its own self-tests
+// prove — via subprocess — that it detects both of its violation classes.
+// AssertIsolated cannot take that shape: tenant data must never be queried
+// by hand (backend coding standard section 3.2), and dbkit.Repository[T] —
+// the only sanctioned access path — owns every query, so there is no
+// caller-side query for this suite to drive. The same fact bounds what
+// this package's self-tests can manufacture (see assert_isolated_test.go's
+// detector-test doc comment): a genuine cross-tenant leak, a transferred
+// row or a removed Update backfill cannot be produced through a real
+// Repository[T] from outside dbkit, so the subprocess negative proof
+// exists only for the one caller-side class that can be manufactured — a
+// TenantScoped implementation whose GetTenantID disagrees with its own
+// persisted tenant. The write-side checks above are dbkit-regression
+// detectors: they fail only when dbkit's own Repository or tenant-scope
+// plugin regresses, which is exactly the assurance every module's suite
+// exists to carry — and dbkit's own unit tier runs the identical
+// scenarios against a plugin-less connection (repository_test.go's
+// forged-tenant and cross-tenant Update tests), so both layers of
+// enforcement get the regression coverage each can be given.
 //
 // AssertIsolated calls t.Run for each of the checks above, so a failure's
 // subtest name says which property broke; do not add t.Parallel() to those
@@ -174,11 +218,32 @@ func AssertIsolated[T dbkit.TenantScoped](t *testing.T, repo *dbkit.Repository[T
 			t.Fatalf("FindByID(owning tenant %q, %q) before the update attempt error = %v", tenantA, id, err)
 		}
 
-		if err := repo.Update(ctxB, victim); !isRecordNotFound(err) {
-			t.Errorf("Update(other tenant %q, %q) error = %v, want dbkit.ErrRecordNotFound", tenantB, id, err)
+		// Snapshot every field of the row before the attempt. The denial
+		// checks below compare the reloaded row against this snapshot rather
+		// than merely asserting the row still exists: "the update was
+		// denied" and "the row is intact" are different facts — the
+		// tenant-scoped WHERE clause could deny an update whose SET clause
+		// would nevertheless have rewritten the victim's fields (the very
+		// transfer the forged-Update check below pins), and only a
+		// field-for-field comparison against the pre-attempt state proves
+		// the "without corrupting" half of this subtest's name. (The
+		// snapshot is taken before the Update call because Repository's own
+		// backfill mutates the passed struct in place on its way to the
+		// database; comparing against the mutated struct would compare the
+		// denial's aftermath with itself.)
+		want := *victim
+
+		if updErr := repo.Update(ctxB, victim); !isRecordNotFound(updErr) {
+			t.Errorf("Update(other tenant %q, %q) error = %v, want dbkit.ErrRecordNotFound", tenantB, id, updErr)
 		}
 
-		assertFindOwnedBy(t, repo, ctxA, tenantA, id)
+		got, err := repo.FindByID(ctxA, id)
+		if err != nil {
+			t.Fatalf("FindByID(owning tenant %q, %q) after the denied update error = %v", tenantA, id, err)
+		}
+		if !reflect.DeepEqual(want, *got) {
+			t.Errorf("row %q after the denied cross-tenant Update changed: before = %+v, after = %+v; a denied update must leave every field of the victim row untouched", id, want, *got)
+		}
 		assertFindDenied(t, repo, ctxB, tenantB, id)
 	})
 
@@ -214,6 +279,38 @@ func AssertIsolated[T dbkit.TenantScoped](t *testing.T, repo *dbkit.Repository[T
 
 		if err := repo.Create(ctxA, rec); err != nil {
 			t.Fatalf("Create(tenant %q, forged-TenantID record) error = %v", tenantA, err)
+		}
+
+		assertFindOwnedBy(t, repo, ctxA, tenantA, id)
+		assertFindDenied(t, repo, ctxB, tenantB, id)
+	})
+
+	t.Run("update_overwrites_a_forged_tenant_id_with_the_context_tenant", func(t *testing.T) {
+		t.Helper()
+		rec, id := mustNewRecord(tenantA)
+		if err := repo.Create(ctxA, rec); err != nil {
+			t.Fatalf("Create(tenant %q, record %q) error = %v", tenantA, id, err)
+		}
+
+		// Deliberately forge the struct's TenantID to a different tenant
+		// before Update — the Update twin of the create check above.
+		// Update's backfill (repository.go) is a separate mechanism from
+		// Create's and is the more dangerous of the two: on a plugin-less
+		// connection a removed backfill would leave the tenant-scoped WHERE
+		// clause scoping the UPDATE to tenant A's row while its SET clause
+		// wrote tenant B's id into it — a silent cross-tenant row transfer
+		// every denial check in this suite would pass, since they never
+		// assert on what a successful update's payload carries. Update must
+		// overwrite the forged value from ctx exactly as Create does, both
+		// on the row and on the caller's own struct.
+		setStringField(t, rec, tenantIDFieldName, string(tenantB))
+
+		if err := repo.Update(ctxA, rec); err != nil {
+			t.Fatalf("Update(tenant %q, forged-TenantID record %q) error = %v, want success with the forged value overwritten from ctx", tenantA, id, err)
+		}
+
+		if gotTenant := (*rec).GetTenantID(); gotTenant != tenantA {
+			t.Errorf("record's TenantID after Update = %q, want %q — Update must overwrite the forged value from ctx, in place, exactly as Create does", gotTenant, tenantA)
 		}
 
 		assertFindOwnedBy(t, repo, ctxA, tenantA, id)
@@ -411,9 +508,9 @@ func stringField[T any](m *T, name string) (value string, ok bool) {
 }
 
 // setStringField writes value into m's exported string field named name
-// through reflection. It exists solely for the forged-tenant-id check
-// above: proving Create overwrites a caller-forged TenantID rather than
-// trusting it requires forging one first.
+// through reflection. It exists solely for the forged-tenant-id checks
+// above: proving Create and Update each overwrite a caller-forged TenantID
+// rather than trusting it requires forging one first.
 func setStringField[T any](t *testing.T, m *T, name, value string) {
 	t.Helper()
 	f := reflect.ValueOf(m).Elem().FieldByName(name)
