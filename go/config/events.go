@@ -32,9 +32,18 @@ const eventConfigItemChangedPayloadType = "config.ItemChangedEvent"
 // records what operation was performed -- "set" -- deliberately distinct
 // from EventConfigItemChanged's past-tense fact "changed": the audit trail
 // records the operation, the event records what became true as a result
-// (the same distinction notes documents for its own pair). Nothing
-// persists audit records in this milestone; declaring the enumeration is
-// what keeps the future audit-log consumer's vocabulary complete.
+// (the same distinction notes documents for its own pair).
+//
+// Whether the operation is persisted is a composition question, not this
+// module's own: config itself never writes audit rows, but a host that
+// composes the optional compliance module gets one audit row persisted per
+// set under this action (compliance subscribes to EventConfigItemChanged
+// and inserts the record through dbkit/audit's append-only repository).
+// That persister derives the row id deterministically from the event, so
+// the at-least-once bus redelivering one change can never record it twice;
+// a host that wires its own persister instead must derive the same
+// deterministic id from the event, or a duplicate delivery lands a
+// permanent duplicate row on the append-only table.
 const AuditActionConfigSet = "config.item.set"
 
 // redactedMarker is what ItemChangedEvent carries in place of a Sensitive
