@@ -954,16 +954,23 @@ func TestRedact_EmptyKeyScalarUnderSensitiveGroupPath_RedactedWholesale(t *testi
 // smilesim service logs "credit_idempotency_key" holding the derived key
 // of an orphaned credit reservation precisely so an operator can reconcile
 // it (smilesim/service.go -- the value the log line exists for was masked).
-// Both names are references or derived correlation identifiers, never
-// credential material: "key_id" is an _id-suffixed row reference (the
+// Both names are references or correlation identifiers whose values the
+// log line exists to show: "key_id" is an _id-suffixed row reference (the
 // naming convention neverRedactKeys' own user_id/job_id entries follow),
-// and a terminal "idempotency_key" compound is this repository's derived
-// idempotency-key convention (go/jobs, go/metering, go/billing,
-// go/notification all derive the key from the operation's own identity --
-// hashed, never caller-supplied), so both fall through the key rule to the
-// value-shape net. A genuinely secret-shaped key field -- api_key and its
-// family -- still redacts wholesale, and a secret-shaped VALUE logged
-// under a surviving reference name is still masked by the value net.
+// and a terminal "idempotency_key" compound is this repository's
+// idempotency-key naming convention (go/jobs, go/metering, go/billing and
+// go/notification all key one business-operation instance by a
+// deterministic id derived from the operation's own identity -- never
+// random -- with only go/notification's actually hashed: go/jobs' is the
+// enqueuing caller's own key text, embedded verbatim in the asynq
+// TaskID), so both fall through the "key" stem to the value-shape net. A
+// genuinely secret-shaped key field -- api_key and its family -- still
+// redacts wholesale, and a secret-shaped VALUE logged under a surviving
+// reference name is still masked by the value net. What no exemption here
+// can do is tell PII-shaped text (an email inside a caller-chosen key,
+// say) apart from an ordinary identifier -- that is caller-declared
+// content, and go/jobs' Task.IdempotencyKey doc comment, the key
+// builder's own gate, warns of exactly that.
 // Fails before the fix (verified): "key_id" and "credit_idempotency_key"
 // both render "[REDACTED]" and the values never reach the sink.
 func TestRedact_KeyStemDoesNotOverRedactCorrelationReferences(t *testing.T) {
@@ -1007,20 +1014,27 @@ func TestRedact_KeyStemDoesNotOverRedactCorrelationReferences(t *testing.T) {
 	})
 
 	t.Run("secret-shaped value under a surviving reference name is still masked", func(t *testing.T) {
-		var buf bytes.Buffer
-		ctx := textLoggerCtx(context.Background(), &buf)
+		// None of the reference exemptions opens a hole: key_id and the
+		// idempotency_key-suffixed names are exempt from the "key" stem's
+		// key-name rule only -- they are not neverRedactKeys entries, so
+		// their values still pass through the value-shape net, which
+		// masks a secret-shaped value in place exactly as under any
+		// benign key. (What the exemptions do not catch is PII-shaped
+		// text, which no shape rule can tell from an ordinary identifier
+		// -- that boundary is the caller's own, per the test header
+		// above.)
+		for _, key := range []string{"key_id", "credit_idempotency_key", "idempotency_key"} {
+			var buf bytes.Buffer
+			ctx := textLoggerCtx(context.Background(), &buf)
 
-		// key_id is not exempt from value scanning (only neverRedactKeys
-		// are), so a secret-shaped value under it is masked in place by
-		// the value net: the reference exemption narrows the key rule, it
-		// does not open a hole.
-		out := logThrough(ctx, &buf, "event", "key_id", testJWT)
+			out := logThrough(ctx, &buf, "event", key, testJWT)
 
-		if strings.Contains(out, testJWT) {
-			t.Errorf("a secret-shaped value under a surviving reference key leaked; got: %s", out)
-		}
-		if want := "key_id=" + obs.RedactedValue; !strings.Contains(out, want) {
-			t.Errorf("expected the JWT-shaped value under key_id to be masked in place (%q); got: %s", want, out)
+			if strings.Contains(out, testJWT) {
+				t.Errorf("a secret-shaped value under surviving reference key %q leaked; got: %s", key, out)
+			}
+			if want := key + "=" + obs.RedactedValue; !strings.Contains(out, want) {
+				t.Errorf("expected the JWT-shaped value under %q to be masked in place (%q); got: %s", key, want, out)
+			}
 		}
 	})
 }
