@@ -13,10 +13,13 @@
  * server -- arrives with the Playwright e2e suite on the
  * test/reference-app-e2e-suite branch, not yet on main.
  *
- * evictQueriesOnSessionEnd -- the session-end cache eviction in
- * isolation, over a real AuthSession (createAuthSession, driven
- * through the real-client rig's own scripted responder) and a real
- * QueryClient, without mounting any DOM tree: the wiring is pure
+ * evictQueriesOnSessionEnd -- the session-end eviction of everything
+ * the departing principal left on the page -- the query cache and the
+ * notes create form's half-typed draft (views/notes-draft.ts, a
+ * leftover of the same class as a cached row) -- in isolation, over a
+ * real AuthSession (createAuthSession, driven through the real-client
+ * rig's own scripted responder), a real QueryClient and the draft
+ * store, without mounting any DOM tree: the wiring is pure
  * session-and-cache plumbing, so nothing here needs React or the
  * app's own views. The cross-account leaks this pins are
  * reference-app-web.md P1-1's root cause -- nothing evicted a
@@ -45,6 +48,10 @@ import {
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
 import { bootstrapReferenceApp } from './main.js'
 import { evictQueriesOnSessionEnd } from './main.js'
+import {
+  readNotesDraft,
+  writeNotesDraft,
+} from './views/notes-draft.js'
 import { jsonResponse, makeRealClientRig } from './test-utils/real-client.js'
 import type { RealResponder } from './test-utils/real-client.js'
 
@@ -286,6 +293,10 @@ describe('evictQueriesOnSessionEnd', () => {
       password: 'correct-horse-battery-staple',
     })
     seedAllDomains(queryClient)
+    // The departing principal also left a half-typed note in the
+    // notes create form's draft store -- the same class of leftover
+    // as a cached row.
+    writeNotesDraft('Half-typed by the departing account')
     expect(
       queryClient.getQueryData(['tenant', TENANT_ID, '/api/v1/notes', {}]),
     ).toBeDefined()
@@ -303,10 +314,13 @@ describe('evictQueriesOnSessionEnd', () => {
 
     await rig.session.logout()
 
-    // Every query the departing session's reads cached is gone --
-    // the notes rows, the account surface's three identity-domain
-    // lists, and the key no eviction knows by name.
+    // Every leftover the departing session left behind is gone --
+    // every query its reads cached (the notes rows, the account
+    // surface's three identity-domain lists, and the key no eviction
+    // knows by name) and the half-typed draft, which must not greet
+    // the next account signing into this page.
     expect(queryClient.getQueryCache().findAll()).toHaveLength(0)
+    expect(readNotesDraft()).toBe('')
     expect(
       queryClient.getQueryData(['tenant', TENANT_ID, '/api/v1/notes', {}]),
     ).toBeUndefined()
@@ -345,10 +359,14 @@ describe('evictQueriesOnSessionEnd', () => {
       password: 'correct-horse-battery-staple',
     })
     seedAllDomains(queryClient)
+    writeNotesDraft('Half-typed when the session died')
 
     expect(await rig.session.refresh()).toBe(false)
 
+    // The death path clears the draft too: the same authenticated ->
+    // anonymous edge, the same rule.
     expect(queryClient.getQueryCache().findAll()).toHaveLength(0)
+    expect(readNotesDraft()).toBe('')
     expect(
       queryClient.getQueryData(['tenant', TENANT_ID, '/api/v1/notes', {}]),
     ).toBeUndefined()
@@ -369,15 +387,17 @@ describe('evictQueriesOnSessionEnd', () => {
     const queryClient = new QueryClient()
     evictQueriesOnSessionEnd(rig.session, queryClient)
     seedAllDomains(queryClient)
+    writeNotesDraft('A draft from before any session')
 
     // A snapshot notification with no prior authenticated state (none
     // fires here since nothing logs in) must not evict anything --
-    // asserted by the cache surviving to this point unexamined by any
-    // transition at all.
+    // asserted by the cache and the draft surviving to this point
+    // unexamined by any transition at all.
     expect(queryClient.getQueryCache().findAll()).toHaveLength(5)
     expect(
       queryClient.getQueryData(['tenant', TENANT_ID, '/api/v1/notes', {}]),
     ).toBeDefined()
+    expect(readNotesDraft()).toBe('A draft from before any session')
   })
 
   it('leaves the cache alone across a still-authenticated transition (a tenant switch)', async () => {
@@ -408,10 +428,15 @@ describe('evictQueriesOnSessionEnd', () => {
       password: 'correct-horse-battery-staple',
     })
     seedAllDomains(queryClient)
+    writeNotesDraft('Half-typed across the switch')
 
     await rig.session.switchTenant('tenant-globex')
 
+    // The same person stays signed in across a switch (notes-draft.ts:
+    // a switch keeps the form mounted, so the form's own state carries
+    // the text), so the draft survives it like the cache does.
     expect(queryClient.getQueryCache().findAll()).toHaveLength(5)
+    expect(readNotesDraft()).toBe('Half-typed across the switch')
     expect(
       queryClient.getQueryData(['tenant', TENANT_ID, '/api/v1/notes', {}]),
     ).toBeDefined()

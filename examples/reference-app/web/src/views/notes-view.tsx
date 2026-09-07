@@ -52,7 +52,7 @@
  */
 
 import type { ReactElement } from 'react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -74,6 +74,11 @@ import { DataTable, EmptyState, FormField, FormLayout } from '@speed/ui-kit'
 import { useForm } from 'react-hook-form'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 import { CurrentClinicLine } from './current-clinic.js'
+import {
+  clearNotesDraft,
+  readNotesDraft,
+  writeNotesDraft,
+} from './notes-draft.js'
 
 /** The notes text limit the server handler enforces (kept in step with
  * the notes module's own limit so a client-side refusal and a server
@@ -174,8 +179,29 @@ export function NotesView(): ReactElement {
   })
 
   const createNoteMutation = useNotesCreateNote()
-  const createForm = useForm<NoteDraft>({ defaultValues: { text: '' } })
+  // The create form seeds from the draft store (notes-draft.ts): a
+  // remount of this view -- a hash navigation away and back -- must
+  // restore the half-typed text the clinician left behind, not start
+  // from an empty field. The store is read once, at form creation,
+  // exactly like any defaultValues source.
+  const createForm = useForm<NoteDraft>({
+    defaultValues: { text: readNotesDraft() },
+  })
   const [submitErrorCode, setSubmitErrorCode] = useState<string | null>(null)
+
+  // Mirrors every change of the live form into the draft store, so the
+  // store always holds the current text whatever unmounts next. The
+  // subscription lives in this view's own effect, so unmounting the
+  // view unsubscribes it: no stale subscription writes after the view
+  // is gone.
+  useEffect(() => {
+    const subscription = createForm.watch((values) => {
+      writeNotesDraft(values.text ?? '')
+    })
+    return () => {
+      subscription.unsubscribe()
+    }
+  }, [createForm])
 
   // The read error, classified by the query's own error state first:
   // an error state means the read failed, whatever the failure carried.
@@ -223,7 +249,14 @@ export function NotesView(): ReactElement {
       setSubmitErrorCode(submitErrorCodeOf(error))
       return
     }
-    createForm.reset()
+    // The note landed: the form turns over and the draft store with
+    // it -- the text became a record, so nothing remains to restore on
+    // a later mount (notes-draft.ts's clear contract). The reset names
+    // the empty values explicitly: a no-argument reset would return
+    // the form to this instance's mount-time defaults, which, on a
+    // mount that restored a draft, means the note that just landed.
+    createForm.reset({ text: '' })
+    clearNotesDraft()
     await queryClient.invalidateQueries({ queryKey: notesListKey })
   }
 

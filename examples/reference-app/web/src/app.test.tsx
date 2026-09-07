@@ -60,6 +60,7 @@ import {
   makeRealClientRig,
 } from './test-utils/real-client.js'
 import { FEATURE_SMILE_PREVIEW } from './views/home-view.js'
+import { clearNotesDraft } from './views/notes-draft.js'
 
 describe('parseHashFragment', () => {
   it('parses the three routes, with or without a leading slash', () => {
@@ -103,9 +104,12 @@ describe('AppView', () => {
   // Each journey starts as a fresh visitor on the bare page. jsdom
   // keeps location.hash between tests, so a journey that navigated
   // would leak its fragment into the next one -- reset per test and
-  // every journey is order-independent.
+  // every journey is order-independent. The notes draft store is
+  // module-scoped the same way, so a journey that typed into the notes
+  // create form would leak its half-typed text into the next one.
   beforeEach(() => {
     window.location.hash = ''
+    clearNotesDraft()
   })
 
   it('shows an anonymous visitor the sign-in surface over one config fetch', async () => {
@@ -235,6 +239,40 @@ describe('AppView', () => {
     expect(homeLink()).not.toHaveAttribute('aria-current')
     expect(notesLink()).not.toHaveAttribute('aria-current')
     expect(accountLink()).not.toHaveAttribute('aria-current')
+  })
+
+  it('keeps a half-typed note across a hash round trip and turns the form over once the note lands', async () => {
+    const rig = makeAppRig()
+    const view = rendered(rig)
+    const user = userEvent.setup()
+    await signInWithPasswordUi(view, user)
+    await view.findByRole('link', { name: zhCN.nav.notes })
+
+    navigateTo('#/notes')
+    const input = await view.findByLabelText(zhCN.notes.create.textLabel)
+    const draft = 'Half-typed before the account detour'
+    await user.type(input, draft)
+
+    // The account detour and back -- the fragment round trip the
+    // browser's Back button makes in this hash-routed app. The
+    // surface unmounted with the detour, so only the draft store can
+    // have kept the text.
+    navigateTo('#/account')
+    await view.findByRole('heading', { name: zhCN.account.heading })
+    navigateTo('#/notes')
+    const restored = await view.findByLabelText(zhCN.notes.create.textLabel)
+    expect(
+      restored,
+      'the half-typed note was lost on the way back from another surface',
+    ).toHaveValue(draft)
+
+    // The create consumes the draft: the note lands and the field
+    // turns over, so another round trip finds an empty form rather
+    // than the same text a second time.
+    await user.click(
+      view.getByRole('button', { name: zhCN.notes.create.submit }),
+    )
+    await waitFor(() => expect(restored).toHaveValue(''))
   })
 
   it('signs out of the frame into the session-ended screen, then back to sign-in', async () => {

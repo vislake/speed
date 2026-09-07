@@ -52,6 +52,7 @@ import {
 } from '../test-utils/real-client.js'
 import type { RenderWithProvidersOptions } from '../test-utils/render.js'
 import { renderWithAppServices } from '../test-utils/render.js'
+import { clearNotesDraft } from './notes-draft.js'
 import { NotesView } from './notes-view.js'
 
 /** A transport whose every call rejects with a raw, code-less error --
@@ -75,6 +76,9 @@ const NOTE_ONE_TEXT = 'First note'
 const NOTE_TWO_TEXT = 'Second note'
 const NEW_NOTE_TEXT = 'Written in the browser'
 const DENIED_NOTE_TEXT = 'A note that must not land'
+/** The half-typed text of the draft journeys: written, left behind by a
+ * surface switch, and restored by the remount. */
+const ROUND_TRIP_NOTE_TEXT = 'Half-typed before navigating away'
 
 const NOTE_ONE: NotesNote = {
   id: 'note-1',
@@ -196,6 +200,9 @@ describe('NotesView', () => {
   })
 
   it('creates a note through the real client: the POST carries the text, the invalidated list shows the served row', async () => {
+    // A fresh form: the draft store is module-scoped, so an earlier
+    // journey's typed-but-uncreated text must not seed this one.
+    clearNotesDraft()
     const rig = makeRealClientRig(demoServer())
     await signInWithPassword(rig)
     const view = renderNotes(rig)
@@ -236,7 +243,8 @@ describe('NotesView', () => {
   it('a refused create keeps the draft on the form and renders the permission text', async () => {
     // The list read answers fine; the write is refused with the rbac
     // gate's 403 -- the surface stays up, the refusal renders where
-    // the form can answer it.
+    // the form can answer it. A fresh form: see the create test.
+    clearNotesDraft()
     const rig = makeRealClientRig(demoServer({ denyNotesWrite: true }))
     await signInWithPassword(rig)
     const view = renderNotes(rig)
@@ -267,7 +275,11 @@ describe('NotesView', () => {
     // text, never the generic fallback -- the code-mapping defect the
     // gate exists to keep closed (the browser proof is the
     // offline-save gate; this pins the mapping where the default CI
-    // can run it).
+    // can run it). A fresh form: the draft store is module-scoped
+    // (notes-draft.ts), and this journey's own half-typed text is the
+    // assertion's whole point -- nothing from an earlier test may have
+    // seeded the field before it types (see the create test).
+    clearNotesDraft()
     const server = demoServer()
     const rig = makeRealClientRig(async (call) => {
       if (call.method === 'POST' && call.path === '/api/v1/notes') {
@@ -295,6 +307,11 @@ describe('NotesView', () => {
   })
 
   it('fails closed on a refetch 403 even though the previous read is still cached (reference-app-web.md P1-1)', async () => {
+    // A fresh form: this journey mounts the surface with the read gate
+    // open and asserts the served row by find-by-text -- a leftover
+    // draft holding the same text as the row would match twice (see
+    // the create test).
+    clearNotesDraft()
     // The read succeeds once (the row lands in the query's cache),
     // then the same query is refetched and refused -- tanstack query
     // v5 keeps the prior successful `data` through a failed refetch,
@@ -393,6 +410,11 @@ describe('NotesView', () => {
   })
 
   it('a codeless refusal after a served read renders the read-error state, never the stale rows (reference-app-web.md P2-rnweb-1)', async () => {
+    // A fresh form: this journey mounts the surface with the read gate
+    // open and asserts the served row by find-by-text -- a leftover
+    // draft holding the same text as the row would match twice (see
+    // the create test).
+    clearNotesDraft()
     // The read serves the row once and opens the gate; then the same
     // query is refetched into a refusal that carries NO code -- a raw
     // transport error the api-client never normalized. The failed
@@ -481,6 +503,9 @@ describe('NotesView', () => {
   })
 
   it('sends whitespace-only text and renders the server\'s text-required refusal', async () => {
+    // A fresh form: the whitespace-only text is the whole point, so
+    // nothing may have seeded the field before this journey types.
+    clearNotesDraft()
     // The client's required rule only catches the empty string, exactly
     // as the real handler's trim does not -- so whitespace-only text
     // travels, and the server's authority answers with text_required.
@@ -503,6 +528,9 @@ describe('NotesView', () => {
   })
 
   it('refuses an empty submit client-side with the field\'s required text and no request', async () => {
+    // An empty form is the subject: no earlier journey's draft may
+    // seed the field.
+    clearNotesDraft()
     const rig = makeRealClientRig(demoServer())
     await signInWithPassword(rig)
     const view = renderNotes(rig)
@@ -532,5 +560,58 @@ describe('NotesView', () => {
     expect(
       view.getByRole('button', { name: enUS.notes.create.submit }),
     ).toBeInTheDocument()
+  })
+
+  it('restores a half-typed draft when the surface remounts (the hash round trip back)', async () => {
+    // The store is module-scoped (notes-draft.ts): a journey that
+    // typed and left text behind in an earlier test of this file must
+    // not leak into this one, so each draft journey starts from a
+    // cleared store.
+    clearNotesDraft()
+    const rig = makeRealClientRig(demoServer())
+    await signInWithPassword(rig)
+    const view = renderNotes(rig)
+    const user = userEvent.setup()
+    await view.findByText(zhCN.notes.list.emptyTitle)
+
+    const input = view.getByLabelText(zhCN.notes.create.textLabel)
+    await user.type(input, ROUND_TRIP_NOTE_TEXT)
+
+    // The surface unmounts -- what a hash navigation to another
+    // surface does to this view -- and remounts.
+    view.unmount()
+    const remounted = renderNotes(rig)
+    const restored = await remounted.findByLabelText(
+      zhCN.notes.create.textLabel,
+    )
+
+    // The half-typed text is where the clinician left it: the page
+    // never reloaded, and neither should the draft.
+    expect(restored).toHaveValue(ROUND_TRIP_NOTE_TEXT)
+  })
+
+  it('a successful create consumes the stored draft: a later remount starts from an empty field', async () => {
+    clearNotesDraft()
+    const rig = makeRealClientRig(demoServer())
+    await signInWithPassword(rig)
+    const view = renderNotes(rig)
+    const user = userEvent.setup()
+    await view.findByText(zhCN.notes.list.emptyTitle)
+
+    const input = view.getByLabelText(zhCN.notes.create.textLabel)
+    await user.type(input, NEW_NOTE_TEXT)
+    await user.click(
+      view.getByRole('button', { name: zhCN.notes.create.submit }),
+    )
+    await waitFor(() => expect(input).toHaveValue(''))
+
+    // The draft became a note: nothing may remain for the next mount
+    // to restore -- the same note would otherwise be created twice.
+    view.unmount()
+    const remounted = renderNotes(rig)
+    const fresh = await remounted.findByLabelText(
+      zhCN.notes.create.textLabel,
+    )
+    expect(fresh).toHaveValue('')
   })
 })

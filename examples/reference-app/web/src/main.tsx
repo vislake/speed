@@ -106,6 +106,7 @@ import {
   REFERENCE_APP_NAMESPACE,
   referenceAppResources,
 } from './resources.js'
+import { clearNotesDraft } from './views/notes-draft.js'
 
 /** What a page's bootstrap produced: the mounted root, the i18n
  * instance and the query client, for hosts and harnesses that act on
@@ -120,11 +121,16 @@ export interface ReferenceAppBootstrap {
 }
 
 /**
- * Wires the query cache to empty the moment the session ends. A manual
- * sign-out and a session death (a silently refused refresh) both settle
- * the same authenticated -> anonymous AuthSnapshot transition (auth-
- * core's session.ts clears the same way for either), so this fires on
- * both.
+ * Wires the page's principal-bound leftovers to empty the moment the
+ * session ends: the query cache (every query was fetched under the
+ * departing principal's access token) and the notes create form's
+ * half-typed draft (views/notes-draft.ts -- a draft is the same class
+ * of leftover as a cached row: text typed by the departing account
+ * must not greet the next account signing into this page). A manual
+ * sign-out and a session death (a silently refused refresh) both
+ * settle the same authenticated -> anonymous AuthSnapshot transition
+ * (auth-core's session.ts clears the same way for either), so this
+ * fires on both.
  *
  * The eviction is total -- removeQueries() with no filter -- because
  * every query this page holds was fetched under the departing
@@ -168,6 +174,7 @@ export function evictQueriesOnSessionEnd(
   return session.subscribe((snapshot) => {
     if (previous.state === 'authenticated' && snapshot.state === 'anonymous') {
       queryClient.removeQueries()
+      clearNotesDraft()
     }
     previous = snapshot
   })
