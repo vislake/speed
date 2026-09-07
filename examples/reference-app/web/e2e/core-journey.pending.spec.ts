@@ -226,11 +226,17 @@ test.describe('the core journey', { tag: '@pending' }, () => {
 
     // Generation is asynchronous by design (internal/smilesim enqueues a
     // job), so the person must be told it is happening rather than left
-    // looking at a frozen screen.
+    // looking at a frozen screen. Scoped to the work area and required
+    // to SAY something: the chrome carries live regions of its own (the
+    // tenant switcher's announcement), so an unscoped, text-free check
+    // could be satisfied by a region that has nothing to do with this
+    // generation.
+    const announcement = page.getByRole('main').getByRole('status').first()
+    await expect(announcement, 'a generation in flight must say so').toBeVisible()
     await expect(
-      page.getByRole('status'),
-      'a generation in flight must say so',
-    ).toBeVisible()
+      announcement,
+      'the in-flight notice is empty, so it announces nothing',
+    ).not.toHaveText('')
 
     // The result, and the original, visible together: a dentist shows the
     // patient the difference, which is the product's entire proposition.
@@ -238,7 +244,31 @@ test.describe('the core journey', { tag: '@pending' }, () => {
     await expect(comparison, 'the result must be shown against the original').toBeVisible({
       timeout: 120_000,
     })
-    await expect(comparison.getByRole('img')).toHaveCount(2)
+    const images = comparison.getByRole('img')
+    await expect(images).toHaveCount(2)
+
+    // TWO DIFFERENT images, which counting cannot tell you.
+    //
+    // A count of two passes just as happily when the surface renders the
+    // ORIGINAL twice -- and "before and before" is a defect this gate
+    // exists to catch, not one it may wave through: it is the product's
+    // entire proposition rendered as a no-op, and it would look right in
+    // a screenshot. The e2e fake provider deliberately answers with
+    // different bytes than the patient photo, but that only helps if
+    // something compares them, and nothing here did.
+    //
+    // Compared by source rather than by pixels: two storage objects are
+    // two URLs, which is the cheapest honest difference. A surface that
+    // renders one object twice fails here; one that renders the same
+    // IMAGE from two different objects is not a defect this gate is
+    // about.
+    const sources = await images.evaluateAll((nodes) =>
+      nodes.map((node) => (node as HTMLImageElement).currentSrc || (node as HTMLImageElement).src),
+    )
+    expect(
+      new Set(sources).size,
+      `the comparison shows the same image twice (${sources.join(' , ')}), so nothing about the simulation is on screen`,
+    ).toBe(2)
   })
 
   test('block C: the result becomes a link a patient can open', async ({ page, context }) => {
@@ -263,10 +293,26 @@ test.describe('the core journey', { tag: '@pending' }, () => {
     try {
       const patientPage = await patient.newPage()
       await patientPage.goto(url)
-      await expect(
-        patientPage.getByRole('img').first(),
-        'a patient opening the link must see the simulation',
-      ).toBeVisible()
+      // The SIMULATION, not merely an image. An unscoped first-image
+      // check is satisfied by a logo, a placeholder or an error
+      // illustration -- so a patient page that failed to load the
+      // simulation at all could pass it. The image has to be one the
+      // browser actually decoded, which a broken or missing source is
+      // not.
+      const shown = patientPage.getByRole('img').first()
+      await expect(shown, 'a patient opening the link must see the simulation').toBeVisible()
+      const decoded = await shown.evaluate((node) => {
+        const image = node as HTMLImageElement
+        return { complete: image.complete, width: image.naturalWidth }
+      })
+      expect(
+        decoded,
+        'the patient page shows an image that never loaded, so the patient sees a broken frame where their new smile should be',
+      ).toEqual({ complete: true, width: expect.any(Number) })
+      expect(
+        decoded.width,
+        'the patient page shows a zero-width image, so nothing of the simulation reached them',
+      ).toBeGreaterThan(0)
     } finally {
       await patient.close()
     }
