@@ -98,9 +98,11 @@
       "wechat": "微信",
       "dingtalk": "钉钉",
       "feishu": "飞书",
+      "oidc": "企业 SSO",
       "other": "其他"
     },
     "unbind": "解绑",
+    "unbindAriaWithProvider": "解绑此账号：{{provider}}",
     "confirmTitle": "解绑此社交账号？",
     "confirmMessage": "解绑后将无法再用此社交账号登录，之后仍可重新绑定。",
     "confirmLabel": "解绑",

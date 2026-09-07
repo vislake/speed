@@ -5,9 +5,13 @@
  * Lists every external identity the authn module holds bound to the
  * signed-in account, through the generated list hook. Each row names the
  * provider (mapped through bindings.provider.<provider> for the five
- * providers the spec hosts -- a value outside that set, a future
- * channel, renders the generic "other" label, never a raw value) and the
- * provider account's email when the answer carries one. A row whose
+ * social providers the spec hosts and through the bindings.provider.oidc
+ * family label for the enterprise-SSO channel, whose live provider
+ * values are the dynamic per-tenant names "oidc:<tenant>" -- the raw
+ * value renders as the row's reference line so one tenant's binding
+ * never reads as another's; a value outside both sets, a future
+ * channel, renders the generic "other" label, never a raw value) and
+ * the provider account's email when the answer carries one. A row whose
  * identity carries an id has a row-end "unlink" action that sits behind
  * the ui-kit danger ConfirmDialog: unbinding is irreversible (the
  * binding is re-established only by walking the provider's OAuth flow
@@ -108,7 +112,9 @@ type Notice = { readonly kind: 'unbind-failed'; readonly code: string } | null
 /**
  * The provider values the authn identity surface answers with, one
  * bundle key each under bindings.provider. t() is only ever called with
- * a value on this list -- anything else (a future channel) renders the
+ * a value on this list -- anything else either carries the enterprise
+ * OIDC_PROVIDER_PREFIX below (the live oidc: family, dynamic per
+ * tenant, mapped by its prefix and never enumerable) or renders the
  * generic bindings.provider.other label.
  */
 const KNOWN_PROVIDERS = new Set<string>([
@@ -118,6 +124,17 @@ const KNOWN_PROVIDERS = new Set<string>([
   'dingtalk',
   'feishu',
 ])
+
+/**
+ * The enterprise-SSO provider family prefix: go/authn stores each
+ * tenant's enterprise connection binding under the per-tenant provider
+ * name "oidc:<tenant>", so the value set is dynamic -- enumeration can
+ * never suffice. A provider value carrying this prefix renders the
+ * bindings.provider.oidc family label with the raw value as the row's
+ * reference line (the label maps the family, the raw value tells one
+ * tenant's binding from another's).
+ */
+const OIDC_PROVIDER_PREFIX = 'oidc:'
 
 /** The pending-state placeholder: rows shaped like the content rows,
  * read aloud as one loading announcement, never a fake heading. */
@@ -305,15 +322,34 @@ export function SocialBindingsSection({
           {/* The identity rows are one real list, as the sessions rows
               are: a screen-reader user hears each binding as one item
               of a numbered set. The notice above and the add area
-              below are page-level content and stay outside the list. */}
-          <Box component="ul" sx={{ m: 0, p: 0, listStyle: 'none' }}>
+              below are page-level content and stay outside the list.
+              role="list" keeps the list semantics under WebKit, which
+              strips them from a list-style-none ul. */}
+          <Box component="ul" role="list" sx={{ m: 0, p: 0, listStyle: 'none' }}>
             {rows.map((identity, index) => {
               const id = identity.id ?? null
               const provider = identity.provider ?? null
+              // Enterprise-SSO bindings arrive under the dynamic
+              // per-tenant provider name "oidc:<tenant>": the family
+              // label renders for the prefix, and the raw value stays
+              // in the row as its reference line, so two SSO bindings
+              // in two tenants never read as one identical row.
+              const oidcProvider =
+                provider !== null &&
+                provider.startsWith(OIDC_PROVIDER_PREFIX)
+                  ? provider
+                  : null
               const providerLabel =
                 provider !== null && KNOWN_PROVIDERS.has(provider)
                   ? t(`bindings.provider.${provider}`)
-                  : t('bindings.provider.other')
+                  : oidcProvider !== null
+                    ? t('bindings.provider.oidc')
+                    : t('bindings.provider.other')
+              // The row identity the unbind action is named after (the
+              // sessions twin names its revoke action after the row's
+              // device label): the raw provider value when the label
+              // is a shared family label, the label itself otherwise.
+              const unbindIdentity = oidcProvider ?? providerLabel
               const email =
                 identity.email != null && identity.email !== ''
                   ? identity.email
@@ -341,6 +377,17 @@ export function SocialBindingsSection({
                       <Typography variant="body1" sx={{ fontWeight: 500 }}>
                         {providerLabel}
                       </Typography>
+                      {oidcProvider !== null && (
+                        <Typography
+                          variant="body2"
+                          color="text.secondary"
+                          noWrap
+                          title={oidcProvider}
+                          sx={{ minWidth: 0 }}
+                        >
+                          {oidcProvider}
+                        </Typography>
+                      )}
                       {email !== null && (
                         <Typography
                           variant="body2"
@@ -358,6 +405,15 @@ export function SocialBindingsSection({
                           color="error"
                           size="small"
                           disabled={unbindBusy}
+                          aria-label={t('bindings.unbindAriaWithProvider', {
+                            provider: unbindIdentity,
+                            // The label is an aria-label, not HTML: the
+                            // row identity (an oidc:<tenant> raw value
+                            // included) must reach the accessibility
+                            // tree verbatim (i18next's default value
+                            // escaping would embed a literal `&#x2F;`).
+                            interpolation: { escapeValue: false },
+                          })}
                           onClick={() => setUnbindTarget(id)}
                         >
                           {t('bindings.unbind')}

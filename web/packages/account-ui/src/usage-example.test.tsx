@@ -144,6 +144,15 @@ function revokeAriaOf(device: string): string {
   return zhCN.sessions.revokeAriaWithDevice.replace('{{device}}', device)
 }
 
+/** The binding row's unlink action, named after the row's provider
+ * identity the way the component names it. */
+function unbindAriaOf(identity: string): string {
+  return zhCN.bindings.unbindAriaWithProvider.replace(
+    '{{provider}}',
+    identity,
+  )
+}
+
 /**
  * The host's account page in the example: the four account surfaces the
  * quick start documents, plus the host-owned binding turn -- the add
@@ -465,7 +474,9 @@ describe('the README quick start, exercised over a real api-client', () => {
     // sends the DELETE; the 409 renders its code text above the list,
     // the row stays and no refetch chases the refusal.
     await user.click(
-      screen.getByRole('button', { name: zhCN.bindings.unbind }),
+      screen.getByRole('button', {
+        name: unbindAriaOf(zhCN.bindings.provider.github),
+      }),
     )
     const unbindDialog = await screen.findByRole('dialog')
     await user.click(

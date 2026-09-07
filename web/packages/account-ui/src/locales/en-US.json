@@ -98,9 +98,11 @@
       "wechat": "WeChat",
       "dingtalk": "DingTalk",
       "feishu": "Feishu",
+      "oidc": "Enterprise SSO",
       "other": "Other"
     },
     "unbind": "Unlink",
+    "unbindAriaWithProvider": "Unlink this account: {{provider}}",
     "confirmTitle": "Unlink this social account?",
     "confirmMessage": "You will no longer be able to sign in with this social account. It can be linked again later.",
     "confirmLabel": "Unlink",

@@ -7,10 +7,15 @@
  *
  * The suite pins the surface contract: every bound identity renders its
  * provider label (mapped through bindings.provider for the known
- * providers, the generic "other" label for a value outside the set --
- * never a raw provider string) with the provider account's email when
- * the answer carries one, and only an identity that carries an id has a
- * row-end unlink action; unlinking sits behind the ui-kit danger
+ * providers; enterprise-SSO bindings, whose live provider values are
+ * the dynamic per-tenant names oidc:<tenant>, render the enterprise
+ * family label with the raw value as the row's reference line -- the
+ * one case a raw provider string is shown, because two SSO bindings in
+ * two tenants must never read as one identical row; anything else is
+ * the generic "other" label, never a raw provider string) with the
+ * provider account's email when the answer carries one, and only an
+ * identity that carries an id has a row-end unlink action, each named
+ * after the row it belongs to; unlinking sits behind the ui-kit danger
  * dialog, a refused unbind renders its code text (last_login_method
  * keeps the row, identity_not_found -- an unbound-elsewhere race --
  * refetches the list so the stale row disappears and the banner clears
@@ -82,14 +87,27 @@ const DIALOG_TITLE = zhCN.bindings.confirmTitle
 const DIALOG_MESSAGE = zhCN.bindings.confirmMessage
 const ADD_TITLE = zhCN.bindings.addSectionTitle
 
-/** The unlink action of the first row. The two-row scenarios list the
- * github identity first, and both legs act on that row; a fixture where
- * no row carries an action would be a test bug, so the guard throws
- * rather than click a phantom. */
+/** The row-end unlink action's accessible name of the row whose
+ * identity reads `identity`, interpolated the way the component
+ * interpolates it -- each row's action is named after the row itself
+ * (the sessions twin's revokeAriaWithDevice pattern). */
+function unbindAriaOf(identity: string): string {
+  return zhCN.bindings.unbindAriaWithProvider.replace(
+    '{{provider}}',
+    identity,
+  )
+}
+
+/** The unlink action of the github row. The scenarios that use it list
+ * the github identity first, and both legs act on that row; a fixture
+ * where no github row carries an action would be a test bug, so the
+ * guard throws rather than click a phantom. */
 function firstUnlink(): HTMLElement {
-  const first = screen.getAllByRole('button', { name: UNLINK })[0]
+  const first = screen.getAllByRole('button', {
+    name: unbindAriaOf('GitHub'),
+  })[0]
   if (first === undefined) {
-    throw new Error('expected at least one unlink action')
+    throw new Error('expected the github row to carry an unlink action')
   }
   return first
 }
@@ -147,14 +165,89 @@ describe('SocialBindingsSection', () => {
     ).toBeTruthy()
     expect(screen.getByText('dev@example.test')).toBeTruthy()
     expect(screen.getByText('zeta@example.test')).toBeTruthy()
-    // The three id-carrying rows have exactly one unlink action each.
-    expect(screen.getAllByRole('button', { name: UNLINK })).toHaveLength(3)
+    // The three id-carrying rows have exactly one unlink action each,
+    // every action named after the row it belongs to (the unknown
+    // 'zeta' row's action carries its generic label, never a raw
+    // provider value).
+    expect(
+      screen.getAllByRole('button', { name: unbindAriaOf('GitHub') }),
+    ).toHaveLength(1)
+    expect(
+      screen.getAllByRole('button', { name: unbindAriaOf('Google') }),
+    ).toHaveLength(1)
+    expect(
+      screen.getAllByRole('button', {
+        name: unbindAriaOf(zhCN.bindings.provider.other),
+      }),
+    ).toHaveLength(1)
     // The unbound channel (wechat) is the only add-area option.
     expect(
       screen.getByRole('button', { name: zhCN.bindings.provider.wechat }),
     ).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'GitHub' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Google' })).toBeNull()
+
+    await expectNoAxeViolations()
+  })
+
+  it('distinguish two enterprise-SSO bindings: oidc: rows carry the family label plus the raw provider reference, never two identical "other" rows', async () => {
+    // Two SSO bindings of the same account in two tenants: go/authn
+    // stores each under its dynamic per-tenant provider name
+    // ("oidc:<tenant>"), and the provider account's email can be the
+    // same in both -- so before the fix the two rows rendered as two
+    // identical generic "other" rows, each with an unbind button, and
+    // unbinding the wrong one was possible. Each row must carry its own
+    // identity: the family label for the prefix plus the raw provider
+    // value as the reference line.
+    const list = [
+      identity({
+        id: 'sso-a-1',
+        provider: 'oidc:tenant-a',
+        email: 'dev@example.test',
+      }),
+      identity({
+        id: 'sso-b-1',
+        provider: 'oidc:tenant-b',
+        email: 'dev@example.test',
+      }),
+    ]
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'GET' && call.path === IDENTITIES_PATH) {
+        return jsonResponse(200, { identities: list })
+      }
+      return errorResponse(500, 'internal')
+    })
+    await signInWithPassword(rig)
+    renderWithProviders(<SocialBindingsSection session={rig.session} providers={[]} />)
+
+    // Both rows name the enterprise-SSO family (never the generic
+    // "other" label)...
+    expect(
+      (await screen.findAllByText(zhCN.bindings.provider.oidc)).length,
+    ).toBe(2)
+    expect(screen.queryByText(zhCN.bindings.provider.other)).toBeNull()
+    // ...and each carries its own raw provider reference line, so the
+    // two rows are never identical even though the emails are.
+    expect(screen.getByText('oidc:tenant-a')).toBeTruthy()
+    expect(screen.getByText('oidc:tenant-b')).toBeTruthy()
+    expect(screen.getAllByText('dev@example.test')).toHaveLength(2)
+    // Each unbind action is named after the row it belongs to: the two
+    // actions are distinguishable, so unbinding the wrong SSO binding
+    // is impossible.
+    expect(
+      screen.getAllByRole('button', { name: unbindAriaOf('oidc:tenant-a') }),
+    ).toHaveLength(1)
+    expect(
+      screen.getAllByRole('button', { name: unbindAriaOf('oidc:tenant-b') }),
+    ).toHaveLength(1)
+    expect(
+      screen.queryByRole('button', {
+        name: unbindAriaOf(zhCN.bindings.provider.other),
+      }),
+    ).toBeNull()
 
     await expectNoAxeViolations()
   })
@@ -211,7 +304,9 @@ describe('SocialBindingsSection', () => {
     expect(deleteCall?.authorization).toBe('Bearer access-1')
     await waitFor(() => expect(screen.queryByText('dev@example.test')).toBeNull())
     expect(screen.getByText('Google')).toBeTruthy()
-    expect(screen.getAllByRole('button', { name: UNLINK })).toHaveLength(1)
+    expect(
+      screen.getAllByRole('button', { name: unbindAriaOf('Google') }),
+    ).toHaveLength(1)
     // GitHub is unbound again, so the add area offers the channel.
     expect(screen.getByText(ADD_TITLE)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'GitHub' })).toBeTruthy()
@@ -240,7 +335,9 @@ describe('SocialBindingsSection', () => {
         providers={[config('google')]}
       />,
     )
-    await userEvent.click(await screen.findByRole('button', { name: UNLINK }))
+    await userEvent.click(
+      await screen.findByRole('button', { name: unbindAriaOf('GitHub') }),
+    )
     await userEvent.click(
       within(await screen.findByRole('dialog')).getByRole('button', {
         name: UNLINK,
@@ -292,7 +389,9 @@ describe('SocialBindingsSection', () => {
         providers={[config('github')]}
       />,
     )
-    await userEvent.click(await screen.findByRole('button', { name: UNLINK }))
+    await userEvent.click(
+      await screen.findByRole('button', { name: unbindAriaOf('GitHub') }),
+    )
     await userEvent.click(
       within(await screen.findByRole('dialog')).getByRole('button', {
         name: UNLINK,
@@ -313,7 +412,9 @@ describe('SocialBindingsSection', () => {
     // announced is over. The channel is unbound again, so the add area
     // offers it (the row is gone either way: zero unlink actions).
     await waitFor(() =>
-      expect(screen.queryAllByRole('button', { name: UNLINK })).toHaveLength(0),
+      expect(
+        screen.queryAllByRole('button', { name: unbindAriaOf('GitHub') }),
+      ).toHaveLength(0),
     )
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
     expect(screen.getByRole('button', { name: 'GitHub' })).toBeTruthy()
@@ -530,7 +631,12 @@ describe('SocialBindingsSection', () => {
     )
     await screen.findByText('GitHub')
     expect(screen.queryByText(ADD_TITLE)).toBeNull()
-    expect(screen.getAllByRole('button', { name: UNLINK })).toHaveLength(2)
+    expect(
+      screen.getAllByRole('button', { name: unbindAriaOf('GitHub') }),
+    ).toHaveLength(1)
+    expect(
+      screen.getAllByRole('button', { name: unbindAriaOf('Google') }),
+    ).toHaveLength(1)
 
     await expectNoAxeViolations()
   })
