@@ -1060,6 +1060,19 @@ type serverConfig struct {
 	// to this field never having existed.
 	DisableQueueWorker bool
 
+	// failSelfServiceProvision is the regression suite's failure-injection
+	// hook for the self-service provisioning chain (self_service.go): when
+	// non-nil, every provisioning attempt the server makes consults it at
+	// the top of provision and fails when it returns an error, so a test
+	// can place a failure on the synchronous delivery of a registration's
+	// event and watch the retry job converge the same clinic. Nil (the
+	// default) is byte-identical to the hook never having existed --
+	// configFromEnv never sets it, and the reference-app suites are its
+	// only writers, each arming it on its own serverConfig before
+	// buildServer captures it into the provisioner it builds
+	// (wireSelfService).
+	failSelfServiceProvision func(userID string) error
+
 	// DisableDemoUserHeader, when true, makes buildServer wire every demo
 	// identity source away from the demo headers: every permission-gated
 	// route's SubjectResolver through demoSubjectResolverFor(true), and
@@ -3207,8 +3220,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// registration and gets its own clinic tenant, org root, membership
 	// and owner grant before its 201 answer leaves (on the in-process
 	// bus, where the subscription's provisioning runs synchronously
-	// inside the register request itself).
-	if wireErr := wireSelfService(ctx, reg, db, orgModule, rbacService, memberships); wireErr != nil {
+	// inside the register request itself). The standaloneQueue is handed
+	// in alongside for the failure half of that guarantee: a synchronous
+	// provisioning attempt that fails enqueues the retry job that
+	// converges the clinic (self_service.go's # Failure semantics), and
+	// the queue's worker was started above, so the retry runs on this
+	// same process's pool. cfg.failSelfServiceProvision rides along as
+	// the regression suite's failure-injection hook -- nil here, armed by
+	// a test's own serverConfig.
+	if wireErr := wireSelfService(ctx, reg, db, orgModule, rbacService, memberships, standaloneQueue, cfg.failSelfServiceProvision); wireErr != nil {
 		_ = cleanup()
 		return nil, nil, nil, wireErr
 	}

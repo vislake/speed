@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
@@ -59,9 +61,11 @@ import (
 // every registration that arrives once the server is up -- a browser's,
 // or a flow test's -- provisions. On the in-process bus the provisioning
 // runs synchronously inside the register request itself, before its 201
-// answer leaves: an account whose registration answered 201 is an account
-// whose clinic is already there, which is what makes "register, then sign
-// in" a journey with no gap to race.
+// answer leaves: on the path every normal registration takes the clinic
+// is already there when the answer arrives, which is what makes
+// "register, then sign in" a journey with no gap to race. The path that
+// is not normal -- a failed synchronous attempt -- and the honest 201
+// semantics that come with it are # Failure semantics' own subject.
 //
 // # The two-path split with org's own subscriber
 //
@@ -79,14 +83,47 @@ import (
 // The subscriber never returns an error: on the in-memory bus a handler
 // error propagates back into authn's own Publish call (go/org/events.go's
 // own subscriber documents why returning errors is actively harmful
-// there), so a provisioning failure is logged at Error -- an operator
-// signal naming the account -- and swallowed, exactly the posture org's
-// subscriber takes for its own half. Every step is idempotent, so a
-// partially provisioned clinic is completed by any later delivery of the
-// same event, and the self_service_clinics ledger below is what lets a
-// boot after a restart re-discover every clinic whose provisioning
-// completed before the restart (sign_in_memberships.go's clinics scan
-// set).
+// there), so the register route answers 201 whether the synchronous
+// provisioning attempt succeeded or failed -- authn must not fail a
+// registration whose account was created. A failure is therefore logged
+// at Error, and it must not stop there: the account is real, the answer
+// said "created", the authn.user.created event fires exactly once (the
+// in-process bus never redelivers), and the account cannot re-register,
+// so a clinic that never appeared would strand the registrant in the dead
+// end this file exists to close. Every step of provision is idempotent --
+// the tenant is derived from the user id, org's tree and membership
+// writes and rbac's role and grant writes reconcile, and the ledger row
+// below is a silent no-op on a repeat -- which is what makes a FAILED
+// attempt retryable: the retry job scheduled on the app's own job queue
+// (scheduleProvisionRetry) re-runs the same provision until it succeeds,
+// converging the clinic exactly as a redelivered event would have. The
+// job row is the durable record of the unfinished work: it survives a
+// restart, so a process that dies between the failed attempt and the
+// retry's success loses nothing -- the next boot's queue start
+// re-dispatches the due retry (jobs' Start recovers and re-claims it).
+// The queue's own retry budget and dead-letter close the loop: past the
+// last attempt the job dead-letters with the final cause on its row and
+// in the log, the operator signal that this provisioning needs a human
+// rather than another attempt.
+//
+// The 201 semantics that result are the honest ones: register answers 201
+// exactly when the account exists. The clinic is already there whenever
+// the synchronous attempt succeeded -- the path every normal registration
+// takes -- so "register, then sign in" keeps its gap-free shape. After a
+// failed synchronous attempt the 201 still answers, and a sign-in in the
+// window before the retry converges answers the memberless refusal
+// (authn.tenant_membership_required) exactly as it did before
+// self-service existed; the retry converges the clinic moments later and
+// the same sign-in then lands in it. The browser-shaped e2e gate
+// (self-service-signup.spec.ts) never sees that window, because it signs
+// in after a registration whose synchronous attempt succeeded.
+//
+// The self_service_clinics ledger below is written only once provision
+// has completed every step (see provision), so boot-time re-discovery
+// never names a clinic whose org/rbac half is missing -- a clinic whose
+// provisioning never completed has no ledger row, and its retry job row,
+// not a ledger row, is the record the next boot re-dispatches
+// (sign_in_memberships.go's clinics scan set reads the ledger only).
 type selfServiceProvisioner struct {
 	// orgModule is the module whose TreeService and MemberService the
 	// clinic's org rows are created through, under the clinic tenant's own
@@ -111,6 +148,18 @@ type selfServiceProvisioner struct {
 	// subscription is installed after Bootstrap, so it is always non-nil
 	// here).
 	catalog *i18n.Catalog
+	// queue is the app's own standalone queue a failed synchronous
+	// provisioning attempt's recovery is enqueued on
+	// (scheduleProvisionRetry), and the queue the retry job's handler is
+	// registered on (wireSelfService). Always set by wireSelfService.
+	queue *jobs.StandaloneQueue
+	// failProvision is the regression suite's failure-injection point
+	// (serverConfig.failSelfServiceProvision, consulted at the top of
+	// provision): when non-nil it fails every provisioning attempt it is
+	// asked about, so a test can place a failure on the synchronous
+	// delivery and watch the retry converge the same clinic. Nil in every
+	// production wiring.
+	failProvision func(userID string) error
 }
 
 // onUserCreated is the subscription installed by wireSelfService for
@@ -122,7 +171,10 @@ type selfServiceProvisioner struct {
 // one account.
 //
 // The handler always returns nil (see selfServiceProvisioner's own doc
-// comment for why), so every failure below is a logged one.
+// comment for why), so every failure below is a logged one -- and a failed
+// provisioning attempt is followed by the retry that converges the clinic
+// (scheduleProvisionRetry), never left for a redelivery that will not
+// come.
 func (p *selfServiceProvisioner) onUserCreated(ctx context.Context, evt pkgcore.Event) error {
 	log := obs.FromContext(ctx)
 	if evt.TenantID != "" {
@@ -144,26 +196,159 @@ func (p *selfServiceProvisioner) onUserCreated(ctx context.Context, evt pkgcore.
 	if err := p.provision(ctx, userID, clinic); err != nil {
 		// The register route has already answered (or is about to answer)
 		// 201 for this account, so a failure here must not surface as one
-		// in authn. The Error line is the operator signal: the account
-		// exists and its sign-in will refuse until the clinic's
-		// provisioning is completed (a later redelivery of this event, or
-		// manual repair) -- the dead end this file exists to close, now
-		// with a log line naming its cause.
-		log.Error("reference-app: self-service clinic provisioning failed; the account cannot sign in until it is provisioned",
+		// in authn. The Error line is the operator signal and
+		// scheduleProvisionRetry is the recovery: the retry job re-runs
+		// this same provision until it succeeds, so a failed synchronous
+		// attempt never strands the account -- its sign-in refuses only
+		// until the retry converges the clinic (the file doc's # Failure
+		// semantics).
+		log.Error("reference-app: self-service clinic provisioning failed synchronously; scheduling the retry that converges it",
 			"user_id", userID, "tenant_id", clinic, "error", err)
+		p.scheduleProvisionRetry(ctx, userID, clinic)
 		return nil
 	}
 	return nil
 }
 
-// provision creates (or ensures, on a redelivery) the whole clinic shape
-// for userID in tenant clinic: the org tree root, the membership, the
+// selfServiceProvisionTaskType is the jobs task type of the retry job a
+// failed synchronous provisioning attempt enqueues (scheduleProvisionRetry
+// below). The dotted spelling follows the task types this app's queue
+// already carries (storage.expiry_sweep, notification.deliver,
+// pki.expiry_scan); the type is this host's own, so its prefix names the
+// feature, not a module.
+const selfServiceProvisionTaskType = "self_service.provision_clinic"
+
+// selfServiceProvisionMaxRetries is how many retries beyond the first
+// attempt the retry job gets (jobs.WithMaxRetries; jobs.DefaultMaxRetries
+// is 3). The job is the ONLY automatic recovery a failed synchronous
+// provisioning attempt gets -- the authn.user.created event fires once and
+// nothing else ever re-runs the chain -- so the budget is deliberately
+// generous: at the queue's doubling backoff (1s base, 5m cap, go/jobs'
+// DefaultBackoffBase/DefaultBackoffMax) ten retries keep trying for
+// minutes, far past the transient failures a synchronous attempt can
+// actually hit (database contention with the register's own writes, a
+// busy SQLite file), and a provisioning still failing after that is an
+// incident the dead-letter row and its log line hand to an operator
+// rather than another attempt.
+const selfServiceProvisionMaxRetries = 10
+
+// selfServiceProvisionTask is the retry job's payload: the registrant's
+// user id, the one fact provision needs (the clinic tenant is derived
+// from it, clinicTenantOf). The payload carries no tenant: the job's own
+// TenantID is the clinic, so the worker's rebuilt context already names
+// it when the handler runs (jobs.Handler's contract).
+type selfServiceProvisionTask struct {
+	UserID string `json:"user_id"`
+}
+
+// selfServiceProvisionJobHandler is the jobs.Handler for
+// selfServiceProvisionTaskType: it re-runs the clinic provisioning whose
+// synchronous attempt failed. Every step provision takes is idempotent,
+// so the handler converges the clinic wherever the earlier attempt died
+// -- even one that completed the org and rbac halves and failed only on
+// the ledger write is finished by a re-run that lands last on a silent
+// no-op (selfServiceClinics.add). A failed attempt returns its error and
+// the queue does the rest: retry with backoff while attempts remain, then
+// a dead-letter whose row and log carry the last cause.
+//
+// wireSelfService registers it directly on the app's standalone queue
+// rather than declaring it on a module registry: the registry's handler
+// drain onto the queue has already run by the time wireSelfService is
+// called (server.go). RegisterHandler is safe to call after the queue's
+// Start (go/jobs' own doc), and no job of this type can exist before this
+// registration completes anyway -- scheduleProvisionRetry, its only
+// enqueuer, runs inside a served register request, which cannot arrive
+// until buildServer has returned.
+type selfServiceProvisionJobHandler struct {
+	provisioner *selfServiceProvisioner
+}
+
+// compile-time check that the retry handler satisfies jobs.Handler.
+var _ jobs.Handler = (*selfServiceProvisionJobHandler)(nil)
+
+// Type implements jobs.Handler.
+func (h *selfServiceProvisionJobHandler) Type() string { return selfServiceProvisionTaskType }
+
+// Handle implements jobs.Handler: it re-runs provision for the task's user
+// under the clinic tenant context the worker rebuilt from the job's own
+// TenantID (jobs.Handler's contract), then returns no result on success
+// and the failure on error -- the error becomes the attempt's recorded
+// failure text and, past the retry budget, the dead-letter's. The wrap
+// carries the registrant's user id so that recorded text names the
+// account even read out of context; the clinic tenant stays on the job
+// row itself, where the queue already keeps it.
+func (h *selfServiceProvisionJobHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs.ProgressFn) (jobs.Result, error) {
+	var task selfServiceProvisionTask
+	if err := json.Unmarshal(job.Payload, &task); err != nil {
+		return jobs.Result{}, fmt.Errorf("reference-app: decode the clinic provisioning retry task: %w", err)
+	}
+	if task.UserID == "" {
+		return jobs.Result{}, fmt.Errorf("reference-app: the clinic provisioning retry task carries no user id")
+	}
+	if err := h.provisioner.provision(ctx, task.UserID, clinicTenantOf(task.UserID)); err != nil {
+		return jobs.Result{}, fmt.Errorf("provisioning the clinic of user %s: %w", task.UserID, err)
+	}
+	return jobs.Result{}, nil
+}
+
+// scheduleProvisionRetry enqueues the retry job that re-runs a failed
+// synchronous provisioning attempt until it succeeds. It is called
+// exactly on the synchronous failure path -- a successful provisioning
+// never enqueues -- and its own failures are logged, never propagated:
+// the register route must not fail for want of a retry. The job is not
+// idempotency-keyed, deliberately: at most one synchronous attempt exists
+// per registration (the event fires once on the in-process bus), so at
+// most one retry job is enqueued per failed registration, and a duplicate
+// would be harmless anyway -- the handler converges idempotently whatever
+// it finds. A key would be worse than useless: jobs' idempotency-key
+// semantics pin a Job forever regardless of its outcome, so a keyed
+// retry that dead-lettered could never be re-enqueued by any later
+// mechanism.
+func (p *selfServiceProvisioner) scheduleProvisionRetry(ctx context.Context, userID string, clinic pkgcore.TenantID) {
+	log := obs.FromContext(ctx)
+	if p.queue == nil {
+		log.Error("reference-app: no job queue to retry the clinic provisioning on; the account cannot sign in until it is provisioned by hand",
+			"user_id", userID, "tenant_id", clinic)
+		return
+	}
+	payload, err := json.Marshal(selfServiceProvisionTask{UserID: userID})
+	if err != nil {
+		// One string field cannot fail to marshal; the guard exists so a
+		// future payload change fails loudly here rather than silently
+		// stranding the account.
+		log.Error("reference-app: encoding the clinic provisioning retry failed",
+			"user_id", userID, "tenant_id", clinic, "error", err)
+		return
+	}
+	if _, err := p.queue.Enqueue(ctx, jobs.Task{
+		Type:     selfServiceProvisionTaskType,
+		TenantID: clinic,
+		Payload:  payload,
+	}, jobs.WithMaxRetries(selfServiceProvisionMaxRetries)); err != nil {
+		log.Error("reference-app: enqueueing the clinic provisioning retry failed",
+			"user_id", userID, "tenant_id", clinic, "error", err)
+	}
+}
+
+// provision creates (or ensures, on a redelivery or a retry) the whole
+// clinic shape for userID in tenant clinic: the org tree root, the
+// membership, the
 // built-in roles, the owner grant, the durable ledger row and the
 // membership store's scan-set entry. Every step is idempotent and every
 // step runs under the clinic tenant's own context -- org's tree and
 // membership rows and rbac's role and binding rows are all tenant data,
 // and nothing here reads or writes across a tenant boundary.
 func (p *selfServiceProvisioner) provision(ctx context.Context, userID string, clinic pkgcore.TenantID) error {
+	// failProvision is the regression suite's injection point
+	// (selfServiceProvisioner's own doc comment): armed, it fails this
+	// attempt before any step runs, so a test can place the failure on
+	// the synchronous delivery and watch the retry converge the same
+	// clinic. Never set in production wiring.
+	if p.failProvision != nil {
+		if err := p.failProvision(userID); err != nil {
+			return fmt.Errorf("reference-app: injected provisioning failure: %w", err)
+		}
+	}
 	tenantCtx := pkgcore.WithTenant(ctx, clinic)
 
 	// The org tree root: mirror org's own ensureRoot (go/org/events.go) --
@@ -394,12 +579,19 @@ func (c *selfServiceClinics) EnsureSchema(ctx context.Context) error {
 	return c.db.WithContext(ctx).Exec(createSelfServiceClinicsTableSQL).Error
 }
 
-// add records one provisioned clinic tenant. The tenant_id primary key
-// makes a repeated add of the same clinic a no-op, which is what lets the
-// provisioning path call this on every delivery of a registration event
-// without special-casing redeliveries.
+// add records one provisioned clinic tenant. The insert carries
+// clause.OnConflict{DoNothing: true}, so a repeated add of the same
+// clinic tenant is a silent no-op rather than a duplicate-key error
+// (measured: a plain Create of an existing tenant_id answers the driver's
+// duplicate-key error on this stack, whatever the old doc comment's
+// "no-op" claim said), which is what lets the provisioning path call this
+// on every run -- a retry job converging a clinic whose earlier steps
+// another run already completed lands here last and must not fail the
+// whole provision -- without special-casing repeats. OnConflict DoNothing
+// is portable across both dbkit dialects (the same clause go/config's and
+// go/ai-gateway's own idempotent inserts use).
 func (c *selfServiceClinics) add(ctx context.Context, tenant pkgcore.TenantID, userID string) error {
-	return c.db.WithContext(ctx).Create(&selfServiceClinic{
+	return c.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&selfServiceClinic{
 		TenantID: string(tenant),
 		UserID:   userID,
 	}).Error
@@ -417,8 +609,15 @@ func (c *selfServiceClinics) list(ctx context.Context) ([]selfServiceClinic, err
 // wireSelfService installs the self-service signup chain into a composed
 // server: it re-discovers every already-provisioned clinic from the
 // durable ledger (a boot against a database a previous boot provisioned
-// clinics into must keep those clinics' owners sign-in-able), then
-// subscribes the provisioner to authn's user-created event.
+// clinics into must keep those clinics' owners sign-in-able), subscribes
+// the provisioner to authn's user-created event, and registers the retry
+// job's handler on the standalone queue the caller hands in -- the queue
+// a failed synchronous provisioning attempt enqueues its recovery onto
+// (scheduleProvisionRetry), whose job rows survive a restart and are
+// re-dispatched by the next boot's queue start. failProvision is the
+// regression suite's failure-injection hook (nil in every production
+// wiring; a test arms it through serverConfig.failSelfServiceProvision
+// before calling buildServer), handed to the provisioner it builds.
 //
 // buildServer calls it AFTER the demo seeds have run, which is the
 // discriminator that keeps the demo path intact (selfServiceProvisioner's
@@ -442,7 +641,7 @@ func (c *selfServiceClinics) list(ctx context.Context) ([]selfServiceClinic, err
 // memberships, grants and first-tenant resolution all stay as the seed
 // made them), which is the residual cost of the ordering discriminator
 // under a genuinely concurrent multi-replica boot.
-func wireSelfService(ctx context.Context, reg *pkgcore.Registry, db *gorm.DB, orgModule *org.Module, rbacService *rbac.Service, memberships *signInMemberships) error {
+func wireSelfService(ctx context.Context, reg *pkgcore.Registry, db *gorm.DB, orgModule *org.Module, rbacService *rbac.Service, memberships *signInMemberships, queue *jobs.StandaloneQueue, failProvision func(userID string) error) error {
 	clinics := &selfServiceClinics{db: db}
 	if err := clinics.EnsureSchema(ctx); err != nil {
 		return fmt.Errorf("reference-app: ensure the self-service clinic ledger schema: %w", err)
@@ -461,12 +660,17 @@ func wireSelfService(ctx context.Context, reg *pkgcore.Registry, db *gorm.DB, or
 	}
 
 	provisioner := &selfServiceProvisioner{
-		orgModule:   orgModule,
-		rbacService: rbacService,
-		clinics:     clinics,
-		memberships: memberships,
-		catalog:     reg.Locales(),
+		orgModule:     orgModule,
+		rbacService:   rbacService,
+		clinics:       clinics,
+		memberships:   memberships,
+		catalog:       reg.Locales(),
+		queue:         queue,
+		failProvision: failProvision,
 	}
 	reg.Events.Subscribe(authn.EventUserCreated, provisioner.onUserCreated)
+	if err := queue.RegisterHandler(&selfServiceProvisionJobHandler{provisioner: provisioner}); err != nil {
+		return fmt.Errorf("reference-app: register the clinic provisioning retry handler: %w", err)
+	}
 	return nil
 }
