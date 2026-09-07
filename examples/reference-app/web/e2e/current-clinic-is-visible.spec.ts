@@ -129,12 +129,17 @@ test(
 
 test(
   'a clinic a practice just created for itself is named, not left as an id',
-  // @pending, not @budget: the defect this checks is OPEN. Its two
-  // siblings above are @budget because they pass and only the sign-in
-  // budget keeps them out of the default run -- conflating the two is
-  // exactly what this suite split the tags to prevent, and tagging this
-  // one @budget would have filed a live defect under "verified".
-  { tag: '@pending' },
+  // @budget, not in the default run: the defect this test found is
+  // closed -- the clinic a registration creates is answered by its own
+  // org root name (go/org's MemberService.TenantsOf behind the sign-in
+  // store, cmd/server/self_service.go naming the root after the
+  // registrant's display name, the frame reading it from
+  // /api/reference-app/clinic-name), the same verified status its two
+  // siblings above carry: they pass and only the sign-in budget keeps
+  // them out of the default run. While the defect was open this test
+  // was @pending -- conflating the two is exactly what this suite split
+  // the tags to prevent.
+  { tag: '@budget' },
   async ({ page }) => {
     // THE OBSERVATION THIS GATE HAD WRONG
     //
@@ -170,6 +175,16 @@ test(
     await page.getByRole('button', { name: APP_TEXT.registerBackToSignIn }).click()
     await submitPasswordSignIn(page, email, SIGNUP_PASSWORD)
     await expectSignedIn(page)
+
+    // The clinic's name arrives one fetch after the frame mounts (the
+    // menu's tenant-identity answer, /api/reference-app/clinic-name) --
+    // the trigger starts in a raw-id fallback so the switcher is never
+    // stranded disabled while it loads. readTenantLabel is a raw read,
+    // so wait the label out of that loading state first; the poll is
+    // timing, never a weakening of the assertion below it.
+    await expect
+      .poll(async () => readTenantLabel(page), { timeout: 10_000 })
+      .not.toMatch(RAW_TENANT_ID)
 
     // Recognisable: whatever the switcher shows, it is not a bare id. A
     // dentist asked "which clinic are you in" cannot answer
