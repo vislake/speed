@@ -27,11 +27,15 @@
  * caller's bound client and its access token. An unresolved load -- the
  * first load in flight, or parked by react-query's default networkMode
  * 'online' while the device is offline -- keeps the loading branch,
- * header included. Only a settled query leaves it: a genuine empty
- * answer (or a genuine failure) hides the section header entirely and
- * renders one ui-kit EmptyState (empty / error variant with a retry
- * button), so the heading order never skips a level and the no-history
- * text is never asserted for an answer that has not arrived.
+ * header included. Only a settled query leaves it: an answer listing
+ * zero attempts hides the header and renders the ui-kit EmptyState
+ * empty variant, while a load that failed -- and a successful answer
+ * that omits the optional attempts key, as unreadable as an error and
+ * never grounds for a "no sign-in history" claim -- render the error
+ * variant with a retry button. In every settled state the EmptyState
+ * title stands in for the hidden h2 header at its own level, so the
+ * heading order never skips a level and the no-history text is only
+ * ever asserted for an answer that genuinely listed none.
  */
 
 import { useMemo } from 'react'
@@ -129,7 +133,7 @@ function HistoryListSkeleton({ label }: { readonly label: string }) {
 
 export function LoginHistorySection() {
   const { t, i18n } = useAccountUiTranslation()
-  const { data, isPending, isError, refetch } = useAuthnListLoginHistory({
+  const { data, isPending, refetch } = useAuthnListLoginHistory({
     limit: PAGE_SIZE,
   })
 
@@ -151,9 +155,8 @@ export function LoginHistorySection() {
   // false too, so a pending test derived from isLoading would miss
   // every branch and read an unresolved load as an empty answer.
   // isPending alone tracks "no answer yet" across the in-flight and the
-  // parked states; a failed load is the isError branch below.
+  // parked states.
   const pending = isPending && attempts === undefined
-  const failed = !isPending && attempts === undefined && isError
   const hasRows = attempts !== undefined && attempts.length > 0
 
   return (
@@ -168,18 +171,34 @@ export function LoginHistorySection() {
 
       {pending ? (
         <HistoryListSkeleton label={t('history.loading')} />
-      ) : failed ? (
+      ) : attempts === undefined ? (
+        // This guard tests the absent list field with the loading
+        // branch already excluded above: pending is false here, so no
+        // attempts means the query settled without delivering a list.
+        // Two shapes settle that way: a load that failed with no data
+        // (isError), and a successful answer whose body omits the
+        // optional attempts key -- AuthnListLoginHistoryResponse marks
+        // `.attempts` optional, so a type-legal 200 `{}` carries data
+        // yet no list, and nothing would re-arm the loading branch for
+        // it (isPending is false and stays false). Both land on the
+        // error state, never the loading skeleton, which nothing could
+        // resolve: the error copy claims no account content, where
+        // reading the field-less answer as "no sign-in history" would
+        // fabricate a statement the answer never made, and its Retry is
+        // the exit.
         <EmptyState
           variant="error"
           title={t('history.error.title')}
           description={t('history.error.description')}
-          // No in-flight state can ever coexist with this button: the
-          // moment a refetch of a settled error is armed, react-query
-          // moves the data-less query back to the pending state, so the
-          // section re-enters the loading branch above -- that loading
-          // announcement is the retry's progress feedback, and the
-          // button, which exists only in this settled branch, can never
-          // be clicked twice into overlapping refetches.
+          // The retry is the exit for both shapes this state covers. A
+          // refetch of a data-less failed load moves the query back to
+          // the pending state, so the section re-enters the loading
+          // branch above -- that loading announcement is the retry's
+          // progress feedback; a refetch of a settled field-less answer
+          // keeps the query's own data, so this state holds until the
+          // refetched answer changes it. Either way react-query dedupes
+          // the per-query fetches, so a click can never overlap a
+          // request already in flight.
           action={
             <Button onClick={() => void refetch()}>{t('history.retry')}</Button>
           }
@@ -189,18 +208,6 @@ export function LoginHistorySection() {
           // level rather than skipping to h6.
           headingLevel="h2"
         />
-      ) : attempts === undefined ? (
-        // attempts is data?.attempts, and the generated
-        // AuthnListLoginHistoryResponse marks `.attempts` optional, so
-        // this branch is reachable from a settled query: a type-legal
-        // 200 whose body omits the key (e.g. `{}`) lands here with no
-        // pending and no error. The query is settled, so nothing re-arms
-        // the loading branch and the skeleton keeps rendering until a
-        // later answer carries the key -- that never-resolving skeleton
-        // screen is a known defect, queued as a separate fix. Rendering
-        // the skeleton rather than the empty state keeps an unresolved
-        // load from ever being read as "no sign-in history".
-        <HistoryListSkeleton label={t('history.loading')} />
       ) : attempts.length === 0 ? (
         <EmptyState
           variant="empty"

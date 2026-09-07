@@ -704,4 +704,53 @@ describe('SessionsSection', () => {
 
     await expectNoAxeViolations()
   })
+
+  it('end the loading state when a settled answer omits the optional sessions key: the error state renders with aria-busy ended, and its retry converges once the answer carries the list', async () => {
+    const user = userEvent.setup()
+    let listCalls = 0
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'GET' && call.path === SESSIONS_PATH) {
+        listCalls += 1
+        if (listCalls === 1) {
+          // AuthnListSessionsResponse marks `.sessions` optional, so a
+          // 200 whose body omits the key is type-legal and react-query
+          // settles it as a successful answer. Before the fix the
+          // section read this settled shape as still loading and held
+          // the aria-busy skeleton forever, with no exit.
+          return jsonResponse(200, {})
+        }
+        return jsonResponse(200, { sessions: [session()] })
+      }
+      throw new Error(`unexpected ${call.method} ${call.path}`)
+    })
+    await signInWithPassword(rig)
+    renderWithProviders(<SessionsSection />)
+
+    // The finite state: the error state -- whose copy claims no account
+    // content -- never the loading skeleton. The loading announcement
+    // and its aria-busy are gone, no fabricated "no sessions" claim
+    // takes the list's place, and the header stays hidden so the error
+    // title keeps the heading level.
+    expect(await screen.findByText(zhCN.sessions.error.title)).toBeTruthy()
+    expect(screen.getByText(zhCN.sessions.error.description)).toBeTruthy()
+    expect(
+      screen.queryByRole('status', { name: zhCN.sessions.loading }),
+    ).toBeNull()
+    expect(screen.queryByText(zhCN.sessions.empty.title)).toBeNull()
+    expect(
+      screen.queryByRole('heading', { name: zhCN.sessions.title }),
+    ).toBeNull()
+
+    // The error state's retry is the exit: a refetch whose answer
+    // carries the key converges onto the list.
+    await user.click(screen.getByRole('button', { name: zhCN.sessions.retry }))
+    expect(await screen.findByText('Chrome/126.0.0.0 on Windows')).toBeTruthy()
+    expect(screen.queryByText(zhCN.sessions.error.title)).toBeNull()
+    expect(listCalls).toBe(2)
+
+    await expectNoAxeViolations()
+  })
 })

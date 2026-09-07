@@ -47,12 +47,15 @@
  * react-query's default networkMode 'online' while the device is
  * offline -- keeps the section header and the loading skeleton; the
  * block must never silently vanish while the answer has not arrived.
- * Empty and failure states render one ui-kit EmptyState (empty / error
- * variant with a retry button) with the section header hidden, so the
- * heading order never skips a level. The one exception is a first-run
- * account with an unbound configured provider: there the empty list is
- * exactly the add area's cue, so the header stays and the add area is
- * the whole of the content.
+ * Settled states render one ui-kit EmptyState with the section header
+ * hidden, so the heading order never skips a level: an answer listing
+ * zero identities renders the empty variant, while a load that failed
+ * -- and a successful answer that omits the optional identities key, as
+ * unreadable as an error and never grounds for a "no linked accounts"
+ * claim or an add area -- render the error variant with a retry button.
+ * The one exception is a first-run account with an unbound configured
+ * provider: there a genuinely empty list is exactly the add area's cue,
+ * so the header stays and the add area is the whole of the content.
  */
 
 import { useState } from 'react'
@@ -180,7 +183,7 @@ export function SocialBindingsSection({
 }: SocialBindingsSectionProps) {
   const { t } = useAccountUiTranslation()
   const queryClient = useQueryClient()
-  const { data, isPending, isError, refetch } = useAuthnListIdentities()
+  const { data, isPending, refetch } = useAuthnListIdentities()
   const unbindMutation = useAuthnUnbindIdentity()
 
   const [unbindTarget, setUnbindTarget] = useState<string | null>(null)
@@ -196,12 +199,10 @@ export function SocialBindingsSection({
   // isPending-and-isFetching conjunction) is false and isError stays
   // false too, so a pending test derived from isLoading would miss
   // every branch and the block would silently vanish. isPending alone
-  // tracks "no answer yet" across the in-flight and the parked states;
-  // a failed load is the isError branch below.
+  // tracks "no answer yet" across the in-flight and the parked states.
   const pending = isPending && identities === undefined
-  const failed = !isPending && identities === undefined && isError
   const rows =
-    !pending && !failed && identities !== undefined ? identities : undefined
+    !pending && identities !== undefined ? identities : undefined
 
   const boundProviders =
     rows === undefined
@@ -284,35 +285,43 @@ export function SocialBindingsSection({
 
       {pending ? (
         <BindingListSkeleton label={t('bindings.loading')} />
-      ) : failed ? (
+      ) : rows === undefined ? (
+        // This guard tests the absent list field with the loading
+        // branch already excluded above: pending is false here, so no
+        // rows means the query settled without delivering a list. Two
+        // shapes settle that way: a load that failed with no data
+        // (isError), and a successful answer whose body omits the
+        // optional identities key -- AuthnListIdentitiesResponse marks
+        // `.identities` optional, so a type-legal 200 `{}` carries data
+        // yet no list, and nothing would re-arm the loading branch for
+        // it (isPending is false and stays false). Both land on the
+        // error state, never the loading skeleton, which nothing could
+        // resolve: the error copy claims no account content, where
+        // reading the field-less answer as "no linked accounts" would
+        // fabricate a statement the answer never made -- and would arm
+        // the add area's binding offers on that fabrication -- and its
+        // Retry is the exit.
         <EmptyState
           variant="error"
           title={t('bindings.error.title')}
           description={t('bindings.error.description')}
-          // No in-flight state can ever coexist with this button: the
-          // moment a refetch of a settled error is armed, react-query
-          // moves the data-less query back to the pending state, so the
-          // section re-enters the loading branch above -- that loading
-          // announcement is the retry's progress feedback, and the
-          // button, which exists only in this settled branch, can never
-          // be clicked twice into overlapping refetches.
+          // The retry is the exit for both shapes this state covers. A
+          // refetch of a data-less failed load moves the query back to
+          // the pending state, so the section re-enters the loading
+          // branch above -- that loading announcement is the retry's
+          // progress feedback; a refetch of a settled field-less answer
+          // keeps the query's own data, so this state holds until the
+          // refetched answer changes it. Either way react-query dedupes
+          // the per-query fetches, so a click can never overlap a
+          // request already in flight.
           action={
             <Button onClick={() => void refetch()}>{t('bindings.retry')}</Button>
           }
+          // The section header is hidden whenever this renders (see the
+          // `showHeader` derivation above), so this EmptyState's title
+          // takes over the section's own heading level.
           headingLevel="h2"
         />
-      ) : rows === undefined ? (
-        // identities is data?.identities, and the generated
-        // AuthnListIdentitiesResponse marks `.identities` optional, so
-        // this branch is reachable from a settled query: a type-legal
-        // 200 whose body omits the key (e.g. `{}`) lands here with no
-        // pending and no error. The query is settled, so nothing re-arms
-        // the loading branch and the skeleton keeps rendering until a
-        // later answer carries the key -- that never-resolving skeleton
-        // screen is a known defect, queued as a separate fix. Rendering
-        // the skeleton rather than nothing keeps an unresolved load from
-        // making the social-bindings block silently vanish.
-        <BindingListSkeleton label={t('bindings.loading')} />
       ) : showEmptyState ? (
         <EmptyState
           variant="empty"

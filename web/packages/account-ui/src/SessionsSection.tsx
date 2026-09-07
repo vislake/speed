@@ -34,11 +34,14 @@
  * An unresolved load -- the first load in flight, or parked by
  * react-query's default networkMode 'online' while the device is offline
  * -- keeps the loading branch, header included. Only a settled query
- * leaves it: a genuine empty answer (or a genuine failure) hides the
- * section header entirely and renders one ui-kit EmptyState (empty /
- * error variant with a retry button), so the heading order never skips a
- * level and the no-sessions text is never asserted for an answer that
- * has not arrived.
+ * leaves it: an answer listing zero sessions hides the header and
+ * renders the ui-kit EmptyState empty variant, while a load that failed
+ * -- and a successful answer that omits the optional sessions key, as
+ * unreadable as an error and never grounds for a "no sessions" claim --
+ * render the error variant with a retry button. In every settled state
+ * the EmptyState title stands in for the hidden h2 header at its own
+ * level, so the heading order never skips a level and the no-sessions
+ * text is only ever asserted for an answer that genuinely listed none.
  */
 
 import { useMemo, useState } from 'react'
@@ -151,7 +154,7 @@ function SessionListSkeleton({ label }: { readonly label: string }) {
 export function SessionsSection() {
   const { t, i18n } = useAccountUiTranslation()
   const queryClient = useQueryClient()
-  const { data, isPending, isError, refetch } = useAuthnListSessions()
+  const { data, isPending, refetch } = useAuthnListSessions()
   const revokeSessionMutation = useAuthnRevokeSession()
   const revokeOthersMutation = useAuthnRevokeOtherSessions()
 
@@ -177,9 +180,8 @@ export function SessionsSection() {
   // false too, so a pending test derived from isLoading would miss
   // every branch and read an unresolved load as an empty answer.
   // isPending alone tracks "no answer yet" across the in-flight and the
-  // parked states; a failed load is the isError branch below.
+  // parked states.
   const pending = isPending && sessions === undefined
-  const failed = !isPending && sessions === undefined && isError
   const hasSessions = sessions !== undefined && sessions.length > 0
   const busy =
     revokeSessionMutation.isPending || revokeOthersMutation.isPending
@@ -264,18 +266,33 @@ export function SessionsSection() {
 
       {pending ? (
         <SessionListSkeleton label={t('sessions.loading')} />
-      ) : failed ? (
+      ) : sessions === undefined ? (
+        // This guard tests the absent list field with the loading
+        // branch already excluded above: pending is false here, so no
+        // sessions means the query settled without delivering a list.
+        // Two shapes settle that way: a load that failed with no data
+        // (isError), and a successful answer whose body omits the
+        // optional sessions key -- AuthnListSessionsResponse marks
+        // `.sessions` optional, so a type-legal 200 `{}` carries data
+        // yet no list, and nothing would re-arm the loading branch for
+        // it (isPending is false and stays false). Both land on the
+        // error state, never the loading skeleton, which nothing could
+        // resolve: the error copy claims no account content, where
+        // reading the field-less answer as "no sessions" would fabricate
+        // a statement the answer never made, and its Retry is the exit.
         <EmptyState
           variant="error"
           title={t('sessions.error.title')}
           description={t('sessions.error.description')}
-          // No in-flight state can ever coexist with this button: the
-          // moment a refetch of a settled error is armed, react-query
-          // moves the data-less query back to the pending state, so the
-          // section re-enters the loading branch above -- that loading
-          // announcement is the retry's progress feedback, and the
-          // button, which exists only in this settled branch, can never
-          // be clicked twice into overlapping refetches.
+          // The retry is the exit for both shapes this state covers. A
+          // refetch of a data-less failed load moves the query back to
+          // the pending state, so the section re-enters the loading
+          // branch above -- that loading announcement is the retry's
+          // progress feedback; a refetch of a settled field-less answer
+          // keeps the query's own data, so this state holds until the
+          // refetched answer changes it. Either way react-query dedupes
+          // the per-query fetches, so a click can never overlap a
+          // request already in flight.
           action={
             <Button onClick={() => void refetch()}>{t('sessions.retry')}</Button>
           }
@@ -285,18 +302,6 @@ export function SessionsSection() {
           // heading order skips straight from h1 to h6.
           headingLevel="h2"
         />
-      ) : sessions === undefined ? (
-        // sessions is data?.sessions, and the generated
-        // AuthnListSessionsResponse marks `.sessions` optional, so this
-        // branch is reachable from a settled query: a type-legal 200
-        // whose body omits the key (e.g. `{}`) lands here with no
-        // pending and no error. The query is settled, so nothing re-arms
-        // the loading branch and the skeleton keeps rendering until a
-        // later answer carries the key -- that never-resolving skeleton
-        // screen is a known defect, queued as a separate fix. Rendering
-        // the skeleton rather than the empty state keeps an unresolved
-        // load from ever being read as "no sessions".
-        <SessionListSkeleton label={t('sessions.loading')} />
       ) : sessions.length === 0 ? (
         <EmptyState
           variant="empty"

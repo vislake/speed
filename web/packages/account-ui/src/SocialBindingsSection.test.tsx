@@ -891,4 +891,65 @@ describe('SocialBindingsSection', () => {
 
     await expectNoAxeViolations()
   })
+
+  it('end the loading state when a settled answer omits the optional identities key: the error state renders with aria-busy ended and no add area, and its retry converges once the answer carries the list', async () => {
+    const user = userEvent.setup()
+    let listCalls = 0
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'GET' && call.path === IDENTITIES_PATH) {
+        listCalls += 1
+        if (listCalls === 1) {
+          // AuthnListIdentitiesResponse marks `.identities` optional, so
+          // a 200 whose body omits the key is type-legal and react-query
+          // settles it as a successful answer. Before the fix the
+          // section read this settled shape as still loading and held
+          // the aria-busy skeleton forever, with no exit.
+          return jsonResponse(200, {})
+        }
+        return jsonResponse(200, {
+          identities: [identity({ provider: 'google' })],
+        })
+      }
+      throw new Error(`unexpected ${call.method} ${call.path}`)
+    })
+    await signInWithPassword(rig)
+    renderWithProviders(
+      <SocialBindingsSection
+        session={rig.session}
+        providers={[config('google'), config('github')]}
+      />,
+    )
+
+    // The finite state is the error state -- whose copy claims no
+    // account content -- never the loading skeleton: the loading
+    // announcement and its aria-busy are gone, no fabricated "no linked
+    // social accounts" claim takes the list's place, and the add area
+    // is not the response to an answer that listed no identities (its
+    // provider options would invite binding channels the account may
+    // already have bound).
+    expect(await screen.findByText(zhCN.bindings.error.title)).toBeTruthy()
+    expect(screen.getByText(zhCN.bindings.error.description)).toBeTruthy()
+    expect(
+      screen.queryByRole('status', { name: zhCN.bindings.loading }),
+    ).toBeNull()
+    expect(screen.queryByText(zhCN.bindings.empty.title)).toBeNull()
+    expect(screen.queryByText(ADD_TITLE)).toBeNull()
+    expect(
+      screen.queryByRole('heading', { name: zhCN.bindings.title }),
+    ).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Google' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'GitHub' })).toBeNull()
+
+    // The error state's retry is the exit: a refetch whose answer
+    // carries the key converges onto the rows.
+    await user.click(screen.getByRole('button', { name: zhCN.bindings.retry }))
+    expect(await screen.findByText('Google')).toBeTruthy()
+    expect(screen.queryByText(zhCN.bindings.error.title)).toBeNull()
+    expect(listCalls).toBe(2)
+
+    await expectNoAxeViolations()
+  })
 })
