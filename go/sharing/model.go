@@ -286,10 +286,34 @@ const (
 // # Append-only
 //
 // Like dbkit/audit.AuditEvent, this table is written once per row and never
-// updated or deleted by this module's own code -- AccessLogRepository
-// exposes no update or delete method, and OccurredAt is the row's only
-// timestamp (no separate CreatedAt), since the row's creation IS the event
-// it records.
+// updated or deleted by this module's own code: the only writes are the two
+// appends of the module's access flow -- createWithRetry for a denied
+// attempt, the grantedEntry insert inside ShareRepository's own
+// view-recording transaction for a granted one -- and no route, service
+// method or call site touches a row after that append. OccurredAt is the
+// row's only timestamp (no separate CreatedAt), since the row's creation IS
+// the event it records.
+//
+// That immutability is a convention this module maintains, not a type
+// property, and the difference from dbkit/audit is deliberate.
+// AccessLogRepository embeds dbkit.Repository[AccessLogEntry], so the
+// base's exported Update and Delete are part of its method set -- the same
+// promoted surface Service.Shares documents for Share rows (seeding,
+// inspection) -- and a host holding the repository Service.AccessLogs
+// returns could call them. The convention suffices because the module
+// itself never does: every row is appended and then only read, so a
+// mutation requires the host to actively reach past that surface, a
+// deliberate violation of the contract this comment states rather than an
+// accident the shape makes easy. dbkit/audit's AuditEvent deliberately
+// chose the stronger form instead -- its Repository's hand-written method
+// set is exactly Insert, InsertIdempotent, Get and ListByTenant, with no
+// embedded base to widen, and its own migrations add rejecting triggers as
+// a second backstop -- because audit rows are platform evidence a
+// compliance process relies on, while an access log is tenant data whose
+// append-only property matters but is not evidence. This table carries no
+// such backstop: nothing in sharing_access_log's migrations rejects an
+// UPDATE or DELETE, which is precisely why the convention this comment
+// states is the whole of its immutability.
 //
 // # ShareID is not a foreign key
 //
