@@ -1,7 +1,7 @@
 package main
 
-// ai_gateway_flow_test.go drives go/ai-gateway's round-3 credential-write
-// HTTP surface -- the module's own OpenAPI fragment mounted at
+// ai_gateway_flow_test.go drives go/ai-gateway's credential-write HTTP
+// surface -- the module's own OpenAPI fragment mounted at
 // aiGatewayRoutePath, gated by demoRouteGuards[aiGatewayRoutePath] through
 // aiGatewayPermissionFor's three-permission selector -- end to end through
 // the composed HTTP stack: the real authn+tenancy middleware chain, a real
@@ -16,22 +16,31 @@ package main
 //     aigateway:manage_platform) writes its own tenant's BYOK credential
 //     and reads which scope answers, but is refused the platform-wide
 //     write, while demoOwnerUserID (BuiltinRoleOwner) is not.
-//   - a tenant BYOK credential written over HTTP genuinely redirects
-//     subsequent real chat calls: the boot-time platform credential sends
-//     the consult route's first call to one fake OpenAI-compatible server
-//     with the platform key on the wire; after a tenant-scope write names a
-//     second fake server and a tenant key, the next call reaches THAT
-//     server presenting THAT key -- the stored row, not the platform
-//     default, is what per-call credential resolution answers with.
-//   - the identical redirect is proven for the image provider through the
-//     async smile-simulation pipeline: a second fake images endpoint,
-//     reached only after the tenant-scope write, receives the subsequent
-//     job with the tenant key, while the boot-time fake is never called
-//     again.
+//   - the round-4 SSRF guard is real on the composed stack: a tenant BYOK
+//     write whose baseUrl names a loopback endpoint (the second fake
+//     OpenAI-compatible server standing in for the platform's intranet) is
+//     refused at creation time with aigateway.base_url_blocked and never
+//     stored -- the subsequent real chat calls and image jobs keep
+//     answering through the boot-time platform credential, and the refused
+//     endpoint never receives a single request. This deliberately replaces
+//     the round-3 redirect legs, which wrote a tenant credential pointing
+//     at a loopback fake and asserted the next real call reached it
+//     presenting the tenant key: that test confirmed the exact primitive
+//     the P0 fix closes (a tenant writes an address, the server dials it
+//     from the platform's network), so the guard is what the composed
+//     stack pins now. A write naming a PUBLIC-shaped endpoint still lands,
+//     and the read surface -- the same CredentialService.Resolve the call
+//     path uses -- answers with the tenant's own row, preserving the
+//     legitimate arbitrary-public-vendor capability (the coordinator's
+//     product decision; a platform-declared whitelist stays recorded, not
+//     implemented, per go/ai-gateway/AGENTS.md).
 //
-// None of the legs needs a live vendor API key: the two fake
-// OpenAI-compatible endpoints stand in for the real ones exactly as
-// consult_flow_test.go and smilesim_flow_test.go already establish.
+// None of the legs needs a live vendor API key: the fake OpenAI-compatible
+// endpoints stand in for the real ones exactly as consult_flow_test.go and
+// smilesim_flow_test.go already establish. The boot-time platform
+// credential is written by buildServer itself under cfg.AIGatewayBaseURL
+// (an operator-chosen platform default, deliberately outside the SSRF
+// guard's tenant-scope boundary -- go/ai-gateway/ssrf.go's file header).
 import (
 	"bytes"
 	"encoding/json"
@@ -160,17 +169,19 @@ func TestAIGatewayCredentialWrites_TwoTierGateOnTheComposedStack(t *testing.T) {
 		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeTenant), "")
 }
 
-// TestAIGatewayCredential_TenantBYOKWriteRedirectsRealChatCalls is the
-// round's mandatory write-then-resolve proof for the chat provider: the
-// boot-time platform credential (buildConsultTestServer pointing cfg's
-// AIGatewayBaseURL/APIKey at fakePlatform) actually sends the first consult
-// call to fakePlatform with the platform key on the wire; a tenant BYOK
-// credential written over this round's own HTTP surface (naming
-// fakeTenant's base URL and a tenant key) then redirects the next consult
-// call to fakeTenant presenting the tenant key -- proving the HTTP write
-// changed what subsequent real calls resolve and use, and that no response
-// ever echoed the key back.
-func TestAIGatewayCredential_TenantBYOKWriteRedirectsRealChatCalls(t *testing.T) {
+// TestAIGatewayCredential_TenantBYOKWrite_InternalBaseURLRefusedBySSRFGuard
+// is the round-4 SSRF guard's chat-provider proof on the composed stack.
+// Its predecessor (round 3's
+// TestAIGatewayCredential_TenantBYOKWriteRedirectsRealChatCalls) wrote a
+// tenant BYOK credential naming a loopback fake endpoint and asserted the
+// next real consult call reached it presenting the tenant key -- the very
+// primitive the P0 fix closes. This test turns that primitive into a
+// guard: the loopback write is refused at creation time and stored
+// nowhere, so subsequent real calls keep answering through the boot-time
+// platform credential and the refused endpoint never sees a request; a
+// write naming a public-shaped endpoint still lands, and the read surface
+// (the same Resolve the call path uses) answers with the tenant's row.
+func TestAIGatewayCredential_TenantBYOKWrite_InternalBaseURLRefusedBySSRFGuard(t *testing.T) {
 	const platformReply = "The platform default answers this consultation."
 	const tenantReply = "The tenant's own BYOK model answers this consultation."
 	fakePlatform := newFakeOpenAICompatibleServer(t, platformReply)
@@ -182,10 +193,13 @@ func TestAIGatewayCredential_TenantBYOKWriteRedirectsRealChatCalls(t *testing.T)
 	noteID := createNoteAs(t, srv, acmeToken, noteText)
 
 	credentialPath := aiGatewayRoutePath + "/credentials/" + aigateway.ProviderOpenAICompatible
+	tenantPath := credentialPath + "/tenant"
 
 	// Leg one: with only the boot-time platform credential present, the
 	// consult call reaches fakePlatform presenting the boot key, and the
-	// read surface reports the system scope answering.
+	// read surface reports the system scope answering. (The boot-time
+	// platform credential is the operator's own default, deliberately
+	// outside the guard's tenant-scope boundary -- see the file header.)
 	resp := consultSuggestRequest(t, srv, acmeToken, noteID)
 	assertConsultSuggestion(t, resp, platformReply, "consult call before the tenant BYOK write")
 	if fakePlatform.lastAuthorization != "Bearer sk-test-consult-key" {
@@ -196,45 +210,120 @@ func TestAIGatewayCredential_TenantBYOKWriteRedirectsRealChatCalls(t *testing.T)
 	assertAIGatewayCredentialAnswer(t, resp, "read before the tenant BYOK write",
 		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeSystem), fakePlatform.URL)
 
-	// The tenant BYOK write over this round's HTTP surface names a DIFFERENT
-	// endpoint and a tenant key.
+	// Leg two -- the guard: a tenant BYOK write whose baseUrl names a
+	// LOOPBACK endpoint (the fake stands in for the platform's intranet) is
+	// refused at creation time with aigateway.base_url_blocked. The literal
+	// address the caller typed may be echoed back in the refusal's ip
+	// param -- zero disclosure.
 	const tenantKey = "sk-tenant-acme-byok-key"
-	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, credentialPath+"/tenant", acmeToken, demoOwnerUserID,
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, tenantPath, acmeToken, demoOwnerUserID,
 		`{"apiKey":"`+tenantKey+`","baseUrl":"`+fakeTenant.URL+`"}`)
-	assertAIGatewayCredentialAnswer(t, resp, "tenant BYOK write",
-		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeTenant), fakeTenant.URL)
+	assertAIGatewayCredentialRefused(t, resp, "tenant BYOK write naming a loopback endpoint",
+		http.StatusBadRequest, aigateway.ErrBaseURLBlocked.Code, map[string]any{"ip": "127.0.0.1"})
 
-	// Leg two: the very same consult call now resolves the tenant's own row
-	// -- fakeTenant receives it, presenting the tenant key -- and the read
-	// surface agrees the tenant scope now answers.
+	// ...and a write naming the SAME endpoint through a hostname whose DNS
+	// answer is blocked is refused without the refusal disclosing the
+	// resolved address -- no ip param -- so the refusal can never be used
+	// as an internal-DNS reconnaissance oracle (ErrBaseURLBlocked's own doc
+	// comment).
+	localhostURL := strings.Replace(fakeTenant.URL, "127.0.0.1", "localhost", 1)
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, tenantPath, acmeToken, demoOwnerUserID,
+		`{"apiKey":"`+tenantKey+`","baseUrl":"`+localhostURL+`"}`)
+	assertAIGatewayCredentialRefused(t, resp, "tenant BYOK write naming a blocked hostname",
+		http.StatusBadRequest, aigateway.ErrBaseURLBlocked.Code, nil)
+
+	// Nothing was stored: the very same consult call still answers through
+	// the platform row presenting the boot key, the read surface still
+	// reports the system scope, and the refused endpoint never received a
+	// single request.
 	resp = consultSuggestRequest(t, srv, acmeToken, noteID)
-	assertConsultSuggestion(t, resp, tenantReply, "consult call after the tenant BYOK write")
-	if fakeTenant.lastAuthorization != "Bearer "+tenantKey {
-		t.Fatalf("fake tenant server saw Authorization %q, want the tenant's own key %q on the wire",
-			fakeTenant.lastAuthorization, "Bearer "+tenantKey)
+	assertConsultSuggestion(t, resp, platformReply, "consult call after the refused tenant BYOK writes")
+	if fakePlatform.lastAuthorization != "Bearer sk-test-consult-key" {
+		t.Fatalf("fake platform server saw Authorization %q after the refused writes, want the boot-time platform key %q -- the refusals must store nothing",
+			fakePlatform.lastAuthorization, "Bearer sk-test-consult-key")
+	}
+	if fakeTenant.lastAuthorization != "" {
+		t.Fatalf("fake tenant server saw Authorization %q, want no request at all -- a refused destination must never be dialed",
+			fakeTenant.lastAuthorization)
 	}
 	resp = aiGatewayCredentialRequest(t, srv, http.MethodGet, credentialPath, acmeToken, demoOwnerUserID, "")
-	assertAIGatewayCredentialAnswer(t, resp, "read after the tenant BYOK write",
-		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeTenant), fakeTenant.URL)
+	assertAIGatewayCredentialAnswer(t, resp, "read after the refused tenant BYOK writes",
+		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeSystem), fakePlatform.URL)
+
+	// Leg three -- the capability the guard deliberately preserves: a
+	// tenant BYOK write naming a PUBLIC-shaped endpoint still lands, and
+	// the read surface -- the same Resolve per-call credential resolution
+	// uses -- now answers with the tenant's own row. (No consult call is
+	// made after this write: the public-shaped endpoint is never dialed in
+	// a test.)
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, tenantPath, acmeToken, demoOwnerUserID,
+		`{"apiKey":"`+tenantKey+`","baseUrl":"https://93.184.216.34/v1"}`)
+	assertAIGatewayCredentialAnswer(t, resp, "tenant BYOK write naming a public-shaped endpoint",
+		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeTenant), "https://93.184.216.34/v1")
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodGet, credentialPath, acmeToken, demoOwnerUserID, "")
+	assertAIGatewayCredentialAnswer(t, resp, "read after the public-shaped tenant BYOK write",
+		aigateway.ProviderOpenAICompatible, string(aigateway.CredentialScopeTenant), "https://93.184.216.34/v1")
 }
 
-// TestAIGatewayCredential_TenantBYOKWriteRedirectsRealImageCalls is the
-// write-then-resolve proof's image-provider mirror, run through the async
-// smile-simulation pipeline: with only the boot-time image platform
-// credential (buildSmileSimTestServer's cfg.AIGatewayImageBaseURL/APIKey)
-// present, the first simulation job's vendor call reaches fakePlatform;
-// after a tenant BYOK credential for the image provider names a second
-// fake endpoint and a tenant key, the next job's vendor call reaches THAT
-// endpoint presenting the tenant key, and fakePlatform is never called
-// again.
-func TestAIGatewayCredential_TenantBYOKWriteRedirectsRealImageCalls(t *testing.T) {
+// assertAIGatewayCredentialRefused reads resp, requires it to be the
+// ai-gateway credential surface's structured {code, params} error answer
+// with exactly wantStatus and wantCode, and -- when wantParams is non-nil
+// -- requires every entry of wantParams to be present with that value. A
+// nil wantParams requires the error to carry NO params at all: the shape
+// the no-IP-echo rule demands of the resolution path's blocked refusal.
+func assertAIGatewayCredentialRefused(t *testing.T, resp *http.Response, what string, wantStatus int, wantCode string, wantParams map[string]any) {
+	t.Helper()
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("%s: read body: %v", what, err)
+	}
+	var out struct {
+		Code   string         `json:"code"`
+		Params map[string]any `json:"params"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("%s: decoding %s: %v", what, raw, err)
+	}
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("%s: status = %d, want %d; body = %s", what, resp.StatusCode, wantStatus, raw)
+	}
+	if out.Code != wantCode {
+		t.Fatalf("%s: code = %q, want %q; body = %s", what, out.Code, wantCode, raw)
+	}
+	if wantParams == nil {
+		if len(out.Params) != 0 {
+			t.Fatalf("%s: refusal carries params %v, want none -- a resolution-path refusal must not disclose the resolved address", what, out.Params)
+		}
+		return
+	}
+	for k, wantV := range wantParams {
+		if gotV, present := out.Params[k]; !present || gotV != wantV {
+			t.Fatalf("%s: params[%q] = %v, want %v; body = %s", what, k, out.Params[k], wantV, raw)
+		}
+	}
+}
+
+// TestAIGatewayCredential_TenantBYOKWrite_InternalImageBaseURLRefusedBySSRFGuard
+// is the guard's image-provider proof, run through the async smile-
+// simulation pipeline: a tenant BYOK write for the image provider naming a
+// loopback images endpoint is refused at creation time and stored nowhere
+// (the next job still reaches the boot-time fakePlatform presenting the
+// platform key, and the refused endpoint never sees a request), while a
+// write naming a public-shaped endpoint still lands and the read surface
+// answers with the tenant's row. Its predecessor (round 3's
+// TestAIGatewayCredential_TenantBYOKWriteRedirectsRealImageCalls) pinned
+// the redirect-to-loopback primitive this round's P0 fix closes -- see the
+// chat-side test's own doc comment.
+func TestAIGatewayCredential_TenantBYOKWrite_InternalImageBaseURLRefusedBySSRFGuard(t *testing.T) {
 	fakePlatform := newFakeOpenAIImageServer(t)
 	fakeTenant := newFakeOpenAIImageServer(t)
 
 	srv, cfg := buildSmileSimTestServer(t, fakePlatform)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "aigw-img-byok-owner")
 
-	// Leg one: the boot-time platform credential serves the first job.
+	// Leg one: the boot-time image platform credential serves the first job.
 	photo := uploadAndComplete(t, srv, acmeToken, jpegWithExif(t), "")
 	final := smileSimulateAndWait(t, srv, acmeToken, photo, time.Now().Add(5*time.Second))
 	if status, _ := final["status"].(string); status != "succeeded" {
@@ -250,8 +339,9 @@ func TestAIGatewayCredential_TenantBYOKWriteRedirectsRealImageCalls(t *testing.T
 	}
 	platformCalls := fakePlatform.requests
 
-	// The tenant BYOK write over this round's HTTP surface names a DIFFERENT
-	// images endpoint and a tenant key. (A write to one provider's row never
+	// Leg two -- the guard: a tenant BYOK write for the image provider
+	// naming a LOOPBACK images endpoint is refused with
+	// aigateway.base_url_blocked. (A write to one provider's row never
 	// affects the other's -- the chat row written by the sibling test's own
 	// server lives in that server's database, and this server's database
 	// never saw it.)
@@ -259,28 +349,45 @@ func TestAIGatewayCredential_TenantBYOKWriteRedirectsRealImageCalls(t *testing.T
 	imageCredentialPath := aiGatewayRoutePath + "/credentials/" + aigateway.ProviderOpenAICompatibleImage
 	resp := aiGatewayCredentialRequest(t, srv, http.MethodPut, imageCredentialPath+"/tenant", acmeToken, demoOwnerUserID,
 		`{"apiKey":"`+tenantKey+`","baseUrl":"`+fakeTenant.URL+`"}`)
-	assertAIGatewayCredentialAnswer(t, resp, "image tenant BYOK write",
-		aigateway.ProviderOpenAICompatibleImage, string(aigateway.CredentialScopeTenant), fakeTenant.URL)
+	assertAIGatewayCredentialRefused(t, resp, "image tenant BYOK write naming a loopback endpoint",
+		http.StatusBadRequest, aigateway.ErrBaseURLBlocked.Code, map[string]any{"ip": "127.0.0.1"})
 
-	// Leg two: the next job's vendor call lands on fakeTenant presenting the
-	// tenant key, and fakePlatform is never called again.
+	// Nothing was stored: the next job's vendor call still lands on
+	// fakePlatform presenting the platform key, and the refused endpoint
+	// never receives a request.
 	secondPhoto := uploadAndComplete(t, srv, acmeToken, jpegWithExif(t), "")
 	final = smileSimulateAndWait(t, srv, acmeToken, secondPhoto, time.Now().Add(5*time.Second))
 	if status, _ := final["status"].(string); status != "succeeded" {
 		t.Fatalf("second job's final status = %v, want \"succeeded\"; body = %+v", final["status"], final)
 	}
-	if fakeTenant.lastAuthorization != "Bearer "+tenantKey {
-		t.Fatalf("fake tenant image server saw Authorization %q, want the tenant's own key %q on the wire",
-			fakeTenant.lastAuthorization, "Bearer "+tenantKey)
+	if fakePlatform.requests != platformCalls+1 {
+		t.Fatalf("fake platform image server received %d calls after the refused write, want %d -- the refusal must store nothing",
+			fakePlatform.requests, platformCalls+1)
 	}
-	if fakeTenant.lastModel != "dall-e-3" {
-		t.Fatalf("fake tenant image server saw model %q, want the routed vendor model %q",
-			fakeTenant.lastModel, "dall-e-3")
+	if fakePlatform.lastAuthorization != "Bearer sk-test-smilesim-key" {
+		t.Fatalf("fake platform image server saw Authorization %q after the refused write, want the boot-time platform key %q on the wire",
+			fakePlatform.lastAuthorization, "Bearer sk-test-smilesim-key")
 	}
-	if fakePlatform.requests != platformCalls {
-		t.Fatalf("fake platform image server received %d calls after the tenant BYOK write, want it to stay at %d -- the second job must resolve the tenant's own row",
-			fakePlatform.requests, platformCalls)
+	if fakePlatform.lastModel != "dall-e-3" {
+		t.Fatalf("fake platform image server saw model %q, want the routed vendor model %q",
+			fakePlatform.lastModel, "dall-e-3")
 	}
+	if fakeTenant.requests != 0 {
+		t.Fatalf("fake tenant image server received %d requests, want 0 -- a refused destination must never be dialed", fakeTenant.requests)
+	}
+
+	// Leg three -- the capability the guard deliberately preserves: a
+	// tenant BYOK write naming a PUBLIC-shaped endpoint still lands, and
+	// the read surface answers with the tenant's own row. (No further job
+	// is run after this write: the public-shaped endpoint is never dialed
+	// in a test.)
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodPut, imageCredentialPath+"/tenant", acmeToken, demoOwnerUserID,
+		`{"apiKey":"`+tenantKey+`","baseUrl":"https://93.184.216.34/v1"}`)
+	assertAIGatewayCredentialAnswer(t, resp, "image tenant BYOK write naming a public-shaped endpoint",
+		aigateway.ProviderOpenAICompatibleImage, string(aigateway.CredentialScopeTenant), "https://93.184.216.34/v1")
+	resp = aiGatewayCredentialRequest(t, srv, http.MethodGet, imageCredentialPath, acmeToken, demoOwnerUserID, "")
+	assertAIGatewayCredentialAnswer(t, resp, "read after the public-shaped image BYOK write",
+		aigateway.ProviderOpenAICompatibleImage, string(aigateway.CredentialScopeTenant), "https://93.184.216.34/v1")
 }
 
 // assertConsultSuggestion reads a consult-suggest response, requires it to
