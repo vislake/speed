@@ -184,8 +184,11 @@ const MethodLabelOverflowValue = "_OTHER"
 // limiter keeps a "seen" map) the method dimension needs no value-length or
 // distinct-value-count bound -- see MethodLabelOverflowValue's own doc
 // comment for that reasoning, and Middleware's "Metric label cardinality
-// caveats" section for the exploit this closes. The SPAN attribute is
-// deliberately NOT run through this function (see the same section).
+// caveats" section for the exploit this closes. The span's METHOD
+// attribute is deliberately NOT run through this function (see the same
+// section): the span keeps the exact raw token. The span's ROUTE
+// attribute, by contrast, now shares the metric side's bounded route
+// value (see that section's paragraph on the route dimension).
 func methodMetricLabel(method string) string {
 	switch method {
 	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
@@ -339,12 +342,33 @@ func methodMetricLabel(method string) string {
 //     distinct-value count cap nor a per-value length bound (see
 //     MethodLabelOverflowValue's own doc comment for that reasoning).
 //
-// The SPAN attributes are deliberately NOT run through either bound: the
-// span keeps the exact raw method token AND the exact raw path. A trace
-// is not a Prometheus series, so it does not share the metric
-// instruments' cardinality (or per-value size) problem, matching how
-// AnnotateTenant treats tenant_id (span attribute, never a metric label)
-// for exactly the same reason.
+// The span does not share the metric instruments' cardinality (or
+// per-value size) problem -- a trace is not a Prometheus series -- but a
+// trace IS an exit of the data-protection rule (docs/internal/
+// 09-observability.md's "never enter logs, traces or API responses"
+// clause), and the raw path is where request paths carry tenant and
+// resource ids. The span's route attribute therefore shares the route
+// dimension's bounded value with the metric side: routeLabels.label(...)
+// is computed once per request and feeds both the metric label and the
+// span attribute, so the metric side's three bounds are disclosure bounds
+// on the span too -- a request below a seeded mount is labeled with the
+// mount prefix whatever id-bearing segments its raw path carries, an
+// unmatched path stays exact only while the distinct-value budget allows
+// and then collapses to RouteLabelOverflowValue, and every value is
+// length-bounded and UTF-8-valid. Pinned by middleware_test.go's
+// TestMiddleware_SpanRouteAttribute_MatchesTheMetricRouteLabel. The
+// span's METHOD attribute is the deliberate exception: it keeps the
+// exact raw request-line token (the method token is a bounded enum by
+// protocol, never a disclosure surface, and verbatim methods keep
+// existing trace dashboards working), matching how AnnotateTenant treats
+// tenant_id -- span attribute, never a metric label -- for the same
+// Tempo-tolerates-high-cardinality reason docs/internal/09-observability.md
+// gives. The span NAME (the otelhttp formatter at the bottom of
+// Middleware) likewise stays method + raw path: the name is the
+// trace-side correlation string an operator searches on, in the same
+// tolerated-cardinality class as tenant_id, and the route ATTRIBUTE --
+// the structured disclosure field -- is the surface this round's bound
+// covers.
 //
 // The route bound is a circuit breaker, not a precision fix: once
 // requests pass, the closest thing this middleware has to a route
@@ -446,26 +470,31 @@ func Middleware(next http.Handler) http.Handler {
 			// this slice entirely: see middleware_test.go's
 			// TestMiddleware_MetricsExcludeTenant_NoPerTenantSeries for
 			// the negative control.
+			routeLabel := routeLabels.label(r.URL.Path)
 			metricAttrs := []attribute.KeyValue{
 				httpMethodKey.String(methodMetricLabel(r.Method)),
-				httpRouteKey.String(routeLabels.label(r.URL.Path)),
+				httpRouteKey.String(routeLabel),
 				httpStatusCodeKey.Int(rec.status),
 			}
 			requestCount.Add(ctx, 1, metric.WithAttributes(metricAttrs...))
 			requestDuration.Record(ctx, duration, metric.WithAttributes(metricAttrs...))
 
-			// The span, unlike the metrics above, always carries the exact
-			// raw method token and the exact raw path, never
-			// methodMetricLabel's or routeLabels' bounded values: a trace
-			// is not a Prometheus series, so it does not share the metric
-			// instruments' cardinality problem -- see the "Metric label
-			// cardinality caveats" section above, and
-			// docs/internal/09-observability.md for why Tempo tolerates
-			// high-cardinality dimensions that Prometheus cannot.
+			// The span shares the metric side's route value: its http.route
+			// attribute is the same routeLabels.label(...) result computed
+			// above, never the raw path -- a trace is not a Prometheus
+			// series, but it IS an exit of the data-protection rule, and
+			// the bounded route value is the disclosure bound on the span
+			// (see the "Metric label cardinality caveats" section above
+			// and middleware_test.go's
+			// TestMiddleware_SpanRouteAttribute_MatchesTheMetricRouteLabel).
+			// The method attribute is the deliberate exception, keeping the
+			// exact raw token (see methodMetricLabel's own doc comment),
+			// and the span name set by the otelhttp formatter below keeps
+			// method + raw path as well.
 			span := trace.SpanFromContext(ctx)
 			span.SetAttributes(
 				httpMethodKey.String(r.Method),
-				httpRouteKey.String(r.URL.Path),
+				httpRouteKey.String(routeLabel),
 				httpStatusCodeKey.Int(rec.status),
 			)
 			// A panicking handler is an error even when it had already

@@ -761,9 +761,11 @@ func TestMiddleware_StartsSpanNamedAfterMethodAndPath(t *testing.T) {
 // span" rests entirely on the query never becoming a span name or a span
 // attribute. Today that is guaranteed by two mechanisms: otelhttp's own
 // semconv deliberately omits url.query and url.full from the SERVER span
-// attributes it attaches, and Middleware's span name formatter and its
-// http.route attribute use (*http.Request).URL.Path, which net/http has
-// already split from the query before this package ever sees the request.
+// attributes it attaches, and both Middleware's span name formatter and
+// its http.route attribute derive from (*http.Request).URL.Path -- the
+// route attribute through the route label limiter, as the same bounded
+// value the metric side records -- which net/http has already split from
+// the query before this package ever sees the request.
 // Both are exclusions-by-default rather than anything this module actively
 // redacts, so they are pinned here by a negative control instead of trusted
 // by assumption: if a future otelhttp upgrade starts attaching url.full, or
@@ -829,6 +831,124 @@ func TestMiddleware_QueryStringSecrets_NeverReachSpanAttributes(t *testing.T) {
 	if got, ok := findAttr(span.Attributes, "http.route"); !ok || got.AsString() != "/api/v1/notes" {
 		t.Errorf("expected http.route=/api/v1/notes to survive on the span, got attributes: %v", span.Attributes)
 	}
+}
+
+// TestMiddleware_SpanRouteAttribute_MatchesTheMetricRouteLabel is the
+// tracing-side regression for the span http.route attribute: the span's
+// route attribute used to be set from r.URL.Path verbatim -- the module's
+// only span SetAttributes site -- while the metric side of the SAME
+// middleware bounded the same route concept in three orthogonal dimensions
+// (MaxRouteLabelValues distinct values, MaxRouteLabelLength bytes, valid
+// UTF-8 only). A trace is still an exit of the data-protection rule
+// (docs/internal/09-observability.md's "never enter logs, traces or API
+// responses" clause), and the raw path is where path segments carry tenant
+// and resource ids; the metric side's bounds are disclosure bounds too. The
+// span route attribute therefore now reuses the metric side's route value
+// -- the same bounded label, computed once per request -- so an id-bearing
+// request path below a seeded mount folds to the mount label and a path
+// past the distinct-value budget collapses to RouteLabelOverflowValue,
+// exactly as the metric label does. The span's METHOD attribute and its
+// span NAME still carry the exact raw values (a trace is not a Prometheus
+// series; the method token and the method+path name are the trace-side
+// correlation fields an operator searches on), and this file's other span
+// tests pin both. Fails before the fix (verified): the span's http.route
+// attribute carries the raw request path; passes after: it carries the same
+// bounded value the request's metric label carries.
+func TestMiddleware_SpanRouteAttribute_MatchesTheMetricRouteLabel(t *testing.T) {
+	t.Run("folded to the seeded mount label", func(t *testing.T) {
+		exp := setupTracerProvider(t)
+		reader := setupMeterProvider(t)
+
+		obs.RegisterMountedRoutes([]pkgcore.MountedRoute{{Path: "/api/v1/objects"}})
+		t.Cleanup(func() { obs.RegisterMountedRoutes(nil) })
+
+		handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		// An id-bearing request path below the seeded mount: object and
+		// node ids are exactly the path-segment disclosure surface the
+		// fix exists for.
+		const rawPath = "/api/v1/objects/obj-9c1b2a3d4e5f60718293a4b5c6d7e8f9f0a1b2c3d4e5f60718/content"
+		handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, rawPath, ""))
+
+		spans := exp.GetSpans()
+		if len(spans) != 1 {
+			t.Fatalf("expected exactly 1 span, got %d", len(spans))
+		}
+		// The span route attribute must be the seeded mount's label -- the
+		// metric side's value for the same request -- never the raw path.
+		if got, ok := findAttr(spans[0].Attributes, "http.route"); !ok {
+			t.Errorf("span carries no http.route attribute; attributes: %v", spans[0].Attributes)
+		} else if got.AsString() != "/api/v1/objects" {
+			t.Errorf("span http.route = %q, want the seeded mount label %q: an id-bearing path below a real mount must not reach the span verbatim; attributes: %v",
+				got.AsString(), "/api/v1/objects", spans[0].Attributes)
+		}
+		// The span name is the deliberate residual: it keeps the exact
+		// method + raw path (see Middleware's own doc comment), pinned here
+		// so the residual is intended rather than accidental.
+		if want := "GET " + rawPath; spans[0].Name != want {
+			t.Errorf("span name = %q, want %q (the method + raw path formatter is the span-name residual)", spans[0].Name, want)
+		}
+		// Metric agreement: the same request's metric route label is the
+		// same bounded value the span now carries.
+		rm := collect(t, reader)
+		counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+		if len(counter.DataPoints) != 1 {
+			t.Fatalf("expected exactly 1 counter series, got %d", len(counter.DataPoints))
+		}
+		if got := labelMap(counter.DataPoints[0].Attributes)["http.route"]; got != "/api/v1/objects" {
+			t.Errorf("metric http.route = %q, want the seeded mount label %q", got, "/api/v1/objects")
+		}
+	})
+
+	t.Run("collapsed to the overflow value past the distinct-value cap", func(t *testing.T) {
+		exp := setupTracerProvider(t)
+		reader := setupMeterProvider(t)
+
+		handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+
+		// Saturate the distinct-value budget, then send one more request
+		// whose id-bearing path is the 257th distinct value.
+		for i := 0; i < obs.MaxRouteLabelValues; i++ {
+			handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, fmt.Sprintf("/attacker-garbage-%d", i), ""))
+		}
+		const victimPath = "/api/v1/objects/obj-victim-9c1b2a3d4e5f60718293a4b5c6d7e8f9f/content"
+		handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, victimPath, ""))
+
+		spans := exp.GetSpans()
+		var victim *tracetest.SpanStub
+		for i := range spans {
+			if spans[i].Name == "GET "+victimPath {
+				victim = &spans[i]
+				break
+			}
+		}
+		if victim == nil {
+			t.Fatalf("victim request's span not found among %d exported spans", len(spans))
+		}
+		if got, ok := findAttr(victim.Attributes, "http.route"); !ok {
+			t.Errorf("victim span carries no http.route attribute; attributes: %v", victim.Attributes)
+		} else if got.AsString() != obs.RouteLabelOverflowValue {
+			t.Errorf("span http.route = %q, want the overflow value %q: a path past the distinct-value budget must not reach the span verbatim; attributes: %v",
+				got.AsString(), obs.RouteLabelOverflowValue, victim.Attributes)
+		}
+		// Metric agreement: the victim request's metric route label is the
+		// same overflow value.
+		rm := collect(t, reader)
+		counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+		overflowFound := false
+		for _, dp := range counter.DataPoints {
+			if labelMap(dp.Attributes)["http.route"] == obs.RouteLabelOverflowValue {
+				overflowFound = true
+			}
+		}
+		if !overflowFound {
+			t.Errorf("no metric series carries http.route=%q, want the victim request's overflow series", obs.RouteLabelOverflowValue)
+		}
+	})
 }
 
 // TestMiddleware_ServerError_SetsSpanErrorStatus confirms a 5xx response
