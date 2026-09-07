@@ -79,6 +79,22 @@ const (
 	// dedicated connection before retrying, mirroring eventbus/redis's
 	// eventRetryDelay.
 	reconnectDelay = 200 * time.Millisecond
+
+	// maxPanickedRowAttempts bounds the total number of times one outbox
+	// row's panicking handlers are invoked -- the first, catch-up delivery
+	// included -- before the row settles with a terminal log line (see
+	// retryPanickedRows). It is what keeps a permanently panicking handler
+	// from becoming an unbounded redelivery loop: the bounded retry runs at
+	// the listener's own wake cadence, so even a type with no further
+	// traffic exhausts the budget within a few wake cycles and then stops.
+	maxPanickedRowAttempts = 4
+
+	// panicRetryDelay is the minimum spacing between two retry rounds of
+	// the same row's panicked handlers, so a burst of notifications -- each
+	// of which wakes the listener and would otherwise retry every recorded
+	// row -- cannot burn a row's whole budget in milliseconds before a
+	// transient panic has had a chance to clear.
+	panicRetryDelay = time.Second
 )
 
 // EventBus is the distributed deployment mode's pkgcore.EventBus,
@@ -194,6 +210,30 @@ const (
 //     This mirrors the wedge every broker-backed bus documents for a
 //     handler that never acknowledges, with the difference that here the
 //     wedge cannot take the Type's other rows down with it.
+//   - A handler that panics while delivering a row is recovered and
+//     logged, never fatal to the reader goroutine -- and it never wedges
+//     its Type and never re-runs its siblings. The catch-up scan advances
+//     the cursor past the panicked row exactly as for a clean delivery,
+//     so later rows of the Type keep flowing to every healthy handler,
+//     and the still-panicking handler values are recorded for an
+//     in-process retry that re-invokes ONLY those values, spaced at least
+//     panicRetryDelay apart and capped at maxPanickedRowAttempts
+//     attempts, after which the row settles with a terminal log line
+//     rather than an unbounded redelivery loop (see retryPanickedRows).
+//     Healthy sibling handlers therefore run exactly once even while
+//     their sibling panics on every attempt. The broker-backed twins
+//     reach comparable ends by other mechanisms: eventbus/redis's reader
+//     consumes only new entries (a ">" cursor), so an unacked panicked
+//     entry is never refetched -- no retry, no stall, no sibling re-run;
+//     it simply sits pending, visible to an operator -- while
+//     eventbus/nats leaves the message unacknowledged and JetStream
+//     redelivers it after the consumer's AckWait, re-running the whole
+//     fan-out each time at the broker's own cadence. Neither has a
+//     reader-driven scan that refetches the same row forever, which is
+//     exactly why only this implementation needs the attempt budget. A
+//     row whose LOCAL delivery panics (Publish does not recover) is left
+//     unmarked for the catch-up scan, which then gives it exactly this
+//     treatment.
 //   - Unlike eventbus/redis, THIS implementation genuinely survives a
 //     replica's own restart without losing events published while it was
 //     down, provided the restarting process is built with the SAME
@@ -328,12 +368,47 @@ type EventBus struct {
 	// lags. Guarded by deliverMu.
 	locallyDelivered map[string]map[int64]struct{}
 
+	// panicRetries records, per event Type and outbox row id, the bounded
+	// retry state of a row whose catch-up delivery invoked at least one
+	// panicking handler: the handlers -- values from the subscription
+	// snapshot that delivery ran -- whose invocation of that row has not
+	// completed, the decoded event retries re-invoke them with, and the
+	// attempt accounting that keeps the retry bounded. The record is what
+	// preserves the "a panicked delivery is not acked as delivered" intent
+	// without the type-stalling wedge it used to cause: the scan advances
+	// its cursor past a panicked row exactly like a clean one (see
+	// deliverPendingForType), so the row is never fetched again and never
+	// re-fanned out to the healthy siblings, while the still-panicking
+	// handlers are retried from this record alone by the pass at the top of
+	// every deliverPendingForType call, up to maxPanickedRowAttempts
+	// attempts, and settle with a terminal log line when the budget is
+	// exhausted (see retryPanickedRows). Both writers -- the scan, which
+	// creates a record after advancing past a panicked row, and the retry
+	// pass, which consumes records -- run on the listener goroutine, but
+	// the map is guarded by deliverMu like its siblings so a future writer
+	// on another goroutine cannot race it. In-process by design: a record
+	// lost to a crash costs the bounded retry of an already-delivered-once
+	// row, whose panics were logged before the crash -- never a row the
+	// healthy handlers have not seen.
+	panicRetries map[string]map[int64]*panicRetry
+
 	ctx    context.Context
 	cancel context.CancelFunc
 
 	listenStarted atomic.Bool
 	listenOnce    sync.Once
 	listenDone    chan struct{}
+}
+
+// panicRetry is one outbox row's bounded redelivery state (see
+// EventBus.panicRetries): which handlers still owe their delivery of the
+// row, the event they are retried with, and how many attempts have been
+// spent. Guarded by deliverMu wherever it is read or written.
+type panicRetry struct {
+	handlers    []pkgcore.EventHandler
+	evt         pkgcore.Event
+	attempts    int
+	lastAttempt time.Time
 }
 
 // NewEventBus returns a pkgcore.EventBus that delivers between replicas
@@ -372,6 +447,7 @@ func NewEventBus(pool *pgxpool.Pool, replicaID string) *EventBus {
 		inFlight:         make(map[string]int),
 		inFlightRows:     make(map[string]map[int64]struct{}),
 		locallyDelivered: make(map[string]map[int64]struct{}),
+		panicRetries:     make(map[string]map[int64]*panicRetry),
 		ctx:              ctx,
 		cancel:           cancel,
 		listenDone:       make(chan struct{}),
@@ -479,9 +555,11 @@ func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 	// defer makes sure neither the count nor a recorded id outlives this
 	// call on ANY path out of it -- including a handler panic, which also
 	// skips the mark below, so the panicked row is left for the poller to
-	// deliver rather than the panicked local path silently swallowing it
-	// (unless the poller has already advanced past the row while it was in
-	// flight -- the trade deliverPendingForType's doc comment describes).
+	// deliver once, its still-panicking handlers then retried on the
+	// bounded budget deliverPendingForType's doc comment describes, rather
+	// than the panicked local path silently swallowing it (unless the
+	// poller has already advanced past the row while it was in flight --
+	// the trade deliverPendingForType's doc comment describes).
 	// What the defer does NOT buy is immunity from a handler that never
 	// returns: the count spans the synchronous handler loop below, so a
 	// wedged handler keeps this call's count and recorded id up for as
@@ -776,7 +854,26 @@ func (b *EventBus) deliverPending(ctx context.Context) {
 // errors are not observable by any publisher" contract eventbus/redis
 // documents for its own remote delivery path -- and simply retried on the
 // next call.
+//
+// A row whose delivery invokes a panicking handler is advanced past
+// exactly like a clean one -- a panic must not wedge the Type's cursor --
+// and the still-panicking handler values are recorded in panicRetries
+// (once the advance succeeded) for retryPanickedRows' bounded,
+// cursor-independent retry pass at the top of each call: the retry
+// re-invokes only those handlers, never the row's whole fan-out, so a
+// panicking sibling never stalls the Type's later rows and never re-runs
+// its healthy siblings, and the attempt budget settles the row with a
+// terminal log line instead of an unbounded redelivery loop (see
+// retryPanickedRows and EventBus's own doc comment's delivery note).
 func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) {
+	// One due retry round per recorded panicked row of this Type runs on
+	// every wake, before the scan, outside deliverMu: the retry is
+	// independent of the cursor -- the scan has already advanced past every
+	// recorded row -- and re-invokes only the handlers that still owe their
+	// delivery, so a panicking handler can neither stall this Type's later
+	// rows nor re-run its healthy siblings (see retryPanickedRows).
+	b.retryPanickedRows(ctx, eventType)
+
 	cursorKnown := false
 	for {
 		// One critical section per batch: the in-flight check, the cursor
@@ -844,35 +941,65 @@ func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) 
 			// already completed and marked (skip it: running its handlers
 			// again would duplicate the delivery), or completed WITHOUT
 			// marking -- which only a handler panic leaves behind, since
-			// the mark precedes the in-flight drop -- and the row is
-			// delivered here, exactly the redelivery Publish's doc comment
-			// promises for a panic, for as long as the scan has not already
-			// passed the row.
+			// the mark precedes the in-flight drop. Such a row is delivered
+			// here, once: a panic must not be acked-as-delivered, but it
+			// must not wedge the type either, so the delivery's panicked
+			// handlers are recorded below (once this row's cursor advance
+			// has succeeded) for retryPanickedRows' bounded, in-process
+			// retry -- the redelivery Publish's doc comment promises for a
+			// panic, delivered without re-running the row's healthy
+			// siblings.
 			b.deliverMu.Lock()
 			_, alreadyLocal := b.locallyDelivered[eventType][row.id]
 			_, localDeliveryInFlight := b.inFlightRows[eventType][row.id]
 			b.deliverMu.Unlock()
 
+			var evt pkgcore.Event
+			var owed []pkgcore.EventHandler
 			if !alreadyLocal && !localDeliveryInFlight {
-				if panicked := b.deliverOutboxRow(ctx, row); panicked {
-					// A handler panicked while delivering this row: the row
-					// is not marked, the cursor is not advanced, and this
-					// scan stops here rather than advancing past the row
-					// with the next row's advance -- the next catch-up
-					// cycle redelivers the row from the unadvanced cursor,
-					// exactly like an unmarked local publish's row, and
-					// each panic is logged (see runHandlerRecovered). A
-					// permanently panicking handler is a programming bug an
-					// operator must fix or remove; meanwhile this replica
-					// delivers no later row of this type past the failing
-					// one, which is the same wedge the unacked-message
-					// semantics of the broker-backed buses describe, and it
-					// is visible in the logs rather than silent.
-					return
-				}
+				evt, owed = b.deliverOutboxRow(ctx, row)
 			}
 			if err := advanceCursorAtLeast(ctx, b.pool, b.replicaID, eventType, row.id); err != nil {
 				return // retried from the (unadvanced) persisted cursor next call
+			}
+			if len(owed) > 0 {
+				// The row's delivery panicked and its row is now behind the
+				// cursor -- advanced past exactly like a clean delivery, so
+				// this Type's later rows keep flowing and no later scan can
+				// re-fan the row out to every subscriber. Record the
+				// still-panicking handler values for the bounded retry pass
+				// (each panic is logged, see runHandlerRecovered): a
+				// permanently panicking handler is a programming bug an
+				// operator must fix or remove, and after
+				// maxPanickedRowAttempts attempts the row settles with a
+				// terminal log line -- never an unbounded hot loop, unlike
+				// the wedge this branch used to cause by returning before
+				// the advance (and unlike eventbus/nats's broker-managed
+				// unacked-message redelivery, which re-runs the whole
+				// fan-out on every JetStream AckWait; eventbus/redis reads
+				// only new entries with a ">" cursor, so its unacked
+				// panicked entries are never refetched at all -- the reader
+				// stalls nothing and re-runs nothing, which is why neither
+				// of those needs a cap and this scan does).
+				b.deliverMu.Lock()
+				rec := b.panicRetries[eventType][row.id]
+				if rec == nil {
+					rec = &panicRetry{evt: evt}
+					if b.panicRetries[eventType] == nil {
+						b.panicRetries[eventType] = make(map[int64]*panicRetry)
+					}
+					b.panicRetries[eventType][row.id] = rec
+				}
+				// A record already in place means this same row was fetched
+				// again -- possible only after an earlier advance failure
+				// re-opened the row -- so the fresh fan-out that just ran
+				// supersedes the old record's round: replace its owed
+				// handlers and restart the attempt accounting from this
+				// delivery.
+				rec.handlers = owed
+				rec.attempts = 1
+				rec.lastAttempt = time.Now()
+				b.deliverMu.Unlock()
 			}
 			// The advance succeeded, so every mark of this type at or
 			// below row.id is dead -- those rows sit behind the cursor and
@@ -901,33 +1028,39 @@ func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) 
 // from any one of them so a buggy handler cannot take down the listener
 // goroutine -- mirroring eventbus/redis.EventBus.runRemoteHandler exactly,
 // including dropping the handler's returned error: there is no publisher
-// left in process for this event to report it to. It reports whether any
-// handler panicked: the caller then leaves the row's delivery unmarked and
-// the cursor unadvanced, so the next catch-up cycle redelivers the row
-// rather than a panicked delivery being silently treated as done (see
-// deliverPendingForType).
-func (b *EventBus) deliverOutboxRow(ctx context.Context, row outboxRow) (panicked bool) {
+// left in process for this event to report it to. It returns the decoded
+// event and the handlers -- values from the subscription snapshot it ran --
+// whose invocation panicked. A non-empty result tells the caller that the
+// row's delivery did not complete: those handlers' side effects never ran,
+// so the row must not be treated as acked-as-delivered. The caller keeps
+// the cursor moving (a panicked delivery must not wedge the type) and hands
+// the returned handlers to the bounded retry machinery, which re-invokes
+// only them rather than re-running the row's whole fan-out (see
+// deliverPendingForType and retryPanickedRows). A row that does not decode
+// is corrupt (or hand-written); it must not wedge the reader, so it is
+// skipped -- the cursor still advances past it in the caller -- and is
+// reported as clean, with nothing owed.
+func (b *EventBus) deliverOutboxRow(ctx context.Context, row outboxRow) (pkgcore.Event, []pkgcore.EventHandler) {
 	var payload interface{}
 	if err := json.Unmarshal(row.payload, &payload); err != nil {
-		// A row that does not decode is corrupt (or hand-written); it must
-		// not wedge the reader, so it is skipped -- the cursor still
-		// advances past it in the caller.
-		return false
+		return pkgcore.Event{}, nil
 	}
 	evt := pkgcore.Event{Type: row.eventType, TenantID: pkgcore.TenantID(row.tenantID), Payload: payload}
 
+	var owed []pkgcore.EventHandler
 	for _, h := range b.handlersFor(row.eventType) {
 		if b.runHandlerRecovered(ctx, evt, h) {
-			panicked = true
+			owed = append(owed, h)
 		}
 	}
-	return panicked
+	return evt, owed
 }
 
 // runHandlerRecovered invokes one handler for a catch-up-delivered event,
 // containing any panic it raises. A recovered panic is reported (and
-// logged): the caller leaves the row undelivered-as-marked rather than a
-// delivery whose side effects never ran being silently treated as done.
+// logged): the caller records the handler as owing its delivery of the
+// event rather than a delivery whose side effects never ran being silently
+// treated as done (see deliverOutboxRow and retryPanickedRows).
 //
 // pkgcore is the dependency floor of the workspace and cannot import
 // go/observability, so this reaches for log/slog directly, the same
@@ -936,7 +1069,7 @@ func (b *EventBus) runHandlerRecovered(ctx context.Context, evt pkgcore.Event, h
 	defer func() {
 		if r := recover(); r != nil {
 			panicked = true
-			slog.Default().Error("pkgcore/eventbus/postgres: remote handler panicked; row left undelivered for the next catch-up cycle",
+			slog.Default().Error("pkgcore/eventbus/postgres: remote handler panicked; the row's delivery is retried for this handler on a bounded budget",
 				"event_type", evt.Type,
 				"panic", fmt.Sprintf("%v", r),
 			)
@@ -944,4 +1077,80 @@ func (b *EventBus) runHandlerRecovered(ctx context.Context, evt pkgcore.Event, h
 	}()
 	_ = h(ctx, evt)
 	return false
+}
+
+// retryPanickedRows runs one due retry round for every outbox row of
+// eventType recorded in panicRetries. It is invoked at the top of every
+// deliverPendingForType call -- once per listener wake per subscribed Type,
+// on the listener goroutine, never from the scan's own row loop -- so a
+// panicked row's retry is entirely independent of the cursor: the scan has
+// already advanced past the row (that advance is what created its record),
+// and no part of this pass consults or moves the watermark. A retry round
+// re-invokes ONLY the recorded handler values that have not completed yet,
+// never the row's whole fan-out, so a panicking sibling can never make a
+// healthy one re-run (each invocation is recovered and logged by
+// runHandlerRecovered). Rounds are spaced at least panicRetryDelay apart
+// and bounded: once a row's handlers have been invoked
+// maxPanickedRowAttempts times in total with at least one still panicking,
+// the row settles -- its record is dropped with a terminal log line, the
+// dead-letter of this mechanism -- and is never retried again, so a
+// permanently panicking handler cannot become an unbounded hot loop. A
+// row whose handlers all complete on some round resolves silently (the
+// record is dropped): the at-least-once delivery of the row is then
+// complete.
+func (b *EventBus) retryPanickedRows(ctx context.Context, eventType string) {
+	b.deliverMu.Lock()
+	type dueRow struct {
+		id  int64
+		rec *panicRetry
+	}
+	due := make([]dueRow, 0, len(b.panicRetries[eventType]))
+	for id, rec := range b.panicRetries[eventType] {
+		if time.Since(rec.lastAttempt) >= panicRetryDelay {
+			due = append(due, dueRow{id: id, rec: rec})
+		}
+	}
+	b.deliverMu.Unlock()
+	if len(due) == 0 {
+		return
+	}
+
+	for _, row := range due {
+		stillOwed := make([]pkgcore.EventHandler, 0, len(row.rec.handlers))
+		for _, h := range row.rec.handlers {
+			if b.runHandlerRecovered(ctx, row.rec.evt, h) {
+				stillOwed = append(stillOwed, h)
+			}
+		}
+		b.deliverMu.Lock()
+		if len(stillOwed) == 0 {
+			// Every still-owed handler completed on this round: the row's
+			// delivery is complete.
+			delete(b.panicRetries[eventType], row.id)
+			if len(b.panicRetries[eventType]) == 0 {
+				delete(b.panicRetries, eventType)
+			}
+			b.deliverMu.Unlock()
+			continue
+		}
+		row.rec.handlers = stillOwed
+		row.rec.attempts++
+		row.rec.lastAttempt = time.Now()
+		if row.rec.attempts < maxPanickedRowAttempts {
+			b.deliverMu.Unlock()
+			continue
+		}
+		// Budget exhausted: the row settles honestly -- logged terminal,
+		// dropped from the records, never retried again.
+		delete(b.panicRetries[eventType], row.id)
+		if len(b.panicRetries[eventType]) == 0 {
+			delete(b.panicRetries, eventType)
+		}
+		b.deliverMu.Unlock()
+		slog.Default().Error("pkgcore/eventbus/postgres: panicking remote handler exhausted its retry budget; row abandoned",
+			"event_type", eventType,
+			"row_id", row.id,
+			"attempts", row.rec.attempts,
+		)
+	}
 }
