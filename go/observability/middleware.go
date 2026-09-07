@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -29,9 +30,9 @@ const instrumentationName = "github.com/vislake/speed/go/observability"
 
 // operationName is the "operation" otelhttp.NewHandler names its span
 // after by default. WithSpanNameFormatter below overrides the actual span
-// name with something more specific (method + path), so this value never
-// reaches an exporter; it exists only because otelhttp.NewHandler requires
-// one.
+// name with something more specific (method + bounded route value), so this
+// value never reaches an exporter; it exists only because otelhttp.NewHandler
+// requires one.
 const operationName = "http.server.request"
 
 // Metric instrument names and units. Names follow OpenTelemetry's
@@ -62,6 +63,30 @@ const (
 	httpRouteKey      = attribute.Key("http.route")
 	httpMethodKey     = attribute.Key("http.request.method")
 	httpStatusCodeKey = attribute.Key("http.response.status_code")
+)
+
+// The three keys below are the request-controlled raw strings otelhttp's
+// own server-span semconv attaches to the span it starts -- the v1.41
+// semantic-convention key names url.path, user_agent.original and
+// client.address, each fed by a request input an unauthenticated caller
+// controls verbatim (the percent-decoded path, the User-Agent header and
+// the first X-Forwarded-For hop, respectively). Middleware overwrites each
+// with a bounded copy in its recording defer -- see Middleware's own "Why
+// no span surface carries the raw request path" section for why an
+// unbounded copy is an availability defect, not just a disclosure one. The
+// keys are spelled here as literals rather than imported from
+// go.opentelemetry.io/otel/semconv/v1.41.0, keeping semconv out of this
+// package's import graph the same way the http.* keys above avoid
+// importing it (the module's own key-spelling pattern, see the comment on
+// that block). A future otelhttp upgrade that renamed one of these keys
+// would silently install a NEW raw attribute alongside the overwritten one
+// and fail middleware_test.go's
+// TestMiddleware_InvalidUTF8Request_SpanNameAndAttributesCarryNoRawByte
+// blanket UTF-8 scan rather than passing unnoticed.
+const (
+	httpURLPathKey       = attribute.Key("url.path")
+	httpUserAgentKey     = attribute.Key("user_agent.original")
+	httpClientAddressKey = attribute.Key("client.address")
 )
 
 // MaxRouteLabelValues bounds how many distinct http.route metric label
@@ -359,16 +384,57 @@ func methodMetricLabel(method string) string {
 // TestMiddleware_SpanRouteAttribute_MatchesTheMetricRouteLabel. The
 // span's METHOD attribute is the deliberate exception: it keeps the
 // exact raw request-line token (the method token is a bounded enum by
-// protocol, never a disclosure surface, and verbatim methods keep
-// existing trace dashboards working), matching how AnnotateTenant treats
+// protocol -- net/http accepts only RFC 7230 token characters -- never a
+// disclosure or validity surface, and verbatim methods keep existing
+// trace dashboards working), matching how AnnotateTenant treats
 // tenant_id -- span attribute, never a metric label -- for the same
 // Tempo-tolerates-high-cardinality reason docs/internal/09-observability.md
-// gives. The span NAME (the otelhttp formatter at the bottom of
-// Middleware) likewise stays method + raw path: the name is the
-// trace-side correlation string an operator searches on, in the same
-// tolerated-cardinality class as tenant_id, and the route ATTRIBUTE --
-// the structured disclosure field -- is the surface this round's bound
-// covers.
+// gives.
+//
+// # Why no span surface carries the raw request path
+//
+// The span NAME is under the same bound, not a raw-path exception to it:
+// the otelhttp formatter at the bottom of Middleware returns method + the
+// same routeLabels.label(...) result. The name used to keep method + raw
+// path as a deliberate residual -- a trace-side correlation string in the
+// tolerated-cardinality class of tenant_id -- until the raw byte it could
+// carry became an availability defect rather than a cardinality one:
+// net/http percent-decodes a request target byte-wise, so a request whose
+// target contains %FF (or any other invalid UTF-8 encoding) reaches this
+// middleware with the raw invalid byte in the path and no parse error
+// anywhere. proto3 string fields must be valid UTF-8, and the Go protobuf
+// encoder fails the WHOLE ExportTraceServiceRequest on one invalid string,
+// so a single such request made otlptracegrpc drop the entire export batch
+// (codes.Internal sits outside its retry whitelist): sustained 100% trace
+// loss -- and traces are exactly the system an operator uses to
+// investigate the request that caused it. The route value's own bounds are
+// what keep the name encodable (sanitizeRouteLabel replaces the invalid
+// bytes, truncateRouteLabel caps the value, and the distinct-value bound
+// caps how many distinct names exist at all): the metric label, the span's
+// http.route attribute and the span name share one boundary, the route
+// value, and every request-controlled string that reaches the span runs
+// through it or through its length and UTF-8 bounds (see
+// boundedRequestString below).
+//
+// The one span surface that keeps the ACTUAL path is url.path -- the
+// attribute otelhttp's own server-span semconv attaches at span creation
+// (its internal semconv package, key "url.path", fed by the raw
+// percent-decoded (*http.Request).URL.Path; the dependency installs it
+// unconditionally, so no formatter-only fix can reach it). otelhttp's
+// semconv attaches two more request-controlled raw strings the same way --
+// user_agent.original (the User-Agent header) and client.address (the
+// first X-Forwarded-For hop, else the peer address) -- and net/http
+// applies no byte validation to header values, so all three can carry an
+// invalid byte exactly as the path can. The recording defer therefore
+// OVERWRITES all three with exporter-safe copies: url.path and
+// user_agent.original keep their real text under the route label's length
+// and UTF-8 bounds, so an operator can still find the exact resource a
+// slow trace was for, and client.address is re-derived from the same
+// X-Forwarded-For / peer inputs otelhttp's semconv uses (spanClientAddress)
+// and run through the same bounds. Pinned at span formation by
+// TestMiddleware_InvalidUTF8Request_SpanNameAndAttributesCarryNoRawByte
+// and, end to end through a real OTLP/gRPC export, by
+// exporter/otlp's TestMiddleware_InvalidUTF8Request_ExportBatchStillArrives.
 //
 // The route bound is a circuit breaker, not a precision fix: once
 // requests pass, the closest thing this middleware has to a route
@@ -489,14 +555,33 @@ func Middleware(next http.Handler) http.Handler {
 			// TestMiddleware_SpanRouteAttribute_MatchesTheMetricRouteLabel).
 			// The method attribute is the deliberate exception, keeping the
 			// exact raw token (see methodMetricLabel's own doc comment),
-			// and the span name set by the otelhttp formatter below keeps
-			// method + raw path as well.
+			// and the span name set by the otelhttp formatter below shares
+			// the same bounded route value (see that section's "Why no
+			// span surface carries the raw request path" paragraph).
+			//
+			// The overwrites below cover the request-controlled raw strings
+			// otelhttp's own semconv attached at span creation -- url.path,
+			// user_agent.original and client.address -- each replaced with
+			// its boundedRequestString form, so no raw byte a caller's
+			// path or headers carried can reach the exported span: an
+			// invalid-UTF-8 string fails the proto3 marshal of the whole
+			// export batch (see the same paragraph). The conditions mirror
+			// otelhttp's own attach conditions (a non-empty User-Agent, a
+			// resolvable client address), so the overwrite never invents an
+			// attribute where the dependency attached none.
 			span := trace.SpanFromContext(ctx)
 			span.SetAttributes(
 				httpMethodKey.String(r.Method),
 				httpRouteKey.String(routeLabel),
 				httpStatusCodeKey.Int(rec.status),
+				httpURLPathKey.String(boundedRequestString(r.URL.Path)),
 			)
+			if ua := r.UserAgent(); ua != "" {
+				span.SetAttributes(httpUserAgentKey.String(boundedRequestString(ua)))
+			}
+			if addr := spanClientAddress(r); addr != "" {
+				span.SetAttributes(httpClientAddressKey.String(boundedRequestString(addr)))
+			}
 			// A panicking handler is an error even when it had already
 			// written a status below 500 before the panic: the request did
 			// not complete, and the span must say so.
@@ -518,10 +603,20 @@ func Middleware(next http.Handler) http.Handler {
 	// a well-formed SERVER span and handling W3C trace-context
 	// propagation -- via otel.GetTracerProvider() (the default, since no
 	// WithTracerProvider option is passed), which Init installs.
+	// The span-name formatter returns method + the bounded route value,
+	// never method + the raw path: the raw path can carry a byte that
+	// would fail the proto3 marshal of the whole export batch (see
+	// Middleware's own "Why no span surface carries the raw request path"
+	// section). routeLabels.label(...) is the same bounded value the metric
+	// side and the span's http.route attribute use, so all three share one
+	// boundary; the call is idempotent, so the recording defer's later call
+	// for the same path returns the identical value (otelhttp may also
+	// invoke the formatter a second time once a mux match populates
+	// r.Pattern, with the same result).
 	return otelhttp.NewHandler(instrumented, operationName,
 		otelhttp.WithMeterProvider(noop.NewMeterProvider()),
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
-			return r.Method + " " + r.URL.Path
+			return r.Method + " " + routeLabels.label(r.URL.Path)
 		}),
 	)
 }
@@ -846,7 +941,12 @@ func (l *routeLabelLimiter) seed(path string) {
 // bad series costs only itself) is wired in
 // go/observability/exporter/prometheus; this function is the
 // label-formation-side half that keeps the class from ever reaching the
-// exporter through this middleware's route dimension.
+// exporter through this middleware's route dimension. The span side of the
+// same class -- the raw byte reaching the span name or otelhttp's own
+// semconv attributes, where its cost is a dropped OTLP export batch rather
+// than a voided scrape -- is bounded by the same function, through
+// boundedRequestString (see Middleware's own "Why no span surface carries
+// the raw request path" section).
 //
 // Replacement, rather than rejection or overflow-collapse, is the choice
 // because the request still happened and must still be counted: an
@@ -887,6 +987,66 @@ func truncateRouteLabel(path string) string {
 		cut--
 	}
 	return path[:cut]
+}
+
+// boundedRequestString returns s run through the route label's length and
+// UTF-8 bounds -- truncateRouteLabel (capped at MaxRouteLabelLength bytes,
+// cutting on a rune boundary) then sanitizeRouteLabel (invalid UTF-8
+// replaced with U+FFFD) -- the same two passes routeLabels.label runs on a
+// request path before the route value is formed (see label's own doc
+// comment for why both run and in that order). It exists for the raw
+// request-controlled strings otelhttp's own server-span semconv attaches
+// to the span it starts -- url.path, user_agent.original and
+// client.address -- which Middleware's recording defer overwrites with
+// this function's result (see Middleware's own "Why no span surface
+// carries the raw request path" section).
+//
+// The route bound's third dimension, the distinct-value count cap, is
+// deliberately NOT applied here: these are span attributes, not Prometheus
+// series, so distinct-value count is not a resource dimension, and the
+// actual path must stay findable per request. What must hold for every
+// value is exporter safety plus a size ceiling: proto3 strings must be
+// valid UTF-8, and the Go protobuf encoder fails the WHOLE OTLP export
+// batch on one invalid string -- the same failure class sanitizeRouteLabel's
+// own doc comment describes for the Prometheus label side, with the same
+// root (net/http percent-decodes a request target byte-wise and applies no
+// byte validation to header values, so invalid bytes reach this middleware
+// with no parse error anywhere). Valid, short input passes through
+// unchanged with no allocation.
+func boundedRequestString(s string) string {
+	return sanitizeRouteLabel(truncateRouteLabel(s))
+}
+
+// spanClientAddress mirrors the client-address selection otelhttp's own
+// server-span semconv performs before attaching the client.address
+// attribute to the span it starts (otelhttp@v0.69.0
+// internal/semconv/server.go: the first X-Forwarded-For hop when the
+// header is present, else the host half of RemoteAddr). Middleware needs
+// the same value it is about to overwrite, so the overwrite re-derives it
+// from the same request inputs rather than importing the dependency's
+// unexported helper; the mirror is pinned end to end by exporter/otlp's
+// TestMiddleware_InvalidUTF8Request_ExportBatchStillArrives and by
+// middleware_test.go's
+// TestMiddleware_InvalidUTF8Request_SpanNameAndAttributesCarryNoRawByte,
+// so a future otelhttp change to this selection fails a test instead of
+// silently overwriting a value the dependency chose differently. Returns
+// "" when neither input yields an address, matching otelhttp's own
+// attach condition (it attaches client.address only when its derivation
+// is non-empty).
+func spanClientAddress(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if idx := strings.IndexByte(xff, ','); idx >= 0 {
+			xff = xff[:idx]
+		}
+		return xff
+	}
+	// A real server always supplies RemoteAddr as "IP:port"; an empty
+	// result (or one that does not parse) means no peer address to mirror.
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return ""
+	}
+	return host
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the status code

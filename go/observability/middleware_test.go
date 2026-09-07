@@ -761,11 +761,12 @@ func TestMiddleware_StartsSpanNamedAfterMethodAndPath(t *testing.T) {
 // span" rests entirely on the query never becoming a span name or a span
 // attribute. Today that is guaranteed by two mechanisms: otelhttp's own
 // semconv deliberately omits url.query and url.full from the SERVER span
-// attributes it attaches, and both Middleware's span name formatter and
-// its http.route attribute derive from (*http.Request).URL.Path -- the
-// route attribute through the route label limiter, as the same bounded
-// value the metric side records -- which net/http has already split from
-// the query before this package ever sees the request.
+// attributes it attaches, and every span surface this middleware derives
+// from the request -- the span name formatter, the http.route attribute
+// (through the route label limiter, as the same bounded value the metric
+// side records) and the url.path attribute it overwrites -- draws from
+// (*http.Request).URL.Path, which net/http has already split from the
+// query before this package ever sees the request.
 // Both are exclusions-by-default rather than anything this module actively
 // redacts, so they are pinned here by a negative control instead of trusted
 // by assumption: if a future otelhttp upgrade starts attaching url.full, or
@@ -823,13 +824,19 @@ func TestMiddleware_QueryStringSecrets_NeverReachSpanAttributes(t *testing.T) {
 	}
 
 	// Positive controls: the same request's legitimate span signal survives
-	// -- the tenant correlation field untouched, and http.route carrying the
-	// path half of the request the way Middleware documents.
+	// -- the tenant correlation field untouched, http.route carrying the
+	// path half of the request the way Middleware documents, and url.path
+	// (the attribute otelhttp's own semconv installs, overwritten by
+	// Middleware with the bounded actual path) carrying the path alone,
+	// never the query.
 	if got, ok := findAttr(span.Attributes, obs.TenantIDKey); !ok || got.AsString() != "acme" {
 		t.Errorf("expected tenant_id=acme to survive on the span, got attributes: %v", span.Attributes)
 	}
 	if got, ok := findAttr(span.Attributes, "http.route"); !ok || got.AsString() != "/api/v1/notes" {
 		t.Errorf("expected http.route=/api/v1/notes to survive on the span, got attributes: %v", span.Attributes)
+	}
+	if got, ok := findAttr(span.Attributes, "url.path"); !ok || got.AsString() != "/api/v1/notes" {
+		t.Errorf("expected url.path=/api/v1/notes to survive on the span, got attributes: %v", span.Attributes)
 	}
 }
 
@@ -847,13 +854,22 @@ func TestMiddleware_QueryStringSecrets_NeverReachSpanAttributes(t *testing.T) {
 // -- the same bounded label, computed once per request -- so an id-bearing
 // request path below a seeded mount folds to the mount label and a path
 // past the distinct-value budget collapses to RouteLabelOverflowValue,
-// exactly as the metric label does. The span's METHOD attribute and its
-// span NAME still carry the exact raw values (a trace is not a Prometheus
-// series; the method token and the method+path name are the trace-side
-// correlation fields an operator searches on), and this file's other span
-// tests pin both. Fails before the fix (verified): the span's http.route
-// attribute carries the raw request path; passes after: it carries the same
-// bounded value the request's metric label carries.
+// exactly as the metric label does. The span NAME is under the same bound,
+// not a raw-path exception to it: otelhttp's span-name formatter returns
+// method + the same bounded label, because the raw path carries bytes that
+// can poison the trace export itself (see
+// TestMiddleware_InvalidUTF8Request_SpanNameAndAttributesCarryNoRawByte).
+// The span surface that keeps the ACTUAL path is url.path -- the attribute
+// otelhttp's own server-span semconv installs at span creation, which
+// Middleware overwrites with the path run through the route label's length
+// and UTF-8 bounds -- so an operator can still find the exact resource a
+// slow trace was for, in exporter-safe form. The span's METHOD attribute
+// keeps the exact raw token (protocol-bounded ASCII, never a disclosure or
+// validity surface). Fails before the fix (verified): the span's http.route
+// attribute carries the raw request path and the span name carries method +
+// raw path; passes after: route attribute and name carry the same bounded
+// value the request's metric label carries, and url.path carries the
+// bounded actual path.
 func TestMiddleware_SpanRouteAttribute_MatchesTheMetricRouteLabel(t *testing.T) {
 	t.Run("folded to the seeded mount label", func(t *testing.T) {
 		exp := setupTracerProvider(t)
@@ -884,11 +900,26 @@ func TestMiddleware_SpanRouteAttribute_MatchesTheMetricRouteLabel(t *testing.T) 
 			t.Errorf("span http.route = %q, want the seeded mount label %q: an id-bearing path below a real mount must not reach the span verbatim; attributes: %v",
 				got.AsString(), "/api/v1/objects", spans[0].Attributes)
 		}
-		// The span name is the deliberate residual: it keeps the exact
-		// method + raw path (see Middleware's own doc comment), pinned here
-		// so the residual is intended rather than accidental.
-		if want := "GET " + rawPath; spans[0].Name != want {
-			t.Errorf("span name = %q, want %q (the method + raw path formatter is the span-name residual)", spans[0].Name, want)
+		// The span NAME shares the same bounded route value (the metric
+		// side's label, never the raw path): an id-bearing path below a
+		// seeded mount folds to the mount label on the name too. The
+		// invalid-byte availability class that forced the name off the raw
+		// path is pinned by
+		// TestMiddleware_InvalidUTF8Request_SpanNameAndAttributesCarryNoRawByte.
+		if want := "GET /api/v1/objects"; spans[0].Name != want {
+			t.Errorf("span name = %q, want the seeded mount label %q: an id-bearing path below a real mount must not reach the span name verbatim", spans[0].Name, want)
+		}
+		// url.path -- the attribute otelhttp's own server-span semconv
+		// installs at span creation, overwritten by Middleware in the same
+		// recording defer -- is the span surface that keeps the ACTUAL
+		// path, run through the route label's length and UTF-8 bounds:
+		// exporter-safe, but still the real path an operator searches for.
+		// rawPath is valid UTF-8 and short, so it passes those bounds
+		// unchanged.
+		if got, ok := findAttr(spans[0].Attributes, "url.path"); !ok {
+			t.Errorf("span carries no url.path attribute; attributes: %v", spans[0].Attributes)
+		} else if got.AsString() != rawPath {
+			t.Errorf("span url.path = %q, want the actual request path %q", got.AsString(), rawPath)
 		}
 		// Metric agreement: the same request's metric route label is the
 		// same bounded value the span now carries.
@@ -919,21 +950,31 @@ func TestMiddleware_SpanRouteAttribute_MatchesTheMetricRouteLabel(t *testing.T) 
 		handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, victimPath, ""))
 
 		spans := exp.GetSpans()
-		var victim *tracetest.SpanStub
-		for i := range spans {
-			if spans[i].Name == "GET "+victimPath {
-				victim = &spans[i]
-				break
-			}
+		// The victim request is the last one served, so its span is the last
+		// exported (the in-memory exporter records spans in end order). It
+		// can no longer be located by its raw-path name the way it used to
+		// be -- bounding that name is part of what this test pins.
+		if len(spans) == 0 {
+			t.Fatalf("expected spans to be exported, got none")
 		}
-		if victim == nil {
-			t.Fatalf("victim request's span not found among %d exported spans", len(spans))
-		}
+		victim := spans[len(spans)-1]
 		if got, ok := findAttr(victim.Attributes, "http.route"); !ok {
 			t.Errorf("victim span carries no http.route attribute; attributes: %v", victim.Attributes)
 		} else if got.AsString() != obs.RouteLabelOverflowValue {
 			t.Errorf("span http.route = %q, want the overflow value %q: a path past the distinct-value budget must not reach the span verbatim; attributes: %v",
 				got.AsString(), obs.RouteLabelOverflowValue, victim.Attributes)
+		}
+		// The victim's span NAME is the same bounded value -- method + the
+		// overflow label -- never the raw path.
+		if want := "GET " + obs.RouteLabelOverflowValue; victim.Name != want {
+			t.Errorf("span name = %q, want %q: a path past the distinct-value budget must not reach the span name verbatim", victim.Name, want)
+		}
+		// url.path still carries the victim's actual (bounded) path: the
+		// per-request correlation surface, distinct from the route bound.
+		if got, ok := findAttr(victim.Attributes, "url.path"); !ok {
+			t.Errorf("victim span carries no url.path attribute; attributes: %v", victim.Attributes)
+		} else if got.AsString() != victimPath {
+			t.Errorf("victim span url.path = %q, want the actual request path %q", got.AsString(), victimPath)
 		}
 		// Metric agreement: the victim request's metric route label is the
 		// same overflow value.
@@ -1181,6 +1222,123 @@ func TestMiddleware_InvalidUTF8Path_SanitizesBeforeTheLabel(t *testing.T) {
 	}
 	if !sanitizedFound {
 		t.Fatalf("expected a series labeled http.route=\"/api/<U+FFFD>junk\" (the invalid path sanitized); got: %v", counter.DataPoints)
+	}
+}
+
+// TestMiddleware_InvalidUTF8Request_SpanNameAndAttributesCarryNoRawByte is
+// the span-side regression for the invalid-UTF-8 class the metric-side test
+// above (and the exporter-side TestBuildReader_InvalidUTF8Path_NeverVoidsTheScrape
+// in exporter/prometheus) already cover for labels. net/http
+// percent-decodes a request target byte-wise, so a %FF in the path reaches
+// Middleware as a raw invalid byte with no parse error anywhere -- and the
+// same raw byte used to reach the exported span through FOUR surfaces at
+// once: the otelhttp span-name formatter returned method + URL.Path
+// verbatim, and otelhttp's own server-span semconv (installed by the
+// dependency, not by this module) attached url.path (the path),
+// user_agent.original (the User-Agent header) and client.address (the
+// first X-Forwarded-For hop) with the caller's raw bytes untouched --
+// net/http applies no byte validation to header values, so a header can
+// carry an invalid byte exactly as a %FF path can.
+//
+// The byte's cost is not confined to one span: proto3 string fields must
+// be valid UTF-8, the Go protobuf encoder refuses a whole
+// ExportTraceServiceRequest containing one invalid string ("string field
+// contains invalid UTF-8"), and otlptracegrpc drops the failed batch
+// (codes.Internal sits outside its retry whitelist) -- so one request
+// carrying one invalid byte silently killed the export of every span in
+// its batch, continuously, for the life of the process: a sustained 100%
+// trace loss, and traces are exactly what an operator reaches for to
+// investigate the request that caused it. The batch-encodes-and-arrives
+// half of the proof lives in exporter/otlp's
+// TestMiddleware_InvalidUTF8Request_ExportBatchStillArrives (a real
+// OTLP/gRPC collector in the test process); this test pins the
+// label-formation side here, where the span is built: the exported span's
+// name and every request-controlled attribute carry the Unicode
+// replacement rune in the invalid byte's place, never the byte itself.
+//
+// Fails before the fix (verified): the exported span's name is
+// "GET /api/<0xFF>junk" (the formatter's raw method + path) and its
+// url.path, user_agent.original and client.address attributes each carry
+// the raw invalid byte; passes after: the name is method + the bounded
+// route value "GET /api/<U+FFFD>junk" and the three attributes carry the
+// same path or header text with the invalid byte replaced by U+FFFD.
+func TestMiddleware_InvalidUTF8Request_SpanNameAndAttributesCarryNoRawByte(t *testing.T) {
+	exp := setupTracerProvider(t)
+	setupMeterProvider(t) // Middleware always records metrics too; give it a live provider.
+
+	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/%FFjunk", nil)
+	if utf8.ValidString(req.URL.Path) {
+		t.Fatalf("test setup: URL.Path %q must not be valid UTF-8 for this regression to be exercised", req.URL.Path)
+	}
+	// net/http applies no byte validation to header values, so these reach
+	// the middleware (and, before the fix, otelhttp's semconv attributes)
+	// with raw invalid bytes exactly like the path does.
+	req.Header.Set("User-Agent", "probe\xffagent")
+	req.Header.Set("X-Forwarded-For", "1.2.3.4\xff")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	spans := exp.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected exactly 1 span, got %d", len(spans))
+	}
+	span := spans[0]
+
+	// The span NAME must be method + the bounded route value with the
+	// invalid byte replaced -- never the raw path.
+	wantName := "GET /api/" + string(utf8.RuneError) + "junk"
+	if span.Name != wantName {
+		t.Errorf("span name = %q, want %q: the raw invalid path byte must not reach the span name", span.Name, wantName)
+	}
+
+	// Blanket scan: no attribute this middleware's span carries may hold an
+	// invalid-UTF-8 string value, whatever request-controlled surface it
+	// came from. This is what fails if a future otelhttp upgrade attaches a
+	// new raw request string, or an edit forgets one of the overwrites the
+	// targeted assertions below cover.
+	for _, kv := range span.Attributes {
+		val := kv.Value.AsString()
+		if kv.Value.Type() == attribute.STRING && !utf8.ValidString(val) {
+			t.Errorf("span attribute %q carries a string value that is not valid UTF-8 (%q): a raw request byte reached the span", kv.Key, val)
+		}
+	}
+
+	// Targeted assertions for each request-controlled string surface: the
+	// invalid byte replaced by U+FFFD, everything else verbatim.
+	wantPath := "/api/" + string(utf8.RuneError) + "junk"
+	if got, ok := findAttr(span.Attributes, "url.path"); !ok {
+		t.Errorf("span carries no url.path attribute; attributes: %v", span.Attributes)
+	} else if got.AsString() != wantPath {
+		t.Errorf("span url.path = %q, want %q: the raw invalid path byte must not reach the url.path attribute", got.AsString(), wantPath)
+	}
+	if got, ok := findAttr(span.Attributes, "http.route"); !ok {
+		t.Errorf("span carries no http.route attribute; attributes: %v", span.Attributes)
+	} else if got.AsString() != wantPath {
+		t.Errorf("span http.route = %q, want %q (the route label must sanitize exactly like the metric side does)", got.AsString(), wantPath)
+	}
+	wantUA := "probe" + string(utf8.RuneError) + "agent"
+	if got, ok := findAttr(span.Attributes, "user_agent.original"); !ok {
+		t.Errorf("span carries no user_agent.original attribute; attributes: %v", span.Attributes)
+	} else if got.AsString() != wantUA {
+		t.Errorf("span user_agent.original = %q, want %q: a raw invalid byte from the User-Agent header must not reach the span", got.AsString(), wantUA)
+	}
+	wantAddr := "1.2.3.4" + string(utf8.RuneError)
+	if got, ok := findAttr(span.Attributes, "client.address"); !ok {
+		t.Errorf("span carries no client.address attribute; attributes: %v", span.Attributes)
+	} else if got.AsString() != wantAddr {
+		t.Errorf("span client.address = %q, want %q: a raw invalid byte from the X-Forwarded-For header must not reach the span", got.AsString(), wantAddr)
+	}
+
+	// Positive controls: the method attribute keeps its exact raw token and
+	// the status attribute is intact -- the span is real, not emptied.
+	if got, ok := findAttr(span.Attributes, "http.request.method"); !ok || got.AsString() != http.MethodGet {
+		t.Errorf("expected http.request.method=GET to survive on the span, got attributes: %v", span.Attributes)
+	}
+	if got, ok := findAttr(span.Attributes, "http.response.status_code"); !ok || got.AsInt64() != http.StatusOK {
+		t.Errorf("expected http.response.status_code=200 to survive on the span, got attributes: %v", span.Attributes)
 	}
 }
 

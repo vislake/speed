@@ -75,18 +75,30 @@
 // key-name stems plus the value-shape net), while plaintext PII and full
 // prompts are caller-declared classes whose declaration mechanism lands
 // with the pkgcore round's apperr work. The span attributes this package's
-// instrumentation emits are kept free of secret-shaped and id-bearing
-// material by construction rather than by a second pass: Middleware
-// assembles only method/route/status/tenant attributes, the span's
-// http.route attribute is the metric side's bounded route value rather than
-// the raw path, and the request's query string -- where credentials ride --
-// never becomes a span name or attribute (the span name, method + URL.Path,
-// is the one deliberate raw-path residual). See redact.go's doc comment for
-// the full contract: the key set, the value shapes, the coverage table and
-// deliberate boundaries (log messages are not scanned; API responses,
-// audit logs and dbkit encryption are separate mechanisms), and the one
-// documented escape (a hand-built *slog.Logger logged through directly,
-// outside FromContext).
+// instrumentation emits are kept free of secret-shaped material by
+// construction rather than by a second pass, and every request-controlled
+// string they or the span name carry is exporter-safe by construction:
+// Middleware's own span attributes are method/route/status/tenant only,
+// the span's http.route attribute is the metric side's bounded route value
+// rather than the raw path (the raw path is where path segments carry
+// tenant and resource ids into the tracing backend), and the request's
+// query string -- where credentials ride -- never becomes a span name or
+// attribute. The span NAME (method + the same bounded route value, via the
+// otelhttp formatter) and the three raw request strings otelhttp's own
+// server-span semconv attaches at span creation -- url.path,
+// user_agent.original and client.address -- are bounded too, each under
+// the route label's length and UTF-8 rules, because an unbounded copy is
+// an availability defect rather than merely a disclosure one: net/http
+// percent-decodes a request target byte-wise and applies no byte
+// validation to header values, so an invalid UTF-8 byte reaches the span
+// from a plain request, and the Go protobuf encoder refuses the whole
+// OTLP export batch containing it (see Middleware's own "Why no span
+// surface carries the raw request path" section). See redact.go's doc
+// comment for the full contract: the key set, the value shapes, the
+// coverage table and deliberate boundaries (log messages are not scanned;
+// API responses, audit logs and dbkit encryption are separate mechanisms),
+// and the one documented escape (a hand-built *slog.Logger logged through
+// directly, outside FromContext).
 //
 // # The one rule that matters most: tenant_id is not a metric label
 //
