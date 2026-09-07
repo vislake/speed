@@ -196,9 +196,23 @@ type Module struct {
 	// wired, applied by AuthMiddleware to authentication attempts BEFORE
 	// any Authenticate call (see that option's own doc comment for the
 	// layering argument). Nil when unset -- every Module built without the
-	// option -- and read at call time by middleware.go's AuthMiddleware,
-	// the identical read-at-call-time shape this Module already uses for
-	// every other field its middleware and handlers consume.
+	// option. AuthMiddleware consumes it when a host calls Middleware(next)
+	// and the guarded handler chain is BUILT: the guard wraps the
+	// authenticate gate at that moment (middleware.go), and a request SERVED
+	// through the returned chain never re-reads the field. That is a
+	// deliberate contrast with this Module's genuinely per-request reads --
+	// m.service (nil until Attach, which runs after the Register-time chain
+	// build, so the per-request closure resolves it only once a request
+	// actually arrives; see Register's own "Handler is built here, not in
+	// Attach" section) and the event-mapping index (which mapping a
+	// delivered event takes is runtime data, knowable only per event, so
+	// webhook_delivery.go consults s.mappings.byInternal[evt.Type] on every
+	// delivery). authGuard's whole effect is the composition it produced
+	// when the chain was built; once Middleware has wrapped the guard around
+	// authenticate, nothing a later request could re-read would recompose
+	// that already-assembled chain, which is why the field is read exactly
+	// once, at build time. There is deliberately no setter that could make a
+	// post-construction change look effective.
 	authGuard *HTTPGuard
 
 	// service is the Service Attach produced, nil until then. It is what

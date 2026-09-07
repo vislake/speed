@@ -65,6 +65,50 @@ var allowedWebhookSchemes = map[string]bool{"http": true, "https": true}
 //     legitimate public webhook receiver.
 var blockedIPv4CIDRs = mustParseCIDRs("100.64.0.0/10")
 
+// blockedIPv6CIDRs are additional IPv6 ranges isBlockedIP checks beyond what
+// net.IP's own classification already covers, the IPv6 twin of the IPv4 gap
+// blockedIPv4CIDRs exists for. Ranges the stdlib ALREADY refuses on the IPv6
+// side are deliberately absent here -- do not add them back, and do not read
+// this list's existence as license to drop a stdlib call as "covered":
+//
+//   - ::1/128 and ::/128 -- loopback and unspecified (IsLoopback/
+//     IsUnspecified);
+//   - fe80::/10 and ff00::/8 -- link-local unicast and multicast
+//     (IsLinkLocalUnicast/IsLinkLocalMulticast/IsMulticast);
+//   - fc00::/7 -- RFC 4193 unique-local (IsPrivate);
+//   - ::ffff:0:0/96 -- v4-mapped addresses are refused through the embedded
+//     IPv4 net.IP.To4 exposes, so ::ffff:127.0.0.1 is caught by the same
+//     loopback test as 127.0.0.1 itself and ::ffff:169.254.169.254 by the
+//     same link-local one -- neither form needs (or would be reached by) an
+//     entry here;
+//   - 169.254.169.254 and the CGNAT range -- IsLinkLocalUnicast and
+//     blockedIPv4CIDRs respectively, listed on the IPv4 side only.
+//
+// What this list adds is IPv6 ranges the stdlib leaves unclassified (Go
+// treats them as ordinary global unicast) that are still never a legitimate
+// public webhook receiver:
+//
+//   - 64:ff9b::/96 -- RFC 6052's well-known NAT64 prefix. A NAT64 network
+//     reaches IPv4 destinations in this form, so a hostile DNS answer can
+//     present an internal IPv4 destination (metadata endpoint, loopback)
+//     here with the stdlib seeing only a "public" address. The whole prefix
+//     is refused rather than decoding each embedded IPv4, which would mean
+//     duplicating every IPv4 rule above in IPv6 form. This module's SSRF
+//     checks have no production-host relaxation (the only overrides,
+//     WithWebhookHTTPClient and WithWebhookURLValidator, are test/demo
+//     seams -- see their doc comments), so a deployment that genuinely
+//     reached public receivers only through NAT64 translation would see a
+//     refused delivery, never a silent bypass -- the conservative direction
+//     for a security check.
+//   - ::/96 -- RFC 4291's IPv4-compatible addresses, deprecated but still
+//     parseable: ::127.0.0.1 is loopback in a form To4 does not map. (The
+//     prefix's own ::/128 and ::1/128 heads are already refused by the
+//     stdlib calls above; listing the /96 additionally covering them
+//     changes nothing.)
+//   - fec0::/10 -- RFC 3879-deprecated site-local, never assigned and never
+//     a legitimate receiver.
+var blockedIPv6CIDRs = mustParseCIDRs("64:ff9b::/96", "::/96", "fec0::/10")
+
 func mustParseCIDRs(cidrs ...string) []*net.IPNet {
 	nets := make([]*net.IPNet, 0, len(cidrs))
 	for _, c := range cidrs {
@@ -81,7 +125,11 @@ func mustParseCIDRs(cidrs ...string) []*net.IPNet {
 // destination: loopback (127.0.0.0/8, ::1), link-local unicast or multicast
 // (169.254.0.0/16, fe80::/10), unspecified (0.0.0.0, ::), private
 // (RFC 1918, RFC 4193 fc00::/7 -- both covered by net.IP.IsPrivate since Go
-// 1.17), multicast, or carrier-grade NAT (100.64.0.0/10).
+// 1.17), multicast, or any supplementary range the blockedIPv4CIDRs and
+// blockedIPv6CIDRs lists add beyond what net.IP classifies -- carrier-grade
+// NAT (100.64.0.0/10) on the IPv4 side, and the IPv6 special-purpose ranges
+// the stdlib misses on the IPv6 side (NAT64, IPv4-compatible, site-local;
+// see blockedIPv6CIDRs's own comment for the full boundary).
 func isBlockedIP(ip net.IP) bool {
 	switch {
 	case ip.IsLoopback(),
@@ -93,6 +141,11 @@ func isBlockedIP(ip net.IP) bool {
 		return true
 	}
 	for _, n := range blockedIPv4CIDRs {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	for _, n := range blockedIPv6CIDRs {
 		if n.Contains(ip) {
 			return true
 		}

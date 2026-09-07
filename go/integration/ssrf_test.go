@@ -23,6 +23,12 @@ func TestValidateWebhookURL_PrivateIPLiteral_Blocked(t *testing.T) {
 		"http://169.254.169.254/latest/meta-data/", // cloud metadata endpoint
 		"http://100.64.0.5/hook",                   // CGNAT
 		"http://0.0.0.0/hook",
+		// IPv6 ranges the stdlib classification misses, refused only through
+		// blockedIPv6CIDRs: NAT64 forms of the metadata endpoint and of
+		// loopback, plus a site-local address.
+		"http://[64:ff9b::169.254.169.254]/hook",
+		"http://[64:ff9b::127.0.0.1]/hook",
+		"http://[fec0::1]/hook",
 	}
 	for _, u := range cases {
 		t.Run(u, func(t *testing.T) {
@@ -146,9 +152,31 @@ func TestIsBlockedIP(t *testing.T) {
 		{"224.0.0.1", true}, // multicast
 		{"100.64.0.1", true},
 		{"0.0.0.0", true},
+		// Covered forms that must stay refused, whatever the supplementary
+		// list mechanism grows into: v4-mapped addresses are refused through
+		// the embedded IPv4 net.IP.To4 exposes (the loopback and link-local
+		// tests both reach into it), 169.254.169.254 through
+		// IsLinkLocalUnicast directly, and the CGNAT range through
+		// blockedIPv4CIDRs -- none of them belongs in an IPv6 list.
+		{"::ffff:127.0.0.1", true},
+		{"::ffff:169.254.169.254", true},
+		{"169.254.169.254", true},
+		{"100.64.255.255", true},
+		// IPv6 ranges net.IP's own classification leaves unclassified (they
+		// read as ordinary global unicast) that isBlockedIP must refuse
+		// through blockedIPv6CIDRs: NAT64 (RFC 6052), IPv4-compatible
+		// (RFC 4291) and site-local (RFC 3879). The NAT64 rows use the
+		// dotted-quad form a DNS answer would actually carry.
+		{"64:ff9b::1", true},
+		{"64:ff9b::169.254.169.254", true},
+		{"64:ff9b::127.0.0.1", true},
+		{"::127.0.0.1", true},
+		{"fec0::1", true},
+		{"feff::1", true},
 		{"8.8.8.8", false},
 		{"1.1.1.1", false},
 		{"2001:4860:4860::8888", false},
+		{"2606:4700:4700::1111", false},
 	}
 	for _, tt := range tests {
 		ip := net.ParseIP(tt.ip)

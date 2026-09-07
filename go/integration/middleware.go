@@ -128,6 +128,11 @@ func NewAuthMiddleware(m *Module) *AuthMiddleware {
 // "Deliberately separate from HTTPGuard" doc section).
 func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 	authenticate := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// m.service is genuinely read per request, INSIDE this closure: it
+		// does not exist until Attach, which runs after Register -- the
+		// moment a host typically builds the chain by calling Middleware --
+		// so only a served request can know whether it exists yet. The guard
+		// below is the opposite shape.
 		if a.module == nil || a.module.service == nil {
 			writeAppError(w, ErrInternal)
 			return
@@ -145,6 +150,12 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 
+	// The guard is read ONCE, here, while Middleware is assembling the chain
+	// it returns -- never per request. Requests served through that chain
+	// are already inside the guard; a request-time re-read could not
+	// recompose the chain this wrap just finalized. See the Module's own
+	// authGuard field comment for the full contrast with the per-request
+	// reads above.
 	if a.module != nil && a.module.authGuard != nil {
 		return a.module.authGuard.Middleware(authenticate)
 	}
