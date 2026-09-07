@@ -61,7 +61,8 @@
       "license": "MIT",
       "name": "github.com/jackc/pgx/v5",
       "used_by": [
-        "go/dbkit"
+        "go/dbkit",
+        "go/pkgcore"
       ],
       "version": "v5.10.0"
     },
@@ -112,6 +113,7 @@
       "name": "github.com/minio/minio-go/v7",
       "used_by": [
         "go/pkgcore",
+        "go/saasctl",
         "go/storage"
       ],
       "version": "v7.3.0"
@@ -163,17 +165,7 @@
         "go/notification",
         "go/pkgcore",
         "go/rbac",
-        "go/storage"
-      ],
-      "version": "v0.44.0"
-    },
-    {
-      "ecosystem": "go",
-      "evidence": "go module cache license file: github.com/testcontainers/testcontainers-go/modules/minio@v0.44.0/LICENSE",
-      "license": "MIT",
-      "name": "github.com/testcontainers/testcontainers-go/modules/minio",
-      "used_by": [
-        "go/pkgcore",
+        "go/saasctl",
         "go/storage"
       ],
       "version": "v0.44.0"
@@ -188,6 +180,7 @@
         "go/dbkit",
         "go/integration",
         "go/notification",
+        "go/pkgcore",
         "go/rbac"
       ],
       "version": "v0.44.0"
@@ -499,6 +492,7 @@
       "name": "react-hook-form",
       "used_by": [
         "web/packages/auth-ui",
+        "web/packages/product-shell",
         "web/packages/ui-kit"
       ],
       "version": "7.87.0"
@@ -592,7 +586,9 @@
       "name": "github.com/oapi-codegen/runtime",
       "used_by": [
         "go/admin",
+        "go/ai-gateway",
         "go/authn",
+        "go/integration",
         "go/notification",
         "go/org",
         "go/pki",
@@ -649,12 +645,63 @@
       "name": "gorm.io/datatypes",
       "used_by": [
         "go/billing",
+        "go/compliance",
         "go/dbkit",
         "go/integration",
         "go/notification",
         "go/pki"
       ],
       "version": "v1.2.7"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/bradfitz/gomemcache@v0.0.0-20260422231931-4d751bb6e37c/LICENSE",
+      "license": "Apache-2.0",
+      "name": "github.com/bradfitz/gomemcache",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v0.0.0-20260422231931-4d751bb6e37c"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/moby/moby/api@v1.55.0/LICENSE",
+      "license": "Apache-2.0",
+      "name": "github.com/moby/moby/api",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v1.55.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/nats-io/nats.go@v1.53.1/LICENSE",
+      "license": "Apache-2.0",
+      "name": "github.com/nats-io/nats.go",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v1.53.1"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/testcontainers/testcontainers-go/modules/memcached@v0.44.0/LICENSE",
+      "license": "MIT",
+      "name": "github.com/testcontainers/testcontainers-go/modules/memcached",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v0.44.0"
+    },
+    {
+      "ecosystem": "go",
+      "evidence": "go module cache license file: github.com/testcontainers/testcontainers-go/modules/nats@v0.44.0/LICENSE",
+      "license": "MIT",
+      "name": "github.com/testcontainers/testcontainers-go/modules/nats",
+      "used_by": [
+        "go/pkgcore"
+      ],
+      "version": "v0.44.0"
     }
   ],
   "schema": 1,
