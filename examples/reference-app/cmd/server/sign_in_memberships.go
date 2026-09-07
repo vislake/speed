@@ -184,10 +184,14 @@ func (m *signInMemberships) Grant(userID string, tenant pkgcore.TenantID) {
 // reports org.ErrMembershipNotFound (in which case the in-process roster
 // gets its say -- the test-shortcut case above), and any other error is
 // returned rather than guessed at, so authn's own fail-closed handling
-// (403 authn.tenant_membership_unavailable) surfaces a genuinely
-// unanswerable membership question instead of a fabricated answer. A
-// question about rbac.SystemDomain skips org entirely and is answered
-// from the roster alone.
+// answers a genuinely unanswerable membership question as a refusal
+// instead of a fabricated answer: password sign-in folds it into the
+// uniform 401 authn.invalid_credentials (the fold of no-membership
+// logins into ErrInvalidCredentials -- the old distinguishable 403
+// authn.tenant_membership_unavailable survived only on paths answering an
+// already-authenticated caller, tenant switching and refresh). A question
+// about rbac.SystemDomain skips org entirely and is answered from the
+// roster alone.
 func (m *signInMemberships) ActiveMembership(ctx context.Context, userID string, tenant pkgcore.TenantID) (bool, error) {
 	if tenant != rbac.SystemDomain && m.org != nil {
 		member, err := m.org.Get(pkgcore.WithTenant(ctx, tenant), userID)

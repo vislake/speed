@@ -146,10 +146,13 @@ import (
 // the synchronous attempt succeeded -- the path every normal registration
 // takes -- so "register, then sign in" keeps its gap-free shape. After a
 // failed synchronous attempt the 201 still answers, and a sign-in in the
-// window before the retry converges answers the memberless refusal
-// (authn.tenant_membership_required) exactly as it did before
-// self-service existed; the retry converges the clinic moments later and
-// the same sign-in then lands in it. The browser-shaped e2e gate
+// window before the retry converges answers the memberless refusal --
+// since the fold of no-membership logins into ErrInvalidCredentials, the
+// unified 401 authn.invalid_credentials, identical to a wrong password's
+// (the old distinguishable membership answer is gone from the login
+// surface) -- exactly as it did before self-service existed; the retry
+// converges the clinic moments later and the same sign-in then lands in
+// it. The browser-shaped e2e gate
 // (self-service-signup.spec.ts) never sees that window, because it signs
 // in after a registration whose synchronous attempt succeeded; a recovery
 // gate drives it on purpose through the env switch
