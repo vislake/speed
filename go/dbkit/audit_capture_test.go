@@ -92,11 +92,20 @@ var auditCaptureTestDBSeq atomic.Int64
 // bus (nil is valid: no capture installed) and the widgets table migrated.
 func openAuditCaptureTestDB(t *testing.T, bus pkgcore.EventBus) *gorm.DB {
 	t.Helper()
+	return openAuditCaptureTestDBScoped(t, bus)
+}
+
+// openAuditCaptureTestDBScoped opens a dbkit.Open connection with AuditBus
+// set to bus (nil is valid: no capture installed), an optional
+// AuditModels restriction, and the widgets table migrated.
+func openAuditCaptureTestDBScoped(t *testing.T, bus pkgcore.EventBus, models ...any) *gorm.DB {
+	t.Helper()
 	dsn := fmt.Sprintf("file:audit_capture_test_%d?mode=memory&cache=shared", auditCaptureTestDBSeq.Add(1))
 	db, err := dbkit.Open(context.Background(), dbkit.Options{
-		Dialect:  dbkit.DialectSQLite,
-		DSN:      dsn,
-		AuditBus: bus,
+		Dialect:     dbkit.DialectSQLite,
+		DSN:         dsn,
+		AuditBus:    bus,
+		AuditModels: models,
 	})
 	if err != nil {
 		t.Fatalf("dbkit.Open: %v", err)
@@ -146,6 +155,64 @@ func TestOpen_AuditBusNil_InstallsNoCapture(t *testing.T) {
 	w := &testutil.Widget{ID: "w1", Name: "gadget"}
 	if err := db.WithContext(ctx).Create(w).Error; err != nil {
 		t.Fatalf("Create() error = %v, want nil (AuditBus nil must behave exactly like before this field existed)", err)
+	}
+}
+
+// TestAuditCapturePlugin_AuditModels_RestrictsCoverageToListedModels pins
+// Options.AuditModels on one connection with the bus wired: a write
+// against a listed Auditable model is captured, while a write against an
+// Auditable model the host left off the list is not — the shape a host
+// sharing one connection between several modules needs to keep a module
+// that records its own audit events through audit.Emit from being
+// double-recorded. The listed entry is the value type (testutil.Widget{})
+// while the statement itself always carries a pointer (*testutil.Widget),
+// so the test also pins the pointer-free type matching between the two
+// sides.
+func TestAuditCapturePlugin_AuditModels_RestrictsCoverageToListedModels(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDBScoped(t, bus, testutil.Widget{})
+	if err := db.Exec(testutil.SoftDeletableWidgetTableSQL).Error; err != nil {
+		t.Fatalf("create soft_deletable_widgets table: %v", err)
+	}
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	w := &testutil.Widget{ID: "w1", Name: "gadget"}
+	if err := db.WithContext(ctx).Create(w).Error; err != nil {
+		t.Fatalf("Create() against the listed model error = %v", err)
+	}
+	sdw := &testutil.SoftDeletableWidget{ID: "sdw1", Name: "gadget"}
+	if err := db.WithContext(ctx).Create(sdw).Error; err != nil {
+		t.Fatalf("Create() against the unlisted model error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want exactly 1 (the listed model's create only)", len(events))
+	}
+	if events[0].ResourceType != "widget" {
+		t.Errorf("ResourceType = %q, want %q — the unlisted Auditable model's write must not be captured", events[0].ResourceType, "widget")
+	}
+}
+
+// TestOpen_AuditModels_NonAuditableEntryRefused pins resolveAuditModels'
+// startup validation: an AuditModels entry whose type does not implement
+// Auditable is refused with a named error, never silently ignored — a
+// capture scope that quietly misses a model would be exactly the silent
+// audit gap the option exists to prevent.
+func TestOpen_AuditModels_NonAuditableEntryRefused(t *testing.T) {
+	dsn := fmt.Sprintf("file:audit_capture_test_%d?mode=memory&cache=shared", auditCaptureTestDBSeq.Add(1))
+	_, err := dbkit.Open(context.Background(), dbkit.Options{
+		Dialect:     dbkit.DialectSQLite,
+		DSN:         dsn,
+		AuditBus:    &capturedBus{},
+		AuditModels: []any{nonAuditableFlag{}},
+	})
+	if err == nil {
+		t.Fatalf("Open with a non-Auditable AuditModels entry error = nil, want a named refusal")
+	}
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Code != "dbkit.invalid_audit_model" {
+		t.Fatalf("Open error = %v, want apperr code dbkit.invalid_audit_model", err)
 	}
 }
 

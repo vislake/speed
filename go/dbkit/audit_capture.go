@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // auditCapturePluginName identifies auditCapturePlugin to GORM (gorm.Plugin.Name
@@ -113,6 +114,15 @@ type WriteCapturedEvent struct {
 // A model that does not implement Auditable is completely unaffected by
 // the plugin, exactly as a model that does not implement TenantScoped is
 // unaffected by tenantScopePlugin: no callback so much as looks at it.
+//
+// Implementing Auditable is necessary but not sufficient for a write to be
+// captured on a given connection: Open's Options.AuditModels can further
+// restrict the plugin to an explicit list of model types (see that field's
+// own doc comment for why a host sharing one connection between several
+// modules needs the restriction). A model left out of that list is treated
+// exactly like a non-Auditable one on that connection — no callback so
+// much as looks at it — while staying capturable on any connection whose
+// host lists it.
 type Auditable interface {
 	// AuditResourceType names the kind of resource this model represents
 	// for the audit trail, for example "note" or "org.member". It has no
@@ -122,9 +132,46 @@ type Auditable interface {
 
 // newAuditCapturePlugin returns a ready-to-install auditCapturePlugin
 // publishing to bus. bus must not be nil; Open only installs this plugin
-// when Options.AuditBus is set.
-func newAuditCapturePlugin(bus pkgcore.EventBus) *auditCapturePlugin {
-	return &auditCapturePlugin{bus: bus}
+// when Options.AuditBus is set. models, when non-nil, is the restriction
+// resolveAuditModels derived from Options.AuditModels: a non-nil map
+// admits only writes against a model whose (pointer-free) type is a key;
+// nil admits every Auditable model, the pre-scoping semantics.
+func newAuditCapturePlugin(bus pkgcore.EventBus, models map[reflect.Type]struct{}) *auditCapturePlugin {
+	return &auditCapturePlugin{bus: bus, models: models}
+}
+
+// resolveAuditModels normalizes Options.AuditModels into the type-set
+// auditCapturePlugin consults per write, or nil when the list is empty
+// (capture everything Auditable, the pre-scoping semantics).
+//
+// Each entry is dereferenced to its underlying type (OrgNode{} and
+// &OrgNode{} both resolve to OrgNode), and that type must implement
+// Auditable — through its value method set or its pointer method set —
+// or Open refuses the whole list with an apperr.Invalid naming the type.
+// Refusing, rather than ignoring, is deliberate: a capture scope that
+// silently skips a listed model is exactly the silent audit gap Options
+// documented as the reason the restriction exists, and a host that lists
+// a model whose Auditable marker a later round removes should hear about
+// it at startup, not discover the missing rows in a compliance query.
+func resolveAuditModels(models []any) (map[reflect.Type]struct{}, error) {
+	if len(models) == 0 {
+		return nil, nil
+	}
+	auditableType := reflect.TypeOf((*Auditable)(nil)).Elem()
+	out := make(map[reflect.Type]struct{}, len(models))
+	for _, m := range models {
+		t := reflect.TypeOf(m)
+		for t.Kind() == reflect.Pointer {
+			t = t.Elem()
+		}
+		if !t.Implements(auditableType) && !reflect.PointerTo(t).Implements(auditableType) {
+			return nil, apperr.Invalid("dbkit.invalid_audit_model").
+				WithParam("type", t.String()).
+				WithParam("hint", "Options.AuditModels entries must be models implementing dbkit.Auditable")
+		}
+		out[t] = struct{}{}
+	}
+	return out, nil
 }
 
 // auditCapturePlugin is a gorm.Plugin that publishes a WriteCapturedEvent
@@ -194,6 +241,11 @@ func newAuditCapturePlugin(bus pkgcore.EventBus) *auditCapturePlugin {
 // that an audit-write failure must alert and never be silently dropped.
 type auditCapturePlugin struct {
 	bus pkgcore.EventBus
+	// models is the capture scope resolveAuditModels derived from
+	// Options.AuditModels: nil means every Auditable model is captured;
+	// non-nil means only models whose pointer-free type is a key are —
+	// see resolveAuditModels' doc comment and capture's own scope check.
+	models map[reflect.Type]struct{}
 }
 
 // auditBufferCtxKey is the unexported context key WithTenantSession installs
@@ -659,12 +711,13 @@ func (p *auditCapturePlugin) afterSavepointSQL(db *gorm.DB) {
 }
 
 // capture builds a WriteCapturedEvent for db.Statement, unless the
-// statement's model is not Auditable, the write already failed, or the
-// write matched no row at all — the RowsAffected guard below. It never
-// publishes directly; see the type's own doc comment for why, and for
-// exactly where the built event goes instead (a per-transaction
-// *auditBuffer when db.Statement.Context carries one, or this statement's
-// own GORM instance map otherwise).
+// statement's model is not Auditable (or not in this plugin's capture
+// scope, when Open's Options.AuditModels restricted one), the write
+// already failed, or the write matched no row at all — the RowsAffected
+// guard below. It never publishes directly; see the type's own doc
+// comment for why, and for exactly where the built event goes instead (a
+// per-transaction *auditBuffer when db.Statement.Context carries one, or
+// this statement's own GORM instance map otherwise).
 func (p *auditCapturePlugin) capture(db *gorm.DB, operation string) {
 	if db.Error != nil {
 		return
@@ -687,6 +740,9 @@ func (p *auditCapturePlugin) capture(db *gorm.DB, operation string) {
 	}
 	auditable, ok := auditableOf(db.Statement)
 	if !ok {
+		return
+	}
+	if !p.inCaptureScope(auditable) {
 		return
 	}
 
@@ -895,6 +951,26 @@ func auditableOf(stmt *gorm.Statement) (Auditable, bool) {
 		return a, true
 	}
 	return nil, false
+}
+
+// inCaptureScope reports whether auditable's type is admitted by this
+// plugin's capture scope. models == nil (the pre-scoping semantics, an
+// Open call that set AuditBus but never AuditModels) admits every
+// Auditable model. A non-nil scope admits only the listed types, matched
+// pointer-free: the statement may hold *OrgNode while the host listed
+// OrgNode{} in Options.AuditModels, and resolveAuditModels normalized
+// both sides to the same underlying type, so this check is type equality
+// on the dereferenced type.
+func (p *auditCapturePlugin) inCaptureScope(auditable Auditable) bool {
+	if p.models == nil {
+		return true
+	}
+	t := reflect.TypeOf(auditable)
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	_, ok := p.models[t]
+	return ok
 }
 
 // auditRedactedFieldValue replaces the captured value of a sensitive

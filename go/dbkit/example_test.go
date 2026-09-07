@@ -341,6 +341,29 @@ func (exampleTask) AuditResourceType() string { return "task" }
 // ExampleAuditable applies below.
 func (exampleTask) TableName() string { return "example_tasks" }
 
+// exampleUntrackedTask is a second Auditable model sharing exampleTask's
+// shape, used by ExampleAuditable to demonstrate Options.AuditModels: with
+// the capture scope listing exampleTask alone, writes against this model
+// publish nothing even though it implements Auditable -- the per-model
+// restriction a host sharing one connection between several modules needs
+// to keep a model that records its own trail through audit.Emit from being
+// double-recorded.
+type exampleUntrackedTask struct {
+	ID       string `gorm:"primaryKey;size:26"`
+	TenantID string `gorm:"primaryKey;size:26;not null"`
+	Title    string `gorm:"size:255;not null"`
+}
+
+// GetTenantID satisfies dbkit.TenantScoped.
+func (t exampleUntrackedTask) GetTenantID() pkgcore.TenantID { return pkgcore.TenantID(t.TenantID) }
+
+// AuditResourceType satisfies dbkit.Auditable.
+func (exampleUntrackedTask) AuditResourceType() string { return "untracked_task" }
+
+// TableName pins exampleUntrackedTask's table name explicitly, matching
+// the raw CREATE TABLE ExampleAuditable applies below.
+func (exampleUntrackedTask) TableName() string { return "example_untracked_tasks" }
+
 // ExampleAuditable demonstrates dbkit's automatic write-capture mechanism:
 // a model implementing Auditable, opened with Options.AuditBus set,
 // publishes a dbkit.WriteCapturedEvent on every Create, Update or Delete
@@ -349,6 +372,14 @@ func (exampleTask) TableName() string { return "example_tasks" }
 // pkgcore.EventBus.Subscribe shown here, so the event ends up in the
 // audit_events table; the direct subscription below keeps this example
 // self-contained.
+//
+// The Open call additionally sets Options.AuditModels to an explicit list
+// of the connection's capture-scope models: a second Auditable model
+// (exampleUntrackedTask, deliberately left off the list) is written
+// without producing any event -- the write still succeeds, only the
+// capture is skipped -- exactly the shape a host needs to keep a model on
+// a shared connection whose module records its own audit trail through
+// audit.Emit from being recorded twice.
 func ExampleAuditable() {
 	ctx := context.Background()
 
@@ -360,9 +391,10 @@ func ExampleAuditable() {
 	})
 
 	db, err := dbkit.Open(ctx, dbkit.Options{
-		Dialect:  dbkit.DialectSQLite,
-		DSN:      "file:dbkit_auditable_example?mode=memory&cache=shared",
-		AuditBus: bus,
+		Dialect:     dbkit.DialectSQLite,
+		DSN:         "file:dbkit_auditable_example?mode=memory&cache=shared",
+		AuditBus:    bus,
+		AuditModels: []any{exampleTask{}},
 	})
 	if err != nil {
 		fmt.Println("open:", err)
@@ -378,12 +410,27 @@ func ExampleAuditable() {
 		fmt.Println("migrate:", err)
 		return
 	}
+	if err = db.Exec(`CREATE TABLE example_untracked_tasks (
+		id        VARCHAR(26)  NOT NULL,
+		tenant_id VARCHAR(26)  NOT NULL,
+		title     VARCHAR(255) NOT NULL,
+		PRIMARY KEY (tenant_id, id)
+	)`).Error; err != nil {
+		fmt.Println("migrate:", err)
+		return
+	}
 
 	ctx = pkgcore.WithTenant(ctx, "tenant-acme")
 	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1"})
 
 	task := &exampleTask{ID: "task-1", Title: "Review the audit round"}
 	if err = dbkit.NewRepository[exampleTask](db).Create(ctx, task); err != nil {
+		fmt.Println("create:", err)
+		return
+	}
+
+	untracked := &exampleUntrackedTask{ID: "task-2", Title: "Written but not captured"}
+	if err = dbkit.NewRepository[exampleUntrackedTask](db).Create(ctx, untracked); err != nil {
 		fmt.Println("create:", err)
 		return
 	}

@@ -79,6 +79,29 @@ type Options struct {
 	// (go/dbkit/audit) is part of its module set; see that package's
 	// AGENTS.md for the end-to-end wiring.
 	AuditBus pkgcore.EventBus
+
+	// AuditModels, when non-empty, restricts the write-capture plugin to
+	// writes whose model is one of the listed model types (each entry is a
+	// model value or a pointer to one, e.g. org.OrgNode{} or
+	// &org.OrgNode{}). The plugin's own Auditable gate still applies on
+	// top: a listed entry whose type does not implement Auditable is
+	// refused here, at Open, with a named error — never silently skipped,
+	// since a capture scope that quietly misses a model is exactly the
+	// silent audit gap this option exists to prevent. nil or empty (every
+	// call site that predates this field) keeps the original semantics:
+	// every Auditable model written through this connection is captured.
+	//
+	// The option exists for a host that wires AuditBus on a connection
+	// several modules share: capture is per-model and per-connection, so a
+	// model on that connection that opts into Auditable but whose module
+	// records its own audit events through audit.Emit (the reference app's
+	// notes.Note is the canonical example) must be kept out of the capture
+	// scope or its writes would be recorded twice — once by the plugin
+	// under the derived "<resource_type>.<operation>" action, once by the
+	// module's own Emit call. Listing the capture-scope models here is
+	// that host's explicit, per-model answer to "which Auditable models on
+	// this connection does the automatic mechanism own".
+	AuditModels []any
 }
 
 // Open opens a *gorm.DB for opts.Dialect and returns it already wired with
@@ -158,7 +181,11 @@ func Open(ctx context.Context, opts Options) (*gorm.DB, error) {
 	}
 
 	if opts.AuditBus != nil {
-		if err := db.Use(newAuditCapturePlugin(opts.AuditBus)); err != nil {
+		modelTypes, err := resolveAuditModels(opts.AuditModels)
+		if err != nil {
+			return nil, err
+		}
+		if err := db.Use(newAuditCapturePlugin(opts.AuditBus, modelTypes)); err != nil {
 			return nil, apperr.Internal("dbkit.audit_capture_plugin_failed").
 				WithParam("dialect", string(opts.Dialect)).
 				WithCause(err)
