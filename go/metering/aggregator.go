@@ -2,7 +2,6 @@ package metering
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -18,11 +17,23 @@ import (
 // counterEntry is one real-time quota counter: the running Quantity within
 // one (tenant, feature, period) bucket, guarded by its own mutex so
 // concurrent Ingest calls for the same key never lose an increment.
-// notifiedOverage latches once EventOverageThresholdCrossed has fired for
-// this bucket, so a threshold that stays crossed for the rest of the
-// period publishes exactly one event rather than one per subsequent
-// event -- resetting only implicitly, when a new period's counterEntry is
-// created fresh (see realtimeKey embedding the period start in its key).
+//
+// notifiedOverage latches once EventOverageThresholdCrossed has actually
+// been DELIVERED for this bucket -- the latch is set only after the bus
+// publish succeeded (see applyDelta and deliverOverageCrossing), never
+// before, so a publish failure leaves the latch open for the next crossing
+// fold to retry: a transient bus failure delays the overage signal, it
+// never consumes it. With the latch set, a threshold that stays crossed
+// for the rest of the period publishes exactly one event rather than one
+// per subsequent event -- resetting only implicitly, when a new period's
+// counterEntry is created fresh (see realtimeKey embedding the period
+// start in its key).
+//
+// publishPending marks the crossing whose publish is currently in flight:
+// the fold that set it owns the delivery, and no other fold can claim the
+// crossing while it stands, so the edge fires exactly once even when
+// folds race the in-flight publish. deliverOverageCrossing clears it and
+// sets notifiedOverage (or leaves it open) when the publish resolves.
 //
 // seeded records that this entry has been reconstructed from the durable
 // UsageSummary row for its bucket (ensureSeeded): the first touch of a
@@ -35,6 +46,7 @@ type counterEntry struct {
 	mu              sync.Mutex
 	quantity        float64
 	notifiedOverage bool
+	publishPending  bool
 	seeded          bool
 }
 
@@ -51,24 +63,45 @@ type counterEntry struct {
 //   - The overage-threshold check that publishes
 //     EventOverageThresholdCrossed on the wired pkgcore.EventBus.
 //
-// # Summary writes are serialized by a single process-wide mutex
+// # Summary folds are database-arbitrated; mu orders, it does not arbitrate
 //
 // dbkit.Repository[T]'s Create/FindByID/Update each open their OWN
 // transaction (dbkit.WithTenantSession), so a naive
 // "FindByID, then Create-or-Update" sequence run without external
 // coordination is a lost-update race under concurrent Ingest calls for
-// the same (tenant, feature, period) key. Aggregator closes that race
-// with mu: every summary read-modify-write runs under it, so at most one
-// goroutine performs the sequence at a time, in this process. That is a
-// deliberate, round-1 simplification, not an oversight -- this round
-// ships the in-process aggregation backend only
-// (docs/internal/06-billing-and-metering.md's own "MVP now, split into its
-// own container once volume grows" framing), so "this process" is the
-// whole deployment. A Redis- or
-// PostgreSQL-backed aggregation backend (a later round, per AGENTS.md's
-// Known limitations) would replace this mutex with a real atomic upsert
-// (Redis INCRBYFLOAT, or a PostgreSQL INSERT ... ON CONFLICT) that holds
-// across processes; it does not need to reuse this one.
+// the same (tenant, feature, period) key. Round 1 closed that race with
+// mu: every summary read-modify-write ran under it, correct while "this
+// process" was the whole deployment (the round shipped the in-process
+// aggregation backend only, per docs/internal/06-billing-and-metering.md's
+// own "MVP now, split into its own container once volume grows" framing).
+// It is not correct once a second replica exists: no other process shares
+// that mutex, and a lost fold there is a SILENT one -- the outbox row is
+// already marked delivered and its receipt committed, so nothing ever
+// retries or compensates the delta the clobbered fold dropped.
+//
+// Both fold paths therefore write the summary through ONE
+// database-arbitrated statement -- an INSERT ... ON CONFLICT DO UPDATE
+// whose conflict branch does the arithmetic server-side (upsertSummaryTx,
+// the shape go/billing's credit ledger established in applyBalanceDelta,
+// with the create half folded into the same statement since a summary
+// row's birth is its first delta). Two folds of the same row are
+// serialized by the database's own row locking on the (id, tenant_id)
+// primary key -- plain, portable SQL that runs identically on SQLite and
+// PostgreSQL -- so the second fold to run sees the first's already-applied
+// quantity and adds onto it, never a stale read a Go-level
+// read-modify-write could race on, within one process or across many.
+//
+// mu stays, but its job narrows to in-process ordering: each event's seed
+// read (ensureSeeded) must run under the same mu acquisition as its own
+// fold, so an entry is never reconstructed from a summary that already
+// holds that event's delta and then folds it a second time; and the
+// expired-period sweep must not evict a counter a concurrent fold is
+// mid-flight on (see sweepExpiredCountersLocked). Real-time counters stay
+// per-process state by design -- a second replica's folds land in the
+// shared summary through the same atomic statement, and its counters
+// reconstruct from that summary on first touch -- the accepted shape until
+// a distributed aggregation backend (a later round, per AGENTS.md's Known
+// limitations) replaces the in-process counters too.
 //
 // # Real-time counters are exact; summary rows are eventually applied
 //
@@ -185,11 +218,18 @@ func realtimeKey(tenantID, feature string, periodStart time.Time) string {
 // the database never received.
 //
 // Publishing the overage event, if one fires, is best-effort: a publish
-// failure is logged and does NOT fail Ingest. The usage measurement
+// failure is logged and does NOT fail Ingest -- the usage measurement
 // itself (the summary row, then the counter increment) has already
-// committed by that point; failing the whole call over a secondary
+// committed by that point, and failing the whole call over a secondary
 // notification signal would make a real, already-durable measurement look
-// like it was lost, which is worse than a missed notification.
+// like it was lost, which is worse than a missed notification. Best-effort
+// must not mean lossy, though: the notifiedOverage latch is set only once
+// the publish has succeeded (applyDelta claims the crossing,
+// deliverOverageCrossing latches it on success and leaves it open on
+// failure), so a failed publish leaves the next fold that finds the bucket
+// still above the threshold as the crossing event and it retries the
+// delivery -- a transient bus failure delays the overage signal, never
+// consumes it.
 func (a *Aggregator) Ingest(ctx context.Context, event UsageEvent) error {
 	if err := event.validate(); err != nil {
 		return err
@@ -222,7 +262,7 @@ func (a *Aggregator) Ingest(ctx context.Context, event UsageEvent) error {
 
 	quantity, crossed := a.applyDelta(entry, event.Feature, event.Quantity)
 	if crossed {
-		a.publishOverageCrossed(ctx, event, start, end, quantity, occurredAt)
+		a.deliverOverageCrossing(ctx, entry, event, start, end, quantity, occurredAt)
 	}
 	return nil
 }
@@ -284,18 +324,32 @@ func (a *Aggregator) ensureSeeded(tenantCtx context.Context, tenantID, feature s
 }
 
 // applyDelta folds delta into an already-seeded counter entry, returning
-// the counter's new value and whether this call is the one that first
-// crossed a configured overage threshold within this period. The caller
+// the counter's new value and whether this call CLAIMED the overage
+// crossing: the first fold within this period whose quantity reaches or
+// passes a configured threshold while no crossing is latched
+// (notifiedOverage) and none is mid-delivery (publishPending). The caller
 // hands in the entry ensureSeeded returned and runs this only after the
 // event's usage has durably persisted -- the summary upsert, or the
-// receipt-plus-summary transaction -- so the increment and the
-// notifiedOverage latch below are never committed for an event whose
-// persistence failed: a refused event leaves the latch open, and a later
-// event that crosses can still be the one to publish
-// EventOverageThresholdCrossed. IngestBillingGrade additionally calls it
-// only when its fold actually applied the event (not for an
-// alreadyIngested redelivery), since a redelivered event's delta is
-// already inside the entry via its seed -- see that method's doc comment.
+// receipt-plus-summary transaction -- so the fold and any crossing claim
+// below are never made for an event whose persistence failed: a refused
+// event leaves the latch open, and a later event that crosses can still
+// be the one to publish EventOverageThresholdCrossed. IngestBillingGrade
+// additionally calls it only when its fold actually applied the event
+// (not for an alreadyIngested redelivery), since a redelivered event's
+// delta is already inside the entry via its seed -- see that method's doc
+// comment.
+//
+// A claimed crossing is not latched here: applyDelta only marks the
+// delivery as pending (publishPending), so no other fold can claim the
+// crossing while the publish runs -- the edge fires exactly once -- and
+// the caller then completes the claim through deliverOverageCrossing,
+// which sets notifiedOverage only once the publish has succeeded. The
+// latch must follow the effect it guards, never precede it: a latch set
+// before an unconfirmed publish is a latch a failed publish can consume,
+// after which no later fold in the period can ever fire the crossing
+// again -- the overage signal lost permanently (the failure-direction
+// bug this module already fixed once, when the same premature latch moved
+// from the summary write to the publish; it must not move again).
 func (a *Aggregator) applyDelta(entry *counterEntry, feature string, delta float64) (quantity float64, crossed bool) {
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
@@ -304,11 +358,47 @@ func (a *Aggregator) applyDelta(entry *counterEntry, feature string, delta float
 	quantity = entry.quantity
 
 	threshold, hasThreshold := a.thresholds.resolve(feature)
-	if hasThreshold && !entry.notifiedOverage && quantity >= threshold {
-		entry.notifiedOverage = true
+	if hasThreshold && !entry.notifiedOverage && !entry.publishPending && quantity >= threshold {
+		entry.publishPending = true
 		crossed = true
 	}
 	return quantity, crossed
+}
+
+// deliverOverageCrossing completes a crossing applyDelta claimed: it
+// publishes EventOverageThresholdCrossed and then settles the claim --
+// the notifiedOverage latch is set ONLY once the publish has succeeded,
+// and a failed publish leaves the latch open (only the in-flight marker
+// is released), so the next fold that finds the bucket still above the
+// threshold is the crossing event again and retries the delivery. A
+// publish failure is logged, never surfaced: the usage measurement has
+// already committed by this point (see Ingest's own doc comment for why
+// the whole call must not fail over a secondary notification signal).
+//
+// The settle happens under the entry's mutex so the claim lifecycle is
+// race-free: while publishPending stands no other fold may claim (see
+// applyDelta), and the release and the latch are one atomic step, so a
+// failed publish can never be followed by a second publisher racing the
+// first one's settle. The publish itself runs OUTSIDE the entry's lock --
+// the bus may block (an in-process bus dispatches to subscribers
+// synchronously), and no subscriber should ever run under a counter lock.
+func (a *Aggregator) deliverOverageCrossing(ctx context.Context, entry *counterEntry, event UsageEvent, start, end time.Time, quantity float64, occurredAt time.Time) {
+	err := a.publishOverageCrossed(ctx, event, start, end, quantity, occurredAt)
+
+	entry.mu.Lock()
+	entry.publishPending = false
+	if err == nil {
+		entry.notifiedOverage = true
+	}
+	entry.mu.Unlock()
+
+	if err != nil {
+		obs.FromContext(ctx).Warn("metering.overage_event_publish_failed",
+			"error", err,
+			"tenant_id", event.TenantID,
+			"feature", event.Feature,
+		)
+	}
 }
 
 // RealtimeCount returns the real-time counter's current value for
@@ -391,82 +481,106 @@ func periodFromRealtimeKey(key any) time.Time {
 	return t
 }
 
-// upsertSummaryInto is the summary-upsert core Ingest and
-// IngestBillingGrade's transaction path both use: the exact
-// same find-or-create/update sequence, run against whichever
-// *SummaryRepository the caller hands it -- a.summaries for the plain
-// Ingest path, or one freshly built over an open transaction for
-// IngestBillingGrade's atomic path (see that method's doc comment). The
-// caller owns whatever serialization the chosen repo's connection needs
-// (a.mu for a.summaries; a single already-locked call for a
-// transaction-scoped repo, since GORM transactions are not safe for
-// concurrent use from multiple goroutines).
+// upsertSummaryInto folds delta into the summary row for (feature, start)
+// through a.summaries' own connection, in ONE dbkit.WithTenantSession
+// transaction that runs the same atomic upsert statement the billing-grade
+// path runs inside its own transaction (upsertSummaryTx) -- see that
+// function's doc comment for why the fold is a single
+// INSERT ... ON CONFLICT DO UPDATE rather than a read-modify-write.
+// Routing through dbkit.Repository[T]'s FindByID/Create/Update here (as an
+// earlier version of this function did) made the fold a Go-level
+// read-modify-write that only Aggregator's in-process mu serialized -- a
+// lost-update race the moment two replicas fold the same bucket, since no
+// other process shares that mutex. Repository[T] cannot express the
+// server-side arithmetic the atomic fold needs (the identical reason
+// go/billing's applyBalanceDelta steps outside its own repository), so
+// this function composes a raw GORM call against the tx a WithTenantSession
+// callback receives, the documented "several statements, one transaction"
+// shape (go/dbkit/AGENTS.md's "Repository[T] growing a transactional
+// batch-write seam" entry; go/org's tree.go and membership.go use the
+// identical idiom against their own repositories) -- with the difference
+// that this upsert is expressed through the ORM's Create and the
+// tenant-scoping plugin, never hand-written SQL (see upsertSummaryTx's doc
+// comment).
+//
+// The caller (Ingest) holds a.mu across this call and the ensureSeeded
+// read that precedes it, so each event's seed read stays ordered before
+// its own fold; the summary row itself needs no in-process serialization
+// at all.
 func upsertSummaryInto(tenantCtx context.Context, summaries *SummaryRepository, feature string, start, end time.Time, delta float64) error {
-	id := summaryID(feature, start)
-	existing, err := summaries.FindByID(tenantCtx, id)
-	if err != nil {
-		if !hasCode(err, dbkit.ErrRecordNotFound.Code) {
-			return err
-		}
-		return summaries.Create(tenantCtx, &UsageSummary{
-			ID:          id,
-			Feature:     feature,
-			PeriodStart: start,
-			PeriodEnd:   end,
-			Quantity:    delta,
-		})
-	}
-	existing.Quantity += delta
-	existing.PeriodEnd = end
-	return summaries.Update(tenantCtx, existing)
+	return dbkit.WithTenantSession(tenantCtx, summaries.db, func(tx *gorm.DB) error {
+		return upsertSummaryTx(tx, feature, start, end, delta)
+	})
 }
 
-// upsertSummaryTx is upsertSummaryInto's transaction-scoped twin: the
-// identical find-or-create/update sequence, composed directly against an
-// already-open transaction handle (tx) rather than through
-// dbkit.Repository[T] -- because foldIntoSummaryOnce's own
-// dbkit.WithTenantSession call already opened that transaction. Routing
-// through dbkit.Repository[T] here (as an earlier version of this function
-// did, via NewSummaryRepository(tx)) would nest a second WithTenantSession
-// transaction inside the first one; dbkit refuses that outright
-// (dbkit.ErrNestedTenantSession) precisely because a nested call's own nil
-// return does not mean the real, outermost transaction has genuinely
-// committed -- see that error's own doc comment in tenant_session.go.
-// Composing raw GORM calls against the tx a WithTenantSession callback
-// already received is the documented shape for "several statements, one
-// transaction" (go/dbkit/AGENTS.md's "Repository[T] growing a
-// transactional batch-write seam" entry; go/org's tree.go and
-// membership.go use the identical idiom against their own repositories).
+// upsertSummaryTx is the one summary fold, in one database-arbitrated
+// statement, shared by both ingest paths: an INSERT ... ON CONFLICT DO
+// UPDATE whose insert branch creates the bucket's row at quantity delta
+// (the row's birth is its first fold -- a summary row exists only to hold
+// quantity, there is no zero-materialize-then-accumulate phase to keep
+// separate) and whose conflict branch adds delta to the existing row's
+// quantity server-side, in the same statement. This is go/billing's
+// credit-ledger shape -- applyBalanceDelta's "one database-arbitrated
+// UPDATE ... two UPDATEs against the same row are serialized by the
+// database itself (ordinary row locking, no dialect-specific
+// atomic-increment feature required -- this is plain, portable SQL that
+// runs identically on SQLite and PostgreSQL), so the second to run sees
+// the first's already-applied change ... never a stale read a Go-level
+// read-modify-write could race on" -- with billing's own ensureBalance
+// create half (its INSERT ... ON CONFLICT DO NOTHING, the same
+// dialect-neutral upsert clause go/config's store.put uses) folded into
+// the same statement, since billing materializes a balance at zero before
+// its first delta and metering has no equivalent phase to sequence.
 //
-// It writes no explicit "tenant_id = ?" clause -- unlike
-// dbkit.Repository[T]'s own methods, which are dbkit's own defense-in-depth
-// and exempt from this codebase's hand-written-tenant-filter discipline as
-// the infrastructure that discipline is built on. tx still carries the
-// tenant-scoping plugin every dbkit.Open connection installs (Aggregator
-// never builds its own *gorm.DB), and UsageSummary implements
-// dbkit.TenantScoped, so the plugin injects the filter on First/Save and
-// forces the column on Create exactly as it would through Repository[T] --
-// the same reliance go/org's tree.go and membership.go place on it inside
-// their own dbkit.WithTenantSession callbacks.
+// The DO UPDATE row lock on the (id, tenant_id) primary key is what makes
+// concurrent folds safe across processes, not just across goroutines: two
+// replicas folding the same bucket serialize on the row, the second fold
+// adds onto the first's committed quantity, and no fold ever commits a
+// stale read of the row the way a Go-level find-mutate-save sequence
+// would (a lost fold there is silent -- the outbox row is already marked
+// delivered and its receipt committed, with no compensation path; see the
+// Aggregator type's "Summary folds are database-arbitrated" doc comment).
+//
+// tx must be a transaction whose context carries the tenant (a
+// dbkit.WithTenantSession callback's tx): the tenant-scoping plugin every
+// dbkit.Open connection installs forces the tenant_id column on the
+// insert from the context, and the conflict target names both primary-key
+// columns, so the statement writes no explicit "tenant_id = ?" clause and
+// needs none -- unlike billing's raw-Exec shape, this upsert is expressed
+// entirely through the ORM (a Create of a concrete UsageSummary), so every
+// isolation layer (the plugin's injected filter and forced column, and
+// PostgreSQL's row-level-security session GUC on the WithTenantSession
+// path) applies exactly as it would to a Repository[T] write. The conflict
+// branch is likewise an ordinary DO UPDATE, never an error a caller would
+// have to catch: on PostgreSQL a caught unique-violation error would leave
+// the transaction aborted, and this statement never aborts anything on
+// either dialect -- the same non-poisoning property foldIntoSummaryOnce's
+// receipt insert relies on (see that method's doc comment).
 func upsertSummaryTx(tx *gorm.DB, feature string, start, end time.Time, delta float64) error {
 	id := summaryID(feature, start)
-	var existing UsageSummary
-	err := tx.Where("id = ?", id).First(&existing).Error
-	switch {
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		return tx.Create(&UsageSummary{
-			ID:          id,
-			Feature:     feature,
-			PeriodStart: start,
-			PeriodEnd:   end,
-			Quantity:    delta,
-		}).Error
-	case err != nil:
-		return err
-	}
-	existing.Quantity += delta
-	existing.PeriodEnd = end
-	return tx.Where("id = ?", id).Select("*").Save(&existing).Error
+	return tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "id"}, {Name: "tenant_id"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			// Server-side arithmetic on the row's current value -- the
+			// create branch and the update branch of one statement,
+			// serialized by the database itself. The existing-row reference
+			// is qualified with the table's own name because PostgreSQL
+			// demands it spelled out -- an unqualified RHS is ambiguous
+			// there (SQLSTATE 42702, the name being in scope against both
+			// the target row and the excluded row) -- and SQLite accepts
+			// the identical qualified form, so one statement serves both
+			// dialects.
+			"quantity":   gorm.Expr(tableUsageSummaries + ".quantity + excluded.quantity"),
+			"period_end": gorm.Expr("excluded.period_end"),
+			"updated_at": gorm.Expr("excluded.updated_at"),
+		}),
+	}).Create(&UsageSummary{
+		ID:          id,
+		Feature:     feature,
+		PeriodStart: start,
+		PeriodEnd:   end,
+		Quantity:    delta,
+	}).Error
 }
 
 // IngestBillingGrade is Ingest's billing-grade-only sibling: Dispatcher
@@ -480,9 +594,12 @@ func upsertSummaryTx(tx *gorm.DB, feature string, start, end time.Time, delta fl
 // unaffected.
 //
 // Publishing the overage event, when IngestBillingGrade is the call that
-// first crosses a configured threshold, follows the identical best-effort
-// contract Ingest's own doc comment describes -- logged on failure, never
-// causing this method itself to return an error.
+// first crosses a configured threshold, follows the identical contract
+// Ingest's own doc comment describes -- best-effort, logged on failure,
+// never causing this method itself to return an error, and latched only
+// after the publish has succeeded (applyDelta claims the crossing,
+// deliverOverageCrossing settles it), so a failed publish leaves the
+// latch open for the next crossing fold to retry.
 func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) error {
 	if err := event.validate(); err != nil {
 		return err
@@ -533,7 +650,7 @@ func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) e
 
 	quantity, crossed := a.applyDelta(entry, event.Feature, event.Quantity)
 	if crossed {
-		a.publishOverageCrossed(ctx, event, start, end, quantity, occurredAt)
+		a.deliverOverageCrossing(ctx, entry, event, start, end, quantity, occurredAt)
 	}
 	return nil
 }
@@ -544,10 +661,11 @@ func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) e
 // see IngestReceipt's doc comment for why that independence matters). The
 // transaction is dbkit.WithTenantSession itself, not a bare
 // db.Transaction: both writes below run as raw GORM calls directly against
-// the tx WithTenantSession hands its callback (see upsertSummaryTx's own
-// doc comment for why -- routing either write back through
-// dbkit.Repository[T] here would nest a second WithTenantSession
-// transaction inside this one, which dbkit refuses outright).
+// the tx WithTenantSession hands its callback (the summary fold because
+// upsertSummaryTx is the module's atomic upsert core -- see its doc
+// comment -- and routing either write back through dbkit.Repository[T]
+// would nest a second WithTenantSession transaction inside this one,
+// which dbkit refuses outright).
 //
 // The receipt insert runs as ON CONFLICT DO NOTHING, never as a plain
 // insert whose unique-violation error would have to be caught: a
@@ -565,11 +683,13 @@ func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) e
 // an earlier, successful call, in which case the transaction commits
 // having changed nothing.
 //
-// Callers must hold a.mu: a single WithTenantSession transaction is not a
-// substitute for it here any more than dbkit.Repository[T]'s own
-// transactions are for upsertSummary's plain path -- see the Aggregator
-// type's own doc comment for why summary writes need a single serializing
-// point at all.
+// Callers must hold a.mu, but not to serialize the summary fold -- the
+// fold's atomic upsert statement is serialized by the database itself
+// (see the Aggregator type's "Summary folds are database-arbitrated" doc
+// comment). a.mu orders the seed read ahead of this fold in-process, so a
+// counter entry is never reconstructed from a summary that already holds
+// this event's delta and then folds it a second time, and it keeps the
+// expired-period sweep from evicting a counter mid-flight.
 func (a *Aggregator) foldIntoSummaryOnce(tenantCtx context.Context, event UsageEvent, start, end time.Time) (alreadyIngested bool, err error) {
 	txErr := dbkit.WithTenantSession(tenantCtx, a.summaries.db, func(tx *gorm.DB) error {
 		receipt := &IngestReceipt{ID: event.IdempotencyKey, TenantID: event.TenantID}
@@ -593,14 +713,17 @@ func (a *Aggregator) foldIntoSummaryOnce(tenantCtx context.Context, event UsageE
 }
 
 // publishOverageCrossed publishes an EventOverageThresholdCrossed for
-// event, best-effort -- see Ingest's own doc comment for why a publish
-// failure here is logged, not returned.
-func (a *Aggregator) publishOverageCrossed(ctx context.Context, event UsageEvent, start, end time.Time, quantity float64, occurredAt time.Time) {
+// event and returns the bus error -- or nil when no bus is wired, which is
+// not a failure (a bus-less Aggregator is a valid, purely measuring
+// construction). The caller (deliverOverageCrossing) owns the failure
+// handling: the latch decision depends on this error, and the warning is
+// logged there with the latch context around it, never here.
+func (a *Aggregator) publishOverageCrossed(ctx context.Context, event UsageEvent, start, end time.Time, quantity float64, occurredAt time.Time) error {
 	if a.bus == nil {
-		return
+		return nil
 	}
 	threshold, _ := a.thresholds.resolve(event.Feature)
-	err := a.bus.Publish(ctx, pkgcore.Event{
+	return a.bus.Publish(ctx, pkgcore.Event{
 		Type:     EventOverageThresholdCrossed,
 		TenantID: pkgcore.TenantID(event.TenantID),
 		Payload: OverageThresholdCrossedEvent{
@@ -613,11 +736,4 @@ func (a *Aggregator) publishOverageCrossed(ctx context.Context, event UsageEvent
 			OccurredAt:  occurredAt,
 		},
 	})
-	if err != nil {
-		obs.FromContext(ctx).Warn("metering.overage_event_publish_failed",
-			"error", err,
-			"tenant_id", event.TenantID,
-			"feature", event.Feature,
-		)
-	}
 }

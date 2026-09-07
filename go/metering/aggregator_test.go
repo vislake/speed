@@ -3,12 +3,16 @@ package metering
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/metering/internal/testutil"
+	"github.com/vislake/speed/go/metering/migrations"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -270,23 +274,80 @@ func TestAggregator_Ingest_PerFeatureThresholdOverridesDefault(t *testing.T) {
 // TestAggregator_Ingest_OverageBusPublishFailure_DoesNotFailIngest proves
 // the "best-effort" contract Ingest's own doc comment promises: a usage
 // measurement that has already committed must not be reported as failed
-// merely because the secondary overage-notification publish failed.
+// merely because the secondary overage-notification publish failed. The
+// second half of the test copies the property assertions of
+// TestAggregator_Ingest_SummaryWriteFailure_DoesNotSilentlyLoseOverage
+// onto the publish-failure side -- the P1 regression for the overage
+// latch: pre-fix the notifiedOverage latch was set inside applyDelta
+// BEFORE the publish ran, so a publish failure left the latch consumed and
+// no later fold in the same period could ever fire the crossing again.
+// What that lost was not a log line but the trigger go/billing's
+// OverageModeNotify (billing/model.go) is built on. The fix latches only
+// once the publish has succeeded; a failed publish leaves the latch open,
+// so the next fold that finds the bucket still above the threshold is the
+// crossing event again and retries the delivery -- the signal must not be
+// lost to a transient publish failure, any more than to a transient
+// summary-write failure.
 func TestAggregator_Ingest_OverageBusPublishFailure_DoesNotFailIngest(t *testing.T) {
 	agg := newTestAggregator(t)
 	threshold := 1.0
 	agg.thresholds = OverageThresholds{Default: &threshold}
+	bus := pkgcore.NewMemoryEventBus()
+	var captured capturedEvents
+	bus.Subscribe(EventOverageThresholdCrossed, captured.handler)
 	agg.bus = failingEventBus{}
 
-	err := agg.Ingest(context.Background(), UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 5, IdempotencyKey: "idem-1"})
+	ctx := context.Background()
+	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	// Event A is the crossing event (quantity 5, threshold 1) -- but its
+	// publish fails. Ingest must still succeed: the usage measurement
+	// itself has committed, and failing the call over a secondary signal
+	// would make real, durable usage look lost.
+	err := agg.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 5, IdempotencyKey: "idem-pubfail-a", OccurredAt: at})
 	if err != nil {
 		t.Fatalf("Ingest = %v, want nil even though the overage publish failed", err)
 	}
-	got, rtErr := agg.RealtimeCount("tenant-a", "ai.generation", time.Now())
+	got, rtErr := agg.RealtimeCount("tenant-a", "ai.generation", at)
 	if rtErr != nil {
 		t.Fatalf("RealtimeCount: %v", rtErr)
 	}
 	if got != 5 {
 		t.Errorf("RealtimeCount = %v, want 5 (the measurement itself must still have landed)", got)
+	}
+
+	// The bus recovers. Event B, still within the same period, folds the
+	// bucket to 6 -- still above the threshold -- so it must now be the
+	// crossing event: A's failed publish must not have consumed the latch.
+	// Pre-fix this second ingest published nothing (the latch was already
+	// set), and the overage signal was gone for the rest of the period.
+	agg.bus = bus
+	if err = agg.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: "idem-pubfail-b", OccurredAt: at}); err != nil {
+		t.Fatalf("Ingest(after the bus recovered): %v", err)
+	}
+
+	if len(captured.events) != 1 {
+		t.Fatalf("published %d overage event(s), want exactly 1: the overage signal must not be lost to a transient publish failure", len(captured.events))
+	}
+	payload, ok := captured.events[0].Payload.(OverageThresholdCrossedEvent)
+	if !ok {
+		t.Fatalf("payload type = %T, want OverageThresholdCrossedEvent", captured.events[0].Payload)
+	}
+	if payload.Quantity != 6 {
+		t.Errorf("payload.Quantity = %v, want 6 (event B's fold was the retried crossing)", payload.Quantity)
+	}
+	if payload.Threshold != threshold {
+		t.Errorf("payload.Threshold = %v, want %v", payload.Threshold, threshold)
+	}
+
+	// Reconciliation: both events' measurements landed, and exactly one
+	// overage signal was delivered -- on the retry, once the bus was back.
+	got, rtErr = agg.RealtimeCount("tenant-a", "ai.generation", at)
+	if rtErr != nil {
+		t.Fatalf("RealtimeCount: %v", rtErr)
+	}
+	if got != 6 {
+		t.Errorf("RealtimeCount = %v, want 6 (both events counted)", got)
 	}
 }
 
@@ -532,6 +593,100 @@ func TestAggregator_IngestBillingGrade_InvalidEvent_ReturnsValidationError(t *te
 	agg := newTestAggregator(t)
 	if err := agg.IngestBillingGrade(context.Background(), UsageEvent{}); err == nil {
 		t.Fatal("IngestBillingGrade(invalid event) = nil error, want a validation error")
+	}
+}
+
+// TestUpsertSummaryTx_ConcurrentSameRow_NoLostUpdate is the P1 regression
+// for the summary-fold race: upsertSummaryTx used to be a Go-level
+// read-modify-write -- read the existing UsageSummary row, add the delta
+// in memory, write the mutated value back -- serialized only by
+// Aggregator's in-process mu, a lock two replicas (or, as exercised here,
+// two real database connections to one database file) do not share. Two
+// folds of the same summary row then each read the pre-other value, and
+// the loser's write clobbers the winner's delta: already-metered usage
+// silently lost, after the outbox receipt was already committed, with no
+// compensation path (see the Aggregator type's "Summary folds are
+// database-arbitrated" doc comment).
+//
+// The fix rewrote the fold as ONE database-arbitrated statement -- an
+// INSERT ... ON CONFLICT DO UPDATE whose conflict branch does the
+// addition server-side (see upsertSummaryTx's own doc comment) -- so the
+// database itself serializes concurrent folds of the same row: both
+// deltas land whatever the interleaving. The regression drives
+// upsertSummaryTx directly, under two real connections (two dbkit.Open
+// handles over one temp-file database), with no Aggregator in the picture
+// to serialize the calls: leg 1 races two folds against a bucket that has
+// no row yet -- a bucket's first touch, pre-fix one of the two concurrent
+// first folds failed (busy or duplicate key) or was lost; leg 2 races a
+// batch of folds against the row leg 1 created -- pre-fix the loser's
+// read-modify-write either failed busy or silently clobbered a delta.
+// Both legs must return no error and leave the row holding the exact sum.
+func TestUpsertSummaryTx_ConcurrentSameRow_NoLostUpdate(t *testing.T) {
+	ctx := context.Background()
+	tenantCtx := pkgcore.WithTenant(ctx, "tenant-a")
+	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	start, end, err := periodBounds(at, defaultPeriodBucket)
+	if err != nil {
+		t.Fatalf("periodBounds: %v", err)
+	}
+	const feature = "ai.generation"
+
+	// Two real connections to one temp-file database: the file is shared,
+	// the pools are not, so concurrent folds below always travel through
+	// distinct physical connections -- the multi-replica shape the
+	// in-process mutex never covered.
+	dsn := filepath.Join(t.TempDir(), "metering-upsert-race.sqlite")
+	dbA, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("open connection A: %v", err)
+	}
+	t.Cleanup(func() { sqlDB, _ := dbA.DB(); _ = sqlDB.Close() })
+	testutil.Migrate(t, dbA, dbkit.DialectSQLite, moduleName, migrations.FS)
+	dbB, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: dsn})
+	if err != nil {
+		t.Fatalf("open connection B: %v", err)
+	}
+	t.Cleanup(func() { sqlDB, _ := dbB.DB(); _ = sqlDB.Close() })
+
+	fold := func(db *gorm.DB, delta float64, errs chan<- error) {
+		errs <- dbkit.WithTenantSession(tenantCtx, db, func(tx *gorm.DB) error {
+			return upsertSummaryTx(tx, feature, start, end, delta)
+		})
+	}
+
+	// Leg 1: two concurrent first-touch folds of one bucket (no row yet).
+	// Both deltas must land.
+	leg1 := make(chan error, 2)
+	go fold(dbA, 5, leg1)
+	go fold(dbB, 7, leg1)
+	for i := 0; i < 2; i++ {
+		if foldErr := <-leg1; foldErr != nil {
+			t.Fatalf("first-touch fold: %v -- pre-fix one of the two concurrent first folds failed or was lost", foldErr)
+		}
+	}
+
+	// Leg 2: a batch of concurrent folds against the row leg 1 created,
+	// alternating connections. Every fold must land on top of the others'.
+	const racers = 10
+	dbs := []*gorm.DB{dbA, dbB}
+	leg2 := make(chan error, racers)
+	for i := 0; i < racers; i++ {
+		go fold(dbs[i%2], 1, leg2)
+	}
+	for i := 0; i < racers; i++ {
+		if foldErr := <-leg2; foldErr != nil {
+			t.Fatalf("accumulating fold %d: %v -- pre-fix a concurrent fold failed busy or was lost", i, foldErr)
+		}
+	}
+
+	summaries := NewSummaryRepository(dbA)
+	summary, err := summaries.FindByID(tenantCtx, summaryID(feature, start))
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	want := float64(5 + 7 + racers)
+	if summary.Quantity != want {
+		t.Errorf("summary Quantity = %v, want %v: every concurrent fold must land, whatever the interleaving (pre-fix the loser's read-modify-write dropped its delta)", summary.Quantity, want)
 	}
 }
 
