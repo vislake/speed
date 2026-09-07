@@ -1,0 +1,42 @@
+# Generator configuration for billing's OpenAPI fragment (openapi.yaml in
+# this directory, per docs/internal/21-api-contract.md's module-asset
+# convention: every module keeps its spec at <module>/api/openapi.yaml).
+# Mirrors go/storage/api/oapi-codegen.yaml exactly in shape -- see that
+# file's own comment for the full rationale; this one records only what is
+# billing-specific.
+#
+# The module's generated surface is regenerated with oapi-codegen v2.8.0,
+# pinned at exactly that version in the two commands that must move
+# together: Taskfile.yml's api:gen task command (which will grow billing's
+# leg in the round that wires this fragment into the api-contract
+# enforcement, exactly as go/sharing's and go/pki's fragments each got
+# their own chore(ci) wiring commit after their surface round -- see this
+# module's AGENTS.md "Deferred" notes) and the identical pinned
+# invocation run from this directory during this round's own development.
+# Both run `go run .../cmd/oapi-codegen@v2.8.0 -config oapi-codegen.yaml
+# openapi.yaml` from this directory. The generated file's header records
+# the generator version, so a regeneration with a different tool version
+# shows up as drift in CI's regenerate-then-diff check.
+#
+# generate.std-http-server emits the pure net/http ServerInterface --
+# plain (w http.ResponseWriter, r *http.Request) method signatures --
+# which is what Handler (handler.go) implements; the strict-server and
+# client targets are not generated, since nothing in this module consumes
+# them.
+#
+# output-options.name-normalizer: ToCamelCaseWithInitialisms applies the
+# standard Go initialism list (ID among them), so generated field and
+# parameter names match this repository's naming (BillingCreditTransaction.ID,
+# limit query parameters, and so on) instead of the default normalizer's Id.
+#
+# Optional spec properties stay optional in Go as pointers (the generator
+# default): Handler sets every pointer it responds with, so presence on
+# the wire is always explicit, matching notes' and storage's handler
+# convention.
+package: api
+generate:
+  models: true
+  std-http-server: true
+output-options:
+  name-normalizer: ToCamelCaseWithInitialisms
+output: billing-server.gen.go

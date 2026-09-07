@@ -46,3 +46,9 @@
 "billing.unsupported_currency" = "Currency \"{{.currency}}\" is not supported by the \"{{.channel}}\" payment channel; it only settles in {{.supported_currency}}."
 
 "billing.usage_reader_unconfigured" = "The entitlements service was built without a usage reader; quota decisions are unavailable."
+
+"billing.invalid_limit" = "The page size {{.limit}} is invalid. It must be between {{.min}} and {{.max}}."
+
+"billing.invalid_request" = "The request could not be parsed. Please check the parameter value and try again."
+
+"billing.internal_error" = "An internal error occurred. Try again later."

@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"testing"
@@ -44,8 +45,14 @@ func TestModule_Identity(t *testing.T) {
 	if got := m.DependsOn(); got != nil {
 		t.Errorf("DependsOn() = %v, want nil -- billing declares no cross-module pkgcore.Module dependency this round", got)
 	}
-	if got := m.OpenAPISpec(); got != nil {
-		t.Errorf("OpenAPISpec() = %v, want nil -- billing has no HTTP surface this round", got)
+	spec := m.OpenAPISpec()
+	if len(spec) == 0 {
+		t.Error("OpenAPISpec() is empty, want billing's own fragment -- this round ships an HTTP surface")
+	}
+	for _, want := range []string{"/api/v1/billing/credits/balance", "/api/v1/billing/credits/transactions"} {
+		if !bytes.Contains(spec, []byte(want)) {
+			t.Errorf("OpenAPISpec() does not mention %s, want the fragment's own paths", want)
+		}
 	}
 }
 
@@ -185,9 +192,19 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		assertContainsAll(t, types, []string{EventPlanChanged, EventSubscriptionStatusChanged})
 	})
 
-	t.Run("no routes are mounted", func(t *testing.T) {
-		if got := reg.Routes.Routes(); len(got) != 0 {
-			t.Errorf("Register mounted %d route(s), want 0 -- billing has no HTTP surface this round", len(got))
+	t.Run("the HTTP surface is mounted at apiPath", func(t *testing.T) {
+		routes := reg.Routes.Routes()
+		if len(routes) != 1 {
+			t.Fatalf("Register mounted %d route(s), want exactly 1 (the module's fragment surface at %s)", len(routes), apiPath)
+		}
+		if routes[0].Path != apiPath {
+			t.Errorf("mounted route path = %q, want %q", routes[0].Path, apiPath)
+		}
+		if routes[0].Handler == nil {
+			t.Error("mounted route carries a nil handler, want the module's built Handler")
+		}
+		if m.handler == nil {
+			t.Error("Module.handler is nil after Register; the HTTP surface was not built")
 		}
 	})
 

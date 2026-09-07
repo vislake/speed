@@ -121,6 +121,32 @@ func (s *CreditService) Balance(ctx context.Context) (*CreditBalance, error) {
 	return bal, nil
 }
 
+// Transactions returns the tenant's credit ledger rows, newest first --
+// every CreditTransaction the tenant's balance movements ever wrote,
+// which docs/internal/06-billing-and-metering.md's
+// reconstructable/auditable requirement names as the ledger's own
+// authority (Balance above answers the number those rows produced; this
+// answers the rows themselves). The read is tenant-scoped exactly like
+// Balance's: it goes through CreditTransactionRepository.ListByTenant
+// (dbkit's isolation plugin injecting the tenant filter from ctx, never a
+// hand-written WHERE), so a caller can only ever see its own tenant's
+// rows.
+//
+// The method is this module's credit-history read surface, added for the
+// HTTP layer (handler.go's BillingListCreditTransactions serves its
+// newest-first result, narrowed to the fragment's recent window) and the
+// read side a billing-history UI would call directly in-process. It
+// performs no write and no ensure-balance materialization: a tenant that
+// has never touched credits answers an empty list, never a missing-row
+// error.
+func (s *CreditService) Transactions(ctx context.Context) ([]CreditTransaction, error) {
+	rows, err := s.transactions.ListByTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
 // PreDeductInput names one reservation request.
 type PreDeductInput struct {
 	// Amount is the credit count to reserve. Must be strictly positive.

@@ -148,3 +148,97 @@ func Example() {
 	// api_calls allowed: true remaining: 7
 	// available: 70 reserved: 0
 }
+
+// ExampleCreditService_Transactions reads a tenant's credit ledger back
+// through CreditService.Transactions -- the read surface the module's HTTP
+// layer (handler.go) serves as the recent-transactions route, and a
+// billing-history UI would call directly in-process. The listing is
+// newest first, tenant-scoped from the context, and classifies every
+// movement through each row's type/status pair: the grant row below is
+// the top-up, and the deduct row that was refunded reports the refund as
+// its own status -- observable as a ledger row, never a silent balance
+// change. (A separate in-memory database keeps this example independent
+// of Example's own.)
+func ExampleCreditService_Transactions() {
+	ctx := context.Background()
+
+	// A real host opens PostgreSQL in the distributed deployment mode
+	// (dbkit.DialectPostgres). SQLite keeps this example self-contained
+	// under `go test`, with no external service required -- which is
+	// exactly what the standalone deployment mode does in production too.
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:billing_example_transactions?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	m := billing.NewModule(db, nil)
+
+	// Migrations are versioned SQL, applied through dbkit's registry.
+	// There is no AutoMigrate anywhere in this codebase.
+	registry := dbkit.NewMigrationRegistry()
+	if regErr := registry.Register(m); regErr != nil {
+		fmt.Println("register migrations:", regErr)
+		return
+	}
+	if applyErr := registry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		fmt.Println("apply migrations:", applyErr)
+		return
+	}
+
+	tenantCtx := pkgcore.WithTenant(ctx, "tenant-acme")
+	credits := m.Credits()
+
+	// A top-up, then a reservation that is refunded rather than
+	// confirmed -- the two ledger facts whose read-back this example
+	// walks.
+	if _, grantErr := credits.Grant(tenantCtx, billing.GrantInput{Amount: 100, Reason: "promo:welcome"}); grantErr != nil {
+		fmt.Println("grant credits:", grantErr)
+		return
+	}
+	if _, deductErr := credits.PreDeduct(tenantCtx, billing.PreDeductInput{
+		Amount:         30,
+		IdempotencyKey: "ai_generation:job-2",
+		Reason:         "ai_generation:job-2",
+	}); deductErr != nil {
+		fmt.Println("pre-deduct credits:", deductErr)
+		return
+	}
+	if _, refundErr := credits.Refund(tenantCtx, "ai_generation:job-2"); refundErr != nil {
+		fmt.Println("refund credits:", refundErr)
+		return
+	}
+
+	rows, err := credits.Transactions(tenantCtx)
+	if err != nil {
+		fmt.Println("read transactions:", err)
+		return
+	}
+	for i, row := range rows {
+		if i == 2 {
+			break
+		}
+		// type/status are the ledger's classification vocabulary: the
+		// refunded deduct row IS the refund, and the grant row is the
+		// top-up. The id (a deduct row's idempotency key) is
+		// nondeterministic here, so it is not printed.
+		fmt.Printf("%d: type=%s status=%s amount=%d\n", i, row.Type, row.Status, row.Amount)
+	}
+
+	// The balance agrees with the ledger: the refunded reservation never
+	// became a spend, so all 100 credits remain available.
+	balance, err := credits.Balance(tenantCtx)
+	if err != nil {
+		fmt.Println("read balance:", err)
+		return
+	}
+	fmt.Println("available:", balance.Available, "reserved:", balance.Reserved)
+
+	// Output:
+	// 0: type=deduct status=refunded amount=30
+	// 1: type=grant status=confirmed amount=100
+	// available: 100 reserved: 0
+}

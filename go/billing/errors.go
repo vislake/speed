@@ -136,6 +136,39 @@ var (
 	// and Unlimited features never consult the UsageReader and are
 	// unaffected; the error is reachable only for FeatureKindQuota grants.
 	ErrUsageReaderUnconfigured = apperr.Internal("billing.usage_reader_unconfigured")
+
+	// ErrInvalidLimit reports a transactions-list request whose limit
+	// query parameter is an integer outside the fragment's 1-100 bound --
+	// the range half of the route's 400 answer (handler.go's
+	// BillingListCreditTransactions, which decorates it with the limit
+	// sent and the bound). The companion shape, a limit that is not an
+	// integer at all, is refused by the spec-generated parameter binder
+	// before the handler runs and answered as ErrInvalidRequest instead --
+	// see that error's own doc comment.
+	ErrInvalidLimit = apperr.Invalid("billing.invalid_limit")
+
+	// ErrInvalidRequest reports a request the transport could not parse
+	// -- on this surface, the spec-generated parameter binder rejecting a
+	// query value before Handler's own method is ever called (a limit
+	// that is not an integer, say), answered through the coded envelope
+	// handler.go's bindingErrorHandler installs in place of oapi-codegen's
+	// default plain-text http.Error. The failing parameter is carried as
+	// the structured "parameter" param. It is deliberately the generic
+	// request-shape code, never one naming limit's own semantics: the
+	// binder never sees the bound (only the handler does, answering
+	// ErrInvalidLimit for an integer outside it), and a future spec edit
+	// that adds another bindable parameter should reuse this same code
+	// for its own malformed-value refusals rather than minting one per
+	// parameter -- the identical stance go/sharing's own ErrInvalidRequest
+	// takes for its binder failures.
+	ErrInvalidRequest = apperr.Invalid("billing.invalid_request")
+
+	// ErrInternal reports a failure the module's HTTP layer cannot
+	// classify -- a database error wrapped in a plain fmt.Errorf, say,
+	// which is not an *apperr.Error -- folded to this one stable code so
+	// a caller never sees raw Go error text (handler.go's writeError,
+	// mirroring go/storage's own ErrInternal for the identical role).
+	ErrInternal = apperr.Internal("billing.internal_error")
 )
 
 // hasCode reports whether err is (or wraps, via apperr.As's Unwrap chain

@@ -1,0 +1,242 @@
+openapi: 3.0.3
+info:
+  title: billing
+  description: >-
+    The credits ledger's read surface: a tenant's own credit balance and
+    the recent rows of its append-only credit-transaction ledger, so a
+    credit view can render the number and a refund is observable as a
+    ledger row carrying its reserve/confirm/refund classification --
+    never a silent balance change. This fragment follows the operationId
+    (billing_<verb><Resource>) and schema-name (Billing<Type>)
+    conventions from .claude/skills/backend-coding-standards/SKILL.md
+    §6.1. task api:gen regenerates billing-server.gen.go (in this
+    directory) from this file, with oapi-codegen pinned at v2.8.0 -- see
+    oapi-codegen.yaml.
+
+    There is deliberately no tenant_id anywhere on this surface, in any
+    path, query, header or request/response body: the tenant is always the
+    one tenancy.Middleware already resolved from the request
+    (docs/internal/04-data-and-tenancy.md; root CLAUDE.md's multi-tenant
+    isolation rule).
+
+    READ-ONLY BY DESIGN THIS ROUND: every operation below is a GET, and
+    that is the whole surface. Credit consumption in this codebase happens
+    service-side, never over HTTP -- internal/smilesim's reserve/confirm/
+    refund wiring calls billing.CreditService's own Go API in-process
+    (PreDeduct at Simulate time, Confirm on success, Refund on failure),
+    so there is no credit-consuming HTTP journey whose write this surface
+    must carry, and no caller that would invoke one. What the credit view
+    and the refund-observability story genuinely need is the read side
+    this fragment ships: the balance number, and the ledger rows whose
+    type/status vocabulary classifies every movement (a deduct row at
+    pending IS the reservation, at confirmed the permanent spend, at
+    refunded the refund; grant and expire rows are single-phase). A later
+    round that builds a caller-driven write journey (an operator grant or
+    refund, gated on the module's declared billing:credit:manage
+    permission) will add that POST surface here; until such a journey
+    exists this fragment stays read-only rather than shipping an endpoint
+    nothing calls.
+
+    Merging this fragment into an application-wide build/openapi/speed.yaml
+    stays future work, exactly as it does for go/storage's and
+    go/sharing's own backend-leg-only fragments: the frontend SDK leg of
+    task api:gen draws only on the merged document, and these operations
+    have no in-workspace web consumer yet.
+  version: 0.0.0
+paths:
+  /api/v1/billing/credits/balance:
+    get:
+      operationId: billing_getCreditBalance
+      summary: Read the caller's tenant credit balance.
+      description: >-
+        The tenant's current credit balance: how many credits are freely
+        spendable (available) and how many are set aside by not-yet-
+        resolved reservations (reserved). A tenant that has never been
+        granted or charged credits -- no ledger rows at all -- answers an
+        all-zero balance, never an error, so the credit view renders a
+        zero state rather than a missing-resource refusal. The number is
+        read from the same CreditService.Balance call business code uses,
+        so this route and a service-side reservation never disagree about
+        what the tenant holds.
+      responses:
+        '200':
+          description: The tenant's current credit balance.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingCreditBalance'
+        '500':
+          description: An unexpected server failure (billing.internal_error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingError'
+  /api/v1/billing/credits/transactions:
+    get:
+      operationId: billing_listCreditTransactions
+      summary: List the caller's tenant's recent credit transactions, newest first.
+      description: >-
+        The recent window of the tenant's append-only credit ledger: at
+        most limit rows (1-100, default 50), newest first. Every balance
+        movement the tenant ever experienced is a row here and only here:
+        a grant (type "grant", status "confirmed") is a top-up, an expire
+        (type "expire", status "confirmed") a single-phase deduction, and
+        a deduct row is the two-phase reservation lifecycle itself --
+        status "pending" while its credits sit in the balance's reserved
+        bucket, "confirmed" once the reservation became a permanent spend,
+        "refunded" once it was released back to available. A refund is
+        therefore observable as that one deduct row's status transition
+        (plus the balance delta the balance route reports), never as a
+        row that silently disappears or a balance-only change with no
+        ledger trace. The window is served from the module's full
+        newest-first listing; a keyset-paginated read over the whole
+        ledger is future work (see go/billing/AGENTS.md's Known
+        limitations) -- a credit view needs the recent rows, and the
+        ledger itself is reconstructable in full service-side today.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: The page size, from 1 through 100. Defaults to 50.
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: The matching credit transactions, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingListCreditTransactionsResponse'
+        '400':
+          description: >-
+            limit is outside the 1-100 bound (billing.invalid_limit), or
+            is not an integer at all (billing.invalid_request).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingError'
+        '500':
+          description: An unexpected server failure (billing.internal_error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillingError'
+components:
+  schemas:
+    BillingCreditBalance:
+      type: object
+      description: >-
+        The caller's tenant credit balance. The two buckets never overlap:
+        a credit is in exactly one of available or reserved. The number a
+        credit view renders is available -- what the tenant can spend
+        right now.
+      properties:
+        available:
+          type: integer
+          format: int64
+          description: The freely spendable credit count.
+        reserved:
+          type: integer
+          format: int64
+          description: >-
+            The credit count set aside by reservations whose jobs have not
+            reached a terminal status yet (each one a deduct row at
+            status "pending" in the ledger).
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the balance row was last touched by a ledger mutation.
+      required:
+        - available
+        - reserved
+        - updatedAt
+    BillingCreditTransaction:
+      type: object
+      description: >-
+        One append-only entry in the tenant's credit ledger. Amount is
+        always positive; the entry's direction is implied by type and
+        status together, never a signed value. A deduct row is inserted
+        at status "pending" by the reservation half of the two-phase
+        pattern, then moved in place to "confirmed" (permanent spend) or
+        "refunded" (released back to available) -- the refund IS that
+        status transition on the same row, never a second row.
+      properties:
+        id:
+          type: string
+          description: >-
+            The ledger row's id: an application-generated UUID for a
+            grant or expire row, or the caller's own idempotency key for
+            a deduct row. Not globally unique across tenants.
+        type:
+          type: string
+          enum: [grant, deduct, expire]
+          description: >-
+            The entry's kind: "grant" is a top-up (a plan's included
+            credits, an admin top-up), "deduct" the two-phase
+            reservation, "expire" a single-phase deduction. "refund" is
+            deliberately not a row type -- a refund is a deduct row whose
+            status became "refunded" (see status).
+        status:
+          type: string
+          enum: [pending, confirmed, refunded]
+          description: >-
+            The entry's resolution state. Grant and expire rows are
+            single-phase and always "confirmed". A deduct row is
+            "pending" while its reservation is outstanding, "confirmed"
+            after the reservation was settled as a permanent spend,
+            "refunded" after it was released back to the balance.
+        amount:
+          type: integer
+          format: int64
+          description: >-
+            The credit count this entry moves, always positive: a
+            confirmed deduct permanently removed it, a refunded deduct
+            removed nothing net, a grant added it, an expire removed it.
+        reason:
+          type: string
+          description: >-
+            A short note recorded when the entry was written (for
+            example "smilesim:<job id>" for a smile-simulation
+            reservation, "demo:seed" for a boot-time demo grant). Free
+            text on the ledger; the credit view may display it verbatim.
+        createdAt:
+          type: string
+          format: date-time
+          description: When the entry was written.
+      required:
+        - id
+        - type
+        - status
+        - amount
+        - reason
+        - createdAt
+    BillingListCreditTransactionsResponse:
+      type: object
+      description: One page of the tenant's recent credit transactions.
+      properties:
+        transactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/BillingCreditTransaction'
+          description: At most limit rows, newest first; empty when the tenant has no ledger rows yet.
+      required:
+        - transactions
+    BillingError:
+      type: object
+      description: >-
+        The structured {code, params} error envelope every speed API
+        returns instead of localized text (backend coding standard §6.2;
+        docs/internal/11-cross-cutting.md) -- a client resolves code
+        through its own i18n catalog, populated from this module's
+        Locales() resources for the codes documented in AGENTS.md's error
+        index.
+      properties:
+        code:
+          type: string
+          example: billing.invalid_limit
+        params:
+          type: object
+          additionalProperties: true
+      required:
+        - code

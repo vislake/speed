@@ -43,3 +43,9 @@
 "billing.unsupported_currency" = "支付渠道 \"{{.channel}}\" 不支持币种 \"{{.currency}}\"，仅支持 {{.supported_currency}} 结算。"
 
 "billing.usage_reader_unconfigured" = "权益服务未配置用量读取器，无法作出额度判定。"
+
+"billing.invalid_limit" = "页大小 {{.limit}} 非法，必须在 {{.min}} 到 {{.max}} 之间。"
+
+"billing.invalid_request" = "请求无法解析。请检查参数值后重试。"
+
+"billing.internal_error" = "发生内部错误，请稍后重试。"
