@@ -807,7 +807,7 @@ func (s *Service) onItemChanged(ctx context.Context, evt pkgcore.Event) error {
 			value.Data = data
 		}
 	}
-	s.watchers.fire(payload.Key, value)
+	s.watchers.fire(ctx, payload.Key, value)
 	return nil
 }
 

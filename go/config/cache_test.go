@@ -1,8 +1,12 @@
 package config
 
 import (
+	"context"
+	"log/slog"
 	"testing"
 	"time"
+
+	obs "github.com/vislake/speed/go/observability"
 )
 
 // Tests for cache.go's two in-process structures: the read-through row
@@ -230,7 +234,7 @@ func TestWatchers_FireInRegistrationOrder(t *testing.T) {
 	w.add("brand.site_name", func(v Value) { got = append(got, "second:"+v.Data.(string)) })
 	w.add("support.reply_email", func(v Value) { got = append(got, "other") })
 
-	w.fire("brand.site_name", Value{Data: "Studio A", Scope: ScopeTenant})
+	w.fire(context.Background(), "brand.site_name", Value{Data: "Studio A", Scope: ScopeTenant})
 
 	if len(got) != 2 || got[0] != "first:Studio A" || got[1] != "second:Studio A" {
 		t.Fatalf("watchers fired out of order or for the wrong key: %v", got)
@@ -239,20 +243,26 @@ func TestWatchers_FireInRegistrationOrder(t *testing.T) {
 
 func TestWatchers_FireSkipsKeysWithoutWatchers(t *testing.T) {
 	w := &watchers{byKey: make(map[string][]watch)}
-	w.fire("brand.site_name", Value{Data: "Studio A"}) // must not panic
+	w.fire(context.Background(), "brand.site_name", Value{Data: "Studio A"}) // must not panic
 }
 
 func TestWatchers_ContainPanicOfOneCallback(t *testing.T) {
 	w := &watchers{byKey: make(map[string][]watch)}
+	logs := &capturedLogs{}
+	ctx := obs.WithLogger(context.Background(), slog.New(logs))
 	w.add("brand.site_name", func(Value) { panic("first callback blew up") })
 	fired := false
 	w.add("brand.site_name", func(v Value) { fired = v.Data == "Studio A" })
 
-	w.fire("brand.site_name", Value{Data: "Studio A"})
+	w.fire(ctx, "brand.site_name", Value{Data: "Studio A"})
 
 	if !fired {
 		t.Fatal("a panicking watcher must not prevent later watchers from firing")
 	}
+	// The recovery must report itself: a panic silently dropped into the
+	// blank identifier makes a buggy host callback disappear with no
+	// diagnostics (the regression this log assertion pins).
+	logs.errorAboutPanic(t, "brand.site_name", 0, "first callback blew up")
 }
 
 func TestWatchers_DuplicateRegistrationFiresTwice(t *testing.T) {
@@ -262,7 +272,7 @@ func TestWatchers_DuplicateRegistrationFiresTwice(t *testing.T) {
 	w.add("brand.site_name", fn)
 	w.add("brand.site_name", fn)
 
-	w.fire("brand.site_name", Value{})
+	w.fire(context.Background(), "brand.site_name", Value{})
 
 	if calls != 2 {
 		t.Fatalf("a doubly registered watcher fired %d times, want 2", calls)

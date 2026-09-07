@@ -1,9 +1,12 @@
 package config
 
 import (
+	"context"
+	"fmt"
 	"sync"
 	"time"
 
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -228,20 +231,34 @@ func (w *watchers) add(key string, fn func(Value)) {
 // registration order. Callbacks run on the caller's goroutine (the
 // publishing Set's, for the in-memory bus); each is invoked with the
 // watch mutex released, so a callback may itself register watchers or call
-// back into the Service. A callback's behavior is deliberately not
-// contained: the bus treats subscriber errors as delivery failures, and a
-// panicking callback would take the publisher down with it -- so fire
-// recovers panics and drops the callback, the same robustness the
-// synchronous in-memory bus gives every other subscriber. The dropped
-// callback's value change is still served correctly: the cache was
-// invalidated before watches fired, so the next read re-reads the store.
-func (w *watchers) fire(key string, value Value) {
+// back into the Service. A panicking callback is contained the same way
+// the in-process bus contains a panicking subscriber: the panic is
+// recovered, logged as an Error naming the key, the callback's position in
+// registration order and the panic value, and the callbacks registered
+// after it still run -- so a buggy host watcher can never tear through a
+// Set that may be running on a goroutine with no recover of its own. The
+// log goes through the delivery context's logger (obs.FromContext), the
+// same logger the Set or event delivery that triggered the fire is running
+// under, so the record carries that change's tenant and trace correlation;
+// a delivery context carrying no logger falls back to the process default,
+// never to silence. The dropped callback's value change is still served
+// correctly: the cache was invalidated before watches fired, so the next
+// read re-reads the store.
+func (w *watchers) fire(ctx context.Context, key string, value Value) {
 	w.mu.RLock()
 	registered := w.byKey[key]
 	w.mu.RUnlock()
-	for _, entry := range registered {
+	for i, entry := range registered {
 		func() {
-			defer func() { _ = recover() }()
+			defer func() {
+				if r := recover(); r != nil {
+					obs.FromContext(ctx).Error("config: watcher callback panicked; recovered so the key's remaining watchers still run",
+						"item", key,
+						"watcher", i,
+						"panic", fmt.Sprintf("%v", r),
+					)
+				}
+			}()
 			entry.fn(value)
 		}()
 	}

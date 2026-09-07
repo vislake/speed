@@ -259,6 +259,43 @@ func (c *capturedLogs) warnedAbout(t *testing.T, wantItem string) {
 	t.Fatalf("want a Warn naming item %q, captured records: %v", wantItem, c.records)
 }
 
+// errorAboutPanic fails the test unless a captured Error record carries an
+// "item" attribute equal to wantItem, a "watcher" attribute equal to
+// wantWatcher and a "panic" attribute equal to wantPanic -- the exact shape
+// the recovery log of a panicking Watch callback has (see cache.go's fire).
+func (c *capturedLogs) errorAboutPanic(t *testing.T, wantItem string, wantWatcher int, wantPanic string) {
+	t.Helper()
+	for _, r := range c.records {
+		if r.Level != slog.LevelError {
+			continue
+		}
+		var item string
+		var watcher int
+		var panicked string
+		r.Attrs(func(a slog.Attr) bool {
+			switch a.Key {
+			case "item":
+				if s, ok := a.Value.Any().(string); ok {
+					item = s
+				}
+			case "watcher":
+				if n, ok := a.Value.Any().(int64); ok {
+					watcher = int(n)
+				}
+			case "panic":
+				if s, ok := a.Value.Any().(string); ok {
+					panicked = s
+				}
+			}
+			return true
+		})
+		if item == wantItem && watcher == wantWatcher && panicked == wantPanic {
+			return
+		}
+	}
+	t.Fatalf("want an Error record naming item %q, watcher %d, panic %q; captured records: %v", wantItem, wantWatcher, wantPanic, c.records)
+}
+
 func TestService_Get_ServesSchemaDefaults(t *testing.T) {
 	svc := attachDefaultServiceForTest(t)
 
@@ -670,6 +707,42 @@ func TestService_Watch_FiresSynchronouslyOnSet(t *testing.T) {
 		}
 	default:
 		t.Fatal("no watch delivery for the system-tier change")
+	}
+}
+
+func TestService_Watch_RecoversPanickingCallbackAndLogsIt(t *testing.T) {
+	// The regression for fire's containment: a host watcher that panics on
+	// a change must surface as an Error-level log naming the item, the
+	// callback's position in registration order and the panic value -- on
+	// the publishing Set's own context logger, so tenant and trace
+	// correlation survive -- while the watchers registered after it still
+	// receive the value. Before the fix, fire recovered the panic into the
+	// blank identifier: a buggy host callback disappeared on every change
+	// with zero diagnostics while the claim in cache.go promised the same
+	// logged robustness the in-memory bus gives its subscribers.
+	svc := attachDefaultServiceForTest(t)
+	logs := &capturedLogs{}
+	ctx := obs.WithLogger(tenantA(), slog.New(logs))
+	delivered := make(chan Value, 1)
+	if err := svc.Watch("brand.site_name", func(Value) { panic("watch-one panicked") }); err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	if err := svc.Watch("brand.site_name", func(v Value) { delivered <- v }); err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+
+	if err := svc.Set(ctx, ScopeTenant, "brand.site_name", Value{Data: "Studio A"}, "alice"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	logs.errorAboutPanic(t, "brand.site_name", 0, "watch-one panicked")
+	select {
+	case v := <-delivered:
+		if v.Data != "Studio A" || v.Scope != ScopeTenant {
+			t.Fatalf("delivery to the watcher after the panicking one = %+v, want the tenant-tier change value", v)
+		}
+	default:
+		t.Fatal("the watcher registered after the panicking one must still receive the value")
 	}
 }
 
