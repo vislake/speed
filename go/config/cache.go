@@ -17,22 +17,43 @@ type cacheKey struct {
 	tenant pkgcore.TenantID
 }
 
-// cacheEntry is one cached row: the canonical value plus the row's
-// updated_at, which the poller's watermark comparison needs.
+// cacheEntry is one cached answer for an exact row triple: the canonical
+// value plus the row's updated_at for a row that exists, or an absence
+// sentinel (missing == true; canonical and updatedAt are zero) for a triple
+// a store read confirmed has no row. Serving cached absence is what keeps
+// repeated reads of unset keys off the store (see the valueCache type's doc
+// comment).
 type cacheEntry struct {
 	canonical string
 	updatedAt time.Time
+	missing   bool
 }
 
 // valueCache is the process-local, read-through cache of configs rows,
 // implementing the design's dynamic-config rule (docs/internal/11-cross-
 // cutting.md) that hot-path reads go through a process-local cache
-// invalidated on change, never a per-read database query. Only rows that
-// exist are cached -- a read
-// that finds no row at a scope simply does not populate an entry, so a
-// later Set that creates the row can only leave a stale cache behind if it
-// forgets to invalidate (which the Set path and the event subscriber both
-// do; see service.go).
+// invalidated on change, never a per-read database query. The cache holds
+// two shapes for one exact (key, scope, tenant) triple: the row itself when
+// one exists, and an absence sentinel (cacheEntry.missing) when a store
+// read confirmed that no row exists there. Absence is cached because an
+// unset key is a normal steady state, not an error path -- every tenant
+// read of a flag or public item without an override row falls through the
+// tenant and system tiers to the platform default, which is exactly the
+// pre-auth login-page answer -- so a no-row read that populated nothing
+// would make every one of those requests pay two database queries each.
+//
+// A sentinel can only be wrong if a row appears at its triple, and every
+// path that creates a row clears the way for the fresh answer on the same
+// mutation: Set's own put lands at the exact triple (overwriting the
+// sentinel), the config.item.changed subscriber invalidates the triple on
+// a remote change, and the poller invalidates any row its sweep finds
+// appeared meanwhile, the periodic full reconciliation evicting entries
+// wholesale on top of that (see service.go). A sentinel is planted under
+// the same mutation-generation guard as a row backfill (putMissing), so a
+// no-row read that raced a concurrent write never caches the absence past
+// the write that superseded it. Its memory is bounded by the frozen
+// schema: keys come from the Attach-time declarations, never from callers,
+// so no request can grow the cache with keys of its own.
 //
 // A cache entry holds the row's canonical value in the clear. That is
 // deliberate: for Sensitive items the canonical value is the decrypted
@@ -47,15 +68,16 @@ type valueCache struct {
 	entries map[cacheKey]cacheEntry
 
 	// gen counts every mutation of entries -- put, a successful
-	// putIfUnchanged, invalidate and invalidateAll alike. A read-through
-	// backfill captures it (via the generation method) before its store
-	// read and refuses to land (putIfUnchanged) once it has moved: a
-	// mutation in between means the row may have changed since the read
-	// began, so the backfill could plant a value the writer already
-	// superseded. See putIfUnchanged and (*Service).resolveRow. A wrap at
-	// 2^64 mutations is not guarded against: reaching it would take longer
-	// than the cache's lifetime on any real schedule of config writes, and
-	// a wrap would only drop a backfill, never serve a stale one.
+	// putIfUnchanged or putMissing, invalidate and invalidateAll alike. A
+	// read-through backfill captures it (via the generation method) before
+	// its store read and refuses to land (putIfUnchanged/putMissing) once
+	// it has moved: a mutation in between means the row may have changed
+	// since the read began, so the backfill could plant a value -- or an
+	// absence -- the writer already superseded. See putIfUnchanged,
+	// putMissing and (*Service).resolveRow. A wrap at 2^64 mutations is not
+	// guarded against: reaching it would take longer than the cache's
+	// lifetime on any real schedule of config writes, and a wrap would only
+	// drop a backfill, never serve a stale one.
 	gen uint64
 }
 
@@ -64,9 +86,10 @@ func newValueCache() *valueCache {
 	return &valueCache{entries: make(map[cacheKey]cacheEntry)}
 }
 
-// get returns the cached canonical value for the exact row keyed by
-// (key, scope, tenant). The boolean reports whether the row was cached at
-// all; only rows that exist are ever cached, so a miss means the caller
+// get returns the cached answer for the exact triple keyed by (key, scope,
+// tenant). The boolean reports whether the triple was cached at all; a
+// cached answer is either the row itself or a confirmed-absence sentinel
+// (entry.missing), which resolveRow distinguishes. A miss means the caller
 // must consult the store.
 func (c *valueCache) get(key string, scope Scope, tenant pkgcore.TenantID) (cacheEntry, bool) {
 	c.mu.RLock()
@@ -87,10 +110,13 @@ func (c *valueCache) generation() uint64 {
 }
 
 // put caches the canonical value of one row. put is the writer's own path:
-// (*Service).Set stores the value it just wrote, so it always lands. Like
-// every mutation it advances generation, which is what makes a concurrent
-// read-through backfill that captured the older generation drop instead of
-// overwriting this fresh value (see putIfUnchanged).
+// (*Service).Set stores the value it just wrote, so it always lands -- and
+// its landing at the exact triple is what supersedes a cached absence
+// sentinel there: the writer is the answer to that absence, so the sentinel
+// cannot outlive the row's creation. Like every mutation it advances
+// generation, which is what makes a concurrent read-through backfill that
+// captured the older generation drop instead of overwriting this fresh
+// value (see putIfUnchanged).
 func (c *valueCache) put(key string, scope Scope, tenant pkgcore.TenantID, canonical string, updatedAt time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -120,11 +146,34 @@ func (c *valueCache) putIfUnchanged(key string, scope Scope, tenant pkgcore.Tena
 	c.gen++
 }
 
-// invalidate drops the cached row for one exact (key, scope, tenant). It is
-// the invalidation half of every "value changed" path: the local Set, the
-// config.item.changed subscriber and the poller all converge on it, so a
-// stale entry cannot survive whichever of the three noticed the change
-// first. Generation advances whether or not an entry was present to drop:
+// putMissing caches the confirmed absence of a row for one exact (key,
+// scope, tenant) triple -- the read-through path for a store read that
+// found no row (see (*Service).resolveRow). It lands only when no cache
+// mutation happened since the caller captured gen, the identical guard
+// putIfUnchanged applies to a row backfill: a mutation in the window means
+// the absence may already be stale -- a concurrent Set's own put of the row
+// it just wrote, its invalidate, a poller sweep, a remote
+// config.item.changed -- so the sentinel is dropped rather than planted
+// past the write that superseded it. Dropping costs one store read on the
+// next access, never a stale absence. On success it advances generation
+// exactly like every other mutation, so a later backfill -- row or absence
+// alike -- from an older capture drops too.
+func (c *valueCache) putMissing(key string, scope Scope, tenant pkgcore.TenantID, captured uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gen != captured {
+		return
+	}
+	c.entries[cacheKey{key: key, scope: scope, tenant: tenant}] = cacheEntry{missing: true}
+	c.gen++
+}
+
+// invalidate drops the cached answer -- a row or an absence sentinel alike
+// -- for one exact (key, scope, tenant). It is the invalidation half of
+// every "value changed" path: the local Set, the config.item.changed
+// subscriber and the poller all converge on it, so a stale entry cannot
+// survive whichever of the three noticed the change first. Generation
+// advances whether or not an entry was present to drop:
 // the call itself reports a change to the row, and an in-flight
 // read-through backfill of the pre-change value must not land after it.
 func (c *valueCache) invalidate(key string, scope Scope, tenant pkgcore.TenantID) {

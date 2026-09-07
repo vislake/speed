@@ -92,8 +92,9 @@ type Service struct {
 	// schema has no Sensitive items and encryption is never needed.
 	cipher *dbkit.Cipher
 
-	// cache is the process-local row cache; poller and subscriber share it
-	// through invalidate, Set through put and invalidate.
+	// cache is the process-local cache of rows and confirmed absences;
+	// poller and subscriber share it through invalidate, Set through put
+	// and invalidate.
 	cache *valueCache
 
 	// watchers is the Watch registry.
@@ -522,9 +523,11 @@ func (s *Service) PublicSnapshot(ctx context.Context) (map[string]any, []string,
 // canonical value and the scope tier it resolved at (the zero Scope for a
 // schema default). The walk is cache-first for every tier: rows are read
 // through the process-local cache, and a cache miss consults the store and
-// populates the cache. Rows for tiers the context does not entitle the
-// caller to are never consulted -- a context without a tenant skips the
-// tenant tier entirely.
+// populates the cache with the row it found -- or a confirmed-absence
+// sentinel when it found none, so an unset key's fallback is served from
+// the cache on the next read instead of querying every tier again. Rows
+// for tiers the context does not entitle the caller to are never consulted
+// -- a context without a tenant skips the tenant tier entirely.
 func (s *Service) resolve(ctx context.Context, item *schemaItem) (string, Scope, error) {
 	if tenant, ok := pkgcore.TenantFromContext(ctx); ok {
 		canonical, found, err := s.resolveRow(ctx, item, ScopeTenant, tenant)
@@ -552,19 +555,25 @@ func (s *Service) resolve(ctx context.Context, item *schemaItem) (string, Scope,
 // found == false when no such row exists. Rows are served from the cache
 // when present; a miss reads the store and populates the cache (Sensitive
 // rows are decrypted on this read -- the cache holds the plaintext
-// canonical form, see valueCache's doc comment).
+// canonical form, see valueCache's doc comment). A no-row answer is
+// cached too, as an absence sentinel, so a repeated read of an unset key
+// does not re-consult the store (see valueCache.putMissing).
 //
 // The read-through backfill is generation-guarded: the cache's mutation
 // generation is captured before the store read, and the backfill (through
-// valueCache.putIfUnchanged) is dropped when any cache mutation landed
-// while the read was in flight -- a concurrent Set's own put or its
-// invalidate, a poller sweep, a remote config.item.changed. Without the
-// guard, a backfill whose store read completed before a concurrent write
-// could land after that write's invalidate, planting the pre-write value
-// in the cache until the next invalidation of the key or the periodic full
+// valueCache.putIfUnchanged for a row, putMissing for a confirmed absence)
+// is dropped when any cache mutation landed while the read was in flight --
+// a concurrent Set's own put or its invalidate, a poller sweep, a remote
+// config.item.changed. Without the guard, a backfill whose store read
+// completed before a concurrent write could land after that write's
+// invalidate, planting the pre-write value -- or a pre-write absence -- in
+// the cache until the next invalidation of the key or the periodic full
 // reconciliation evicted it.
 func (s *Service) resolveRow(ctx context.Context, item *schemaItem, scope Scope, tenant pkgcore.TenantID) (string, bool, error) {
 	if entry, ok := s.cache.get(item.key, scope, tenant); ok {
+		if entry.missing {
+			return "", false, nil
+		}
 		return entry.canonical, true, nil
 	}
 	generation := s.cache.generation()
@@ -573,6 +582,12 @@ func (s *Service) resolveRow(ctx context.Context, item *schemaItem, scope Scope,
 		return "", false, ErrStorage.WithCause(err)
 	}
 	if r == nil {
+		// No row exists at this tier: cache the confirmed absence so the
+		// next read of the unset key is served from the cache like a
+		// present one. The sentinel is generation-guarded exactly like the
+		// positive backfill below, and a later Set that creates the row
+		// lands its own put at this same triple (see valueCache.putMissing).
+		s.cache.putMissing(item.key, scope, tenant, generation)
 		return "", false, nil
 	}
 	canonical := r.Value

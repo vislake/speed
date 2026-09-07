@@ -1349,6 +1349,62 @@ func eventually(t *testing.T, timeout time.Duration, probe func() bool) {
 	t.Fatalf("condition was never met within %v", timeout)
 }
 
+func TestService_Get_AnAbsentRowIsReadFromTheStoreOnceThenServedFromCache(t *testing.T) {
+	// Negative-caching regression: resolving an absent key performs one
+	// store lookup per consulted scope tier on the first read and caches the
+	// confirmed absence, so the second read -- the shape every pre-auth
+	// /api/config/public and /api/system/features request produces while no
+	// override row exists, where falling back to platform defaults is the
+	// normal answer, not an error path -- never touches the database again.
+	// Before negative caching every read of an absent key paid those store
+	// lookups again; the query counter below (a gorm callback registered
+	// before Attach, so the count is deterministic, -count=1) proves the
+	// second read pays none. The multiplier stays fixed by the declared
+	// schema: only the store rows the resolve walk consults are ever
+	// counted, never a caller-supplied key list.
+	db := openServiceTestDB(t)
+	var reads atomic.Int64
+	if err := db.Callback().Query().Before("gorm:query").Register("config:test:count-row-reads", func(*gorm.DB) { reads.Add(1) }); err != nil {
+		t.Fatalf("registering the row-read counter: %v", err)
+	}
+	svc, _ := attachServiceForTest(t, db, buildTestCipher(t), serviceTestSchemaItems, serviceTestSchemaFlags)
+
+	// billing.retry_limit has a declared Default but no row at any scope, so
+	// a tenant read falls through the tenant tier and the system tier to the
+	// default: two store lookups on the first read, none on the second.
+	ctx := tenantA()
+	if v, err := GetTyped[int64](svc, ctx, "billing.retry_limit"); err != nil {
+		t.Fatalf("first Get: %v", err)
+	} else if v != 3 {
+		t.Fatalf("first Get = %d, want the schema default 3", v)
+	}
+	if reads.Load() == 0 {
+		t.Fatal("the first read of an absent key must consult the store")
+	}
+	afterFirst := reads.Load()
+
+	if v, err := GetTyped[int64](svc, ctx, "billing.retry_limit"); err != nil {
+		t.Fatalf("second Get: %v", err)
+	} else if v != 3 {
+		t.Fatalf("second Get = %d, want the schema default 3", v)
+	}
+	if got := reads.Load(); got != afterFirst {
+		t.Fatalf("a repeated read of an absent key performed %d more store lookups -- the confirmed absence is not cached (got %d reads, want %d)", got-afterFirst, got, afterFirst)
+	}
+
+	// A Set that creates the row must supersede the cached absence: the
+	// writer's own put lands at the exact triple the sentinel occupied, so
+	// the very next read serves the new value.
+	if err := svc.Set(ctx, ScopeTenant, "billing.retry_limit", Value{Data: int64(9)}, "alice"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if v, err := GetTyped[int64](svc, ctx, "billing.retry_limit"); err != nil {
+		t.Fatalf("Get after Set: %v", err)
+	} else if v != 9 {
+		t.Fatalf("Get after Set = %d, want the row Set just wrote -- the cached absence outlived the row's creation", v)
+	}
+}
+
 func TestService_RemoteDelivery_InvalidatesFromTheWireMap(t *testing.T) {
 	// Regression test for the cross-replica delivery path: pkgcore's
 	// distributed bus reconstructs a remote event's payload as the JSON

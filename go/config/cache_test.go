@@ -164,6 +164,65 @@ func TestValueCache_InvalidateAll_DropsInFlightBackfillsOfTheWipedEra(t *testing
 	}
 }
 
+func TestValueCache_PutMissing_StoresACachedAbsenceUntilARowReplacesIt(t *testing.T) {
+	c := newValueCache()
+	at := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+
+	// A no-row store answer is cached as an absence sentinel: get reports
+	// the triple cached, with missing set -- repeated reads of an unset key
+	// must not each consult the store.
+	c.putMissing("brand.site_name", ScopeTenant, "tenant-a", c.generation())
+	entry, ok := c.get("brand.site_name", ScopeTenant, "tenant-a")
+	if !ok || !entry.missing {
+		t.Fatalf("the cached absence is not served as missing: %+v, %v", entry, ok)
+	}
+
+	// A later Set that creates the row lands its own put at the same triple
+	// and thereby replaces the sentinel: the cache must serve the row from
+	// then on, never the stale absence.
+	c.put("brand.site_name", ScopeTenant, "tenant-a", "Studio A", at)
+	entry, ok = c.get("brand.site_name", ScopeTenant, "tenant-a")
+	if !ok || entry.missing || entry.canonical != "Studio A" {
+		t.Fatalf("a put did not supersede the cached absence: %+v, %v", entry, ok)
+	}
+
+	// The invalidation paths drop a sentinel exactly like a row entry: the
+	// change subscriber's invalidate and the poller's full reconciliation
+	// alike.
+	c.putMissing("brand.site_name", ScopeTenant, "tenant-a", c.generation())
+	c.invalidate("brand.site_name", ScopeTenant, "tenant-a")
+	if _, ok := c.get("brand.site_name", ScopeTenant, "tenant-a"); ok {
+		t.Fatal("invalidate left the cached absence behind")
+	}
+	c.putMissing("brand.site_name", ScopeTenant, "tenant-a", c.generation())
+	c.invalidateAll()
+	if _, ok := c.get("brand.site_name", ScopeTenant, "tenant-a"); ok {
+		t.Fatal("invalidateAll left the cached absence behind")
+	}
+}
+
+func TestValueCache_PutMissing_BackfillAcrossAWriteIsDropped(t *testing.T) {
+	c := newValueCache()
+	at := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+
+	// The mirror of putIfUnchanged's guard, driven at the cache seam: a
+	// no-row reader captured the generation before its store read, and a
+	// concurrent Set created the row (its own put) while the read was in
+	// flight. The stale sentinel must not land over the writer's fresh
+	// entry -- the absence would outlive the write that superseded it.
+	gen := c.generation()
+	c.put("brand.site_name", ScopeTenant, "tenant-a", "Studio A", at)
+	c.putMissing("brand.site_name", ScopeTenant, "tenant-a", gen)
+
+	entry, ok := c.get("brand.site_name", ScopeTenant, "tenant-a")
+	if !ok || entry.missing {
+		t.Fatalf("a stale absence backfill overwrote the writer's fresh put: %+v, %v", entry, ok)
+	}
+	if entry.canonical != "Studio A" {
+		t.Fatalf("the writer's row = %+v, want canonical %q", entry, "Studio A")
+	}
+}
+
 func TestWatchers_FireInRegistrationOrder(t *testing.T) {
 	w := &watchers{byKey: make(map[string][]watch)}
 	var got []string
