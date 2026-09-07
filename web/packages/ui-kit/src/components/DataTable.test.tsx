@@ -189,8 +189,9 @@ describe('DataTable', () => {
     // as its text. A live region announces content changes that follow
     // its own existence, never text that mounts together with it, so that
     // refresh's loading announcement was silent. POST-FIX: the region is
-    // mounted (empty, visually silent) for the whole empty phase and the
-    // loading text fills it on refresh -- a text change inside a region
+    // mounted for the whole empty phase and carries that phase's text,
+    // so both fills -- the empty-result wording while not loading (P2-2),
+    // the loading text on refresh -- are text changes inside a region
     // the screen reader already knows. The same DOM node must survive the
     // transition, which is what makes the later text change an
     // announcement rather than another mount. A stateful host drives the
@@ -215,7 +216,7 @@ describe('DataTable', () => {
     }
     const utils = renderWithProviders(<RefreshHarness />)
     const region = utils.getByRole('status')
-    expect(region).toHaveTextContent('')
+    expect(region).toHaveTextContent(zhCN.dataTable.noData)
     fireEvent.click(utils.getByRole('button', { name: 'refresh' }))
     expect(region).toHaveTextContent(zhCN.dataTable.loading)
     expect(utils.getByRole('progressbar')).toBeInTheDocument()
@@ -276,6 +277,136 @@ describe('DataTable', () => {
     const region = utils.getByRole('status')
     expect(region.textContent).toContain(zhCN.dataTable.loading)
     expect(utils.getByRole('progressbar')).toBeInTheDocument()
+  })
+
+  it('announces the empty result when a load ends with no rows: the region fills with the empty-result wording (P2-2 regression)', () => {
+    // The loading live region carried only the loading text, and the
+    // stock EmptyState — the empty result's own presentation — sat
+    // outside it as a sibling. A load that ended empty therefore left
+    // the region empty: a screen-reader user heard the loading text and
+    // then silence, with zero rows to navigate to that would disambiguate
+    // still-loading from finished-and-found-nothing. POST-FIX the
+    // region's text is the empty-result wording once the load finishes,
+    // so the terminal state lands as a text change inside the same
+    // region — never a trailing empty string.
+    function LoadsEmptyHarness() {
+      const [rows, setRows] = useState<readonly Member[]>(MEMBERS)
+      const [loading, setLoading] = useState(false)
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => {
+              setRows([])
+              setLoading(true)
+            }}
+          >
+            clear and load
+          </button>
+          <button type="button" onClick={() => setLoading(false)}>
+            finish empty
+          </button>
+          <DataTable
+            rows={rows}
+            columns={BASE_COLUMNS}
+            rowKey={keyOf}
+            loading={loading}
+          />
+        </>
+      )
+    }
+    const utils = renderWithProviders(<LoadsEmptyHarness />)
+    expect(utils.getByText('Ada')).toBeInTheDocument()
+    act(() => {
+      utils.getByRole('button', { name: 'clear and load' }).click()
+    })
+    const region = utils.getByRole('status')
+    expect(region.textContent).toContain(zhCN.dataTable.loading)
+    act(() => {
+      utils.getByRole('button', { name: 'finish empty' }).click()
+    })
+    expect(region.textContent).toContain(zhCN.dataTable.noData)
+    // The EmptyState visual is untouched: the stock placeholder still
+    // renders beneath the region, its own title and description.
+    expect(
+      utils.getByRole('heading', { name: zhCN.emptyState.empty.title }),
+    ).toBeInTheDocument()
+    expect(
+      utils.getByText(zhCN.emptyState.empty.description),
+    ).toBeInTheDocument()
+  })
+
+  it('keeps the announced empty wording independent of an overridden visible title (P2-2 regression)', () => {
+    // The region announces the empty result in the ui-kit's own wording
+    // (the dataTable namespace, like the loading label); a host's
+    // emptyTitle override stays the EmptyState's visible title — the
+    // single visual source — rather than a second copy rendered inside
+    // the live region, which would present the same text twice.
+    function OverrideHarness() {
+      const [loading, setLoading] = useState(true)
+      return (
+        <>
+          <button type="button" onClick={() => setLoading(false)}>
+            finish empty
+          </button>
+          <DataTable
+            rows={[]}
+            columns={BASE_COLUMNS}
+            rowKey={keyOf}
+            loading={loading}
+            emptyTitle="No matches"
+          />
+        </>
+      )
+    }
+    const utils = renderWithProviders(<OverrideHarness />)
+    const region = utils.getByRole('status')
+    expect(region.textContent).toContain(zhCN.dataTable.loading)
+    act(() => {
+      utils.getByRole('button', { name: 'finish empty' }).click()
+    })
+    expect(region.textContent).toContain(zhCN.dataTable.noData)
+    expect(
+      utils.getByRole('heading', { name: 'No matches' }),
+    ).toBeInTheDocument()
+    expect(
+      utils.queryByText(zhCN.emptyState.empty.title),
+    ).not.toBeInTheDocument()
+  })
+
+  it("fills the empty-result wording only after the region's first committed frame (P2-2 regression)", () => {
+    // The loading fill owes its announcability to the one-commit birth
+    // discipline (see the D5 regression above): the region's first
+    // committed frame is empty whatever transition enters the empty
+    // phase, so any later text fill is a change. The empty-result fill
+    // must spend that same first frame empty — an empty phase entered
+    // not loading may not be born carrying the empty-result wording, or
+    // that wording is never a change and never announces. The assertion
+    // inside the act scope pins the birth frame; the one after it pins
+    // the fill.
+    function ShowsEmptyHarness() {
+      const [rows, setRows] = useState<readonly Member[]>(MEMBERS)
+      return (
+        <>
+          <button type="button" onClick={() => setRows([])}>
+            show empty
+          </button>
+          <DataTable rows={rows} columns={BASE_COLUMNS} rowKey={keyOf} />
+        </>
+      )
+    }
+    const utils = renderWithProviders(<ShowsEmptyHarness />)
+    expect(utils.getByText('Ada')).toBeInTheDocument()
+    act(() => {
+      flushSync(() => {
+        utils.getByRole('button', { name: 'show empty' }).click()
+      })
+      const region = utils.getByRole('status')
+      expect(region.textContent).toBe('')
+    })
+    expect(utils.getByRole('status').textContent).toContain(
+      zhCN.dataTable.noData,
+    )
   })
 
   it('overrides the empty placeholder slots', () => {

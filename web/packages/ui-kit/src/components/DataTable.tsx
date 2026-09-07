@@ -23,19 +23,28 @@
  * `emptyAction`), which hosts swap for a variant of their own when the
  * emptiness means more than "no data yet".
  *
- * The loading announcement follows the FileUploader live-region twin: a
- * role="status" region is mounted (empty and visually silent) for the
- * whole empty phase, and the loading text fills it while loading. A
- * region that only appeared together with its text could never announce
- * the empty-list-then-refresh path -- live regions speak about content
- * changes that follow their own existence, not text that mounts with
- * them. The empty phase's first committed frame is therefore empty
- * whatever transition entered the phase: a phase that begins already
- * loading (rows emptied and loading flipped in the same host commit)
- * shows the region empty for one commit, the loading text filling it on
- * the next -- the same fill-an-existing-region shape, guaranteed for
- * every route into the empty phase rather than only the refresh of a
- * phase that began not loading.
+ * The empty phase's announcements follow the FileUploader live-region
+ * twin: a role="status" region is mounted (empty and visually silent)
+ * for the whole empty phase, and its text states the phase's current
+ * state -- the loading text while loading, and the empty-result wording
+ * (`dataTable.noData`, the ui-kit's own, deliberately not the
+ * host-overridable EmptyState title: the stock placeholder beneath is
+ * the empty result's visual, and duplicating a host-supplied title node
+ * inside the live region would present the same text twice) once the
+ * phase is not loading. The region therefore never falls silent between
+ * states: a load that ends with zero rows replaces the loading text
+ * instead of trailing off into an emptiness that could still mean
+ * loading. A region that only appeared together with its text could
+ * never announce any of this -- live regions speak about content changes
+ * that follow their own existence, not text that mounts with them -- so
+ * the empty phase's first committed frame is empty whatever transition
+ * entered the phase: a phase that begins already loading (rows emptied
+ * and loading flipped in the same host commit) shows the region empty
+ * for one commit, the loading text filling it on the next, and an empty
+ * phase entered not loading spends that same first frame empty before
+ * the empty-result wording fills it -- the same fill-an-existing-region
+ * shape, guaranteed for every route into the empty phase rather than
+ * only the refresh of a phase that began not loading.
  *
  * The stock placeholder's title is a real heading element whose correct
  * level only the host knows (see EmptyState's own heading-level note):
@@ -237,6 +246,26 @@ const PRIORITY_VISIBLE_FROM: Record<DataTableColumnPriority, 'sm' | 'md' | 'lg'>
   medium: 'md',
   low: 'lg',
 }
+
+/**
+ * The visually-hidden presentation of the empty-result wording inside
+ * the status region: the EmptyState beneath is the empty result's
+ * visual, so the region's copy must take no painted space -- but it must
+ * stay in the accessibility tree or the live region has nothing to
+ * announce, so it is clipped, never display:none (the same clip
+ * technique FileUploader's hidden file input uses).
+ */
+const visuallyHiddenSx = {
+  clip: 'rect(0 0 0 0)',
+  clipPath: 'inset(50%)',
+  height: 1,
+  overflow: 'hidden',
+  position: 'absolute',
+  bottom: 0,
+  left: 0,
+  whiteSpace: 'nowrap',
+  width: 1,
+} as const
 
 /**
  * Renders a column's opt-in priority into a breakpoint-keyed `display`
@@ -444,15 +473,17 @@ export function DataTable<T>({
                   align="center"
                   sx={{ border: 0, padding: 0 }}
                 >
-                  {/* The loading live region mounts (empty) for the whole
-                      empty phase, so a refresh that flips into loading
-                      fills an existing region instead of mounting one
-                      together with its text -- see the file header. The
-                      empty-phase region has no children and therefore
-                      zero height: it is rendered, never display:none,
-                      because a hidden region would not be live. Its first
-                      committed frame is empty even when the phase begins
-                      already loading: the text below renders only once
+                  {/* The status region mounts (empty) for the whole empty
+                      phase, so a transition into a new state fills an
+                      existing region instead of mounting one together
+                      with its text -- see the file header. The region
+                      carries the phase's text, loading or empty-result,
+                      never silence in between; when not loading that text
+                      is visually hidden (clipped, not display:none --
+                      the EmptyState beneath is the visual, and a hidden
+                      region would not be live). Its first committed frame
+                      is empty even when the phase begins already loading
+                      or already empty: the text below renders only once
                       `statusRegionCommitted` arms it, one commit after
                       the region mounts. */}
                   <Box
@@ -470,14 +501,20 @@ export function DataTable<T>({
                         : { display: 'flex' }
                     }
                   >
-                    {loading && statusRegionCommitted ? (
-                      <>
-                        <CircularProgress
-                          size={22}
-                          aria-label={t('dataTable.loading')}
-                        />
-                        {t('dataTable.loading')}
-                      </>
+                    {statusRegionCommitted ? (
+                      loading ? (
+                        <>
+                          <CircularProgress
+                            size={22}
+                            aria-label={t('dataTable.loading')}
+                          />
+                          {t('dataTable.loading')}
+                        </>
+                      ) : (
+                        <Box component="span" sx={visuallyHiddenSx}>
+                          {t('dataTable.noData')}
+                        </Box>
+                      )
                     ) : null}
                   </Box>
                   {!loading && (

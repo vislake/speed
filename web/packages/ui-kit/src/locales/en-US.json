@@ -38,6 +38,7 @@
   },
   "dataTable": {
     "loading": "Loading",
+    "noData": "No data",
     "ariaLabel": "Data table",
     "rowsPerPage": "Rows per page",
     "displayedRows": "{{from}}–{{to}} of {{count}}",

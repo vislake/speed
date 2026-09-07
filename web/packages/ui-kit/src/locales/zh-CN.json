@@ -38,6 +38,7 @@
   },
   "dataTable": {
     "loading": "加载中",
+    "noData": "没有数据",
     "ariaLabel": "数据表",
     "rowsPerPage": "每页行数",
     "displayedRows": "第 {{from}}–{{to}} 条，共 {{count}} 条",
