@@ -588,6 +588,7 @@
         "go/admin",
         "go/ai-gateway",
         "go/authn",
+        "go/billing",
         "go/integration",
         "go/notification",
         "go/org",
