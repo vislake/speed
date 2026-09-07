@@ -141,6 +141,8 @@ func newTestAuthnService(t *testing.T) *authn.Service {
 }
 
 func TestSearchService_Users_DelegatesToAuthn(t *testing.T) {
+	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
+
 	authnSvc := newTestAuthnService(t)
 	orgModule := newTestOrgModule(t)
 	tenants := NewTenantService(NewTenantRepository(testutil.NewDB(t)))
