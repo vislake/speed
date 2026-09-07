@@ -96,9 +96,20 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	})
 
 	t.Run("audit actions", func(t *testing.T) {
-		assertContainsAll(t, reg.AuditActions.Actions(), []string{
-			AuditActionNodeCreate, AuditActionNodeRename, AuditActionNodeMove, AuditActionNodeDelete,
-		})
+		// Exact match, both directions: org declares exactly the six
+		// actions its write paths can produce through automatic audit
+		// capture (module.go's audit block). A declared action no write
+		// can ever produce -- the dead-vocabulary shape this round
+		// replaced -- or a produced action nobody declared (which the
+		// go/dbkit/audit persister's vocabulary gate would refuse with a
+		// structured alert) both fail this assertion.
+		wantActions := []string{
+			AuditActionNodeCreate, AuditActionNodeUpdate,
+			AuditActionMemberCreate, AuditActionMemberUpdate,
+			AuditActionInvitationCreate, AuditActionInvitationUpdate,
+		}
+		assertContainsAll(t, reg.AuditActions.Actions(), wantActions)
+		assertContainsAll(t, wantActions, reg.AuditActions.Actions())
 	})
 
 	t.Run("published events", func(t *testing.T) {
@@ -316,7 +327,7 @@ func TestModule_Register_EmailDisabled_NeedsNoMailWiring(t *testing.T) {
 func TestModule_Register_DeclaresTheMembershipSurface(t *testing.T) {
 	reg := bootstrapTestModule(t)
 
-	wantActions := []string{AuditActionMemberInvite, AuditActionMemberAccept, AuditActionMemberRemove}
+	wantActions := []string{AuditActionMemberCreate, AuditActionMemberUpdate, AuditActionInvitationCreate, AuditActionInvitationUpdate}
 	actions := map[string]bool{}
 	for _, action := range reg.AuditActions.Actions() {
 		actions[action] = true

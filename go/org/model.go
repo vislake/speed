@@ -126,8 +126,28 @@ func (n OrgNode) IsRoot() bool { return n.ParentID == "" }
 // field writes go through reflection on fixed field names.
 func (n OrgNode) GetDeletedAt() *time.Time { return n.DeletedAt }
 
+// AuditResourceType implements dbkit.Auditable: it names org's audit
+// resource kind "org.node", the label dbkit's automatic GORM write-capture
+// plugin attaches to every OrgNode write's WriteCapturedEvent -- from which
+// go/dbkit/audit's persister derives the declared "org.node.create" and
+// "org.node.update" actions (module.go's audit-action block). Writes
+// against this model are captured only when a host wires
+// dbkit.Options.AuditBus on the connection org writes through AND lists
+// this model in that connection's Options.AuditModels scope -- go/org's
+// own AGENTS.md "Audit trail collection" section has the full wiring
+// contract, and the reference app is the first host fulfilling it. The
+// label is also why the lock-touch UPDATE statements org's write paths
+// issue (touchLockByID and its callers) are recorded too: they are genuine
+// UPDATEs against an Auditable model, and the capture mechanism has no
+// statement-level filter -- see that AGENTS section for how a reader tells
+// a touch row from a real change.
+func (OrgNode) AuditResourceType() string { return AuditResourceTypeNode }
+
 // compile-time check that OrgNode satisfies dbkit.TenantScoped.
 var _ dbkit.TenantScoped = OrgNode{}
 
 // compile-time check that OrgNode satisfies dbkit.SoftDeletable.
 var _ dbkit.SoftDeletable = OrgNode{}
+
+// compile-time check that OrgNode satisfies dbkit.Auditable.
+var _ dbkit.Auditable = OrgNode{}

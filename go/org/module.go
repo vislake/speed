@@ -45,18 +45,56 @@ const (
 	PermissionRemoveMember = "org:remove_member"
 )
 
-// The audit actions org contributes to the audit vocabulary. Every
-// structural change to a tenant's tree is auditable, because a node move
-// silently changes what its members can see.
+// The audit actions org contributes to the audit vocabulary -- and the
+// exact vocabulary org's write paths actually produce. These six names are
+// derived automatically by dbkit's write-capture plugin
+// (go/dbkit/audit_capture.go) from each Auditable model's resource label
+// (AuditResourceTypeNode/Member/Invitation below) and the GORM processor
+// the write ran -- "create" or "update": org's rows are only ever created
+// or updated, since every delete org performs is a mark-delete UPDATE and
+// nothing in this module ever issues a physical DELETE, so no org write is
+// captured under a "delete" operation.
+//
+// This block deliberately does NOT declare the semantic event-shaped
+// vocabulary an earlier round sketched (org.node.rename / org.node.move /
+// org.node.delete / org.member.invite / org.member.accept /
+// org.member.remove): nothing in org emits rows under those names -- the
+// gap this audit round exists to close -- and the automatic capture
+// mechanism cannot produce them, its operation vocabulary being the
+// processor's own three. The semantic operations all still land in the
+// trail, under the generic action plus the write's own changes diff:
+// a rename, a move, a mark-delete and a restore each record as
+// "org.node.update" (distinguishable by which columns the diff shows
+// changed); an invite records as "org.invitation.create"; an acceptance
+// records as "org.invitation.update" (the invitation row's status flip)
+// plus "org.member.create" (the membership row); a revoke as
+// "org.invitation.update"; a member removal or restore as
+// "org.member.update". A host wiring the capture plugin must declare
+// exactly this vocabulary on its AuditActionRegistrar (org's own Register
+// does), because go/dbkit/audit's persister refuses -- with a structured
+// alert -- any captured event whose derived action no module declared.
 const (
 	AuditActionNodeCreate = "org.node.create"
-	AuditActionNodeRename = "org.node.rename"
-	AuditActionNodeMove   = "org.node.move"
-	AuditActionNodeDelete = "org.node.delete"
+	AuditActionNodeUpdate = "org.node.update"
 
-	AuditActionMemberInvite = "org.member.invite"
-	AuditActionMemberAccept = "org.member.accept"
-	AuditActionMemberRemove = "org.member.remove"
+	AuditActionMemberCreate = "org.member.create"
+	AuditActionMemberUpdate = "org.member.update"
+
+	AuditActionInvitationCreate = "org.invitation.create"
+	AuditActionInvitationUpdate = "org.invitation.update"
+)
+
+// The dbkit.Auditable resource labels OrgNode, Membership and Invitation
+// return from AuditResourceType. dbkit's write-capture plugin derives the
+// actions declared above as "<label>.<operation>", so these strings are
+// load-bearing for the audit trail -- model and vocabulary share one
+// source here, exactly as table names and migrations do, so a rename can
+// never drift between the model's AuditResourceType and the declared
+// actions.
+const (
+	AuditResourceTypeNode       = "org.node"
+	AuditResourceTypeMember     = "org.member"
+	AuditResourceTypeInvitation = "org.invitation"
 )
 
 // The feature flags org contributes.
@@ -414,12 +452,11 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	}
 	if err := reg.AuditActions.Add(
 		AuditActionNodeCreate,
-		AuditActionNodeRename,
-		AuditActionNodeMove,
-		AuditActionNodeDelete,
-		AuditActionMemberInvite,
-		AuditActionMemberAccept,
-		AuditActionMemberRemove,
+		AuditActionNodeUpdate,
+		AuditActionMemberCreate,
+		AuditActionMemberUpdate,
+		AuditActionInvitationCreate,
+		AuditActionInvitationUpdate,
 	); err != nil {
 		return err
 	}

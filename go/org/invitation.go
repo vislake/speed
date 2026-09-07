@@ -157,8 +157,30 @@ func (i Invitation) IsPending(now time.Time) bool {
 	return i.Status == InvitationStatusPending && now.Before(i.ExpiresAt)
 }
 
+// AuditResourceType implements dbkit.Auditable: it names org's audit
+// resource kind "org.invitation", the label dbkit's automatic GORM
+// write-capture plugin attaches to every Invitation write's
+// WriteCapturedEvent -- from which go/dbkit/audit's persister derives the
+// declared "org.invitation.create" and "org.invitation.update" actions
+// (module.go's audit-action block). An invite records as
+// "org.invitation.create"; an acceptance and a revoke are compare-and-swap
+// status flips and record as "org.invitation.update". The invitee's Email
+// column is a GORM serializer field, so capture redacts it to
+// "[redacted]" automatically; EmailIndex (an HMAC digest) and TokenHash (a
+// SHA-256 digest) are safe to record. The deliberately narrow,
+// non-tenant-scoped invitationTokenIndex row is NOT Auditable: it is
+// bookkeeping for the token, and its writes belong to no tenant -- see
+// that type's own doc comment. Captured only when a host wires
+// dbkit.Options.AuditBus on org's connection AND lists this model in its
+// Options.AuditModels scope; see go/org/AGENTS.md's "Audit trail
+// collection" section.
+func (Invitation) AuditResourceType() string { return AuditResourceTypeInvitation }
+
 // compile-time check that Invitation satisfies dbkit.TenantScoped.
 var _ dbkit.TenantScoped = Invitation{}
+
+// compile-time check that Invitation satisfies dbkit.Auditable.
+var _ dbkit.Auditable = Invitation{}
 
 // invitationTokenIndex is the narrow, deliberately non-tenant-scoped row
 // that resolves an invitation token's owning tenant before any tenant is
