@@ -106,7 +106,7 @@ async function chromeContrast(page: import('@playwright/test').Page): Promise<Co
 // leave @pending the moment the colours are fixed, and from then on they
 // are an ordinary regression gate. (playwright.config.ts's grepInvert
 // keeps a known-failing gate out of the default run; asking for it by
-// name is `pnpm test:e2e --grep @pending`.)
+// name is `E2E_INCLUDE_PENDING=1 pnpm test:e2e --grep @pending`.)
 test('every control in the signed-in chrome is legible against its background', {
   tag: '@pending',
 }, async ({ page }) => {

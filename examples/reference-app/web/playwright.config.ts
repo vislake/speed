@@ -147,7 +147,15 @@ export default defineConfig({
   //
   // A block's gate moves out of @pending when its surface ships, which is
   // the moment it starts being a regression gate rather than a promise.
-  grepInvert: /@pending/,
+  //
+  // The exclusion is conditional rather than absolute because a config
+  // grepInvert OVERRIDES a command-line --grep: with it always on, asking
+  // for the pending gates by name answered "No tests found", which is the
+  // worst possible failure mode for a gate written to be run deliberately.
+  // Asking for them means saying so:
+  //
+  //   E2E_INCLUDE_PENDING=1 pnpm test:e2e --grep @pending
+  grepInvert: process.env.E2E_INCLUDE_PENDING === undefined ? /@pending/ : undefined,
   // One worker: the specs share one server, and that server's own
   // per-account rate limiting and progressive lockout (go/authn's
   // ratelimit.go) make concurrent sign-in attempts against the same demo

@@ -8,7 +8,7 @@
  * tagged @pending and left out of the default run (playwright.config.ts's
  * grepInvert). Run them deliberately:
  *
- *   pnpm test:e2e --grep @pending
+ *   E2E_INCLUDE_PENDING=1 pnpm test:e2e --grep @pending
  *
  * Every one of them fails today, and that is their present value: an
  * acceptance review found that a signed-in practice can reach nothing but
