@@ -171,15 +171,25 @@ documented usage cannot drift from the API.
 
 ## SignInScreen
 
-The assembled sign-in surface: a channel tab strip (password or SMS
-code, labels from the bundle, password first) switches the form below
-it, and when `social` is given the social section renders under the
-form with its divider title between them. Switching channels unmounts
-the previous form, so its half-typed state and whole-attempt error are
-gone with it -- a deliberate reset: channel errors must not leak
-across surfaces. A successful sign-in on any channel fires `onSignedIn`
-once. The screen renders no heading of its own: the page above
-(branding, the heading, the register link) is host content.
+The assembled sign-in surface: the channel tab strip the host declares
+through `channels` (password or SMS code, labels from the bundle,
+password first) switches the form below it, and when `social` is given
+the social section renders under the form with its divider title
+between them. Switching channels unmounts the previous form, so its
+half-typed state and whole-attempt error are gone with it -- a
+deliberate reset: channel errors must not leak across surfaces. A
+successful sign-in on any channel fires `onSignedIn` once. The screen
+renders no heading of its own: the page above (branding, the heading,
+the register link) is host content.
+
+The channels offered are the host's to declare -- both are offered when
+`channels` is omitted. A deployment must not offer a channel it cannot
+finish: offering SMS sign-in while nothing can deliver a code is a
+promise no phone will ever keep, so a host whose SMS seam resolves to
+the console sender declares `['password']` rather than captioned
+entrance nobody can walk through. One declared channel renders its
+form directly, with no tab strip at all: a tablist with nothing to
+switch between is not a choice, and its ARIA wiring would dangle.
 
 The tab strip is wired to the mounted channel panel the ARIA tabs way:
 each `Tab` carries an id and `aria-controls` naming its own panel, and
@@ -190,8 +200,9 @@ the DOM, since switching unmounts the previous form.
 | Prop | Type | Notes |
 |---|---|---|
 | `session` | `AuthSession` (required) | the session every channel on the screen drives |
+| `channels` | `readonly ('password' \| 'sms')[]` | the channels offered, in tab order; both by default, an empty list meaning "no opinion" |
 | `social` | `SocialSignInOptions` | the screen's social block; omitted to run without one |
-| `defaultChannel` | `'password' \| 'sms'` | the channel selected on first render; defaults to `'password'` |
+| `defaultChannel` | `'password' \| 'sms'` | the channel selected on first render; defaults to `'password'`, and falls back to the first offered channel when the named one is not offered |
 | `onSignedIn` | `() => void` | fired once after a sign-in commits on any channel |
 
 `SocialSignInOptions` carries the channels in the order the host wants

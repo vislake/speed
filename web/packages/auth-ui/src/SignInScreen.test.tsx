@@ -230,4 +230,65 @@ describe('SignInScreen', () => {
       screen.queryByLabelText(zhCN.passwordSignIn.identifierLabel),
     ).not.toBeInTheDocument()
   })
+
+  it('offer only the channels the host declares: an undeclared channel is not offered at all', async () => {
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [REQUEST_SMS_CODE]: () => undefined,
+    })
+    const onSignedIn = vi.fn()
+    renderWithProviders(
+      <SignInScreen
+        session={harness.session}
+        channels={['password']}
+        onSignedIn={onSignedIn}
+      />,
+    )
+    // The undeclared channel leaves no trace: no tab to click and no
+    // form behind one -- the SMS surface cannot be reached, whatever a
+    // person tries.
+    expect(
+      screen.queryByRole('tab', { name: zhCN.smsSignIn.title }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByLabelText(zhCN.smsSignIn.phoneLabel),
+    ).not.toBeInTheDocument()
+    // One offered channel renders its form directly, without a tab
+    // strip: a tablist with nothing to switch between is not a choice,
+    // and the password channel stays the screen it always was.
+    expect(
+      screen.queryByRole('tab', { name: zhCN.passwordSignIn.title }),
+    ).not.toBeInTheDocument()
+    const user = userEvent.setup()
+    await user.type(
+      screen.getByLabelText(zhCN.passwordSignIn.identifierLabel),
+      'alice@example.com',
+    )
+    await user.type(
+      screen.getByLabelText(zhCN.passwordSignIn.passwordLabel),
+      's3cret-pass',
+    )
+    await user.click(
+      screen.getByRole('button', { name: zhCN.passwordSignIn.submit }),
+    )
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.calls[0]?.path).toBe('/api/v1/authn/login/password')
+  })
+
+  it('fall back to the first offered channel when defaultChannel is not offered', async () => {
+    const harness = makeHarness({ [REQUEST_SMS_CODE]: () => undefined })
+    renderWithProviders(
+      <SignInScreen session={harness.session} defaultChannel="sms" channels={['password']} />,
+    )
+    // The password form is up even though the screen was asked to open
+    // on a channel this deployment does not offer -- never a channel
+    // that cannot be reached.
+    expect(
+      screen.getByLabelText(zhCN.passwordSignIn.identifierLabel),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByLabelText(zhCN.smsSignIn.phoneLabel),
+    ).not.toBeInTheDocument()
+  })
 })
