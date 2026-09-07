@@ -8,6 +8,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // This file is the active-polling fallback
@@ -176,10 +177,12 @@ func newPollingService(events *PaymentEventRepository, gateways map[string]Payme
 // for it) is skipped with a logged warning, left pending for a later run --
 // this is a configuration gap, not a data error, and must not fail the rest
 // of the tenant's batch. A QueryStatus call that itself errors is likewise
-// logged and skipped, not fatal to the pass: unlike storage's Sweep (whose
-// phases fail fast because a failed row usually means a broken store or
-// database, worth stopping over), a single channel being unreachable for
-// one row must not block every other row's re-query in the same batch.
+// logged (with its bounded failure classification only, never the raw
+// gateway error text -- see pollFailureClass) and skipped, not fatal to the
+// pass: unlike storage's Sweep (whose phases fail fast because a failed row
+// usually means a broken store or database, worth stopping over), a single
+// channel being unreachable for one row must not block every other row's
+// re-query in the same batch.
 func (s *PollingService) Poll(ctx context.Context) error {
 	now := s.now()
 	stuck, err := s.events.listPending(ctx, now.Add(-s.stuckAfter), s.batchLimit)
@@ -199,7 +202,8 @@ func (s *PollingService) Poll(ctx context.Context) error {
 		status, amount, err := gw.QueryStatus(ctx, ChannelReference(row.ChannelReference))
 		if err != nil {
 			log.Warn("payment poll: query status failed",
-				"channel", row.Channel, "payment_event_id", row.ID, "error", err)
+				"channel", row.Channel, "payment_event_id", row.ID,
+				"failure_class", pollFailureClass(err))
 			continue
 		}
 		if status == ChannelStatusPending {
@@ -284,6 +288,47 @@ func (h pollHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs.ProgressF
 		return jobs.Result{}, err
 	}
 	return jobs.Result{}, nil
+}
+
+// pollFailureClassUnclassified is pollFailureClass's fixed answer for a
+// QueryStatus error that carries no typed billing classification -- the
+// poll layer's honest ceiling: it cannot see into a gateway's own error
+// (a WeChat/Alipay business-envelope message, a Stripe SDK error), so the
+// line says exactly that the failure is unclassified rather than guessing
+// from the error's text.
+const pollFailureClassUnclassified = "unclassified"
+
+// pollFailureClass returns the bounded classification the poll log line
+// may carry for one QueryStatus failure: the error's own apperr code when
+// the error is (or wraps) a typed *apperr.Error -- the code space of the
+// module error indexes, code-authored and bounded, the one classification
+// this layer can name across every gateway a host may wire -- and the
+// fixed pollFailureClassUnclassified literal otherwise.
+//
+// The raw error's text is deliberately never logged, here or anywhere in
+// Poll's failure branch: a PaymentGateway error is external-provider free
+// text by construction (the wechatAPIError message a WeChat Pay APIv3
+// refusal body carries, alipay's query-failed envelope fields, a Stripe
+// SDK error), and go/observability's redaction layer masks secret-shaped
+// values and sensitive attribute-key names, never arbitrary free text
+// under a benign, ubiquitous key like "error" -- so the guarantee has to
+// be made at this log point, by bounding the value. The classification is
+// read from the error's Code only, never by stringifying it: an apperr
+// with an unbounded cause renders "code: cause", so even the typed case
+// must not reach the log as text. A status code is not logged because
+// none is available here in bounded form: the error object carries no
+// status field this layer can name (a gateway embeds an HTTP status in
+// its own text at best, which this function must not parse), and
+// apperr.Error.Status is the suggested HTTP status for an API response,
+// not the channel's own answer -- logging it would mislead. A gateway
+// that maps more of its provider's conditions onto billing error codes
+// automatically refines this line, since the code is read from the error
+// chain itself.
+func pollFailureClass(err error) string {
+	if appErr, ok := apperr.As(err); ok {
+		return appErr.Code
+	}
+	return pollFailureClassUnclassified
 }
 
 // compile-time check that pollHandler satisfies jobs.Handler.

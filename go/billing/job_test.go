@@ -1,12 +1,17 @@
 package billing
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/vislake/speed/go/jobs"
+	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -199,6 +204,78 @@ func TestPollingService_Poll_QueryErrorIsSkippedNotFatal(t *testing.T) {
 	}
 	if got.Status != string(ChannelStatusPending) {
 		t.Errorf("Status = %q, want left untouched (pending)", got.Status)
+	}
+}
+
+// TestPollingService_Poll_QueryFailureLogsClassificationNeverRawText is
+// the regression for the poll log point's provider-text discipline (see
+// pollFailureClass's doc comment in job.go): a QueryStatus failure must
+// reach the poll log as a bounded classification only, never as the raw
+// error's text -- a gateway error can carry external-provider free text (a
+// WeChat/Alipay business-envelope message, a Stripe SDK error), and
+// go/observability's redaction layer masks credential shapes and sensitive
+// key names, never arbitrary free text under the ubiquitous "error" key,
+// so the log point must bound the value itself. Two failure shapes are
+// scripted, each carrying a distinctive fragment that must not appear in
+// any of the poll log's attributes after the fix: an opaque gateway error
+// (the shape every non-typed QueryStatus failure takes -- wechat's wrapped
+// vendor refusals, alipay's query-failed envelopes, stripe's SDK errors)
+// and a typed billing error carrying the fragment as its unbounded cause
+// (the sharp case, since (*apperr.Error).Error() renders "code: cause" --
+// the classification must read the error's code, never its text). Before
+// the fix, the log's "error" attribute carried the whole error text
+// verbatim and both legs failed.
+func TestPollingService_Poll_QueryFailureLogsClassificationNeverRawText(t *testing.T) {
+	const echoedFragment = "mango-vendor-echo-4c9d7"
+
+	legs := []struct {
+		name      string
+		queryErr  error
+		wantClass string
+	}{
+		{
+			name:      "opaque gateway error",
+			queryErr:  errors.New("billing/gateway/wechat: query failed: SYSTEMERROR: " + echoedFragment),
+			wantClass: "unclassified", // pollFailureClass's fixed literal for an error no typed class covers
+		},
+		{
+			name:      "typed billing error with unbounded cause",
+			queryErr:  ErrChannelReferenceNotFound.WithCause(fmt.Errorf("channel answered: %s", echoedFragment)),
+			wantClass: ErrChannelReferenceNotFound.Code,
+		},
+	}
+
+	for _, leg := range legs {
+		t.Run(leg.name, func(t *testing.T) {
+			events := NewPaymentEventRepository(newTestDB(t))
+
+			evt := newTestPaymentEvent("wechat", "evt_1", ChannelStatusPending, time.Now().Add(-time.Hour))
+			if _, err := events.InsertIfNew(pkgcore.WithTenant(context.Background(), "tenant-a"), evt); err != nil {
+				t.Fatalf("InsertIfNew: %v", err)
+			}
+
+			var logBuf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+			ctx := observability.WithLogger(pkgcore.WithTenant(context.Background(), "tenant-a"), logger)
+
+			gw := &fakeGateway{queryErr: leg.queryErr}
+			svc := newPollingService(events, map[string]PaymentGateway{"wechat": gw}, nil)
+
+			if err := svc.Poll(ctx); err != nil {
+				t.Fatalf("Poll: %v, want nil -- a single row's query error must not fail the pass", err)
+			}
+			if gw.queryCall != 1 {
+				t.Fatalf("QueryStatus called %d times, want 1", gw.queryCall)
+			}
+
+			logged := logBuf.String()
+			if strings.Contains(logged, echoedFragment) {
+				t.Fatalf("poll log carries the provider error text's fragment %q in its attributes; log = %q", echoedFragment, logged)
+			}
+			if want := "failure_class=" + leg.wantClass; !strings.Contains(logged, want) {
+				t.Fatalf("poll log lacks the bounded classification %q; log = %q", want, logged)
+			}
+		})
 	}
 }
 
