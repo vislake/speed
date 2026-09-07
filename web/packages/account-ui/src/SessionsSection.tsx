@@ -4,10 +4,14 @@
  * Renders every session the authn module holds for the signed-in account,
  * the session the request's own token belongs to marked as the current
  * one, through the generated list hook. Rows show what the server
- * answers: the device string (the user_agent, or an unknown-device label
- * when the answer carries none), the raw IP and AMR values (AMR tokens
- * are opaque authentication-method references -- server vocabulary, not
- * text to translate -- so they render as-is in chips), created/last-seen
+ * answers, shaped for the eye that has to tell them apart: a row names
+ * the client-supplied device string when the sign-in carried one, else
+ * the readable browser/OS summary its user agent parses to ("Chrome ·
+ * macOS" -- never the raw UA string, which would make two sign-ins from
+ * one browser read as two identical, truncated walls of text), else the
+ * unknown-device label; the IP and AMR values render raw (AMR tokens are
+ * opaque authentication-method references -- server vocabulary, not text
+ * to translate -- so they render as-is in chips), created/last-seen
  * times, and a status badge telling an active session from a revoked or
  * an expired one. Expiry is checked at use time and never written back
  * to the row, so the server answers only active/revoked -- a row whose
@@ -64,6 +68,7 @@ import {
 import { ConfirmDialog, EmptyState } from '@speed/ui-kit'
 import { errorCodeOf, InlineError } from './internal/inline-error.js'
 import { useAccountUiTranslation } from './internal/translation.js'
+import { summarizeUserAgent } from './internal/ua-summary.js'
 
 /** The transient outcome of a revoke action, rendered above the list. */
 type Notice =
@@ -376,9 +381,13 @@ export function SessionsSection() {
               const revocable = id !== null && !current && !revoked && !expired
               const dead = revoked || expired
               const metaColor = dead ? 'text.disabled' : 'text.secondary'
-              // Line 1 carries the friendliest label the answer offers (its
-              // device string when present); the raw user_agent repeats as a
-              // muted detail line only when line 1 is not already it.
+              // Line 1 carries the friendliest label the answer offers:
+              // the client-named device string when the sign-in carried
+              // one, else the readable summary the user agent parses to
+              // ("Chrome · macOS", never the raw UA -- the raw string is
+              // the defect this surface exists to spare its reader). The
+              // summary repeats as a muted detail line only under a row
+              // line 1 already names with a device string.
               const device =
                 session.device != null && session.device !== ''
                   ? session.device
@@ -387,12 +396,12 @@ export function SessionsSection() {
                 session.user_agent != null && session.user_agent !== ''
                   ? session.user_agent
                   : null
+              const summary =
+                agent !== null ? summarizeUserAgent(agent) : null
               const deviceLabel =
-                device ?? agent ?? t('sessions.deviceUnknown')
+                device ?? summary ?? t('sessions.deviceUnknown')
               const agentLine =
-                device !== null && agent !== null && agent !== device
-                  ? agent
-                  : null
+                device !== null && summary !== null ? summary : null
               const created = parseDate(session.created_at)
               const lastSeen = parseDate(session.last_seen_at)
               const showLastSeen =
@@ -468,7 +477,7 @@ export function SessionsSection() {
                             // device string must reach the accessibility
                             // tree verbatim (i18next's default value
                             // escaping would embed a literal `&#x2F;`
-                            // for a user-agent's slashes).
+                            // for a free-text device label's slashes).
                             interpolation: { escapeValue: false },
                           })}
                           size="small"
@@ -498,7 +507,6 @@ export function SessionsSection() {
                     <Typography
                       variant="body2"
                       noWrap
-                      title={agentLine}
                       color={metaColor}
                       sx={{ minWidth: 0 }}
                     >

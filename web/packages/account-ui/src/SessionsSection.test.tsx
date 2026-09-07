@@ -5,9 +5,12 @@
  * bindRequestFn seam the generated hooks use) and every session answer
  * is the shape the server answers, assertions on what the user sees.
  *
- * The suite pins the surface contract: raw values (the user-agent
- * string, the IP, the AMR tokens) render as answered, translated text
- * never appears in their place; the current session is marked and has no
+ * The suite pins the surface contract: the raw user-agent never reaches
+ * a row -- each row shows the readable browser/OS summary it parses to
+ * instead (its detail line under a row the client already named) -- and
+ * no machine string from a raw UA appears in any row text, while the IP
+ * and the AMR tokens render raw as answered, translated text never
+ * appearing in their place; the current session is marked and has no
  * revoke action while every other active session has exactly one;
  * revoked sessions stay listed, greyed out, with no action; a session
  * whose stored expires_at has passed is a dead session rendered
@@ -63,12 +66,31 @@ const T3 = '2026-08-02T14:20:00.000Z'
 const PAST_EXPIRY = '2020-01-01T00:00:00.000Z'
 const FUTURE_EXPIRY = '2099-01-01T00:00:00.000Z'
 
+/**
+ * Real user agents in the shapes the server stores (the original UA
+ * header of the sign-in request, verbatim -- the fixture the suite used
+ * to fabricate, "Chrome/126.0.0.0 on Windows", is not a shape any real
+ * browser sends) and the readable summaries the rows show instead.
+ */
+const CHROME_MAC_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+const SAFARI_IPHONE_UA =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
+const CHROME_MAC_SUMMARY = 'Chrome · macOS'
+const SAFARI_IPHONE_SUMMARY = 'Safari · iPhone'
+
+/** Substrings that only ever appear in a raw User-Agent string -- the
+ * e2e gate's own vocabulary (examples/reference-app/web/e2e/
+ * sessions-are-distinguishable.spec.ts), mirrored here so the component
+ * tier holds the same line as the browser tier. */
+const MACHINE_STRINGS = ['Mozilla/', 'AppleWebKit', 'Gecko', 'curl/', 'Safari/']
+
 function session(overrides: Partial<AuthnSession> = {}): AuthnSession {
   return {
     id: 'session-1',
     status: 'active',
     is_current: false,
-    user_agent: 'Chrome/126.0.0.0 on Windows',
+    user_agent: CHROME_MAC_UA,
     ip: '203.0.113.10',
     amr: ['password'],
     created_at: T1,
@@ -103,13 +125,13 @@ describe('SessionsSection', () => {
     onlineManager.setOnline(true)
   })
 
-  it('render every session with raw values, the current marker, and one revoke action per non-current active row', async () => {
+  it('render every session with a readable device summary, the current marker, and one revoke action per non-current active row', async () => {
     const sessions = [
       session({
         id: 'current-1',
         is_current: true,
         device: 'This laptop',
-        user_agent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+        user_agent: CHROME_MAC_UA,
         ip: '198.51.100.4',
         amr: ['password', 'mfa:totp'],
         created_at: T1,
@@ -117,7 +139,7 @@ describe('SessionsSection', () => {
       }),
       session({
         id: 'other-1',
-        user_agent: 'Chrome/126.0.0.0 on Windows',
+        user_agent: SAFARI_IPHONE_UA,
         ip: '203.0.113.10',
         amr: ['social:google'],
         created_at: T2,
@@ -156,11 +178,16 @@ describe('SessionsSection', () => {
     expect(await screen.findByRole('heading', { name: zhCN.sessions.title })).toBeTruthy()
     expect(await screen.findByText(zhCN.sessions.current)).toBeTruthy()
 
-    // The device label and the raw user-agent detail line of the current row.
+    // The client-named device label and, under it, the readable summary
+    // of the current row's user agent -- where the raw string used to
+    // repeat as the detail line.
     expect(screen.getByText('This laptop')).toBeTruthy()
-    expect(screen.getByText('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')).toBeTruthy()
-    // The raw user-agent as the label of a row that carries no device string.
-    expect(screen.getByText('Chrome/126.0.0.0 on Windows')).toBeTruthy()
+    expect(screen.getByText(CHROME_MAC_SUMMARY)).toBeTruthy()
+    // The summary as the label of a row that carries no device string.
+    expect(screen.getByText(SAFARI_IPHONE_SUMMARY)).toBeTruthy()
+    // Neither raw user agent is anywhere on the page.
+    expect(screen.queryByText(CHROME_MAC_UA)).toBeNull()
+    expect(screen.queryByText(SAFARI_IPHONE_UA)).toBeNull()
     // The row with neither device nor user-agent falls back to the label.
     expect(screen.getByText(zhCN.sessions.deviceUnknown)).toBeTruthy()
 
@@ -191,7 +218,7 @@ describe('SessionsSection', () => {
     // Exactly one revoke affordance: the active non-current row; the
     // current and the revoked rows carry none.
     const revokeButtons = screen.getAllByRole('button', {
-      name: revokeAriaOf('Chrome/126.0.0.0 on Windows'),
+      name: revokeAriaOf(SAFARI_IPHONE_SUMMARY),
     })
     expect(revokeButtons).toHaveLength(1)
 
@@ -220,7 +247,7 @@ describe('SessionsSection', () => {
     expect(container.querySelector('.MuiSkeleton-root')).not.toBeNull()
 
     release(jsonResponse(200, { sessions: [session()] }))
-    expect(await screen.findByText('Chrome/126.0.0.0 on Windows')).toBeTruthy()
+    expect(await screen.findByText(CHROME_MAC_SUMMARY)).toBeTruthy()
     expect(screen.queryByRole('status', { name: zhCN.sessions.loading })).toBeNull()
   })
 
@@ -269,7 +296,7 @@ describe('SessionsSection', () => {
     expect(screen.queryByRole('heading', { name: zhCN.sessions.title })).toBeNull()
 
     await user.click(screen.getByRole('button', { name: zhCN.sessions.retry }))
-    expect(await screen.findByText('Chrome/126.0.0.0 on Windows')).toBeTruthy()
+    expect(await screen.findByText(CHROME_MAC_SUMMARY)).toBeTruthy()
     expect(screen.queryByText(zhCN.sessions.error.title)).toBeNull()
     expect(listCalls).toBe(2)
 
@@ -327,7 +354,7 @@ describe('SessionsSection', () => {
     // The parked fetch resumes by itself once the network is back.
     wentOnline = true
     onlineManager.setOnline(true)
-    expect(await screen.findByText('Chrome/126.0.0.0 on Windows')).toBeTruthy()
+    expect(await screen.findByText(CHROME_MAC_SUMMARY)).toBeTruthy()
     expect(
       screen.queryByRole('status', { name: zhCN.sessions.loading }),
     ).toBeNull()
@@ -392,7 +419,7 @@ describe('SessionsSection', () => {
     // duplicate.
     wentOnline = true
     onlineManager.setOnline(true)
-    expect(await screen.findByText('Chrome/126.0.0.0 on Windows')).toBeTruthy()
+    expect(await screen.findByText(CHROME_MAC_SUMMARY)).toBeTruthy()
     expect(
       screen.queryByRole('status', { name: zhCN.sessions.loading }),
     ).toBeNull()
@@ -429,7 +456,7 @@ describe('SessionsSection', () => {
     renderWithProviders(<SessionsSection />)
 
     const revokeButton = await screen.findByRole('button', {
-      name: revokeAriaOf('Chrome/126.0.0.0 on Windows'),
+      name: revokeAriaOf(CHROME_MAC_SUMMARY),
     })
     await user.click(revokeButton)
 
@@ -440,7 +467,7 @@ describe('SessionsSection', () => {
     })
     expect(
       screen.queryByRole('button', {
-        name: revokeAriaOf('Chrome/126.0.0.0 on Windows'),
+        name: revokeAriaOf(CHROME_MAC_SUMMARY),
       }),
     ).toBeNull()
     // No failure banner: a successful single revoke is silent.
@@ -481,7 +508,7 @@ describe('SessionsSection', () => {
     renderWithProviders(<SessionsSection />)
 
     const revokeButton = await screen.findByRole('button', {
-      name: revokeAriaOf('Chrome/126.0.0.0 on Windows'),
+      name: revokeAriaOf(CHROME_MAC_SUMMARY),
     })
     await user.click(revokeButton)
 
@@ -491,7 +518,7 @@ describe('SessionsSection', () => {
     // Nothing was revoked: the row still carries its revoke action.
     expect(
       screen.getAllByRole('button', {
-        name: revokeAriaOf('Chrome/126.0.0.0 on Windows'),
+        name: revokeAriaOf(CHROME_MAC_SUMMARY),
       }),
     ).toHaveLength(1)
   })
@@ -833,9 +860,112 @@ describe('SessionsSection', () => {
     // The error state's retry is the exit: a refetch whose answer
     // carries the key converges onto the list.
     await user.click(screen.getByRole('button', { name: zhCN.sessions.retry }))
-    expect(await screen.findByText('Chrome/126.0.0.0 on Windows')).toBeTruthy()
+    expect(await screen.findByText(CHROME_MAC_SUMMARY)).toBeTruthy()
     expect(screen.queryByText(zhCN.sessions.error.title)).toBeNull()
     expect(listCalls).toBe(2)
+
+    await expectNoAxeViolations()
+  })
+
+  it('never hand a person a raw user-agent: no machine string appears in any row of two same-browser sign-ins', async () => {
+    // The gate's own failing design, at the component tier: two sign-ins
+    // from one browser whose rows used to render the raw UA verbatim --
+    // two identical, truncated walls of text the person who came here to
+    // spot an intruder could not tell apart. The assertion mirrors the
+    // browser gate (examples/reference-app/web/e2e/
+    // sessions-are-distinguishable.spec.ts) exactly: the machine
+    // substrings that only ever appear in a raw UA must not appear in
+    // any rendered row.
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, {
+          ...makePair(),
+          principal: {
+            user_id: 'user-1',
+            tenant_id: 'tenant-1',
+            session_id: 'session-2',
+          },
+        })
+      }
+      if (call.method === 'GET' && call.path === SESSIONS_PATH) {
+        return jsonResponse(200, {
+          sessions: [
+            // Both sessions come from the same browser: the user agent
+            // the server stores is identical, so only what the row
+            // renders can tell them apart.
+            session({ id: 'session-1', created_at: T1, last_seen_at: T2 }),
+            session({ id: 'session-2', is_current: true, created_at: T2, last_seen_at: T3 }),
+          ],
+        })
+      }
+      throw new Error(`unexpected ${call.method} ${call.path}`)
+    })
+    await signInWithPassword(rig)
+    renderWithProviders(<SessionsSection />)
+
+    const rows = await screen.findAllByRole('listitem')
+    expect(rows).toHaveLength(2)
+    for (const row of rows) {
+      const text = row.textContent ?? ''
+      for (const token of MACHINE_STRINGS) {
+        expect(text, `a row reads as a raw user-agent: it contains ${token}`).not.toContain(
+          token,
+        )
+      }
+    }
+    // The rows show the readable summary in the raw string's place --
+    // one per row, and the raw string itself nowhere.
+    expect(screen.getAllByText(CHROME_MAC_SUMMARY)).toHaveLength(2)
+    expect(screen.queryByText(CHROME_MAC_UA)).toBeNull()
+
+    await expectNoAxeViolations()
+  })
+
+  it('keep two sign-ins from the same browser distinguishable: every row carries its own time and mark', async () => {
+    // The same-browser pair again: identical user agent, identical IP,
+    // the same machine could not be what tells the rows apart. Each row
+    // must still carry its own story -- the summary label, its own
+    // signed-in and last-active times, and the current mark on exactly
+    // the row whose token is asking.
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, {
+          ...makePair(),
+          principal: {
+            user_id: 'user-1',
+            tenant_id: 'tenant-1',
+            session_id: 'session-2',
+          },
+        })
+      }
+      if (call.method === 'GET' && call.path === SESSIONS_PATH) {
+        return jsonResponse(200, {
+          sessions: [
+            session({ id: 'session-1', created_at: T1, last_seen_at: T2 }),
+            session({ id: 'session-2', is_current: true, created_at: T2, last_seen_at: T3 }),
+          ],
+        })
+      }
+      throw new Error(`unexpected ${call.method} ${call.path}`)
+    })
+    await signInWithPassword(rig)
+    renderWithProviders(<SessionsSection />)
+
+    const rows = await screen.findAllByRole('listitem')
+    expect(rows).toHaveLength(2)
+    // Both rows name the browser the same way; each carries its own
+    // signed-in and last-active times, and each row still reads
+    // differently from the other (their times differ, and only the
+    // current row carries the current mark).
+    expect(within(rows[0]!).getByText(CHROME_MAC_SUMMARY)).toBeTruthy()
+    expect(within(rows[1]!).getByText(CHROME_MAC_SUMMARY)).toBeTruthy()
+    expect(within(rows[0]!).getByText(timeText(zhCN.sessions.signedIn, T1))).toBeTruthy()
+    expect(within(rows[0]!).getByText(timeText(zhCN.sessions.lastSeen, T2))).toBeTruthy()
+    expect(within(rows[1]!).getByText(timeText(zhCN.sessions.signedIn, T2))).toBeTruthy()
+    expect(within(rows[1]!).getByText(timeText(zhCN.sessions.lastSeen, T3))).toBeTruthy()
+    expect(within(rows[0]!).queryByText(zhCN.sessions.current)).toBeNull()
+    expect(within(rows[1]!).getByText(zhCN.sessions.current)).toBeTruthy()
+    expect(rows[0]!.textContent).not.toBe(rows[1]!.textContent)
 
     await expectNoAxeViolations()
   })

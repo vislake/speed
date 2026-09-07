@@ -201,11 +201,16 @@ credential-less, `access-1` until the step-up rotates it to
 
 The sessions-and-devices surface: every session the authn module holds
 for the signed-in account, the session the request's own token belongs
-to marked with a current badge. Rows show what the server answers --
-the device string (or an unknown-device label when the answer carries
-none), the raw user agent as a muted detail line when it differs, the
-IP, created and last-seen times rendered through `Intl` in the
-surface's current language, AMR values as chips (AMR tokens are opaque
+to marked with a current badge. Rows show the server's answer shaped
+for the eye that has to tell sessions apart: the device string a
+sign-in named itself with when it carried one, else the readable
+browser/OS summary its user agent parses to ("Chrome · macOS" -- the
+raw UA string never renders, since two sign-ins from one browser would
+otherwise read as two identical walls of text), else the unknown-device
+label; the summary repeats as a muted detail line only under a row
+line 1 already names. Beneath the label sit the IP, created and
+last-seen times rendered through `Intl` in the surface's current
+language, AMR values as chips (AMR tokens are opaque
 authentication-method references -- server vocabulary, not text to
 translate -- so they render as-is) and a status badge telling an active
 session from a revoked one. A revoked session stays listed, greyed
