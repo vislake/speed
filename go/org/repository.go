@@ -247,7 +247,7 @@ func (r *Repository) findByIDIncludingDeletedTx(tx *gorm.DB, id string) (*OrgNod
 //     refused immediately instead. Every caller of this function MUST
 //     call it before issuing any other statement on tx, or this guarantee
 //     is void and a contended call can fail immediately instead of
-//     waiting -- see withRetry in tree.go for the bounded-retry backstop
+//     waiting -- see withRetry in concurrency.go for the bounded-retry backstop
 //     every caller wraps itself in regardless, for the cases (PostgreSQL
 //     deadlocks between two such calls locking two different rows in
 //     opposite order, most notably) no single call's own lock order can
@@ -272,9 +272,8 @@ func touchLockByID(tx *gorm.DB, id string) (bool, error) {
 }
 
 // lockLiveNode wraps touchLockByID and reads the now-locked row back,
-// for callers (CreateChild, Move, Restore) that need the row's own current
-// data -- Path and Depth above all -- rather than merely a lock over some
-// OTHER statement.
+// for a caller that needs the row's own current data -- Path and Depth
+// above all -- rather than merely a lock over some OTHER statement.
 //
 // It reports gorm.ErrRecordNotFound -- never wrapped, so a caller matches it
 // with errors.Is directly -- for an id with no live row under ctx's tenant:

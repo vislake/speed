@@ -6,11 +6,9 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 )
 
-// txRetryBudget bounds how many times an atomic, multi-statement tree
-// operation (CreateChild, Move, Restore -- each opens exactly one
-// dbkit.WithTenantSession transaction per attempt, composed of lockLiveNode
-// calls and the operation's own writes) retries the whole transaction after
-// a transient, contention-only failure: SQLite's SQLITE_BUSY, or
+// txRetryBudget bounds how many times a transaction-shaped write that
+// runs through withRetry (below) retries its whole transaction after a
+// transient, contention-only failure: SQLite's SQLITE_BUSY, or
 // PostgreSQL's detected deadlock or serialization failure (see
 // dbkit.IsRetryableConflict's own doc comment for exactly what each of those
 // is and why dbkit, not org, is what recognizes them). Neither is data
@@ -20,8 +18,8 @@ import (
 // the race is exactly as valid as one that had simply started a little
 // later.
 //
-// 5 is generous for the shape these operations actually produce contention
-// over (two callers touching the same node, or two callers whose moved
+// 5 is generous for the shape of the contention the retried writes actually
+// produce (two callers touching the same node, or two callers whose moved
 // subtrees genuinely overlap -- see tree.go's Move doc comment), not a
 // number tuned against a measured production workload. Exhausting the
 // budget reports ErrConcurrentUpdate rather than looping forever, so a
@@ -48,6 +46,22 @@ const txRetryBackoff = 5 * time.Millisecond
 // retryable error returns ErrConcurrentUpdate instead of the raw, dialect-
 // specific conflict error, so a caller never has to know what SQLITE_BUSY or
 // a PostgreSQL SQLSTATE means.
+//
+// withRetry is this module's one retry envelope, and the module's answer to
+// "which operations retry" is its call sites, deliberately not an
+// enumeration a doc comment would have to keep in step: every
+// transaction-shaped write that must re-run from a clean read on
+// contention wraps itself here, and grepping this module's non-test files
+// for withRetry( is exact. Today that is seven call sites across both write
+// services -- six in tree.go (CreateChild, Rename, Move, both of Delete's
+// write paths, and Restore) and one in membership.go (MemberService.ensure's
+// membership insert, the shared core of Add and of the authn.user.created
+// subscriber). A new operation of that shape wraps its own transaction
+// here. MemberService.Remove and InviteService.Invite are the two standing
+// exceptions: each rewrite is a single, database-arbitrated transaction
+// whose first statement takes every lock it will ever hold (see
+// go/org/AGENTS.md's D3 and D4 notes), the shape that cannot produce the
+// overlapping-lock-order deadlock this envelope exists to retry.
 func withRetry(op func() error) error {
 	var err error
 	for attempt := 0; attempt < txRetryBudget; attempt++ {

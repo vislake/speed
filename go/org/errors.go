@@ -120,17 +120,17 @@ var (
 	// cause never reaches an API response body.
 	ErrInternal = apperr.Internal("org.internal_error")
 
-	// ErrConcurrentUpdate reports that an atomic, multi-statement tree
-	// operation (CreateChild, Move, Restore) could not be serialized against
-	// a concurrent writer of the same rows within its bounded retry budget
-	// (see tree.go's withRetry) -- PostgreSQL detected a genuine deadlock
-	// between overlapping lock orders, or SQLite's writers stayed contended
-	// for longer than the retry budget's backoff covers. The operation
-	// changed nothing: this is the database correctly refusing to let two
-	// overlapping writers proceed at once, not data corruption, and the
-	// caller's next attempt starts from a clean read of whatever the winner
-	// committed. It is deliberately rare -- see withRetry's own doc comment
-	// for the budget this only fires past.
+	// ErrConcurrentUpdate reports that a write this module retries on
+	// transient contention could not be serialized against a concurrent
+	// writer of the same rows within its bounded retry budget: PostgreSQL
+	// detected a genuine deadlock between overlapping lock orders, or
+	// SQLite's writers stayed contended for longer than the retry budget's
+	// backoff covers. The write changed nothing: this is the database
+	// correctly refusing to let two overlapping writers proceed at once,
+	// not data corruption, and the caller's next attempt starts from a
+	// clean read of whatever the winner committed. It is deliberately
+	// rare -- see withRetry's own doc comment in concurrency.go for the
+	// envelope, and which write paths run through it.
 	ErrConcurrentUpdate = apperr.Conflict("org.concurrent_update")
 )
 
