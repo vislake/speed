@@ -37,6 +37,33 @@ var ErrActionNotRegistered = errors.New("audit: action is not registered on the 
 // snapshot is): a caller using Emit is expected to know, and state,
 // exactly what changed.
 //
+// The completeness expectation has one hard limit, and stating it is the
+// point of this sentence: nothing about Diff's shape filters or redacts
+// what these maps carry -- changesJSON (module.go) marshals them verbatim
+// into the changes column, and the caller is the only redaction layer
+// that content will ever pass. The repository's "do not write plaintext
+// PII, secrets or tokens into logs, traces or API responses" security
+// rule therefore applies to every Diff value with its full force: a Diff
+// may record that a field changed, and how (identifiers, structural
+// values), but must never carry the sensitive content itself -- no
+// plaintext PII (an email address, a phone number, a person's name), no
+// keys or tokens, no full prompt or document bodies. Requiring a caller
+// to know exactly what changed does not license recording the sensitive
+// parts of what changed; when the changed value itself is sensitive, the
+// truthful diff is that it changed, not what it now says.
+//
+// The landing makes that limit non-negotiable in a way no other column's
+// content is: the changes column is written to the one table in this
+// system with no published path to delete from. audit.Repository offers
+// no Update or Delete method at all; dbkit.Repository[T]'s HardDelete --
+// the compliance-erasure path -- cannot even be instantiated against
+// AuditEvent, which deliberately does not implement dbkit.TenantScoped
+// (model.go's own doc comment on why that absence is load-bearing); the
+// append-only trigger set refuses UPDATE and DELETE at the database
+// itself; and compliance only ever reads this table. Anything written
+// here is effectively permanent, so a caller must write nothing into a
+// Diff that it could not leave in the audit trail forever.
+//
 // Deliberately no json struct tags: every event payload type in this
 // package and in dbkit (WriteCapturedEvent, RecordedEvent, Actor,
 // Resource, Result) relies on encoding/json's default behavior --
