@@ -11,6 +11,7 @@ import (
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/config"
 	"github.com/vislake/speed/go/integration"
 	"github.com/vislake/speed/go/org"
@@ -231,6 +232,10 @@ const sharingSharesRoutePath = sharing.PathShares
 // notesRoutePath's own comment explains.
 const aiGatewayRoutePath = "/api/v1/ai-gateway"
 
+// billingRoutePath is where the billing module mounts its routes -- the
+// same unexported-path situation notesRoutePath's own comment explains.
+const billingRoutePath = "/api/v1/billing"
+
 // demoRouteGuards declares, for every path a module mounts, the resource
 // whose permissions gate it -- or routePublic when the path is
 // deliberately reachable without one.
@@ -430,6 +435,21 @@ var demoRouteGuards = map[string]string{
 	// sharingPermissionFor-style carve-out this table already makes for
 	// those two paths.
 	aiGatewayRoutePath: aiGatewayResource,
+
+	// billing's path is gated for real, like storage's: the module's
+	// Handler performs no authorization of its own (go/billing's Handler
+	// doc comment), leaving enforcement to the host's authorization
+	// layer. It is one of this table's sentinel-dispatched entries for
+	// the same class of reason integration's is: billing's permission
+	// strings carry THREE segments ("billing:credit:read", never
+	// "<resource>:<action>"), and rbac.RequirePermissionFunc's own
+	// splitPermission refuses a string whose action half contains a
+	// second colon by design -- so this path can neither use
+	// demoPermissionFor's generic read/write composition nor the
+	// permissionFor substitution pki's and sharing's paths use. See
+	// billingRouteSentinel's and guardBillingRoute's own doc comments
+	// for the shape that replaces it.
+	billingRoutePath: billingRouteSentinel,
 }
 
 // adminRouteSentinel marks demoRouteGuards' one entry that guardModuleRoute
@@ -700,6 +720,20 @@ func sharingPermissionFor(r *http.Request) string {
 // integration's two-entity vocabulary.
 var aiGatewayResource = mustResourceOf(aigateway.PermissionRead, aigateway.PermissionWrite, aigateway.PermissionManagePlatform)
 
+// billingRouteSentinel marks demoRouteGuards' entry for go/billing's
+// mounted route. guardModuleRoute dispatches it to guardBillingRoute
+// instead of the generic demoPermissionFor(resource) gate, for the same
+// class of reason integrationRouteSentinel's own dispatch exists:
+// billing's permission strings carry THREE segments ("billing:credit:
+// read", "billing:credit:manage"), and rbac.RequirePermissionFunc's own
+// splitPermission refuses a string whose action half contains a second
+// colon by design (see splitPermission's own doc comment in go/rbac) --
+// so no permissionFor substitution can ride that middleware at all. The
+// sentinel value is distinct from routePublic and from any real resource
+// string, so a reader (and guardModuleRoute's own dispatch) cannot
+// confuse it with either.
+const billingRouteSentinel = "BILLING_ROUTE_THREE_SEGMENT_PERMISSION"
+
 // aiGatewayPermissionFor selects the permission an aiGatewayRoutePath
 // request must hold, mirroring pkiPermissionFor's and sharingPermissionFor's
 // own reasoning: ai-gateway's three-permission vocabulary (read/write/
@@ -721,6 +755,99 @@ func aiGatewayPermissionFor(r *http.Request) string {
 		return aigateway.PermissionManagePlatform
 	}
 	return aigateway.PermissionWrite
+}
+
+// billingPermissionFor selects the permission a billingRoutePath request
+// must hold, mirroring pkiPermissionFor's method-only split but naming
+// billing's own three-segment permission strings directly. The module's
+// fragment is read-only this round -- both operations are GETs answered
+// under billing.PermissionCreditRead (billing.PermissionCreditManage
+// gates nothing over HTTP yet; see go/billing/api/openapi.yaml's own
+// header for the read-only decision and what a future write round gates
+// on) -- so the GET/HEAD read branch is the one any real request takes;
+// the default branch stays the strict direction demoPermissionFor itself
+// adopts, demanding the manage permission from any method this example
+// never thought about rather than guessing.
+//
+// Unlike pkiPermissionFor and the other selectors, this function's answer
+// is consumed by guardBillingRoute, never by rbac.RequirePermissionFunc:
+// its constants' three-segment shape is exactly what that middleware's
+// splitPermission refuses (billingRouteSentinel's own doc comment), so
+// the guard reproduces the gate by hand, splitting at the LAST colon the
+// way integration's guard does.
+func billingPermissionFor(r *http.Request) string {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		return billing.PermissionCreditRead
+	default:
+		return billing.PermissionCreditManage
+	}
+}
+
+// guardBillingRoute wraps go/billing's mounted fragment routes in rbac's
+// permission gate, reproducing rbac.RequirePermissionFunc's own
+// fail-closed shape by hand instead of calling it, for the reason
+// billingRouteSentinel's own doc comment gives in full: billing's
+// permission strings ("billing:credit:read"/"billing:credit:manage") do
+// not fit rbac.RequirePermissionFunc's "<resource>:<action>" contract --
+// its splitPermission refuses any string whose action half contains a
+// second colon, and refusing would deny every request regardless of what
+// the caller actually holds. resource and action are derived by cutting
+// billingPermissionFor's answer at its LAST colon -- "billing:credit"
+// and "read"/"manage" -- exactly the shape guardIntegrationRoute uses for
+// integration's own three-segment vocabulary, and az.Can's
+// Permission(resource, action) join maps them straight back onto the
+// catalog entry the caller's role actually carries.
+func guardBillingRoute(az rbac.Authorizer, handler http.Handler, demoHeaderDisabled bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		permission := billingPermissionFor(r)
+		idx := strings.LastIndex(permission, ":")
+		if idx <= 0 || idx == len(permission)-1 {
+			// Unreachable for any permission billingPermissionFor can
+			// actually return -- both are known-good constants -- but
+			// handled anyway rather than assumed away, the same "never
+			// trust a string shape silently" posture splitPermission
+			// itself takes.
+			writeBillingAuthzError(w, rbac.ErrPermissionDenied.WithParam("permission", permission))
+			return
+		}
+		resource, action := permission[:idx], permission[idx+1:]
+
+		sub, ok := demoResolveSubject(r, demoHeaderDisabled)
+		if !ok {
+			writeBillingAuthzError(w, rbac.ErrPermissionDenied.WithParam("permission", permission))
+			return
+		}
+		allowed, err := az.Can(r.Context(), sub, action, resource)
+		if err != nil {
+			writeBillingAuthzError(w, rbac.ErrStorage)
+			return
+		}
+		if !allowed {
+			writeBillingAuthzError(w, rbac.ErrPermissionDenied.WithParam("permission", permission))
+			return
+		}
+		handler.ServeHTTP(w, r)
+	})
+}
+
+// writeBillingAuthzError writes an rbac denial or storage error to w as
+// the {code, params} envelope -- the same shape rbac's own middleware
+// writes and guardIntegrationRoute's writeIntegrationError produces, so a
+// caller of billing's routes cannot tell this hand-rolled gate's answers
+// apart from rbac.RequirePermissionFunc's on any other surface.
+func writeBillingAuthzError(w http.ResponseWriter, err error) {
+	appErr, ok := apperr.As(err)
+	if !ok {
+		appErr = rbac.ErrStorage
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(appErr.Status)
+	envelope := map[string]any{"code": appErr.Code}
+	if appErr.Params != nil {
+		envelope["params"] = appErr.Params
+	}
+	_ = json.NewEncoder(w).Encode(envelope)
 }
 
 // orgNodesSubPath, orgMembersSubPath and orgInvitationsSubPath are org's
@@ -1302,6 +1429,13 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, org
 		// entirely. See integrationRouteSentinel's own doc comment for why.
 		return guardIntegrationRoute(az, handler, demoHeaderDisabled), nil
 	}
+	if resource == billingRouteSentinel {
+		// The same wholly-different-gate class of reason integration's
+		// sentinel dispatch above has: billing's three-segment permission
+		// strings cannot ride rbac.RequirePermissionFunc at all. See
+		// billingRouteSentinel's and guardBillingRoute's own doc comments.
+		return guardBillingRoute(az, handler, demoHeaderDisabled), nil
+	}
 	if resource == orgRouteSentinel {
 		// Also a wholly different gate, not just a different action
 		// selector -- see orgRouteSentinel's and guardOrgRoute's own doc
@@ -1313,6 +1447,8 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, org
 	// pki, sharing and ai-gateway all need their own action selector, not
 	// demoPermissionFor's generic read/write split -- see pkiPermissionFor's,
 	// sharingPermissionFor's and aiGatewayPermissionFor's own doc comments.
+	// billing never reaches this branch: billingRouteSentinel's dispatch
+	// above already returned guardBillingRoute's own gate.
 	permissionFor := demoPermissionFor(resource)
 	switch path {
 	case pkiRoutePath:
