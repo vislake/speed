@@ -288,13 +288,20 @@ rate-limit call sites (the adjudicated P1). See "What round 4 adds".
   parameter, header or body (there is no tenant_id anywhere on this
   surface). The one translation layer: PUT .../platform builds the audited
   system context `SetPlatformCredential`'s own contract requires --
-  `pkgcore.WithSystemContext` under `SystemPurposeCredentialWrite`
-  ("ai-gateway.credential_write"), attributed to the fixed actor
-  "ai-gateway-http", mirroring the fixed-actor reason the reference app's
-  own boot-time platform writes already use: the audit value that matters
-  is WHICH PATH performed the write, not a per-request caller identity a
-  system context cannot carry here (pkgcore.SystemReason.Actor's own doc
-  comment).
+  `tenancy.WithSystemContext` (the audited wrapper, which publishes an
+  `EventSystemContextEntered` audit event on the bus `NewHandler` was
+  given, and fails the write closed if that publish fails) under
+  `SystemPurposeCredentialWrite` ("ai-gateway.credential_write"),
+  attributed to the fixed actor "ai-gateway-http", mirroring the
+  fixed-actor reason the reference app's own boot-time platform writes
+  already use: the audit value that matters is WHICH PATH performed the
+  write, not a per-request caller identity a system context cannot carry
+  here (pkgcore.SystemReason.Actor's own doc comment). This module sits
+  well above tenancy in the dependency graph, so using the raw
+  `pkgcore.WithSystemContext` here -- as an earlier round did -- would take
+  the escape hatch on a live request path with zero audit events, the
+  exact violation tenancy/AGENTS.md's System-context rule names; the
+  audited wrapper is mandatory for this path.
 - `Module.Register` grows accordingly: rounds 1's no-op (plus round 2's
   conditional image job claim) becomes a `Register` that also declares the
   three permissions on `reg.Permissions`, registers

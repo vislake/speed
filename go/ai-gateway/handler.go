@@ -7,6 +7,7 @@ import (
 	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/tenancy"
 
 	"github.com/vislake/speed/go/ai-gateway/api"
 )
@@ -49,7 +50,8 @@ const handlerSystemActor = "ai-gateway-http"
 // tested. The one exception -- and it is translation, not a new decision
 // -- is aiGateway_setPlatformCredential building the audited system-context
 // reason SetPlatformCredential's own contract requires
-// (pkgcore.WithSystemContext under SystemPurposeCredentialWrite): nothing
+// (tenancy.WithSystemContext, the audited wrapper, under
+// SystemPurposeCredentialWrite): nothing
 // upstream of this HTTP handler is positioned to build it, since the
 // module's own SystemPurpose is what the reason must carry and rbac's
 // router-level permission gate (which the host wires, never this package)
@@ -71,18 +73,33 @@ const handlerSystemActor = "ai-gateway-http"
 // exactly as the spec's own header records.
 type Handler struct {
 	credentials *CredentialService
-	mux         *http.ServeMux
+
+	// bus is the pkgcore.EventBus AiGatewaySetPlatformCredential publishes
+	// its audited system-context grant on, through tenancy.WithSystemContext
+	// (see that method's own doc comment): the platform-wide credential
+	// write is a privileged, platform-row write that must never happen
+	// unrecorded, and tenancy's wrapper fails the whole call closed if the
+	// audit publish fails. Module.Register supplies the registry's resolved
+	// bus (reg.EventBus()); a Handler with no bus cannot serve the
+	// platform-credential operation at all, since building its system
+	// context would then have nowhere to publish the audit event.
+	bus pkgcore.EventBus
+
+	mux *http.ServeMux
 }
 
 // NewHandler returns a Handler serving reads and writes of ai-gateway's
 // platform and tenant BYOK credentials through the given CredentialService
 // -- the instance Module.Register mounts it behind, in the same call that
-// attaches it at apiPath. The returned Handler's routing is registered by
-// the generated api.HandlerFromMux helper: it derives this module's
-// method+path patterns from the "paths:" keys of api/openapi.yaml itself,
-// exactly as storage's and org's NewHandler do for their own fragments.
-func NewHandler(credentials *CredentialService) *Handler {
-	h := &Handler{credentials: credentials}
+// attaches it at apiPath. bus is the event bus the platform-credential
+// operation publishes its audited system-context grant on (see Handler's
+// bus field); Module.Register passes the registry's own resolved bus. The
+// returned Handler's routing is registered by the generated
+// api.HandlerFromMux helper: it derives this module's method+path patterns
+// from the "paths:" keys of api/openapi.yaml itself, exactly as storage's
+// and org's NewHandler do for their own fragments.
+func NewHandler(credentials *CredentialService, bus pkgcore.EventBus) *Handler {
+	h := &Handler{credentials: credentials, bus: bus}
 	h.mux = http.NewServeMux()
 	api.HandlerFromMux(h, h.mux)
 	return h
@@ -191,15 +208,31 @@ func (h *Handler) AiGatewaySetPlatformCredential(w http.ResponseWriter, r *http.
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	sysCtx, err := pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
+	if h.bus == nil {
+		// Fail closed before granting anything rather than panic mid-publish
+		// on a nil bus: NewHandler's contract says bus is never nil
+		// (Module.Register passes the registry's resolved bus), but a host
+		// wiring the handler by hand could get it wrong, and an escape
+		// hatch granted with its audit publish about to panic is exactly
+		// the unrecorded-grant gap this path exists to close -- the same
+		// nil-bus refusal the reference app's signInMemberships store makes
+		// for its own audited system-context grant.
+		writeError(w, ErrInternal.WithParam("reason", "handler has no event bus for its audited system-context grant"))
+		return
+	}
+	sysCtx, err := tenancy.WithSystemContext(ctx, h.bus, pkgcore.SystemReason{
 		Actor:   handlerSystemActor,
 		Purpose: SystemPurposeCredentialWrite,
 	})
 	if err != nil {
-		// Unreachable in practice -- Module.Register always registers
+		// Both failure modes -- pkgcore refusing the reason (unreachable in
+		// practice: Module.Register always registers
 		// SystemPurposeCredentialWrite before any request can reach this
-		// handler -- but handled anyway rather than assumed away, per
-		// this file's own ErrInternal doc comment.
+		// handler) and the audit publish itself failing, which
+		// tenancy.WithSystemContext reports as ErrAuditPublishFailed and
+		// fails closed so no unrecorded grant ever proceeds -- are handled
+		// the same way rather than assumed away, per this file's own
+		// ErrInternal doc comment.
 		writeError(w, ErrInternal.WithCause(err))
 		return
 	}

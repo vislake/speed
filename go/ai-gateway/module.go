@@ -192,7 +192,13 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 			return err
 		}
 	}
-	m.handler = NewHandler(m.credentials)
+	// The handler is built here with the registry's resolved event bus
+	// (reg.EventBus()) as well as m.credentials: Bootstrap resolves every
+	// seam before Register runs, so Register is the earliest point at which
+	// the platform-credential operation's audited system-context publish
+	// (handler.go's tenancy.WithSystemContext call) has a bus to publish
+	// on.
+	m.handler = NewHandler(m.credentials, reg.EventBus())
 	reg.Routes.Mount(apiPath, m.handler)
 	return nil
 }
