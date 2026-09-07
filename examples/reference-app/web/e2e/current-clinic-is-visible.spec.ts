@@ -38,12 +38,28 @@ import { expect, test } from '@playwright/test'
 import { DEMO_READER } from './test-utils/accounts.js'
 import {
   APP_TEXT,
+  SIGN_IN_TEXT,
+  expectSignedIn,
   openSurface,
   otherTenant,
   readCurrentTenant,
+  readTenantLabel,
   signInAs,
+  submitPasswordSignIn,
   switchTenant,
+  visitSignIn,
 } from './test-utils/journeys.js'
+
+/** A password that satisfies authn's real policy (12 characters minimum). */
+const SIGNUP_PASSWORD = 'e2e-new-clinic-2026'
+
+/**
+ * What a tenant id looks like when nothing has given it a name: this
+ * host derives a self-service clinic's tenant id from the registrant's
+ * user id (cmd/server/self_service.go's clinicTenantOf), so an
+ * unnamed clinic surfaces as exactly this shape.
+ */
+const RAW_TENANT_ID = /^tenant-[0-9a-f-]{8,}$/i
 
 // Both tests were tagged @pending while the defect they found was open:
 // no surface named the clinic it was scoped to, and a switch produced no
@@ -108,5 +124,68 @@ test(
       page.getByRole('main').getByText(from, { exact: false }),
       `after switching away from ${from}, the work area still names the old clinic`,
     ).toHaveCount(0)
+  },
+)
+
+test(
+  'a clinic a practice just created for itself is named, not left as an id',
+  // @pending, not @budget: the defect this checks is OPEN. Its two
+  // siblings above are @budget because they pass and only the sign-in
+  // budget keeps them out of the default run -- conflating the two is
+  // exactly what this suite split the tags to prevent, and tagging this
+  // one @budget would have filed a live defect under "verified".
+  { tag: '@pending' },
+  async ({ page }) => {
+    // THE OBSERVATION THIS GATE HAD WRONG
+    //
+    // Its two tests above sign in as a demo account, and they passed --
+    // while the property they exist for was failing for the newest kind
+    // of clinic in the product. The clinic's NAME is resolved from the
+    // host's own hard-coded demo roster, so a clinic created at run time
+    // by self-service registration is not in it: the switcher shows the
+    // raw tenant id and the work area names no clinic at all. Verified
+    // by hand on the real deployment during acceptance, on every surface
+    // (home, cases, new case), while these gates stayed green.
+    //
+    // A gate whose subject is "can a person tell which clinic they are
+    // working in" cannot only ever ask it about the clinics that were
+    // configured before the server booted.
+    //
+    // It deliberately does NOT assert what the clinic should be called
+    // -- that is a product decision (the practice's own name at signup,
+    // an editable field later, something else). It asserts the two
+    // things any answer has to satisfy: a person can recognise it, and
+    // the work area says it.
+    const email = `e2e-named-clinic-${Date.now()}@example.com`
+
+    await visitSignIn(page)
+    await page.getByRole('button', { name: SIGN_IN_TEXT.registerAction }).click()
+    await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(email)
+    await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(SIGNUP_PASSWORD)
+    await page
+      .getByRole('textbox', { name: SIGN_IN_TEXT.displayNameLabel })
+      .fill('Northside Dental')
+    await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
+    await expect(page.getByRole('status')).toContainText(APP_TEXT.registerSuccess)
+    await page.getByRole('button', { name: APP_TEXT.registerBackToSignIn }).click()
+    await submitPasswordSignIn(page, email, SIGNUP_PASSWORD)
+    await expectSignedIn(page)
+
+    // Recognisable: whatever the switcher shows, it is not a bare id. A
+    // dentist asked "which clinic are you in" cannot answer
+    // "tenant-84ef467d-3653-41d8-a604-a1e686eb8be6".
+    const clinic = await readTenantLabel(page)
+    expect(
+      clinic,
+      `the clinic this practice just created is shown as a raw tenant id (${clinic}), which names nothing a person can recognise`,
+    ).not.toMatch(RAW_TENANT_ID)
+
+    // And said where the work happens, the same property the demo
+    // clinics get from the two tests above.
+    await openSurface(page, APP_TEXT.navHome)
+    await expect(
+      page.getByRole('main').getByText(clinic, { exact: false }),
+      `the home surface never names the clinic being worked in (${clinic}), so a person opening a patient record cannot tell where it lands`,
+    ).toBeVisible()
   },
 )
