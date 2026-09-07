@@ -43,6 +43,26 @@
  * one thing it is for. The sign-ins this gate spends are covered by the
  * @pending tier being its own invocation against its own freshly booted
  * server, which is the same mechanism that makes @budget a real tier.
+ *
+ * WOULD IT PASS ON A CORRECT IMPLEMENTATION?
+ *
+ * That is the question a @pending gate can normally never answer about
+ * itself, and it is the one that matters: a gate written before the
+ * surface exists is only as good as its own untested machinery. This
+ * one's machinery was tested separately, against a working download.
+ *
+ * A throwaway page serving a real `<a download>` to a PNG was driven on
+ * chromium and webkit: the click fired the download event, the file
+ * arrived named smile.png, `download.path()` returned a path rather than
+ * null (so `acceptDownloads` is on by default in this config -- had it
+ * been off, this gate would have failed a correct implementation for a
+ * reason belonging to the harness), and the saved bytes passed the magic
+ * check. The file was SIXTY-NINE bytes: the exact size the byte
+ * threshold this gate used to carry would have rejected, measured on a
+ * download that was in every way correct.
+ *
+ * So what remains untested here is only whether the product grows the
+ * control -- not whether this gate can recognise it when it does.
  */
 import { expect, test } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
