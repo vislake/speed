@@ -47,6 +47,7 @@ import {
   submitPasswordSignIn,
   visitSignIn,
 } from './test-utils/journeys.js'
+import { PATIENT_PHOTO } from './test-utils/cases.js'
 
 /** The app's own credits copy (its en-US bundle). */
 const CREDITS_TEXT = {
@@ -65,15 +66,6 @@ const CREDITS_TEXT = {
   failedAttempt: 'This generation failed and cannot be retried.',
 } as const
 
-/** A patient photo: the smallest thing the server's own probe accepts. */
-const PATIENT_PHOTO = {
-  name: 'patient-before.png',
-  mimeType: 'image/png',
-  buffer: Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-    'base64',
-  ),
-}
 
 /**
  * This spec's own database and server. The run's shared server cannot be

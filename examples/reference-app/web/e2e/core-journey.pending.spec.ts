@@ -41,16 +41,17 @@
  * layout, wording, component choice or route shape. Where a locator names
  * a control, the name is this suite's expectation of an accessible name,
  * not a design instruction -- the UI round is free to name it otherwise,
- * in which case UI_NAMES below is the one place to reconcile, and the
- * reconciliation is a conversation about what a control should be called,
- * which is a conversation worth having in the open rather than a hidden
- * test-id.
+ * in which case test-utils/cases.ts's CASE_UI is the one place to
+ * reconcile (it moved out of this file when the gates for the brief's
+ * remaining surfaces needed the same names). That reconciliation is a
+ * conversation about what a control should be called, which is worth
+ * having in the open rather than buried in a test id.
  *
  * The blocks are ordered the way they will be delivered (A first: it is
  * the journey's entrance), and each is independently runnable, so a block
  * can be accepted the day it lands instead of waiting for the whole.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 import { DEMO_OWNER, DEMO_READER } from './test-utils/accounts.js'
 import {
   openSurface,
@@ -58,60 +59,15 @@ import {
   signInAs,
   switchTenant,
 } from './test-utils/journeys.js'
-
-/**
- * The accessible names the gates look for. Expectations, not decrees:
- * when the UI lands with different names, this block is what changes,
- * and nothing else in the file should need to.
- */
-const UI_NAMES = {
-  /** Block A: the nav entry that leads to the practice's cases. */
-  navCases: /cases|patients/i,
-  /** Block A: the control that starts a new case. */
-  newCase: /new case|create case|add case/i,
-  /** Block A: the field naming the case (a patient reference). */
-  caseNameField: /case name|patient|reference/i,
-  /** Block A: the control that attaches a photo to the open case. */
-  addPhoto: /add photo|upload photo|choose file|upload/i,
-  /** Block B: the control that starts a simulation from the open photo. */
-  simulate: /simulate|generate/i,
-  /** Block B: the region showing the original and the result together. */
-  comparison: /before.*after|comparison/i,
-  /** Block C: the control that mints a patient-facing link. */
-  share: /share|link/i,
-  /** Block D: where the cost of one generation is shown. */
-  cost: /credit|cost|usage/i,
-  /**
-   * Block D: the nav entry leading to the standing balance.
-   *
-   * The real name, not a pattern that might reach it. This was
-   * `/account|billing|usage/i`, which matches NONE of them -- the entry
-   * is called "Credits" -- and instead matched "Account", whose surface
-   * happens to carry digits, so the gate passed on chromium by landing
-   * on the wrong page entirely. On webkit and the iPad project the same
-   * mistake failed, which is the only reason it was found. A pattern
-   * loose enough to reach the thing it wants is loose enough to reach
-   * something else.
-   */
-  navCredits: 'Credits',
-} as const
-
-/** A patient reference unique to one run, so a rerun never collides. */
-function caseName(): string {
-  return `E2E patient ${Date.now()}`
-}
-
-/** A small, valid PNG standing in for a patient photograph. */
-const PATIENT_PHOTO = {
-  name: 'patient-before.png',
-  mimeType: 'image/png',
-  // A 1x1 opaque pixel: the smallest thing the server's own probe will
-  // still accept as a real PNG.
-  buffer: Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-    'base64',
-  ),
-}
+import {
+  CASE_UI,
+  PATIENT_PHOTO,
+  caseName,
+  createCaseWithPhoto,
+  expectBeforeAndAfter,
+  openCaseWithPhoto,
+  openCaseWithSimulation,
+} from './test-utils/cases.js'
 
 test.describe('the core journey', { tag: '@budget' }, () => {
   test('block A: a practice opens a case with the patient photo in one step', async ({ page }) => {
@@ -126,7 +82,7 @@ test.describe('the core journey', { tag: '@budget' }, () => {
     // it through that menu. Asserting the link's visibility instead made
     // this gate accuse the product of having no entrance on the one
     // device the product is most often held in.
-    await openSurface(page, UI_NAMES.navCases)
+    await openSurface(page, CASE_UI.navCases)
 
     // One step, not two. The backend takes a case's photos as storage
     // object ids it already holds (cases.CreateCaseInput.PhotoObjectIDs),
@@ -160,11 +116,11 @@ test.describe('the core journey', { tag: '@budget' }, () => {
     const name = caseName()
 
     await signInAs(page, DEMO_OWNER)
-    await openSurface(page, UI_NAMES.navCases)
-    await page.getByRole('button', { name: UI_NAMES.newCase }).click()
-    await page.getByRole('textbox', { name: UI_NAMES.caseNameField }).fill(name)
+    await openSurface(page, CASE_UI.navCases)
+    await page.getByRole('button', { name: CASE_UI.newCase }).click()
+    await page.getByRole('textbox', { name: CASE_UI.caseNameField }).fill(name)
     const chooser = page.waitForEvent('filechooser')
-    await page.getByRole('button', { name: UI_NAMES.addPhoto }).click()
+    await page.getByRole('button', { name: CASE_UI.addPhoto }).click()
     await (await chooser).setFiles(PATIENT_PHOTO)
     await page.getByRole('button', { name: /create|save|confirm/i }).click()
     await expect(page.getByText(name)).toBeVisible({ timeout: 30_000 })
@@ -180,7 +136,7 @@ test.describe('the core journey', { tag: '@budget' }, () => {
     // the way a shift change happens at a front desk.
     await signInAs(page, DEMO_READER)
     await switchTenant(page, clinic)
-    await openSurface(page, UI_NAMES.navCases)
+    await openSurface(page, CASE_UI.navCases)
     await expect(
       page.getByText(name),
       'a colleague in the same practice cannot see the case, so the patient gets a second chart',
@@ -237,7 +193,7 @@ test.describe('the core journey', { tag: '@budget' }, () => {
     await signInAs(page, DEMO_OWNER)
     await openCaseWithPhoto(page)
 
-    await page.getByRole('button', { name: UI_NAMES.simulate }).click()
+    await page.getByRole('button', { name: CASE_UI.simulate }).click()
 
     // Generation is asynchronous by design (internal/smilesim enqueues a
     // job), so the person must be told it is happening rather than left
@@ -255,7 +211,7 @@ test.describe('the core journey', { tag: '@budget' }, () => {
 
     // The result, and the original, visible together: a dentist shows the
     // patient the difference, which is the product's entire proposition.
-    const comparison = page.getByRole('region', { name: UI_NAMES.comparison })
+    const comparison = page.getByRole('region', { name: CASE_UI.comparison })
     await expect(comparison, 'the result must be shown against the original').toBeVisible({
       timeout: 120_000,
     })
@@ -266,11 +222,11 @@ test.describe('the core journey', { tag: '@budget' }, () => {
     await signInAs(page, DEMO_OWNER)
     await openCaseWithSimulation(page)
 
-    await page.getByRole('button', { name: UI_NAMES.share }).click()
+    await page.getByRole('button', { name: CASE_UI.share }).click()
 
     // The link is handed to the practice in a form they can actually send
     // -- readable on screen, not only in a clipboard a test cannot read.
-    const link = page.getByRole('textbox', { name: UI_NAMES.share })
+    const link = page.getByRole('textbox', { name: CASE_UI.share })
     await expect(link, 'the practice must be able to see and copy the link').toBeVisible()
     const url = await link.inputValue()
     expect(url, 'the share control must produce a URL').toMatch(/^https?:\/\//)
@@ -366,7 +322,7 @@ test.describe('the core journey', { tag: '@budget' }, () => {
     // so a surface that said the word "credits" and no amount would have
     // passed a gate whose whole subject is how much was spent. A cost
     // that does not say how much is not a cost.
-    const cost = page.getByRole('main').getByText(UI_NAMES.cost).first()
+    const cost = page.getByRole('main').getByText(CASE_UI.cost).first()
     await expect(cost, 'a generation must say what it cost').toBeVisible()
     await expect(
       cost,
@@ -391,7 +347,7 @@ test.describe('the core journey', { tag: '@budget' }, () => {
     // navigation is behind the menu button, and clicking the link
     // directly is the desktop-only mistake this suite has now made six
     // times.
-    await openSurface(page, UI_NAMES.navCredits)
+    await openSurface(page, CASE_UI.navCredits)
     // Polled to settle, because the balance is a fetch and the heading
     // renders before it answers.
     //
@@ -439,31 +395,6 @@ test.describe('the core journey', { tag: '@budget' }, () => {
  * whatever the newest case is rather than creating one, mirroring a
  * receptionist continuing yesterday's work.
  */
-async function openCaseWithPhoto(page: Page): Promise<void> {
-  // CREATES the case, rather than hoping one is there.
-  //
-  // This helper's own doc comment promised to create one "when the run
-  // has none" and never did: it clicked the first row and asserted it
-  // was visible. Against a fresh database -- which every local run gets,
-  // deliberately -- there is no row, so every block-B gate failed with
-  // "block B starts from a case with a photo, which block A is what
-  // creates" the moment block B's surface actually landed. The helper
-  // was describing an intention, and the note left in it ("its shape
-  // will firm up when block A's surface lands, which is the point at
-  // which guessing stops") came due exactly there.
-  //
-  // Creating unconditionally rather than only-if-empty is the honest
-  // shape: it makes each gate independent of what earlier gates left
-  // behind, and of the order they ran in. It costs no sign-in.
-  await openSurface(page, UI_NAMES.navCases)
-  const name = caseName()
-  await createCaseWithPhoto(page, name)
-  await page.getByText(name).click()
-  await expect(
-    page.getByRole('img', { name: /photo|patient|before/i }).first(),
-    'the case just created does not show the photo submitted with it',
-  ).toBeVisible({ timeout: 30_000 })
-}
 
 /**
  * Asserts a region shows a genuine before/after pair: two images, both
@@ -486,61 +417,6 @@ async function openCaseWithPhoto(page: Page): Promise<void> {
  * twice fails; one rendering the same IMAGE from two different objects
  * is not what this is about.
  */
-async function expectBeforeAndAfter(
-  images: import('@playwright/test').Locator,
-  what: string,
-): Promise<void> {
-  await expect(images, `${what} does not show two images`).toHaveCount(2)
-
-  // Polled, not sampled once, and this cost a round's worth of false red.
-  //
-  // The first version read the decode state immediately after the count
-  // reached two -- one `evaluateAll` and a hard assertion. But the count
-  // reaching two says the elements are THERE, not that the browser has
-  // finished with them: an <img> exists the moment it is rendered and
-  // decodes some milliseconds later. So the check raced the decode and
-  // failed on about one engine execution in six, naming a broken image
-  // while the traces showed both requests answering 200 image/png in
-  // ~35ms. The app was never at fault; the gate was reading a
-  // point-in-time sample as if it were a settled state -- the same
-  // mistake `isVisible()` made in openSurface, in a different costume.
-  //
-  // A false red is not a cheap failure. It would have gone on hitting
-  // every later block's gate, and worse, it can hide a real regression:
-  // once a gate is known to flake, its red stops being read.
-  const settled = async (): Promise<readonly { source: string; decoded: boolean }[]> =>
-    await images.evaluateAll((nodes) =>
-      nodes.map((node) => {
-        const image = node as HTMLImageElement
-        return {
-          source: image.currentSrc || image.src,
-          decoded: image.complete && image.naturalWidth > 0,
-        }
-      }),
-    )
-
-  await expect
-    .poll(async () => (await settled()).every((image) => image.decoded), { timeout: 15_000 })
-    .toBe(true)
-
-  const shown = await settled()
-
-  // Kept as an assertion rather than folded into the poll: a poll that
-  // times out says only "never became true", while this names the source
-  // that never loaded -- and a broken frame where a smile should be is
-  // exactly what a patient would report.
-  const broken = shown.filter((image) => !image.decoded).map((image) => image.source)
-  expect(
-    broken,
-    `${what} shows an image that never loaded (${broken.join(' , ')}), which is a broken frame where a smile should be`,
-  ).toEqual([])
-
-  const sources = shown.map((image) => image.source)
-  expect(
-    new Set(sources).size,
-    `${what} shows the same image twice (${sources.join(' , ')}), so nothing about the simulation is on screen`,
-  ).toBe(2)
-}
 
 /**
  * Opens one case with one patient photo, from the cases surface, the way
@@ -552,28 +428,7 @@ async function expectBeforeAndAfter(
  * how a case is opened cannot leave the later blocks driving a shape the
  * product no longer has.
  */
-async function createCaseWithPhoto(page: Page, name: string): Promise<void> {
-  await page.getByRole('button', { name: UI_NAMES.newCase }).click()
-  await page.getByRole('textbox', { name: UI_NAMES.caseNameField }).fill(name)
 
-  const chooser = page.waitForEvent('filechooser')
-  await page.getByRole('button', { name: UI_NAMES.addPhoto }).click()
-  await (await chooser).setFiles(PATIENT_PHOTO)
-
-  await page.getByRole('button', { name: /create|save|confirm/i }).click()
-  await expect(page.getByText(name), 'the case must be findable after creation').toBeVisible({
-    timeout: 30_000,
-  })
-}
-
-/** Opens a case whose simulation has already been generated. */
-async function openCaseWithSimulation(page: Page): Promise<void> {
-  await openCaseWithPhoto(page)
-  await expect(
-    page.getByRole('region', { name: UI_NAMES.comparison }),
-    'blocks C and D start from a generated simulation, which block B is what produces',
-  ).toBeVisible()
-}
 
 /**
  * That opening a patient's photo does not spend money without saying so.
@@ -617,7 +472,7 @@ test(
     await signInAs(page, DEMO_OWNER)
 
     const name = caseName()
-    await openSurface(page, UI_NAMES.navCases)
+    await openSurface(page, CASE_UI.navCases)
     await createCaseWithPhoto(page, name)
     await page.getByText(name).click()
 

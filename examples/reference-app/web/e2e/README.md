@@ -26,7 +26,7 @@ budget below rather than anything about the gates.
 | *(none)* | Verified, and it fits the budget | `pnpm test:e2e` |
 | `@budget` | **Verified passing.** Out of the default run only because the suite has no sign-in left to spend | `pnpm test:e2e:budget` |
 | `@pending` | The thing it checks is **still broken**, or its surface does not exist yet | `pnpm test:e2e:pending` |
-| | **Nothing carries `@pending` today.** Every gate written against a defect has seen its fix land, so that command answers "No tests found" -- which is the honest answer and not a broken invocation | |
+| | **No `@pending` gate is waiting on a DEFECT any more** -- every one of those has seen its fix land. The two that carry the tag today are waiting on a *surface that does not exist*, which is the tag's second meaning | |
 | `@deployment` | Safe to run against a long-running deployment (needs no sign-in, or one) | any of the above with `E2E_BASE_URL` |
 
 `@budget` and `@pending` were one tag once, and merging them cost the
@@ -596,10 +596,9 @@ that was its own acceptance criterion -- the gate was not selected. A
 tier's green says only what that tier selected.
 
 **Open defects with a gate waiting on them: none.** Every gate this
-suite wrote against a defect has seen its fix land, so
-`pnpm test:e2e:pending` selects nothing. What the list held, and what
-closed each one -- kept because the shape of these findings is the
-suite's own record of what it is for:
+suite wrote against a defect has seen its fix land. What the list held,
+and what closed each one -- kept because the shape of these findings is
+the suite's own record of what it is for:
 
 | Gate | Was waiting on | Closed by |
 |---|---|---|
@@ -608,11 +607,38 @@ suite's own record of what it is for:
 | current-clinic-is-visible (one of three) | a self-service clinic was shown as a raw tenant id and named on no surface | the clinic-naming round |
 | offered-channels-work | an SMS tab was offered that the demo cannot configure | `ba061cd`, by closing the channel rather than configuring it |
 
-An empty `@pending` tier is a claim about this suite, not about the
-product: it says every defect this suite found has been fixed, and says
-nothing about the defects it never looked for. The two lists below --
-what the deployment cannot answer, and what is not gated at all -- are
-where that difference lives.
+That is a claim about this suite, not about the product: it says every
+defect this suite found has been fixed, and says nothing about the
+defects it never looked for. The two lists below -- what the deployment
+cannot answer, and what is not gated at all -- are where that difference
+lives.
+
+**Unbuilt surfaces with a gate waiting on them** (`pnpm test:e2e:pending`):
+
+| Gate | Waiting on |
+|---|---|
+| keep-the-result | no way to save the generated image -- the only way out of the product is a screenshot |
+| add-a-colleague | no surface for a practice's people, so a colleague can only be invited through the API |
+
+These are written ahead of the work, which is the shape that produced the
+core journey: the acceptance criterion exists before the round does,
+rather than being argued about after it. Both assert what a person must
+be able to ACCOMPLISH and deliberately prescribe no layout, wording or
+route -- `test-utils/cases.ts`'s `CASE_UI` and each gate's own name
+constants are the one place to reconcile when a surface lands calling
+things something else.
+
+Two traps they were written around, both of which this suite has already
+paid for once:
+
+- **`add-a-colleague` does not match "Account".** That surface exists and
+  carries a person's own sessions and bindings; a pattern loose enough to
+  reach a team page that might live there is loose enough to land on the
+  personal one and pass.
+- **`keep-the-result` does not match "share".** A share control exists,
+  and matching it would make the gate pass on exactly the thing it says
+  is not enough -- a link that expires by design is not the clinic's own
+  copy.
 
 **What the deployment cannot answer.** The fly.io deployment has no
 image-provider configuration (`flyctl secrets list` shows no
@@ -633,14 +659,16 @@ that journey has been walked locally and not on the deployment.
 
 **Not gated at all, and why:**
 
-- **Team management.** Invitations work, but only through the API: a
-  practice cannot add a colleague by clicking, so no gate here can
-  cover it. This one is worth naming next to a green result, because
-  the green does not know the surface is missing.
-- **Downloading the result.** A practice can generate a simulation and
-  share a link, but cannot save the image.
 - **Subscription billing, usage analytics, the admin console.** No
-  browser surface exists for any of them.
+  browser surface exists for any of them, and none has a gate yet.
+
+Team management and downloading the result used to sit here, and what
+moved them out is the point: a missing surface can be gated, and until it
+is, its absence is invisible from every green result the suite produces.
+`org-invitation-sign-in` is the sharpest case -- it proves the whole
+invitation cycle and passes, while driving the API directly, because
+there is no surface to click. Its green says the backend is sound and
+says nothing about whether a dentist can add a colleague.
 
 The refund entry used to sit here for the same reason the
 provisioning-recovery one below did -- the vendor could refuse

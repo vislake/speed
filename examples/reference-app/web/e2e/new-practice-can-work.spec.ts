@@ -48,19 +48,11 @@ import {
   submitPasswordSignIn,
   visitSignIn,
 } from './test-utils/journeys.js'
+import { PATIENT_PHOTO } from './test-utils/cases.js'
 
 /** A password that satisfies authn's real policy (12 characters minimum). */
 const SIGNUP_PASSWORD = 'e2e-new-practice-2026'
 
-/** A small, valid PNG standing in for a patient photograph. */
-const PATIENT_PHOTO = {
-  name: 'patient-before.png',
-  mimeType: 'image/png',
-  buffer: Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-    'base64',
-  ),
-}
 
 /**
  * The refusals a new practice must not be left holding. Quoted from the
