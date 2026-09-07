@@ -599,10 +599,14 @@ func TestLifecycleService_Sweep_FailsFastAndLetsTheNextRunFinish(t *testing.T) {
 
 // TestLifecycleService_EnqueueExpirySweep_ShapesTheTask pins what the
 // schedule point puts on the queue: one task of the expiry-sweep type for
-// the tenant in context, with no payload and with the per-tenant
-// idempotency key that collapses concurrent enqueues into one job.
+// the tenant in context, with no payload and with the window-scoped
+// idempotency key that collapses one expirySweepWindowSize window's
+// concurrent enqueues into one job -- the enqueue's key naming the window
+// (expirySweepWindowStart) its clock places it in.
 func TestLifecycleService_EnqueueExpirySweep_ShapesTheTask(t *testing.T) {
 	life, _, _, _, queue, _ := newCleanupHarness(t)
+	now := time.Date(2026, 9, 7, 10, 30, 0, 0, time.UTC)
+	life.now = func() time.Time { return now }
 	ctx := serviceCtx("tenant-a")
 
 	if err := life.EnqueueExpirySweep(ctx); err != nil {
@@ -621,8 +625,9 @@ func TestLifecycleService_EnqueueExpirySweep_ShapesTheTask(t *testing.T) {
 	if task.Payload != nil {
 		t.Errorf("task payload = %v, want nil -- the sweep reads the rows and the clock when it runs", task.Payload)
 	}
-	if task.IdempotencyKey != expirySweepIdempotencyKey("tenant-a") {
-		t.Errorf("idempotency key = %q, want %q", task.IdempotencyKey, expirySweepIdempotencyKey("tenant-a"))
+	want := expirySweepIdempotencyKey("tenant-a", expirySweepWindowStart(now))
+	if task.IdempotencyKey != want {
+		t.Errorf("idempotency key = %q, want %q (the enqueue's own window, not a tenant-only key)", task.IdempotencyKey, want)
 	}
 }
 

@@ -83,15 +83,49 @@ import (
 // backed by LifecycleService.
 const taskTypeExpirySweep = "storage.expiry_sweep"
 
-// expirySweepIdempotencyKey derives the jobs idempotency key of a
-// tenant's expiry-sweep task from the tenant id, per the rule that an
-// idempotency key derives from the business operation, never random: two
-// enqueues for the same tenant's sweep -- a scheduler with two replicas, a
-// manual re-run -- collapse into one job, so a tenant is never swept by two
-// workers at once. The "storage.sweep:" prefix keeps the key inside the
-// module's namespace within the shared queue store.
-func expirySweepIdempotencyKey(tenant pkgcore.TenantID) string {
-	return "storage.sweep:" + string(tenant)
+// expirySweepWindowSize is the period one expiry-sweep idempotency key
+// covers: a sweep is enqueued under the key of the expirySweepWindowSize
+// window (expirySweepWindowStart) its enqueue falls in, so the same-window
+// duplicates the original key existed to collapse -- a scheduler with two
+// replicas, a manual re-run -- still merge into one job, while an enqueue
+// in a later window becomes a NEW job and the sweep runs again. The window
+// is what makes the sweep periodic at all: jobs' idempotency is
+// unconditional for one key on StandaloneQueue (a resolved key is held
+// forever), so a tenant-only key would give each tenant exactly one sweep
+// per database file -- the pre-window design's recorded residual -- and,
+// worse, a sweep job that dead-letters would poison its tenant forever,
+// since every later enqueue would keep returning the dead job's id. A
+// dead-lettered job now poisons only its own window; the next window's
+// enqueue is a fresh key and runs. One hour means an expired object is
+// reaped at most expirySweepWindowSize after the sweep that should have
+// caught it was enqueued -- well inside the day-scale horizons retention
+// deadlines are declared in -- while keeping the sweep load at one task
+// per tenant per hour at most.
+const expirySweepWindowSize = time.Hour
+
+// expirySweepWindowStart is the expiry-sweep window the enqueue at now
+// belongs to -- the absolute hour boundary now.Truncate(expirySweepWindowSize)
+// lands in. Two replicas enqueuing within the same window share one key
+// (and one job); a tick in a later window gets its own. Truncation is on
+// the absolute clock, never a timezone-local calendar cut, so every
+// replica agrees on the boundary regardless of its own location.
+func expirySweepWindowStart(now time.Time) time.Time {
+	return now.Truncate(expirySweepWindowSize)
+}
+
+// expirySweepIdempotencyKey derives the jobs idempotency key of one
+// expiry-sweep window for a tenant, per the rule that an idempotency key
+// derives from the business operation, never random: the operation one key
+// names is "the sweep of windowStart", not "some sweep or other" -- a
+// periodic task's identity inherently includes WHICH period it is for (the
+// same reasoning notification's derived keys encode the business
+// operation's identity). windowStart is the expirySweepWindowSize window
+// start the enqueue belongs to (expirySweepWindowStart). The
+// "storage.sweep:" prefix keeps the key inside the module's namespace
+// within the shared queue store, and the RFC 3339 window stamp keeps the
+// key readable in DeadLetterJobs while staying unambiguous.
+func expirySweepIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) string {
+	return "storage.sweep:" + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
 }
 
 // LifecycleService ends object life: Delete removes one object -- its
@@ -112,6 +146,14 @@ type LifecycleService struct {
 	// queue is the jobs.Queue expiry-sweep tasks are enqueued on, the same
 	// instance Module wires for the thumbnail-derive task.
 	queue jobs.Queue
+
+	// now is the clock EnqueueExpirySweep reads to place the enqueue in its
+	// expirySweepWindowSize window (expirySweepWindowStart). It is a field,
+	// not a time.Now() call at the enqueue site, so the window a sweep is
+	// enqueued under is deterministic in tests -- the same clock-seam
+	// pattern Sweep's own callers rely on -- while defaulting to the real
+	// clock for every production call.
+	now func() time.Time
 }
 
 // newLifecycleService returns a LifecycleService deleting and sweeping over
@@ -125,6 +167,7 @@ func newLifecycleService(objects *ObjectRepository, derivatives *DerivativeRepos
 		objects:     objects,
 		derivatives: derivatives,
 		queue:       queue,
+		now:         time.Now,
 	}
 }
 
@@ -336,11 +379,17 @@ func (s *LifecycleService) reclaimUpload(ctx context.Context, row Object) error 
 
 // EnqueueExpirySweep enqueues the expiry-sweep task for the tenant ctx
 // carries. It is the host-facing schedule point: a host with workers runs
-// it on its own timer per tenant, and the task's per-tenant idempotency key
-// collapses concurrent enqueues -- a scheduler with replicas, a manual
-// re-run -- into one job, so a tenant is never swept by two workers at
-// once. The task carries no payload: the sweep reads the rows and the
-// clock when it runs.
+// it on its own timer per tenant, and the task's window-scoped idempotency
+// key (expirySweepIdempotencyKey) collapses the enqueues of one
+// expirySweepWindowSize window -- a scheduler with two replicas ticking
+// in the same window, a manual re-run -- into one job, so a tenant is
+// never swept by two workers at once. An enqueue whose clock has moved
+// into a later window (expirySweepWindowStart) is a new job and runs
+// again: this is what makes the sweep periodic on queues whose idempotency
+// is unconditional, and what keeps one dead-lettered sweep from poisoning
+// its tenant forever -- see expirySweepIdempotencyKey's doc comment for
+// the full window semantics. The task carries no payload: the sweep reads
+// the rows and the clock when it runs.
 //
 // ctx must carry a tenant; the task's own TenantID is taken from it. A
 // caller with no tenant in context gets ErrInternal, because a tenant-less
@@ -362,7 +411,7 @@ func (s *LifecycleService) EnqueueExpirySweep(ctx context.Context) error {
 	_, err = s.queue.Enqueue(ctx, jobs.Task{
 		Type:           taskTypeExpirySweep,
 		TenantID:       tenant,
-		IdempotencyKey: expirySweepIdempotencyKey(tenant),
+		IdempotencyKey: expirySweepIdempotencyKey(tenant, expirySweepWindowStart(s.now())),
 	})
 	return err
 }
