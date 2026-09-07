@@ -151,6 +151,42 @@ test.describe('the core journey', { tag: '@pending' }, () => {
     ).toBeVisible({ timeout: 30_000 })
   })
 
+  test('block B: the practice chooses the smile it wants, not a hardcoded one', async ({
+    page,
+  }) => {
+    // "Multiple smile/tooth shade options" is in the product brief in so
+    // many words, and the backend already carries the whole vocabulary:
+    // three smile styles (subtle / natural / bright), three tooth shades
+    // (natural / white / ultra-white) and an adjustable strength, each
+    // with its own validation answer (smilesim.unsupported_smile_style,
+    // unsupported_tooth_shade, strength_out_of_range). A surface that
+    // generates from hardcoded defaults would leave a dentist unable to
+    // do the thing the product is sold on -- offering a patient a choice
+    // -- while the capability sat unused underneath.
+    //
+    // This gate was missing from the first draft of these blocks, which
+    // asserted only that one simulation appeared. That omission would
+    // have let block B ship "working" and still miss a brief requirement.
+    await signInAs(page, DEMO_OWNER)
+    await openCaseWithPhoto(page)
+
+    // The choices a person can actually make, by name rather than by
+    // count: a dentist tells a patient "let's try the natural one", so
+    // the words matter more than the number of buttons.
+    for (const style of ['subtle', 'natural', 'bright'] as const) {
+      await expect(
+        page.getByRole('group', { name: /style|smile/i }).getByText(new RegExp(style, 'i')),
+        `the ${style} smile style must be offerable to a patient`,
+      ).toBeVisible()
+    }
+    for (const shade of ['natural', 'white', 'ultra'] as const) {
+      await expect(
+        page.getByRole('group', { name: /shade|colour|color/i }).getByText(new RegExp(shade, 'i')),
+        `the ${shade} tooth shade must be offerable to a patient`,
+      ).toBeVisible()
+    }
+  })
+
   test('block B: a simulation is generated and shown beside the original', async ({ page }) => {
     await signInAs(page, DEMO_OWNER)
     await openCaseWithPhoto(page)
