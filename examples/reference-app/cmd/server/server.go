@@ -3295,21 +3295,27 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// their own and keep exactly the memberships and grants the seeds
 	// give them; every registration that reaches the composed handler
 	// from here on -- a browser's, or a flow test's -- is a self-service
-	// registration and gets its own clinic tenant, org root, membership
-	// and owner grant before its 201 answer leaves (on the in-process
-	// bus, where the subscription's provisioning runs synchronously
-	// inside the register request itself). The clinic's org root is named
-	// after the registrant's own authn display name (read through the
-	// authn service handed in here), and the standaloneQueue rides along
-	// for the failure half of the guarantee: a synchronous provisioning
-	// attempt that fails enqueues the retry job that converges the clinic
-	// (self_service.go's # Failure semantics), and the queue's worker was
-	// started above, so the retry runs on this same process's pool.
+	// registration and gets its own clinic tenant, org root, membership,
+	// owner grant, demo-plan subscription and credit seed before its 201
+	// answer leaves (on the in-process bus, where the subscription's
+	// provisioning runs synchronously inside the register request
+	// itself). The clinic's org root is named after the registrant's own
+	// authn display name (read through the authn service handed in here);
+	// the three billing services ride along as the subscription and
+	// credit half of the provisioned clinic -- the same PlanService,
+	// SubscriptionService and CreditService the two demo seeds above just
+	// used, so a clinic's subscription and starting balance are the demo
+	// tenant's own (provision's own doc comment in self_service.go) --
+	// and the standaloneQueue rides along for the failure half of the
+	// guarantee: a synchronous provisioning attempt that fails enqueues
+	// the retry job that converges the clinic (self_service.go's #
+	// Failure semantics), and the queue's worker was started above, so
+	// the retry runs on this same process's pool.
 	// cfg.failSelfServiceProvision rides along as the failure-injection
 	// hook -- nil under the disabled default (APP_FAIL_SELF_SERVICE_PROVISION
 	// absent or 0), armed either by configFromEnv's own env-driven parse or
 	// by a test's serverConfig.
-	if wireErr := wireSelfService(ctx, reg, orgModule, rbacService, authnModule.Service(), standaloneQueue, cfg.failSelfServiceProvision); wireErr != nil {
+	if wireErr := wireSelfService(ctx, reg, orgModule, rbacService, authnModule.Service(), billingModule.Plans(), billingModule.Subscriptions(), billingModule.Credits(), standaloneQueue, cfg.failSelfServiceProvision); wireErr != nil {
 		_ = cleanup()
 		return nil, nil, nil, wireErr
 	}

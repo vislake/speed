@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/vislake/speed/go/authn"
+	"github.com/vislake/speed/go/billing"
 	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/org"
@@ -30,6 +31,17 @@ import (
 // product, exactly what org's own authn.user.created subscription gives a
 // user whose creation event carries a tenant, plus the tenant itself and
 // the owner grant the "what may this user do" half of the product needs.
+// Provisioning also subscribes the clinic to the demo entitlement Plan
+// and seeds its credit balance -- the same subscription (ensureDemoSubscription)
+// and the same grant (grantDemoCredits) the boot-time demo seeding gives
+// a demo tenant, demo_entitlements.go and demo_credits.go -- so the
+// product's gated AI routes are open and payable from the clinic's very
+// first request: a clinic whose registration granted neither would find
+// its first smile simulation refused with aigateway.entitlement_denied
+// on a zero balance, the dead end this file's sibling regression suite
+// closes. The billing steps are provision steps like any other, which is
+// what keeps them under the same failure/retry semantics as the org and
+// rbac ones (# Failure semantics).
 //
 // The provisioning follows the same assembly shapes the demo seeding
 // already established (demo_users.go's addDemoOrgMembership and
@@ -109,8 +121,11 @@ import (
 // so a clinic that never appeared would strand the registrant in the dead
 // end this file exists to close. Every step of provision is idempotent --
 // the tenant is derived from the user id, and org's tree and membership
-// writes and rbac's role and grant writes reconcile on a repeat -- which
-// is what makes a FAILED attempt retryable: the retry job scheduled on
+// writes and rbac's role and grant writes reconcile on a repeat, the
+// billing subscription step's Active check (ensureDemoSubscription) makes
+// an already-subscribed clinic a no-op, and the credit step's balance
+// guard (grantDemoCredits) never double-seeds -- which is what makes a
+// FAILED attempt retryable: the retry job scheduled on
 // the app's own job queue (scheduleProvisionRetry) re-runs the same
 // provision until it succeeds, converging the clinic exactly as a
 // redelivered event would have. The job row is the durable record of the
@@ -142,14 +157,18 @@ import (
 // comment) -- register, retry convergence, one sign-in.
 //
 // No host-side ledger stands behind any of this. A completed clinic is
-// the org rows a previous boot left in the database -- the clinic's org
-// tree, the membership and the grants are the whole of the durable
-// record, and the sign-in store's "which tenants does this account belong
-// to" answer reads them directly through org's own cross-tenant query
+// the rows a previous boot left in the database -- the clinic's org
+// tree, the membership and the grants, joined by its billing
+// subscription and credit rows (provision's own last two steps), are the
+// whole of the durable record, and the sign-in store's "which tenants
+// does this account belong to" answer reads them directly through org's
+// own cross-tenant query
 // (sign_in_memberships.go's doc comment records the self_service_clinics
 // ledger's retirement in the same round), so a boot against a database a
 // previous boot provisioned clinics into needs no re-discovery pass and
-// keeps every clinic owner's sign-in working. A clinic whose provisioning
+// keeps every clinic owner's sign-in working -- and every clinic's
+// subscription Active and balance intact, since nothing re-runs for a
+// clinic whose provisioning already completed. A clinic whose provisioning
 // never completed has no boot-time record to re-discover either -- its
 // retry job row, not a host bookkeeping row, is what the next boot's
 // queue start re-dispatches.
@@ -163,6 +182,28 @@ type selfServiceProvisioner struct {
 	// owner grant are ensured through (EnsureBuiltinRoles then
 	// AssignRole, the same order seedDemoGrants uses).
 	rbacService *rbac.Service
+	// plans is the billing.PlanService whose platform-wide demo Plan the
+	// clinic's subscription is created against: provision resolves it
+	// through demo_entitlements.go's demoEntitlementPlan (resolved-else-
+	// created, the very plan the boot-time demo seed subscribes its demo
+	// tenants to) on every provisioning attempt, so a clinic's
+	// subscription never depends on the demo seed having run first.
+	// Always set by wireSelfService.
+	plans *billing.PlanService
+	// subscriptions is the billing.SubscriptionService the clinic's
+	// Active subscription to the demo Plan is ensured through
+	// (demo_entitlements.go's ensureDemoSubscription) -- the same service
+	// and the same subscription shape seedDemoEntitlements gives every
+	// demo tenant, which is exactly what opens the app's gated AI routes
+	// (smilesim's entitlement pre-flight, internal/smilesim/service.go)
+	// to the clinic's own requests. Always set by wireSelfService.
+	subscriptions *billing.SubscriptionService
+	// credits is the billing.CreditService the clinic's starting credit
+	// balance is granted through (demo_credits.go's grantDemoCredits) --
+	// the same service, amount and reason seedDemoCredits gives every
+	// demo tenant, the balance smile simulations reserve against.
+	// Always set by wireSelfService.
+	credits *billing.CreditService
 	// authnSvc is the service whose user repository the clinic's name is
 	// read from: the registrant's authn display name, the name this host
 	// gives the clinic's org root. The user-created event payload carries
@@ -446,11 +487,20 @@ func (p *selfServiceProvisioner) scheduleProvisionRetry(ctx context.Context, use
 // provision creates (or ensures, on a redelivery or a retry) the whole
 // clinic shape for userID in tenant clinic: the org tree root (named
 // after the name the registrant gave at registration, or the catalog
-// default), the membership, the built-in roles and the owner grant. Every
+// default), the membership, the built-in roles, the owner grant, the
+// clinic's subscription to the demo entitlement Plan (ensureDemoSubscription,
+// the same Active subscription the demo seeding gives a demo tenant -- the
+// grant that opens the app's gated AI routes to the clinic) and its demo
+// credit seed (grantDemoCredits, the same starting balance a demo tenant's
+// boot seed gets -- the balance a smile simulation reserves against). Every
 // step is idempotent and every step runs under the clinic tenant's own
-// context -- org's tree and membership rows and rbac's role and binding
-// rows are all tenant data, and nothing here reads or writes across a
-// tenant boundary.
+// context -- org's tree and membership rows, rbac's role and binding rows
+// and billing's subscription and credit rows are all tenant data, and
+// nothing here reads or writes across a tenant boundary. A redelivery or a
+// retry whose earlier attempt already landed the subscription or the
+// credits converges on the ensure's own guards (an Active subscription is
+// left where it is; a non-zero balance is never double-seeded), exactly
+// as it converges the org and rbac rows.
 func (p *selfServiceProvisioner) provision(ctx context.Context, userID string, clinic pkgcore.TenantID) error {
 	// failProvision is the injection point (selfServiceProvisioner's own
 	// doc comment): armed, it fails this attempt before any step runs, so
@@ -502,6 +552,39 @@ func (p *selfServiceProvisioner) provision(ctx context.Context, userID string, c
 	}
 	if err := p.rbacService.AssignRole(tenantCtx, rbac.Subject{TenantID: clinic, UserID: userID}, rbac.BuiltinRoleOwner, rbac.Scope{}); err != nil {
 		return fmt.Errorf("reference-app: grant the clinic owner role: %w", err)
+	}
+
+	// The clinic's subscription to the demo entitlement Plan: the SAME
+	// Active subscription the demo seeding gives a demo tenant at boot
+	// (demo_entitlements.go's ensureDemoSubscription over the SAME demo
+	// Plan), resolved-else-created here rather than assumed seeded -- a
+	// clinic's subscription must never depend on the boot-time demo seed
+	// having run first. It is the grant the app's gated AI routes judge:
+	// without it the clinic owner's first smile simulation would be
+	// refused with aigateway.entitlement_denied before anything else ran
+	// (internal/smilesim/service.go's entitlement pre-flight), the
+	// browser-verified defect this round closes.
+	// planErr is named apart from the function-scope err above (the org
+	// root step's own): this resolution is the first use of an error
+	// variable AFTER provision's earlier if-init errs, and reusing the
+	// outer err there would turn those long-standing inner shadows into
+	// govet shadow reports.
+	plan, planErr := demoEntitlementPlan(tenantCtx, p.plans)
+	if planErr != nil {
+		return fmt.Errorf("reference-app: resolve the clinic's entitlement plan: %w", planErr)
+	}
+	if err := ensureDemoSubscription(tenantCtx, p.subscriptions, plan, clinic); err != nil {
+		return fmt.Errorf("reference-app: subscribe the clinic to the demo entitlement plan: %w", err)
+	}
+
+	// The clinic's starting credit balance: the SAME grant the demo
+	// seeding gives a demo tenant at boot (demo_credits.go's
+	// grantDemoCredits -- the same amount, for the same reason, through
+	// the same service), the balance the clinic's first smile simulations
+	// reserve against. The balance-zero guard inside the grant makes this
+	// step converge on a retry whose earlier attempt already landed it.
+	if err := grantDemoCredits(tenantCtx, p.credits, clinic); err != nil {
+		return fmt.Errorf("reference-app: seed the clinic's credit balance: %w", err)
 	}
 	return nil
 }
@@ -666,17 +749,25 @@ func userIDFromUserCreatedPayload(payload any) (string, bool) {
 // registers the retry job's handler on the standalone queue the caller
 // hands in -- the queue a failed synchronous provisioning attempt enqueues
 // its recovery onto (scheduleProvisionRetry), whose job rows survive a
-// restart and are re-dispatched by the next boot's queue start. Nothing
-// else needs wiring -- the clinic's org rows are the whole of the durable
-// record, and the sign-in store reads them directly through org's own
-// cross-tenant query (sign_in_memberships.go), so a boot against a
-// database a previous boot provisioned clinics into needs no re-discovery
-// pass and keeps every clinic owner's sign-in working. failProvision is
-// the failure-injection hook serverConfig.failSelfServiceProvision carries
-// (nil under the production default; configFromEnv arms it from
-// APP_FAIL_SELF_SERVICE_PROVISION, and a test may arm it on its own
-// serverConfig before calling buildServer), handed to the provisioner it
-// builds.
+// restart and are re-dispatched by the next boot's queue start. The three
+// billing services ride along as the provisioner's subscription and
+// credit half (selfServiceProvisioner's own field comments): plans is the
+// PlanService whose demo Plan the clinic subscribes to, subscriptions the
+// SubscriptionService the Active subscription is ensured through, and
+// credits the CreditService the clinic's starting balance is granted
+// through -- the same services, Plan and grant shape seedDemoEntitlements
+// and seedDemoCredits give the demo tenants at boot (demo_entitlements.go,
+// demo_credits.go). Nothing else needs wiring -- the clinic's org rows
+// and its billing subscription and credit rows are the whole of the
+// durable record, and the sign-in store reads them directly through
+// org's own cross-tenant query (sign_in_memberships.go), so a boot
+// against a database a previous boot provisioned clinics into needs no
+// re-discovery pass and keeps every clinic owner's sign-in working.
+// failProvision is the failure-injection hook
+// serverConfig.failSelfServiceProvision carries (nil under the production
+// default; configFromEnv arms it from APP_FAIL_SELF_SERVICE_PROVISION,
+// and a test may arm it on its own serverConfig before calling
+// buildServer), handed to the provisioner it builds.
 //
 // buildServer calls it AFTER the demo seeds have run, which is the
 // discriminator that keeps the demo path intact (selfServiceProvisioner's
@@ -700,10 +791,13 @@ func userIDFromUserCreatedPayload(payload any) (string, bool) {
 // memberships, grants and first-tenant resolution all stay as the seed
 // made them), which is the residual cost of the ordering discriminator
 // under a genuinely concurrent multi-replica boot.
-func wireSelfService(ctx context.Context, reg *pkgcore.Registry, orgModule *org.Module, rbacService *rbac.Service, authnSvc *authn.Service, queue *jobs.StandaloneQueue, failProvision func(userID string) error) error {
+func wireSelfService(ctx context.Context, reg *pkgcore.Registry, orgModule *org.Module, rbacService *rbac.Service, authnSvc *authn.Service, plans *billing.PlanService, subscriptions *billing.SubscriptionService, credits *billing.CreditService, queue *jobs.StandaloneQueue, failProvision func(userID string) error) error {
 	provisioner := &selfServiceProvisioner{
 		orgModule:     orgModule,
 		rbacService:   rbacService,
+		plans:         plans,
+		subscriptions: subscriptions,
+		credits:       credits,
 		authnSvc:      authnSvc,
 		catalog:       reg.Locales(),
 		queue:         queue,
