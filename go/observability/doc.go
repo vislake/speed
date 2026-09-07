@@ -69,16 +69,24 @@
 // masked in place. Redaction is on by default and cannot be disabled from
 // any call site (docs/internal/09-observability.md), and it holds
 // identically for every sink a host plugs in. The correlation fields
-// trace_id, span_id, tenant_id, user_id and job_id are never redacted. The
-// span attributes this package's instrumentation emits are kept secret-free
-// by construction rather than by a second pass: Middleware assembles only
-// method/route/status/tenant attributes, and the request's query string --
-// where credentials ride -- never becomes a span name or attribute. See
-// redact.go's doc comment for the full contract: the key set, the value
-// shapes, the deliberate boundaries (log messages are not scanned; API
-// responses, audit logs and dbkit encryption are separate mechanisms), and
-// the one documented escape (a hand-built *slog.Logger logged through
-// directly, outside FromContext).
+// trace_id, span_id, tenant_id, user_id and job_id are never redacted.
+// Coverage against the mandate is class-by-class partial, stated in
+// redact.go's header: credential keys and tokens are covered here (the
+// key-name stems plus the value-shape net), while plaintext PII and full
+// prompts are caller-declared classes whose declaration mechanism lands
+// with the pkgcore round's apperr work. The span attributes this package's
+// instrumentation emits are kept free of secret-shaped and id-bearing
+// material by construction rather than by a second pass: Middleware
+// assembles only method/route/status/tenant attributes, the span's
+// http.route attribute is the metric side's bounded route value rather than
+// the raw path, and the request's query string -- where credentials ride --
+// never becomes a span name or attribute (the span name, method + URL.Path,
+// is the one deliberate raw-path residual). See redact.go's doc comment for
+// the full contract: the key set, the value shapes, the coverage table and
+// deliberate boundaries (log messages are not scanned; API responses,
+// audit logs and dbkit encryption are separate mechanisms), and the one
+// documented escape (a hand-built *slog.Logger logged through directly,
+// outside FromContext).
 //
 // # The one rule that matters most: tenant_id is not a metric label
 //
