@@ -27,17 +27,21 @@ import "github.com/vislake/speed/go/pkgcore/apperr"
 //     ("the propagation window") this file's own doc keeps honest about.
 //   - ErrSignerUnavailable is the third reserved code, redirected: round
 //     1/2's AGENTS.md parenthetically associated it with "a KMS-backed
-//     signer" (round 4's vault/kmsaws), but neither of those packages
-//     declares or returns it -- their Sign/Public/Destroy failures are
-//     unwrapped fmt.Errorf, verified by grep against
-//     go/pki/signer/{vault,kmsaws}/signer.go before writing this comment.
-//     This round gives it a real, first trigger instead: GenerateCRL
-//     (crl.go) wraps a Signer.Sign failure that is not already an
-//     *apperr.Error (LocalSigner's ErrKeyNotFound passes through
-//     unwrapped) as ErrSignerUnavailable, since CRL signing is exactly the
-//     revocation-adjacent path where a KMS-backed signer's network failure
-//     would first surface. Round 4's providers may adopt this code
-//     directly in a future edit; nothing here requires them to.
+//     signer" (round 4's vault/kmsaws). Round 3 gave it its first real
+//     trigger -- GenerateCRL (crl.go) wraps a Signer.Sign failure that is
+//     not already an *apperr.Error (LocalSigner's ErrKeyNotFound passes
+//     through unwrapped) as ErrSignerUnavailable, since CRL signing is
+//     exactly the revocation-adjacent path where a KMS-backed signer's
+//     network failure would first surface. Round 3's comment predicted
+//     "round 4's providers may adopt this code directly in a future edit";
+//     the P2-3 closing round (2026-09-08) is that edit: kmsaws's
+//     signDirect answers a KMS Sign that returns no Signature field with
+//     ErrSignerUnavailable -- a signing backend that did not actually sign
+//     (see its own doc comment and go/pki/signer.go's Sign contract
+//     sentence). vault's own missing-signature-field answer stays an
+//     unwrapped fmt.Errorf, exactly as this file's original accounting
+//     recorded for both providers; what changed is that kmsaws now has a
+//     coded reason to return this code, not just GenerateCRL's wrapping.
 //   - ErrCRLNotGenerated is a new code this round adds outright, for the
 //     CRL-fetch HTTP operation when GenerateCRL has never run for the
 //     requested authority -- see crl.go.
@@ -122,13 +126,16 @@ var (
 	// answers "nothing NEW may be signed under it".
 	ErrAuthorityRevoked = apperr.Conflict("pki.authority_revoked")
 
-	// ErrSignerUnavailable reports that a Signer call this module made on
-	// the caller's behalf failed for a reason that is not itself a coded
-	// *apperr.Error -- today, only GenerateCRL's CRL-signing call (crl.go).
-	// apperr.Internal, not apperr.NotFound or apperr.Invalid: the caller
-	// did nothing wrong, the signing backend did not answer, matching
-	// storage.ErrStoreUnavailable's identical "the infrastructure seam
-	// failed" shape.
+	// ErrSignerUnavailable reports that a Signer call failed because the
+	// signing backend did not actually sign, with two triggers today:
+	// GenerateCRL (crl.go) wraps a CRL-signing failure that is not itself a
+	// coded *apperr.Error in this code, and kmsaws's signDirect
+	// (go/pki/signer/kmsaws/signer.go) answers a KMS Sign whose response
+	// carries no Signature field with it directly -- the provider adoption
+	// this code's own round-3 history predicted. apperr.Internal, not
+	// apperr.NotFound or apperr.Invalid: the caller did nothing wrong, the
+	// signing backend did not answer, matching storage.ErrStoreUnavailable's
+	// identical "the infrastructure seam failed" shape.
 	ErrSignerUnavailable = apperr.Internal("pki.signer_unavailable")
 
 	// ErrPropagationWindowNotElapsed reports that Service.PromoteNow was

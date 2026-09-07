@@ -154,6 +154,20 @@ func (s *signer) Sign(ctx context.Context, keyRef string, input []byte) ([]byte,
 // ED25519_SHA_512 (PureEdDSA) with MessageType RAW -- see doc.go's own
 // section on why this exact combination is mandatory, never
 // ED25519_PH_SHA_512/DIGEST.
+//
+// The answer is field-validated before anything is returned, mirroring the
+// vault twin's own sign path (go/pki/signer/vault signer.go's signDirect)
+// so the two implementations of this seam agree on FAILURE semantics, not
+// just success ones -- the contract go/pki/signer.go's Sign doc comment
+// states. A real KMS Sign errors on failure (a missing key, a disabled
+// key, a throttled call), so a nil *kms.SignOutput with a nil error can
+// only come from a misbehaving transport or stub; it is answered with
+// pki.ErrKeyNotFound, the same coded error the vault twin answers for a
+// nil secret. A nil or empty Signature -- the key signed nothing -- is
+// pki.ErrSignerUnavailable, the module's coded error for a signing backend
+// that did not actually sign (the provider adoption errors.go's own doc
+// comment records), never a (nil, nil) empty-signature success and never
+// a panic.
 func (s *signer) signDirect(ctx context.Context, keyRef string, input []byte) ([]byte, error) {
 	out, err := s.client.Sign(ctx, &kms.SignInput{
 		KeyId:            aws.String(keyRef),
@@ -163,6 +177,12 @@ func (s *signer) signDirect(ctx context.Context, keyRef string, input []byte) ([
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pki/signer/kmsaws: sign with %q: %w", keyRef, err)
+	}
+	if out == nil {
+		return nil, pki.ErrKeyNotFound
+	}
+	if len(out.Signature) == 0 {
+		return nil, pki.ErrSignerUnavailable.WithParam("reason", fmt.Sprintf("KMS sign response for %q carries no Signature", keyRef))
 	}
 	return out.Signature, nil
 }

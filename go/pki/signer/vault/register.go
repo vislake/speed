@@ -23,6 +23,17 @@ func init() {
 		Capabilities: 0,
 		New:          envelopeSignerFromConfig,
 	})
+	// WARNING, standing until the pin described in doc.go's "in-place
+	// Transit key rotation" section lands: this name governs the Transit
+	// key's LIFECYCLE only insofar as the pki module's own state machine
+	// does -- Vault-side rotation of a Transit key in place (Vault's own
+	// rotate endpoint) is NOT governed by that state machine (pending ->
+	// active -> retiring -> retired). Nothing here pins key_version on the
+	// sign request or reconciles versions with the module's lifecycle, so
+	// an in-place rotation silently diverges every later signature from the
+	// public key the module exports. A host choosing "signer.vault-direct"
+	// must read doc.go's section before relying on this name under any
+	// rotation regime other than the module's own create-new-key rotation.
 	mustRegister(pkgcore.Registration[pki.Signer]{
 		Name:         "signer.vault-direct",
 		Capabilities: pkgcore.KeyNeverLeavesBoundary,

@@ -312,15 +312,53 @@ func (s *signer) decryptPrivateKey(ctx context.Context, keyRef string) (ed25519.
 
 // decodeVaultSignature strips Vault Transit's "vault:v<version>:" envelope
 // off a sign response's signature field and base64-decodes the remainder
-// into the raw signature bytes crypto/ed25519.Verify expects.
+// into the raw signature bytes crypto/ed25519.Verify expects. The version
+// is parsed and validated (Vault's own "v<N>" spelling, N a positive
+// integer), and the decoded signature must be non-empty: an empty
+// signature is never success, the failure-semantics half of the Signer
+// seam contract go/pki/signer.go's Sign doc comment states, a contract
+// this implementation and the kmsaws twin (signer.go's signDirect there)
+// share.
+//
+// The version itself is deliberately NOT used beyond that validation, and
+// it is important to read that as an unfinished wiring, not a considered
+// decision: the version names WHICH generation of the Transit key produced
+// the signature, and nothing in this package can act on that yet. This
+// package's own sign request (signDirect above) pins no key_version, so
+// Vault signs with the key's latest version, and the public-key read this
+// package performs (readPublicKey/parseTransitPublicKey) -- like the pki
+// module's JWKS export -- serves the LATEST version. The two therefore
+// agree at one moment and diverge if someone rotates the Transit key in
+// place through Vault's own rotate endpoint, which bypasses the pki
+// module's key-lifecycle state machine (pending -> active -> retiring ->
+// retired) entirely and leaves nothing coordinating the flip -- doc.go's
+// "in-place Transit key rotation" section states the standing warning, and
+// the signer.vault-direct registration (register.go) carries it too.
+// Closing the gap is recorded there as a two-step plan: the sign request
+// must pin the version the module issued and exported with (Vault
+// Transit's sign endpoint accepts key_version) and reconcile it with the
+// lifecycle state, and until that pin lands the parse-and-validate here
+// keeps the field from reading like a decided irrelevance.
 func decodeVaultSignature(encoded string) ([]byte, error) {
 	parts := strings.SplitN(encoded, ":", 3)
 	if len(parts) != 3 || parts[0] != "vault" {
 		return nil, fmt.Errorf("pki/signer/vault: unexpected signature format %q", encoded)
 	}
+	// Vault's own envelope spells the version "v1", "v2", ... -- the "v"
+	// prefix is part of the field, not part of the value.
+	versionText := parts[1]
+	if len(versionText) < 2 || versionText[0] != 'v' {
+		return nil, fmt.Errorf("pki/signer/vault: unexpected signature version %q in %q", parts[1], encoded)
+	}
+	if version, err := strconv.Atoi(versionText[1:]); err != nil || version < 1 {
+		return nil, fmt.Errorf("pki/signer/vault: unexpected signature version %q in %q", parts[1], encoded)
+	}
 	sig, err := base64.StdEncoding.DecodeString(parts[2])
 	if err != nil {
 		return nil, fmt.Errorf("pki/signer/vault: decode signature: %w", err)
+	}
+	if len(sig) == 0 {
+		return nil, fmt.Errorf("pki/signer/vault: signature in %q is empty", encoded)
 	}
 	return sig, nil
 }

@@ -58,6 +58,23 @@ type Signer interface {
 	// (ED25519_SHA_512 vs. ED25519_PH_SHA_512), and a signature made under
 	// the wrong one does not verify.
 	//
+	// Failure semantics are as much this seam's contract as the success
+	// shapes, and every implementation agrees on them -- a host that swaps
+	// one registered implementation for another (signer.vault-direct for
+	// signer.aws-kms-direct, say: a registration-name change with zero code
+	// change) must observe the same failure vocabulary, not a panic where
+	// the other answered a coded error and not a silent empty-answer
+	// success. Concretely: an unrecognized keyRef is ErrKeyNotFound from
+	// every implementation (LocalSigner, vault, kmsaws alike); a backend
+	// that answers a signing request with no signature bytes at all -- a
+	// nil response, or a response whose signature field is nil or empty --
+	// is a failure, answered with an explicit error rather than (nil, nil),
+	// never a panic; and each provider field-validates the sign response
+	// it parses and fails closed on a malformed one (vault's signDirect
+	// answers ErrKeyNotFound for a nil secret and an explicit error for a
+	// missing or empty "signature" field; kmsaws's signDirect mirrors
+	// both).
+	//
 	// ErrKeyNotFound if keyRef is not recognized.
 	Sign(ctx context.Context, keyRef string, input []byte) ([]byte, error)
 

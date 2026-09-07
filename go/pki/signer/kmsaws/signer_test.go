@@ -181,6 +181,51 @@ func TestSignDirect_ProducesAPureEdDSASignature(t *testing.T) {
 	}
 }
 
+// TestSigner_DirectMode_Sign_NilResponse_FailsClosed pins the fail-closed
+// answer for a Sign whose KMS client answers (nil, nil): the vault twin's
+// own sign path (vault/signer.go's signDirect) maps a nil answer to
+// pki.ErrKeyNotFound, and this implementation must agree on that FAILURE
+// semantics -- the seam contract go/pki/signer.go's Sign doc comment
+// states -- rather than panicking on the nil *kms.SignOutput deref. A real
+// KMS Sign errors on failure, so nil-out-with-nil-error can only come from
+// a misbehaving transport or stub; the guard exists so the two
+// implementations answer the same coded error for the same empty answer.
+func TestSigner_DirectMode_Sign_NilResponse_FailsClosed(t *testing.T) {
+	fake := &fakeKMSClient{
+		sign: func(context.Context, *kms.SignInput, ...func(*kms.Options)) (*kms.SignOutput, error) {
+			return nil, nil
+		},
+	}
+	s := &signer{client: fake, mode: ModeDirectSign}
+	_, err := s.Sign(context.Background(), "key-1234", []byte("x"))
+	found, ok := apperr.As(err)
+	if !ok || found.Code != pki.ErrKeyNotFound.Code {
+		t.Errorf("Sign(nil response) error = %v, want ErrKeyNotFound (the vault twin's coded answer for the same empty response)", err)
+	}
+}
+
+// TestSigner_DirectMode_Sign_EmptySignature_FailsClosed pins the other half
+// of the same failure-semantics agreement: a Sign that answers with no
+// Signature bytes must fail with a coded error, never (nil, nil) -- an
+// empty signature reported as success is exactly the defect this test was
+// written against (signDirect returned out.Signature unconditionally).
+func TestSigner_DirectMode_Sign_EmptySignature_FailsClosed(t *testing.T) {
+	fake := &fakeKMSClient{
+		sign: func(context.Context, *kms.SignInput, ...func(*kms.Options)) (*kms.SignOutput, error) {
+			return &kms.SignOutput{}, nil
+		},
+	}
+	s := &signer{client: fake, mode: ModeDirectSign}
+	sig, err := s.Sign(context.Background(), "key-1234", []byte("x"))
+	if err == nil {
+		t.Fatalf("Sign(empty signature) = (%v, nil), want a coded error -- an empty signature must never be reported as success", sig)
+	}
+	found, ok := apperr.As(err)
+	if !ok || found.Code != pki.ErrSignerUnavailable.Code {
+		t.Errorf("Sign(empty signature) error = %v, want ErrSignerUnavailable (the signing backend did not actually sign)", err)
+	}
+}
+
 func TestSigner_DirectMode_Destroy_SchedulesDeletionWithTheMinimumWindow(t *testing.T) {
 	var gotKeyID string
 	var gotWindow *int32

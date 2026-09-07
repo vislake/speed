@@ -177,6 +177,39 @@ func TestSigner_DirectMode_Sign_UnknownKeyRef(t *testing.T) {
 	}
 }
 
+// TestDecodeVaultSignature_RejectsMalformedVersion pins the version field
+// of Vault's "vault:v<N>:" envelope being parsed and validated rather than
+// dropped unread. Before this test was written decodeVaultSignature
+// checked only parts[0] == "vault", so "vault:abc:<valid base64>" decoded
+// to a signature as though the version were meaningless -- the parsed-and-
+// dropped shape the doc comment now explains is "needed but not connected"
+// (rotation coherence with the module's lifecycle), never "unnecessary".
+func TestDecodeVaultSignature_RejectsMalformedVersion(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString(make([]byte, 64))
+	for _, envelope := range []string{
+		"vault:abc:" + payload,
+		"vault:1:" + payload,
+		"vault:v0:" + payload,
+		"vault:v-3:" + payload,
+	} {
+		if _, err := decodeVaultSignature(envelope); err == nil {
+			t.Errorf("decodeVaultSignature(%q) error = nil, want one (the version must match Vault's own \"v<N>\" spelling with N a positive integer)", envelope)
+		}
+	}
+}
+
+// TestDecodeVaultSignature_RejectsEmptySignature pins the empty-signature-
+// is-never-success half of the seam's failure semantics on this side of the
+// twin: a well-formed envelope with nothing after the version
+// ("vault:v1:") base64-decodes to zero bytes, and that empty answer must
+// be an error -- the vault twin answers the same shape the kmsaws twin's
+// own regression test covers (an empty Signature field there).
+func TestDecodeVaultSignature_RejectsEmptySignature(t *testing.T) {
+	if _, err := decodeVaultSignature("vault:v1:"); err == nil {
+		t.Error("decodeVaultSignature(\"vault:v1:\") error = nil, want one (an empty signature must never decode to success)")
+	}
+}
+
 func TestSigner_DirectMode_Destroy_DeletesTheTransitKey(t *testing.T) {
 	var deletedPath string
 	fake := &fakeTransitClient{
