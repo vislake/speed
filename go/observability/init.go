@@ -36,7 +36,10 @@ const localStdoutMetricInterval = 10 * time.Second
 // its own documented defaults before applying opts.
 type Config struct {
 	// ServiceName becomes the service.name resource attribute every span
-	// and metric is tagged with. Defaults to "speed".
+	// and metric is tagged with. Defaults to "speed"; an explicitly empty
+	// value (WithServiceName("")) is refused at Init -- service.name is a
+	// required resource attribute, and an empty one could only come from
+	// an explicit call, never from an omitted option.
 	ServiceName string
 
 	// OTLPEndpoint is the "host:port" target (see otlptracegrpc's own doc
@@ -86,7 +89,10 @@ type Config struct {
 type Option func(*Config)
 
 // WithServiceName overrides the default "speed" service.name resource
-// attribute.
+// attribute. An explicitly empty name is refused at Init (an option func
+// cannot report an error itself): service.name is a required resource
+// attribute, and the default already covers the "no override wanted"
+// case, so an empty value can only be a caller bug.
 func WithServiceName(name string) Option {
 	return func(c *Config) { c.ServiceName = name }
 }
@@ -118,6 +124,36 @@ func WithOTLPInsecure(insecure bool) Option {
 // that never blank-imports exporter/otlp -- can assert on it with
 // errors.Is instead of matching its message text.
 var ErrOTLPExporterNotRegistered = errors.New(`observability: OTLP endpoint configured but no OTLP exporter registered -- blank-import "github.com/vislake/speed/go/observability/exporter/otlp"`)
+
+// providersMu guards currentShutdown: the shutdown func of the most
+// recently SUCCEEDED Init call. Init swaps it on every success and invokes
+// the superseded func before returning, so a second Init tears the first
+// pair's providers down instead of leaking them (see Init's own doc
+// comment); a failed Init never reaches the swap, so the previous pair
+// keeps working.
+var (
+	providersMu     sync.Mutex
+	currentShutdown func(context.Context) error
+)
+
+// onceShutdown wraps f so that only its first invocation runs f; every
+// later invocation -- the swap a subsequent Init performs, or a caller
+// that still holds the func and invokes it at graceful shutdown -- returns
+// the first invocation's result without re-running f. The once-guard is
+// this module's own, because the OTel SDK's provider Shutdown methods are
+// not error-idempotent at the reader level: a second MeterProvider.Shutdown
+// answers with the metric SDK's ErrReaderShutdown (reader.go), so promising
+// upstream idempotence would be false. A second caller whose context
+// differs from the first's gets the first invocation's result; concurrent
+// callers serialize on the once.
+func onceShutdown(f func(context.Context) error) func(context.Context) error {
+	var once sync.Once
+	var err error
+	return func(ctx context.Context) error {
+		once.Do(func() { err = f(ctx) })
+		return err
+	}
+}
 
 // factoryMu guards otlpFactory and metricsReaderFactory. Both package
 // variables are written by exported Register functions -- called from
@@ -212,12 +248,13 @@ func RegisterLocalMetricsReader(f func() (sdkmetric.Reader, http.Handler, error)
 	metricsReaderFactory = f
 }
 
-// metricsHandlerMu guards currentMetricsHandler. Init runs once per
-// process in normal operation, but this package's own tests call it
-// repeatedly, so the handler is mutex-protected rather than a bare package
-// variable.
+// metricsHandlerMu guards currentMetricsHandler and metricsHandlerGen.
+// Init runs once per process in normal operation, but this package's own
+// tests call it repeatedly (and a host may re-Init deliberately), so the
+// handler is mutex-protected rather than a bare package variable.
 var (
 	metricsHandlerMu      sync.Mutex
+	metricsHandlerGen     int
 	currentMetricsHandler http.Handler = http.HandlerFunc(metricsUnavailable)
 )
 
@@ -238,11 +275,31 @@ func MetricsHandler() http.Handler {
 	return currentMetricsHandler
 }
 
-// setMetricsHandler installs h as MetricsHandler's return value.
-func setMetricsHandler(h http.Handler) {
+// installMetricsHandler installs h as MetricsHandler's return value and
+// returns the generation of this install. The generation lets one Init's
+// shutdown func clear the handler only while it is still the most recent
+// install: a second Init installs its own handler before tearing the first
+// Init's providers down, and the first Init's shutdown func -- invoked by
+// that teardown, or later by the caller who still holds it -- must not
+// clear the newer Init's handler (see clearMetricsHandlerIfCurrent).
+func installMetricsHandler(h http.Handler) int {
 	metricsHandlerMu.Lock()
 	defer metricsHandlerMu.Unlock()
+	metricsHandlerGen++
 	currentMetricsHandler = h
+	return metricsHandlerGen
+}
+
+// clearMetricsHandlerIfCurrent replaces the current metrics handler with
+// the not-configured 404 -- the post-shutdown state -- unless a newer
+// Init has since installed its own handler (gen no longer matches the
+// install this shutdown belongs to), in which case it is a no-op.
+func clearMetricsHandlerIfCurrent(gen int) {
+	metricsHandlerMu.Lock()
+	defer metricsHandlerMu.Unlock()
+	if gen == metricsHandlerGen {
+		currentMetricsHandler = http.HandlerFunc(metricsUnavailable)
+	}
 }
 
 // metricsUnavailableBody is the response body MetricsHandler serves
@@ -304,12 +361,36 @@ func metricsUnavailable(w http.ResponseWriter, _ *http.Request) {
 // actionable error naming the same import. Once wired, both signals are
 // pushed to that endpoint, and MetricsHandler reports 404, since there is
 // no local registry to scrape.
+//
+// Init may be called more than once in one process (this package's own
+// tests do, and MetricsHandler is defined as answering for the most
+// recent call). Each successful Init tears down the provider pair the
+// previous successful Init installed before returning -- the superseded
+// pair's exporters are flushed and its background processors stopped, so
+// a second Init can never leak the first pair for the process lifetime. A
+// caller that still holds an earlier Init's shutdown func may invoke it
+// later all the same: every shutdown Init hands out is once-guarded (see
+// onceShutdown -- the OTel SDK's own provider Shutdown methods are not
+// error-idempotent at the reader level), so a later invocation is a
+// no-op returning the first invocation's result, and the metrics-handler
+// clear inside is generation-guarded, so neither the swap nor a later
+// invocation can disturb the newer pair (see clearMetricsHandlerIfCurrent).
+// An Init that FAILS leaves the previous pair untouched and working --
+// the swap happens only on success.
+//
+// An explicitly empty service name (WithServiceName("")) is refused with
+// an error before any provider is built: service.name is the required
+// resource attribute every span and metric is tagged with, and the
+// omitted-option default ("speed") already covers the no-override case.
 func Init(ctx context.Context, opts ...Option) (func(context.Context) error, error) {
 	cfg := Config{ServiceName: defaultServiceName}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)
 		}
+	}
+	if cfg.ServiceName == "" {
+		return nil, errors.New(`observability: WithServiceName("") refused: service.name is the resource attribute every span and metric is tagged with and must not be empty`)
 	}
 
 	res, err := resource.Merge(resource.Default(), resource.NewSchemaless(
@@ -319,6 +400,7 @@ func Init(ctx context.Context, opts ...Option) (func(context.Context) error, err
 		return nil, fmt.Errorf("observability: build resource: %w", err)
 	}
 
+	var shutdown func(context.Context) error
 	if cfg.OTLPEndpoint != "" {
 		factoryMu.Lock()
 		factory := otlpFactory
@@ -326,14 +408,38 @@ func Init(ctx context.Context, opts ...Option) (func(context.Context) error, err
 		if factory == nil {
 			return nil, ErrOTLPExporterNotRegistered
 		}
-		shutdown, err := factory(ctx, cfg, res)
+		shutdown, err = factory(ctx, cfg, res)
 		if err != nil {
 			return nil, err
 		}
-		setMetricsHandler(http.HandlerFunc(metricsUnavailable))
-		return shutdown, nil
+		installMetricsHandler(http.HandlerFunc(metricsUnavailable))
+	} else {
+		shutdown, err = initLocalExporters(res)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return initLocalExporters(res)
+
+	// Replace the previously installed provider pair (see Init's own doc
+	// comment for the repeated-Init semantics). The swap runs only after
+	// the new pair is fully installed and only on success, so a failed
+	// Init leaves the previous pair working. Every shutdown this function
+	// hands out is once-guarded (see onceShutdown), so the swap's own
+	// invocation of the superseded func is its one real run, and a caller
+	// who still holds it gets a no-op later; its handler-clear step is
+	// generation-guarded, so neither path can uninstall the new pair's
+	// MetricsHandler.
+	shutdown = onceShutdown(shutdown)
+	providersMu.Lock()
+	previous := currentShutdown
+	currentShutdown = shutdown
+	providersMu.Unlock()
+	if previous != nil {
+		if err := previous(ctx); err != nil {
+			otel.Handle(fmt.Errorf("observability: shut down the providers a previous Init installed: %w", err))
+		}
+	}
+	return shutdown, nil
 }
 
 // initLocalExporters wires the local exporter set: traces to stdout
@@ -410,10 +516,10 @@ func initLocalExporters(res *resource.Resource) (func(context.Context) error, er
 
 	otel.SetTracerProvider(tp)
 	otel.SetMeterProvider(mp)
-	setMetricsHandler(metricsHandler)
+	gen := installMetricsHandler(metricsHandler)
 
 	shutdown := func(shutdownCtx context.Context) error {
-		setMetricsHandler(http.HandlerFunc(metricsUnavailable))
+		clearMetricsHandlerIfCurrent(gen)
 		return errors.Join(tp.Shutdown(shutdownCtx), mp.Shutdown(shutdownCtx))
 	}
 	return shutdown, nil

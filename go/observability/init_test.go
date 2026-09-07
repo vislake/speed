@@ -439,3 +439,112 @@ func stopFakeCollector(t *testing.T, _ net.Listener, srv *fakeCollectorServer) {
 		t.Errorf("fake collector Serve: %v", err)
 	}
 }
+
+// TestInit_SecondCall_TearsDownThePreviousProviders is the regression for
+// the repeated-Init leak (Finding 4a): calling Init a second time without
+// invoking the first call's shutdown used to leave the first pair of
+// providers -- and their exporters' background processors -- running for
+// the life of the process, since nothing tracked or tore them down. The
+// flush is the observable: an OTLP exporter's Shutdown flushes its pending
+// spans synchronously (proven by
+// TestInit_WithOTLPEndpoint_ExportsRealSpansAndMetricsOverOTLP's own
+// count-after-shutdown assertion), so a span ended through the FIRST
+// Init's global provider is exported to the fake collector exactly when
+// the second Init tears that first pair down. Fails before the fix
+// (verified): the second Init leaves the first pair running, nothing ever
+// shuts it down, and the fake collector receives zero trace export
+// requests; passes after: the second Init's return is preceded by the
+// first pair's shutdown, and the pending span has reached the collector.
+func TestInit_SecondCall_TearsDownThePreviousProviders(t *testing.T) {
+	lis, srv := startFakeCollector(t)
+	defer stopFakeCollector(t, lis, srv)
+	ctx := context.Background()
+
+	baseline := settledGoroutineCount(t)
+
+	shutdown1, err := obs.Init(ctx,
+		obs.WithOTLPEndpoint(lis.Addr().String()),
+		obs.WithOTLPInsecure(true),
+	)
+	if err != nil {
+		t.Fatalf("Init #1: %v", err)
+	}
+	// Plain defer, not t.Cleanup, for the exact reason the file's other
+	// OTLP tests document: the defer runs before stopFakeCollector's own
+	// defer (LIFO), so any shutdown that has not run yet still flushes
+	// against a live fake collector.
+	defer func() { _ = shutdown1(ctx) }()
+
+	// Negative control, mirroring
+	// TestInit_WithOTLPEndpoint_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer's
+	// own: an Init whose shutdown never runs must measurably add background
+	// goroutines, or the leak assertion below proves nothing.
+	if got := settledGoroutineCount(t); got <= baseline {
+		t.Fatalf("negative control did not reproduce the leak signal: goroutine count = %d after an unshut-down Init, want > baseline %d -- has OTel SDK's shutdown-less behavior changed?", got, baseline)
+	}
+
+	// One span, ended through the first Init's still-global provider: it
+	// sits in the first pair's batch span processor until that pair is
+	// shut down.
+	_, span := otel.Tracer("observability_test").Start(ctx, "op-before-reinit")
+	span.End()
+
+	// Second Init, with the first pair still up and shutdown1 never
+	// called. Init must tear the superseded pair down itself before
+	// returning -- the synchronous flush is what delivers the pending span
+	// to the fake collector.
+	shutdown2, err := obs.Init(ctx,
+		obs.WithOTLPEndpoint(lis.Addr().String()),
+		obs.WithOTLPInsecure(true),
+	)
+	if err != nil {
+		t.Fatalf("Init #2: %v", err)
+	}
+	defer func() { _ = shutdown2(ctx) }()
+
+	if got := srv.traces.count(); got < 1 {
+		t.Errorf("fake collector received %d trace export requests after the second Init, want >= 1: the first Init's providers were not torn down (its pending span was never flushed)", got)
+	}
+
+	// The second pair's own shutdown, plus the first shutdown func still
+	// being safely callable afterwards: every shutdown Init hands out is
+	// once-guarded (the OTel SDK's own provider Shutdown methods are not
+	// error-idempotent at the reader level), so the re-invocation is a
+	// no-op returning the first run's result. With the fix, both pairs'
+	// goroutines are gone and the count returns to baseline. Before the
+	// fix the first pair's goroutines survive every one of these calls.
+	if err := shutdown2(ctx); err != nil {
+		t.Errorf("shutdown #2: %v", err)
+	}
+	if err := shutdown1(ctx); err != nil {
+		t.Errorf("shutdown #1 (re-invocation after the second Init replaced it): %v", err)
+	}
+	if got := settledGoroutineCount(t); got > baseline {
+		t.Errorf("goroutine count = %d after both pairs were shut down, want <= baseline %d: providers leaked across the second Init", got, baseline)
+	}
+}
+
+// TestInit_EmptyServiceName_Refused is the regression for Finding 4b: an
+// explicitly empty service name (WithServiceName("")) used to be accepted
+// and become the resource's service.name attribute verbatim -- an empty
+// service.name is not a legal value under the OTel semantic conventions
+// this module adopts wholesale (every span and metric is tagged with it,
+// and backends key ownership off it), and it could only arise from an
+// explicit WithServiceName("") call, since the omitted-option default is
+// "speed". Options cannot report errors (their signature is func(*Config)),
+// so Init -- the module's established point for refusing an option outcome,
+// the way it refuses WithOTLPEndpoint with no registered exporter -- must.
+// Fails before the fix (verified): Init succeeds and returns a usable
+// shutdown; passes after: Init fails with an error naming the empty
+// service name, and no providers are installed (the failure precedes every
+// provider-construction and global-install step).
+func TestInit_EmptyServiceName_Refused(t *testing.T) {
+	shutdown, err := obs.Init(context.Background(), obs.WithServiceName(""))
+	if err == nil {
+		_ = shutdown(context.Background())
+		t.Fatal("Init with WithServiceName(\"\") succeeded, want an error: an empty service.name must not become the resource attribute every span and metric is tagged with")
+	}
+	if !strings.Contains(err.Error(), "service.name") {
+		t.Errorf("Init error = %q, want it to name the empty service.name", err)
+	}
+}
