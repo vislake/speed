@@ -17,6 +17,30 @@ import "strings"
 // transaction that lost the race is exactly as valid as one that had simply
 // started a little later.
 //
+// # What this classifier does NOT distinguish: when the conflict struck
+//
+// The substring match is against the driver's wording for the failure,
+// never its timing, and the two timings of a SQLITE_BUSY carry different
+// retry premises. A BUSY can surface from a statement early in the
+// transaction -- pre-commit: nothing of the attempt has taken effect, and
+// retrying from a fresh read is unconditionally safe -- or from the
+// transaction's own Commit call -- commit-time: the attempt's outcome is
+// unknown, because database/sql has already marked the transaction done
+// and, per WithTenantSession's own doc comment, fn's writes may be durably
+// committed, still visible on the connection that attempted them, or
+// rolled back. Both timings match this classifier (the wording is the
+// same either way), and both should be retried -- a commit-time conflict
+// is as transient as a pre-commit one -- but after a commit-time
+// classification the retrying caller may NOT assume the first attempt
+// recorded nothing. Discharging that assumption is the caller's
+// obligation, stated in full on WithTenantSession's own doc comment: an
+// operation retried after a conflict must be idempotent over its own
+// residue, or must re-verify the row state its earlier attempt may already
+// have changed. A classifier that could tell the timings apart would not
+// remove that obligation -- at commit time the outcome is genuinely
+// unknowable -- but naming the blindness here is what keeps a retrying
+// caller from reading "retryable" as "the first attempt had no effect".
+//
 // # Why this is a dbkit function, and why it is a string match
 //
 // A caller with such an operation cannot classify these errors itself

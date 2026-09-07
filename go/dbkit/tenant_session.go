@@ -150,6 +150,29 @@ var ErrNestedTenantSession = errors.New("dbkit: WithTenantSession called with an
 // audit-publish mechanism above depends on this call's own db.Transaction
 // returning nil meaning the real, outermost transaction genuinely
 // committed, which is not what a nested call's own nil return means).
+//
+// The return value carries one obligation every retrying caller of this
+// function must be able to read off this contract: a non-nil return does
+// NOT prove that nothing of fn's writes happened. On the commit-time
+// failure cell — a failure GORM's Transaction wrapper surfaces from
+// tx.Commit() itself (SQLite's deferred-constraint or commit-time lock
+// error among them) — database/sql marks the transaction done the instant
+// Commit is attempted, so the rollback GORM defers to is a same-call
+// no-op, and fn's writes can remain visible afterward on the very
+// connection that attempted them, neither durably committed nor rolled
+// back. AGENTS.md's "commit-time failure" known-limitation entry
+// reproduces and documents this cell, and records that no test in this
+// package covers it yet. A caller that retries on a non-nil return without
+// re-verifying what the failed attempt actually left behind can apply its
+// operation twice over what already stuck. The obligation is therefore the
+// caller's, and it is stated here because the contract is the only place
+// this package can hold it: an operation retried after a non-nil return
+// must be idempotent over its own residue, or must re-verify the row state
+// its earlier attempt may already have changed. go/sharing's guarded
+// view-recording write models the idempotency answer: its granted log row
+// doubles as the retried attempt's recognition key, so a retry that finds
+// its own committed residue reports the access as already recorded rather
+// than applying it again.
 func WithTenantSession(ctx context.Context, db *gorm.DB, fn func(tx *gorm.DB) error) error {
 	tid, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
