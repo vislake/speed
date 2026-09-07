@@ -23,7 +23,10 @@
  * the sign-in surface's (the session-lifecycle family, authn.rate_limited,
  * authn.identity_already_bound and authn.identity_requires_binding) reuse
  * the auth-ui bundle's text verbatim, so the same server answer reads the
- * same on both surfaces.
+ * same on both surfaces. Same-tier packages never import one another's
+ * catalogs, so those eight leaves are deliberate duplicates of the sign-in
+ * bundle's own -- a duplication the error-text suite pins to its source,
+ * importing the auth-ui bundles as test data, so the copies cannot drift.
  */
 
 import { useAccountUiTranslation } from './translation.js'
