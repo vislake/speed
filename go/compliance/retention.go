@@ -90,13 +90,17 @@ type SweepResult struct {
 	// asked to reap soft-deleted rows at or before.
 	Cutoff time.Time
 	// Reaped maps participant Name to how many rows it reported reaping.
-	// A participant absent from this map either errored (see Errors) or
-	// was never called (should not happen for a completed pass).
+	// A participant absent from this map was never called (should not
+	// happen for a completed pass); one present here may also appear in
+	// Errors, when its callback reaped rows before failing (see Errors).
 	Reaped map[string]int
 	// Errors maps participant Name to the error its Sweep callback
 	// returned, for participants whose callback failed. A participant
-	// present here reaped 0 rows this pass, whatever partial progress its
-	// own callback may or may not have made internally.
+	// present here may still appear in Reaped: a callback that failed
+	// part-way through hard-deleted the rows it reports reaping, and
+	// TotalReaped -- and the sweep audit's Changes["reaped"] breakdown --
+	// must count rows that are genuinely and irreversibly gone even when
+	// the callback also errored.
 	Errors map[string]error
 }
 
@@ -241,11 +245,21 @@ func (s *RetentionService) SweepTenant(ctx context.Context, tenant pkgcore.Tenan
 			continue
 		}
 		reaped, err := p.Sweep(sysCtx, tenant, cutoff)
-		if err != nil {
-			result.Errors[p.Name] = err
-			continue
-		}
 		result.Reaped[p.Name] = reaped
+		if err != nil {
+			// The participant's reported count is still recorded: a
+			// callback that failed part-way through has already
+			// hard-deleted reaped rows (pkgcore.RetentionParticipant's
+			// own contract, and the count this module's testutil
+			// participants report on a mid-loop failure), and
+			// TotalReaped -- and the audit event's Changes["reaped"]
+			// breakdown -- must count rows that are genuinely and
+			// irreversibly gone, not silently drop them from the record
+			// of the sweep because the callback also errored. This is the
+			// identical count-on-error semantics ErasureService.Erase's
+			// own accounting applies to ErasureResult.Erased.
+			result.Errors[p.Name] = err
+		}
 	}
 
 	if err := s.emitSweepAudit(ctx, result); err != nil {

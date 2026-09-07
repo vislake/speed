@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 
@@ -199,6 +200,104 @@ func TestRetentionService_SweepTenant_ParticipantErrorIsPartialFailure(t *testin
 	}
 	if result.Errors["testutil.failing"] == nil {
 		t.Errorf("Errors[%q] = nil, want errFakeParticipant", "testutil.failing")
+	}
+}
+
+// TestRetentionService_SweepTenant_ParticipantPartialCountSurvivesError
+// pins the sweep half of the count-on-error semantics the erasure side
+// already records: a participant whose Sweep callback failed part-way
+// through has already hard-deleted the rows it reports reaping, so that
+// count must survive into SweepResult.Reaped -- TotalReaped and the audit
+// event's Changes["reaped"] breakdown count rows that are genuinely and
+// irreversibly gone even when the callback also errored, never silently
+// dropping them from the record. The ungated behavior recorded the count
+// only on success, so a participant reporting (2, err) contributed 0 to
+// TotalReaped and vanished from the audit trail's reaped map entirely.
+func TestRetentionService_SweepTenant_ParticipantPartialCountSurvivesError(t *testing.T) {
+	bus := pkgcore.NewMemoryEventBus()
+	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
+		t.Fatalf("declare audit action: %v", err)
+	}
+	pkgcore.RegisterSystemPurpose(SystemPurposeRetentionSweep)
+
+	captured := &[]audit.RecordedEvent{}
+	bus.Subscribe(audit.EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
+		if rec, ok := evt.Payload.(audit.RecordedEvent); ok {
+			*captured = append(*captured, rec)
+		}
+		return nil
+	})
+
+	repo := testutil.NewFakeRepository(testutil.NewDB(t))
+	partial := pkgcore.RetentionParticipant{
+		Name: "testutil.partial",
+		// NoopErase satisfies the registrar's mandatory-Erase rule; the
+		// retention sweep under test never invokes it.
+		Erase: testutil.NoopErase,
+		Sweep: func(ctx context.Context, _ pkgcore.TenantID, _ time.Time) (int, error) {
+			// A genuine part-way failure: hard-delete both expired rows
+			// for real -- the sweep's own system context is what makes
+			// repo.HardDelete legal here -- then fail before reporting
+			// completion, the same (reaped, err) mid-loop shape
+			// testutil.NewParticipant's own Sweep returns when one of
+			// its HardDelete calls fails.
+			for _, id := range []string{"expired-1", "expired-2"} {
+				if err := repo.HardDelete(ctx, id); err != nil {
+					return 0, err
+				}
+			}
+			return 2, errFakeParticipant
+		},
+	}
+	if err := reg.Retention.Add(partial); err != nil {
+		t.Fatalf("register partial participant: %v", err)
+	}
+	svc := newRetentionService()
+	svc.retention = reg.Retention
+	svc.bus = bus
+	svc.actions = reg.AuditActions
+
+	tenant := pkgcore.TenantID("tenant-a")
+	seedFakeNote(t, repo, tenant, "expired-1", "subject-1", wellPastDefaultWindow())
+	seedFakeNote(t, repo, tenant, "expired-2", "subject-2", wellPastDefaultWindow())
+
+	result, err := svc.SweepTenant(context.Background(), tenant)
+	if !hasCode(err, ErrSweepPartialFailure.Code) {
+		t.Fatalf("SweepTenant error = %v, want %s", err, ErrSweepPartialFailure.Code)
+	}
+	if got := result.Reaped["testutil.partial"]; got != 2 {
+		t.Errorf("Reaped[testutil.partial] = %d, want 2 -- the rows the failing participant reaped before its error must still be counted", got)
+	}
+	if result.Errors["testutil.partial"] == nil {
+		t.Error("Errors[testutil.partial] is missing -- the failure must still be reported alongside the count")
+	}
+	if got := result.TotalReaped(); got != 2 {
+		t.Errorf("TotalReaped() = %d, want 2", got)
+	}
+	for _, id := range []string{"expired-1", "expired-2"} {
+		if fakeNoteExists(t, repo, tenant, id) {
+			t.Errorf("%s should have been hard-deleted by the failing participant's sweep", id)
+		}
+	}
+
+	events := *captured
+	if len(events) != 1 {
+		t.Fatalf("captured audit events = %d, want 1", len(events))
+	}
+	changes := events[0].Changes
+	if changes == nil {
+		t.Fatal("audit event Changes = nil, want the reaped/errors breakdown")
+	}
+	reaped, ok := changes.After["reaped"].(map[string]int)
+	if !ok {
+		t.Fatalf("Changes.After[\"reaped\"] = %T, want map[string]int", changes.After["reaped"])
+	}
+	if got := reaped["testutil.partial"]; got != 2 {
+		t.Errorf("audit Changes reaped[testutil.partial] = %d, want 2 -- the reaped breakdown must count rows actually hard-deleted even alongside the error", got)
+	}
+	if events[0].Result.Success {
+		t.Error("audit Result.Success = true, want false -- the participant error must still mark the pass failed")
 	}
 }
 
