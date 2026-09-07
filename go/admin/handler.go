@@ -485,6 +485,37 @@ func toAdminAuditEvent(e audit.AuditEvent) api.AdminAuditEvent {
 		tenantID := e.TenantID
 		out.TenantID = &tenantID
 	}
+	if len(e.Changes) > 0 {
+		// The changes column stores the module-authored Diff JSON under the
+		// capitalized keys dbkit/audit's persister writes ("Before" /
+		// "After" -- audit.Diff has no json tags); the shell serves the
+		// same diff under the wire shape's camelCase keys. Changes is the
+		// sixth element of the audit shape docs/internal/10 names, and the
+		// element an operator searches the trail for: an impersonation
+		// start's after names the operator's own mandatory reason, so
+		// serving it back is what makes the reason reachable by the
+		// operator who wrote it once the grant has ended (recordAudit's
+		// own doc comment, impersonation_service.go). A row whose changes
+		// do not decode is served without them: the column is
+		// module-written and always Diff-shaped, so an undecodable value is
+		// a corrupt row, never something to fail the whole listing over.
+		diff := struct {
+			Before map[string]any `json:"Before"`
+			After  map[string]any `json:"After"`
+		}{}
+		if err := json.Unmarshal(e.Changes, &diff); err == nil {
+			changes := &api.AdminAuditChanges{}
+			if len(diff.Before) > 0 {
+				before := diff.Before
+				changes.Before = &before
+			}
+			if len(diff.After) > 0 {
+				after := diff.After
+				changes.After = &after
+			}
+			out.Changes = changes
+		}
+	}
 	return out
 }
 

@@ -324,6 +324,60 @@ func TestImpersonationService_Start_RecordsDualIdentityAuditEvent(t *testing.T) 
 	}
 }
 
+// TestImpersonationService_Start_AuditChanges_CarryTheReason is P2-2's
+// regression at the audit-emission site: the mandatory reason an operator
+// must write to start an impersonation grant (docs/internal/23-admin.md
+// section 4.1 -- the reason itself is part of the audit) must arrive on
+// the started event's after map, next to the grant's shape, so the
+// dual-identity audit trail is where the justification outlives the grant.
+// On unfixed code the started event's after carried target_tenant_id and
+// expires_at alone -- the reason lived only on the grant row, readable
+// while the grant was active and nowhere once it ended: a write-time
+// formality.
+func TestImpersonationService_Start_AuditChanges_CarryTheReason(t *testing.T) {
+	svc, reg := newTestImpersonationService(t, &fakeNotifier{})
+	var recorded []audit.RecordedEvent
+	reg.EventBus().Subscribe(audit.EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
+		if rec, ok := evt.Payload.(audit.RecordedEvent); ok {
+			recorded = append(recorded, rec)
+		}
+		return nil
+	})
+
+	const reason = "support ticket #42"
+	grant, err := svc.Start(context.Background(), StartInput{
+		AdminUserID:    "admin-1",
+		TargetUserID:   "user-1",
+		TargetTenantID: "tenant-1",
+		Reason:         reason,
+		Locale:         "zh-CN",
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	if len(recorded) != 1 {
+		t.Fatalf("got %d recorded audit events on Start, want exactly 1", len(recorded))
+	}
+	evt := recorded[0]
+	if evt.Action != AuditActionImpersonationStarted {
+		t.Fatalf("Action = %q, want %q", evt.Action, AuditActionImpersonationStarted)
+	}
+	if evt.Changes == nil {
+		t.Fatal("started event carries no Changes, want the after map with the grant's shape and the operator's reason")
+	}
+	after := evt.Changes.After
+	if got, _ := after["reason"].(string); got != reason {
+		t.Errorf("after[\"reason\"] = %q, want the operator's own justification %q -- the reason must arrive on the audit record, not only on the grant row", got, reason)
+	}
+	if got, _ := after["target_tenant_id"].(string); got != grant.TargetTenantID {
+		t.Errorf("after[\"target_tenant_id\"] = %v, want %q", after["target_tenant_id"], grant.TargetTenantID)
+	}
+	if _, ok := after["expires_at"]; !ok {
+		t.Error("after[\"expires_at\"] missing, want the grant's expiry alongside the reason")
+	}
+}
+
 func TestImpersonationService_End_RecordsDualIdentityAuditEvent(t *testing.T) {
 	svc, reg := newTestImpersonationService(t, &fakeNotifier{})
 	grant := startTestGrant(t, svc)

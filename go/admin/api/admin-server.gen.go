@@ -32,21 +32,33 @@ func (e AdminTenantStatus) Valid() bool {
 	}
 }
 
-// AdminAuditEvent defines model for AdminAuditEvent.
+// AdminAuditChanges The before/after diff an audit event recorded, when its action had one to show. Each side is a free-form object whose keys are the audited module's own field names.
+type AdminAuditChanges struct {
+	// After The resource's state after the audited action, when the action recorded one.
+	After *map[string]interface{} `json:"after,omitempty"`
+
+	// Before The resource's state before the audited action, when the action recorded one.
+	Before *map[string]interface{} `json:"before,omitempty"`
+}
+
+// AdminAuditEvent One audit event, the six-element audit shape of the platform's append-only trail. changes is present only when the recorded action carried a before/after diff: for an impersonation start, after names the operator's own mandatory reason alongside the grant's shape, so the operator who wrote it can read it back once the grant has ended.
 type AdminAuditEvent struct {
-	Action           string    `json:"action"`
-	ActorDisplayName *string   `json:"actorDisplayName,omitempty"`
-	ActorID          string    `json:"actorId"`
-	ActorType        string    `json:"actorType"`
-	FailureReason    *string   `json:"failureReason,omitempty"`
-	ID               string    `json:"id"`
-	OccurredAt       time.Time `json:"occurredAt"`
-	OnBehalfOfID     *string   `json:"onBehalfOfId,omitempty"`
-	OnBehalfOfType   *string   `json:"onBehalfOfType,omitempty"`
-	ResourceID       string    `json:"resourceId"`
-	ResourceType     string    `json:"resourceType"`
-	Success          bool      `json:"success"`
-	TenantID         *string   `json:"tenantId,omitempty"`
+	Action           string  `json:"action"`
+	ActorDisplayName *string `json:"actorDisplayName,omitempty"`
+	ActorID          string  `json:"actorId"`
+	ActorType        string  `json:"actorType"`
+
+	// Changes The before/after diff an audit event recorded, when its action had one to show. Each side is a free-form object whose keys are the audited module's own field names.
+	Changes        *AdminAuditChanges `json:"changes,omitempty"`
+	FailureReason  *string            `json:"failureReason,omitempty"`
+	ID             string             `json:"id"`
+	OccurredAt     time.Time          `json:"occurredAt"`
+	OnBehalfOfID   *string            `json:"onBehalfOfId,omitempty"`
+	OnBehalfOfType *string            `json:"onBehalfOfType,omitempty"`
+	ResourceID     string             `json:"resourceId"`
+	ResourceType   string             `json:"resourceType"`
+	Success        bool               `json:"success"`
+	TenantID       *string            `json:"tenantId,omitempty"`
 }
 
 // AdminCreateRoleBindingRequest defines model for AdminCreateRoleBindingRequest.

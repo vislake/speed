@@ -675,6 +675,13 @@ components:
     AdminAuditEvent:
       type: object
       required: [id, actorType, actorId, action, resourceType, resourceId, success, occurredAt]
+      description: >-
+        One audit event, the six-element audit shape of the platform's
+        append-only trail. changes is present only when the recorded action
+        carried a before/after diff: for an impersonation start, after
+        names the operator's own mandatory reason alongside the grant's
+        shape, so the operator who wrote it can read it back once the grant
+        has ended.
       properties:
         id:
           type: string
@@ -700,9 +707,26 @@ components:
           type: string
         tenantId:
           type: string
+        changes:
+          $ref: '#/components/schemas/AdminAuditChanges'
         occurredAt:
           type: string
           format: date-time
+    AdminAuditChanges:
+      type: object
+      description: >-
+        The before/after diff an audit event recorded, when its action had
+        one to show. Each side is a free-form object whose keys are the
+        audited module's own field names.
+      properties:
+        before:
+          type: object
+          description: The resource's state before the audited action, when the action recorded one.
+          additionalProperties: true
+        after:
+          type: object
+          description: The resource's state after the audited action, when the action recorded one.
+          additionalProperties: true
     AdminListAuditEventsResponse:
       type: object
       required: [events]

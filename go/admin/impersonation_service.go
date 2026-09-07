@@ -377,8 +377,18 @@ func (s *ImpersonationService) Start(ctx context.Context, in StartInput) (*Imper
 		return nil, err
 	}
 
+	// The started event's after carries the operator's own reason next to
+	// the grant's shape -- P2-2's fix: before it, the reason lived only on
+	// the grant row (reachable while the grant is active) and never in the
+	// audit trail docs/internal/23-admin.md section 4.1 names as its
+	// designed record, so the mandatory justification was a write-time
+	// formality once the grant ended. The dual-identity audit row is
+	// append-only and the D7 audit shell serves its changes back, so the
+	// operator who wrote the reason can read it back for as long as the
+	// trail exists (recordAudit's own doc comment).
 	s.recordAudit(ctx, AuditActionImpersonationStarted, pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: in.AdminUserID}, in.TargetUserID, grant.ID, map[string]any{
 		"target_tenant_id": grant.TargetTenantID,
+		"reason":           grant.Reason,
 		"expires_at":       grant.ExpiresAt,
 	})
 	return grant, nil
@@ -525,6 +535,15 @@ func isImpersonationGrantEnded(err error) bool {
 // (End), so surfacing an audit failure as the caller's own error would
 // report a failure that did not happen -- matching go/pki's
 // Handler.recordAudit and notes' recordNoteCreatedAudit.
+//
+// The started event's after map is the reason's designed home (P2-2's
+// fix): Start records {target_tenant_id, reason, expires_at} there, the
+// operator's justification itself being part of the audit per
+// docs/internal/23-admin.md section 4.1, and the D7 audit shell (handler.go's
+// toAdminAuditEvent) serves an event's changes back to the operator --
+// the read-back path that keeps the mandatory reason reachable by the
+// operator who wrote it long after the grant it justifies has ended,
+// instead of a write-time formality.
 func (s *ImpersonationService) recordAudit(ctx context.Context, action string, onBehalfOf pkgcore.Actor, targetUserID, grantID string, after map[string]any) {
 	if s.bus == nil {
 		return
