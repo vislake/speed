@@ -203,7 +203,11 @@ export default defineConfig({
   //   drives does not exist yet (core-journey.pending.spec.ts: the upload
   //   / generate / compare / share / cost journey the product is for;
   //   sessions-are-distinguishable and offered-channels-work each carry
-  //   their own open acceptance blocker).
+  //   their own open acceptance blocker, and current-clinic-is-visible
+  //   carries ONE @pending test beside its two @budget ones -- the
+  //   clinic a self-service registration creates is still shown as a
+  //   raw tenant id and named on no surface, which is the same missing
+  //   capability its file header points at rather than a UI omission).
   //   Written ahead of the fix on purpose -- each one is an acceptance
   //   criterion, checkable the day it lands -- but a suite that is
   //   permanently red says nothing, so they are asked for by name:
