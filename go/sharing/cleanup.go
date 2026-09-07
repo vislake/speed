@@ -44,13 +44,14 @@ func expirySweepIdempotencyKey(tenant pkgcore.TenantID) string {
 	return "sharing.sweep:" + string(tenant)
 }
 
-// Sweep marks every one of the caller tenant's (read from ctx) shares that
-// is past its ExpiresAt or whose MaxViews has been reached, and is not
-// already revoked, with RevokedAt set to now. It is the expiry-sweep task's
-// body (expirySweepHandler) and doubles as Service's own synchronous entry
+// Sweep runs the expiry-sweep task's two arms over the caller tenant's
+// (read from ctx) rows. It is the expiry-sweep task's body
+// (expirySweepHandler) and doubles as Service's own synchronous entry
 // point for a host that wants a tenant swept without going through the
 // queue.
 //
+// Arm 1 marks every share that is past its ExpiresAt or whose MaxViews has
+// been reached, and is not already revoked, with RevokedAt set to now.
 // Marking reuses Share.RevokedAt rather than a separate column: isLive
 // already treats any non-nil RevokedAt as "not live" regardless of why, so
 // an expired-and-marked row and an owner-revoked row behave identically to
@@ -59,7 +60,15 @@ func expirySweepIdempotencyKey(tenant pkgcore.TenantID) string {
 // comparing RevokedAt against ExpiresAt/MaxViews rather than by a second
 // status column.
 //
-// The mark goes through ShareRepository's guarded markRevoked -- the same
+// Arm 2 refunds every view reservation that has OUTLIVED
+// viewReservationTimeout (ShareRepository.listStaleReserved) -- the sweep
+// half of the "an interrupted reservation is converged" lifecycle, whose
+// next-access half is tryReserveView's takeover clause and tryRecordView's
+// stale-or-free clause (service.go's viewReservationTimeout doc comment).
+// The refund is the same guarded tryRefundView a failed serve's own
+// refundAccessView uses, idempotent exactly like it.
+//
+// The marks go through ShareRepository's guarded markRevoked -- the same
 // narrow revoked_at-only UPDATE Service.Revoke uses, never a full-row
 // write-back -- and EventShareRevoked is published for every share THIS
 // pass actually transitioned (the module.go constant's "owner-initiated or
@@ -81,9 +90,9 @@ func (s *Service) Sweep(ctx context.Context) error {
 		return err
 	}
 	for _, row := range rows {
-		won, err := s.shares.markRevoked(ctx, row.ID, now)
-		if err != nil {
-			return err
+		won, markErr := s.shares.markRevoked(ctx, row.ID, now)
+		if markErr != nil {
+			return markErr
 		}
 		if !won {
 			// A concurrent Revoke got there first -- it published.
@@ -97,6 +106,24 @@ func (s *Service) Sweep(ctx context.Context) error {
 		}); pubErr != nil {
 			observability.FromContext(ctx).Warn("share-revoked event publish failed", "share_id", row.ID, "error", pubErr)
 		}
+	}
+
+	stale, err := s.shares.listStaleReserved(ctx, now)
+	if err != nil {
+		return err
+	}
+	for _, row := range stale {
+		won, refundErr := s.shares.tryRefundView(ctx, row.ID, now)
+		if refundErr != nil {
+			return refundErr
+		}
+		if !won {
+			// The reservation was already resolved -- its serve confirmed or
+			// refunded it, or a concurrent revoke's own settle cleared it --
+			// between the listing and this refund; nothing to converge.
+			continue
+		}
+		observability.FromContext(ctx).Info("interrupted share view reservation refunded by sweep", "share_id", row.ID)
 	}
 	return nil
 }

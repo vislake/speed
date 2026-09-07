@@ -88,6 +88,71 @@ func TestService_Sweep_IsIdempotent(t *testing.T) {
 	}
 }
 
+// TestService_Sweep_RefundsInterruptedReservations pins the sweep's
+// reservation arm: a view reservation that has OUTLIVED viewReservationTimeout
+// -- presumed left behind by a serve that died without resolving it -- is
+// refunded by the sweep, so a crashed serve's dead reservation never
+// squats on a limited share's last view; a reservation still LIVE (the
+// serve is presumably still streaming) is untouched by the pass.
+func TestService_Sweep_RefundsInterruptedReservations(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	createAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	sweepAt := createAt.Add(viewReservationTimeout + 2*time.Minute)
+	svc.now = fixedClock(createAt)
+
+	one := 1
+	interrupted, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r1", MaxViews: &one})
+	if err != nil {
+		t.Fatalf("Create(interrupted): %v", err)
+	}
+	live, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r2", MaxViews: &one})
+	if err != nil {
+		t.Fatalf("Create(live): %v", err)
+	}
+
+	// Take the two reservations at explicit instants: the interrupted
+	// serve's at createAt (stale by sweep time), the live serve's just
+	// before the sweep (still live at sweep time).
+	interruptedShare, err := svc.Get(testCtx(), interrupted.Share.ID)
+	if err != nil {
+		t.Fatalf("Get(interrupted): %v", err)
+	}
+	liveShare, err := svc.Get(testCtx(), live.Share.ID)
+	if err != nil {
+		t.Fatalf("Get(live): %v", err)
+	}
+	if won, reserveErr := svc.shares.tryReserveView(testCtx(), interruptedShare, createAt); reserveErr != nil || !won {
+		t.Fatalf("tryReserveView(interrupted): won=%v err=%v", won, reserveErr)
+	}
+	if won, reserveErr := svc.shares.tryReserveView(testCtx(), liveShare, sweepAt.Add(-time.Minute)); reserveErr != nil || !won {
+		t.Fatalf("tryReserveView(live): won=%v err=%v", won, reserveErr)
+	}
+
+	svc.now = fixedClock(sweepAt)
+	if sweepErr := svc.Sweep(testCtx()); sweepErr != nil {
+		t.Fatalf("Sweep: %v", sweepErr)
+	}
+
+	got, err := svc.Get(testCtx(), interrupted.Share.ID)
+	if err != nil {
+		t.Fatalf("Get(interrupted, after sweep): %v", err)
+	}
+	if got.ViewsReserved != 0 || got.ViewsReservedAt != nil {
+		t.Errorf("interrupted serve's reservation after Sweep = ViewsReserved %d / ViewsReservedAt %v, want 0 / nil -- the stale reservation must be refunded", got.ViewsReserved, got.ViewsReservedAt)
+	}
+	if got.RevokedAt != nil {
+		t.Errorf("interrupted share's RevokedAt = %v after Sweep, want nil -- a stale reservation alone must not revoke a live share", got.RevokedAt)
+	}
+
+	got, err = svc.Get(testCtx(), live.Share.ID)
+	if err != nil {
+		t.Fatalf("Get(live, after sweep): %v", err)
+	}
+	if got.ViewsReserved != 1 {
+		t.Errorf("live serve's ViewsReserved after Sweep = %d, want 1 -- a reservation still younger than the timeout must be untouched", got.ViewsReserved)
+	}
+}
+
 // TestService_Sweep_PublishesShareRevokedPerReapedShare pins the EventShareRevoked
 // contract module.go's constant declares -- "owner-initiated or
 // sweep-initiated alike": a sweep that marks a share must announce that

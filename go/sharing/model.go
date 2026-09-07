@@ -122,8 +122,40 @@ type Share struct {
 	// incremented only by a granted access (service.go's Service.Access),
 	// through a compare-and-swap guard (repository.go's
 	// ShareRepository.tryRecordView) rather than a raw SQL increment -- see
-	// that method's own doc comment for why.
+	// that method's own doc comment for why. On the module's HTTP access
+	// route (handler.go) a MaxViews-limited share's view is incremented
+	// only by the confirm half of the reserve/confirm/refund shape
+	// (Service.confirmAccessView, repository.go's tryConfirmView) -- never
+	// by the reservation that precedes the delivery.
 	ViewCount int `gorm:"column:view_count;not null;default:0"`
+
+	// ViewsReserved is this share's single in-flight view reservation: 1
+	// while the access route (handler.go) is serving one viewer of a
+	// MaxViews-limited share, 0 otherwise. It exists to close the
+	// settle-after-serve hole (AGENTS.md's "Serving an access" section): the
+	// route reserves the view BEFORE any bytes are delivered, so the
+	// share's ceiling already accounts for the serve in flight -- a
+	// concurrent second fetch is refused up front instead of being
+	// delivered and then losing a settlement race -- and the reservation is
+	// resolved after the delivery (confirmed into a spent view) or after a
+	// failed one (refunded). Deliberately a count-shaped column that only
+	// ever holds 0 or 1: a MaxViews-limited share serves one viewer at a
+	// time, by this round's design -- see service.go's viewReservationTimeout
+	// doc comment for the per-share single-flight reasoning and the recorded
+	// alternative it rejects. Only ever set on a row whose MaxViews is
+	// non-nil: an unlimited share has no finite allowance for a reservation
+	// to draw against, so its serves are never reserved (and never refused
+	// for being in use).
+	ViewsReserved int `gorm:"column:views_reserved;not null;default:0"`
+
+	// ViewsReservedAt is when the in-flight reservation (ViewsReserved)
+	// began -- the age that lets a stale reservation be told apart from a
+	// live serve (viewReservationTimeout, service.go). Written together
+	// with ViewsReserved by every guarded write, never independently: a row
+	// with ViewsReserved = 1 and ViewsReservedAt = NULL is an invariant
+	// violation, treated defensively as a live reservation (never
+	// auto-converged).
+	ViewsReservedAt *time.Time `gorm:"column:views_reserved_at"`
 
 	// PasswordHash, when non-nil, is the argon2id PHC digest of an
 	// additional access password a viewer must present. Never plaintext --
@@ -159,6 +191,17 @@ func (Share) TableName() string { return tableShares }
 // the single predicate Service.Access and the expiry sweep both evaluate,
 // so "what makes a share accessible" has exactly one definition in this
 // module.
+//
+// isLive deliberately does NOT consider the in-flight reservation
+// (ViewsReserved): the reservation is enforced by the guarded writes that
+// draw against it (repository.go's tryReserveView and tryRecordView), each
+// of which re-evaluates the row's real state at write time, because the
+// reservation's one job is to arbitrate exactly that write-time race.
+// authorizeAttempt (service.go) therefore lets a request for an in-use
+// share through to the guarded reserve, which is the one place that can
+// distinguish "the share is serving someone right now" (a refusal) from
+// "the share's last view is free" (a grant) without a read-then-decide
+// race.
 func (s Share) isLive(now time.Time) bool {
 	if s.RevokedAt != nil {
 		return false
@@ -170,6 +213,29 @@ func (s Share) isLive(now time.Time) bool {
 		return false
 	}
 	return true
+}
+
+// hasLiveReservation reports whether the share holds a view reservation
+// that has not yet outlived viewReservationTimeout as of now -- i.e. a
+// serve that is presumed still in flight, as opposed to a stale
+// reservation a dead serve left behind (which the next access converges
+// instead: repository.go's tryReserveView takeover clause and tryRecordView's
+// stale-or-free clause, and cleanup.go's sweep). An unlimited share never
+// holds a reservation, and a ViewsReservedAt = NULL mark (an invariant
+// violation, per that field's own doc comment) is treated as live forever
+// rather than ever being auto-converged.
+func (s Share) hasLiveReservation(now time.Time) bool {
+	if s.MaxViews == nil || s.ViewsReserved <= 0 {
+		return false
+	}
+	if s.ViewsReservedAt == nil {
+		return true
+	}
+	// Live strictly while younger than the timeout: a reservation exactly
+	// viewReservationTimeout old is stale, the same boundary the guarded
+	// writes' takeover clauses use (views_reserved_at <= now - timeout), so
+	// the two predicates can never disagree about one row.
+	return now.Before(s.ViewsReservedAt.Add(viewReservationTimeout))
 }
 
 // compile-time check that Share satisfies dbkit.TenantScoped.

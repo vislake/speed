@@ -3,6 +3,7 @@ package sharing
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -141,5 +142,83 @@ func TestWithTxRetry_ExhaustingTheBudgetReturnsTheLastConflict(t *testing.T) {
 	}
 	if calls != txRetryBudget {
 		t.Errorf("op ran %d times, want exactly %d -- the retry must be bounded", calls, txRetryBudget)
+	}
+}
+
+// TestShareRepository_ConcurrentReservesOnOneShare_SingleFlightWins is the
+// reservation shape's concurrency proof: many goroutines racing the single
+// in-flight reservation of one MaxViews-limited share (the route's
+// concurrent-fetch shape, driven here through the guarded write itself)
+// produce exactly one winner -- the database-arbitrated single-flight
+// guarantee no read-then-decide can fake -- and the losers' later
+// resolution attempts are all harmless no-ops, so exactly one view is
+// ever spent. Runs under -race in the standard suite; on SQLite the
+// guarded write's writeMu ordering makes the outcome deterministic.
+func TestShareRepository_ConcurrentReservesOnOneShare_SingleFlightWins(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctx := pkgcore.WithTenant(context.Background(), testTenant)
+
+	share := newTestShare("share-1", now)
+	one := 1
+	share.MaxViews = &one
+	if err := repo.Create(ctx, share); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	fresh, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+
+	const racers = 16
+	var wg sync.WaitGroup
+	wins := make(chan bool, racers)
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			won, reserveErr := repo.tryReserveView(ctx, fresh, now)
+			if reserveErr != nil {
+				t.Errorf("tryReserveView: %v", reserveErr)
+				wins <- false
+				return
+			}
+			wins <- won
+		}()
+	}
+	wg.Wait()
+	close(wins)
+	winnerCount := 0
+	for won := range wins {
+		if won {
+			winnerCount++
+		}
+	}
+	if winnerCount != 1 {
+		t.Fatalf("%d of %d concurrent reservations won, want exactly 1 -- a limited share serves one viewer at a time", winnerCount, racers)
+	}
+
+	// The single winner's view resolves exactly once: the row shows one
+	// reservation standing, one confirm spends it, and no other resolution
+	// path can spend or release anything further.
+	standing, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if standing.ViewsReserved != 1 || standing.ViewCount != 0 {
+		t.Fatalf("row after the tournament = ViewsReserved %d / ViewCount %d, want 1 / 0", standing.ViewsReserved, standing.ViewCount)
+	}
+	if won, confirmErr := repo.tryConfirmView(ctx, standing, now, nil); confirmErr != nil || !won {
+		t.Fatalf("tryConfirmView (winner): won=%v err=%v", won, confirmErr)
+	}
+	if won, refundErr := repo.tryRefundView(ctx, share.ID, now); refundErr != nil || won {
+		t.Fatalf("tryRefundView (after the confirm) = won=%v err=%v, want won=false -- nothing stands to refund", won, refundErr)
+	}
+	final, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if final.ViewCount != 1 || final.ViewsReserved != 0 {
+		t.Errorf("row after the confirm = ViewCount %d / ViewsReserved %d, want 1 / 0", final.ViewCount, final.ViewsReserved)
 	}
 }

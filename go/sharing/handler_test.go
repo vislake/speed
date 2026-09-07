@@ -876,6 +876,163 @@ func TestHandler_SharingAccessShare_SuccessfulServe_ConsumesExactlyOnce(t *testi
 	}
 }
 
+// TestHandler_SharingAccessShare_DeliveredServeWithFailedSettle_KeepsTheViewSpent
+// is the settle-after-serve regression (the finding this round closes): a
+// MaxViews=1 serve whose content was FULLY delivered but whose post-delivery
+// settle write fails (a SQL trigger forces every view_count UPDATE to fail
+// -- the deterministic shape of the reported DB write failure) must leave
+// the view SPENT, never unspent and re-fetchable. Under the unfixed code
+// the settle failure left ViewCount at 0 with no reservation standing, so
+// the identical fetch immediately succeeded again -- a single-view share
+// (a compliance export share is exactly this shape) whose content had
+// already been delivered once stayed endlessly fetchable. Under the fixed
+// code the delivered serve's reservation is never refunded once delivery
+// succeeded, so the second fetch is refused while it stands.
+func TestHandler_SharingAccessShare_DeliveredServeWithFailedSettle_KeepsTheViewSpent(t *testing.T) {
+	one := 1
+	svc, _ := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "ref-1", MaxViews: &one})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	h := NewHandler(svc, fakeResourceResolver{mime: "text/plain", body: "hello"})
+
+	// Force the post-delivery settle write to fail deterministically. The
+	// trigger fires only on view_count UPDATEs -- the settle's own write --
+	// leaving the reservation write (views_reserved) and the access-log
+	// writes healthy, exactly the shape of a settle that fails while
+	// everything around it works.
+	trigger := "CREATE TRIGGER sharing_test_fail_settle BEFORE UPDATE OF view_count ON " + tableShares +
+		" BEGIN SELECT RAISE(FAIL, 'injected settle write failure'); END"
+	if triggerErr := svc.shares.db.Exec(trigger).Error; triggerErr != nil {
+		t.Fatalf("CREATE TRIGGER: %v", triggerErr)
+	}
+
+	// The delivery itself succeeds: 200 and the full body make it out.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, accessRequest(created.Token, nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "hello" {
+		t.Fatalf("delivered-serve status = %d, body = %q, want 200 %q", rec.Code, rec.Body.String(), "hello")
+	}
+
+	// The settle write failed, but the view must stay spent: a second fetch
+	// is refused. Under the unfixed code it was served again in full.
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, accessRequest(created.Token, nil))
+	if rec2.Code != http.StatusNotFound {
+		t.Fatalf("refetch status after the delivered-but-unsettled serve = %d, body = %q, want 404 -- the delivered view must stay spent, not be re-fetchable", rec2.Code, rec2.Body.String())
+	}
+}
+
+// gatedBody is an io.ReadCloser that delivers its content only after
+// release fires -- the reader-side shape of a serve that is genuinely in
+// flight (mid-delivery) while a second fetch arrives. The first Read
+// signals reading (so the test knows the serve has passed the reservation
+// and the stream start), blocks until release, then returns the content;
+// subsequent Reads answer EOF.
+type gatedBody struct {
+	reading chan struct{}
+	release chan struct{}
+	content string
+	sent    bool
+}
+
+func (b *gatedBody) Read(p []byte) (int, error) {
+	if !b.sent {
+		b.sent = true
+		close(b.reading)
+		<-b.release
+		return copy(p, b.content), nil
+	}
+	return 0, io.EOF
+}
+
+func (b *gatedBody) Close() error { return nil }
+
+// gatedOnceResolver hands the FIRST OpenResource call a gatedBody and every
+// later call the configured error -- so a second fetch, if it is ever
+// admitted past the access decision, fails fast at the resolver instead of
+// blocking the test forever.
+type gatedOnceResolver struct {
+	gate    *gatedBody
+	failErr error
+	served  bool
+}
+
+func (r *gatedOnceResolver) OpenResource(context.Context, string) (ResourceContent, error) {
+	if !r.served {
+		r.served = true
+		return ResourceContent{MIME: "text/plain", Body: r.gate}, nil
+	}
+	return ResourceContent{}, r.failErr
+}
+
+// TestHandler_SharingAccessShare_SecondFetchDuringInFlightServe_Refused is
+// the in-use half of the reserve-before-serve regression: while a
+// MaxViews-limited share's one serve is mid-delivery (its view reserved,
+// its bytes still streaming), a concurrent second fetch must be refused up
+// front -- under the unfixed code the second fetch was authorized against
+// the not-yet-counted view, admitted all the way into the resolver, and
+// only the post-delivery settlement race (or its failure) decided the
+// share's real fate: a single-view share could be delivered to two viewers.
+// The second fetch is answered here before any delivery attempt, with the
+// identical outward refusal a share that had simply exhausted its views
+// answers with.
+func TestHandler_SharingAccessShare_SecondFetchDuringInFlightServe_Refused(t *testing.T) {
+	one := 1
+	svc, _ := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "ref-1", MaxViews: &one})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	gate := &gatedBody{reading: make(chan struct{}), release: make(chan struct{}), content: "hello"}
+	resolver := &gatedOnceResolver{gate: gate, failErr: io.ErrUnexpectedEOF}
+	h := NewHandler(svc, resolver)
+
+	first := httptest.NewRecorder()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		h.ServeHTTP(first, accessRequest(created.Token, nil))
+	}()
+
+	// Wait until the first serve is provably mid-delivery: it has passed
+	// the access decision, taken its reservation and begun streaming (its
+	// body's first Read is blocked on release).
+	<-gate.reading
+
+	// The concurrent second fetch is refused while the reservation stands
+	// -- before any delivery attempt. Under the unfixed code it was
+	// admitted past the authorization and failed only at the resolver (502),
+	// after the share's not-yet-counted view had already authorized a
+	// second concurrent delivery.
+	second := httptest.NewRecorder()
+	h.ServeHTTP(second, accessRequest(created.Token, nil))
+	if second.Code != http.StatusNotFound {
+		t.Fatalf("second-fetch status during the in-flight serve = %d, body = %q, want 404 -- an in-use share must refuse the concurrent fetch", second.Code, second.Body.String())
+	}
+
+	// Release the first serve: it completes, confirms its reservation and
+	// spends the share's only view exactly once.
+	close(gate.release)
+	select {
+	case <-firstDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first serve did not finish after release")
+	}
+	if first.Code != http.StatusOK || first.Body.String() != "hello" {
+		t.Fatalf("first-serve status = %d, body = %q, want 200 %q", first.Code, first.Body.String(), "hello")
+	}
+	share, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if share.ViewCount != 1 {
+		t.Errorf("ViewCount = %d after the in-flight serve and its refused concurrent fetch, want exactly 1", share.ViewCount)
+	}
+}
+
 // compile-time check that Handler still satisfies api.ServerInterface --
 // duplicated from handler.go's own assertion so a reader of this test file
 // sees the contract without following an import.

@@ -777,6 +777,159 @@ func TestService_Access_ConcurrentAccessesRespectMaxViews(t *testing.T) {
 // row, and the CAS's lost races also made the exact count assertion below
 // fail. An unlimited share's view recording is now one atomic increment
 // that cannot lose to concurrency at all. Run with -race.
+// TestService_Access_RefusedWhileTheRouteHoldsTheReservation pins the
+// in-process Access path's respect for the access route's in-flight
+// reservation (the reserve/confirm/refund shape's single-flight rule):
+// while the route is serving a MaxViews-limited share's view -- the
+// reservation held, its bytes still streaming -- an in-process
+// Service.Access for the same share is refused with the identical outward
+// answer, spending nothing; the view a delivery in flight holds cannot be
+// double-spent by a second path. Once the delivery fails and its refund
+// releases the reservation, the same Access succeeds and spends the view.
+func TestService_Access_RefusedWhileTheRouteHoldsTheReservation(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	one := 1
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "ref-1", MaxViews: &one})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	share, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	// The route takes its reservation before any delivery begins.
+	reserved, err := svc.reserveAccessView(testCtx(), share, AccessParams{})
+	if err != nil {
+		t.Fatalf("reserveAccessView: %v", err)
+	}
+
+	// The in-process Access is refused while the reservation stands.
+	_, err = svc.Access(testCtx(), created.Token, AccessParams{})
+	assertCode(t, err, ErrNotAccessible.Code)
+
+	still, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get (after the refused Access): %v", err)
+	}
+	if still.ViewCount != 0 || still.ViewsReserved != 1 {
+		t.Fatalf("row after the refused Access = ViewCount %d / ViewsReserved %d, want 0 / 1 -- the refusal must spend nothing and leave the reservation standing", still.ViewCount, still.ViewsReserved)
+	}
+
+	// The route's delivery fails and refunds the reservation: the share's
+	// one view is free again, and the in-process Access now succeeds.
+	if refundErr := svc.refundAccessView(testCtx(), reserved); refundErr != nil {
+		t.Fatalf("refundAccessView: %v", refundErr)
+	}
+	after, err := svc.Access(testCtx(), created.Token, AccessParams{})
+	if err != nil {
+		t.Fatalf("Access (after the refund): %v", err)
+	}
+	if after.ViewCount != 1 {
+		t.Errorf("ViewCount = %d after the post-refund Access, want 1", after.ViewCount)
+	}
+}
+
+// TestService_ConfirmAccessView_StoreFailure_KeepsTheReservationHeld pins
+// confirmAccessView's never-refund-after-delivery contract (the regression
+// this round closes): when the confirm write itself fails after the
+// content was fully delivered, the reservation is NOT released -- the view
+// stays held in use, spent -- exactly as go/billing's Confirm-after-success
+// semantics never refund a reservation the delivered work already earned.
+// The reservation's release is left to no one but a later confirm or the
+// recorded timeout convergence; the failed confirm itself never returns
+// the view to the share.
+func TestService_ConfirmAccessView_StoreFailure_KeepsTheReservationHeld(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	one := 1
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "ref-1", MaxViews: &one})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	share, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	reserved, err := svc.reserveAccessView(testCtx(), share, AccessParams{})
+	if err != nil {
+		t.Fatalf("reserveAccessView: %v", err)
+	}
+
+	// The delivery succeeded; only the confirm write fails (deterministic:
+	// a SQL trigger raising on every view_count UPDATE).
+	trigger := "CREATE TRIGGER sharing_test_fail_confirm BEFORE UPDATE OF view_count ON " + tableShares +
+		" BEGIN SELECT RAISE(FAIL, 'injected confirm write failure'); END"
+	if triggerErr := svc.shares.db.Exec(trigger).Error; triggerErr != nil {
+		t.Fatalf("CREATE TRIGGER: %v", triggerErr)
+	}
+	if confirmErr := svc.confirmAccessView(testCtx(), reserved, AccessParams{}); confirmErr == nil {
+		t.Fatalf("confirmAccessView = nil, want the internal error the failed confirm write surfaces")
+	} else {
+		assertCode(t, confirmErr, ErrInternal.Code)
+	}
+
+	// The reservation stands: the delivered view stays spent, never
+	// refunded by the failed confirm.
+	after, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get (after the failed confirm): %v", err)
+	}
+	if after.ViewsReserved != 1 || after.ViewCount != 0 {
+		t.Errorf("row after the failed confirm = ViewsReserved %d / ViewCount %d, want 1 / 0 -- the delivered serve's reservation must not be refunded", after.ViewsReserved, after.ViewCount)
+	}
+}
+
+// TestService_ConfirmAccessView_RevokedMidFlight_RefundsAndSettlesDenied
+// pins the confirm's settle-time-liveness semantics (the same ones ee20d37
+// established for its own post-delivery record): a share revoked while its
+// delivery was in flight refuses the confirm at the database, and the
+// serve is then settled as denied with its reservation released -- the
+// revoked share can never serve again, so neither the view nor the
+// reservation it held means anything further.
+func TestService_ConfirmAccessView_RevokedMidFlight_RefundsAndSettlesDenied(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	one := 1
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "ref-1", MaxViews: &one})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	share, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	reserved, err := svc.reserveAccessView(testCtx(), share, AccessParams{})
+	if err != nil {
+		t.Fatalf("reserveAccessView: %v", err)
+	}
+
+	// The owner revokes while the delivery is in flight.
+	if revokeErr := svc.Revoke(testCtx(), created.Share.ID); revokeErr != nil {
+		t.Fatalf("Revoke: %v", revokeErr)
+	}
+
+	// The confirm loses at the liveness guard; the serve is settled denied
+	// and its reservation released -- no error: this is the honest refused
+	// outcome of a delivery whose share stopped being live mid-flight.
+	if confirmErr := svc.confirmAccessView(testCtx(), reserved, AccessParams{}); confirmErr != nil {
+		t.Fatalf("confirmAccessView (revoked mid-flight) = %v, want nil -- the lost confirm settles as denied, not as a store error", confirmErr)
+	}
+	after, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get (after the lost confirm): %v", err)
+	}
+	if after.ViewsReserved != 0 || after.ViewCount != 0 {
+		t.Errorf("row after the lost confirm = ViewsReserved %d / ViewCount %d, want 0 / 0", after.ViewsReserved, after.ViewCount)
+	}
+
+	entries, err := svc.ListAccessLog(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("ListAccessLog: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Outcome != AccessOutcomeDenied {
+		t.Errorf("access log after the lost confirm = %+v, want exactly one denied entry", entries)
+	}
+}
+
 func TestService_Access_ConcurrentUnlimitedViews_AllSucceedAndAllCount(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1"})

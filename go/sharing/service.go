@@ -70,6 +70,37 @@ const MaxExplicitShareLifetime = 30 * 24 * time.Hour
 // rather than a config item.
 const maxRecordViewAttempts = 8
 
+// viewReservationTimeout is how long a MaxViews-limited share's single
+// in-flight view reservation (Share.ViewsReserved) may stand before it is
+// presumed interrupted -- the serve that took it gone without resolving
+// it -- and is converged by the next access or the expiry sweep (see
+// ShareRepository.tryReserveView's takeover clause, tryRecordView's
+// stale-or-free clause, and Service.Sweep's reservation arm). It is the
+// reservation half of this module's "a view is spent on delivery, never on
+// authorization" discipline (AGENTS.md's "Serving an access" section): a
+// serve resolves its own reservation the moment the delivery succeeds
+// (confirmAccessView) or fails (refundAccessView), so a reservation that
+// outlives this timeout is by construction one whose serve died without
+// resolving it -- the module's standing model for "interrupted", exactly
+// as go/storage treats an uploading row whose upload window closed, and
+// go/billing treats a pending reservation its caller never resolves.
+//
+// The timeout must be far larger than any legitimate serve: a genuine
+// delivery (the resolver open plus the streamed response) takes seconds
+// for ordinary content and minutes for a large bundle over a slow link,
+// and a reservation older than the timeout may be taken over by a newer
+// fetch -- the accepted residual of any timeout-based convergence, recorded
+// in AGENTS.md's Known limitations (a serve so slow it outlives the
+// timeout and a second fetch arriving exactly then can both deliver, with
+// the ceiling still enforced at confirm time -- and, symmetrically, a
+// fully delivered serve whose confirm could not be recorded is held spent
+// only while its reservation stands, a persistent store outage outlasting
+// the timeout being the one shape that can still reopen it). 30 minutes
+// clears any realistic serve by an order of magnitude while keeping a
+// crashed serve's dead reservation from squatting on the share's last view
+// for long.
+const viewReservationTimeout = 30 * time.Minute
+
 // TenantConfigReader is the structurally-typed seam Service reads a
 // tenant's configured default share expiry through -- the same
 // no-import-edge shape go/org's FeatureGate and go/org's Scope use to reach
@@ -830,9 +861,154 @@ func (s *Service) settleAccessDenied(ctx context.Context, share *Share, p Access
 // view consumed. The response has already been committed by the time this
 // runs, so a returned error (a store failure) can only be logged, never
 // answered.
+//
+// The access route (handler.go) calls this only for an UNLIMITED share
+// (MaxViews nil): a limited share's post-delivery settle is
+// confirmAccessView, the confirm half of the reserve/confirm/refund shape
+// that method's own doc comment describes.
 func (s *Service) settleAccessGranted(ctx context.Context, share *Share, p AccessParams) error {
 	_, _, err := s.settleGranted(ctx, share, p)
 	return err
+}
+
+// reserveAccessView is the reserve half of the access route's
+// reserve/confirm/refund shape (Handler.SharingAccessShare): it takes a
+// MaxViews-limited share's single in-flight view reservation BEFORE any
+// delivery can begin, so the share's ceiling already accounts for the
+// serve in flight. A MaxViews=1 share whose one serve is being delivered
+// right now is refused by this call -- the identical outward answer a
+// share that had simply exhausted its views answers with -- instead of
+// being authorized, delivered in full, and only then losing the settlement
+// race the pre-ee20d37 flow lost at the front of the request and the
+// post-ee20d37 flow can still lose when the post-delivery settle write
+// fails (AGENTS.md's "Serving an access" section has the full reasoning).
+//
+// An unlimited share (MaxViews nil) is returned from unchanged -- no
+// reservation, and no way to be refused for being in use.
+//
+// The refusal paths settle the attempt as one denied log row and one
+// denied event before they return, exactly as authorizeAttempt settles its
+// own refusals: a lost reservation means the share was revoked, expired,
+// exhausted or taken by a concurrent serve between the authorization and
+// this write (all refused identically per rule 5), and a store failure on
+// the reservation itself attempts the same denied settle before surfacing
+// the internal error -- nothing has been delivered either way, so the
+// caller's answer is the whole story.
+func (s *Service) reserveAccessView(ctx context.Context, share *Share, p AccessParams) (*Share, error) {
+	if share.MaxViews == nil {
+		return share, nil
+	}
+	tenant := pkgcore.TenantID(share.GetTenantID())
+	grantedCtx := pkgcore.WithTenant(ctx, tenant)
+	now := s.now()
+	won, err := s.shares.tryReserveView(grantedCtx, share, now)
+	if err != nil {
+		_ = s.settleDenied(grantedCtx, tenant, share, p)
+		return nil, err
+	}
+	if !won {
+		if deniedErr := s.settleDenied(grantedCtx, tenant, share, p); deniedErr != nil {
+			return nil, deniedErr
+		}
+		return nil, ErrNotAccessible
+	}
+	updated := *share
+	updated.ViewsReserved = 1
+	updated.ViewsReservedAt = &now
+	return &updated, nil
+}
+
+// refundAccessView releases the share's in-flight view reservation after a
+// serve failed before its content was delivered -- the no-resolver answer,
+// the resolver's own failure, a stream dying partway -- so the share is
+// left exactly as it was: the reservation is returned and no view is spent,
+// and a later fetch of a MaxViews=1 share can still succeed (the
+// delivery-failure half of ee20d37's direction, preserved under the
+// reservation shape). It is the route's partner to settleAccessDenied,
+// which logs the same failed serve as denied. Idempotent under the guarded
+// write: a reservation already resolved (or cleared by a revoke) makes the
+// refund affect zero rows and report success. Only a MaxViews-limited share
+// can hold a reservation; an unlimited share is returned from unchanged. A
+// returned error is a store failure -- the route logs it, and the stale
+// reservation is left for the convergence owners (viewReservationTimeout's
+// own doc comment) rather than for a refund that cannot land.
+func (s *Service) refundAccessView(ctx context.Context, share *Share) error {
+	if share.MaxViews == nil {
+		return nil
+	}
+	tenant := pkgcore.TenantID(share.GetTenantID())
+	grantedCtx := pkgcore.WithTenant(ctx, tenant)
+	_, err := s.shares.tryRefundView(grantedCtx, share.ID, s.now())
+	return err
+}
+
+// confirmAccessView settles a MaxViews-limited serve whose content was FULLY
+// delivered: the reserved view is confirmed into a spent view -- one guarded
+// write increments view_count, clears the reservation and commits the
+// granted log row in the same transaction (tryConfirmView's own doc
+// comment) -- and one EventShareAccessed with Granted true is published.
+// It is the reserve/confirm/refund shape's confirm-after-success arm, and
+// the two directions it must hold are exactly the two this module's
+// "a view is spent on delivery, never on authorization" discipline
+// guarantees:
+//
+//   - Bytes not delivered never spend the view: a serve that fails is
+//     refunded (refundAccessView), never confirmed -- this method only runs
+//     after io.Copy returned without error.
+//
+//   - Bytes delivered are never given away unspent: this method never
+//     refunds. If the confirm write itself fails (a store failure after the
+//     response was committed), the reservation is NOT released -- the view
+//     stays held in use, and every subsequent fetch is refused while it
+//     stands, exactly as go/billing's Confirm-after-success semantics leave
+//     a reservation resolved only by its own confirm, never by a refund the
+//     delivered work did not earn (see go/billing's CreditService.Confirm/
+//     Refund, whose already-resolved refusal is this shape's billing-side
+//     twin). A delivered-but-unconfirmable serve is settled as a denied log
+//     row (best-effort -- the attempt's trail), the error is logged, and
+//     the held reservation is the share's own record that the view is
+//     spent; only the reservation-timeout convergence
+//     (viewReservationTimeout's doc comment) can later release it, the
+//     recorded residual of any timeout-based convergence.
+//
+// A share that ceased to be live while the delivery was in flight (revoked
+// or expired mid-stream) refuses the confirm at its WHERE clause; the serve
+// is then settled as denied and the reservation released -- the same
+// settle-time liveness semantics ee20d37 established for its own
+// post-delivery record. The response has already been committed by the time
+// this runs, so a returned error can only be logged, never answered.
+func (s *Service) confirmAccessView(ctx context.Context, share *Share, p AccessParams) error {
+	tenant := pkgcore.TenantID(share.GetTenantID())
+	grantedCtx := pkgcore.WithTenant(ctx, tenant)
+	now := s.now()
+	pending := s.accessLogEntry(tenant, share.ID, AccessOutcomeGranted, p)
+
+	won, recordErr := s.shares.tryConfirmView(grantedCtx, share, now, pending)
+	if recordErr != nil {
+		// The delivery succeeded but the spend could not be recorded. The
+		// reservation is deliberately NOT refunded (see this method's own
+		// doc comment): the best-effort denied row is the attempt's trail,
+		// and the reservation is what keeps the delivered view spent.
+		_ = s.settleDenied(grantedCtx, tenant, share, p)
+		return recordErr
+	}
+	if !won {
+		// The reservation was lost to a concurrent revoke or expiry (or, in
+		// the recorded stale-takeover corner, to a newer serve): release the
+		// slot if it is still standing and settle the delivered serve as
+		// denied, exactly as settleGranted settles a delivery whose share
+		// ceased to be live before its view could be recorded.
+		if refundErr := s.refundAccessView(grantedCtx, share); refundErr != nil {
+			observability.FromContext(ctx).Warn("share reservation could not be refunded after a lost confirm",
+				"share_id", share.ID, "error", refundErr)
+		}
+		if err := s.settleDenied(grantedCtx, tenant, share, p); err != nil {
+			return err
+		}
+		return nil
+	}
+	s.publishAccessEvent(grantedCtx, tenant, share.ID, true, p)
+	return nil
 }
 
 // recordView drives the share's view-recording guard to a definitive
@@ -908,7 +1084,17 @@ func (s *Service) recordView(ctx context.Context, share *Share, now time.Time, g
 
 	current := share
 	for attempt := 0; attempt < maxRecordViewAttempts; attempt++ {
-		if !current.isLive(now) {
+		// A share that is no longer live at this moment is refused here --
+		// and so is one whose last view a concurrent serve of the access
+		// route currently holds in flight (a live reservation,
+		// Share.hasLiveReservation): the CAS below would refuse it anyway
+		// (tryRecordView's own reservation clause), and refusing now,
+		// before the attempt, is what keeps a serve that is genuinely
+		// mid-delivery from costing this loop its whole retry budget. A
+		// STALE reservation is not refused -- the CAS's own stale-or-free
+		// clause (tryRecordView) converges it, which is the "converged by
+		// the next access" half of an interrupted reservation's lifecycle.
+		if !current.isLive(now) || current.hasLiveReservation(now) {
 			return current, false, nil
 		}
 		won, err := s.shares.tryRecordView(ctx, current, now, grantedEntry)

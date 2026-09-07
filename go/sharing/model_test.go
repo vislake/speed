@@ -17,6 +17,63 @@ func TestAccessLogEntry_TableName(t *testing.T) {
 	}
 }
 
+func TestShare_HasLiveReservation(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	one := 1
+	began := now.Add(-time.Minute)
+	aged := now.Add(-viewReservationTimeout)
+	stale := now.Add(-viewReservationTimeout - time.Second)
+
+	tests := []struct {
+		name  string
+		share Share
+		want  bool
+	}{
+		{
+			name:  "no reservation",
+			share: Share{MaxViews: &one},
+			want:  false,
+		},
+		{
+			name:  "live reservation on a limited share",
+			share: Share{MaxViews: &one, ViewsReserved: 1, ViewsReservedAt: &began},
+			want:  true,
+		},
+		{
+			name:  "reservation exactly at the timeout boundary is stale",
+			share: Share{MaxViews: &one, ViewsReserved: 1, ViewsReservedAt: &aged},
+			want:  false,
+		},
+		{
+			name:  "reservation past the timeout is stale",
+			share: Share{MaxViews: &one, ViewsReserved: 1, ViewsReservedAt: &stale},
+			want:  false,
+		},
+		{
+			name:  "reservation mark with no timestamp is treated as live forever",
+			share: Share{MaxViews: &one, ViewsReserved: 1, ViewsReservedAt: nil},
+			want:  true,
+		},
+		{
+			name:  "unlimited share never holds a live reservation",
+			share: Share{ViewsReserved: 1, ViewsReservedAt: &began},
+			want:  false,
+		},
+		{
+			name:  "unlimited share with a stale-looking mark is still not a reservation",
+			share: Share{ViewsReserved: 1, ViewsReservedAt: &stale},
+			want:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.share.hasLiveReservation(now); got != tt.want {
+				t.Errorf("hasLiveReservation(%v) = %v, want %v", now, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShare_IsLive(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	future := now.Add(time.Hour)

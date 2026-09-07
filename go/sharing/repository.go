@@ -116,6 +116,20 @@ func (r *ShareRepository) byTokenHash(ctx context.Context, hash string) (*Share,
 // the precedent -- passes a struct to Where/Updates so the table resolves
 // from the struct's own TableName rather than an explicit .Model() call.
 //
+// Since the access route (handler.go) now reserves a limited share's view
+// BEFORE its delivery begins (Share.ViewsReserved), this CAS carries a
+// reservation clause alongside the liveness and ceiling ones: a LIVE
+// reservation (one younger than viewReservationTimeout) refuses the
+// increment -- a view the route is mid-delivery on cannot be spent by an
+// in-process Access -- while a STALE one (a reservation older than
+// viewReservationTimeout, presumed left behind by a serve that died
+// without resolving it) does not: the stale-or-free disjunction below lets
+// this write converge the interrupted reservation by spending the view it
+// held, exactly as tryReserveView's own takeover clause converges one.
+// Service.recordView's early exit (hasLiveReservation) is what keeps a
+// live reservation from costing the retry loop its whole budget; this
+// clause is the write-time enforcement behind that read-time refusal.
+//
 // Service.Access retries on a lost race (this call returning won == false
 // while the row it re-reads is still live) rather than treating ordinary
 // concurrency as "not accessible" -- see its own doc comment.
@@ -143,6 +157,7 @@ func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now t
 			Where("revoked_at IS NULL").
 			Where("expires_at > ?", now).
 			Where("max_views IS NULL OR view_count < max_views").
+			Where("views_reserved = 0 OR (views_reserved_at IS NOT NULL AND views_reserved_at <= ?)", now.Add(-viewReservationTimeout)).
 			Updates(&Share{ViewCount: share.ViewCount + 1})
 		if res.Error != nil {
 			return res.Error
@@ -152,6 +167,151 @@ func (r *ShareRepository) tryRecordView(ctx context.Context, share *Share, now t
 			return tx.Create(grantedEntry).Error
 		}
 		return nil
+	})
+	if err != nil {
+		return false, ErrInternal.WithCause(err)
+	}
+	return won, nil
+}
+
+// tryReserveView takes a MaxViews-limited share's single in-flight view
+// reservation for a serve that is about to begin: it sets
+// views_reserved = 1 (with views_reserved_at = now) and reports whether
+// this call is the one that took the reservation. It succeeds only if, at
+// the moment the UPDATE runs, the share is still live -- not revoked, not
+// expired, under its MaxViews ceiling -- and not already reserved by a
+// live serve: the WHERE clause is the access route's in-use refusal and
+// its ceiling check in one, so two concurrent fetches of a limited share
+// can never both begin delivering (Service.reserveAccessView's doc comment
+// has the full reserve-before-serve reasoning).
+//
+// A reservation that has OUTLIVED viewReservationTimeout does not refuse:
+// it is presumed interrupted -- the serve that took it is gone without
+// having resolved it (a resolved serve always confirms or refunds within
+// the delivery it owns) -- and this call takes it over, refreshing
+// views_reserved_at to now in the same write. That takeover is the
+// "converged by the next access" half of an interrupted reservation's
+// lifecycle; the expiry sweep's reservation arm (cleanup.go) is the other.
+//
+// The statement is a struct-based partial update (only views_reserved and
+// views_reserved_at are written), so the tenant-scope GORM plugin engages
+// exactly as it does for every other struct Updates call in this module,
+// and the WHERE clause's stale-or-free disjunction is re-evaluated on
+// every attempt of the guarded write's retry envelope (concurrency.go) --
+// a retried attempt that lost a genuine takeover race to another caller
+// affects zero rows and reports won == false, never two reservations.
+func (r *ShareRepository) tryReserveView(ctx context.Context, share *Share, now time.Time) (won bool, err error) {
+	err = r.runGuardedWrite(ctx, func(tx *gorm.DB) error {
+		res := tx.
+			Where("id = ?", share.ID).
+			Where("revoked_at IS NULL").
+			Where("expires_at > ?", now).
+			Where("max_views IS NOT NULL").
+			Where("view_count < max_views").
+			Where("views_reserved = 0 OR (views_reserved_at IS NOT NULL AND views_reserved_at <= ?)", now.Add(-viewReservationTimeout)).
+			Updates(&Share{ViewsReserved: 1, ViewsReservedAt: &now})
+		won = res.RowsAffected == 1
+		return res.Error
+	})
+	if err != nil {
+		return false, ErrInternal.WithCause(err)
+	}
+	return won, nil
+}
+
+// tryConfirmView settles a taken reservation into a spent view: it
+// increments view_count, clears the reservation (views_reserved = 0,
+// views_reserved_at = NULL) and -- when this call is the one that landed --
+// inserts the caller's grantedEntry -- the serve's granted log row, never
+// nil on the Service.confirmAccessView path -- in the SAME transaction,
+// so the spend and its trail commit or roll back together (the identical
+// count-and-trail atomicity tryRecordView documents for its own winning
+// write). Service.confirmAccessView drives this after a serve's content
+// was FULLY delivered: a delivered serve's reservation is never refunded,
+// only confirmed -- see that method's doc comment for the two-directions
+// reasoning this statement enforces at the database.
+//
+// The WHERE clause re-checks liveness and ceiling at confirm time, exactly
+// as tryRecordView's own settle-time guards do: a share revoked or expired
+// while its delivery was in flight refuses the confirm (the delivery is
+// settled as denied and the reservation refunded by the caller instead,
+// the same settle-time-liveness semantics ee20d37 established), and the
+// ceiling check keeps the count from ever exceeding max_views even in the
+// one corner where two serves can overlap -- a stale reservation taken
+// over by a newer fetch while its original, still-alive serve later
+// completes (see viewReservationTimeout's own doc comment for that
+// recorded residual). The views_reserved = 1 predicate ties the spend to a
+// reservation actually standing: a confirm whose reservation a concurrent
+// writer already resolved affects zero rows and is settled as denied.
+//
+// This is a raw Exec for the same reasons tryIncrementView's own doc
+// comment documents in full: the statement needs genuine server-side
+// arithmetic (view_count = view_count + 1, which a struct-based partial
+// update cannot express without first reading the count) and explicit
+// clears to zero and NULL (which a struct-based partial update skips as
+// zero values). Exec bypasses the tenant-scope plugin's callback chain, so
+// the tenant_id predicate below is hand-written, exactly as
+// tryIncrementView's is -- the isolation proof
+// TestShareRepository_TryConfirmView_ScopedToOneTenant is the test this
+// shape requires.
+func (r *ShareRepository) tryConfirmView(ctx context.Context, share *Share, now time.Time, grantedEntry *AccessLogEntry) (won bool, err error) {
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	err = r.runGuardedWrite(ctx, func(tx *gorm.DB) error {
+		res := tx.Exec(
+			`UPDATE `+tableShares+` `+
+				`SET view_count = view_count + 1, views_reserved = 0, views_reserved_at = NULL, updated_at = ? `+
+				`WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL AND expires_at > ? `+
+				`AND views_reserved = 1 AND view_count < max_views`,
+			now, share.ID, string(tenant), now)
+		if res.Error != nil {
+			return res.Error
+		}
+		won = res.RowsAffected == 1
+		if won && grantedEntry != nil {
+			return tx.Create(grantedEntry).Error
+		}
+		return nil
+	})
+	if err != nil {
+		return false, ErrInternal.WithCause(err)
+	}
+	return won, nil
+}
+
+// tryRefundView releases a taken reservation back to the share without
+// spending a view: it clears views_reserved and views_reserved_at, so a
+// serve that failed before its content was delivered leaves the share
+// exactly as it found it -- the delivery-failure arm of the
+// reserve/confirm/refund shape (Service.refundAccessView). A call that
+// finds no reservation standing (views_reserved = 0: already confirmed,
+// already refunded, or cleared by a revoke) affects zero rows and reports
+// won == false -- refunds are idempotent under the guarded write, exactly
+// as the resolution arms of go/billing's CreditService are. No liveness
+// predicate: a refund also clears a reservation on a row a concurrent
+// revoke transitioned meanwhile, which is exactly the cleanup that row
+// needs.
+//
+// Raw Exec for the identical reason tryConfirmView's is: the statement
+// clears a column to zero and one to NULL, which a struct-based partial
+// update cannot express; the hand-written tenant_id predicate below is the
+// isolation mechanism (see tryConfirmView's doc comment), proven by
+// TestShareRepository_TryRefundView_ScopedToOneTenant.
+func (r *ShareRepository) tryRefundView(ctx context.Context, shareID string, now time.Time) (won bool, err error) {
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	err = r.runGuardedWrite(ctx, func(tx *gorm.DB) error {
+		res := tx.Exec(
+			`UPDATE `+tableShares+` `+
+				`SET views_reserved = 0, views_reserved_at = NULL, updated_at = ? `+
+				`WHERE id = ? AND tenant_id = ? AND views_reserved = 1`,
+			now, shareID, string(tenant))
+		won = res.RowsAffected == 1
+		return res.Error
 	})
 	if err != nil {
 		return false, ErrInternal.WithCause(err)
@@ -387,6 +547,32 @@ func (r *ShareRepository) listExpiredOrExhausted(ctx context.Context, now time.T
 		return tx.
 			Where("revoked_at IS NULL").
 			Where("expires_at <= ? OR (max_views IS NOT NULL AND view_count >= max_views)", now).
+			Order("id").
+			Find(&out).Error
+	})
+	if err != nil {
+		return nil, ErrInternal.WithCause(err)
+	}
+	return out, nil
+}
+
+// listStaleReserved returns every row of the caller tenant that still
+// holds a view reservation which has OUTLIVED viewReservationTimeout as of
+// now -- the expiry sweep's reservation-arm listing (cleanup.go), whose
+// sweep refunds each such reservation on the assumption that the serve
+// that took it died without resolving it. Unlike listExpiredOrExhausted
+// this listing deliberately carries no revoked_at filter: a reservation
+// standing on a revoked or expired row is residue a refund is free to
+// clear too (such a row can never serve again, so nothing depends on the
+// marker), and the reservation-age predicate alone is what the refund arm
+// acts on.
+func (r *ShareRepository) listStaleReserved(ctx context.Context, now time.Time) ([]Share, error) {
+	var out []Share
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.
+			Where("views_reserved = 1").
+			Where("views_reserved_at IS NOT NULL").
+			Where("views_reserved_at <= ?", now.Add(-viewReservationTimeout)).
 			Order("id").
 			Find(&out).Error
 	})

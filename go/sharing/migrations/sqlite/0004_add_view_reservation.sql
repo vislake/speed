@@ -1,0 +1,29 @@
+-- The settle-after-serve round adds the access route's in-flight view
+-- reservation to sharing_shares (go/sharing/model.go's ViewsReserved and
+-- ViewsReservedAt fields; the reserve/confirm/refund shape's full
+-- reasoning is in AGENTS.md's "Serving an access" section):
+--
+--   * views_reserved: 1 while the route is serving one viewer of a
+--     MaxViews-limited share, 0 otherwise. The reservation is taken
+--     BEFORE any bytes are delivered (ShareRepository.tryReserveView), so
+--     a concurrent second fetch is refused up front instead of being
+--     delivered and then losing a settlement race -- and a fully delivered
+--     serve whose post-delivery confirm write fails keeps the view held in
+--     use (spent) rather than returning it to the share.
+--   * views_reserved_at: when the reservation began, the age that lets a
+--     stale reservation (one older than viewReservationTimeout, presumed
+--     left behind by a serve that died without resolving it) be told apart
+--     from a live serve and converged by the next access or the expiry
+--     sweep.
+--
+-- The two columns are written together by every guarded write, never
+-- independently; a row with views_reserved = 1 and views_reserved_at NULL
+-- is an invariant violation the module treats defensively as a live
+-- reservation. Only rows whose max_views is non-nil ever carry a
+-- reservation: an unlimited share has no finite allowance to reserve
+-- against.
+--
+-- This is the SQLite copy; see the postgres/ sibling for the identical
+-- schema on that dialect.
+ALTER TABLE sharing_shares ADD COLUMN views_reserved INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sharing_shares ADD COLUMN views_reserved_at TIMESTAMP;

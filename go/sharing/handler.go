@@ -138,34 +138,52 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // for the full outward contract; this method is deliberately thin --
 // extract the request's inputs, delegate the access decision to
 // Service.authorizePublicAccess, then delegate the resource read to
-// resolver and the view recording to Service's settle methods -- because
-// every rule that actually matters (outward-identical refusals, the
-// constant-time password check, revocation with no caching, and the rule
-// that a view is consumed only when the content was actually delivered)
-// already lives in Service and must not be duplicated here.
+// resolver and the view recording to Service's reserve/confirm/refund
+// trio -- because every rule that actually matters (outward-identical
+// refusals, the constant-time password check, revocation with no caching,
+// and the rule that a view is consumed only when the content was actually
+// delivered) already lives in Service and must not be duplicated here.
 //
-// # The serve flow: authorize, deliver, then consume
+// # The serve flow: authorize, reserve, deliver, then confirm
 //
-// A limited share's view is the budget this route exists to spend, and it
-// is spent ONLY once the share's content has actually reached the viewer:
+// A MaxViews-limited share's views are the budget this route exists to
+// spend, and a view is spent ONLY once the share's content has actually
+// reached the viewer -- the reserve/confirm/refund shape go/billing's
+// credits ledger and go/storage's transfer lifecycle establish in this
+// codebase (AGENTS.md's "Serving an access" section has the full
+// two-directions reasoning):
 //
 //  1. authorizePublicAccess runs every refusal check (rate limit, token
 //     lookup, the constant-time password check, current liveness) and
-//     records NOTHING on success -- no view, no granted log row. Refusals
-//     are settled as one denied row and one denied event, exactly as
-//     Service.Access settles them.
-//  2. The content is resolved (resolver) and streamed to the response. An
+//     records NOTHING on success -- no view, no reservation, no granted
+//     log row. Refusals are settled as one denied row and one denied
+//     event, exactly as Service.Access settles them.
+//  2. A MaxViews-limited share's view is then RESERVED (reserveAccessView)
+//     before any delivery can begin: the share's ceiling already accounts
+//     for the serve in flight, so a concurrent second fetch is refused up
+//     front -- the identical outward answer a share that had simply
+//     exhausted its views answers with -- instead of being delivered and
+//     only then losing a settlement race. A lost reservation (the share
+//     was revoked, expired, exhausted or taken by a concurrent serve in
+//     the interim) is settled as denied and answered; nothing has been
+//     delivered either way.
+//  3. The content is resolved (resolver) and streamed to the response. An
 //     unwired resolver, a resolver failure, or a stream that dies partway
-//     through settles the attempt as DENIED (settleAccessDenied): the
-//     visitor never got the content, so the share keeps its views and the
-//     log says refused -- the pre-fix flow recorded the view inside
-//     Service.AccessPublic at the start of this method instead, so any of
-//     those failure shapes permanently spent a MaxViews=1 share whose
-//     content nobody ever saw (Service.authorizeAttempt's doc comment has
-//     the full reasoning).
-//  3. Only after the body has been fully copied does settleAccessGranted
-//     consume the view and commit the granted log row, in one guarded
-//     transaction.
+//     through REFUNDS the reservation (refundAccessView -- no view
+//     consumed, so the share keeps every view it had) and settles the
+//     attempt as DENIED (settleAccessDenied): the visitor never got the
+//     content, and the log says refused -- the same honesty ee20d37
+//     established, preserved under the reservation shape.
+//  4. Only after the body has been fully copied is the reservation
+//     resolved into a spent view: a limited share's serve is CONFIRMED
+//     (confirmAccessView -- the reserved view becomes a counted view and
+//     the granted log row commits in one guarded transaction), an
+//     unlimited share's serve is settled granted exactly as it always was
+//     (settleAccessGranted, no reservation ever standing for it). A
+//     delivered serve is never refunded: if its confirm write fails, the
+//     reservation keeps the view held in use -- spent -- rather than
+//     returning it to the share (confirmAccessView's own doc comment has
+//     the two-directions reasoning in full).
 //
 // Cache-Control: no-store is set FIRST, before any other work, so every
 // response this method can possibly produce -- including one that panics
@@ -198,6 +216,40 @@ func (h *Handler) SharingAccessShare(w http.ResponseWriter, r *http.Request, par
 	// the settles run on a context that survives the request.
 	settleCtx := context.WithoutCancel(ctx)
 
+	// Step 2: reserve the view of a MaxViews-limited share BEFORE any
+	// delivery can begin -- see the doc comment above for why the ceiling
+	// must account for the serve in flight before its bytes leave the
+	// server.
+	limited := share.MaxViews != nil
+	if limited {
+		share, err = h.svc.reserveAccessView(settleCtx, share, p)
+		if err != nil {
+			// Either the in-use refusal (ErrNotAccessible, already settled
+			// as denied) or a store failure on the reservation itself (its
+			// denied settle attempted, the internal error surfaced) --
+			// nothing has been delivered either way.
+			writeError(w, err)
+			return
+		}
+	}
+
+	// refundAndSettleDenied releases a limited serve's reservation and
+	// settles the failed serve as denied -- the no-resolver answer, the
+	// resolver's failure, and the interrupted stream all land here. A
+	// refund failure is logged (a reservation a refund cannot land is left
+	// for the convergence owners viewReservationTimeout's own doc comment
+	// names); the denied settle's failure is the caller's to answer or log,
+	// exactly as the pre-reservation route treated the settle alone.
+	refundAndSettleDenied := func() error {
+		if limited {
+			if refundErr := h.svc.refundAccessView(settleCtx, share); refundErr != nil {
+				observability.FromContext(ctx).Warn("share reservation could not be refunded after a failed serve",
+					"share_id", share.ID, "error", refundErr)
+			}
+		}
+		return h.svc.settleAccessDenied(settleCtx, share, p)
+	}
+
 	if h.resolver == nil {
 		// Authorized, but nothing can serve this share's content: settle the
 		// attempt as denied -- the share keeps every view it had -- and
@@ -205,7 +257,7 @@ func (h *Handler) SharingAccessShare(w http.ResponseWriter, r *http.Request, par
 		// no trail: answer the internal error rule 4 demands instead, the
 		// same way Service.Access refuses rather than answering when its own
 		// denied row cannot be written.
-		if settleErr := h.svc.settleAccessDenied(settleCtx, share, p); settleErr != nil {
+		if settleErr := refundAndSettleDenied(); settleErr != nil {
 			writeError(w, settleErr)
 			return
 		}
@@ -223,7 +275,7 @@ func (h *Handler) SharingAccessShare(w http.ResponseWriter, r *http.Request, par
 	resourceCtx := pkgcore.WithTenant(ctx, share.GetTenantID())
 	content, err := h.resolver.OpenResource(resourceCtx, share.ResourceRef)
 	if err != nil {
-		if settleErr := h.svc.settleAccessDenied(settleCtx, share, p); settleErr != nil {
+		if settleErr := refundAndSettleDenied(); settleErr != nil {
 			writeError(w, settleErr)
 			return
 		}
@@ -248,26 +300,33 @@ func (h *Handler) SharingAccessShare(w http.ResponseWriter, r *http.Request, par
 	w.WriteHeader(http.StatusOK)
 	if _, copyErr := io.Copy(w, content.Body); copyErr != nil {
 		// The response is already committed -- 200 and however many bytes
-		// made it out. Settle the interrupted delivery honestly: one denied
-		// row and one denied event, no view consumed, so a flaky first
-		// attempt never spends a limited share's budget. A settle failure
-		// here can only be logged: there is no response left to answer
-		// with.
+		// made it out. Settle the interrupted delivery honestly: refund the
+		// reservation (no view consumed, so a flaky first attempt never
+		// spends a limited share's budget), then one denied row and one
+		// denied event. A settle failure here can only be logged: there is
+		// no response left to answer with.
 		observability.FromContext(ctx).Warn("share resource stream failed",
 			"share_id", share.ID, "error", copyErr)
-		if settleErr := h.svc.settleAccessDenied(settleCtx, share, p); settleErr != nil {
+		if settleErr := refundAndSettleDenied(); settleErr != nil {
 			observability.FromContext(ctx).Error("share stream interruption could not be logged",
 				"share_id", share.ID, "error", settleErr)
 		}
 		return
 	}
 
-	// Step 3: the full content reached the viewer -- only NOW is the view
-	// consumed and the access logged granted (settleAccessGranted commits
-	// the guarded view record and the granted log row in one transaction).
-	// The response is already committed, so a settle failure can only be
-	// logged.
-	if settleErr := h.svc.settleAccessGranted(settleCtx, share, p); settleErr != nil {
+	// Step 4: the full content reached the viewer -- only NOW is the view
+	// consumed and the access logged granted (confirmAccessView on a
+	// MaxViews-limited share, settleAccessGranted on an unlimited one --
+	// both commit the view record and the granted log row in one
+	// transaction). The response is already committed, so a settle failure
+	// can only be logged.
+	var settleErr error
+	if limited {
+		settleErr = h.svc.confirmAccessView(settleCtx, share, p)
+	} else {
+		settleErr = h.svc.settleAccessGranted(settleCtx, share, p)
+	}
+	if settleErr != nil {
 		observability.FromContext(ctx).Error("share access delivery could not be settled",
 			"share_id", share.ID, "error", settleErr)
 	}

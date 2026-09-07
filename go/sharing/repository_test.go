@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 
@@ -142,6 +143,595 @@ func TestShareRepository_TryRecordView_StaleViewCountLosesTheRace(t *testing.T) 
 	}
 	if won {
 		t.Errorf("tryRecordView (stale copy) = true, want false -- the row's view_count has moved on")
+	}
+}
+
+// TestShareRepository_TryReserveView_TakesAndRefusesTheLiveReservation
+// pins the reserve half of the access route's reserve/confirm/refund
+// shape: a MaxViews-limited share takes exactly one in-flight reservation,
+// and a second attempt while that reservation is still LIVE (younger than
+// viewReservationTimeout) affects zero rows -- the write-time in-use
+// refusal a concurrent second fetch races against. Nothing about the
+// reservation spends a view: ViewCount stays put until a confirm.
+func TestShareRepository_TryReserveView_TakesAndRefusesTheLiveReservation(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	share := newTestShare("share-1", now)
+	one := 1
+	share.MaxViews = &one
+	if err := repo.Create(ctx, share); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	won, err := repo.tryReserveView(ctx, share, now)
+	if err != nil {
+		t.Fatalf("tryReserveView (first): %v", err)
+	}
+	if !won {
+		t.Fatalf("tryReserveView (first) = false, want true")
+	}
+
+	fresh, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if fresh.ViewsReserved != 1 || fresh.ViewsReservedAt == nil {
+		t.Fatalf("after the reservation: ViewsReserved = %d, ViewsReservedAt = %v, want 1 and a timestamp", fresh.ViewsReserved, fresh.ViewsReservedAt)
+	}
+	if fresh.ViewCount != 0 {
+		t.Fatalf("ViewCount = %d after the reservation, want 0 -- reserving must not spend a view", fresh.ViewCount)
+	}
+
+	// A second reservation attempt while the first is still live loses --
+	// the in-use refusal -- and changes nothing.
+	won, err = repo.tryReserveView(ctx, fresh, now)
+	if err != nil {
+		t.Fatalf("tryReserveView (second, in use): %v", err)
+	}
+	if won {
+		t.Fatalf("tryReserveView (second, in use) = true, want false")
+	}
+	after, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash (after the refused second): %v", err)
+	}
+	if after.ViewsReserved != 1 || after.ViewCount != 0 {
+		t.Errorf("row after the refused second reservation = ViewsReserved %d / ViewCount %d, want 1 / 0", after.ViewsReserved, after.ViewCount)
+	}
+}
+
+// TestShareRepository_TryReserveView_StaleReservationIsTakenOver pins the
+// interrupted-reservation convergence: a reservation that has OUTLIVED
+// viewReservationTimeout no longer refuses -- it is presumed left behind by
+// a serve that died without resolving it, and a newer fetch takes it over,
+// refreshing views_reserved_at in the same write. The takeover is what
+// keeps a crashed serve's dead reservation from wedging the share's last
+// view forever.
+func TestShareRepository_TryReserveView_StaleReservationIsTakenOver(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	t0 := time.Now().UTC()
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	share := newTestShare("share-1", t0)
+	one := 1
+	share.MaxViews = &one
+	if err := repo.Create(ctx, share); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if won, err := repo.tryReserveView(ctx, share, t0); err != nil || !won {
+		t.Fatalf("tryReserveView (first): won=%v err=%v", won, err)
+	}
+
+	// Still live just before the timeout boundary: refused.
+	if won, err := repo.tryReserveView(ctx, share, t0.Add(viewReservationTimeout-1*time.Minute)); err != nil || won {
+		t.Fatalf("tryReserveView (pre-timeout) = won=%v err=%v, want won=false (still live)", won, err)
+	}
+
+	// Past the timeout: the stale reservation is taken over.
+	takeoverAt := t0.Add(viewReservationTimeout + time.Minute)
+	won, err := repo.tryReserveView(ctx, share, takeoverAt)
+	if err != nil {
+		t.Fatalf("tryReserveView (takeover): %v", err)
+	}
+	if !won {
+		t.Fatalf("tryReserveView (takeover) = false, want true -- a stale reservation must be taken over")
+	}
+	fresh, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if fresh.ViewsReserved != 1 || fresh.ViewsReservedAt == nil {
+		t.Fatalf("after the takeover: ViewsReserved = %d, ViewsReservedAt = %v, want 1 and a timestamp", fresh.ViewsReserved, fresh.ViewsReservedAt)
+	}
+	if !fresh.ViewsReservedAt.Equal(takeoverAt) {
+		t.Errorf("ViewsReservedAt = %v after the takeover, want the takeover's own time %v -- the takeover refreshes the reservation", fresh.ViewsReservedAt, takeoverAt)
+	}
+}
+
+// TestShareRepository_TryReserveView_RefusesOnNonReservableRows pins the
+// guard's outer bounds: a reservation can only stand on a row that is
+// still live, still under its MaxViews ceiling, and carrying a MaxViews at
+// all -- a revoked, expired or exhausted share cannot be reserved (its
+// refusals are the route's outward answer), and an UNLIMITED share has no
+// finite allowance to draw a reservation from, so its rows never reserve.
+func TestShareRepository_TryReserveView_RefusesOnNonReservableRows(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	revoked := newTestShare("revoked", now)
+	one := 1
+	revoked.MaxViews = &one
+	if err := repo.Create(ctx, revoked); err != nil {
+		t.Fatalf("Create(revoked): %v", err)
+	}
+	if won, err := repo.markRevoked(ctx, revoked.ID, now); err != nil || !won {
+		t.Fatalf("markRevoked: won=%v err=%v", won, err)
+	}
+
+	exhausted := newTestShare("exhausted", now)
+	exhausted.MaxViews = &one
+	if err := repo.Create(ctx, exhausted); err != nil {
+		t.Fatalf("Create(exhausted): %v", err)
+	}
+	freshExhausted, err := repo.byTokenHash(ctx, exhausted.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash(exhausted): %v", err)
+	}
+	if won, err := repo.tryRecordView(ctx, freshExhausted, now, nil); err != nil || !won {
+		t.Fatalf("tryRecordView (exhausting the one view): won=%v err=%v", won, err)
+	}
+
+	unlimited := newTestShare("unlimited", now)
+	if err := repo.Create(ctx, unlimited); err != nil {
+		t.Fatalf("Create(unlimited): %v", err)
+	}
+
+	expired := newTestShare("expired", now)
+	expired.MaxViews = &one
+	if err := repo.Create(ctx, expired); err != nil {
+		t.Fatalf("Create(expired): %v", err)
+	}
+
+	expiredLater := now.Add(25 * time.Hour) // newTestShare expires 24h after now
+	cases := []struct {
+		name string
+		row  *Share
+		at   time.Time
+	}{
+		{"revoked share", revoked, now},
+		{"exhausted share", freshExhausted, now},
+		{"share past its expiry", expired, expiredLater},
+		{"unlimited share", unlimited, now},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			row, err := repo.byTokenHash(ctx, c.row.TokenHash)
+			if err != nil {
+				t.Fatalf("byTokenHash: %v", err)
+			}
+			won, err := repo.tryReserveView(ctx, row, c.at)
+			if err != nil {
+				t.Fatalf("tryReserveView: %v", err)
+			}
+			if won {
+				t.Errorf("tryReserveView on a %s = true, want false", c.name)
+			}
+		})
+	}
+}
+
+// TestShareRepository_TryConfirmView_ConvertsTheReservationAndLogsWithIt
+// pins the confirm half of the reserve/confirm/refund shape: a standing
+// reservation is confirmed into one spent view -- view_count incremented,
+// the reservation cleared -- with the serve's granted log row committed in
+// the SAME transaction. Once confirmed, nothing remains to confirm: a
+// second confirm (or a confirm with no reservation standing at all)
+// affects zero rows.
+func TestShareRepository_TryConfirmView_ConvertsTheReservationAndLogsWithIt(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	share := newTestShare("share-1", now)
+	one := 1
+	share.MaxViews = &one
+	if err := repo.Create(ctx, share); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	fresh, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if won, reserveErr := repo.tryReserveView(ctx, fresh, now); reserveErr != nil || !won {
+		t.Fatalf("tryReserveView: won=%v err=%v", won, reserveErr)
+	}
+
+	entry := &AccessLogEntry{
+		ID:          uuid.NewString(),
+		TenantModel: dbkit.TenantModel{TenantID: "tenant-a"},
+		ShareID:     share.ID,
+		OccurredAt:  now,
+		Outcome:     AccessOutcomeGranted,
+	}
+	won, err := repo.tryConfirmView(ctx, fresh, now, entry)
+	if err != nil {
+		t.Fatalf("tryConfirmView: %v", err)
+	}
+	if !won {
+		t.Fatalf("tryConfirmView = false, want true")
+	}
+
+	after, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if after.ViewCount != 1 {
+		t.Errorf("ViewCount = %d after the confirm, want 1", after.ViewCount)
+	}
+	if after.ViewsReserved != 0 || after.ViewsReservedAt != nil {
+		t.Errorf("reservation after the confirm = ViewsReserved %d / ViewsReservedAt %v, want 0 / nil", after.ViewsReserved, after.ViewsReservedAt)
+	}
+
+	// The granted row landed in the same transaction.
+	var logged []AccessLogEntry
+	if logErr := dbkit.WithTenantSession(ctx, repo.db, func(tx *gorm.DB) error {
+		return tx.Where("share_id = ?", share.ID).Find(&logged).Error
+	}); logErr != nil {
+		t.Fatalf("access-log read: %v", logErr)
+	}
+	if len(logged) != 1 || logged[0].Outcome != AccessOutcomeGranted || logged[0].ID != entry.ID {
+		t.Errorf("access log after the confirm = %+v, want exactly the serve's one granted row", logged)
+	}
+
+	// A second confirm -- no reservation standing -- affects zero rows.
+	won, err = repo.tryConfirmView(ctx, after, now, nil)
+	if err != nil {
+		t.Fatalf("tryConfirmView (second): %v", err)
+	}
+	if won {
+		t.Errorf("tryConfirmView (second, no reservation) = true, want false")
+	}
+}
+
+// TestShareRepository_TryConfirmView_LostConfirmLeavesNoTrace pins the
+// confirm's count-and-trail atomicity on the losing side: a confirm whose
+// reservation was already resolved, or whose share ceased to be live while
+// its delivery was in flight, affects zero rows, inserts nothing, and
+// spends nothing -- the caller settles the delivered serve as denied
+// instead (confirmAccessView's own doc comment).
+func TestShareRepository_TryConfirmView_LostConfirmLeavesNoTrace(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	// A share whose delivery was interrupted -- no reservation ever taken
+	// (say the serve failed before the reserve, or the reservation was
+	// already refunded): a confirm finds nothing to confirm.
+	noReservation := newTestShare("no-reservation", now)
+	one := 1
+	noReservation.MaxViews = &one
+	if err := repo.Create(ctx, noReservation); err != nil {
+		t.Fatalf("Create(no-reservation): %v", err)
+	}
+	freshNoReservation, err := repo.byTokenHash(ctx, noReservation.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash(no-reservation): %v", err)
+	}
+	if won, confirmErr := repo.tryConfirmView(ctx, freshNoReservation, now, nil); confirmErr != nil || won {
+		t.Fatalf("tryConfirmView (no reservation) = won=%v err=%v, want won=false", won, confirmErr)
+	}
+
+	// A share revoked while its delivery was in flight: the reservation
+	// stands but the confirm's liveness guard refuses it, exactly as
+	// ee20d37's settle-time liveness refused the post-delivery record.
+	revoked := newTestShare("revoked-mid-flight", now)
+	revoked.MaxViews = &one
+	if createErr := repo.Create(ctx, revoked); createErr != nil {
+		t.Fatalf("Create(revoked-mid-flight): %v", createErr)
+	}
+	freshRevoked, err := repo.byTokenHash(ctx, revoked.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash(revoked-mid-flight): %v", err)
+	}
+	if won, reserveErr := repo.tryReserveView(ctx, freshRevoked, now); reserveErr != nil || !won {
+		t.Fatalf("tryReserveView(revoked-mid-flight): won=%v err=%v", won, reserveErr)
+	}
+	if won, markErr := repo.markRevoked(ctx, revoked.ID, now); markErr != nil || !won {
+		t.Fatalf("markRevoked: won=%v err=%v", won, markErr)
+	}
+	if won, confirmErr := repo.tryConfirmView(ctx, freshRevoked, now, nil); confirmErr != nil || won {
+		t.Fatalf("tryConfirmView (revoked mid-flight) = won=%v err=%v, want won=false", won, confirmErr)
+	}
+	afterRevoked, err := repo.byTokenHash(ctx, revoked.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash(after revoked confirm): %v", err)
+	}
+	if afterRevoked.ViewCount != 0 {
+		t.Errorf("ViewCount = %d after the refused confirm on the revoked share, want 0", afterRevoked.ViewCount)
+	}
+
+	// A share at its ceiling cannot be confirmed into a view it has no
+	// room for -- the corner a stale-reservation takeover can create (two
+	// overlapping serves racing one ceiling, viewReservationTimeout's own
+	// doc comment).
+	overCeiling := newTestShare("over-ceiling", now)
+	overCeiling.MaxViews = &one
+	if createErr := repo.Create(ctx, overCeiling); createErr != nil {
+		t.Fatalf("Create(over-ceiling): %v", createErr)
+	}
+	freshOverCeiling, err := repo.byTokenHash(ctx, overCeiling.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash(over-ceiling): %v", err)
+	}
+	if won, err := repo.tryReserveView(ctx, freshOverCeiling, now); err != nil || !won {
+		t.Fatalf("tryReserveView(over-ceiling): won=%v err=%v", won, err)
+	}
+	// A concurrent winner already spent the ceiling while this serve was in
+	// flight.
+	if err := repo.db.Exec("UPDATE "+tableShares+" SET view_count = 1 WHERE id = ?", overCeiling.ID).Error; err != nil {
+		t.Fatalf("UPDATE view_count: %v", err)
+	}
+	if won, err := repo.tryConfirmView(ctx, freshOverCeiling, now, nil); err != nil || won {
+		t.Fatalf("tryConfirmView (over ceiling) = won=%v err=%v, want won=false", won, err)
+	}
+}
+
+// TestShareRepository_TryConfirmView_ScopedToOneTenant is the isolation
+// proof tryConfirmView's raw-Exec shape requires (repository.go's own doc
+// comment names it): the hand-written tenant_id predicate must scope the
+// confirm to the caller's tenant exactly as the tenant-scope plugin would.
+// Another tenant's confirm against the same share id affects zero rows and
+// leaves the reservation standing.
+func TestShareRepository_TryConfirmView_ScopedToOneTenant(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctxA := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctxB := pkgcore.WithTenant(context.Background(), "tenant-b")
+
+	share := newTestShare("share-1", now)
+	one := 1
+	share.MaxViews = &one
+	if err := repo.Create(ctxA, share); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if won, err := repo.tryReserveView(ctxA, share, now); err != nil || !won {
+		t.Fatalf("tryReserveView: won=%v err=%v", won, err)
+	}
+
+	won, err := repo.tryConfirmView(ctxB, share, now, nil)
+	if err != nil {
+		t.Fatalf("tryConfirmView(other tenant): %v", err)
+	}
+	if won {
+		t.Fatalf("tryConfirmView(other tenant) = true, want false -- the confirm must not cross tenants")
+	}
+
+	fresh, err := repo.byTokenHash(ctxA, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if fresh.ViewCount != 0 || fresh.ViewsReserved != 1 {
+		t.Errorf("row after the foreign-tenant confirm = ViewCount %d / ViewsReserved %d, want 0 / 1 -- nothing of the reservation was spent cross-tenant", fresh.ViewCount, fresh.ViewsReserved)
+	}
+}
+
+// TestShareRepository_TryRefundView_ClearsOnlyAStandingReservation pins the
+// refund arm: a standing reservation is released without spending a view
+// (the failed-serve arm of the reserve/confirm/refund shape), and a refund
+// that finds no reservation standing -- already confirmed, already
+// refunded, never taken -- is an idempotent no-op reporting won == false,
+// exactly as the resolution arms of go/billing's CreditService are.
+func TestShareRepository_TryRefundView_ClearsOnlyAStandingReservation(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	share := newTestShare("share-1", now)
+	one := 1
+	share.MaxViews = &one
+	if err := repo.Create(ctx, share); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// No reservation standing: the refund is an idempotent no-op.
+	won, err := repo.tryRefundView(ctx, share.ID, now)
+	if err != nil {
+		t.Fatalf("tryRefundView (nothing standing): %v", err)
+	}
+	if won {
+		t.Fatalf("tryRefundView (nothing standing) = true, want false")
+	}
+
+	// A standing reservation is released, spending nothing.
+	reserveWon, reserveErr := repo.tryReserveView(ctx, share, now)
+	if reserveErr != nil {
+		t.Fatalf("tryReserveView: %v", reserveErr)
+	}
+	if !reserveWon {
+		t.Fatalf("tryReserveView = false, want true")
+	}
+	won, err = repo.tryRefundView(ctx, share.ID, now)
+	if err != nil {
+		t.Fatalf("tryRefundView: %v", err)
+	}
+	if !won {
+		t.Fatalf("tryRefundView = false, want true")
+	}
+	fresh, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if fresh.ViewsReserved != 0 || fresh.ViewsReservedAt != nil {
+		t.Errorf("reservation after the refund = ViewsReserved %d / ViewsReservedAt %v, want 0 / nil", fresh.ViewsReserved, fresh.ViewsReservedAt)
+	}
+	if fresh.ViewCount != 0 {
+		t.Errorf("ViewCount = %d after the refund, want 0 -- a refund must not spend a view", fresh.ViewCount)
+	}
+
+	// And the released share can be reserved again.
+	won, err = repo.tryReserveView(ctx, fresh, now)
+	if err != nil {
+		t.Fatalf("tryReserveView (after refund): %v", err)
+	}
+	if !won {
+		t.Errorf("tryReserveView (after refund) = false, want true -- the refunded share must be reservable again")
+	}
+}
+
+// TestShareRepository_TryRefundView_ScopedToOneTenant is the isolation
+// proof tryRefundView's raw-Exec shape requires: the hand-written tenant_id
+// predicate must scope the refund to the caller's tenant. Another tenant's
+// refund against the same share id affects zero rows and leaves the
+// standing reservation in place.
+func TestShareRepository_TryRefundView_ScopedToOneTenant(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	now := time.Now().UTC()
+	ctxA := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctxB := pkgcore.WithTenant(context.Background(), "tenant-b")
+
+	share := newTestShare("share-1", now)
+	one := 1
+	share.MaxViews = &one
+	if err := repo.Create(ctxA, share); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if won, err := repo.tryReserveView(ctxA, share, now); err != nil || !won {
+		t.Fatalf("tryReserveView: won=%v err=%v", won, err)
+	}
+
+	won, err := repo.tryRefundView(ctxB, share.ID, now)
+	if err != nil {
+		t.Fatalf("tryRefundView(other tenant): %v", err)
+	}
+	if won {
+		t.Fatalf("tryRefundView(other tenant) = true, want false -- the refund must not cross tenants")
+	}
+	fresh, err := repo.byTokenHash(ctxA, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if fresh.ViewsReserved != 1 {
+		t.Errorf("ViewsReserved = %d after the foreign-tenant refund attempt, want 1 -- the standing reservation must survive it", fresh.ViewsReserved)
+	}
+}
+
+// TestShareRepository_TryRecordView_RefusedWhileTheReservationIsLive pins
+// the reservation clause on the in-process Access path's CAS: a LIVE
+// reservation (a route serve mid-delivery) refuses the record -- an
+// in-process Access must not spend the view a delivery in flight holds --
+// while a STALE reservation does not refuse: the CAS converges it by
+// spending the view it held, the next-access half of an interrupted
+// reservation's lifecycle.
+func TestShareRepository_TryRecordView_RefusedWhileTheReservationIsLive(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	t0 := time.Now().UTC()
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	share := newTestShare("share-1", t0)
+	one := 1
+	share.MaxViews = &one
+	if err := repo.Create(ctx, share); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	fresh, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash: %v", err)
+	}
+	if won, reserveErr := repo.tryReserveView(ctx, fresh, t0); reserveErr != nil || !won {
+		t.Fatalf("tryReserveView: won=%v err=%v", won, reserveErr)
+	}
+
+	// Live reservation: the CAS refuses, spending nothing.
+	won, err := repo.tryRecordView(ctx, fresh, t0, nil)
+	if err != nil {
+		t.Fatalf("tryRecordView (live reservation): %v", err)
+	}
+	if won {
+		t.Fatalf("tryRecordView (live reservation) = true, want false")
+	}
+	afterLive, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash (live reservation): %v", err)
+	}
+	if afterLive.ViewCount != 0 {
+		t.Fatalf("ViewCount = %d after the refused record against a live reservation, want 0", afterLive.ViewCount)
+	}
+
+	// Same reservation once STALE: the CAS converges it by spending.
+	staleNow := t0.Add(viewReservationTimeout + time.Minute)
+	afterStaleRead, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash (stale reservation): %v", err)
+	}
+	if afterStaleRead.hasLiveReservation(staleNow) {
+		t.Fatalf("hasLiveReservation(%v) = true for a reservation from %v, want false", staleNow, t0)
+	}
+	won, err = repo.tryRecordView(ctx, afterStaleRead, staleNow, nil)
+	if err != nil {
+		t.Fatalf("tryRecordView (stale reservation): %v", err)
+	}
+	if !won {
+		t.Fatalf("tryRecordView (stale reservation) = false, want true -- the stale reservation must be converged by the spend")
+	}
+	afterStale, err := repo.byTokenHash(ctx, share.TokenHash)
+	if err != nil {
+		t.Fatalf("byTokenHash (after stale convergence): %v", err)
+	}
+	if afterStale.ViewCount != 1 {
+		t.Errorf("ViewCount = %d after the stale-reservation convergence, want 1", afterStale.ViewCount)
+	}
+}
+
+// TestShareRepository_ListStaleReserved_ReportsOnlyAgedReservations pins
+// the sweep's reservation-arm listing: exactly the rows still holding a
+// reservation that has outlived viewReservationTimeout as of now are
+// listed -- a live reservation is not, and neither is a row with no
+// reservation at all.
+func TestShareRepository_ListStaleReserved_ReportsOnlyAgedReservations(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	t0 := time.Now().UTC()
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	stale := newTestShare("stale", t0)
+	one := 1
+	stale.MaxViews = &one
+	if err := repo.Create(ctx, stale); err != nil {
+		t.Fatalf("Create(stale): %v", err)
+	}
+	if won, err := repo.tryReserveView(ctx, stale, t0); err != nil || !won {
+		t.Fatalf("tryReserveView(stale): won=%v err=%v", won, err)
+	}
+
+	// The live reservation is taken just before the sweep's own instant, so
+	// it is still younger than viewReservationTimeout at listing time.
+	sweepNow := t0.Add(viewReservationTimeout + 2*time.Minute)
+	live := newTestShare("live", t0)
+	live.MaxViews = &one
+	if err := repo.Create(ctx, live); err != nil {
+		t.Fatalf("Create(live): %v", err)
+	}
+	if won, err := repo.tryReserveView(ctx, live, sweepNow.Add(-time.Minute)); err != nil || !won {
+		t.Fatalf("tryReserveView(live): won=%v err=%v", won, err)
+	}
+
+	plain := newTestShare("plain", t0)
+	if err := repo.Create(ctx, plain); err != nil {
+		t.Fatalf("Create(plain): %v", err)
+	}
+
+	rows, err := repo.listStaleReserved(ctx, sweepNow)
+	if err != nil {
+		t.Fatalf("listStaleReserved: %v", err)
+	}
+	var ids []string
+	for _, r := range rows {
+		ids = append(ids, r.ID)
+	}
+	if len(rows) != 1 || rows[0].ID != stale.ID {
+		t.Errorf("listStaleReserved = %v, want exactly the stale row %q", ids, stale.ID)
 	}
 }
 
