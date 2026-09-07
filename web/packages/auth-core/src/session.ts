@@ -402,6 +402,21 @@ function parseIssued(
   body: AuthnTokenPair,
   expectRefreshToken: boolean,
 ): IssuedTokens {
+  if (body === undefined || body === null) {
+    // A token-issuing operation whose 2xx carried no document -- an
+    // empty 2xx body resolves as undefined through the generated seam,
+    // which declares no document-existence expectation (it never sets
+    // requireJsonBody; see the @speed/api-sdk runtime.ts seam doc) --
+    // is refused here, before the first property access. A native
+    // TypeError on undefined is not an ApiError: it would escape the
+    // failure contract -- isApiError, the surfaces' reachable-code
+    // whitelists -- as an unhandled exception instead of resolving as
+    // client.protocol, the code reserved for exactly this deviation
+    // class.
+    throw protocolViolation(
+      'token-issuing response carries no body document',
+    )
+  }
   const accessToken = body.access_token
   if (typeof accessToken !== 'string' || accessToken === '') {
     throw protocolViolation(
@@ -758,6 +773,17 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
       params: AuthnSocialAuthorizeParams,
     ): Promise<string> {
       const response = await authnSocialAuthorize(provider, params)
+      if (response === undefined || response === null) {
+        // The document-existence guard, on the authorize endpoint whose
+        // whole 2xx answer is the URL document: an empty 2xx resolves
+        // as undefined through the generated seam (see parseIssued's
+        // guard), and the property access below would throw a native
+        // TypeError -- never an ApiError -- before the field check
+        // could refuse it.
+        throw protocolViolation(
+          'social authorize 2xx carries no response document',
+        )
+      }
       const authorizeUrl = response.authorize_url
       if (typeof authorizeUrl !== 'string' || authorizeUrl === '') {
         // A 2xx whose whole purpose is the URL answers without one: a
@@ -775,6 +801,17 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
     ): Promise<AuthSnapshot> {
       const opGeneration = generation
       const response = await authnSocialCallback(provider, request)
+      if (response === undefined || response === null) {
+        // The document-existence guard, on the callback's own
+        // response-dereferencing cell: an empty 2xx resolves as
+        // undefined through the generated seam (see parseIssued's
+        // guard), and the property access below would throw a native
+        // TypeError -- never an ApiError -- before the
+        // binding-shaped-response check could refuse it.
+        throw protocolViolation(
+          'social callback 2xx carries no response document',
+        )
+      }
       const tokens = response.tokens
       if (typeof tokens !== 'object' || tokens === null) {
         // The callback answered a binding-shaped response -- identity

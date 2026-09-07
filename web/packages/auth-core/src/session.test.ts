@@ -2040,6 +2040,132 @@ describe('with the real api-client', () => {
     })
     expect(store.get()).toBe('access-rotated')
   })
+
+  it('refuses an empty 2xx on a token-issuing login as client.protocol', async () => {
+    // Regression: the generated seam declares no document-existence
+    // expectation -- it never sets RequestOptions.requireJsonBody, for
+    // any operation (see the @speed/api-sdk runtime.ts seam doc) -- so
+    // an operation whose spec declares a response body but that
+    // actually answers an empty 2xx resolved as undefined through the
+    // real transport. parseIssued's first property access then threw a
+    // native TypeError, which is not an ApiError: isApiError(error) is
+    // false, so the rejection bypassed the ApiError contract every
+    // surface resolves through (the reachable-code whitelists with an
+    // unknown fallback) and escaped as an unhandled exception. The
+    // body-existence guard refuses the bodyless success as
+    // client.protocol, the same answer every other contract-violating
+    // token-issuing 2xx gets.
+    const store = createMemoryAccessTokenStore()
+    const session = createAuthSession(store)
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/api/v1/authn/login/password') {
+        return emptyResponse(200)
+      }
+      throw new Error(`unexpected fetch: ${url.pathname}`)
+    }
+    const client = createClient({
+      baseUrl: 'https://api.test',
+      fetch: fetcher,
+      accessTokenStore: store,
+    })
+    bindRequestFn(client)
+
+    const error = await captureRejection(
+      session.loginWithPassword({
+        identifier: 'ada@example.com',
+        password: 'pw',
+      }),
+    )
+    expect(isApiError(error)).toBe(true)
+    if (!isApiError(error)) {
+      return
+    }
+    expect(error.status).toBe(200)
+    expect(error.code).toBe(ERROR_CODE_PROTOCOL)
+    // A failed operation changes nothing: no token, still anonymous.
+    expect(store.get()).toBeNull()
+    expect(session.getSnapshot()).toEqual({
+      state: 'anonymous',
+      principal: null,
+      permissionSets: { tenant: null, system: null },
+    })
+  })
+
+  it('refuses an empty 2xx authorize answer as client.protocol', async () => {
+    // The same missed cell as the token-issuing guard, on the
+    // authorize endpoint whose whole 2xx answer is the URL document:
+    // an empty 2xx used to escape as a native TypeError on the first
+    // property access -- never an ApiError -- before the missing-field
+    // check could refuse it.
+    const store = createMemoryAccessTokenStore()
+    const session = createAuthSession(store)
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/api/v1/authn/social/google/authorize') {
+        return emptyResponse(200)
+      }
+      throw new Error(`unexpected fetch: ${url.pathname}`)
+    }
+    const client = createClient({
+      baseUrl: 'https://api.test',
+      fetch: fetcher,
+      accessTokenStore: store,
+    })
+    bindRequestFn(client)
+
+    const error = await captureRejection(
+      session.socialAuthorizeUrl('google', {
+        redirect_uri: 'https://app.example.com/social/callback/google',
+      }),
+    )
+    expect(isApiError(error)).toBe(true)
+    if (!isApiError(error)) {
+      return
+    }
+    expect(error.status).toBe(200)
+    expect(error.code).toBe(ERROR_CODE_PROTOCOL)
+    // A pure request: nothing about the session moved.
+    expect(store.get()).toBeNull()
+    expect(session.getSnapshot().state).toBe('anonymous')
+  })
+
+  it('refuses an empty 2xx callback answer as client.protocol', async () => {
+    // The social callback's own document-dereferencing cell
+    // (response.tokens): an empty 2xx resolves as undefined through
+    // the transport and used to escape as a native TypeError before
+    // the binding-shaped-response check could refuse it.
+    const store = createMemoryAccessTokenStore()
+    const session = createAuthSession(store)
+    const fetcher: typeof fetch = async (input) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/api/v1/authn/social/google/callback') {
+        return emptyResponse(200)
+      }
+      throw new Error(`unexpected fetch: ${url.pathname}`)
+    }
+    const client = createClient({
+      baseUrl: 'https://api.test',
+      fetch: fetcher,
+      accessTokenStore: store,
+    })
+    bindRequestFn(client)
+
+    const error = await captureRejection(
+      session.completeSocialLogin('google', {
+        code: '4/0AX4XfF19S4Q2',
+        state: 'state-1',
+      }),
+    )
+    expect(isApiError(error)).toBe(true)
+    if (!isApiError(error)) {
+      return
+    }
+    expect(error.status).toBe(200)
+    expect(error.code).toBe(ERROR_CODE_PROTOCOL)
+    expect(store.get()).toBeNull()
+    expect(session.getSnapshot().state).toBe('anonymous')
+  })
 })
 
 /** Waits until the refresh request has gone out (the refresh gate
@@ -2075,4 +2201,11 @@ function jsonResponse(status: number, body: unknown): Response {
     status,
     headers: { 'content-type': 'application/json' },
   })
+}
+
+/** Builds a body-less 2xx for the fetch stand-in: the empty-success
+ * shape the request function resolves as undefined when the request
+ * declared no requireJsonBody. */
+function emptyResponse(status: number): Response {
+  return new Response(null, { status })
 }
