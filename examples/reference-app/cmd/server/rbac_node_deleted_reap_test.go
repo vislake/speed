@@ -78,11 +78,20 @@ func newOrgRBACReapHarness(t *testing.T) (*org.TreeService, *org.MemberService, 
 	// WithInvitationLinkBuilder, both otherwise mandatory per
 	// org.Module.Register's own doc comment.
 	orgModule := org.NewModule(db, org.WithEmailIndexer(orgIndexer), org.WithInvitationEmailDisabled())
-	// No WithSubtreeResolver: this harness's assertions read rbac.Service.Can
-	// and the tenant-scoped binding rows directly, neither of which consults
-	// a SubtreeResolver -- that seam only matters to DataScope, which this
-	// regression does not exercise.
-	rbacModule := rbac.NewModule(db)
+	// WithSubtreeResolver is wired onto org's real Scope -- the
+	// orgSubtreeResolver adapter buildServer itself uses (server.go) -- so
+	// the seam answers node liveness against the very tree this harness
+	// mutates. That matters only to the restore side of the reap pair: the
+	// member-restored re-instatement re-verifies every node-scoped row's
+	// node through this seam before un-marking it (rbac's
+	// bindingNodeLivesAtMemberRestore, the b52b64d gate), and a harness
+	// without the resolver fails that gate closed, leaving node-scoped
+	// bindings revoked after a membership restore no matter what the tree
+	// actually holds. rbac's own pre-b52b64d uses of this seam -- DataScope
+	// narrowing -- are still not exercised by this file's assertions, which
+	// read Can and the binding rows directly; the seam is wired for the
+	// restore-side consumer, not for them.
+	rbacModule := rbac.NewModule(db, rbac.WithSubtreeResolver(orgSubtreeResolver{scope: orgModule.Scope()}))
 
 	migrationRegistry := dbkit.NewMigrationRegistry()
 	if regErr := migrationRegistry.Register(orgModule); regErr != nil {

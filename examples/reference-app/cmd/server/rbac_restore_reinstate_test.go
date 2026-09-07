@@ -40,6 +40,19 @@ import (
 // travelled the real bus, both bindings must be live again -- rbac's
 // restore-side subscriber undoing exactly the reaped grants, and only
 // those of the restored member.
+//
+// The node-scoped half of the assertion also clears the
+// structural-precondition gate b52b64d ships: the member-restored
+// re-instatement re-verifies each revoked row's node through the host's
+// SubtreeResolver before any un-mark, because the org.member.restored
+// event asserts the membership and never the node. The team node here was
+// never deleted, so the harness's org-backed resolver -- wired in
+// newOrgRBACReapHarness exactly as buildServer wires the full app -- must
+// answer that the node lives for this binding to come back: the
+// member-restored-while-the-node-lives half of the b52b64d property,
+// whose member-restored-while-the-node-stays-deleted half
+// TestOrgRBACRestore_MemberRestored_NodeDeletedWhileMemberGone_
+// StaysRevokedUntilTheNodeReturns below pins.
 func TestOrgRBACRestore_MemberRestored_ReinstatesTheReapedBindings(t *testing.T) {
 	tree, members, rbacService := newOrgRBACReapHarness(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
@@ -107,6 +120,116 @@ func TestOrgRBACRestore_MemberRestored_ReinstatesTheReapedBindings(t *testing.T)
 		if err != nil || !live {
 			t.Fatalf("binding at scope %+v stayed revoked after the membership restore: live = %v, %v", scope, live, err)
 		}
+	}
+}
+
+// TestOrgRBACRestore_MemberRestored_NodeDeletedWhileMemberGone_StaysRevokedUntilTheNodeReturns
+// pins the node-deleted half of the b52b64d discipline through the real
+// composed stack, the sequence this round's sibling test's happy path
+// cannot show: a member whose seat node is deleted while she is gone, and
+// whose membership org then restores while the node STAYS deleted, must
+// not regain her node-scoped grant. The org.member.restored event asserts
+// only that the membership is visible again; the row's other structural
+// precondition -- the node it is scoped to -- is re-verified through the
+// host's SubtreeResolver before any un-mark, and a node org still hides
+// answers no. Only the node's own later restore, through org's real
+// TreeService.Restore, lifts the binding again: the declined row is
+// re-attributed to the node-deletion origin, making the node's event its
+// single resurrection path -- the same re-attribution go/rbac/reap_test.go's
+// own TestService_OnMemberRestored_NodeDeletedWhileMemberGone_
+// StaysRevokedUntilTheNodeReturns pins with published events. Here the
+// cycle runs through org's real services, and org's real refusal shape
+// forces its ordering: TreeService.Delete refuses a node with a live
+// member, so the removal must come first and the node can only die after
+// the seat is empty.
+//
+// PRE-HARNESS-FIX this test fails at its final assertion with the binding
+// still revoked after the node's own restore: with no SubtreeResolver
+// wired, the member-restored re-instatement fails closed and never
+// re-attributes the row to the node-deletion origin, so the node-restored
+// subscriber finds nothing of its origin at the node to lift -- the row
+// stays stranded under the member-removal origin, which no later event
+// ever undoes.
+func TestOrgRBACRestore_MemberRestored_NodeDeletedWhileMemberGone_StaysRevokedUntilTheNodeReturns(t *testing.T) {
+	tree, members, rbacService := newOrgRBACReapHarness(t)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	root, err := tree.CreateRoot(ctx, "root", "workspace")
+	if err != nil {
+		t.Fatalf("CreateRoot: %v", err)
+	}
+	team, err := tree.CreateChild(ctx, root.ID, "team", "team")
+	if err != nil {
+		t.Fatalf("CreateChild(team): %v", err)
+	}
+	// user-1 sits in the team node; user-2 sits at the root so the tenant
+	// never hits org's last-active-member refusal when user-1 is removed.
+	memberOne, err := members.Add(ctx, "user-1", team.ID)
+	if err != nil {
+		t.Fatalf("members.Add(user-1): %v", err)
+	}
+	if _, err = members.Add(ctx, "user-2", root.ID); err != nil {
+		t.Fatalf("members.Add(user-2): %v", err)
+	}
+
+	if _, err = rbacService.DefineRole(ctx, rbac.RoleDefinition{
+		Key: "reader", Permissions: []string{"org:read"},
+	}); err != nil {
+		t.Fatalf("DefineRole: %v", err)
+	}
+	sub := rbac.Subject{TenantID: "tenant-a", UserID: "user-1"}
+	scope := rbac.Scope{NodeID: team.ID}
+	if err = rbacService.AssignRole(ctx, sub, "reader", scope); err != nil {
+		t.Fatalf("AssignRole at the team node: %v", err)
+	}
+
+	var live bool
+	live, err = isReaderLiveAtScope(ctx, rbacService, sub, scope)
+	if err != nil || !live {
+		t.Fatalf("binding at the team node was not live before the removal: live = %v, %v", live, err)
+	}
+
+	// The removal first, through org's real MemberService. The claim step
+	// of rbac's member-removal reap finds nothing yet revoked, and the
+	// revoke half reaps the live binding with the member-removal origin.
+	if err = members.Remove(ctx, "user-1"); err != nil {
+		t.Fatalf("members.Remove: %v", err)
+	}
+	live, err = isReaderLiveAtScope(ctx, rbacService, sub, scope)
+	if err != nil || live {
+		t.Fatalf("binding at the team node survived the removal: live = %v, %v", live, err)
+	}
+
+	// The node deletion while the member is gone, through org's real
+	// TreeService.Delete: rbac's node-deleted subscriber finds no LIVE row
+	// at the node to reap -- the removal already revoked this one -- so
+	// the row's origin still says member-removal, and everything that
+	// follows turns on the member restore below.
+	if err = tree.Delete(ctx, team.ID, false); err != nil {
+		t.Fatalf("Delete(team): %v", err)
+	}
+
+	// The member restore while the node STAYS deleted: the membership is
+	// visible again, the node is not, and the binding must stay revoked.
+	// The liveness gate asks the org-backed SubtreeResolver whether the
+	// node still resolves; org's tree says no, the row is re-attributed to
+	// the node-deletion origin, and only that event may lift it.
+	if _, err = members.Restore(ctx, memberOne.ID); err != nil {
+		t.Fatalf("members.Restore: %v", err)
+	}
+	live, err = isReaderLiveAtScope(ctx, rbacService, sub, scope)
+	if err != nil || live {
+		t.Fatalf("binding at the still-deleted team node went live with the member restore: live = %v, %v", live, err)
+	}
+
+	// The node comes back, through org's real TreeService.Restore -- the
+	// single resurrection path the re-attribution exists to preserve.
+	if _, err = tree.Restore(ctx, team.ID); err != nil {
+		t.Fatalf("tree.Restore(team): %v", err)
+	}
+	live, err = isReaderLiveAtScope(ctx, rbacService, sub, scope)
+	if err != nil || !live {
+		t.Fatalf("binding at the restored team node stayed revoked after the node restore: live = %v, %v", live, err)
 	}
 }
 
