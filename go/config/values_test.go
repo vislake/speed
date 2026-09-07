@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,6 +90,44 @@ func TestDecodeValue_RejectsStoredCorruption(t *testing.T) {
 	}
 	if _, err := decodeValue("duration", "forty winks"); err == nil {
 		t.Fatal("decodeValue of a non-duration canonical form must fail")
+	}
+}
+
+func TestDecodeValue_ErrorNamesTheTypeNeverTheValue(t *testing.T) {
+	// decodeValue is the one function in this file whose input can be a
+	// value decrypted back out of storage: for a Sensitive item the
+	// canonical argument is the plaintext itself (service.go's resolveRow
+	// decrypts before calling decodeValue), so a parse-failure error that
+	// echoes the canonical form writes that plaintext into err.Error() --
+	// the text a log ends up carrying, where redaction does not reliably
+	// apply (a support mailbox is not secret-shaped). The family rule is
+	// written twice in this file for the caller-supplied halves
+	// (canonicalizeValue's and rangeViolation's doc comments) and must hold
+	// here too: the error names the declared type, never the value. The
+	// realistic route to this failure is a type migration -- a round
+	// changing a declared Type from string to int/bool/duration while
+	// stored values exist -- after which every read of the migrated key
+	// hits this branch.
+	for _, tc := range []struct {
+		itemType string
+		secret   string
+	}{
+		{itemType: "bool", secret: "a-secret-support-mailbox"},
+		{itemType: "int", secret: "a-secret-support-mailbox"},
+		{itemType: "duration", secret: "a-secret-support-mailbox"},
+	} {
+		t.Run(tc.itemType, func(t *testing.T) {
+			_, err := decodeValue(tc.itemType, tc.secret)
+			if err == nil {
+				t.Fatal("decodeValue of an unparseable stored value must fail")
+			}
+			if strings.Contains(err.Error(), tc.secret) {
+				t.Fatalf("decodeValue's error echoes the stored value %q into its text; for a Sensitive item that is the decrypted plaintext reaching the log: %v", tc.secret, err)
+			}
+			if !strings.Contains(err.Error(), tc.itemType) {
+				t.Fatalf("decodeValue's error does not name the declared type %q: %v", tc.itemType, err)
+			}
+		})
 	}
 }
 

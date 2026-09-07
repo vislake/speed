@@ -99,6 +99,15 @@ func canonicalizeValue(itemType string, v any) (string, error) {
 // as int64 regardless of whether the schema declared the default as int or
 // int64 -- which is why GetTyped[int] reports ErrTypedValueMismatch and
 // GetTyped[int64] is the sanctioned read.
+//
+// A parse-failure error names the declared type, never the stored value.
+// canonicalizeValue and rangeViolation state the same rule for the
+// caller-supplied values they handle; decodeValue's input is different and
+// stronger -- it is the value DECRYPTED BACK OUT OF STORAGE (service.go's
+// resolveRow decrypts a Sensitive row before calling here), the one value
+// in this file that is genuinely a secret -- so echoing it into the error
+// text would write the plaintext into err.Error(), which is what logs
+// carry.
 func decodeValue(itemType, canonical string) (any, error) {
 	switch itemType {
 	case "string":
@@ -106,19 +115,19 @@ func decodeValue(itemType, canonical string) (any, error) {
 	case "bool":
 		b, err := strconv.ParseBool(canonical)
 		if err != nil {
-			return nil, fmt.Errorf("config: stored value %q is not a bool", canonical)
+			return nil, fmt.Errorf("config: stored value cannot be parsed as a bool")
 		}
 		return b, nil
 	case "int":
 		n, err := strconv.ParseInt(canonical, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("config: stored value %q is not an int", canonical)
+			return nil, fmt.Errorf("config: stored value cannot be parsed as an int")
 		}
 		return n, nil
 	case "duration":
 		d, err := time.ParseDuration(canonical)
 		if err != nil {
-			return nil, fmt.Errorf("config: stored value %q is not a duration", canonical)
+			return nil, fmt.Errorf("config: stored value cannot be parsed as a duration")
 		}
 		return d, nil
 	default:
