@@ -17,31 +17,32 @@
  * useCurrentTenant) -- when a switch commits, the session notifies and
  * the line re-renders with the new clinic's name, the old name gone.
  *
- * The component renders nothing until a tenant is known (an anonymous
- * render, or a session mid-transition), and nothing when the tenant id
- * is not on the app's demo roster: an unknown tenant is named nowhere,
- * never guessed. The display names are the same app-namespace keys the
- * chrome's switcher uses (demo-tenants.ts holds the one roster), so
- * the name in the work area and the name on the trigger can never
- * drift apart.
+ * The name comes from useCurrentTenantName (app-services.tsx): the
+ * demo roster's copy for the boot-configured tenants, the tenant's own
+ * org root name -- fetched from the app's tenant-identity answer,
+ * tenant-name.ts -- for a clinic that did not exist at boot, the same
+ * name the chrome's switcher shows, so the name in the work area and
+ * the name on the trigger can never drift apart. The component renders
+ * nothing until a tenant is known (an anonymous render, or a session
+ * mid-transition), and nothing while a runtime clinic's name is still
+ * loading or absent: an unknown tenant is named nowhere, never guessed.
  */
 
 import type { ReactElement } from 'react'
 import Typography from '@mui/material/Typography'
-import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
-import { demoTenantNameKey } from '../demo-tenants.js'
+import { useCurrentTenantName } from '../app-services.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 
 /**
  * The clinic-context line: which clinic the signed-in session operates
- * in, in the clinic's own display name. Null until a tenant id exists.
+ * in, in the clinic's own display name. Null until a tenant exists and
+ * its name is known.
  */
 export function CurrentClinicLine(): ReactElement | null {
   const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
-  const currentTenant = useCurrentTenant()
-  const nameKey = demoTenantNameKey(currentTenant?.tenantId ?? null)
-  if (nameKey === null) {
+  const name = useCurrentTenantName()
+  if (name === null) {
     return null
   }
   return (
@@ -50,7 +51,7 @@ export function CurrentClinicLine(): ReactElement | null {
       variant="subtitle1"
       sx={{ marginTop: 0.5, color: 'text.secondary' }}
     >
-      {t('clinic.currentClinic', { name: t(nameKey) })}
+      {t('clinic.currentClinic', { name })}
     </Typography>
   )
 }

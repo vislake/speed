@@ -93,6 +93,7 @@ import {
   DEMO_OWNER_IDENTIFIER,
   DEMO_READER_IDENTIFIER,
   FIRST_REGISTERED_CLINIC_TENANT_ID,
+  REGISTERED_CLINIC_DEFAULT_NAME,
   demoServer,
 } from './test-utils/demo-server.js'
 import type { RealCall, RealClientRig } from './test-utils/real-client.js'
@@ -486,13 +487,22 @@ describe('the app journey', () => {
 
     // The visitor's own sign-in (the browser shape, no tenant named)
     // commits: the frame names the clinic tenant the registration
-    // provisioned (the fixture's own derived tenant id), the notes
-    // surface under it answers the clinic's empty list, and no
-    // membership-refusal text renders anywhere.
+    // provisioned by the clinic's NAME (the fixture's
+    // /api/reference-app/clinic-name mirror of cmd/server/clinic_name.go
+    // answers the registration's recorded name; this register turn typed
+    // no display name, so the answer is the fixture's
+    // REGISTERED_CLINIC_DEFAULT_NAME -- never the raw derived tenant
+    // id, which is the id's only alternative and exactly what the
+    // acceptance gate forbids a person to be shown), the notes surface
+    // under it answers the clinic's empty list, and no membership-
+    // refusal text renders anywhere.
     await signInWithPasswordUi(view, user, REGISTER_EMAIL)
     expect(
-      view.getByRole('button', { name: FIRST_REGISTERED_CLINIC_TENANT_ID }),
+      view.getByRole('button', { name: REGISTERED_CLINIC_DEFAULT_NAME }),
     ).toBeInTheDocument()
+    expect(
+      view.queryByRole('button', { name: FIRST_REGISTERED_CLINIC_TENANT_ID }),
+    ).not.toBeInTheDocument()
     expect(await view.findByText(zhCN.notes.list.emptyTitle)).toBeInTheDocument()
     expect(view.queryByText(NOTE_TEXT)).not.toBeInTheDocument()
     expect(
@@ -517,7 +527,7 @@ describe('the app journey', () => {
     // notes read after its switch: the notes view's re-keyed query
     // refetches as the tenant change commits, the switch handler's
     // config refresh follows in the same turn.
-    await waitFor(() => expect(rig.calls).toHaveLength(33))
+    await waitFor(() => expect(rig.calls).toHaveLength(34))
     expect(configGets(rig)).toBe(3)
     const trace = rig.calls.map((call) => `${call.method} ${call.path}${call.query}`)
     expect(trace).toEqual([
@@ -553,6 +563,7 @@ describe('the app journey', () => {
       'GET /api/v1/notes',
       'POST /api/v1/authn/logout',
       'POST /api/v1/authn/login/password',
+      'GET /api/reference-app/clinic-name',
       'GET /api/v1/notes',
     ])
 
@@ -582,7 +593,10 @@ describe('the app journey', () => {
     }
     expect(authOf(30)).toBe('Bearer access-5') // the owner's sign-out
     expect(authOf(31)).toBeNull() // the visitor's sign-in: public
-    expect(authOf(32)).toBe('Bearer access-6') // the visitor's clinic
+    expect(authOf(32)).toBe('Bearer access-6') // the frame's clinic-name
+    // fetch: the clinic the visitor's sign-in landed in is not on the
+    // demo roster, so the menu asks the app's tenant-identity answer
+    expect(authOf(33)).toBe('Bearer access-6') // the visitor's clinic
     // notes read
 
     expect(bodyOf(callOf(rig, 1))).toEqual({

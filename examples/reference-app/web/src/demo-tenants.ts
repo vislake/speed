@@ -12,20 +12,25 @@
  * both (cmd/server/demo_users.go), so the roster is the app's own
  * static data with app-namespace display names -- the same
  * hand-maintained mirror the chrome always used, moved here so the
- * two consumers can never drift apart. Which of the two tenants an
- * account lands in when it signs in with no tenant named is NOT fixed
- * (authn resolves the account's first tenant from the host's
- * MembershipReader, and this host's seeding iterates a Go map), so a
- * surface names the CURRENT tenant from the principal's own claim,
- * never from a guess.
+ * two consumers can never drift apart. The static copy covers the
+ * two boot-configured tenants only; a tenant that did not exist at
+ * boot -- the clinic a self-service registration provisions -- is
+ * named by its org root through the app's own tenant-identity
+ * answer (tenant-name.ts / useCurrentTenantName in app-services),
+ * the route cmd/server/clinic_name.go mounts. Which of the two demo
+ * tenants an account lands in when it signs in with no tenant named
+ * is NOT fixed (authn resolves the account's first tenant from the
+ * host's MembershipReader), so a surface names the CURRENT tenant
+ * from the principal's own claim, never from a guess.
  */
 
 /** One demo tenant: the id the switch operation is called with, and
  * the app-namespace key carrying its display name. */
 export interface DemoTenant {
   readonly id: string
-  /** The app-namespace key carrying the tenant's display name (no
-   * roster endpoint exists in the demo; names are host copy). */
+  /** The app-namespace key carrying the tenant's display name (the
+   * demo roster's names are host copy; off-roster tenants are named
+   * by the server answer useCurrentTenantName fetches). */
   readonly nameKey: string
 }
 

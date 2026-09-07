@@ -150,21 +150,36 @@ describe('UserMenu', () => {
     // menu must still render a live trigger naming it -- never the
     // no-current-tenant disabled state a signed-in account would be
     // stranded in.
+    //
+    // The clinic's NAME comes from the app's own tenant-identity answer
+    // (the demo-server's /api/reference-app/clinic-name mirror of
+    // cmd/server/clinic_name.go), fetched when the current tenant is
+    // not on the demo roster: what the frame shows must be a name a
+    // person can recognise -- the name the practice gave at
+    // registration, like the demo tenants' own copy names -- never the
+    // raw tenant id, the unit mirror of the acceptance gate's first
+    // assertion (e2e/current-clinic-is-visible.spec.ts: a clinic shown
+    // as "tenant-84ef467d-..." names nothing a person can recognise).
+    const CLINIC_NAME = 'Northside Dental'
     const rig = makeRealClientRig(
-      demoServer({ tenantId: FIRST_REGISTERED_CLINIC_TENANT_ID }),
+      demoServer({
+        tenantId: FIRST_REGISTERED_CLINIC_TENANT_ID,
+        clinicName: CLINIC_NAME,
+      }),
     )
     await signInWithPassword(rig)
     const view = await renderedUserMenu(rig)
     const user = userEvent.setup()
 
-    const trigger = view.getByRole('button', {
-      name: FIRST_REGISTERED_CLINIC_TENANT_ID,
-    })
+    // The trigger settles on the fetched clinic name (findBy waits out
+    // the fetch), and the raw tenant id is nowhere on it.
+    const trigger = await view.findByRole('button', { name: CLINIC_NAME })
     expect(trigger).toHaveAttribute('aria-haspopup', 'menu')
+    expect(
+      view.queryByRole('button', { name: FIRST_REGISTERED_CLINIC_TENANT_ID }),
+    ).not.toBeInTheDocument()
     await user.click(trigger)
-    const currentRow = await view.findByRole('menuitem', {
-      name: FIRST_REGISTERED_CLINIC_TENANT_ID,
-    })
+    const currentRow = await view.findByRole('menuitem', { name: CLINIC_NAME })
     // The clinic row is the current row: rendered, disabled (a tenant
     // you are in is not a destination). The demo roster rows stay
     // listed beside it, as far as the server's own membership answers

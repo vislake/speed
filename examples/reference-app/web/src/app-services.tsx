@@ -22,6 +22,7 @@
  * answer verbatim in whatever language the page speaks).
  */
 
+import { useQuery } from '@tanstack/react-query'
 import { createContext, useContext, useMemo } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import { usePublicConfig } from '@speed/api-client/react'
@@ -29,8 +30,9 @@ import type { RequestFn } from '@speed/api-client'
 import { useCurrentTenant } from '@speed/auth-core'
 import type { AuthSession } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
-import { DEMO_TENANTS } from './demo-tenants.js'
+import { demoTenantNameKey } from './demo-tenants.js'
 import { REFERENCE_APP_NAMESPACE } from './resources.js'
+import { clinicNameRequest } from './tenant-name.js'
 
 /** The services the shell views compose. */
 export interface AppServices {
@@ -45,20 +47,41 @@ export interface AppServices {
 
 /**
  * The display name of the tenant the signed-in frame is currently in,
- * or null when the current tenant is not on the demo roster (a real
- * deployment's tenants have no name in this host's static copy -- the
- * demo's names live in the app namespace because no roster endpoint
- * exists). The switcher and the cases surface read the same roster, so
- * the name a person sees in the chrome is the name the work area
- * shows.
+ * or null while the tenant has no known name.
+ *
+ * The demo's two boot-configured tenants are named by the app's own
+ * static copy (demo-tenants.ts -- their ids are on the roster), and a
+ * tenant that did not exist at boot -- the clinic a self-service
+ * registration provisions -- is named by its org root, fetched from the
+ * app's own tenant-identity answer (tenant-name.ts) under a
+ * tenant-namespaced query key, so a tenant switch evicts the departing
+ * tenant's name with its other ['tenant', tenantId] data and the new
+ * tenant's name loads under its own key. Null while the answer is
+ * loading or absent: the switcher and the work-area clinic line render
+ * nothing rather than inventing a name, exactly the roster's old
+ * out-of-set behavior for a tenant the app could not name.
  */
 export function useCurrentTenantName(): string | null {
+  const { api } = useAppServices()
   const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
   const currentTenant = useCurrentTenant()
-  const tenant = DEMO_TENANTS.find(
-    (candidate) => candidate.id === currentTenant?.tenantId,
-  )
-  return tenant === undefined ? null : t(tenant.nameKey)
+  const tenantId = currentTenant?.tenantId ?? null
+  const nameKey = demoTenantNameKey(tenantId)
+  // The demo roster's copy answers first; the server answer is fetched
+  // only for a tenant the copy cannot name. The query key shares the
+  // ['tenant', tenantId, ...] prefix the app's tenant-scoped data keys
+  // use, so user-menu's switch-time eviction of the departing tenant
+  // (TENANT_QUERY_PREFIX) removes this row with the notes list's.
+  const nameQuery = useQuery({
+    queryKey: ['tenant', tenantId, 'clinic-name'],
+    queryFn: () => clinicNameRequest(api),
+    enabled: tenantId !== null && nameKey === null,
+  })
+  if (nameKey !== null) {
+    return t(nameKey)
+  }
+  const name = nameQuery.data?.name
+  return name !== undefined && name.length > 0 ? name : null
 }
 
 /** The Public config key carrying the brand name a server serves. */

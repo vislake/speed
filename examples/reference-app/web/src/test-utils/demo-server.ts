@@ -45,7 +45,14 @@
  * which the composed stack answers the same way. The old
  * registered-but-unseeded dead end -- registration answering 201 and a
  * later sign-in answering 403 authn.tenant_membership_required -- no
- * longer exists on the real server and no longer exists here. The
+ * longer exists on the real server and no longer exists here. A
+ * clinic's NAME mirrors the real host's naming decision
+ * (cmd/server/self_service.go's clinicRootNameFor): the display name a
+ * register body carries names the provisioned clinic (the later
+ * /api/reference-app/clinic-name answer serves it), and a registration
+ * that named none falls back to REGISTERED_CLINIC_DEFAULT_NAME -- the
+ * fixture's en-US mirror of the real catalog default (the zh-CN value
+ * is a CJK literal no test file here may carry). The
  * named-tenant refusal keeps its shape for what it always meant: the
  * real server refuses a sign-in naming a tenant the account holds no
  * membership in (authn.tenant_membership_required, the shape pinned at
@@ -98,7 +105,12 @@
  * while the cases answers mirror the real refusals through their own
  * switches (denyCasesList, casesCreateRefusal, casesUploadRefusal,
  * casesPhotoContentRefusal) -- the journeys gate and error surfaces are
- * driven by genuine refusals, never stubbed locally.
+ * driven by genuine refusals, never stubbed locally. The app's own
+ * tenant-identity answer, GET /api/reference-app/clinic-name (200,
+ * {name}), mirrors the host route cmd/server/clinic_name.go mounts:
+ * the org root name of the bearer principal's tenant, served for the
+ * off-roster clinics the demo roster's host copy cannot name (see the
+ * clinic-naming paragraph above).
  *
  * The multi-factor surface mirrors the authn handler's step-up
  * machine (the same states its own tests pin): POST
@@ -352,7 +364,23 @@ export interface DemoServerOptions {
     readonly media_type: string
     readonly content_base64: string
   }
+  /** The name the GET /api/reference-app/clinic-name answer serves for
+   * a current tenant that is neither a demo tenant nor a clinic a
+   * register answer provisioned (a suite that signs a principal
+   * straight into a clinic-shaped tenant without the register turn
+   * scripts this); default REGISTERED_CLINIC_DEFAULT_NAME. */
+  readonly clinicName?: string
 }
+
+/** The name the fixture gives a registered account's clinic when its
+ * registration named none: the fixture's en-US mirror of the real
+ * host's fallback (the org catalog's default workspace name rendered in
+ * the platform-default zh-CN locale -- a CJK literal no test file here
+ * may carry, so the mirror is the en-US value). The register turn of
+ * the journeys types a display name when the clinic's own name is what
+ * the journey asserts; the e2e tier drives the real server, whose root
+ * naming comes from the real catalog. */
+export const REGISTERED_CLINIC_DEFAULT_NAME = 'Workspace'
 
 /** What an issued access token stands for: the principal it belongs to
  * and whether it carries a fresh second-factor proof (the elevation a
@@ -566,6 +594,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       media_type: 'image/png',
       content_base64: DEMO_SIMULATION_CONTENT_BASE64,
     },
+    clinicName,
   } = options
   // The account state is stateful per responder instance (a revoke
   // marks a row for later list answers, an exchange appends a bound
@@ -656,7 +685,18 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   // one of the demo tenants -- a later sign-in lands in. Registration
   // alone now grants a sign-in-able membership, exactly like the real
   // server's journey regression (self_service_test.go) pins.
-  const registeredAccounts = new Map<string, { user_id: string; tenant_id: string }>()
+  const registeredAccounts = new Map<
+    string,
+    { user_id: string; tenant_id: string; clinic_name: string }
+  >()
+  // The clinic tenants registered above, mapped to the name their
+  // registration gave the clinic: the display name the register body
+  // carried (the name a practice types at signup), or the fixture's
+  // default when it carried none -- the mirror of the real
+  // provisioner's root naming (self_service.go's clinicRootNameFor,
+  // which reads the registrant's authn display name back and falls back
+  // to the catalog default).
+  const clinicNamesByTenant = new Map<string, string>()
   // The id counters for registered accounts: their user ids start after
   // the seeded rows (the demo accounts own user-1..user-8) and their
   // sessions after the demo roster's (session-1..session-4), so nothing
@@ -727,6 +767,25 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     switch (key) {
       case 'GET /api/config/public':
         return jsonResponse(200, publicConfig)
+      case 'GET /api/reference-app/clinic-name': {
+        // The app's own tenant-identity answer (cmd/server/clinic_name.go
+        // mounts the real route): the org root name of the tenant the
+        // bearer principal is scoped to. A clinic a register answer
+        // provisioned answers the name its registration carried; a
+        // principal scripted straight into another off-roster tenant
+        // answers the clinicName option; the demo tenants (whose names
+        // are host copy the app renders without this request) are
+        // answered with the fixture's default -- no journey asks.
+        const principal = principalOf(call)
+        const registeredName = clinicNamesByTenant.get(principal.tenant_id)
+        if (registeredName !== undefined) {
+          return jsonResponse(200, { name: registeredName })
+        }
+        if (clinicName !== undefined) {
+          return jsonResponse(200, { name: clinicName })
+        }
+        return jsonResponse(200, { name: REGISTERED_CLINIC_DEFAULT_NAME })
+      }
       case 'POST /api/v1/authn/login/password': {
         const body = bodyObject(call)
         const identifier =
@@ -785,10 +844,25 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
           // later sign-in can actually enter.
           const user_id = `user-${nextRegisteredUserNumber}`
           nextRegisteredUserNumber += 1
+          // The clinic's name is the display name the registration
+          // carried (the real host reads it back from the authn user
+          // row at provisioning time), falling back to the fixture's
+          // default when the body named none.
+          const rawName =
+            typeof body.display_name === 'string'
+              ? body.display_name
+              : typeof body.displayName === 'string'
+                ? body.displayName
+                : ''
+          const clinic_name =
+            rawName.trim().length > 0 ? rawName.trim() : REGISTERED_CLINIC_DEFAULT_NAME
+          const tenant_id = `tenant-${user_id}`
           registeredAccounts.set(email, {
             user_id,
-            tenant_id: `tenant-${user_id}`,
+            tenant_id,
+            clinic_name,
           })
+          clinicNamesByTenant.set(tenant_id, clinic_name)
           return jsonResponse(201, {
             id: user_id,
             email,

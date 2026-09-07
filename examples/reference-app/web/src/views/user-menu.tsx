@@ -8,8 +8,11 @@
  * app namespace keys -- plus, when the session's current tenant is
  * not one of them (a self-registered account's own clinic, which
  * registration provisions -- cmd/server/self_service.go), one extra
- * row naming that tenant by its id, so the switcher's trigger is
- * never left in its no-current-tenant state while signed in. The
+ * row naming that tenant by its clinic's own name -- the org root
+ * name the app fetches from its tenant-identity answer
+ * (useCurrentTenantName / tenant-name.ts), never the raw tenant id
+ * -- so the switcher's trigger is never left in its no-current-
+ * tenant state while signed in. The
  * roster lists tenants only; membership is
  * the server's own fact, never inferred here -- of the accounts the
  * seed registers, demo-owner and demo-reader hold membership in
@@ -58,7 +61,7 @@ import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import { TenantSwitcher } from '@speed/tenancy-ui'
 import type { TenantOption } from '@speed/tenancy-ui'
-import { useAppServices } from '../app-services.js'
+import { useAppServices, useCurrentTenantName } from '../app-services.js'
 import { DEMO_TENANTS } from '../demo-tenants.js'
 import { REFERENCE_APP_NAMESPACE } from '../resources.js'
 
@@ -118,19 +121,28 @@ export function UserMenu(): ReactElement {
   // trigger must name the tenant the session actually runs in: a
   // current-tenant id absent from the options would leave the trigger
   // in its no-current-tenant disabled state while signed in. The clinic
-  // is merged in as one extra row, labelled by its tenant id -- the
-  // identifier the host can honestly show for a tenant whose name no
-  // roster endpoint serves (the same identifier-as-display fallback
-  // org's own auto-created root naming uses server-side); the row a
+  // is merged in as one extra row named by the app's own
+  // tenant-identity answer -- the org root name the registration gave
+  // the clinic (useCurrentTenantName, which fetches it through
+  // tenant-name.ts for a tenant the demo copy cannot name) -- never the
+  // raw tenant id, which is exactly what the acceptance gate
+  // (e2e/current-clinic-is-visible.spec.ts) forbids a person to be
+  // shown as their clinic's identity. While the name is still loading
+  // the row falls back to the id so the trigger never strands a
+  // signed-in account in the no-current-tenant state; the row a
   // self-service account owns is disabled like any current row, and the
   // demo rows above stay switchable only as far as the server's own
   // membership answers let a switch through.
   const currentTenantId = currentTenant?.tenantId ?? null
+  const currentTenantName = useCurrentTenantName()
   if (
     currentTenantId !== null &&
     !tenants.some((tenant) => tenant.id === currentTenantId)
   ) {
-    tenants.push({ id: currentTenantId, name: currentTenantId })
+    tenants.push({
+      id: currentTenantId,
+      name: currentTenantName ?? currentTenantId,
+    })
   }
 
   const handleSwitched = (tenantId: string): void => {
