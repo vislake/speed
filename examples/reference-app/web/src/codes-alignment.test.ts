@@ -162,23 +162,27 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'authn.identity_already_bound': 'go/authn/errors.go:210 (ErrIdentityAlreadyBound)',
   'authn.identity_not_found': 'go/authn/errors.go:216 (ErrIdentityNotFound)',
   'authn.last_login_method': 'go/authn/errors.go:222 (ErrLastLoginMethod)',
-  'authn.rate_limited': 'go/authn/errors.go:254 (ErrRateLimited)',
-  'authn.account_locked': 'go/authn/errors.go:262 (ErrAccountLocked)',
-  'authn.channel_disabled': 'go/authn/errors.go:272 (ErrChannelDisabled)',
-  'authn.verification_code_invalid': 'go/authn/errors.go:280 (ErrVerificationCodeInvalid)',
-  'authn.mfa_not_enrolled': 'go/authn/errors.go:297 (ErrMFANotEnrolled)',
-  'authn.mfa_already_enrolled': 'go/authn/errors.go:301 (ErrMFAAlreadyEnrolled)',
+  'authn.rate_limited': 'go/authn/errors.go:285 (ErrRateLimited)',
+  'authn.account_locked': 'go/authn/errors.go:293 (ErrAccountLocked)',
+  'authn.channel_disabled': 'go/authn/errors.go:303 (ErrChannelDisabled)',
+  'authn.verification_code_invalid': 'go/authn/errors.go:311 (ErrVerificationCodeInvalid)',
+  'authn.mfa_not_enrolled': 'go/authn/errors.go:328 (ErrMFANotEnrolled)',
+  'authn.mfa_already_enrolled': 'go/authn/errors.go:332 (ErrMFAAlreadyEnrolled)',
   // authn.mfa_code_used -- the honest-split round's new sentinel: the
   // spent-code answer (a code that passed the real check but whose
   // single-use guard already consumed it) that authn now distinguishes
   // from the never-valid authn.mfa_invalid_code. The declaration block
   // inserted between ErrMFAInvalidCode and ErrStepUpRequired shifted
   // every citation from ErrMFAInvalidCode to ErrSessionNotFound;
-  // re-measured here against the current declaration sites.
-  'authn.mfa_invalid_code': 'go/authn/errors.go:319 (ErrMFAInvalidCode)',
-  'authn.mfa_code_used': 'go/authn/errors.go:334 (ErrMFACodeUsed)',
-  'authn.step_up_required': 'go/authn/errors.go:338 (ErrStepUpRequired)',
-  'authn.session_not_found': 'go/authn/errors.go:347 (ErrSessionNotFound)',
+  // re-measured here against the current declaration sites. The
+  // over-width SSO validation block the authn input-guard round added
+  // above ErrRateLimited has since shifted that whole run again --
+  // ErrRateLimited through ErrSessionNotFound, re-measured the same
+  // way.
+  'authn.mfa_invalid_code': 'go/authn/errors.go:350 (ErrMFAInvalidCode)',
+  'authn.mfa_code_used': 'go/authn/errors.go:365 (ErrMFACodeUsed)',
+  'authn.step_up_required': 'go/authn/errors.go:369 (ErrStepUpRequired)',
+  'authn.session_not_found': 'go/authn/errors.go:378 (ErrSessionNotFound)',
   // go/rbac/errors.go -- the permission-denied sentinel the notes route's
   // rbac gate answers with.
   'rbac.permission_denied': 'go/rbac/errors.go:56 (ErrPermissionDenied)',
@@ -401,7 +405,6 @@ describe('reachable-error whitelists vs the server code set', () => {
     // three option-validation sentinels in internal/smilesim/options.go
     // that round named, and the three gateway/queue sentinels a
     // simulate call can surface from go/jobs, go/billing and
-<<<<<<< HEAD
     // go/ai-gateway) + the four sharing sentinels the block-C round's
     // two surfaces added (three in go/sharing/errors.go and the
     // creation/access rate-limit sentinel in go/sharing/ratelimit.go).
