@@ -52,6 +52,7 @@
  * (root CLAUDE.md's language rule).
  */
 import { defineConfig, devices } from '@playwright/test'
+import { randomInt } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -63,15 +64,72 @@ const appDir = fileURLToPath(new URL('.', import.meta.url))
 const serverDir = fileURLToPath(new URL('..', import.meta.url))
 
 /**
- * Ports deliberately away from the defaults a developer's own `vite` and
- * `go run ./cmd/server` occupy (5173 and 8080), so a suite run never
- * collides with a session already in progress.
+ * The three ports one run needs: the Go server, the vite server, and the
+ * second Go process restart-survival.spec.ts starts over the same
+ * database. Picked at random per run rather than fixed, and set through
+ * the environment for the same reason the database path below is -- the
+ * runner chooses, every worker inherits.
+ *
+ * Fixed ports were the original shape (8091 and 5191, chosen only to stay
+ * clear of a developer's own 5173 and 8080) and they were wrong for a
+ * reason the repository's own working style makes routine rather than
+ * exotic: several git worktrees of this repository run this same suite at
+ * the same time, one per concurrent round. Worktrees isolate the CODE.
+ * They do not isolate the machine's TCP ports, its filesystem or its
+ * process table -- so two runs asked for 5191, the second lost, and
+ * `reuseExistingServer` (below) quietly handed it the FIRST run's server:
+ * a suite in one worktree driving another worktree's code. That is worse
+ * than a collision that fails, because a green result means nothing and
+ * says nothing about it.
+ *
+ * A random base cannot make a collision impossible -- roughly one run in
+ * six hundred with eight running at once -- so it is paired with the
+ * settings that make one loud: `--strictPort` on vite and
+ * `reuseExistingServer: false` everywhere, which together turn a taken
+ * port into a startup failure naming the port instead of a silent
+ * adoption. Override any of the three explicitly when a run needs a known
+ * port (E2E_API_PORT, E2E_WEB_PORT, E2E_RESTART_PORT).
  */
-const apiPort = process.env.E2E_API_PORT ?? '8091'
-const webPort = process.env.E2E_WEB_PORT ?? '5191'
+const portBase = 8100 + randomInt(0, 18_000) * 3
+
+/**
+ * Reads one of the three ports, choosing it on this run's behalf when
+ * nobody has, and writing the choice back so every worker process reads
+ * the same answer this one just made. Returns a string rather than
+ * leaving `process.env`'s own `string | undefined` to every call site.
+ */
+function runPort(variable: string, chosen: number): string {
+  const port = process.env[variable] ?? String(chosen)
+  process.env[variable] = port
+  return port
+}
+
+const apiPort = runPort('E2E_API_PORT', portBase)
+const webPort = runPort('E2E_WEB_PORT', portBase + 1)
+
+/**
+ * The port restart-survival.spec.ts starts its second server on, exported
+ * so the spec reads the run's own choice rather than defaulting to one of
+ * its own -- the identical reason SERVER_LOG_PATH below is exported.
+ */
+export const RESTART_API_PORT = runPort('E2E_RESTART_PORT', portBase + 2)
+
+/**
+ * The loopback address every local URL in this file names.
+ *
+ * `127.0.0.1` rather than `localhost`, and not a style preference: the
+ * name resolves to both `::1` and `127.0.0.1` on a dual-stack host, a
+ * server may bind only one of them, and the two halves of this suite
+ * disagree about which to try -- Playwright's own health check reaches a
+ * server over either, while Chromium picked IPv4 and answered
+ * ERR_CONNECTION_REFUSED for a server listening on IPv6 alone. So the
+ * health check passed, the suite ran, and every spec failed on a
+ * navigation. Naming the address leaves nothing to resolve.
+ */
+const loopback = '127.0.0.1'
 
 /** Where the browser half points. */
-const baseURL = process.env.E2E_BASE_URL ?? `http://localhost:${webPort}`
+const baseURL = process.env.E2E_BASE_URL ?? `http://${loopback}:${webPort}`
 
 /** True when the suite drives an already-running deployment. */
 const external = process.env.E2E_BASE_URL !== undefined
@@ -229,11 +287,16 @@ export default defineConfig({
           // server that fails to boot still says so in the test report.
           command: `sh -c 'go run ./cmd/server > "${SERVER_LOG_PATH}"'`,
           cwd: serverDir,
-          url: `http://localhost:${apiPort}/healthz`,
+          url: `http://${loopback}:${apiPort}/healthz`,
           // A cold build of this app compiles every go/* module it
           // imports, which is minutes rather than seconds.
           timeout: 300_000,
-          reuseExistingServer: !process.env.CI,
+          // Never adopt a server this run did not start, on CI or off it.
+          // The ports above are this run's own, so there is nothing
+          // legitimate to reuse -- and reuse is exactly how a run in one
+          // worktree ended up driving another worktree's server. Off, a
+          // taken port is a startup failure that names it.
+          reuseExistingServer: false,
           // The server's stdout is its OpenTelemetry span export plus its
           // structured log, several hundred lines per test -- piping it
           // buries the test report it is supposed to accompany. Failures
@@ -249,14 +312,18 @@ export default defineConfig({
           },
         },
         {
-          command: `vite --port ${webPort} --strictPort`,
+          // --host pins the dev server to the one address baseURL names,
+          // so the browser cannot be refused by a server that bound the
+          // other half of the dual stack; --strictPort makes a taken port
+          // a failure rather than a silent move to the next one.
+          command: `vite --port ${webPort} --strictPort --host ${loopback}`,
           cwd: appDir,
           url: baseURL,
           timeout: 120_000,
-          reuseExistingServer: !process.env.CI,
+          reuseExistingServer: false,
           stdout: 'pipe',
           stderr: 'pipe',
-          env: { REFERENCE_APP_API_PROXY: `http://localhost:${apiPort}` },
+          env: { REFERENCE_APP_API_PROXY: `http://${loopback}:${apiPort}` },
         },
       ],
 })

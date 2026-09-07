@@ -55,6 +55,40 @@ gates are not using.
 The first run compiles the Go server, which takes minutes; later runs
 reuse the build cache and the whole suite finishes in seconds.
 
+## A worktree does not isolate the machine
+
+Several git worktrees of this repository routinely run this same suite at
+the same time, one per concurrent round. A worktree isolates the **code**.
+It does not isolate the machine's TCP ports, its filesystem or its process
+table, and that gap produced the worst failure this suite has had.
+
+The config used to name two fixed ports and set
+`reuseExistingServer: !CI`. Two runs asked for the same port, the second
+lost -- and instead of failing, Playwright saw a healthy server there and
+adopted it. A suite in one worktree then drove **another worktree's
+server**: another round's code, another round's database. It surfaced as a
+wall of red (that server had bound IPv6 only, and Chromium resolved the
+name to IPv4), which was luck. The same mechanism can just as easily
+produce green, and a green measured against code you are not testing is
+worse than any red.
+
+So the suite now picks its three ports at random per run and never reuses
+a server it did not start. A collision is still possible and is now loud:
+`--strictPort` plus `reuseExistingServer: false` make a taken port a
+startup failure that names the port, never a silent adoption. Name a port
+explicitly (`E2E_API_PORT`, `E2E_WEB_PORT`, `E2E_RESTART_PORT`) only when
+a run needs a known one. Every local URL says `127.0.0.1` rather than
+`localhost` for the other half of that failure: the name resolves to both
+stacks, a server may bind one, and Playwright's health check and the
+browser do not have to pick the same one.
+
+The general lesson, worth carrying past this suite: **shared machine state
+in a test harness fails silently in the direction of a pass.** A fixed
+port, a fixed temp path, a fixed container name or a fixed database file
+all have this shape. This suite's run-unique SQLite path and log file were
+already built that way; the ports were the one place it had not been
+applied.
+
 ## Why this tier exists
 
 Every tier below this one drives its requests through a scripted fetch

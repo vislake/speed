@@ -13,17 +13,30 @@
  * idleness, not an edge case. Fixed by reading org's real membership rows
  * at sign-in.
  *
- * The restart is real: the spec starts a SECOND server process against
- * the same database file and points the browser's API calls at it, which
- * is precisely the situation the defect could not survive -- a fresh
- * process, an existing database, seeding skipped. The page itself is
- * untouched, so the assertion stays a browser assertion: the same person
- * signs in on the same UI and the frame appears.
+ * THE RESTART IS SEQUENTIAL, WHICH IS THE WHOLE POINT
  *
- * The second process is addressed by rewriting the page's /api requests
- * rather than by restarting Playwright's own webServer, which a spec
- * cannot do. Its port and log file are its own, so nothing it writes
- * disturbs the servers the rest of the suite shares.
+ * The spec owns two server processes and one database file: the first boot
+ * creates the file and seeds it, the spec then stops that process and
+ * waits for it to be gone, and a second process boots over the file the
+ * first left behind. That is what a restart is -- one process, then
+ * another, over surviving state.
+ *
+ * It used to be written differently, and the difference mattered: a second
+ * server was started while the suite's own was still running, and the
+ * page's API calls were pointed at it. That is a concurrent second
+ * process, not a restart, and it only resembled one because nothing in
+ * the app minded. Something does now -- go/jobs grew a single-writer
+ * registration, so a second queue on one database is refused outright
+ * (jobs.queue_writer_active) -- and the refusal is correct: two
+ * dispatchers on one jobs table would each claim the same work. The gate
+ * had been passing on a shape that was never the thing it claimed to
+ * check, and the guard is what exposed it.
+ *
+ * Because that registration is released on shutdown and stolen once its
+ * heartbeat goes stale, the second boot may briefly lose a race with the
+ * first process's own exit. bootUntilHealthy retries for that reason --
+ * the same thing a process supervisor does, rather than an assumption
+ * about how long the window is.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -31,101 +44,181 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { DEMO_OWNER } from './test-utils/accounts.js'
-import { DEMO_PASSWORD } from '../playwright.config.js'
+import { DEMO_PASSWORD, RESTART_API_PORT } from '../playwright.config.js'
 import { APP_TEXT, submitPasswordSignIn, visitSignIn } from './test-utils/journeys.js'
 
 /** The reference-app Go module directory. */
 const serverDir = fileURLToPath(new URL('../..', import.meta.url))
 
-/** The port the restarted process listens on, away from the suite's own. */
-const restartPort = process.env.E2E_RESTART_PORT ?? '8092'
+/**
+ * The port both of this spec's processes listen on -- one port, because
+ * they run one after the other. It is this run's own third port, read
+ * from the configuration rather than defaulted to here: several worktrees
+ * of this repository run this suite at once, and a port named in the
+ * source is a port they all ask for.
+ */
+const restartPort = RESTART_API_PORT
+
+/**
+ * This spec's own database, separate from the suite's. The suite's server
+ * keeps its jobs-queue registration alive for as long as it runs, so a
+ * second process could never boot over that file while the suite is up --
+ * and it should not have to: what this gate needs is a file that outlives
+ * a process, not that particular file.
+ */
+const databasePath = join(
+  tmpdir(),
+  `reference-app-e2e-restart-${Date.now()}-${process.pid}.db`,
+)
 
 test('a member signs in again after the server restarts against the same database', async ({
   page,
 }) => {
-  // One sign-in, and it happens AFTER the restart. Signing in first would
-  // cost a second attempt against the same account's per-minute rate
-  // limit while proving nothing this suite does not already prove: that
-  // sign-in works against a first-boot server is what every other spec
-  // asserts. What only this spec can say is that it still works against a
-  // process that booted over an existing database.
-  const databasePath = databasePathOfSuiteServer()
-  const restarted = spawn(
-    'go',
-    ['run', './cmd/server'],
-    {
-      cwd: serverDir,
-      env: {
-        ...process.env,
-        PORT: restartPort,
-        APP_DB_PATH: databasePath,
-        APP_DEPLOYMENT_MODE: 'standalone',
-        APP_DEMO_USERS_PASSWORD: DEMO_PASSWORD,
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  )
+  // The boot that seeds: an empty file, so demo seeding really runs and
+  // the three accounts exist with their memberships.
+  const seeding = await bootUntilHealthy()
+  await stop(seeding)
+
+  // The boot under test: a fresh process over the file the first one left,
+  // which is the state seeding refuses to re-seed.
+  const restarted = await bootUntilHealthy()
 
   try {
-    await waitForHealthy(restarted, restartPort)
-
     // Point the page's API calls at the restarted process. Everything
     // else about the page stays as it is, so what follows is the same
-    // browser journey against a server that just booted over an existing
-    // database -- the state seeding refuses to re-seed.
+    // browser journey a person makes, against a server that just booted
+    // over an existing database.
     await page.route('**/api/**', async (route) => {
       const url = new URL(route.request().url())
       url.protocol = 'http:'
-      url.host = `localhost:${restartPort}`
+      url.host = `127.0.0.1:${restartPort}`
       await route.continue({ url: url.toString() })
     })
 
+    // One sign-in, and it happens after the restart. Signing in before it
+    // would spend a second attempt against this account's per-minute rate
+    // limit while proving nothing the rest of the suite does not already
+    // prove. What only this spec can say is that sign-in still works
+    // against a process that booted over an existing database.
     await visitSignIn(page)
     await submitPasswordSignIn(page, DEMO_OWNER.email, DEMO_OWNER.password)
 
     // The whole point: the frame, not authn.tenant_membership_required.
     await expect(page.getByRole('link', { name: APP_TEXT.navNotes })).toBeVisible()
   } finally {
-    restarted.kill('SIGTERM')
+    await stop(restarted)
   }
 })
 
-/**
- * The database file the suite's own server was started with, read from
- * the environment the configuration set for the whole run. Reading it
- * rather than recomputing it is what keeps the two processes on one file:
- * a path derived again here would be a different path, which is exactly
- * the mistake this suite made once already.
- */
-function databasePathOfSuiteServer(): string {
-  const path = process.env.E2E_DB_PATH
-  if (path === undefined || path === '') {
-    // Only reachable when the suite drives an external deployment
-    // (E2E_BASE_URL), where there is no local database to restart over.
-    test.skip(true, 'no local server to restart: the suite is driving an external deployment')
-    return join(tmpdir(), 'unreachable')
-  }
-  return path
+/** Starts one reference-app server over this spec's database and port. */
+function boot(): ChildProcess {
+  return spawn('go', ['run', './cmd/server'], {
+    cwd: serverDir,
+    env: {
+      ...process.env,
+      PORT: restartPort,
+      APP_DB_PATH: databasePath,
+      APP_DEPLOYMENT_MODE: 'standalone',
+      APP_DEMO_USERS_PASSWORD: DEMO_PASSWORD,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
 }
 
-/** Waits for the restarted process to answer its health endpoint. */
-async function waitForHealthy(child: ChildProcess, port: string): Promise<void> {
+/**
+ * Boots a server and returns it once it answers its health endpoint,
+ * starting another when one exits before becoming healthy.
+ *
+ * The retry is not papering over flakiness: a boot legitimately fails
+ * while the previous process still holds the jobs-queue single-writer
+ * registration, and the registration is released or goes stale shortly
+ * after. Retrying is what a supervisor does, and it keeps this spec from
+ * encoding a number that belongs to go/jobs. Every attempt's output is
+ * kept, so a failure that is NOT the race says so in the report.
+ */
+async function bootUntilHealthy(): Promise<ChildProcess> {
   const deadline = Date.now() + 300_000
-  let lastError = ''
-  child.stderr?.on('data', (chunk: Buffer) => {
-    lastError = chunk.toString().slice(-500)
-  })
+  let attempts = 0
+  let transcript = ''
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`e2e: the restarted server exited (${child.exitCode}): ${lastError}`)
+    attempts += 1
+    const child = boot()
+    const said = capture(child)
+    const healthy = await waitForHealthy(child, deadline)
+    if (healthy) {
+      return child
     }
-    const healthy = await fetch(`http://localhost:${port}/healthz`)
+    transcript += `\n--- attempt ${attempts} ---\n${said()}`
+    child.kill('SIGKILL')
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  throw new Error(
+    `e2e: no reference-app server became healthy on port ${restartPort} in ${attempts} attempts:${transcript.slice(-4000)}`,
+  )
+}
+
+/**
+ * Collects everything a process says on BOTH streams, returning a reader
+ * for it.
+ *
+ * Both, and all of it: two separate omissions used to hide the reason a
+ * restart failed. Keeping only the last stderr chunk let `go run`'s own
+ * "exit status 1" epilogue overwrite the program's explanation, and
+ * reading stderr alone missed the explanation entirely whenever it went
+ * to stdout -- which is where this app's structured logger writes, so
+ * that was the normal case rather than the exception. The report said a
+ * server had exited without ever saying why.
+ */
+function capture(child: ChildProcess): () => string {
+  let said = ''
+  const collect = (chunk: Buffer): void => {
+    said += chunk.toString()
+  }
+  child.stderr?.on('data', collect)
+  child.stdout?.on('data', collect)
+  return () => said.trim()
+}
+
+/**
+ * Waits until the process answers /healthz (true) or exits without ever
+ * doing so (false). A cold build compiles every go/* module the app
+ * imports, which is minutes rather than seconds, so the deadline is the
+ * caller's whole budget.
+ */
+async function waitForHealthy(child: ChildProcess, deadline: number): Promise<boolean> {
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return false
+    }
+    const healthy = await fetch(`http://127.0.0.1:${restartPort}/healthz`)
       .then((response) => response.ok)
       .catch(() => false)
     if (healthy) {
-      return
+      return true
     }
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
-  throw new Error(`e2e: the restarted server never became healthy: ${lastError}`)
+  return false
+}
+
+/**
+ * Stops a server and waits for the process to actually be gone, rather
+ * than for the signal to have been sent. The next boot competes with this
+ * one for a port and for the jobs-queue registration, so "asked it to
+ * stop" is not the state the next step needs.
+ */
+async function stop(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return
+  }
+  const exited = new Promise<void>((resolve) => {
+    child.once('exit', () => resolve())
+  })
+  child.kill('SIGTERM')
+  const gaveUp = new Promise<void>((resolve) => setTimeout(resolve, 15_000))
+  await Promise.race([exited, gaveUp])
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill('SIGKILL')
+    await exited
+  }
 }
