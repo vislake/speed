@@ -133,21 +133,11 @@ test.describe('the core journey', { tag: '@pending' }, () => {
     // the case from one submission -- which is also the shape the work
     // actually has: a receptionist photographs the patient and opens the
     // case, rather than opening an empty case and coming back later.
-    await page.getByRole('button', { name: UI_NAMES.newCase }).click()
     const name = caseName()
-    await page.getByRole('textbox', { name: UI_NAMES.caseNameField }).fill(name)
-
-    const chooser = page.waitForEvent('filechooser')
-    await page.getByRole('button', { name: UI_NAMES.addPhoto }).click()
-    await (await chooser).setFiles(PATIENT_PHOTO)
-
-    await page.getByRole('button', { name: /create|save|confirm/i }).click()
+    await createCaseWithPhoto(page, name)
 
     // The case exists, is findable, and carries the photo -- which is
     // what go/storage's three-step protocol exists to make true.
-    await expect(page.getByText(name), 'the case must be findable after creation').toBeVisible({
-      timeout: 30_000,
-    })
     await page.getByText(name).click()
     await expect(
       page.getByRole('img', { name: /photo|patient|before/i }).first(),
@@ -392,13 +382,53 @@ test.describe('the core journey', { tag: '@pending' }, () => {
  * receptionist continuing yesterday's work.
  */
 async function openCaseWithPhoto(page: Page): Promise<void> {
+  // CREATES the case, rather than hoping one is there.
+  //
+  // This helper's own doc comment promised to create one "when the run
+  // has none" and never did: it clicked the first row and asserted it
+  // was visible. Against a fresh database -- which every local run gets,
+  // deliberately -- there is no row, so every block-B gate failed with
+  // "block B starts from a case with a photo, which block A is what
+  // creates" the moment block B's surface actually landed. The helper
+  // was describing an intention, and the note left in it ("its shape
+  // will firm up when block A's surface lands, which is the point at
+  // which guessing stops") came due exactly there.
+  //
+  // Creating unconditionally rather than only-if-empty is the honest
+  // shape: it makes each gate independent of what earlier gates left
+  // behind, and of the order they ran in. It costs no sign-in.
   await openSurface(page, UI_NAMES.navCases)
-  const firstCase = page.getByRole('main').getByRole('listitem').first()
+  const name = caseName()
+  await createCaseWithPhoto(page, name)
+  await page.getByText(name).click()
   await expect(
-    firstCase,
-    'block B starts from a case with a photo, which block A is what creates',
-  ).toBeVisible()
-  await firstCase.click()
+    page.getByRole('img', { name: /photo|patient|before/i }).first(),
+    'the case just created does not show the photo submitted with it',
+  ).toBeVisible({ timeout: 30_000 })
+}
+
+/**
+ * Opens one case with one patient photo, from the cases surface, the way
+ * a receptionist does: name the patient, attach the photograph, submit
+ * once. Leaves the browser on the cases list with the new case in it.
+ *
+ * The one implementation of that sequence, shared by block A's own
+ * journey and by the blocks that start from its result -- so a change to
+ * how a case is opened cannot leave the later blocks driving a shape the
+ * product no longer has.
+ */
+async function createCaseWithPhoto(page: Page, name: string): Promise<void> {
+  await page.getByRole('button', { name: UI_NAMES.newCase }).click()
+  await page.getByRole('textbox', { name: UI_NAMES.caseNameField }).fill(name)
+
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: UI_NAMES.addPhoto }).click()
+  await (await chooser).setFiles(PATIENT_PHOTO)
+
+  await page.getByRole('button', { name: /create|save|confirm/i }).click()
+  await expect(page.getByText(name), 'the case must be findable after creation').toBeVisible({
+    timeout: 30_000,
+  })
 }
 
 /** Opens a case whose simulation has already been generated. */
