@@ -167,9 +167,14 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'authn.rate_limited': 'go/authn/errors.go:285 (ErrRateLimited)',
   'authn.account_locked': 'go/authn/errors.go:293 (ErrAccountLocked)',
   'authn.channel_disabled': 'go/authn/errors.go:303 (ErrChannelDisabled)',
-  'authn.verification_code_invalid': 'go/authn/errors.go:311 (ErrVerificationCodeInvalid)',
-  'authn.mfa_not_enrolled': 'go/authn/errors.go:328 (ErrMFANotEnrolled)',
-  'authn.mfa_already_enrolled': 'go/authn/errors.go:332 (ErrMFAAlreadyEnrolled)',
+  // The authn doc round that recorded the pre-authentication collapse
+  // of a spent phone-login code into the invalid answer expanded the
+  // verification-code sentinel's doc comment, shifting every citation
+  // from ErrVerificationCodeInvalid to ErrSessionNotFound by exactly
+  // +19 lines; re-measured here against the current declaration sites.
+  'authn.verification_code_invalid': 'go/authn/errors.go:330 (ErrVerificationCodeInvalid)',
+  'authn.mfa_not_enrolled': 'go/authn/errors.go:347 (ErrMFANotEnrolled)',
+  'authn.mfa_already_enrolled': 'go/authn/errors.go:351 (ErrMFAAlreadyEnrolled)',
   // authn.mfa_code_used -- the honest-split round's new sentinel: the
   // spent-code answer (a code that passed the real check but whose
   // single-use guard already consumed it) that authn now distinguishes
@@ -181,10 +186,10 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // above ErrRateLimited has since shifted that whole run again --
   // ErrRateLimited through ErrSessionNotFound, re-measured the same
   // way.
-  'authn.mfa_invalid_code': 'go/authn/errors.go:350 (ErrMFAInvalidCode)',
-  'authn.mfa_code_used': 'go/authn/errors.go:365 (ErrMFACodeUsed)',
-  'authn.step_up_required': 'go/authn/errors.go:369 (ErrStepUpRequired)',
-  'authn.session_not_found': 'go/authn/errors.go:378 (ErrSessionNotFound)',
+  'authn.mfa_invalid_code': 'go/authn/errors.go:369 (ErrMFAInvalidCode)',
+  'authn.mfa_code_used': 'go/authn/errors.go:384 (ErrMFACodeUsed)',
+  'authn.step_up_required': 'go/authn/errors.go:388 (ErrStepUpRequired)',
+  'authn.session_not_found': 'go/authn/errors.go:397 (ErrSessionNotFound)',
   // go/rbac/errors.go -- the permission-denied sentinel the notes route's
   // rbac gate answers with.
   'rbac.permission_denied': 'go/rbac/errors.go:56 (ErrPermissionDenied)',
@@ -270,10 +275,13 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // outward-identical not-accessible refusal, the per-IP/per-token rate
   // limit, the granted-but-unopenable 502 and the internal envelope.
   // The route-level rbac answer the share action can draw is the
-  // already-pinned rbac.permission_denied above).
+  // already-pinned rbac.permission_denied above. The limited-share
+  // round's route fix that moved the view consumption to post-serve
+  // expanded the 502 sentinel's doc comment, shifting its citation by
+  // two lines; re-measured here against the current declaration site).
   'sharing.internal_error': 'go/sharing/errors.go:92 (ErrInternal)',
   'sharing.not_accessible': 'go/sharing/errors.go:60 (ErrNotAccessible)',
-  'sharing.resource_unavailable': 'go/sharing/errors.go:109 (ErrResourceUnavailable)',
+  'sharing.resource_unavailable': 'go/sharing/errors.go:111 (ErrResourceUnavailable)',
   'sharing.rate_limited': 'go/sharing/ratelimit.go:79 (ErrRateLimited)',
 }
 
