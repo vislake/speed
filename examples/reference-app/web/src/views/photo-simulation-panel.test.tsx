@@ -232,12 +232,14 @@ describe('PhotoSimulationPanel', () => {
     // cost (a pay-per-use product that spends silently is one nobody
     // trusts). The caption reads the displayed cost from the same
     // mirrored constant the simulation-cost-lockstep suite pins to the
-    // service's own charge.
+    // service's own charge. A freshly opened photo's first generation
+    // is the panel's automatic default one (the block-C shape, and the
+    // button stays disabled while it runs), so the caption is awaited
+    // beside the auto-run's comparison -- the completed generation is
+    // the one that must say what it cost.
     const blobDoubles = installBlobURLDoubles()
     try {
       const view = await renderCaseDetail({ initialCases: [caseWithPhoto()] })
-      await view.findByRole('button', { name: 'Simulate smile' })
-      await userEvent.click(view.getByRole('button', { name: 'Simulate smile' }))
       const comparison = await view.findByRole(
         'region',
         { name: 'Before and after' },
