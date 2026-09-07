@@ -142,7 +142,7 @@ func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t
 	// the deterministic tenant derived from its own user id, never
 	// tenant-acme.
 	clinic := pkgcore.TenantID("tenant-" + freshID)
-	status, code, _, tenant := browserSignIn(t, srv, freshEmail, freshPassword)
+	status, code, freshToken, tenant := browserSignIn(t, srv, freshEmail, freshPassword)
 	if status != http.StatusOK {
 		t.Fatalf("browser-shaped sign-in of the freshly registered account: status = %d, code = %q, want %d "+
 			"(registration must provision the clinic its account can sign into)",
@@ -153,4 +153,13 @@ func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t
 			"tenant %q, want its own clinic %q: the caller's tenant must never steer the account's provisioning",
 			tenant, clinic)
 	}
+
+	// Leg 2's refusal was the unified 401 authn.invalid_credentials a
+	// wrong password also gets, so its real reason must be read from the
+	// login history -- the one place authn writes it: this very sign-in
+	// proved the password right, and the account's newest failed attempt
+	// (leg 2's) must record the no-membership refusal rather than a bad
+	// password, so the leg-2 401 stays evidence of "no seat in
+	// tenant-acme" instead of a credential failure proving nothing.
+	assertNoMembershipRefusal(t, srv, freshToken, "sign-in of the freshly registered account into tenant-acme")
 }

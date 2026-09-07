@@ -188,6 +188,13 @@ func TestSelfServiceSignup_RegisterThenSignIn_LandsInTheCreatedClinic(t *testing
 		t.Fatalf("sign-in of the clinic owner into tenant-acme: status = %d, code = %q, want 401 %q",
 			status, code, "authn.invalid_credentials")
 	}
+	// The refusal's real reason: the 401 above is also a wrong password's
+	// answer, so the login history -- the one place authn writes the
+	// specific reason -- must show this attempt as the no-membership
+	// refusal it is (the browser-shaped sign-in into the clinic above
+	// proved the password; history proves the tenant-acme refusal was the
+	// missing membership).
+	assertNoMembershipRefusal(t, srv, token, "sign-in of the clinic owner into tenant-acme")
 
 	// The clinic's org tree answers the account's own bearer token: the
 	// registration provisioned exactly one root node (org's root of the

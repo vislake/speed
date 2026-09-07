@@ -116,6 +116,63 @@ func demoLogin(t *testing.T, srv *httptest.Server, email, password string, tenan
 	return resp.StatusCode, answer.Code, answer.AccessToken
 }
 
+// assertNoMembershipRefusal reads the account accessToken authenticates
+// its login history through authn's real login-history endpoint and
+// asserts that the account's newest FAILED attempt was recorded with
+// FailureReasonNoMembership. The unified-401 controls call this right
+// after the refusal they pin: since the fold of no-membership logins
+// into ErrInvalidCredentials, that 401 is byte-identical to a wrong
+// password's, so a control asserting only the status could not tell "the
+// password verified and the account holds no membership in the asked-for
+// tenant" from "the test's own credentials broke" -- a defect regression
+// answering 401 for another reason would leave the control green. The
+// login history is the one place the real reason survives: the login
+// response itself never names it, and the history endpoint exists
+// exactly to read it back (a wrong password records
+// FailureReasonBadPassword, an unknown account FailureReasonUnknownUser,
+// and only a membership-less refusal of a verified credential records
+// FailureReasonNoMembership).
+func assertNoMembershipRefusal(t *testing.T, srv *httptest.Server, accessToken, what string) {
+	t.Helper()
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/authn/login-history", nil)
+	if err != nil {
+		t.Fatalf("%s: build login-history request: %v", what, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("%s: read login history: %v", what, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("%s: login history status = %d, want %d; body = %s", what, resp.StatusCode, http.StatusOK, raw)
+	}
+	var history struct {
+		Attempts []struct {
+			Result        string `json:"result"`
+			FailureReason string `json:"failure_reason"`
+		} `json:"attempts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&history); err != nil {
+		t.Fatalf("%s: decode login history: %v", what, err)
+	}
+	const wantReason = authn.FailureReasonNoMembership
+	for _, attempt := range history.Attempts {
+		if attempt.Result != authn.LoginResultFailure {
+			continue
+		}
+		if attempt.FailureReason != string(wantReason) {
+			t.Fatalf("%s: the refusal's history row records %q, want %q -- the 401 was not the no-membership "+
+				"answer (a wrong password would record %q)",
+				what, attempt.FailureReason, wantReason, authn.FailureReasonBadPassword)
+		}
+		return
+	}
+	t.Fatalf("%s: the account's login history holds no failed attempt; attempts = %+v", what, history.Attempts)
+}
+
 // TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal signs the
 // seeded accounts in and drives the notes gate with NO demo header at all:
 // the tenant comes from the access token's claim, the acting user from the
@@ -171,6 +228,17 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 		notesRequestAs(t, srv, http.MethodPost, readerToken, "", strings.NewReader(`{"text":"reader note"}`)),
 		"POST as the seeded reader")
 
+	// The acme-only account signs into its own tenant fine -- its
+	// membership and reader grant live in tenant-acme alone -- which both
+	// proves the credentials the globex control refuses below are right
+	// and yields the bearer the login-history read after the control needs
+	// (history is the one place a refusal's real reason survives).
+	status, code, acmeOnlyToken := demoLogin(t, srv, demoAcmeOnlyEmail, demoSeedPassword, "tenant-acme")
+	if status != http.StatusOK {
+		t.Fatalf("login as the seeded acme-only account in its own tenant: status = %d, code = %q, want %d",
+			status, code, http.StatusOK)
+	}
+
 	// The acme-only account holds its membership and reader grant in
 	// tenant-acme only; signing in for the tenant it has no membership in is
 	// refused before any route exists with the unified 401
@@ -185,6 +253,13 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 		t.Fatalf("login as the acme-only account in tenant-globex: status = %d, code = %q, want 401 %q",
 			status, code, "authn.invalid_credentials")
 	}
+	// The refusal's real reason: the 401 above is also a wrong password's
+	// answer, so the login history -- the one place authn writes the
+	// specific reason -- must show this attempt as the no-membership
+	// refusal it is (the sign-in into tenant-acme just above proved the
+	// password; history proves the globex refusal was the missing
+	// membership).
+	assertNoMembershipRefusal(t, srv, acmeOnlyToken, "login as the acme-only account in tenant-globex")
 }
 
 // TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive pins what a
@@ -201,13 +276,20 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 //
 // Before this round the memberships lived in an in-process roster each
 // boot owned, so boot two (the honest image of a restart) answered "not a
-// member" for every account and refused the sign-ins with
-// authn.tenant_membership_required no matter how right the password was --
-// the failure this test previously pinned as
-// TestDemoUsers_SecondBootAgainstTheSameDatabaseFailsClosed, and the
-// scale-to-zero restart defect that killed every demo account (and locked
-// the platform-staff account out of admin's console) whenever an idle
-// instance stopped and came back.
+// member" for every account and refused the sign-ins -- back then with
+// the distinguishable 403 authn.tenant_membership_required, the answer
+// the test's original FailsClosed form could lean on to show the
+// passwords were right and only the membership was missing. That
+// contrast is gone: the fold of no-membership logins into
+// ErrInvalidCredentials answers the same defect's refusal today with the
+// unified 401 authn.invalid_credentials a wrong password also gets (the
+// reason survives only in the login history, never the response), so no
+// distinguishable refusal exists for this test to assert and its proof is
+// the 200s themselves -- every sign-in below must succeed, and a
+// restarted boot that lost the memberships fails them red. The defect
+// was the scale-to-zero restart one that killed every demo account (and
+// locked the platform-staff account out of admin's console) whenever an
+// idle instance stopped and came back.
 func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "reference-app-seed-restart.db")
 

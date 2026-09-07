@@ -148,6 +148,17 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// invitation below.
 	inviteeUserID := registerOnlyRealAccount(t, srv1, inviteeEmail, inviteePassword)
 
+	// The invitee's registration provisioned its own self-service clinic
+	// (a different tenant, self_service.go), and signing into it succeeds
+	// -- the account is real and the password right, and the clinic bearer
+	// is what the login-history read after the control below needs
+	// (history is the one place a refusal's real reason survives).
+	status, code, inviteeClinicToken, _ := browserSignIn(t, srv1, inviteeEmail, inviteePassword)
+	if status != http.StatusOK {
+		t.Fatalf("sign-in of the freshly registered invitee into its own clinic: status = %d, code = %q, want %d",
+			status, code, http.StatusOK)
+	}
+
 	// Control: before any invitation exists, the freshly registered
 	// invitee cannot sign into the inviting tenant -- its only membership
 	// so far is the self-service clinic its registration provisioned
@@ -159,12 +170,20 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// not say so (this control used to pin the distinguishable 403
 	// authn.tenant_membership_required; the specific reason now lives in
 	// the login history, never the response). The account's reality is
-	// proven below, when the same credentials answer 200 after the
-	// acceptance creates the membership.
-	status, code, _ := demoLogin(t, srv1, inviteeEmail, inviteePassword, "tenant-acme")
+	// proven from both sides: the clinic sign-in above, and the same
+	// credentials answering 200 below, once the acceptance creates the
+	// membership.
+	status, code, _ = demoLogin(t, srv1, inviteeEmail, inviteePassword, "tenant-acme")
 	if status != http.StatusUnauthorized || code != "authn.invalid_credentials" {
 		t.Fatalf("pre-invitation login: status = %d, code = %q, want 401 %q", status, code, "authn.invalid_credentials")
 	}
+	// The refusal's real reason: the 401 above is also a wrong password's
+	// answer, so the login history -- the one place authn writes the
+	// specific reason -- must show this attempt as the no-membership
+	// refusal it is (the clinic sign-in just above proved the password;
+	// history proves the tenant-acme refusal was the missing membership,
+	// the exact pre-state this control exists to establish).
+	assertNoMembershipRefusal(t, srv1, inviteeClinicToken, "the pre-invitation sign-in of the real invitee into tenant-acme")
 
 	// Invite the real invitee's email into the new root node, through
 	// org's real HTTP invite route, and recover the token from the mail
