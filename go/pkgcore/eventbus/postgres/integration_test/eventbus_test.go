@@ -139,11 +139,16 @@ func TestEventBus_AssertConforms(t *testing.T) {
 	// init declares MultiReplicaSafe | SurvivesRestart, and this package's
 	// own register_test.go pins the registry to return exactly those bits —
 	// and the capability-gated suite runs the cross-instance assertions for
-	// the MultiReplicaSafe half of that declaration. (Its SurvivesRestart
-	// half names broker-held outbox state and is verified by this file's own
-	// catch-up proofs — a full restart under the same replicaID, and a
-	// severed-and-reconnected listener — the per-leg shape eventbustest's
-	// package doc comment names for an EventBus's durable-cursor claim.)
+	// the MultiReplicaSafe half of that declaration. (The shared suite runs
+	// no EventBus restart protocol — see eventbustest's package doc comment.
+	// This file's catch-up proofs — a full restart under the same
+	// replicaID, and a severed-and-reconnected listener — close and reopen
+	// the BUS, so they prove the durable-cursor-across-consumer-restart
+	// property and, per pkgcore.Capability's own definition, nothing about
+	// the PostgreSQL server behind it; the SurvivesRestart half of the
+	// declaration is verified against a genuine restart of that server by
+	// this file's own
+	// TestEventBus_DeclaredSurvivesRestart_DurableCursorAcrossServerRestart.)
 	eventbustest.AssertConforms(t, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart, func() (pkgcore.EventBus, pkgcore.EventBus) {
 		seq++
 		busA := eventbuspostgres.NewEventBus(pool, fmt.Sprintf("conform-replica-a-%d", seq))

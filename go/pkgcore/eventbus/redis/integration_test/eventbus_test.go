@@ -699,10 +699,16 @@ func TestEventBus_ConformsToEventBusContract(t *testing.T) {
 	// init declares MultiReplicaSafe | SurvivesRestart, and this package's
 	// own register_test.go pins the registry to return exactly those bits —
 	// and the capability-gated suite runs the cross-instance assertions for
-	// the MultiReplicaSafe half of that declaration. (Its SurvivesRestart
-	// half names broker-held stream state; the shared suite runs no EventBus
-	// restart protocol — see eventbustest's package doc comment — and this
-	// leg's backend holds that state in Redis itself.)
+	// the MultiReplicaSafe half of that declaration. (The shared suite runs
+	// no EventBus restart protocol — see eventbustest's package doc comment
+	// — and this leg's own
+	// TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart
+	// is the SurvivesRestart half's verification: a genuine restart of the
+	// Redis container, under the explicitly forced persistence configuration
+	// the declaration's premise names — see EventBus's own package doc
+	// comment, which records that whether Redis Streams survive a server
+	// restart is the server's operator-configured RDB/AOF persistence, never
+	// something this bus controls or a default container provides.)
 	eventbustest.AssertConforms(t, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart, func() (pkgcore.EventBus, pkgcore.EventBus) {
 		busA := eventbusredis.NewEventBus(client)
 		busB := eventbusredis.NewEventBus(client)

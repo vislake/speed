@@ -16,8 +16,15 @@ package nats_test
 
 import (
 	"context"
+	"math/rand/v2"
+	"net"
+	"net/netip"
+	"strconv"
 	"testing"
+	"time"
 
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	natslib "github.com/nats-io/nats.go"
 	"github.com/testcontainers/testcontainers-go"
 	tcnats "github.com/testcontainers/testcontainers-go/modules/nats"
@@ -110,4 +117,103 @@ func startNATSConnN(t *testing.T, ctx context.Context, n int) []*natslib.Conn {
 		conns[i] = conn
 	}
 	return conns
+}
+
+// startNATSConnPairWithContainer is startNATSConnPair's counterpart for the
+// tests that stop and restart their own container mid-test (the
+// SurvivesRestart proofs, see declared_survives_restart_test.go): it hands
+// back the container itself alongside two independent connections to it and
+// differs from startNATSConnPair in the two ways those tests alone need:
+//
+//   - It connects with a short PingInterval/MaxPingsOutstanding, unlike
+//     startNATSConnPair's plain default -- nats.go's own default
+//     PingInterval is 2 minutes, so a client that sends nothing while the
+//     server is down would not even notice the connection died within that
+//     test's own timeout; the ping is what surfaces the failure quickly
+//     enough for reconnection to kick in on a test-sized timescale, not a
+//     change to what reconnection itself does once it notices. kv/nats's
+//     own restart fixture connects the identical way, for the identical
+//     reason.
+//   - It publishes the container's client port to a fixed, rather than
+//     random, host port. testcontainers' own random host-port allocation is
+//     re-resolved on every container start (observed directly against this
+//     environment's Docker Desktop: the same container's client port
+//     answered on a *different* host port after Stop then Start), and
+//     nats.go's reconnect logic only ever redials addresses it already
+//     knows -- a client has no way to discover that the port it should
+//     reconnect to just changed. A fixed host port sidesteps that platform
+//     detail entirely, which is also the more realistic shape for what this
+//     test means to prove: a real deployment's NATS server keeps a stable
+//     advertised address across a restart, and it is exactly that stability
+//     this package's reconnect behaviour depends on.
+func startNATSConnPairWithContainer(t *testing.T, ctx context.Context) (*tcnats.NATSContainer, *natslib.Conn, *natslib.Conn) {
+	t.Helper()
+
+	// A random port in the high, rarely-reserved range on every run, so two
+	// concurrent invocations of restart-driven tests are unlikely to collide
+	// (the kv-tier restart fixtures draw from the same range for their own
+	// containers); a genuine collision fails loudly at container start
+	// (Docker refuses the bind) rather than silently reusing someone else's
+	// server.
+	hostPort := strconv.Itoa(40000 + rand.IntN(20000))
+
+	container, err := tcnats.Run(ctx, natsImage,
+		testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
+			hc.PortBindings = network.PortMap{
+				network.MustParsePort("4222/tcp"): {{HostIP: netip.IPv4Unspecified(), HostPort: hostPort}},
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatalf("start nats testcontainer on fixed port %s: %v", hostPort, err)
+	}
+	t.Cleanup(func() {
+		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
+			t.Errorf("terminate nats testcontainer: %v", terminateErr)
+		}
+	})
+
+	addr := "nats://" + net.JoinHostPort("127.0.0.1", hostPort)
+	conns := make([]*natslib.Conn, 2)
+	for i := range conns {
+		conn, err := natslib.Connect(addr,
+			natslib.PingInterval(200*time.Millisecond), natslib.MaxPingsOutstanding(2))
+		if err != nil {
+			t.Fatalf("nats.Connect(%q) [%d]: %v", addr, i, err)
+		}
+		t.Cleanup(conn.Close)
+		conns[i] = conn
+	}
+	return container, conns[0], conns[1]
+}
+
+// restartNATSContainer stops and starts container and blocks until conn has
+// reconnected to it, failing the test if the reconnect does not happen
+// within 30s. The survives-restart proofs drive their container restart
+// through this helper: the post-restart assertions must run against a
+// reconnected connection, or they would fail on the dead connection rather
+// than on genuinely lost data.
+func restartNATSContainer(t *testing.T, ctx context.Context, container *tcnats.NATSContainer, conn *natslib.Conn) {
+	t.Helper()
+
+	reconnected := make(chan struct{}, 1)
+	conn.SetReconnectHandler(func(*natslib.Conn) {
+		select {
+		case reconnected <- struct{}{}:
+		default:
+		}
+	})
+
+	if err := container.Stop(ctx, nil); err != nil {
+		t.Fatalf("stop nats container: %v", err)
+	}
+	if err := container.Start(ctx); err != nil {
+		t.Fatalf("restart nats container: %v", err)
+	}
+
+	select {
+	case <-reconnected:
+	case <-time.After(30 * time.Second):
+		t.Fatal("client did not reconnect within 30s of the server restarting")
+	}
 }

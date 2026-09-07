@@ -26,11 +26,18 @@ package s3_test
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
+	"net"
+	"net/http"
+	"net/netip"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
@@ -118,4 +125,111 @@ func startRustfsObjectStore(t *testing.T, ctx context.Context) pkgcore.ObjectSto
 		AccessKey: accessKey,
 		SecretKey: secretKey,
 	})
+}
+
+// startRustfsPersistentStore is startRustfsObjectStore's counterpart for
+// the one test that stops and restarts its own container mid-test
+// (TestObjectStore_DeclaredSurvivesRestart_ProvenAgainstContainerRestart):
+// it returns the container itself, the fixed endpoint it advertises, and a
+// makeStore factory -- every call returns a fresh S3-backed store over a
+// fresh client, all pointed at the one bucket the fixture provisioned --
+// and differs from startRustfsObjectStore in the one way that test alone
+// needs: the S3 port is published to a fixed, rather than random, host
+// port. testcontainers' own random host-port allocation is re-resolved on
+// every container start (the same platform detail kv/nats's own restart
+// fixture documents), and minio-go only ever redials addresses it already
+// knows, so a stable advertised address is what makes the post-restart
+// factory call deterministic. RustFS stores the bucket and every object
+// under the /data directory this fixture mounts as its Cmd argument, inside
+// the container's own filesystem -- which survives a stop/start of the same
+// container the way a real S3 service's durable storage survives a service
+// restart.
+func startRustfsPersistentStore(t *testing.T, ctx context.Context) (testcontainers.Container, string, func() pkgcore.ObjectStore) {
+	t.Helper()
+
+	// A random port in the high, rarely-reserved range on every run, so two
+	// concurrent invocations of restart-driven tests are unlikely to collide
+	// (the kv-tier and eventbus-tier restart fixtures draw from the same
+	// range for their own containers); a genuine collision fails loudly at
+	// container start (Docker refuses the bind) rather than silently reusing
+	// someone else's server.
+	hostPort := strconv.Itoa(40000 + rand.IntN(20000))
+
+	req := testcontainers.ContainerRequest{
+		Image: rustfsImage,
+		Env: map[string]string{
+			"RUSTFS_ACCESS_KEY":     "rustfsadmin",
+			"RUSTFS_SECRET_KEY":     "rustfsadmin",
+			"RUSTFS_ADDRESS":        ":9000",
+			"RUSTFS_CONSOLE_ENABLE": "false",
+		},
+		Cmd: []string{"/data"},
+		HostConfigModifier: func(hc *container.HostConfig) {
+			hc.PortBindings = network.PortMap{
+				network.MustParsePort("9000/tcp"): {{HostIP: netip.IPv4Unspecified(), HostPort: hostPort}},
+			}
+		},
+		WaitingFor: wait.ForHTTP("/health").WithPort("9000/tcp").WithStartupTimeout(60 * time.Second),
+	}
+	rustfsContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		t.Fatalf("start rustfs testcontainer on fixed port %s: %v", hostPort, err)
+	}
+	t.Cleanup(func() {
+		if terminateErr := testcontainers.TerminateContainer(rustfsContainer); terminateErr != nil {
+			t.Errorf("terminate rustfs testcontainer: %v", terminateErr)
+		}
+	})
+
+	const bucket = "objects"
+	const accessKey = "rustfsadmin"
+	const secretKey = "rustfsadmin"
+	endpoint := net.JoinHostPort("127.0.0.1", hostPort)
+	client, err := minio.New(endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
+		Secure: false,
+	})
+	if err != nil {
+		t.Fatalf("build a minio-go client for %q: %v", endpoint, err)
+	}
+	if err := client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil {
+		t.Fatalf("create bucket %q on the rustfs testcontainer: %v", bucket, err)
+	}
+
+	makeStore := func() pkgcore.ObjectStore {
+		return s3.NewObjectStore(s3.Config{
+			Endpoint:  endpoint,
+			Bucket:    bucket,
+			AccessKey: accessKey,
+			SecretKey: secretKey,
+		})
+	}
+	return rustfsContainer, endpoint, makeStore
+}
+
+// waitForRustfsReady polls the container's /health endpoint until the
+// restarted server answers, or fails the test once the deadline passes. The
+// restart closure of the survives-restart proof must not return before the
+// server accepts connections, or the post-restart read would fail on a dead
+// connection rather than on genuinely lost data.
+func waitForRustfsReady(t *testing.T, ctx context.Context, endpoint string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	url := "http://" + endpoint + "/health"
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err == nil {
+			if resp, err := http.DefaultClient.Do(req); err == nil {
+				_ = resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					return
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatal("restarted rustfs server did not answer /health within 30s")
 }

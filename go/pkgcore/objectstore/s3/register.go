@@ -15,6 +15,27 @@ package s3
 // objectstore.s3" from a compile-time failure into a Bootstrap-time
 // pkgcore.ErrUnknownImplementation (docs/internal/03-deployment-modes.md's
 // implementation-registry section names this cost and accepts it explicitly).
+//
+// # Declared capabilities
+//
+// The registration below declares MultiReplicaSafe | SurvivesRestart. The
+// MultiReplicaSafe half is the ordinary claim of a shared backend: any
+// number of replicas may address the same bucket, and object stores hold no
+// per-replica state to split. The SurvivesRestart half promises that the
+// state this store reads and writes — the objects PutObject stores, the
+// keys GetObject and DeleteObject address — outlives a restart of the
+// service that holds them, per pkgcore.Capability's own definition: the
+// bytes live inside the S3-compatible service, whose durable storage is
+// exactly what an object service exists to provide, never in this process
+// (the way a throwaway local store's bytes live in its temp directory).
+// The service-side premise is the operator's to provide, as it is for every
+// S3-backed consumer: a self-hosted object service must keep its storage
+// on durable media, and a managed one (AWS S3, Aliyun OSS) is durable by
+// its own service contract. The integration tier verifies the claim against
+// a genuine restart of this package's real S3-compatible container
+// (integration_test/declared_survives_restart_test.go, running
+// objectstoretest.AssertSurvivesRestart), so the declaration is a promise
+// a protocol checks rather than an unexamined label.
 
 import (
 	"fmt"

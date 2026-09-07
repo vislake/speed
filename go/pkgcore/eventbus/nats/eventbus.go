@@ -134,12 +134,22 @@
 // so events already committed to a stream survive a restart of the NATS
 // server process itself -- the identical honesty eventbus/redis's own
 // SurvivesRestart declaration rests on for Redis Streams' AOF/RDB
-// persistence. Neither declaration is a promise about *this process*
-// restarting with the same in-memory bookkeeping: a fresh process gets a
-// fresh random instance id (see newBusInstanceID) and therefore a fresh
-// consumer starting at the stream's live end, exactly like eventbus/redis --
-// SurvivesRestart is about the broker's own durability, not about this
-// bus's own reader cursor surviving an app restart.
+// persistence, which that package's own doc comment now records in full.
+// The server-side premise is the operator's to provide, the same way it is
+// for eventbus/redis: JetStream must be running with its store directory on
+// storage that outlives the server's restart -- this package's integration
+// tier proves the claim against a genuine restart of its real NATS
+// container, whose JetStream store directory sits in the container's own
+// filesystem and therefore survives a stop/start of the same container
+// (see declared_survives_restart_test.go), and a production operator must
+// give the NATS server a store directory on durable storage for the
+// declaration to be true of that deployment. Neither declaration is a
+// promise about *this process* restarting with the same in-memory
+// bookkeeping: a fresh process gets a fresh random instance id (see
+// newBusInstanceID) and therefore a fresh consumer starting at the stream's
+// live end, exactly like eventbus/redis -- SurvivesRestart is about the
+// broker's own durability, not about this bus's own reader cursor surviving
+// an app restart.
 //
 // # Dependency cost (root CLAUDE.md's mandatory measurement)
 //

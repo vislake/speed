@@ -18,10 +18,15 @@ package postgres_test
 
 import (
 	"context"
+	"math/rand/v2"
+	"net/netip"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -72,4 +77,86 @@ func startPostgresPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 		t.Fatalf("EnsureSchema: %v", err)
 	}
 	return pool
+}
+
+// startPostgresPersistent is startPostgresPool's counterpart for the one
+// test that stops and restarts its own container mid-test
+// (TestEventBus_DeclaredSurvivesRestart_DurableCursorAcrossServerRestart):
+// it returns the container itself alongside the pool and publishes the
+// PostgreSQL port to a fixed, rather than random, host port.
+// testcontainers' own random host-port allocation is re-resolved on every
+// container start (the same platform detail kv/nats's own restart fixture
+// documents), and pgxpool only ever redials addresses it already knows, so
+// a stable advertised address is what makes the reconnect after the restart
+// deterministic. kv/postgres's own integration tier carries an identical
+// fixture for its own restart proof.
+func startPostgresPersistent(t *testing.T, ctx context.Context) (*tcpostgres.PostgresContainer, *pgxpool.Pool) {
+	t.Helper()
+
+	// A random port in the high, rarely-reserved range on every run, so two
+	// concurrent invocations of restart-driven tests are unlikely to collide
+	// (the kv-tier restart fixtures draw from the same range for their own
+	// containers); a genuine collision fails loudly at container start
+	// (Docker refuses the bind) rather than silently reusing someone else's
+	// server.
+	hostPort := strconv.Itoa(40000 + rand.IntN(20000))
+
+	container, err := tcpostgres.Run(ctx,
+		"postgres:16-alpine",
+		tcpostgres.WithDatabase("pkgcore"),
+		tcpostgres.WithUsername("pkgcore"),
+		tcpostgres.WithPassword("pkgcore"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(90*time.Second),
+		),
+		testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
+			hc.PortBindings = network.PortMap{
+				network.MustParsePort("5432/tcp"): {{HostIP: netip.IPv4Unspecified(), HostPort: hostPort}},
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatalf("start postgres testcontainer on fixed port %s: %v", hostPort, err)
+	}
+	t.Cleanup(func() {
+		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
+			t.Errorf("terminate postgres testcontainer: %v", terminateErr)
+		}
+	})
+
+	dsn := "postgres://pkgcore:pkgcore@127.0.0.1:" + hostPort + "/pkgcore?sslmode=disable"
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	if err := eventbuspostgres.EnsureSchema(ctx, pool); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	return container, pool
+}
+
+// waitForPostgresReady polls the pool until the restarted server answers a
+// Ping, or fails the test once the deadline passes. The restart closure of
+// the survives-restart proof must not return before the server accepts
+// connections, or the post-restart read would fail on a dead connection
+// rather than on genuinely lost data.
+func waitForPostgresReady(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		err := pool.Ping(probeCtx)
+		cancel()
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("postgres server did not answer a Ping within 30s of its restart")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }

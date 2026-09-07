@@ -144,6 +144,43 @@ const (
 //     goroutine, in registration order. A slow handler delays the next
 //     remote event of the same type, on that replica only.
 //
+// # SurvivesRestart: what the declaration promises and what it rests on
+//
+// This implementation registers (and WithEventBus hosts may declare)
+// SurvivesRestart because every byte the bus reads and writes — the stream
+// entries Publish appends and the consumer-group state its readers keep —
+// lives inside the Redis server, never in this process. Whether that state
+// outlives a restart of the Redis server is the server's own persistence
+// configuration, which this implementation neither controls nor can force:
+// with RDB snapshotting or AOF enabled (the standard durable-Redis
+// configuration an operator runs for any state worth keeping), committed
+// entries and group cursors survive a server restart and this bus's readers
+// resume from where they stopped; against a server running without
+// persistence (no RDB snapshot points, no AOF — the redis-server default
+// when no config file supplies them, and the state a crash loses even on a
+// server whose long-cadence snapshot points never fired) the streams are
+// gone when the server comes back: a reader recreates its group at the live
+// end and entries committed before the restart are lost for it — the
+// identical configuration dependence kv/redis's own SurvivesRestart
+// declaration carries, and the reason the declaration's verification (this
+// package's integration tier) runs its genuine server-restart proof against
+// a container whose persistence is explicitly forced rather than assumed.
+// The host owns the premise: whatever Redis the operator runs must be
+// configured to persist, or the declaration is not true of that deployment.
+//
+// What the declaration does NOT promise is continuity for this process's
+// own reader: instance ids are random per construction, a fresh process
+// gets a fresh consumer group starting at the stream's live end (see
+// createGroup), and a graceful Close destroys this instance's own group and
+// deletes a stream once no group is left on it — a bus that closes and
+// reopens is a brand-new reader, exactly like eventbus/nats, and unlike
+// eventbus/postgres, whose persisted per-replicaID cursor is what gives
+// THAT bus its catch-up-across-consumer-restart property. SurvivesRestart
+// is about the broker's own durability, not about this bus's own reader
+// surviving an app restart — the distinction pkgcore.Capability's doc
+// comment draws, and the one eventbustest's package doc comment records
+// per-leg.
+//
 // The bus is safe for concurrent use by multiple goroutines. Publish after
 // Close returns ErrEventBusClosed, and Subscribe after Close is a no-op;
 // both are programming errors, detected rather than silently accepted.

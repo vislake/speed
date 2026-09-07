@@ -766,11 +766,15 @@ func TestEventBus_ConformsToEventBusContract(t *testing.T) {
 	// init declares MultiReplicaSafe | SurvivesRestart, and this package's
 	// own register_test.go pins the registry to return exactly those bits —
 	// and the capability-gated suite runs the cross-instance assertions for
-	// the MultiReplicaSafe half of that declaration. (Its SurvivesRestart
-	// half names broker-held stream state; the shared suite runs no EventBus
-	// restart protocol — see eventbustest's package doc comment — and this
-	// leg's backend holds that state in NATS JetStream's file storage
-	// itself.)
+	// the MultiReplicaSafe half of that declaration. (The shared suite runs
+	// no EventBus restart protocol — see eventbustest's package doc comment
+	// — and this leg's own
+	// TestEventBus_DeclaredSurvivesRestart_CommittedStateSurvivesServerRestart
+	// is the SurvivesRestart half's verification: a genuine restart of the
+	// NATS container, whose JetStream store directory sits in the
+	// container's filesystem and therefore survives the stop/start — the
+	// file-storage default EventBus's own package doc comment names, with
+	// the operator-provided store premise that doc records.)
 	eventbustest.AssertConforms(t, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart, func() (pkgcore.EventBus, pkgcore.EventBus) {
 		busA := eventbusnats.NewEventBus(connA)
 		busB := eventbusnats.NewEventBus(connB)

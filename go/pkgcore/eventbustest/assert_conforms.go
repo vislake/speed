@@ -50,16 +50,52 @@
 // Kernel.Bootstrap fails an assembly whose resolved implementation cannot
 // satisfy the deployment mode's requirements (ErrCapabilityUnsatisfied),
 // but at the level of the implementation's actual behaviour rather than its
-// declaration). Of the bits an EventBus implementation can declare, this
-// suite verifies MultiReplicaSafe. SurvivesRestart names broker-held
-// delivery state that must outlive a restart of the service holding it; an
-// EventBus keeps no state of its own that a write-then-read protocol could
-// read back (the bus is the transport, not the record), so no EventBus
-// restart protocol exists in the shared suite and the claim is verified
-// per-leg where a backend makes it observable — eventbus/postgres's
-// integration tier re-proves catch-up across a full process restart under
-// the same replicaID, the durable-cursor shape SurvivesRestart names for a
-// bus.
+// declaration).
+//
+// # SurvivesRestart and why the shared suite runs no restart protocol for it
+//
+// Of the bits an EventBus implementation can declare, this suite verifies
+// MultiReplicaSafe alone. SurvivesRestart promises that the state an
+// implementation reads and writes outlives a restart of the SERVICE that
+// holds it — the Redis server behind eventbus.redis, the PostgreSQL server
+// behind eventbus.postgres, the NATS server behind eventbus.nats — and
+// pkgcore.Capability's own doc comment is explicit that restarting the
+// application process proves nothing about that service: a consumer that
+// merely talks to the service can be restarted freely, and everything it
+// wrote through the service comes back. An EventBus is the transport, not
+// the record: every byte it reads and writes lives inside the backend
+// service (a Redis Streams entry, an outbox row, a JetStream message), and
+// the bus API exposes no write-then-read path that could read that state
+// back through the bus itself, so no restart protocol exists in this shared
+// suite — a declaration of the bit is verified per-leg, in the backend's
+// own integration tier, and each leg records exactly what its evidence
+// proves and what it does not:
+//
+//   - A consumer-process restart — the bus's own instance closing and a
+//     fresh one reopening, possibly under the same identity — proves the
+//     durable-cursor-across-consumer-restart property and nothing else:
+//     the events committed while the consumer was gone are delivered when
+//     it returns. eventbus/postgres's catch-up proofs are exactly this
+//     shape (a replica that closes and reopens under the same replicaID
+//     resumes from its persisted cursor), and they are NOT a service-
+//     restart proof under pkgcore.Capability's definition: the PostgreSQL
+//     server never restarted in them. The same definition is why a fresh
+//     consumer that starts at the live end after a crash (every backend's
+//     no-catch-up rule, which this suite's own late-subscription check
+//     pins) is compatible with a SurvivesRestart declaration rather than a
+//     contradiction of one.
+//   - A service restart — the backend's own container stopping and
+//     starting between the write and the read, the shape
+//     kvstoretest.AssertSurvivesRestart drives for KVStore — is the
+//     evidence each declaration ultimately rests on, and the eventbus legs
+//     that declare the bit run it against their real containers the same
+//     way (eventbus/postgres's durable-cursor proof across a genuine
+//     PostgreSQL-container restart; eventbus/redis's and eventbus/nats's
+//     committed-state survival proofs against genuine Redis and NATS
+//     restarts), each recording the configuration premise its backend's
+//     persistence stands on — a premise that is the operator's to provide,
+//     since no bus implementation can force its server's persistence
+//     configuration.
 package eventbustest
 
 import (
@@ -183,8 +219,10 @@ func payloadSequence(payload any) (int, bool) {
 // implementation claiming that bit is claiming exactly that a second
 // instance of the same deployment observes what the first one publishes —
 // the claim those checks verify against the pair the factory builds. An
-// implementation declaring neither MultiReplicaSafe nor SurvivesRestart
-// (the in-memory bus) runs the single-instance checks only.
+// implementation not declaring MultiReplicaSafe (the in-memory bus) runs
+// the single-instance checks only; what a SurvivesRestart declaration is
+// verified against is the per-leg evidence the package doc comment records,
+// never an assertion this suite gates.
 //
 // AssertConforms calls factory once per checked property (t.Run subtest),
 // never assuming state left by an earlier subtest is visible in the next:
