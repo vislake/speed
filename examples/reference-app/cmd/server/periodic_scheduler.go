@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/vislake/speed/go/compliance"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pki"
@@ -14,11 +15,11 @@ import (
 //
 // go/jobs deliberately ships no periodic facility of its own -- a task
 // exists only once something enqueues it, and who decides when that
-// happens is the host. storage's and pki's job-driven mechanisms are
-// therefore scheduled here, in the host, by this file's single ticker
-// loop, exactly the way internal/smilesim's own reconciler ticker
-// (StartReconciler) runs in this same process. One shared cadence drives
-// the two mechanisms this app actually wired:
+// happens is the host. storage's, compliance's and pki's job-driven
+// mechanisms are therefore scheduled here, in the host, by this file's
+// single ticker loop, exactly the way internal/smilesim's own reconciler
+// ticker (StartReconciler) runs in this same process. One shared cadence
+// drives the three mechanisms this app actually wired:
 //
 //   - storage's per-tenant expiry sweep, one task per tenant the host
 //     serves (LifecycleService.EnqueueExpirySweep under a pkgcore tenant
@@ -40,6 +41,28 @@ import (
 //     test proves end to end: boot 1 lets a completed object expire with
 //     the scheduler disabled, boot 2's first-ever sweep must then remove
 //     that object's row and bytes through the real host wiring.
+//   - compliance's per-tenant retention sweep, one task per tenant the
+//     host serves (RetentionService.EnqueueRetentionSweep under a pkgcore
+//     tenant context -- the sweep runs tenant-scoped for the same reason
+//     the expiry sweep's does, so the tenant must travel on the task).
+//     The enqueue carries the deterministic per-tenant idempotency key
+//     go/compliance/retention.go derives, deliberately aligned with the
+//     expiry sweep's, so the two mechanisms share one schedule shape and
+//     one residual: on this app's StandaloneQueue each tenant gets exactly
+//     one retention sweep per database file -- the first-ever one -- and a
+//     soft-deleted row that ages past its retention window after that one
+//     sweep has run is never reaped, the same per-file limitation
+//     go/storage/AGENTS.md records for its own sweep
+//     (go/compliance/AGENTS.md's Known limitations entry records
+//     compliance's own copy). The one sweep drives every participant
+//     registered on the kernel's reg.Retention seat -- notes' soft-deleted
+//     notes and compliance's own stored export manifests alike -- so
+//     nothing else needs its own schedule point. The trigger-half proof
+//     is the same two-boot shape as the expiry sweep's:
+//     periodic_scheduler_flow_test.go's retention leg lets boot 1 leave a
+//     soft-deleted note 45 days past the default window with the scheduler
+//     disabled, and boot 2's first-ever sweep must then hard-delete that
+//     row through the real host wiring.
 //   - pki's signing-key expiry scan, one platform-level task per tick
 //     (Service.EnqueueExpiryScan: pki's keys are platform data, so the
 //     scan carries no tenant at all). This is what actually drives the
@@ -58,10 +81,6 @@ import (
 //     is wired with a queue -- this host wires pki.WithQueue below, so the
 //     handler IS registered and drained onto the shared queue; it simply
 //     never receives a task. go/pki/AGENTS.md records that honestly.
-//   - go/compliance's RetentionService scheduling is not wired here
-//     either; that mechanism's host schedule is another round's work
-//     (the same frozen plan that names pki's expiry scan and storage's
-//     sweep as this round's wired mechanisms).
 //
 // The tick body is synchronous: every tick runs every enqueue to
 // completion before the next tick can fire, and time.Ticker drops a tick
@@ -97,7 +116,7 @@ const defaultPeriodicTaskSchedulerInterval = time.Minute
 // signals the loop and blocks until the in-flight tick (if any) has
 // returned, so the caller knows no enqueue is still running when the
 // queue is closed underneath it.
-func startPeriodicTaskScheduler(ctx context.Context, interval time.Duration, tenants map[string]pkgcore.TenantID, lifecycle *storage.LifecycleService, signingKeys *pki.Service) func() {
+func startPeriodicTaskScheduler(ctx context.Context, interval time.Duration, tenants map[string]pkgcore.TenantID, lifecycle *storage.LifecycleService, retention *compliance.RetentionService, signingKeys *pki.Service) func() {
 	if interval <= 0 {
 		interval = defaultPeriodicTaskSchedulerInterval
 	}
@@ -113,7 +132,7 @@ func startPeriodicTaskScheduler(ctx context.Context, interval time.Duration, ten
 			case <-stopCh:
 				return
 			case <-ticker.C:
-				runPeriodicTasks(ctx, tenants, lifecycle, signingKeys)
+				runPeriodicTasks(ctx, tenants, lifecycle, retention, signingKeys)
 			}
 		}
 	}()
@@ -124,11 +143,12 @@ func startPeriodicTaskScheduler(ctx context.Context, interval time.Duration, ten
 }
 
 // runPeriodicTasks performs one scheduler tick: one expiry-sweep enqueue
-// per unique tenant in tenants, then one signing-key expiry-scan enqueue.
-// Every enqueue failure is logged and left for the next tick to retry --
-// enqueues are durable row inserts, so a failed one changes nothing and
-// the mechanism stays exactly as due as it was.
-func runPeriodicTasks(ctx context.Context, tenants map[string]pkgcore.TenantID, lifecycle *storage.LifecycleService, signingKeys *pki.Service) {
+// and one retention-sweep enqueue per unique tenant in tenants, then one
+// signing-key expiry-scan enqueue. Every enqueue failure is logged and
+// left for the next tick to retry -- enqueues are durable row inserts, so
+// a failed one changes nothing and the mechanism stays exactly as due as
+// it was.
+func runPeriodicTasks(ctx context.Context, tenants map[string]pkgcore.TenantID, lifecycle *storage.LifecycleService, retention *compliance.RetentionService, signingKeys *pki.Service) {
 	log := obs.FromContext(ctx)
 	seen := make(map[pkgcore.TenantID]struct{}, len(tenants))
 	for _, tenantID := range tenants {
@@ -136,13 +156,17 @@ func runPeriodicTasks(ctx context.Context, tenants map[string]pkgcore.TenantID, 
 			continue
 		}
 		seen[tenantID] = struct{}{}
-		// The sweep handler runs tenant-scoped (its repository filters on
-		// the context's tenant), so each sweep is enqueued under the
+		// Both sweep handlers run tenant-scoped (their repositories filter
+		// on the context's tenant), so each sweep is enqueued under the
 		// tenant's own context -- never the scheduler's ctx, which carries
 		// none.
 		tenantCtx := pkgcore.WithTenant(ctx, tenantID)
 		if err := lifecycle.EnqueueExpirySweep(tenantCtx); err != nil {
 			log.Warn("periodic tasks: expiry-sweep enqueue failed, will retry on the next tick",
+				"tenant_id", tenantID, "error", err)
+		}
+		if err := retention.EnqueueRetentionSweep(tenantCtx); err != nil {
+			log.Warn("periodic tasks: retention-sweep enqueue failed, will retry on the next tick",
 				"tenant_id", tenantID, "error", err)
 		}
 	}

@@ -40,6 +40,33 @@ package main
 //     sweep run (with nothing to delete), the key would be resolved
 //     forever on this queue and no later sweep could ever execute.
 //
+//   - The compliance retention-sweep leg is the trigger-half twin of the
+//     storage leg above: TestBuildServer_PeriodicScheduler_RetentionSweep_
+//     ReapsExpiredSoftDeletedNote proves the host-scheduled retention sweep
+//     really hard-deletes an expired soft-deleted note's row end to end --
+//     the half go/compliance/AGENTS.md's Known limitations records as
+//     having no schedule point until the host wiring this test proves.
+//     Same two-boot shape, same reason: StandaloneQueue's permanent
+//     idempotency gives each database file exactly one retention sweep per
+//     tenant (the first-ever one), so boot 1 must leave the key
+//     unresolved. Boot 1 runs with the worker and scheduler disabled,
+//     hosts a live note and one soft-deleted with deleted_at backdated
+//     45 days (past the sweep's 30-day default window -- no product API
+//     ages deleted_at; the backdate goes through the same second-connection
+//     reach compliance_flow_test.go's softDeleteAndBackdate uses), and
+//     closes with both rows physically present -- age alone removes
+//     nothing. Boot 2 runs the normal gate with the injected cadence; its
+//     very first tick enqueues tenant-acme's FIRST-ever retention sweep
+//     (alongside the expiry sweep -- both wired mechanisms share the one
+//     tick, per periodic_scheduler.go), the worker drains the task into
+//     compliance's real retentionSweepHandler, and SweepTenant runs the
+//     notes participant's real HardDelete: the expired note's physical row
+//     is gone -- observed through the same second connection -- while the
+//     live note's row is untouched. The test FAILS when retention
+//     scheduling is unwired -- the state that predates this round, where
+//     no tick enqueued compliance's task and every soft-deleted row past
+//     its window was kept indefinitely.
+//
 // What remains honestly limited:
 //
 //   - StandaloneQueue holds a resolved idempotency key forever (go/jobs:
@@ -576,5 +603,130 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 	}
 	if _, err := os.Stat(survivorBytesPath); err != nil {
 		t.Fatalf("the survivor's bytes are gone from %q: %v", survivorBytesPath, err)
+	}
+}
+
+// TestBuildServer_PeriodicScheduler_RetentionSweep_ReapsExpiredSoftDeletedNote
+// is the compliance retention-sweep leg of this file's wiring proof: it
+// proves the host-scheduled retention sweep really hard-deletes an expired
+// soft-deleted note's row end to end -- the trigger-half proof
+// go/compliance/AGENTS.md's "no schedule point" Known-limitations entry
+// records the absence of -- over two real boots of the composed server
+// sharing one SQLite file, the same two-boot shape the storage expiry-sweep
+// leg above uses and for the same reason: StandaloneQueue's permanent
+// idempotency gives each database file exactly one retention sweep per
+// tenant, the first-ever one, so boot 1 must leave the key unresolved.
+//
+// Boot 1 runs with cfg.DisableQueueWorker set -- the same gate that guards
+// the worker and the scheduler (periodic_scheduler.go's doc comment) -- so
+// no retention-sweep key is ever resolved for tenant-acme in this database
+// file while boot 1 is up. Boot 1 hosts a live note and one whose
+// deleted_at is backdated 45 days (past the 30-day default retention
+// window every sweep uses when no config service is wired --
+// go/compliance/retention.go's defaultRetentionWindow; notes exposes no
+// delete endpoint and no product API ages deleted_at, so the soft delete
+// and backdate go through the second-connection reach compliance_flow_test.go's
+// softDeleteAndBackdate uses), and asserts both rows are physically present
+// as it closes: age alone removes nothing.
+//
+// Boot 2 starts the same server over the same file with the normal gate
+// and the injected periodicFlowTickInterval cadence. Its first tick
+// enqueues tenant-acme's first-ever retention sweep -- alongside the
+// expiry sweep, since both wired mechanisms share the one tick, per
+// periodic_scheduler.go; nothing in boot 2 needs a signed-in user, the
+// sweep is tenant-scoped from the host's tenant map. The worker drains the
+// task into compliance's real retentionSweepHandler, whose SweepTenant
+// runs the notes participant's real HardDelete. The test waits -- bounded,
+// with no wall-clock race: nothing in the wait depends on a tick, only on
+// the terminal state the sweep must produce -- until the expired note's
+// physical row is gone while the live note's row stays, both observed
+// through the same second connection boot 1 already opened. If retention
+// scheduling were still unwired from the host scheduler -- the state this
+// test exists to catch -- boot 2's ticks would enqueue nothing for
+// compliance and the wait would fail.
+func TestBuildServer_PeriodicScheduler_RetentionSweep_ReapsExpiredSoftDeletedNote(t *testing.T) {
+	cfg := periodicSweepTestConfig(t)
+
+	// ------------------------------------------------------------------
+	// Boot 1: host the note to expire and the live survivor, with neither
+	// the queue worker nor the scheduler running (the same DisableQueueWorker
+	// gate). Because no scheduler runs, the retention sweep's per-tenant
+	// idempotency key stays unresolved in this database file -- the
+	// precondition boot 2's first-ever sweep depends on.
+	// ------------------------------------------------------------------
+	boot1Cfg := cfg
+	boot1Cfg.DisableQueueWorker = true
+	boot1 := buildPeriodicFlowServer(t, boot1Cfg)
+	boot1Token := registerAndAuthenticate(t, boot1.srv, cfg, "tenant-acme", "periodic-retention-boot-1")
+
+	// The note to expire: created through the real notes HTTP surface, then
+	// soft-deleted with deleted_at backdated 45 days -- past the 30-day
+	// default retention window, so any retention sweep that ever runs will
+	// reap it.
+	expiredID := createNoteAs(t, boot1.srv, boot1Token, "note past its retention window")
+	liveID := createNoteAs(t, boot1.srv, boot1Token, "note still inside its retention window")
+
+	db := openSecondDB(t, cfg)
+	softDeleteAndBackdate(t, db, "tenant-acme", expiredID, time.Now().Add(-45*24*time.Hour))
+
+	// The state handed to boot 2: both rows are physically present. Age
+	// alone removes nothing; removal happens only when the wired sweep runs.
+	if got := physicalNoteCount(t, db, "tenant-acme", expiredID); got != 1 {
+		t.Fatalf("pre-boot-2 expired note physical rows = %d, want 1", got)
+	}
+	if got := physicalNoteCount(t, db, "tenant-acme", liveID); got != 1 {
+		t.Fatalf("pre-boot-2 live note physical rows = %d, want 1", got)
+	}
+
+	if closeErr := boot1.close(); closeErr != nil {
+		t.Fatalf("closing boot 1: %v", closeErr)
+	}
+
+	// ------------------------------------------------------------------
+	// Boot 2: the restart. Same database file, normal gate, the injected
+	// cadence. The scheduler's very first tick enqueues tenant-acme's
+	// first-ever retention sweep, the worker drains it into the wired
+	// retentionSweepHandler, and SweepTenant reaps the note boot 1 left
+	// expired.
+	// ------------------------------------------------------------------
+	boot2Cfg := cfg
+	boot2Cfg.PeriodicTaskInterval = periodicFlowTickInterval
+	buildPeriodicFlowServer(t, boot2Cfg)
+
+	// Wait for the sweep's terminal state: the expired note's physical row
+	// gone, the live note's row untouched. The state is monotone -- a row
+	// HardDelete removed stays removed, and the live note is never a sweep
+	// target -- so the wait cannot exit on a transient mid-protocol
+	// snapshot. Observations are paced ~5x per second rather than hammered:
+	// each count takes a read lock on the SQLite file, and a near-continuous
+	// read stream under -race slowed the expiry sweep's own writes into
+	// SQLITE_BUSY failures, the lesson this file's cadence comment records.
+	// The ceiling turns a sweep that never runs -- the failure mode this
+	// test exists to catch -- into a named failure: a host that never
+	// enqueues the retention sweep can never converge, however long the
+	// wait, so a generous ceiling costs the test none of its discriminating
+	// power; it only bounds how long a healthy-but-contended sweep may take
+	// to land.
+	convergenceDeadline := time.Now().Add(90 * time.Second)
+	for {
+		expiredRows := physicalNoteCount(t, db, "tenant-acme", expiredID)
+		liveRows := physicalNoteCount(t, db, "tenant-acme", liveID)
+		if expiredRows == 0 && liveRows == 1 {
+			break
+		}
+		if time.Now().After(convergenceDeadline) {
+			t.Fatalf("the first-ever retention sweep never reaped the expired note within 90s (expired rows = %d, live rows = %d)",
+				expiredRows, liveRows)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// The strict post-conditions, asserted once more now that the state is
+	// terminal, so each property's failure names itself in the test output.
+	if got := physicalNoteCount(t, db, "tenant-acme", expiredID); got != 0 {
+		t.Fatalf("the sweep-expired note still has %d physical row(s), want 0", got)
+	}
+	if got := physicalNoteCount(t, db, "tenant-acme", liveID); got != 1 {
+		t.Fatalf("the live note physical rows = %d, want 1 (the sweep must not touch a fresh note)", got)
 	}
 }
