@@ -169,6 +169,44 @@ type RecordedEvent struct {
 // belongs to the caller. The division of fulfilment is recorded in
 // go/dbkit/audit/AGENTS.md's Collection section, the two mechanisms'
 // shared home.
+//
+// The nil-seat decision is the caller half's other obligation, settled
+// BEFORE Emit is ever called: what a caller whose audit wiring is missing
+// -- a nil EventBus or a nil registrar, the shape of a host that assembled
+// the module by hand rather than through a full Kernel.Bootstrap -- does
+// with the operation it was about to record. (The guard itself is
+// mandatory either way: Emit dereferences both seats, so a nil seat means
+// Emit cannot be called at all; the question is only what the caller does
+// with the operation instead.) Callers across this repository answer that
+// question two opposite ways, and the answer is not a matter of taste: it
+// follows the same before-and-after axis this comment just drew for the
+// plugin. A caller that records a POST-HOC FACT about an operation that
+// has already durably committed and been answered -- a login, a
+// configuration write, a revocation, a credit mutation, each with that
+// rationale written at its own site -- is recording metadata, not a gate:
+// the record's loss changes nothing about the operation's legitimacy, and
+// there is nothing left to refuse (the commit already happened and the
+// caller was already answered), so the honest posture is to skip the
+// attempt WITH an alert -- the per-call "log, never drop" obligation
+// above, and a once-per-lifetime announcement for a seat that will never
+// record anything -- rather than to turn the operation's already-given
+// answer into a failure. A caller that records the PRECONDITION OF AN
+// OPERATION'S LEGITIMACY must fail closed instead: the audited
+// system-context escape-hatch grant (an unrecorded grant IS the gap that
+// operation exists to close), the sensitive share whose creation the
+// disclosure itself is the audit event of -- for these, an operation that
+// proceeds unrecorded is the very failure the audit exists to prevent, and
+// the operation has not been answered yet, so there is still something to
+// refuse: a missing seat must refuse the operation, never proceed
+// unrecorded. The discriminator is timing, not taste: a post-commit record
+// can no longer refuse anything, so skip-with-alert is its only honest
+// posture; a pre-answer gate still can refuse, and must, whenever the
+// record is the gate. The rule of thumb a new call site can apply before
+// reading either pole's own written reason: could the operation still be
+// undone, or its answer still withheld, at the moment the audit write
+// fails? If not -- the write committed and the caller was answered -- it
+// is post-hoc metadata and may skip with an alert; if yes -- the audit is
+// what legitimizes what is about to be answered -- it must refuse.
 func Emit(ctx context.Context, bus pkgcore.EventBus, actions pkgcore.AuditActionRegistrar, in Input) error {
 	if !slices.Contains(actions.Actions(), in.Action) {
 		return fmt.Errorf("%w: %q", ErrActionNotRegistered, in.Action)
