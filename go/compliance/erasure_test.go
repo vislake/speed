@@ -178,7 +178,10 @@ func TestErasureService_Erase_ParticipantErrorIsPartialFailureAndRetryConverges(
 
 	attempt := 0
 	flaky := pkgcore.RetentionParticipant{
-		Name: "testutil.flaky",
+		// NoopSweep satisfies the registrar's mandatory-Sweep rule; the
+		// erasure service under test never invokes it.
+		Name:  "testutil.flaky",
+		Sweep: testutil.NoopSweep,
 		Erase: func(context.Context, pkgcore.SubjectRef) (int, error) {
 			attempt++
 			if attempt == 1 {
@@ -227,7 +230,10 @@ func TestErasureService_Erase_ParticipantErrorIsPartialFailureAndRetryConverges(
 // Erase gate refused the request before any participant ran.
 func erasureRecorder(calls *int, observed *[]pkgcore.Actor) pkgcore.RetentionParticipant {
 	return pkgcore.RetentionParticipant{
-		Name: "testutil.recorder",
+		// NoopSweep satisfies the registrar's mandatory-Sweep rule; the
+		// erasure service under test never invokes it.
+		Name:  "testutil.recorder",
+		Sweep: testutil.NoopSweep,
 		Erase: func(ctx context.Context, _ pkgcore.SubjectRef) (int, error) {
 			*calls++
 			if observed != nil {
@@ -347,7 +353,10 @@ func TestErasureService_Erase_EmptyActorFallsBackToSystemActor(t *testing.T) {
 // audit trail's erased map entirely.
 func TestErasureService_Erase_ParticipantPartialCountSurvivesError(t *testing.T) {
 	partial := pkgcore.RetentionParticipant{
-		Name: "testutil.partial",
+		// NoopSweep satisfies the registrar's mandatory-Sweep rule; the
+		// erasure service under test never invokes it.
+		Name:  "testutil.partial",
+		Sweep: testutil.NoopSweep,
 		Erase: func(context.Context, pkgcore.SubjectRef) (int, error) {
 			return 2, errFakeParticipant
 		},
