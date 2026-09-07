@@ -619,30 +619,36 @@ lives.
 |---|---|---|
 | keep-the-result | no way to save the generated image -- the only way out of the product is a screenshot | unbuilt surface |
 | add-a-colleague | no surface for a practice's people, so a colleague can only be invited through the API | unbuilt surface |
-| new-practice-can-work (first screen) | a self-registered practice is told "Ask an administrator to enable a feature for this clinic" while the whole product works and there is no administrator | defect |
-| core-journey (share panel) | `cases.share.expiresOn` is written with single braces, so the patient link's expiry renders the literal `{date}` in both languages | defect |
 
-**Both defects were found by walking the journey as a person, and neither
-could have been found here.** A click-through as a freshly self-registered
-practice -- register, sign in, open a case with a photograph, choose the
-smile, watch the simulation, mint the patient link, read the credits
-ledger -- surfaced both in about ten minutes:
+**Both remaining gates wait on a surface that does not exist. No gate
+here waits on a defect.**
 
-- The home surface is the FIRST thing a new practice reads, and it says
-  nothing works and to ask an administrator. Every gate that had looked
-  at the home surface asked a neighbouring question of a SEEDED demo
-  account, which carries the feature flags a registrant does not. That is
-  the wrong-population lesson for the third time (see "How a gate here
-  has gone wrong"), and the shape is always the same: the question was
-  right, the population was not.
-- The share panel's expiry line was read by nobody. Block C asserted the
-  link appears and that a patient can open it, and stopped there. The
-  sentence next to it was rendering a placeholder.
+**Two defects were found by walking the journey as a person, and both are
+closed.** A click-through as a freshly self-registered practice --
+register, sign in, open a case with a photograph, choose the smile, watch
+the simulation, mint the patient link, read the credits ledger --
+surfaced them in about ten minutes, and neither could have been found by
+any gate that existed:
 
-The second one is now asserted as a CLASS -- any single-braced token
+| Was | Closed by |
+|---|---|
+| the home surface told every practice "Ask an administrator to enable a feature for this clinic", which no administrator could do and a self-registered practice had nobody to ask for | `2c383a0`, by naming where the work is and saying there is nothing to enable and nobody to ask |
+| the share panel rendered the literal `{date}` where the patient link's expiry belongs -- `cases.share.expiresOn` written with single braces in both languages | `2c383a0`, plus a repository-wide scan of every resource string for single-braced tokens |
+
+The first one also carries a correction worth keeping. I reported it as a
+wrong-population finding -- a self-registered practice sees it, while the
+home gate signs in as a seeded account -- and assumed the seeds carried
+the flags those cards are keyed to. **They do not.** The seeded owner sees
+the identical message, so the population was never the issue: the gate
+asked the neighbouring question (does the surface promise cards it has
+none of) and never questioned the empty state's own words. A stable wrong
+explanation is worse than an unstable one, because each retelling makes
+it sound better sourced.
+
+The second one is asserted as a CLASS -- any single-braced token
 surviving into rendered text -- because i18next interpolates `{{name}}`
-and this app has four other date lines that get it right, so the next
-one written with single braces is a matter of time.
+and this app has four other date lines that get it right, so the next one
+written with single braces was a matter of time.
 
 That is the argument for the click-through in one paragraph: a suite
 checks the questions someone thought to ask, and a person meeting the

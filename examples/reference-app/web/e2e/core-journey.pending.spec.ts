@@ -534,9 +534,18 @@ test(
  * token surviving into rendered text is the same defect wearing a
  * different name, and this is the cheapest place to notice the next one.
  */
+// Closed by 2c383a0: cases.share.expiresOn carries i18next's double
+// braces now, in both languages, so the panel renders the real expiry
+// date. The fix went wider than this gate asked -- every resource string
+// in the repository was scanned for single-braced tokens, and a re-scan
+// of all twelve bundles finds none left.
+//
+// The gate stays, and asserts the class rather than the one string, so
+// the next single-braced token written anywhere on this surface fails
+// here. @budget rather than untagged: it signs in and generates.
 test(
   'the share panel shows a date, not a placeholder',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     await signInAs(page, DEMO_OWNER)
     await openCaseWithSimulation(page)
