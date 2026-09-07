@@ -392,6 +392,35 @@ that proves invitations work had to reach around the product to set
 itself up. That gap is invisible from the gate's green result, which is
 exactly why it is written here.
 
+## How a finding gets recorded wrong
+
+Separate from how a gate is written wrong, and with its own cost: a
+misclassified finding is not merely an inaccurate record, it is a defect
+that gets shelved permanently.
+
+The SMS gate spent a long time filed as "cannot be configured in this
+demo, so not applicable". That reading was mine and it was wrong. The
+gate does not wait for SMS to work; it refuses one specific state --
+the channel offered while the surface claims "Code sent to +8613800…"
+about a phone that will never receive anything. Not offering the channel
+passes. Offering it and saying the code went to the server log passes.
+Only the lie fails, and removing the lie needs no SMS configuration at
+all.
+
+Filed as environmental, it would have become a red line nobody reads
+again, pointing at something fixable that a person will actually walk
+into. The rule that follows: before recording a finding as blocked by
+the environment, check whether the gate's own acceptance conditions
+include one the environment permits. If any of them does, the finding is
+open, not exempt.
+
+The same distinction applies to the deployment boundary above, and lands
+the other way: the generation genuinely cannot be exercised on the
+deployment without a vendor credential, and no condition of those gates
+is satisfiable there. That one IS environmental, which is why it is
+recorded as a limit on what a report may claim rather than as a defect
+waiting on someone.
+
 ## Layout
 
 Every file, because a partial list of what a suite contains invites the
