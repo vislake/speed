@@ -221,6 +221,25 @@ type NotificationType struct {
 	Group string
 	// DefaultChannels lists the delivery channels used when the recipient has no preference.
 	DefaultChannels []string
+	// RecipientVisibleParams names the parameters a dispatch of this type may
+	// carry to its recipient: the keys of the interpolation values the type's
+	// own templates reference (see notification's Dispatch.Params). Anything
+	// NOT named here is delivery-internal context that must never reach the
+	// recipient, and notification enforces that on the two boundaries it
+	// owns: DeliveryService.Dispatch refuses a dispatch carrying any
+	// parameter outside this list, and the delivery path narrows any payload
+	// that nevertheless reaches it (a job enqueued before this declaration
+	// existed, say) down to this list before rendering copy or persisting
+	// the inbox row. An EMPTY list is a real declaration: the type's copy is
+	// not parameterized, so its dispatches may carry no parameters at all.
+	//
+	// Nil is the legacy value meaning "no restriction declared": a type that
+	// predates the annotation keeps accepting any parameters, byte for byte
+	// as before. Every newly declared or edited type should state its list
+	// explicitly -- the empty list included -- so the recipient-visible
+	// surface is decided by declaration, never by whatever a dispatch
+	// happens to carry.
+	RecipientVisibleParams []string
 	// Unsubscribable reports whether recipients may opt out. Transactional
 	// notifications such as verification codes are not unsubscribable.
 	Unsubscribable bool
