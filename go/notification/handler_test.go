@@ -1020,8 +1020,9 @@ func TestHandler_VerifyContact_UnknownId_NotFound(t *testing.T) {
 // TestHandler_VerifyContact_CodeBudgetExhausted_Refused pins the fail-closed
 // verify limit over HTTP: enough wrong-code attempts against one address
 // answer the budget's denial (429 notification.contact_rate_limited) with
-// the verify dimension named and a retry-after hint -- the same closed
-// behaviour the send limit has, on the guessing path a code probe opens.
+// the address dimension's NAME -- never the key that embeds the address's
+// blind index -- and a retry-after hint, the same closed behaviour the send
+// limit has, on the guessing path a code probe opens.
 func TestHandler_VerifyContact_CodeBudgetExhausted_Refused(t *testing.T) {
 	env := newHandlerEnv(t)
 
@@ -1041,11 +1042,14 @@ func TestHandler_VerifyContact_CodeBudgetExhausted_Refused(t *testing.T) {
 	rec = env.do(t, http.MethodPost, apiPath+"/contacts/"+created.ID+"/verify", map[string]string{"code": wrong})
 	params := assertEnvelope(t, rec, http.StatusTooManyRequests, "notification.contact_rate_limited")
 	dimension, _ := params["dimension"].(string)
-	if !strings.HasPrefix(dimension, "verify.address.") {
-		t.Errorf("dimension = %q, want the verify.address.* budget", dimension)
+	if dimension != "address" {
+		t.Errorf("dimension = %q, want the address dimension's name", dimension)
 	}
 	if _, has := params["retry_after_seconds"]; !has {
 		t.Errorf("params = %v, want a retry_after_seconds hint", params)
+	}
+	if index := mustIndex(t, env.contacts.phoneIndexer, testPhone); strings.Contains(rec.Body.String(), index) {
+		t.Errorf("the refusal body echoes the address's blind index %s: %s", index, rec.Body.String())
 	}
 }
 
@@ -1124,9 +1128,10 @@ func TestHandler_CreateContact_MalformedBody_Refused(t *testing.T) {
 // the dedupe probe means repeated creates at one address never send again,
 // so the budget that remains is spent by resends. Four resends exhaust it;
 // a fifth resend -- the sixth message the address would receive that day --
-// answers 429 (notification.contact_rate_limited) naming the send dimension,
-// before any message goes out, and the sms buffer still holds exactly the
-// budget's messages.
+// answers 429 (notification.contact_rate_limited) naming the address
+// dimension's name -- never the key that embeds the address's blind index
+// -- before any message goes out, and the sms buffer still holds exactly
+// the budget's messages.
 func TestHandler_CreateContact_SendBudgetExhausted_Refused(t *testing.T) {
 	env := newHandlerEnv(t)
 
@@ -1149,11 +1154,14 @@ func TestHandler_CreateContact_SendBudgetExhausted_Refused(t *testing.T) {
 	rec := env.do(t, http.MethodPost, apiPath+"/contacts/"+created.ID+"/resend", nil)
 	params := assertEnvelope(t, rec, http.StatusTooManyRequests, "notification.contact_rate_limited")
 	dimension, _ := params["dimension"].(string)
-	if !strings.HasPrefix(dimension, "send.address.") {
-		t.Errorf("dimension = %q, want the send.address.* budget", dimension)
+	if dimension != "address" {
+		t.Errorf("dimension = %q, want the address dimension's name", dimension)
 	}
 	if _, has := params["retry_after_seconds"]; !has {
 		t.Errorf("params = %v, want a retry_after_seconds hint", params)
+	}
+	if index := mustIndex(t, env.contacts.phoneIndexer, testPhone); strings.Contains(rec.Body.String(), index) {
+		t.Errorf("the refusal body echoes the address's blind index %s: %s", index, rec.Body.String())
 	}
 	if got := len(smsLines(env.smsBuf)); got != contactCodeSendDailyPerAddress {
 		t.Errorf("sms messages = %d, want the %d that fit inside the budget", got, contactCodeSendDailyPerAddress)

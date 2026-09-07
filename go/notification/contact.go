@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -1083,6 +1082,17 @@ const platformDefaultLocale = "zh-CN"
 // code wrong several times must not be prevented from requesting a fresh
 // code by the same budget that is supposed to slow down an attacker.
 type contactRateLimit struct {
+	// name is what a denial of this dimension reports in its
+	// ErrContactRateLimited dimension param: the closed vocabulary
+	// "address" and "tenant", never the entry's key. The keys embed
+	// values a response body must never echo -- the per-address keys
+	// carry the contact address's blind index, an HMAC built to resist
+	// offline recovery that an online echo would reduce to an oracle,
+	// and the per-tenant keys carry the tenant id -- so deriving the
+	// reported label from the key by slicing is exactly the mistake this
+	// field exists to make impossible (the protected contract is
+	// errors.go's ErrContactRateLimited doc).
+	name string
 	key  string
 	rate int
 	per  time.Duration
@@ -1124,18 +1134,21 @@ const contactRateLimitKey = "notification.contact-code."
 // tenant) before a code is generated or a message sent.
 func (s *ContactService) checkCodeSendLimit(ctx context.Context, index string) error {
 	limits := []contactRateLimit{
-		{key: contactRateLimitKey + "send.address." + index, rate: contactCodeSendDailyPerAddress, per: contactRateLimitDay},
-		{key: contactRateLimitKey + "send.tenant." + tenantIDString(ctx), rate: contactCodeSendDailyPerTenant, per: contactRateLimitDay},
+		{name: "address", key: contactRateLimitKey + "send.address." + index, rate: contactCodeSendDailyPerAddress, per: contactRateLimitDay},
+		{name: "tenant", key: contactRateLimitKey + "send.tenant." + tenantIDString(ctx), rate: contactCodeSendDailyPerTenant, per: contactRateLimitDay},
 	}
 	return s.checkLimits(ctx, limits)
 }
 
 // checkCodeVerifyLimit enforces the two verify dimensions before a typed
-// code is checked.
+// code is checked. Its two dimensions report the same closed names as the
+// send limits: the caller's operation already names the flow, and the
+// retry-after seconds the denial carries distinguish the day-long send
+// windows from the code-lifetime verify window.
 func (s *ContactService) checkCodeVerifyLimit(ctx context.Context, index string) error {
 	limits := []contactRateLimit{
-		{key: contactRateLimitKey + "verify.address." + index, rate: contactCodeVerifyPerAddress, per: contactRateLimitWindow},
-		{key: contactRateLimitKey + "verify.tenant." + tenantIDString(ctx), rate: contactCodeVerifyPerTenant, per: contactRateLimitWindow},
+		{name: "address", key: contactRateLimitKey + "verify.address." + index, rate: contactCodeVerifyPerAddress, per: contactRateLimitWindow},
+		{name: "tenant", key: contactRateLimitKey + "verify.tenant." + tenantIDString(ctx), rate: contactCodeVerifyPerTenant, per: contactRateLimitWindow},
 	}
 	return s.checkLimits(ctx, limits)
 }
@@ -1157,7 +1170,7 @@ func tenantIDString(ctx context.Context) string {
 // the attempt, and the limiter is built lazily from the host's KV store at
 // call time (the org pattern), so a nil store -- a host that never attached
 // one -- fails the call closed with ErrInternal rather than allowing it. A
-// denial answers ErrContactRateLimited with the dimension and the
+// denial answers ErrContactRateLimited with the dimension's name and the
 // retry-after seconds; a limiter that itself errors answers ErrInternal --
 // fail closed, never allow-on-error.
 func (s *ContactService) checkLimits(ctx context.Context, limits []contactRateLimit) error {
@@ -1171,7 +1184,7 @@ func (s *ContactService) checkLimits(ctx context.Context, limits []contactRateLi
 			return errInternal(err)
 		}
 		if !decision.Allowed {
-			return ErrContactRateLimited.WithParam("dimension", strings.TrimPrefix(l.key, contactRateLimitKey)).
+			return ErrContactRateLimited.WithParam("dimension", l.name).
 				WithParam("retry_after_seconds", fmt.Sprintf("%d", int(decision.ResetAfter.Seconds())))
 		}
 	}

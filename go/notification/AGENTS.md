@@ -585,8 +585,13 @@ Rules specific to this module, on top of the codebase-wide discipline:
 - **Addresses stay encrypted, indexed, and out of every sink.** The
   plaintext contact address never appears in a WHERE clause, a response
   body, an audit record, a log line, or a rate-limit key -- the blind index
-  is the only form any of those see. The handler's contact-list response
-  serves id/channel/status/created_at only.
+  is the only form any of those see, and even the index never travels in a
+  response body: a rate-limit refusal reports the denied dimension's NAME
+  ("address" or "tenant", each entry's `name` field), never the KV key that
+  embeds the index -- ErrContactRateLimited's doc is the protected
+  contract, since a key echoed into params would turn the HMAC into an
+  online oracle. The handler's contact-list response serves
+  id/channel/status/created_at only.
 - **Contacts are never in-app.** `verified_contacts` carries email and SMS
   only; the in-app channel belongs to user recipients (inbox rows), and the
   closed channel vocabulary is enforced at the preference boundary.
@@ -607,8 +612,10 @@ Unit tests are per-file, run with `-race`, and cover the module's suites:
 `repository_test.go` (including `tenancytest.AssertIsolated`), the
 preference files' `AssertIsolated` suite, `contact_test.go` (the
 `AssertIsolated` suite, the double opt-in lifecycle, the code CAS, both
-rate-limit dimensions, address-at-rest encryption, terminal-state
-permanence), `blacklist_test.go` and `send_record_test.go`
+rate-limit dimensions with their refusals pinning the name-not-key
+reporting contract over service and HTTP surfaces alike, address-at-rest
+encryption, terminal-state permanence), `blacklist_test.go` and
+`send_record_test.go`
 (`tenancytest.AssertNotTenantScoped` over the platform tables),
 `delivery_test.go` (the retry/converge/skip/deferral semantics, transport
 permanence marking contacts bounced, the resolver-failure and

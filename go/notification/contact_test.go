@@ -340,6 +340,30 @@ func assertRateLimited(t *testing.T, err error, wantDimension string) {
 	}
 }
 
+// assertRefusalNamesDimensionNotKey fails t unless err is the module's
+// contact_rate_limited denial reporting exactly the given dimension NAME
+// (assertRateLimited's check) whose params echo none of the key material a
+// key-derived label would have carried: the address's blind index hex when
+// one is supplied, the flow/subject fragments of the KV key, or the
+// module's rate-limit key prefix. This is the regression assertion behind
+// TestContact_RateLimitRefusal_ReportsNameNeverKey -- a refusal that named
+// its key instead of its name fails here before any review has to.
+func assertRefusalNamesDimensionNotKey(t *testing.T, err error, wantName, index string) {
+	t.Helper()
+	assertRateLimited(t, err, wantName)
+	appErr, _ := apperr.As(err)
+	params := fmt.Sprint(appErr.Params)
+	fragments := []string{"send.address", "verify.address", "send.tenant", "verify.tenant", contactRateLimitKey}
+	if index != "" {
+		fragments = append(fragments, index)
+	}
+	for _, fragment := range fragments {
+		if strings.Contains(params, fragment) {
+			t.Errorf("refusal params echo key material %q: %s", fragment, params)
+		}
+	}
+}
+
 // TestContact_AssertIsolated runs the tenant-data isolation suite every
 // tenant-scoped repository must pass: the consent ledger of one tenant must
 // be invisible to every other, and a row can never be created without a
@@ -1133,8 +1157,9 @@ func TestContact_AddressEncryptedAtRest(t *testing.T) {
 // TestContact_SendRateLimit_PerAddress pins one send dimension: one address
 // may receive at most contactCodeSendDailyPerAddress verification-code
 // messages a day. Create is the first send, four resends exhaust the
-// budget, and the fifth resend is denied with the per-address dimension --
-// before any message goes out.
+// budget, and the fifth resend is denied with the address dimension's name
+// -- never the key that embeds the address's blind index -- before any
+// message goes out.
 func TestContact_SendRateLimit_PerAddress(t *testing.T) {
 	env := newContactEnv(t)
 	ctx := tenantCtx("tenant-acme")
@@ -1154,7 +1179,7 @@ func TestContact_SendRateLimit_PerAddress(t *testing.T) {
 	if err := env.svc.ResendCode(ctx, ResendCodeInput{ContactID: contact.ID}); err == nil {
 		t.Fatal("the sixth send of the day succeeded, want the rate-limit denial")
 	} else {
-		assertRateLimited(t, err, "send.address."+index)
+		assertRefusalNamesDimensionNotKey(t, err, "address", index)
 	}
 	if mails := env.host.mailer.messages(); len(mails) != contactCodeSendDailyPerAddress {
 		t.Errorf("mails = %d, want the %d that fit inside the budget", len(mails), contactCodeSendDailyPerAddress)
@@ -1183,7 +1208,7 @@ func TestContact_SendRateLimit_PerTenant(t *testing.T) {
 	if _, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: overflow}); err == nil {
 		t.Fatal("the twenty-first create succeeded, want the rate-limit denial")
 	} else {
-		assertRateLimited(t, err, "send.tenant.tenant-acme")
+		assertRefusalNamesDimensionNotKey(t, err, "tenant", "")
 	}
 	index := mustIndex(t, env.svc.emailIndexer, overflow)
 	if got, err := env.svc.repo.ByChannelAndAddressIndex(ctx, ChannelEmail, index); err != nil {
@@ -1220,10 +1245,62 @@ func TestContact_VerifyRateLimit_PerAddress(t *testing.T) {
 	if _, err := env.svc.VerifyCode(ctx, VerifyCodeInput{ContactID: contact.ID, Code: code}); err == nil {
 		t.Fatal("the eleventh attempt succeeded, want the rate-limit denial")
 	} else {
-		assertRateLimited(t, err, "verify.address."+index)
+		assertRefusalNamesDimensionNotKey(t, err, "address", index)
 	}
 	if row := mustFindContact(t, env, ctx, contact.ID); row.Status != ContactStatusPending {
 		t.Errorf("row status = %s after the denied eleventh attempt, want still pending", row.Status)
+	}
+}
+
+// TestContact_RateLimitRefusal_ReportsNameNeverKey pins the protected
+// contract of the contact-code refusals: a denial's dimension param is the
+// denied budget's NAME (the closed vocabulary "address"/"tenant"), never
+// the KV key. The per-address keys embed the address's blind index -- an
+// HMAC built to resist OFFLINE recovery -- and a key echoed into a
+// response body would turn that construction into an online oracle: a
+// caller specifies an address and receives its index. The leg below is the
+// oracle's exact shape: the per-address budget key is derived from the
+// tenant-unsalted index alone, so an address whose budget one tenant
+// already exhausted is refused in a SECOND tenant on CREATE -- before any
+// tenant-scoped row exists to constrain the address the caller may name --
+// and the refusal must answer with the name, not the index.
+func TestContact_RateLimitRefusal_ReportsNameNeverKey(t *testing.T) {
+	env := newContactEnv(t)
+	ctx := tenantCtx("tenant-acme")
+	const address = "oracle@example.com"
+
+	// Exhaust the shared per-address send budget from one tenant: one
+	// create plus four resends is exactly contactCodeSendDailyPerAddress
+	// sends against the address's key.
+	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: address})
+	if err != nil {
+		t.Fatalf("CreateContact: %v", err)
+	}
+	for i := 0; i < contactCodeSendDailyPerAddress-1; i++ {
+		if err := env.svc.ResendCode(ctx, ResendCodeInput{ContactID: contact.ID}); err != nil {
+			t.Fatalf("resend %d: %v", i+1, err)
+		}
+	}
+
+	// A second tenant with no row for the address now creates it: the
+	// dedupe probe misses (rows are tenant-scoped), the shared budget
+	// denies, and the refusal must report the name with no trace of the
+	// index its key embeds.
+	otherCtx := tenantCtx("tenant-acme-2")
+	index := mustIndex(t, env.svc.emailIndexer, address)
+	if _, err := env.svc.CreateContact(otherCtx, ContactCreateInput{Channel: ChannelEmail, Address: address}); err == nil {
+		t.Fatal("the second tenant's create succeeded, want the shared per-address denial")
+	} else {
+		assertRefusalNamesDimensionNotKey(t, err, "address", index)
+	}
+	if mails := env.host.mailer.messages(); len(mails) != contactCodeSendDailyPerAddress {
+		t.Errorf("mails = %d, want only the first tenant's %d -- the denied create sent nothing",
+			len(mails), contactCodeSendDailyPerAddress)
+	}
+	if got, err := env.svc.repo.ByChannelAndAddressIndex(otherCtx, ChannelEmail, index); err != nil {
+		t.Fatalf("ByChannelAndAddressIndex under the second tenant: %v", err)
+	} else if got != nil {
+		t.Errorf("the denied create left a row in the second tenant: %+v", got)
 	}
 }
 

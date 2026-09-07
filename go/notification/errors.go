@@ -146,6 +146,16 @@ var (
 	// dimension's window resets. Every code-message path fails closed on
 	// its budget; the params are what a caller renders a "try again
 	// later" message from.
+	//
+	// The dimension param is the denied budget's NAME -- the closed
+	// vocabulary "address" and "tenant" -- never the rate-limit key that
+	// denied the attempt. This is a protected contract, not a cosmetic
+	// one: the per-address keys embed the contact address's blind index,
+	// an HMAC built to resist OFFLINE recovery that an online echo would
+	// reduce to an oracle (a caller would specify an address and receive
+	// its index), so the keys must never travel in params -- every
+	// dimension entry carries its own name field (contactRateLimit) and
+	// a refusal reports that, never anything derived from the key.
 	ErrContactRateLimited = rateLimited("notification.contact_rate_limited")
 )
 
