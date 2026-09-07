@@ -163,19 +163,21 @@ func defaultResolve(ctx context.Context, host string) ([]netip.Addr, error) {
 	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 }
 
-// ValidateURL parses raw, checks its scheme, resolves its host and refuses it
-// when ANY resolved address is blocked.
-//
-// Refusing on any rather than on all is deliberate. A host that answers with
-// both a public and a private address is a rebinding attempt written down in
-// one response; accepting it because one of the two looked fine would leave
-// the choice to whichever address the dialler happened to try first.
-//
-// It is a pre-flight check, run when a URL is saved so the operator gets a
-// clear error at the moment they can fix it. It is NOT the security boundary
-// -- Client's dialler is, and it re-checks every address it actually
+// CheckScheme is the scheme half of ValidateURL: it parses raw and refuses
+// it when it is not an absolute URL or when its scheme is not one of this
+// guard's allowed schemes. The host is neither resolved nor checked here --
+// resolution is ValidateURL's remaining half, and the moment-of-connection
+// half is Client's dialler, which re-checks every address it actually
 // connects to.
-func (g *Guard) ValidateURL(ctx context.Context, raw string) (*url.URL, error) {
+//
+// It exists as its own method because the dialler checks addresses, never
+// schemes: ValidateURL's "not the security boundary" disclaimer covers its
+// address checks, but the scheme requirement has no dial-time twin, so a
+// caller whose destination must stay confidential -- or must simply never
+// be reached over a non-http scheme -- runs this check itself on the path
+// that matters. Resolving nothing, it can run at request time without a
+// network round trip of its own.
+func (g *Guard) CheckScheme(raw string) (*url.URL, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return nil, fmt.Errorf("safehttp: parse destination: %w", err)
@@ -185,6 +187,29 @@ func (g *Guard) ValidateURL(ctx context.Context, raw string) (*url.URL, error) {
 	}
 	if !slices.Contains(g.cfg.schemes, strings.ToLower(parsed.Scheme)) {
 		return nil, fmt.Errorf("%w: %q", ErrBlockedScheme, parsed.Scheme)
+	}
+	return parsed, nil
+}
+
+// ValidateURL parses raw, checks its scheme (the CheckScheme half), resolves
+// its host and refuses it when ANY resolved address is blocked.
+//
+// Refusing on any rather than on all is deliberate. A host that answers with
+// both a public and a private address is a rebinding attempt written down in
+// one response; accepting it because one of the two looked fine would leave
+// the choice to whichever address the dialler happened to try first.
+//
+// It is a pre-flight check, run when a URL is saved so the operator gets a
+// clear error at the moment they can fix it. It is NOT the security boundary
+// for the address checks -- Client's dialler is, and it re-checks every
+// address it actually connects to. The scheme half has no such second
+// moment: no dial-time mechanism checks schemes, so a caller whose
+// destination's scheme must stay restricted runs CheckScheme itself wherever
+// the URL is used, not only where it is saved.
+func (g *Guard) ValidateURL(ctx context.Context, raw string) (*url.URL, error) {
+	parsed, err := g.CheckScheme(raw)
+	if err != nil {
+		return nil, err
 	}
 
 	host := parsed.Hostname()

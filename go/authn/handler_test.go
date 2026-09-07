@@ -1862,7 +1862,12 @@ func TestHandler_DeploymentModeConsistency_SMSFlow(t *testing.T) {
 	var consoleOut bytes.Buffer
 	standalone, standaloneFixture := newTestHandler(t, WithSMSSender(NewConsoleSMSSender(&consoleOut)))
 
-	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// TLS, not plaintext: the HTTP SMS sender refuses a plaintext gateway
+	// endpoint before any request (see sms_test.go's
+	// TestHTTPSMSSender_PlaintextEndpoint_RefusedBeforeAnyRequest), so the
+	// distributed leg's gateway must be a TLS test server for the flow to
+	// exercise a real delivery.
+	gateway := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(gateway.Close)
@@ -1871,7 +1876,9 @@ func TestHandler_DeploymentModeConsistency_SMSFlow(t *testing.T) {
 		// correctly refuses this httptest server's loopback address; a
 		// real deployment's gateway is a public endpoint, so this
 		// override -- like WithFederationHTTPClient's identical test-only
-		// use elsewhere in this package -- is test-only.
+		// use elsewhere in this package -- is test-only. Replacing the
+		// client replaces only that dial-time address guard, never the
+		// endpoint's https requirement (see NewHTTPSMSSender).
 		WithSMSSender(NewHTTPSMSSender(gateway.URL, WithHTTPSMSSenderClient(gateway.Client()))),
 		WithDeploymentMode(pkgcore.DeploymentModeDistributed),
 	)

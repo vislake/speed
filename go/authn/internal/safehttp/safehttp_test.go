@@ -62,6 +62,45 @@ func TestCheckAddr_RefusesEverythingNotPubliclyRoutable(t *testing.T) {
 	}
 }
 
+// TestGuard_CheckScheme_RefusesDisallowedSchemesWithoutResolving pins the
+// scheme-only half of ValidateURL: it is the half the SMS sender runs before
+// every request, so it must refuse a disallowed scheme without resolving the
+// host -- a resolution would cost a network round trip per send and couple
+// the refusal to the resolver. The injected resolver fails the test if it is
+// ever consulted.
+func TestGuard_CheckScheme_RefusesDisallowedSchemesWithoutResolving(t *testing.T) {
+	t.Parallel()
+
+	resolved := false
+	guard := NewGuard(WithResolver(func(context.Context, string) ([]netip.Addr, error) {
+		resolved = true
+		return nil, errors.New("resolver must not be consulted by CheckScheme")
+	}))
+
+	for _, raw := range []string{
+		"http://example.com/sms",
+		"file:///etc/passwd",
+		"gopher://example.com:70/",
+		"ftp://example.com/",
+		"/relative/only",
+	} {
+		if _, err := guard.CheckScheme(raw); !errors.Is(err, ErrBlockedScheme) {
+			t.Errorf("CheckScheme(%q) error = %v, want ErrBlockedScheme", raw, err)
+		}
+	}
+	if resolved {
+		t.Error("CheckScheme resolved a host; the scheme check must not need resolution")
+	}
+
+	parsed, err := guard.CheckScheme(" https://idp.example.com/oidc ")
+	if err != nil {
+		t.Fatalf("CheckScheme(https) error = %v, want nil", err)
+	}
+	if parsed.Host != "idp.example.com" {
+		t.Errorf("parsed host = %q, want %q", parsed.Host, "idp.example.com")
+	}
+}
+
 func TestGuard_ValidateURL_RefusesABlockedScheme(t *testing.T) {
 	t.Parallel()
 

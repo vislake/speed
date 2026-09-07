@@ -102,10 +102,15 @@ type httpSMSSenderConfig struct {
 type HTTPSMSSenderOption func(*httpSMSSenderConfig)
 
 // WithHTTPSMSSenderClient replaces the HTTP client an HTTP SMS sender talks
-// to its gateway with. The default is the SSRF-guarded client (this
-// module's internal/safehttp), which cannot connect to a private address --
-// so a test pointing a sender at an httptest server on loopback MUST inject
-// a plain client, and does; a deployment has no reason to.
+// to its gateway with.
+//
+// The default is the SSRF-guarded client (this module's internal/safehttp),
+// which cannot connect to a private address -- so a test pointing a sender
+// at an httptest server on loopback MUST inject a plain client (the TLS
+// test server's own), and does; a deployment has no reason to. Replacing
+// the client replaces only that dial-time address guard: the endpoint's
+// https requirement (see NewHTTPSMSSender) is enforced by the sender
+// itself, before any request, and survives any client swap.
 func WithHTTPSMSSenderClient(client *http.Client) HTTPSMSSenderOption {
 	return func(c *httpSMSSenderConfig) {
 		if client != nil {
@@ -120,24 +125,41 @@ func WithHTTPSMSSenderClient(client *http.Client) HTTPSMSSenderOption {
 // Aliyun/Tencent Cloud/Twilio adapters are deferred to the M2 notification
 // round, and for why this is nonetheless a genuine, testable second
 // implementation and not a placeholder: it is offline-testable end to end
-// against httptest.NewServer, and its endpoint is validated exactly like
-// the enterprise OIDC issuer URL is (internal/safehttp), because both are a
-// destination an operator, not this codebase, chose.
+// against httptest.NewTLSServer, and its endpoint is subject to the same
+// internal/safehttp policy the enterprise OIDC issuer URL is, because both
+// are a destination an operator, not this codebase, chose -- the endpoint's
+// scheme must be https (checked before every send, see Send) and every
+// connection is dialled through safehttp's guarded client, which refuses a
+// private address at CONNECT time.
 type httpSMSSender struct {
 	endpoint string
 	client   *http.Client
+	guard    *safehttp.Guard
 }
 
 // NewHTTPSMSSender returns the distributed deployment mode's SMS transport,
 // posting a JSON {"to","text"} body to endpoint.
+//
+// The body is a phone number and a rendered verification-code message --
+// the code is the credential of this module's phone-login channel -- so
+// endpoint MUST be https, and Send refuses one that is not before any
+// request leaves this process. That is internal/safehttp's allowed-scheme
+// policy, the same policy a tenant administrator's OIDC issuer URL is
+// checked against when it is saved. This constructor returns no error (its
+// signature predates this requirement): the refusal surfaces on the first
+// Send instead, and through the delivery-failure log the service already
+// writes for a failed Send -- an operator whose gateway URL is refused
+// should change the scheme of the value they configured (the reference
+// app's APP_SMS_GATEWAY_URL), never replace this constructor.
 func NewHTTPSMSSender(endpoint string, opts ...HTTPSMSSenderOption) SMSSender {
-	cfg := httpSMSSenderConfig{httpClient: safehttp.NewClient()}
+	guard := safehttp.NewGuard()
+	cfg := httpSMSSenderConfig{httpClient: guard.Client()}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)
 		}
 	}
-	return &httpSMSSender{endpoint: endpoint, client: cfg.httpClient}
+	return &httpSMSSender{endpoint: endpoint, client: cfg.httpClient, guard: guard}
 }
 
 // httpSMSGatewayRequest is the body posted to the gateway.
@@ -148,24 +170,41 @@ type httpSMSGatewayRequest struct {
 
 // Send implements SMSSender.
 //
-// The endpoint is dialled through internal/safehttp's guarded client (the
-// default, unless a test overrode it), which refuses a private, loopback,
-// link-local or otherwise non-public address at CONNECT time -- the same
-// defence this module's enterprise SSO issuer URL gets, and for the same
-// reason: an operator, not this codebase, chose the destination.
+// Two internal/safehttp duties protect the request, and they are not the
+// same duty. The endpoint's scheme is checked FIRST, against safehttp's
+// allowed-scheme policy (https only -- NewGuard's default, the same policy
+// the enterprise OIDC issuer URL is checked against when a tenant saves
+// it). That is the confidentiality half, and it has no dial-time twin: the
+// guarded client's dialler checks ADDRESSES, never schemes, so the scheme
+// check must happen here, on the path that actually sends. The address half
+// is the dialler's: every connection -- every redirect hop included -- goes
+// through internal/safehttp's guarded client (the default, unless a test
+// overrode it with WithHTTPSMSSenderClient), which refuses a private,
+// loopback, link-local or otherwise non-public address at CONNECT time and
+// defeats DNS rebinding. Both halves exist for one reason: an operator, not
+// this codebase, chose the destination, exactly as with the enterprise SSO
+// issuer URL.
 func (s *httpSMSSender) Send(ctx context.Context, msg SMS) error {
+	// The scheme refusal must precede everything else: a plaintext endpoint
+	// would carry this message's verification code in cleartext, so no
+	// request may ever be built, let alone sent, to one.
+	if _, err := s.guard.CheckScheme(s.endpoint); err != nil {
+		return fmt.Errorf("authn: sms gateway endpoint: %w", err)
+	}
+
 	body, err := json.Marshal(httpSMSGatewayRequest(msg))
 	if err != nil {
 		return fmt.Errorf("authn: encode sms gateway request: %w", err)
 	}
 
 	// #nosec G704 -- gosec's taint analysis flags any http.NewRequestWithContext
-	// call whose URL is a variable, but s.endpoint is dialled through
-	// internal/safehttp's guarded client by default (this function's own doc
-	// comment above), which resolves and dials the exact validated IP,
-	// rejecting private/loopback/link-local/CGNAT ranges and defeating DNS
-	// rebinding -- the same false positive already justified at provider.go's
-	// doJSON, getJSON and postJSON for the identical reason.
+	// call whose URL is a variable, but s.endpoint's scheme was checked at the
+	// top of this function and the request is dialled through internal/
+	// safehttp's guarded client by default (this function's own doc comment
+	// above), which resolves and dials the exact validated IP, rejecting
+	// private/loopback/link-local/CGNAT ranges and defeating DNS rebinding --
+	// the same false positive already justified at provider.go's doJSON,
+	// getJSON and postJSON for the identical reason.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("authn: build sms gateway request: %w", err)

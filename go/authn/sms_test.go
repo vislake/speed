@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/vislake/speed/go/authn/internal/safehttp"
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -32,15 +34,80 @@ func TestConsoleSMSSender_WritesToInjectedWriter(t *testing.T) {
 	}
 }
 
+// TestHTTPSMSSender_PlaintextEndpoint_RefusedBeforeAnyRequest is the
+// regression for the P2 finding that the distributed-mode SMS gateway
+// endpoint did not require TLS while its payload is a phone number and a
+// rendered verification-code message -- the code being the credential of
+// this module's phone-login channel. Before the fix a sender built with an
+// http:// endpoint accepted it with no signal anywhere, so a deployment
+// whose gateway URL pointed at a public plaintext gateway would send every
+// code across the public internet in cleartext. The gateway here is a live
+// plaintext server that RECORDS whether it was reached: the fixed sender
+// must refuse the endpoint with safehttp's scheme error BEFORE any request
+// is made -- on the unfixed code this send succeeds silently, which is the
+// whole defect. The plain client is injected exactly as the delivery-path
+// tests do, so the refusal under test is the endpoint's scheme, not the
+// dialler (which a loopback gateway would trip first on the default
+// client).
+func TestHTTPSMSSender_PlaintextEndpoint_RefusedBeforeAnyRequest(t *testing.T) {
+	t.Parallel()
+
+	var hit atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hit.Store(true)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	sender := NewHTTPSMSSender(server.URL, WithHTTPSMSSenderClient(server.Client()))
+	err := sender.Send(t.Context(), SMS{To: "+8613800000004", Text: "your code is 112233"})
+	if err == nil {
+		t.Fatalf("Send(plaintext endpoint) error = nil, want a refusal before any request")
+	}
+	if !errors.Is(err, safehttp.ErrBlockedScheme) {
+		t.Errorf("Send(plaintext endpoint) error = %v, want it to wrap safehttp.ErrBlockedScheme", err)
+	}
+	if hit.Load() {
+		t.Errorf("Send(plaintext endpoint) reached the gateway; the scheme refusal must happen before any request is made")
+	}
+}
+
+// TestHTTPSMSSender_PlaintextEndpoint_RefusedBySchemeNotDialler pins the
+// ORDER of the two duties on the default guarded client: an http:// endpoint
+// whose host the dialler would also refuse must answer with the scheme error,
+// because the plaintext endpoint is a confidentiality violation before any
+// address question is even reached -- on the unfixed code this send answers
+// with the dialler's ErrBlockedAddress instead, which is the refusal for the
+// wrong axis and says nothing about the cleartext problem.
+func TestHTTPSMSSender_PlaintextEndpoint_RefusedBySchemeNotDialler(t *testing.T) {
+	t.Parallel()
+
+	sender := NewHTTPSMSSender("http://127.0.0.1:1/sms")
+	err := sender.Send(t.Context(), SMS{To: "+8613800000005", Text: "x"})
+	if err == nil {
+		t.Fatalf("Send(plaintext endpoint) error = nil, want a scheme refusal")
+	}
+	if !errors.Is(err, safehttp.ErrBlockedScheme) {
+		t.Errorf("Send(plaintext endpoint) error = %v, want it to wrap safehttp.ErrBlockedScheme, not the dialler's address error", err)
+	}
+	if errors.Is(err, safehttp.ErrBlockedAddress) {
+		t.Errorf("Send(plaintext endpoint) error = %v, want the scheme refusal to precede any dial-time address refusal", err)
+	}
+}
+
 // TestHTTPSMSSender_PostsExpectedJSON proves the distributed transport
 // posts exactly the {"to","text"} body a generic gateway expects, entirely
-// offline against httptest.
+// offline against an httptest TLS server -- the TLS server is not optional
+// decoration: the transport refuses a plaintext gateway endpoint before any
+// request (see TestHTTPSMSSender_PlaintextEndpoint_RefusedBeforeAnyRequest),
+// so the delivery path is exercised over the TLS test server's own client,
+// which trusts its certificate.
 func TestHTTPSMSSender_PostsExpectedJSON(t *testing.T) {
 	t.Parallel()
 
 	var received httpSMSGatewayRequest
 	var gotContentType string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotContentType = r.Header.Get("Content-Type")
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
 			t.Errorf("decode request body: %v", err)
@@ -67,7 +134,7 @@ func TestHTTPSMSSender_PostsExpectedJSON(t *testing.T) {
 func TestHTTPSMSSender_GatewayErrorStatus_ReturnsError(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
