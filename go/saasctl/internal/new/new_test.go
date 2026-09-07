@@ -101,6 +101,14 @@ func wantContent(t *testing.T, key, rel, appName, speedRoot string) []byte {
 // template.SelectionKey (mirroring internal/template's embed_test.go
 // side; the full universe cross-check is TestSelectionUniverseCrossCheck
 // below).
+//
+// The expected tree is derived from template.SharedFiles (plus the two
+// selection-driven files), the SAME single source materialize's own asset
+// list is built from -- the twin-discipline pin that a shared template
+// file added on either side without the other silently never (or wrongly)
+// materializes: a file the run wrote that SharedFiles does not name, or a
+// SharedFiles entry the run did not write, both fail here in the
+// materialized-tree assertions below, in both directions.
 func TestRunMaterializesEverySelection(t *testing.T) {
 	t.Setenv(speedRootEnv, "") // never let the environment leak in
 	root := testSpeedRoot(t)
@@ -118,10 +126,12 @@ func TestRunMaterializesEverySelection(t *testing.T) {
 				t.Errorf("Run wrote to stderr on success: %q", stderr)
 			}
 
-			files := []string{
-				"go.mod", ".gitignore", "README.md",
-				"cmd/server/main.go", "cmd/server/config.go", "cmd/server/server.go",
-			}
+			// The two selection-driven files plus exactly the shared set:
+			// the same derivation materialize itself uses, so the two
+			// lists are equal by construction and a drift on either side
+			// of the SharedFiles contract fails the tree assertions.
+			files := []string{"go.mod", "cmd/server/server.go"}
+			files = append(files, template.SharedFiles...)
 			for _, rel := range files {
 				want := wantContent(t, key, rel, appName, root)
 				got, err := os.ReadFile(filepath.Join(target, rel))
@@ -250,6 +260,61 @@ func TestRunExistingNonEmptyTargetRefused(t *testing.T) {
 	}
 	if string(content) != "mine" {
 		t.Error("refused run modified the existing tree")
+	}
+}
+
+// TestRollbackTargetRemovesFilesAndDirectoriesItCreated pins the
+// rollback promise of a failed materialization against the shape a
+// mid-write failure actually leaves: materialize wrote some of its files
+// and the directories cmd/ and cmd/server/ that hold them, then failed.
+// rollbackTarget must restore the tree to its pre-run state -- files AND
+// the directories created with them -- so the target's non-empty check
+// cannot refuse the next attempt over an empty-dir half skeleton. The
+// failure point itself is not constructible in a unit test (materialize
+// only ever writes into an empty or absent target, and its write steps
+// cannot be made to fail on demand without a fault-injection seam), so
+// the test fabricates exactly the half-written tree and drives the
+// rollback helper over the same written-file list materialize would have
+// accumulated.
+func TestRollbackTargetRemovesFilesAndDirectoriesItCreated(t *testing.T) {
+	root := t.TempDir()
+	// The pre-run state: an existing empty target (the accepted shape).
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Fatalf("temp dir not empty: %v", err)
+	}
+	// The half-written state a mid-write failure leaves: some files
+	// written, the directories materialize created with them.
+	for _, rel := range []string{
+		".gitignore", "README.md",
+		"cmd/server/main.go", "cmd/server/config.go", "cmd/server/server.go", "go.mod",
+	} {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("fabricate %s: %v", rel, err)
+		}
+		if err := os.WriteFile(full, []byte(rel), 0o600); err != nil {
+			t.Fatalf("fabricate %s: %v", rel, err)
+		}
+	}
+	written := []string{".gitignore", "README.md", "cmd/server/main.go", "cmd/server/config.go", "go.mod", "cmd/server/server.go"}
+
+	rollbackTarget(root, written)
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("read target after rollback: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("target holds %v after rollback; a failed run must leave no half skeleton -- files and the directories created with them both removed", names)
+	}
+	// The target itself survives as an empty directory: an empty target
+	// is a legal, reusable state for the next attempt.
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		t.Errorf("target itself was removed by the rollback (err=%v); only the run's own files and directories belong to the rollback", err)
 	}
 }
 

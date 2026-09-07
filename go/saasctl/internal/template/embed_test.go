@@ -222,24 +222,24 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 		{
 			key:      "authn+org+rbac",
 			modules:  []string{"pkiModule", "authnModule", "orgModule", "configModule", "rbacModule"},
-			contains: []string{"authn.NewModule(", "org.NewModule(", "rbac.NewModule(", "pki.NewModule(", "authnPreAuthAllowlist()", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
+			contains: []string{"authn.NewModule(", "org.NewModule(", "rbac.NewModule(", "pki.NewModule(", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
 		},
 		{
 			key:      "authn+rbac",
 			modules:  []string{"pkiModule", "authnModule", "configModule", "rbacModule"},
-			contains: []string{"authn.NewModule(", "rbac.NewModule(", "pki.NewModule(", "authnPreAuthAllowlist()", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
+			contains: []string{"authn.NewModule(", "rbac.NewModule(", "pki.NewModule(", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
 			absent:   []string{"org.NewModule("},
 		},
 		{
 			key:      "authn+org",
 			modules:  []string{"pkiModule", "authnModule", "orgModule", "configModule"},
-			contains: []string{"authn.NewModule(", "org.NewModule(", "pki.NewModule(", "authnPreAuthAllowlist()", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
+			contains: []string{"authn.NewModule(", "org.NewModule(", "pki.NewModule(", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
 			absent:   []string{"rbac.NewModule("},
 		},
 		{
 			key:      "authn",
 			modules:  []string{"pkiModule", "authnModule", "configModule"},
-			contains: []string{"authn.NewModule(", "pki.NewModule(", "authnPreAuthAllowlist()", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
+			contains: []string{"authn.NewModule(", "pki.NewModule(", "authn.NewPrincipalResolver()", "authnModule.Service().Verifier()"},
 			absent:   []string{"org.NewModule(", "rbac.NewModule("},
 		},
 		{
@@ -280,6 +280,56 @@ func TestSelectionServerGoMatchesSelectionKey(t *testing.T) {
 		for _, s := range want.absent {
 			if strings.Contains(server, s) {
 				t.Errorf("%s: selection %s must not contain %q", path, want.key, s)
+			}
+		}
+	}
+}
+
+// TestAuthnSelectionsExemptAuthnSubtreeByStructure is the structural half
+// of the P1 regression: an anonymous enterprise-OIDC authorize/callback
+// request (provider "oidc:<tenant>", a per-tenant name no allowlist can
+// enumerate) must reach authn's own handler instead of being refused 403
+// tenancy.tenant_unresolved by tenancy.Middleware. The exemption must be
+// STRUCTURAL -- every route under authn's API path mounted ahead of
+// tenancy.Middleware -- never an enumerated allowlist, which is exactly
+// the fixed-channel enumeration that failed: each authn selection's
+// server.go must mount the authn subtree on topMux directly behind
+// authn.Middleware (topMux.Handle(authnAPIPath, ...) with the tenancy
+// chain as the "/" fallback), route-split in mountModuleRoutes by path
+// prefix, and must NOT carry a pre-auth allowlist for authn paths at all
+// -- no authnPreAuthAllowlist function, no per-provider social entries,
+// no register/login literals next to tenancy.WithAllowlist. A template
+// edit that reintroduces the enumeration (or drops the structural
+// dispatch) fails here before any generated project inherits the bug.
+func TestAuthnSelectionsExemptAuthnSubtreeByStructure(t *testing.T) {
+	for _, key := range []string{"authn+org+rbac", "authn+rbac", "authn+org", "authn"} {
+		path := ProjectRoot + "/selection/" + key + "/server.go"
+		content, err := fs.ReadFile(Project, path)
+		if err != nil {
+			t.Errorf("%s: %v", path, err)
+			continue
+		}
+		server := string(content)
+		for _, want := range []string{
+			"topMux.Handle(authnAPIPath, authnMux)",
+			"topMux.Handle(authnAPIPath+\"/\", authnMux)",
+			"mountModuleRoutes(authnMux, moduleMux, reg)",
+			"strings.HasPrefix(route.Path, authnAPIPath)",
+			"handler := authn.Middleware(authnModule.Service().Verifier())(topMux)",
+		} {
+			if !strings.Contains(server, want) {
+				t.Errorf("%s: missing the structural exemption marker %q", path, want)
+			}
+		}
+		// The fixed enumeration must be gone: no pre-auth allowlist
+		// function, no allowlist entry naming an authn path or provider.
+		for _, stale := range []string{
+			"authnPreAuthAllowlist", "ProviderDingTalk", "ProviderFeishu",
+			`tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/register")`,
+			`tenancy.WithAllowlist(http.MethodGet, authnAPIPath+"/social/`,
+		} {
+			if strings.Contains(server, stale) {
+				t.Errorf("%s: the fixed pre-auth enumeration survived: %q must not appear", path, stale)
 			}
 		}
 	}

@@ -9,9 +9,11 @@ import (
 // ExampleRun migrates the project whose go.mod sits in the working
 // directory -- the command's defaults, no arguments and no environment:
 // the default go.mod path resolves to the temp directory the example
-// moves into, the app name derives from the go.mod's module path, and the
-// default database path is that app name plus .db. The one-line report
-// shows what the run applied.
+// moves into, and the unset-APP_DB_PATH default resolves to the fixed
+// app.db name next to that go.mod (a fixed literal shared with the
+// generated app's own config.go -- never derived from the module path,
+// so a renamed module cannot fork the file CLI and app open). The
+// one-line report shows what the run applied.
 func ExampleRun() {
 	dir, err := os.MkdirTemp("", "db-example")
 	if err != nil {
@@ -77,5 +79,5 @@ require github.com/vislake/speed/go/config v0.0.0-00010101000000-000000000000
 		return
 	}
 	// Output:
-	// Migrated cli-app.db: applied 1 migration files (config 1)
+	// Migrated app.db: applied 1 migration files (config 1)
 }

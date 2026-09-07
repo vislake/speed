@@ -38,9 +38,14 @@ go mod tidy    # first time only: resolves the require graph through the replace
 go run ./cmd/server
 ```
 
-The server boots in standalone deployment mode on SQLite at
-`__APP_NAME__.db` and listens on `:8080`; `GET /healthz` answers 200 once
-the kernel is up.
+The server boots in standalone deployment mode on SQLite at `app.db`
+(and listens on `:8080`); `GET /healthz` answers 200 once the kernel is
+up. The database default is a fixed name, never derived from the module
+path: the module path is yours to rename, and a default that tracked it
+would silently stop matching the file this app opens the moment saasctl's
+own commands (`saasctl db migrate`, `saasctl config print`) derive the
+same default from the go.mod they are handed. Set `APP_DB_PATH` for a
+different name.
 
 Setting `APP_DEPLOYMENT_MODE=distributed` with no other variable set does
 **not** boot a working distributed server: `Kernel.Bootstrap` resolves all
@@ -68,7 +73,7 @@ environment instead.
 | Variable | Meaning |
 | --- | --- |
 | `PORT` | HTTP listen port (default `8080`) |
-| `APP_DB_PATH` | SQLite database file (default `__APP_NAME__.db`) |
+| `APP_DB_PATH` | SQLite database file (default `app.db`) |
 | `APP_DEPLOYMENT_MODE` | `standalone` (default) or `distributed` |
 | `APP_CONFIG_KEY` | 64 hex characters: the master key the config module's cipher is built from |
 | `APP_ORG_INDEX_KEY` | 64 hex characters: the blind-index HMAC key; consumed only by compositions that wire the org module, parsed unconditionally so the bootstrap contract never changes with the selection |

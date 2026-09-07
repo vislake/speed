@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/vislake/speed/go/saasctl/internal/template"
@@ -335,15 +336,18 @@ func validateModuleName(name string) error {
 }
 
 // materialize writes the embedded skeleton for one selection into target:
-// the selection's go.mod and server.go plus every shared file, each with
-// the build-ignore marker stripped (from .go files) and the app-name and
-// speed-root tokens substituted. The whole file list is fixed and
-// relative -- it is never derived from a walk of the target, so a
-// hostile or stale target tree cannot smuggle paths into the write -- and
-// every path joins onto the absolutized target. An existing target is
-// refused unless it is an empty directory; on a write failure every file
-// this call created is removed again, so a failed run never leaves a
-// half-skeleton that would block the next attempt.
+// the selection's go.mod and server.go plus every shared file (the shared
+// set IS template.SharedFiles -- this function's list is derived from it,
+// never a second enumeration), each with the build-ignore marker stripped
+// (from .go files) and the app-name and speed-root tokens substituted. The
+// whole file list is fixed and relative -- it is never derived from a walk
+// of the target, so a hostile or stale target tree cannot smuggle paths
+// into the write -- and every path joins onto the absolutized target. An
+// existing target is refused unless it is an empty directory; on a write
+// failure every file this call created is removed again and every
+// directory it created with them, so a failed run never leaves a
+// half-skeleton -- not even empty directories -- that would block the next
+// attempt.
 func materialize(target, speedRoot, selectionKey string, stdout io.Writer) error {
 	absTarget, err := filepath.Abs(target)
 	if err != nil {
@@ -384,25 +388,32 @@ func materialize(target, speedRoot, selectionKey string, stdout io.Writer) error
 		templatePath string // inside template.ProjectRoot
 		targetPath   string // relative to absTarget
 	}
-	assets := []asset{
+	// The shared half of the list is template.SharedFiles itself, never a
+	// second hand-copied enumeration: a shared template file added to the
+	// embed tree without a SharedFiles entry -- or added to a hard-coded
+	// list here without a SharedFiles entry -- would silently never (or
+	// wrongly) materialize while every test stayed green. Building the
+	// list from the single exported source makes the two identical by
+	// construction, and the materialization tests assert the written tree
+	// against the same source in both directions, so neither side can
+	// drift.
+	assets := make([]asset, 0, len(template.SharedFiles)+2)
+	for _, name := range template.SharedFiles {
+		assets = append(assets, asset{templatePath: name, targetPath: name})
+	}
+	assets = append(assets,
 		// The go.mod document is embedded as go.mod.txt: go:embed's
 		// directory scan refuses to descend into a subdirectory containing
 		// a file named go.mod (such a directory reads as a nested module
 		// root), so the document carries the inert .txt name through the
 		// embed and is renamed here.
-		{templatePath: "selection/" + selectionKey + "/go.mod.txt", targetPath: "go.mod"},
-		{templatePath: ".gitignore", targetPath: ".gitignore"},
-		{templatePath: "README.md", targetPath: "README.md"},
-		{templatePath: "cmd/server/main.go", targetPath: "cmd/server/main.go"},
-		{templatePath: "cmd/server/config.go", targetPath: "cmd/server/config.go"},
-		{templatePath: "selection/" + selectionKey + "/server.go", targetPath: "cmd/server/server.go"},
-	}
+		asset{templatePath: "selection/" + selectionKey + "/go.mod.txt", targetPath: "go.mod"},
+		asset{templatePath: "selection/" + selectionKey + "/server.go", targetPath: "cmd/server/server.go"},
+	)
 
 	var written []string
 	removeAll := func() {
-		for i := len(written) - 1; i >= 0; i-- {
-			_ = os.Remove(filepath.Join(absTarget, written[i]))
-		}
+		rollbackTarget(absTarget, written)
 	}
 	for _, a := range assets {
 		content, err := fs.ReadFile(template.Project, template.ProjectRoot+"/"+a.templatePath)
@@ -442,6 +453,42 @@ func materialize(target, speedRoot, selectionKey string, stdout io.Writer) error
 	_, _ = fmt.Fprintf(stdout, "\nGenerated %s wiring modules: %s\n", absTarget, selectionKey)
 	_, _ = fmt.Fprintf(stdout, "Next: cd %s && go mod tidy && go run ./cmd/server\n", absTarget)
 	return nil
+}
+
+// rollbackTarget undoes a failed materialization: it removes every file in
+// written (relative to absTarget), then every directory the run created
+// with them. The file half restores the tree's content; the directory half
+// matters because a rollback that stopped at files would leave a half
+// skeleton -- the target's own non-empty check refuses every later attempt
+// over a tree that holds only empty directories, so a failed run would
+// block the next one even though nothing real survived. Every directory
+// below absTarget is safe to sweep because materialize only ever writes
+// into a target that was empty (or absent) when the run started, so no
+// directory under it predates the run; the sweep runs deepest-first so a
+// parent only empties after its children are gone, absTarget itself is
+// never removed (an empty target is a legal, reusable state), and a Remove
+// that fails because a directory unexpectedly still holds something is
+// ignored rather than masking the original error.
+func rollbackTarget(absTarget string, written []string) {
+	for i := len(written) - 1; i >= 0; i-- {
+		_ = os.Remove(filepath.Join(absTarget, written[i]))
+	}
+	dirs := map[string]bool{}
+	for _, rel := range written {
+		for dir := filepath.Dir(rel); dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+			dirs[dir] = true
+		}
+	}
+	ordered := make([]string, 0, len(dirs))
+	for dir := range dirs {
+		ordered = append(ordered, dir)
+	}
+	slices.SortFunc(ordered, func(a, b string) int {
+		return strings.Count(b, string(filepath.Separator)) - strings.Count(a, string(filepath.Separator))
+	})
+	for _, dir := range ordered {
+		_ = os.Remove(filepath.Join(absTarget, dir))
+	}
 }
 
 // replaceTokens substitutes the two materialization tokens everywhere a

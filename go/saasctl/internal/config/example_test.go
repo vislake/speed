@@ -78,7 +78,7 @@ go 1.25.0
 	// Output:
 	// deployment mode  standalone   unset or empty (default standalone)
 	// port             8080         unset or empty (default 8080)
-	// sqlite path      cli-app.db   unset or empty (default cli-app.db)
+	// sqlite path      app.db       unset or empty (default app.db)
 	// config key       [redacted]   unset or empty (development default)
 	// org index key    [redacted]   unset or empty (development default)
 	// redis addr                    unset or empty (eventbus/kv stay on the in-process default)

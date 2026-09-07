@@ -16,11 +16,19 @@ const (
 	// defaultPort is used when the PORT environment variable is unset.
 	defaultPort = "8080"
 
-	// defaultSQLitePath is used when APP_DB_PATH is unset. It is a
-	// relative path so `go run ./cmd/server` works with zero setup, per the
-	// standalone deployment mode's no-external-dependencies promise applied
-	// to the generated project's own entry point.
-	defaultSQLitePath = "__APP_NAME__.db"
+	// defaultSQLitePath is used when APP_DB_PATH is unset. It is a fixed
+	// literal, deliberately INDEPENDENT of the module path this project
+	// was generated under: the module path is editable by the consumer
+	// (a rename is the first thing a fork does), and a default derived
+	// from it at materialization would silently stop matching the file a
+	// renamed project actually opens the moment saasctl's own commands
+	// (db migrate, config print) derive the same default from the go.mod
+	// they are handed. One fixed name on both sides keeps CLI-then-boot
+	// agreement intact under any rename; an app that wants its own name
+	// sets APP_DB_PATH. Relative so `go run ./cmd/server` works with zero
+	// setup, per the standalone deployment mode's no-external-dependencies
+	// promise applied to the generated project's own entry point.
+	defaultSQLitePath = "app.db"
 
 	// deploymentModeEnv names the environment variable selecting the
 	// deployment mode. Empty defaults to standalone (configFromEnv), so the

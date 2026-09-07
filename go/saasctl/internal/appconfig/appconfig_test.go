@@ -23,7 +23,7 @@ func envFromMap(env map[string]string) LookupEnv {
 // TestLoadDefaultsResolveTheGeneratedProjectsOwnDefaults: with an empty
 // environment, Load resolves exactly what the generated server resolves
 // with no environment at all -- the standalone deployment mode, port 8080,
-// the <app name>.db path -- plus the documented development key bytes, and
+// the fixed app.db path -- plus the documented development key bytes, and
 // records that nothing came from the environment.
 func TestLoadDefaultsResolveTheGeneratedProjectsOwnDefaults(t *testing.T) {
 	cfg, err := Load("cli-app", envFromMap(nil))
@@ -36,8 +36,25 @@ func TestLoadDefaultsResolveTheGeneratedProjectsOwnDefaults(t *testing.T) {
 	if cfg.Port != "8080" {
 		t.Errorf("Port = %q, want the 8080 default", cfg.Port)
 	}
-	if cfg.SQLitePath != "cli-app.db" {
-		t.Errorf("SQLitePath = %q, want the <app name>.db default", cfg.SQLitePath)
+	if cfg.SQLitePath != defaultSQLitePath {
+		t.Errorf("SQLitePath = %q, want the fixed %q default", cfg.SQLitePath, defaultSQLitePath)
+	}
+	// The P3 rename regression: the default must NOT follow the module
+	// path's final element (the appName argument). The generated app's own
+	// default is frozen at materialization, so a twin default derived from
+	// the CURRENT module path would fork from the app the moment a
+	// consumer renamed the module -- the CLI migrating and printing one
+	// file while the app opens another. Whatever the caller's appName is,
+	// the default stays the one fixed literal both sides share.
+	for _, renamed := range []string{"smilestudio-v2", "another-vendor/renamed-app"} {
+		renamedCfg, loadErr := Load(renamed, envFromMap(nil))
+		if loadErr != nil {
+			t.Errorf("Load(%q): %v", renamed, loadErr)
+			continue
+		}
+		if renamedCfg.SQLitePath != defaultSQLitePath {
+			t.Errorf("Load(%q).SQLitePath = %q, want the fixed %q default even under a renamed module path", renamed, renamedCfg.SQLitePath, defaultSQLitePath)
+		}
 	}
 	if !bytes.Equal(cfg.ConfigKey, devConfigKey) {
 		t.Errorf("ConfigKey is not the ascending 0x00..0x1f development default")
@@ -164,7 +181,7 @@ func TestLoadSetButEmptyCountsAsUnset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load with all-empty variables failed: %v", err)
 	}
-	if cfg.DeploymentMode != pkgcore.DeploymentModeStandalone || cfg.Port != "8080" || cfg.SQLitePath != "cli-app.db" {
+	if cfg.DeploymentMode != pkgcore.DeploymentModeStandalone || cfg.Port != "8080" || cfg.SQLitePath != defaultSQLitePath {
 		t.Errorf("empty variables must resolve to the defaults, got %q/%q/%q", cfg.DeploymentMode, cfg.Port, cfg.SQLitePath)
 	}
 	if cfg.DeploymentModeFromEnv || cfg.PortFromEnv || cfg.SQLitePathFromEnv ||
@@ -428,8 +445,11 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	if !strings.Contains(src, decl) {
 		t.Errorf("template does not declare %s; the twin has drifted", decl)
 	}
-	if !strings.Contains(src, `defaultSQLitePath = "__APP_NAME__.db"`) {
-		t.Error("template's default SQLite path is not the __APP_NAME__.db token form")
+	if !strings.Contains(src, `defaultSQLitePath = "`+defaultSQLitePath+`"`) {
+		t.Errorf("template's defaultSQLitePath is not the twin's fixed %q literal; the two defaults must be one value (see defaultSQLitePath's doc comment for why it is fixed rather than __APP_NAME__-derived)", defaultSQLitePath)
+	}
+	if strings.Contains(src, `defaultSQLitePath = "__APP_NAME__.db"`) {
+		t.Error("template's defaultSQLitePath still derives from the __APP_NAME__ token; a fixed literal is what keeps the twin honest across a module-path rename")
 	}
 
 	// The error texts: Load must produce byte-identical messages to the

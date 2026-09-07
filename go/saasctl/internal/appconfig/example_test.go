@@ -31,7 +31,7 @@ func ExampleLoad() {
 	// Output:
 	// deployment mode: distributed from env: true
 	// port: 9090 from env: true
-	// sqlite path: cli-app.db from env: false
+	// sqlite path: app.db from env: false
 	// config key is the documented development default: true
 	// org index key is the documented development default: true
 }

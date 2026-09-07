@@ -20,11 +20,17 @@
 // tokens of the speed module requires.
 //
 // The rewrite is validated offline before anything is written: the result
-// parses, every speed require carries the target version, and the replace
-// directives are exactly the input's. Nothing here contacts a module proxy
-// or a registry -- until M4's first release nothing is published, so the
-// target version is a required --version argument, never discovered -- and
-// the version is validated with the same release-version form the release
+// parses, every speed require carries the target version, the replace
+// directives are exactly the input's, and no replace directive pins a speed
+// module to a module version other than the target -- a module-to-module
+// replace of a speed module wins over its require line at build time, so a
+// stale pin would silently build the very pre-upgrade version the rewrite
+// just claimed to remove (local-directory replaces -- the transition-state
+// and local-checkout shape -- carry no version and are never pinned, so they
+// are untouched by this rule). Nothing here contacts a module proxy or a
+// registry -- until M4's first release nothing is published, so the target
+// version is a required --version argument, never discovered -- and the
+// version is validated with the same release-version form the release
 // pipeline itself enforces (internal/version). web/package.json rewrites
 // are frontend work and land with the frontend-scaffold round; this package
 // rewrites go.mod files only.
@@ -61,8 +67,12 @@ const usage = `Usage: saasctl upgrade [flags] [go.mod]
 Upgrade a speed consumer project to a new lockstep release: rewrite every
 require of a github.com/vislake/speed/go/* module in the project's go.mod
 to --version, and leave everything else -- third-party requires, replace
-directives, comments, formatting -- untouched. The go.mod argument names
-the project's go.mod file, defaulting to ./go.mod.
+directives, comments, formatting -- untouched. A go.mod whose replace
+directives pin a speed module to a module version other than --version is
+refused, pin or no pin on the require lines: the replace wins at build
+time, so upgrading over it would report a clean lockstep move of a project
+that still builds the old module. The go.mod argument names the project's
+go.mod file, defaulting to ./go.mod.
 
 Until the first release (M4) nothing is published, so the target version is
 never discovered: it is always the required --version flag, in the
@@ -145,6 +155,12 @@ func reportError(stderr io.Writer, err error) int {
 // requires -- and every changed result passes the offline self-check before
 // it is returned.
 //
+// A go.mod whose replace directives pin a speed module to a module version
+// other than target is refused (see selfCheck), whether or not the require
+// lines themselves changed: such a replace wins over its require line at
+// build time, so a clean upgrade report would be a lie about what the
+// project would actually build.
+//
 // The module set is derived from the data itself, never hardcoded. An
 // error is returned when data does not parse, when no speed module is
 // required at all, or when target is not a valid release version.
@@ -158,6 +174,9 @@ func Rewrite(data []byte, target string) ([]byte, int, error) {
 	}
 	if !hasSpeedRequire(f) {
 		return nil, 0, errors.New("no github.com/vislake/speed/go/* requires found; nothing to rewrite")
+	}
+	if err = checkReplacePins(f, target); err != nil {
+		return nil, 0, err
 	}
 	replaces := replaceKeys(f)
 	changed := 0
@@ -227,13 +246,19 @@ func rewriteFile(path, target string, stdout io.Writer) error {
 }
 
 // writeFileAtomically replaces the file at path with data, preserving its
-// mode. The bytes land in a temporary file in the same directory first and
-// are renamed over the target, so the replacement is atomic on the local
-// filesystem: an interrupted write -- a crash, a kill, a full disk -- leaves
-// either the old go.mod or the new one behind, never a truncated file, and
-// whatever holds the old file open keeps reading it. The temporary file is
-// removed again on any failure before the rename completes. A rename within
-// one directory cannot cross filesystems, which is why the temporary file is
+// mode. The bytes land in a temporary file in the same directory first, are
+// flushed to stable storage, and only then is the temporary file renamed
+// over the target, so the replacement is atomic on the local filesystem: an
+// interrupted write -- a crash, a kill, a full disk -- leaves either the old
+// go.mod or the new one behind, never a truncated file, and whatever holds
+// the old file open keeps reading it. The Sync before the rename is what
+// makes that promise survive a crash rather than a mere error return: a
+// rename without a preceding fsync can leave the new name pointing at a
+// file whose data was never allocated (delayed allocation), which a crash
+// then turns into a zero-length go.mod -- the very truncated state the
+// temporary-file dance exists to prevent. The temporary file is removed
+// again on any failure before the rename completes. A rename within one
+// directory cannot cross filesystems, which is why the temporary file is
 // created next to the target rather than in the system temp directory.
 func writeFileAtomically(path string, data []byte, mode os.FileMode) (err error) {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
@@ -251,6 +276,10 @@ func writeFileAtomically(path string, data []byte, mode os.FileMode) (err error)
 		return err
 	}
 	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -305,8 +334,44 @@ func selfCheck(f *modfile.File, target string, want []replaceKey) error {
 			return fmt.Errorf("self-check failed: %s is required at %s, not the lockstep version %s", req.Mod.Path, req.Mod.Version, target)
 		}
 	}
+	if err := checkReplacePins(f, target); err != nil {
+		return err
+	}
 	if got := replaceKeys(f); !slices.Equal(got, want) {
 		return fmt.Errorf("self-check failed: replace directives changed across the rewrite")
+	}
+	return nil
+}
+
+// checkReplacePins refuses a go.mod whose replace directives pin a speed
+// module to a module version other than target. A module-to-module replace
+// -- `replace github.com/vislake/speed/go/authn => <module> <version>` --
+// takes precedence over the require line at build time: go resolves the
+// module to whatever the replace names, so a require rewritten to target
+// while a replace still pins the module at an older version builds the old
+// module. An upgrade that reported clean over such a file would be a lie
+// about the lockstep version the project actually builds, so the refusal
+// names the pin and the goal version. The check is deliberately scoped to
+// the replace TARGET being a speed module at a concrete version: a
+// directory replace (the transition-state and local-checkout shape, whose
+// right-hand side is a path and carries no version) is the tool's own
+// sanctioned pre-release development form and is never pinned to a version,
+// and a replace of a speed module onto a NON-speed module is a genuine fork
+// the tool cannot version-judge -- both pass.
+func checkReplacePins(f *modfile.File, target string) error {
+	for _, r := range f.Replace {
+		if !strings.HasPrefix(r.Old.Path, modulePrefix) {
+			continue
+		}
+		if r.New.Version == "" {
+			continue
+		}
+		if !strings.HasPrefix(r.New.Path, modulePrefix) {
+			continue
+		}
+		if r.New.Version != target {
+			return fmt.Errorf("self-check failed: replace directive pins %s to %s at %s, not the lockstep version %s -- remove or update the replace before upgrading", r.Old.Path, r.New.Path, r.New.Version, target)
+		}
 	}
 	return nil
 }

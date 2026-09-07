@@ -50,13 +50,19 @@ transaction per module, in dependency order, each file recorded in
 schema_migrations as it lands, so a re-run applies only what is not yet
 recorded.
 
-With APP_DB_PATH unset, the database defaults to <app name>.db, and this
-command resolves that default next to the [go.mod] argument -- the
+With APP_DB_PATH unset, the database defaults to app.db -- the fixed
+literal the generated app's own cmd/server/config.go shares, deliberately
+never derived from the module path, so a renamed module cannot fork the
+file this command migrates from the file the app opens -- and this
+command resolves that default next to the [go.mod] argument: the
 directory the generated app is documented to run from, where its default
-database lands -- so a go.mod argument naming another directory's project
+database lands, so a go.mod argument naming another directory's project
 migrates that project's own database whichever directory the command is
-invoked from. A set APP_DB_PATH always wins and is used exactly as the
-app would use it.
+invoked from. A set APP_DB_PATH always wins; an ABSOLUTE value is used
+exactly as the app would use it, and a relative one resolves against the
+[go.mod] argument's directory the same way the anchored default does, so
+the file this command migrates is always the file a boot from the
+project's own directory opens.
 
 APP_DEPLOYMENT_MODE may be standalone or distributed: a generated
 project's own database always speaks SQLite regardless of deployment
@@ -256,12 +262,16 @@ type moduleCount struct {
 }
 
 // formatCounts renders module counts as the parenthetical of a report
-// line -- one "name count" pair per module in the order collected, the
-// migration universe's alphabetical order: "authn 10, config 1, org 5,
-// pki 9, rbac 2", the full universe's counts today. The counts are
-// whatever the run applied or found recorded, never a fixed total --
-// they follow each module's own migration set and move as modules add
-// migration files.
+// line: one "name count" pair per module in the order collected -- the
+// migration universe's alphabetical order (the order migrationUniverse
+// declares and selectMigrationModules preserves). The counts are whatever
+// the run applied or found recorded, never a fixed total -- they follow
+// each module's own migration set and move as modules add migration
+// files, so no concrete numbers belong in this comment (AGENTS.md's
+// Testing section quotes one concrete report, and migrate_test.go's
+// TestAgentsMdMigrationCountsMatchTheRegistry keeps that quote equal to
+// what a real run reports, which is the only place a count may be
+// asserted).
 func formatCounts(counts []moduleCount) string {
 	pairs := make([]string, len(counts))
 	for i, c := range counts {
@@ -318,7 +328,19 @@ func reportError(stderr io.Writer, err error) int {
 // module the project at modPath requires to the SQLite database the
 // project's bootstrap environment names, and returns the one report line
 // the command prints on success.
-func migrate(modPath string) (string, error) {
+//
+// The named err return exists for the cleanup defer registered once the
+// database is open: a run that opened a FRESH file (one that did not exist
+// when the command started) and then failed removes that file again before
+// returning, restoring the operator's filesystem to its pre-run state.
+// Without the removal, the freshly created file would carry no
+// schema_migrations ledger and every later run would be refused with
+// errLedgerMissing -- an operator told to delete a file this very command
+// created. A database file that already existed is never touched on
+// failure: it may hold real data and its ledger-less state is the
+// operator's own pre-existing situation, which the existing-file refusal
+// already handles.
+func migrate(modPath string) (report string, err error) {
 	proj, err := project.Read(modPath)
 	if err != nil {
 		return "", err
@@ -394,17 +416,22 @@ func migrate(modPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// The app's default database path (<app name>.db, resolved when
-	// APP_DB_PATH is unset) is relative to the app's working directory;
-	// this command anchors it to the directory of the go.mod argument it
-	// was handed instead -- the directory the app is documented to run
-	// from, where its default database actually lands -- so a go.mod
-	// argument pointing at another directory's project migrates that
-	// project's own database rather than silently creating one in the
-	// caller's working directory. An explicit APP_DB_PATH always wins
-	// and is used exactly as the app would use it.
+	// A RELATIVE database path -- the app's own default (app.db, resolved
+	// when APP_DB_PATH is unset; the fixed literal the generated app's
+	// cmd/server/config.go shares, never derived from the module path) or
+	// a relative APP_DB_PATH -- is anchored to the directory of the go.mod
+	// argument this command was handed: the directory the generated app is
+	// documented to run from, where its relative paths actually resolve
+	// against the process working directory. Migrating that project's
+	// database from another directory must hit the same file the app's own
+	// boot would open, so migrate-then-boot agree whichever directory the
+	// command is invoked from; anchoring only the unset-variable default
+	// while letting a relative APP_DB_PATH resolve against the CALLER's
+	// working directory would fork the two on the identical operator
+	// shape. An ABSOLUTE APP_DB_PATH needs no anchor and is used exactly
+	// as the app would use it.
 	dbPath := cfg.SQLitePath
-	if !cfg.SQLitePathFromEnv {
+	if !filepath.IsAbs(dbPath) {
 		dbPath = filepath.Join(filepath.Dir(modPath), dbPath)
 	}
 
@@ -433,6 +460,21 @@ func migrate(modPath string) (string, error) {
 		// is what lets the operator see which file failed to open.
 		return "", fmt.Errorf("open %s: %w", dbPath, err)
 	}
+	// Registered BEFORE the close defer below, so this runs AFTER the
+	// database is closed: a fresh file this run created (the file did not
+	// exist at the stat above) that is being left behind by a failure is
+	// removed, returning the operator's filesystem to its pre-run state.
+	// Only the failing run removes its own fresh file -- a successful run
+	// (err == nil) keeps it, and a file that already existed (fresh ==
+	// false) is never this command's to remove.
+	defer func() {
+		if err == nil || !fresh {
+			return
+		}
+		if removeErr := os.Remove(dbPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			err = fmt.Errorf("%w (additionally failed to remove the freshly created %s: %w)", err, dbPath, removeErr)
+		}
+	}()
 	defer func() {
 		if sqlDB, closeErr := gdb.DB(); closeErr == nil {
 			_ = sqlDB.Close()

@@ -154,7 +154,7 @@ func TestRunConfigDispatchesThroughCLI(t *testing.T) {
 	}
 	want := "deployment mode  standalone   unset or empty (default standalone)\n" +
 		"port             8080         unset or empty (default 8080)\n" +
-		"sqlite path      cli-app.db   unset or empty (default cli-app.db)\n" +
+		"sqlite path      app.db       unset or empty (default app.db)\n" +
 		"config key       [redacted]   unset or empty (development default)\n" +
 		"org index key    [redacted]   unset or empty (development default)\n" +
 		"redis addr                    unset or empty (eventbus/kv stay on the in-process default)\n" +

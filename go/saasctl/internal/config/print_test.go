@@ -72,7 +72,7 @@ func fixture(t *testing.T, name string) string {
 // TestPrintResolvesAndRendersTheDocumentedDefaults: with an empty
 // environment, print renders what the generated app boots on with no
 // environment at all -- the standalone deployment mode, port 8080, the
-// <app name>.db path, the two development key bytes, and every
+// fixed app.db path, the two development key bytes, and every
 // infrastructure seam left on its Preset default -- one line per value,
 // each sourced line naming the default (or the seam) it fell back to. The
 // key rows and the S3 secret key / SMTP password rows show only the
@@ -93,7 +93,7 @@ func TestPrintResolvesAndRendersTheDocumentedDefaults(t *testing.T) {
 	}
 	want := "deployment mode  standalone   unset or empty (default standalone)\n" +
 		"port             8080         unset or empty (default 8080)\n" +
-		"sqlite path      cli-app.db   unset or empty (default cli-app.db)\n" +
+		"sqlite path      app.db       unset or empty (default app.db)\n" +
 		"config key       [redacted]   unset or empty (development default)\n" +
 		"org index key    [redacted]   unset or empty (development default)\n" +
 		"redis addr                    unset or empty (eventbus/kv stay on the in-process default)\n" +

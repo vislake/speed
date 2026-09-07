@@ -301,6 +301,116 @@ func TestSelfCheckDetectsReplaceDrift(t *testing.T) {
 	}
 }
 
+// TestSelfCheckDetectsStaleSpeedModuleReplacePin is the P1 regression for
+// the upgrade self-check: a replace directive whose TARGET is a speed
+// module pinned at a version other than the goal survives the rewrite
+// (replaces are left untouched by contract) and WINS at build time -- go
+// resolves the replaced module to whatever the replace names, never to the
+// require line -- so a self-check that passed over such a file would report
+// a clean lockstep upgrade of a project that still builds the old module.
+// The self-check must refuse it, naming the pin and the goal version.
+func TestSelfCheckDetectsStaleSpeedModuleReplacePin(t *testing.T) {
+	data := []byte(`module example.com/app
+
+go 1.25.0
+
+require github.com/vislake/speed/go/authn v0.2.0
+
+replace github.com/vislake/speed/go/authn => github.com/vislake/speed/go/authn v0.1.0
+`)
+	f, err := modfile.Parse("go.mod", data, nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	err = selfCheck(f, "v0.2.0", replaceKeys(f))
+	if err == nil {
+		t.Fatal("selfCheck passed a go.mod whose replace pins a speed module at an old version, want refusal")
+	}
+	for _, want := range []string{
+		"github.com/vislake/speed/go/authn",
+		"v0.1.0",
+		"v0.2.0",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("selfCheck error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// TestSelfCheckAcceptsSameVersionPinAndDirectoryReplaces pins the two
+// shapes the stale-pin refusal must NOT catch: a module-to-module replace
+// whose target already carries the goal version is harmless (it forces
+// exactly what the requires claim), and directory replaces -- the
+// transition-state and local-checkout shape every generated project ships,
+// whose right-hand side is a path and carries no version at all -- are
+// untouched by a version rule.
+func TestSelfCheckAcceptsSameVersionPinAndDirectoryReplaces(t *testing.T) {
+	data := []byte(`module example.com/app
+
+go 1.25.0
+
+require github.com/vislake/speed/go/authn v0.2.0
+
+replace github.com/vislake/speed/go/authn => github.com/vislake/speed/go/authn v0.2.0
+
+replace github.com/vislake/speed/go/config => /opt/speed/go/config
+`)
+	f, err := modfile.Parse("go.mod", data, nil)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := selfCheck(f, "v0.2.0", replaceKeys(f)); err != nil {
+		t.Errorf("selfCheck refused harmless replaces: %v", err)
+	}
+}
+
+// TestRewriteRefusesAStaleSpeedModuleReplacePin drives the whole P1
+// scenario at the Rewrite level: requires at v0.1.0 plus a replace pinning
+// authn at v0.1.0, rewritten to v0.2.0. Before the fix this rewrote the two
+// require lines, passed the self-check (the replaces were unchanged, which
+// was all it compared) and reported clean with the stale pin intact; the
+// refusal must now name the pin and change nothing.
+func TestRewriteRefusesAStaleSpeedModuleReplacePin(t *testing.T) {
+	orig := readFixture(t, "pinned_replace.go.mod")
+	out, changed, err := Rewrite(orig, "v0.2.0")
+	if err == nil {
+		t.Fatalf("Rewrite succeeded (changed=%d) over a stale speed-module replace pin, want refusal", changed)
+	}
+	if changed != 0 || out != nil {
+		t.Errorf("Rewrite returned changed=%d out=%q alongside its error", changed, out)
+	}
+	for _, want := range []string{"v0.1.0", "v0.2.0", "replace"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// TestRunRefusesAStaleSpeedModuleReplacePinAndLeavesTheFileUntouched
+// drives the same scenario through the command entry point: exit code 1,
+// the pin named on stderr, and the go.mod on disk byte-for-byte unchanged.
+func TestRunRefusesAStaleSpeedModuleReplacePinAndLeavesTheFileUntouched(t *testing.T) {
+	orig := readFixture(t, "pinned_replace.go.mod")
+	path := writeTempFile(t, "go.mod", orig)
+	code, stdout, stderr := runUpgrade("--version", "v0.2.0", path)
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "saasctl upgrade:") || !strings.Contains(stderr, "v0.1.0") {
+		t.Errorf("stderr %q does not report the refused pin", stderr)
+	}
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if !bytes.Equal(onDisk, orig) {
+		t.Errorf("refused run modified the file on disk")
+	}
+}
+
 // equalReplaceKeys compares two sorted replace-key slices.
 func equalReplaceKeys(a, b []replaceKey) bool {
 	if len(a) != len(b) {

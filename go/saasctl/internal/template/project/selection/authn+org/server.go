@@ -114,9 +114,15 @@ var (
 // absent one stays anonymous), so tenancy.Middleware's fail-closed default
 // is what protects every route this file does NOT allowlist: such a route
 // answers 403 without a valid Principal and needs no per-route wrapping.
-// The allowlist covers healthz, metrics, config's two pre-auth display
-// endpoints and authn's own pre-auth operations (authnPreAuthAllowlist
-// below) -- the routes that must work before anyone has signed in.
+// The allowlist covers only the non-authn routes that must work before a
+// Principal exists: healthz, metrics and config's two pre-auth display
+// endpoints. authn's own pre-auth operations need NO allowlist entries at
+// all -- every route under authn's API path is mounted ahead of
+// tenancy.Middleware (see mountModuleRoutes), which is also what lets
+// enterprise SSO's dynamic per-tenant provider names ("oidc:<tenant>",
+// authn.ProviderOIDCPrefix + a tenant id) work: no allowlist could
+// enumerate them, and authn's handler decides per operation which of its
+// routes require a Principal (go/authn/handler.go).
 //
 // Host seams deliberately left unwired, each failing closed per the owning
 // module's contract and each the owner's first task: authn's
@@ -364,72 +370,77 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, fmt.Errorf("__APP_NAME__: attach the config module: %w", err)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc(healthzPath, healthzHandler)
-	mux.HandleFunc(metricsPath, metricsHandler)
-	if err := mountModuleRoutes(mux, reg); err != nil {
+	// Route mounting: every route reg's modules mounted goes to one of
+	// two muxes, decided in mountModuleRoutes by the route's path --
+	// authn's own subtree (authnAPIPath) to authnMux, everything else to
+	// moduleMux -- never by a per-route enumeration.
+	moduleMux := http.NewServeMux()
+	moduleMux.HandleFunc(healthzPath, healthzHandler)
+	moduleMux.HandleFunc(metricsPath, metricsHandler)
+	authnMux := http.NewServeMux()
+	if err := mountModuleRoutes(authnMux, moduleMux, reg); err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("__APP_NAME__: mount module routes: %w", err)
 	}
 
 	// The middleware chain: authn first, then tenancy (see buildServer's
-	// doc comment above for the order reasoning, and authnPreAuthAllowlist
-	// below for the routes that must work before anyone has signed in).
-	handler := authn.Middleware(authnModule.Service().Verifier())(
-		tenancy.Middleware(authn.NewPrincipalResolver(), append([]tenancy.MiddlewareOption{
-			tenancy.WithAllowlist(http.MethodGet, healthzPath),
-			tenancy.WithAllowlist(http.MethodHead, healthzPath),
-			tenancy.WithAllowlist(http.MethodGet, metricsPath),
-			tenancy.WithAllowlist(http.MethodHead, metricsPath),
-			tenancy.WithAllowlist(http.MethodGet, config.PathPublic),
-			tenancy.WithAllowlist(http.MethodHead, config.PathPublic),
-			tenancy.WithAllowlist(http.MethodGet, config.PathSystemFeatures),
-			tenancy.WithAllowlist(http.MethodHead, config.PathSystemFeatures),
-		}, authnPreAuthAllowlist()...)...)(mux),
-	)
+	// doc comment above for the order reasoning). What tenancy.Middleware
+	// wraps is moduleMux only: topMux dispatches authn's own subtree
+	// (authnAPIPath) straight from authn.Middleware's output, exempt from
+	// tenant resolution BY STRUCTURE rather than by allowlist entry.
+	// Everything under authnAPIPath must work before a Principal exists --
+	// registration, every sign-in entry point, token refresh and the
+	// social authorize/callback pair -- and authn's own handler decides,
+	// operation by operation, which of its routes require a Principal (see
+	// go/authn/handler.go). Enterprise SSO makes the structural exemption
+	// the only correct one: its provider value is the dynamic per-tenant
+	// name "oidc:<tenant>" (authn.ProviderOIDCPrefix + a tenant id), which
+	// no fixed allowlist could enumerate -- so any allowlist-shaped wiring
+	// would refuse an SSO-configured tenant's login-start request with 403
+	// tenancy.tenant_unresolved before authn's own OIDC logic ever saw it.
+	// The tenancy allowlist below therefore names only the NON-authn
+	// routes that must work with no Principal: healthz, metrics and
+	// config's two pre-auth display endpoints.
+	topMux := http.NewServeMux()
+	topMux.Handle(authnAPIPath, authnMux)
+	topMux.Handle(authnAPIPath+"/", authnMux)
+	topMux.Handle("/", tenancy.Middleware(authn.NewPrincipalResolver(),
+		tenancy.WithAllowlist(http.MethodGet, healthzPath),
+		tenancy.WithAllowlist(http.MethodHead, healthzPath),
+		tenancy.WithAllowlist(http.MethodGet, metricsPath),
+		tenancy.WithAllowlist(http.MethodHead, metricsPath),
+		tenancy.WithAllowlist(http.MethodGet, config.PathPublic),
+		tenancy.WithAllowlist(http.MethodHead, config.PathPublic),
+		tenancy.WithAllowlist(http.MethodGet, config.PathSystemFeatures),
+		tenancy.WithAllowlist(http.MethodHead, config.PathSystemFeatures),
+	)(moduleMux))
+	handler := authn.Middleware(authnModule.Service().Verifier())(topMux)
 	return handler, cleanup, nil
 }
 
 // authnAPIPath is authn's own HTTP mount point -- duplicated from
 // go/authn/module.go's private apiPath constant of the same value, because
 // this project's wiring, not authn's package, is what needs to name
-// individual routes under it: the module owns and mounts the routes, this
-// file owns which of them a caller may reach before proving who they are.
+// individual routes under it: buildServer mounts the whole subtree ahead
+// of tenancy.Middleware (see buildServer's doc comment for why every route
+// under it must work before a Principal exists, enterprise SSO's dynamic
+// per-tenant provider names included), and mountModuleRoutes uses the
+// prefix to decide which mux a mounted route belongs on. No per-route
+// pre-auth allowlist exists anymore: the structural exemption replaced
+// the fixed (method, path) enumeration that could never name an
+// "oidc:<tenant>" provider.
 const authnAPIPath = "/api/v1/authn"
 
-// authnPreAuthAllowlist lists every (method, path) pair under authnAPIPath
-// that must work with no Principal at all -- registration, every sign-in
-// entry point, token refresh, and the social authorize/callback pair (see
-// go/authn/api/openapi.yaml's own path table for the exact literals, and
-// go/authn/handler.go for which operations skip requirePrincipal).
-//
-// tenancy.WithAllowlist matches (method, path) exactly, with no prefix or
-// wildcard (see its own doc comment), so the social channel's {provider}
-// path parameter cannot be allowlisted generically: every channel the
-// module ships gets its own two entries here, even though no channel is
-// wired with real credentials in this skeleton -- otherwise enabling one
-// later would silently need a code change here too.
-func authnPreAuthAllowlist() []tenancy.MiddlewareOption {
-	opts := []tenancy.MiddlewareOption{
-		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/register"),
-		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/login/password"),
-		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/login/sms/request"),
-		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/login/sms"),
-		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/token/refresh"),
-	}
-	for _, provider := range []string{
-		authn.ProviderGoogle, authn.ProviderGitHub, authn.ProviderWeChat,
-		authn.ProviderDingTalk, authn.ProviderFeishu,
-	} {
-		opts = append(opts,
-			tenancy.WithAllowlist(http.MethodGet, authnAPIPath+"/social/"+provider+"/authorize"),
-			tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/social/"+provider+"/callback"),
-		)
-	}
-	return opts
-}
-
-// mountModuleRoutes copies every route reg's modules mounted onto mux.
+// mountModuleRoutes copies every route reg's modules mounted onto one of
+// the two muxes, decided by path prefix: a route under authnAPIPath --
+// authn's own subtree, which authn mounts as a single handler at its API
+// path -- goes to authnMux, mounted by buildServer on topMux ahead of
+// tenancy.Middleware; every other route goes to protectedMux, the
+// tenancy-wrapped one. Routing by the module's own mount path rather than
+// by an enumerated route list is what keeps the exemption structural: a
+// future route under authn's API path is exempt the day it mounts, and
+// nothing outside that subtree ever is. (authn owns the whole prefix: no
+// other module mounts under /api/v1/authn.)
 //
 // net/http's ServeMux (since Go 1.22) distinguishes an exact-match pattern
 // from a subtree pattern (one ending in "/", matching everything below
@@ -442,11 +453,16 @@ func authnPreAuthAllowlist() []tenancy.MiddlewareOption {
 // everything nested below it -- so both patterns are registered explicitly
 // here, pointing at the same Handler, instead of relying on ServeMux's
 // implicit redirect-on-missing-slash behavior.
-func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry) error {
+
+func mountModuleRoutes(authnMux, protectedMux *http.ServeMux, reg *pkgcore.Registry) error {
 	for _, route := range reg.Routes.Routes() {
-		mux.Handle(route.Path, route.Handler)
+		target := protectedMux
+		if strings.HasPrefix(route.Path, authnAPIPath) {
+			target = authnMux
+		}
+		target.Handle(route.Path, route.Handler)
 		if !strings.HasSuffix(route.Path, "/") {
-			mux.Handle(route.Path+"/", route.Handler)
+			target.Handle(route.Path+"/", route.Handler)
 		}
 	}
 	return nil

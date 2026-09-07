@@ -17,11 +17,15 @@
 // silently dropped to the Preset default), the same development key bytes
 // and the same malformed-value error texts, with the template's
 // __APP_NAME__ token replaced by the real app name the caller derives from
-// the project's go.mod. appconfig_test.go re-reads the embedded template and
-// fails when the two sides drift, so a template edit that renames a
-// variable, changes a default, reorders the parse or rewrites an error text
-// fails here before any generated app silently disagrees with the tool that
-// maintains it.
+// the project's go.mod. One default is deliberately a FIXED literal on both
+// sides rather than anything derived from the app name: the unset-
+// APP_DB_PATH database path (defaultSQLitePath), which the generated
+// project freezes at materialization and which therefore cannot track a
+// later module-path rename (see defaultSQLitePath's own doc comment).
+// appconfig_test.go re-reads the embedded template and fails when the two
+// sides drift, so a template edit that renames a variable, changes a
+// default, reorders the parse or rewrites an error text fails here before
+// any generated app silently disagrees with the tool that maintains it.
 //
 // The environment is injectable through LookupEnv so every caller can
 // decide its own source: the commands pass os.LookupEnv (a generated app
@@ -107,6 +111,19 @@ const (
 // defaultPort is used when the PORT environment variable is unset, the
 // same default the generated server uses.
 const defaultPort = "8080"
+
+// defaultSQLitePath is the SQLite database path used when APP_DB_PATH is
+// unset: a FIXED literal, byte-for-byte the generated cmd/server/config.go's
+// own defaultSQLitePath constant (the twin test pins the equality). It is
+// deliberately not derived from appName or from the module path the caller
+// resolved: the generated project's own default is a literal frozen at
+// materialization, so a twin that derived its own default from the CURRENT
+// go.mod module path would fork from the app the moment a consumer renamed
+// the module -- the CLI would migrate and print one file while the app
+// opens another. One fixed name on both sides keeps CLI-then-boot
+// agreement intact under any rename, and TestAppConfigIsTheGeneratedProjectsTwin
+// fails if either side's literal moves without the other.
+const defaultSQLitePath = "app.db"
 
 // configKeyHexLength is the encoded length of the required 32-byte key (2
 // hex characters per byte), checked so a short or malformed key fails
@@ -217,14 +234,19 @@ type Config struct {
 
 // Load resolves a generated project's bootstrap configuration for appName
 // -- the go.mod module path's final element, the name __APP_NAME__ stood
-// for at materialization -- reading the seventeen environment variables
-// through lookup. The parse order, defaults, completeness rules and
-// failure texts mirror the generated configFromEnv exactly, including its
-// error contract: a mode that does not parse is returned verbatim (no
-// appName prefix), a malformed key variable or infrastructure-group value
-// reports the app name prefixed in the template's exact wording, and an
-// incomplete S3 group or SMTP pair is refused exactly as configFromEnv
-// refuses it -- never silently dropped to the Preset default.
+// for at materialization; appName appears in error texts only, never in
+// the SQLite default, which is the fixed defaultSQLitePath literal -- the
+// one default the generated app freezes rather than derives, so deriving
+// it from the module path here would fork on a module rename (see
+// defaultSQLitePath's own doc comment) -- reading the seventeen
+// environment variables through lookup. The parse order, defaults,
+// completeness rules and failure texts mirror the generated configFromEnv
+// exactly, including its error contract: a mode that does not parse is
+// returned verbatim (no appName prefix), a malformed key variable or
+// infrastructure-group value reports the app name prefixed in the
+// template's exact wording, and an incomplete S3 group or SMTP pair is
+// refused exactly as configFromEnv refuses it -- never silently dropped
+// to the Preset default.
 func Load(appName string, lookup LookupEnv) (Config, error) {
 	var cfg Config
 
@@ -250,7 +272,7 @@ func Load(appName string, lookup LookupEnv) (Config, error) {
 
 	dbPath, _ := lookup(DBPathEnv)
 	if dbPath == "" {
-		dbPath = appName + ".db"
+		dbPath = defaultSQLitePath
 	} else {
 		cfg.SQLitePathFromEnv = true
 	}

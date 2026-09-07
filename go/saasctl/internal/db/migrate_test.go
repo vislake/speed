@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -194,14 +195,19 @@ func TestMigrate_PKIRequired_MigratesPKITablesToo(t *testing.T) {
 }
 
 // TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument: with APP_DB_PATH
-// unset, the database defaults to <app name>.db, resolved -- by this
-// command -- next to the go.mod argument, not the caller's working
+// unset, the database defaults to the fixed app.db name (the literal the
+// generated app's own config.go shares -- see appconfig.defaultSQLitePath
+// for why the default is never derived from the module path), resolved --
+// by this command -- next to the go.mod argument, not the caller's working
 // directory: `saasctl db migrate /path/to/project/go.mod` migrates the
 // project's own database whichever directory it is invoked from. The
-// project's go.mod lives in one directory, the command runs from another,
-// and the database file must land next to the go.mod -- where the app's
-// default database lands when the app is run from its own directory --
-// never in the caller's.
+// fixture's module path is cli-app, and the anchored file is app.db: the
+// default tracks neither the caller's directory nor the module path, so a
+// consumer that renames the module can never fork the file this command
+// migrates from the file the app opens. The project's go.mod lives in one
+// directory, the command runs from another, and the database file must
+// land next to the go.mod -- where the app's default database lands when
+// the app is run from its own directory -- never in the caller's.
 func TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument(t *testing.T) {
 	projectDir := t.TempDir()
 	mod := filepath.Join(projectDir, "go.mod")
@@ -227,17 +233,149 @@ func TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument(t *testing.T) {
 
 	// The report names the database next to the go.mod...
 	want := fmt.Sprintf("Migrated %s: applied 23 migration files (authn 11, config 1, org 8, rbac 3)\n",
-		filepath.Join(projectDir, "cli-app.db"))
+		filepath.Join(projectDir, "app.db"))
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 	// ...the database file really exists there with the full ledger...
-	if got := ledgerCounts(t, openDB(t, filepath.Join(projectDir, "cli-app.db"))); !reflect.DeepEqual(got, fullUniverseLedger) {
+	if got := ledgerCounts(t, openDB(t, filepath.Join(projectDir, "app.db"))); !reflect.DeepEqual(got, fullUniverseLedger) {
 		t.Errorf("ledger = %v, want %v", got, fullUniverseLedger)
 	}
 	// ...and nothing was created in the caller's working directory.
-	if _, err := os.Stat(filepath.Join(callerDir, "cli-app.db")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(callerDir, "app.db")); !os.IsNotExist(err) {
 		t.Errorf("database file exists in the caller's working directory; the default path must resolve next to the go.mod argument (stat err = %v)", err)
+	}
+}
+
+// TestMigrateRelativeDBPathAnchorsAtTheGoModArgument pins the P1 fix for
+// a RELATIVE APP_DB_PATH: the operator runs the command from another
+// directory against another directory's project with APP_DB_PATH set to a
+// relative value. The generated app, booted from its own directory,
+// resolves that relative value against its working directory; this
+// command must resolve it against the go.mod argument's directory the same
+// way -- so the file migrate writes is the file a boot from the project's
+// own directory opens. Before the fix the relative value resolved against
+// the CALLER's working directory: the database was created and migrated
+// at the wrong path and the run reported success over it.
+func TestMigrateRelativeDBPathAnchorsAtTheGoModArgument(t *testing.T) {
+	projectDir := t.TempDir()
+	mod := filepath.Join(projectDir, "go.mod")
+	full, err := os.ReadFile(filepath.Join("testdata", "full.mod"))
+	if err != nil {
+		t.Fatalf("read the full.mod fixture: %v", err)
+	}
+	if err := os.WriteFile(mod, full, 0o644); err != nil {
+		t.Fatalf("write the project's go.mod: %v", err)
+	}
+
+	callerDir := t.TempDir()
+	t.Chdir(callerDir)
+	code, stdout, stderr := driveMigrate(t, []string{mod},
+		map[string]string{appconfig.DBPathEnv: "rel.db"})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+
+	// The report names the database anchored next to the go.mod...
+	want := fmt.Sprintf("Migrated %s: applied 23 migration files (authn 11, config 1, org 8, rbac 3)\n",
+		filepath.Join(projectDir, "rel.db"))
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+	// ...the database file really exists there with the full ledger...
+	if got := ledgerCounts(t, openDB(t, filepath.Join(projectDir, "rel.db"))); !reflect.DeepEqual(got, fullUniverseLedger) {
+		t.Errorf("ledger = %v, want %v", got, fullUniverseLedger)
+	}
+	// ...and nothing was created in the caller's working directory.
+	if _, err := os.Stat(filepath.Join(callerDir, "rel.db")); !os.IsNotExist(err) {
+		t.Errorf("database file exists in the caller's working directory; a relative %s must resolve next to the go.mod argument (stat err = %v)", appconfig.DBPathEnv, err)
+	}
+}
+
+// TestMigrateFailureRemovesAFreshlyCreatedDatabaseFile pins the P3 fix
+// for a database file this command created itself: when the run opened a
+// FRESH file (one that did not exist when the command started) and then
+// failed before the migration ledger existed, the leftover file carried no
+// schema_migrations table and every later run was refused with
+// errLedgerMissing -- an operator told to delete a file the command itself
+// had just created. The failing run must remove its own fresh file,
+// restoring the pre-run state so the next run starts clean again. The
+// failure is injected by swapping migrationUniverse for one whose module
+// construct fails, a deterministic pre-Apply failure after the file has
+// been opened (SQLite creates the file on open) and before any ledger
+// exists.
+func TestMigrateFailureRemovesAFreshlyCreatedDatabaseFile(t *testing.T) {
+	originalUniverse := migrationUniverse
+	t.Cleanup(func() { migrationUniverse = originalUniverse })
+	migrationUniverse = []migrationModule{
+		{
+			name:    "config",
+			modPath: modulePrefix + "config",
+			construct: func(db *gorm.DB) (pkgcore.Module, error) {
+				return nil, errors.New("injected construct failure")
+			},
+		},
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "cli-app.db")
+	code, stdout, stderr := driveMigrate(t, []string{fixture(t, "config_only.mod")},
+		map[string]string{appconfig.DBPathEnv: dbPath})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr:\n%s", code, stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "injected construct failure") {
+		t.Errorf("stderr %q does not name the injected failure", stderr)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Errorf("freshly created database file survived the failed run (stat err = %v); a failing run must remove the file it created", err)
+	}
+
+	// The pre-run state is restored, so the next run over the same path
+	// starts fresh and succeeds -- no errLedgerMissing trap on a file this
+	// command itself created and left behind.
+	migrationUniverse = originalUniverse
+	code, stdout, stderr = driveMigrate(t, []string{fixture(t, "config_only.mod")},
+		map[string]string{appconfig.DBPathEnv: dbPath})
+	if code != 0 {
+		t.Fatalf("run after the failed one: exit code = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	want := fmt.Sprintf("Migrated %s: applied 1 migration files (config 1)\n", dbPath)
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+// TestAgentsMdMigrationCountsMatchTheRegistry is the mechanization of the
+// migration counts AGENTS.md quotes: the Testing section's B4 procedure
+// records the ledger report a fresh migrate of the default authn+org+rbac
+// selection prints, and this test derives that report from a REAL run
+// (which reads the counts from the registry's migration universe) and
+// requires AGENTS.md to carry it verbatim. Hand-edited numbers in that
+// prose can no longer drift from the modules' own migration sets -- the
+// third recurrence of that drift (the counts grew and the prose did not)
+// is what this test exists to make impossible -- without this test having
+// to know any count itself.
+func TestAgentsMdMigrationCountsMatchTheRegistry(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cli-app.db")
+	code, stdout, stderr := driveMigrate(t, []string{fixture(t, "full_with_pki.mod")},
+		map[string]string{appconfig.DBPathEnv: dbPath})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	realReport := strings.TrimSpace(strings.TrimPrefix(stdout, "Migrated "+dbPath+": "))
+
+	agents, err := os.ReadFile(filepath.Join("..", "..", "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	if !strings.Contains(string(agents), realReport) {
+		t.Errorf("AGENTS.md does not carry the registry-derived report %q verbatim; hand-edited counts in its prose drifted from the modules' migration sets", realReport)
 	}
 }
 
