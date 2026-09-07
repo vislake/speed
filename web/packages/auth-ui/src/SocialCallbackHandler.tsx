@@ -95,6 +95,23 @@ export function SocialCallbackHandler({
   // stale exchange from a superseded pair cannot paint over the active
   // one. The attempt counter re-arms the effect for a retry after the
   // ref guard is lifted.
+  // The pending live region must never mount together with its text: a
+  // role="status" region announces only content changes that follow its
+  // own insertion, so the pending text born in the same commit as the
+  // region -- the initial mount, or a retry's re-entry into the pending
+  // branch -- would be silent. The text below is therefore gated on
+  // `pendingCommitted`, which lags the pending phase by one commit (the
+  // effect after the phase's first commit arms it, leaving the phase
+  // disarms it): the region's first committed frame is empty whatever
+  // transition entered the phase, and the text fills an existing region
+  // a commit later, which is what makes the announcement fire. The same
+  // node survives the transition, so the later text change is an
+  // announcement rather than another mount.
+  const pending = status === 'pending'
+  const [pendingCommitted, setPendingCommitted] = useState(false)
+  useEffect(() => {
+    setPendingCommitted(pending)
+  }, [pending])
   const runRef = useRef(0)
   useEffect(() => {
     if (handledPairRef.current === pair) {
@@ -179,9 +196,13 @@ export function SocialCallbackHandler({
     >
       {/* Decorative: the pending text on its own announces the state from
           the role=status container; naming the spinner too would read the
-          notice twice. */}
+          notice twice. The text renders only once `pendingCommitted`
+          arms it, one commit after this region mounts (see the comment
+          on the state above). */}
       <CircularProgress size={18} aria-hidden={true} />
-      <Typography>{t('socialCallback.pending')}</Typography>
+      <Typography>
+        {pendingCommitted ? t('socialCallback.pending') : ''}
+      </Typography>
     </Box>
   )
 }

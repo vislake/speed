@@ -71,6 +71,7 @@ import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import TextField from '@mui/material/TextField'
 import Button from '@mui/material/Button'
+import type { SxProps, Theme } from '@mui/material'
 import { useForm } from 'react-hook-form'
 import type { SubmitHandler } from 'react-hook-form'
 import { FormLayout, FormField } from '@speed/ui-kit'
@@ -84,6 +85,23 @@ export interface SMSSignInFormProps {
   readonly session: AuthSession
   /** Fired once after an SMS-code login commits; the host navigates. */
   readonly onSignedIn?: () => void
+}
+
+/** The visually-hidden recipe for the sent-notice live region while
+ * there is nothing to announce (the clip technique, the family's shape
+ * -- see product-shell's sr-only region and ui-kit's ConfirmDialog
+ * arming region): the region must stay in the accessibility tree to
+ * announce, so it is clipped, never display:none -- a hidden region
+ * would not be live. */
+const srOnlyRegionSx: SxProps<Theme> = {
+  clip: 'rect(0 0 0 0)',
+  clipPath: 'inset(50%)',
+  height: 1,
+  margin: 0,
+  overflow: 'hidden',
+  position: 'absolute',
+  whiteSpace: 'nowrap',
+  width: 1,
 }
 
 interface SmsFields {
@@ -246,6 +264,28 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
         )
       }
     >
+      {/* The sent-notice live region. It must never mount together with
+          its text: a role="status" region announces only content changes
+          that follow its own insertion, so a notice born in the same
+          commit as the region (the accepted code request's step flip)
+          would be silent. The region therefore stands for the whole
+          life of the form -- mounted empty and visually silent (clipped,
+          never display:none) while nothing was sent -- and the accepted
+          request fills the text into a region the screen reader already
+          knows, which is what makes the announcement fire. The clip and
+          the notice never coexist: the same node shows the full info
+          notice exactly while it carries the text, and a changed phone
+          or a re-entry from the phone step fills the same standing node
+          again. */}
+      <Alert
+        severity="info"
+        role="status"
+        sx={step === 'code' ? { width: '100%' } : srOnlyRegionSx}
+      >
+        {step === 'code'
+          ? t('smsSignIn.sentNotice', { phone: sentTo ?? '' })
+          : ''}
+      </Alert>
       {step === 'phone' ? (
         <FormField
           name="phone"
@@ -264,9 +304,6 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
         />
       ) : (
         <>
-          <Alert severity="info" role="status" sx={{ width: '100%' }}>
-            {t('smsSignIn.sentNotice', { phone: sentTo ?? '' })}
-          </Alert>
           <FormField
             name="code"
             required

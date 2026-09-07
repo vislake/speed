@@ -98,6 +98,36 @@ describe('SMSSignInForm', () => {
     expect(harness.store.get()).toBe('access-1')
   })
 
+  it('announce the sent notice through a live region that stood empty from the phone step (mount-with-text regression)', async () => {
+    // PRE-FIX: the sent notice's role="status" region rendered only
+    // inside the code step, so the region mounted in the same commit as
+    // its text the moment an accepted code request opened the step. A
+    // live region announces content changes that follow its own
+    // existence, never text that mounts together with it, so the
+    // accepted request was silent. POST-FIX: the region stands mounted
+    // (empty, visually silent) for the whole life of the form and the
+    // accepted request fills the text into a region the screen reader
+    // already knows. The same DOM node must survive the transition,
+    // which is what makes the later text change an announcement rather
+    // than another mount.
+    const harness = makeHarness({
+      [REQUEST_SMS_CODE]: () => undefined,
+    })
+    renderWithProviders(<SMSSignInForm session={harness.session} />)
+    // The standing region exists, empty, while nothing has been sent:
+    // pre-fix no status region exists at all on the phone step.
+    const status = screen.getByRole('status')
+    expect(status).toHaveTextContent('')
+    await requestCode(PHONE)
+    // The sent notice filled the standing region -- the same node.
+    await waitFor(() =>
+      expect(status).toHaveTextContent(
+        sentNoticeOf(PHONE, zhCN.smsSignIn.sentNotice),
+      ),
+    )
+    expect(screen.getByRole('status')).toBe(status)
+  })
+
   it('resend the code against the same number, staying on the code step', async () => {
     const harness = makeHarness({
       [REQUEST_SMS_CODE]: () => undefined,
@@ -138,7 +168,9 @@ describe('SMSSignInForm', () => {
     expect(
       screen.queryByLabelText(zhCN.smsSignIn.codeLabel),
     ).not.toBeInTheDocument()
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    // The sent notice's standing live region is back to empty: nothing
+    // was sent for this phone step, so there is no notice to announce.
+    expect(screen.getByRole('status')).toHaveTextContent('')
     expect(harness.calls).toHaveLength(1)
   })
 
@@ -155,9 +187,10 @@ describe('SMSSignInForm', () => {
         zhCN.errors.authn.rate_limited,
       ),
     )
-    // Still on the phone step: no notice, no code field, nothing sent.
+    // Still on the phone step: no notice content (the standing live
+    // region is empty), no code field, nothing sent.
     expect(screen.getByLabelText(zhCN.smsSignIn.phoneLabel)).toBeInTheDocument()
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('')
     expect(harness.store.get()).toBeNull()
     expect(harness.calls).toHaveLength(1)
   })
@@ -177,9 +210,10 @@ describe('SMSSignInForm', () => {
         zhCN.errors.authn.invalid_phone,
       ),
     )
-    // Still on the phone step: no notice, no code field, nothing sent.
+    // Still on the phone step: no notice content (the standing live
+    // region is empty), no code field, nothing sent.
     expect(screen.getByLabelText(zhCN.smsSignIn.phoneLabel)).toBeInTheDocument()
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('')
     expect(harness.store.get()).toBeNull()
     expect(harness.calls).toHaveLength(1)
   })

@@ -14,6 +14,7 @@
  */
 
 import { StrictMode } from 'react'
+import { flushSync } from 'react-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -137,6 +138,64 @@ describe('SocialCallbackHandler', () => {
     expect(harness.calls).toHaveLength(2)
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(harness.store.get()).toBe('access-1')
+  })
+
+  it('mount the pending live region empty on a retry re-entry, then fill it (mount-with-text regression)', async () => {
+    // PRE-FIX: the pending notice's role="status" region mounted together
+    // with its text on every entry into the pending state -- the initial
+    // mount and a retry's re-entry alike. A live region announces content
+    // changes that follow its own existence, never text that mounts with
+    // it, so the retry's re-entry was silent. POST-FIX: the text is gated
+    // behind a one-commit lag armed by an effect after the pending
+    // phase's first commit, so the region's first committed frame is
+    // empty whatever transition entered the phase, and the text fills an
+    // existing region a commit later. The assertion between the two
+    // commits below is what distinguishes the shapes: the region's text
+    // content must still be empty the moment the node re-appears on the
+    // retry (pre-fix it already holds the pending text). flushSync lands
+    // the retry's one commit synchronously, and the act scope holds back
+    // the post-commit effect that fills the region until this assertion
+    // has seen the birth frame.
+    let attempts = 0
+    const harness = makeHarness({
+      [SOCIAL_CALLBACK]: () => {
+        attempts += 1
+        if (attempts === 1) {
+          throw apiError(400, 'authn.oauth_state_invalid')
+        }
+        return { tokens: makePair() }
+      },
+    })
+    const onSignedIn = vi.fn()
+    renderWithProviders(
+      <SocialCallbackHandler
+        session={harness.session}
+        provider="google"
+        code={CODE}
+        state={STATE}
+        onSignedIn={onSignedIn}
+      />,
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toBeInTheDocument(),
+    )
+    // The failed state carries no live region: nothing to announce.
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    act(() => {
+      flushSync(() => {
+        screen
+          .getByRole('button', { name: zhCN.socialCallback.retry })
+          .click()
+      })
+      const region = screen.getByRole('status')
+      expect(region.textContent).toBe('')
+    })
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent(
+        zhCN.socialCallback.pending,
+      ),
+    )
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
   })
 
   it('start a fresh exchange when the pair changes while anonymous', async () => {

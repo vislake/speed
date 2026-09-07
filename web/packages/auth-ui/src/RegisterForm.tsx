@@ -27,8 +27,10 @@
 import { useState } from 'react'
 import Alert from '@mui/material/Alert'
 import AlertTitle from '@mui/material/AlertTitle'
+import Box from '@mui/material/Box'
 import TextField from '@mui/material/TextField'
 import Button from '@mui/material/Button'
+import type { SxProps, Theme } from '@mui/material'
 import { useForm } from 'react-hook-form'
 import type { SubmitHandler } from 'react-hook-form'
 import { FormLayout, FormField } from '@speed/ui-kit'
@@ -46,6 +48,23 @@ export interface RegisterFormProps {
    * renders a success panel in place.
    */
   readonly onRegistered?: (user: AuthnUser) => void
+}
+
+/** The visually-hidden recipe for the success live region while there is
+ * nothing to announce (the clip technique, the family's shape -- see
+ * product-shell's sr-only region and ui-kit's ConfirmDialog arming
+ * region): the region must stay in the accessibility tree to announce,
+ * so it is clipped, never display:none -- a hidden region would not be
+ * live. */
+const srOnlyRegionSx: SxProps<Theme> = {
+  clip: 'rect(0 0 0 0)',
+  clipPath: 'inset(50%)',
+  height: 1,
+  margin: 0,
+  overflow: 'hidden',
+  position: 'absolute',
+  whiteSpace: 'nowrap',
+  width: 1,
 }
 
 interface RegisterFields {
@@ -107,29 +126,8 @@ export function RegisterForm({ session, onRegistered }: RegisterFormProps) {
     setCreated(user)
   }
 
-  if (created !== null) {
-    return (
-      <Alert severity="success" role="status" sx={{ width: '100%' }}>
-        <AlertTitle>{t('register.successTitle')}</AlertTitle>
-        {t('register.successMessage')}
-      </Alert>
-    )
-  }
-
-  return (
-    <FormLayout
-      form={form}
-      onSubmit={onSubmit}
-      actions={
-        <Button
-          type="submit"
-          variant="contained"
-          disabled={form.formState.isSubmitting}
-        >
-          {t('register.submit')}
-        </Button>
-      }
-    >
+  const fields = (
+    <>
       <FormField
         name="identifier"
         required
@@ -173,6 +171,59 @@ export function RegisterForm({ session, onRegistered }: RegisterFormProps) {
         )}
       />
       <InlineError code={errorCode} />
+    </>
+  )
+  const formLayout = (
+    <FormLayout
+      form={form}
+      onSubmit={onSubmit}
+      actions={
+        <Button
+          type="submit"
+          variant="contained"
+          disabled={form.formState.isSubmitting}
+        >
+          {t('register.submit')}
+        </Button>
+      }
+    >
+      {fields}
     </FormLayout>
+  )
+
+  // With a host callback the form announces nothing: registration hands
+  // the created user to the host, which navigates away from this
+  // surface, and no panel ever replaces the form.
+  if (onRegistered !== undefined) {
+    return formLayout
+  }
+
+  // The success live region. It must never mount together with its
+  // text: a role="status" region announces only content changes that
+  // follow its own insertion, so a success panel born in the same
+  // commit as the region would be silent. The region therefore stands
+  // for the whole no-callback life of the form -- mounted empty and
+  // visually silent (clipped, never display:none) while there is
+  // nothing to announce -- and the created commit fills the text into a
+  // region the screen reader already knows, which is what makes the
+  // announcement fire. The clip and the success panel never coexist:
+  // the same node shows the full panel exactly while it carries the
+  // text.
+  return (
+    <Box sx={{ width: '100%' }}>
+      <Alert
+        severity="success"
+        role="status"
+        sx={created !== null ? { width: '100%' } : srOnlyRegionSx}
+      >
+        {created !== null ? (
+          <>
+            <AlertTitle>{t('register.successTitle')}</AlertTitle>
+            {t('register.successMessage')}
+          </>
+        ) : null}
+      </Alert>
+      {created !== null ? null : formLayout}
+    </Box>
   )
 }

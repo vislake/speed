@@ -101,6 +101,36 @@ describe('RegisterForm', () => {
     expect(harness.store.get()).toBeNull()
   })
 
+  it('announce the success panel through a live region that stood empty from the form phase (mount-with-text regression)', async () => {
+    // PRE-FIX: the success panel's role="status" region rendered only
+    // while the panel existed, so the region mounted in the same commit
+    // as its text. A live region announces content changes that follow
+    // its own existence, never text that mounts together with it, so a
+    // successful registration was silent. POST-FIX: the region stands
+    // mounted (empty, visually silent) for the whole no-callback life of
+    // the form and the created commit fills the text into a region the
+    // screen reader already knows. The same DOM node must survive the
+    // transition, which is what makes the later text change an
+    // announcement rather than another mount.
+    const harness = makeHarness({ [REGISTER]: () => ALICE })
+    renderWithProviders(<RegisterForm session={harness.session} />)
+    // The standing region exists, empty, before anything was submitted:
+    // pre-fix no status region exists at all on the form.
+    const status = screen.getByRole('status')
+    expect(status).toHaveTextContent('')
+    await fillAndSubmit('alice@example.com', 's3cret-pass', ZH_LABELS)
+    // The success text filled the standing region -- the same node.
+    await waitFor(() =>
+      expect(status).toHaveTextContent(zhCN.register.successMessage),
+    )
+    expect(screen.getByRole('status')).toBe(status)
+    expect(screen.getByText(zhCN.register.successTitle)).toBeInTheDocument()
+    // The form is gone, replaced by the panel.
+    expect(
+      screen.queryByLabelText(zhCN.register.identifierLabel),
+    ).not.toBeInTheDocument()
+  })
+
   it('register a phone identifier into the phone slot with a display name', async () => {
     const harness = makeHarness({
       [REGISTER]: () => ({ id: 'user-2', phone: PHONE }),
