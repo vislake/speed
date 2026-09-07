@@ -85,12 +85,15 @@
 //     retried: when Publish returns, replicas may not have run their
 //     handlers yet. Every entry is acknowledged after its handlers ran,
 //     whatever they returned -- deliberately forgoing JetStream's own
-//     stronger MaxDeliver/AckWait redelivery machinery, in order to keep
-//     this implementation's observable behaviour identical to
-//     eventbus/redis's documented contract, which the same
-//     eventbustest.AssertConforms suite checks for both. Redelivery,
-//     retries and dead-letter handling belong to the jobs queue, built for
-//     them.
+//     stronger MaxDeliver/AckWait redelivery machinery for handler errors,
+//     in order to keep this implementation's observable behaviour identical
+//     to eventbus/redis's documented contract, which the same
+//     eventbustest.AssertConforms suite checks for both. A message whose
+//     remote handler panicked is the one exception: it is left
+//     unacknowledged rather than acked as delivered, its panic is logged
+//     (see runRemoteHandler), and JetStream's own redelivery then re-
+//     delivers it after the consumer's AckWait window. Redelivery, retries
+//     and dead-letter handling belong to the jobs queue, built for them.
 //   - Payloads cross the process boundary as JSON. The shape survives -- a
 //     struct becomes a map[string]any -- but the concrete Go type does not.
 //     Handlers on the publishing replica receive the original payload
@@ -98,8 +101,9 @@
 //   - Handlers on other replicas run on the bus's own root context, which
 //     carries no tenant, and their errors are not observable by any
 //     publisher. A handler that needs tenant data must rebuild it from the
-//     event with pkgcore.WithTenant, and a panic inside it is recovered so
-//     one buggy handler cannot take a replica down.
+//     event with pkgcore.WithTenant, and a panic inside it is recovered --
+//     and logged, never silently swallowed -- so one buggy handler cannot
+//     take a replica down.
 //   - A replica that subscribes late does not catch up: its consumer is
 //     created with DeliverNewPolicy, JetStream's live-end-only equivalent of
 //     eventbus/redis's "$" starting id. Unlike Redis's approximate MAXLEN
@@ -162,6 +166,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -655,10 +660,15 @@ func (b *EventBus) remoteHandlerFor(eventType string) jetstream.MessageHandler {
 // instance published itself is acknowledged without dispatch, because the
 // Publish call already ran the local handlers synchronously; everything else
 // is reconstructed from the JSON body and handed to the registered
-// handlers, then acknowledged regardless of what they returned -- see the
-// package doc comment's delivery note for why this implementation forgoes
-// JetStream's own redelivery machinery to keep behaviour identical to
-// eventbus/redis.
+// handlers, then acknowledged regardless of what they returned -- unless a
+// handler panicked, in which case the message is deliberately left
+// unacknowledged: a handler whose side effects never ran (or only partly
+// ran) must not be acked as delivered, and its panic is logged so the
+// failure leaves a trace an operator can act on (see runRemoteHandler).
+// JetStream's own redelivery machinery then redelivers the unacked message
+// after the consumer's AckWait, which is exactly the honest at-least-once
+// shape for a panicked handler -- see the package doc comment's delivery
+// note.
 func (b *EventBus) deliverRemote(eventType string, msg jetstream.Msg) {
 	headers := msg.Headers()
 	if headers.Get(headerSrc) == b.instanceID {
@@ -677,8 +687,20 @@ func (b *EventBus) deliverRemote(eventType string, msg jetstream.Msg) {
 	}
 	evt := pkgcore.Event{Type: eventType, TenantID: pkgcore.TenantID(tenant), Payload: payload}
 
+	panicked := false
 	for _, h := range b.handlersFor(eventType) {
-		b.runRemoteHandler(evt, h)
+		if b.runRemoteHandler(evt, h) {
+			panicked = true
+		}
+	}
+	if panicked {
+		// Not acknowledged: the message stays unacked on the consumer, so
+		// JetStream redelivers it after the consumer's AckWait window -- and
+		// each panic is logged. A permanently panicking handler is a
+		// programming bug an operator must fix or remove; meanwhile the
+		// redelivery cadence keeps the failure visible instead of acked
+		// away.
+		return
 	}
 	_ = msg.Ack()
 }
@@ -688,12 +710,25 @@ func (b *EventBus) deliverRemote(eventType string, msg jetstream.Msg) {
 // process to receive a panic, so letting it escape would crash the whole
 // replica from nats.go's own dispatch goroutine. The handler's error is not
 // observable by any publisher either; it is dropped by design, see the
-// package doc comment's delivery note.
-func (b *EventBus) runRemoteHandler(evt pkgcore.Event, h pkgcore.EventHandler) {
+// package doc comment's delivery note. A recovered panic is reported (and
+// logged): the caller leaves the message unacknowledged rather than acking
+// a delivery whose side effects never ran.
+//
+// pkgcore is the dependency floor of the workspace and cannot import
+// go/observability, so this reaches for log/slog directly, the same
+// precedent warnIfNotDurable sets in pkgcore's own root package.
+func (b *EventBus) runRemoteHandler(evt pkgcore.Event, h pkgcore.EventHandler) (panicked bool) {
 	defer func() {
-		_ = recover()
+		if r := recover(); r != nil {
+			panicked = true
+			slog.Default().Error("pkgcore/eventbus/nats: remote handler panicked; message left unacknowledged",
+				"event_type", evt.Type,
+				"panic", fmt.Sprintf("%v", r),
+			)
+		}
 	}()
 	_ = h(b.ctx, evt)
+	return false
 }
 
 // handlersFor returns a private snapshot of the handlers subscribed to

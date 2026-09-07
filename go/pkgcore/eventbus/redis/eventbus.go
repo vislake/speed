@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -111,10 +112,14 @@ const (
 //   - Cross-process delivery is asynchronous and at-least-once-ish but not
 //     retried: when Publish returns, replicas may not have run their
 //     handlers yet. Each entry is acknowledged after its handlers ran,
-//     whatever they returned, so the bus does not redeliver on failure.
-//     Redelivery, retries and dead-letter handling belong to the jobs queue,
-//     which is built for them; the bus only guarantees no handler is
-//     silently skipped while its replica is connected.
+//     whatever they returned -- one exception: an entry whose remote handler
+//     panicked is not acknowledged, since a handler whose side effects never
+//     (or only partly) ran must not be acked as delivered. Such an entry
+//     stays pending in the consumer group, and the panic is logged, never
+//     silently swallowed; see runRemoteHandler. Redelivery, retries and
+//     dead-letter handling belong to the jobs queue, which is built for
+//     them; the bus only guarantees no handler is silently skipped while its
+//     replica is connected.
 //   - Payloads cross the process boundary as JSON. The shape survives -- a
 //     struct becomes a map[string]any, an array becomes []any, numbers
 //     become float64 -- but the concrete Go type does not. Subscribers on
@@ -125,10 +130,11 @@ const (
 //     no tenant, and their errors are not observable by any publisher: the
 //     publisher has already moved on in another process. A handler that
 //     needs tenant data must rebuild the tenant from the event with
-//     pkgcore.WithTenant, and a panic inside it is recovered so that one
-//     buggy handler cannot take down a replica. (On the publishing replica,
-//     handlers run synchronously on the caller's goroutine and behave
-//     exactly as they do on the in-memory bus, errors included.)
+//     pkgcore.WithTenant, and a panic inside it is recovered -- and logged,
+//     never silently swallowed -- so that one buggy handler cannot take down
+//     a replica. (On the publishing replica, handlers run synchronously on
+//     the caller's goroutine and behave exactly as they do on the in-memory
+//     bus, errors included.)
 //   - A replica that subscribes late does not catch up: the consumer group
 //     starts at the live end of the stream. And a replica whose reader
 //     stays disconnected while its stream fills past its trim window loses
@@ -443,10 +449,14 @@ func (b *EventBus) createGroup(ctx context.Context, stream, group string) error 
 // instance published itself are acknowledged without dispatch, because the
 // Publish call already ran the local handlers synchronously; everything else
 // is reconstructed from the JSON envelope and handed to the registered
-// handlers, then acknowledged. The per-entry work is deliberately finished
-// even when Redis vanished mid-delivery: an entry that could not be
-// acknowledged stays pending in the group, which is exactly what an operator
-// wants to find when they inspect it.
+// handlers, then acknowledged -- unless a handler panicked, in which case
+// the entry is deliberately left pending in the group: a handler whose side
+// effects never ran (or only partly ran) must not be acked as delivered,
+// and its panic is logged so the failure leaves a trace an operator can
+// act on (see runRemoteHandler). The per-entry work is deliberately
+// finished even when Redis vanished mid-delivery: an entry that could not
+// be acknowledged stays pending in the group, which is exactly what an
+// operator wants to find when they inspect it.
 func (b *EventBus) deliverRemote(ctx context.Context, eventType, stream, group string, entry redis.XMessage) {
 	fields := entry.Values
 	src, _ := fields["src"].(string)
@@ -468,8 +478,19 @@ func (b *EventBus) deliverRemote(ctx context.Context, eventType, stream, group s
 	evt := pkgcore.Event{Type: eventType, TenantID: pkgcore.TenantID(tenant), Payload: payload}
 
 	handlers := b.handlersFor(eventType)
+	panicked := false
 	for _, h := range handlers {
-		b.runRemoteHandler(ctx, evt, h)
+		if b.runRemoteHandler(ctx, evt, h) {
+			panicked = true
+		}
+	}
+	if panicked {
+		// Not acknowledged: the entry stays in the group's pending set,
+		// where an operator's XINFO GROUPS / XPENDING inspection finds it
+		// alongside the logged panic. The reader never reads the pending
+		// set again, so this entry is not redelivered behind the reader's
+		// back; what an operator does with it is theirs to decide.
+		return
 	}
 	b.acknowledge(ctx, stream, group, entry.ID)
 }
@@ -479,12 +500,25 @@ func (b *EventBus) deliverRemote(ctx context.Context, eventType, stream, group s
 // process to receive a panic, so letting it escape would crash the whole
 // replica from a reader goroutine. The handler's error is not observable by
 // any publisher either; it is dropped by design, see the delivery note on
-// EventBus.
-func (b *EventBus) runRemoteHandler(ctx context.Context, evt pkgcore.Event, h pkgcore.EventHandler) {
+// EventBus. A recovered panic is reported (and logged): the caller leaves
+// the entry unacknowledged rather than acking a delivery whose side effects
+// never ran.
+//
+// pkgcore is the dependency floor of the workspace and cannot import
+// go/observability, so this reaches for log/slog directly, the same
+// precedent warnIfNotDurable sets in pkgcore's own root package.
+func (b *EventBus) runRemoteHandler(ctx context.Context, evt pkgcore.Event, h pkgcore.EventHandler) (panicked bool) {
 	defer func() {
-		_ = recover()
+		if r := recover(); r != nil {
+			panicked = true
+			slog.Default().Error("pkgcore/eventbus/redis: remote handler panicked; entry left unacknowledged",
+				"event_type", evt.Type,
+				"panic", fmt.Sprintf("%v", r),
+			)
+		}
 	}()
 	_ = h(ctx, evt)
+	return false
 }
 
 // acknowledge removes the entry from the group's pending set. Failures are

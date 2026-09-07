@@ -161,3 +161,52 @@ func TestIsNotNumericErr(t *testing.T) {
 		})
 	}
 }
+
+// TestExpiryInterval_NonPositiveTTLIsNil pins the zero-or-less boundary of
+// the expiry parameter every expiry-writing statement binds: a ttl of zero
+// or less must travel as an untyped nil (SQL NULL), which now() + NULL turns
+// into a NULL expires_at -- "no expiry" -- rather than as a zero-length
+// interval that now() + interval '00:00:00' would render as a non-NULL
+// instant the read-side guards would treat as live forever.
+func TestExpiryInterval_NonPositiveTTLIsNil(t *testing.T) {
+	t.Parallel()
+
+	for _, ttl := range []time.Duration{0, -time.Second} {
+		if got := expiryInterval(ttl); got != nil {
+			t.Errorf("expiryInterval(%v) = %#v, want nil", ttl, got)
+		}
+	}
+}
+
+// TestExpiryInterval_PositiveTTLIsTheDurationItself pins that a positive ttl
+// travels as a time.Duration parameter -- the value pgx encodes as a
+// PostgreSQL interval of exactly that length, which the database adds to its
+// own now() (see expiryInterval's own doc comment). Returning the duration
+// unchanged -- rather than an absolute instant computed with the application
+// clock -- is the whole point of the one-clock fix WithClock's own doc
+// comment describes.
+func TestExpiryInterval_PositiveTTLIsTheDuration(t *testing.T) {
+	t.Parallel()
+
+	if got := expiryInterval(200 * time.Millisecond); got != 200*time.Millisecond {
+		t.Errorf("expiryInterval(200ms) = %#v, want 200ms as a time.Duration", got)
+	}
+}
+
+// TestWithClock_NilFunctionIsIgnored pins WithClock's nil guard, matching
+// go/authn.WithClock's identical contract: a nil clock must leave whatever
+// clock the store already holds in place rather than clearing it.
+func TestWithClock_NilFunctionIsIgnored(t *testing.T) {
+	t.Parallel()
+
+	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db")
+	if err != nil {
+		t.Fatalf("pgxpool.New() error = %v, want nil", err)
+	}
+	t.Cleanup(pool.Close)
+
+	store := NewKVStore(pool, WithClock(nil))
+	if store.now == nil {
+		t.Error("WithClock(nil) cleared the store's clock, want it left in place")
+	}
+}

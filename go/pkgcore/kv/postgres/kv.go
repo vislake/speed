@@ -75,6 +75,16 @@ const (
 	// yet passed) is visible; an expired or absent row is not. This is the
 	// "drop lazily" half of the table's expiry story -- see the migration
 	// file's own doc comment on expires_at, and Sweep for the other half.
+	//
+	// The expiry comparison is made against the database's own now(), never
+	// against a client-supplied instant -- the write side (setSQL,
+	// incrByFloatWithTTLSQL) stores a database-computed now() + interval, so
+	// the write and every read share one clock, the database's. Judging an
+	// application-clock-written absolute instant with the database clock
+	// would let clock skew between the two silently shorten (or stretch)
+	// every TTL this store manages; see incrByFloatWithTTLSQL's doc comment
+	// for the full argument, and the WithClock option for the regression
+	// that pins it.
 	getSQL = `SELECT value FROM pkgcore_kv_entries WHERE key = $1 AND (expires_at IS NULL OR expires_at > now())`
 
 	// setSQL implements KVStore.Set: an upsert that always replaces both the
@@ -82,7 +92,16 @@ const (
 	// "Set... replacing any existing value and expiry" contract -- a
 	// pre-existing TTL is cleared exactly when the new ttl argument asks for
 	// no expiry, because EXCLUDED.expires_at is NULL in that case.
-	setSQL = `INSERT INTO pkgcore_kv_entries (key, value, expires_at) VALUES ($1, $2, $3)
+	//
+	// $3 is the interval expiryInterval binds: the expires_at value stored
+	// here is now() + $3, computed entirely inside the database on the
+	// database's own clock (a NULL $3 -- a zero-or-less ttl -- stores NULL,
+	// "no expiry"). The expiry is never computed on the application clock as
+	// an absolute instant, because every read of the row judges it against
+	// the database's own now(): two clocks would let skew between them
+	// silently shorten or stretch the TTL (see getSQL's doc comment).
+	setSQL = `INSERT INTO pkgcore_kv_entries (key, value, expires_at)
+VALUES ($1, $2, now() + $3::interval)
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at`
 
 	// deleteSQL implements KVStore.Delete. Deleting an absent key affects
@@ -142,13 +161,27 @@ RETURNING value`
 	// upsert incrByFloatSQL performs, with one difference -- everywhere
 	// incrByFloatSQL resets expires_at to NULL (a genuinely missing row, or
 	// an existing row whose own expiry has already passed), this statement
-	// instead sets it to $3, the caller-computed absolute expiry (NULL when
-	// the caller passed a ttl of zero or less, matching Set's own
-	// zero-or-less-means-no-expiry convention). A live, non-expired row's
-	// branch is untouched byte for byte: its own expires_at is carried over
-	// exactly as incrByFloatSQL already does, so $3 is never consulted for
-	// it -- ttl is ignored for a live key, never extending it, the identical
-	// non-extension rule IncrByFloat's own doc comment states.
+	// instead sets it to now() + $3, the database's own clock plus the
+	// interval $3 carries (NULL when the caller passed a ttl of zero or
+	// less, matching Set's own zero-or-less-means-no-expiry convention). A
+	// live, non-expired row's branch is untouched byte for byte: its own
+	// expires_at is carried over exactly as incrByFloatSQL already does, so
+	// $3 is never consulted for it -- ttl is ignored for a live key, never
+	// extending it, the identical non-extension rule IncrByFloat's own doc
+	// comment states.
+	//
+	// Computing the expiry as now() + $3 inside the statement -- never on
+	// the application clock -- is what makes the write share a clock with
+	// every read: getSQL, incrByFloatSQL and compareAndSwapSQL all judge
+	// expires_at against the database's own now(), and a client-computed
+	// absolute instant written by a replica whose clock skews from the
+	// database's would silently shorten or stretch the TTL this statement
+	// attaches (a security control like a rate-limit window must not be
+	// judged early -- or late -- by a clock disagreement between two
+	// machines). now() is stable for the whole statement, so the row's
+	// value and its expiry are decided under one instant even when the
+	// statement races another writer to an expired row. See the WithClock
+	// option for the regression that pins the property.
 	//
 	// This is one statement, not incrByFloatSQL followed by a second write:
 	// the same row-level serialization argument in incrByFloatSQL's own doc
@@ -156,7 +189,7 @@ RETURNING value`
 	// can ever have its increment overwritten by another caller's own
 	// expiry-attaching write -- there is no second write to race against.
 	incrByFloatWithTTLSQL = `INSERT INTO pkgcore_kv_entries AS kv (key, value, expires_at)
-VALUES ($1, ($2::numeric)::text::bytea, $3::timestamptz)
+VALUES ($1, ($2::numeric)::text::bytea, now() + $3::interval)
 ON CONFLICT (key) DO UPDATE SET
     value = CASE
         WHEN kv.expires_at IS NOT NULL AND kv.expires_at <= now()
@@ -165,7 +198,7 @@ ON CONFLICT (key) DO UPDATE SET
     END,
     expires_at = CASE
         WHEN kv.expires_at IS NOT NULL AND kv.expires_at <= now()
-            THEN $3::timestamptz
+            THEN now() + $3::interval
         ELSE kv.expires_at
     END
 RETURNING value`
@@ -249,6 +282,41 @@ SELECT (SELECT count(*) FROM matched) + (SELECT count(*) FROM inserted)`
 // rather than an oversight.
 type Store struct {
 	pool *pgxpool.Pool
+
+	// now is the application-clock source WithClock supplies. No statement
+	// this store runs consults it: expiries are computed by the database
+	// itself (now() + $3::interval on the write side, judged against now()
+	// on the read side), so the field exists solely so that WithClock's
+	// regression seam has somewhere to stand -- a clock deliberately wrong
+	// relative to the database's must be constructible, and provably
+	// irrelevant, in the same code that once used it. See WithClock's own
+	// doc comment.
+	now func() time.Time
+}
+
+// Option configures a Store at construction.
+type Option func(*Store)
+
+// WithClock supplies the application-clock source this store's expiry
+// arithmetic used before the one-clock hardening that made the database's
+// own clock the only judge of a TTL. Today no statement consults it:
+// Set and IncrByFloatWithTTL store now() + <interval> computed inside
+// PostgreSQL, and every read compares against PostgreSQL's own now(), so
+// the application clock has no seat at the expiry table.
+//
+// WithClock exists as the regression seam for exactly that property: a test
+// constructs the store with a clock deliberately skewed from the database's
+// (say, ten minutes behind) and pins that a Set with a live TTL is still
+// visible to a Get until the TTL genuinely elapses on the database clock.
+// Before the one-clock fix the same construction made the key vanish
+// instantly -- the expiry the skewed clock computed was already in the past
+// by the database's reckoning. A nil function is ignored.
+func WithClock(now func() time.Time) Option {
+	return func(s *Store) {
+		if now != nil {
+			s.now = now
+		}
+	}
 }
 
 // NewKVStore returns a *Store backed by the given PostgreSQL connection
@@ -285,13 +353,28 @@ type Store struct {
 // expires_at for the full story, and Sweep's doc comment for the hygiene
 // half a host is expected to run on its own schedule.
 //
+// A second boundary detail is the clock the store's TTLs run on: every
+// expiry this store writes is computed inside PostgreSQL as now() + ttl and
+// judged against PostgreSQL's own now(), so the store itself never reads the
+// application clock and a replica whose clock disagrees with the database's
+// cannot shorten or stretch a TTL. The kv/nats and kv/memcached
+// implementations carry their expiry inside the value envelope and judge it
+// on the reading replica's local clock instead, which is what makes this
+// store's one-clock property distinct among the envelope-less backends.
+//
 // A nil pool panics: it is an unrecoverable wiring error at startup, and
 // every operation would fail identically at first use.
-func NewKVStore(pool *pgxpool.Pool) *Store {
+func NewKVStore(pool *pgxpool.Pool, opts ...Option) *Store {
 	if pool == nil {
 		panic("pkgcore/kv/postgres: NewKVStore requires a non-nil *pgxpool.Pool")
 	}
-	return &Store{pool: pool}
+	s := &Store{pool: pool, now: time.Now}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 // var _ pins that *Store satisfies pkgcore.KVStore at compile time.
@@ -320,13 +403,7 @@ func (s *Store) Set(ctx context.Context, key string, value []byte, ttl time.Dura
 		return err
 	}
 
-	var expiresAt *time.Time
-	if ttl > kvNoExpiry {
-		at := time.Now().Add(ttl)
-		expiresAt = &at
-	}
-
-	if _, err := s.pool.Exec(ctx, setSQL, key, normalizeValue(value), expiresAt); err != nil {
+	if _, err := s.pool.Exec(ctx, setSQL, key, normalizeValue(value), expiryInterval(ttl)); err != nil {
 		return fmt.Errorf("pkgcore/kv/postgres: set: %w", err)
 	}
 	return nil
@@ -388,14 +465,8 @@ func (s *Store) IncrByFloatWithTTL(ctx context.Context, key string, delta float6
 
 	deltaText := formatFloat(delta)
 
-	var expiresAt *time.Time
-	if ttl > kvNoExpiry {
-		at := time.Now().Add(ttl)
-		expiresAt = &at
-	}
-
 	var result []byte
-	err := s.pool.QueryRow(ctx, incrByFloatWithTTLSQL, key, deltaText, expiresAt).Scan(&result)
+	err := s.pool.QueryRow(ctx, incrByFloatWithTTLSQL, key, deltaText, expiryInterval(ttl)).Scan(&result)
 	if err != nil {
 		if isNotNumericErr(err) {
 			return 0, pkgcore.ErrNotNumeric
@@ -489,6 +560,24 @@ func normalizeValue(v []byte) []byte {
 // cast's rendering free of binary-to-decimal noise.
 func formatFloat(delta float64) string {
 	return strconv.FormatFloat(delta, kvFloatFormat, kvFloatPrecisionShortest, kvFloatBitSize)
+}
+
+// expiryInterval turns a KVStore ttl argument into the $3 parameter the
+// expiry-writing statements bind: the interval PostgreSQL adds to its own
+// now() to compute the row's expires_at. A ttl of zero or less binds NULL,
+// which now() + NULL turns into a NULL expires_at -- "no expiry", matching
+// the interface's own zero-or-less convention.
+//
+// The duration travels as a pgx time.Duration parameter, which pgx encodes
+// as a PostgreSQL interval (microsecond precision; a sub-microsecond ttl is
+// below the interval's own granularity and truncates, which no caller of
+// this store uses -- kvstoretest's conformance tier exercises
+// millisecond-scale TTLs).
+func expiryInterval(ttl time.Duration) any {
+	if ttl <= kvNoExpiry {
+		return nil
+	}
+	return ttl
 }
 
 // parseFloat parses raw -- the bytea column's own text-shaped content, per

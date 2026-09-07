@@ -35,9 +35,42 @@ func init() {
 			if err != nil {
 				return nil, fmt.Errorf("pkgcore/eventbus/nats: builtin eventbus.nats seam: %w", err)
 			}
-			return NewEventBus(conn), nil
+			// connFromConfig dials a live connection (nats.Connect is
+			// synchronous, with RetryOnFailedConnect), and the connection
+			// was built here, from cfg -- so the returned value closes both
+			// halves: EventBus.Close stops the readers and deletes the
+			// consumers, and conn.Close releases the dialed connection,
+			// which EventBus.Close deliberately leaves open because a
+			// host-built connection is the host's to close.
+			// Kernel.Bootstrap records this Close and runs it on Shutdown
+			// (or on its own failure path); see pkgcore.Registration's
+			// resource-ownership contract.
+			bus := NewEventBus(conn)
+			return &closableEventBus{EventBus: bus, closeConn: conn.Close}, nil
 		},
 	})
+}
+
+// closableEventBus is the value "eventbus.nats"'s registration returns: the
+// bus itself (whose promoted methods satisfy pkgcore.EventBus) plus the
+// Close() error method that releases the connection the registration
+// dialed, per the Registration-level resource-ownership contract. A host
+// that calls NewEventBus itself gets the bare *EventBus and keeps owning
+// its connection, exactly as that constructor's own doc comment promises;
+// only the preset-built value carries the registration's closer.
+type closableEventBus struct {
+	*EventBus
+	closeConn func()
+}
+
+// Close stops the bus and then releases the connection the registration
+// dialed.
+func (b *closableEventBus) Close() error {
+	b.EventBus.Close()
+	if b.closeConn != nil {
+		b.closeConn()
+	}
+	return nil
 }
 
 // mustRegister adds r to registry and panics if that fails. It is only ever

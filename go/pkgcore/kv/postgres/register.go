@@ -34,9 +34,37 @@ func init() {
 			if err != nil {
 				return nil, fmt.Errorf("pkgcore/kv/postgres: builtin kv.postgres seam: %w", err)
 			}
-			return NewKVStore(pool), nil
+			// The pool was built here, from cfg -- the registration owns it,
+			// not a host that never saw it -- so the returned value's
+			// Close() error releases it. Kernel.Bootstrap records that
+			// Close and runs it on Shutdown (or on its own failure path);
+			// see pkgcore.Registration's resource-ownership contract. Note
+			// that a store reached through the registry therefore closes
+			// with its pool at Shutdown; a host that wants Sweep on a
+			// store whose pool it owns calls NewKVStore directly instead.
+			return &closableKVStore{KVStore: NewKVStore(pool), closePool: pool.Close}, nil
 		},
 	})
+}
+
+// closableKVStore is the value "kv.postgres"'s registration returns: the
+// store itself (whose promoted methods satisfy pkgcore.KVStore) plus the
+// Close() error method that releases the pool the registration built, per
+// the Registration-level resource-ownership contract. A host that calls
+// NewKVStore itself gets the bare *Store and keeps owning its pool, exactly
+// as that constructor's own doc comment promises; only the preset-built
+// value carries the registration's closer.
+type closableKVStore struct {
+	pkgcore.KVStore
+	closePool func()
+}
+
+// Close releases the pool the registration built.
+func (s *closableKVStore) Close() error {
+	if s.closePool != nil {
+		s.closePool()
+	}
+	return nil
 }
 
 // mustRegister adds r to registry and panics if that fails, mirroring

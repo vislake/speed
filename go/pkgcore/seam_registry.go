@@ -28,6 +28,23 @@ type Config map[string]string
 // Registration is one named implementation of a seam: the name assembly
 // resolves through a Preset, the Capability it declares about itself, and the
 // constructor that builds it from a Config.
+//
+// # Resource ownership and the Close contract
+//
+// New may create resources the instance owns -- a dialed connection, a
+// client built from cfg's address, a connection pool, a temporary directory
+// -- and an implementation that does should declare it by implementing
+// Close() error on the value it returns, whatever its concrete type. The
+// value is returned to the caller as the seam interface (EventBus, KVStore,
+// ...), so the Close method lives on the concrete type and is reached by an
+// interface assertion, never by the seam interface itself; Kernel.Bootstrap
+// closes every preset-resolved implementation whose value satisfies
+// `interface{ Close() error }` -- on failure, before the Bootstrap error is
+// returned; on success, when the host calls Kernel.Shutdown. A
+// Registration whose New creates no owned resources simply does not
+// implement Close, and Bootstrap has nothing to record. A host that builds
+// the implementation itself and injects it with WithEventBus or one of its
+// siblings keeps owning its lifecycle, exactly as it always did.
 type Registration[T any] struct {
 	// Name identifies the implementation within its seam, for example
 	// "eventbus.memory" or "eventbus.redis". It is what a Preset's per-seam
@@ -42,7 +59,9 @@ type Registration[T any] struct {
 
 	// New builds one instance of the implementation from cfg. It is called
 	// once per SeamRegistry.Build call; nothing in SeamRegistry retries it or
-	// caches the result.
+	// caches the result. See the type's own doc comment for the resource
+	// ownership and Close() error contract a New that creates resources it
+	// owns should honour.
 	New func(cfg Config) (T, error)
 }
 

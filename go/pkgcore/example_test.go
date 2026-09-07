@@ -777,3 +777,26 @@ func ExampleErrMissingSeamConfig() {
 	// true
 	// true
 }
+
+// ExampleKernel_Shutdown shows the seam lifecycle a successful Bootstrap
+// hands over to the Kernel: Shutdown releases the resources of every seam
+// implementation the Bootstrap resolved from a Preset and that implements
+// the Registration-level Close() error contract (a dialed connection, a
+// client built from the Config, a throwaway temporary directory), and a
+// Bootstrap that fails after resolving such a seam closes it before
+// returning the error. The default standalone composition's in-process
+// implementations own nothing closable, so Shutdown here is a no-op that
+// reports no error; a host calls it when the assembled application is
+// stopping, after the bootstrapped Registry's seams are no longer in use.
+func ExampleKernel_Shutdown() {
+	kernel := pkgcore.NewKernel()
+	reg, err := kernel.Bootstrap(context.Background())
+	if err != nil {
+		fmt.Println("unexpected bootstrap error:", err)
+		return
+	}
+	fmt.Println(reg != nil, kernel.Shutdown())
+
+	// Output:
+	// true <nil>
+}

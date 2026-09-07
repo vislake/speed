@@ -34,9 +34,39 @@ func init() {
 			if err != nil {
 				return nil, fmt.Errorf("pkgcore/eventbus/redis: builtin eventbus.redis seam: %w", err)
 			}
-			return NewEventBus(client), nil
+			// The client was built here, from cfg -- the registration owns
+			// it, not a host that never saw it -- so the returned value
+			// closes both halves: EventBus.Close stops the readers, and
+			// client.Close releases the dialed connections, which
+			// EventBus.Close deliberately leaves open because a host-built
+			// client is the host's to close. Kernel.Bootstrap records this
+			// Close and runs it on Shutdown (or on its own failure path);
+			// see pkgcore.Registration's resource-ownership contract.
+			bus := NewEventBus(client)
+			return &closableEventBus{EventBus: bus, closeClient: client.Close}, nil
 		},
 	})
+}
+
+// closableEventBus is the value "eventbus.redis"'s registration returns: the
+// bus itself (whose promoted methods satisfy pkgcore.EventBus) plus the
+// Close() error method that releases the client the registration built, per
+// the Registration-level resource-ownership contract. A host that calls
+// NewEventBus itself gets the bare *EventBus and keeps owning its client,
+// exactly as that constructor's own doc comment promises; only the
+// preset-built value carries the registration's closer.
+type closableEventBus struct {
+	*EventBus
+	closeClient func() error
+}
+
+// Close stops the bus and then releases the client the registration built.
+func (b *closableEventBus) Close() error {
+	b.EventBus.Close()
+	if b.closeClient != nil {
+		return b.closeClient()
+	}
+	return nil
 }
 
 // mustRegister adds r to registry and panics if that fails. It is only ever

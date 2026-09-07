@@ -62,8 +62,19 @@
 // server's memory, exactly as an ordinary cache entry should; it is never
 // what decides whether a Get call reports the key present. A row Memcached
 // has not yet physically evicted but whose logical envelope has expired is
-// deleted eagerly on the read that discovers it and reported absent, so two
-// callers never observe it flip from present to absent at different moments.
+// reported absent -- and, when a write revives the key, replaced through the
+// server's own compare-and-swap at the token the stale read returned (see
+// readRow and the Incr/CAS loops), never deleted through an unguarded
+// Delete that could land after a concurrent writer had already replaced the
+// row and silently destroy that writer's fresh value.
+//
+// One consequence of never deleting a logically expired row on the read
+// path is that the row physically lingers until the physical exptime its
+// last write scheduled (at most about one second after the logical expiry,
+// for a sub-second ttl) or the next write replaces it. The envelope is
+// authoritative for what a Get reports, so the lingering is invisible to
+// callers; it is the price of making every read of an expired row
+// race-free against every concurrent writer.
 //
 // One inherent boundary the envelope cannot lift: Memcached's own exptime
 // field is a signed 32-bit Unix timestamp once it is used in absolute-time
@@ -83,7 +94,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"net"
 	"strconv"
 	"time"
 
@@ -165,6 +178,31 @@ var errCASAttemptsExhausted = errors.New("pkgcore/kv/memcached: exceeded retry a
 // this store cannot rule out on its own.
 var errCorruptEnvelope = errors.New("pkgcore/kv/memcached: stored value is too short to be one of this store's envelopes")
 
+// rowState classifies what one read of a key found, in the three shapes the
+// store's operations branch on.
+type rowState int
+
+const (
+	// rowAbsent means Memcached answered cache-miss: the key is physically
+	// gone (never written, or already evicted by the physical exptime its
+	// last write scheduled). A fresh value must be created with Memcached's
+	// "add" verb, which only succeeds while the key stays absent.
+	rowAbsent rowState = iota
+
+	// rowExpired means the key is physically present but its envelope's
+	// logical expiry has passed: absent to every caller, but still occupying
+	// the server, so a fresh value must be written with Memcached's "cas"
+	// verb conditioned on the token the read returned -- the only write that
+	// is guaranteed not to clobber a concurrent writer who revived the key
+	// between this read and this write.
+	rowExpired
+
+	// rowLive means the key is physically present and its envelope's logical
+	// expiry has not passed: the value is visible and its expiry is carried
+	// forward by the write that follows.
+	rowLive
+)
+
 // kvStore is the distributed deployment mode's Memcached-backed KVStore. A
 // distributed-mode host passes one client for the whole deployment; nothing
 // in the store constructs, closes or otherwise owns the client.
@@ -198,17 +236,20 @@ func NewKVStore(client *memcache.Client) pkgcore.KVStore {
 	return &kvStore{client: client}
 }
 
-// Get implements pkgcore.KVStore.Get.
+// Get implements pkgcore.KVStore.Get. A key whose envelope's logical expiry
+// has passed -- whatever Memcached's own physical state -- is reported
+// absent, exactly like every other implementation; see readRow for why the
+// expired row is left in place rather than eagerly deleted.
 func (s *kvStore) Get(ctx context.Context, key string) ([]byte, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
 
-	payload, _, _, found, err := s.readLive(key)
+	payload, _, _, state, err := s.readRow(key)
 	if err != nil {
 		return nil, false, err
 	}
-	if !found {
+	if state != rowLive {
 		return nil, false, nil
 	}
 	// Copy, so that a caller mutating the result cannot reach into whatever
@@ -261,11 +302,13 @@ func (s *kvStore) Delete(ctx context.Context, key string) error {
 // retry loop over the value's canonical decimal encoding: read the current
 // value and its CAS token together (Memcached's "gets" command, which
 // gomemcache's Get always issues), parse it, add delta, and write the result
-// back conditioned on that same token via Memcached's native "cas" (an
-// existing key) or "add" (a missing or logically expired one). A lost race
-// -- someone else's write landed between this call's read and its write --
-// is not an error and is retried from a fresh read, bounded by
-// kvMaxCASAttempts.
+// back conditioned on that same token via Memcached's native "cas" -- for a
+// live key, and for a logically expired one too, whose fresh value must
+// replace the still-physically-present stale row without clobbering a
+// concurrent writer that revived it in between (see readRow's doc comment) --
+// or via "add" for a genuinely absent key. A lost race -- someone else's
+// write landed between this call's read and its write -- is not an error and
+// is retried from a fresh read, bounded by kvMaxCASAttempts.
 func (s *kvStore) IncrByFloat(ctx context.Context, key string, delta float64) (float64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -279,8 +322,11 @@ func (s *kvStore) IncrByFloat(ctx context.Context, key string, delta float64) (f
 			time.Sleep(casBackoff(attempt))
 		}
 
-		payload, expiresAt, casID, found, err := s.readLive(key)
+		payload, expiresAt, casID, state, err := s.readRow(key)
 		if err != nil {
+			if isTransientServerErr(err) {
+				continue
+			}
 			return 0, err
 		}
 
@@ -289,7 +335,7 @@ func (s *kvStore) IncrByFloat(ctx context.Context, key string, delta float64) (f
 		// contract pkgcore.KVStore.IncrByFloat documents, and the one
 		// pkgcore's in-memory store and kv/redis both honour.
 		var current float64
-		if found {
+		if state == rowLive {
 			parsed, perr := strconv.ParseFloat(string(payload), kvFloatBitSize)
 			if perr != nil {
 				// The stored value is not a number: fail now, without
@@ -300,42 +346,37 @@ func (s *kvStore) IncrByFloat(ctx context.Context, key string, delta float64) (f
 				return 0, pkgcore.ErrNotNumeric
 			}
 			current = parsed
+		} else {
+			// A revived (logically expired) row must not carry the stale
+			// envelope's already-passed expiry into its fresh value --
+			// readRow hands the old expiresAt back with the row, and only
+			// the ttl-attaching sibling below is allowed to replace it.
+			expiresAt = time.Time{}
 		}
 
 		result := current + delta
 		newValue := strconv.AppendFloat(nil, result, kvFloatFormat, kvFloatPrecisionShortest, kvFloatBitSize)
 
-		if !found {
-			encoded, encodeErr := encodeEnvelope(newValue, time.Time{})
-			if encodeErr != nil {
-				return 0, fmt.Errorf("pkgcore/kv/memcached: incr: %w", encodeErr)
-			}
-			item := &memcache.Item{
-				Key:   key,
-				Value: encoded,
-			}
-			err = s.client.Add(item)
-			if isLostCASRace(err) {
-				continue
-			}
-			if err != nil {
-				return 0, fmt.Errorf("pkgcore/kv/memcached: incr: %w", err)
-			}
-			return result, nil
+		// The write is an "add" for a genuinely absent key and a "cas" at
+		// the read's token for a physically present one (live or expired):
+		// the cas write is what makes a revive of an expired row safe
+		// against a concurrent writer that got there first -- a lost race
+		// is retried, never a clobber.
+		encoded, encodeErr := encodeEnvelope(newValue, expiresAt)
+		if encodeErr != nil {
+			return 0, fmt.Errorf("pkgcore/kv/memcached: incr: %w", encodeErr)
 		}
-
-		encoded, err := encodeEnvelope(newValue, expiresAt)
-		if err != nil {
-			return 0, fmt.Errorf("pkgcore/kv/memcached: incr: %w", err)
-		}
-
 		item := &memcache.Item{
 			Key:        key,
 			Value:      encoded,
 			Expiration: physicalExptime(expiresAt),
 			CasID:      casID,
 		}
-		err = s.client.CompareAndSwap(item)
+		if state == rowAbsent {
+			err = s.client.Add(item)
+		} else {
+			err = s.client.CompareAndSwap(item)
+		}
 		if isLostCASRace(err) {
 			continue
 		}
@@ -349,14 +390,12 @@ func (s *kvStore) IncrByFloat(ctx context.Context, key string, delta float64) (f
 
 // IncrByFloatWithTTL implements pkgcore.KVStore.IncrByFloatWithTTL. It is the
 // identical compare-and-swap retry loop IncrByFloat runs, with one
-// difference: when readLive reports the key absent (found is false --
-// readLive already collapses "genuinely never set" and "logically expired"
-// into that one signal, unlike this store's own envelope-decoding internals
-// for other operations), the new envelope's expiry is computed from ttl
-// instead of always being time.Time{} ("never"). A live key's own expiresAt,
-// read straight from its envelope, is carried through unchanged on every
-// retry -- ttl is never consulted for it, matching IncrByFloat's own
-// non-extension rule.
+// difference: when readRow reports the key not live (rowAbsent or
+// rowExpired), the new envelope's expiry is computed from ttl instead of
+// always being time.Time{} ("never"). A live key's own expiresAt, read
+// straight from its envelope, is carried through unchanged on every retry --
+// ttl is never consulted for it, matching IncrByFloat's own non-extension
+// rule.
 func (s *kvStore) IncrByFloatWithTTL(ctx context.Context, key string, delta float64, ttl time.Duration) (float64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -370,13 +409,16 @@ func (s *kvStore) IncrByFloatWithTTL(ctx context.Context, key string, delta floa
 			time.Sleep(casBackoff(attempt))
 		}
 
-		payload, expiresAt, casID, found, err := s.readLive(key)
+		payload, expiresAt, casID, state, err := s.readRow(key)
 		if err != nil {
+			if isTransientServerErr(err) {
+				continue
+			}
 			return 0, err
 		}
 
 		var current float64
-		if found {
+		if state == rowLive {
 			parsed, perr := strconv.ParseFloat(string(payload), kvFloatBitSize)
 			if perr != nil {
 				return 0, pkgcore.ErrNotNumeric
@@ -391,38 +433,21 @@ func (s *kvStore) IncrByFloatWithTTL(ctx context.Context, key string, delta floa
 		result := current + delta
 		newValue := strconv.AppendFloat(nil, result, kvFloatFormat, kvFloatPrecisionShortest, kvFloatBitSize)
 
-		if !found {
-			encoded, encodeErr := encodeEnvelope(newValue, expiresAt)
-			if encodeErr != nil {
-				return 0, fmt.Errorf("pkgcore/kv/memcached: incr with ttl: %w", encodeErr)
-			}
-			item := &memcache.Item{
-				Key:        key,
-				Value:      encoded,
-				Expiration: physicalExptime(expiresAt),
-			}
-			err = s.client.Add(item)
-			if isLostCASRace(err) {
-				continue
-			}
-			if err != nil {
-				return 0, fmt.Errorf("pkgcore/kv/memcached: incr with ttl: %w", err)
-			}
-			return result, nil
+		encoded, encodeErr := encodeEnvelope(newValue, expiresAt)
+		if encodeErr != nil {
+			return 0, fmt.Errorf("pkgcore/kv/memcached: incr with ttl: %w", encodeErr)
 		}
-
-		encoded, err := encodeEnvelope(newValue, expiresAt)
-		if err != nil {
-			return 0, fmt.Errorf("pkgcore/kv/memcached: incr with ttl: %w", err)
-		}
-
 		item := &memcache.Item{
 			Key:        key,
 			Value:      encoded,
 			Expiration: physicalExptime(expiresAt),
 			CasID:      casID,
 		}
-		err = s.client.CompareAndSwap(item)
+		if state == rowAbsent {
+			err = s.client.Add(item)
+		} else {
+			err = s.client.CompareAndSwap(item)
+		}
 		if isLostCASRace(err) {
 			continue
 		}
@@ -434,16 +459,20 @@ func (s *kvStore) IncrByFloatWithTTL(ctx context.Context, key string, delta floa
 	return 0, fmt.Errorf("pkgcore/kv/memcached: incr with ttl: %w", errCASAttemptsExhausted)
 }
 
-// CompareAndSwap implements pkgcore.KVStore.CompareAndSwap. A missing or
-// logically expired key is treated identically: it matches only an empty
-// old, which is written through Memcached's native "add" (store only if
-// absent); an existing key is compared against the value this call's own
-// "gets" read, and a match is written back through Memcached's native "cas"
-// conditioned on that read's token, which never touches the key's expiry. A
-// mismatch is reported false immediately, without attempting a write; a lost
-// race against another writer -- the row changed shape between this call's
-// read and its conditional write -- is not an error and is retried from a
-// fresh read, bounded by kvMaxCASAttempts.
+// CompareAndSwap implements pkgcore.KVStore.CompareAndSwap. A missing key
+// matches only an empty old, which is written through Memcached's native
+// "add" (store only if absent); a logically expired but physically present
+// key likewise matches only an empty old, and the fresh value is written
+// through "cas" at the token the read returned -- replacing the stale row
+// without ever clobbering a concurrent writer that revived it between this
+// call's read and its write (the guard readRow's doc comment describes). A
+// live key is compared against the value this call's own "gets" read, and a
+// match is written back through "cas" conditioned on that read's token,
+// which never touches the key's expiry. A mismatch is reported false
+// immediately, without attempting a write; a lost race against another
+// writer -- the row changed shape between this call's read and its
+// conditional write -- is not an error and is retried from a fresh read,
+// bounded by kvMaxCASAttempts.
 func (s *kvStore) CompareAndSwap(ctx context.Context, key string, old, newVal []byte) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -457,12 +486,15 @@ func (s *kvStore) CompareAndSwap(ctx context.Context, key string, old, newVal []
 			time.Sleep(casBackoff(attempt))
 		}
 
-		payload, expiresAt, casID, found, err := s.readLive(key)
+		payload, expiresAt, casID, state, err := s.readRow(key)
 		if err != nil {
+			if isTransientServerErr(err) {
+				continue
+			}
 			return false, err
 		}
 
-		if !found {
+		if state == rowAbsent {
 			if len(old) != 0 {
 				// An absent key matches only the empty expectation.
 				return false, nil
@@ -476,6 +508,34 @@ func (s *kvStore) CompareAndSwap(ctx context.Context, key string, old, newVal []
 				Value: encoded,
 			}
 			err = s.client.Add(item)
+			if isLostCASRace(err) {
+				continue
+			}
+			if err != nil {
+				return false, fmt.Errorf("pkgcore/kv/memcached: cas: %w", err)
+			}
+			return true, nil
+		}
+
+		if state == rowExpired {
+			// A logically expired key is absent for matching purposes: only
+			// the empty expectation matches it, and the fresh value is
+			// written with no expiry, exactly as an absent key's add would
+			// have -- but through a cas at the read's token, since the
+			// stale row still physically occupies the key.
+			if len(old) != 0 {
+				return false, nil
+			}
+			encoded, encodeErr := encodeEnvelope(newVal, time.Time{})
+			if encodeErr != nil {
+				return false, fmt.Errorf("pkgcore/kv/memcached: cas: %w", encodeErr)
+			}
+			item := &memcache.Item{
+				Key:   key,
+				Value: encoded,
+				CasID: casID,
+			}
+			err = s.client.CompareAndSwap(item)
 			if isLostCASRace(err) {
 				continue
 			}
@@ -514,33 +574,47 @@ func (s *kvStore) CompareAndSwap(ctx context.Context, key string, old, newVal []
 	return false, fmt.Errorf("pkgcore/kv/memcached: cas: %w", errCASAttemptsExhausted)
 }
 
-// readLive fetches key through Memcached's native "gets" (gomemcache's Get
+// readRow fetches key through Memcached's native "gets" (gomemcache's Get
 // always issues gets, populating the CAS token), decodes this store's own
-// envelope, and applies the logical expiry check the package doc comment's
-// "why TTL needs an envelope" section describes on top of Memcached's own
-// coarser, whole-second native TTL. A physically present but logically
-// expired row is deleted eagerly -- best-effort, since a concurrent reader
-// or Memcached's own eviction may already have removed it -- and reported
-// absent, exactly like every other KVStore implementation treats an expired
-// key.
-func (s *kvStore) readLive(key string) (payload []byte, expiresAt time.Time, casID uint64, found bool, err error) {
+// envelope, and classifies what it found into the three rowState shapes the
+// operations above branch on, applying the logical expiry check the package
+// doc comment's "why TTL needs an envelope" section describes on top of
+// Memcached's own coarser, whole-second native TTL:
+//
+//   - Memcached's own cache-miss answer is rowAbsent.
+//   - A physically present row whose envelope expiry has passed is
+//     rowExpired: absent to every caller, but its casID is returned with it
+//     so the write that revives the key can go through a cas conditioned on
+//     that token -- the only write that provably cannot clobber a
+//     concurrent writer who replaced the row between this read and that
+//     write. The row is deliberately NOT deleted here: an unguarded Delete
+//     issued from a stale read could land after a concurrent writer had
+//     already revived the key with a fresh value, silently destroying that
+//     writer's work (a rate-limit counter restarted from zero, a lock
+//     released early) -- the exact lost-update shape the revision-guarded
+//     purge in kv/nats's own Get exists to avoid. Memcached's physical
+//     exptime, scheduled at every write, still reclaims the stale row about
+//     a second after its logical expiry, and the revive itself replaces it
+//     immediately.
+//   - A physically present row whose envelope expiry has not passed is
+//     rowLive, with its payload and expiry carried out for the write.
+func (s *kvStore) readRow(key string) (payload []byte, expiresAt time.Time, casID uint64, state rowState, err error) {
 	item, err := s.client.Get(key)
 	if errors.Is(err, memcache.ErrCacheMiss) {
-		return nil, time.Time{}, 0, false, nil
+		return nil, time.Time{}, 0, rowAbsent, nil
 	}
 	if err != nil {
-		return nil, time.Time{}, 0, false, fmt.Errorf("pkgcore/kv/memcached: get: %w", err)
+		return nil, time.Time{}, 0, rowAbsent, fmt.Errorf("pkgcore/kv/memcached: get: %w", err)
 	}
 
 	payload, expiresAt, ok := decodeEnvelope(item.Value)
 	if !ok {
-		return nil, time.Time{}, 0, false, fmt.Errorf("pkgcore/kv/memcached: get: %w", errCorruptEnvelope)
+		return nil, time.Time{}, 0, rowAbsent, fmt.Errorf("pkgcore/kv/memcached: get: %w", errCorruptEnvelope)
 	}
 	if !expiresAt.IsZero() && !time.Now().Before(expiresAt) {
-		_ = s.client.Delete(key)
-		return nil, time.Time{}, 0, false, nil
+		return payload, expiresAt, item.CasID, rowExpired, nil
 	}
-	return payload, expiresAt, item.CasID, true, nil
+	return payload, expiresAt, item.CasID, rowLive, nil
 }
 
 // isLostCASRace reports whether err is one of the answers Memcached's own
@@ -555,6 +629,23 @@ func isLostCASRace(err error) bool {
 	return errors.Is(err, memcache.ErrCASConflict) ||
 		errors.Is(err, memcache.ErrNotStored) ||
 		errors.Is(err, memcache.ErrCacheMiss)
+}
+
+// isTransientServerErr reports whether err is a transient transport-level
+// failure of the read half of a retry loop -- the server closed the
+// connection under this call (io.EOF), or the round trip timed out (a
+// net.Error). Both mean the operation did not happen and may simply be
+// retried from a fresh read within the loop's existing bounded budget; the
+// loops' error paths only fail outright on errors that are not transient in
+// that sense (a malformed envelope, an unreachable server that outlasts the
+// whole retry budget). The read side of the loops used to fail on the first
+// such blip, which a busy or restarting server under load could trip.
+func isTransientServerErr(err error) bool {
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // casBackoff returns the delay before retry attempt (1-indexed against the

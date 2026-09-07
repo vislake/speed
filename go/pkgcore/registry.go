@@ -844,6 +844,25 @@ func (r *memoryRetentionRegistrar) Participants() []RetentionParticipant {
 // shared-state seam; it never selects one. Kernel assembly is the only place
 // allowed to branch on the mode, which is why capability validation lives
 // here rather than inside a module.
+//
+// # Seam lifecycle
+//
+// A seam implementation a Bootstrap resolves from the Kernel's Preset may
+// own resources the registration built -- a dialed NATS connection, a Redis
+// client created from the Config's address, a connection pool, a throwaway
+// temporary directory. Such an implementation declares that it owns them by
+// implementing Close() error (see Registration's own doc comment), and the
+// Kernel then owns the closing: Shutdown closes every preset-resolved
+// implementation a Bootstrap of this Kernel recorded, and a Bootstrap that
+// fails after resolving one or more seams closes what it already resolved
+// before returning the error, so a misconfigured composition never leaks
+// dialed connections. A seam value the host injected with WithEventBus or
+// one of its siblings is never closed by the Kernel: injection means the
+// host built it and keeps owning its lifecycle, exactly as the host owns the
+// connection it passed to a constructor like NewEventBus. Shutdown is
+// idempotent and safe for concurrent use; Bootstrap is not concurrent with
+// itself, and a host must stop using a bootstrapped Registry's seams before
+// calling Shutdown.
 type Kernel struct {
 	deploymentMode DeploymentMode
 
@@ -856,6 +875,20 @@ type Kernel struct {
 	kv          kernelSeam[KVStore]
 	mailer      kernelSeam[Mailer]
 	objectStore kernelSeam[ObjectStore]
+
+	// closersMu guards closers, the Close() error functions of every seam
+	// implementation a Bootstrap of this Kernel resolved from a Preset and
+	// that implements the seam-closer contract (see Registration's doc
+	// comment). Shutdown runs them, once; a Bootstrap that fails closes the
+	// closers it recorded for its own attempt before returning the error
+	// rather than leaving them for a Shutdown the host may never call.
+	closersMu sync.Mutex
+	closers   []func() error
+
+	// shutdownOnce and shutdownErr make Shutdown idempotent: the first call
+	// runs every recorded closer, later calls report the same result.
+	shutdownOnce sync.Once
+	shutdownErr  error
 }
 
 // kernelSeam holds one infrastructure seam's resolution state on a Kernel:
@@ -990,18 +1023,54 @@ type seamResolution struct {
 // Config's own doc comment); a host that needs them injects the
 // implementation directly instead, which is exactly what WithEventBus and
 // its siblings are for.
-func resolveKernelSeam[T any](seam kernelSeam[T], seamKey string, preset Preset, registry *SeamRegistry[T]) (T, seamResolution, error) {
+//
+// The third return value is the closer Bootstrap must run to release the
+// resources this resolution created: nil for an injected seam (the host owns
+// the value's lifecycle), and the value's own Close() error method -- when
+// it implements one -- for a preset-resolved seam, per Registration's
+// resource-ownership contract. It is nil when the resolved implementation
+// owns nothing closable.
+func resolveKernelSeam[T any](seam kernelSeam[T], seamKey string, preset Preset, registry *SeamRegistry[T]) (T, seamResolution, func() error, error) {
 	if seam.injected {
-		return seam.value, seamResolution{seamKey: seamKey, implementation: "<injected>", capabilities: seam.capabilities}, nil
+		return seam.value, seamResolution{seamKey: seamKey, implementation: "<injected>", capabilities: seam.capabilities}, nil, nil
 	}
 
 	name := preset[seamKey]
 	impl, caps, err := registry.Build(name, Config{})
 	if err != nil {
 		var zero T
-		return zero, seamResolution{}, fmt.Errorf("pkgcore: resolve %q seam: %w", seamKey, err)
+		return zero, seamResolution{}, nil, fmt.Errorf("pkgcore: resolve %q seam: %w", seamKey, err)
 	}
-	return impl, seamResolution{seamKey: seamKey, implementation: name, capabilities: caps}, nil
+	return impl, seamResolution{seamKey: seamKey, implementation: name, capabilities: caps}, seamCloserOf(impl), nil
+}
+
+// seamCloserOf returns value's own Close() error method when value
+// implements it -- the resource-release contract Registration's own doc
+// comment describes -- and nil otherwise. Bootstrap applies it only to
+// values it resolved from a Preset; a value the host injected was built and
+// is owned by the host, and nothing here may close it.
+func seamCloserOf(value any) func() error {
+	if closer, ok := value.(interface{ Close() error }); ok {
+		return closer.Close
+	}
+	return nil
+}
+
+// closeSeamClosers runs every closer, in reverse registration order (the
+// last-resolved seam closes first, mirroring conventional teardown order),
+// joining their errors. Nil entries -- the slots a resolution that owns
+// nothing closable records -- are skipped.
+func closeSeamClosers(closers []func() error) error {
+	var errs []error
+	for i := len(closers) - 1; i >= 0; i-- {
+		if closers[i] == nil {
+			continue
+		}
+		if err := closers[i](); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // validateSeamCapability returns an error wrapping ErrCapabilityUnsatisfied,
@@ -1071,31 +1140,57 @@ func warnIfNotDurable(res seamResolution) {
 // dependency that is not part of modules, on a duplicate module name, on the
 // first Register error, and on an unresolved feature flag dependency. ctx
 // must be non-nil; cancelling it stops the bootstrap between modules.
-func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, error) {
+//
+// # Seam resource lifecycle
+//
+// A seam implementation this Bootstrap resolves from the Kernel's Preset may
+// own resources its registration built (see Registration's doc comment):
+// if its concrete value implements Close() error, Bootstrap records it, and
+// the resources it owns are released exactly once -- by Shutdown when the
+// bootstrap succeeds, or by Bootstrap itself, immediately, when the
+// bootstrap fails after that seam was resolved (a misconfigured composition
+// must not leak the connections it already dialed on the way to failing). An
+// injected seam is the host's to close, never this Bootstrap's.
+func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (reg *Registry, retErr error) {
 	if !k.deploymentMode.Valid() {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidDeploymentMode, k.deploymentMode)
 	}
+
+	// This attempt's preset-resolved seam closers, in resolution order. On
+	// success they are transferred to the Kernel's Shutdown list below; on
+	// any error path -- validation, capability, sorting, registration -- the
+	// deferred close below releases what was already resolved.
+	attemptClosers := make([]func() error, 0, 4)
+	defer func() {
+		if retErr != nil {
+			_ = closeSeamClosers(attemptClosers)
+		}
+	}()
 
 	// The seams are resolved, in this fixed order, before anything else, so
 	// that a misconfigured composition fails at startup rather than after a
 	// partial assembly -- the same guarantee the four mode-keyed checks this
 	// retrofit replaced used to give.
-	bus, busRes, err := resolveKernelSeam(k.eventBus, presetKeyEventBus, k.preset, EventBusRegistry)
+	bus, busRes, busClose, err := resolveKernelSeam(k.eventBus, presetKeyEventBus, k.preset, EventBusRegistry)
 	if err != nil {
 		return nil, err
 	}
-	kv, kvRes, err := resolveKernelSeam(k.kv, presetKeyKVStore, k.preset, KVStoreRegistry)
+	attemptClosers = append(attemptClosers, busClose)
+	kv, kvRes, kvClose, err := resolveKernelSeam(k.kv, presetKeyKVStore, k.preset, KVStoreRegistry)
 	if err != nil {
 		return nil, err
 	}
-	mailer, mailerRes, err := resolveKernelSeam(k.mailer, presetKeyMailer, k.preset, MailerRegistry)
+	attemptClosers = append(attemptClosers, kvClose)
+	mailer, mailerRes, mailerClose, err := resolveKernelSeam(k.mailer, presetKeyMailer, k.preset, MailerRegistry)
 	if err != nil {
 		return nil, err
 	}
-	objectStore, objectStoreRes, err := resolveKernelSeam(k.objectStore, presetKeyObjectStore, k.preset, ObjectStoreRegistry)
+	attemptClosers = append(attemptClosers, mailerClose)
+	objectStore, objectStoreRes, objectStoreClose, err := resolveKernelSeam(k.objectStore, presetKeyObjectStore, k.preset, ObjectStoreRegistry)
 	if err != nil {
 		return nil, err
 	}
+	attemptClosers = append(attemptClosers, objectStoreClose)
 
 	required := k.deploymentMode.RequiredCapabilities()
 	resolvedSeams := [...]seamResolution{busRes, kvRes, mailerRes, objectStoreRes}
@@ -1116,7 +1211,7 @@ func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, e
 		return nil, err
 	}
 
-	reg := NewRegistry(bus, kv, mailer)
+	reg = NewRegistry(bus, kv, mailer)
 	// The object-store seam post-dates NewRegistry's three-argument
 	// signature, so the resolved store is installed here, before any module
 	// registers and can reach it.
@@ -1150,7 +1245,41 @@ func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (*Registry, e
 	if err := ValidateFeatureGraph(reg); err != nil {
 		return nil, err
 	}
+
+	// Success: the resolved seams' resources live on for the assembled
+	// application's lifetime. Transfer this attempt's closers to the
+	// Kernel's Shutdown list -- the point at which Bootstrap stops owning
+	// them and Shutdown takes over.
+	k.closersMu.Lock()
+	k.closers = append(k.closers, attemptClosers...)
+	k.closersMu.Unlock()
 	return reg, nil
+}
+
+// Shutdown releases the resources of every seam implementation a Bootstrap
+// of this Kernel resolved from a Preset and that implements the
+// Registration-level Close() error contract: a dialed Redis or NATS
+// connection, a connection pool, a throwaway temporary directory. Injected
+// seam values are never closed here -- the host that built them owns them --
+// and neither is anything a failed Bootstrap resolved: that Bootstrap closed
+// its own resolution before returning its error.
+//
+// Shutdown is idempotent (every closer runs exactly once, whatever the
+// callers) and safe for concurrent use, and reports the joined errors of the
+// closers that failed. A host calls it when the assembled application is
+// stopping, after the bootstrapped Registry's seams are no longer in use;
+// closing a seam the Registry still serves would make its next operation
+// fail, which is the caller's sequencing error, not a Shutdown defect.
+func (k *Kernel) Shutdown() error {
+	k.shutdownOnce.Do(func() {
+		k.closersMu.Lock()
+		closers := k.closers
+		k.closers = nil
+		k.closersMu.Unlock()
+
+		k.shutdownErr = closeSeamClosers(closers)
+	})
+	return k.shutdownErr
 }
 
 // moduleVisitState tracks where a module sits in the depth-first traversal

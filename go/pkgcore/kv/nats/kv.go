@@ -53,6 +53,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -128,23 +129,45 @@ type kvStore struct {
 }
 
 // NewKVStore returns a pkgcore.KVStore backed by a JetStream KV bucket named
-// bucket, provisioning that bucket (via CreateOrUpdateKeyValue) if it does
-// not already exist. nc must already be connected -- this package never
-// dials, closes, or otherwise owns the connection, exactly like kv/redis's
-// NewKVStore with its *redis.Client -- but unlike that constructor,
-// provisioning a JetStream KV bucket is itself a round trip to the server, so
-// this one takes a context and can fail: a JetStream KV bucket is schema the
-// server must agree to hold, not a bare namespace a client can assume into
-// existence the way a Redis key can.
+// bucket, provisioning that bucket if it does not already exist. nc must
+// already be connected -- this package never dials, closes, or otherwise
+// owns the connection, exactly like kv/redis's NewKVStore with its
+// *redis.Client -- but unlike that constructor, provisioning a JetStream KV
+// bucket is itself a round trip to the server, so this one takes a context
+// and can fail: a JetStream KV bucket is schema the server must agree to
+// hold, not a bare namespace a client can assume into existence the way a
+// Redis key can.
 //
-// The bucket is provisioned with every KeyValueConfig field left at its
-// default except Bucket itself: History defaults to 1 (this package keeps no
-// history of its own -- every write replaces the prior value outright, the
-// same behaviour Set/Update/Create give every other KVStore implementation),
-// TTL defaults to zero (the bucket never expires a key on its own; see the
+// The provisioning is probe-then-create, never create-or-update: an
+// existing bucket is probed with a plain KeyValue lookup and adopted
+// untouched, whatever its configuration. Update-overwriting an existing
+// bucket with this constructor's defaults used to silently rewrite a
+// configuration a provisioning operator set deliberately -- replica count,
+// storage engine, history depth and TTL all collapsed back to this
+// constructor's hardcoded single-replica, one-entry-history, no-TTL,
+// file-storage defaults the moment a store was built against it (a
+// pre-provisioned three-replica production bucket quietly demoted to
+// single-replica, with all the availability that replication existed to
+// buy). A bucket created here -- the genuinely absent case -- is
+// provisioned with every KeyValueConfig field left at its default except
+// Bucket itself: History defaults to 1 (this package keeps no history of
+// its own -- every write replaces the prior value outright, the same
+// behaviour Set/Update/Create give every other KVStore implementation), TTL
+// defaults to zero (the bucket never expires a key on its own; see the
 // package doc comment for why this package's own envelope is what carries
 // expiry instead), and Storage defaults to jetstream.FileStorage, which is
 // what lets this implementation declare pkgcore.SurvivesRestart.
+//
+// Two builders racing to provision the same never-seen bucket are resolved
+// by re-probing: the loser's create answers "already in use", and the loser
+// then adopts the winner's bucket exactly as it would have adopted a
+// pre-provisioned one, instead of failing. The "already in use" answer is
+// classified by name -- nats.go maps the single-replica form to
+// jetstream.ErrBucketExists (joined with ErrStreamNameAlreadyInUse) and a
+// replicated-stream form can surface the stream-level error alone; both,
+// plus any future rephrasing of the same server answer, are caught by
+// bucketNameInUse, so a create race never surfaces as a hard error while a
+// perfectly good bucket sits there to adopt.
 //
 // A nil nc panics: it is an unrecoverable wiring error at startup, exactly
 // like kv/redis's nil-client panic, and every operation -- starting with the
@@ -160,12 +183,52 @@ func NewKVStore(ctx context.Context, nc *nats.Conn, bucket string) (pkgcore.KVSt
 		return nil, fmt.Errorf("pkgcore/kv/nats: build jetstream context: %w", err)
 	}
 
-	kv, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: bucket})
-	if err != nil {
-		return nil, fmt.Errorf("pkgcore/kv/nats: provision bucket %q: %w", bucket, err)
+	// Probe first: an existing bucket is adopted as-is, never re-created or
+	// re-configured -- see the constructor doc comment for the rewrite
+	// hazard this probe exists to prevent.
+	kv, err := js.KeyValue(ctx, bucket)
+	if err == nil {
+		return &kvStore{kv: kv}, nil
+	}
+	if !errors.Is(err, jetstream.ErrBucketNotFound) {
+		return nil, fmt.Errorf("pkgcore/kv/nats: probe bucket %q: %w", bucket, err)
 	}
 
-	return &kvStore{kv: kv}, nil
+	created, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: bucket})
+	if err == nil {
+		return &kvStore{kv: created}, nil
+	}
+	if bucketNameInUse(err) {
+		// Lost a provisioning race against another builder of this
+		// never-before-seen bucket: the bucket exists now, so adopt it the
+		// same way a pre-provisioned one would have been adopted. If the
+		// re-probe finds nothing, the create failed for a reason other than
+		// the race and the original error is the honest answer.
+		if winner, probeErr := js.KeyValue(ctx, bucket); probeErr == nil {
+			return &kvStore{kv: winner}, nil
+		}
+	}
+	return nil, fmt.Errorf("pkgcore/kv/nats: provision bucket %q: %w", bucket, err)
+}
+
+// bucketNameInUse reports whether err is one of the answers a JetStream
+// server gives when a CreateKeyValue races another builder of the same
+// bucket: nats.go's own CreateKeyValue maps the single-replica
+// "stream name already in use" API answer onto ErrBucketExists (joined with
+// ErrStreamNameAlreadyInUse for backward compatibility), while a
+// replicated-stream create race can surface as the bare stream-level error
+// or, across server versions, a rephrased answer this package cannot see in
+// advance -- so the classification is errors.Is over both nats.go sentinels
+// plus a text match on the server's own fixed wording, the same coupling
+// kv/redis's ErrNotNumeric detection documents for Redis's fixed error
+// text. Every path through here ends in a re-probe that adopts the winner,
+// so over- and under-matching both degrade safely: a missed classification
+// reports the original create error, and an over-match on a genuinely
+// absent bucket is caught by the re-probe's own ErrBucketNotFound.
+func bucketNameInUse(err error) bool {
+	return errors.Is(err, jetstream.ErrBucketExists) ||
+		errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) ||
+		strings.Contains(err.Error(), "stream name already in use")
 }
 
 // Get implements pkgcore.KVStore.Get. A key JetStream itself has never held,

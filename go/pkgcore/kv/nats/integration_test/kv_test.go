@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/vislake/speed/go/pkgcore"
 	kvnats "github.com/vislake/speed/go/pkgcore/kv/nats"
@@ -543,6 +544,130 @@ func TestInit_RegistersKVNatsOnTheSharedRegistry_WithCapabilities(t *testing.T) 
 func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 	kv := newStore(t, context.Background())
 	kvstoretest.AssertConforms(t, func() pkgcore.KVStore { return kv })
+}
+
+// TestKVStore_NewKVStore_AdoptsPreProvisionedBucketUntouched is the
+// regression for the bucket-rewrite hazard NewKVStore used to carry: it
+// provisioned through nats.go's CreateOrUpdateKeyValue, which -- for a
+// bucket that already exists -- re-applies the constructor's own hardcoded
+// defaults (single replica, one-entry history, no TTL, file storage) on top
+// of whatever configuration the bucket actually had. A pre-provisioned
+// bucket configured deliberately -- memory storage, a ten-entry history, a
+// whole-bucket TTL, a description naming its operator -- was silently
+// rewritten to the constructor defaults the moment a store was built
+// against it, a single-replica downgrade of a bucket someone had provisioned
+// for a reason.
+//
+// NewKVStore must instead probe first and adopt an existing bucket
+// untouched: this test provisions a deliberately distinctive bucket, builds
+// a store over it, and reads the bucket's configuration back through a raw
+// jetstream client -- asserting every distinctive field survived byte for
+// byte, and that the adopted store is usable.
+func TestKVStore_NewKVStore_AdoptsPreProvisionedBucketUntouched(t *testing.T) {
+	ctx := context.Background()
+	conn := startNATSConn(t, ctx)
+	js, err := jetstream.New(conn)
+	if err != nil {
+		t.Fatalf("jetstream.New() error = %v, want nil", err)
+	}
+
+	const bucket = "adopt-untouched"
+	if _, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:      bucket,
+		History:     10,
+		Storage:     jetstream.MemoryStorage,
+		TTL:         45 * time.Second,
+		Description: "provisioned by an operator, must survive adoption",
+	}); err != nil {
+		t.Fatalf("CreateKeyValue() error = %v, want nil", err)
+	}
+
+	store, err := kvnats.NewKVStore(ctx, conn, bucket)
+	if err != nil {
+		t.Fatalf("NewKVStore() error = %v, want nil", err)
+	}
+
+	// The bucket's configuration must be byte-for-byte what the operator
+	// provisioned. Before the probe-first fix, NewKVStore's
+	// CreateOrUpdateKeyValue collapsed every one of these fields back to its
+	// constructor default (history 1, file storage, no TTL, no description).
+	stream, err := js.Stream(ctx, "KV_"+bucket)
+	if err != nil {
+		t.Fatalf("read back bucket %q: %v", bucket, err)
+	}
+	cfg := stream.CachedInfo().Config
+	if cfg.MaxMsgsPerSubject != 10 {
+		t.Errorf("adopted bucket history = %d, want 10: NewKVStore must not rewrite a pre-provisioned bucket's config", cfg.MaxMsgsPerSubject)
+	}
+	if cfg.Storage != jetstream.MemoryStorage {
+		t.Errorf("adopted bucket storage = %v, want memory: NewKVStore must not rewrite a pre-provisioned bucket's config", cfg.Storage)
+	}
+	if cfg.MaxAge != 45*time.Second {
+		t.Errorf("adopted bucket TTL = %v, want 45s: NewKVStore must not rewrite a pre-provisioned bucket's config", cfg.MaxAge)
+	}
+	if cfg.Description != "provisioned by an operator, must survive adoption" {
+		t.Errorf("adopted bucket description = %q, want the provisioned one: NewKVStore must not rewrite a pre-provisioned bucket's config", cfg.Description)
+	}
+
+	// And the adopted store must be a working store over that bucket.
+	if err := store.Set(ctx, "k", []byte("v"), 0); err != nil {
+		t.Fatalf("Set() on the adopted store error = %v, want nil", err)
+	}
+	if value, found, err := store.Get(ctx, "k"); err != nil || !found || string(value) != "v" {
+		t.Errorf("Get() = (%q, %t, %v), want (\"v\", true, nil) on the adopted store", value, found, err)
+	}
+}
+
+// TestKVStore_NewKVStore_RacingProvisionsConvergeOnOneBucket pins the
+// provisioning-race path of NewKVStore's probe-then-create: two builders
+// racing to provision the same never-before-seen bucket both succeed -- the
+// loser's create answers "already in use", and the loser adopts the winner's
+// bucket through the same probe an ordinary pre-provisioned bucket takes
+// (see bucketNameInUse's own doc comment for the classification). Both
+// returned stores must be usable over the one bucket that exists.
+func TestKVStore_NewKVStore_RacingProvisionsConvergeOnOneBucket(t *testing.T) {
+	ctx := context.Background()
+	conn := startNATSConn(t, ctx)
+
+	bucket := "race-provision-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+
+	start := make(chan struct{})
+	stores := make([]pkgcore.KVStore, 2)
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			stores[i], errs[i] = kvnats.NewKVStore(ctx, conn, bucket)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("builder %d NewKVStore() error = %v, want nil: a provisioning race must converge, not fail", i, err)
+		}
+	}
+	for i, store := range stores {
+		if err := store.Set(ctx, fmt.Sprintf("from-%d", i), []byte("v"), 0); err != nil {
+			t.Fatalf("builder %d's store Set() error = %v, want nil", i, err)
+		}
+	}
+	// Exactly one bucket must exist, and both stores must read each other's
+	// writes through it.
+	js, err := jetstream.New(conn)
+	if err != nil {
+		t.Fatalf("jetstream.New() error = %v, want nil", err)
+	}
+	if _, err := js.Stream(ctx, "KV_"+bucket); err != nil {
+		t.Fatalf("read back provisioned bucket: %v", err)
+	}
+	if value, found, err := stores[1].Get(ctx, "from-0"); err != nil || !found || string(value) != "v" {
+		t.Errorf("store 1 Get(from-0) = (%q, %t, %v), want (\"v\", true, nil): both racers must share one bucket", value, found, err)
+	}
 }
 
 // newStore starts a fresh NATS container and returns a KVStore over a

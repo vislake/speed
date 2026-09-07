@@ -168,7 +168,37 @@ func localObjectStoreFromConfig(cfg Config) (ObjectStore, error) {
 		if err != nil {
 			return nil, fmt.Errorf("pkgcore: builtin objectstore.local seam: %w", err)
 		}
-		directory = created
+		// The temp directory was created by this registration and is owned
+		// by it: the returned value's Close() error removes the directory
+		// again, so a Kernel.Shutdown (or a failed Bootstrap, which closes
+		// what it resolved) does not leak the throwaway tree. A store over
+		// a host-supplied cfg["directory"] never carries a closer: that
+		// directory is the host's data, which nothing here may delete.
+		store := NewLocalObjectStore(created)
+		return &closableObjectStore{ObjectStore: store, removeRoot: func() error {
+			return os.RemoveAll(created)
+		}}, nil
 	}
 	return NewLocalObjectStore(directory), nil
+}
+
+// closableObjectStore is the value "objectstore.local"'s registration
+// returns when it created the store's directory itself: the store itself
+// (whose promoted methods satisfy ObjectStore) plus the Close() error method
+// that removes the temporary directory the registration created, per the
+// Registration-level resource-ownership contract. A host that calls
+// NewLocalObjectStore itself keeps owning its directory, exactly as that
+// constructor's own doc comment promises.
+type closableObjectStore struct {
+	ObjectStore
+	removeRoot func() error
+}
+
+// Close removes the temporary directory the registration created. Nothing
+// may use the store after Close; a host shuts its seams down last.
+func (s *closableObjectStore) Close() error {
+	if s.removeRoot != nil {
+		return s.removeRoot()
+	}
+	return nil
 }

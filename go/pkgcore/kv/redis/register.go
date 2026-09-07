@@ -34,9 +34,34 @@ func init() {
 			if err != nil {
 				return nil, fmt.Errorf("pkgcore/kv/redis: builtin kv.redis seam: %w", err)
 			}
-			return NewKVStore(client), nil
+			// The client was built here, from cfg -- the registration owns
+			// it, not a host that never saw it -- so the returned value's
+			// Close() error releases it. Kernel.Bootstrap records that
+			// Close and runs it on Shutdown (or on its own failure path);
+			// see pkgcore.Registration's resource-ownership contract.
+			return &closableKVStore{KVStore: NewKVStore(client), closeClient: client.Close}, nil
 		},
 	})
+}
+
+// closableKVStore is the value "kv.redis"'s registration returns: the store
+// itself (whose promoted methods satisfy pkgcore.KVStore) plus the Close()
+// error method that releases the client the registration built, per the
+// Registration-level resource-ownership contract. A host that calls
+// NewKVStore itself gets the bare store and keeps owning its client,
+// exactly as that constructor's own doc comment promises; only the
+// preset-built value carries the registration's closer.
+type closableKVStore struct {
+	pkgcore.KVStore
+	closeClient func() error
+}
+
+// Close releases the client the registration built.
+func (s *closableKVStore) Close() error {
+	if s.closeClient != nil {
+		return s.closeClient()
+	}
+	return nil
 }
 
 // mustRegister adds r to registry and panics if that fails. It is only ever

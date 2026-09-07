@@ -102,12 +102,19 @@ func insertOutboxAndNotify(ctx context.Context, pool *pgxpool.Pool, eventType, t
 		return 0, fmt.Errorf("serialize %q publish transactions: %w", eventType, err)
 	}
 
+	// created_at is stamped by the database itself (now(), in the same
+	// statement that writes the row), never by the application clock: the
+	// one consumer of created_at -- PurgeOutboxBefore -- cuts off against
+	// the database's own now(), and an application-stamped timestamp would
+	// let clock skew between a publisher replica and the database silently
+	// purge rows too young or keep rows too old (the identical one-clock
+	// argument kv/postgres's own expiry statements document).
 	var id int64
 	if err := tx.QueryRow(ctx,
 		`INSERT INTO pkgcore_eventbus_outbox (event_type, tenant_id, payload, created_at)
-		 VALUES ($1, $2, $3, $4)
+		 VALUES ($1, $2, $3, now())
 		 RETURNING id`,
-		eventType, tenantID, payload, time.Now().UTC(),
+		eventType, tenantID, payload,
 	).Scan(&id); err != nil {
 		return 0, fmt.Errorf("insert outbox row: %w", err)
 	}
@@ -307,10 +314,17 @@ func advanceCursorAtLeast(ctx context.Context, pool *pgxpool.Pool, replicaID, ev
 // host that cannot tolerate that trade schedules this call at an interval
 // generous enough that no replica is ever down that long, exactly as it
 // would size Redis's stream trim window today.
+//
+// The age comparison runs entirely on the database's clock: created_at is
+// stamped by now() at insert (see insertOutboxAndNotify) and the cutoff is
+// now() - $1 computed in the same statement, so no application clock is
+// consulted anywhere in the comparison -- a replica whose clock skews from
+// the database's cannot make this purge fire early or late (the one-clock
+// rule kv/postgres's own expiry statements document).
 func PurgeOutboxBefore(ctx context.Context, pool *pgxpool.Pool, olderThan time.Duration) (int64, error) {
 	tag, err := pool.Exec(ctx,
-		`DELETE FROM pkgcore_eventbus_outbox WHERE created_at < $1`,
-		time.Now().UTC().Add(-olderThan),
+		`DELETE FROM pkgcore_eventbus_outbox WHERE created_at < now() - $1::interval`,
+		olderThan,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("purge outbox rows: %w", err)

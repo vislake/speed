@@ -8,6 +8,7 @@ package postgres_test
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -41,6 +42,36 @@ func ExampleNewKVStore() {
 	fmt.Println("store wired; its first operation dials the server")
 	// Output:
 	// store wired; its first operation dials the server
+}
+
+// ExampleWithClock shows WithClock's role as the one-clock regression seam:
+// the option accepts an application-clock source, and the store never
+// consults it -- expiries are computed inside PostgreSQL as now() + ttl and
+// judged against the database's own now(), so the clock supplied here is
+// provably irrelevant. A test constructs the store with a deliberately
+// skewed clock and pins that a Set with a live TTL still stays visible until
+// the TTL genuinely elapses on the database clock (the integration tier's
+// TestKVStore_TTLJudgedByTheDatabaseClockNotTheApplicationClock does exactly
+// that); before the one-clock fix, the same construction made the key
+// vanish the instant it was written. The DSN points at a closed port so
+// this example stays hermetic, exactly like ExampleNewKVStore.
+func ExampleWithClock() {
+	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db")
+	if err != nil {
+		fmt.Println("unexpected pool construction error:", err)
+		return
+	}
+	defer pool.Close()
+
+	kvpostgres.NewKVStore(pool, kvpostgres.WithClock(func() time.Time {
+		// A clock ten minutes behind the database's: the skew that used to
+		// make every TTL'd write expire instantly.
+		return time.Now().Add(-10 * time.Minute)
+	}))
+
+	fmt.Println("store wired; its expiries are judged by the database clock, never this one")
+	// Output:
+	// store wired; its expiries are judged by the database clock, never this one
 }
 
 // Example demonstrates the package's self-registration: importing it for

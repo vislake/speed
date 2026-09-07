@@ -53,9 +53,34 @@ func init() {
 			if err != nil {
 				return nil, fmt.Errorf("pkgcore/kv/nats: builtin kv.nats seam: %w", err)
 			}
-			return store, nil
+			// connFromConfig dials a live connection (nats.Connect is
+			// synchronous), built here from cfg -- so the returned value's
+			// Close() error releases it. Kernel.Bootstrap records that
+			// Close and runs it on Shutdown (or on its own failure path);
+			// see pkgcore.Registration's resource-ownership contract.
+			return &closableKVStore{KVStore: store, closeConn: conn.Close}, nil
 		},
 	})
+}
+
+// closableKVStore is the value "kv.nats"'s registration returns: the store
+// itself (whose promoted methods satisfy pkgcore.KVStore) plus the Close()
+// error method that releases the connection the registration dialed, per
+// the Registration-level resource-ownership contract. A host that calls
+// NewKVStore itself gets the bare store and keeps owning its connection,
+// exactly as that constructor's own doc comment promises; only the
+// preset-built value carries the registration's closer.
+type closableKVStore struct {
+	pkgcore.KVStore
+	closeConn func()
+}
+
+// Close releases the connection the registration dialed.
+func (s *closableKVStore) Close() error {
+	if s.closeConn != nil {
+		s.closeConn()
+	}
+	return nil
 }
 
 // mustRegister adds r to registry and panics if that fails. It is only ever

@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/vislake/speed/go/pkgcore"
 	kvpostgres "github.com/vislake/speed/go/pkgcore/kv/postgres"
 	"github.com/vislake/speed/go/pkgcore/kvstoretest"
@@ -512,4 +514,106 @@ func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 	kvstoretest.AssertConforms(t, func() pkgcore.KVStore {
 		return kvpostgres.NewKVStore(pool)
 	})
+}
+
+// TestKVStore_TTLJudgedByTheDatabaseClockNotTheApplicationClock is the
+// deterministic regression for the one-clock hardening of this store's TTL
+// arithmetic: every expiry must be computed inside PostgreSQL as now() +
+// ttl and judged against PostgreSQL's own now(), never written as an
+// absolute instant computed on the application clock.
+//
+// The store under test is deliberately built with an application clock ten
+// minutes behind the database's (kvpostgres.WithClock supplies the seam; a
+// store built before the hardening consulted exactly such a clock to compute
+// the absolute expiry its statements stored). A Set with a live ttl must
+// still be visible to a plain Get -- before the fix, the skewed clock made
+// the stored expiry already past by the database's reckoning, and the key
+// vanished instantly, a security control (a rate-limit window, a lockout)
+// failing silently early. The stored row must additionally carry an
+// expires_at about ttl after the database's own now() -- the assertion that
+// keeps this test protective even against a future regression that stops
+// consulting the injected clock and goes back to time.Now() directly: that
+// code's expiry would trail the database clock by the full ten-minute skew
+// and this second check would fail.
+//
+// The whole test is timing-robust by construction: the skew (ten minutes) is
+// enormous next to the ttl (two seconds), so no scheduling jitter can blur
+// the distinction between "expired because the skewed write clock said so"
+// and "expired because the ttl genuinely elapsed on the database clock".
+func TestKVStore_TTLJudgedByTheDatabaseClockNotTheApplicationClock(t *testing.T) {
+	ctx := context.Background()
+	pool := startPostgresPool(t, ctx)
+
+	var dbNow time.Time
+	if err := pool.QueryRow(ctx, "SELECT now()").Scan(&dbNow); err != nil {
+		t.Fatalf("read database clock: %v", err)
+	}
+
+	const skew = 10 * time.Minute
+	skewed := kvpostgres.NewKVStore(pool, kvpostgres.WithClock(func() time.Time {
+		return dbNow.Add(-skew)
+	}))
+	plain := kvpostgres.NewKVStore(pool)
+
+	const ttl = 2 * time.Second
+
+	// Set on the skewed store: before the one-clock fix the expiry it stored
+	// was (dbNow - 10min) + ttl, already past when the database judged it.
+	const setKey = "ratelimit:acme:lockout"
+	if err := skewed.Set(ctx, setKey, []byte("locked"), ttl); err != nil {
+		t.Fatalf("Set() on the skewed store error = %v, want nil", err)
+	}
+	value, found, err := plain.Get(ctx, setKey)
+	if err != nil {
+		t.Fatalf("Get() error = %v, want nil", err)
+	}
+	if !found || string(value) != "locked" {
+		t.Errorf("Get() = (%q, %t, %v), want (\"locked\", true, nil): a Set with a live ttl must stay visible until the ttl genuinely elapses on the database clock, whatever the application clock says", value, found, err)
+	}
+	assertRemainingTTL(t, ctx, pool, setKey, ttl)
+
+	// IncrByFloatWithTTL creating a fresh key on the skewed store: the same
+	// one-clock property on the expiry-attaching increment path.
+	const counterKey = "ratelimit:acme:login-attempts"
+	if _, err := skewed.IncrByFloatWithTTL(ctx, counterKey, 1, ttl); err != nil {
+		t.Fatalf("IncrByFloatWithTTL() on the skewed store error = %v, want nil", err)
+	}
+	value, found, err = plain.Get(ctx, counterKey)
+	if err != nil {
+		t.Fatalf("Get() error = %v, want nil", err)
+	}
+	if !found || string(value) != "1" {
+		t.Errorf("Get() = (%q, %t, %v), want (\"1\", true, nil): IncrByFloatWithTTL's fresh-key expiry must be anchored to the database clock too", value, found, err)
+	}
+	assertRemainingTTL(t, ctx, pool, counterKey, ttl)
+
+	// And the key genuinely dies once the ttl has elapsed on the database
+	// clock -- neither longer (the skew direction that would keep a security
+	// lockout alive past its window) nor shorter.
+	time.Sleep(ttl + 500*time.Millisecond)
+	for _, key := range []string{setKey, counterKey} {
+		if _, found, err := plain.Get(ctx, key); err != nil {
+			t.Fatalf("Get(%q) error = %v, want nil", key, err)
+		} else if found {
+			t.Errorf("Get(%q) found the key after ttl+500ms elapsed on the database clock, want it treated as absent", key)
+		}
+	}
+}
+
+// assertRemainingTTL pins that key's stored expires_at is about ttl ahead of
+// the database's own now() -- the second, DB-visible half of the one-clock
+// property (see the regression test above for why it is load-bearing on its
+// own).
+func assertRemainingTTL(t *testing.T, ctx context.Context, pool *pgxpool.Pool, key string, ttl time.Duration) {
+	t.Helper()
+
+	var remaining time.Duration
+	err := pool.QueryRow(ctx,
+		`SELECT expires_at - now() FROM pkgcore_kv_entries WHERE key = $1`, key).Scan(&remaining)
+	if err != nil {
+		t.Fatalf("read remaining ttl of %q: %v", key, err)
+	}
+	if remaining <= 0 || remaining > ttl {
+		t.Errorf("row %q expires_at - now() = %v, want in (0, %v]: the expiry must be anchored to the database clock, not an application-clock instant (a skewed one would land far outside this window)", key, remaining, ttl)
+	}
 }

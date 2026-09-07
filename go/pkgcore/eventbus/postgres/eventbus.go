@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -708,7 +709,22 @@ func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) 
 			b.deliverMu.Unlock()
 
 			if !alreadyLocal {
-				b.deliverOutboxRow(ctx, row)
+				if panicked := b.deliverOutboxRow(ctx, row); panicked {
+					// A handler panicked while delivering this row: the row
+					// is not marked, the cursor is not advanced, and this
+					// scan stops here rather than advancing past the row
+					// with the next row's advance -- the next catch-up
+					// cycle redelivers the row from the unadvanced cursor,
+					// exactly like an unmarked local publish's row, and
+					// each panic is logged (see runHandlerRecovered). A
+					// permanently panicking handler is a programming bug an
+					// operator must fix or remove; meanwhile this replica
+					// delivers no later row of this type past the failing
+					// one, which is the same wedge the unacked-message
+					// semantics of the broker-backed buses describe, and it
+					// is visible in the logs rather than silent.
+					return
+				}
 			}
 			if err := advanceCursorAtLeast(ctx, b.pool, b.replicaID, eventType, row.id); err != nil {
 				return // retried from the (unadvanced) persisted cursor next call
@@ -740,27 +756,47 @@ func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) 
 // from any one of them so a buggy handler cannot take down the listener
 // goroutine -- mirroring eventbus/redis.EventBus.runRemoteHandler exactly,
 // including dropping the handler's returned error: there is no publisher
-// left in process for this event to report it to.
-func (b *EventBus) deliverOutboxRow(ctx context.Context, row outboxRow) {
+// left in process for this event to report it to. It reports whether any
+// handler panicked: the caller then leaves the row's delivery unmarked and
+// the cursor unadvanced, so the next catch-up cycle redelivers the row
+// rather than a panicked delivery being silently treated as done (see
+// deliverPendingForType).
+func (b *EventBus) deliverOutboxRow(ctx context.Context, row outboxRow) (panicked bool) {
 	var payload interface{}
 	if err := json.Unmarshal(row.payload, &payload); err != nil {
 		// A row that does not decode is corrupt (or hand-written); it must
 		// not wedge the reader, so it is skipped -- the cursor still
 		// advances past it in the caller.
-		return
+		return false
 	}
 	evt := pkgcore.Event{Type: row.eventType, TenantID: pkgcore.TenantID(row.tenantID), Payload: payload}
 
 	for _, h := range b.handlersFor(row.eventType) {
-		b.runHandlerRecovered(ctx, evt, h)
+		if b.runHandlerRecovered(ctx, evt, h) {
+			panicked = true
+		}
 	}
+	return panicked
 }
 
 // runHandlerRecovered invokes one handler for a catch-up-delivered event,
-// containing any panic it raises.
-func (b *EventBus) runHandlerRecovered(ctx context.Context, evt pkgcore.Event, h pkgcore.EventHandler) {
+// containing any panic it raises. A recovered panic is reported (and
+// logged): the caller leaves the row undelivered-as-marked rather than a
+// delivery whose side effects never ran being silently treated as done.
+//
+// pkgcore is the dependency floor of the workspace and cannot import
+// go/observability, so this reaches for log/slog directly, the same
+// precedent warnIfNotDurable sets in pkgcore's own root package.
+func (b *EventBus) runHandlerRecovered(ctx context.Context, evt pkgcore.Event, h pkgcore.EventHandler) (panicked bool) {
 	defer func() {
-		_ = recover()
+		if r := recover(); r != nil {
+			panicked = true
+			slog.Default().Error("pkgcore/eventbus/postgres: remote handler panicked; row left undelivered for the next catch-up cycle",
+				"event_type", evt.Type,
+				"panic", fmt.Sprintf("%v", r),
+			)
+		}
 	}()
 	_ = h(ctx, evt)
+	return false
 }

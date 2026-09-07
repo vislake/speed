@@ -20,6 +20,7 @@ package memcached_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -416,5 +417,92 @@ func TestKVStore_ConcurrentCompareAndSwapSetIfAbsent_ExactlyOneWins(t *testing.T
 
 	if _, found, err := kv.Get(ctx, key); err != nil || !found {
 		t.Errorf("Get() after the race = (%t, %v), want (true, nil): exactly one goroutine's write must have landed", found, err)
+	}
+}
+
+// TestKVStore_ReviveRaceInTheTTLFlipWindow_LosesNoIncrement is the
+// regression for the unguarded-delete hazard this store's read path used to
+// carry: when a key sits in the TTL-flip window -- logically expired by its
+// envelope, but still physically present because Memcached's own eviction
+// runs on the whole-second exptime the write scheduled -- every reader that
+// discovered the expired row used to delete it with an unconditional Delete.
+// A Delete issued from a stale read could land after a concurrent writer had
+// already revived the key with its fresh value, silently destroying that
+// writer's increment: two (or more) concurrent IncrByFloatWithTTL reviving
+// the key in the same window then reported their own private "1"s and the
+// stored total lost every increment but one.
+//
+// The fix routes every revive through Memcached's own compare-and-swap at
+// the token the stale read returned, so a concurrent writer who revived the
+// key between the read and the revive simply wins the race and the loser
+// retries from a fresh read -- no write is ever clobbered. This test drives
+// the exact window: each round seeds a key that expires in a few tens of
+// milliseconds, waits until it is logically dead but physically present, and
+// releases workers simultaneously to revive it with IncrByFloatWithTTL. The
+// final stored value must equal the number of workers, every round; the
+// whole flip window is roughly a second wide (the physical exptime rounds up
+// to a whole second at write time), so hundreds of rounds race inside it in
+// a few seconds.
+func TestKVStore_ReviveRaceInTheTTLFlipWindow_LosesNoIncrement(t *testing.T) {
+	ctx := context.Background()
+	kv := kvmemcached.NewKVStore(startMemcachedClient(t, ctx))
+
+	const (
+		workers  = 8
+		rounds   = 150
+		flipTTL  = 40 * time.Millisecond
+		flipWait = 55 * time.Millisecond
+		// reviveTTL is what the racing revivers attach to the fresh key.
+		// It must comfortably outlive the whole round: a reviver whose retry
+		// lands after the key it is reviving has flipped again is -- by the
+		// KVStore contract -- resetting an *expired* key, which is not the
+		// lost-update shape under test. The flip under test is the one the
+		// seed's own flipTTL creates, which the round waits out before the
+		// revivers start.
+		reviveTTL = 2 * time.Second
+	)
+
+	for round := 0; round < rounds; round++ {
+		key := fmt.Sprintf("flip-window:%d", round)
+		if err := kv.Set(ctx, key, []byte("0"), flipTTL); err != nil {
+			t.Fatalf("round %d: Set() error = %v, want nil", round, err)
+		}
+		// Past the logical expiry, well inside the physical-eviction window.
+		time.Sleep(flipWait)
+
+		start := make(chan struct{})
+		errs := make([]error, workers)
+		var wg sync.WaitGroup
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func(w int) {
+				defer wg.Done()
+				<-start
+				_, errs[w] = kv.IncrByFloatWithTTL(ctx, key, 1, reviveTTL)
+			}(w)
+		}
+		close(start)
+		wg.Wait()
+
+		for w, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: worker %d IncrByFloatWithTTL() error = %v, want nil", round, w, err)
+			}
+		}
+
+		value, found, err := kv.Get(ctx, key)
+		if err != nil {
+			t.Fatalf("round %d: Get() error = %v, want nil", round, err)
+		}
+		if !found {
+			t.Fatalf("round %d: Get() reports the revived key absent", round)
+		}
+		parsed, err := strconv.ParseFloat(string(value), 64)
+		if err != nil {
+			t.Fatalf("round %d: stored value %q does not parse: %v", round, value, err)
+		}
+		if parsed != float64(workers) {
+			t.Fatalf("round %d: counter = %v, want %d: a concurrent revive in the TTL-flip window lost an increment", round, parsed, workers)
+		}
 	}
 }

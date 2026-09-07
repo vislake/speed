@@ -3,7 +3,10 @@ package memcached
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"math"
+	"net"
 	"testing"
 	"time"
 	"unsafe"
@@ -209,6 +212,43 @@ func TestIsLostCASRace_ClassifiesTheThreeRaceAnswers(t *testing.T) {
 		t.Error("isLostCASRace(nil) = true, want false")
 	}
 }
+
+// TestIsTransientServerErr_ClassifiesTransportFailures pins the boundary
+// isTransientServerErr draws for the retry loops' read side: a connection
+// the server closed under the call (io.EOF) and a round trip that timed out
+// (a net.Error) are transient and retried, while an ordinary wrapped error
+// is not.
+func TestIsTransientServerErr_ClassifiesTransportFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "io.EOF is transient", err: io.EOF, want: true},
+		{name: "a wrapped io.EOF is transient", err: fmt.Errorf("pkgcore/kv/memcached: get: %w", io.EOF), want: true},
+		{name: "a net timeout is transient", err: &net.OpError{Err: &timeoutErr{}}, want: true},
+		{name: "a wrapped net timeout is transient", err: fmt.Errorf("pkgcore/kv/memcached: get: %w", &net.OpError{Err: &timeoutErr{}}), want: true},
+		{name: "a plain error is not transient", err: errors.New("connection refused"), want: false},
+		{name: "a corrupt envelope is not transient", err: fmt.Errorf("pkgcore/kv/memcached: get: %w", errCorruptEnvelope), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTransientServerErr(tt.err); got != tt.want {
+				t.Errorf("isTransientServerErr(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// timeoutErr is a net.Error that is a timeout and not otherwise interesting,
+// for the table above.
+type timeoutErr struct{}
+
+func (*timeoutErr) Error() string   { return "i/o timeout" }
+func (*timeoutErr) Timeout() bool   { return true }
+func (*timeoutErr) Temporary() bool { return true }
 
 // TestKVStore_Set_EnvelopeSizeOverflowValueRefused pins the fix for the
 // allocation-size overflow CodeQL flagged in encodeEnvelope (rule id

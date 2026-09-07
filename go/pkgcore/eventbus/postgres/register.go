@@ -34,9 +34,39 @@ func init() {
 			if err != nil {
 				return nil, fmt.Errorf("pkgcore/eventbus/postgres: builtin eventbus.postgres seam: %w", err)
 			}
-			return NewEventBus(pool, replicaID), nil
+			// The pool was built here, from cfg -- the registration owns it,
+			// not a host that never saw it -- so the returned value closes
+			// both halves: EventBus.Close stops the listener, and pool.Close
+			// releases the pooled connections, which EventBus.Close
+			// deliberately leaves open because a host-built pool is the
+			// host's to close. Kernel.Bootstrap records this Close and runs
+			// it on Shutdown (or on its own failure path); see
+			// pkgcore.Registration's resource-ownership contract.
+			bus := NewEventBus(pool, replicaID)
+			return &closableEventBus{EventBus: bus, closePool: pool.Close}, nil
 		},
 	})
+}
+
+// closableEventBus is the value "eventbus.postgres"'s registration returns:
+// the bus itself (whose promoted methods satisfy pkgcore.EventBus) plus the
+// Close() error method that releases the pool the registration built, per
+// the Registration-level resource-ownership contract. A host that calls
+// NewEventBus itself gets the bare *EventBus and keeps owning its pool,
+// exactly as that constructor's own doc comment promises; only the
+// preset-built value carries the registration's closer.
+type closableEventBus struct {
+	*EventBus
+	closePool func()
+}
+
+// Close stops the bus and then releases the pool the registration built.
+func (b *closableEventBus) Close() error {
+	b.EventBus.Close()
+	if b.closePool != nil {
+		b.closePool()
+	}
+	return nil
 }
 
 // mustRegister adds r to registry and panics if that fails, mirroring
