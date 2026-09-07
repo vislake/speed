@@ -5,7 +5,12 @@
  *
  * The demo has no roster endpoint, so the roster is the app's own
  * static data over the two seeded demo tenants, its display names
- * app namespace keys. The roster lists tenants only; membership is
+ * app namespace keys -- plus, when the session's current tenant is
+ * not one of them (a self-registered account's own clinic, which
+ * registration provisions -- cmd/server/self_service.go), one extra
+ * row naming that tenant by its id, so the switcher's trigger is
+ * never left in its no-current-tenant state while signed in. The
+ * roster lists tenants only; membership is
  * the server's own fact, never inferred here -- of the accounts the
  * seed registers, demo-owner and demo-reader hold membership in
  * both demo tenants and demo-acme-only@example.com in tenant-acme
@@ -103,10 +108,30 @@ export function UserMenu(): ReactElement {
   // feature answers.
   const publicConfig = usePublicConfig(api)
 
-  const tenants: readonly TenantOption[] = DEMO_TENANTS.map((tenant) => ({
+  const tenants: TenantOption[] = DEMO_TENANTS.map((tenant) => ({
     id: tenant.id,
     name: t(tenant.nameKey),
   }))
+  // A self-registered account's own clinic (registration provisions the
+  // registrant a tenant of its own -- cmd/server/self_service.go) is not
+  // among the seeded demo tenants this roster knows, yet the switcher's
+  // trigger must name the tenant the session actually runs in: a
+  // current-tenant id absent from the options would leave the trigger
+  // in its no-current-tenant disabled state while signed in. The clinic
+  // is merged in as one extra row, labelled by its tenant id -- the
+  // identifier the host can honestly show for a tenant whose name no
+  // roster endpoint serves (the same identifier-as-display fallback
+  // org's own auto-created root naming uses server-side); the row a
+  // self-service account owns is disabled like any current row, and the
+  // demo rows above stay switchable only as far as the server's own
+  // membership answers let a switch through.
+  const currentTenantId = currentTenant?.tenantId ?? null
+  if (
+    currentTenantId !== null &&
+    !tenants.some((tenant) => tenant.id === currentTenantId)
+  ) {
+    tenants.push({ id: currentTenantId, name: currentTenantId })
+  }
 
   const handleSwitched = (tenantId: string): void => {
     // Evict the tenant being left, captured before the switch commits:
@@ -137,7 +162,7 @@ export function UserMenu(): ReactElement {
       <TenantSwitcher
         session={session}
         tenants={tenants}
-        currentTenantId={currentTenant?.tenantId ?? null}
+        currentTenantId={currentTenantId}
         onSwitched={handleSwitched}
       />
       <SignOutButton session={session} />

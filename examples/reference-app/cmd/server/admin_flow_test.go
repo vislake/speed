@@ -294,11 +294,25 @@ func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 
 	// D6 + D2, second half: which tenants this user belongs to, composed
 	// by looping admin's own D3 ledger under tenancy.WithSystemContext and
-	// calling org's existing, unmodified per-tenant membership method.
+	// calling org's existing, unmodified per-tenant membership method. The
+	// account was registered at runtime, so under this app's self-service
+	// signup (self_service.go) its registration provisioned its own clinic
+	// -- tenant-<targetID>, the deterministic derivation -- whose root's
+	// org.node.created lazily registered the clinic in the very same D3
+	// ledger this query loops; the answer must name BOTH the clinic the
+	// account owns and the tenant-acme seat its invitation acceptance
+	// created.
 	var memberships adminListMembershipsResponse
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users/"+targetID+"/memberships", staffToken, nil, http.StatusOK, &memberships, nil)
-	if len(memberships.TenantIds) != 1 || memberships.TenantIds[0] != "tenant-acme" {
-		t.Fatalf("memberships of %q = %+v, want exactly [tenant-acme]", targetID, memberships.TenantIds)
+	wantTenants := map[string]bool{"tenant-acme": true, "tenant-" + targetID: true}
+	if len(memberships.TenantIds) != len(wantTenants) {
+		t.Fatalf("memberships of %q = %+v, want the account's own clinic plus tenant-acme", targetID, memberships.TenantIds)
+	}
+	for _, tenant := range memberships.TenantIds {
+		if !wantTenants[tenant] {
+			t.Fatalf("memberships of %q = %+v, want exactly its own clinic (tenant-%s) plus tenant-acme",
+				targetID, memberships.TenantIds, targetID)
+		}
 	}
 
 	// D7: query that tenant's audit trail and find the note-create event.

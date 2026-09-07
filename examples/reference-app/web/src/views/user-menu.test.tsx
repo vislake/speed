@@ -24,7 +24,10 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import authUiZhCN from '../../../../../web/packages/auth-ui/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
-import { demoServer } from '../test-utils/demo-server.js'
+import {
+  FIRST_REGISTERED_CLINIC_TENANT_ID,
+  demoServer,
+} from '../test-utils/demo-server.js'
 import { makeRealClientRig, signInWithPassword } from '../test-utils/real-client.js'
 import { renderWithAppServices } from '../test-utils/render.js'
 import { UserMenu } from './user-menu.js'
@@ -137,5 +140,41 @@ describe('UserMenu', () => {
       (call) => call.path === '/api/config/public',
     )
     expect(configCalls).toHaveLength(2)
+  })
+
+  it('names a current tenant outside the demo roster on the trigger and in the list -- a self-service account in its own clinic', async () => {
+    // A registered account signs into the clinic its registration
+    // provisioned (demo-server.ts's self-service mirror of
+    // cmd/server/self_service.go): the fixture's derived clinic tenant
+    // id is not among the seeded demo tenants the roster knows, so the
+    // menu must still render a live trigger naming it -- never the
+    // no-current-tenant disabled state a signed-in account would be
+    // stranded in.
+    const rig = makeRealClientRig(
+      demoServer({ tenantId: FIRST_REGISTERED_CLINIC_TENANT_ID }),
+    )
+    await signInWithPassword(rig)
+    const view = await renderedUserMenu(rig)
+    const user = userEvent.setup()
+
+    const trigger = view.getByRole('button', {
+      name: FIRST_REGISTERED_CLINIC_TENANT_ID,
+    })
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu')
+    await user.click(trigger)
+    const currentRow = await view.findByRole('menuitem', {
+      name: FIRST_REGISTERED_CLINIC_TENANT_ID,
+    })
+    // The clinic row is the current row: rendered, disabled (a tenant
+    // you are in is not a destination). The demo roster rows stay
+    // listed beside it, as far as the server's own membership answers
+    // let a switch through.
+    expect(currentRow).toHaveAttribute('aria-disabled', 'true')
+    expect(
+      view.getByRole('menuitem', { name: zhCN.tenants.acme }),
+    ).toBeInTheDocument()
+    expect(
+      view.getByRole('menuitem', { name: zhCN.tenants.globex }),
+    ).toBeInTheDocument()
   })
 })

@@ -3157,6 +3157,22 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		}
 	}
 
+	// The self-service signup chain (self_service.go) installs AFTER both
+	// demo seeds, which is the ordering that keeps the demo path intact:
+	// the seeds' registrations run above, before the provisioner's
+	// subscription exists, so the demo accounts provision no clinic of
+	// their own and keep exactly the memberships and grants the seeds
+	// give them; every registration that reaches the composed handler
+	// from here on -- a browser's, or a flow test's -- is a self-service
+	// registration and gets its own clinic tenant, org root, membership
+	// and owner grant before its 201 answer leaves (on the in-process
+	// bus, where the subscription's provisioning runs synchronously
+	// inside the register request itself).
+	if wireErr := wireSelfService(ctx, reg, db, orgModule, rbacService, memberships); wireErr != nil {
+		_ = cleanup()
+		return nil, nil, nil, wireErr
+	}
+
 	// Serve the built frontend when this boot is configured with one
 	// (cfg.WebDistDir, set by configFromEnv from APP_WEB_DIST -- the
 	// Dockerfile ships the dist and sets the variable itself). The wrap

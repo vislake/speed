@@ -39,7 +39,7 @@ import {
 /** A password that satisfies authn's real policy (12 characters minimum). */
 const SIGNUP_PASSWORD = 'e2e-new-clinic-2026'
 
-test.describe('a practice signing itself up', { tag: '@pending' }, () => {
+test.describe('a practice signing itself up', () => {
   test('registers, signs in, and lands in its own practice', async ({ page }) => {
     const email = `e2e-clinic-${Date.now()}@example.com`
 

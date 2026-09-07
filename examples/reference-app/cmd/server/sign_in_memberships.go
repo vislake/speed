@@ -38,14 +38,15 @@ func orgCodeIs(err error, code string) bool {
 // glue reads org's rows" shape go/admin's impersonation-target membership
 // check (impersonation_service.go's MembershipChecker) already established.
 // One source of truth: an account that really accepted an org invitation
-// through org's own HTTP flow, and a demo account the boot-time seed placed
-// into org (demo_users.go's addDemoOrgMembership), are members because
-// their rows exist -- in this process and in the next one. A restart
-// against the same database loses neither, which is exactly the property an
-// in-process roster could never give: before this store read org, a real
-// accepted invitation (or a seeded demo account) that predated the current
-// process answered "not a member" forever after the process that created it
-// exited, authn refusing every sign-in with 403
+// through org's own HTTP flow, a demo account the boot-time seed placed
+// into org (demo_users.go's addDemoOrgMembership), and a self-registered
+// account whose registration provisioned its own clinic (self_service.go),
+// are members because their rows exist -- in this process and in the next
+// one. A restart against the same database loses neither, which is exactly
+// the property an in-process roster could never give: before this store
+// read org, a real accepted invitation (or a seeded demo account) that
+// predated the current process answered "not a member" forever after the
+// process that created it exited, authn refusing every sign-in with 403
 // authn.tenant_membership_required no matter how real the row was.
 //
 // What is NOT answered from org is the rbac.SystemDomain pseudo-tenant
@@ -85,6 +86,20 @@ type signInMemberships struct {
 	// belong to" question -- see TenantsOf's doc comment for why the
 	// question has to be asked per tenant.
 	universe []pkgcore.TenantID
+	// clinics is every SELF-SERVICE tenant this host has provisioned (the
+	// clinic a registration creates, self_service.go). It is the second
+	// scan set TenantsOf consults, after universe: the configured host
+	// tenants stay the tenants a configured account can ever reach, while
+	// a self-registered account's own clinic lives outside that set by
+	// construction (self_service.go's clinicTenantOf derives the id from
+	// the registrant's user id, never from cfg.HostTenants), and its
+	// sign-in must still find the org membership row that lets it act in
+	// the clinic. addClinicTenant is called by the provisioning path for
+	// a new clinic and at every boot from the durable self_service_clinics
+	// ledger (self_service.go's wireSelfService), which is what keeps a
+	// clinic-owner's sign-in working after a restart that re-reads the
+	// rows org's own memberships table already carries.
+	clinics []pkgcore.TenantID
 }
 
 // newSignInMemberships returns an empty membership store.
@@ -93,11 +108,13 @@ func newSignInMemberships() *signInMemberships {
 }
 
 // attach binds the org-backed half of the store: the MemberService whose
-// rows answer customer-tenant questions, and the host's own tenant
-// universe (the values of cfg.HostTenants -- the only tenants that can
-// ever accrue an org memberships row in this app, since every org root
-// and invitation lives in a configured tenant). buildServer calls it once,
-// right after it has built both; until then the store answers from granted
+// rows answer customer-tenant questions, and the host's own configured
+// tenant universe (the values of cfg.HostTenants -- the tenants every
+// configured org root and invitation live in). The self-service clinics
+// provisioning creates (self_service.go) reach the same org scan through
+// their own list (addClinicTenant), which wireSelfService fills from the
+// durable ledger at every boot. buildServer calls attach once, right
+// after it has built both; until then the store answers from granted
 // alone.
 func (m *signInMemberships) attach(orgMembers *org.MemberService, hostTenants map[string]pkgcore.TenantID) {
 	seen := make(map[pkgcore.TenantID]struct{}, len(hostTenants))
@@ -138,6 +155,25 @@ func (m *signInMemberships) Grant(userID string, tenant pkgcore.TenantID) {
 	m.granted[userID] = append(m.granted[userID], tenant)
 }
 
+// addClinicTenant records tenant (a self-service clinic) in the store's
+// second scan set, so TenantsOf asks org about it. Idempotent; called for
+// a newly provisioned clinic by self_service.go's provisioning path and
+// for every already-provisioned clinic at boot from the durable
+// self_service_clinics ledger (wireSelfService) -- the two calls are what
+// make a clinic-owner's no-tenant sign-in work in the process that
+// provisioned the clinic and in every later process booted against the
+// same database.
+func (m *signInMemberships) addClinicTenant(tenant pkgcore.TenantID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.clinics {
+		if existing == tenant {
+			return
+		}
+	}
+	m.clinics = append(m.clinics, tenant)
+}
+
 // ActiveMembership implements authn.MembershipReader.
 //
 // A customer-tenant question is answered by org's own row first: the
@@ -175,19 +211,34 @@ func (m *signInMemberships) ActiveMembership(ctx context.Context, userID string,
 // org's own schema has no single "every tenant this user belongs to"
 // answer: memberships are tenant-scoped rows, so the question has to be
 // asked per tenant. This host can afford to ask exactly that way because
-// its tenant universe is bounded and known -- the configured host tenants,
-// the only tenants that can ever hold an org membership in this app (see
-// attach's doc comment) -- which is the "org-backed adapter for a consumer
-// with its own bounded tenant set" shape the pre-org store's own doc
-// comment already named as the honest option. The roster's entries are
-// folded in after the org scan, de-duplicated, so a test shortcut never
-// answers twice and a real org row always answers first.
+// the tenants it can ever hold an org membership in are a bounded, known
+// set -- the configured host tenants PLUS the self-service clinics
+// (addClinicTenant's doc comment) -- which is the "org-backed adapter for
+// a consumer with its own bounded tenant set" shape the pre-org store's
+// own doc comment already named as the honest option. The configured
+// universe is scanned first, then the clinics, so an account that holds
+// both a configured-tenant membership and a clinic membership keeps the
+// configured tenant's answer in front (the demo accounts' no-tenant
+// sign-in keeps landing in tenant-acme), and a self-registered account
+// whose only membership is its own clinic is answered from the clinic
+// scan. The roster's entries are folded in after the org scans,
+// de-duplicated, so a test shortcut never answers twice and a real org
+// row always answers first.
 func (m *signInMemberships) TenantsOf(ctx context.Context, userID string) ([]pkgcore.TenantID, error) {
 	tenants := make([]pkgcore.TenantID, 0, 4)
 	seen := make(map[pkgcore.TenantID]struct{})
 
 	if m.org != nil {
-		for _, tenant := range m.universe {
+		// The clinics scan set is snapshotted under the lock: the set only
+		// ever grows, and a provisioning concurrent with a sign-in must
+		// either be visible to this scan or not -- never half-visible.
+		// universe, by contrast, is immutable once attach has run and is
+		// iterated directly.
+		m.mu.Lock()
+		clinics := append([]pkgcore.TenantID(nil), m.clinics...)
+		m.mu.Unlock()
+		scan := append(append([]pkgcore.TenantID(nil), m.universe...), clinics...)
+		for _, tenant := range scan {
 			_, err := m.org.Get(pkgcore.WithTenant(ctx, tenant), userID)
 			switch {
 			case err == nil:

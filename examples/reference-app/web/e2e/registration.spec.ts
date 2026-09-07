@@ -14,10 +14,12 @@
  * Registration deliberately does NOT sign the new account in
  * (@speed/auth-ui's RegisterForm: register is not a session operation),
  * and this app renders the created account as a success panel that sends
- * the visitor back to the sign-in surface. A freshly registered account
- * also has no organization membership yet, so it cannot sign in until
- * one exists -- which is the invitation journey, not this one
- * (org-invitation-sign-in.spec.ts).
+ * the visitor back to the sign-in surface. What the visitor does with
+ * the created account is that account's own story, not this suite's:
+ * self-service registration provisions the registrant a clinic it can
+ * sign into (self-service-signup.spec.ts), and an invitation opens a
+ * second organization beside it (org-invitation-sign-in.spec.ts). This
+ * suite stays on the register surface itself.
  */
 import { expect, test } from '@playwright/test'
 import {

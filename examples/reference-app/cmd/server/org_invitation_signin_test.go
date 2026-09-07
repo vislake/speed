@@ -31,31 +31,41 @@ import (
 // The shape mirrors the same-boot regression the removed sync glue carried
 // (the deleted demo_org_membership_sync_test.go): the invitee is
 // registered through authn's real register route and NEVER granted a
-// membership by hand -- its only path to a membership is really accepting
-// the invitation below. And the acceptance itself is performed the way a
-// real memberless invitee must perform it: the accept request carries NO
-// bearer token at all (the invitee holds no token -- with no membership
-// anywhere, sign-in is impossible until the acceptance below creates one)
-// and names the REAL registered invitee as the acting subject through the
-// demo identity header. That used to be impossible: org's accept handler
-// resolved the invitation strictly inside the tenant the caller's bearer
-// token named, so a memberless invitee could never accept, and this test
-// had to borrow the inviter's target-tenant token for the accept call (the
-// accept flow's memberless-caller limitation, recorded as a STOP item by
-// the membership round). Since the tenantless-accept round,
-// org_acceptInvitation resolves the invitation's own tenant from the token,
-// server-side, and this app's tenancy allowlist lets the accept path
-// through unresolved -- the accept below is the round's journey regression:
-// it failed with 403 tenancy.tenant_unresolved before the round, and
-// grants the invitee a real sign-in-able membership after it. Boot one
-// proves the accept grants sign-in in process; the server shuts down
-// completely, and boot two against the same database proves the sign-in
-// survives the restart that used to kill it.
+// membership by hand -- its only path to a membership in the INVITING
+// tenant is really accepting the invitation below. (Its registration does
+// provision its own clinic under this app's self-service signup --
+// self_service.go -- which is a DIFFERENT tenant: the sign-ins this test
+// drives all name tenant-acme explicitly, so the clinic never answers
+// them, and the pre-invitation control below remains a genuine control
+// for the tenant that matters: an invitee cannot enter the inviting
+// tenant until the acceptance creates the membership.) And the acceptance
+// itself is performed the way a real memberless invitee must perform it:
+// the accept request carries NO bearer token at all (the invitee holds no
+// token for the inviting tenant -- sign-in into it is impossible until
+// the acceptance below creates one) and names the REAL registered invitee
+// as the acting subject through the demo identity header. That used to be
+// impossible: org's accept handler resolved the invitation strictly inside
+// the tenant the caller's bearer token named, so a memberless invitee
+// could never accept, and this test had to borrow the inviter's
+// target-tenant token for the accept call (the accept flow's
+// memberless-caller limitation, recorded as a STOP item by the membership
+// round). Since the tenantless-accept round, org_acceptInvitation resolves
+// the invitation's own tenant from the token, server-side, and this app's
+// tenancy allowlist lets the accept path through unresolved -- the accept
+// below is the round's journey regression: it failed with 403
+// tenancy.tenant_unresolved before the round, and grants the invitee a
+// real sign-in-able membership after it. Boot one proves the accept
+// grants sign-in in process; the server shuts down completely, and boot
+// two against the same database proves the sign-in survives the restart
+// that used to kill it.
 
 // registerOnlyRealAccount registers email through authn's real register
 // route and returns the user id authn assigned, WITHOUT ever granting the
-// account a membership anywhere -- this account must reach its first
-// membership through org's own real invitation-accept flow alone.
+// account a membership anywhere by hand -- this account must reach its
+// membership in the inviting tenant through org's own real
+// invitation-accept flow alone. (Its registration's self-service clinic,
+// self_service.go, is a different tenant and plays no part in this test's
+// explicit-tenant sign-ins.)
 func registerOnlyRealAccount(t *testing.T, srv *httptest.Server, email, password string) (userID string) {
 	t.Helper()
 
@@ -138,9 +148,12 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// invitation below.
 	inviteeUserID := registerOnlyRealAccount(t, srv1, inviteeEmail, inviteePassword)
 
-	// Control: before any invitation exists, the freshly registered,
-	// memberless invitee cannot sign in at all -- confirms the account is
-	// real and genuinely starts with no membership anywhere.
+	// Control: before any invitation exists, the freshly registered
+	// invitee cannot sign into the inviting tenant -- its only membership
+	// so far is the self-service clinic its registration provisioned
+	// (self_service.go), which is a different tenant, so this
+	// explicit-tenant sign-in confirms the account is real and genuinely
+	// starts with no seat in the tenant the invitation will open.
 	status, code, _ := demoLogin(t, srv1, inviteeEmail, inviteePassword, "tenant-acme")
 	if status != http.StatusForbidden || code != "authn.tenant_membership_required" {
 		t.Fatalf("pre-invitation login: status = %d, code = %q, want 403 %q", status, code, "authn.tenant_membership_required")
@@ -164,10 +177,11 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// Accept through org's real HTTP accept route, naming the REAL
 	// registered invitee's id as the acting subject -- never a
 	// cfg.Memberships.Grant on its behalf -- and carrying NO bearer token,
-	// because this invitee genuinely has none: with no membership anywhere,
-	// authn's own sign-in refused the account above (the control leg), so
-	// the only credential the invitee holds is the invitation token itself,
-	// and org's tenantless accept resolves the inviting tenant from it.
+	// because this invitee genuinely has no token for the inviting tenant:
+	// authn's own sign-in into it refused the account above (the control
+	// leg), so the only credential the invitee holds for this tenant is the
+	// invitation token itself, and org's tenantless accept resolves the
+	// inviting tenant from it.
 	// This call used to borrow the inviter's target-tenant bearer instead
 	// (the STOP item the tenantless-accept round closes); on that pre-round
 	// code it fails with 403 tenancy.tenant_unresolved before org's handler

@@ -23,14 +23,8 @@
  * recovery codes shown once.
  *
  * The journey's arc, in order: a fresh visitor registers over the
- * sign-in surface's register turn, and the created account's own
- * sign-in answers the membership refusal of a registered-but-unseeded
- * account -- the honest display of the server's 403 code text, not a
- * fabricated state (demo_users_test.go:336-338 pins the refusal for the
- * browser's no-tenant sign-in shape; its named-tenant sibling -- the
- * acme-only account asking for a tenant it holds no membership in --
- * is asserted at demo_users_test.go:170-172);
- * the owner signs in (access-1) and the day runs: notes read and
+ * sign-in surface's register turn, and the owner signs in (access-1)
+ * and the day runs: notes read and
  * written under the token's tenant, the tenant switch away and back
  * proving per-tenant lists and the eviction discipline, the account
  * day (a session revoked, the first MFA setup answering its recovery
@@ -38,11 +32,18 @@
  * 403 step-up gate -- a wrong step-up code answered with its field
  * text -- and the replacement codes shown once), sign-out into the
  * session-ended screen, and the re-login that lands back on the
- * account fragment. A bilingual leg closes the day, and the whole
- * trace pins with configGets === 3: the initial Public-config fetch
- * plus one revalidation per tenant switch (a switch re-asks the host-
- * resolved config the frame's brand and the home cards render from --
- * reference-app-web.md P2-refapp-14).
+ * account fragment. A bilingual leg closes the day, and the closing
+ * self-service leg brings the register-turn visitor back: its sign-in
+ * lands inside the clinic its registration provisioned (the server's
+ * self-service signup, cmd/server/self_service.go) -- the empty notes
+ * list of its own tenant, never the demo rows of the day and never
+ * the raw membership-refusal the register turn used to dead-end into
+ * (that registered-but-unseeded shape is gone from the demo fixture
+ * with the product decision that removed it from the real server).
+ * The whole trace pins with configGets === 3: the initial
+ * Public-config fetch plus one revalidation per tenant switch (a
+ * switch re-asks the host-resolved config the frame's brand and the
+ * home cards render from -- reference-app-web.md P2-refapp-14).
  *
  * The second and third journeys script the member days of the demo's
  * other account shapes: the reader day (the rig's reader option --
@@ -91,15 +92,17 @@ import {
   DEMO_MFA_SECRET,
   DEMO_OWNER_IDENTIFIER,
   DEMO_READER_IDENTIFIER,
+  FIRST_REGISTERED_CLINIC_TENANT_ID,
   demoServer,
 } from './test-utils/demo-server.js'
 import type { RealCall, RealClientRig } from './test-utils/real-client.js'
 import { errorResponse, makeRealClientRig } from './test-utils/real-client.js'
 import { evictQueriesOnSessionEnd } from './main.js'
 
-/** The identifier the register turn creates -- an account the demo
- * seed granted no membership, whose own sign-in the day then answers
- * honestly. */
+/** The identifier the register turn creates -- the account whose own
+ * sign-in the day's closing self-service leg lands in its clinic (the
+ * fixture provisions the registered account's own tenant, the web
+ * mirror of the composed stack's self-service signup). */
 const REGISTER_EMAIL = 'journey-visitor@example.test'
 
 /** The note the owner day writes in tenant-acme; its text is served
@@ -117,19 +120,6 @@ const CACHED_NOTE: NotesNote = {
   id: 'note-1',
   text: CACHED_NOTE_TEXT,
   created_at: '2026-09-04T00:00:00Z',
-}
-
-/** A refused sign-in's identifier input holds its failed value; the
- * owner's sign-in follows it, so the journeys clear the field first. */
-function loginFields(view: ReturnType<typeof rendered>) {
-  return {
-    identifier: view.getByLabelText(
-      authUiZhCN.passwordSignIn.identifierLabel,
-    ) as HTMLInputElement,
-    password: view.getByLabelText(
-      authUiZhCN.passwordSignIn.passwordLabel,
-    ) as HTMLInputElement,
-  }
 }
 
 function bodyOf(call: RealCall): Record<string, string> {
@@ -256,7 +246,11 @@ describe('the app journey', () => {
 
     // The register turn: a created account is a destination, never a
     // session flip -- the register panel reports the created account
-    // and sends the visitor back to the sign-in surface.
+    // and sends the visitor back to the sign-in surface. The visitor's
+    // own sign-in is the day's closing leg (below): the account the
+    // register turn created now lands in the clinic its registration
+    // provisioned, which is the acceptance finding this journey
+    // chronicles -- the old registered-but-unseeded dead end is gone.
     await user.click(
       view.getByRole('button', { name: zhCN.signIn.registerAction }),
     )
@@ -277,23 +271,7 @@ describe('the app journey', () => {
     )
     await view.findByRole('button', { name: zhCN.signIn.registerAction })
 
-    // The created account's own sign-in answers the membership
-    // refusal of a registered-but-unseeded account, and the surface
-    // renders that code text honestly -- no session, no frame.
-    const fields = loginFields(view)
-    await user.type(fields.identifier, REGISTER_EMAIL)
-    await user.type(fields.password, APP_PASSWORD)
-    await user.click(
-      view.getByRole('button', { name: authUiZhCN.passwordSignIn.submit }),
-    )
-    expect(
-      await view.findByText(authUiZhCN.errors.authn.tenant_membership_required),
-    ).toBeInTheDocument()
-    expect(view.queryByRole('link', { name: zhCN.nav.home })).not.toBeInTheDocument()
-
     // The owner signs in and the day begins (access-1).
-    await user.clear(fields.identifier)
-    await user.clear(fields.password)
     await signInWithPasswordUi(view, user)
     expect(configGets(rig)).toBe(1)
 
@@ -482,11 +460,51 @@ describe('the app journey', () => {
     ).toBeInTheDocument()
     expect(await view.findByText(NOTE_TEXT)).toBeInTheDocument()
 
+    // The closing self-service leg: back in the day's zh-CN language,
+    // the owner signs out, and the register-turn visitor signs in.
+    // Under the product decision this journey chronicles, the visitor
+    // lands INSIDE the clinic its registration provisioned -- the
+    // notes surface under it serves the clinic's own empty list, the
+    // day's tenant-acme rows are nowhere, and the raw
+    // membership-refusal code text that used to answer this exact
+    // sign-in is nowhere either (the register turn's dead end, gone
+    // with the server shape that produced it).
+    await act(async () => {
+      await switchLanguage(view.i18n, 'zh-CN')
+    })
+    await view.findByRole('link', { name: zhCN.nav.home })
+    await user.click(
+      view.getByRole('button', { name: authUiZhCN.signOut.label }),
+    )
+    expect(
+      await view.findByText(authUiZhCN.sessionEnded.title),
+    ).toBeInTheDocument()
+    await user.click(
+      view.getByRole('button', { name: authUiZhCN.sessionEnded.signInAction }),
+    )
+    await view.findByRole('button', { name: zhCN.signIn.registerAction })
+
+    // The visitor's own sign-in (the browser shape, no tenant named)
+    // commits: the frame names the clinic tenant the registration
+    // provisioned (the fixture's own derived tenant id), the notes
+    // surface under it answers the clinic's empty list, and no
+    // membership-refusal text renders anywhere.
+    await signInWithPasswordUi(view, user, REGISTER_EMAIL)
+    expect(
+      view.getByRole('button', { name: FIRST_REGISTERED_CLINIC_TENANT_ID }),
+    ).toBeInTheDocument()
+    expect(await view.findByText(zhCN.notes.list.emptyTitle)).toBeInTheDocument()
+    expect(view.queryByText(NOTE_TEXT)).not.toBeInTheDocument()
+    expect(
+      view.queryByText(authUiZhCN.errors.authn.tenant_membership_required),
+    ).not.toBeInTheDocument()
+
     // The whole session, pinned: every request landed in order with
     // the bearer of the token that was current when it left -- the
-    // session's own token timeline (access-1 after the first sign-in,
-    // access-2/3 across the two switches, access-4 after the step-up,
-    // access-5 after the re-login), credentials never riding the
+    // session's own token timeline (access-1 after the owner's first
+    // sign-in, access-2/3 across the two switches, access-4 after the
+    // step-up, access-5 after the owner's re-login, access-6 after the
+    // visitor's closing sign-in), credentials never riding the
     // register or the sign-ins, and every body exactly as the surface
     // sent it. The Public-config fetch appears three times: the
     // first-paint fetch (anonymous, hence bearer-less) plus one
@@ -499,13 +517,12 @@ describe('the app journey', () => {
     // notes read after its switch: the notes view's re-keyed query
     // refetches as the tenant change commits, the switch handler's
     // config refresh follows in the same turn.
-    await waitFor(() => expect(rig.calls).toHaveLength(31))
+    await waitFor(() => expect(rig.calls).toHaveLength(33))
     expect(configGets(rig)).toBe(3)
     const trace = rig.calls.map((call) => `${call.method} ${call.path}${call.query}`)
     expect(trace).toEqual([
       'GET /api/config/public',
       'POST /api/v1/authn/register',
-      'POST /api/v1/authn/login/password',
       'POST /api/v1/authn/login/password',
       'GET /api/v1/notes',
       'POST /api/v1/notes',
@@ -534,33 +551,39 @@ describe('the app journey', () => {
       'GET /api/v1/authn/login-history?limit=20',
       'GET /api/v1/authn/identities',
       'GET /api/v1/notes',
+      'POST /api/v1/authn/logout',
+      'POST /api/v1/authn/login/password',
+      'GET /api/v1/notes',
     ])
 
     const authOf = (index: number): string | null =>
       callOf(rig, index).authorization
     expect(authOf(0)).toBeNull() // the pre-auth config fetch
     expect(authOf(1)).toBeNull() // register: a public route
-    expect(authOf(2)).toBeNull() // the refused sign-in: still public
-    expect(authOf(3)).toBeNull() // the owner sign-in: still public
-    for (let index = 4; index <= 7; index += 1) {
+    expect(authOf(2)).toBeNull() // the owner sign-in: still public
+    for (let index = 3; index <= 6; index += 1) {
       expect(authOf(index)).toBe('Bearer access-1')
     }
-    expect(authOf(8)).toBe('Bearer access-2')
-    expect(authOf(9)).toBe('Bearer access-2') // the switch's revalidation
-    expect(authOf(10)).toBe('Bearer access-2')
-    expect(authOf(11)).toBe('Bearer access-3')
-    expect(authOf(12)).toBe('Bearer access-3') // the second switch's
+    expect(authOf(7)).toBe('Bearer access-2')
+    expect(authOf(8)).toBe('Bearer access-2') // the switch's revalidation
+    expect(authOf(9)).toBe('Bearer access-2')
+    expect(authOf(10)).toBe('Bearer access-3')
+    expect(authOf(11)).toBe('Bearer access-3') // the second switch's
     // revalidation
-    for (let index = 13; index <= 22; index += 1) {
+    for (let index = 12; index <= 21; index += 1) {
       expect(authOf(index)).toBe('Bearer access-3')
     }
-    for (let index = 23; index <= 25; index += 1) {
+    for (let index = 22; index <= 24; index += 1) {
       expect(authOf(index)).toBe('Bearer access-4')
     }
-    expect(authOf(26)).toBeNull() // the re-login: public again
-    for (let index = 27; index <= 30; index += 1) {
+    expect(authOf(25)).toBeNull() // the re-login: public again
+    for (let index = 26; index <= 29; index += 1) {
       expect(authOf(index)).toBe('Bearer access-5')
     }
+    expect(authOf(30)).toBe('Bearer access-5') // the owner's sign-out
+    expect(authOf(31)).toBeNull() // the visitor's sign-in: public
+    expect(authOf(32)).toBe('Bearer access-6') // the visitor's clinic
+    // notes read
 
     expect(bodyOf(callOf(rig, 1))).toEqual({
       email: REGISTER_EMAIL,
@@ -568,22 +591,22 @@ describe('the app journey', () => {
       locale: 'zh-CN',
     })
     expect(bodyOf(callOf(rig, 2))).toEqual({
+      identifier: DEMO_OWNER_IDENTIFIER,
+      password: APP_PASSWORD,
+    })
+    expect(bodyOf(callOf(rig, 4))).toEqual({ text: NOTE_TEXT })
+    expect(bodyOf(callOf(rig, 6))).toEqual({ tenant_id: 'tenant-globex' })
+    expect(bodyOf(callOf(rig, 9))).toEqual({ tenant_id: 'tenant-acme' })
+    expect(bodyOf(callOf(rig, 18))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
+    expect(bodyOf(callOf(rig, 20))).toEqual({ code: '000000' })
+    expect(bodyOf(callOf(rig, 21))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
+    expect(bodyOf(callOf(rig, 23))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
+    expect(bodyOf(callOf(rig, 25))).toEqual({
+      identifier: DEMO_OWNER_IDENTIFIER,
+      password: APP_PASSWORD,
+    })
+    expect(bodyOf(callOf(rig, 31))).toEqual({
       identifier: REGISTER_EMAIL,
-      password: APP_PASSWORD,
-    })
-    expect(bodyOf(callOf(rig, 3))).toEqual({
-      identifier: DEMO_OWNER_IDENTIFIER,
-      password: APP_PASSWORD,
-    })
-    expect(bodyOf(callOf(rig, 5))).toEqual({ text: NOTE_TEXT })
-    expect(bodyOf(callOf(rig, 7))).toEqual({ tenant_id: 'tenant-globex' })
-    expect(bodyOf(callOf(rig, 10))).toEqual({ tenant_id: 'tenant-acme' })
-    expect(bodyOf(callOf(rig, 19))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
-    expect(bodyOf(callOf(rig, 21))).toEqual({ code: '000000' })
-    expect(bodyOf(callOf(rig, 22))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
-    expect(bodyOf(callOf(rig, 24))).toEqual({ code: DEMO_MFA_CONFIRM_CODE })
-    expect(bodyOf(callOf(rig, 26))).toEqual({
-      identifier: DEMO_OWNER_IDENTIFIER,
       password: APP_PASSWORD,
     })
   })

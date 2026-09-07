@@ -22,12 +22,18 @@
  *
  * The spec walks the whole loop and ends where it matters: the invitee
  * signs in through the browser, with no tenant named, and the frame shows
- * an organization. The setup steps use the API because the surfaces for
- * them do not exist yet -- there is no team-management UI, and an
- * invitation token is never in an API response (see
+ * the organization it was invited to. The setup steps use the API because
+ * the surfaces for them do not exist yet -- there is no team-management
+ * UI, and an invitation token is never in an API response (see
  * test-utils/invitations.ts) -- while the two steps that decide whether
- * the product works, the refusal before and the sign-in after, are both
- * driven through the browser.
+ * the product works, where the invitee lands before acceptance and the
+ * sign-in into the invited organization after, are both driven through
+ * the browser. (Before acceptance the invitee's registration already
+ * provisioned a clinic of its own -- self-service signup,
+ * cmd/server/self_service.go -- so the pre-acceptance leg asserts the
+ * invitee is NOT yet inside the inviting organization, in place of the
+ * old refused-sign-in control that the memberless registration shape
+ * used to provide.)
  */
 import { expect, test } from '@playwright/test'
 import { DEMO_OWNER } from './test-utils/accounts.js'
@@ -39,10 +45,9 @@ import {
   signInThroughApi,
 } from './test-utils/invitations.js'
 import {
-  AUTH_ERROR_TEXT,
+  APP_TEXT,
   TENANT_NAMES,
   expectSignedIn,
-  expectSpecificError,
   readCurrentTenant,
   submitPasswordSignIn,
   visitSignIn,
@@ -58,17 +63,33 @@ test('an invited colleague accepts and can then sign in to that organization', a
   const invitee = `e2e-invitee-${Date.now()}@example.com`
 
   // The invitee registers, the way a person following an invitation link
-  // does, and belongs to no organization yet.
+  // does. Registration provisions the registrant a clinic of its own
+  // (self-service signup, cmd/server/self_service.go), so unlike the old
+  // memberless shape the account CAN sign in from the moment it exists
+  // -- what it cannot do yet is enter the ORGANIZATION that invited it.
+  // This pre-acceptance leg asserts exactly that, in place of the old
+  // refused-sign-in control: the browser-shaped sign-in lands in the
+  // invitee's own clinic, never inside one of the demo organizations the
+  // invitation below will open -- if it ever did land there, the
+  // acceptance would prove nothing.
   const inviteeUserId = await registerThroughApi(request, invitee, INVITEE_PASSWORD)
-
-  // Before the invitation is accepted, signing in is refused: an account
-  // with no membership anywhere has no tenant to be issued a token for.
-  // This is the fail-before half of the gate, asserted rather than
-  // assumed -- if it ever starts succeeding, the acceptance below would
-  // prove nothing.
   await visitSignIn(page)
   await submitPasswordSignIn(page, invitee, INVITEE_PASSWORD)
-  await expectSpecificError(page, AUTH_ERROR_TEXT.tenantMembershipRequired)
+  await expect(page.getByRole('link', { name: APP_TEXT.navNotes })).toBeVisible()
+  // The invitee's own clinic is not one of the demo organizations the
+  // helper knows by name -- readCurrentTenant's failure to find one IS
+  // the assertion's first half (the clinic's trigger names its raw
+  // tenant id, never a demo practice's name).
+  expect(
+    TENANT_NAMES,
+    'before accepting, the invitee must not be inside the organization that invited it',
+  ).not.toContain(await readCurrentTenant(page).catch(() => ''))
+
+  // The acceptance steps below run through the API while the browser is
+  // signed in as the invitee; a reload returns the page to the anonymous
+  // sign-in surface for the closing leg (the session is memory-only, so
+  // a reload starts anonymous by the app's own design).
+  await page.reload()
 
   // An owner invites the address into their own tenant's root node.
   const owner = await signInThroughApi(request, DEMO_OWNER.email, DEMO_OWNER.password)

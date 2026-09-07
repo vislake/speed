@@ -14,10 +14,10 @@
  * demo-owner and demo-reader get, while the seed's third account
  * (demo-acme-only@example.com, a tenant-acme member alone) has no web
  * counterpart: no journey drives a member whose switch into
- * tenant-globex the real server refuses (authn.tenant_membership_
- * required) -- a Public config carrying brand.site_name plus the
- * dependency-resolved feature list for the request's tenant, and an
- * authn surface that issues tokens on login and tenant switch.
+ * tenant-globex the real server would refuse -- a Public config
+ * carrying brand.site_name plus the dependency-resolved feature list
+ * for the request's tenant, and an authn surface that issues tokens on
+ * login and tenant switch.
  *
  * Two demo accounts model the seeded accounts a journey can drive,
  * whose answers the server's own tests pin
@@ -32,24 +32,37 @@
  * reader's list as served, demo_users_test.go:143-153), and a note
  * create from that principal answers the 403 the write gate gives a
  * caller without notes:write (rbac.permission_denied, asserted at
- * server_test.go:443-445). An account registration answers 201 and records
- * the identifier, and a later sign-in of a recorded identifier answers
- * the membership refusal of a registered-but-unseeded account -- 403
- * authn.tenant_membership_required, in the browser's own shape: the
- * sign-in body names no tenant_id (the login form has no tenant
- * field), the shape the composed stack pins at demo_users_test.go:336-338
- * -- an account the register route created, granted nowhere, drawing
- * the no-membership-anywhere form of the code; its named-tenant
- * sibling -- the acme-only account asking for a tenant it holds no
- * membership in -- is asserted at demo_users_test.go:170-172.
- * Registering twice
- * answers the same 409 authn.email_already_registered a real handler
- * answers (go/authn/errors.go's ErrEmailAlreadyRegistered).
+ * server_test.go:443-445).
+ *
+ * Registration answers 201 and PROVISIONS the account's own clinic --
+ * the web mirror of the composed stack's self-service signup
+ * (cmd/server/self_service.go, whose journey regression
+ * self_service_test.go pins): the registered account is allocated its
+ * own tenant (an id derived from the account, never one of the demo
+ * tenants) and a later sign-in of the same identifier succeeds into
+ * that clinic, exactly like any member's sign-in -- the browser shape,
+ * a body naming no tenant_id (the login form has no tenant field),
+ * which the composed stack answers the same way. The old
+ * registered-but-unseeded dead end -- registration answering 201 and a
+ * later sign-in answering 403 authn.tenant_membership_required -- no
+ * longer exists on the real server and no longer exists here. The
+ * named-tenant refusal keeps its shape for what it always meant: the
+ * real server refuses a sign-in naming a tenant the account holds no
+ * membership in (authn.tenant_membership_required, the shape pinned at
+ * demo_users_test.go:170-181 by the acme-only account asking for
+ * tenant-globex) -- a refusal no journey drives, since the switch and
+ * sign-in surfaces a browser reaches never ask for a tenant it was not
+ * granted. Registering twice answers the same 409
+ * authn.email_already_registered a real handler answers
+ * (go/authn/errors.go's ErrEmailAlreadyRegistered).
  *
  * The endpoints: GET /api/config/public (pre-auth, the config fetch
  * usePublicConfig drives), POST /api/v1/authn/register (201, the
- * created AuthnUser), POST /api/v1/authn/login/password (200, a token
- * pair whose principal lands in the configured default tenant),
+ * created AuthnUser; the answer provisions the account's own clinic --
+ * see the registration paragraph above), POST /api/v1/authn/login/password
+ * (200, a token pair whose principal lands in the configured default
+ * tenant -- or, for an account a register created, in the clinic that
+ * registration provisioned),
  * POST /api/v1/authn/tenant/switch (200, an access-only answer whose
  * principal is in the tenant the body asks for -- the one answer that
  * reads the request body, which is why RealCall carries it; the spec
@@ -156,14 +169,18 @@ export const DEMO_READER_USER_ID = 'user-2'
 /** The reader-shaped principal's session id -- its own session, never
  * the owner's. */
 export const DEMO_READER_SESSION_ID = 'session-4'
+/** The user id a register answer allocates for the FIRST account it
+ * creates (registered user ids count up from user-9, past the seeded
+ * rows user-1..user-8, mirroring how the fixture numbers registered
+ * sessions from session-9). */
+export const FIRST_REGISTERED_USER_ID = 'user-9'
+/** The clinic tenant the FIRST registered account's registration
+ * provisions: 'tenant-' + its user id, the web mirror of the composed
+ * stack's deterministic tenant derivation (self_service.go's
+ * clinicTenantOf). A journey that signs the first registered account in
+ * asserts the frame names this tenant. */
+export const FIRST_REGISTERED_CLINIC_TENANT_ID = `tenant-${FIRST_REGISTERED_USER_ID}`
 
-/** The code a sign-in of a registered-but-unseeded account answers with
- * (go/authn/errors.go's ErrTenantMembershipRequired; the browser-shaped
- * refusal -- a sign-in body with no tenant_id -- the composed stack
- * pins at demo_users_test.go:336-338, whose named-tenant sibling -- the
- * acme-only account asking for a tenant it holds no membership in --
- * is asserted at demo_users_test.go:170-172). */
-export const MEMBERSHIP_REQUIRED_CODE = 'authn.tenant_membership_required'
 
 /** The TOTP secret every enroll answer serves -- scripted once so the
  * journeys can pin the wizard's rendered secret verbatim. */
@@ -522,10 +539,23 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   // The object ids the demo's photo-upload answers hand out, counting
   // per responder instance like the note and case ids.
   let nextObjectId = 1
-  // The accounts a register answered. A later sign-in of a recorded
-  // identifier answers the membership refusal of a registered-but-
-  // unseeded account (registration alone grants no membership).
-  const registeredEmails = new Set<string>()
+  // The accounts a register answered, mapped to the clinic their
+  // registration provisioned (the web mirror of the composed stack's
+  // self-service signup, cmd/server/self_service.go): the account's own
+  // user id and the own tenant -- an id derived from the account, never
+  // one of the demo tenants -- a later sign-in lands in. Registration
+  // alone now grants a sign-in-able membership, exactly like the real
+  // server's journey regression (self_service_test.go) pins.
+  const registeredAccounts = new Map<string, { user_id: string; tenant_id: string }>()
+  // The id counters for registered accounts: their user ids start after
+  // the seeded rows (the demo accounts own user-1..user-8) and their
+  // sessions after the demo roster's (session-1..session-4), so nothing
+  // a journey pins about a seeded principal can collide with a
+  // registered one. The clinic tenant id is derived from the account's
+  // user id ('tenant-' + user_id), the same deterministic-derivation
+  // shape the real server uses (clinicTenantOf).
+  let nextRegisteredUserNumber = 9
+  let nextRegisteredSessionNumber = 9
   // Every issued access token, mapped to the principal it stands for.
   // Token strings count up per responder instance ('access-1',
   // 'access-2', ...) so journeys can pin the first issue and read the
@@ -591,14 +621,27 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         const body = bodyObject(call)
         const identifier =
           typeof body.identifier === 'string' ? body.identifier : undefined
-        // A registered account has no seeded membership: its sign-in
-        // answers the refusal the Go suite pins in the browser's own
-        // shape -- no tenant_id in the body -- at demo_users_test.go:336-338
-        // (an account the register route created, granted nowhere); the
-        // named-tenant form of the same refusal is asserted at
-        // demo_users_test.go:170-172.
-        if (identifier !== undefined && registeredEmails.has(identifier)) {
-          return errorResponse(403, MEMBERSHIP_REQUIRED_CODE)
+        // A registered account signs into the clinic its registration
+        // provisioned -- its own principal (user, session and tenant all
+        // its own), the answer the composed stack's self-service journey
+        // regression pins in the browser's own shape -- no tenant_id in
+        // the body (self_service_test.go): the account a register
+        // created can sign in and act in its clinic like any member. The
+        // old registered-but-unseeded refusal shape is gone with the
+        // product decision that removed it.
+        const registered = registeredAccounts.get(identifier ?? '')
+        if (registered !== undefined) {
+          const principal = {
+            user_id: registered.user_id,
+            tenant_id: registered.tenant_id,
+            session_id: `session-${nextRegisteredSessionNumber}`,
+          }
+          nextRegisteredSessionNumber += 1
+          return jsonResponse(200, {
+            access_token: issueAccess(principal, false),
+            refresh_token: issueRefreshToken(),
+            principal,
+          })
         }
         // The reader option's member: its own principal, the web mirror
         // of the demo seed's reader row.
@@ -620,16 +663,34 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         const body = bodyObject(call)
         const email = typeof body.email === 'string' ? body.email : undefined
         if (email !== undefined) {
-          // Registration records the account; a second register of the
-          // same email answers the real handler's uniqueness refusal.
-          if (registeredEmails.has(email)) {
+          // A second register of the same email answers the real
+          // handler's uniqueness refusal.
+          if (registeredAccounts.has(email)) {
             return errorResponse(409, 'authn.email_already_registered')
           }
-          registeredEmails.add(email)
+          // Registration provisions the account's clinic -- its own user
+          // id and its own tenant, derived from that id the way the real
+          // server derives it (self_service.go's clinicTenantOf) -- so
+          // the 201 the register form shows answers for an account a
+          // later sign-in can actually enter.
+          const user_id = `user-${nextRegisteredUserNumber}`
+          nextRegisteredUserNumber += 1
+          registeredAccounts.set(email, {
+            user_id,
+            tenant_id: `tenant-${user_id}`,
+          })
+          return jsonResponse(201, {
+            id: user_id,
+            email,
+            created_at: DEMO_NOTE_CREATED_AT,
+          })
         }
+        // A register that named no email (the identifier was a phone) is
+        // recorded under nothing a sign-in can name, so it stays the
+        // pre-self-service fixture's unrecorded 201 answer -- no journey
+        // drives a phone registration.
         return jsonResponse(201, {
           id: 'user-9',
-          ...(email !== undefined ? { email } : {}),
           created_at: DEMO_NOTE_CREATED_AT,
         })
       }
