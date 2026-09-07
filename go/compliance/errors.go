@@ -99,12 +99,16 @@ var (
 
 	// ErrExportDeliveryFailed wraps a failed go/sharing.Service.Create
 	// call once ExportService.Export has already gathered and stored the
-	// manifest. The manifest itself is not lost -- the caller still gets
-	// the object key and manifest back alongside this error -- but no
-	// share link exists for the subject to retrieve it with, so this is
-	// reported as its own coded failure rather than folded into
-	// ErrExportPartialFailure, which describes a participant gathering
-	// failure, not a delivery failure.
+	// manifest. No share link exists for the subject to retrieve the
+	// manifest with, so this is reported as its own coded failure rather
+	// than folded into ErrExportPartialFailure, which describes a
+	// participant gathering failure, not a delivery failure. The manifest
+	// Export gathered is not lost -- the caller still gets it, and its
+	// object key, back alongside this error -- but the stored object
+	// itself is deleted before Export returns (see Export's doc comment):
+	// an un-shareable copy of a subject's complete personal data must not
+	// persist in the object store, and admin retries must not accumulate
+	// such dumps.
 	ErrExportDeliveryFailed = apperr.Internal("compliance.export_delivery_failed")
 
 	// ErrExportTenantMismatch is returned by ExportService.Export when the
@@ -116,6 +120,19 @@ var (
 	// tenant at all is refused earlier, with pkgcore.ErrNoTenant, by
 	// pkgcore.MustTenantFromContext.
 	ErrExportTenantMismatch = apperr.Invalid("compliance.export_tenant_mismatch")
+
+	// ErrErasureTenantMismatch is returned by ErasureService.Erase when
+	// the tenant carried by ctx differs from the subject's own TenantID.
+	// Erase hard-deletes every participant's rows for the subject through
+	// the ctx tenant -- that is the only data boundary an erasure may ever
+	// cross (see Erase's doc comment, and ErrExportTenantMismatch's own
+	// for the identical Export gate) -- so a SubjectRef naming any other
+	// tenant is a caller bug, refused before any participant is called:
+	// an irreversible, cross-tenant destruction must never be reachable
+	// from a caller-supplied tenant that does not echo the ctx tenant
+	// back. A ctx carrying no tenant at all is refused earlier, with
+	// pkgcore.ErrNoTenant, by pkgcore.MustTenantFromContext.
+	ErrErasureTenantMismatch = apperr.Invalid("compliance.erasure_tenant_mismatch")
 )
 
 // hasCode reports whether err is (or wraps, via apperr.As's Unwrap chain

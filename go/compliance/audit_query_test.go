@@ -110,6 +110,86 @@ func TestAuditQuery_Query_FiltersByEveryField(t *testing.T) {
 	})
 }
 
+// TestAuditQuery_Query_SameTimestampEventsOrderDeterministically is the
+// regression test for the sort's tiebreaker (finding P3): several events
+// sharing an identical OccurredAt must come back in a fixed, deterministic
+// order -- by ID descending, per filterAndSort's documented total order --
+// on every query, so a caller paging over the returned slice never sees
+// same-timestamp events reorder between requests. dbkit/audit's own
+// ListByTenant orders by occurred_at alone and the pre-fix sort had no
+// tiebreaker, so the order of tied rows was whatever the database's index
+// scan happened to return (SQLite returns them newest-rowid-first, and a
+// second database or query plan could return them differently) -- the
+// instability this test pins the documented total order against.
+func TestAuditQuery_Query_SameTimestampEventsOrderDeterministically(t *testing.T) {
+	repo := audit.NewRepository(newTestAuditDB(t))
+	q := NewAuditQuery(repo)
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+	// Three events sharing one exact timestamp, inserted in an order that
+	// deliberately disagrees with the documented ID-descending tiebreak,
+	// plus one newer event that must sort ahead of all three. Inserting
+	// ties in descending ID order matters: dbkit/audit's own ListByTenant
+	// orders by occurred_at alone, and SQLite's index scan returns tied
+	// rows newest-rowid-first, so without the tiebreaker the sort's
+	// insertion-order-preserving behavior on equal keys would hand these
+	// back ascending -- exactly the reorder this test pins against.
+	for _, id := range []string{"tie-c", "tie-b", "tie-a"} {
+		evt := &audit.AuditEvent{
+			ID:         id,
+			TenantID:   "tenant-a",
+			Action:     "notes.note.create",
+			OccurredAt: at,
+		}
+		evt.SetActor(pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: "user-1", DisplayName: "user-1"})
+		evt.SetResource(audit.Resource{Type: "note", ID: "r-" + id, DisplayName: "r-" + id})
+		evt.SetResult(audit.Result{Success: true})
+		if err := repo.Insert(context.Background(), evt); err != nil {
+			t.Fatalf("insert audit event %q: %v", id, err)
+		}
+	}
+	insertAuditEvent(t, repo, "tenant-a", "user-1", "note", "notes.note.create", at.Add(time.Minute), true)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	readIDs := func() []string {
+		events, err := q.Query(ctx, QueryFilter{})
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		got := make([]string, 0, len(events))
+		for _, evt := range events {
+			got = append(got, evt.ID)
+		}
+		return got
+	}
+
+	// Two separate queries (what two pagination requests over the same
+	// underlying rows would do) must return the identical order, newest
+	// first with the same-timestamp events broken by ID descending.
+	first := readIDs()
+	second := readIDs()
+	if len(first) != 4 {
+		t.Fatalf("Query returned %d events, want 4", len(first))
+	}
+	want := []string{"tie-c", "tie-b", "tie-a"}
+	for i, evt := range first {
+		if i == 0 {
+			if evt == "tie-a" || evt == "tie-b" || evt == "tie-c" {
+				t.Errorf("first event = %q, want the newer (one-minute-later) event first", evt)
+			}
+			continue
+		}
+		if evt != want[i-1] {
+			t.Errorf("event %d = %q, want %q -- same-timestamp events must order by ID descending", i, evt, want[i-1])
+		}
+	}
+	for i := range first {
+		if first[i] != second[i] {
+			t.Fatalf("two queries returned different orders: %v then %v -- pagination over the slice can reorder same-timestamp events", first, second)
+		}
+	}
+}
+
 // TestAuditQuery_QueryAcrossTenants_RequiresSystemContext pins the gate.
 func TestAuditQuery_QueryAcrossTenants_RequiresSystemContext(t *testing.T) {
 	repo := audit.NewRepository(newTestAuditDB(t))

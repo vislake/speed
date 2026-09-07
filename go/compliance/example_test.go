@@ -28,6 +28,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
+	auditmigrations "github.com/vislake/speed/go/dbkit/audit/migrations"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 
@@ -89,6 +90,21 @@ func (m *exampleNotesModule) Register(reg *pkgcore.Registry) error {
 
 var _ pkgcore.Module = (*exampleNotesModule)(nil)
 
+// exampleAuditModule feeds dbkit/audit's own embedded migrations to
+// dbkit.MigrationRegistry -- the same shape module_test.go's fakeAuditModule
+// uses; only Name and Migrations are ever read by MigrationRegistry.Apply
+// here.
+type exampleAuditModule struct{}
+
+func (exampleAuditModule) Name() string                     { return "audit" }
+func (exampleAuditModule) DependsOn() []string              { return nil }
+func (exampleAuditModule) Migrations() embed.FS             { return auditmigrations.FS }
+func (exampleAuditModule) Locales() embed.FS                { return embed.FS{} }
+func (exampleAuditModule) OpenAPISpec() []byte              { return nil }
+func (exampleAuditModule) Register(*pkgcore.Registry) error { return nil }
+
+var _ pkgcore.Module = exampleAuditModule{}
+
 // Example wires compliance.Module alongside a fake business module, seeds
 // one soft-deleted row well past the retention window, sweeps it, and
 // reports how many rows were reaped.
@@ -117,11 +133,26 @@ func Example() {
 
 	notes := &exampleNotesModule{repo: dbkit.NewRepository[exampleNote](db), db: db}
 
-	// compliance.NewModule needs an *audit.Repository -- audit.Emit only
+	// A real host migrates dbkit/audit's audit_events table before wiring
+	// anything that audits -- and compliance's own Register now registers
+	// the module's export-manifests cleanup participant (export_cleanup.go),
+	// which reads the tenant's audit events on every retention sweep, so
+	// this example must too: without the table the module's own sweep
+	// callback would fail its read.
+	registry := dbkit.NewMigrationRegistry()
+	if registryErr := registry.Register(exampleAuditModule{}); registryErr != nil {
+		fmt.Println("register audit migrations:", registryErr)
+		return
+	}
+	if applyErr := registry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		fmt.Println("apply audit migrations:", applyErr)
+		return
+	}
+
+	// compliance.NewModule takes an *audit.Repository -- audit.Emit only
 	// ever publishes an event on the bus (dbkit/audit's own write-back
 	// persister is a separate, host-wired subscriber this example does not
-	// need), so wrapping the same connection is enough; no audit_events
-	// migration is required for this example to run.
+	// need), so wrapping the migrated connection is enough.
 	m := compliance.NewModule(audit.NewRepository(db), compliance.WithQueue(exampleNoopQueue{}))
 
 	reg, err := pkgcore.NewKernel().Bootstrap(ctx, m, notes)

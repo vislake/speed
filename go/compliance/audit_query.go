@@ -136,7 +136,18 @@ func (q *AuditQuery) Get(ctx context.Context, id string) (*audit.AuditEvent, err
 }
 
 // filterAndSort returns the events in events matching filter, sorted
-// newest first by OccurredAt.
+// newest first by OccurredAt. The ordering is a total order: events whose
+// OccurredAt is identical -- a burst of records within the same instant,
+// or timestamps truncated by a coarse clock -- are ordered by their ID,
+// descending, as a deterministic tiebreaker. sort.Slice is not a stable
+// sort, so without that tiebreak two events sharing an OccurredAt could
+// come out in either order depending on the order ListByTenant happened to
+// return them in, which would let a caller paging over the returned slice
+// reorder same-timestamp events between requests; with it, two queries
+// over the same rows always return the same order. ID is a random UUID
+// (dbkit/audit's own Repository.Insert), so the tiebreak order itself is
+// arbitrary -- it exists for determinism, not to express any recency
+// claim within one timestamp.
 func filterAndSort(events []audit.AuditEvent, filter QueryFilter) []audit.AuditEvent {
 	out := make([]audit.AuditEvent, 0, len(events))
 	for _, evt := range events {
@@ -144,6 +155,11 @@ func filterAndSort(events []audit.AuditEvent, filter QueryFilter) []audit.AuditE
 			out = append(out, evt)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].OccurredAt.After(out[j].OccurredAt) })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].OccurredAt.Equal(out[j].OccurredAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].OccurredAt.After(out[j].OccurredAt)
+	})
 	return out
 }

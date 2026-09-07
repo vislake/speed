@@ -241,11 +241,13 @@ func (m *Module) OpenAPISpec() []byte { return nil }
 // It declares compliance's configuration schema, its permissions and its
 // audit vocabulary, registers the periodic retention-sweep task's
 // handler on reg.Jobs, registers this module's two audited system
-// purposes, and attaches the registry's EventBus, AuditActions and
-// Retention registrar onto all three orchestration services plus the
-// registry's resolved ObjectStore onto ExportService. It refuses to
-// proceed without a queue (ErrQueueRequired) -- see WithQueue's doc
-// comment. ExportService's SharingCreator is not part of this: it is not
+// purposes, attaches the registry's EventBus, AuditActions and Retention
+// registrar onto all three orchestration services plus the registry's
+// resolved ObjectStore onto ExportService, and registers the module's own
+// export-manifests cleanup participant onto reg.Retention so the
+// retention sweep also reaps expired export manifests (export_cleanup.go).
+// It refuses to proceed without a queue (ErrQueueRequired) -- see
+// WithQueue's doc comment. ExportService's SharingCreator is not part of this: it is not
 // a pkgcore.Registry seam, so WithSharing wires it directly at Module
 // construction time (NewModule's own Option application), and its absence
 // is never a reason to refuse Register -- see WithSharing's own doc
@@ -296,6 +298,17 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	m.export.bus = bus
 	m.export.actions = reg.AuditActions
 	m.export.store = reg.ObjectStore()
+
+	// Register the module's own export-manifest cleanup participant so
+	// every retention sweep this module orchestrates also reaps stored
+	// export manifests whose delivery share has expired (export_cleanup.go's
+	// header comment has the full mechanism). Register runs before any
+	// host-populated post-Bootstrap Add, so the reserved
+	// compliance.export_manifests name can never collide with a host's
+	// participant.
+	if err := reg.Retention.Add(exportManifestsParticipant(m.auditRepo, reg.ObjectStore())); err != nil {
+		return err
+	}
 
 	// Claim the retention-sweep task handler so a host that drains
 	// reg.Jobs.Handlers() onto its jobs.Queue after Bootstrap gets a

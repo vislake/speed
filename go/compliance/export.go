@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -253,12 +254,27 @@ func exportObjectKey(tenant pkgcore.TenantID, id string) string {
 // ErrExportDeliveryFailed instead: ExportResult.ObjectKey and .Manifest
 // are still populated (the gather and store already succeeded), but
 // .Delivery is the zero value, since no share exists for the subject to
-// retrieve the export with. A delivery failure takes precedence over a
-// participant partial failure in the returned error (both cannot be
-// represented by one apperr code at once), but ExportManifest.Errors is
-// unaffected either way, so a caller inspecting the manifest still learns
-// about a participant failure even when the returned error names the
-// delivery problem instead.
+// retrieve the export with. The stored object itself is deleted before
+// Export returns in that case: a manifest no share can ever reference is
+// an un-shareable copy of the tenant's complete data with no legitimate
+// consumer path, and an admin retrying Export must re-gather and re-store
+// fresh rather than pile up one such dump per failed attempt (see
+// ErrExportDeliveryFailed's doc comment). A delivery failure takes
+// precedence over a participant partial failure in the returned error
+// (both cannot be represented by one apperr code at once), but
+// ExportManifest.Errors is unaffected either way, so a caller inspecting
+// the manifest still learns about a participant failure even when the
+// returned error names the delivery problem instead.
+//
+// A successfully delivered manifest is not kept in the object store
+// forever either: its lifetime is anchored to the delivery share this
+// module mints against it. Module.Register registers compliance's own
+// export-manifests retention participant (export_cleanup.go), whose Sweep
+// reaps, on the regular per-tenant retention sweep, every stored manifest
+// whose delivery share's expiry has itself fallen past the tenant's
+// retention window -- the audit event every completed Export leaves behind
+// (export_cleanup.go's own doc comment) is the record that makes that
+// sweep possible without a store listing primitive.
 //
 // ctx must carry a tenant (pkgcore.WithTenant), and the tenant argument
 // must echo that same tenant back: Export reads every participant's rows
@@ -332,6 +348,19 @@ func (s *ExportService) Export(ctx context.Context, tenant pkgcore.TenantID) (*E
 
 	delivery, deliverErr := s.deliverExport(ctx, tenant, key)
 	if deliverErr != nil {
+		// A manifest that could not be handed to its subject must not
+		// stay stored: it is an un-shareable copy of the tenant's complete
+		// data with no legitimate consumer path, and leaving it behind
+		// would let an admin's retried Export calls accumulate one such
+		// dump per attempt. Delete it before returning -- DeleteObject is
+		// idempotent, so a retry that re-gathers and re-stores fresh is
+		// the only recovery path, never an append to a pile. A failed
+		// cleanup is chained into the reported cause: the store itself is
+		// misbehaving, and the operator must know the dump may still be
+		// there rather than assume the delete succeeded.
+		if deleteErr := s.store.DeleteObject(ctx, key); deleteErr != nil {
+			deliverErr = errors.Join(deliverErr, fmt.Errorf("compliance: delete undelivered export manifest: %w", deleteErr))
+		}
 		if auditErr := s.emitExportAudit(ctx, tenant, key, manifest, ExportDelivery{}, deliverErr); auditErr != nil {
 			return result, ErrAuditRecordFailed.WithCause(auditErr)
 		}

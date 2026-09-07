@@ -135,9 +135,12 @@ func TestComplianceRightToErasure_NotesParticipant_ErasesOnlyItsSubject(t *testi
 	softDeleteAndBackdate(t, db, "tenant-acme", creatorDeletedID, time.Now())
 
 	subject := pkgcore.SubjectRef{TenantID: "tenant-acme", SubjectID: demoNotesCreatorUserID}
-	// A bare context works here too: Erase re-scopes ctx to the subject's
-	// own tenant and enters its audited system context itself.
-	result, err := complianceModule.Erasure().Erase(context.Background(), subject, pkgcore.Actor{
+	// The ctx must carry the subject's own tenant: Erase erases within
+	// the tenant ctx is scoped to -- the SubjectRef may only echo it back
+	// (go/compliance's Erase tenant gate) -- and enters its audited system
+	// context itself.
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	result, err := complianceModule.Erasure().Erase(ctx, subject, pkgcore.Actor{
 		Type:        pkgcore.ActorTypeSystem,
 		ID:          "compliance-flow-test",
 		DisplayName: "Compliance flow test",
@@ -172,7 +175,7 @@ func TestComplianceRightToErasure_NotesParticipant_ErasesOnlyItsSubject(t *testi
 	// A re-run of the same request converges to (0, nil): the participant
 	// reports no rows for an already-fully-erased subject, the documented
 	// retry semantics of Erase.
-	again, err := complianceModule.Erasure().Erase(context.Background(), subject, pkgcore.Actor{
+	again, err := complianceModule.Erasure().Erase(ctx, subject, pkgcore.Actor{
 		Type:        pkgcore.ActorTypeSystem,
 		ID:          "compliance-flow-test",
 		DisplayName: "Compliance flow test",

@@ -480,34 +480,48 @@ func TestExportService_Export_NoSharingWired_Refuses(t *testing.T) {
 // TestExportService_Export_DeliveryFailureIsReported proves a failed
 // go/sharing.Create is reported as ErrExportDeliveryFailed, distinct from
 // a participant gathering failure, while the already-gathered manifest and
-// its storage key are still returned.
+// its storage key are still returned -- and that the stored object itself
+// is deleted before Export returns (finding P1-6's delivery-failure half):
+// a manifest no share can ever reference is an un-shareable copy of the
+// tenant's complete data, so a failed delivery must not leave it behind
+// and an admin's retried Export calls must not accumulate one dump per
+// attempt. The behavior this test pins against left every failed
+// attempt's manifest stored forever, so three retries left three orphaned
+// objects.
 func TestExportService_Export_DeliveryFailureIsReported(t *testing.T) {
 	svc, repo, store, fakeSharing := newExportHarness(t)
 	tenant := pkgcore.TenantID("tenant-a")
 	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
 	fakeSharing.failWith = errors.New("sharing unavailable")
 
-	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
-	if !hasCode(err, ErrExportDeliveryFailed.Code) {
-		t.Fatalf("Export error = %v, want %s", err, ErrExportDeliveryFailed.Code)
-	}
-	if result == nil {
-		t.Fatal("Export should return a non-nil result even when delivery fails")
-	}
-	if result.ObjectKey == "" {
-		t.Error("ObjectKey should still be populated: the manifest was stored before delivery was attempted")
-	}
-	if result.Delivery != (ExportDelivery{}) {
-		t.Errorf("Delivery = %+v, want the zero value", result.Delivery)
-	}
-	if _, ok := result.Manifest.Participants["testutil.fake_note"]; !ok {
-		t.Error("the manifest gathered before the delivery failure should still be returned")
+	var keys []string
+	for attempt := 1; attempt <= 3; attempt++ {
+		result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
+		if !hasCode(err, ErrExportDeliveryFailed.Code) {
+			t.Fatalf("Export attempt %d error = %v, want %s", attempt, err, ErrExportDeliveryFailed.Code)
+		}
+		if result == nil {
+			t.Fatal("Export should return a non-nil result even when delivery fails")
+		}
+		if result.ObjectKey == "" {
+			t.Error("ObjectKey should still be populated: the manifest was stored before delivery was attempted")
+		}
+		if result.Delivery != (ExportDelivery{}) {
+			t.Errorf("Delivery = %+v, want the zero value", result.Delivery)
+		}
+		if _, ok := result.Manifest.Participants["testutil.fake_note"]; !ok {
+			t.Error("the manifest gathered before the delivery failure should still be returned")
+		}
+		keys = append(keys, result.ObjectKey)
 	}
 
-	// The manifest itself was genuinely stored -- delivery failing must
-	// not roll back or lose it.
-	if _, err := store.GetObject(context.Background(), result.ObjectKey); err != nil {
-		t.Errorf("GetObject(%q) after delivery failure: %v", result.ObjectKey, err)
+	// None of the failed attempts' manifests may persist: each attempt
+	// cleans up its own un-shareable object, so the store holds nothing
+	// for an admin retry to pile more dumps onto.
+	for _, key := range keys {
+		if _, err := store.GetObject(context.Background(), key); !errors.Is(err, pkgcore.ErrObjectNotFound) {
+			t.Errorf("GetObject(%q) after delivery failure = %v, want pkgcore.ErrObjectNotFound -- an undelivered manifest must not persist", key, err)
+		}
 	}
 }
 

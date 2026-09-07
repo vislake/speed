@@ -18,6 +18,12 @@ import (
 // SystemPurposeRetentionSweep's identical convention.
 const SystemPurposeRightToErasure pkgcore.SystemPurpose = "compliance.right_to_erasure"
 
+// erasureFallbackActorID is the actor id an Erase call falls back to when
+// its requestedBy Actor carries an empty ID (including the zero Actor) --
+// see Erase's own doc comment for why the fallback must land on the Actor
+// placed on ctx itself, not only in the system reason's own Actor field.
+const erasureFallbackActorID = "compliance.right_to_erasure"
+
 // AuditActionErasureRequest is the audit action Module.Register declares
 // and ErasureService.Erase emits under, once per erasure request (never
 // once per participant): one AuditEvent records the whole request, with
@@ -85,7 +91,24 @@ func newErasureService() *ErasureService {
 // behalf of the subject's own request (an intake ticket, a support case)
 // should still pass a real operator or system-task Actor here -- Erase
 // has no notion of "the subject erasing themselves": every erasure is
-// performed by someone accountable for having triggered it.
+// performed by someone accountable for having triggered it. An empty
+// requestedBy -- the zero Actor, or one whose ID is empty -- is replaced
+// by a stable system actor (Type pkgcore.ActorTypeSystem, ID
+// erasureFallbackActorID) before EITHER placement, so the Actor
+// participants and the audit trail read off ctx never carries an empty
+// ID even for a caller that passed none.
+//
+// Erase erases within the tenant ctx already carries, never a tenant a
+// caller names from nowhere: the ctx tenant is the single data boundary
+// an erasure may ever cross -- every participant's Erase callback below
+// hard-deletes rows through it -- so subject.TenantID may only echo that
+// same tenant back, mirroring Export's identical gate and its documented
+// principle. A ctx carrying no tenant is refused with pkgcore.ErrNoTenant
+// and a SubjectRef naming any other tenant is refused with
+// ErrErasureTenantMismatch, both before any participant is called and
+// before any system context is entered -- a bare or mis-scoped ctx must
+// never become a license to pick another tenant for an operation that is,
+// by design, irreversible.
 //
 // subject.TenantID and subject.SubjectID must both be non-empty; an empty
 // either fails closed with ErrEmptySubjectRef before any participant is
@@ -125,17 +148,38 @@ func (s *ErasureService) Erase(ctx context.Context, subject pkgcore.SubjectRef, 
 		return ErasureResult{}, ErrEmptySubjectRef
 	}
 
+	// The ctx tenant is the tenant an erasure may ever touch: every
+	// participant's Erase callback below hard-deletes rows through it, so
+	// subject.TenantID may only echo it back. A bare ctx must never become
+	// a license to pick any tenant for an irreversible operation -- refuse
+	// it fail-closed, mirroring Export's identical no-tenant handling (a
+	// raw pkgcore.MustTenantFromContext error, unwrapped, is this module's
+	// established no-tenant idiom), and refuse a mismatch outright before
+	// any participant is called and before any system context is entered.
+	ctxTenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return ErasureResult{}, err
+	}
+	if ctxTenant != subject.TenantID {
+		return ErasureResult{}, ErrErasureTenantMismatch.
+			WithParam("ctx_tenant", string(ctxTenant)).
+			WithParam("subject_tenant", string(subject.TenantID))
+	}
+
 	actor := requestedBy
 	if actor.Type == "" {
 		actor.Type = pkgcore.ActorTypeSystem
 	}
-	actorID := actor.ID
-	if actorID == "" {
-		actorID = "compliance.right_to_erasure"
+	if actor.ID == "" {
+		actor.ID = erasureFallbackActorID
 	}
+	actorID := actor.ID
 
+	// ctx already carries subject.TenantID -- the gate above guarantees
+	// the two agree -- so no WithTenant re-scope happens here: the
+	// context's tenant is the single data boundary, never overwritten
+	// from the SubjectRef.
 	ctx = pkgcore.WithActor(ctx, actor)
-	ctx = pkgcore.WithTenant(ctx, subject.TenantID)
 	sysCtx, err := tenancy.WithSystemContext(ctx, s.bus, pkgcore.SystemReason{
 		Actor:   actorID,
 		Purpose: SystemPurposeRightToErasure,
@@ -154,11 +198,19 @@ func (s *ErasureService) Erase(ctx context.Context, subject pkgcore.SubjectRef, 
 			continue
 		}
 		erased, err := p.Erase(sysCtx, subject)
-		if err != nil {
-			result.Errors[p.Name] = err
-			continue
-		}
 		result.Erased[p.Name] = erased
+		if err != nil {
+			// The participant's reported count is still recorded: a
+			// callback that failed part-way through has already
+			// hard-deleted erased rows (pkgcore.RetentionParticipant's
+			// own contract, and the count this module's testutil
+			// participants report on a mid-loop failure), and
+			// TotalErased -- and the audit event's Changes["erased"]
+			// breakdown -- must count rows that are genuinely gone, not
+			// silently drop them from the record of an irreversible
+			// operation because the callback also errored.
+			result.Errors[p.Name] = err
+		}
 	}
 
 	if err := s.emitErasureAudit(ctx, result); err != nil {

@@ -162,6 +162,35 @@ func TestModule_Register_WiresServicesFromTheRegistry(t *testing.T) {
 	}
 }
 
+// TestModule_Register_RegistersItsOwnExportManifestCleanupParticipant
+// proves Register adds the module's own export-manifests cleanup
+// participant (export_cleanup.go) onto reg.Retention, wired over the
+// module's own audit repository and the registry's resolved ObjectStore --
+// the seam a host's retention-sweep schedule drives, so a registered
+// compliance module's sweep reaps expired export manifests with no further
+// wiring.
+func TestModule_Register_RegistersItsOwnExportManifestCleanupParticipant(t *testing.T) {
+	m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
+	reg, err := pkgcore.NewKernel().Bootstrap(context.Background(), m)
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	found := false
+	for _, p := range reg.Retention.Participants() {
+		if p.Name != exportManifestsParticipantName {
+			continue
+		}
+		found = true
+		if p.Sweep == nil {
+			t.Error("the export-manifests participant registered without a Sweep callback")
+		}
+	}
+	if !found {
+		t.Errorf("Retention.Participants() = %v, missing the module's own %q participant", reg.Retention.Participants(), exportManifestsParticipantName)
+	}
+}
+
 // TestModule_WithSharing_WiresExportServiceSharing proves WithSharing
 // attaches the given SharingCreator onto ExportService directly at
 // construction time -- unlike the registry-derived seams
