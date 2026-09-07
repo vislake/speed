@@ -53,10 +53,16 @@
 // backend, no TimescaleDB raw-detail storage), and a threshold-crossing
 // event published on pkgcore.EventBus when a tenant's real-time counter for
 // a feature passes a configured limit. It does NOT ship the Plan/Feature/
-// Entitlement domain model (docs/internal/06-billing-and-metering.md's own
-// domain-model section -- that is go/billing's, a still-unstarted module),
-// actual blocking of over-quota calls (metering measures and signals, it
-// does not enforce), or credits (pre-deduct/confirm/refund is a separate,
-// synchronous path the same design doc places in go/billing, not here).
-// See AGENTS.md's Known limitations for the complete boundary.
+// Entitlement domain model, actual blocking or allowance decisions for
+// over-quota calls, or credits: docs/internal/06-billing-and-metering.md's
+// domain-model section places all three in go/billing, which has since
+// shipped them in its own round-1 foundation (Feature/Plan/Grant/
+// Entitlements, EntitlementsService.Check's Block/AllowAndBill/Notify
+// decision, and the credits ledger) -- metering measures and signals,
+// go/billing decides. go/billing is also this module's first real
+// consumer: its UsageReader interface compile-asserts *metering.Aggregator
+// (billing/module.go) and its EntitlementsService quota decisions read
+// Aggregator.RealtimeCount through that seam (billing/entitlements.go) --
+// see AGENTS.md's "billing is metering's first consumer" note. See
+// AGENTS.md's Known limitations for the complete boundary.
 package metering

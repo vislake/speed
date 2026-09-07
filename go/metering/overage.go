@@ -10,14 +10,21 @@ import (
 // publishes the moment a tenant's real-time counter for a feature first
 // reaches or exceeds a configured threshold within the current period --
 // docs/internal/06-billing-and-metering.md's overage-policy bullet: a
-// threshold event is published on the event bus, for the notification
-// module to subscribe to. metering publishes the signal only; it does not
-// import go/notification (this codebase's events-not-imports rule for
-// cross-module notification, root CLAUDE.md's "Notifications are
-// event-driven" trap) and it does not block or otherwise enforce the
-// crossing itself -- Plan.Grants.OverageMode's Block/AllowAndBill/Notify
-// decision is go/billing's, once it exists, to make from this event and
-// its own domain model.
+// threshold event is published on the event bus. metering publishes the
+// signal only; it does not import go/notification (this codebase's
+// events-not-imports rule for cross-module notification, root CLAUDE.md's
+// "Notifications are event-driven" trap) and it does not block or
+// otherwise enforce the crossing itself -- Plan.Grants.OverageMode's
+// Block/AllowAndBill/Notify decision is go/billing's, to make from this
+// event and its own domain model. go/billing exists and is this module's
+// first real consumer, but its relationship to THIS event is comment-only
+// so far: billing/model.go's OverageModeNotify and billing/entitlements.go
+// name it as the signal those modes rely on, while no code in either
+// module subscribes to it -- a host whose overage mode needs the event
+// delivered wires that subscription itself (the compile-asserted
+// consumption runs the other way, billing reading RealtimeCount through
+// its UsageReader seam; see AGENTS.md's "billing is metering's first
+// consumer" note).
 //
 // Its Payload is an OverageThresholdCrossedEvent.
 const EventOverageThresholdCrossed = "metering.overage_threshold.crossed"
