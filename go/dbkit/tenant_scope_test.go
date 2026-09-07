@@ -1353,3 +1353,169 @@ func TestTenantScopeBeforeUpdate_DecoupledModelAndPayload_PaddedPayload_DoesNotF
 		t.Errorf("row name after Updates() = %q, want %q (the decoupled payload's real column must still be written)", got.Name, "renamed")
 	}
 }
+
+// widgetProjection is a plain read-model DTO standing in for the
+// projection/query shape a real module builds against a tenant-scoped model:
+// db.Model(&testutil.Widget{}).Select(...).Scan(&[]widgetProjection) — a
+// filtered, paged, projected list query, exactly the shape every real
+// list/dashboard endpoint is. It deliberately implements neither
+// TenantScoped nor SoftDeletable: the row-path protection under test must
+// come from the statement's Model (the Widget), never from the scan
+// destination, which is a different type from the model by construction.
+type widgetProjection struct {
+	ID    string
+	Name  string
+	Value int
+}
+
+// ---------------------------------------------------------------------------
+// Row-path contract tests. GORM routes db.Scan (finisher_api.go's Scan ->
+// Rows) and db.Rows/db.Row through the row processor
+// (tx.callbacks.Row().Execute), which is a separate callback chain from the
+// query processor Find/First/Take/Last/Count/Pluck run through
+// (tx.callbacks.Query().Execute). tenantScopePlugin registered only on the
+// query processor until this round, so the row path read every tenant's rows
+// with a nil error, and — because the row processor never consulted the
+// context's tenant either — read everything with a nil error when the
+// context carried no tenant at all. These tests pin the row path to the
+// query path's contract: tenant-scoped filter under a tenant, fail-closed
+// without one, both identical to Find.
+// ---------------------------------------------------------------------------
+
+// TestTenantScopePlugin_RowPath_Scan_UnderTenant_OnlySeesOwnTenant is
+// regression (a): db.Model(&Widget{}).Scan(&dtos) under tenant-a's context
+// must return only tenant-a's rows, exactly like Find. The two seeded rows
+// share name and value so only the tenant filter can tell them apart.
+func TestTenantScopePlugin_RowPath_Scan_UnderTenant_OnlySeesOwnTenant(t *testing.T) {
+	db := newScopedTestDB(t)
+	mustCreateWidget(t, db, tenantA, &testutil.Widget{ID: "a-1", TenantID: string(tenantA), Name: "gadget", Value: 7})
+	mustCreateWidget(t, db, tenantB, &testutil.Widget{ID: "b-1", TenantID: string(tenantB), Name: "gadget", Value: 7})
+
+	t.Run("Scan", func(t *testing.T) {
+		var got []widgetProjection
+		if err := db.WithContext(ctxFor(tenantA)).Model(&testutil.Widget{}).Scan(&got).Error; err != nil {
+			t.Fatalf("Scan() error = %v, want nil", err)
+		}
+		if len(got) != 1 || got[0].ID != "a-1" {
+			t.Fatalf("Scan() = %+v, want exactly [a-1] (tenant-a's own row; tenant-b's row must be filtered out)", got)
+		}
+	})
+
+	t.Run("Rows", func(t *testing.T) {
+		rows, err := db.WithContext(ctxFor(tenantA)).Model(&testutil.Widget{}).Rows()
+		if err != nil {
+			t.Fatalf("Rows() error = %v, want nil", err)
+		}
+		defer rows.Close()
+		var got []string
+		for rows.Next() {
+			var w testutil.Widget
+			if err := db.ScanRows(rows, &w); err != nil {
+				t.Fatalf("ScanRows() error = %v", err)
+			}
+			got = append(got, w.ID)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("Rows() iteration error = %v", err)
+		}
+		if len(got) != 1 || got[0] != "a-1" {
+			t.Fatalf("Rows() = %v, want exactly [a-1] (tenant-b's row must be filtered out)", got)
+		}
+	})
+}
+
+// TestTenantScopePlugin_RowPath_Scan_NoTenantInContext_FailsClosed is
+// regression (b): the row-path reads of db.Model(&Widget{}) with no tenant
+// in the context must fail closed exactly like Find — an error wrapping
+// pkgcore.ErrNoTenant, never a nil error with every tenant's rows (the
+// pre-fix shape) and never a nil error with zero rows either. Scan and Rows
+// surface the refusal through their error channels; gorm's Row() finisher
+// has none, so the leg for it pins the refusal's other half: a nil *sql.Row
+// proving the statement never executed (see tenantScopeBeforeQuery's doc
+// comment for why Row() cannot report the coded error itself).
+func TestTenantScopePlugin_RowPath_Scan_NoTenantInContext_FailsClosed(t *testing.T) {
+	db := newScopedTestDB(t)
+	mustCreateWidget(t, db, tenantA, &testutil.Widget{ID: "a-1", TenantID: string(tenantA), Name: "gadget", Value: 7})
+	mustCreateWidget(t, db, tenantB, &testutil.Widget{ID: "b-1", TenantID: string(tenantB), Name: "gadget", Value: 7})
+	noTenant := context.Background()
+
+	t.Run("Scan", func(t *testing.T) {
+		var got []widgetProjection
+		err := db.WithContext(noTenant).Model(&testutil.Widget{}).Scan(&got).Error
+		if err == nil {
+			t.Fatalf("Scan() error = nil, want an error (fail closed)")
+		}
+		if !errors.Is(err, pkgcore.ErrNoTenant) {
+			t.Errorf("Scan() error = %v, want it to wrap pkgcore.ErrNoTenant", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("Scan() populated %+v despite the error; no rows must leak", got)
+		}
+	})
+
+	t.Run("Rows", func(t *testing.T) {
+		rows, err := db.WithContext(noTenant).Model(&testutil.Widget{}).Rows()
+		if rows != nil {
+			defer rows.Close()
+		}
+		leaked := 0
+		if rows != nil {
+			for rows.Next() {
+				leaked++
+			}
+			if rerr := rows.Err(); rerr != nil {
+				t.Errorf("Rows() iteration error = %v", rerr)
+			}
+		}
+		if err == nil {
+			t.Fatalf("Rows() error = nil, want an error (fail closed)")
+		}
+		if !errors.Is(err, pkgcore.ErrNoTenant) {
+			t.Errorf("Rows() error = %v, want it to wrap pkgcore.ErrNoTenant", err)
+		}
+		if leaked != 0 {
+			t.Errorf("Rows() yielded %d rows despite the error; no rows must leak", leaked)
+		}
+	})
+
+	t.Run("Row", func(t *testing.T) {
+		row := db.WithContext(noTenant).Model(&testutil.Widget{}).Where("id = ?", "a-1").Row()
+		if row != nil {
+			t.Fatalf("Row() returned a usable *sql.Row despite the missing tenant; the refused statement must never execute (no tenant's row may be reachable)")
+		}
+	})
+}
+
+// TestTenantScopePlugin_RawSQLScan_StillBypasses is regression (d): the
+// documented truth-reader — db.Raw(...).Scan(...), the raw-SQL escape hatch
+// AGENTS.md's Known limitations section describes — must keep executing the
+// hand-written SQL verbatim, tenant filter and all, with the plugin never
+// consulted. The raw processor is deliberately unregistered; this test pins
+// that the row-path registration does not overreach into it. Both contexts
+// (with and without a tenant) must behave identically: nil error, both
+// tenants' rows, because a raw statement's WHERE is the caller's own.
+func TestTenantScopePlugin_RawSQLScan_StillBypasses(t *testing.T) {
+	db := newScopedTestDB(t)
+	mustCreateWidget(t, db, tenantA, &testutil.Widget{ID: "a-1", TenantID: string(tenantA), Name: "gadget", Value: 7})
+	mustCreateWidget(t, db, tenantB, &testutil.Widget{ID: "b-1", TenantID: string(tenantB), Name: "gadget", Value: 7})
+
+	rawSQL := `SELECT id, name, value FROM widgets WHERE name = ?`
+
+	for _, tc := range []struct {
+		name string
+		db   *gorm.DB
+	}{
+		{name: "under a tenant context", db: db.WithContext(ctxFor(tenantA))},
+		{name: "without a tenant context", db: db},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []widgetProjection
+			if err := tc.db.Raw(rawSQL, "gadget").Scan(&got).Error; err != nil {
+				t.Fatalf("Raw().Scan() error = %v, want nil (the raw path stays a bypass)", err)
+			}
+			if len(got) != 2 {
+				t.Fatalf("Raw().Scan() = %+v, want both tenants' rows [a-1 b-1] (hand-written SQL runs verbatim)", got)
+			}
+		})
+	}
+}

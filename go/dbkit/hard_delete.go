@@ -25,8 +25,9 @@ var ErrHardDeleteRequiresSystemContext = apperr.Invalid("dbkit.hard_delete_requi
 // HardDelete physically removes the row with the given id, scoped to the
 // ctx tenant — an irreversible DELETE, never a mark-delete. Even a T
 // implementing SoftDeletable is removed outright, soft-deleted or not:
-// soft_delete.go's auto-scope is query-only (it registers Before
-// "gorm:query", nothing else), so a soft-deleted row is just as deletable
+// soft_delete.go's auto-scope is read-side-only — it registers on the two
+// read processors, Before "gorm:query" and Before "gorm:row", never on
+// update or delete — so a soft-deleted row is just as deletable
 // as a live one, and this method never consults SoftDeletable at all — a
 // soft-deleted row is not a security boundary, and HardDelete is the
 // repository path that actually erases it (docs/internal/04-data-and-tenancy.md's

@@ -23,8 +23,8 @@ const tenantScopeColumn = "tenant_id"
 const tenantScopePluginName = "dbkit:tenant_scope"
 
 // ErrMissingTenantContext is the *apperr.Error returned (with the underlying
-// pkgcore error attached as its cause) when a tenant-scoped query, create,
-// update or delete is attempted on a context that carries no tenant.
+// pkgcore error attached as its cause) when a tenant-scoped query, scan,
+// create, update or delete is attempted on a context that carries no tenant.
 //
 // This is dbkit's fail-closed default: a tenant-scoped statement never runs
 // unfiltered, and never quietly returns zero rows in place of this error
@@ -117,11 +117,22 @@ var _ TenantScoped = TenantModel{}
 // This is a defense-in-depth safety net, not a replacement for
 // dbkit.Repository[T] — business code is still expected to go through
 // Repository so a query is never built with a hand-written tenant filter in
-// the first place — and it does not intercept raw SQL (db.Raw, db.Exec) or
-// db.Row/db.Rows, which bypass the query/create/update/delete callbacks
-// entirely; that is a separate, lint-enforced discipline (see the backend
-// coding standards, section 3.2), not something a GORM callback can catch in
-// general.
+// the first place. It registers on GORM's query processor and on its row
+// processor (Initialize): GORM fans every finisher out onto exactly one
+// processor — Find/First/Take/Last/Count/Pluck and their kin run the query
+// processor's callbacks, while Scan/Row/Rows run the row processor's
+// (finisher_api.go's Scan calls Rows, which executes callbacks.Row()) — so a
+// plugin that protects "reads" must register on both, or every scan-shaped
+// read (db.Model(&Widget{}).Scan(&dtos), the standard projection/query
+// shape) silently bypasses it. That same finisher-to-processor reasoning is
+// what auditCapturePlugin applied when SavePoint turned out to route through
+// the raw processor (audit_capture.go) — a GORM operation is protected at
+// the processor its finisher executes, never at the finisher name. Raw SQL
+// (db.Raw, db.Exec) is the one read/write family this still does not
+// intercept: it runs the raw processor, which carries no tenant model to
+// scope by, and its statements are hand-written SQL by construction — a
+// separate, lint-enforced discipline (see the backend coding standards,
+// section 3.2), not something a GORM callback can catch in general.
 //
 // It also does not implement the system-context cross-tenant escape hatch
 // (pkgcore.WithSystemContext): when a tenant-scoped model is queried without
@@ -142,15 +153,32 @@ func (p *tenantScopePlugin) Name() string { return tenantScopePluginName }
 
 // Initialize registers the tenant-isolation callbacks on db, satisfying
 // gorm.Plugin. Each callback is registered immediately before GORM's own
-// SQL-building step for that operation ("gorm:query", "gorm:create",
-// "gorm:update", "gorm:delete"), so it runs after any model-level hook
-// (BeforeCreate and friends) has had its say and nothing after it can
-// override its decision before the statement is built and executed. It
-// performs no I/O, matching the Module.Register contract this plugin is
-// typically wired from.
+// SQL-building step for that operation ("gorm:query", "gorm:row",
+// "gorm:create", "gorm:update", "gorm:delete"), so it runs after any
+// model-level hook (BeforeCreate and friends) has had its say and nothing
+// after it can override its decision before the statement is built and
+// executed. It performs no I/O, matching the Module.Register contract this
+// plugin is typically wired from.
+//
+// The read side registers the same handler on both read processors: the
+// query processor, which Find/First/Take/Last/Count/Pluck and every other
+// read finisher execute, and the row processor, which Scan/Row/Rows execute
+// (finisher_api.go's Scan delegates to Rows, which runs
+// callbacks.Row().Execute). Before the row registration, every scan-shaped
+// read of a tenant-scoped model ran unfiltered with a nil error — GORM's
+// Row processor is a separate callback chain, so a query-only registration
+// never saw it — the same finisher-to-processor lesson auditCapturePlugin's
+// raw-processor registration records (audit_capture.go): a GORM operation
+// is protected at the processor its finisher executes, never at the
+// finisher name. Row/Rows/Scan are the only finishers the row processor
+// runs, so this one registration closes all three.
 func (p *tenantScopePlugin) Initialize(db *gorm.DB) error {
 	if err := db.Callback().Query().Before("gorm:query").
 		Register(tenantScopePluginName+":query", tenantScopeBeforeQuery); err != nil {
+		return err
+	}
+	if err := db.Callback().Row().Before("gorm:row").
+		Register(tenantScopePluginName+":row", tenantScopeBeforeQuery); err != nil {
 		return err
 	}
 	if err := db.Callback().Create().Before("gorm:create").
@@ -171,11 +199,26 @@ func (p *tenantScopePlugin) Initialize(db *gorm.DB) error {
 // compile-time check that tenantScopePlugin satisfies gorm.Plugin.
 var _ gorm.Plugin = (*tenantScopePlugin)(nil)
 
-// tenantScopeBeforeQuery injects "WHERE tenant_id = ?" ahead of every
-// Find/First/Take/Count and similar reads of a tenant-scoped model, and
-// fails the query closed when the statement's context carries no tenant.
-// Registered Before "gorm:query", it applies uniformly to everything that
-// routes through the query processor.
+// tenantScopeBeforeQuery injects "WHERE tenant_id = ?" ahead of every read
+// of a tenant-scoped model — Find/First/Take/Count on the query processor,
+// Scan/Row/Rows on the row processor (see Initialize for the
+// finisher-to-processor reasoning) — and fails the read closed when the
+// statement's context carries no tenant. Registered Before "gorm:query" and
+// Before "gorm:row", it applies uniformly to everything routed through
+// either processor.
+//
+// On the row processor, gorm's own Row() finisher (as opposed to Rows() and
+// Scan, whose returned errors carry this refusal) returns only a *sql.Row
+// and discards the statement's error — a statement this callback fails
+// closed is never executed, so Row() hands its caller a nil *sql.Row on
+// which database/sql's Scan panics with a nil dereference rather than
+// reporting ErrMissingTenantContext. That is a limitation of gorm's Row()
+// API shape, not of the protection: the refused statement never runs, so
+// no tenant's row can leak through it, and the sanctioned single-row
+// shapes (Repository[T], First/Take) carry the same limit-1 semantics with
+// a real error channel. The Row()-finisher shape against a tenant-scoped
+// model is accordingly steered to First/Take, and no code in this
+// repository uses it.
 func tenantScopeBeforeQuery(db *gorm.DB) {
 	if !isTenantScopedStatement(db.Statement) {
 		return

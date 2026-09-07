@@ -79,10 +79,19 @@ func newSoftDeleteScopePlugin() *softDeleteScopePlugin {
 // and similar reads) against a model implementing SoftDeletable, hiding
 // soft-deleted rows from ordinary reads.
 //
-// It is deliberately narrower than tenantScopePlugin: it registers only
-// Before("gorm:query"), not create/update/delete. The design doc's literal
-// text says the auto-scope belongs on the query callback only, not on
-// create/update/delete.
+// It is deliberately narrower than tenantScopePlugin: it registers on the
+// two read processors — Before("gorm:query") and Before("gorm:row") — never
+// on create/update/delete. The design doc's literal text says the
+// auto-scope belongs on the query callback only, not on
+// create/update/delete; the row-processor registration extends that same
+// auto-scope to the reads GORM routes through its Row processor
+// (Scan/Row/Rows — finisher_api.go's Scan delegates to Rows, which executes
+// callbacks.Row()), the identical finisher-to-processor reasoning
+// tenantScopePlugin's row registration and auditCapturePlugin's
+// raw-processor registration record: a GORM operation is protected at the
+// processor its finisher executes, never at the finisher name, and without
+// the row registration every scan-shaped read of a SoftDeletable model
+// surfaced soft-deleted rows with a nil error.
 // Repository[T].Delete and Restore build their own explicit
 // "deleted_at IS NULL" / "deleted_at IS NOT NULL" WHERE clauses instead of
 // relying on this plugin (see repository.go), and Repository[T].Update is
@@ -106,22 +115,36 @@ type softDeleteScopePlugin struct{}
 // Name returns the plugin's identifier, satisfying gorm.Plugin.
 func (p *softDeleteScopePlugin) Name() string { return softDeleteScopePluginName }
 
-// Initialize registers the soft-delete query-scope callback on db,
-// satisfying gorm.Plugin. It is registered Before("gorm:query"), matching
-// tenantScopePlugin's own query-callback registration point, so both
-// scopes' WHERE conditions are in place before GORM's own SQL-building step
-// runs.
+// Initialize registers the soft-delete scope callback on both of db's read
+// processors, satisfying gorm.Plugin. The query-processor registration sits
+// Before("gorm:query"), matching tenantScopePlugin's own registration point,
+// so both scopes' WHERE conditions are in place before GORM's own
+// SQL-building step runs; the row-processor registration sits
+// Before("gorm:row") for the same reason. The row registration exists
+// because GORM routes Scan/Row/Rows through its Row processor, a separate
+// callback chain from the query processor, so a query-only registration
+// left every scan-shaped read of a SoftDeletable model surfacing
+// soft-deleted rows with a nil error. Row/Rows/Scan are the only finishers
+// the row processor runs, so this one registration closes all three (the
+// identical finisher-to-processor reasoning tenantScopePlugin's Initialize
+// records).
 func (p *softDeleteScopePlugin) Initialize(db *gorm.DB) error {
-	return db.Callback().Query().Before("gorm:query").
-		Register(softDeleteScopePluginName+":query", softDeleteScopeBeforeQuery)
+	if err := db.Callback().Query().Before("gorm:query").
+		Register(softDeleteScopePluginName+":query", softDeleteScopeBeforeQuery); err != nil {
+		return err
+	}
+	return db.Callback().Row().Before("gorm:row").
+		Register(softDeleteScopePluginName+":row", softDeleteScopeBeforeQuery)
 }
 
 // compile-time check that softDeleteScopePlugin satisfies gorm.Plugin.
 var _ gorm.Plugin = (*softDeleteScopePlugin)(nil)
 
 // softDeleteScopeBeforeQuery appends "deleted_at IS NULL" ahead of every
-// query against a SoftDeletable model, unless the statement is Unscoped
-// (db.Statement.Unscoped), GORM's own general bypass mechanism.
+// read of a SoftDeletable model — Find and its kin on the query processor,
+// Scan/Row/Rows on the row processor (see Initialize) — unless the
+// statement is Unscoped (db.Statement.Unscoped), GORM's own general bypass
+// mechanism.
 //
 // Like tenantScopeBeforeQuery/Update/Delete, it groups whatever WHERE
 // expressions the caller already attached (groupExistingWhereConditions)

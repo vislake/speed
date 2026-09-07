@@ -284,3 +284,49 @@ func TestSoftDeleteScopeBeforeQuery_UnscopedOrCondition_SeesSoftDeletedRows(t *t
 		}
 	}
 }
+
+// TestSoftDeleteScopePlugin_RowPath_Scan_SkipsSoftDeletedRows is regression
+// (c), the soft-delete twin of tenant_scope_test.go's row-path regressions:
+// db.Model(&SoftDeletableWidget{}).Scan(&rows) — the projection/query shape
+// that routes through GORM's row processor, where the plugin registered no
+// callback until this round — must hide soft-deleted rows exactly like
+// Find. Pre-fix the scan returned the soft-deleted row with a nil error.
+func TestSoftDeleteScopePlugin_RowPath_Scan_SkipsSoftDeletedRows(t *testing.T) {
+	db := newSoftDeleteScopedTestDB(t)
+
+	live := &testutil.SoftDeletableWidget{ID: "live-1", TenantID: "tenant-a", Name: "live"}
+	mustCreateSoftDeletableWidget(t, db, live)
+
+	deleted := &testutil.SoftDeletableWidget{ID: "deleted-1", TenantID: "tenant-a", Name: "deleted"}
+	mustCreateSoftDeletableWidget(t, db, deleted)
+	if err := db.Exec(
+		`UPDATE soft_deletable_widgets SET deleted_at = ?, deleted_by = ? WHERE id = ?`,
+		"2026-01-01 00:00:00", "user-1", "deleted-1",
+	).Error; err != nil {
+		t.Fatalf("mark deleted-1 deleted via raw SQL: %v", err)
+	}
+
+	t.Run("Scan", func(t *testing.T) {
+		var got []testutil.SoftDeletableWidget
+		if err := db.Model(&testutil.SoftDeletableWidget{}).Scan(&got).Error; err != nil {
+			t.Fatalf("Scan() error = %v", err)
+		}
+		if len(got) != 1 || got[0].ID != "live-1" {
+			t.Fatalf("Scan() = %+v, want exactly [live-1] (the soft-deleted row must be hidden)", got)
+		}
+	})
+
+	t.Run("Unscoped Scan", func(t *testing.T) {
+		var got []testutil.SoftDeletableWidget
+		if err := db.Unscoped().Model(&testutil.SoftDeletableWidget{}).Scan(&got).Error; err != nil {
+			t.Fatalf("Unscoped().Scan() error = %v", err)
+		}
+		ids := make(map[string]bool, len(got))
+		for _, w := range got {
+			ids[w.ID] = true
+		}
+		if !ids["live-1"] || !ids["deleted-1"] {
+			t.Fatalf("Unscoped().Scan() = %+v, want both [live-1 deleted-1] (the scope's own bypass must keep working on the row path)", got)
+		}
+	})
+}
