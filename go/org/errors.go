@@ -159,6 +159,18 @@ var (
 	// fresh Add has since taken makes the un-delete collide with it.
 	ErrMembershipExists = apperr.Conflict("org.membership_exists")
 
+	// ErrSystemContextRequired reports a call to MemberService.TenantsOf --
+	// the one cross-tenant read this module offers -- whose context carries
+	// no system context (pkgcore.WithSystemContext). The question TenantsOf
+	// answers is "which organizations does this person belong to", a
+	// platform-operator-shaped fact about a person that no single tenant's
+	// context may ask for: it is org's mirror of dbkit's own gate on
+	// HardDelete (dbkit.hard_delete_requires_system_context), and like that
+	// gate it checks only the grant's presence, never who holds it -- which
+	// modules may hold one at all is the caller-side whitelist's business,
+	// and the audited way to obtain one is tenancy.WithSystemContext.
+	ErrSystemContextRequired = apperr.Invalid("org.system_context_required")
+
 	// ErrMemberNotRemovable reports a removal that would leave the tenant with
 	// no active member at all. Somebody has to be able to invite the next
 	// person, and org has no privileged path back in: the invitation endpoint

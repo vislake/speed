@@ -37,6 +37,8 @@
 
 "org.node_has_members" = "该节点下还有成员,请先把他们调整到其他节点再删除。"
 
+"org.system_context_required" = "该操作需要平台级上下文,组织成员无法执行。"
+
 "org.membership_not_found" = "此人不是该组织的成员。"
 
 "org.membership_exists" = "此人已经是该组织的成员。"

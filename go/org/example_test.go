@@ -280,3 +280,114 @@ func Example_membershipAndScope() {
 	// user-dentist can see 1 node(s)
 	// user-stranger can see 0 node(s)
 }
+
+// ExampleMemberService_TenantsOf answers the question a host's
+// authn.MembershipReader must be able to answer at sign-in -- "which
+// tenants does this account belong to" -- from org's own rows, the same
+// rows every Get/Add/Remove answer, instead of from a host-maintained
+// roster that has to be told about every tenant a registration creates.
+//
+// The question spans tenants by definition, so org serves it only to a
+// system context: the caller (here, the example itself) declares the
+// purpose it will take the grant for through pkgcore.RegisterSystemPurpose
+// -- exactly what a host's Module.Register does -- and obtains the grant
+// with pkgcore.WithSystemContext (a business module uses tenancy's audited
+// wrapper instead). A caller holding only an organization's own context is
+// refused before any database work happens.
+func ExampleMemberService_TenantsOf() {
+	ctx := context.Background()
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     "file:org_example_tenants_of?mode=memory&cache=shared",
+	})
+	if err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+
+	// Registration validates that a host wired the seams the module's
+	// invitation half needs; the example wires the same minimal set
+	// Example_membershipAndScope uses, with the invitation email disabled so
+	// nothing goes out through the console mailer.
+	indexer, err := dbkit.NewBlindIndexer("email_index", []byte("example-blind-index-key-32-bytes"), dbkit.NormalizeEmail)
+	if err != nil {
+		fmt.Println("blind indexer:", err)
+		return
+	}
+	module := org.NewModule(db,
+		org.WithEmailIndexer(indexer),
+		org.WithInvitationEmailDisabled(),
+	)
+
+	registry := dbkit.NewMigrationRegistry()
+	if regErr := registry.Register(module); regErr != nil {
+		fmt.Println("register migrations:", regErr)
+		return
+	}
+	if applyErr := registry.Apply(ctx, db, dbkit.DialectSQLite); applyErr != nil {
+		fmt.Println("apply migrations:", applyErr)
+		return
+	}
+	if _, bootErr := pkgcore.NewKernel().Bootstrap(ctx, module); bootErr != nil {
+		fmt.Println("bootstrap:", bootErr)
+		return
+	}
+
+	members := module.Members()
+	for _, tenant := range []pkgcore.TenantID{"acme-dental", "globex-dental"} {
+		tenantCtx := pkgcore.WithTenant(ctx, tenant)
+		root, rootErr := module.Tree().CreateRoot(tenantCtx, "Dental Practice", "group")
+		if rootErr != nil {
+			fmt.Println("create root:", rootErr)
+			return
+		}
+		if _, addErr := members.Add(tenantCtx, "user-owner", root.ID); addErr != nil {
+			fmt.Println("add owner:", addErr)
+			return
+		}
+		if tenant == "globex-dental" {
+			if _, addErr := members.Add(tenantCtx, "user-globex-only", root.ID); addErr != nil {
+				fmt.Println("add globex member:", addErr)
+				return
+			}
+		}
+	}
+
+	// A tenant-scoped caller is refused: one organization's context cannot
+	// enumerate a person's memberships in every organization.
+	if _, refusalErr := members.TenantsOf(pkgcore.WithTenant(ctx, "acme-dental"), "user-owner"); refusalErr != nil {
+		if code, ok := apperr.As(refusalErr); ok {
+			fmt.Printf("TenantsOf without system context: %s\n", code.Code)
+		}
+	}
+
+	// A system-context caller gets the real answer, ordered by tenant id.
+	sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{
+		Actor:   "platform-operator",
+		Purpose: orgExampleTenantsOfPurpose,
+	})
+	if err != nil {
+		fmt.Println("system context:", err)
+		return
+	}
+	tenants, err := members.TenantsOf(sysCtx, "user-owner")
+	if err != nil {
+		fmt.Println("tenants of:", err)
+		return
+	}
+	fmt.Printf("user-owner belongs to: %v\n", tenants)
+
+	// Output:
+	// TenantsOf without system context: org.system_context_required
+	// user-owner belongs to: [acme-dental globex-dental]
+}
+
+// orgExampleTenantsOfPurpose is the system purpose this example declares
+// for its own TenantsOf grant, the same declaration a host makes once at
+// boot for the purposes its glue takes system contexts for.
+var orgExampleTenantsOfPurpose = pkgcore.SystemPurpose("org.example.tenants_of")
+
+func init() {
+	pkgcore.RegisterSystemPurpose(orgExampleTenantsOfPurpose)
+}

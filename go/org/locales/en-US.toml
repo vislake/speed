@@ -38,6 +38,8 @@
 
 "org.node_has_members" = "That node still has members. Move them elsewhere before deleting it."
 
+"org.system_context_required" = "This operation requires platform-level context and cannot be performed by an organization member."
+
 "org.membership_not_found" = "That person is not a member of this organization."
 
 "org.membership_exists" = "That person is already a member of this organization."

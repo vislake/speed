@@ -40,6 +40,7 @@ var errorCatalog = []struct {
 
 	{"ErrMembershipNotFound", ErrMembershipNotFound, "org.membership_not_found", http.StatusNotFound},
 	{"ErrMembershipExists", ErrMembershipExists, "org.membership_exists", http.StatusConflict},
+	{"ErrSystemContextRequired", ErrSystemContextRequired, "org.system_context_required", http.StatusBadRequest},
 	{"ErrMemberNotRemovable", ErrMemberNotRemovable, "org.member_not_removable", http.StatusConflict},
 	{"ErrInvitationNotFound", ErrInvitationNotFound, "org.invitation_not_found", http.StatusNotFound},
 	{"ErrInvitationExpired", ErrInvitationExpired, "org.invitation_expired", http.StatusConflict},

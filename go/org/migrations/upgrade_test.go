@@ -81,7 +81,9 @@ func stageSingleRootUpgrade(t *testing.T, db *gorm.DB, dialect dbkit.Dialect) {
 
 	// Stage 2: the upgrade. A second registry applies the FULL set; its
 	// ledger already records 0001..0007 (same module name, same filenames),
-	// so it executes exactly the new files -- 0008_single_root_live.sql.
+	// so it executes exactly the new files -- 0008_single_root_live.sql and
+	// every migration that has landed since (0009_memberships_user_lookup.sql
+	// at the time of writing).
 	full := dbkit.NewMigrationRegistry()
 	if err := full.Register(migrationSetModule{name: "org", fs: FS}); err != nil {
 		t.Fatalf("Register(full set): %v", err)
@@ -94,8 +96,8 @@ func stageSingleRootUpgrade(t *testing.T, db *gorm.DB, dialect dbkit.Dialect) {
 	if err := db.Raw("SELECT count(*) FROM schema_migrations WHERE module = 'org'").Scan(&ledgerRows).Error; err != nil {
 		t.Fatalf("count the ledger rows: %v", err)
 	}
-	if ledgerRows != 8 {
-		t.Fatalf("schema_migrations holds %d org rows after the upgrade, want 8 (0001..0008)", ledgerRows)
+	if ledgerRows != 9 {
+		t.Fatalf("schema_migrations holds %d org rows after the upgrade, want 9 (0001..0009)", ledgerRows)
 	}
 
 	// The narrowed index (deleted_at IS NULL added to the predicate): the
