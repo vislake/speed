@@ -143,8 +143,9 @@ func registerFreshAccount(t *testing.T, srv *httptest.Server, email, password st
 // registration provisioned, and the notes gate answers the owner grant
 // with a real write. The named-tenant control keeps the journey honest
 // about what the clinic is NOT: the account holds no membership in any
-// configured tenant, so a sign-in asking for tenant-acme is refused
-// exactly as before, with authn.tenant_membership_required.
+// configured tenant, so a sign-in asking for tenant-acme is refused --
+// the unified 401 authn.invalid_credentials answer, identical to a wrong
+// password's (the login endpoint no longer names the membership gate).
 func TestSelfServiceSignup_RegisterThenSignIn_LandsInTheCreatedClinic(t *testing.T) {
 	srv, _, _ := buildTestServer(t)
 
@@ -177,11 +178,15 @@ func TestSelfServiceSignup_RegisterThenSignIn_LandsInTheCreatedClinic(t *testing
 	// The control: the account holds no membership in any configured
 	// tenant, so a sign-in naming one is refused exactly as a
 	// pre-acceptance invitee's is -- the clinic is its own tenant, not a
-	// back door into someone else's.
+	// back door into someone else's. The refusal is the unified 401
+	// authn.invalid_credentials answer a wrong password also gets (this
+	// control used to pin the distinguishable 403
+	// authn.tenant_membership_required; the specific no-membership reason
+	// now lives in the login history, never the response).
 	status, code, _ = demoLogin(t, srv, selfServiceFreshEmail, selfServicePassword, "tenant-acme")
-	if status != http.StatusForbidden || code != "authn.tenant_membership_required" {
-		t.Fatalf("sign-in of the clinic owner into tenant-acme: status = %d, code = %q, want 403 %q",
-			status, code, "authn.tenant_membership_required")
+	if status != http.StatusUnauthorized || code != "authn.invalid_credentials" {
+		t.Fatalf("sign-in of the clinic owner into tenant-acme: status = %d, code = %q, want 401 %q",
+			status, code, "authn.invalid_credentials")
 	}
 
 	// The clinic's org tree answers the account's own bearer token: the

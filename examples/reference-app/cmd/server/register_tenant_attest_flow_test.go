@@ -34,9 +34,12 @@ import (
 // Failing before the fix: the fresh account lands on tenant-acme's org
 // roster and its sign-in resolves into tenant-acme. Passing after: the
 // account is absent from the roster, its sign-in naming tenant-acme is
-// refused with authn.tenant_membership_required, and the signup
-// provisioning path gives it its own clinic (the browser-shaped sign-in
-// lands in the deterministic clinicTenantOf tenant).
+// refused with the unified 401 authn.invalid_credentials answer a wrong
+// password also gets (the fold of no-membership logins into
+// ErrInvalidCredentials: the login endpoint discloses nothing about
+// whether the password verified), and the signup provisioning path gives
+// it its own clinic (the browser-shaped sign-in lands in the
+// deterministic clinicTenantOf tenant).
 func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 
@@ -120,12 +123,17 @@ func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t
 	}
 
 	// Leg 2, the refusal: a sign-in of the fresh account naming
-	// tenant-acme is refused -- the account holds no membership there.
+	// tenant-acme is refused -- the account holds no membership there. The
+	// refusal is the unified 401 authn.invalid_credentials answer a wrong
+	// password also gets (this leg used to pin the distinguishable 403
+	// authn.tenant_membership_required; the answer was deliberately
+	// unified, the specific reason now recorded in the login history,
+	// never the response).
 	status, code, _ := demoLogin(t, srv, freshEmail, freshPassword, "tenant-acme")
-	if status != http.StatusForbidden || code != "authn.tenant_membership_required" {
-		t.Fatalf("sign-in of the freshly registered account into tenant-acme: status = %d, code = %q, want 403 %q "+
+	if status != http.StatusUnauthorized || code != "authn.invalid_credentials" {
+		t.Fatalf("sign-in of the freshly registered account into tenant-acme: status = %d, code = %q, want 401 %q "+
 			"(the account must hold no membership in the registering caller's tenant)",
-			status, code, "authn.tenant_membership_required")
+			status, code, "authn.invalid_credentials")
 	}
 
 	// Leg 3, the account's own clinic: the signup provisioning path (this

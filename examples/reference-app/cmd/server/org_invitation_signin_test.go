@@ -152,11 +152,18 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// invitee cannot sign into the inviting tenant -- its only membership
 	// so far is the self-service clinic its registration provisioned
 	// (self_service.go), which is a different tenant, so this
-	// explicit-tenant sign-in confirms the account is real and genuinely
-	// starts with no seat in the tenant the invitation will open.
+	// explicit-tenant sign-in proves the invitee starts with no seat in the
+	// tenant the invitation will open. The refusal is the unified 401
+	// authn.invalid_credentials answer a wrong password also gets -- the
+	// account is real and the password right, but the login endpoint must
+	// not say so (this control used to pin the distinguishable 403
+	// authn.tenant_membership_required; the specific reason now lives in
+	// the login history, never the response). The account's reality is
+	// proven below, when the same credentials answer 200 after the
+	// acceptance creates the membership.
 	status, code, _ := demoLogin(t, srv1, inviteeEmail, inviteePassword, "tenant-acme")
-	if status != http.StatusForbidden || code != "authn.tenant_membership_required" {
-		t.Fatalf("pre-invitation login: status = %d, code = %q, want 403 %q", status, code, "authn.tenant_membership_required")
+	if status != http.StatusUnauthorized || code != "authn.invalid_credentials" {
+		t.Fatalf("pre-invitation login: status = %d, code = %q, want 401 %q", status, code, "authn.invalid_credentials")
 	}
 
 	// Invite the real invitee's email into the new root node, through

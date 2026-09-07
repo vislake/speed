@@ -173,14 +173,17 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 
 	// The acme-only account holds its membership and reader grant in
 	// tenant-acme only; signing in for the tenant it has no membership in is
-	// refused with authn's membership-required code (authn.tenant_
-	// membership_required: the caller asked for a tenant it is not an active
-	// member of -- the unavailable code, by contrast, is for a membership
-	// question nobody could answer at all), before any route exists.
+	// refused before any route exists with the unified 401
+	// authn.invalid_credentials answer a wrong password also gets -- the
+	// account is real and the password right, but the login endpoint must
+	// not disclose that to an anonymous caller (this control used to pin
+	// the distinguishable 403 authn.tenant_membership_required; the answer
+	// was deliberately unified, the specific reason now recorded in the
+	// login history, never the response).
 	status, code, _ = demoLogin(t, srv, demoAcmeOnlyEmail, demoSeedPassword, "tenant-globex")
-	if status != http.StatusForbidden || code != "authn.tenant_membership_required" {
-		t.Fatalf("login as the acme-only account in tenant-globex: status = %d, code = %q, want 403 %q",
-			status, code, "authn.tenant_membership_required")
+	if status != http.StatusUnauthorized || code != "authn.invalid_credentials" {
+		t.Fatalf("login as the acme-only account in tenant-globex: status = %d, code = %q, want 401 %q",
+			status, code, "authn.invalid_credentials")
 	}
 }
 
