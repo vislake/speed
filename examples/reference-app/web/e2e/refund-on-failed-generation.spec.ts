@@ -148,8 +148,7 @@ test(
       // driving anything, so a silent skip cannot masquerade as a pass.
       await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
       await openSurface(page, /cases|patients/i)
-      await expect(page.getByRole('heading', { level: 1 })).toContainText(/cases|病例/i)
-      // PROBE: 每一步都必须真的到达
+      await expect(page.getByRole('heading', { level: 1 })).toContainText(/cases/i)
       await page.getByRole('button', { name: /new case|create case|add case/i }).click()
       await page
         .getByRole('textbox', { name: /case name|patient|reference/i })
@@ -196,7 +195,7 @@ test(
       await expect(
         page.getByRole('heading', { level: 1 }),
         'the gate never reached the credits surface, so whatever it read next was not the ledger',
-      ).toContainText(/credits|额度/i)
+      ).toContainText(/credits/i)
       const ledger = page.getByRole('main')
       await expect
         .poll(async () => await ledger.innerText(), { timeout: 60_000 })
