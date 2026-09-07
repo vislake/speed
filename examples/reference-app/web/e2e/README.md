@@ -760,6 +760,27 @@ address serves an HTML document, the page mounts the app, and it loads
 with no failed asset or console error -- and names its own reason for
 the other two.
 
+**And those three answer about a build, not about main.** Nothing
+redeploys this app automatically. Measured at the time of writing: the
+running image is unchanged since its deploy, while main has moved 154
+commits past it -- 51 of them touching `examples/reference-app` or
+`web/packages`, and 106 touching a `go/` module the app compiles in. So
+a green `@deployment` result says "the deployed build serves and
+mounts"; it says nothing about the code that has landed since.
+
+That is worth stating in any acceptance report, because the two
+sentences read almost identically and mean very different things:
+
+- *the product's own code works* -- what a local run proves, against
+  whatever is checked out;
+- *it survives being deployed* -- what a deployment run proves, against
+  whatever was last deployed.
+
+Neither substitutes for the other, and the second decays silently:
+every commit that lands widens the gap without changing the result.
+`flyctl status` plus a `git log --since` against the deploy time is how
+to size it before quoting a deployment green.
+
 **What the deployment cannot answer.** The fly.io deployment has no
 image-provider configuration (`flyctl secrets list` shows no
 `APP_AI_GATEWAY_IMAGE_*` entry -- re-checked, still one secret), so a
