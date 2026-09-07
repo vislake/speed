@@ -383,7 +383,6 @@ tier's green says only what that tier selected.
 
 | Gate | Waiting on |
 |---|---|
-| core-journey block C | the patient's page shows the result alone; the pair needs the share to carry both objects, not just an extra `<img>` |
 | core-journey block D | `go/billing` has no HTTP surface, so a credits view has nothing to call |
 | sessions-are-distinguishable | session rows still render raw User-Agent strings, so three sign-ins from one browser are three identical walls of text |
 | current-clinic-is-visible (one of three) | a self-service clinic is shown as a raw tenant id and named on no surface |
