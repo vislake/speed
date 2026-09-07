@@ -75,12 +75,16 @@ type middlewareConfig struct {
 	statusResolver TenantStatusResolver
 }
 
-// WithAllowlist exempts the given (method, paths) combinations from tenant
-// resolution. When resolver.Resolve fails for a request whose
-// (*http.Request).Method exactly equals method AND whose
-// (*http.Request).URL.Path exactly matches one of paths, Middleware calls
-// the next handler with no tenant in the request context, instead of
-// responding with 403 Forbidden.
+// WithAllowlist exempts the given (method, paths) combinations from the
+// refusals Middleware would otherwise answer with -- on a resolution
+// failure and on a wired tenant-status gate's refusal of the resolved
+// tenant alike -- never from resolution or tenant injection itself: an
+// allowlisted request whose tenant resolves, and passes a wired gate, has
+// that tenant injected like any other request. When resolver.Resolve
+// fails for a request whose (*http.Request).Method exactly equals method
+// AND whose (*http.Request).URL.Path exactly matches one of paths,
+// Middleware calls the next handler with no tenant in the request
+// context, instead of responding with 403 Forbidden.
 //
 // The exemption is scoped to method as well as path. Allowlisting
 // (http.MethodPost, "/api/v1/orgs/invite") does NOT exempt GET, PUT,
