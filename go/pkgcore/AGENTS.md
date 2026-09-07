@@ -84,10 +84,12 @@ Declaration types:
 | `MountedRoute` | `Path`, `Handler` |
 | `ConfigItem` | `Key`, `Type`, `Default`, `Sensitive`, `Description`, `Group`, `Public`, `Min`, `Max` |
 | `FeatureFlag` | `Key`, `Default`, `Description`, `DependsOn` |
-| `NotificationType` | `Key`, `Group`, `DefaultChannels`, `Unsubscribable` |
+| `NotificationType` | `Key`, `Group`, `DefaultChannels`, `RecipientVisibleParams`, `Unsubscribable` |
 | `EventDecl` | `Type`, `PayloadType`, `Description` |
 
 `ConfigItem` declarations are validated when registered: `Type` must be one of `string` / `int` / `bool` / `duration`; a non-nil `Default` must be a Go value of that kind (`string`, `int` or `int64`, `bool`, `time.Duration`; nil is legal and means "no value until one is set"); `Min`/`Max` are declarative ranges defined for `int` and `duration` items only, must satisfy `Min <= Max`, and a non-nil `Default` must fall inside them; `Sensitive` and `Public` are mutually exclusive. A contradictory declaration fails the whole `Add` call with an error wrapping `ErrInvalidConfigItem` -- see the error index below.
+
+`NotificationType`'s own annotation -- added with the field, 2026-09: `RecipientVisibleParams` names the parameters a dispatch of the type may carry to its recipient -- the keys of the interpolation values the type's templates reference (see `go/notification`'s `Dispatch.Params`). Anything NOT named is delivery-internal context that must never reach the recipient, and `go/notification` enforces the declaration on the two boundaries it owns: `DeliveryService.Dispatch` refuses a dispatch carrying any parameter outside the list before anything is enqueued (`ErrDispatchParamsNotAllowed`, naming the type and the offending keys), and the delivery path narrows a payload that nevertheless reaches it -- a job enqueued before the declaration restricted its params -- down to the list before anything renders, derives into the delivery key or persists into the row. An EMPTY list is a real declaration: the type's copy is not parameterized, so its dispatches may carry no parameters at all. Nil is the legacy value meaning "no restriction declared": a type that predates the annotation keeps accepting any parameters, byte for byte as before, so no pre-existing type changes behaviour. pkgcore itself only carries the field -- the enforcement lives in `go/notification` (that module's `AGENTS.md` has the delivery-side detail); its first real declaration is `go/admin`'s `admin.impersonation_started`, which declares the empty list (that module's `AGENTS.md` records the P1-2 leak the list closes).
 
 
 **Deployment mode and implementation composition**
