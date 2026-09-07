@@ -49,10 +49,15 @@ var errNoKVStore = errors.New("org: the host registry carries no key-value store
 // host knows its own public address -- and, for a multi-tenant deployment,
 // which host name belongs to the tenant in ctx.
 //
-// That per-tenant host is not decoration. InviteService.Accept resolves an
-// invitation strictly inside the tenant the request context already carries
-// and never reads a tenant out of the token, so the link has to arrive at
-// the tenant's own entry point to be acceptable at all.
+// That per-tenant host name is desirable, not a requirement of acceptance:
+// acceptance is tenantless. Accept on a request context carrying no tenant
+// -- the freshly invited person's path -- resolves the invitation's own
+// tenant from the token's hash through org_invitation_token_index and
+// attaches it with pkgcore.WithTenant, so a link to any host entry point
+// that serves the accept path is acceptable. The per-tenant host name
+// decides what the recipient sees -- the tenant's own branded address in
+// the inbox rather than a shared one -- never whether the invitation can
+// be accepted at all.
 type InvitationLinkBuilder func(ctx context.Context, token string) (string, error)
 
 // invitationMailData is everything the invitation templates interpolate.

@@ -357,8 +357,18 @@ func WithMailFrom(from string) Option {
 // WithInvitationLinkBuilder injects the function that turns an invitation
 // token into the URL the invitee clicks. Only the host knows its own public
 // address, and in a multi-tenant deployment which host name belongs to the
-// tenant in context -- which matters, because acceptance is resolved inside
-// the tenant of the request and never from the token.
+// tenant in ctx -- so the link can point the invitee at the tenant's own
+// address rather than a shared one.
+//
+// That per-tenant host name is desirable, not a requirement of acceptance:
+// acceptance is tenantless. Accept on a request context carrying no tenant
+// -- the freshly invited person's path -- resolves the invitation's own
+// tenant from the token's hash through org_invitation_token_index, attaches
+// it with pkgcore.WithTenant, and runs the ordinary tenant-scoped flow
+// unchanged, so a link to any host entry point that serves the accept path
+// is acceptable. The per-tenant address buys the recipient-facing URL --
+// branding, and the tenant's own address in the invitee's inbox -- not
+// acceptability.
 //
 // Required on the same terms as WithMailFrom.
 func WithInvitationLinkBuilder(build InvitationLinkBuilder) Option {
