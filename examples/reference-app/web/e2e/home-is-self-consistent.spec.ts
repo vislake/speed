@@ -47,6 +47,16 @@ const EMPTY_STATE_TITLES = /no data yet|nothing to show|no features/i
 // owner sign-ins would not. That is the whole of the difference between
 // this gate and the ones behind `pnpm test:e2e:budget` -- which demo
 // account they need, not how much anyone trusts them.
+/**
+ * The two sentences that cannot both be true, kept as the pair that must
+ * not come back together. 794e472 separated them by rendering the intro
+ * only beside the cards it describes.
+ */
+const CONTRADICTION = {
+  dependsOnFlags: 'depends on the features this clinic has enabled',
+  nothingToEnable: 'no feature to enable',
+} as const
+
 /** The sentence 2c383a0 removed, kept as the thing that must not return. */
 const UNACTIONABLE = 'Ask an administrator to enable a feature for this clinic.'
 
@@ -123,59 +133,37 @@ test('the home surface does not promise cards it has none of', {
     home,
     `the home surface tells the reader to ask an administrator to enable a feature, which no administrator can do (home-view.tsx: "no mechanism in the app able to enable any") and which a self-registered practice has nobody to ask for. Home said: ${home}`,
   ).not.toContain(UNACTIONABLE)
-})
 
-/**
- * The two sentences on this surface that cannot both be true.
- *
- * home.intro says what is here depends on the features this clinic has
- * enabled. The empty state, since 2c383a0, says there is no feature to
- * enable. Both render, one under the other, on every tenant today.
- */
-const CONTRADICTION = {
-  dependsOnFlags: 'depends on the features this clinic has enabled',
-  nothingToEnable: 'no feature to enable',
-} as const
-
-/**
- * That the home surface does not say two opposite things at once.
- *
- * A leftover of the fix above, and deliberately reported as a leftover
- * rather than as a defect of the same kind: the sentence it replaced sent
- * a reader to a person who did not exist, while this one is merely stale.
- * Nobody is misdirected by it. But a reader arriving today reads, in
- * order: what is here depends on the features this clinic has enabled;
- * nothing to show yet; there is no feature to enable. The first and the
- * third cannot both be true, and the third is the one that is.
- *
- * WHAT IT ASSERTS, AND WHY THAT IS NOT PRESCRIBING COPY
- *
- * Only that the two claims do not co-occur. Rewriting the intro so it
- * says something true for a tenant with no flags, dropping it when the
- * card list is empty, or removing the claim from the empty state instead
- * would each pass -- the last one being the choice this gate would rather
- * not see taken, since that clause is the part a reader can act on, but
- * it is a product decision and not this gate's to make. What fails is a
- * screen that answers its own sentence.
- *
- * SEPARATE TEST, AND ONLY UNTIL IT CLOSES
- *
- * It costs a second sign-in as the same account, which is exactly the
- * cost the merge above removed. It is worth paying while the defect is
- * open, because the alternative is a failing assertion inside a test the
- * DEFAULT tier runs -- and a red fast tier is worse than a slow @pending
- * one. When this closes, it folds into the test above and the sign-in
- * comes back.
- */
-test('the home surface does not answer its own sentence', {
-  tag: ['@pending', '@deployment'],
-}, async ({ page }) => {
-  await signInAs(page, DEMO_ACME_ONLY)
-
-  const home = await readSettledText(page.getByRole('main'))
+  // AND IT DOES NOT ANSWER ITS OWN SENTENCE.
+  //
+  // home.intro says what is here depends on the features this clinic has
+  // enabled. The empty state, since 2c383a0, says there is no feature to
+  // enable. Both used to render, one under the other, on every tenant --
+  // the first and third sentences a reader met contradicted each other,
+  // and the third was the true one.
+  //
+  // Reported as a LEFTOVER rather than as a defect of the same kind as
+  // the sentence above, and that distinction held: the old sentence sent
+  // a reader to a person who did not exist, while this one only misframed
+  // the screen. Nobody was misdirected by it.
+  //
+  // Closed by 794e472, and by the option this gate hoped for: the intro
+  // now renders only beside the card list its words describe, so a
+  // no-flags home shows the honest empty state and no intro at all. The
+  // empty state's own wording is untouched, the card path is unchanged,
+  // and no locale file moved -- the two sentences simply never share a
+  // screen. Verified on all three engines.
+  //
+  // Folded in here rather than left a separate test, which is the whole
+  // reason it was separate: as its own test it needed a second sign-in as
+  // this same account, past demo-acme-only's five-per-minute allowance,
+  // and the default tier paid for that in pacing. It asserts only that
+  // the two claims do not CO-OCCUR -- rewriting the intro, dropping it
+  // when the cards are empty, or removing the claim from the empty state
+  // would each pass, the last being the one this would rather not see
+  // taken since that clause is the part a reader can act on.
   const saysDependsOnFlags = home.includes(CONTRADICTION.dependsOnFlags)
   const saysNothingToEnable = home.includes(CONTRADICTION.nothingToEnable)
-
   expect(
     saysDependsOnFlags && saysNothingToEnable,
     `the home surface says both "${CONTRADICTION.dependsOnFlags}" and "${CONTRADICTION.nothingToEnable}", one under the other, so it contradicts itself in the space of two sentences. Home said: ${home}`,
