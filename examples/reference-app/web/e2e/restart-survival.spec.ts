@@ -42,10 +42,14 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, test } from '@playwright/test'
+import { test } from '@playwright/test'
 import { DEMO_OWNER } from './test-utils/accounts.js'
 import { DEMO_PASSWORD, RESTART_API_PORT } from '../playwright.config.js'
-import { APP_TEXT, submitPasswordSignIn, visitSignIn } from './test-utils/journeys.js'
+import {
+  expectSignedIn,
+  submitPasswordSignIn,
+  visitSignIn,
+} from './test-utils/journeys.js'
 
 /** The reference-app Go module directory. */
 const serverDir = fileURLToPath(new URL('../..', import.meta.url))
@@ -84,15 +88,34 @@ test('a member signs in again after the server restarts against the same databas
   const restarted = await bootUntilHealthy()
 
   try {
-    // Point the page's API calls at the restarted process. Everything
-    // else about the page stays as it is, so what follows is the same
-    // browser journey a person makes, against a server that just booted
-    // over an existing database.
+    // Point the page's API calls at the restarted process, so what
+    // follows is the same browser journey a person makes against a
+    // server that just booted over an existing database. The page itself
+    // is untouched.
+    //
+    // The calls are FETCHED by Playwright and handed back as this
+    // origin's own answer, rather than continued to a different origin.
+    //
+    // `route.continue({ url })` to another port is a CROSS-ORIGIN request
+    // as far as the page is concerned, and the browser applies CORS to
+    // it: this app's server sends no CORS headers (it has never needed
+    // to, being same-origin in every real deployment), so WebKit blocked
+    // every rewritten call and the page rendered "No network
+    // connection." The gate then failed on the sign-in surface with the
+    // frame never appearing -- which reads exactly like the membership
+    // defect it exists to catch, on an engine where nothing was wrong.
+    // Chromium happened to allow it, so the suite looked fine.
+    //
+    // route.fetch performs the request from Playwright's own stack, with
+    // no origin and no preflight involved, and fulfill returns the real
+    // response to the page. The server under test is unchanged, and so
+    // is what the browser believes it is talking to.
     await page.route('**/api/**', async (route) => {
       const url = new URL(route.request().url())
       url.protocol = 'http:'
       url.host = `127.0.0.1:${restartPort}`
-      await route.continue({ url: url.toString() })
+      const response = await route.fetch({ url: url.toString() })
+      await route.fulfill({ response })
     })
 
     // One sign-in, and it happens after the restart. Signing in before it
@@ -104,7 +127,7 @@ test('a member signs in again after the server restarts against the same databas
     await submitPasswordSignIn(page, DEMO_OWNER.email, DEMO_OWNER.password)
 
     // The whole point: the frame, not authn.tenant_membership_required.
-    await expect(page.getByRole('link', { name: APP_TEXT.navNotes })).toBeVisible()
+    await expectSignedIn(page)
   } finally {
     await stop(restarted)
   }

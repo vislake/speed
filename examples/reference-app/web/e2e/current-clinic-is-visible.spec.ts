@@ -52,15 +52,15 @@ import {
 // host's CurrentClinicLine on the home and notes surfaces) and the
 // tenant switcher announces its committed switch through its live
 // region; both tests pass against the fixed tree (the closing round's
-// verification). The tag stays until the acceptance session's re-run
-// drops it: each test adds sign-ins to a suite that shares one demo
-// server, and the go/authn per-account limit (five per minute) makes
-// joining the default run a suite-budget decision, not a visibility
-// decision. Dropping @pending then turns them into ordinary regression
-// gates.
+// verification), and the acceptance session re-ran both against a
+// freshly deployed tree and confirmed it. So the tag is @budget now,
+// not @pending: verified, and out of the default run only because its
+// sign-ins do not fit the suite's per-account budget -- a suite-budget
+// decision, never a visibility one. `pnpm test:e2e:budget` runs them
+// with a budget of their own (see e2e/README.md).
 test(
   'the clinic being worked in is named in the main content, not only in the chrome',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     await signInAs(page, DEMO_READER)
     const clinic = await readCurrentTenant(page)
@@ -80,7 +80,7 @@ test(
 
 test(
   'switching clinic says so, and the new clinic is named where the work is',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     await signInAs(page, DEMO_READER)
     await openSurface(page, APP_TEXT.navNotes)

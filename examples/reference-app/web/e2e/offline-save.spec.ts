@@ -18,11 +18,12 @@
  * the defect was believed open; on the closing round's verification the
  * mapping -- and both tests below -- pass against the real server, so
  * the gate's job from its first green run is to keep the mapping
- * honest. The @pending tag stays until the acceptance session's re-run
- * drops it: each test adds sign-ins to a suite that shares one demo
- * server, and the go/authn per-account limit (five per minute) makes
- * joining the default run a suite-budget decision, not a mapping
- * decision.)
+ * honest. The acceptance session re-ran both and confirmed it, so the
+ * tag is @budget now rather than @pending: verified, and out of the
+ * default run only because its two owner sign-ins do not fit the
+ * suite's per-account budget -- a suite-budget decision, never a
+ * mapping one. `pnpm test:e2e:budget` runs them with a budget of their
+ * own; see e2e/README.md.)
  *
  * The network is cut by routing the page's own API calls to failure
  * rather than by stopping a server, so the gate does not depend on how
@@ -41,7 +42,7 @@ const GENERIC_FALLBACK = /something went wrong/i
 
 test(
   'a save that fails offline keeps the text and blames the network, not the product',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     await signInAs(page, DEMO_OWNER)
     await openSurface(page, APP_TEXT.navNotes)
@@ -80,7 +81,7 @@ test(
 
 test(
   'the work survives the network coming back',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     await signInAs(page, DEMO_OWNER)
     await openSurface(page, APP_TEXT.navNotes)

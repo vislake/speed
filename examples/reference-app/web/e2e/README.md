@@ -5,16 +5,47 @@ real composed UI against a real, freshly booted reference-app server.
 
 ```bash
 # from examples/reference-app/web
-pnpm test:e2e                     # boots both servers, runs every journey
+pnpm test:e2e                     # boots both servers, runs the default tier
+pnpm test:e2e:budget              # the verified gates the budget excludes
+pnpm test:e2e:pending             # the gates for defects still open
 pnpm test:e2e --headed            # watch it happen
 pnpm exec playwright show-report  # the last run's report
-
-# the gates for defects still open, asked for by name
-E2E_INCLUDE_PENDING=1 pnpm test:e2e --grep @pending
 
 # drive an already-running deployment: ONLY the @deployment gates run
 E2E_BASE_URL=https://your-deployment.example pnpm test:e2e
 ```
+
+`test:e2e` and `test:e2e:budget` together run every gate that is
+expected to pass; neither alone does, and the reason is the sign-in
+budget below rather than anything about the gates.
+
+## Three tiers, and what each one means
+
+| Tag | What it says | Where it runs |
+|---|---|---|
+| *(none)* | Verified, and it fits the budget | `pnpm test:e2e` |
+| `@budget` | **Verified passing.** Out of the default run only because the suite has no sign-in left to spend | `pnpm test:e2e:budget` |
+| `@pending` | The thing it checks is **still broken**, or its surface does not exist yet | `pnpm test:e2e:pending` |
+| `@deployment` | Safe to run against a long-running deployment (needs no sign-in, or one) | any of the above with `E2E_BASE_URL` |
+
+`@budget` and `@pending` were one tag once, and merging them cost the
+suite the thing it is for: a gate held back because its defect is open
+and a gate held back because the budget is full looked identical, so
+nothing in the suite could say what was still broken. An acceptance
+report cannot be honest on top of that.
+
+The budget is a hard ceiling, not untidiness. `go/authn` allows five
+sign-ins per account per minute, the whole local run finishes in about
+twenty-five seconds, and there are three seeded demo accounts — so every
+test competes for one minute's worth of the same three, and the owner
+account, which every write-gated test needs, is already at five. A sixth
+does not slow the suite: it turns it red on `429` in whichever test loses
+the race, a failure that says nothing about the product.
+
+What keeps `@budget` a real tier rather than a graveyard: each run boots
+its own server, so a **separate invocation** starts with the rate-limit
+counters at zero and a full budget of its own. That is why the answer is
+two commands rather than a suite that quietly stops growing.
 
 ## Two environments, and why the suite is not the same in both
 

@@ -24,22 +24,48 @@
  * ever becomes technically impossible to avoid the reload, that is a
  * product decision with a security cost attached, and it belongs to a
  * person rather than to this file.
+ *
+ * CLOSED, AND NOT BY THE ROUND THAT WAS AIMED AT IT
+ *
+ * Both assertions pass against the deployment on all three engines
+ * (chromium, webkit and the iPad project), verified in the acceptance
+ * session after the web-host UI round landed -- while the round written
+ * for hash navigation and session survival had not landed at all. The
+ * likeliest cause is that round's config render guard: the AppBar's
+ * brand name read a Public-config answer without null guards and threw a
+ * TypeError mid-render, which white-screens the page and takes the
+ * in-memory session down with the unmount. "The content came up blank,
+ * and they were signed out" is that failure, described from the outside,
+ * and nothing about it needed the router to be at fault.
+ *
+ * That is worth stating rather than quietly reclassifying: a symptom
+ * attributed to one layer was produced by another, so the fix that
+ * closed it is not the fix anyone planned, and the gate is what settled
+ * it. The tag is @budget rather than @pending now -- verified, and out
+ * of the default run only because its two owner sign-ins do not fit the
+ * budget (see e2e/README.md).
  */
 import { expect, test } from '@playwright/test'
 import { DEMO_OWNER } from './test-utils/accounts.js'
-import { APP_TEXT, SESSION_TEXT, openSurface, signInAs } from './test-utils/journeys.js'
+import {
+  APP_TEXT,
+  SESSION_TEXT,
+  expectOnSurface,
+  openSurface,
+  signInAs,
+} from './test-utils/journeys.js'
 
 test(
   'pressing Back moves the view and keeps the person signed in',
-  { tag: ['@pending', '@deployment'] },
+  { tag: ['@budget', '@deployment'] },
   async ({ page }) => {
     await signInAs(page, DEMO_OWNER)
 
     // Two moves, so there is somewhere to go back to.
     await openSurface(page, APP_TEXT.navNotes)
-    await expect(page.getByRole('heading', { name: APP_TEXT.notesHeading })).toBeVisible()
+    await expectOnSurface(page, APP_TEXT.notesHeading)
     await openSurface(page, APP_TEXT.navAccount)
-    await expect(page.getByRole('heading', { name: APP_TEXT.accountHeading })).toBeVisible()
+    await expectOnSurface(page, APP_TEXT.accountHeading)
 
     await page.goBack()
 
@@ -53,7 +79,7 @@ test(
     // And actually back on the previous surface, with its content --
     // not a blank main landmark under a restored address.
     await expect(
-      page.getByRole('heading', { name: APP_TEXT.notesHeading }),
+      page.getByRole('heading', { name: APP_TEXT.notesHeading, level: 1 }),
       'Back restored the address but not the surface behind it',
     ).toBeVisible()
   },
@@ -61,7 +87,7 @@ test(
 
 test(
   'a same-document move does not reload the page',
-  { tag: ['@pending', '@deployment'] },
+  { tag: ['@budget', '@deployment'] },
   async ({ page }) => {
     await signInAs(page, DEMO_OWNER)
 
@@ -73,7 +99,7 @@ test(
     })
 
     await openSurface(page, APP_TEXT.navNotes)
-    await expect(page.getByRole('heading', { name: APP_TEXT.notesHeading })).toBeVisible()
+    await expectOnSurface(page, APP_TEXT.notesHeading)
 
     const survived = await page.evaluate(
       () => (window as unknown as { __e2eDocumentMarker?: string }).__e2eDocumentMarker,

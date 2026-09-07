@@ -43,6 +43,11 @@ export const AUTH_ERROR_TEXT = {
   genericFallback: 'Something went wrong. Please try again later.',
 } as const
 
+/** layout-kit's AppShell chrome (its own en-US bundle). */
+export const SHELL_TEXT = {
+  openNav: 'Open navigation menu',
+} as const
+
 /** auth-ui's session-ended screen and sign-out control. */
 export const SESSION_TEXT = {
   signOut: 'Sign out',
@@ -192,12 +197,103 @@ export async function switchTenant(page: Page, target: string): Promise<void> {
   await expect(page.getByRole('button', { name: target })).toBeVisible()
 }
 
-/** Navigates the signed-in frame to one of the app's hash-routed surfaces. */
+/**
+ * Asserts a person is signed in, by the one control that is present on
+ * every screen size when they are: the sign-out button.
+ *
+ * NOT a nav link, which is what four specs used and what made them
+ * desktop-only -- below the md breakpoint AppShell collapses the
+ * navigation behind the menu button, so no nav link is in the DOM at
+ * all. The failures read as "element(s) not found" on the iPad project
+ * while the person was signed in perfectly well.
+ */
+export async function expectSignedIn(page: Page): Promise<void> {
+  await expect(page.getByRole('button', { name: SESSION_TEXT.signOut })).toBeVisible()
+}
+
+/**
+ * Asserts a person is NOT signed in.
+ *
+ * This one matters more than its twin above, because the assertion it
+ * replaces was not merely desktop-only -- it was VACUOUS on a phone or
+ * a tablet. "The frame is gone" was written as "no nav link is on the
+ * page", and below the md breakpoint no nav link is on the page whether
+ * someone is signed in or not. So the check passed on the iPad project
+ * for the wrong reason, and would have kept passing if signing out had
+ * stopped working entirely.
+ *
+ * That is the same failure this suite already learned once: an indirect
+ * measure standing in for the real property fails silently in BOTH
+ * directions, and the direction that costs you is the one where it says
+ * yes. The sign-out button is the real property -- it exists when there
+ * is a session to end and not otherwise, on every screen size.
+ */
+export async function expectSignedOut(page: Page): Promise<void> {
+  await expect(page.getByRole('button', { name: SESSION_TEXT.signOut })).toHaveCount(0)
+}
+
+/**
+ * Asserts the frame is showing a named surface, identified by that
+ * surface's own top-level heading.
+ *
+ * `level: 1` is what makes this unambiguous, and the ambiguity is not
+ * hypothetical: an accessible-name match is a SUBSTRING match, so
+ * `{ name: 'Account' }` alone also matched account-ui's own
+ * "Linked social accounts" section heading and failed on strict mode --
+ * a gate reporting a locator problem where a person reading it would
+ * expect a product problem. A surface has exactly one h1, and it is the
+ * surface's own title, so that is what a "we are on this surface"
+ * assertion should name.
+ */
+export async function expectOnSurface(page: Page, heading: string): Promise<void> {
+  await expect(page.getByRole('heading', { name: heading, level: 1 })).toBeVisible()
+}
+
+/**
+ * Navigates the signed-in frame to one of the app's hash-routed
+ * surfaces, the way a person on that screen size would.
+ *
+ * Below the md breakpoint AppShell collapses its navigation behind the
+ * menu button and no nav link is in the DOM until someone opens the
+ * drawer -- so a helper that clicks the link directly is desktop-only,
+ * and silently so: it timed out on the iPad project with "locator.click:
+ * Test timeout", which reads like a broken product rather than a helper
+ * that does not know how to walk this screen. That matters more here
+ * than in most products, because the iPad IS the device a dentist shows
+ * a patient their simulation on. `signInAs` above had the same bug and
+ * the same symptom; this is the other half of it.
+ *
+ * Opening the drawer first is what a person does, not a workaround: on a
+ * narrow screen the menu button is the navigation.
+ */
 export async function openSurface(
   page: Page,
   name: typeof APP_TEXT.navHome | typeof APP_TEXT.navNotes | typeof APP_TEXT.navAccount,
 ): Promise<void> {
-  await page.getByRole('link', { name }).click()
+  const link = page.getByRole('link', { name })
+  const reachable = await link.isVisible().catch(() => false)
+  if (reachable) {
+    await link.click()
+    return
+  }
+
+  await page.getByRole('button', { name: SHELL_TEXT.openNav }).click()
+  await link.waitFor({ state: 'visible' })
+  await link.click()
+
+  // Wait for the drawer to finish closing, not just for the click.
+  //
+  // The temporary drawer is a modal, and while it is open -- including
+  // through its closing animation -- everything behind it is excluded
+  // from the accessibility tree. The controls are all still in the DOM,
+  // so this does not look like a hidden element: it looks like the app
+  // bar's buttons losing their accessible NAMES, because a name is not
+  // computed for an element that is not in the tree. `readCurrentTenant`
+  // then reported "the frame shows no known tenant in its switcher"
+  // while a screenshot showed the switcher plainly, on the iPad project
+  // only -- a gate accusing the product of losing its tenant switcher
+  // when the truth was that this helper returned half a step early.
+  await link.waitFor({ state: 'hidden' })
 }
 
 /**

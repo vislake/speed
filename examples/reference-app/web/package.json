@@ -9,6 +9,8 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.e2e.json",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:pending": "E2E_RUN_TAGGED=1 playwright test --grep @pending",
+    "test:e2e:budget": "E2E_RUN_TAGGED=1 playwright test --grep @budget",
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build"
   },

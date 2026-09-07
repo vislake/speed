@@ -193,32 +193,54 @@ export const DEMO_PASSWORD = process.env.E2E_DEMO_PASSWORD ?? 'e2e-demo-password
 
 export default defineConfig({
   testDir: './e2e',
-  // The @pending gates describe surfaces or defects that are not closed
-  // yet (core-journey.pending.spec.ts: the upload / generate / compare /
-  // share / cost journey the product is for; sessions-are-
-  // distinguishable, offered-channels-work, self-service-signup,
-  // visible-controls, current-clinic-is-visible, home-is-self-consistent
-  // and offline-save each carry their own open acceptance blocker -- the
-  // last four pass on the fixed tree and wait only on the acceptance
-  // session's re-run to leave @pending). They are written ahead of
-  // delivery on purpose -- each one is the acceptance criterion for a
-  // block, checkable the day it lands -- but a suite that is permanently
-  // red says nothing, so the default run leaves them out and they are
-  // asked for by name instead:
+  // TWO TIERS SIT OUTSIDE THE DEFAULT RUN, FOR TWO DIFFERENT REASONS
   //
-  //   pnpm test:e2e --grep @pending
+  //   @pending -- the thing it checks is still broken, or the surface it
+  //   drives does not exist yet (core-journey.pending.spec.ts: the upload
+  //   / generate / compare / share / cost journey the product is for;
+  //   sessions-are-distinguishable, offered-channels-work and
+  //   self-service-signup each carry their own open acceptance blocker).
+  //   Written ahead of the fix on purpose -- each one is an acceptance
+  //   criterion, checkable the day it lands -- but a suite that is
+  //   permanently red says nothing, so they are asked for by name:
   //
-  // A block's gate moves out of @pending when its surface ships, which is
-  // the moment it starts being a regression gate rather than a promise.
+  //     pnpm test:e2e:pending
+  //
+  //   @budget -- VERIFIED PASSING, and out of the default run only
+  //   because the suite has no sign-in left to spend on it:
+  //
+  //     pnpm test:e2e:budget
+  //
+  // Keeping these two apart is not bookkeeping. They were one tag, and
+  // the conflation made the suite unreadable in the way that matters
+  // most: a gate excluded because its defect is open and a gate excluded
+  // because the budget is full looked identical, so nothing in the suite
+  // could tell anyone what was still broken. An acceptance report cannot
+  // be honest on top of that.
+  //
+  // The budget is a real ceiling, not a tidiness preference. go/authn
+  // allows five sign-ins per account per minute and the whole local run
+  // finishes in about twenty-five seconds, so every test in it competes
+  // for one minute's worth of the same three demo accounts -- and the
+  // owner account, which every write-gated test needs, is already at
+  // five. Adding a sixth does not slow the suite down, it turns it red on
+  // 429 in whichever test happens to lose, which is a failure that says
+  // nothing about the product.
+  //
+  // What makes @budget a real tier rather than a graveyard: each run
+  // boots its own server, so a SEPARATE invocation starts with the
+  // rate-limit counters at zero and its own full budget. The two
+  // commands together run every gate in this suite; one command cannot.
   //
   // The exclusion is conditional rather than absolute because a config
   // grepInvert OVERRIDES a command-line --grep: with it always on, asking
-  // for the pending gates by name answered "No tests found", which is the
-  // worst possible failure mode for a gate written to be run deliberately.
-  // Asking for them means saying so:
+  // for a tier by name answered "No tests found", which is the worst
+  // possible failure mode for a gate written to be run deliberately. So
+  // selecting by tag says so, which is what the two scripts above do:
   //
-  //   E2E_INCLUDE_PENDING=1 pnpm test:e2e --grep @pending
-  grepInvert: process.env.E2E_INCLUDE_PENDING === undefined ? /@pending/ : undefined,
+  //   E2E_RUN_TAGGED=1 pnpm test:e2e --grep @budget
+  grepInvert:
+    process.env.E2E_RUN_TAGGED === undefined ? /@pending|@budget/ : undefined,
   // Against a REAL DEPLOYMENT, only the specs tagged @deployment run.
   //
   // The rest are not merely slower there, they are wrong there. This

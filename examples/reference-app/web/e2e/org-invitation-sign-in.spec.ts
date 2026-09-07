@@ -39,9 +39,9 @@ import {
   signInThroughApi,
 } from './test-utils/invitations.js'
 import {
-  APP_TEXT,
   AUTH_ERROR_TEXT,
   TENANT_NAMES,
+  expectSignedIn,
   expectSpecificError,
   readCurrentTenant,
   submitPasswordSignIn,
@@ -85,6 +85,6 @@ test('an invited colleague accepts and can then sign in to that organization', a
   // through the browser and lands in an organization.
   await visitSignIn(page)
   await submitPasswordSignIn(page, invitee, INVITEE_PASSWORD)
-  await expect(page.getByRole('link', { name: APP_TEXT.navNotes })).toBeVisible()
+  await expectSignedIn(page)
   expect(TENANT_NAMES).toContain(await readCurrentTenant(page))
 })

@@ -31,6 +31,7 @@ import {
   AUTH_ERROR_TEXT,
   SIGN_IN_TEXT,
   TENANT_NAMES,
+  expectSignedIn,
   expectSpecificError,
   readCurrentTenant,
   signInAs,
@@ -49,8 +50,13 @@ test('a seeded owner signs in and lands in the tenant frame', async ({ page }) =
   // account in several tenants lands in whichever one the host's
   // membership order happens to put first, and that order is not fixed
   // (see TENANT_NAMES in test-utils/journeys.ts).
-  await expect(page.getByRole('link', { name: APP_TEXT.navHome })).toBeVisible()
-  await expect(page.getByRole('link', { name: APP_TEXT.navAccount })).toBeVisible()
+  // The frame is identified by the sign-out control rather than by a nav
+  // link: below the md breakpoint the navigation is collapsed behind the
+  // menu button and no link is in the DOM, which made this assertion
+  // desktop-only. That the nav itself WORKS is proven by the gates that
+  // actually walk it (back-button, current-clinic-is-visible), on every
+  // engine including the iPad project.
+  await expectSignedIn(page)
   expect(TENANT_NAMES).toContain(await readCurrentTenant(page))
 })
 

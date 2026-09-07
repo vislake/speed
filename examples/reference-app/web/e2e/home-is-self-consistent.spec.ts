@@ -36,15 +36,19 @@ const EMPTY_STATE_TITLES = /no data yet|nothing to show|no features/i
 // gate failed, which was its present evidence. The intro no longer
 // makes the promise (its copy changed with the empty-state round) and a
 // surface with no enabled feature renders its own empty state; the gate
-// passes against the fixed tree (the closing round's verification) --
-// the PROMISE_OF_CARDS probe above still exists to catch a
-// reintroduction, exactly as written. The tag stays until the
-// acceptance session's re-run drops it: each test adds a sign-in to a
-// suite that shares one demo server, and the go/authn per-account limit
-// (five per minute) makes joining the default run a suite-budget
-// decision, not a content decision.
+// passes against the fixed tree (the closing round's verification), and
+// the acceptance session re-ran it against a freshly deployed tree on
+// all three engines and confirmed it -- the PROMISE_OF_CARDS probe above
+// still exists to catch a reintroduction, exactly as written.
+//
+// It carries NO budget tag, unlike its three sibling gates from the same
+// round: its one sign-in is on the single-tenant demo account, which the
+// rest of the suite barely touches, so it fits the default run where two
+// owner sign-ins would not. That is the whole of the difference between
+// this gate and the ones behind `pnpm test:e2e:budget` -- which demo
+// account they need, not how much anyone trusts them.
 test('the home surface does not promise cards it has none of', {
-  tag: ['@pending', '@deployment'],
+  tag: '@deployment',
 }, async ({ page }) => {
   await signInAs(page, DEMO_ACME_ONLY)
 

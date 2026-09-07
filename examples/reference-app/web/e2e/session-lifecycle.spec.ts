@@ -29,9 +29,10 @@
 import { expect, test } from '@playwright/test'
 import { DEMO_ACME_ONLY } from './test-utils/accounts.js'
 import {
-  APP_TEXT,
   SESSION_TEXT,
   SIGN_IN_TEXT,
+  expectSignedIn,
+  expectSignedOut,
   signInAs,
   submitPasswordSignIn,
 } from './test-utils/journeys.js'
@@ -45,14 +46,17 @@ test('signing out ends the session and signing in again reaches the frame', asyn
   // back to the sign-in surface. See this file's header.
   await expect(page.getByText(SESSION_TEXT.endedTitle)).toBeVisible()
   await expect(page.getByRole('button', { name: SESSION_TEXT.signInAgain })).toBeVisible()
-  // The frame is gone: no nav, nothing tenant-scoped left on screen.
-  await expect(page.getByRole('link', { name: APP_TEXT.navNotes })).toHaveCount(0)
+  // The frame is gone. Asserted through the sign-out control, not a nav
+  // link: a nav link is absent on a narrow viewport whether or not
+  // anyone is signed in, so the old form of this check passed on the
+  // iPad project for a reason that had nothing to do with signing out.
+  await expectSignedOut(page)
 
   await page.getByRole('button', { name: SESSION_TEXT.signInAgain }).click()
   await expect(page.getByRole('button', { name: SIGN_IN_TEXT.submit })).toBeVisible()
 
   await submitPasswordSignIn(page, DEMO_ACME_ONLY.email, DEMO_ACME_ONLY.password)
-  await expect(page.getByRole('link', { name: APP_TEXT.navNotes })).toBeVisible()
+  await expectSignedIn(page)
 })
 
 test('a reload after signing in starts anonymous', async ({ page }) => {
@@ -66,5 +70,5 @@ test('a reload after signing in starts anonymous', async ({ page }) => {
   // pick up. A visitor who reloads is a fresh visitor, which is why this
   // lands on the sign-in surface rather than the session-ended screen.
   await expect(page.getByRole('button', { name: SIGN_IN_TEXT.submit })).toBeVisible()
-  await expect(page.getByRole('link', { name: APP_TEXT.navNotes })).toHaveCount(0)
+  await expectSignedOut(page)
 })

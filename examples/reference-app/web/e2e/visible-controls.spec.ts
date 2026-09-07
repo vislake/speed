@@ -65,6 +65,46 @@ async function chromeContrast(page: import('@playwright/test').Page): Promise<Co
     }
 
     /**
+     * The pixel a translucent colour actually becomes over an opaque
+     * one. WCAG asks about rendered pixels, and TEXT carries alpha in
+     * this design system as routinely as backgrounds do: MUI's light
+     * palette states its text colours as black at an opacity --
+     * text.primary at 0.87, text.secondary at 0.6, the disabled tier at
+     * 0.38, action.active at 0.54 -- so a foreground read straight off
+     * getComputedStyle and measured as if opaque is not the colour on
+     * the screen.
+     *
+     * It is measured in the lenient direction, which is why this matters
+     * rather than being a rounding quibble: dark text treated as fully
+     * opaque looks DARKER than it renders, so the ratio comes out too
+     * high and a control passes on a number the browser never produced.
+     * Over white, text.secondary really renders at 5.74:1 and the
+     * disabled tier at 2.65:1 -- a genuine AA failure -- while both
+     * measure 21:1 when their alpha is dropped. This gate would have
+     * reported the failing one as excellent.
+     *
+     * The background half of exactly this mistake was found and fixed by
+     * the round that closed the colour defects (see backgroundOf below);
+     * the foreground half was left, so this closes the same error on the
+     * other side of the ratio.
+     */
+    const flatten = (
+      colour: [number, number, number, number],
+      over: [number, number, number, number],
+    ): [number, number, number, number] => {
+      const [r, g, b, a] = colour
+      if (a >= 1) {
+        return colour
+      }
+      return [
+        r * a + over[0] * (1 - a),
+        g * a + over[1] * (1 - a),
+        b * a + over[2] * (1 - a),
+        1,
+      ]
+    }
+
+    /**
      * The background a browser actually renders the control over:
      * every layer from the element itself upward, alpha-composited the
      * way the browser composites them, stopping at the first opaque
@@ -120,16 +160,21 @@ async function chromeContrast(page: import('@playwright/test').Page): Promise<Co
           .trim()
           .slice(0, 40)
         const style = getComputedStyle(element)
-        const foreground = parseColor(style.color)
+        const declared = parseColor(style.color)
         const background = backgroundOf(element)
-        if (foreground === null) {
+        if (declared === null) {
           return null
         }
+        // The text over the background it sits on, both as pixels.
+        const foreground = flatten(declared, background)
         const lighter = Math.max(relativeLuminance(foreground), relativeLuminance(background))
         const darker = Math.min(relativeLuminance(foreground), relativeLuminance(background))
         return {
           label,
           ratio: Math.round(((lighter + 0.05) / (darker + 0.05)) * 100) / 100,
+          // The declared colour, not the composited one: a person fixing
+          // a reading needs the value written in the code, while the
+          // ratio is what the screen does with it.
           color: style.color,
           background: `rgb(${background[0]}, ${background[1]}, ${background[2]})`,
         }
@@ -145,18 +190,24 @@ async function chromeContrast(page: import('@playwright/test').Page): Promise<Co
 // silent-failure shape this suite exists for -- plus a third reading,
 // the Home nav link at 3.45:1, which turned out to be this suite's own
 // measurement bug (a translucent selected-item tint measured as if it
-// were opaque; see backgroundOf above). The colours are fixed
-// (tenancy-ui's trigger and auth-ui's sign-out button inherit the
-// surface's contrastText) and the measurement now composites the way a
-// browser does; both tests pass against the fixed tree (the closing
-// round's verification). The tag stays until the acceptance session's
-// re-run drops it: each test adds sign-ins to a suite that shares one
-// demo server, and the go/authn per-account limit (five per minute)
-// makes joining the default run a suite-budget decision, not a colour
-// decision. Dropping @pending then turns them into ordinary regression
-// gates.
+// were opaque; see backgroundOf above).
+//
+// Both are closed, and measured closed on the real deployment across
+// all three engines in the acceptance session: the two invisible
+// controls now read 5.17:1 (white on the AppBar's blue) and the Home
+// link 15.99:1, the nav's other links 17.85:1. Those numbers are worth
+// keeping here because they corroborate each other from opposite
+// directions -- 3.45:1 is exactly what near-black text over an OPAQUE
+// primary blue measures, and ~16:1 is exactly what the same text over
+// that blue at 8% over white measures, so the old reading and the new
+// one are the same pixel described by a broken and a working
+// instrument.
+//
+// The tag is @budget now, not @pending: verified, and out of the default
+// run only because its sign-ins do not fit the suite's per-account
+// budget (see e2e/README.md).
 test('every control in the signed-in chrome is legible against its background', {
-  tag: ['@pending', '@deployment'],
+  tag: ['@budget', '@deployment'],
 }, async ({ page }) => {
   await signInAs(page, DEMO_OWNER)
 
@@ -172,7 +223,7 @@ test('every control in the signed-in chrome is legible against its background', 
   ).toEqual([])
 })
 
-test('the chrome stays legible on a phone', { tag: ['@pending', '@deployment'] }, async ({ page }) => {
+test('the chrome stays legible on a phone', { tag: ['@budget', '@deployment'] }, async ({ page }) => {
   // A different account from the test above, so neither approaches the
   // per-account sign-in budget when this runs against a long-lived
   // deployment (playwright.config.ts's deployment-mode note).
