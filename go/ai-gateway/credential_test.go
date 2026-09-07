@@ -292,3 +292,30 @@ func TestCredentialService_SetPlatformCredential_PrivateBaseURL_StillAccepted(t 
 		t.Fatalf("Resolve = %+v, want the stored platform row", cred)
 	}
 }
+
+// TestCredentialService_SetTenantCredential_BlockedBaseURL_RefusedAcrossVersions
+// is the cross-version regression harness for the P0 fix: it deliberately
+// references no symbol the SSRF round adds (no ErrBaseURLBlocked, no
+// ValidateBaseURL) so the very same test compiles and runs against the
+// PRE-fix code too -- where SetTenantCredential accepted and stored any
+// base URL, and this test therefore FAILS ("accepted and stored a blocked
+// destination"), proving the fail-before half of the round's mandatory
+// regression with the identical test that passes after the fix. Post-fix
+// it asserts the two things that matter at the service boundary: the
+// write is refused, and no row was stored -- the blocked destination
+// never becomes a stored dial target waiting for a later call to reach
+// it. (The code-level assertions of the refusal shape -- which coded
+// error, which params -- live in the sibling tests above, which cannot
+// compile against the pre-fix code and are not this harness's job.)
+func TestCredentialService_SetTenantCredential_BlockedBaseURL_RefusedAcrossVersions(t *testing.T) {
+	svc := NewCredentialService(newTestDB(t))
+	acmeCtx := pkgcore.WithTenant(t.Context(), "tenant-acme")
+
+	err := svc.SetTenantCredential(acmeCtx, ProviderOpenAICompatible, "sk-test", "http://127.0.0.1:9000/v1")
+	if err == nil {
+		t.Fatal("SetTenantCredential accepted and stored a loopback base URL -- the P0 the SSRF round closes; the write must be refused")
+	}
+	if _, err := svc.Resolve(acmeCtx, ProviderOpenAICompatible); !hasCode(err, ErrCredentialNotFound.Code) {
+		t.Fatalf("Resolve after the refused write = %v, want ErrCredentialNotFound -- the refusal must store no row", err)
+	}
+}
