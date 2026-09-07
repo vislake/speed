@@ -44,7 +44,11 @@
 // demo_notification.go's own demoUserAddresses table): it does not survive
 // a process restart, which is an acceptable limitation for a reference
 // app's own demo feature, never for a real deployment's own notification
-// pipeline.
+// pipeline. It is also bounded, not a log of every job ever simulated:
+// NotifyOnCompletion deletes both entries once a job's terminal outcome is
+// fully processed, so the maps hold only outstanding (undelivered or
+// still-pending) notifications -- see NotifyOnCompletion's own doc comment
+// and Service's field comment on mu.
 //
 // # Credit accounting
 //
@@ -59,12 +63,22 @@
 // request with billing.ErrInsufficientCredits and never reaches
 // go/ai-gateway at all -- and settleCredit later settles that reservation
 // once the job reaches a terminal status: Confirm on StatusSucceeded,
-// Refund on StatusDeadLetter/StatusCancelled. Every credit-pack-purchase
-// leg (a real Stripe/Alipay/WeChat sandbox charge) is deliberately out of
-// scope here -- see cmd/server/server.go's seedDemoCredits for the
-// Grant-based demo stand-in this round ships instead, and
-// go/billing/gateway/AGENTS.md for why no live payment credentials exist
-// in this environment.
+// Refund on StatusDeadLetter/StatusCancelled. The reservation opens only
+// when this Service was built with a CreditService, the durable store AND
+// the jobs.Queue all wired: the queue is the reconciliation sweep's only
+// window onto each job's status, so a service that debits without one
+// would open reservations no sweep could ever settle (see Simulate's own
+// doc comment on the three-way pair). The gate go/ai-gateway runs before
+// any enqueue -- the entitlement check, first among its pre-enqueue
+// refusals -- is additionally pre-flighted by Simulate BEFORE the
+// reservation opens, so a request the gate refuses is refused with the
+// gateway's own coded answer while no PreDeduct/Refund pair has ever been
+// written to the ledger for it (see Simulate's own doc comment). Every
+// credit-pack-purchase leg (a real Stripe/Alipay/WeChat sandbox charge)
+// is deliberately out of scope here -- see cmd/server/server.go's
+// seedDemoCredits for the Grant-based demo stand-in this round ships
+// instead, and go/billing/gateway/AGENTS.md for why no live payment
+// credentials exist in this environment.
 //
 // # Settlement reachability
 //
@@ -97,7 +111,10 @@
 // jobs.Queue performs no credit accounting/reconciliation at all -- the
 // same nil-is-legal default every other optional host seam in this
 // codebase takes when unwired (mirroring bus's own nil-is-legal contract
-// just above).
+// just above). The nil queue suppresses Simulate's reservation too, not
+// just the sweep: a debit whose settlement would rest on a sweep that
+// cannot run is never opened (see Simulate's own doc comment on the
+// three-way pair).
 //
 // # Parameterized simulation options
 //
@@ -152,6 +169,14 @@
 // no existing record can. The job-status route answers
 // Service.OptionsForJob, so a polled result also names the options that
 // produced it.
+//
+// The deliberate no-snapshot choice has one recorded consequence, spelled
+// out in ListSimulationsByPhoto's own "Recorded limitation" section: once
+// a job's retention passes on the distributed queue, the enumeration can
+// no longer read its outcome, and the row is omitted from listings -- the
+// row itself is never deleted, but a terminal outcome this index chose
+// not to duplicate cannot be presented after the queue that held the only
+// copy of it is gone.
 //
 // # Provider capability assessment (honest record, P2a)
 //
@@ -221,6 +246,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // LogicalModel is the logical image model key this service asks
@@ -337,7 +363,11 @@ type Service struct {
 	// outstanding reservation's current job status -- the SAME queue
 	// go/ai-gateway's own job handler runs on, never a second queue of
 	// this Service's own. Nil is legal: ReconcileOutstandingCredits and
-	// StartReconciler are then no-ops, mirroring credits and store.
+	// StartReconciler are then no-ops, and Simulate performs no credit
+	// reservation either -- a debit whose settlement would rest on a sweep
+	// that cannot run is never opened (see Simulate's own doc comment on
+	// the three-way credits/store/queue pair), mirroring credits and
+	// store.
 	queue jobs.Queue
 
 	// bus is where NotifyOnCompletion publishes EventSimulationCompleted.
@@ -352,6 +382,20 @@ type Service struct {
 	// this app.
 	bus pkgcore.EventBus
 
+	// entitlements is the model-access gate Simulate runs BEFORE it opens
+	// any credit reservation -- the same gate go/ai-gateway's own
+	// GenerateImage runs inside its pipeline (checkEntitlement: feature
+	// key "model:"+LogicalModel, requested 1, refusal answered with
+	// aigateway.ErrEntitlementDenied). Nil is legal: Simulate then skips
+	// the pre-flight and the gateway's own gate is the only judgment, the
+	// same nil-is-unwired convention the gateway's own WithEntitlements
+	// option follows. When wired, this MUST be the same seam the gateway
+	// was built with (cmd/server passes one closure to both), so the
+	// pre-flight and the gateway's own re-check answer the same question;
+	// see Simulate's own doc comment on why the gate must run before the
+	// reservation, not after it.
+	entitlements aigateway.Entitlements
+
 	// mu guards recipients and notified, both keyed by the image job's id
 	// -- Simulate writes to recipients, NotifyOnCompletion reads both, and
 	// both methods may be called concurrently (a real client polls the
@@ -360,6 +404,14 @@ type Service struct {
 	// that used to share this lock (creditKeys) now lives durably in
 	// store instead -- see the package doc comment's "Settlement
 	// reachability" section for why.
+	//
+	// The two maps are bounded by outstanding notifications, never by the
+	// count of jobs ever simulated: NotifyOnCompletion deletes both
+	// entries once a job's terminal outcome has been fully processed -- an
+	// accepted publish on the success path, and a terminal job observed
+	// by a bus-less Service that can never deliver -- so an entry lives
+	// only while its delivery is still pending or in flight (see
+	// NotifyOnCompletion's own doc comment).
 	mu         sync.Mutex
 	recipients map[jobs.JobID]string
 	notified   map[jobs.JobID]bool
@@ -372,21 +424,26 @@ type Service struct {
 // through queue (nil is legal for either -- see Service's own doc comments
 // on the store and queue fields), durably recording each generation
 // request's photo/options/job mapping in simulations (nil is legal -- see
-// Service's own doc comment on the simulations field), and publishing
+// Service's own doc comment on the simulations field), publishing
 // simulation-completed events on bus (nil is legal -- see Service's own doc
-// comment on the bus field). Constructing one performs no I/O; call each
-// store's own EnsureSchema once, separately, before first use (cmd/server's
-// wiring does this).
-func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus pkgcore.EventBus, queue jobs.Queue, store *ReservationStore, simulations *SimulationStore) *Service {
+// comment on the bus field), and pre-flighting the model-access gate
+// through entitlements before any credit reservation opens (nil is legal --
+// Simulate then skips the pre-flight; see Service's own doc comment on the
+// entitlements field for why a wired one must be the very seam gateway was
+// built with). Constructing one performs no I/O; call each store's own
+// EnsureSchema once, separately, before first use (cmd/server's wiring does
+// this).
+func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus pkgcore.EventBus, queue jobs.Queue, store *ReservationStore, simulations *SimulationStore, entitlements aigateway.Entitlements) *Service {
 	return &Service{
-		gateway:     gateway,
-		credits:     credits,
-		store:       store,
-		simulations: simulations,
-		queue:       queue,
-		bus:         bus,
-		recipients:  make(map[jobs.JobID]string),
-		notified:    make(map[jobs.JobID]bool),
+		gateway:      gateway,
+		credits:      credits,
+		store:        store,
+		simulations:  simulations,
+		queue:        queue,
+		bus:          bus,
+		entitlements: entitlements,
+		recipients:   make(map[jobs.JobID]string),
+		notified:     make(map[jobs.JobID]bool),
 	}
 }
 
@@ -431,22 +488,35 @@ func NewService(gateway *aigateway.Gateway, credits *billing.CreditService, bus 
 //
 // # Credit reservation
 //
-// When this Service was built with both a non-nil CreditService and a
-// non-nil store (see the package doc comment's "Credit accounting"
-// section for why the two are a pair), Simulate reserves
+// When this Service was built with a non-nil CreditService, a non-nil
+// store AND a non-nil jobs.Queue (see the package doc comment's "Credit
+// accounting" section for why the three are a pair), Simulate reserves
 // CreditsPerSimulation credits via CreditService.PreDeduct BEFORE calling
 // Gateway.GenerateImage at all: an insufficient balance returns
 // billing.ErrInsufficientCredits (a coded 409, never a silent fallback)
 // and Gateway.GenerateImage -- and therefore go/ai-gateway, and any real
 // vendor it might eventually reach -- is never called. A Service built
-// with a CreditService but no store performs NO reservation either,
-// consistent with settleCredit and ReconcileOutstandingCredits, both of
-// which already require the store's durable row before they will settle
-// anything: a reservation opened without that row could never be settled
-// (neither NotifyOnCompletion's poll nor the sweep has anything to act
-// on) and would stay Reserved forever -- which is why the store's
-// absence suppresses PreDeduct outright rather than letting Simulate
-// charge a tenant for credits no mechanism can ever release.
+// with a CreditService but no store, or with both but no jobs.Queue,
+// performs NO reservation either: the store's durable row is what both
+// settlement paths act on, and the queue is the reconciliation sweep's
+// only window onto each job's status -- so a reservation opened without
+// that row, or on a service whose sweep can never run, could never be
+// settled and would stay Reserved forever. Each missing piece suppresses
+// PreDeduct outright rather than letting Simulate charge a tenant for
+// credits no mechanism can ever release.
+//
+// The reservation also opens only AFTER the entitlement pre-flight below:
+// the gate go/ai-gateway's GenerateImage runs before any enqueue must
+// refuse BEFORE the reservation exists, or a deterministically refused
+// request would write a PreDeduct/Refund pair into the ledger for a job
+// that never ran. The pre-flight answers the gateway's own question
+// (feature key "model:"+LogicalModel, requested 1) through the same
+// Entitlements seam the gateway was built with, and a denial is answered
+// with the gateway's own coded aigateway.ErrEntitlementDenied -- the
+// gateway's own re-check inside GenerateImage then passes for the same
+// state, except in a race where the state changed between the two calls,
+// which lands in the same refund path any other post-reservation refusal
+// takes.
 //
 // The reservation's idempotency key cannot be the eventual job id: PreDeduct
 // must run before GenerateImage even executes, and GenerateImage (via its
@@ -494,13 +564,40 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 		return "", err
 	}
 
+	// The entitlement-gate pre-flight: go/ai-gateway's GenerateImage runs
+	// its own checkEntitlement (key "model:"+LogicalModel, requested 1)
+	// before it enqueues anything -- but that check happens INSIDE the
+	// call, after this method's credit reservation would already have
+	// opened. A deterministically refused request must be refused here,
+	// before the reservation, with the gateway's own coded answer, so no
+	// PreDeduct/Refund pair is ever written to the ledger for a job that
+	// never ran. The gateway's own re-check inside GenerateImage answers
+	// the same seam, so a request that passes here passes there unless the
+	// state changed between the two calls -- a race that lands in the same
+	// refund path as any other post-reservation refusal (see Simulate's
+	// own doc comment on the reservation's ordering). A nil seam skips the
+	// pre-flight entirely, exactly as an unwired gateway gate skips its
+	// own check.
+	if s.entitlements != nil {
+		decision, checkErr := s.entitlements.Check(ctx, "model:"+LogicalModel, 1)
+		if checkErr != nil {
+			return "", checkErr
+		}
+		if !decision.Allowed {
+			return "", aigateway.ErrEntitlementDenied.WithParam("model", LogicalModel).WithParam("reason", decision.Reason)
+		}
+	}
+
 	var creditKey string
-	// Reserved only when the CreditService and the store are BOTH wired --
-	// settlement (settleCredit, reached from NotifyOnCompletion's poll and
-	// the reconciliation sweep alike) acts only on the store's durable
-	// job-id-to-credit-key row, so a reservation opened without that row
-	// could never be settled. See Simulate's own doc comment on this pair.
-	if s.credits != nil && s.store != nil {
+	// Reserved only when the CreditService, the store AND the queue are
+	// ALL wired -- settlement (settleCredit, reached from
+	// NotifyOnCompletion's poll and the reconciliation sweep alike) acts
+	// only on the store's durable job-id-to-credit-key row, and the sweep
+	// that heals a reservation no client ever polls to completion reads
+	// each job's status through the queue: a debit on a service whose
+	// sweep can never run would rest on clients polling forever. See
+	// Simulate's own doc comment on this three-way pair.
+	if s.credits != nil && s.store != nil && s.queue != nil {
 		creditKey = "smilesim:" + uuid.NewString()
 		if _, err := s.credits.PreDeduct(ctx, billing.PreDeductInput{
 			Amount:         CreditsPerSimulation,
@@ -651,6 +748,26 @@ func (s *Service) Simulate(ctx context.Context, photoObjectID, recipientUserID s
 // nothing: the claim is rolled back, so some later poll of this job still
 // retries.)
 //
+// Everything this method does after the terminal-status check -- the
+// credit settlement and the event publish -- is durable bookkeeping for a
+// job that is already terminal, so it runs on a cancel-free derivation of
+// ctx, the same context.WithoutCancel boundary Simulate draws around its
+// own post-enqueue writes (persistCtx there, below): a client that closes
+// its poll tab at this exact moment must not be able to roll back a
+// credit settlement (Confirm/Refund are only healed by a later poll or
+// the reconciliation sweep) or kill the event publish mid-delivery (a
+// refused publish is retryable, but the one subscriber-side dispatch it
+// would have driven is not -- see the publish call's own comment). The
+// claim-latch and its rollback stay ordinary lock-guarded memory
+// operations, deliberately not affected by ctx.
+//
+// The recipients and notified entries for job are deleted once its
+// terminal outcome is fully processed -- on the success path, right after
+// an accepted publish, and on the bus-less path, where no delivery can
+// ever exist -- so the two maps stay bounded by outstanding
+// (undelivered or still-pending) notifications instead of growing with
+// every job ever simulated (see Service's field comment on mu).
+//
 // Callers that poll job status -- cmd/server's job-status route is this
 // app's one caller -- call this after every read they make, terminal or
 // not; the method itself decides whether there is anything to do. See the
@@ -667,7 +784,15 @@ func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 		return nil
 	}
 
-	if err := s.settleCredit(ctx, job); err != nil {
+	// persistCtx is ctx stripped of its cancellation, the identical
+	// context.WithoutCancel boundary Simulate draws at its own
+	// post-enqueue writes (see Simulate's own persistCtx comment): every
+	// remaining call here is durable bookkeeping for a job that is already
+	// terminal, and none of it may be killable by the client whose poll
+	// observed that terminal state disconnecting mid-call.
+	persistCtx := context.WithoutCancel(ctx)
+
+	if err := s.settleCredit(persistCtx, job); err != nil {
 		return err
 	}
 
@@ -676,7 +801,12 @@ func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 		// field): nothing is published and nothing is latched -- with no
 		// bus there is no delivery for the latch to record, and the bus is
 		// fixed at construction, so no later delivery could redeem a
-		// latch set now.
+		// latch set now. The recipient entry is equally dead weight: a
+		// bus-less Service can never deliver, so a terminal job's entry is
+		// removed rather than kept for a delivery that cannot exist.
+		s.mu.Lock()
+		delete(s.recipients, job.ID)
+		s.mu.Unlock()
 		return nil
 	}
 
@@ -707,7 +837,15 @@ func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 		}
 	}
 
-	if err := s.bus.Publish(ctx, pkgcore.Event{
+	// The publish runs on persistCtx for the same reason the settlement
+	// just above does: this job is terminal, and the publish is the one
+	// dispatch attempt this observation drives. A publish refused for a
+	// genuine reason stays retryable (the claim rolls back below), but a
+	// publish killed by the poller's own disconnect would take the
+	// subscriber-side dispatch -- the notification module's enqueue of the
+	// delivery job -- down with it, and the subscription logs and swallows
+	// that failure, so nothing would ever retry it.
+	if err := s.bus.Publish(persistCtx, pkgcore.Event{
 		Type:     EventSimulationCompleted,
 		TenantID: job.TenantID,
 		Payload:  payload,
@@ -720,6 +858,17 @@ func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 		s.mu.Unlock()
 		return err
 	}
+
+	// The delivery is accepted and out -- the success path. Neither entry
+	// has a future now (a later poll of this job must not publish again,
+	// and there is no recipient to remember for a job whose notification
+	// is done), so both are deleted to keep the maps bounded by
+	// outstanding notifications rather than by every job ever simulated
+	// (see Service's field comment on mu).
+	s.mu.Lock()
+	delete(s.recipients, job.ID)
+	delete(s.notified, job.ID)
+	s.mu.Unlock()
 	return nil
 }
 
@@ -872,6 +1021,29 @@ func (s *Service) OptionsForJob(ctx context.Context, jobID jobs.JobID) (Simulati
 // photo-to-generation mapping and the options (see the package doc
 // comment's "Per-photo result index" section).
 //
+// # Recorded limitation: the queue's own retention
+//
+// A row whose job the queue no longer has on file is OMITTED from the
+// enumeration rather than failing it -- one aged-out simulation must not
+// take its whole photo's album down with it (a 404 on the listing route).
+// The distributed queue deletes a completed task once its retention
+// window passes (go/jobs/queue/asynq's DefaultCompletedRetention, 24
+// hours), after which the job row -- and with it the only copy of the
+// outcome this package does not duplicate -- is gone: an aged-out job is
+// by definition one that already reached a terminal status, and this
+// index deliberately stores no terminal-outcome snapshot (see the package
+// doc comment's "Per-photo result index" section for why status and
+// result stay in the job row), so nothing truthful remains to list for
+// it. The row itself is never deleted -- the durable record of "this
+// generation was requested" survives -- but the live enumeration cannot
+// present an outcome it can no longer read. The standalone queue this
+// app boots on retains completed jobs indefinitely, so the omission only
+// ever manifests under a distributed composition. A job read that fails
+// for any OTHER reason -- the queue itself being down, say -- still
+// fails the whole enumeration: an outage is transient and will heal,
+// where retention is permanent, and an empty album must not be the
+// answer to a queue that is merely unreachable.
+//
 // ctx must carry a tenant; one without refuses with pkgcore.ErrNoTenant
 // rather than listing across tenants. A Service built with a nil
 // simulations store or a nil queue -- the optional-seam convention this
@@ -906,10 +1078,21 @@ func (s *Service) ListSimulationsByPhoto(ctx context.Context, photoObjectID stri
 		// a behavior difference.)
 		job, getErr := s.queue.Get(pkgcore.WithTenant(ctx, pkgcore.TenantID(row.TenantID)), jobs.JobID(row.JobID))
 		if getErr != nil {
-			return nil, fmt.Errorf("smilesim: fetch status for recorded simulation job %q: %w", row.JobID, getErr)
+			// A job the queue no longer has -- its retention passed -- is
+			// omitted per this method's own "Recorded limitation" section;
+			// any other read failure still fails the whole enumeration.
+			if !isJobNotFound(getErr) {
+				return nil, fmt.Errorf("smilesim: fetch status for recorded simulation job %q: %w", row.JobID, getErr)
+			}
+			continue
 		}
 		if job == nil {
-			return nil, fmt.Errorf("smilesim: recorded simulation job %q has no job row on file -- the jobs queue lost a job this store still indexes", row.JobID)
+			// A queue answer of (nil, nil) for a recorded job id is the
+			// same "no longer on file" state as a not-found error (the
+			// conformance contract answers ErrJobNotFound, but the omission
+			// must not depend on which spelling a queue implementation
+			// chose).
+			continue
 		}
 
 		outcome := SimulationOutcome{
@@ -930,4 +1113,17 @@ func (s *Service) ListSimulationsByPhoto(ctx context.Context, photoObjectID stri
 		outcomes = append(outcomes, outcome)
 	}
 	return outcomes, nil
+}
+
+// isJobNotFound reports whether err is, or wraps, a jobs.ErrJobNotFound
+// answer -- matched on the error's code rather than errors.Is, because
+// apperr-derived answers (WithParam/WithCause) are new *apperr.Error
+// values whose chain does not carry the original sentinel (the same
+// matching rule go/jobs' own tests apply).
+func isJobNotFound(err error) bool {
+	appErr, ok := apperr.As(err)
+	if !ok {
+		return false
+	}
+	return appErr.Code == jobs.ErrJobNotFound.Code
 }

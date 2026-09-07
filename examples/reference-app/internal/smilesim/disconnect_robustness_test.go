@@ -14,15 +14,29 @@
 // reservation no settlement path could ever act on must never be opened
 // (P2-10).
 //
+// The smilesim rescan round added two further regressions here: that
+// NotifyOnCompletion's settlement of a terminal job commits even when the
+// poll request's context is already canceled -- the poll-tab-disconnect
+// shape of the poll-driven settlement path, the twin of Simulate's own
+// post-enqueue writes (P1-refapp-5); and that a Service assembled with a
+// CreditService and a ReservationStore but no jobs.Queue reserves nothing
+// at all, since the reconciliation sweep -- the net beneath the poll
+// path -- is a permanent no-op without the queue, leaving such a
+// reservation settleable only by a client that keeps polling forever
+// (P2-refapp-9).
+//
 // The canceled-context shapes are driven deterministically through
 // recordingQueue's onEnqueue hook (see that type's doc comment in
 // service_test.go): the hook fires at the exact point of the real
 // gateway's enqueue call -- after PreDeduct has committed, before
 // Simulate's own post-enqueue writes -- which is the one interleaving a
 // real client disconnect can produce that a synchronous Simulate call
-// could not otherwise expose. The tests run against the real billing
-// CreditService over a real SQLite file, so a "refund still executes on a
-// canceled context" pass means a real balance moved.
+// could not otherwise expose; NotifyOnCompletion's own canceled-context
+// regression cancels before the call, the deterministic shape of a
+// disconnect that beats the terminal poll's settlement to the store. The
+// tests run against the real billing CreditService over a real SQLite
+// file, so a "refund still executes on a canceled context" pass means a
+// real balance moved.
 package smilesim
 
 import (
@@ -164,7 +178,7 @@ func TestService_Simulate_CanceledAfterEnqueue_PersistenceWritesStillLand(t *tes
 // against later polls exactly once.
 func TestService_NotifyOnCompletion_RefusedPublish_LeavesNotificationRetryable(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, nil, bus, nil, nil, nil)
+	svc := NewService(nil, nil, bus, nil, nil, nil, nil)
 
 	const jobID = jobs.JobID("job-publish-refused")
 	svc.recipients[jobID] = "user-7"
@@ -385,5 +399,124 @@ func TestService_Simulate_CreditServiceWithoutReservationStore_DoesNotReserve(t 
 	}
 	if len(sims) != 1 {
 		t.Errorf("per-photo listing returned %d entries, want 1 -- the generation must still be recorded", len(sims))
+	}
+}
+
+// TestService_NotifyOnCompletion_CanceledRequestCtx_SettlementStillCommits
+// is the P1-refapp-5 regression: before the fix, NotifyOnCompletion ran
+// its credit settlement on the poll request's own context, so a client
+// that closed its poll tab at the moment its poll observed the terminal
+// status -- the context canceled, driven here before the call, the
+// deterministic shape of that disconnect -- failed the settlement's own
+// store read (the transaction cannot begin on a done context) and rolled
+// the Confirm back: cmd/server's job-status route logs and swallows
+// NotifyOnCompletion's error, so the reservation stayed silently Reserved,
+// healed only if some later poll or the reconciliation sweep happened to
+// come by. The settlement must run on a cancel-free derivation of the
+// request context, the identical context.WithoutCancel boundary Simulate
+// draws around its own post-enqueue writes, and commit regardless of what
+// happened to the caller.
+func TestService_NotifyOnCompletion_CanceledRequestCtx_SettlementStillCommits(t *testing.T) {
+	credits := newTestCreditService(t)
+	grantTestCredits(t, credits)
+	liveCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+
+	queue := &recordingQueue{jobID: "job-terminal-poll-canceled"}
+	svc := newTestService(t, &fakeImageProvider{}, queue, credits)
+
+	jobID, err := svc.Simulate(liveCtx, "photo-1", "")
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+
+	// The client's poll connection is already gone when the terminal
+	// status read settles -- the shape of a tab closed just before the
+	// poll that would have observed the completed job.
+	requestCtx, cancel := context.WithCancel(liveCtx)
+	cancel()
+	job := newSimulateResultJob(t, jobID, "tenant-acme", jobs.StatusSucceeded, "object-out-1")
+	if notifyErr := svc.NotifyOnCompletion(requestCtx, job); notifyErr != nil {
+		t.Fatalf("NotifyOnCompletion on a canceled request context: %v -- the settlement must not depend on the poller's connection staying alive", notifyErr)
+	}
+
+	bal, err := credits.Balance(liveCtx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 100-CreditsPerSimulation {
+		t.Errorf("Available after settling on a canceled context = %d, want %d -- the Confirm must have committed", bal.Available, 100-CreditsPerSimulation)
+	}
+	if bal.Reserved != 0 {
+		t.Errorf("Reserved after settling on a canceled context = %d, want 0 -- a canceled poll request must not leave the reservation stuck Reserved", bal.Reserved)
+	}
+}
+
+// TestService_Simulate_CreditServiceAndStoreWithoutQueue_DoesNotReserve is
+// the P2-refapp-9 regression: before the fix, Simulate's reservation guard
+// required only the CreditService and the durable store, so a Service
+// assembled with both but no jobs.Queue still debited the tenant -- while
+// the reconciliation sweep that heals a reservation no client ever polls
+// to completion is a permanent no-op without the queue (it can ask
+// nothing about any job's status, and StartReconciler refuses to even
+// start). A debit whose only settlement net cannot run is exactly the
+// never-settleable reservation the P2-10 store-less guard refuses, and
+// the package doc already promises "a nil jobs.Queue performs no credit
+// accounting at all": the queue must be required by the same guard, so a
+// Service that debits always keeps its safety net reachable. This is the
+// P2-10 test's own shape applied to the third missing piece.
+func TestService_Simulate_CreditServiceAndStoreWithoutQueue_DoesNotReserve(t *testing.T) {
+	credits := newTestCreditService(t)
+	grantTestCredits(t, credits)
+	liveCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+
+	queue := &recordingQueue{jobID: "job-no-queue"}
+	svc := newTestService(t, &fakeImageProvider{}, queue, credits)
+	svc.queue = nil // a Service assembled with a CreditService and a store but no jobs.Queue
+
+	jobID, err := svc.Simulate(liveCtx, "photo-1", "")
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	if jobID != queue.jobID {
+		t.Fatalf("Simulate returned job id %q, want the queue's %q", jobID, queue.jobID)
+	}
+	if queue.enqueueCalls != 1 {
+		t.Fatalf("queue.enqueueCalls = %d, want 1 -- the generation itself is unaffected by the credit pair", queue.enqueueCalls)
+	}
+
+	bal, err := credits.Balance(liveCtx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 100 {
+		t.Errorf("Available after Simulate = %d, want 100 -- a Service with no queue must not reserve credits that no reconciliation sweep could ever settle", bal.Available)
+	}
+	if bal.Reserved != 0 {
+		t.Errorf("Reserved after Simulate = %d, want 0", bal.Reserved)
+	}
+
+	// Nothing was reserved, so a terminal job settles nothing -- no error,
+	// no balance move -- and the per-photo index still records the
+	// generation (the index is independent of the credit pair; the
+	// enumeration itself is a queue-less no-op by design, so the durable
+	// row is checked directly).
+	job := newSimulateResultJob(t, jobID, "tenant-acme", jobs.StatusSucceeded, "object-out-1")
+	queue.setJob(job)
+	if notifyErr := svc.NotifyOnCompletion(liveCtx, job); notifyErr != nil {
+		t.Fatalf("NotifyOnCompletion: %v", notifyErr)
+	}
+	balAfter, err := credits.Balance(liveCtx)
+	if err != nil {
+		t.Fatalf("Balance (after terminal job): %v", err)
+	}
+	if *balAfter != *bal {
+		t.Errorf("balance moved after a terminal job on a queue-less Service: first %+v, after %+v", *bal, *balAfter)
+	}
+	rows, err := svc.simulations.listByPhoto(liveCtx, "photo-1")
+	if err != nil {
+		t.Fatalf("listByPhoto: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Errorf("index rows for the photo = %d, want 1 -- the generation must still be recorded", len(rows))
 	}
 }

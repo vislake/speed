@@ -2107,19 +2107,32 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// wired one judged against an empty database would deny everything --
 	// seedDemoEntitlements (boot, below) is what keeps the seeded demo
 	// tenants on the allowed side from the very first request.
+	// gatewayEntitlements is the ONE adapter instance this app's gateway
+	// gate and smilesim's own pre-flight both run through. Binding it as a
+	// value first lets the same closure be handed to two consumers:
+	// aiGatewayModule's WithEntitlements below (the gateway's own gate,
+	// checked inside Chat/ChatStream/GenerateImage before any provider is
+	// reached) and smileSimService's NewService call further down (whose
+	// Simulate pre-flights the gate BEFORE its credit reservation opens,
+	// so a refused request never writes a PreDeduct/Refund pair -- see
+	// internal/smilesim/service.go's Simulate doc comment). The two must
+	// answer through the very same seam, or the pre-flight and the
+	// gateway's re-check could disagree about the same state.
+	gatewayEntitlements := aigateway.EntitlementsFunc(
+		func(ctx context.Context, featureKey string, requested int64) (aigateway.Decision, error) {
+			decision, checkErr := billingModule.Entitlements().Check(ctx, featureKey, requested)
+			if checkErr != nil {
+				return aigateway.Decision{}, checkErr
+			}
+			return aigateway.Decision{Allowed: decision.Allowed, Reason: string(decision.Reason)}, nil
+		},
+	)
+
 	aiGatewayModule := aigateway.NewModule(db,
 		aigateway.WithModelRoute(consult.LogicalModel, aigateway.ProviderOpenAICompatible, "gpt-4o-mini"),
 		aigateway.WithModelRoute(smilesim.LogicalModel, aigateway.ProviderOpenAICompatibleImage, "dall-e-3"),
 		aigateway.WithImageGeneration(standaloneQueue, storageModule.ObjectService()),
-		aigateway.WithEntitlements(aigateway.EntitlementsFunc(
-			func(ctx context.Context, featureKey string, requested int64) (aigateway.Decision, error) {
-				decision, checkErr := billingModule.Entitlements().Check(ctx, featureKey, requested)
-				if checkErr != nil {
-					return aigateway.Decision{}, checkErr
-				}
-				return aigateway.Decision{Allowed: decision.Allowed, Reason: string(decision.Reason)}, nil
-			},
-		)),
+		aigateway.WithEntitlements(gatewayEntitlements),
 	)
 
 	// complianceModule is the reference app's first consumer of
@@ -2715,7 +2728,12 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: ensure smilesim simulation index schema: %w", err)
 	}
-	smileSimService := smilesim.NewService(aiGatewayModule.Gateway(), billingModule.Credits(), reg.EventBus(), standaloneQueue, smileSimReservationStore, smileSimulationStore)
+	// The last argument is gatewayEntitlements -- the same adapter instance
+	// aiGatewayModule's WithEntitlements gate runs -- so Simulate can
+	// pre-flight the model-access gate before its credit reservation opens
+	// (see that binding's own comment above and internal/smilesim's
+	// Simulate doc comment).
+	smileSimService := smilesim.NewService(aiGatewayModule.Gateway(), billingModule.Credits(), reg.EventBus(), standaloneQueue, smileSimReservationStore, smileSimulationStore, gatewayEntitlements)
 	// context.Background(), never ctx, per StartReconciler's own doc
 	// comment: the sweep must keep running until cleanup's own
 	// smileSimReconcilerStop call, not be cut short by whatever cancels

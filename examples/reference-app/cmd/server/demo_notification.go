@@ -186,7 +186,7 @@ func noteCreatedFieldsFromPayload(payload any) (noteID, creatorUserID string, ok
 }
 
 // simulationCompletedFieldKeys are the field spellings accepted for the
-// recipient user id and the success flag inside a
+// image job id, the recipient user id and the success flag inside a
 // smilesim.EventSimulationCompleted payload, probed in order by
 // simulationCompletedFieldsFromPayload.
 //
@@ -208,36 +208,45 @@ func noteCreatedFieldsFromPayload(payload any) (noteID, creatorUserID string, ok
 // an API contract), so the map spellings below are the plain struct field
 // names.
 var simulationCompletedFieldKeys = struct {
+	imageJobID      []string
 	recipientUserID []string
 	succeeded       []string
 }{
+	imageJobID:      []string{"image_job_id", "ImageJobID", "imageJobID"},
 	recipientUserID: []string{"recipient_user_id", "RecipientUserID", "recipientUserID"},
 	succeeded:       []string{"succeeded", "Succeeded"},
 }
 
-// simulationCompletedFieldsFromPayload extracts the recipient user id and
-// the success flag from a smilesim.EventSimulationCompleted payload of any
-// shape, by round-tripping it through JSON into a map and probing the
-// accepted key spellings -- mirroring noteCreatedFieldsFromPayload exactly,
-// down to returning ok=false rather than an error for every unusable shape
-// (the subscription's contract is to log and drop the event, never to fail
-// the publisher; see wireDemoNotification). recipientUserID must be a
-// non-empty string to count as present, matching
-// SimulationCompletedPayload.RecipientUserID's own "never empty" invariant;
-// succeeded is read as whatever bool value is actually present -- false is
-// a meaningful, valid answer (a failed or cancelled simulation), so its
+// simulationCompletedFieldsFromPayload extracts the image job id, the
+// recipient user id and the success flag from a
+// smilesim.EventSimulationCompleted payload of any shape, by round-tripping
+// it through JSON into a map and probing the accepted key spellings --
+// mirroring noteCreatedFieldsFromPayload exactly, down to returning ok=false
+// rather than an error for every unusable shape (the subscription's contract
+// is to log and drop the event, never to fail the publisher; see
+// wireDemoNotification). imageJobID and recipientUserID must each be a
+// non-empty string to count as present: recipientUserID matching
+// SimulationCompletedPayload.RecipientUserID's own "never empty" invariant,
+// and imageJobID because the dispatch below carries it in the delivery's
+// Params -- the per-occurrence marker that keeps two completed simulations
+// for the same recipient from collapsing into one delivery -- so a payload
+// that cannot name the job it happened for has nothing this subscription
+// can truthfully dispatch (a publisher that omits the job id is not this
+// app's own NotifyOnCompletion, whose payload always carries it). succeeded
+// is read as whatever bool value is actually present -- false is a
+// meaningful, valid answer (a failed or cancelled simulation), so its
 // presence is tracked separately from its value.
-func simulationCompletedFieldsFromPayload(payload any) (recipientUserID string, succeeded, ok bool) {
+func simulationCompletedFieldsFromPayload(payload any) (recipientUserID, imageJobID string, succeeded, ok bool) {
 	if payload == nil {
-		return "", false, false
+		return "", "", false, false
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return "", false, false
+		return "", "", false, false
 	}
 	var fields map[string]any
 	if err := json.Unmarshal(encoded, &fields); err != nil {
-		return "", false, false
+		return "", "", false, false
 	}
 	probeString := func(spellings []string) (string, bool) {
 		for _, key := range spellings {
@@ -259,12 +268,13 @@ func simulationCompletedFieldsFromPayload(payload any) (recipientUserID string, 
 		}
 		return false, false
 	}
+	jobID, hasJob := probeString(simulationCompletedFieldKeys.imageJobID)
 	recipient, hasRecipient := probeString(simulationCompletedFieldKeys.recipientUserID)
 	succeededValue, hasSucceeded := probeBool(simulationCompletedFieldKeys.succeeded)
-	if !hasRecipient || !hasSucceeded {
-		return "", false, false
+	if !hasJob || !hasRecipient || !hasSucceeded {
+		return "", "", false, false
 	}
-	return recipient, succeededValue, true
+	return recipient, jobID, succeededValue, true
 }
 
 // wireDemoNotification mounts the reference app's demo glue for the
@@ -288,12 +298,12 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 	// delivery job at send time, never frozen into the payload (see
 	// Dispatch's own doc comment).
 	//
-	// The tenant comes from the event envelope itself (evt.TenantID), and
-	// is rebuilt into the dispatch context explicitly: a subscription
-	// handler must never assume the publisher's context survives to its
-	// own queue enqueue (and in a distributed composition the two sides
-	// share no context at all). pkgcore.WithTenant makes the enqueued job
-	// -- and every record it writes -- belong to the note's tenant.
+	// The tenant comes from the event envelope itself (evt.TenantID),
+	// rebuilt into a cancel-free dispatch context inside the handler below
+	// -- in a distributed composition the publisher and this subscriber
+	// share no context at all, and in any composition the publisher's
+	// cancellation must not be able to drop the dispatch once the note it
+	// announced is committed (see the derivation's own inline comment).
 	//
 	// An event whose payload cannot be read is dropped with a logged
 	// warning, never an error returned to the publisher: the subscription
@@ -317,7 +327,21 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 				"event_type", evt.Type)
 			return nil
 		}
-		dispatchCtx := pkgcore.WithTenant(ctx, evt.TenantID)
+		// dispatchCtx is the publisher's context stripped of its
+		// cancellation, with the event's tenant rebuilt into it. The
+		// cancel-free derivation is the same boundary
+		// internal/smilesim's NotifyOnCompletion draws around its own
+		// post-terminal writes: by the time this subscription runs, the
+		// note row is already committed, and a publisher-side disconnect
+		// (the note-create request's client closing its tab the moment the
+		// create landed) must not be able to drop the notification the
+		// committed note was supposed to trigger -- this handler logs and
+		// swallows a refused dispatch, so nothing else would ever retry
+		// it. The tenant comes from the event envelope itself (evt.TenantID),
+		// never assumed to survive from the publisher's context, and
+		// pkgcore.WithTenant makes the enqueued job -- and every record it
+		// writes -- belong to the note's tenant.
+		dispatchCtx := pkgcore.WithTenant(context.WithoutCancel(ctx), evt.TenantID)
 		// The creator's locale is fixed to the zh-CN default for the same
 		// reason the address resolver is a static table: demo users have no
 		// profile to negotiate from, and authn's own default locale is
@@ -414,9 +438,16 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 	// dispatched: "your simulation is ready to view" would be actively
 	// wrong for a job that dead-lettered or was cancelled, and this app
 	// has no distinct "your simulation failed" copy to send instead.
+	//
+	// The dispatch below carries the completing job's own id in its
+	// Params -- the per-occurrence marker mirroring this function's own
+	// note-created dispatch carrying note_id -- so every completed
+	// simulation delivers as the distinct occurrence it is (see the
+	// dispatch call's own comment for why the parameter is load-bearing
+	// and not just copy).
 	bus.Subscribe(smilesim.EventSimulationCompleted, func(ctx context.Context, evt pkgcore.Event) error {
 		logger := observability.FromContext(ctx)
-		recipientUserID, succeeded, ok := simulationCompletedFieldsFromPayload(evt.Payload)
+		recipientUserID, imageJobID, succeeded, ok := simulationCompletedFieldsFromPayload(evt.Payload)
 		if !ok {
 			logger.Warn("demo notification glue dropped a smilesim.simulation_completed event with an unreadable payload",
 				"event_type", evt.Type)
@@ -425,7 +456,27 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 		if !succeeded {
 			return nil
 		}
-		dispatchCtx := pkgcore.WithTenant(ctx, evt.TenantID)
+		// dispatchCtx carries the event's tenant, on a cancel-free copy of
+		// the publisher's context -- the identical boundary
+		// internal/smilesim's NotifyOnCompletion draws before it publishes
+		// this very event (see its own persistCtx comment): by the time
+		// this subscription runs, the simulation job is terminal and
+		// settled, and a publisher-side disconnect must not be able to
+		// drop the delivery the terminal job was supposed to trigger --
+		// this handler logs and swallows a refused dispatch, so nothing
+		// else would ever retry it.
+		dispatchCtx := pkgcore.WithTenant(context.WithoutCancel(ctx), evt.TenantID)
+		// Params carry the completing job's own id as
+		// demo.simulation_ready.sms.text's {{.simulation_job_id}}
+		// placeholder and -- the load-bearing half -- as part of the
+		// derived delivery key go/notification hashes from the dispatch
+		// (tenant, type, recipient, channel, params): two simulations
+		// completed for the SAME recipient are two distinct occurrences,
+		// and each must deliver on its own, never collapse into one
+		// delivery because the second dispatch derived an identical key
+		// and was settled as a duplicate of the first. The note-created
+		// subscription above makes the identical choice for its note_id
+		// parameter.
 		if _, err := module.Deliveries().Dispatch(dispatchCtx, notification.Dispatch{
 			TypeKey: demo.TypeKeySimulationReady,
 			Recipient: notification.DispatchRecipient{
@@ -433,7 +484,7 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 				UserID: recipientUserID,
 			},
 			Locale: i18n.LocaleZHCN,
-			Params: map[string]any{},
+			Params: map[string]any{"simulation_job_id": imageJobID},
 		}); err != nil {
 			logger.Warn("demo notification glue could not dispatch the simulation-completed delivery",
 				"event_type", evt.Type, "user_id", recipientUserID, "error", err)

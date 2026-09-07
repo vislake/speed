@@ -10,10 +10,14 @@
 # go/notification/render.go documents -- type key, channel and part in
 # order (<type_key>.<channel>.<part>, e.g.
 # demo.patient_reminder.email.subject), plus one "<type_key>.description"
-# row per type for the type catalog. Neither type's templates take
-# parameters: the demo patient-message route and the smilesim completion
-# glue (both in cmd/server) only trigger the send, and each type's copy is
-# fixed text.
+# row per type for the type catalog. The patient-reminder type's templates
+# take no parameters -- the demo patient-message route only triggers the
+# send and the copy is fixed text -- while the simulation-ready type's SMS
+# takes the completing simulation's job id as {{.simulation_job_id}}: the
+# dispatch (cmd/server/demo_notification.go's smilesim completion glue)
+# carries it both as copy and as the per-occurrence marker that keeps two
+# completed simulations for the same recipient from collapsing into one
+# delivery (the derived delivery key hashes the dispatch's params).
 #
 # The copy is rendered by the notification module out of the merged catalog
 # Kernel.Bootstrap assembles from each module's Locales() -- which is exactly
@@ -29,5 +33,5 @@
 "demo.patient_reminder.sms.text" = "Smile Studio reminder: your smile check-up appointment is coming up. Reply to this message if you need to reschedule."
 "demo.patient_reminder.description" = "Sent when a contact's check-up appointment is drawing near."
 
-"demo.simulation_ready.sms.text" = "Smile Studio: your smile simulation is ready to view."
+"demo.simulation_ready.sms.text" = "Smile Studio: your smile simulation ({{.simulation_job_id}}) is ready to view."
 "demo.simulation_ready.description" = "Sent when a requested smile simulation finishes generating."

@@ -584,6 +584,119 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 	}
 }
 
+// TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver is the
+// P1-refapp-4 regression: TWO simulations completed for the SAME
+// recipient are two distinct occurrences, and each must deliver on its
+// own. Before the fix, demo_notification.go's simulation-completed
+// subscription dispatched with empty Params, so both dispatches derived
+// the identical delivery key (same tenant, same type, same recipient,
+// same channel, same params) and the notification module settled the
+// second delivery job as a duplicate of the first -- one SMS for two
+// completed simulations, silently dropped while each simulate route had
+// answered 202. The dispatch must carry the completing job's own id in
+// its Params -- the mirror of the note-created dispatch carrying
+// note_id -- so the two occurrences derive distinct keys and both
+// deliver.
+//
+// The legs are sequenced so the failure is deterministic: simulation
+// one's delivery must be fully settled (its send record written) before
+// simulation two's event dispatches, which is why the test waits for the
+// first SMS before starting the second simulation -- otherwise the two
+// delivery jobs could race and the duplicate-settling order would decide
+// whether the bug showed.
+func TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver(t *testing.T) {
+	imgServer := newFakeOpenAIImageServer(t)
+
+	cfg := testConfig(t)
+	cfg.AIGatewayImageBaseURL = imgServer.URL
+	cfg.AIGatewayImageAPIKey = "sk-test-smilesim-notify-twice-key"
+	sms := &lockedBuffer{}
+	cfg.SMSOutput = sms
+	cfg.Memberships.Grant(demoSmileSimRecipientUserID, "tenant-acme")
+
+	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	t.Cleanup(func() {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			t.Errorf("cleanup: %v", cleanupErr)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "smilesim-notify-twice-owner")
+
+	photo := jpegWithExif(t)
+	completedPhoto := uploadAndComplete(t, srv, token, photo, "")
+	if completedPhoto.State != "completed" {
+		t.Fatalf("photo state = %q, want completed", completedPhoto.State)
+	}
+
+	simulateForRecipient := func() string {
+		t.Helper()
+		simulateBody, err := json.Marshal(map[string]string{
+			"photo_object_id":   completedPhoto.ID,
+			"recipient_user_id": demoSmileSimRecipientUserID,
+		})
+		if err != nil {
+			t.Fatalf("marshal simulate request: %v", err)
+		}
+		resp := smileSimRequest(t, srv, http.MethodPost, smileSimulatePath, token, simulateBody)
+		var simulateOut struct {
+			JobID string `json:"job_id"`
+		}
+		if decodeErr := json.NewDecoder(resp.Body).Decode(&simulateOut); decodeErr != nil {
+			resp.Body.Close()
+			t.Fatalf("decode simulate response: %v", decodeErr)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("POST %s status = %d, want %d", smileSimulatePath, resp.StatusCode, http.StatusAccepted)
+		}
+		return simulateOut.JobID
+	}
+
+	// Simulation one: complete it and wait until its SMS has genuinely
+	// been delivered and settled -- the first send record is what the
+	// second delivery job's duplicate probe would find.
+	job1 := simulateForRecipient()
+	final1 := waitForSmileSimSucceeded(t, srv, token, job1, time.Now().Add(5*time.Second))
+	if status, _ := final1["status"].(string); status != "succeeded" {
+		t.Fatalf("first job status = %v, want \"succeeded\"", final1["status"])
+	}
+	eventually(t, 4*time.Second, "the first simulation-ready SMS", func() bool {
+		return len(smsLinesTo(sms, "+8613800138099")) == 1
+	})
+
+	// Simulation two for the same recipient: a regenerate of the same
+	// photo is an explicit NEW generation with its own job id, exactly the
+	// "second occurrence" the bug collapsed into the first delivery.
+	job2 := simulateForRecipient()
+	if job2 == job1 {
+		t.Fatalf("second simulate returned the same job id %q as the first -- each generation must be its own job", job1)
+	}
+	final2 := waitForSmileSimSucceeded(t, srv, token, job2, time.Now().Add(5*time.Second))
+	if status, _ := final2["status"].(string); status != "succeeded" {
+		t.Fatalf("second job status = %v, want \"succeeded\"", final2["status"])
+	}
+
+	// Both occurrences deliver: before the fix, the second delivery was
+	// settled as a duplicate of the first and this wait timed out with the
+	// recipient stuck at one SMS.
+	eventually(t, 4*time.Second, "the second simulation-ready SMS", func() bool {
+		return len(smsLinesTo(sms, "+8613800138099")) == 2
+	})
+	lines := smsLinesTo(sms, "+8613800138099")
+	if len(lines) != 2 {
+		t.Fatalf("recorded %d SMS lines to the recipient, want exactly 2 -- each completed simulation must deliver as its own occurrence", len(lines))
+	}
+	if lines[0] == lines[1] {
+		t.Errorf("the two SMS lines are identical: %q -- each delivery's copy must name its own simulation", lines[0])
+	}
+}
+
 // TestSmileSimulation_ParameterizedOptions_ReachTheVendorAndTheResultIndex
 // is the P2a parameterization round's end-to-end proof, in three legs over
 // the real composed HTTP stack:

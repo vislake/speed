@@ -106,7 +106,11 @@ var _ aigateway.ImageProvider = (*fakeImageProvider)(nil)
 // test double actually running any job. A jobID never given to setJob
 // answers (nil, nil) from Get, exactly as the zero-value map lookup
 // already did before setJob existed, so every pre-existing test that never
-// calls setJob is unaffected.
+// calls setJob is unaffected. A jobID recorded via ageOut answers
+// jobs.ErrJobNotFound instead -- standing in for a real queue whose task
+// retention has deleted a completed job (the distributed queue's
+// DefaultCompletedRetention window; see ListSimulationsByPhoto's own
+// "Recorded limitation" section for what that means to a listing).
 type recordingQueue struct {
 	lastTask     jobs.Task
 	jobID        jobs.JobID
@@ -114,6 +118,7 @@ type recordingQueue struct {
 	enqueueErr   error
 	onEnqueue    func()
 	jobs         map[jobs.JobID]*jobs.Job
+	notFound     map[jobs.JobID]bool
 }
 
 func (q *recordingQueue) Enqueue(_ context.Context, task jobs.Task, _ ...jobs.EnqueueOption) (jobs.JobID, error) {
@@ -129,6 +134,9 @@ func (q *recordingQueue) Enqueue(_ context.Context, task jobs.Task, _ ...jobs.En
 }
 
 func (q *recordingQueue) Get(_ context.Context, id jobs.JobID) (*jobs.Job, error) {
+	if q.notFound[id] {
+		return nil, jobs.ErrJobNotFound
+	}
 	return q.jobs[id], nil
 }
 func (q *recordingQueue) Cancel(context.Context, jobs.JobID) error { return nil }
@@ -140,6 +148,16 @@ func (q *recordingQueue) setJob(job *jobs.Job) {
 		q.jobs = make(map[jobs.JobID]*jobs.Job)
 	}
 	q.jobs[job.ID] = job
+}
+
+// ageOut records jobID as no longer on file -- a later Get answers
+// jobs.ErrJobNotFound, the shape a real queue reports once the completed
+// task's retention window has passed.
+func (q *recordingQueue) ageOut(jobID jobs.JobID) {
+	if q.notFound == nil {
+		q.notFound = make(map[jobs.JobID]bool)
+	}
+	q.notFound[jobID] = true
 }
 
 // compile-time check that *recordingQueue satisfies jobs.Queue.
@@ -181,12 +199,17 @@ func newTestCreditService(t *testing.T) *billing.CreditService {
 // records what Service.Simulate causes Gateway.GenerateImage to enqueue,
 // and credits (nil is legal -- see Service's own doc comment on its
 // credits field) is the CreditService Simulate reserves against and
-// settleCredit settles. This is the ordinary case, one fresh database per
-// Service; see newTestServiceWithDB for the "same database, two Service
-// instances" shape a process-restart proof needs.
-func newTestService(t *testing.T, provider aigateway.ImageProvider, queue *recordingQueue, credits *billing.CreditService) *Service {
+// settleCredit settles. entitlements, when given (at most one), is wired
+// BOTH into the built gateway's WithEntitlements gate and into the
+// Service's own pre-flight seam -- the same one-seam-for-both shape
+// cmd/server's own wiring uses -- so the entitlement-refusal regressions
+// can drive the refusal through the same composition production runs
+// under. This is the ordinary case, one fresh database per Service; see
+// newTestServiceWithDB for the "same database, two Service instances"
+// shape a process-restart proof needs.
+func newTestService(t *testing.T, provider aigateway.ImageProvider, queue *recordingQueue, credits *billing.CreditService, entitlements ...aigateway.Entitlements) *Service {
 	t.Helper()
-	return newTestServiceWithDB(t, dbtest.NewSQLite(t), provider, queue, credits)
+	return newTestServiceWithDB(t, dbtest.NewSQLite(t), provider, queue, credits, entitlements...)
 }
 
 // newTestServiceWithDB is newTestService's own implementation, parametrized
@@ -204,8 +227,12 @@ func newTestService(t *testing.T, provider aigateway.ImageProvider, queue *recor
 // only reaches Gateway.GenerateImage's enqueue path, never the job handler
 // that would call it -- go/ai-gateway's own image_gateway_test.go is where
 // that handler's storage I/O is proven.
-func newTestServiceWithDB(t *testing.T, db *gorm.DB, provider aigateway.ImageProvider, queue *recordingQueue, credits *billing.CreditService) *Service {
+func newTestServiceWithDB(t *testing.T, db *gorm.DB, provider aigateway.ImageProvider, queue *recordingQueue, credits *billing.CreditService, entitlements ...aigateway.Entitlements) *Service {
 	t.Helper()
+	var entitlementSeam aigateway.Entitlements
+	if len(entitlements) > 0 {
+		entitlementSeam = entitlements[0]
+	}
 	registerCredentialSerializer()
 
 	migrations := dbkit.NewMigrationRegistry()
@@ -243,11 +270,15 @@ func newTestServiceWithDB(t *testing.T, db *gorm.DB, provider aigateway.ImagePro
 	// are attached only by Module.Register, which nothing here calls).
 	storageModule := storage.NewModule(db, storage.WithQueue(queue))
 
-	gateway := aigateway.NewGateway(credentials,
+	gatewayOptions := []aigateway.GatewayOption{
 		aigateway.WithModelRoute(LogicalModel, fakeImageProviderName, "vendor-model-x"),
 		aigateway.WithImageProviderRegistry(registry),
 		aigateway.WithImageGeneration(queue, storageModule.ObjectService()),
-	)
+	}
+	if entitlementSeam != nil {
+		gatewayOptions = append(gatewayOptions, aigateway.WithEntitlements(entitlementSeam))
+	}
+	gateway := aigateway.NewGateway(credentials, gatewayOptions...)
 
 	store := NewReservationStore(db)
 	if err := store.EnsureSchema(context.Background()); err != nil {
@@ -259,7 +290,7 @@ func newTestServiceWithDB(t *testing.T, db *gorm.DB, provider aigateway.ImagePro
 		t.Fatalf("EnsureSchema (simulation index): %v", err)
 	}
 
-	return NewService(gateway, credits, pkgcore.NewMemoryEventBus(), queue, store, simulations)
+	return NewService(gateway, credits, pkgcore.NewMemoryEventBus(), queue, store, simulations, entitlementSeam)
 }
 
 func TestService_Simulate_EnqueuesImageToImageUnderTheLogicalModel(t *testing.T) {
@@ -326,7 +357,7 @@ func subscribeSimulationCompleted(bus pkgcore.EventBus) func() []SimulationCompl
 
 func TestService_NotifyOnCompletion_PublishesOnceForASucceededJobWithARecipient(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, nil, bus, nil, nil, nil)
+	svc := NewService(nil, nil, bus, nil, nil, nil, nil)
 	events := subscribeSimulationCompleted(bus)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -370,7 +401,7 @@ func TestService_NotifyOnCompletion_PublishesOnceForASucceededJobWithARecipient(
 
 func TestService_NotifyOnCompletion_DeadLetterReportsFailureWithNoOutputObject(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, nil, bus, nil, nil, nil)
+	svc := NewService(nil, nil, bus, nil, nil, nil, nil)
 	events := subscribeSimulationCompleted(bus)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -396,7 +427,7 @@ func TestService_NotifyOnCompletion_DeadLetterReportsFailureWithNoOutputObject(t
 
 func TestService_NotifyOnCompletion_NoRecipientOnFile_NeverPublishes(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, nil, bus, nil, nil, nil)
+	svc := NewService(nil, nil, bus, nil, nil, nil, nil)
 	events := subscribeSimulationCompleted(bus)
 
 	job := &jobs.Job{ID: "job-no-recipient", TenantID: "tenant-acme", Status: jobs.StatusSucceeded}
@@ -410,7 +441,7 @@ func TestService_NotifyOnCompletion_NoRecipientOnFile_NeverPublishes(t *testing.
 
 func TestService_NotifyOnCompletion_NonTerminalStatus_NeverPublishes(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
-	svc := NewService(nil, nil, bus, nil, nil, nil)
+	svc := NewService(nil, nil, bus, nil, nil, nil, nil)
 	events := subscribeSimulationCompleted(bus)
 
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -619,7 +650,7 @@ func TestService_NotifyOnCompletion_DeadLetter_RefundsReservation(t *testing.T) 
 }
 
 func TestService_NotifyOnCompletion_NilBus_IsANoOp(t *testing.T) {
-	svc := NewService(nil, nil, nil, nil, nil, nil)
+	svc := NewService(nil, nil, nil, nil, nil, nil, nil)
 	job := &jobs.Job{ID: "job-x", TenantID: "tenant-acme", Status: jobs.StatusSucceeded}
 	// Never given a recipient, so this would be a no-op regardless, but the
 	// point is that a nil bus must not panic even when it IS reached.
@@ -739,7 +770,7 @@ func TestService_ReconcileOutstandingCredits_NonTerminalJob_LeavesReservationInP
 // other optional-seam nil-safety test in this file: a Service missing
 // credits, store or queue must not panic, and must settle nothing.
 func TestService_ReconcileOutstandingCredits_NilWiring_IsANoOp(t *testing.T) {
-	svc := NewService(nil, nil, nil, nil, nil, nil)
+	svc := NewService(nil, nil, nil, nil, nil, nil, nil)
 	settled, err := svc.ReconcileOutstandingCredits(context.Background())
 	if err != nil {
 		t.Fatalf("ReconcileOutstandingCredits: %v", err)
@@ -792,7 +823,7 @@ func TestService_CreditReservation_SurvivesRestart(t *testing.T) {
 	if schemaErr := simulations.EnsureSchema(context.Background()); schemaErr != nil {
 		t.Fatalf("EnsureSchema (simulation index): %v", schemaErr)
 	}
-	serviceB := NewService(nil, credits, pkgcore.NewMemoryEventBus(), queue, store, simulations)
+	serviceB := NewService(nil, credits, pkgcore.NewMemoryEventBus(), queue, store, simulations, nil)
 
 	queue.setJob(&jobs.Job{ID: jobID, TenantID: "tenant-acme", Status: jobs.StatusSucceeded})
 
@@ -865,7 +896,7 @@ func TestService_StartReconciler_AutomaticallySettlesWithoutAnyPoll(t *testing.T
 // StartReconciler on a Service with nothing wired must not panic, and its
 // returned stop func must be safe to call.
 func TestService_StartReconciler_NilWiring_ReturnsAHarmlessStop(t *testing.T) {
-	svc := NewService(nil, nil, nil, nil, nil, nil)
+	svc := NewService(nil, nil, nil, nil, nil, nil, nil)
 	stop := svc.StartReconciler(context.Background(), time.Millisecond)
 	stop()
 }
@@ -1085,7 +1116,7 @@ func TestService_OptionsAndListing_SurviveRestart(t *testing.T) {
 		t.Fatalf("EnsureSchema (simulation index): %v", schemaErr)
 	}
 	queue.setJob(newSimulateResultJob(t, jobID, "tenant-acme", jobs.StatusSucceeded, "object-out-9"))
-	serviceB := NewService(nil, nil, pkgcore.NewMemoryEventBus(), queue, nil, simulations)
+	serviceB := NewService(nil, nil, pkgcore.NewMemoryEventBus(), queue, nil, simulations, nil)
 
 	sims, err := serviceB.ListSimulationsByPhoto(ctx, "photo-1")
 	if err != nil {
@@ -1200,7 +1231,7 @@ func TestService_PerPhotoIndex_TenantScoped(t *testing.T) {
 // built with no simulation store and no queue must not panic, and its
 // per-photo reads answer "nothing".
 func TestService_PerPhotoIndex_NilWiring_IsANoOp(t *testing.T) {
-	svc := NewService(nil, nil, nil, nil, nil, nil)
+	svc := NewService(nil, nil, nil, nil, nil, nil, nil)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
 
 	sims, err := svc.ListSimulationsByPhoto(ctx, "photo-1")
@@ -1212,5 +1243,189 @@ func TestService_PerPhotoIndex_NilWiring_IsANoOp(t *testing.T) {
 	}
 	if _, has, err := svc.OptionsForJob(ctx, "job-1"); err != nil || has {
 		t.Errorf("OptionsForJob with nil wiring = has %v err %v, want false nil", has, err)
+	}
+}
+
+// TestService_ListSimulationsByPhoto_AgedOutJob_DoesNotFailTheAlbum is the
+// P3-refapp-13 regression: before the fix, ONE row whose job the queue no
+// longer has on file -- a completed task whose retention window passed
+// (the distributed queue answers jobs.ErrJobNotFound once go/jobs/queue/
+// asynq's DefaultCompletedRetention has elapsed), or a queue that answers
+// (nil, nil) -- failed the ENTIRE enumeration, so the photo's album
+// listing answered not-found over one simulation the index itself still
+// records. The listing must tolerate an unreadable row by omitting it
+// (the method's own "Recorded limitation" section documents why nothing
+// truthful remains to list for an aged-out job), while the photo's other,
+// still-readable simulations keep listing -- and a genuine queue failure
+// (any error other than not-found) must still fail the enumeration, since
+// an outage is transient where retention is permanent.
+func TestService_ListSimulationsByPhoto_AgedOutJob_DoesNotFailTheAlbum(t *testing.T) {
+	queue := &recordingQueue{}
+	svc := newTestService(t, &fakeImageProvider{}, queue, nil)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+
+	// Three generations of the same photo: one still on file, one whose
+	// completed task aged out of the queue's retention window, and one the
+	// queue answers (nil, nil) for -- the two spellings of "no longer on
+	// file" this method must tolerate.
+	queue.jobID = "job-fresh"
+	freshJob, err := svc.Simulate(ctx, "photo-1", "")
+	if err != nil {
+		t.Fatalf("Simulate (fresh): %v", err)
+	}
+	queue.jobID = "job-aged-out"
+	agedJob, err := svc.Simulate(ctx, "photo-1", "")
+	if err != nil {
+		t.Fatalf("Simulate (aged): %v", err)
+	}
+	queue.jobID = "job-lost"
+	if _, lostErr := svc.Simulate(ctx, "photo-1", ""); lostErr != nil {
+		t.Fatalf("Simulate (lost): %v", lostErr)
+	}
+
+	queue.setJob(newSimulateResultJob(t, freshJob, "tenant-acme", jobs.StatusSucceeded, "object-out-fresh"))
+	queue.ageOut(agedJob) // completed 25 hours ago: the retention window has passed
+
+	sims, err := svc.ListSimulationsByPhoto(ctx, "photo-1")
+	if err != nil {
+		t.Fatalf("ListSimulationsByPhoto with an aged-out simulation = %v -- one aged-out job must not fail its photo's whole album", err)
+	}
+	if len(sims) != 1 {
+		t.Fatalf("enumeration returned %d entries, want 1 (the fresh job; the aged-out and the lost jobs are omitted per the recorded limitation): %+v", len(sims), sims)
+	}
+	if sims[0].JobID != freshJob {
+		t.Errorf("enumerated job id = %q, want the still-readable %q", sims[0].JobID, freshJob)
+	}
+	if sims[0].Status != jobs.StatusSucceeded || sims[0].OutputObjectID != "object-out-fresh" {
+		t.Errorf("enumerated fresh outcome = status %q output %q, want succeeded %q -- the readable row must keep its live outcome", sims[0].Status, sims[0].OutputObjectID, "object-out-fresh")
+	}
+
+	// The durable rows themselves are untouched: only the live enumeration
+	// omits what it cannot read.
+	rows, err := svc.simulations.listByPhoto(ctx, "photo-1")
+	if err != nil {
+		t.Fatalf("listByPhoto: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Errorf("index rows for the photo = %d, want 3 -- the index is append-only and must not lose the aged-out row", len(rows))
+	}
+}
+
+// TestService_NotifyOnCompletion_DeliveredEntriesAreForgotten is the
+// P3-refapp-14 regression: before the fix, recipients and notified kept
+// one entry per job forever -- every job Simulate ran with a recipient
+// and every delivery it latched accumulated across the process's life,
+// unbounded by anything. The two maps must be bounded by outstanding
+// notifications instead: once a job's terminal outcome is fully processed
+// -- an accepted publish on the success path, and a terminal job observed
+// by a bus-less Service that can never deliver -- both entries are
+// deleted, and the once-only guarantee holds across the deletion (a later
+// poll must not publish again for a job whose delivery is done).
+func TestService_NotifyOnCompletion_DeliveredEntriesAreForgotten(t *testing.T) {
+	bus := pkgcore.NewMemoryEventBus()
+	svc := NewService(nil, nil, bus, nil, nil, nil, nil)
+	events := subscribeSimulationCompleted(bus)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	const completed = 3
+	for i := 0; i < completed; i++ {
+		jobID := jobs.JobID(fmt.Sprintf("job-delivered-%d", i))
+		svc.recipients[jobID] = "user-7"
+		job := newSimulateResultJob(t, jobID, "tenant-acme", jobs.StatusSucceeded, "object-out-1")
+		if err := svc.NotifyOnCompletion(ctx, job); err != nil {
+			t.Fatalf("NotifyOnCompletion (job %s): %v", jobID, err)
+		}
+	}
+	if got := events(); len(got) != completed {
+		t.Fatalf("published %d events, want %d", len(got), completed)
+	}
+
+	// After N completed and delivered simulations the maps hold at most N
+	// entries -- here, none at all: every delivered job's bookkeeping was
+	// cleaned up on the success path.
+	if len(svc.recipients) != 0 || len(svc.notified) != 0 {
+		t.Errorf("maps after %d delivered simulations: recipients %d notified %d entries, want 0 each -- delivered bookkeeping must be cleaned up, not accumulated", completed, len(svc.recipients), len(svc.notified))
+	}
+
+	// The once-only guarantee survives the cleanup: a repeated poll of an
+	// already-delivered job must not publish again.
+	repeatPoll := newSimulateResultJob(t, jobs.JobID("job-delivered-0"), "tenant-acme", jobs.StatusSucceeded, "object-out-1")
+	if err := svc.NotifyOnCompletion(ctx, repeatPoll); err != nil {
+		t.Fatalf("NotifyOnCompletion (repeat poll): %v", err)
+	}
+	if got := events(); len(got) != completed {
+		t.Errorf("published %d events after a repeat poll of a delivered job, want still %d -- cleanup must not re-arm the delivery", len(got), completed)
+	}
+
+	// A bus-less Service forgets a terminal job's recipient too: no
+	// deliverer is wired, so no delivery can ever exist for it, and the
+	// entry has no future (NotifyOnCompletion's nil-bus path).
+	busless := NewService(nil, nil, nil, nil, nil, nil, nil)
+	busless.recipients[jobs.JobID("job-no-bus")] = "user-7"
+	if err := busless.NotifyOnCompletion(ctx, newSimulateResultJob(t, jobs.JobID("job-no-bus"), "tenant-acme", jobs.StatusSucceeded, "object-out-1")); err != nil {
+		t.Fatalf("NotifyOnCompletion (bus-less): %v", err)
+	}
+	if len(busless.recipients) != 0 {
+		t.Errorf("bus-less Service kept %d recipient entries after a terminal job, want 0 -- a delivery that can never exist must not be remembered", len(busless.recipients))
+	}
+}
+
+// TestService_Simulate_EntitlementRefusal_WritesNoLedgerRow is the
+// P3-refapp-17 regression: before the fix, Simulate reserved credits
+// before calling Gateway.GenerateImage, whose own entitlement gate then
+// refused the request -- leaving the reservation opened and immediately
+// refunded (the PreDeduct/Refund pair: one ledger row under the
+// reservation's own reason, plus the two balance moves) for a request no
+// job ever ran for. The model-access gate must be pre-flighted BEFORE the
+// reservation opens -- through the very seam the gateway gates on, so the
+// two checks cannot disagree about the same state -- and a deterministically
+// refused request must be refused with the gateway's own coded answer and
+// no ledger row at all.
+func TestService_Simulate_EntitlementRefusal_WritesNoLedgerRow(t *testing.T) {
+	billingDB := dbtest.NewSQLite(t)
+	credits := newTestCreditServiceWithDB(t, billingDB)
+	grantTestCredits(t, credits)
+	liveCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+
+	// A seam that denies every request, the way a tenant with no Active
+	// subscription answers -- wired into both the gateway's gate and the
+	// Service's pre-flight by newTestService, exactly as cmd/server's own
+	// one-closure-for-both wiring does.
+	denied := aigateway.EntitlementsFunc(func(context.Context, string, int64) (aigateway.Decision, error) {
+		return aigateway.Decision{Allowed: false, Reason: "no_subscription"}, nil
+	})
+	queue := &recordingQueue{jobID: "job-should-never-run"}
+	svc := newTestService(t, &fakeImageProvider{}, queue, credits, denied)
+
+	jobID, err := svc.Simulate(liveCtx, "photo-1", "")
+	if err == nil {
+		t.Fatalf("Simulate with a refusing entitlement gate succeeded (job %q), want aigateway.entitlement_denied", jobID)
+	}
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Code != aigateway.ErrEntitlementDenied.Code {
+		t.Fatalf("Simulate error = %v, want the gateway's own coded aigateway.entitlement_denied answer", err)
+	}
+	if queue.enqueueCalls != 0 {
+		t.Errorf("queue.enqueueCalls = %d, want 0 -- the refusal must precede any enqueue", queue.enqueueCalls)
+	}
+
+	// The ledger carries nothing for the refused request -- before the
+	// fix, the reservation opened and its compensating refund left one
+	// row (status refunded) under creditReasonSimulate behind.
+	var reservations []billing.CreditTransaction
+	queryErr := billingDB.WithContext(liveCtx).Where("reason = ?", creditReasonSimulate).Find(&reservations).Error
+	if queryErr != nil {
+		t.Fatalf("read ledger: %v", queryErr)
+	}
+	if len(reservations) != 0 {
+		t.Errorf("ledger holds %d smilesim reservation rows after a refused request, want 0 -- a request the gateway refuses must never write the PreDeduct/Refund pair", len(reservations))
+	}
+
+	bal, err := credits.Balance(liveCtx)
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 100 || bal.Reserved != 0 {
+		t.Errorf("balance after the refused request = %+v, want Available 100 Reserved 0 -- no reservation may open for a refused request", *bal)
 	}
 }

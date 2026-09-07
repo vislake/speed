@@ -18,6 +18,13 @@ package main
 // "decoded map" cases would have caught. The Docker-backed integration
 // regression in examples/reference-app/integration_test proves the same
 // thing end to end, over a real Redis EventBus and a real subprocess.
+//
+// The probe has since grown a third required field: the completing job's
+// image id, which the subscription's dispatch carries in its Params as the
+// per-occurrence marker that keeps two completed simulations for the same
+// recipient from collapsing into one delivery (see the probe's own doc
+// comment in demo_notification.go). Every readable-payload case below
+// therefore carries one, and the unreadable list names its absence.
 
 import (
 	"testing"
@@ -39,12 +46,15 @@ func TestSimulationCompletedFieldsFromPayload_ConcreteStruct(t *testing.T) {
 		Succeeded:       true,
 		OutputObjectID:  "obj-1",
 	}
-	recipientUserID, succeeded, ok := simulationCompletedFieldsFromPayload(payload)
+	recipientUserID, imageJobID, succeeded, ok := simulationCompletedFieldsFromPayload(payload)
 	if !ok {
 		t.Fatalf("simulationCompletedFieldsFromPayload(%+v) ok = false, want true", payload)
 	}
 	if recipientUserID != "user-smilesim-recipient-1" {
 		t.Errorf("recipientUserID = %q, want %q", recipientUserID, "user-smilesim-recipient-1")
+	}
+	if imageJobID != "job-1" {
+		t.Errorf("imageJobID = %q, want %q", imageJobID, "job-1")
 	}
 	if !succeeded {
 		t.Errorf("succeeded = false, want true")
@@ -58,10 +68,11 @@ func TestSimulationCompletedFieldsFromPayload_ConcreteStruct(t *testing.T) {
 // =false to skip dispatch without logging a warning.
 func TestSimulationCompletedFieldsFromPayload_ConcreteStruct_Failed(t *testing.T) {
 	payload := smilesim.SimulationCompletedPayload{
+		ImageJobID:      "job-2",
 		RecipientUserID: "user-smilesim-recipient-1",
 		Succeeded:       false,
 	}
-	recipientUserID, succeeded, ok := simulationCompletedFieldsFromPayload(payload)
+	recipientUserID, imageJobID, succeeded, ok := simulationCompletedFieldsFromPayload(payload)
 	if !ok {
 		t.Fatalf("ok = false, want true (a failed simulation is a readable payload)")
 	}
@@ -70,6 +81,9 @@ func TestSimulationCompletedFieldsFromPayload_ConcreteStruct_Failed(t *testing.T
 	}
 	if recipientUserID != "user-smilesim-recipient-1" {
 		t.Errorf("recipientUserID = %q, want %q", recipientUserID, "user-smilesim-recipient-1")
+	}
+	if imageJobID != "job-2" {
+		t.Errorf("imageJobID = %q, want %q", imageJobID, "job-2")
 	}
 }
 
@@ -91,12 +105,15 @@ func TestSimulationCompletedFieldsFromPayload_DecodedMap(t *testing.T) {
 		"Succeeded":       true,
 		"OutputObjectID":  "obj-1",
 	}
-	recipientUserID, succeeded, ok := simulationCompletedFieldsFromPayload(decoded)
+	recipientUserID, imageJobID, succeeded, ok := simulationCompletedFieldsFromPayload(decoded)
 	if !ok {
 		t.Fatalf("simulationCompletedFieldsFromPayload(%+v) ok = false, want true -- this is the exact shape the Redis EventBus delivers", decoded)
 	}
 	if recipientUserID != "user-smilesim-recipient-1" {
 		t.Errorf("recipientUserID = %q, want %q", recipientUserID, "user-smilesim-recipient-1")
+	}
+	if imageJobID != "job-1" {
+		t.Errorf("imageJobID = %q, want %q", imageJobID, "job-1")
 	}
 	if !succeeded {
 		t.Errorf("succeeded = false, want true")
@@ -109,10 +126,11 @@ func TestSimulationCompletedFieldsFromPayload_DecodedMap(t *testing.T) {
 // read back as false, not as absent.
 func TestSimulationCompletedFieldsFromPayload_DecodedMap_Failed(t *testing.T) {
 	decoded := map[string]any{
+		"ImageJobID":      "job-2",
 		"RecipientUserID": "user-smilesim-recipient-1",
 		"Succeeded":       false,
 	}
-	recipientUserID, succeeded, ok := simulationCompletedFieldsFromPayload(decoded)
+	recipientUserID, imageJobID, succeeded, ok := simulationCompletedFieldsFromPayload(decoded)
 	if !ok {
 		t.Fatalf("ok = false, want true")
 	}
@@ -122,33 +140,42 @@ func TestSimulationCompletedFieldsFromPayload_DecodedMap_Failed(t *testing.T) {
 	if recipientUserID != "user-smilesim-recipient-1" {
 		t.Errorf("recipientUserID = %q, want %q", recipientUserID, "user-smilesim-recipient-1")
 	}
+	if imageJobID != "job-2" {
+		t.Errorf("imageJobID = %q, want %q", imageJobID, "job-2")
+	}
 }
 
 // TestSimulationCompletedFieldsFromPayload_Unreadable proves the
 // warn-and-drop path is preserved for every shape this subscription must
 // never dispatch for: nil, a payload of some unrelated type, and maps
-// missing one of the two required keys (including an empty
+// missing one of the three required keys (including an empty
 // RecipientUserID, which SimulationCompletedPayload's own doc comment
-// declares NotifyOnCompletion never publishes).
+// declares NotifyOnCompletion never publishes, and an absent or empty
+// ImageJobID, without which the dispatch could not carry its
+// per-occurrence marker -- see the probe's own doc comment for why such a
+// payload has nothing this subscription can truthfully dispatch).
 func TestSimulationCompletedFieldsFromPayload_Unreadable(t *testing.T) {
 	cases := map[string]any{
 		"nil":                        nil,
 		"unrelated struct":           struct{ Foo string }{Foo: "bar"},
-		"missing RecipientUserID":    map[string]any{"Succeeded": true},
-		"missing Succeeded":          map[string]any{"RecipientUserID": "user-smilesim-recipient-1"},
-		"empty RecipientUserID":      map[string]any{"RecipientUserID": "", "Succeeded": true},
-		"RecipientUserID wrong type": map[string]any{"RecipientUserID": 42, "Succeeded": true},
-		"Succeeded wrong type":       map[string]any{"RecipientUserID": "user-smilesim-recipient-1", "Succeeded": "yes"},
+		"missing ImageJobID":         map[string]any{"RecipientUserID": "user-smilesim-recipient-1", "Succeeded": true},
+		"empty ImageJobID":           map[string]any{"ImageJobID": "", "RecipientUserID": "user-smilesim-recipient-1", "Succeeded": true},
+		"ImageJobID wrong type":      map[string]any{"ImageJobID": 42, "RecipientUserID": "user-smilesim-recipient-1", "Succeeded": true},
+		"missing RecipientUserID":    map[string]any{"ImageJobID": "job-1", "Succeeded": true},
+		"missing Succeeded":          map[string]any{"ImageJobID": "job-1", "RecipientUserID": "user-smilesim-recipient-1"},
+		"empty RecipientUserID":      map[string]any{"ImageJobID": "job-1", "RecipientUserID": "", "Succeeded": true},
+		"RecipientUserID wrong type": map[string]any{"ImageJobID": "job-1", "RecipientUserID": 42, "Succeeded": true},
+		"Succeeded wrong type":       map[string]any{"ImageJobID": "job-1", "RecipientUserID": "user-smilesim-recipient-1", "Succeeded": "yes"},
 		"unmarshalable channel":      make(chan int),
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
-			recipientUserID, succeeded, ok := simulationCompletedFieldsFromPayload(payload)
+			recipientUserID, imageJobID, succeeded, ok := simulationCompletedFieldsFromPayload(payload)
 			if ok {
-				t.Fatalf("ok = true for %s, want false (recipientUserID=%q succeeded=%v)", name, recipientUserID, succeeded)
+				t.Fatalf("ok = true for %s, want false (recipientUserID=%q imageJobID=%q succeeded=%v)", name, recipientUserID, imageJobID, succeeded)
 			}
-			if recipientUserID != "" || succeeded {
-				t.Errorf("unreadable payload must return zero values, got recipientUserID=%q succeeded=%v", recipientUserID, succeeded)
+			if recipientUserID != "" || imageJobID != "" || succeeded {
+				t.Errorf("unreadable payload must return zero values, got recipientUserID=%q imageJobID=%q succeeded=%v", recipientUserID, imageJobID, succeeded)
 			}
 		})
 	}
