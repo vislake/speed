@@ -425,6 +425,23 @@ tier's green says only what that tier selected.
 | current-clinic-is-visible (one of three) | a self-service clinic is shown as a raw tenant id and named on no surface |
 | offered-channels-work | SMS cannot be configured in this demo, by decision |
 
+**What the deployment cannot answer.** The fly.io deployment has no
+image-provider configuration (`flyctl secrets list` shows no
+`APP_AI_GATEWAY_IMAGE_*` entry), so a generation there reaches for a
+vendor that is not configured and fails. Everything up to that point is
+verifiable on the deployment -- registration, sign-in, the clinic's own
+name, a case with its photograph, the smile and shade choices -- and
+everything from the generation onward is verifiable only locally, where
+the suite boots its own fake provider. Setting that configuration needs
+a real credential and is a decision outside this suite.
+
+That boundary is worth stating whenever a result is reported, because
+"verified" means different things on either side of it: the local runs
+prove the product's own code, and the deployment runs prove it survives
+being deployed. A claim that the core journey works end to end is only
+as strong as the environment it was walked in, and today the middle of
+that journey has been walked locally and not on the deployment.
+
 **Not gated at all, and why:**
 
 - **A generation that fails giving the credits back.** The fake vendor
