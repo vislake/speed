@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -48,8 +49,22 @@ type Service struct {
 	// bus carries the invalidation and audit events. Writes publish on it;
 	// Attach subscribes this Service's own handlers to it, so a replica
 	// converges on another replica's revoke through the same code path a
-	// local revoke takes.
+	// local revoke takes. It is also the bus audit.Emit publishes
+	// audit.event.recorded on (audit.go's emitAudit).
 	bus pkgcore.EventBus
+
+	// actions is the platform-wide audit-action registrar Attach read from
+	// the registry. emitAudit hands it to audit.Emit, whose first act is to
+	// refuse an action no module ever declared -- the emitted-never-declared
+	// direction of the register-vs-emit reconciliation audit_test.go pins.
+	actions pkgcore.AuditActionRegistrar
+
+	// queue is the jobs.Queue org-event reaps are enqueued on (the host's
+	// WithQueue), nil when none was wired. Nil selects the module's
+	// synchronous best-effort reaping inside the event delivery (reap.go);
+	// a wired queue moves the reaping into the reap tasks this Service's
+	// own handlers execute (reap_jobs.go).
+	queue jobs.Queue
 
 	// cacheTTL is the decision cache's anti-loss expiry, kept here because
 	// it is part of the Service's documented contract even though only the

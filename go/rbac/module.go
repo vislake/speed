@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/go/rbac/locales"
@@ -65,6 +66,11 @@ type Module struct {
 	// nil when the host wired none. See Service.subtree for what nil means.
 	subtree SubtreeResolver
 
+	// queue is the jobs.Queue the org-event reaps run through
+	// (WithQueue; nil when the host wired none -- see reap_jobs.go for
+	// what nil means for reaping).
+	queue jobs.Queue
+
 	// cacheTTL is the decision cache's anti-loss expiry (WithCacheTTL;
 	// default DefaultCacheTTL).
 	cacheTTL time.Duration
@@ -98,6 +104,27 @@ func WithCacheTTL(ttl time.Duration) Option {
 			m.cacheTTL = ttl
 		}
 	}
+}
+
+// WithQueue wires the jobs.Queue the org-event reaps run through: when the
+// module hears an org.member.removed or org.node.deleted event, the
+// subscriber enqueues the reaping as a task (reap_jobs.go) instead of
+// running it synchronously inside the event delivery, so a transient
+// database failure mid-reap is converged by the queue's own retries rather
+// than left to a redelivery neither published bus provides (P1-rbac-reap:
+// the depended-on side -- go/pkgcore's bus contract -- never redelivers).
+// The queue of a standalone host is jobs' StandaloneQueue; of a
+// distributed host, go/jobs/queue/asynq's Queue -- whichever the host's
+// own wiring chose.
+//
+// It is OPTIONAL. A host that wires none keeps the module's original
+// synchronous best-effort reaping inside the event delivery (reap.go),
+// with its per-binding failures logged and never retried -- the shape this
+// round moves away from, available only so that a host without a jobs
+// queue at all is not refused. The reference app, the module's mandatory
+// first consumer, wires its StandaloneQueue.
+func WithQueue(queue jobs.Queue) Option {
+	return func(m *Module) { m.queue = queue }
 }
 
 // NewModule returns a Module whose tables live in db. Constructing a
@@ -194,6 +221,8 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 		bindings:        NewRoleBindingRepository(m.db),
 		subtree:         m.subtree,
 		bus:             reg.Events.Bus(),
+		actions:         reg.AuditActions,
+		queue:           m.queue,
 		cacheTTL:        m.cacheTTL,
 		cache:           newGrantCache(m.cacheTTL),
 		now:             time.Now,
@@ -208,6 +237,33 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 	reg.Events.Subscribe(EventRoleBindingRevoked, svc.onRoleBindingChanged)
 	reg.Events.Subscribe(EventRoleBindingRestored, svc.onRoleBindingChanged)
 	reg.Events.Subscribe(EventRoleChanged, svc.onRoleChanged)
+
+	// The queue-backed reap handlers are registered here, in Attach, not in
+	// Register: they execute the reaping through the very Service this call
+	// builds, and nothing can enqueue a reap before the subscriptions below
+	// exist -- a host drains reg.Jobs.Handlers() onto its queue after
+	// Bootstrap AND after its Attach calls (the reference app does exactly
+	// that), so a handler registered here is on the queue before any org
+	// event can ever fire. A host that wires no queue (WithQueue absent)
+	// registers them all the same -- harmless, exactly like the sweep
+	// handler go/sharing registers whether or not its queue is wired -- and
+	// simply never enqueues.
+	//
+	// A duplicate registration is this module's own second replica: Attach
+	// runs once per MODULE instance, so two Service replicas attached to
+	// one registry (the module's multi-replica test shape -- one database,
+	// one bus, two Services) register the same two job types twice. The
+	// first replica's handlers are the ones the host drains, and they run
+	// the identical reaping code over the shared database, so the second
+	// registration is skipped rather than failing the replica's Attach.
+	// Any duplicate of a job type this module does not own is that error
+	// path's genuine meaning, and still fails here.
+	if err := reg.Jobs.Handle(taskTypeReapMember, memberReapTask{svc: svc}); err != nil && !errors.Is(err, pkgcore.ErrDuplicateJobType) {
+		return nil, err
+	}
+	if err := reg.Jobs.Handle(taskTypeReapNode, nodeReapTask{svc: svc}); err != nil && !errors.Is(err, pkgcore.ErrDuplicateJobType) {
+		return nil, err
+	}
 
 	// Four subscriptions are to foreign events org publishes, in two
 	// matched pairs (reap.go's own header comment has the full picture):

@@ -1540,6 +1540,16 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, org
 // whose memberships and grants mirror this same model. A real deployment
 // does neither: roles are seeded when a tenant is created and grants are
 // made by an administrator through the admin console.
+// demoSeedActorID is the audit Actor id this host's demo and platform-
+// staff seeds attribute their rbac role writes to (pkgcore.ActorTypeSystem):
+// rbac now emits an audit row for every role it defines or grants, and
+// boot-time seeding has no operator session behind it, so the row names
+// the seed itself -- the same "the write is a config-driven declaration
+// re-affirmed identically on every restart" attribution shape the app's
+// own boot-time ai-gateway credential write uses ("reference-app-boot" in
+// server.go).
+const demoSeedActorID = "reference-app-demo-seed"
+
 func seedDemoGrants(ctx context.Context, svc *rbac.Service, tenants map[string]pkgcore.TenantID) error {
 	seeded := make(map[pkgcore.TenantID]struct{}, len(tenants))
 	for _, tenantID := range tenants {
@@ -1550,13 +1560,19 @@ func seedDemoGrants(ctx context.Context, svc *rbac.Service, tenants map[string]p
 		seeded[tenantID] = struct{}{}
 
 		tenantCtx := pkgcore.WithTenant(ctx, tenantID)
-		if err := svc.EnsureBuiltinRoles(tenantCtx); err != nil {
+		// Every role this seed defines and grants is audited by rbac under
+		// the Actor this context carries: boot-time automation with no
+		// operator session, so the rows name the seed itself as a system
+		// actor (demoSeedActorID) rather than landing with a blank
+		// attribution.
+		seedCtx := pkgcore.WithActor(tenantCtx, pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: demoSeedActorID})
+		if err := svc.EnsureBuiltinRoles(seedCtx); err != nil {
 			return fmt.Errorf("reference-app: seed the built-in roles of %q: %w", tenantID, err)
 		}
-		if err := seedDemoReaderRole(tenantCtx, svc); err != nil {
+		if err := seedDemoReaderRole(seedCtx, svc); err != nil {
 			return fmt.Errorf("reference-app: seed the demo reader role of %q: %w", tenantID, err)
 		}
-		if err := seedDemoAIGatewayTenantWriterRole(tenantCtx, svc); err != nil {
+		if err := seedDemoAIGatewayTenantWriterRole(seedCtx, svc); err != nil {
 			return fmt.Errorf("reference-app: seed the demo ai-gateway tenant-writer role of %q: %w", tenantID, err)
 		}
 
@@ -1584,7 +1600,7 @@ func seedDemoGrants(ctx context.Context, svc *rbac.Service, tenants map[string]p
 			// A tenant-wide Scope: this example has no organization tree,
 			// so it wires no rbac.SubtreeResolver either, and a
 			// node-scoped grant would correctly be denied for want of one.
-			if err := svc.AssignRole(tenantCtx, sub, grant.roleKey, rbac.Scope{}); err != nil {
+			if err := svc.AssignRole(seedCtx, sub, grant.roleKey, rbac.Scope{}); err != nil {
 				return fmt.Errorf("reference-app: grant %q to %q in %q: %w", grant.roleKey, grant.userID, tenantID, err)
 			}
 		}

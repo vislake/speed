@@ -113,11 +113,14 @@ var auditActions = []string{
 // the fact carried is identical (this user, this role, this scope); only
 // the direction differs, and that is what the event Type says.
 //
-// Its first job is cache invalidation: TenantID and UserID together
-// address exactly the entry every replica must drop. Its second is the
-// audit trail a future compliance consumer builds by subscribing, which is
-// why the role KEY travels alongside the role id -- an audit record naming
-// only a UUID is unreadable once the role is gone.
+// Its job is cache invalidation: TenantID and UserID together address
+// exactly the entry every replica must drop, and the role KEY travels
+// alongside the role id so the announcement stays readable after the role
+// is gone. It is NOT the audit record of the grant -- that is the
+// explicit audit.Emit each write path performs (audit.go), which is what
+// an audit consumer reads; the event exists for convergence, and the
+// event stream is not a place a compliance reader should be expected to
+// reconstruct history from.
 type RoleBindingChangedEvent struct {
 	// TenantID owns the binding. It is the tenant the grant applies in,
 	// never the acting administrator's.
@@ -140,15 +143,19 @@ type RoleBindingChangedEvent struct {
 
 	// ActorUserID is the user id of the subject that performed the change,
 	// taken from ctx through SubjectFromContext when the host installed
-	// one, and empty otherwise.
+	// one, and empty otherwise. It is BEST-EFFORT on purpose -- rbac takes
+	// no actor parameter (see Authorizer.AssignRole) and cannot invent
+	// one.
 	//
-	// It is BEST-EFFORT on purpose. rbac takes no actor parameter (see
-	// Authorizer.AssignRole) and cannot invent one, and no audit-record
-	// persistence layer exists yet to demand it. When impersonation lands,
-	// this single field is not enough -- an impersonated action must record
-	// both the impersonated user and the real administrator -- which is
-	// tracked as this module's deferral D9 rather than papered over with a
-	// field that would be silently wrong.
+	// It is deliberately NOT the audit record of the change, and never was
+	// intended to be: the single user id cannot express the dual-identity
+	// shape an impersonation-era write must carry (root CLAUDE.md's hard
+	// rule), which is why the audit trail is produced separately, by
+	// audit.go's explicit emissions reading pkgcore.Actor and
+	// pkgcore.OnBehalfOf from ctx the same way every other module's
+	// emission does. The event's actor field stays the lightweight
+	// convergence hint it was -- a replica that only needs to invalidate
+	// one cache entry has no use for either full identity.
 	ActorUserID string
 
 	// ChangedAt is when the change was written.

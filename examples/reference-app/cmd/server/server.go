@@ -2198,7 +2198,21 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// makes is still tenant-wide (rbac.Scope{}) -- the wiring below is what
 	// makes a NARROWER grant (a role assigned with a real node id) mean
 	// something, for a host that wants one, not what makes one mandatory.
-	rbacModule := rbac.NewModule(db, rbac.WithSubtreeResolver(orgSubtreeResolver{scope: orgModule.Scope()}))
+	// WithQueue wires the host's standaloneQueue into rbac's org-event
+	// reaping (rbac.Module.WithQueue's own doc comment has the full
+	// shape): when this app removes a member or deletes an org node, the
+	// org-event subscriber ENQUEUES the reap of that member's or node's
+	// role bindings as a task on this same queue every other module's
+	// asynchronous work runs on, instead of running the reap
+	// synchronously inside the event delivery with no retry home -- the
+	// P1-rbac-reap fix this app is the mandatory consumer of. The task
+	// handlers land on reg.Jobs in rbac's own Attach, like every other
+	// module's declarations, by the time the drain loop below moves them
+	// onto the queue; the queue's retries are what converge a reap that
+	// hit a transient database failure.
+	rbacModule := rbac.NewModule(db,
+		rbac.WithSubtreeResolver(orgSubtreeResolver{scope: orgModule.Scope()}),
+		rbac.WithQueue(standaloneQueue))
 
 	// storageModule is the reference app's first consumer of go/storage.
 	// Its asynchronous work -- the thumbnail-derive task every completed

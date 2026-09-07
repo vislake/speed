@@ -364,8 +364,14 @@ func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID s
 		seeded[tenantID] = struct{}{}
 
 		tenantCtx := pkgcore.WithTenant(ctx, tenantID)
+		// The grant's audit Actor: this seed is boot-time automation, so
+		// the row names the seed (demoSeedActorID) as a system actor --
+		// rbac records every grant, and a host that hands it a bare
+		// tenant context would see every one of these land with a blank
+		// attribution.
+		seedCtx := pkgcore.WithActor(tenantCtx, pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: demoSeedActorID})
 
-		if err := addDemoOrgMembership(tenantCtx, orgModule, userID); err != nil {
+		if err := addDemoOrgMembership(seedCtx, orgModule, userID); err != nil {
 			return fmt.Errorf("reference-app: add demo account to org roster in %q: %w", tenantID, err)
 		}
 
@@ -373,7 +379,7 @@ func grantDemoSeedAccount(ctx context.Context, account demoSeedAccount, userID s
 		// A tenant-wide Scope, exactly as seedDemoGrants grants with:
 		// this example has no organization tree to scope roles to (only
 		// a bare root node, addDemoOrgMembership's own doc comment).
-		if err := svc.AssignRole(tenantCtx, sub, account.roleKey, rbac.Scope{}); err != nil {
+		if err := svc.AssignRole(seedCtx, sub, account.roleKey, rbac.Scope{}); err != nil {
 			return fmt.Errorf("reference-app: grant %q to demo account in %q: %w", account.roleKey, tenantID, err)
 		}
 	}

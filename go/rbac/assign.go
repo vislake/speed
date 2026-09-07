@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -127,6 +128,17 @@ func (s *Service) defineRole(ctx context.Context, def RoleDefinition, builtin bo
 		return nil, err
 	}
 
+	// The role now exists: the write committed, so the audit record of its
+	// definition fires regardless of what the announcement below does. Only
+	// a row actually created is recorded -- the duplicate race's loser and
+	// an already-seeded EnsureBuiltinRoles write nothing and record
+	// nothing.
+	s.emitAudit(ctx, audit.Input{
+		Action:   AuditActionRoleDefine,
+		Resource: audit.Resource{Type: auditResourceRole, ID: role.ID, DisplayName: role.Key},
+		Result:   audit.Result{Success: true},
+	})
+
 	if err := s.publishRoleChanged(ctx, tenant, role, permissions); err != nil {
 		return nil, err
 	}
@@ -187,6 +199,17 @@ func (s *Service) AssignRole(ctx context.Context, sub Subject, role string, scop
 		}
 		return ErrStorage.WithCause(err)
 	}
+
+	// The grant now exists: the write committed, so the audit record of
+	// the assignment fires regardless of what the announcement below does.
+	// Only a row actually created is recorded -- an assign that found its
+	// grant already there writes nothing and records nothing.
+	s.emitAudit(writeCtx, audit.Input{
+		Action:   AuditActionRoleAssign,
+		Resource: audit.Resource{Type: auditResourceRole, ID: def.ID, DisplayName: def.Key},
+		Result:   audit.Result{Success: true},
+		Changes:  bindingAuditDiff(sub.UserID, scope.NodeID),
+	})
 	return s.publishBindingChanged(ctx, EventRoleBindingAssigned, sub, def, scope)
 }
 
@@ -243,6 +266,17 @@ func (s *Service) RevokeRole(ctx context.Context, sub Subject, role string, scop
 		}
 		return ErrStorage.WithCause(err)
 	}
+
+	// The revocation now holds: the write committed, so the audit record
+	// fires regardless of what the announcement below does. Only a revoke
+	// that actually withdrew a row is recorded -- the not-found race above
+	// writes nothing and records nothing.
+	s.emitAudit(writeCtx, audit.Input{
+		Action:   AuditActionRoleRevoke,
+		Resource: audit.Resource{Type: auditResourceRole, ID: def.ID, DisplayName: def.Key},
+		Result:   audit.Result{Success: true},
+		Changes:  bindingAuditDiff(sub.UserID, scope.NodeID),
+	})
 	return s.publishBindingChanged(ctx, EventRoleBindingRevoked, sub, def, scope)
 }
 
@@ -368,6 +402,23 @@ func (s *Service) RestoreRole(ctx context.Context, sub Subject, role string, sco
 		}
 		return ErrStorage.WithCause(err)
 	}
+
+	// The grant is live again: the write committed, so the audit record of
+	// the restoration fires regardless of what the announcement below does.
+	// The action vocabulary has no restore of its own (events.go declares
+	// exactly the three present-tense verbs define/assign/revoke), and
+	// RestoreRole's own documented semantics are AssignRole's -- "its whole
+	// job is to make a grant exist, exactly like AssignRole's" -- so the
+	// row records the restoration under the assign action; the resource
+	// names the role and the diff names the (user, node) tuple, which is
+	// the whole of what a reader needs to tell a restoration from a fresh
+	// insert at the same tuple.
+	s.emitAudit(writeCtx, audit.Input{
+		Action:   AuditActionRoleAssign,
+		Resource: audit.Resource{Type: auditResourceRole, ID: def.ID, DisplayName: def.Key},
+		Result:   audit.Result{Success: true},
+		Changes:  bindingAuditDiff(sub.UserID, scope.NodeID),
+	})
 	return s.publishBindingChanged(ctx, EventRoleBindingRestored, sub, def, scope)
 }
 

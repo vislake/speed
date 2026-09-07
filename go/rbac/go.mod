@@ -6,6 +6,8 @@ replace github.com/vislake/speed/go/pkgcore => ../pkgcore
 
 replace github.com/vislake/speed/go/dbkit => ../dbkit
 
+replace github.com/vislake/speed/go/jobs => ../jobs
+
 replace github.com/vislake/speed/go/observability => ../observability
 
 replace github.com/vislake/speed/go/tenancy => ../tenancy
@@ -17,6 +19,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/redis v0.44.0
 	github.com/vislake/speed/go/dbkit v0.0.0-00010101000000-000000000000
+	github.com/vislake/speed/go/jobs v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/observability v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
@@ -25,6 +28,7 @@ require (
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
+	filippo.io/edwards25519 v1.1.1 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
@@ -48,6 +52,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
+	github.com/go-sql-driver/mysql v1.8.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.10.0 // indirect
@@ -94,6 +99,8 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	gorm.io/datatypes v1.2.7 // indirect
+	gorm.io/driver/mysql v1.5.6 // indirect
 	gorm.io/driver/postgres v1.6.2 // indirect
 	modernc.org/libc v1.22.5 // indirect
 	modernc.org/mathutil v1.5.0 // indirect

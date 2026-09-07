@@ -547,10 +547,20 @@ func (p *selfServiceProvisioner) provision(ctx context.Context, userID string, c
 	// uses. EnsureBuiltinRoles reconciles rather than recreates, and
 	// AssignRole is a no-op when the binding is already there, so both
 	// are safe to repeat on a redelivery.
-	if err := p.rbacService.EnsureBuiltinRoles(tenantCtx); err != nil {
+	//
+	// Both writes carry the registering user as the audit Actor: rbac now
+	// emits an audit row for every role it defines or grants (its
+	// role-management audit round), and this host is the layer that knows
+	// who the caller is -- the user whose self-registration created the
+	// clinic -- so the attribution is layered HERE, the same way this
+	// app's notes handler layers the creator before its own audit.Emit
+	// call. A host that grants roles without layering an actor would
+	// record every such grant with a blank attribution.
+	registrantCtx := pkgcore.WithActor(tenantCtx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: userID})
+	if err := p.rbacService.EnsureBuiltinRoles(registrantCtx); err != nil {
 		return fmt.Errorf("reference-app: ensure the clinic's built-in roles: %w", err)
 	}
-	if err := p.rbacService.AssignRole(tenantCtx, rbac.Subject{TenantID: clinic, UserID: userID}, rbac.BuiltinRoleOwner, rbac.Scope{}); err != nil {
+	if err := p.rbacService.AssignRole(registrantCtx, rbac.Subject{TenantID: clinic, UserID: userID}, rbac.BuiltinRoleOwner, rbac.Scope{}); err != nil {
 		return fmt.Errorf("reference-app: grant the clinic owner role: %w", err)
 	}
 

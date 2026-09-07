@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"gorm.io/gorm"
@@ -117,10 +118,18 @@ import (
 // enumerated binding BY ID and resolves its role once per distinct role
 // per pass, where the public RevokeRole -- which takes a subject, a role
 // key and a scope and re-resolves both -- would cost one full
-// read-modify-delete cycle per binding. The two reaps run synchronously
-// inside org's own request (the in-memory bus delivers in-process), so
-// that per-binding overhead is what a many-binding cascade would otherwise
-// drag into org's single HTTP DELETE.
+// read-modify-delete cycle per binding. Where the loop RUNS depends on the
+// host's wiring: on a host with a jobs queue (Module.WithQueue) each reap
+// is a queue task the queue retries until it converges (reap_jobs.go); on
+// a host without one the reaps run synchronously inside org's own request
+// (the in-memory bus delivers in-process) -- where that per-binding
+// overhead is what a many-binding cascade would otherwise drag into org's
+// single HTTP DELETE -- with failures logged and never retried. The
+// restore-side handlers (onMemberRestored, onNodeRestored) always run
+// synchronously inside org's restore request, whichever side the reaps run
+// on: their re-instating must stay ordered behind the events' own delivery
+// (see reap_jobs.go's ordering note), and a restore request is not where a
+// per-binding overhead belongs anyway.
 //
 // See onMemberRemoved's, onNodeDeleted's, onMemberRestored's and
 // onNodeRestored's own doc comments for each handler's resilience
@@ -193,6 +202,44 @@ func memberUserIDFromPayload(payload any) (string, bool) {
 	return "", false
 }
 
+// membershipIDKeys are the field spellings rbac accepts for the membership
+// id inside an org.member.removed payload (MemberRemoved.MembershipID),
+// probed in order like memberUserIDKeys. It is read only so the
+// queue-backed reap task can key itself on the removal INSTANCE (reap_
+// jobs.go's memberReapKey): one user's successive removals are distinct
+// membership instances, and distinct keys keep their reaps distinct.
+var membershipIDKeys = []string{"membership_id", "membershipId", "MembershipID"}
+
+// membershipIDFromPayload extracts the membership id from an
+// org.member.removed payload of any shape, by the identical JSON
+// round-trip probe memberUserIDFromPayload performs. It reports ok=false
+// for every unusable shape; the caller (onMemberRemoved) treats an absent
+// id as a key fallback to the user id, never as an error.
+func membershipIDFromPayload(payload any) (string, bool) {
+	if payload == nil {
+		return "", false
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", false
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return "", false
+	}
+	for _, key := range membershipIDKeys {
+		value, ok := fields[key]
+		if !ok {
+			continue
+		}
+		id, ok := value.(string)
+		if ok && id != "" {
+			return id, true
+		}
+	}
+	return "", false
+}
+
 // onMemberRemoved is the subscriber Attach installs for org's
 // org.member.removed event: it reaps every role binding the removed member
 // still holds in the tenant the removal happened in.
@@ -223,10 +270,11 @@ func memberUserIDFromPayload(payload any) (string, bool) {
 //     event (pkgcore.WithTenant) because a handler invoked by the
 //     distributed mode's bus runs on a context that carries none, and
 //     every Repository call would otherwise fail closed. Then the
-//     member's live bindings are revoked one by one and her still-revoked
-//     node-reaped rows are claimed (see reapRoleBindings); see
-//     revokeReapedBindings for why the failures inside that pass are
-//     logged and continued rather than returned.
+//     reaping happens one of two ways, depending on whether the host
+//     wired a jobs queue (Module.WithQueue -- see reap_jobs.go's header
+//     comment for the full shape): with a queue, the reap is ENQUEUED as
+//     a task and its failures are the queue's to retry; without one, it
+//     runs synchronously here, its failures logged and never retried.
 //
 // The handler never returns an error. On the in-memory bus it runs
 // synchronously inside org's Remove call, after org's transaction has
@@ -246,7 +294,23 @@ func (s *Service) onMemberRemoved(ctx context.Context, evt pkgcore.Event) error 
 	}
 
 	ctx = pkgcore.WithTenant(ctx, evt.TenantID)
-	s.reapRoleBindings(ctx, evt, userID)
+	if s.queue != nil {
+		membershipID, _ := membershipIDFromPayload(evt.Payload)
+		if err := s.enqueueMemberReap(ctx, evt.TenantID, userID, membershipID); err != nil {
+			observability.FromContext(ctx).Warn("rbac could not enqueue a removed member's reaping; the removal's bindings may stay live",
+				"event_type", evt.Type, "user_id", userID, "error", err)
+		}
+		return nil
+	}
+	if err := s.reapRoleBindings(ctx, evt, userID); err != nil {
+		// The synchronous fallback for a host that wired no queue: one
+		// aggregate log line for whatever the reap could not complete,
+		// instead of the per-binding lines the pass used to emit. Nothing
+		// retries it -- that is exactly what wiring a queue buys (see
+		// reap_jobs.go's header comment).
+		observability.FromContext(ctx).Warn("rbac could not fully reap a removed member's role bindings",
+			"event_type", evt.Type, "user_id", userID, "error", err)
+	}
 	return nil
 }
 
@@ -275,27 +339,32 @@ func (s *Service) onMemberRemoved(ctx context.Context, evt pkgcore.Event) error 
 // comment for why each binding is withdrawn by id rather than through the
 // public RevokeRole and what that keeps and what it skips).
 //
-// Both effects fail independently and neither aborts the other: a reap
-// that revoked the live bindings but could not claim, or claimed but could
-// not revoke, logs what it could not do at Warn and moves on, exactly as
-// revokeReapedBindings treats its own per-binding failures -- a redelivery
-// is the backstop for the revokes, and the claim's own UPDATE is
-// idempotent under one. The claim runs FIRST and unconditionally because
-// it does not depend on the live-row enumeration at all: it targets rows
-// that are already revoked, and a failure to enumerate the live ones must
-// not also skip the claim.
-func (s *Service) reapRoleBindings(ctx context.Context, evt pkgcore.Event, userID string) {
-	log := observability.FromContext(ctx)
+// Both effects fail independently and neither aborts the other: the claim
+// runs FIRST and unconditionally because it does not depend on the
+// live-row enumeration at all -- it targets rows that are already revoked,
+// and a failure to enumerate the live ones must not also skip the claim --
+// and every failure anywhere in the pass is returned as one joined error
+// for the CALLER to handle, never silently dropped. The caller is either
+// onMemberRemoved's no-queue fallback (logs the joined error at Warn and
+// moves on, the pre-queue behavior) or the queue-backed reap task
+// (memberReapTask, which returns it so the queue retries the reap -- the
+// retry home the old design's redelivery backstop never was; see
+// reap_jobs.go's header comment). The claim's own UPDATE is idempotent, so
+// a retry that reaches it again rewrites nothing.
+func (s *Service) reapRoleBindings(ctx context.Context, evt pkgcore.Event, userID string) error {
+	var errs []error
 
-	s.claimNodeReapedBindings(ctx, evt, userID)
+	if err := s.claimNodeReapedBindings(ctx, evt, userID); err != nil {
+		errs = append(errs, err)
+	}
 
 	bindings, err := s.bindings.ByUser(ctx, userID)
 	if err != nil {
-		log.Warn("rbac could not enumerate a removed member's role bindings",
-			"event_type", evt.Type, "user_id", userID, "error", err)
-		return
+		errs = append(errs, fmt.Errorf("enumerating the removed member's role bindings: %w", err))
+		return errors.Join(errs...)
 	}
-	s.revokeReapedBindings(ctx, evt, bindings, revokeOriginMemberRemoval)
+	errs = append(errs, s.revokeReapedBindings(ctx, evt, bindings, revokeOriginMemberRemoval)...)
+	return errors.Join(errs...)
 }
 
 // claimNodeReapedBindings runs the member-removal reap's claim step:
@@ -317,15 +386,20 @@ func (s *Service) reapRoleBindings(ctx context.Context, evt pkgcore.Event, userI
 // may ever resurrect them, so there is nothing for the claim to do. The
 // step writes no row state beyond the marker -- no decision changes, no
 // event is published, and the durable re-attribution alone is what the
-// later node-restored handler reads -- which is also why a redelivery of
-// this same removal event finds nothing left to claim and rewrites nothing
-// (the reap stays idempotent).
-func (s *Service) claimNodeReapedBindings(ctx context.Context, evt pkgcore.Event, userID string) {
-	log := observability.FromContext(ctx)
+// later node-restored handler reads -- which is also why a re-run of this
+// same removal's reap finds nothing left to claim and rewrites nothing
+// (the reap stays idempotent under the queue's retries).
+//
+// The error is returned, after a Warn log, for reapRoleBindings to join
+// into its aggregate: a claim that fails is a re-attribution that did not
+// happen, and the queue must retry it exactly like a failed revoke.
+func (s *Service) claimNodeReapedBindings(ctx context.Context, evt pkgcore.Event, userID string) error {
 	if err := s.bindings.claimByUser(ctx, userID); err != nil {
-		log.Warn("rbac could not claim a removed member's node-reaped role bindings",
+		observability.FromContext(ctx).Warn("rbac could not claim a removed member's node-reaped role bindings",
 			"event_type", evt.Type, "user_id", userID, "error", err)
+		return fmt.Errorf("claiming the removed member's node-reaped role bindings: %w", err)
 	}
+	return nil
 }
 
 // eventNodeDeleted is org's org.node.deleted event, the string rbac
@@ -415,9 +489,10 @@ func nodeDeletedIDsFromPayload(payload any) ([]string, bool) {
 //
 //  4. The event carries a tenant and a non-empty id set. The tenant
 //     context is rebuilt from the event for the same reason
-//     onMemberRemoved's does, and every binding scoped to any of the
-//     deleted ids is revoked; see revokeReapedBindings for why failures
-//     inside that pass are logged and continued rather than returned.
+//     onMemberRemoved's does, and the reaping happens the same two ways
+//     that subscriber's does: enqueued as a task when the host wired a
+//     jobs queue, run synchronously (failures logged, never retried)
+//     otherwise.
 //
 // The handler never returns an error, for the same reason onMemberRemoved's
 // does not: on the in-memory bus it runs synchronously inside org's Delete
@@ -438,7 +513,19 @@ func (s *Service) onNodeDeleted(ctx context.Context, evt pkgcore.Event) error {
 	}
 
 	ctx = pkgcore.WithTenant(ctx, evt.TenantID)
-	s.reapRoleBindingsForNodes(ctx, evt, nodeIDs)
+	if s.queue != nil {
+		if err := s.enqueueNodeReap(ctx, evt.TenantID, nodeIDs); err != nil {
+			observability.FromContext(ctx).Warn("rbac could not enqueue the reaping of bindings scoped to deleted nodes; they may stay live",
+				"event_type", evt.Type, "error", err)
+		}
+		return nil
+	}
+	if err := s.reapRoleBindingsForNodes(ctx, evt, nodeIDs); err != nil {
+		// The synchronous fallback for a host that wired no queue; see
+		// onMemberRemoved's identical call for the shape.
+		observability.FromContext(ctx).Warn("rbac could not fully reap the bindings scoped to deleted nodes",
+			"event_type", evt.Type, "error", err)
+	}
 	return nil
 }
 
@@ -458,16 +545,17 @@ func (s *Service) onNodeDeleted(ctx context.Context, evt pkgcore.Event) error {
 // -- a single event for a cascade can carry many ids, and this runs one
 // enumeration and one revoke loop over all of them, never one handler
 // invocation per node.
-func (s *Service) reapRoleBindingsForNodes(ctx context.Context, evt pkgcore.Event, nodeIDs []string) {
-	log := observability.FromContext(ctx)
-
+//
+// It returns the joined error of everything the pass could not complete
+// (see reapRoleBindings for the caller contract); the enumeration failure
+// is the one whole-pass case and returns immediately, with the failures of
+// the revoke pass joined on top of it.
+func (s *Service) reapRoleBindingsForNodes(ctx context.Context, evt pkgcore.Event, nodeIDs []string) error {
 	bindings, err := s.bindings.ByNodes(ctx, nodeIDs)
 	if err != nil {
-		log.Warn("rbac could not enumerate bindings scoped to deleted nodes",
-			"event_type", evt.Type, "error", err)
-		return
+		return fmt.Errorf("enumerating bindings scoped to the deleted nodes: %w", err)
 	}
-	s.revokeReapedBindings(ctx, evt, bindings, revokeOriginNodeDeletion)
+	return errors.Join(s.revokeReapedBindings(ctx, evt, bindings, revokeOriginNodeDeletion)...)
 }
 
 // revokeReapedBindings withdraws every live binding in bindings -- the rows
@@ -493,33 +581,43 @@ func (s *Service) reapRoleBindingsForNodes(ctx context.Context, evt pkgcore.Even
 // enumerated. Each binding is therefore deleted BY ID, and the role it
 // names is resolved once per DISTINCT role per pass rather than once per
 // binding. That is the cost shape this module's performance contract
-// needs: the two reaps run synchronously inside org's own request (the
-// in-memory bus delivers in-process), and a many-binding cascade must not
-// drag org's single HTTP DELETE through one full read-modify-delete cycle
-// per binding -- measured, not timed, by the reap statement-counting
-// regression in reap_test.go.
+// needs -- measured, not timed, by the reap statement-counting regression
+// in reap_test.go.
 //
-// A binding whose role cannot be resolved is left in place. Roles have no
-// delete path in this module, so an unresolvable role is an anomaly worth
-// a Warn rather than a crash -- reported once per binding that names it,
-// exactly as the per-binding resolution the reaps performed before
-// reported it.
+// # Failure semantics: retryable failures travel, the pass never aborts
 //
-// The pass never aborts on a failure, for the reason the reaps'
-// enumeration-side comments give: a delivery that reaped some bindings and
-// not others has done real work, and surfacing an error would make org's
-// committed removal or delete look failed. Each failure is logged at Warn
-// and the pass moves on; the residual bindings keep the tenant's own
-// subsequent revokes (or a re-delivery, which finds nothing left to do --
-// the reap is idempotent because both enumerations only return live rows)
-// as their backstop. The one classified case is the delete's
+// The pass never aborts on a failure: a reap that withdrew nine of ten
+// bindings has done real work, and the remaining one is exactly what a
+// retry exists to converge. Every failure that a retry could fix -- a
+// binding whose role could not be resolved, a delete that failed -- is
+// therefore RETURNED as one entry of the caller's joined error, per
+// binding and naming the row, so the caller can retry the whole reap: a
+// re-run re-enumerates live rows only (both enumerations return live rows
+// alone, which is what keeps the reap idempotent under the queue's
+// retries), so the bindings this pass already withdrew are gone from the
+// next attempt's enumeration and the failed ones come around again. The
+// queue-backed caller (memberReapTask / nodeReapTask) returns the joined
+// error to the queue, which retries the task; the synchronous fallback
+// logs it and moves on. A binding whose role cannot be resolved is left in
+// place and its failure is returned too: roles have no delete path in this
+// module, so an unresolvable role is an anomaly -- a row that grants
+// nothing -- and a reap that dead-letters over it is the standing alert
+// that anomaly deserves.
+//
+// Two outcomes are classified silent, never failures: the delete's
 // ErrRecordNotFound -- a concurrent administrator revoke already withdrew
 // the binding between the enumeration and this delete, exactly the
-// caller's goal, so it is not even worth a log line (the identical
-// classification RevokeRole gives its own delete's zero-rows outcome).
-func (s *Service) revokeReapedBindings(ctx context.Context, evt pkgcore.Event, bindings []RoleBinding, origin string) {
+// caller's goal, so there is nothing left for this pass to do (the
+// identical classification RevokeRole gives its own delete's zero-rows
+// outcome) -- and a failed EventRoleBindingRevoked ANNOUNCEMENT, which is
+// logged at Warn and not returned: the row is already revoked, so a retry
+// would re-enumerate nothing and could never re-announce it, and the
+// replicas' stale decisions are covered by the anti-loss TTL exactly as a
+// manual revoke's own publish failure is.
+func (s *Service) revokeReapedBindings(ctx context.Context, evt pkgcore.Event, bindings []RoleBinding, origin string) []error {
 	log := observability.FromContext(ctx)
 
+	var errs []error
 	resolvedRoles := make(map[string]*Role, len(bindings))
 	for _, binding := range bindings {
 		role, ok := resolvedRoles[binding.RoleID]
@@ -530,6 +628,7 @@ func (s *Service) revokeReapedBindings(ctx context.Context, evt pkgcore.Event, b
 				log.Warn("rbac could not resolve a reaped binding's role",
 					"event_type", evt.Type, "user_id", binding.UserID, "node_id", binding.NodeID,
 					"role_id", binding.RoleID, "error", err)
+				errs = append(errs, fmt.Errorf("binding %s (role %s) has no resolvable role: %w", binding.ID, binding.RoleID, err))
 				continue
 			}
 			resolvedRoles[binding.RoleID] = role
@@ -542,6 +641,8 @@ func (s *Service) revokeReapedBindings(ctx context.Context, evt pkgcore.Event, b
 			log.Warn("rbac could not revoke a reaped role binding",
 				"event_type", evt.Type, "node_id", binding.NodeID, "user_id", binding.UserID,
 				"role", role.Key, "error", err)
+			errs = append(errs, fmt.Errorf("revoking binding %s (%s, %s at node %s): %w",
+				binding.ID, binding.UserID, role.Key, binding.NodeID, err))
 			continue
 		}
 		sub := Subject{TenantID: evt.TenantID, UserID: binding.UserID}
@@ -551,6 +652,7 @@ func (s *Service) revokeReapedBindings(ctx context.Context, evt pkgcore.Event, b
 				"role", role.Key, "error", err)
 		}
 	}
+	return errs
 }
 
 // onMemberRestored is the subscriber Attach installs for org's
@@ -991,10 +1093,12 @@ func (s *Service) reinstateReapedBindings(ctx context.Context, evt pkgcore.Event
 //     unknown, and the re-instatement fails closed -- the row stays
 //     revoked under the member-removal origin, never re-attributed
 //     (without an answer the code must not presume the node dead and hand
-//     the row to an event that may never fire). A later delivery of the
-//     same restore event, or the member's next removal-and-restore cycle
-//     (whose claim rewrites the origin), re-checks it. Logged at Warn
-//     with the reason.
+//     the row to an event that may never fire). Nothing re-checks it on
+//     its own: neither bus redelivers the restore event (see reap_jobs.go's
+//     header comment), so the re-check happens on the member's NEXT
+//     removal-and-restore cycle, whose re-instatement pass runs this same
+//     gate again -- or on the node's own deletion-and-restore cycle if the
+//     row is re-claimed meanwhile. Logged at Warn with the reason.
 //
 // ctx is the event-tenant context onMemberRestored rebuilt, so the
 // resolver is asked under the tenant whose bindings are being
