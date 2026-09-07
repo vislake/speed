@@ -15,15 +15,21 @@
  * it never promises that verification will not be asked again, because
  * the elevation lives only in that access token's lifetime).
  *
- * Failure answers resolve through the code whitelist: a wrong code
- * (authn.mfa_invalid_code, collapsed with replay and unknown-recovery-
- * code answers on the server side) renders as a field-level error and
- * stays retryable; every other reachable code -- authn.rate_limited,
- * the session-lifecycle family, authn.mfa_not_enrolled, the client.*
- * transport codes -- renders its code text above the field through the
- * InlineError banner, never a raw key and never an API message. The
- * dialog never signs in and never navigates: a dead session shows its
- * code text and the host's session gate converges.
+ * Failure answers resolve through the code whitelist. The server splits
+ * spent codes from wrong ones: a code that was never valid
+ * (authn.mfa_invalid_code -- a wrong TOTP code, or a recovery code no
+ * issued row matches) renders as a field-level error and stays
+ * retryable; a code that WAS valid but is consumed (authn.mfa_code_used
+ * -- the replay guard already advanced past its step, or its
+ * recovery-code row is marked used) renders its code text above the
+ * field through the InlineError banner, the field is cleared, and the
+ * dialog asks for a fresh code -- the spent code itself is never
+ * retryable, and never called invalid. Every other reachable code --
+ * authn.rate_limited, the session-lifecycle family, authn.mfa_not_enrolled,
+ * the client.* transport codes -- renders its code text above the field
+ * through the InlineError banner too, never a raw key and never an API
+ * message. The dialog never signs in and never navigates: a dead session
+ * shows its code text and the host's session gate converges.
  *
  * While a verification is in flight the field, the verify button and the
  * cancel affordance (button, Escape, backdrop) are all disabled, so an
@@ -34,15 +40,17 @@
  * step-up -- or a tenant switch -- committed to the session while this
  * code was in flight) answers with auth-core's
  * OperationSupersededError: the submitted code genuinely verified
- * server-side, but the elevation never landed -- the winner's session
- * stands without it, and the losing pair was never applied. That is
- * neither a failure nor a success: no error renders (collapsing to
- * client.unknown would call the verified code a failure), and no
- * onSuccess fires (re-running the gated operation under an elevation
- * that does not exist would only draw a fresh 403 from the server).
- * The dialog stays open with the code intact and the attempt
- * retryable: with the race settled, the next submit verifies for
- * real.
+ * server-side -- which is exactly why it is now SPENT, its single-use
+ * guard consumed by this very 2xx -- but the elevation never landed:
+ * the winner's session stands without it, and the losing pair was never
+ * applied. No onSuccess fires (re-running the gated operation under an
+ * elevation that does not exist would only draw a fresh 403 from the
+ * server). The dialog renders the same used-code text a re-submitted
+ * consumed code draws and clears the field: the attempt is NOT
+ * retryable with the same code -- the next submit can only verify with
+ * a fresh one. (Pre-fix, the dialog stayed silent and told the caller
+ * the code was intact and retryable; the code was in fact consumed, and
+ * the ensuing re-submit drew the invalid-code answer forever.)
  */
 
 import { useEffect, useId, useState } from 'react'
@@ -129,15 +137,29 @@ export function StepUpChallenge({
     } catch (error) {
       if (isOperationSuperseded(error)) {
         // This verification lost a concurrent-operation race (see the
-        // file header): the code verified server-side but the
-        // elevation never landed. Neither failure nor success -- no
-        // error text, no onSuccess; the dialog stays open and the
-        // attempt is retryable.
+        // file header): the code verified server-side -- and is
+        // therefore spent -- but the elevation never landed. The code
+        // is never retryable: render the used-code answer, clear the
+        // field and ask for a fresh code. No onSuccess: re-running the
+        // gated operation under an elevation that does not exist would
+        // only draw a fresh 403 from the server.
+        setCode('')
+        setBanner('authn.mfa_code_used')
         return
       }
       const failure = errorCodeOf(error)
       if (failure === 'authn.mfa_invalid_code') {
+        // A never-valid code: wrong, or no issued row matches. The
+        // attempt is retryable with a fresh code -- the field error
+        // stays, the typed code stays for editing.
         setFieldError(failure)
+      } else if (failure === 'authn.mfa_code_used') {
+        // A code that was valid and is spent: its single-use guard
+        // already consumed it, so it can never verify again. Clear the
+        // field and render the used-code answer -- never "invalid",
+        // never retryable-with-this-code.
+        setCode('')
+        setBanner(failure)
       } else {
         setBanner(failure)
       }

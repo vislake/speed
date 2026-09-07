@@ -7,10 +7,15 @@
  * exactly once; cancel (button, Escape, backdrop) fires onCancel and
  * nothing else while nothing is in flight, and an in-flight verification
  * cannot be cancelled at all. Failure answers resolve through the code
- * whitelist: authn.mfa_invalid_code renders as the field's helper text
- * and stays retryable; every other reachable code (rate_limited,
- * mfa_not_enrolled, the session family) renders its code text in the
- * banner. Re-opening resets every piece of per-attempt state. Every
+ * whitelist: authn.mfa_invalid_code (a never-valid code) renders as the
+ * field's helper text and stays retryable; authn.mfa_code_used (a code
+ * that was valid and is spent) renders its used-code text in the banner
+ * and clears the field -- never "invalid", never retryable with the same
+ * code; a superseded verification, whose code verified server-side and
+ * is therefore spent, renders the same used-code answer; every other
+ * reachable code (rate_limited, mfa_not_enrolled, the session family)
+ * renders its code text in the banner. Re-opening resets every piece of
+ * per-attempt state. Every
  * scenario ends with an axe pass.
  */
 
@@ -497,17 +502,20 @@ describe('StepUpChallenge', () => {
     await expectNoAxeViolations()
   })
 
-  it('treat a superseded verification as the lost race it is: no error, no onSuccess, retryable', async () => {
+  it('tell a superseded verification its code was used: banner, cleared field, never retryable-with-the-same-code', async () => {
     // A tenant switch committing through the same session while the
     // code is in flight makes auth-core reject the verification with
     // OperationSupersededError when its answer arrives: the code
-    // verified server-side but the elevation never landed -- the
-    // winner's session stands without it. The dialog must not render
-    // the client.unknown collapse (that would call a verified code a
-    // failure) and must not fire onSuccess (re-running the gated
-    // operation under an elevation that does not exist would only draw
-    // a fresh 403). The dialog stays open with the code intact: with
-    // the race settled, the next submit verifies for real.
+    // verified server-side -- and is therefore SPENT, its single-use
+    // guard consumed by that very 2xx -- but the elevation never
+    // landed: the winner's session stands without it. The dialog must
+    // not fire onSuccess (re-running the gated operation under an
+    // elevation that does not exist would only draw a fresh 403) and
+    // must not tell the caller the code is intact and retryable (a
+    // re-submit of the same code would draw the server's used-code
+    // refusal forever -- the bug this regression pins). It renders the
+    // used-code answer, clears the field, and only a FRESH code can
+    // verify.
     let releaseVerify: () => void = () => undefined
     const verifyGate = new Promise<void>((resolve) => {
       releaseVerify = resolve
@@ -516,9 +524,13 @@ describe('StepUpChallenge', () => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, makePair())
       }
+      if (call.method === 'POST' && call.path === REFRESH_PATH) {
+        return jsonResponse(200, makePair())
+      }
       if (call.method === 'POST' && call.path === STEP_UP_PATH) {
-        await verifyGate
-        return jsonResponse(200, STEP_UP_BODY)
+        // The first answer is the superseded 2xx; a re-submission of
+        // the spent code would answer the server's used-code refusal.
+        return verifyGate.then(() => jsonResponse(200, STEP_UP_BODY))
       }
       if (call.method === 'POST' && call.path === '/api/v1/authn/tenant/switch') {
         return jsonResponse(
@@ -568,19 +580,109 @@ describe('StepUpChallenge', () => {
     await rig.session.switchTenant('tenant-2')
     expect(rig.store.get()).toBe('access-switched')
     releaseVerify()
-    await waitFor(() => expect(verifyButtons().confirm).toBeEnabled())
-    // The lost race rendered nothing: no banner, no field error, no
-    // onSuccess, and the switch's session stands untouched.
-    expect(screen.queryByRole('alert')).toBeNull()
-    expect(screen.queryByText(zhCN.errors.authn.mfa_invalid_code)).toBeNull()
+    // The lost race surfaces the used-code answer: the code verified
+    // server-side and is spent. The banner names it used -- never
+    // "invalid" -- and the field is cleared so the spent code cannot be
+    // re-submitted.
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toBe(
+        zhCN.errors.authn.mfa_code_used,
+      ),
+    )
+    expect(
+      screen.queryByText(zhCN.errors.authn.mfa_invalid_code),
+    ).toBeNull()
+    const input = screen.getByLabelText(
+      zhCN.mfa.stepUp.codeLabel,
+    ) as HTMLInputElement
+    expect(input.value).toBe('')
     expect(successCount).toBe(0)
     expect(cancelCount).toBe(0)
     expect(rig.store.get()).toBe('access-switched')
-    // With the race settled, the same code verifies for real on the
-    // next submit.
+    // A FRESH code verifies for real on the next submit.
+    await userEvent.type(
+      screen.getByLabelText(zhCN.mfa.stepUp.codeLabel),
+      '654321',
+    )
     await userEvent.click(verifyButtons().confirm)
     await waitFor(() => expect(successCount).toBe(1))
     expect(screen.queryByRole('alert')).toBeNull()
+
+    await expectNoAxeViolations()
+  })
+
+  it('answer a consumed code with the used-code banner, clearing the field and never calling it invalid', async () => {
+    // Regression (a)'s UI half: a code the server's single-use guard
+    // already consumed (the code verified once and is re-submitted) is
+    // refused with authn.mfa_code_used. The dialog must render that
+    // distinct answer as its own text -- the code is used, enter a
+    // fresh one -- never the invalid-code text and never a retryable
+    // claim over the spent code.
+    let stepUpAttempts = 0
+    let refreshCount = 0
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'POST' && call.path === REFRESH_PATH) {
+        refreshCount += 1
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'POST' && call.path === STEP_UP_PATH) {
+        stepUpAttempts += 1
+        // The used-code refusal is answered twice: the 401-refresh leg
+        // re-sends the same request once, and the server refuses it
+        // again -- the spent code stays refused.
+        if (stepUpAttempts <= 2) {
+          return errorResponse(401, 'authn.mfa_code_used')
+        }
+        return jsonResponse(200, STEP_UP_BODY)
+      }
+      return errorResponse(500, 'internal')
+    })
+    await signInWithPassword(rig)
+    let successCount = 0
+    renderWithProviders(
+      <StepUpChallenge
+        open
+        session={rig.session}
+        onSuccess={() => {
+          successCount += 1
+        }}
+        onCancel={() => {
+          throw new Error('unexpected cancel')
+        }}
+      />,
+    )
+    await userEvent.type(
+      screen.getByLabelText(zhCN.mfa.stepUp.codeLabel),
+      CODE,
+    )
+    await userEvent.click(verifyButtons().confirm)
+    // The used-code answer rides the silent refresh leg, then renders
+    // as the banner's own text -- the field is cleared beneath it.
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toBe(
+        zhCN.errors.authn.mfa_code_used,
+      ),
+    )
+    expect(refreshCount).toBe(1)
+    expect(successCount).toBe(0)
+    const input = screen.getByLabelText(
+      zhCN.mfa.stepUp.codeLabel,
+    ) as HTMLInputElement
+    expect(input.value).toBe('')
+    expect(
+      screen.queryByText(zhCN.errors.authn.mfa_invalid_code),
+    ).toBeNull()
+    // A fresh code verifies in the same dialog.
+    await userEvent.type(
+      screen.getByLabelText(zhCN.mfa.stepUp.codeLabel),
+      '654321',
+    )
+    await userEvent.click(verifyButtons().confirm)
+    await waitFor(() => expect(successCount).toBe(1))
+    expect(stepUpAttempts).toBe(3)
 
     await expectNoAxeViolations()
   })

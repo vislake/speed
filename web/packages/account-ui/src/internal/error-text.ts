@@ -56,11 +56,17 @@ export const ERROR_TEXT_CODES = [
   'authn.redirect_uri_not_allowed',
   // The unbind guard: an account cannot shed its last login method.
   'authn.last_login_method',
-  // authn: step-up-gated two-factor setup.
+  // authn: step-up-gated two-factor setup. The step-up challenge answers
+  // split spent codes from wrong ones server-side: mfa_invalid_code stays
+  // the retryable wrong/never-valid answer, mfa_code_used names a code
+  // that was valid and is gone -- the surface renders it (never as
+  // "invalid", never as retryable-with-the-same-code) so a user who
+  // re-submits a consumed code is told it is consumed.
   'authn.step_up_required',
   'authn.mfa_not_enrolled',
   'authn.mfa_already_enrolled',
   'authn.mfa_invalid_code',
+  'authn.mfa_code_used',
   // Transport-level failures of the api-client contract.
   'client.network',
   'client.timeout',

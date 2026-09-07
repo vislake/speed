@@ -419,6 +419,14 @@ just-verified factor, and the pending action is remembered so the
 success retries exactly the gated operation and a cancel retries
 nothing. The elevation lives only in that access token's lifetime; the
 dialog never promises that verification will not be asked again.
+Failure answers split spent codes from wrong ones: a wrong code is a
+field-level error and stays retryable with a fresh code, while a code
+the server reports as used (`authn.mfa_code_used`) -- including a
+verification that lost a concurrent-operation race, whose code verified
+server-side and is therefore spent even though the elevation never
+landed -- clears the field and renders the used-code answer: the
+attempt is never retryable with the same code, because the code can
+never verify again.
 
 | Prop | Type | Notes |
 |---|---|---|
@@ -427,7 +435,7 @@ dialog never promises that verification will not be asked again.
 ## Text and i18n
 
 All built-in strings live in the bilingual `account-ui` namespace
-(`src/locales/zh-CN.json` and `en-US.json`, 106 keys each with
+(`src/locales/zh-CN.json` and `en-US.json`, 107 keys each with
 identical leaf key sets, enforced by registration and by
 `tools/check_i18n_keys.py` in CI):
 
@@ -453,7 +461,12 @@ themselves carry no speed text.
 Every failure path of the family resolves its failure to one error code
 and renders it through the same `role="alert"` banner (`InlineError`),
 never per-field error prose (the one exception is a wrong MFA code,
-which is a field-level error). The resolver maps exactly these codes to
+`authn.mfa_invalid_code`, which is a field-level error and stays
+retryable). A code the server reports as used rather than wrong --
+`authn.mfa_code_used`, a code that was valid and whose single-use guard
+has consumed it -- renders its own banner text and is never offered
+for re-submission: the spent code cannot verify again, and only a
+fresh one can. The resolver maps exactly these codes to
 their `errors.*` keys -- the reachable answers of the signed-in account
 surface, plus the transport codes of the `@speed/api-client` contract:
 
@@ -461,7 +474,7 @@ surface, plus the transport codes of the `@speed/api-client` contract:
 |---|---|
 | Session lifecycle (a revoke or a read of one's own sessions can answer with these; a host renders them for its own protected operations too) | `authn.session_not_found`, `authn.session_revoked`, `authn.token_expired`, `authn.refresh_token_invalid`, `authn.refresh_token_reused` |
 | Social binding (the authorize request, the callback exchange, the unbind) | `authn.provider_unknown`, `authn.redirect_uri_not_allowed`, `authn.oauth_state_invalid`, `authn.social_exchange_failed`, `authn.identity_requires_binding`, `authn.identity_already_bound`, `authn.identity_not_found`, `authn.last_login_method` |
-| Two-factor and step-up | `authn.step_up_required`, `authn.mfa_not_enrolled`, `authn.mfa_already_enrolled`, `authn.mfa_invalid_code` |
+| Two-factor and step-up | `authn.step_up_required`, `authn.mfa_not_enrolled`, `authn.mfa_already_enrolled`, `authn.mfa_invalid_code`, `authn.mfa_code_used` |
 | Shared rate limiting | `authn.rate_limited` |
 | Transport (the api-client contract) | `client.network`, `client.timeout`, `client.protocol` |
 

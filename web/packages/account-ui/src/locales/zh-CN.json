@@ -18,7 +18,8 @@
       "step_up_required": "此操作需要你重新验证身份。",
       "mfa_not_enrolled": "你尚未开启两步验证。",
       "mfa_already_enrolled": "两步验证已开启，无需重复设置。",
-      "mfa_invalid_code": "验证码不正确或已过期，请重试。"
+      "mfa_invalid_code": "验证码不正确或已过期，请重试。",
+      "mfa_code_used": "该验证码已使用，请输入验证器应用中的最新验证码，或使用一条未使用的恢复码。"
     },
     "client": {
       "network": "网络连接不可用，请检查网络后重试。",

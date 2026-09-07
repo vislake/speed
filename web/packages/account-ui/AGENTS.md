@@ -39,7 +39,7 @@ verification); two take no props at all.
   never hand-written query keys.
 - **Every built-in string is bilingual and bundled.** All text renders
   from the `account-ui` namespace (`ACCOUNT_UI_NAMESPACE`, one
-  `zh-CN.json` and one `en-US.json` under `src/locales/`, 106 identical
+  `zh-CN.json` and one `en-US.json` under `src/locales/`, 107 identical
   leaf keys per language), registered by the host exactly once through
   `@speed/i18n` alongside the `ui-kit` namespace — the confirm-again
   label of the armed danger dialog and the `EmptyState` texts are
@@ -85,6 +85,15 @@ verification); two take no props at all.
    and to both `errors.*` sections at once. Codes whose failure
    context matches the sign-in surface's reuse the auth-ui bundle's
    text verbatim — never divergent copy for the same server answer.
+   Within the two-factor family the server splits spent codes from
+   wrong ones, and the step-up challenge renders the split: a code
+   that was never valid (`authn.mfa_invalid_code`) is a retryable
+   field error, while a code that WAS valid and is consumed
+   (`authn.mfa_code_used` — the replay guard advanced past its step,
+   or its recovery row is marked used) — and a superseded
+   verification, whose code verified server-side and is therefore
+   spent — renders the used-code answer, clears the field, and is
+   never offered for re-submission or called invalid.
    Deliberately not whitelisted: `client.http.*` and `client.unknown`
    (the classifier's landing slot for non-`ApiError` throws) — they
    render `errors.unknown` by design.

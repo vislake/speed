@@ -18,7 +18,8 @@
       "step_up_required": "This action requires you to verify your identity again.",
       "mfa_not_enrolled": "Two-step verification is not enabled.",
       "mfa_already_enrolled": "Two-step verification is already enabled.",
-      "mfa_invalid_code": "The code is incorrect or has expired. Try again."
+      "mfa_invalid_code": "The code is incorrect or has expired. Try again.",
+      "mfa_code_used": "That code has already been used. Enter the latest code from your authenticator app, or an unused recovery code."
     },
     "client": {
       "network": "No network connection. Check your connection and try again.",
