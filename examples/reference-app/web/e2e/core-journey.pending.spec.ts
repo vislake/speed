@@ -313,6 +313,33 @@ test.describe('the core journey', { tag: '@pending' }, () => {
       // simulation at all could pass it. The image has to be one the
       // browser actually decoded, which a broken or missing source is
       // not.
+      // A PAGE, not a file.
+      //
+      // go/sharing's public route answers the resource's raw bytes with
+      // its own MIME type (handler.go's io.Copy over the resolved
+      // content), so handing a patient that URL directly opens a bare
+      // image in their browser: no practice name, no explanation, and --
+      // the part that matters most -- no BEFORE. "Before/after
+      // comparison" is a core requirement, and a link that carries only
+      // the after half does not meet it.
+      //
+      // This gate passed that shape until now: a browser given image
+      // bytes builds a document around an <img>, so an image-role check
+      // and a decoded-width check both hold. Found by reading the gate
+      // as though it had already passed and asking what it would have
+      // let through -- the only defence available for a gate written
+      // before its surface exists.
+      //
+      // Asserted as "the view says something", which is the least this
+      // can require without dictating a design: a bare image document
+      // has no text in it at all. What the page should actually say --
+      // the practice's name, the patient's, an explanation, the pair
+      // side by side -- is a product decision this does not make.
+      await expect(
+        patientPage.locator('body'),
+        'the patient received a bare file rather than a page: nothing on it says whose smile this is, and the before half of the comparison is not there at all',
+      ).not.toHaveText('')
+
       const shown = patientPage.getByRole('img').first()
       await expect(shown, 'a patient opening the link must see the simulation').toBeVisible()
       const decoded = await shown.evaluate((node) => {
