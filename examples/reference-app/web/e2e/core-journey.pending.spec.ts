@@ -93,6 +93,19 @@ const UI_NAMES = {
   share: /share|link/i,
   /** Block D: where the cost of one generation is shown. */
   cost: /credit|cost|usage/i,
+  /**
+   * Block D: the nav entry leading to the standing balance.
+   *
+   * The real name, not a pattern that might reach it. This was
+   * `/account|billing|usage/i`, which matches NONE of them -- the entry
+   * is called "Credits" -- and instead matched "Account", whose surface
+   * happens to carry digits, so the gate passed on chromium by landing
+   * on the wrong page entirely. On webkit and the iPad project the same
+   * mistake failed, which is the only reason it was found. A pattern
+   * loose enough to reach the thing it wants is loose enough to reach
+   * something else.
+   */
+  navCredits: 'Credits',
 } as const
 
 /** A patient reference unique to one run, so a rerun never collides. */
@@ -362,16 +375,40 @@ test.describe('the core journey', { tag: '@pending' }, () => {
     // navigation is behind the menu button, and clicking the link
     // directly is the desktop-only mistake this suite has now made six
     // times.
-    await openSurface(page, /account|billing|usage/i)
-    const balance = page.getByRole('main').getByText(/balance|remaining|credits/i).first()
+    await openSurface(page, UI_NAMES.navCredits)
+    // Polled to settle, because the balance is a fetch and the heading
+    // renders before it answers.
+    //
+    // The fourth time this suite has read a point-in-time sample as if it
+    // were a settled state -- after an assertion, a wait, and a helper.
+    // Here it passed on chromium and failed on webkit and the iPad
+    // project, purely on how fast each got the answer: the snapshot at
+    // failure was the whole surface reduced to `heading "Credits"`, with
+    // the figure still in flight. A gate that resolves on engine speed
+    // reports nothing about the product.
+    const main = page.getByRole('main')
+    await expect
+      .poll(async () => await main.innerText(), { timeout: 15_000 })
+      .toMatch(/\d/)
+
+    // The line that carries the FIGURE, not the label above it.
+    //
+    // `getByText(/balance|remaining|credits/i).first()` picked the
+    // standalone "Balance" label, which never contains a number by
+    // design -- the amount lives in its own line ("N credits
+    // available"). So the assertion could not pass on this surface at
+    // all, and the reason chromium went green earlier was that the
+    // navigation was landing on the Account page instead. Neither
+    // engine's answer was about the product.
+    //
+    // Matched on a number next to the word rather than on either alone:
+    // a label with no figure fails, and a figure belonging to something
+    // else is not accepted just for being a digit somewhere on the page.
+    const balance = main.getByText(/\d[\d,.]*\s*(credit|credits)/i).first()
     await expect(
       balance,
-      'the practice must be able to see its remaining credits',
+      'the practice must be able to see its remaining credits: no line on this surface states an amount of credits',
     ).toBeVisible()
-    await expect(
-      balance,
-      'the balance surface names credits but shows no figure, so nobody can tell whether they can afford the next simulation',
-    ).toContainText(/\d/)
   })
 })
 

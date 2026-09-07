@@ -133,10 +133,27 @@ export async function signInAs(page: Page, account: DemoAccount): Promise<void> 
   const refusal = page
     .getByRole('alert')
     .filter({ hasText: AUTH_ERROR_TEXT.invalidCredentials })
+  // The budget refusal is raced too, and named on its own, because it
+  // is the one failure a caller can do nothing about by looking at the
+  // product: go/authn allows five sign-ins per account and twenty per
+  // IP per minute, and the second is a pool the whole suite shares. A
+  // run that crosses it fails on whichever journey was unlucky, and
+  // without this branch the report says only that some control never
+  // appeared -- which reads like a defect and is not one.
+  const rateLimited = page
+    .getByRole('alert')
+    .filter({ hasText: AUTH_ERROR_TEXT.rateLimited })
   await Promise.race([
     frame.waitFor({ state: 'visible' }).catch(() => undefined),
     refusal.waitFor({ state: 'visible' }).catch(() => undefined),
+    rateLimited.waitFor({ state: 'visible' }).catch(() => undefined),
   ])
+
+  if (await rateLimited.isVisible().catch(() => false)) {
+    throw new Error(
+      `e2e: ${account.email} was rate-limited at sign-in. This is the suite's own login budget, not a product defect: go/authn allows five sign-ins per account and twenty per IP per minute, shared by every gate in the run. Ask for one block rather than a whole tier (see e2e/README.md).`,
+    )
+  }
 
   if (await refusal.isVisible()) {
     const hint =
