@@ -676,6 +676,167 @@ func TestParamsWithUnserializableValueIsReported(t *testing.T) {
 	}
 }
 
+// TestError_WithSensitiveParamKeepsValuesOutOfTheEnvelope pins the contract
+// of the sensitive-parameter twin: the caller declares what a client must
+// never see, and the value stays out of everything a transport serializes
+// while remaining reachable server-side through SensitiveParams. The gap the
+// twin closes is real -- before it existed a sensitive-shaped value (a
+// resolved internal address, the exact shape of the integration SSRF oracle)
+// had nowhere to go but WithParam, whose map is serialized verbatim into the
+// response body.
+func TestError_WithSensitiveParamKeepsValuesOutOfTheEnvelope(t *testing.T) {
+	const resolvedAddress = "10.0.3.77"
+
+	err := Internal(testCode).
+		WithParam("id", "sub_01H8Z").
+		WithSensitiveParam("resolved_ip", resolvedAddress)
+
+	// (b) WithParam is unchanged for ordinary parameters: the value sits in
+	// Params exactly as it always did.
+	if !maps.Equal(err.Params, map[string]any{"id": "sub_01H8Z"}) {
+		t.Errorf("Params = %v, want only the ordinary id parameter", err.Params)
+	}
+	if _, leaked := err.Params["resolved_ip"]; leaked {
+		t.Error("the sensitive value leaked into Params")
+	}
+
+	// The serialized envelope carries neither the key nor its value, whether
+	// the whole error is marshalled or just the Params map a transport copies
+	// into its envelope.
+	blob, mErr := json.Marshal(err)
+	if mErr != nil {
+		t.Fatalf("json.Marshal(*Error) returned an error: %v", mErr)
+	}
+	payload := string(blob)
+	if strings.Contains(payload, "resolved_ip") || strings.Contains(payload, resolvedAddress) {
+		t.Errorf("the sensitive parameter leaked into the marshalled error: %s", payload)
+	}
+	var back map[string]any
+	if uErr := json.Unmarshal(blob, &back); uErr != nil {
+		t.Fatalf("json.Unmarshal returned an error: %v (payload %s)", uErr, payload)
+	}
+	params, isObject := back["Params"].(map[string]any)
+	if !isObject {
+		t.Fatalf("Params = %#v, want a JSON object (payload %s)", back["Params"], payload)
+	}
+	if params["id"] != "sub_01H8Z" {
+		t.Errorf("Params.id = %#v, want %q", params["id"], "sub_01H8Z")
+	}
+
+	// The value remains reachable server-side, where a deliberate diagnostic
+	// reads it -- never in the client-bound envelope, never in the error
+	// string.
+	if got := err.SensitiveParams()["resolved_ip"]; got != resolvedAddress {
+		t.Errorf("SensitiveParams()[\"resolved_ip\"] = %v, want %q", got, resolvedAddress)
+	}
+	if got := err.Error(); strings.Contains(got, resolvedAddress) {
+		t.Errorf("Error() rendered the sensitive value: %q", got)
+	}
+}
+
+// TestError_WithSensitiveParamDerivesAndSeparates covers the twin's builder
+// semantics, mirroring the WithParam cases: derivation, chaining, overwrite,
+// receiver independence and sentinel safety under concurrency.
+func TestError_WithSensitiveParamDerivesAndSeparates(t *testing.T) {
+	t.Run("the receiver is left untouched and Params stays nil", func(t *testing.T) {
+		base := Invalid(testCode)
+
+		derived := base.WithSensitiveParam("resolved_ip", "10.0.3.77")
+
+		if derived == base {
+			t.Fatal("WithSensitiveParam returned the receiver, want a derived instance")
+		}
+		if base.Params != nil || base.SensitiveParams() != nil {
+			t.Errorf("base maps = Params %v, sensitive %v; want both nil",
+				base.Params, base.SensitiveParams())
+		}
+		if derived.Params != nil {
+			t.Errorf("derived.Params = %v, want nil: a sensitive-only error has no client parameters", derived.Params)
+		}
+		if !maps.Equal(derived.SensitiveParams(), map[string]any{"resolved_ip": "10.0.3.77"}) {
+			t.Errorf("SensitiveParams() = %v, want the recorded value", derived.SensitiveParams())
+		}
+	})
+
+	t.Run("chained calls accumulate and a repeated key keeps the last value", func(t *testing.T) {
+		got := Invalid(testCode).
+			WithSensitiveParam("resolved_ip", "10.0.3.1").
+			WithSensitiveParam("dialed_backend", "billing-db").
+			WithSensitiveParam("resolved_ip", "10.0.3.77")
+
+		want := map[string]any{"resolved_ip": "10.0.3.77", "dialed_backend": "billing-db"}
+		if !maps.Equal(got.SensitiveParams(), want) {
+			t.Errorf("SensitiveParams() = %v, want %v", got.SensitiveParams(), want)
+		}
+	})
+
+	t.Run("siblings derived from one error do not share the sensitive map", func(t *testing.T) {
+		base := Internal(testCode).WithSensitiveParam("resolved_ip", "10.0.3.1")
+
+		first := base.WithSensitiveParam("dialed_backend", "a")
+		second := base.WithSensitiveParam("dialed_backend", "b")
+
+		if !maps.Equal(base.SensitiveParams(), map[string]any{"resolved_ip": "10.0.3.1"}) {
+			t.Errorf("base.SensitiveParams() = %v, want only its own value", base.SensitiveParams())
+		}
+		if !maps.Equal(first.SensitiveParams(), map[string]any{"resolved_ip": "10.0.3.1", "dialed_backend": "a"}) {
+			t.Errorf("first.SensitiveParams() = %v", first.SensitiveParams())
+		}
+		if !maps.Equal(second.SensitiveParams(), map[string]any{"resolved_ip": "10.0.3.1", "dialed_backend": "b"}) {
+			t.Errorf("second.SensitiveParams() = %v", second.SensitiveParams())
+		}
+	})
+
+	t.Run("a sensitive-only error marshals with null Params", func(t *testing.T) {
+		err := NotFound(testCode).WithSensitiveParam("resolved_ip", "10.0.3.77")
+
+		blob, mErr := json.Marshal(err)
+		if mErr != nil {
+			t.Fatalf("json.Marshal returned an error: %v", mErr)
+		}
+		var back map[string]any
+		if uErr := json.Unmarshal(blob, &back); uErr != nil {
+			t.Fatalf("json.Unmarshal returned an error: %v (payload %s)", uErr, blob)
+		}
+		if back["Params"] != nil {
+			t.Errorf("Params = %#v, want null (payload %s)", back["Params"], blob)
+		}
+		if strings.Contains(string(blob), "10.0.3.77") {
+			t.Errorf("the sensitive value leaked into the payload: %s", blob)
+		}
+	})
+
+	t.Run("concurrent decoration of a shared sentinel leaves it clean", func(t *testing.T) {
+		sentinel := Internal(testCode)
+		const goroutines = 8
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		results := make([]*Error, goroutines)
+		for i := range goroutines {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				results[i] = sentinel.WithSensitiveParam("resolved_ip", fmt.Sprintf("10.0.3.%d", i+1))
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+
+		if sentinel.Params != nil || sentinel.SensitiveParams() != nil {
+			t.Errorf("sentinel maps = Params %v, sensitive %v; want both nil",
+				sentinel.Params, sentinel.SensitiveParams())
+		}
+		for i, got := range results {
+			want := map[string]any{"resolved_ip": fmt.Sprintf("10.0.3.%d", i+1)}
+			if !maps.Equal(got.SensitiveParams(), want) {
+				t.Errorf("goroutine %d SensitiveParams() = %v, want %v", i, got.SensitiveParams(), want)
+			}
+		}
+	})
+}
+
 // TestNilParamsMarshalsAsNull covers the state every constructor starts in:
 // Params is nil until the first WithParam call, and a transport will marshal
 // that fresh error as-is.

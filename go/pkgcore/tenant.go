@@ -50,6 +50,14 @@ func WithTenant(ctx context.Context, id TenantID) context.Context {
 
 // TenantFromContext returns the TenantID carried by ctx. The second result is
 // false when no tenant was set, or when the stored tenant is empty.
+//
+// Always check the second result: on failure the returned id is the empty
+// string, and the empty string is a live, meaningful value elsewhere in this
+// codebase -- config's configs table stores it as its system-scope sentinel,
+// and org's org_nodes store it as the tenant root's parent id. A caller that
+// ignores ok and passes the zero value onward would therefore hand layers
+// below a tenant-shaped id that means "the system tier" or "the root" in
+// those modules, never "no tenant".
 func TenantFromContext(ctx context.Context) (TenantID, bool) {
 	id, ok := ctx.Value(ctxKeyTenant).(TenantID)
 	if !ok || id == "" {
@@ -70,9 +78,10 @@ func MustTenantFromContext(ctx context.Context) (TenantID, error) {
 	return id, nil
 }
 
-// SystemPurpose names why tenant filtering is being bypassed. It is a closed
-// enumeration rather than free text: a purpose has to be declared through
-// RegisterSystemPurpose before WithSystemContext will accept it.
+// SystemPurpose names why a caller is acting outside an ordinary
+// tenant-scoped context. It is a closed enumeration rather than free text: a
+// purpose has to be declared through RegisterSystemPurpose before
+// WithSystemContext will accept it.
 type SystemPurpose string
 
 var (
@@ -101,25 +110,32 @@ func systemPurposeRegistered(p SystemPurpose) bool {
 	return registeredSystemPurposes[p]
 }
 
-// SystemReason records who is bypassing tenant filtering and why. Ticket is
-// optional and links the bypass to the request that authorised it.
+// SystemReason records who is acting outside an ordinary tenant-scoped
+// context and why -- the attribution layers above read when they decide what
+// the reason changes. Ticket is optional and links the grant to the request
+// that authorised it.
 type SystemReason struct {
 	Actor   string
 	Purpose SystemPurpose
 	Ticket  string
 }
 
-// WithSystemContext returns a copy of ctx carrying reason, granting the
-// tenant-filtering escape hatch. It fails when Actor is empty or when Purpose
-// was never registered through RegisterSystemPurpose.
+// WithSystemContext returns a copy of ctx carrying reason, marking the caller
+// as acting outside an ordinary tenant-scoped context. It fails when Actor is
+// empty or when Purpose was never registered through RegisterSystemPurpose.
 //
 // A system context is orthogonal to a tenant context: it sets no tenant, and
 // a caller acting as a system actor inside one tenant's data combines it with
 // WithTenant. On failure ctx is returned unchanged, so a caller that ignores
-// the error is left without the escape hatch rather than with a nil context.
+// the error is left without the marker rather than with a nil context.
 //
-// The escape hatch bypasses tenant filtering only. It never bypasses
-// authorization.
+// This primitive only marks intent: carrying the reason grants nothing by
+// itself, because this package implements no tenant filtering of its own and
+// therefore provides no bypass of one. Whether a system reason changes what
+// a caller may read is decided by the layers above that own tenant filtering
+// and data access -- tenancy's audited wrapper, and each data-owning
+// module's own guards -- none of which this package can see or speak for.
+// A system context never bypasses authorization.
 func WithSystemContext(ctx context.Context, reason SystemReason) (context.Context, error) {
 	if reason.Actor == "" {
 		return ctx, fmt.Errorf("%w (purpose %q)", ErrSystemActorRequired, reason.Purpose)

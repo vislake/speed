@@ -1,10 +1,11 @@
 # pkgcore's seed message bundle, American English.
 #
-# pkgcore renders no user-facing content in M0; these three messages exist
-# to exercise the catalog machinery through real embedded files. See the
-# package doc in fs.go. File contract: every entry is one flat top-level
-# message, the id is the whole quoted key prefixed with the module name
-# ("pkgcore."), and zh-CN.toml must carry exactly the same id set.
+# pkgcore renders no user-facing content in M0 and is not a Module, so
+# Kernel.Bootstrap never feeds these files into any runtime catalog -- they
+# exist as pkgcore's own test fixture and the canonical shape example (see
+# the package doc in fs.go). File contract: every entry is one flat
+# top-level message, the id is the whole quoted key prefixed with the module
+# name ("pkgcore."), and zh-CN.toml must carry exactly the same id set.
 
 "pkgcore.seed.plain" = "A single-form seed message rendered by pkgcore's message catalog."
 

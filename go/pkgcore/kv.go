@@ -32,6 +32,16 @@ const (
 
 	// kvFloatBitSize is the width of the numeric values IncrByFloat handles.
 	kvFloatBitSize = 64
+
+	// kvSweepInterval is how many write operations the in-memory store lets
+	// pass between amortized sweeps: every interval-th write reclaims every
+	// expired entry in one pass. A rate-limit window key embeds its window,
+	// so once a window passes nothing ever touches its key again -- without a
+	// reclamation that runs on its own, such keys would occupy the map for
+	// the rest of the process. One O(entries) pass per interval keeps the
+	// amortized cost at O(1) per write while bounding the map to live
+	// entries plus whatever expired during the last interval.
+	kvSweepInterval = 1024
 )
 
 // KVStore is the key-value contract shared by every deployment mode: an
@@ -140,12 +150,49 @@ func (e kvEntry) expired(now time.Time) bool {
 	return !e.expiresAt.IsZero() && !now.Before(e.expiresAt)
 }
 
+// sweepExpired reclaims every entry whose expiry has already passed at now.
+// The caller holds s.mu. Deleting during a map range is safe: Go allows
+// removing the entry currently being visited, and every other removal this
+// pass makes is of an entry the pass would have visited anyway.
+func (s *memoryKVStore) sweepExpired(now time.Time) {
+	for key, entry := range s.entries {
+		if entry.expired(now) {
+			delete(s.entries, key)
+		}
+	}
+}
+
+// noteWrite counts one write operation toward the amortized sweep and runs
+// the sweep once the interval elapses, so reclamation follows the store's own
+// write traffic rather than waiting for a specific key to be touched again.
+// The caller holds s.mu.
+func (s *memoryKVStore) noteWrite() {
+	s.writesSinceSweep++
+	if s.writesSinceSweep >= kvSweepInterval {
+		s.writesSinceSweep = 0
+		s.sweepExpired(time.Now())
+	}
+}
+
 // memoryKVStore is the standalone deployment mode's KVStore: a mutex-guarded
-// map that lives and dies with the process. Expired entries are dropped
-// lazily, when an operation next touches the key.
+// map that lives and dies with the process. Expiry reclamation has two
+// halves, mirroring the expiry story of the PostgreSQL-backed store
+// (kv/postgres's "invisible but not yet removed" reads plus its host-run
+// Sweep): an expired entry is invisible to every operation, and a touched
+// key's expired entry is dropped by the operation that touches it, while
+// every kvSweepInterval-th write runs an amortized sweep that reclaims every
+// expired entry in one pass -- so a key nothing ever touches again (a spent
+// rate-limit window, an expired lock) does not occupy the map for the rest
+// of the process. Reclamation is a hygiene matter, never a correctness one:
+// correctness never depends on a sweep having run.
 type memoryKVStore struct {
 	mu      sync.Mutex
 	entries map[string]kvEntry
+
+	// writesSinceSweep counts the write operations since the last amortized
+	// sweep; when it reaches kvSweepInterval the next write sweeps and
+	// resets it.
+	writesSinceSweep int
 }
 
 // NewMemoryKVStore returns a KVStore backed by an in-memory map, with no
@@ -193,6 +240,7 @@ func (s *memoryKVStore) Set(ctx context.Context, key string, value []byte, ttl t
 	defer s.mu.Unlock()
 
 	s.entries[key] = entry
+	s.noteWrite()
 	return nil
 }
 
@@ -238,6 +286,7 @@ func (s *memoryKVStore) IncrByFloat(ctx context.Context, key string, delta float
 		value:     strconv.AppendFloat(nil, result, kvFloatFormat, kvFloatPrecisionShortest, kvFloatBitSize),
 		expiresAt: expiresAt,
 	}
+	s.noteWrite()
 	return result, nil
 }
 
@@ -283,6 +332,7 @@ func (s *memoryKVStore) IncrByFloatWithTTL(ctx context.Context, key string, delt
 		value:     strconv.AppendFloat(nil, result, kvFloatFormat, kvFloatPrecisionShortest, kvFloatBitSize),
 		expiresAt: expiresAt,
 	}
+	s.noteWrite()
 	return result, nil
 }
 
@@ -308,6 +358,7 @@ func (s *memoryKVStore) CompareAndSwap(ctx context.Context, key string, old, new
 			return false, nil
 		}
 		s.entries[key] = kvEntry{value: bytes.Clone(newVal)}
+		s.noteWrite()
 		return true, nil
 	}
 
@@ -318,5 +369,6 @@ func (s *memoryKVStore) CompareAndSwap(ctx context.Context, key string, old, new
 	// entry.expiresAt is carried over untouched: a swap is not a refresh.
 	entry.value = bytes.Clone(newVal)
 	s.entries[key] = entry
+	s.noteWrite()
 	return true, nil
 }

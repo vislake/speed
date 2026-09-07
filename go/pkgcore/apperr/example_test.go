@@ -4,6 +4,7 @@ package apperr_test
 // compiled and executed by `go test`.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -79,6 +80,32 @@ func ExampleError_WithCause() {
 	// Output:
 	// billing.provider_unavailable: dial tcp 10.0.0.7:5432: connection refused
 	// true
+}
+
+// ExampleError_WithSensitiveParam shows a value a client must never see being
+// recorded separately from the Params map a transport serializes verbatim
+// into the response body. The caller declares sensitivity; the library never
+// guesses it, and the value stays reachable server-side only.
+func ExampleError_WithSensitiveParam() {
+	err := apperr.Internal("billing.provider_unavailable").
+		WithParam("provider", "stripe").
+		WithSensitiveParam("resolved_ip", "10.0.3.77")
+
+	// The client-bound envelope carries only the ordinary parameter: the
+	// transport serializes Params and nothing else.
+	payload, marshalErr := json.Marshal(err.Params)
+	if marshalErr != nil {
+		panic(marshalErr)
+	}
+	fmt.Println("envelope:", string(payload))
+
+	// A server-side diagnostic reads the sensitive value here -- a structured
+	// log attribute, never a response field.
+	fmt.Println("server-side:", err.SensitiveParams()["resolved_ip"])
+
+	// Output:
+	// envelope: {"provider":"stripe"}
+	// server-side: 10.0.3.77
 }
 
 // ExampleAs shows the transport boundary recovering the structured error from

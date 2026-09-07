@@ -1443,3 +1443,46 @@ func TestMemoryKVStore_CancelledContext(t *testing.T) {
 		})
 	}
 }
+
+// TestMemoryKVStore_ReclaimsExpiredEntryNobodyTouchesAgain pins the
+// amortized-reclamation half of the store's expiry story: a key whose expiry
+// passes and that no later operation touches must not occupy the map for the
+// rest of the process. Lazy drop alone reclaims only keys an operation
+// happens to touch again, and a rate-limit window key embeds its window --
+// once the window passes nobody touches the key again, so a store that only
+// drops on touch grows without bound under sustained traffic.
+func TestMemoryKVStore_ReclaimsExpiredEntryNobodyTouchesAgain(t *testing.T) {
+	t.Parallel()
+
+	// kvReclaimWriteBudget is how many unrelated writes the test performs
+	// after the key has expired: well above the store's amortized sweep
+	// interval, so a sweep must have run by the end of the writes whatever
+	// the exact interval is.
+	const kvReclaimWriteBudget = 2048
+
+	ctx := context.Background()
+	store := NewMemoryKVStore()
+	if err := store.Set(ctx, "expired-never-touched", []byte("value"), kvShortTTL); err != nil {
+		t.Fatalf("Set: unexpected error: %v", err)
+	}
+
+	time.Sleep(kvExpiryWait)
+
+	// Expired but not yet reclaimed: no operation has touched the key, and
+	// (until reclamation exists) nothing else will remove it either.
+	entry, found := kvStoredEntry(t, store, "expired-never-touched")
+	if !found || !entry.expired(time.Now()) {
+		t.Fatalf("before the writes: entry = %+v, found = %t; want an expired, still-present entry", entry, found)
+	}
+
+	// Enough unrelated writes to cross the amortized sweep interval. Every
+	// write happens after the key's own expiry, so whichever sweep runs
+	// first must reclaim it.
+	for i := 0; i < kvReclaimWriteBudget; i++ {
+		kvSet(t, store, fmt.Sprintf("filler-%04d", i), "v")
+	}
+
+	if _, found := kvStoredEntry(t, store, "expired-never-touched"); found {
+		t.Errorf("an expired key no operation ever touches again is still in the map after %d writes: amortized reclamation did not run", kvReclaimWriteBudget)
+	}
+}
