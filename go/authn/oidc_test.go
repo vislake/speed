@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
@@ -1146,6 +1147,133 @@ func TestSSOService_SaveConfig_AcceptsValuesAtTheColumnWidths(t *testing.T) {
 	}
 	if len([]rune(stored.AllowedDomains)) != ssoAllowedDomainsColumnWidth {
 		t.Errorf("stored allowed domains are %d runes, want %d", len([]rune(stored.AllowedDomains)), ssoAllowedDomainsColumnWidth)
+	}
+}
+
+// TestSSOService_SaveConfig_RecordsTheWriteAsAuditActionSSOConfigure is the
+// consumer-shaped proof that AuditActionSSOConfigure is genuinely emitted:
+// SaveConfig has no in-repo callers, so this test is its first real one,
+// driving the write through the same construction a host uses -- a Module
+// registered on a real pkgcore.Registry, exactly module.go's Register runs
+// in production -- and asserting the rows land on the shared bus under the
+// declared action.
+//
+// The operator's identity travels the way every audit carrier in this
+// module travels: a pkgcore.Actor (and pkgcore.OnBehalfOf, when an
+// impersonation flow installs one) on ctx, the carriers audit.Emit itself
+// reads back -- handler.go's recordAudit layers the same shape. The tenant
+// is the ctx tenant SaveConfig itself validated. Before the fix this round
+// ships, the action was declared on the registry but no code emitted it
+// anywhere: the round that wired the other eight concluded SaveConfig had
+// "no site" because no HTTP handler exists for it, missing that the service
+// layer is where this module's own write happens and where the audit calls
+// of every other module's services legitimately live. The pre-fix code
+// therefore fails this test with "recorded 0 authn.sso.configure rows
+// across the create and the update, want 2".
+func TestSSOService_SaveConfig_RecordsTheWriteAsAuditActionSSOConfigure(t *testing.T) {
+	t.Parallel()
+
+	module := newTestModule(t)
+	bus := pkgcore.NewMemoryEventBus()
+	recorder := testutil.NewEventRecorder()
+	recorder.Subscribe(bus, audit.EventRecorded)
+	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	if err := module.Register(reg); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	svc := module.Service()
+
+	// The writing operator: a real account, attested on ctx exactly as the
+	// audit carriers demand. SaveConfig itself performs no authorization --
+	// who may write a tenant's SSO configuration is the caller's gate (a
+	// future HTTP surface behind PermissionSSOManage) -- so the recorded
+	// attribution is precisely the identity the caller vouched for.
+	user, err := svc.Register(t.Context(), RegisterInput{
+		Email: "sso-operator@example.com", Password: testPassword, DisplayName: "SSO Operator",
+	})
+	if err != nil {
+		t.Fatalf("Register(operator) error = %v", err)
+	}
+	actor := pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: user.ID, DisplayName: user.DisplayName}
+	ctx := pkgcore.WithTenant(pkgcore.WithActor(t.Context(), actor), testTenantA)
+
+	const firstIssuer = "https://93.184.216.34/oidc"
+	const secondIssuer = "https://93.184.216.34/idp2"
+
+	config, err := svc.SSO().SaveConfig(ctx, SSOConfigInput{
+		Issuer: firstIssuer, ClientID: "client-id",
+		ClientSecret: "the-client-secret", Enabled: true,
+		AllowedDomains: []string{"example.com"},
+	})
+	if err != nil {
+		t.Fatalf("SaveConfig(create) error = %v", err)
+	}
+
+	// The same tenant written again goes down the update branch: the row is
+	// the existing one, now disabled and repointed at the second issuer.
+	// Turning enterprise single sign-on OFF is an authentication-boundary
+	// change too, and the second record must say so.
+	if _, err := svc.SSO().SaveConfig(ctx, SSOConfigInput{
+		Issuer: secondIssuer, ClientID: "client-id", Enabled: false,
+	}); err != nil {
+		t.Fatalf("SaveConfig(update) error = %v", err)
+	}
+
+	var rows []audit.RecordedEvent
+	for _, evt := range recorder.Events() {
+		if evt.Type != audit.EventRecorded {
+			continue
+		}
+		recorded, ok := evt.Payload.(audit.RecordedEvent)
+		if !ok {
+			t.Fatalf("audit.EventRecorded payload has type %T, want audit.RecordedEvent", evt.Payload)
+		}
+		if recorded.Action == AuditActionSSOConfigure {
+			rows = append(rows, recorded)
+		}
+	}
+	if len(rows) != 2 {
+		t.Fatalf("recorded %d %s rows across the create and the update, want 2; all events: %+v",
+			len(rows), AuditActionSSOConfigure, recorder.Events())
+	}
+
+	// Both rows carry the writing operator and the tenant the write
+	// happened in, and name the same configuration row.
+	for i, row := range rows {
+		if row.Actor != actor {
+			t.Errorf("row %d actor = %+v, want the writing operator %+v", i, row.Actor, actor)
+		}
+		auditTenantIs(t, row, testTenantA)
+		if row.Resource.Type != "sso_config" || row.Resource.ID != config.ID {
+			t.Errorf("row %d resource = %+v, want type %q id %q", i, row.Resource, "sso_config", config.ID)
+		}
+		if !row.Result.Success {
+			t.Errorf("row %d result = %+v, want success", i, row.Result)
+		}
+	}
+
+	// The create row names the configuration as first written, the update
+	// row names it as rewritten -- and neither row ever carries the client
+	// secret, whose plaintext must not enter the permanent trail.
+	first := rows[0].Changes.After
+	if first["issuer"] != firstIssuer || first["client_id"] != "client-id" ||
+		first["enabled"] != true || first["allowed_domains"] != "example.com" {
+		t.Errorf("create row changes = %v, want issuer %q client_id %q enabled true allowed_domains %q",
+			first, firstIssuer, "client-id", "example.com")
+	}
+	second := rows[1].Changes.After
+	if second["issuer"] != secondIssuer || second["enabled"] != false {
+		t.Errorf("update row changes = %v, want issuer %q and enabled false", second, secondIssuer)
+	}
+	for i, after := range []map[string]any{first, second} {
+		if _, leaked := after["client_secret"]; leaked {
+			t.Errorf("row %d changes carry a client_secret key; the secret never enters the trail", i)
+		}
+		for key, value := range after {
+			if text, ok := value.(string); ok && strings.Contains(text, "the-client-secret") {
+				t.Errorf("row %d changes leak the client secret under key %q", i, key)
+			}
+		}
 	}
 }
 

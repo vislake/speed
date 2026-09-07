@@ -177,9 +177,11 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 // identity unbind, MFA changes, tenant switch, session revoke -- carries
 // its principal's tenant, and every sign-in success this Handler records
 // (password, SMS, social) carries the tenant the new session resolved
-// (enterprise SSO sign-ins have no recordAudit site: the SSO service has no
-// mounted HTTP surface, the gap AGENTS.md's known-limitation table records
-// for AuditActionSSOConfigure). AuthnSwitchTenant
+// (enterprise SSO sign-ins still have no recordAudit site: the SSO service
+// has no mounted HTTP surface, and AuditActionSSOConfigure's own emission
+// -- oidc.go's emitConfigSavedAudit -- records configuration writes from
+// the service layer, not sign-ins; the remainder is AGENTS.md's
+// known-limitation table's business). AuthnSwitchTenant
 // records the PRINCIPAL'S tenant (the tenant the session acted in before
 // the switch): the row answers "a member of which tenant performed this
 // action", and the switch's own destination is the request's business,

@@ -15,6 +15,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 
 	"github.com/vislake/speed/go/authn/internal/safehttp"
@@ -348,6 +349,17 @@ type SSOService struct {
 	httpClient *http.Client
 	guard      *safehttp.Guard
 
+	// auditActions is the registrar SSOService's own audit.Emit calls
+	// (emitConfigSavedAudit) validate their action string against. It is
+	// nil until module.go's Register wires it from the host's
+	// pkgcore.Registry -- the registrar lives on the registry, which is
+	// why SaveConfig, a service-layer write, cannot reach it through
+	// NewService -- so a Service assembled directly through NewService
+	// (every unit test in this package) records no audit rows, exactly
+	// like billing's own nil-events short-circuit for a directly
+	// constructed CreditService.
+	auditActions pkgcore.AuditActionRegistrar
+
 	// mu guards the memoized discovery results, keyed by issuer URL, the
 	// forgotten generation counter below, and nothing else. Discovery
 	// itself is a round trip to a third party whose answer changes almost
@@ -456,6 +468,7 @@ func (s *SSOService) SaveConfig(ctx context.Context, in SSOConfigInput) (*Tenant
 			return nil, updateErr
 		}
 		s.forget(previousIssuer)
+		s.emitConfigSavedAudit(ctx, existing)
 		return existing, nil
 	case errors.Is(err, ErrNotFound):
 		created := &TenantSSOConfig{
@@ -470,9 +483,73 @@ func (s *SSOService) SaveConfig(ctx context.Context, in SSOConfigInput) (*Tenant
 		if createErr := s.configs.Create(ctx, created); createErr != nil {
 			return nil, createErr
 		}
+		s.emitConfigSavedAudit(ctx, created)
 		return created, nil
 	default:
 		return nil, err
+	}
+}
+
+// emitConfigSavedAudit records AuditActionSSOConfigure for a configuration
+// write that has already committed, through audit.Emit -- the declarative
+// collection mechanism go/dbkit/audit documents, on the bus the Service
+// was built over (s.svc.bus). It runs at the SERVICE layer, from
+// SaveConfig itself, because that is where this write genuinely happens:
+// no HTTP handler for tenant SSO configuration is mounted anywhere, and
+// the audit.Emit sites across this codebase are overwhelmingly
+// service-layer (12 non-handler sites across seven modules against 3
+// handler-layer ones) -- recordAudit (handler.go) is the same mechanism
+// for the paths that DO have a handler. Wiring: the registrar is attached
+// by module.go's Register, after reg.AuditActions.Add has declared the
+// action (Emit validates the action string against it before publishing).
+//
+// The row's identity is whatever ctx attests: audit.Emit itself reads
+// pkgcore.ActorFromContext / pkgcore.OnBehalfOfFromContext, so an
+// impersonation flow whose middleware installed both carriers records the
+// impersonated administrator as Actor and the real operator as OnBehalfOf
+// with no further wiring here, and a ctx carrying no Actor records the
+// zero-value shape go/dbkit/audit sanctions for a write no authenticating
+// layer vouched for -- this Service performs no authorization of its own
+// (who may call SaveConfig is the caller's gate, PermissionSSOManage where
+// a request is involved). The tenant the configuration was written for is
+// the ctx tenant SaveConfig itself validated, read back by Emit the same
+// way, and the resource is the configuration row the write produced or
+// rewrote.
+//
+// The Changes copy names the configuration as stored -- issuer, client id,
+// whether it is enabled and the allowed-domain list -- so a row answers
+// "who wrote what the tenant's enterprise single sign-on configuration now
+// is", including the write that turns it OFF. The client SECRET is
+// deliberately absent: ciphertext would be unusable and plaintext would
+// put a credential into the permanent trail, the exact thing this module's
+// redaction rule forbids.
+//
+// A publish failure is logged at Error and never returned: the write has
+// already committed and been answered, so surfacing the audit failure as
+// SaveConfig's own error would report a failure that did not happen -- the
+// identical choice recordAudit makes for its own post-commit records.
+func (s *SSOService) emitConfigSavedAudit(ctx context.Context, config *TenantSSOConfig) {
+	if s.auditActions == nil {
+		// A Service whose Module.Register ran on a registry always carries
+		// it (the AuditActions seat exists on every Registry); this guard
+		// exists for the shape of a directly assembled Service, never a
+		// real wiring.
+		return
+	}
+	err := audit.Emit(ctx, s.svc.bus, s.auditActions, audit.Input{
+		Action:   AuditActionSSOConfigure,
+		Resource: audit.Resource{Type: "sso_config", ID: config.ID},
+		Result:   audit.Result{Success: true},
+		Changes: &audit.Diff{After: map[string]any{
+			"issuer":          config.Issuer,
+			"client_id":       config.ClientID,
+			"enabled":         config.Enabled,
+			"allowed_domains": config.AllowedDomains,
+		}},
+	})
+	if err != nil {
+		obs.FromContext(ctx).Error("authn sso config audit event emit failed",
+			"action", AuditActionSSOConfigure, "tenant_id", config.TenantID, "error", err)
 	}
 }
 
