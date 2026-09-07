@@ -31,6 +31,27 @@
 // it when it increments an existing one," so bucket TTL is never touched by
 // this package, and MaxAge is left at zero (never expire) throughout.
 //
+// The pinned nats.go v1.53.1 does expose a server-side per-key TTL -- the
+// KeyTTL create option, which requires the bucket-level LimitMarkerTTL to be
+// enabled -- and it would move an expiry onto the server's own clock, the
+// same fix kv/postgres's database-clock arithmetic makes. It is deliberately
+// unused here, and the reason is probed, not assumed: KeyTTL applies only
+// when a key is created, and Put and Update take no TTL option at all, so
+// the only write a refresh or an increment can issue is a header-less
+// Put/Update. Probed empirically against real nats-server 2.11.7 and 2.12.3,
+// such a Put/Update clears a KeyTTL-created key's per-key TTL entirely (the
+// key becomes immortal), so the server-side mechanism cannot express the two
+// expiry semantics every KVStore backend must honour: the increment-
+// preserves-expiry half is pinned by kvstoretest.AssertConforms, while the
+// Set-clears-expiry half is pinned by each backend's own real-server
+// integration layer (the same-named
+// TestKVStore_SetWithNonPositiveTTL_StoresForever_AndClearsAnExistingExpiry).
+// The envelope above therefore remains the only mechanism that can honour
+// the shared contract, its deadline written on the writer's clock and judged
+// on the reading replica's -- a clock-skew window kv/postgres's single-clock
+// fix closes by construction and this backend cannot, evidenced rather than
+// assumed.
+//
 // # Why keys are hex-encoded
 //
 // pkgcore.KVStore's keys are opaque strings with no restriction on their

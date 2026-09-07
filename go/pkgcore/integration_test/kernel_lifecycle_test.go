@@ -53,6 +53,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -64,7 +65,6 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/testcontainers/testcontainers-go/wait"
-	"net/netip"
 
 	"github.com/vislake/speed/go/pkgcore"
 	// Importing the Redis- and NATS-backed seam packages registers their
