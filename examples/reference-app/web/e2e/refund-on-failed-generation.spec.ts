@@ -160,6 +160,7 @@ test(
       await page.getByRole('button', { name: /create|save|confirm/i }).click()
 
       await page.getByRole('listitem').filter({ hasText: /E2E refund/ }).first().click()
+      const attemptsBefore = await page.getByText(CREDITS_TEXT.failedAttempt).count()
       await page.getByRole('button', { name: /simulate|generate/i }).click()
 
       // THE PERSON IS TOLD. A charge taken for work that then failed is
@@ -169,6 +170,18 @@ test(
         page.getByText(CREDITS_TEXT.failedAttempt).first(),
         'the generation failed and the surface never said so, so a practice is left waiting for a simulation that is not coming',
       ).toBeVisible({ timeout: 120_000 })
+
+      // ONE click, ONE attempt. Counted rather than assumed, because the
+      // ledger observation this gate stops on could be explained either
+      // by a charge that never settles OR by one press producing two
+      // attempts of which one settled -- and those are different
+      // defects. Settling this here is what lets the ledger assertion
+      // below mean one thing.
+      const attemptsAfter = await page.getByText(CREDITS_TEXT.failedAttempt).count()
+      expect(
+        attemptsAfter - attemptsBefore,
+        'one press of Simulate produced more than one generation attempt, so a practice is charged more than once for asking once',
+      ).toBe(1)
 
       // THE MONEY CAME BACK, as a row that says what happened.
       //
