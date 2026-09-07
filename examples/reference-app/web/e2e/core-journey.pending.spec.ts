@@ -36,7 +36,7 @@
  * can be accepted the day it lands instead of waiting for the whole.
  */
 import { expect, test, type Page } from '@playwright/test'
-import { DEMO_OWNER } from './test-utils/accounts.js'
+import { DEMO_OWNER, DEMO_READER } from './test-utils/accounts.js'
 import { signInAs } from './test-utils/journeys.js'
 
 /**
@@ -81,7 +81,7 @@ const PATIENT_PHOTO = {
 }
 
 test.describe('the core journey', { tag: '@pending' }, () => {
-  test('block A: a practice creates a case and attaches a patient photo', async ({ page }) => {
+  test('block A: a practice opens a case with the patient photo in one step', async ({ page }) => {
     await signInAs(page, DEMO_OWNER)
 
     // Reachable at all: the journey's entrance must be in the frame's own
@@ -90,28 +90,64 @@ test.describe('the core journey', { tag: '@pending' }, () => {
     await expect(casesEntry, 'a practice must be able to reach its cases from the nav').toBeVisible()
     await casesEntry.click()
 
-    // Create a case, the way a receptionist opening a new patient does.
+    // One step, not two. The backend takes a case's photos as storage
+    // object ids it already holds (cases.CreateCaseInput.PhotoObjectIDs),
+    // so the surface is expected to pick the file, upload it and create
+    // the case from one submission -- which is also the shape the work
+    // actually has: a receptionist photographs the patient and opens the
+    // case, rather than opening an empty case and coming back later.
     await page.getByRole('button', { name: UI_NAMES.newCase }).click()
     const name = caseName()
     await page.getByRole('textbox', { name: UI_NAMES.caseNameField }).fill(name)
-    await page.getByRole('button', { name: /create|save|confirm/i }).click()
 
-    // The case exists and is findable: a list a person can come back to.
-    await expect(page.getByText(name)).toBeVisible()
-
-    // Attach the photograph. Choosing a file in the browser's own dialog
-    // is the user's click; everything after it is the product's job.
-    await page.getByText(name).click()
     const chooser = page.waitForEvent('filechooser')
     await page.getByRole('button', { name: UI_NAMES.addPhoto }).click()
     await (await chooser).setFiles(PATIENT_PHOTO)
 
-    // The photo is attached and visible on the case -- the whole point of
-    // the upload, and the thing go/storage's three-step protocol exists
-    // to make true.
+    await page.getByRole('button', { name: /create|save|confirm/i }).click()
+
+    // The case exists, is findable, and carries the photo -- which is
+    // what go/storage's three-step protocol exists to make true.
+    await expect(page.getByText(name), 'the case must be findable after creation').toBeVisible({
+      timeout: 30_000,
+    })
+    await page.getByText(name).click()
     await expect(
       page.getByRole('img', { name: /photo|patient|before/i }).first(),
-      'the uploaded photo must appear on the case',
+      'the photo submitted with the case must appear on it',
+    ).toBeVisible({ timeout: 30_000 })
+  })
+
+  test('block A: a case one colleague opened is visible to another', async ({ page }) => {
+    // The property that makes this a practice's tool rather than a
+    // personal notebook, and the one the backend's own list query got
+    // wrong: it listed by creator, so a dentist could not see the case
+    // the receptionist had just opened for them, and a returning patient
+    // met a colleague who could not find their last case -- one patient,
+    // two charts, a split record.
+    //
+    // Tenant isolation is what protects another practice's cases (proven
+    // separately in authorization.spec.ts); inside one practice, the
+    // people who treat a patient together must see the same case.
+    const name = caseName()
+
+    await signInAs(page, DEMO_OWNER)
+    await page.getByRole('link', { name: UI_NAMES.navCases }).click()
+    await page.getByRole('button', { name: UI_NAMES.newCase }).click()
+    await page.getByRole('textbox', { name: UI_NAMES.caseNameField }).fill(name)
+    const chooser = page.waitForEvent('filechooser')
+    await page.getByRole('button', { name: UI_NAMES.addPhoto }).click()
+    await (await chooser).setFiles(PATIENT_PHOTO)
+    await page.getByRole('button', { name: /create|save|confirm/i }).click()
+    await expect(page.getByText(name)).toBeVisible({ timeout: 30_000 })
+
+    // A colleague in the same practice, signing in on the same machine
+    // the way a shift change happens at a front desk.
+    await signInAs(page, DEMO_READER)
+    await page.getByRole('link', { name: UI_NAMES.navCases }).click()
+    await expect(
+      page.getByText(name),
+      'a colleague in the same practice cannot see the case, so the patient gets a second chart',
     ).toBeVisible({ timeout: 30_000 })
   })
 
