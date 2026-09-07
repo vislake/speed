@@ -17,9 +17,13 @@
  * throwaway OpenAI-compatible images provider -- fake-image-provider.mjs
  * under e2e/test-utils, wired in playwright.config.ts -- is what lets a
  * freshly booted server complete the generation deterministically). To
- * run the passing B gates alone while C and D are still open:
+ * run the passing A and B gates while C and D are still open:
  *
- *   pnpm exec playwright test --grep "block B"
+ *   pnpm exec playwright test --grep "block A|block B"
+ *
+ * (A must ride along with B: each run boots a fresh server and a fresh
+ * database, and block B's helpers open a case that block A's own tests
+ * create earlier in the same run.)
  *
  * The gates stay out of the default run for a structural reason, not an
  * implementation one: go/authn's per-IP login budget (limitLoginByIP,
@@ -379,12 +383,17 @@ test.describe('the core journey', { tag: '@pending' }, () => {
 /**
  * Opens a case that already has a photo on it, creating one when the run
  * has none. Written as a helper because blocks B, C and D all start from
- * that state; its shape will firm up when block A's surface lands, which
- * is the point at which guessing stops.
+ * that state. Its targeting firmed up when block A's surface landed: the
+ * page's FIRST listitem is the frame navigation's own Home entry, not a
+ * case row (the nav list precedes the main landmark in the DOM and both
+ * use the listitem role), so the helper scopes to the main landmark --
+ * the cases list -- before taking its first row. It deliberately opens
+ * whatever the newest case is rather than creating one, mirroring a
+ * receptionist continuing yesterday's work.
  */
 async function openCaseWithPhoto(page: Page): Promise<void> {
   await openSurface(page, UI_NAMES.navCases)
-  const firstCase = page.getByRole('listitem').first()
+  const firstCase = page.getByRole('main').getByRole('listitem').first()
   await expect(
     firstCase,
     'block B starts from a case with a photo, which block A is what creates',
