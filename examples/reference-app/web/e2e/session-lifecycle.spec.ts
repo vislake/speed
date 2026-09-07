@@ -44,7 +44,16 @@ test('signing out ends the session and signing in again reaches the frame', asyn
 
   // Current behaviour: the session-ended branch, with its own action
   // back to the sign-in surface. See this file's header.
-  await expect(page.getByText(SESSION_TEXT.endedTitle)).toBeVisible()
+  // The screen's own heading, not any text saying so.
+  //
+  // `getByText('Session ended')` matched two elements after 04e1102
+  // registered the product-shell namespace: the title AND the live-region
+  // announcement that now renders for a screen reader. Both appearing is
+  // the fix working -- a context change that ends a session has to be
+  // announced, not only drawn -- so the gate was wrong to assume one.
+  // Naming the heading says "the session-ended screen is showing" and
+  // stays true however many places also say it in words.
+  await expect(page.getByRole('heading', { name: SESSION_TEXT.endedTitle })).toBeVisible()
   await expect(page.getByRole('button', { name: SESSION_TEXT.signInAgain })).toBeVisible()
   // The frame is gone. Asserted through the sign-out control, not a nav
   // link: a nav link is absent on a narrow viewport whether or not
