@@ -1741,37 +1741,59 @@ func configFromEnv() (serverConfig, error) {
 // examples/reference-app/integration_test/distributed_mode_test.go proves
 // end to end against real Docker-backed infrastructure.
 func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() error, *compliance.Module, error) {
-	// Deliberately NOT setting dbkit.Options.AuditBus here, even though
-	// notes.Note implements dbkit.Auditable (see model.go): every note
-	// write in this app goes through dbkit.Repository[Note], which wraps
-	// Create in a WithTenantSession transaction. This USED TO deadlock a
-	// same-SQLite-file persister into "database is locked" (SQLITE_BUSY)
-	// on every single note creation, confirmed empirically while wiring
-	// this app, because dbkit.auditCapturePlugin's write-capture callback
-	// published synchronously, *inside* that still-open transaction, so a
-	// persister (audit.Module, below) writing into this SAME SQLite file
-	// tried to open a second write session against a database that
-	// already held an uncommitted write transaction on the very same OS
-	// thread. A later round removed that hazard for exactly this shape:
-	// the plugin now buffers its captured events on the write's own
-	// context and WithTenantSession publishes them only once its own
-	// transaction has genuinely committed, reproduced and proven closed
-	// against two real connections to one real SQLite file in
-	// go/dbkit/audit_capture_test.go's
-	// TestAuditCapturePlugin_WithTenantSession_SameFileSynchronousPersister_NoLongerDeadlocks.
-	// See go/dbkit/AGENTS.md's "Audit trail collection" section (Known
-	// limitation, now marked resolved for this shape) for the full
-	// write-up.
+	// dbkit.Options.AuditBus is wired here (and notes.Note does implement
+	// dbkit.Auditable -- see its model.go), for org: org's OrgNode,
+	// Membership and Invitation models opt into dbkit.Auditable, and doc
+	// 10's "automatic first, declaration second" rule says their writes
+	// are auto-captured by dbkit's GORM callbacks rather than recorded by
+	// hand-written audit.Emit calls at each write path. The automatic
+	// mechanism's same-SQLite-file self-deadlock history does not stand in
+	// the way: the plugin USED TO publish synchronously *inside* the
+	// still-open WithTenantSession transaction, so a persister
+	// (audit.Module, below) writing into this SAME SQLite file collided
+	// with the write lock its own goroutine held (SQLITE_BUSY), confirmed
+	// empirically while wiring this app. A later dbkit round removed that
+	// hazard for exactly this Repository[T] shape -- the plugin buffers
+	// its captured events on the write's own context and WithTenantSession
+	// publishes them only once its own transaction has genuinely
+	// committed, reproduced and proven closed against two real connections
+	// to one real SQLite file in go/dbkit/audit_capture_test.go's
+	// TestAuditCapturePlugin_WithTenantSession_SameFileSynchronousPersister_NoLongerDeadlocks
+	// (full write-up in go/dbkit/AGENTS.md's "Audit trail collection"
+	// section).
 	//
-	// This app still does not wire AuditBus here, though, since a
-	// genuinely separate persister connection remains the simpler,
-	// clearer choice even with the deadlock gone -- not because the
-	// automatic mechanism would still fail. It instead persists its audit
-	// trail through the declarative audit.Emit call notes/handler.go's
-	// NotesCreateNote makes explicitly -- after h.repo.Create has already
-	// returned, i.e. after that transaction has committed, which is why
-	// Emit's call site never depended on the fix above in the first
-	// place.
+	// Org's models are captured, and notes' are not, through
+	// Options.AuditModels -- the per-model capture scope dbkit's Options
+	// gained for exactly this composition: Note is deliberately NOT in the
+	// list, because notes records its own trail through the declarative
+	// audit.Emit call notes/handler.go's NotesCreateNote makes after the
+	// note's transaction has committed (a genuinely separate persister
+	// connection remaining the simpler, clearer choice for notes, and its
+	// "notes.note.create" rows the only record of a note write). Were the
+	// capture scope to include Note, every note create would land twice --
+	// once as the derived "note.create" row, once as the explicit
+	// "notes.note.create" Emit row -- and note update/delete writes would
+	// land under "note.update"/"note.delete" actions nothing declares,
+	// which the persister's vocabulary gate refuses with a structured
+	// alert. The scope list is this app's explicit answer to "which
+	// Auditable models on this connection does the automatic mechanism
+	// own": org's three, nothing else. go/org/AGENTS.md's "Audit trail
+	// collection" section and go/dbkit/AGENTS.md's audit section carry the
+	// full contract; cmd/server/org_p1_audit_test.go pins the composed
+	// outcome (member removal and node delete during an impersonation
+	// session each leaving a dual-identity row).
+	//
+	// The bus itself is constructed right below, BEFORE dbkit.Open, and
+	// the SAME instance is handed to Kernel.Bootstrap through
+	// WithEventBus further down: reg.EventBus() must be the very bus the
+	// capture plugin publishes on, or org's captured writes would vanish
+	// into a bus audit.Module's subscriptions never see -- the one wiring
+	// mistake this composition cannot fail loudly about, since each half
+	// works on its own. With cfg.RedisAddr set the bus is the real
+	// Redis-backed one (and doubles as the "kv" seam's store, as below);
+	// unset, it is pkgcore's in-process memory bus, the identical
+	// implementation (and identical zero capability declaration) the
+	// standalone Preset would otherwise resolve on its own.
 	//
 	// authn's own PII columns (email, phone, TOTP secrets) must have their
 	// serializer registered BEFORE dbkit.Open: GORM resolves a model's
@@ -1799,8 +1821,58 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, nil, fmt.Errorf("reference-app: register pki's local-key serializer: %w", regErr)
 	}
 
-	db, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
+	// The audit-capture bus is constructed here, before dbkit.Open wires
+	// it into Options.AuditBus below, and the identical instance is handed
+	// to Kernel.Bootstrap's WithEventBus later -- see the comment on the
+	// Open call for why the two must be one and the same bus. With
+	// cfg.RedisAddr set, the bus is the real Redis-backed implementation
+	// over a go-redis client this host constructs and owns (the client is
+	// what cleanup closes); unset, it is pkgcore's in-process memory bus,
+	// the identical implementation -- and identical zero capability
+	// declaration -- the standalone Preset would otherwise resolve on its
+	// own inside Bootstrap. busCapabilities declares what the chosen
+	// implementation genuinely carries, so the WithEventBus call below can
+	// declare it the way every other injection in this function does.
+	var (
+		bus             pkgcore.EventBus
+		busCapabilities pkgcore.Capability
+		redisBus        *eventbusredis.EventBus
+		redisClient     *redis.Client
+	)
+	if cfg.RedisAddr != "" {
+		redisClient = redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+		redisBus = eventbusredis.NewEventBus(redisClient)
+		bus = redisBus
+		busCapabilities = pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
+	} else {
+		bus = pkgcore.NewMemoryEventBus()
+		busCapabilities = 0
+	}
+
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     cfg.SQLitePath,
+		// Org's automatic write capture publishes on bus -- see the long
+		// comment above this call for why the bus exists before Open, and
+		// why the scope lists org's three models and deliberately nothing
+		// else (notes.Note stays out: its module records its own trail
+		// through audit.Emit).
+		AuditBus: bus,
+		AuditModels: []any{
+			org.OrgNode{},
+			org.Membership{},
+			org.Invitation{},
+		},
+	})
 	if err != nil {
+		// The Redis client created above has no goroutine or connection
+		// yet (go-redis dials lazily; the eventbus starts nothing until a
+		// Subscribe), but it exists -- close it so no startup error path
+		// leaks the handle. Every later error path runs the cleanup
+		// closure, which closes redisClient itself.
+		if redisClient != nil {
+			_ = redisClient.Close()
+		}
 		return nil, nil, nil, fmt.Errorf("reference-app: open database: %w", err)
 	}
 
@@ -1808,8 +1880,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// (nil until then), standaloneQueue by the pki module's wiring above
 	// (nil until then), and smileSimReconcilerStop and
 	// periodicTaskSchedulerStop by their start calls below (both nil until
-	// then); redisBus and redisClient are filled below when cfg.RedisAddr
-	// selects the injected Redis-backed composition (nil otherwise).
+	// then); redisBus and redisClient were filled above, where the
+	// audit-capture bus was constructed, when cfg.RedisAddr selects the
+	// injected Redis-backed composition (nil otherwise).
 	// cleanup closes the services and the job queue first -- stopping the
 	// two ticker loops, config's anti-loss poller, rbac's cache janitor
 	// and the queue's workers so none of them drains a job, enqueues a
@@ -1823,8 +1896,6 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		configService             *config.Service
 		rbacService               *rbac.Service
 		standaloneQueue           *jobs.StandaloneQueue
-		redisBus                  *eventbusredis.EventBus
-		redisClient               *redis.Client
 		smileSimReconcilerStop    func()
 		periodicTaskSchedulerStop func()
 	)
@@ -2634,22 +2705,29 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// actually receive the audit.EventRecorded event notesModule's
 	// handler publishes through audit.Emit (see NewHandler's wiring
 	// below), and what lets orgModule's own subscriptions receive
-	// authn's UserCreated event on that same bus: no separate bus
-	// construction is needed the way it would be if this app wired
-	// dbkit.Options.AuditBus (see db's own doc comment above for why it
-	// deliberately does not).
+	// authn's UserCreated event on that same bus. The bus itself was
+	// constructed above -- this app wires dbkit.Options.AuditBus for org's
+	// automatic write capture, which is why the construction happens
+	// before dbkit.Open, and why the SAME bus is injected here: see the
+	// Open call's own comment for the full reasoning, and org_p1_audit_test.go
+	// for the composed proof.
 	//
 	// WithDeploymentMode(cfg.DeploymentMode) declares the topology the
 	// composition is validated against; it never selects an implementation
 	// (docs/internal/03-deployment-modes.md's orthogonality rule). Every
-	// stateful seam below follows the exact same conditional-injection
-	// shape APP_REDIS_ADDR originally established for the "eventbus" seam
-	// alone: an unset env var leaves that seam on the Preset's in-process
-	// default (so a plain `go run ./cmd/server` is byte-for-byte unaffected
-	// by this round), and a configured one injects a real implementation
-	// with the capability bits that implementation genuinely carries.
+	// stateful seam below except the eventbus seam follows the conditional-
+	// injection shape APP_REDIS_ADDR originally established for the
+	// "eventbus" seam alone: an unset env var leaves THAT seam on the
+	// Preset's in-process default (so a plain `go run ./cmd/server` is
+	// byte-for-byte unaffected by this round), and a configured one
+	// injects a real implementation with the capability bits that
+	// implementation genuinely carries. The eventbus seam is the one
+	// deliberate exception -- it is injected in BOTH branches, memory or
+	// Redis, because the org audit round moved its construction before
+	// dbkit.Open (see the Open call's own comment) and Kernel.Bootstrap
+	// must resolve to that same pre-built bus.
 	//
-	// When APP_REDIS_ADDR is set, WithEventBus injects a REAL
+	// When APP_REDIS_ADDR is set, that pre-built bus is a REAL
 	// Redis-backed EventBus -- eventbus/redis's NewEventBus over a go-redis
 	// client this host constructs and owns -- declaring
 	// MultiReplicaSafe|SurvivesRestart, the capabilities the Redis Streams
@@ -2661,10 +2739,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// instances. This is not merely a convenience -- a distributed
 	// deployment mode requires MultiReplicaSafe of every seam that carries
 	// shared state (docs/internal/03-deployment-modes.md's capability
-	// table), so wiring the "eventbus" seam alone, as this app did before
-	// this round, can never let a distributed composition succeed: the
-	// very next seam Kernel.Bootstrap resolves and validates, "kv", would
-	// still fail on the Preset's in-process default.
+	// table), so wiring the "eventbus" seam alone can never let a
+	// distributed composition succeed: the very next seam Kernel.Bootstrap
+	// resolves and validates, "kv", would still fail on the Preset's
+	// in-process default.
 	//
 	// When the APP_S3_* variables are set (configFromEnv's own doc
 	// comment on s3EndpointEnv has the completeness rule), WithObjectStore
@@ -2709,11 +2787,18 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// itself. The no-concrete-infrastructure-implementation rule constrains
 	// business modules, not the application that assembles them.
 	kernelOptions := []pkgcore.KernelOption{pkgcore.WithDeploymentMode(cfg.DeploymentMode)}
+	// The eventbus seam is injected in BOTH branches -- not left to the
+	// Preset's default -- because the bus was already constructed above
+	// (before dbkit.Open wired it as Options.AuditBus): reg.EventBus()
+	// must resolve to that same bus, or org's captured writes would
+	// publish onto a bus auditModule's subscriptions never see, each half
+	// of the audit path working in isolation while no row ever lands.
+	// busCapabilities carries the declaration of whichever implementation
+	// the branch above chose (zero for the in-process memory bus, the
+	// same declaration its "eventbus.memory" builtin registration
+	// carries).
+	kernelOptions = append(kernelOptions, pkgcore.WithEventBus(bus, busCapabilities))
 	if cfg.RedisAddr != "" {
-		redisClient = redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
-		redisBus = eventbusredis.NewEventBus(redisClient)
-		kernelOptions = append(kernelOptions,
-			pkgcore.WithEventBus(redisBus, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
 		kernelOptions = append(kernelOptions,
 			pkgcore.WithKVStore(kvredis.NewKVStore(redisClient), pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart))
 	}

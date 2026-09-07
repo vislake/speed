@@ -825,12 +825,24 @@ const fakeSMSGatewayURL = "http://127.0.0.1:1/sms"
 // rejected up front, it is validated -- and with every seam resolved from
 // the Preset, the distributed mode's required capabilities cannot be met.
 // Kernel.Bootstrap must fail with ErrCapabilityUnsatisfied, naming the
-// first shortfall: the "eventbus" seam's "eventbus.memory" implementation
+// first shortfall: the "eventbus" seam's in-process memory implementation
 // lacking MultiReplicaSafe while the mode is "distributed". Bootstrap
 // performs that validation before any Subscribe or goroutine starts, so
 // this test needs no Docker and never touches a network, and it guarantees
 // the mode can never silently degrade into a SQLite-and-in-memory run
 // under a "distributed" label.
+//
+// The org audit round changed WHO resolves that implementation without
+// changing the property: buildServer now constructs the event bus itself
+// -- before dbkit.Open, so the automatic org audit capture can publish on
+// the same bus the Kernel later resolves, see the Open call's own comment
+// -- and injects it through WithEventBus in the standalone as well as the
+// Redis composition. A distributed boot without cfg.RedisAddr therefore
+// fails on the INJECTED memory bus, which pkgcore's capability error names
+// as implementation "<injected>" (an injected seam has no registry name to
+// report -- the host knows what it injected); the seam, capability and
+// mode naming is unchanged, and that is the part that proves the mode can
+// never silently degrade.
 //
 // cfg.SMSGatewayURL is set to fakeSMSGatewayURL so that authn's own
 // wiring-time SMS-sender validation, which buildServer reaches BEFORE
@@ -850,7 +862,7 @@ func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *test
 	if !errors.Is(err, pkgcore.ErrCapabilityUnsatisfied) {
 		t.Fatalf("buildServer with DeploymentModeDistributed: error = %v, want errors.Is(err, pkgcore.ErrCapabilityUnsatisfied)", err)
 	}
-	for _, want := range []string{`seam "eventbus"`, `"eventbus.memory"`, "MultiReplicaSafe", `"distributed"`} {
+	for _, want := range []string{`seam "eventbus"`, `"<injected>"`, "MultiReplicaSafe", `"distributed"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("buildServer with DeploymentModeDistributed: error %q does not mention %s", err, want)
 		}
