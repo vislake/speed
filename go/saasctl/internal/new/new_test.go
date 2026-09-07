@@ -203,6 +203,88 @@ func TestRunMaterializesEverySelection(t *testing.T) {
 	}
 }
 
+// TestRunSpeedRootBreakingGoModGrammarIsRefusedBeforeAnythingCreated
+// pins the P1 fix for a speed checkout whose PATH the go.mod grammar
+// cannot carry: the replace directives embed the resolved speed-root path
+// verbatim, and the go.mod grammar is not every filesystem path's grammar
+// -- a space cuts the replace right-hand side (modfile then reads the
+// remainder as a version), parentheses derail the directive's shape -- so
+// materializing against such a checkout ships a go.mod no go tool accepts,
+// while `saasctl new` had exited 0 over it. The produced go.mod document
+// is therefore handed to the go command's own parser (modfile.Parse)
+// before anything is created, and a document that does not parse is
+// refused with an execution error naming the checkout path. The check
+// sits on the ARTIFACT, so it covers every resolution tier: the flag tier
+// (--speed-root) is exercised by the subtests' named roots, and the
+// discovery tier by the third subtest, which runs from inside a spaced
+// checkout with no flag and no SPEED_ROOT -- the tier whose resolved path
+// previously received no validation at all. Every subtest asserts the
+// refusal lands before the target directory exists.
+func TestRunSpeedRootBreakingGoModGrammarIsRefusedBeforeAnythingCreated(t *testing.T) {
+	t.Setenv(speedRootEnv, "")
+	// Roots whose paths are legal on the filesystem yet break the go.mod
+	// grammar once substituted into a replace directive: a space (modfile
+	// reads the post-space remainder as a version) and parentheses (the
+	// directive's shape no longer parses).
+	for _, breaking := range []string{"speed dev", "speed(dev)"} {
+		breaking := breaking
+		t.Run("flag tier: "+breaking, func(t *testing.T) {
+			root := t.TempDir()
+			checkout := filepath.Join(root, breaking)
+			if err := os.MkdirAll(checkout, 0o755); err != nil {
+				t.Fatalf("create the checkout: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(checkout, "go.work"),
+				[]byte("go 1.25.0\n\nuse ./go/pkgcore\n"), 0o644); err != nil {
+				t.Fatalf("write the checkout's go.work: %v", err)
+			}
+			target := filepath.Join(t.TempDir(), "probeapp")
+			code, stdout, stderr := runNew(t, testRunArgs(checkout, target, "none"))
+			if code != 1 {
+				t.Fatalf("Run = %d, want 1 (a speed-root path breaking the produced go.mod must refuse the run); stderr:\n%s", code, stderr)
+			}
+			if !strings.Contains(stderr, checkout) {
+				t.Errorf("stderr %q does not name the breaking checkout path %q as the cause", stderr, checkout)
+			}
+			if strings.Contains(stdout, "Wrote") {
+				t.Error("refused run reported writing files")
+			}
+			if _, err := os.Stat(target); !os.IsNotExist(err) {
+				t.Errorf("refused run created the target directory (stat err = %v); the refusal must land before anything is created", err)
+			}
+		})
+	}
+	t.Run("discovery tier: spaced checkout resolved from inside it", func(t *testing.T) {
+		root := t.TempDir()
+		checkout := filepath.Join(root, "speed dev")
+		if err := os.MkdirAll(filepath.Join(checkout, "consumer", "apps"), 0o755); err != nil {
+			t.Fatalf("create the checkout tree: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(checkout, "go.work"),
+			[]byte("go 1.25.0\n\nuse ./go/pkgcore\n"), 0o644); err != nil {
+			t.Fatalf("write the checkout's go.work: %v", err)
+		}
+		// The auto-discovery shape: no --speed-root and no SPEED_ROOT, the
+		// working directory somewhere inside the checkout -- the invocation
+		// shape whose resolved path previously received no validation at all.
+		t.Chdir(filepath.Join(checkout, "consumer", "apps"))
+		target := filepath.Join(t.TempDir(), "probeapp")
+		code, stdout, stderr := runNew(t, []string{"--speed-root", "", target})
+		if code != 1 {
+			t.Fatalf("Run = %d, want 1 (the discovered checkout's path breaks the produced go.mod; stderr):\n%s", code, stderr)
+		}
+		if !strings.Contains(stderr, checkout) {
+			t.Errorf("stderr %q does not name the discovered checkout path %q as the cause", stderr, checkout)
+		}
+		if strings.Contains(stdout, "Wrote") {
+			t.Error("refused run reported writing files")
+		}
+		if _, err := os.Stat(target); !os.IsNotExist(err) {
+			t.Errorf("refused run created the target directory (stat err = %v)", err)
+		}
+	})
+}
+
 // TestRunEmptyTargetDirectoryAcceptedAndSecondRunRefused pins the
 // empty-directory carve-out (a prepared mount point or checkout
 // directory is a fine target) and the not-empty refusal on the second

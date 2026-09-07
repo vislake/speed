@@ -155,9 +155,14 @@ func TestRunConfigDispatchesThroughCLI(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("run(config print) wrote to stderr on success: %q", stderr)
 	}
+	// The go.mod argument is absolute, so the sqlite path row reports the
+	// anchored effective file -- the fixed app.db default resolved next to
+	// that go.mod's directory, derived here through the same shared
+	// resolution the print command renders.
+	effective := (appconfig.Config{SQLitePath: "app.db"}).EffectiveDBPath(mod)
 	want := "deployment mode  standalone   unset or empty (default standalone)\n" +
 		"port             8080         unset or empty (default 8080)\n" +
-		"sqlite path      app.db       unset or empty (default app.db)\n" +
+		fmt.Sprintf("sqlite path      %s unset or empty (default app.db)\n", effective) +
 		"config key       [redacted]   unset or empty (development default)\n" +
 		"org index key    [redacted]   unset or empty (development default)\n" +
 		"authn blind index key [redacted]   unset or empty (development default)\n" +

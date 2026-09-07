@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -429,11 +428,13 @@ func migrate(modPath string) (report string, err error) {
 	// while letting a relative APP_DB_PATH resolve against the CALLER's
 	// working directory would fork the two on the identical operator
 	// shape. An ABSOLUTE APP_DB_PATH needs no anchor and is used exactly
-	// as the app would use it.
-	dbPath := cfg.SQLitePath
-	if !filepath.IsAbs(dbPath) {
-		dbPath = filepath.Join(filepath.Dir(modPath), dbPath)
-	}
+	// as the app would use it. The anchoring is cfg.EffectiveDBPath's
+	// single shared function -- config print renders the same answer for
+	// the same project, so the command that tells the operator which file
+	// the app opens and the command that actually opens it cannot fork
+	// (appconfig's own doc comment and this module's AGENTS.md carry the
+	// rule).
+	dbPath := cfg.EffectiveDBPath(modPath)
 
 	// A file that does not exist yet is a fresh database, migrated from
 	// nothing. A file that exists must be a regular file, and -- because a

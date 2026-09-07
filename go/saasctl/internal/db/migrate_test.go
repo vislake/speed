@@ -240,7 +240,7 @@ func TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the full.mod fixture: %v", err)
 	}
-	if err := os.WriteFile(mod, full, 0o644); err != nil {
+	if err = os.WriteFile(mod, full, 0o644); err != nil {
 		t.Fatalf("write the project's go.mod: %v", err)
 	}
 
@@ -256,14 +256,28 @@ func TestMigrateDefaultDatabaseAnchorsAtTheGoModArgument(t *testing.T) {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
 
-	// The report names the database next to the go.mod...
-	want := fmt.Sprintf("Migrated %s: applied 24 migration files (authn 11, config 1, org 9, rbac 3)\n",
-		filepath.Join(projectDir, "app.db"))
+	// The report names the database next to the go.mod. The expected path
+	// is derived through cfg.EffectiveDBPath -- the single shared
+	// resolution this command opens its database through and config print
+	// renders for the same project (its own regression test compares
+	// against the same function), so the two commands' answers to "which
+	// file does this project open" are compared through the one function,
+	// never reimplemented beside it -- with the literal join kept as the
+	// guard that the shared function itself still anchors correctly.
+	cfg, err := appconfig.Load("cli-app", os.LookupEnv)
+	if err != nil {
+		t.Fatalf("resolve the bootstrap environment the command ran under: %v", err)
+	}
+	wantPath := cfg.EffectiveDBPath(mod)
+	if wantPath != filepath.Join(projectDir, "app.db") {
+		t.Fatalf("EffectiveDBPath = %q, want %q (the shared resolution itself moved)", wantPath, filepath.Join(projectDir, "app.db"))
+	}
+	want := fmt.Sprintf("Migrated %s: applied 24 migration files (authn 11, config 1, org 9, rbac 3)\n", wantPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 	// ...the database file really exists there with the full ledger...
-	if got := ledgerCounts(t, openDB(t, filepath.Join(projectDir, "app.db"))); !reflect.DeepEqual(got, fullUniverseLedger) {
+	if got := ledgerCounts(t, openDB(t, wantPath)); !reflect.DeepEqual(got, fullUniverseLedger) {
 		t.Errorf("ledger = %v, want %v", got, fullUniverseLedger)
 	}
 	// ...and nothing was created in the caller's working directory.
@@ -289,7 +303,7 @@ func TestMigrateRelativeDBPathAnchorsAtTheGoModArgument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the full.mod fixture: %v", err)
 	}
-	if err := os.WriteFile(mod, full, 0o644); err != nil {
+	if err = os.WriteFile(mod, full, 0o644); err != nil {
 		t.Fatalf("write the project's go.mod: %v", err)
 	}
 
@@ -304,14 +318,28 @@ func TestMigrateRelativeDBPathAnchorsAtTheGoModArgument(t *testing.T) {
 		t.Errorf("stderr = %q, want empty", stderr)
 	}
 
-	// The report names the database anchored next to the go.mod...
-	want := fmt.Sprintf("Migrated %s: applied 24 migration files (authn 11, config 1, org 9, rbac 3)\n",
-		filepath.Join(projectDir, "rel.db"))
+	// The report names the database anchored next to the go.mod. The
+	// expected path is derived through cfg.EffectiveDBPath -- the single
+	// shared resolution this command opens its database through and config
+	// print renders for the same project (its own regression test compares
+	// against the same function), so the config-print answer and the
+	// migrate-opened file are byte-identical by construction, with the
+	// literal join kept as the guard that the shared function itself still
+	// anchors correctly.
+	cfg, err := appconfig.Load("cli-app", os.LookupEnv)
+	if err != nil {
+		t.Fatalf("resolve the bootstrap environment the command ran under: %v", err)
+	}
+	wantPath := cfg.EffectiveDBPath(mod)
+	if wantPath != filepath.Join(projectDir, "rel.db") {
+		t.Fatalf("EffectiveDBPath = %q, want %q (the shared resolution itself moved)", wantPath, filepath.Join(projectDir, "rel.db"))
+	}
+	want := fmt.Sprintf("Migrated %s: applied 24 migration files (authn 11, config 1, org 9, rbac 3)\n", wantPath)
 	if stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 	// ...the database file really exists there with the full ledger...
-	if got := ledgerCounts(t, openDB(t, filepath.Join(projectDir, "rel.db"))); !reflect.DeepEqual(got, fullUniverseLedger) {
+	if got := ledgerCounts(t, openDB(t, wantPath)); !reflect.DeepEqual(got, fullUniverseLedger) {
 		t.Errorf("ledger = %v, want %v", got, fullUniverseLedger)
 	}
 	// ...and nothing was created in the caller's working directory.

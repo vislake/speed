@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -80,7 +81,14 @@ func fixture(t *testing.T, name string) string {
 // infrastructure seam left on its Preset default -- one line per value,
 // each sourced line naming the default (or the seam) it fell back to. The
 // five key rows and the S3 secret key / SMTP password rows show only the
-// [redacted] marker in the value column.
+// [redacted] marker in the value column. The sqlite path row's value
+// column shows the EFFECTIVE file -- the relative app.db default anchored
+// to the fixture go.mod's directory (testdata/, the directory the app is
+// documented to run from) -- while its source column keeps the raw
+// default literal; the fixture's go.mod argument is relative, so the
+// anchored file reads "testdata/app.db" (the absolute form of the same
+// file, for an absolute go.mod argument, is the regression test below's
+// subject).
 //
 // Before the appconfig twin covered the full bootstrap surface, this
 // rendered only the first five lines: the rows below are the regression
@@ -96,7 +104,7 @@ func TestPrintResolvesAndRendersTheDocumentedDefaults(t *testing.T) {
 	}
 	want := "deployment mode  standalone   unset or empty (default standalone)\n" +
 		"port             8080         unset or empty (default 8080)\n" +
-		"sqlite path      app.db       unset or empty (default app.db)\n" +
+		"sqlite path      testdata/app.db unset or empty (default app.db)\n" +
 		"config key       [redacted]   unset or empty (development default)\n" +
 		"org index key    [redacted]   unset or empty (development default)\n" +
 		"authn blind index key [redacted]   unset or empty (development default)\n" +
@@ -127,7 +135,12 @@ func TestPrintResolvesAndRendersTheDocumentedDefaults(t *testing.T) {
 // defaults case above: before the twin covered the full surface, setting
 // these twelve infrastructure variables changed nothing about print's
 // output (they were silently ignored), which this test's line count and
-// per-row "from APP_*" provenance would have caught.
+// per-row "from APP_*" provenance would have caught. The sqlite path row
+// shows both sides of its value: the effective file -- the relative
+// APP_DB_PATH anchored to the fixture go.mod's directory (testdata/, the
+// file a boot from that directory opens) -- in the value column, and the
+// raw value it came from in the source column's parenthetical, since the
+// two differ whenever APP_DB_PATH is relative.
 func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, map[string]string{
 		appconfig.DeploymentModeEnv:       "distributed",
@@ -159,7 +172,7 @@ func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 	}
 	want := "deployment mode  distributed  from APP_DEPLOYMENT_MODE\n" +
 		"port             9090         from PORT\n" +
-		"sqlite path      db.sqlite    from APP_DB_PATH\n" +
+		"sqlite path      testdata/db.sqlite from APP_DB_PATH (raw value: db.sqlite)\n" +
 		"config key       [redacted]   from APP_CONFIG_KEY\n" +
 		"org index key    [redacted]   from APP_ORG_INDEX_KEY\n" +
 		"authn blind index key [redacted]   from APP_AUTHN_BLIND_INDEX_KEY\n" +
@@ -340,5 +353,108 @@ func TestPrintTooManyGoModArgumentsIsAUsageError(t *testing.T) {
 	want := "saasctl config print: expected at most one go.mod path, got 2\n\n" + printUsage
 	if stderr != want {
 		t.Errorf("stderr = %q, want %q", stderr, want)
+	}
+}
+
+// TestPrintSqlitePathRowShowsTheEffectiveFileAnchoredAtTheGoModArgument
+// pins the P2 fix for the sqlite path row: print exists to tell the
+// operator which file the generated app would actually use, and before the
+// fix it reported the RAW relative APP_DB_PATH -- the value db migrate
+// anchors to the go.mod argument's directory before opening (its own
+// relative-path regression test pins that half) -- so an operator reading
+// "db.sqlite" from print while migrate operated on
+// /path/to/project/db.sqlite had exactly the misunderstanding print exists
+// to prevent. The operator shape is the one the anchoring rule exists for:
+// the project's go.mod lives in another directory, the command runs from
+// this one, and APP_DB_PATH carries a relative value. The row's value
+// column must carry the effective file -- anchored to the go.mod
+// argument's directory, byte-identical to the path db migrate would open
+// -- compared here through cfg.EffectiveDBPath, the single shared
+// resolution both commands use, and the raw value must stay visible in the
+// source column.
+func TestPrintSqlitePathRowShowsTheEffectiveFileAnchoredAtTheGoModArgument(t *testing.T) {
+	projectDir := t.TempDir()
+	mod := filepath.Join(projectDir, "go.mod")
+	fixtureContent, err := os.ReadFile(fixture(t, "print.mod"))
+	if err != nil {
+		t.Fatalf("read the print.mod fixture: %v", err)
+	}
+	if err = os.WriteFile(mod, fixtureContent, 0o644); err != nil {
+		t.Fatalf("write the project's go.mod: %v", err)
+	}
+
+	// The operator runs the command from a directory that is not the
+	// project's, pointing at the project's go.mod by absolute path, with a
+	// RELATIVE APP_DB_PATH.
+	callerDir := t.TempDir()
+	t.Chdir(callerDir)
+	code, stdout, stderr := drivePrint(t, []string{mod}, map[string]string{
+		appconfig.DBPathEnv: "db.sqlite",
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+
+	// The value column carries the effective file -- derived through the
+	// shared resolution function db migrate opens its database through, so
+	// the comparison is against the one function, never a reimplementation
+	// beside it -- and the effective file is exactly the file a boot from
+	// the project's own directory opens.
+	cfg, err := appconfig.Load("cli-app", os.LookupEnv)
+	if err != nil {
+		t.Fatalf("resolve the bootstrap environment the command ran under: %v", err)
+	}
+	effective := cfg.EffectiveDBPath(mod)
+	if want := filepath.Join(projectDir, "db.sqlite"); effective != want {
+		t.Fatalf("EffectiveDBPath = %q, want %q (the shared resolution itself moved)", effective, want)
+	}
+	if !strings.Contains(stdout, "sqlite path      "+effective) {
+		t.Errorf("stdout does not carry the effective file %q in the sqlite path row's value column:\n%s", effective, stdout)
+	}
+	// The raw value stays visible in the source column when it differs
+	// from the effective file.
+	if !strings.Contains(stdout, "from APP_DB_PATH (raw value: db.sqlite)") {
+		t.Errorf("stdout does not carry the raw value with its provenance in the sqlite path row:\n%s", stdout)
+	}
+	// And nothing about the caller's directory leaked into the answer.
+	if strings.Contains(stdout, callerDir) {
+		t.Errorf("stdout carries the caller's directory %q; the effective file anchors at the go.mod argument's directory", callerDir)
+	}
+}
+
+// TestPrintSqlitePathRowAbsoluteDBPathUsedVerbatim pins the other half of
+// the anchoring rule: an ABSOLUTE APP_DB_PATH is used exactly as the
+// generated app would use it -- raw and effective coincide, the value
+// column carries the absolute value, and no raw parenthetical is needed.
+func TestPrintSqlitePathRowAbsoluteDBPathUsedVerbatim(t *testing.T) {
+	projectDir := t.TempDir()
+	mod := filepath.Join(projectDir, "go.mod")
+	fixtureContent, err := os.ReadFile(fixture(t, "print.mod"))
+	if err != nil {
+		t.Fatalf("read the print.mod fixture: %v", err)
+	}
+	if err = os.WriteFile(mod, fixtureContent, 0o644); err != nil {
+		t.Fatalf("write the project's go.mod: %v", err)
+	}
+	callerDir := t.TempDir()
+	t.Chdir(callerDir)
+	absolute := filepath.Join(projectDir, "fixed.db")
+	code, stdout, stderr := drivePrint(t, []string{mod}, map[string]string{
+		appconfig.DBPathEnv: absolute,
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "sqlite path      "+absolute) {
+		t.Errorf("stdout does not carry the absolute APP_DB_PATH %q in the sqlite path row's value column:\n%s", absolute, stdout)
+	}
+	if strings.Contains(stdout, "raw value") {
+		t.Errorf("stdout renders a raw-value parenthetical for an absolute %s; raw and effective coincide there:\n%s", appconfig.DBPathEnv, stdout)
 	}
 }

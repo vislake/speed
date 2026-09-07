@@ -36,6 +36,7 @@ package appconfig
 import (
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -461,6 +462,28 @@ func Load(appName string, lookup LookupEnv) (Config, error) {
 	cfg.SMSGatewayURL, cfg.SMSGatewayURLFromEnv = smsGatewayURL, smsGatewayURL != ""
 
 	return cfg, nil
+}
+
+// EffectiveDBPath returns the SQLite database FILE the generated app of
+// the project at modPath would actually open when booted from its own
+// directory: SQLitePath used exactly as-is when absolute (an absolute
+// APP_DB_PATH is used verbatim by the app, so it is used verbatim here
+// too), and joined onto the directory of the go.mod argument when
+// relative -- the unset-APP_DB_PATH default (defaultSQLitePath, the fixed
+// app.db literal) or a relative APP_DB_PATH. Relative paths resolve
+// against the process working directory, and the app is documented to run
+// from its go.mod's directory, so a relative value names a file in that
+// directory: joining onto filepath.Dir(modPath) is exactly that, whatever
+// directory the caller invokes a command from. db migrate opens this
+// function's answer and config print renders it, so the two commands'
+// shared answer to "which file does this project open" is one function
+// and cannot fork -- migrate's own doc comment on the anchoring carries
+// the full argument.
+func (c Config) EffectiveDBPath(modPath string) string {
+	if filepath.IsAbs(c.SQLitePath) {
+		return c.SQLitePath
+	}
+	return filepath.Join(filepath.Dir(modPath), c.SQLitePath)
 }
 
 // loadKey resolves one of the five hex-encoded 32-byte key variables: the

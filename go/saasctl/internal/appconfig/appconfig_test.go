@@ -631,6 +631,38 @@ func TestAppConfigIsTheGeneratedProjectsTwin(t *testing.T) {
 	}
 }
 
+// TestEffectiveDBPath pins the anchoring rule db migrate and config print
+// share through this one function: an absolute SQLitePath is used exactly
+// as the generated app would use it, and a relative one -- the app.db
+// default or a relative APP_DB_PATH -- joins onto the directory of the
+// go.mod argument, whatever form that argument takes. A relative go.mod
+// argument's directory and an absolute one denote the same directory
+// (both resolve against the process working directory), so the joined
+// results name the same file.
+func TestEffectiveDBPath(t *testing.T) {
+	tests := []struct {
+		name       string
+		modPath    string
+		sqlitePath string
+		want       string
+	}{
+		{name: "absolute APP_DB_PATH used verbatim", modPath: "/proj/go.mod", sqlitePath: "/db/app.db", want: "/db/app.db"},
+		{name: "relative APP_DB_PATH anchored to an absolute go.mod directory", modPath: "/proj/go.mod", sqlitePath: "db.sqlite", want: "/proj/db.sqlite"},
+		{name: "relative APP_DB_PATH anchored to a relative go.mod directory", modPath: "sub/go.mod", sqlitePath: "db.sqlite", want: "sub/db.sqlite"},
+		{name: "default go.mod argument keeps the plain name", modPath: "go.mod", sqlitePath: "app.db", want: "app.db"},
+		{name: "app.db default anchored to another project", modPath: "/other/go.mod", sqlitePath: "app.db", want: "/other/app.db"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			got := (Config{SQLitePath: tt.sqlitePath}).EffectiveDBPath(tt.modPath)
+			if got != tt.want {
+				t.Errorf("EffectiveDBPath(%q, %q) = %q, want %q", tt.modPath, tt.sqlitePath, got, tt.want)
+			}
+		})
+	}
+}
+
 // keyByteLiteral renders one development key as its normalized byte
 // literals, e.g. "0x00,0x01,...,0x1f", for template-source comparison.
 func keyByteLiteral(key []byte) string {

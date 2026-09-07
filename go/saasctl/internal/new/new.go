@@ -32,6 +32,7 @@ import (
 	"slices"
 	"strings"
 
+	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
 
 	"github.com/vislake/speed/go/saasctl/internal/template"
@@ -359,6 +360,23 @@ func validateModuleName(name string) error {
 // directory it created with them, so a failed run never leaves a
 // half-skeleton -- not even empty directories -- that would block the next
 // attempt.
+//
+// The one produced file an external tool consumes is the go.mod, so its
+// produced bytes are handed to the go command's own parser (modfile.Parse
+// -- the same delegate-to-authority self-check `upgrade` applies to its
+// rewritten output, and the third instance of the produced-artifact rule
+// this module's AGENTS.md records) BEFORE anything touches the filesystem:
+// the replace directives embed the resolved speed-root path verbatim, the
+// go.mod grammar is not every filesystem path's grammar (a space cuts a
+// replace right-hand side, parentheses derail the directive's shape), and
+// a document that does not parse is refused with an execution error naming
+// the checkout path instead of shipping a skeleton no `go mod tidy`
+// accepts. Sitting the check on the produced document rather than on the
+// speed-root input is what lets it cover every resolution tier (the
+// --speed-root flag, SPEED_ROOT and the ancestor-go.work discovery)
+// without any tier enumerating the grammar's breaking characters. The
+// bytes the gate accepts are the bytes the write loop lands, so the
+// parsed document and the delivered one cannot drift apart.
 func materialize(target, speedRoot, selectionKey string, stdout io.Writer) error {
 	absTarget, err := filepath.Abs(target)
 	if err != nil {
@@ -367,6 +385,22 @@ func materialize(target, speedRoot, selectionKey string, stdout io.Writer) error
 	appName, err := deriveModuleName(target)
 	if err != nil {
 		return err
+	}
+
+	// Pre-render the selection's go.mod document -- the embedded asset with
+	// this run's app name and speed root substituted -- and refuse a
+	// document the go command cannot parse before the target directory even
+	// exists. The document is embedded as go.mod.txt (see the asset list
+	// below for why the .txt name is inert); the loop that writes the tree
+	// reuses these very bytes for the go.mod asset.
+	goModTemplate := "selection/" + selectionKey + "/go.mod.txt"
+	rawGoMod, err := fs.ReadFile(template.Project, template.ProjectRoot+"/"+goModTemplate)
+	if err != nil {
+		return fmt.Errorf("read embedded template %s: %w", goModTemplate, err)
+	}
+	goModContent := replaceTokens(rawGoMod, appName, speedRoot)
+	if _, parseErr := modfile.Parse("go.mod", goModContent, nil); parseErr != nil {
+		return fmt.Errorf("the go.mod this run would produce does not parse after substituting the speed checkout path %q into its replace directives: %w; the path is embedded verbatim in the produced document, and a path the go.mod grammar cannot carry (a space or parentheses are the usual breakers) ships a project no go tool accepts -- relocate the checkout or pass --speed-root naming a path the grammar accepts; nothing has been created", speedRoot, parseErr)
 	}
 
 	// Refuse an existing non-empty target up front: the skeleton writes
@@ -388,8 +422,8 @@ func materialize(target, speedRoot, selectionKey string, stdout io.Writer) error
 		// git, whose checkouts carry their own modes. An existing empty
 		// target keeps its creator's mode: MkdirAll leaves an existing
 		// directory's permissions alone.
-		if err := os.MkdirAll(absTarget, 0o750); err != nil {
-			return fmt.Errorf("create target %s: %w", absTarget, err)
+		if mkdirErr := os.MkdirAll(absTarget, 0o750); mkdirErr != nil {
+			return fmt.Errorf("create target %s: %w", absTarget, mkdirErr)
 		}
 	default:
 		return fmt.Errorf("inspect target %s: %w", absTarget, statErr)
@@ -418,7 +452,7 @@ func materialize(target, speedRoot, selectionKey string, stdout io.Writer) error
 		// a file named go.mod (such a directory reads as a nested module
 		// root), so the document carries the inert .txt name through the
 		// embed and is renamed here.
-		asset{templatePath: "selection/" + selectionKey + "/go.mod.txt", targetPath: "go.mod"},
+		asset{templatePath: goModTemplate, targetPath: "go.mod"},
 		asset{templatePath: "selection/" + selectionKey + "/server.go", targetPath: "cmd/server/server.go"},
 	)
 
@@ -427,20 +461,28 @@ func materialize(target, speedRoot, selectionKey string, stdout io.Writer) error
 		rollbackTarget(absTarget, written)
 	}
 	for _, a := range assets {
-		content, err := fs.ReadFile(template.Project, template.ProjectRoot+"/"+a.templatePath)
-		if err != nil {
-			removeAll()
-			return fmt.Errorf("read embedded template %s: %w", a.templatePath, err)
-		}
-		if strings.HasSuffix(a.templatePath, ".go") {
-			stripped, err := template.StripBuildIgnore(content)
+		// The go.mod asset is written from the pre-rendered, parse-gated
+		// bytes above; every other asset is rendered here, after the same
+		// strip-and-substitute steps.
+		var content []byte
+		if a.templatePath == goModTemplate {
+			content = goModContent
+		} else {
+			content, err = fs.ReadFile(template.Project, template.ProjectRoot+"/"+a.templatePath)
 			if err != nil {
 				removeAll()
-				return fmt.Errorf("template %s: %w", a.templatePath, err)
+				return fmt.Errorf("read embedded template %s: %w", a.templatePath, err)
 			}
-			content = stripped
+			if strings.HasSuffix(a.templatePath, ".go") {
+				stripped, err := template.StripBuildIgnore(content)
+				if err != nil {
+					removeAll()
+					return fmt.Errorf("template %s: %w", a.templatePath, err)
+				}
+				content = stripped
+			}
+			content = replaceTokens(content, appName, speedRoot)
 		}
-		content = replaceTokens(content, appName, speedRoot)
 
 		full := filepath.Join(absTarget, a.targetPath)
 		// Directories 0o750 and files 0o600, the owner-private modes of the

@@ -111,6 +111,18 @@ single declaration in print.go, and every rendered row consults it. An
 S3 group or SMTP pair that is only partially set is refused, exactly as
 the generated app's own bootstrap refuses it.
 
+The sqlite path row is the one row that resolves one step further than
+the bootstrap itself: every value this command reports is the value the
+generated app would actually use, and a relative database path -- the
+app.db default when APP_DB_PATH is unset, or a relative APP_DB_PATH --
+is used by the app relative to the directory it runs from, which is the
+go.mod argument's directory. The row's value column therefore shows the
+effective file (anchored to that directory, exactly the file db migrate
+opens and the file a boot from the project's own directory opens), and
+when the raw value differs from it -- a relative APP_DB_PATH -- the raw
+value is shown in the source column too, so "the value" and "the
+effective value" are both visible.
+
 Examples:
 
   saasctl config print
@@ -175,6 +187,17 @@ func reportError(stderr io.Writer, err error) int {
 // variables, the S3 secret key and the SMTP password render as
 // [redacted] whatever the environment holds, every other variable prints
 // its resolved value.
+//
+// The sqlite path row is the one row whose value column shows the
+// EFFECTIVE file rather than the raw resolved value: a relative database
+// path -- the app.db default or a relative APP_DB_PATH -- resolves
+// against the directory the app runs from, the go.mod argument's
+// directory, and the file that actually opens is what the row reports,
+// through cfg.EffectiveDBPath, the single shared resolution db migrate
+// opens its database with. The raw value and its provenance stay visible
+// in the source column when the two differ (sqlitePathSource), so the
+// operator sees both the input and the effective file -- the module
+// discipline this command's AGENTS.md entry records in its strong form.
 func print(modPath string) (string, error) {
 	proj, err := project.Read(modPath)
 	if err != nil {
@@ -184,6 +207,7 @@ func print(modPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	effectiveDBPath := cfg.EffectiveDBPath(modPath)
 
 	// One row per bootstrap variable, in the order the generated app's own
 	// config.go parses them (deployment mode, port, database path, the
@@ -206,8 +230,15 @@ func print(modPath string) (string, error) {
 			provenance(appconfig.PortEnv, cfg.PortFromEnv, fmt.Sprintf("unset or empty (default %s)", cfg.Port)),
 		},
 		{
-			"sqlite path", appconfig.DBPathEnv, cfg.SQLitePath,
-			provenance(appconfig.DBPathEnv, cfg.SQLitePathFromEnv, fmt.Sprintf("unset or empty (default %s)", cfg.SQLitePath)),
+			// The sqlite path row's value is the effective FILE a boot
+			// opens (cfg.EffectiveDBPath -- relative values anchored to the
+			// go.mod argument's directory, the app's documented run
+			// directory), not the raw resolved value, because this
+			// command's whole purpose is answering which file the app
+			// would actually use; the raw value stays visible in the
+			// source column when the two differ (sqlitePathSource).
+			"sqlite path", appconfig.DBPathEnv, effectiveDBPath,
+			sqlitePathSource(cfg, effectiveDBPath),
 		},
 		// The five key rows carry no value at all, not merely a redacted
 		// rendering of one: their raw bytes never enter this table, so the
@@ -305,6 +336,27 @@ func valueColumn(env, value string) string {
 		return redactedMarker
 	}
 	return value
+}
+
+// sqlitePathSource renders the sqlite path row's source column: where
+// the RAW value came from, and the raw value itself when it differs from
+// the effective file the value column shows. A relative raw value -- the
+// unset-APP_DB_PATH default (the fixed app.db literal, carried inside the
+// unset text below) or a relative APP_DB_PATH -- names a file in the
+// app's own directory while the effective column shows that file anchored
+// to the go.mod argument's directory, and "the value" and "the effective
+// value" are two different things an operator can need both of; an
+// absolute APP_DB_PATH is used exactly as the app would use it, so raw
+// and effective coincide and no raw parenthetical is needed.
+func sqlitePathSource(cfg appconfig.Config, effective string) string {
+	if !cfg.SQLitePathFromEnv {
+		return fmt.Sprintf("unset or empty (default %s)", cfg.SQLitePath)
+	}
+	source := fmt.Sprintf("from %s", appconfig.DBPathEnv)
+	if cfg.SQLitePath != effective {
+		source = fmt.Sprintf("%s (raw value: %s)", source, cfg.SQLitePath)
+	}
+	return source
 }
 
 // smtpPortValue renders the SMTP port column: blank when unset (0 would
