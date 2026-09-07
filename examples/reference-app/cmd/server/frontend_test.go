@@ -305,3 +305,156 @@ func TestFrontend_PathTraversal_StaysInsideTheDist(t *testing.T) {
 		}
 	}
 }
+
+// TestFrontend_PathTraversal_NoEscapeShapeNamesOrReadsOutsideTheDist is the
+// traversal battery behind the confinement rule, driven over the full shape
+// family at the composed-server level: raw and percent-encoded dot-dot
+// segments, multi-level ".." sequences, trailing-dot forms and dot-only
+// paths, each answered while a canary file sitting one directory above the
+// dist (a join that escaped the configured directory would land exactly on
+// it) never leaks a byte. The suite's assertion is the confinement property
+// itself -- no request can name or read a file outside the configured dist
+// directory -- pinned over every shape, with the serving answer pinned per
+// shape too: the root-pinned cleaning confines every escape attempt to a
+// name inside the dist, which does not exist there (the SPA-fallback
+// answer, index.html), is the dist's own index.html, or still sits under
+// the cleaned /assets/ prefix (the asset-miss 404). A real hashed asset
+// request closes the suite as the control: the same handler still serves
+// the dist's genuine file when the path is a legitimate one.
+func TestFrontend_PathTraversal_NoEscapeShapeNamesOrReadsOutsideTheDist(t *testing.T) {
+	cfg := testConfig(t)
+	dir := writeFrontendFixture(t)
+	// A canary file outside the dist directory (the fixture's parent): any
+	// join that escaped the configured directory would land on exactly this
+	// file, so its bytes in a response are the leak signal.
+	canary := "CANARY-OUTSIDE-THE-DIST"
+	if err := os.WriteFile(filepath.Join(filepath.Dir(dir), "canary.txt"), []byte(canary), 0o644); err != nil {
+		t.Fatalf("write canary: %v", err)
+	}
+	cfg.WebDistDir = dir
+	handler, cleanup, _, err := buildServer(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("cleanup: %v", err)
+		}
+	})
+
+	// wantPage and wantAssetMiss are the two confined answers an escape
+	// shape can produce, each the serving rules' ordinary answer for the
+	// CLEANED name, never an answer carrying an outside file: wantPage is
+	// the root/fallback answer (index.html, status 200) for a cleaned name
+	// that does not exist in the dist and is not under /assets/; wantAssetMiss
+	// is the real 404 a missing file under the cleaned /assets/ prefix gets
+	// (frontend.go's broken-deploy signal). Which of the two a shape lands
+	// on is a property of where its cleaned form sits, not of the escape
+	// attempt -- the pin collapses every shape into the dist, and the dist's
+	// own serving rules answer from there.
+	const (
+		wantPage = iota
+		wantAssetMiss
+	)
+	// escapeTargets are the traversal shapes: dot-dot segments raw and in
+	// their percent-encodings, single- and multi-level climbs, trailing-dot
+	// and dot-only paths, and traversal disguised under the /assets/ prefix.
+	escapeTargets := []struct {
+		name   string
+		target string
+		want   int
+	}{
+		{"raw dot-dot from the root", "/../canary.txt", wantPage},
+		{"encoded %2e%2e dot-dot", "/%2e%2e/canary.txt", wantPage},
+		{"encoded %2f separator after dot-dot", "/..%2fcanary.txt", wantPage},
+		{"fully encoded %2e%2e%2f climb", "/%2e%2e%2fcanary.txt", wantPage},
+		{"dot-dot through the assets prefix", "/assets/../../canary.txt", wantPage},
+		{"encoded climb through the assets prefix", "/assets/..%2f..%2fcanary.txt", wantPage},
+		{"encoded segments through the assets prefix", "/assets/%2e%2e/%2e%2e/canary.txt", wantPage},
+		{"single-level climb from a subdirectory", "/a/../canary.txt", wantPage},
+		{"two-level climb from a nested path", "/a/b/../../canary.txt", wantPage},
+		{"three-level climb from a deeper path", "/a/b/c/../../../canary.txt", wantPage},
+		{"staggered climbs from a nested path", "/a/../b/../../canary.txt", wantPage},
+		{"climb back through a named file", "/canary.txt/../../canary.txt", wantPage},
+		{"encoded climb from a subdirectory", "/a/..%2f..%2fcanary.txt", wantPage},
+		{"climb to the root from one level", "/a/../..", wantPage},
+		{"climb to the root from two levels", "/a/b/../../..", wantPage},
+		{"assets climb to the root", "/assets/..", wantPage},
+		{"bare dot-dot", "/..", wantPage},
+		{"trailing dot on the file name", "/canary.txt.", wantPage},
+		{"encoded trailing dot on the file name", "/canary.txt%2e", wantPage},
+		{"leading dot segment", "/./canary.txt", wantPage},
+		{"dot segment under assets, staying under assets", "/assets/./canary.txt", wantAssetMiss},
+		{"dot-only file name", "/...", wantPage},
+		{"dot-dot with a trailing space", "/..%20/canary.txt", wantPage},
+		{"staggered dot-dot segments", "/.././../canary.txt", wantPage},
+	}
+	for _, tt := range escapeTargets {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.target, nil))
+			if strings.Contains(rec.Body.String(), canary) {
+				t.Fatalf("GET %s leaked the canary file outside the dist: %s", tt.target, rec.Body)
+			}
+			if rec.Code >= http.StatusInternalServerError {
+				t.Fatalf("GET %s status = %d, want no server error; body = %s", tt.target, rec.Code, rec.Body)
+			}
+			switch tt.want {
+			case wantPage:
+				// Confinement collapses the shape to a name inside the dist
+				// that does not exist there, so the answer is the ordinary
+				// unknown-path one: index.html with status 200, never a 404
+				// for an escape (there is nothing to 404 over) and never a
+				// file from outside the directory.
+				if rec.Code != http.StatusOK {
+					t.Fatalf("GET %s status = %d, want the confined 200 answer; body = %s", tt.target, rec.Code, rec.Body)
+				}
+				if body := rec.Body.String(); !strings.Contains(body, `id="root"`) {
+					t.Fatalf("GET %s answered %q, want the app page (the confined answer); no outside file may ever appear", tt.target, body)
+				}
+			case wantAssetMiss:
+				// The cleaned name still sits under /assets/, so the miss
+				// answers with the serving rules' real 404 -- a broken-deploy
+				// signal for an asset that does not exist, never index.html
+				// and never an outside file.
+				if rec.Code != http.StatusNotFound {
+					t.Fatalf("GET %s status = %d, want the confined 404 (asset-shaped miss); body = %s", tt.target, rec.Code, rec.Body)
+				}
+				if body := rec.Body.String(); strings.Contains(body, `id="root"`) {
+					t.Fatalf("GET %s answered index.html for an asset-shaped miss, want the real 404", tt.target)
+				}
+			}
+		})
+	}
+
+	// Traversal disguised at the top of a real, in-dist name still only
+	// ever opens the dist's own file: /assets/../index.html cleans to
+	// /index.html, which exists inside the fixture -- the answer is the
+	// fixture's own index.html bytes, never a sibling file.
+	for _, target := range []string{"/assets/../index.html", "/../index.html", "/index.html"} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200; body = %s", target, rec.Code, rec.Body)
+		}
+		if body := rec.Body.String(); !strings.Contains(body, `id="root"`) || strings.Contains(body, canary) {
+			t.Fatalf("GET %s answered %q, want the dist's own index.html and never the canary", target, body)
+		}
+	}
+
+	// Control: the legitimate hashed-asset request the dist genuinely holds
+	// still serves its bytes through the same handler, so the battery's
+	// refusals are not over-broad -- only paths that could name a file
+	// outside the dist are confined.
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/"+fixtureAssetName, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /assets/%s status = %d, want 200; body = %s", fixtureAssetName, rec.Code, rec.Body)
+	}
+	if got := rec.Body.Bytes(); string(got) != string(fixtureAssetBody) {
+		t.Errorf("GET /assets/%s body = %q, want the fixture bytes %q", fixtureAssetName, got, fixtureAssetBody)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "public, max-age=31536000, immutable" {
+		t.Errorf("GET /assets/%s Cache-Control = %q, want the immutable hashed-asset policy", fixtureAssetName, cc)
+	}
+}

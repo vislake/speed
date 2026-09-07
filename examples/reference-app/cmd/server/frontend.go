@@ -65,10 +65,15 @@ package main
 // cleaning, so ".." segments collapse at the root instead of escaping it,
 // and the cleaned relative path is joined onto the configured directory
 // before opening -- a request can name no file outside APP_WEB_DIST
-// through cleaning alone. (A symlink INSIDE the dist directory pointing
-// outside it is not followed-guarded, exactly as with net/http's own file
-// server: the directory is the operator's own built output, and guarding
-// symlinks would be defending the deployer against themselves.)
+// through cleaning alone. The open site itself carries a same-function
+// refusal of any ".."-bearing or absolute relative path (see ServeHTTP),
+// so the confinement stays visible to taint analyzers that do not track
+// the cleaning invariant across cleanWebRel's function boundary and stays
+// in force even if that boundary is ever edited away. (A symlink INSIDE
+// the dist directory pointing outside it is not followed-guarded, exactly
+// as with net/http's own file server: the directory is the operator's own
+// built output, and guarding symlinks would be defending the deployer
+// against themselves.)
 
 import (
 	"errors"
@@ -167,10 +172,27 @@ func (f *frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.serveIndex(w, r)
 		return
 	}
-	// #nosec G703 -- gosec's taint analysis cannot see that rel passed
-	// through cleanWebRel, whose root-pinning path.Clean makes a ".."
-	// escape impossible before the join (its own doc comment spells the
-	// invariant out); the joined name can never leave f.dir.
+	// The refusal at the open site itself: rel is cleanWebRel's output, and
+	// the root pin inside cleanWebRel makes every clause below unreachable
+	// from this request path -- a "/"-pinned path.Clean cannot leave a ".."
+	// segment behind, and its result never starts with "/" -- but taint
+	// analyzers do not track that invariant across cleanWebRel's function
+	// boundary (CodeQL's go/path-injection fires at the open below on every
+	// scan; this file's #nosec G703 comment records gosec's same blindness),
+	// so the refusal exists to truncate the tainted flow where the analyzer
+	// can see it. It is also the belt-and-braces that documents what happens
+	// if an edit ever removes the pin: a ".."-bearing or absolute rel
+	// answers 404 and returns before the join, never reaching os.Open and
+	// never being swallowed by the SPA fallback.
+	if rel == ".." || strings.HasPrefix(rel, "../") ||
+		strings.Contains(rel, "/../") || filepath.IsAbs(rel) {
+		http.NotFound(w, r)
+		return
+	}
+	// #nosec G703 -- gosec's taint analysis cannot see the refusal above
+	// (it evaluates no guard branches), any more than it can see the
+	// root-pinning inside cleanWebRel; the joined name can never leave
+	// f.dir either way.
 	file, err := os.Open(filepath.Join(f.dir, filepath.FromSlash(rel)))
 	switch {
 	case err == nil:
