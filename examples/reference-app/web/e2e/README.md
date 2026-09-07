@@ -34,6 +34,17 @@ and a gate held back because the budget is full looked identical, so
 nothing in the suite could say what was still broken. An acceptance
 report cannot be honest on top of that.
 
+**A gate that skips itself unless `E2E_BASE_URL` is set must also carry
+`@deployment`.** Against a deployment the config narrows the run to
+`@deployment`, and a command-line `--grep` narrows it *further* rather
+than replacing that — the two intersect. So a deployment-only gate
+without the tag is excluded at both ends: skipped locally by its own
+guard, filtered out on the deployment for lacking the tag, and
+`--grep @pending` there answers "No tests found". One gate lived like
+that (the session address-source check) and had never run anywhere;
+nothing catches this automatically, so it is a rule to hold when adding
+a gate rather than something the suite enforces.
+
 The budget is a hard ceiling, not untidiness. `go/authn` allows five
 sign-ins per account per minute, the whole local run finishes in about
 twenty-five seconds, and there are three seeded demo accounts — so every
