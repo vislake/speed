@@ -21,8 +21,11 @@ package main
 //     temp directory and boot 2 could not remove boot 1's bytes). Boot 1
 //     runs with the queue worker and the scheduler disabled (the same
 //     gate), hosts a completed object whose retention deadline then
-//     passes plus a no-deadline survivor, and closes with both still
-//     served and listed -- expiry alone removes nothing. Boot 2 runs with
+//     passes plus a survivor whose own deadline -- settled at create,
+//     since an upload declaring no retention now expires at the module's
+//     default lifetime ceiling -- is still months away, and closes with
+//     both still served and listed -- expiry alone removes nothing.
+//     Boot 2 runs with
 //     the normal gate and the flow tests' injected cadence
 //     (periodicFlowTickInterval); its very first
 //     tick enqueues tenant-acme's first expiry sweep in a fresh
@@ -37,7 +40,7 @@ package main
 //     second connection server_test.go's audit test opens -- its bytes are
 //     gone on the filesystem under cfg.ObjectStoreRoot, its metadata and
 //     content answer 404, and the list holds only the survivor, whose own
-//     row, bytes and reads are untouched.
+//     row, bytes, reads and deadline are untouched.
 //
 //   - The compliance retention-sweep leg is the trigger-half twin of the
 //     storage leg above: TestBuildServer_PeriodicScheduler_RetentionSweep_
@@ -404,8 +407,11 @@ func errString(err error) string {
 // and dropped in boot 1: another honest record of the gate, and it leaves
 // boot 2's tenant slots entirely free for the sweep. Boot 1 hosts a
 // completed object whose retention deadline passes before it closes, plus
-// a no-deadline survivor, and asserts both are still served and listed
-// once the deadline is behind them: expiry alone removes nothing.
+// a survivor whose own deadline still sits at the module's default
+// lifetime ceiling -- 90 days under this host's no-option wiring, far
+// beyond the seconds the test spans -- and asserts both are still served
+// and listed once the expiring deadline is behind them: expiry alone
+// removes nothing.
 //
 // Boot 2 starts the same server over the same files with the normal gate
 // and the injected periodicFlowTickInterval cadence. Its first tick
@@ -419,9 +425,10 @@ func errString(err error) string {
 // content answer 404, the list holds only the survivor, the object's row
 // is absent from the database (observed through a second connection, the
 // same reach server_test.go's audit test uses), and its bytes are absent
-// under cfg.ObjectStoreRoot, then asserts the survivor's row, bytes and
-// reads are all untouched. This leg proves the first sweep of a fresh
-// window really runs through the real host wiring; the periodicity of
+// under cfg.ObjectStoreRoot, then asserts the survivor's row, bytes,
+// reads and deadline are all untouched. This leg proves the first sweep
+// of a fresh window really runs through the real host wiring; the
+// periodicity of
 // later windows (and a dead-lettered window's non-poisoning) is the
 // modules' own real-queue proof (go/storage's sweep_window_test.go,
 // go/compliance's retention_sweep_window_test.go), not this e2e's.
@@ -459,17 +466,41 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 		t.Fatalf("completed object's expiresAt %q is not RFC 3339: %v", expiring.ExpiresAt, err)
 	}
 
-	// The live survivor -- no expiresAt on the wire at all. Each completion
-	// attempts to enqueue a thumbnail-derive task; with the worker gated
-	// off, the queue's schema was never created (go/jobs applies it inside
-	// Start), so those enqueues fail and storage logs the failure as a
-	// warning, exactly as its wiring contract allows -- completion itself
-	// is never held hostage to the queue. That leaves boot 2 with no
-	// derivative backlog, so the first tick's sweep is claimed without
-	// competing for tenant-acme's worker slots.
+	// storageDefaultObjectLifetime mirrors go/storage/module.go's
+	// defaultMaxObjectLifetime -- the default ceiling in force for a host
+	// that wires no WithMaxObjectLifetime, which this one is (server.go's
+	// storage.NewModule call). The mirror is load-bearing: the survivor
+	// below lives because its default deadline sits months away, so a
+	// material change to the module's default -- or the host's adoption of
+	// its own shorter ceiling -- must revisit this two-boot shape, not
+	// pass it silently.
+	const storageDefaultObjectLifetime = 90 * 24 * time.Hour
+
+	// The survivor -- an ordinary upload declaring no retention at all.
+	// The default-life rule (go/storage/object.go's CreateParams.Retention
+	// doc) settles every row's expiry at create, so a no-request upload
+	// now carries a deadline at the module's configured maximum lifetime:
+	// storageDefaultObjectLifetime here, far beyond the seconds the test
+	// spans. That far deadline is exactly what makes this object a
+	// survivor -- the sweep spares it because its time has not come, never
+	// because it has no time. Each completion attempts to enqueue a
+	// thumbnail-derive task; with the worker gated off, the queue's schema
+	// was never created (go/jobs applies it inside Start), so those
+	// enqueues fail and storage logs the failure as a warning, exactly as
+	// its wiring contract allows -- completion itself is never held
+	// hostage to the queue. That leaves boot 2 with no derivative backlog,
+	// so the first tick's sweep is claimed without competing for
+	// tenant-acme's worker slots.
 	survivor := uploadAndComplete(t, boot1.srv, boot1Token, jpegBytes, "")
-	if survivor.ExpiresAt != "" {
-		t.Fatalf("survivor carries a retention deadline it was never declared with: %+v", survivor)
+	survivorDeadline, err := time.Parse(time.RFC3339Nano, survivor.ExpiresAt)
+	if err != nil {
+		t.Fatalf("survivor carries no expiry deadline: expiresAt %q is not RFC 3339 (%v); an upload declaring no retention must default to the module's lifetime ceiling",
+			survivor.ExpiresAt, err)
+	}
+	if survivorDeadline.Before(time.Now().Add(storageDefaultObjectLifetime-time.Minute)) ||
+		survivorDeadline.After(time.Now().Add(storageDefaultObjectLifetime+time.Minute)) {
+		t.Fatalf("survivor's default-life deadline = %v, want roughly now + the module's default maximum lifetime (%v); the sweep must spare it because its time has not come",
+			survivorDeadline, storageDefaultObjectLifetime)
 	}
 
 	// Wait the deadline out. Nothing in boot 1 can react to it -- no
@@ -588,6 +619,10 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 		"GET the survivor after the sweep")
 	if survivorAfter.ID != survivor.ID {
 		t.Fatalf("GET survivor answered object %s", survivorAfter.ID)
+	}
+	if survivorAfter.ExpiresAt != survivor.ExpiresAt {
+		t.Fatalf("the sweep changed the survivor's deadline: %q before, %q after (a spared object's row is untouched)",
+			survivor.ExpiresAt, survivorAfter.ExpiresAt)
 	}
 	survivorContent := storageRequest(t, boot2.srv, http.MethodGet,
 		"/api/v1/storage/objects/"+survivor.ID+"/content", boot2Token, demoOwnerUserID, "", nil)
