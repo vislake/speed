@@ -14,7 +14,8 @@
  * kinds the app knows. The business surfaces live in views/: home
  * (config/feature-driven), cases (the clinic's case list, the one-page
  * creation flow and one case's detail -- the block-A acceptance
- * surface), notes and account. The
+ * surface), notes, credits (the clinic's credit balance and ledger --
+ * the block-D surface) and account. The
  * binding callback is the account surface's subroute: the fragment
  * /auth/binding/<provider>?code=<code>&state=<state> is what the
  * account-ui BindingCallbackHandler completes at, so it parses here
@@ -45,6 +46,7 @@ import { CaseDetailView } from './views/case-detail-view.js'
 import { CasesCreateView } from './views/case-create-view.js'
 import { CasesView } from './views/cases-view.js'
 import { NotesView } from './views/notes-view.js'
+import { CreditsView } from './views/credits-view.js'
 import { AccountView } from './views/account-view.js'
 import { SignInView } from './views/sign-in-view.js'
 import { UserMenu } from './views/user-menu.js'
@@ -56,6 +58,9 @@ export const ROUTE_HOME = '/'
 export const ROUTE_CASES = '/cases'
 /** The notes list fragment. */
 export const ROUTE_NOTES = '/notes'
+/** The credits surface fragment: the clinic's credit balance and
+ * ledger (block D). */
+export const ROUTE_CREDITS = '/credits'
 /** The account surface fragment. */
 export const ROUTE_ACCOUNT = '/account'
 /** The account surface's binding-callback subroute prefix: the rest of
@@ -90,13 +95,15 @@ function isSocialProvider(value: string): value is SocialProvider {
 /** The fragment kinds the app renders, with the binding target a
  * provider plus the (code, state) pair its callback route completes
  * with. The cases surface is three fragments: the clinic list, the
- * one-page creation flow, and one case's detail (its id). */
+ * one-page creation flow, and one case's detail (its id). The credits
+ * fragment is the clinic's own credit balance and ledger (block D). */
 export type AppFragment =
   | { readonly kind: 'home' }
   | { readonly kind: 'cases' }
   | { readonly kind: 'casesCreate' }
   | { readonly kind: 'caseDetail'; readonly caseId: string }
   | { readonly kind: 'notes' }
+  | { readonly kind: 'credits' }
   | { readonly kind: 'account' }
   | { readonly kind: 'binding'; readonly target: BindingTarget }
   | {
@@ -155,6 +162,9 @@ export function parseHashFragment(fragment: string): AppFragment {
   if (path === ROUTE_NOTES) {
     return { kind: 'notes' }
   }
+  if (path === ROUTE_CREDITS) {
+    return { kind: 'credits' }
+  }
   if (path === ROUTE_ACCOUNT) {
     return { kind: 'account' }
   }
@@ -205,6 +215,8 @@ function selectedNavId(fragment: AppFragment): string | null {
       return NAV_CASES
     case 'notes':
       return NAV_NOTES
+    case 'credits':
+      return NAV_CREDITS
     case 'account':
     case 'binding':
       return NAV_ACCOUNT
@@ -220,6 +232,7 @@ function selectedNavId(fragment: AppFragment): string | null {
 const NAV_HOME = 'nav-home'
 const NAV_CASES = 'nav-cases'
 const NAV_NOTES = 'nav-notes'
+const NAV_CREDITS = 'nav-credits'
 const NAV_ACCOUNT = 'nav-account'
 
 function navHref(route: string): string {
@@ -268,6 +281,12 @@ export function AppView(): ReactElement {
       label: t('nav.notes'),
       href: navHref(ROUTE_NOTES),
       selected: selected === NAV_NOTES,
+    },
+    {
+      id: NAV_CREDITS,
+      label: t('nav.credits'),
+      href: navHref(ROUTE_CREDITS),
+      selected: selected === NAV_CREDITS,
     },
     {
       id: NAV_ACCOUNT,
@@ -319,6 +338,9 @@ export function AppView(): ReactElement {
       break
     case 'notes':
       content = <NotesView />
+      break
+    case 'credits':
+      content = <CreditsView />
       break
     case 'account':
       content = <AccountView />

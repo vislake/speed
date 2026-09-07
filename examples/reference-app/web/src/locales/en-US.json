@@ -6,7 +6,8 @@
     "home": "Home",
     "cases": "Cases",
     "notes": "Notes",
-    "account": "Account"
+    "account": "Account",
+    "credits": "Credits"
   },
   "signIn": {
     "registerPrompt": "No account yet?",
@@ -135,7 +136,10 @@
         "internalError": "Something went wrong on the server. Try again later.",
         "client": "Could not reach the server. Check your connection and try again.",
         "unknown": "Something went wrong. Try again later."
-      }
+      },
+      "cost": "This simulation cost {{value}} credits",
+      "cost_one": "This simulation cost {{value}} credit",
+      "cost_other": "This simulation cost {{value}} credits"
     },
     "share": {
       "action": "Share with patient",
@@ -189,6 +193,33 @@
       "internal": "Something went wrong on the server. Try again later.",
       "client": "The image could not be loaded. Check your connection and try again.",
       "unknown": "This preview could not be shown. Try again later."
+    }
+  },
+  "credits": {
+    "heading": "Credits",
+    "intro": "This clinic's AI smile simulations draw on a credit balance.",
+    "balance": "Balance",
+    "availableLine_one": "{{value}} credit available",
+    "availableLine_other": "{{value}} credits available",
+    "reservedLine_one": "{{value}} credit reserved by generations in flight",
+    "reservedLine_other": "{{value}} credits reserved by generations in flight",
+    "updatedLine": "Updated {{date}}",
+    "activityHeading": "Recent activity",
+    "empty": "No credit movements yet.",
+    "rows": {
+      "grant": "Top-up",
+      "expired": "Credits expired",
+      "deductPending": "Simulation (in progress)",
+      "deductConfirmed": "Simulation",
+      "deductRefunded": "Simulation refunded",
+      "unknown": "Ledger entry"
+    },
+    "rowMeta": "{{reason}} · {{date}}",
+    "errors": {
+      "permissionDenied": "You do not have permission to view this clinic's credits.",
+      "internalError": "The server could not read the credit information. Please try again.",
+      "client": "Could not reach the server. Please check the connection and try again.",
+      "unknown": "The credit information could not be loaded. Please try again."
     }
   }
 }

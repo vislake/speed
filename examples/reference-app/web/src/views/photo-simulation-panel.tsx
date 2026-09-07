@@ -110,6 +110,17 @@ const STATUS_TEXT_KEY: Readonly<Record<string, string>> = {
   cancelled: 'cases.sim.status.cancelled',
 }
 
+/**
+ * The credit cost of one smile simulation, mirrored from the service
+ * that charges it (internal/smilesim/service.go's CreditsPerSimulation,
+ * the flat cost Simulate reserves for one generation). The block-D
+ * surface shows this number next to a completed generation -- a
+ * generation must say what it cost -- and the mirror is pinned to the
+ * Go source by photo-simulation-cost.test.ts, so the displayed price
+ * cannot drift from the reserved amount without a failing test.
+ */
+export const SIMULATION_CREDIT_COST = 10
+
 /** One of the option dimensions, rendered as native radio rows: each
  * option is a visible radio input whose label text is its accessible
  * name -- the block-B gate addresses every offered option by that
@@ -338,7 +349,14 @@ export function PhotoSimulationPanel({
    * text inside the comparison. */
   readonly index: number
 }): ReactElement {
-  const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
+  const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
+  // The price the block-D surface renders beside a completed
+  // generation, formatted in the surface language like every other
+  // number on this page.
+  const formatCost = useMemo(() => {
+    const formatter = new Intl.NumberFormat(i18n.language)
+    return (value: number): string => formatter.format(value)
+  }, [i18n.language])
   const queryClient = useQueryClient()
   const currentTenant = useCurrentTenant()
   const tenantId = currentTenant?.tenantId ?? null
@@ -657,6 +675,15 @@ export function PhotoSimulationPanel({
             simulation={newestSucceeded}
             photoObjectId={photoObjectID}
           />
+          {/* What this generation cost, where the generation happened
+              (the block-D acceptance): the charge reads from the same
+              mirror the service's reservation pins. */}
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+            {t('cases.sim.cost', {
+              count: SIMULATION_CREDIT_COST,
+              value: formatCost(SIMULATION_CREDIT_COST),
+            })}
+          </Typography>
         </Box>
       )}
 

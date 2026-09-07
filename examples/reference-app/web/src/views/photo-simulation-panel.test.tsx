@@ -226,6 +226,36 @@ describe('PhotoSimulationPanel', () => {
     }
   })
 
+  it('says what the completed generation cost, beside the comparison (block D)', async () => {
+    // The block-D acceptance shape: where the generation happened, the
+    // page must say what it cost -- a number, not just the idea of a
+    // cost (a pay-per-use product that spends silently is one nobody
+    // trusts). The caption reads the displayed cost from the same
+    // mirrored constant the simulation-cost-lockstep suite pins to the
+    // service's own charge.
+    const blobDoubles = installBlobURLDoubles()
+    try {
+      const view = await renderCaseDetail({ initialCases: [caseWithPhoto()] })
+      await view.findByRole('button', { name: 'Simulate smile' })
+      await userEvent.click(view.getByRole('button', { name: 'Simulate smile' }))
+      const comparison = await view.findByRole(
+        'region',
+        { name: 'Before and after' },
+        { timeout: 8000 },
+      )
+      await waitFor(() =>
+        expect(within(comparison).getAllByRole('img')).toHaveLength(2),
+      )
+      // The cost caption under the pair carries the figure itself --
+      // the amount, in the surface language, never just the word.
+      expect(
+        await view.findByText('This simulation cost 10 credits'),
+      ).toBeInTheDocument()
+    } finally {
+      blobDoubles.restore()
+    }
+  })
+
   it('generates again from a changed option set and keeps both attempts', async () => {
     const view = await renderCaseDetail({ initialCases: [caseWithPhoto()] })
 

@@ -1,13 +1,14 @@
 /**
  * codes-alignment.test.ts -- the reference-app shell's reachable-error
- * alignment suite: every server-emittable error code the shell's eight
+ * alignment suite: every server-emittable error code the shell's nine
  * surfaces can be answered with (the auth-ui sign-in/session family, the
  * account-ui signed-in family, the tenancy-ui switch family, the notes
  * create surface, the cases surface, the smile-simulation surface the
- * block-B round added, and the two block-C share surfaces: the clinic's
- * share action on the case page and the patient's share page) is
- * rendered through a reachable-error whitelist, and this suite pins the
- * whitelists to the server codes themselves.
+ * block-B round added, the two block-C share surfaces: the clinic's
+ * share action on the case page and the patient's share page, and the
+ * credits surface the block-D round added) is rendered through a
+ * reachable-error whitelist, and this suite pins the whitelists to the
+ * server codes themselves.
  *
  * The server side of the comparison is GO_PINNED below: a hand-maintained
  * enumeration of the codes the Go side of this app can answer with on
@@ -66,6 +67,7 @@ import {
   SHARE_VIEW_ERROR_TEXT_KEYS,
 } from './share-errors.js'
 import { NOTE_ERROR_TEXT_KEYS } from './views/notes-view.js'
+import { CREDITS_ERROR_TEXT_KEYS } from './views/credits-view.js'
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
 import enUS from './locales/en-US.json' with { type: 'json' }
 
@@ -250,6 +252,13 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // go/billing/errors.go -- the credit-reservation refusal a simulate
   // answers when the tenant's balance cannot cover one generation.
   'billing.insufficient_credits': 'go/billing/errors.go:70 (ErrInsufficientCredits)',
+  // go/billing/errors.go -- the handler-level envelope the credits
+  // surface's two GETs fold an unclassifiable failure into (the block-D
+  // round's own surface addition; billing.invalid_limit and
+  // billing.invalid_request stay out of the enumeration because the
+  // credits view never sends a limit -- the server's default window is
+  // the read it needs -- so neither 400 is reachable on this surface).
+  'billing.internal_error': 'go/billing/errors.go:171 (ErrInternal)',
   // go/ai-gateway/errors.go -- the entitlement-gate refusal a simulate
   // answers for a tenant whose subscription lacks the image model.
   'aigateway.entitlement_denied': 'go/ai-gateway/errors.go:42 (ErrEntitlementDenied)',
@@ -320,7 +329,7 @@ function nonClientCodes(codes: readonly string[]): string[] {
   return codes.filter((code) => !code.startsWith('client.'))
 }
 
-/** The eight whitelists by surface, for failure messages that name the
+/** The nine whitelists by surface, for failure messages that name the
  * list a drift was found in. */
 const SURFACE_WHITELISTS: Readonly<Record<string, readonly string[]>> = {
   'auth-ui sign-in/session': AUTH_UI_ERROR_TEXT_CODES,
@@ -331,6 +340,7 @@ const SURFACE_WHITELISTS: Readonly<Record<string, readonly string[]>> = {
   'smile-simulation surface': Object.keys(SMILE_SIM_ERROR_TEXT_KEYS),
   'share action (case detail)': Object.keys(SHARE_ACTION_ERROR_TEXT_KEYS),
   'patient share page': Object.keys(SHARE_VIEW_ERROR_TEXT_KEYS),
+  'credits surface': Object.keys(CREDITS_ERROR_TEXT_KEYS),
 }
 
 /** A citation's path, line and sentinel identifier. */
@@ -407,11 +417,12 @@ describe('reachable-error whitelists vs the server code set', () => {
     // simulate call can surface from go/jobs, go/billing and
     // go/ai-gateway) + the four sharing sentinels the block-C round's
     // two surfaces added (three in go/sharing/errors.go and the
-    // creation/access rate-limit sentinel in go/sharing/ratelimit.go).
-    // The size guard makes a GO_PINNED edit (in either direction) fail
-    // loudly here rather than silently through the subset assertions
-    // below.
-    expect(Object.keys(GO_PINNED)).toHaveLength(72)
+    // creation/access rate-limit sentinel in go/sharing/ratelimit.go) +
+    // billing.internal_error, the one handler-level envelope the
+    // block-D round's credits surface can be answered with. The size
+    // guard makes a GO_PINNED edit (in either direction) fail loudly
+    // here rather than silently through the subset assertions below.
+    expect(Object.keys(GO_PINNED)).toHaveLength(73)
   })
 
   it('renders a bilingual text for every reachable smile-simulation code', () => {

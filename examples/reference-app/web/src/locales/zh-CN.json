@@ -6,7 +6,8 @@
     "home": "首页",
     "cases": "病例",
     "notes": "记事",
-    "account": "账户"
+    "account": "账户",
+    "credits": "额度"
   },
   "signIn": {
     "registerPrompt": "还没有账户？",
@@ -135,7 +136,10 @@
         "internalError": "服务器出了点问题，请稍后重试。",
         "client": "无法连接服务器，请检查网络后重试。",
         "unknown": "出了点问题，请稍后重试。"
-      }
+      },
+      "cost": "本次模拟生成花费 {{value}} 额度",
+      "cost_one": "本次模拟生成花费 {{value}} 额度",
+      "cost_other": "本次模拟生成花费 {{value}} 额度"
     },
     "share": {
       "action": "分享给患者",
@@ -189,6 +193,33 @@
       "internal": "服务器出了点问题，请稍后重试。",
       "client": "图片加载失败，请检查网络后重试。",
       "unknown": "无法显示此预览，请稍后重试。"
+    }
+  },
+  "credits": {
+    "heading": "额度",
+    "intro": "本诊所 AI 微笑模拟的用量与剩余额度。",
+    "balance": "余额",
+    "availableLine_one": "{{value}} 额度可用",
+    "availableLine_other": "{{value}} 额度可用",
+    "reservedLine_one": "进行中的生成已预留 {{value}} 额度",
+    "reservedLine_other": "进行中的生成已预留 {{value}} 额度",
+    "updatedLine": "更新于 {{date}}",
+    "activityHeading": "最近动态",
+    "empty": "还没有额度变动记录。",
+    "rows": {
+      "grant": "充值",
+      "expired": "额度过期",
+      "deductPending": "模拟生成（进行中）",
+      "deductConfirmed": "模拟生成",
+      "deductRefunded": "模拟生成已退款",
+      "unknown": "账目记录"
+    },
+    "rowMeta": "{{reason}} · {{date}}",
+    "errors": {
+      "permissionDenied": "你没有查看本诊所额度的权限。",
+      "internalError": "读取额度信息时服务出错，请稍后重试。",
+      "client": "无法连接服务器，请检查网络后重试。",
+      "unknown": "读取额度信息失败，请稍后重试。"
     }
   }
 }

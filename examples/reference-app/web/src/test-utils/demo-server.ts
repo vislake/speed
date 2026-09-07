@@ -96,7 +96,16 @@
  * POST /api/v1/cases/photos/upload (201 {object_id}, the one-shot
  * upload answer), GET /api/v1/cases/{caseId} (200, one case) and GET
  * /api/v1/cases/{caseId}/photos/{photoObjectID}/content (200, the
- * photo's bytes). The notes answers mirror the real handler's
+ * photo's bytes) -- plus the block-D credits surface's two reads, GET
+ * /api/v1/billing/credits/balance (200, the balance) and GET
+ * /api/v1/billing/credits/transactions (200, the recent ledger rows,
+ * newest first), mirroring go/billing's read-only fragment: the
+ * creditHistory option scripts the first-served ledger, accepted
+ * simulation jobs append their own deduct rows statefully, and a
+ * job's terminal outcome settles the row in place (confirmed on
+ * success, refunded when the simulateJobOutcome option scripts a
+ * dead_letter generation -- see the two options' docs). The notes
+ * answers mirror the real handler's
  * refusals: a create whose trimmed text is empty answers 400
  * notes.text_required (internal/notes/handler.go), one over the
  * 4000-character limit answers 400 notes.text_too_long, and the deny
@@ -165,6 +174,7 @@ import type {
   AuthnIdentity,
   AuthnLoginAttempt,
   AuthnSession,
+  BillingCreditTransaction,
 } from '@speed/api-sdk'
 import type { PublicConfigResponse } from '@speed/api-client'
 import { errorResponse, jsonResponse } from './real-client.js'
@@ -359,6 +369,42 @@ export interface DemoServerOptions {
     readonly status: number
     readonly code: string
   }
+  /** The terminal outcome of every accepted simulation job, reached
+   * after the job-status reads advance past running; default
+   * 'succeeded' -- a journey scripts 'dead_letter' to drive the shape
+   * of a generation that failed after its reservation opened (the
+   * provider refused, the job died, and the reservation came back as
+   * the ledger row's refunded state). */
+  readonly simulateJobOutcome?: 'succeeded' | 'dead_letter'
+  /**
+   * The billing ledger as first served: the balance and the recent
+   * transaction rows of the bearer principal's tenant, mirroring the
+   * read surface go/billing's fragment serves (GET /api/v1/billing/
+   * credits/balance and GET /api/v1/billing/credits/transactions).
+   * Defaults to the demo mirror of a freshly booted server's state: a
+   * tenant seeded with the boot-time grant (1000 credits, reason
+   * 'demo:seed' -- cmd/server/demo_credits.go's demoSimulationCreditGrant
+   * and demoCreditGrantReason), an empty reserved bucket and the seed
+   * grant as the ledger's one row. Stateful from there, the way the
+   * real handler's tenant-scoped ledger is: each accepted simulation
+   * job appends its own deduct row (10 credits, reason
+   * 'smilesim:simulate', status pending while the job runs) and the
+   * job's terminal outcome settles it in place -- succeeded moves the
+   * row to confirmed (reserved released), dead_letter moves it to
+   * refunded (the reservation's credits released back to available) --
+   * so the credit-view journeys observe a consumption and a refund the
+   * way they would against the real server. */
+  readonly creditHistory?: {
+    readonly balance: {
+      readonly available: number
+      readonly reserved: number
+      readonly updatedAt: string
+    }
+    readonly transactions: readonly BillingCreditTransaction[]
+  }
+  /** Refuses both billing reads with the rbac read gate's 403 (the
+   * answer a caller without billing:credit:read gets); default false. */
+  readonly billingDeny?: boolean
   /** Refuses every simulation-content read (GET /api/v1/smile-simulation/
    * photos/{photoObjectID}/simulations/{jobID}/content) with this coded
    * answer; default undefined -- a succeeded simulation's content is
@@ -565,6 +611,23 @@ const DEMO_PHOTO_CONTENT_BASE64 = 'cGhvdG8tYnl0ZXM='
  * different images. */
 const DEMO_SIMULATION_CONTENT_BASE64 = 'c2ltdWxhdGlvbi1yZXN1bHQtYnl0ZXM='
 
+/** The boot-time credit grant every demo tenant receives, mirroring
+ * cmd/server/demo_credits.go's demoSimulationCreditGrant -- the web
+ * fixture's answer for a freshly booted server's balance and the seed
+ * row its ledger serves. */
+export const DEMO_CREDIT_SEED_GRANT = 1000
+/** The reason the demo seed's grant row carries, mirroring
+ * cmd/server/demo_credits.go's demoCreditGrantReason. */
+export const DEMO_CREDIT_SEED_REASON = 'demo:seed'
+/** The flat credit cost of one smile simulation, mirroring
+ * internal/smilesim/service.go's CreditsPerSimulation: the amount the
+ * fixture's billing ledger reserves per accepted job and settles on
+ * its terminal outcome. */
+export const DEMO_SIMULATION_CREDIT_COST = 10
+/** The reason every smile-simulation deduct row carries, mirroring
+ * internal/smilesim/service.go's creditReasonSimulate. */
+export const DEMO_SIMULATION_CREDIT_REASON = 'smilesim:simulate'
+
 /** The demo's three sessions: the current one on the rig's own session
  * id (the same row every token-issuing answer names) plus two active
  * others -- the rows the revoke journeys act on. The device strings and
@@ -657,6 +720,9 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       media_type: 'image/png',
       content_base64: DEMO_SIMULATION_CONTENT_BASE64,
     },
+    simulateJobOutcome = 'succeeded',
+    creditHistory,
+    billingDeny = false,
     clinicName,
     sharesCreateRefusal,
     sharesCreateSecondRefusal,
@@ -742,16 +808,86 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   let shareCreateCount = 0
 
   /** The live status of one accepted job under this responder's
-   * deterministic progression (see the ledger comment above). */
+   * deterministic progression (see the ledger comment above). The
+   * terminal outcome is the simulateJobOutcome option's: succeeded by
+   * default, dead_letter when a journey scripts a generation that
+   * fails after its reservation opened. */
   function simulationStatusOf(jobID: string): string {
     const job = simulationJobs.get(jobID)
     if (job === undefined) {
       return ''
     }
     if (job.reads >= 2) {
-      return 'succeeded'
+      return simulateJobOutcome === 'dead_letter' ? 'dead_letter' : 'succeeded'
     }
     return job.reads === 1 ? 'running' : 'pending'
+  }
+
+  // The billing ledger answers, derived per read: the static history
+  // (option-scripted or the demo mirror of a freshly booted server's
+  // seed -- see the creditHistory option doc) plus one dynamic deduct
+  // row per accepted simulation job, settled from the job's live
+  // status at read time: pending while the job runs, confirmed once it
+  // succeeded, refunded once it died -- the reservation's credits
+  // released back to available in the latter case, exactly the refund
+  // shape the real server's settleCredit performs. Balance and rows
+  // derive from the same statuses so the two reads never disagree
+  // about what the tenant holds.
+  function creditLedgerState(tenant: string): {
+    balance: { available: number; reserved: number; updatedAt: string }
+    transactions: readonly BillingCreditTransaction[]
+  } {
+    const scripted = creditHistory
+    const baseAvailable = scripted?.balance.available ?? DEMO_CREDIT_SEED_GRANT
+    const baseReserved = scripted?.balance.reserved ?? 0
+    const baseRows: readonly BillingCreditTransaction[] =
+      scripted?.transactions ?? [
+        {
+          id: 'demo-seed',
+          type: 'grant',
+          status: 'confirmed',
+          amount: DEMO_CREDIT_SEED_GRANT,
+          reason: DEMO_CREDIT_SEED_REASON,
+          createdAt: DEMO_NOTE_CREATED_AT,
+        },
+      ]
+    const dynamicRows: BillingCreditTransaction[] = []
+    for (const jobID of simulationJobOrder) {
+      const job = simulationJobs.get(jobID)
+      if (job === undefined) {
+        continue
+      }
+      const status = simulationStatusOf(jobID)
+      dynamicRows.push({
+        id: jobID,
+        type: 'deduct',
+        status:
+          status === 'pending' || status === 'running'
+            ? 'pending'
+            : status === 'succeeded'
+              ? 'confirmed'
+              : 'refunded',
+        amount: DEMO_SIMULATION_CREDIT_COST,
+        reason: DEMO_SIMULATION_CREDIT_REASON,
+        createdAt: job.created_at,
+      })
+    }
+    const confirmed = dynamicRows.filter((row) => row.status === 'confirmed')
+    const pending = dynamicRows.filter((row) => row.status === 'pending')
+    void tenant
+    return {
+      balance: {
+        available:
+          baseAvailable - confirmed.length * DEMO_SIMULATION_CREDIT_COST,
+        reserved:
+          baseReserved + pending.length * DEMO_SIMULATION_CREDIT_COST,
+        updatedAt: scripted?.balance.updatedAt ?? DEMO_NOTE_CREATED_AT,
+      },
+      // Newest first, the window's documented order: the dynamic rows
+      // newest-job-first (simulationJobOrder is creation order), then
+      // the static history as scripted.
+      transactions: [...dynamicRows.reverse(), ...baseRows],
+    }
   }
   // The accounts a register answered, mapped to the clinic their
   // registration provisioned (the web mirror of the composed stack's
@@ -1087,6 +1223,30 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         const objectId = `obj-${nextObjectId}`
         nextObjectId += 1
         return jsonResponse(201, { object_id: objectId })
+      }
+      case 'GET /api/v1/billing/credits/balance': {
+        // The credits surface's balance read. The demo route guard's
+        // refusal (billingDeny) answers first, the shape a caller
+        // without billing:credit:read gets; the ledger state answers
+        // otherwise -- derived per read, never a cached number, so a
+        // job's settlement is observable the moment it happened.
+        if (billingDeny) {
+          return errorResponse(403, 'rbac.permission_denied')
+        }
+        const principal = principalOf(call)
+        return jsonResponse(
+          200,
+          creditLedgerState(principal.tenant_id).balance,
+        )
+      }
+      case 'GET /api/v1/billing/credits/transactions': {
+        if (billingDeny) {
+          return errorResponse(403, 'rbac.permission_denied')
+        }
+        const principal = principalOf(call)
+        return jsonResponse(200, {
+          transactions: creditLedgerState(principal.tenant_id).transactions,
+        })
       }
       case 'POST /api/v1/smile-simulation/simulate': {
         // The bearer is resolved (and an anonymous simulate fails loudly
