@@ -358,6 +358,24 @@ const (
 	// recorded address.
 	trustedProxiesEnv = "APP_TRUSTED_PROXIES"
 
+	// readFlyClientIPEnv names the environment variable holding this
+	// deployment's declaration that its proxy is FLY's -- the one platform
+	// whose proxy genuinely overwrites the Fly-Client-IP header on every
+	// request it forwards -- which is what authorizes authn to read that
+	// single-hop vendor header at all (go/authn's WithVendorClientIPHeaders
+	// and VendorClientIPHeaderFlyClientIP; see serverConfig.ReadFlyClientIP).
+	// APP_TRUSTED_PROXIES alone can never authorize it: a generic reverse
+	// proxy (nginx, ALB, Envoy, Cloudflare) forwards a client-chosen
+	// Fly-Client-IP verbatim, so reading the header for every declared
+	// proxy would let a client mint its own recorded AND rate-limited
+	// address -- the P0 finding this variable's existence closes. It is a
+	// strict bool ('true'/'false'), parsed at boot; unset is false. It only
+	// takes effect alongside APP_TRUSTED_PROXIES: configFromEnv refuses
+	// 'true' with an empty proxy list, since that combination would
+	// silently keep recording the proxy itself -- the very defect the
+	// declaration pair exists to fix.
+	readFlyClientIPEnv = "APP_READ_FLY_CLIENT_IP"
+
 	// rootKeyPurposeConfigCipher, rootKeyPurposeOrgIndex,
 	// rootKeyPurposeNotificationIndex, rootKeyPurposePKILocalKeyCipher,
 	// rootKeyPurposeAuthnBlindIndex and rootKeyPurposeAuthnPIICipher are the
@@ -1032,12 +1050,12 @@ type serverConfig struct {
 	// TrustedProxies is the authn.WithTrustedProxies declaration: the IP
 	// addresses and CIDR prefixes of the reverse proxies this deployment
 	// receives requests through, so authn's session/login-history records
-	// carry the real client address (recovered from the platform-injected
-	// Fly-Client-IP / X-Forwarded-For headers) instead of the proxy's
-	// address -- the Fly.io acceptance finding this round closes, where
-	// every recorded address was the proxy's internal 172.16.45.218.
-	// configFromEnv fills it from APP_TRUSTED_PROXIES, a comma-separated
-	// list (see trustedProxiesEnv); the empty default -- the zero-external-
+	// carry the real client address (recovered from the X-Forwarded-For
+	// chain those proxies append) instead of the proxy's address -- the
+	// Fly.io acceptance finding this round closes, where every recorded
+	// address was the proxy's internal 172.16.45.218. configFromEnv fills
+	// it from APP_TRUSTED_PROXIES, a comma-separated list (see
+	// trustedProxiesEnv); the empty default -- the zero-external-
 	// dependency `go run ./cmd/server` experience, and every test's
 	// config -- keeps authn's fail-closed behavior, every request
 	// recording its direct connection address, byte-identical to this
@@ -1046,9 +1064,28 @@ type serverConfig struct {
 	// validates its input at module construction (go/authn's newOptions).
 	// A deployment behind a proxy declares the proxy here or its records
 	// stay proxy-addressed; it must never declare an untrusted range, and
-	// the declared proxy must overwrite or strip forwarding headers it
+	// the declared proxy must overwrite or strip the X-Forwarded-For it
 	// receives from its own clients, exactly as Fly.io's proxy does.
 	TrustedProxies []string
+
+	// ReadFlyClientIP is this deployment's declaration that its proxy is
+	// Fly's, the per-header opt-in (APP_READ_FLY_CLIENT_IP, readFlyClientIPEnv)
+	// that authorizes authn to read the single-hop Fly-Client-IP vendor
+	// header for a request whose peer is within TrustedProxies (go/authn's
+	// WithVendorClientIPHeaders / VendorClientIPHeaderFlyClientIP). The
+	// header is the real client address on every request Fly's proxy
+	// forwards, so this app's session/login-history records keep carrying
+	// the real client behind the Fly proxy. False (the default) reads no
+	// vendor header at all -- authn falls back to X-Forwarded-For and the
+	// connection address -- which is the correct fail-closed shape for a
+	// non-Fly deployment: reading Fly-Client-IP for ANY declared proxy
+	// would let a client smuggle its own value through a generic reverse
+	// proxy that forwards unknown headers verbatim (nginx, ALB, Envoy,
+	// Cloudflare), minting its own recorded AND rate-limited address.
+	// configFromEnv refuses true with an empty TrustedProxies: that
+	// combination could never read the header and would silently keep
+	// recording the proxy itself.
+	ReadFlyClientIP bool
 
 	// WebDistDir names the directory holding this app's built frontend
 	// (the dist/ examples/reference-app/web's `pnpm build` emits) when
@@ -1424,6 +1461,30 @@ func configFromEnv() (serverConfig, error) {
 		s3UseSSL = parsed
 	}
 
+	// readFlyClientIP is the strict parse of readFlyClientIPEnv: 'true' is
+	// this deployment's declaration that its proxy is Fly's, the per-header
+	// opt-in that authorizes authn to read Fly-Client-IP (see
+	// serverConfig.ReadFlyClientIP). The declaration is only meaningful
+	// alongside trustedProxiesEnv -- authn reads a vendor header only from
+	// a request whose peer is a declared proxy, so the header with no
+	// declared proxy would never be read and the records would silently
+	// stay proxy-addressed, the defect the pair exists to fix -- which is
+	// why that combination is refused here rather than accepted as a
+	// no-op.
+	readFlyClientIP := false
+	if raw := os.Getenv(readFlyClientIPEnv); raw != "" {
+		parsed, parseErr := strconv.ParseBool(raw)
+		if parseErr != nil {
+			return serverConfig{}, fmt.Errorf("reference-app: %s must be a valid bool, got %q: %w", readFlyClientIPEnv, raw, parseErr)
+		}
+		readFlyClientIP = parsed
+	}
+	if readFlyClientIP && len(splitTrustedProxies(os.Getenv(trustedProxiesEnv))) == 0 {
+		return serverConfig{}, fmt.Errorf(
+			"reference-app: %s is true but %s is empty: reading Fly-Client-IP is authorized only for a deployment whose proxy is declared there, and this pair would silently keep recording the proxy itself",
+			readFlyClientIPEnv, trustedProxiesEnv)
+	}
+
 	// objectStoreRoot is the local-directory twin of the S3 composition
 	// above: unset leaves "objectstore" on the Preset's throwaway
 	// temp-directory default, set names a fixed directory whose contents
@@ -1485,6 +1546,7 @@ func configFromEnv() (serverConfig, error) {
 		DisableQueueWorker:    os.Getenv(disableQueueWorkerEnv) != "",
 		DisableDemoUserHeader: os.Getenv(disableDemoUserHeaderEnv) != "",
 		TrustedProxies:        splitTrustedProxies(os.Getenv(trustedProxiesEnv)),
+		ReadFlyClientIP:       readFlyClientIP,
 		WebDistDir:            os.Getenv(webDistEnv),
 		HostTenants:           demoHostTenants,
 		// Empty when unset: the demo-user seed is opt-in (its own doc
@@ -1885,14 +1947,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		authn.WithRedirectAllowlist(cfg.RedirectAllowlist),
 		authn.WithTrustedProviders(cfg.TrustedProviders...),
 		// The trusted-proxy declaration (trustedProxiesEnv): the proxy
-		// addresses whose requests may carry the platform-injected
-		// forwarding headers authn reads, so this app's session and
-		// login-history records carry the real client address behind the
-		// Fly proxy instead of the proxy's own (the finding fly.toml's
-		// APP_TRUSTED_PROXIES declaration closes). Empty -- every local
-		// boot and every test -- is authn's fail-closed default, and a
-		// declaration with an entry that is neither an IP address nor a
-		// CIDR prefix refuses this NewModule call below.
+		// addresses whose requests may carry the forwarding headers authn
+		// reads, so this app's session and login-history records carry the
+		// real client address behind the proxy instead of the proxy's own
+		// (the finding fly.toml's APP_TRUSTED_PROXIES declaration closes).
+		// Empty -- every local boot and every test -- is authn's fail-closed
+		// default, and a declaration with an entry that is neither an IP
+		// address nor a CIDR prefix refuses this NewModule call below.
 		authn.WithTrustedProxies(cfg.TrustedProxies...),
 		// The feature gate that makes authn's eight declared feature flags
 		// (authn.password_login, authn.sms_login, the five authn.social.*
@@ -1909,6 +1970,21 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		// cfg.SocialProviders are opened at the system tier after Attach by
 		// openConfiguredAuthnChannels, since their flags default OFF.
 		authn.WithFeatureGate(orgFeatureGate{service: &configService}),
+	}
+	// The per-header vendor opt-in (readFlyClientIPEnv), conditional on the
+	// deployment declaration: cfg.ReadFlyClientIP's 'true' declares this
+	// deployment's proxy is FLY's, the one proxy that genuinely overwrites
+	// Fly-Client-IP on every request it forwards -- the host declaration
+	// go/authn requires before it reads that single-hop vendor header at
+	// all (WithVendorClientIPHeaders). Without it, authn never reads
+	// Fly-Client-IP even from a declared proxy -- a generic reverse proxy
+	// forwards a client-chosen value verbatim, so the header on its own
+	// could never be trusted -- and this app's records still carry the
+	// real client through the X-Forwarded-For chain Fly's proxy appends.
+	// configFromEnv refuses 'true' with an empty APP_TRUSTED_PROXIES, so
+	// the two halves of the declaration cannot be assembled inconsistently.
+	if cfg.ReadFlyClientIP {
+		authnOpts = append(authnOpts, authn.WithVendorClientIPHeaders(authn.VendorClientIPHeaderFlyClientIP))
 	}
 	// The "SMS sender" seam, following the same conditional-injection shape
 	// as every other seam this file wires: a configured gateway URL always

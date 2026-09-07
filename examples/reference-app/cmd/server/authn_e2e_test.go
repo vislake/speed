@@ -639,17 +639,23 @@ func TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen(t *t
 
 // TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress is
 // the host-wiring regression for the Fly.io acceptance finding this round
-// closes: with the deployment's trusted proxy declared (serverConfig.
-// TrustedProxies, from APP_TRUSTED_PROXIES), the session and login-history
-// rows a sign-in writes must carry the REAL client address recovered from
-// the platform-injected forwarding header -- where the finding's deployment
-// recorded the proxy's own internal address (172.16.45.218) -- and WITHOUT
-// the declaration, a direct request carrying a spoofed forwarding header
-// must still record its own connection address (127.0.0.1: the httptest
-// listener's peer, which the tests below trust only in the first leg by
-// declaring loopback itself).
+// closes: with the deployment's two-part declaration in place
+// (serverConfig.TrustedProxies from APP_TRUSTED_PROXIES, and the
+// per-header vendor opt-in serverConfig.ReadFlyClientIP from
+// APP_READ_FLY_CLIENT_IP), the session and login-history rows a sign-in
+// writes must carry the REAL client address recovered from the
+// platform-injected forwarding header -- where the finding's deployment
+// recorded the proxy's own internal address (172.16.45.218). The P0
+// header-selection follow-up then re-aimed the legs at the host-declared
+// shape: the proxy declaration ALONE authorizes X-Forwarded-For (the
+// chain walk's own protection), never the single-hop Fly-Client-IP header
+// -- that needs the opt-in declaring the proxy is Fly's -- so a declared
+// proxy WITHOUT the opt-in must not record a client-chosen Fly-Client-IP,
+// and a direct request with no declaration at all must still record its
+// own connection address (127.0.0.1: the httptest listener's peer, which
+// the legs below trust only by declaring loopback itself).
 //
-// The two legs drive the real composed server end to end -- register,
+// The three legs drive the real composed server end to end -- register,
 // membership grant, sign-in, sessions list, login history -- exactly like
 // TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement, over a real
 // socket whose peer is 127.0.0.1, the one address a test can both declare
@@ -767,14 +773,19 @@ func TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress(t *te
 		return pair.Principal.SessionID, sessionIP, historyIP
 	}
 
-	t.Run("declared proxy: the forwarded client address is recorded", func(t *testing.T) {
+	t.Run("declared proxy with the Fly header opt-in: the forwarded client address is recorded", func(t *testing.T) {
 		// Loopback is this test's stand-in for the Fly proxy: every
 		// request over the httptest listener comes from 127.0.0.1, so
 		// declaring it is the honest local twin of fly.toml declaring
-		// the Fly private ranges -- and the request carrying Fly-Client-IP
-		// records the address the platform forwarded, not 127.0.0.1.
+		// the Fly private ranges -- and this deployment declares its
+		// proxy is Fly's (ReadFlyClientIP, the APP_READ_FLY_CLIENT_IP
+		// opt-in fly.toml carries), the host declaration authn requires
+		// before it reads the Fly-Client-IP header. The request carrying
+		// the proxy-written Fly-Client-IP records the address the
+		// platform forwarded, not 127.0.0.1.
 		srv, cfg, _, _ := buildAuthnE2EServer(t, func(cfg *serverConfig) {
 			cfg.TrustedProxies = []string{"127.0.0.0/8"}
+			cfg.ReadFlyClientIP = true
 		})
 		forwarding := map[string]string{"Fly-Client-IP": "198.51.100.7"}
 		sessionID, sessionIP, historyIP := registerAndSignIn(t, srv, cfg, srv.Client(), forwarding, forwarding)
@@ -783,6 +794,27 @@ func TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress(t *te
 		}
 		if historyIP != "198.51.100.7" {
 			t.Errorf("login-history IP = %q, want the forwarded client %q (was the proxy before the fix)", historyIP, "198.51.100.7")
+		}
+	})
+
+	t.Run("declared proxy WITHOUT the opt-in: a client-chosen fly client ip changes nothing", func(t *testing.T) {
+		// The P0-authn-14 host cell: this deployment declared its GENERIC
+		// reverse proxy -- one that forwards a client-chosen Fly-Client-IP
+		// verbatim -- so authn must never read that single-hop vendor
+		// header, even though the peer is trusted. The client-chosen value
+		// is not recorded; the connection address is. (Pre-fix, this leg
+		// recorded 198.51.100.7: the vendor header was read for any
+		// declared proxy.)
+		srv, cfg, _, _ := buildAuthnE2EServer(t, func(cfg *serverConfig) {
+			cfg.TrustedProxies = []string{"127.0.0.0/8"}
+		})
+		spoof := map[string]string{"Fly-Client-IP": "198.51.100.7"}
+		sessionID, sessionIP, historyIP := registerAndSignIn(t, srv, cfg, srv.Client(), spoof, spoof)
+		if sessionIP != "127.0.0.1" {
+			t.Errorf("session %s IP = %q, want the connection address %q (peer declared but no vendor-header opt-in)", sessionID, sessionIP, "127.0.0.1")
+		}
+		if historyIP != "127.0.0.1" {
+			t.Errorf("login-history IP = %q, want the connection address %q", historyIP, "127.0.0.1")
 		}
 	})
 

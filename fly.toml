@@ -13,22 +13,34 @@ primary_region = 'sin'
   PORT = '8080'
   APP_DB_PATH = '/data/reference-app.db'
   APP_DEPLOYMENT_MODE = 'standalone'
-  # APP_TRUSTED_PROXIES declares which peers may carry the platform-injected
-  # forwarding headers authn reads (go/authn's WithTrustedProxies), so this
-  # app's session/login-history records carry the real client address
-  # instead of the proxy's own -- the acceptance finding this declaration
-  # closes, where every recorded address was the proxy's internal
-  # 172.16.45.218. This app's http_service is reachable only through Fly's
-  # proxy, which connects to the machine over its private IPv4 address --
-  # observed here as 172.16.45.218, inside 172.16.0.0/12, Fly's private
-  # IPv4 space -- and, for 6PN (WireGuard) traffic, a Fly-routed fdaa::/16
-  # address. Both ranges are unreachable as source addresses from the
-  # public internet, which is what makes declaring them safe on this
-  # single-machine deployment; Fly's proxy overwrites the Fly-Client-IP
-  # header on every request it forwards, so a client can never smuggle a
-  # header through it. A deployment that attaches other Fly apps to this
-  # app's private network should narrow the declaration to its own subnet.
+  # APP_TRUSTED_PROXIES declares which peers may carry the forwarding
+  # headers authn reads (go/authn's WithTrustedProxies), so this app's
+  # session/login-history records carry the real client address instead of
+  # the proxy's own -- the acceptance finding this declaration closes,
+  # where every recorded address was the proxy's internal 172.16.45.218.
+  # This app's http_service is reachable only through Fly's proxy, which
+  # connects to the machine over its private IPv4 address -- observed here
+  # as 172.16.45.218, inside 172.16.0.0/12, Fly's private IPv4 space --
+  # and, for 6PN (WireGuard) traffic, a Fly-routed fdaa::/16 address. Both
+  # ranges are unreachable as source addresses from the public internet,
+  # which is what makes declaring them safe on this single-machine
+  # deployment; Fly's proxy appends the client to X-Forwarded-For and
+  # overwrites Fly-Client-IP on every request it forwards, so a client can
+  # never smuggle a header through it. A deployment that attaches other
+  # Fly apps to this app's private network should narrow the declaration
+  # to its own subnet.
   APP_TRUSTED_PROXIES = '172.16.0.0/12, fdaa::/16'
+  # APP_READ_FLY_CLIENT_IP is the second half of the same declaration:
+  # 'true' tells authn this deployment's proxy is FLY's -- the one proxy
+  # that genuinely overwrites the single-hop Fly-Client-IP header on every
+  # request it forwards -- the per-header opt-in go/authn requires before
+  # it reads that vendor header at all (WithVendorClientIPHeaders).
+  # Trusting the proxy ranges alone would NOT authorize it: a generic
+  # reverse proxy (nginx, ALB, Envoy, Cloudflare) forwards a client-chosen
+  # Fly-Client-IP verbatim, so a non-Fly deployment must never set this.
+  # Fly's proxy forwards the X-Forwarded-For chain either way, which is
+  # what this app's records resolve through when this variable is absent.
+  APP_READ_FLY_CLIENT_IP = 'true'
 
 [[mounts]]
   source = 'reference_app_data'

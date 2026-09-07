@@ -31,22 +31,40 @@ Every environment variable name this app's own bootstrap code declares and reads
 | `SPEED_DEMO_USERS_PASSWORD` | `APP_DEMO_USERS_PASSWORD` |
 | `PORT` | `PORT` (unchanged) |
 
-### `APP_TRUSTED_PROXIES`: declare the proxy so records carry the real client address
+### `APP_TRUSTED_PROXIES` and `APP_READ_FLY_CLIENT_IP`: the two halves of one declaration
 
-`APP_TRUSTED_PROXIES` is a non-secret `[env]` variable (already set in this
-deployment's committed `fly.toml`): a comma-separated list of IP addresses
-and CIDR prefixes naming the reverse proxies requests arrive through. The
-app hands it to authn's `WithTrustedProxies`, which gates reading the
-platform-injected forwarding headers (`Fly-Client-IP` on Fly.io,
-`X-Forwarded-For` generally) on the request's direct peer being one of the
-declared proxies -- so a session or login-history record carries the real
-client address instead of the proxy's (this deployment recorded the proxy's
-internal `172.16.45.218` before the declaration existed), while a direct
-client that sets those headers itself still records its own connection
-address. Declared proxies must overwrite or strip forwarding headers they
-receive from their own clients, exactly as Fly.io's proxy does; left unset,
-every request records its direct connection address, the correct
-fail-closed default for a host not behind a proxy.
+Both variables are non-secret `[env]` variables (already set in this
+deployment's committed `fly.toml`), and together they are what make this
+app's session and login-history records carry the real client address
+instead of the proxy's -- this deployment recorded the proxy's internal
+`172.16.45.218` before the pair existed.
+
+`APP_TRUSTED_PROXIES` is a comma-separated list of IP addresses and CIDR
+prefixes naming the reverse proxies requests arrive through. The app hands
+it to authn's `WithTrustedProxies`, which reads the forwarding headers for
+a request only when its direct peer is one of the declared proxies: the
+`X-Forwarded-For` chain those proxies append is walked from the right,
+stripping declared entries, so the recorded address is the client's while
+a direct client that sets the header itself still records its own
+connection address. Declared proxies must overwrite or strip the
+`X-Forwarded-For` they receive from their own clients, exactly as Fly's
+proxy does; left unset, every request records its direct connection
+address, the correct fail-closed default for a host not behind a proxy.
+
+`APP_READ_FLY_CLIENT_IP` (`'true'` here) is the declaration that this
+deployment's proxy is **Fly's** -- the per-header opt-in authn requires
+before it reads the single-hop `Fly-Client-IP` vendor header at all
+(`WithVendorClientIPHeaders`), and `'true'` with an empty
+`APP_TRUSTED_PROXIES` refuses boot, so the two cannot be assembled
+inconsistently. The extra declaration exists because trusting the proxy
+ranges alone would never authorize that header: a generic reverse proxy
+(nginx, ALB, Envoy, Cloudflare) forwards a client-chosen `Fly-Client-IP`
+verbatim, so reading it for every declared proxy would let a client mint
+its own recorded -- and rate-limited -- address. Only a deployment whose
+proxy genuinely overwrites the header on every request may set this; every
+other deployment (including a non-Fly host in front of the same app)
+leaves it unset or `'false'`, and records still resolve through
+`X-Forwarded-For`.
 
 ## Prerequisites
 

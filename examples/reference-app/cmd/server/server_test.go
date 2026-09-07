@@ -1075,6 +1075,7 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	t.Setenv("APP_OBJECT_STORE_ROOT", "")
 	t.Setenv("APP_DISABLE_DEMO_USER_HEADER", "")
 	t.Setenv("APP_TRUSTED_PROXIES", "")
+	t.Setenv("APP_READ_FLY_CLIENT_IP", "")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -1104,6 +1105,9 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	if cfg.DisableDemoUserHeader {
 		t.Fatal("DisableDemoUserHeader = true, want false (the default: demoUserHeader keeps winning, unchanged)")
 	}
+	if cfg.ReadFlyClientIP {
+		t.Fatal("ReadFlyClientIP = true, want false (the default: no vendor header is read, authn's fail-closed shape)")
+	}
 }
 
 // TestConfigFromEnv_ReadsOverrides verifies each environment variable
@@ -1118,6 +1122,7 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	t.Setenv("APP_OBJECT_STORE_ROOT", "/var/lib/reference-app/objects")
 	t.Setenv("APP_DISABLE_DEMO_USER_HEADER", "1")
 	t.Setenv("APP_TRUSTED_PROXIES", " 172.16.0.0/12, 203.0.113.10 , ")
+	t.Setenv("APP_READ_FLY_CLIENT_IP", "true")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -1153,6 +1158,9 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 			t.Errorf("TrustedProxies[%d] = %q, want %q", i, cfg.TrustedProxies[i], wantProxies[i])
 		}
 	}
+	if !cfg.ReadFlyClientIP {
+		t.Fatal("ReadFlyClientIP = false, want true (APP_READ_FLY_CLIENT_IP set to 'true' alongside the proxy declaration)")
+	}
 	wantKey := []byte{
 		0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08,
 		0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00,
@@ -1162,6 +1170,43 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	if !bytes.Equal(cfg.ConfigKey, wantKey) {
 		t.Fatalf("ConfigKey = %x, want the decoded APP_CONFIG_KEY %x", cfg.ConfigKey, wantKey)
 	}
+}
+
+// TestConfigFromEnv_ReadFlyClientIPWithoutTrustedProxies_ReturnsError pins
+// the declaration-pair rule readFlyClientIPEnv's own doc comment states:
+// reading Fly-Client-IP is authorized only for a deployment whose proxy is
+// declared, so 'true' with an empty APP_TRUSTED_PROXIES refuses boot --
+// the pair would never read the header and would silently keep recording
+// the proxy itself, the defect the declaration exists to fix. A value that
+// is not a strict bool is refused the same way.
+func TestConfigFromEnv_ReadFlyClientIPWithoutTrustedProxies_ReturnsError(t *testing.T) {
+	t.Setenv("APP_DEPLOYMENT_MODE", "")
+	t.Setenv("PORT", "")
+	t.Setenv("APP_DB_PATH", "")
+	t.Setenv("APP_TRUSTED_PROXIES", "")
+
+	t.Run("true with no proxy declared", func(t *testing.T) {
+		t.Setenv("APP_READ_FLY_CLIENT_IP", "true")
+		if _, err := configFromEnv(); err == nil {
+			t.Fatal("configFromEnv() error = nil, want a refusal naming both variables")
+		}
+	})
+	t.Run("not a strict bool", func(t *testing.T) {
+		t.Setenv("APP_READ_FLY_CLIENT_IP", "yes")
+		if _, err := configFromEnv(); err == nil {
+			t.Fatal("configFromEnv() error = nil, want a bool-parse refusal")
+		}
+	})
+	t.Run("false with no proxy declared stays accepted", func(t *testing.T) {
+		t.Setenv("APP_READ_FLY_CLIENT_IP", "false")
+		cfg, err := configFromEnv()
+		if err != nil {
+			t.Fatalf("configFromEnv() error = %v", err)
+		}
+		if cfg.ReadFlyClientIP {
+			t.Fatal("ReadFlyClientIP = true, want false")
+		}
+	})
 }
 
 // TestConfigFromEnv_ObjectStoreRootWithS3_ReturnsError proves the
