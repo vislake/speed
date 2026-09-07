@@ -237,7 +237,7 @@ func TestQueue_HandleErrorAttempt(t *testing.T) {
 		q.handleErrorAttempt(task, errors.New("boom"), 3, 3, "job-1", nil, obs.FromContext(context.Background())) // must not panic.
 	})
 
-	t.Run("tenant-at-capacity bounce is never treated as dead-letter-worthy", func(t *testing.T) {
+	t.Run("tenant-at-capacity bounce with retries remaining: FailureHook must not fire", func(t *testing.T) {
 		q := newTestQueue(t)
 		h := &recordingFailureHook{jobType: "always-fails"}
 		if err := q.RegisterHandler(h); err != nil {
@@ -245,12 +245,50 @@ func TestQueue_HandleErrorAttempt(t *testing.T) {
 		}
 		task := asynqlib.NewTaskWithHeaders("always-fails", nil, map[string]string{headerTenantID: "tenant-a"})
 
-		// Even at retried==maxRetry, errTenantAtCapacity short-circuits
-		// before the archive-boundary check.
-		q.handleErrorAttempt(task, errTenantAtCapacity, 3, 3, "job-1", nil, obs.FromContext(context.Background()))
+		// retried(1) < maxRetry(3): asynq will bounce again, not archive --
+		// a bounce with retries remaining is never a dead-letter-worthy
+		// event and must not fire compensation.
+		q.handleErrorAttempt(task, errTenantAtCapacity, 1 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, obs.FromContext(context.Background()))
 
 		if len(h.calls) != 0 {
-			t.Errorf("OnFailure called %d times, want 0 for a throttle bounce", len(h.calls))
+			t.Errorf("OnFailure called %d times, want 0 for a throttle bounce with retries remaining", len(h.calls))
+		}
+	})
+
+	t.Run("terminal-attempt tenant bounce: asynq will archive, so FailureHook fires", func(t *testing.T) {
+		q := newTestQueue(t)
+		h := &recordingFailureHook{jobType: "always-fails"}
+		if err := q.RegisterHandler(h); err != nil {
+			t.Fatalf("RegisterHandler() error = %v", err)
+		}
+		task := asynqlib.NewTaskWithHeaders("always-fails", []byte("payload"), map[string]string{
+			headerTenantID:       "tenant-a",
+			headerIdempotencyKey: "op-1",
+		})
+
+		// retried == maxRetry: asynq's own dispatch loop archives the task
+		// right after this hook returns (processor.go's handleFailedMessage
+		// archives whenever retried >= maxRetry; isFailure is not consulted
+		// for that decision). A dead-letter that fires no OnFailure strands
+		// the Job's compensation, so the terminal-attempt bounce's hook must
+		// fire exactly like any other terminal failure's. Fails on the
+		// pre-fix code, where the bounce short-circuited before the
+		// archive-boundary check and the Job archived with zero
+		// compensation.
+		q.handleErrorAttempt(task, errTenantAtCapacity, 3 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, obs.FromContext(context.Background()))
+
+		if len(h.calls) != 1 {
+			t.Fatalf("OnFailure called %d times, want exactly 1 for an archive-bound terminal bounce", len(h.calls))
+		}
+		got := h.calls[0]
+		if got.ID != jobs.JobID("job-1") || got.TenantID != pkgcore.TenantID("tenant-a") || got.IdempotencyKey != "op-1" {
+			t.Errorf("OnFailure job = %+v, want ID=job-1 TenantID=tenant-a IdempotencyKey=op-1", got)
+		}
+		if got.Status != jobs.StatusDeadLetter {
+			t.Errorf("OnFailure job.Status = %v, want %v", got.Status, jobs.StatusDeadLetter)
+		}
+		if got.Error != errTenantAtCapacity.Error() {
+			t.Errorf("OnFailure job.Error = %q, want the bounce message %q (the bounce is what the archived record will carry)", got.Error, errTenantAtCapacity.Error())
 		}
 	})
 

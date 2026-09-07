@@ -87,7 +87,10 @@ func jobContext(tenant pkgcore.TenantID) context.Context {
 // each successfully claimed one to dispatch, until q.stopCh is closed. It
 // is the one goroutine that writes runningPerTenant increments;
 // runWorker's decrements run concurrently with it by construction, so both
-// sides go through q.tenantMu.
+// sides go through q.tenantMu. Every tick also refreshes this queue's
+// writer registration (heartbeat), so a live dispatcher is what keeps a
+// concurrent Start on the same database from mistaking this queue for a
+// crashed one.
 func (q *StandaloneQueue) runDispatcher(dispatch chan<- jobRecord) {
 	defer q.wg.Done()
 	defer close(dispatch)
@@ -100,8 +103,32 @@ func (q *StandaloneQueue) runDispatcher(dispatch chan<- jobRecord) {
 		case <-q.stopCh:
 			return
 		case <-ticker.C:
+			q.heartbeat()
 			q.dispatchOnce(dispatch)
 		}
+	}
+}
+
+// heartbeat refreshes this queue's queue_writers registration row (store.go)
+// so a concurrent StandaloneQueue.Start on the same database can tell a
+// live writer from a crashed one — see ErrQueueWriterActive and
+// acquireWriterRegistration. It rides the dispatcher's own tick, so no
+// extra goroutine or lifecycle is needed: while the dispatcher beats, this
+// queue is alive by definition. A heartbeat that fails to reach its own row
+// means the registration was stolen (its beats lapsed past the stale window
+// and a sibling took over) or removed — the queue keeps running rather than
+// stopping mid-flight, which would strand every row it has claimed, and the
+// error is logged every tick until the operator resolves the two-writer
+// situation the steal implies.
+func (q *StandaloneQueue) heartbeat() {
+	ctx := context.Background()
+	ok, err := heartbeatWriterRegistration(ctx, q.db, q.owner, time.Now())
+	if err != nil {
+		obs.FromContext(ctx).Error("jobs: writer heartbeat failed", "error", err)
+		return
+	}
+	if !ok {
+		obs.FromContext(ctx).Error("jobs: writer registration lost; another StandaloneQueue may have started against this database", "owner", q.owner)
 	}
 }
 
@@ -138,7 +165,7 @@ func (q *StandaloneQueue) dispatchOnce(dispatch chan<- jobRecord) {
 			continue
 		}
 
-		claimed, err := claimOne(ctx, q.db, rec, time.Now())
+		claimed, err := claimOne(ctx, q.db, rec, time.Now(), q.owner)
 		if err != nil {
 			q.releaseTenantSlot(tenant)
 			obs.FromContext(ctx).Error("jobs dispatch: claim failed", "job_id", rec.ID, "error", err)
@@ -152,7 +179,10 @@ func (q *StandaloneQueue) dispatchOnce(dispatch chan<- jobRecord) {
 		}
 
 		rec.Status = string(StatusRunning)
-		rec.Attempts++
+		// The attempt itself is counted only at the worker handoff
+		// (runWorker's runAttempt / markAttemptStarted), not here: a Job
+		// sitting claimed-but-not-started must not report an Attempts
+		// figure that pre-counts a Handle call nothing has made yet.
 		select {
 		case dispatch <- rec:
 		case <-q.stopCh:
@@ -199,10 +229,31 @@ func (q *StandaloneQueue) runWorker(dispatch <-chan jobRecord) {
 			if !ok {
 				return
 			}
-			q.execute(rec)
+			q.runAttempt(rec)
 			q.releaseTenantSlot(pkgcore.TenantID(rec.TenantID))
 		}
 	}
+}
+
+// runAttempt is the worker-handoff half of a claim — the moment a worker
+// actually takes possession of a Job the dispatcher claimed (claimOne). It
+// counts the attempt: rec.Attempts is incremented in memory (execute's
+// retry/dead-letter arithmetic reads it), and the increment plus the
+// attempt's StartedAt are persisted by markAttemptStarted before Handle
+// runs. Doing this at the handoff rather than at the claim is what keeps
+// Get() honest for a Job that sits claimed-but-not-started (see claimOne's
+// and markAttemptStarted's own doc comments), and what keeps an unclean
+// exit in the claim-to-handoff window from consuming an attempt that never
+// ran.
+func (q *StandaloneQueue) runAttempt(rec jobRecord) {
+	rec.Attempts++
+	startedAt := time.Now()
+	rec.StartedAt = &startedAt
+	ctx := jobContext(pkgcore.TenantID(rec.TenantID))
+	if werr := markAttemptStarted(context.Background(), q.db, rec.ID, startedAt); werr != nil {
+		obs.FromContext(ctx).Warn("jobs: persisting attempt start failed", "job_id", rec.ID, "error", werr)
+	}
+	q.execute(rec)
 }
 
 // invokeHandle calls handler.Handle for job, recovering a panic raised
@@ -263,10 +314,12 @@ func invokeOnFailure(ctx context.Context, hook FailureHook, job *Job, cause erro
 // registerJobMetrics wires (standalone_queue.go), labeled by jobType and status
 // -- status is always one of StatusSucceeded/StatusRetrying/
 // StatusDeadLetter, the exact three outcomes whose attempt records exist:
-// an attempt whose failure a concurrent Cancel already discarded (the
-// !moved dead-letter branch of execute) is deliberately recorded under
-// none of them, so a cancelled Job never shows up as dead-lettered on
-// either instrument. Both instruments share one attribute set, computed
+// an attempt whose outcome a concurrent Cancel already discarded (any of
+// execute's three !moved branches) is deliberately recorded under none of
+// them, so a cancelled Job never shows up as succeeded, retrying or
+// dead-lettered on either instrument. Every call site sits strictly after
+// the conditional write that persisted the outcome reported the transition
+// (execute, worker.go). Both instruments share one attribute set, computed
 // once. A nil q.jobDuration (registerJobMetrics never ran, or failed) is
 // the guard: registration always sets both fields together, so checking
 // one stands for both -- see the struct field's own doc comment for why
@@ -358,10 +411,23 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 	now := time.Now()
 	bg := context.Background()
 	if err == nil {
-		log.Info("job succeeded", "job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
-		q.recordJobMetrics(rec.Type, StatusSucceeded, duration)
-		if werr := completeSucceeded(bg, q.db, rec.ID, result, now); werr != nil {
+		// The success log line and the success metrics fire strictly AFTER
+		// completeSucceeded' transition report, mirroring the dead-letter
+		// branch below -- see the moved == true comment there for the full
+		// rationale, which applies identically: a concurrent Cancel can
+		// no-op the write, and a record emitted ahead of the write would
+		// survive the no-op and show a cancelled Job as succeeded.
+		moved, werr := completeSucceeded(bg, q.db, rec.ID, result, now)
+		switch {
+		case werr != nil:
 			log.Error("jobs: persisting success failed", "job_id", rec.ID, "error", werr)
+		case moved:
+			log.Info("job succeeded", "job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
+			q.recordJobMetrics(rec.Type, StatusSucceeded, duration)
+		default:
+			log.Info("job cancelled before its success could be recorded, outcome discarded",
+				"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
+			job.Status = StatusCancelled
 		}
 		return
 	}
@@ -416,12 +482,24 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 	}
 
 	delay := q.backoffDelay(rec.Attempts)
-	log.Warn("job attempt failed, scheduling retry",
-		"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS,
-		"retry_in_ms", delay.Milliseconds(), "error", err)
-	q.recordJobMetrics(rec.Type, StatusRetrying, duration)
-	if werr := completeRetrying(bg, q.db, rec.ID, err.Error(), now.Add(delay), now); werr != nil {
+	// The retry log line and the retry metrics fire strictly AFTER
+	// completeRetrying's transition report, for the identical reason the
+	// success branch above and the dead-letter branch both give: a
+	// concurrent Cancel can no-op the write, and a record emitted ahead of
+	// the write would show a cancelled Job as retrying.
+	moved, werr := completeRetrying(bg, q.db, rec.ID, err.Error(), now.Add(delay), now)
+	switch {
+	case werr != nil:
 		log.Error("jobs: persisting retry failed", "job_id", rec.ID, "error", werr)
+	case moved:
+		log.Warn("job attempt failed, scheduling retry",
+			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS,
+			"retry_in_ms", delay.Milliseconds(), "error", err)
+		q.recordJobMetrics(rec.Type, StatusRetrying, duration)
+	default:
+		log.Info("job cancelled before its failure could schedule a retry, outcome discarded",
+			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
+		job.Status = StatusCancelled
 	}
 }
 

@@ -85,16 +85,28 @@ var ErrDuplicateHandlerType = apperr.Invalid("jobs.duplicate_handler_type")
 type Option func(*StandaloneQueue)
 
 // WithWorkerCount sets how many Jobs StandaloneQueue executes concurrently
-// across all tenants combined. Defaults to DefaultWorkerCount.
+// across all tenants combined. Defaults to DefaultWorkerCount. A value
+// below 1 is refused at option time with a coded panic: a queue with no
+// workers would pass every admission gate and claim every eligible Job into
+// StatusRunning without ever executing one -- a silent no-op, not a
+// configuration with any meaning.
 func WithWorkerCount(n int) Option {
+	if n < 1 {
+		panic(apperr.Invalid("jobs.worker_count_zero"))
+	}
 	return func(q *StandaloneQueue) { q.workerCount = n }
 }
 
 // WithTenantConcurrencyLimit caps how many Jobs belonging to any one
 // tenant may be StatusRunning at once, so one tenant's backlog cannot
 // starve every worker (docs/internal/07-platform-services.md). Defaults to
-// DefaultTenantConcurrencyLimit.
+// DefaultTenantConcurrencyLimit. A value below 1 is refused at option time
+// with a coded panic: a limit of zero would refuse every tenant admission
+// forever, silently processing nothing.
 func WithTenantConcurrencyLimit(n int) Option {
+	if n < 1 {
+		panic(apperr.Invalid("jobs.tenant_concurrency_limit_zero"))
+	}
 	return func(q *StandaloneQueue) { q.tenantConcurrency = n }
 }
 
@@ -162,6 +174,33 @@ type StandaloneQueue struct {
 	closeOnce sync.Once
 	wg        sync.WaitGroup
 
+	// owner is this queue's writer-registration token (store.go's
+	// queue_writers table): the value every claim this queue makes stamps
+	// into jobRecord.ClaimedBy, and the identity under which Start acquires
+	// -- and the dispatcher heartbeats, and Close releases -- the
+	// single-writer registration that lets Start refuse a second live
+	// writer on the same database. Generated per queue object by
+	// NewStandaloneQueue (no I/O), so a restarted process claims rows under
+	// a token no earlier run ever used.
+	owner string
+
+	// writerStaleAfter is how long owner's registration row may go without
+	// a dispatcher heartbeat before another Start treats it as a crashed
+	// writer's and steals it. Computed from the poll interval at
+	// construction; see writerStaleAfter.
+	writerStaleAfter time.Duration
+
+	// startMu serializes Start, and started records whether a Start has
+	// ever fully succeeded (dispatcher and workers launched). Together they
+	// replace the old sync.Once gate: a Start that FAILED (schema error,
+	// writer registration conflict, interrupted-row recovery) leaves
+	// started false, so a later Start -- after the host fixed the cause --
+	// genuinely re-runs the whole startup sequence instead of silently
+	// returning nil with nothing running. A Start after started is a no-op
+	// returning nil, exactly the pre-existing contract.
+	startMu sync.Mutex
+	started bool
+
 	// depthGaugeMu orders the queue-depth gauge callback against Close:
 	// the callback holds the read lock while it checks whether the queue
 	// is still running and queries the database, and Close holds the write
@@ -170,8 +209,6 @@ type StandaloneQueue struct {
 	// database. See registerQueueDepthGauge's doc comment for the full
 	// lifecycle contract.
 	depthGaugeMu sync.RWMutex
-
-	startOnce sync.Once
 }
 
 // NewStandaloneQueue returns a StandaloneQueue backed by db, which must come from
@@ -197,7 +234,27 @@ func NewStandaloneQueue(db *gorm.DB, opts ...Option) *StandaloneQueue {
 	for _, opt := range opts {
 		opt(q)
 	}
+	q.owner = newWriterOwner()
+	q.writerStaleAfter = writerStaleAfter(q.pollInterval)
 	return q
+}
+
+// writerStaleAfter computes how long a writer registration may go without
+// a dispatcher heartbeat before Start treats it as a crashed writer's and
+// steals it (see queueWritersTable and ErrQueueWriterActive). Heartbeats
+// ride the dispatcher's poll tick (worker.go's heartbeat), so the window
+// must comfortably exceed one poll interval -- a live queue must never look
+// stale to a concurrent Start just because its last tick was recent -- and
+// is floored at two seconds so a slow dispatcher tick under load cannot
+// manufacture a false steal either. A crashed process's registration is
+// stolen at most this long after its last beat, which is also the longest a
+// restart waits to take over after a crash.
+func writerStaleAfter(pollInterval time.Duration) time.Duration {
+	const minWriterStaleAfter = 2 * time.Second
+	if d := 10 * pollInterval; d > minWriterStaleAfter {
+		return d
+	}
+	return minWriterStaleAfter
 }
 
 // RegisterHandler adds h to the set this StandaloneQueue dispatches to, keyed by
@@ -222,44 +279,64 @@ func (q *StandaloneQueue) handler(jobType string) Handler {
 	return q.handlers[jobType]
 }
 
-// Start creates the persistence schema if it does not already exist,
-// recovers any Job left StatusRunning by an unclean previous exit back to
-// StatusPending, wires the "jobs.queue.depth", "jobs.job.duration",
-// "jobs.job.attempts" and "jobs.job.dead_letter" metrics, then launches
-// the dispatcher and worker goroutines. It is safe to call only once per
-// StandaloneQueue; later calls are a no-op.
+// Start creates the persistence schema if it does not already exist (the
+// queue_writers single-writer table included), registers this
+// StandaloneQueue as the jobs table's live writer — refusing with
+// ErrQueueWriterActive while another live StandaloneQueue already owns the
+// same database — recovers any Job left StatusRunning by an unclean
+// previous exit back to StatusPending (only after that writer gate has
+// proven no live writer could still be executing those rows; see
+// resetInterruptedRecords), wires the "jobs.queue.depth",
+// "jobs.job.duration", "jobs.job.attempts" and "jobs.job.dead_letter"
+// metrics, then launches the dispatcher and worker goroutines.
+//
+// A Start that FAILED — a schema error, a writer-registration conflict, an
+// interrupted-row recovery failure — may be retried by calling Start again:
+// the whole sequence genuinely re-runs once the cause is fixed. A Start
+// after a successful one is a no-op returning nil, as it always was.
 func (q *StandaloneQueue) Start(ctx context.Context) error {
-	var startErr error
-	q.startOnce.Do(func() {
-		if err := ensureJobsSchema(ctx, q.db); err != nil {
-			startErr = err
-			return
+	q.startMu.Lock()
+	defer q.startMu.Unlock()
+	if q.started {
+		return nil
+	}
+	if err := ensureJobsSchema(ctx, q.db); err != nil {
+		return err
+	}
+	now := time.Now()
+	if err := acquireWriterRegistration(ctx, q.db, q.owner, now, q.writerStaleAfter); err != nil {
+		return err
+	}
+	if err := resetInterruptedRecords(ctx, q.db, now, q.owner); err != nil {
+		// The registration was acquired for this attempt only: release it
+		// so a retry of this Start (or another queue) is not blocked on a
+		// registration whose owner never started.
+		if relErr := releaseWriterRegistration(ctx, q.db, q.owner); relErr != nil {
+			obs.FromContext(ctx).Warn("jobs: releasing writer registration after failed recovery", "error", relErr)
 		}
-		if err := resetInterruptedRecords(ctx, q.db, time.Now()); err != nil {
-			startErr = fmt.Errorf("jobs: recover interrupted jobs: %w", err)
-			return
-		}
-		if err := q.registerQueueDepthGauge(otel.Meter(InstrumentationName)); err != nil {
-			// A metrics wiring failure must not prevent the queue itself
-			// from running -- see this method's own doc comment; only
-			// ensureJobsSchema/resetInterruptedRecords failures abort
-			// Start.
-			obs.FromContext(ctx).Warn("jobs: registering queue depth gauge failed", "error", err)
-		}
-		if err := q.registerJobMetrics(); err != nil {
-			// Same fail-open contract as registerQueueDepthGauge above.
-			obs.FromContext(ctx).Warn("jobs: registering job metrics failed", "error", err)
-		}
+		return fmt.Errorf("jobs: recover interrupted jobs: %w", err)
+	}
+	if err := q.registerQueueDepthGauge(otel.Meter(InstrumentationName)); err != nil {
+		// A metrics wiring failure must not prevent the queue itself
+		// from running -- see this method's own doc comment; only
+		// ensureJobsSchema/acquireWriterRegistration/resetInterruptedRecords
+		// failures abort Start.
+		obs.FromContext(ctx).Warn("jobs: registering queue depth gauge failed", "error", err)
+	}
+	if err := q.registerJobMetrics(); err != nil {
+		// Same fail-open contract as registerQueueDepthGauge above.
+		obs.FromContext(ctx).Warn("jobs: registering job metrics failed", "error", err)
+	}
 
-		dispatch := make(chan jobRecord)
+	dispatch := make(chan jobRecord)
+	q.wg.Add(1)
+	go q.runDispatcher(dispatch)
+	for i := 0; i < q.workerCount; i++ {
 		q.wg.Add(1)
-		go q.runDispatcher(dispatch)
-		for i := 0; i < q.workerCount; i++ {
-			q.wg.Add(1)
-			go q.runWorker(dispatch)
-		}
-	})
-	return startErr
+		go q.runWorker(dispatch)
+	}
+	q.started = true
+	return nil
 }
 
 // Close stops the dispatcher and waits for in-flight Jobs to reach their
@@ -277,6 +354,17 @@ func (q *StandaloneQueue) Close(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
 		q.wg.Wait()
+		// Graceful handover: with every worker stopped no row this queue
+		// claimed is mid-Handle any more, so releasing the writer
+		// registration lets a successor queue on the same database Start
+		// immediately instead of waiting out the stale window. Best-effort:
+		// a failed release ages out via the stale window regardless. The
+		// release runs on a ctx stripped of the caller's cancellation --
+		// Close may return ctx.Err while this goroutine still finishes the
+		// handover, and the release must not be abandoned mid-way.
+		if relErr := releaseWriterRegistration(context.WithoutCancel(ctx), q.db, q.owner); relErr != nil {
+			obs.FromContext(ctx).Warn("jobs: releasing writer registration failed", "error", relErr)
+		}
 		close(done)
 	}()
 

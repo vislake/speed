@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // jobsTable is the standalone deployment mode's persistence table name.
@@ -53,6 +54,16 @@ type jobRecord struct {
 	MaxRetries     int    `gorm:"column:max_retries;not null"`
 	TimeoutNanos   int64  `gorm:"column:timeout_nanos;not null"`
 
+	// ClaimedBy records which StandaloneQueue owns this row's current or most
+	// recent claim: the queue's writer-registration owner token (see
+	// queueWritersTable), written by claimOne under the claiming queue's own
+	// token at the moment the row flips to StatusRunning. It is the ownership
+	// marker resetInterruptedRecords' WHERE clause is scoped by, and the
+	// operator-visible record of which process (re)start left a row running
+	// after a crash. Empty for rows that never were claimed (and for rows
+	// written before the column existed).
+	ClaimedBy string `gorm:"column:claimed_by;size:64;not null"`
+
 	ScheduledAt time.Time  `gorm:"column:scheduled_at;not null"`
 	CreatedAt   time.Time  `gorm:"column:created_at;not null"`
 	UpdatedAt   time.Time  `gorm:"column:updated_at;not null"`
@@ -91,6 +102,7 @@ const createJobsTableSQL = `CREATE TABLE IF NOT EXISTS ` + jobsTable + ` (
 	payload         BLOB,
 	idempotency_key VARCHAR(255) NOT NULL DEFAULT '',
 	status          VARCHAR(32) NOT NULL,
+	claimed_by      VARCHAR(64) NOT NULL DEFAULT '',
 	priority        INTEGER NOT NULL,
 	progress_pct    INTEGER NOT NULL DEFAULT 0,
 	progress_msg    VARCHAR(1000) NOT NULL DEFAULT '',
@@ -123,13 +135,156 @@ const createJobsDispatchIndexSQL = `CREATE INDEX IF NOT EXISTS idx_jobs_dispatch
 const createJobsIdempotencySQL = `CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_tenant_idempotency
 	ON ` + jobsTable + ` (tenant_id, idempotency_key) WHERE idempotency_key != ''`
 
+// queueWritersTable is the single-row table through which StandaloneQueue
+// enforces "one live writer per jobs table". StandaloneQueue.Start registers
+// this queue under its owner token (acquireWriterRegistration) and refuses to
+// start -- ErrQueueWriterActive -- while that row belongs to a live sibling
+// (its last_heartbeat within the stale window); the dispatcher refreshes the
+// heartbeat every poll tick; Close releases the row. A crashed process leaves
+// the row behind, and the next Start steals it once its heartbeat goes stale
+// (see StandaloneQueue.Start and writerStaleAfter) -- the same
+// crash-recovery shape the jobs table's own StatusRunning rows get from
+// resetInterruptedRecords, applied to the writer itself. The table is
+// bootstrapped alongside the jobs table (CREATE TABLE IF NOT EXISTS, exactly
+// like createJobsTableSQL) for the same reason: it is an implementation
+// detail of the standalone deployment mode with no other consumer. Row id is
+// pinned to 1 by convention; the primary key plus the id=1 upsert below are
+// what keep the table at exactly one row.
+const queueWritersTable = "queue_writers"
+
+const createQueueWritersTableSQL = `CREATE TABLE IF NOT EXISTS ` + queueWritersTable + ` (
+	id            INTEGER NOT NULL PRIMARY KEY,
+	owner         VARCHAR(64) NOT NULL,
+	last_heartbeat TIMESTAMP NOT NULL
+)`
+
+// ErrQueueWriterActive is returned by StandaloneQueue.Start when another
+// live StandaloneQueue already holds the queue_writers registration for the
+// same database — a second writer on one jobs table would reset and
+// re-claim the first writer's mid-Handle rows, double-executing them (see
+// resetInterruptedRecords' own doc comment for the full chain). It is a
+// conflict with the database's current writer, not a caller error: the
+// host should either shut the other queue down (its Close releases the
+// registration) or retry Start once the incumbent's heartbeat goes stale.
+var ErrQueueWriterActive = apperr.Conflict("jobs.queue_writer_active")
+
+// acquireWriterRegistrationSQL is the atomic single-writer gate: it inserts
+// this queue's registration, or -- when the row already exists -- replaces
+// it only if the incumbent's last_heartbeat has gone stale (the incumbent
+// is presumed crashed). One statement, so two queues racing to Start on the
+// same database serialize on the row's own primary key instead of both
+// reading "absent" and both proceeding: exactly one of them sees
+// RowsAffected == 1, the other sees the incumbent's fresh registration and
+// is refused. Portable across both dbkit dialects (SQLite 3.24+'s and
+// PostgreSQL's identical UPSERT syntax).
+const acquireWriterRegistrationSQL = `INSERT INTO ` + queueWritersTable + ` (id, owner, last_heartbeat) VALUES (1, ?, ?)
+ON CONFLICT(id) DO UPDATE SET owner = excluded.owner, last_heartbeat = excluded.last_heartbeat
+WHERE ` + queueWritersTable + `.last_heartbeat < ?`
+
+// acquireWriterRegistration claims the queue_writers row for owner (this
+// queue's writer token, NewStandaloneQueue) at now, or reports
+// ErrQueueWriterActive when the row already belongs to a writer whose
+// heartbeat is younger than now-staleAfter. Callers pass their computed
+// stale window (StandaloneQueue.writerStaleAfter); passing zero makes every
+// incumbent stale, which is what the unit tests use to exercise the
+// steal-the-crashed-registration path without waiting out a real window.
+func acquireWriterRegistration(ctx context.Context, db *gorm.DB, owner string, now time.Time, staleAfter time.Duration) error {
+	res := db.WithContext(ctx).Exec(acquireWriterRegistrationSQL, owner, now, now.Add(-staleAfter))
+	if res.Error != nil {
+		return fmt.Errorf("jobs: acquire writer registration: %w", res.Error)
+	}
+	if res.RowsAffected == 1 {
+		return nil
+	}
+	// Zero rows affected: id=1 exists and its heartbeat is fresh -- another
+	// live StandaloneQueue owns this database. See ErrQueueWriterActive.
+	return ErrQueueWriterActive
+}
+
+// heartbeatWriterRegistration refreshes owner's registration row and reports
+// whether the row was still there to refresh. A false report means this
+// queue's registration was stolen (its beats lapsed past the stale window
+// and a sibling took over, or the row was removed) -- the dispatcher logs
+// it and keeps running, since stopping mid-flight would strand claimed rows;
+// the anomaly is operator-visible either way.
+func heartbeatWriterRegistration(ctx context.Context, db *gorm.DB, owner string, now time.Time) (bool, error) {
+	res := db.WithContext(ctx).Exec(`UPDATE `+queueWritersTable+` SET last_heartbeat = ? WHERE id = 1 AND owner = ?`, now, owner)
+	if res.Error != nil {
+		return false, fmt.Errorf("jobs: writer heartbeat: %w", res.Error)
+	}
+	return res.RowsAffected == 1, nil
+}
+
+// releaseWriterRegistration removes owner's registration row -- the graceful
+// handover StandaloneQueue.Close performs once every worker has stopped, so
+// a successor queue on the same database may Start immediately rather than
+// waiting out the stale window. Removing another owner's row is impossible
+// (the WHERE names owner); a row already stolen or never acquired leaves the
+// delete at zero rows, which is success, not an error.
+func releaseWriterRegistration(ctx context.Context, db *gorm.DB, owner string) error {
+	if err := db.WithContext(ctx).Exec(`DELETE FROM `+queueWritersTable+` WHERE id = 1 AND owner = ?`, owner).Error; err != nil {
+		return fmt.Errorf("jobs: release writer registration: %w", err)
+	}
+	return nil
+}
+
+// newWriterOwner generates this StandaloneQueue's writer-registration token:
+// a fresh id per queue object, so a restarted process claims rows under a
+// token no previous run ever used (see resetInterruptedRecords' doc comment
+// for why the reset's own WHERE needs exactly that property).
+func newWriterOwner() string { return uuid.NewString() }
+
 // ensureJobsSchema creates the jobs table and its indexes if they do not
-// already exist. Safe to call every time Start runs.
+// already exist, adds the claimed_by column to a jobs table a pre-fix
+// release created without it, and creates the queue_writers single-writer
+// table. Safe to call every time Start runs.
 func ensureJobsSchema(ctx context.Context, db *gorm.DB) error {
 	for _, stmt := range [...]string{createJobsTableSQL, createJobsDispatchIndexSQL, createJobsIdempotencySQL} {
 		if err := db.WithContext(ctx).Exec(stmt).Error; err != nil {
 			return fmt.Errorf("jobs: ensure schema: %w", err)
 		}
+	}
+	if err := ensureJobsClaimedByColumn(ctx, db); err != nil {
+		return err
+	}
+	if err := db.WithContext(ctx).Exec(createQueueWritersTableSQL).Error; err != nil {
+		return fmt.Errorf("jobs: ensure schema: %w", err)
+	}
+	return nil
+}
+
+// ensureJobsClaimedByColumn brings a jobs table created by a release that
+// predated the claimed_by ownership column (see jobRecord.ClaimedBy) up to
+// the current shape, portably across both dbkit dialects: PostgreSQL
+// supports ADD COLUMN IF NOT EXISTS natively; SQLite does not, so the sqlite
+// path probes PRAGMA table_info first and alters only when the column is
+// absent. A table freshly created from createJobsTableSQL already carries
+// the column and the probe answers "present", skipping the alter. The jobs
+// table is bootstrapped with CREATE TABLE IF NOT EXISTS rather than through
+// dbkit.MigrationRegistry (see createJobsTableSQL's own doc comment), so
+// this in-place column add is the migration story for exactly the one shape
+// that bootstrapping cannot evolve: a table that already exists.
+func ensureJobsClaimedByColumn(ctx context.Context, db *gorm.DB) error {
+	if db.Name() != "sqlite" {
+		// postgres (the only other dbkit dialect): native IF NOT EXISTS.
+		if err := db.WithContext(ctx).Exec(`ALTER TABLE ` + jobsTable + ` ADD COLUMN IF NOT EXISTS claimed_by VARCHAR(64) NOT NULL DEFAULT ''`).Error; err != nil {
+			return fmt.Errorf("jobs: add claimed_by column: %w", err)
+		}
+		return nil
+	}
+	var columns []struct {
+		Name string `gorm:"column:name"`
+	}
+	if err := db.WithContext(ctx).Raw(`PRAGMA table_info(` + jobsTable + `)`).Scan(&columns).Error; err != nil {
+		return fmt.Errorf("jobs: probe jobs table columns: %w", err)
+	}
+	for _, c := range columns {
+		if c.Name == "claimed_by" {
+			return nil
+		}
+	}
+	if err := db.WithContext(ctx).Exec(`ALTER TABLE ` + jobsTable + ` ADD COLUMN claimed_by VARCHAR(64) NOT NULL DEFAULT ''`).Error; err != nil {
+		return fmt.Errorf("jobs: add claimed_by column: %w", err)
 	}
 	return nil
 }
@@ -297,25 +452,57 @@ func claimCandidates(ctx context.Context, db *gorm.DB, now time.Time, limit int)
 }
 
 // claimOne atomically transitions rec (identified by rec.ID and the status
-// it was read with) to StatusRunning, incrementing Attempts. It reports
-// false, with no error, when another operation already moved the row out
-// of that status first — the observed-status guard in the WHERE clause
-// turns a lost race into a no-op instead of a double execution, which
-// matters if the standalone deployment mode's implementation is ever
-// driven by more than the one dispatcher goroutine it ships with today.
-func claimOne(ctx context.Context, db *gorm.DB, rec jobRecord, now time.Time) (bool, error) {
+// it was read with) to StatusRunning under owner's writer token, stamping
+// the row's ClaimedBy marker. It reports false, with no error, when another
+// operation already moved the row out of that status first — the
+// observed-status guard in the WHERE clause turns a lost race into a no-op
+// instead of a double execution, which matters if the standalone deployment
+// mode's implementation is ever driven by more than the one dispatcher
+// goroutine it ships with today.
+//
+// claimOne is deliberately only the FIRST half of a claim: it flips the
+// status and records ownership but does not count the attempt. Counting
+// (Attempts) and the attempt's StartedAt happen at the worker handoff,
+// markAttemptStarted — the moment a worker actually takes possession of the
+// row — so a Job that sits claimed-but-not-started (dispatcher claimed it,
+// the worker has not received it yet) honestly reports through Get() as
+// StatusRunning with Attempts not yet including an attempt no Handle has
+// started, and an unclean exit in that window never consumes an attempt
+// that never ran.
+func claimOne(ctx context.Context, db *gorm.DB, rec jobRecord, now time.Time, owner string) (bool, error) {
 	result := db.WithContext(ctx).Model(&jobRecord{}).
 		Where("id = ? AND status = ?", rec.ID, rec.Status).
 		Updates(map[string]any{
 			"status":     string(StatusRunning),
-			"attempts":   rec.Attempts + 1,
-			"started_at": now,
+			"claimed_by": owner,
 			"updated_at": now,
 		})
 	if result.Error != nil {
 		return false, fmt.Errorf("jobs: claim job: %w", result.Error)
 	}
 	return result.RowsAffected == 1, nil
+}
+
+// markAttemptStarted is the worker-handoff half of the two-phase claim (see
+// claimOne's own doc comment): it records that the attempt a worker is about
+// to execute has actually started, incrementing Attempts and stamping
+// StartedAt on a row the dispatcher already claimed (StatusRunning). The
+// WHERE ... status = 'running' guard keeps the write a no-op for a row a
+// concurrent Cancel settled between the claim and the handoff — the attempt
+// still executes (Cancel's contract lets a claimed Job run), but its count
+// and start time are discarded along with its outcome, exactly like
+// completeSucceeded/completeRetrying/completeDeadLetter discard the outcome
+// itself. Called by the worker; execute's own in-memory rec.Attempts is
+// authoritative for this attempt's retry/dead-letter arithmetic either way,
+// so a failed write is logged and the attempt proceeds.
+func markAttemptStarted(ctx context.Context, db *gorm.DB, id string, now time.Time) error {
+	return db.WithContext(ctx).Model(&jobRecord{}).
+		Where("id = ? AND status = ?", id, string(StatusRunning)).
+		Updates(map[string]any{
+			"attempts":   gorm.Expr("attempts + 1"),
+			"started_at": now,
+			"updated_at": now,
+		}).Error
 }
 
 // updateProgress persists one progress report.
@@ -330,13 +517,17 @@ func updateProgress(ctx context.Context, db *gorm.DB, id string, pct int, msg st
 }
 
 // completeSucceeded conditionally transitions id from StatusRunning to
-// StatusSucceeded. Like claimOne, the WHERE ... status = 'running' guard
-// makes this a no-op (RowsAffected == 0, no error) rather than an
-// overwrite when a concurrent Cancel already moved the row to
-// StatusCancelled while Handle was still executing — see Queue.Cancel's
-// own doc comment.
-func completeSucceeded(ctx context.Context, db *gorm.DB, id string, result Result, now time.Time) error {
-	return db.WithContext(ctx).Model(&jobRecord{}).
+// StatusSucceeded and reports whether the transition actually happened.
+// Like claimOne, the WHERE ... status = 'running' guard turns a concurrent
+// Cancel's markCancelled into the winner of the race (RowsAffected == 0,
+// nil error) rather than letting this write overwrite StatusCancelled —
+// see Queue.Cancel's own doc comment. The returned bool is what lets
+// execute (worker.go) record the success log line and the success metrics
+// strictly after a genuine running -> succeeded transition, mirroring
+// completeDeadLetter's transition report: a record emitted ahead of the
+// write would survive a no-op write and show a cancelled Job as succeeded.
+func completeSucceeded(ctx context.Context, db *gorm.DB, id string, result Result, now time.Time) (bool, error) {
+	res := db.WithContext(ctx).Model(&jobRecord{}).
 		Where("id = ? AND status = ?", id, string(StatusRunning)).
 		Updates(map[string]any{
 			"status": string(StatusSucceeded),
@@ -351,21 +542,32 @@ func completeSucceeded(ctx context.Context, db *gorm.DB, id string, result Resul
 			"error_message": "",
 			"updated_at":    now,
 			"completed_at":  now,
-		}).Error
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
 }
 
 // completeRetrying conditionally transitions id from StatusRunning back to
-// StatusRetrying, recording cause and moving ScheduledAt to nextAttempt.
-// Same concurrent-Cancel no-op guard as completeSucceeded.
-func completeRetrying(ctx context.Context, db *gorm.DB, id string, cause string, nextAttempt time.Time, now time.Time) error {
-	return db.WithContext(ctx).Model(&jobRecord{}).
+// StatusRetrying, recording cause and moving ScheduledAt to nextAttempt,
+// and reports whether the transition actually happened. Same concurrent-
+// Cancel no-op guard and the same transition-report role as
+// completeSucceeded: execute records the retry log line and the retry
+// metrics only after a genuine running -> retrying move.
+func completeRetrying(ctx context.Context, db *gorm.DB, id string, cause string, nextAttempt time.Time, now time.Time) (bool, error) {
+	res := db.WithContext(ctx).Model(&jobRecord{}).
 		Where("id = ? AND status = ?", id, string(StatusRunning)).
 		Updates(map[string]any{
 			"status":        string(StatusRetrying),
 			"error_message": cause,
 			"scheduled_at":  nextAttempt,
 			"updated_at":    now,
-		}).Error
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
 }
 
 // completeDeadLetter conditionally transitions id from StatusRunning to
@@ -410,13 +612,28 @@ func markCancelled(ctx context.Context, db *gorm.DB, id string, now time.Time) e
 // still StatusRunning at Start time cannot actually be running (this
 // process just started), so it is moved back to StatusPending —
 // re-attempted, exactly as docs/internal/07-platform-services.md requires:
-// a restarted process must recover in-flight work, not lose it. Its
-// Attempts count is left as-is (already incremented at the claim that was
-// interrupted), so this recovery does not grant an extra attempt beyond
-// MaxRetries.
-func resetInterruptedRecords(ctx context.Context, db *gorm.DB, now time.Time) error {
+// a restarted process must recover in-flight work, not lose it. Attempts
+// and StartedAt are left as-is: only an attempt the worker handoff actually
+// started (markAttemptStarted) ever incremented them, so this recovery
+// never grants an extra attempt beyond MaxRetries and never counts an
+// attempt whose Handle never ran.
+//
+// The reset is scoped by the two things that make it safe to run at all,
+// both established by StandaloneQueue.Start before this is called: owner
+// has just acquired the queue_writers registration (acquireWriterRegistration
+// refused a live sibling), so no live writer exists whose StatusRunning
+// rows this could steal mid-Handle — and owner is a brand-new token
+// (newWriterOwner) that no live or previously-crashed run ever claimed
+// rows under. The WHERE ... claimed_by != owner clause spells that second
+// property out at the statement level: a row this queue itself claimed
+// (impossible at Start, since claims happen only after Start returns) would
+// be left alone even if Start were ever re-entered over a live run, while
+// every row some other (now provably dead) writer claimed — and every
+// legacy row carrying the empty claimed_by a pre-claim_by release wrote —
+// is recovered.
+func resetInterruptedRecords(ctx context.Context, db *gorm.DB, now time.Time, owner string) error {
 	return db.WithContext(ctx).Model(&jobRecord{}).
-		Where("status = ?", string(StatusRunning)).
+		Where("status = ? AND claimed_by != ?", string(StatusRunning), owner).
 		Updates(map[string]any{
 			"status":     string(StatusPending),
 			"updated_at": now,

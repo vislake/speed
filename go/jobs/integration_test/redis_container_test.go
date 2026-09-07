@@ -61,37 +61,43 @@ func startRedisContainer(t *testing.T, ctx context.Context) asynqlib.RedisConnOp
 	return connOpt
 }
 
+// testAsynqDefaultOpts is the shared "short intervals for fast,
+// deterministic tests" option list every queue this package starts uses --
+// polling intervals and the tenant-throttle delay all turned down so tests
+// observe outcomes in tens of milliseconds rather than asynq's own
+// multi-second defaults (TaskCheckInterval defaults to 1s,
+// DelayedTaskCheckInterval to 5s) -- the same convention go/jobs's own
+// newTestQueue helper (standalone_queue_test.go, parent module) applies to
+// StandaloneQueue's WithPollInterval/WithBackoff. Extracted so a test that
+// must build its Queue from a container it started itself (to reach the
+// same Redis with a raw client, e.g. marker-sabotage tests) starts from
+// the identical tuning rather than a hand-maintained copy.
+var testAsynqDefaultOpts = []asynq.Option{
+	asynq.WithTaskCheckInterval(20 * time.Millisecond),
+	asynq.WithDelayedTaskCheckInterval(50 * time.Millisecond),
+	asynq.WithThrottleRetryDelay(20 * time.Millisecond),
+	// asynqlib.DefaultRetryDelayFunc is tuned for real production
+	// traffic (its first-retry delay alone is 15-44 SECONDS -- see
+	// server.go's DefaultRetryDelayFunc: n=0 gives
+	// 0 + 15 + rand.IntN(30)), the same reason StandaloneQueue's own tests
+	// override WithBackoff instead of using DefaultBackoffBase/
+	// DefaultBackoffMax. Every test in this package that exercises a
+	// genuine retry needs this fast instead, or it would spend most
+	// of its runtime asleep waiting on asynq's own default backoff.
+	asynq.WithRetryDelayFunc(func(n int, err error, task *asynqlib.Task) time.Duration {
+		return 20 * time.Millisecond
+	}),
+}
+
 // newTestAsynqQueue returns an asynq.Queue (go/jobs/queue/asynq) connected
-// to a fresh Redis container, with polling intervals and the
-// tenant-throttle delay all turned down so tests observe outcomes in tens
-// of milliseconds rather than asynq's own multi-second defaults
-// (TaskCheckInterval defaults to 1s, DelayedTaskCheckInterval to 5s) --
-// the same "short intervals for fast, deterministic tests" convention
-// go/jobs's own newTestQueue helper (standalone_queue_test.go, parent
-// module) applies to StandaloneQueue's WithPollInterval/WithBackoff.
-// Registers handlers and calls Start; Close is registered via t.Cleanup,
-// bounded so a stuck test cannot hang forever.
+// to a fresh Redis container with testAsynqDefaultOpts applied (opts
+// appended after, so a caller's override wins). Close is registered via
+// t.Cleanup, bounded so a stuck test cannot hang forever.
 func newTestAsynqQueue(t *testing.T, ctx context.Context, opts ...asynq.Option) *asynq.Queue {
 	t.Helper()
 	connOpt := startRedisContainer(t, ctx)
 
-	defaults := []asynq.Option{
-		asynq.WithTaskCheckInterval(20 * time.Millisecond),
-		asynq.WithDelayedTaskCheckInterval(50 * time.Millisecond),
-		asynq.WithThrottleRetryDelay(20 * time.Millisecond),
-		// asynqlib.DefaultRetryDelayFunc is tuned for real production
-		// traffic (its first-retry delay alone is 15-44 SECONDS -- see
-		// server.go's DefaultRetryDelayFunc: n=0 gives
-		// 0 + 15 + rand.IntN(30)), the same reason StandaloneQueue's own tests
-		// override WithBackoff instead of using DefaultBackoffBase/
-		// DefaultBackoffMax. Every test in this package that exercises a
-		// genuine retry needs this fast instead, or it would spend most
-		// of its runtime asleep waiting on asynq's own default backoff.
-		asynq.WithRetryDelayFunc(func(n int, err error, task *asynqlib.Task) time.Duration {
-			return 20 * time.Millisecond
-		}),
-	}
-	q := asynq.NewQueue(connOpt, append(defaults, opts...)...)
+	q := asynq.NewQueue(connOpt, append(testAsynqDefaultOpts, opts...)...)
 
 	t.Cleanup(func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

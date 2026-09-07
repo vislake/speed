@@ -3,12 +3,14 @@ package asynq
 import (
 	"context"
 	"testing"
+	"time"
 
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/jobs/internal/testutil"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // TestQueue_RegisterHandler_DuplicateType_Errors mirrors StandaloneQueue's
@@ -83,4 +85,49 @@ func TestQueue_DepthGauge_StoppedQueueDoesNotQueryRedis(t *testing.T) {
 	if depth := testutil.MetricByName(t, rm, "jobs.queue.depth"); depth != nil {
 		t.Errorf("Collect() reports %q for a stopped queue, want it to answer nothing", "jobs.queue.depth")
 	}
+}
+
+// This file's own option-refusal tests: configuration values that would
+// make the queue silently process nothing, or crash a processor goroutine
+// later, must be refused at option time with a coded panic (the same
+// convention pkgcore's constructors use) -- never accepted and left to
+// fail somewhere else.
+
+// assertOptionPanics asserts that fn panics with a coded *apperr.Error
+// carrying code.
+func assertOptionPanics(t *testing.T, code string, fn func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatalf("%s: expected a coded panic %q, got none", t.Name(), code)
+		}
+		e, ok := r.(*apperr.Error)
+		if !ok {
+			t.Fatalf("%s: panic value = %T(%v), want a coded *apperr.Error %q", t.Name(), r, r, code)
+		}
+		if e.Code != code {
+			t.Fatalf("%s: panic code = %q, want %q", t.Name(), e.Code, code)
+		}
+	}()
+	fn()
+}
+
+// TestWithThrottleRetryDelay_Negative_Refused pins the negative-delay
+// refusal: retryDelay (worker.go) feeds the delay through
+// math/rand.Int64N's range, which panics on a negative bound inside
+// asynq's own processor goroutine -- an unrecovered panic that would crash
+// the whole process. Fails on the pre-fix code, where WithThrottleRetryDelay(-1)
+// is accepted silently and the crash only happens later, asynchronously.
+func TestWithThrottleRetryDelay_Negative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.throttle_retry_delay_negative", func() { WithThrottleRetryDelay(-1) })
+	assertOptionPanics(t, "jobs.throttle_retry_delay_negative", func() { WithThrottleRetryDelay(-time.Hour) })
+}
+
+// TestWithTenantConcurrencyLimit_ZeroOrNegative_Refused pins the zero-limit
+// refusal: a limit of zero would bounce every task of every tenant forever
+// (errTenantAtCapacity), silently processing nothing.
+func TestWithTenantConcurrencyLimit_ZeroOrNegative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.tenant_concurrency_limit_zero", func() { WithTenantConcurrencyLimit(0) })
+	assertOptionPanics(t, "jobs.tenant_concurrency_limit_zero", func() { WithTenantConcurrencyLimit(-2) })
 }

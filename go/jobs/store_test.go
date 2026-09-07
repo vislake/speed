@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 )
 
@@ -36,6 +38,12 @@ func nextFixtureID() string {
 	return time.Now().Format("20060102150405.000000000") + "-" + string(rune('a'+fixtureRecordSeq%26))
 }
 
+// testWriterOwner is the writer-registration token store-level tests claim
+// rows under, standing in for the per-queue token NewStandaloneQueue
+// generates (newWriterOwner). Distinct per test is unnecessary: every test
+// uses its own database.
+const testWriterOwner = "test-owner"
+
 // fixtureRecord returns a minimally valid jobRecord: every NOT NULL column
 // populated, ready to insert.
 func fixtureRecord(tenant pkgcore.TenantID, jobType string) *jobRecord {
@@ -61,6 +69,68 @@ func TestEnsureJobsSchema_Idempotent(t *testing.T) {
 	}
 	if err := ensureJobsSchema(context.Background(), db); err != nil {
 		t.Fatalf("second ensureJobsSchema() error = %v, want nil (CREATE TABLE/INDEX IF NOT EXISTS must be idempotent)", err)
+	}
+}
+
+// TestEnsureJobsSchema_UpgradesLegacyTableWithoutClaimedBy proves the
+// in-place column add that keeps a jobs table created by a pre-claim_by
+// release bootable: a table carrying the pre-existing shape (no
+// claimed_by column) must come out of ensureJobsSchema with the column
+// present and every pre-existing row intact and reset-table-compatible
+// (claimed_by defaulting to the empty string the reset's WHERE clause
+// treats as another writer's).
+func TestEnsureJobsSchema_UpgradesLegacyTableWithoutClaimedBy(t *testing.T) {
+	db := dbtest.NewSQLite(t)
+	legacy := `CREATE TABLE ` + jobsTable + ` (
+		id              VARCHAR(36) NOT NULL PRIMARY KEY,
+		type            VARCHAR(255) NOT NULL,
+		tenant_id       VARCHAR(64) NOT NULL,
+		payload         BLOB,
+		idempotency_key VARCHAR(255) NOT NULL DEFAULT '',
+		status          VARCHAR(32) NOT NULL,
+		priority        INTEGER NOT NULL,
+		progress_pct    INTEGER NOT NULL DEFAULT 0,
+		progress_msg    VARCHAR(1000) NOT NULL DEFAULT '',
+		result          BLOB,
+		error_message   VARCHAR(4000) NOT NULL DEFAULT '',
+		attempts        INTEGER NOT NULL DEFAULT 0,
+		max_retries     INTEGER NOT NULL,
+		timeout_nanos   BIGINT NOT NULL,
+		scheduled_at    TIMESTAMP NOT NULL,
+		created_at      TIMESTAMP NOT NULL,
+		updated_at      TIMESTAMP NOT NULL,
+		started_at      TIMESTAMP,
+		completed_at    TIMESTAMP
+	)`
+	if err := db.Exec(legacy).Error; err != nil {
+		t.Fatalf("create legacy jobs table: %v", err)
+	}
+	// Inserted through an explicit legacy column list (no claimed_by --
+	// gorm would add the column the model now carries).
+	if err := db.Exec(`INSERT INTO `+jobsTable+` (id, type, tenant_id, status, priority, max_retries, timeout_nanos, scheduled_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"legacy-1", "legacy.type", "tenant-a", string(StatusPending), int(PriorityNormal), DefaultMaxRetries, int64(DefaultTimeout),
+		time.Now(), time.Now(), time.Now()).Error; err != nil {
+		t.Fatalf("insert into legacy table: %v", err)
+	}
+
+	if err := ensureJobsSchema(context.Background(), db); err != nil {
+		t.Fatalf("ensureJobsSchema() over a legacy table error = %v", err)
+	}
+	// Idempotent over the upgraded table too.
+	if err := ensureJobsSchema(context.Background(), db); err != nil {
+		t.Fatalf("second ensureJobsSchema() over the upgraded table error = %v", err)
+	}
+
+	got, err := findByID(context.Background(), db, JobID("legacy-1"))
+	if err != nil {
+		t.Fatalf("findByID() error = %v", err)
+	}
+	if got.ClaimedBy != "" {
+		t.Errorf("ClaimedBy of a pre-existing row = %q, want empty (the legacy default the reset's WHERE treats as another writer's)", got.ClaimedBy)
+	}
+	// A claim against the upgraded table works end to end.
+	if _, err := claimOne(context.Background(), db, *got, time.Now(), testWriterOwner); err != nil {
+		t.Fatalf("claimOne() against the upgraded table error = %v", err)
 	}
 }
 
@@ -372,14 +442,14 @@ func TestClaimCandidates_FairShareRotationAcrossTenants_PriorityWithinTenantShar
 	}
 }
 
-func TestClaimOne_ClaimsAndIncrementsAttempts(t *testing.T) {
+func TestClaimOne_ClaimsUnderOwner_LeavesAttemptCountingToTheWorkerHandoff(t *testing.T) {
 	db := newTestDB(t)
 	rec := fixtureRecord("tenant-a", "t")
 	if _, err := insertRecord(context.Background(), db, rec); err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
 	}
 
-	claimed, err := claimOne(context.Background(), db, *rec, time.Now())
+	claimed, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner)
 	if err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
@@ -394,29 +464,97 @@ func TestClaimOne_ClaimsAndIncrementsAttempts(t *testing.T) {
 	if got.Status != string(StatusRunning) {
 		t.Errorf("Status after claim = %q, want %q", got.Status, StatusRunning)
 	}
-	if got.Attempts != 1 {
-		t.Errorf("Attempts after claim = %d, want 1", got.Attempts)
+	if got.ClaimedBy != testWriterOwner {
+		t.Errorf("ClaimedBy after claim = %q, want %q (the claiming queue's writer token)", got.ClaimedBy, testWriterOwner)
 	}
-	if got.StartedAt == nil {
-		t.Error("StartedAt after claim = nil, want set")
+	// The claim is only the first half: counting the attempt and stamping
+	// its StartedAt belong to the worker handoff (markAttemptStarted), so
+	// Get() between the claim and the handoff reports a Job that is claimed
+	// but has not started -- Attempts not yet including an attempt no
+	// Handle has made, StartedAt still nil.
+	if got.Attempts != 0 {
+		t.Errorf("Attempts after claim = %d, want 0 (an attempt is counted at the worker handoff, not at the claim)", got.Attempts)
+	}
+	if got.StartedAt != nil {
+		t.Errorf("StartedAt after claim = %v, want nil (the attempt has not started yet)", got.StartedAt)
 	}
 }
 
-// TestClaimOne_StaleSnapshotLosesTheRace proves claimOne's WHERE ... AND
-// status = ? guard: a second attempt to claim the SAME row using a
-// snapshot taken before the first, now-stale, claim succeeded reports
-// claimed = false with no error, rather than double-claiming or erroring.
-// This is deliberately exercised with two sequential calls against one
-// stale snapshot, rather than real goroutine concurrency, so the assertion
-// is exact and immune to SQLite's writer serialization under genuine
-// concurrent writers — the bounded busy_timeout on every dbkit SQLite
-// connection (see go/dbkit/AGENTS.md's "SQLite busy timeout" section) makes
-// contended writes wait rather than fail, but lock-wait scheduling is not
-// what this test asserts (see
-// TestInsertRecord_IdempotencyKey_ConcurrentEnqueue_ReturnsSameID's own doc
-// comment for the same concern) — the two code paths exercise the exact
-// same WHERE-clause guard either way, since claimOne itself has no notion
-// of "concurrent" versus "stale sequential".
+func TestMarkAttemptStarted_CountsAttemptAndStampsStartedAt(t *testing.T) {
+	db := newTestDB(t)
+	rec := fixtureRecord("tenant-a", "t")
+	if _, err := insertRecord(context.Background(), db, rec); err != nil {
+		t.Fatalf("insertRecord() error = %v", err)
+	}
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
+		t.Fatalf("claimOne() error = %v", err)
+	}
+
+	startedAt := time.Now()
+	if err := markAttemptStarted(context.Background(), db, rec.ID, startedAt); err != nil {
+		t.Fatalf("markAttemptStarted() error = %v", err)
+	}
+
+	got, err := findByID(context.Background(), db, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("findByID() error = %v", err)
+	}
+	if got.Attempts != 1 {
+		t.Errorf("Attempts after handoff = %d, want 1", got.Attempts)
+	}
+	if got.StartedAt == nil || !got.StartedAt.Equal(startedAt) {
+		t.Errorf("StartedAt after handoff = %v, want %v", got.StartedAt, startedAt)
+	}
+
+	// A second handoff is the next attempt: another increment, another
+	// start stamp -- the row is claimed again between attempts.
+	if _, err := claimOne(context.Background(), db, *got, time.Now(), testWriterOwner); err != nil {
+		t.Fatalf("second claimOne() error = %v", err)
+	}
+	secondStart := time.Now()
+	if startErr := markAttemptStarted(context.Background(), db, rec.ID, secondStart); startErr != nil {
+		t.Fatalf("second markAttemptStarted() error = %v", startErr)
+	}
+	got2, findErr := findByID(context.Background(), db, JobID(rec.ID))
+	if findErr != nil {
+		t.Fatalf("findByID() error = %v", findErr)
+	}
+	if got2.Attempts != 2 {
+		t.Errorf("Attempts after second handoff = %d, want 2", got2.Attempts)
+	}
+}
+
+func TestMarkAttemptStarted_NoOpWhenNoLongerRunning(t *testing.T) {
+	db := newTestDB(t)
+	rec := fixtureRecord("tenant-a", "t")
+	if _, err := insertRecord(context.Background(), db, rec); err != nil {
+		t.Fatalf("insertRecord() error = %v", err)
+	}
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
+		t.Fatalf("claimOne() error = %v", err)
+	}
+	// A concurrent Cancel settles the row between the claim and the worker
+	// handoff -- the same race markAttemptStarted's status guard exists for:
+	// the attempt still executes (Cancel lets a claimed Job run), but its
+	// count must not land on a cancelled row.
+	if err := markCancelled(context.Background(), db, rec.ID, time.Now()); err != nil {
+		t.Fatalf("markCancelled() error = %v", err)
+	}
+	if err := markAttemptStarted(context.Background(), db, rec.ID, time.Now()); err != nil {
+		t.Fatalf("markAttemptStarted() error = %v, want nil (no-op, not an error)", err)
+	}
+	got, err := findByID(context.Background(), db, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("findByID() error = %v", err)
+	}
+	if got.Attempts != 0 {
+		t.Errorf("Attempts = %d, want 0 (the handoff write must not count an attempt on a row a Cancel already settled)", got.Attempts)
+	}
+	if got.Status != string(StatusCancelled) {
+		t.Errorf("Status = %q, want %q", got.Status, StatusCancelled)
+	}
+}
+
 func TestClaimOne_StaleSnapshotLosesTheRace(t *testing.T) {
 	db := newTestDB(t)
 	rec := fixtureRecord("tenant-a", "t")
@@ -425,7 +563,7 @@ func TestClaimOne_StaleSnapshotLosesTheRace(t *testing.T) {
 	}
 	staleSnapshot := *rec // status: pending, as read before any claim.
 
-	firstClaimed, err := claimOne(context.Background(), db, staleSnapshot, time.Now())
+	firstClaimed, err := claimOne(context.Background(), db, staleSnapshot, time.Now(), testWriterOwner)
 	if err != nil {
 		t.Fatalf("first claimOne() error = %v", err)
 	}
@@ -433,7 +571,7 @@ func TestClaimOne_StaleSnapshotLosesTheRace(t *testing.T) {
 		t.Fatalf("first claimOne() = false, want true")
 	}
 
-	secondClaimed, err := claimOne(context.Background(), db, staleSnapshot, time.Now())
+	secondClaimed, err := claimOne(context.Background(), db, staleSnapshot, time.Now(), testWriterOwner)
 	if err != nil {
 		t.Fatalf("second claimOne() error = %v, want nil (lost race is a no-op, not an error)", err)
 	}
@@ -445,8 +583,8 @@ func TestClaimOne_StaleSnapshotLosesTheRace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findByID() error = %v", err)
 	}
-	if got.Attempts != 1 {
-		t.Errorf("Attempts = %d, want 1 (the lost claim must not have incremented it a second time)", got.Attempts)
+	if got.Attempts != 0 {
+		t.Errorf("Attempts = %d, want 0 (claims never count attempts -- the worker handoff does -- so a lost claim has nothing to double-count)", got.Attempts)
 	}
 }
 
@@ -476,12 +614,13 @@ func TestCompleteSucceeded(t *testing.T) {
 	if _, err := insertRecord(context.Background(), db, rec); err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
 	}
-	if _, err := claimOne(context.Background(), db, *rec, time.Now()); err != nil {
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 
-	if err := completeSucceeded(context.Background(), db, rec.ID, Result{Data: []byte("done")}, time.Now()); err != nil {
-		t.Fatalf("completeSucceeded() error = %v", err)
+	moved, err := completeSucceeded(context.Background(), db, rec.ID, Result{Data: []byte("done")}, time.Now())
+	if err != nil || !moved {
+		t.Fatalf("completeSucceeded() = (%v, %v), want (true, nil)", moved, err)
 	}
 
 	got, err := findByID(context.Background(), db, JobID(rec.ID))
@@ -510,10 +649,10 @@ func TestCompleteSucceeded_ClearsStaleErrorFromEarlierRetry(t *testing.T) {
 	if _, err := insertRecord(context.Background(), db, rec); err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
 	}
-	if _, err := claimOne(context.Background(), db, *rec, time.Now()); err != nil {
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
-	if err := completeRetrying(context.Background(), db, rec.ID, "first attempt failed", time.Now(), time.Now()); err != nil {
+	if _, err := completeRetrying(context.Background(), db, rec.ID, "first attempt failed", time.Now(), time.Now()); err != nil {
 		t.Fatalf("completeRetrying() error = %v", err)
 	}
 
@@ -521,13 +660,12 @@ func TestCompleteSucceeded_ClearsStaleErrorFromEarlierRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findByID() error = %v", err)
 	}
-	_, err = claimOne(context.Background(), db, *retried, time.Now())
+	_, err = claimOne(context.Background(), db, *retried, time.Now(), testWriterOwner)
 	if err != nil {
 		t.Fatalf("second claimOne() error = %v", err)
 	}
-	err = completeSucceeded(context.Background(), db, rec.ID, Result{Data: []byte("done")}, time.Now())
-	if err != nil {
-		t.Fatalf("completeSucceeded() error = %v", err)
+	if moved, succErr := completeSucceeded(context.Background(), db, rec.ID, Result{Data: []byte("done")}, time.Now()); succErr != nil || !moved {
+		t.Fatalf("completeSucceeded() = (%v, %v), want (true, nil)", moved, succErr)
 	}
 
 	got, err := findByID(context.Background(), db, JobID(rec.ID))
@@ -549,15 +687,19 @@ func TestCompleteSucceeded_NoOpWhenNotRunning(t *testing.T) {
 	if _, err := insertRecord(context.Background(), db, rec); err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
 	}
-	if _, err := claimOne(context.Background(), db, *rec, time.Now()); err != nil {
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 	if err := markCancelled(context.Background(), db, rec.ID, time.Now()); err != nil {
 		t.Fatalf("markCancelled() error = %v", err)
 	}
 
-	if err := completeSucceeded(context.Background(), db, rec.ID, Result{Data: []byte("done")}, time.Now()); err != nil {
+	moved, err := completeSucceeded(context.Background(), db, rec.ID, Result{Data: []byte("done")}, time.Now())
+	if err != nil {
 		t.Fatalf("completeSucceeded() error = %v, want nil (no-op, not an error)", err)
+	}
+	if moved {
+		t.Fatal("completeSucceeded() = true, want false: the row is StatusCancelled, not StatusRunning, so the write must report no transition")
 	}
 
 	got, err := findByID(context.Background(), db, JobID(rec.ID))
@@ -575,13 +717,13 @@ func TestCompleteRetrying(t *testing.T) {
 	if _, err := insertRecord(context.Background(), db, rec); err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
 	}
-	if _, err := claimOne(context.Background(), db, *rec, time.Now()); err != nil {
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 
 	next := time.Now().Add(10 * time.Second).UTC().Truncate(time.Second)
-	if err := completeRetrying(context.Background(), db, rec.ID, "transient failure", next, time.Now()); err != nil {
-		t.Fatalf("completeRetrying() error = %v", err)
+	if moved, err := completeRetrying(context.Background(), db, rec.ID, "transient failure", next, time.Now()); err != nil || !moved {
+		t.Fatalf("completeRetrying() = (%v, %v), want (true, nil)", moved, err)
 	}
 
 	got, err := findByID(context.Background(), db, JobID(rec.ID))
@@ -605,7 +747,7 @@ func TestCompleteDeadLetter(t *testing.T) {
 	if _, err := insertRecord(context.Background(), db, rec); err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
 	}
-	if _, err := claimOne(context.Background(), db, *rec, time.Now()); err != nil {
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 
@@ -649,7 +791,7 @@ func TestCompleteDeadLetter_NoTransitionWhenAlreadyCancelled(t *testing.T) {
 	if _, err := insertRecord(context.Background(), db, rec); err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
 	}
-	if _, err := claimOne(context.Background(), db, *rec, time.Now()); err != nil {
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 	if err := markCancelled(context.Background(), db, rec.ID, time.Now()); err != nil {
@@ -699,7 +841,7 @@ func TestMarkCancelled_FromPendingAndRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
 	}
-	_, err = claimOne(context.Background(), db, *running, time.Now())
+	_, err = claimOne(context.Background(), db, *running, time.Now(), testWriterOwner)
 	if err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
@@ -722,11 +864,11 @@ func TestMarkCancelled_IdempotentOnAlreadyTerminal(t *testing.T) {
 	if _, err := insertRecord(context.Background(), db, rec); err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
 	}
-	if _, err := claimOne(context.Background(), db, *rec, time.Now()); err != nil {
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
-	if err := completeSucceeded(context.Background(), db, rec.ID, Result{}, time.Now()); err != nil {
-		t.Fatalf("completeSucceeded() error = %v", err)
+	if moved, err := completeSucceeded(context.Background(), db, rec.ID, Result{}, time.Now()); err != nil || !moved {
+		t.Fatalf("completeSucceeded() = (%v, %v), want (true, nil)", moved, err)
 	}
 
 	if err := markCancelled(context.Background(), db, rec.ID, time.Now()); err != nil {
@@ -745,20 +887,53 @@ func TestMarkCancelled_IdempotentOnAlreadyTerminal(t *testing.T) {
 func TestResetInterruptedRecords(t *testing.T) {
 	db := newTestDB(t)
 
+	// A row a worker was genuinely mid-Handle on when the process died: the
+	// handoff ran (markAttemptStarted), so the attempt is counted -- the
+	// recovery must not grant an extra attempt beyond MaxRetries. Claimed
+	// under the crashed writer's own token -- the fresh successor's reset
+	// below runs under testWriterOwner, a token no row carries.
 	running := fixtureRecord("tenant-a", "t")
 	if _, err := insertRecord(context.Background(), db, running); err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
 	}
-	if _, err := claimOne(context.Background(), db, *running, time.Now()); err != nil {
+	if _, err := claimOne(context.Background(), db, *running, time.Now(), "crashed-writer"); err != nil {
+		t.Fatalf("claimOne() error = %v", err)
+	}
+	if err := markAttemptStarted(context.Background(), db, running.ID, time.Now()); err != nil {
+		t.Fatalf("markAttemptStarted() error = %v", err)
+	}
+
+	// A row only CLAIMED when the process died -- the worker handoff never
+	// ran, so no attempt was ever started and none may be counted by the
+	// recovery (see claimOne's two-phase doc comment).
+	claimedOnly := fixtureRecord("tenant-a", "t")
+	if _, err := insertRecord(context.Background(), db, claimedOnly); err != nil {
+		t.Fatalf("insertRecord() error = %v", err)
+	}
+	if _, err := claimOne(context.Background(), db, *claimedOnly, time.Now(), "crashed-writer"); err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 
+	// A row claimed by a DIFFERENT (already dead) writer -- the situation a
+	// fresh Start after a crash always faces -- plus a row that never was
+	// claimed at all: both must come out of the reset untouched except for
+	// the intended recovery.
 	pending := fixtureRecord("tenant-a", "t")
 	if _, err := insertRecord(context.Background(), db, pending); err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
 	}
+	otherWriter := fixtureRecord("tenant-a", "t")
+	if _, err := insertRecord(context.Background(), db, otherWriter); err != nil {
+		t.Fatalf("insertRecord() error = %v", err)
+	}
+	if _, err := claimOne(context.Background(), db, *otherWriter, time.Now(), "other-owner"); err != nil {
+		t.Fatalf("claimOne() error = %v", err)
+	}
 
-	if err := resetInterruptedRecords(context.Background(), db, time.Now()); err != nil {
+	// The fresh writer's token: brand new, so no row can carry it -- every
+	// StatusRunning row above was claimed by someone else (or nobody) and
+	// is this Start's to recover.
+	if err := resetInterruptedRecords(context.Background(), db, time.Now(), testWriterOwner); err != nil {
 		t.Fatalf("resetInterruptedRecords() error = %v", err)
 	}
 
@@ -767,10 +942,29 @@ func TestResetInterruptedRecords(t *testing.T) {
 		t.Fatalf("findByID(running) error = %v", err)
 	}
 	if gotRunning.Status != string(StatusPending) {
-		t.Errorf("previously-running Status = %q, want %q (recovered after unclean exit)", gotRunning.Status, StatusPending)
+		t.Errorf("mid-Handle Status = %q, want %q (recovered after unclean exit)", gotRunning.Status, StatusPending)
 	}
 	if gotRunning.Attempts != 1 {
-		t.Errorf("previously-running Attempts = %d, want 1 (recovery must not grant a free extra attempt)", gotRunning.Attempts)
+		t.Errorf("mid-Handle Attempts = %d, want 1 (the started attempt stays counted; recovery must not grant a free extra attempt)", gotRunning.Attempts)
+	}
+
+	gotClaimedOnly, err := findByID(context.Background(), db, JobID(claimedOnly.ID))
+	if err != nil {
+		t.Fatalf("findByID(claimedOnly) error = %v", err)
+	}
+	if gotClaimedOnly.Status != string(StatusPending) {
+		t.Errorf("claimed-only Status = %q, want %q (recovered after unclean exit)", gotClaimedOnly.Status, StatusPending)
+	}
+	if gotClaimedOnly.Attempts != 0 {
+		t.Errorf("claimed-only Attempts = %d, want 0 (an attempt whose Handle never ran must not be counted by the recovery)", gotClaimedOnly.Attempts)
+	}
+
+	gotOther, err := findByID(context.Background(), db, JobID(otherWriter.ID))
+	if err != nil {
+		t.Fatalf("findByID(otherWriter) error = %v", err)
+	}
+	if gotOther.Status != string(StatusPending) {
+		t.Errorf("other-writer Status = %q, want %q (a dead writer's rows are this Start's to recover)", gotOther.Status, StatusPending)
 	}
 
 	gotPending, err := findByID(context.Background(), db, JobID(pending.ID))
@@ -782,6 +976,98 @@ func TestResetInterruptedRecords(t *testing.T) {
 	}
 }
 
+// TestResetInterruptedRecords_OwnFreshClaimIsLeftAlone pins the WHERE
+// clause's defensive tail: a Running row already claimed under the
+// resetting owner's own token is not this reset's business. Not reachable
+// through StandaloneQueue.Start today (a fresh token claims nothing before
+// the reset runs -- see resetInterruptedRecords' own doc comment), but the
+// clause exists exactly so a re-entrant Start over a live run could never
+// reset the very rows it is executing.
+func TestResetInterruptedRecords_OwnFreshClaimIsLeftAlone(t *testing.T) {
+	db := newTestDB(t)
+	rec := fixtureRecord("tenant-a", "t")
+	if _, err := insertRecord(context.Background(), db, rec); err != nil {
+		t.Fatalf("insertRecord() error = %v", err)
+	}
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
+		t.Fatalf("claimOne() error = %v", err)
+	}
+
+	if err := resetInterruptedRecords(context.Background(), db, time.Now(), testWriterOwner); err != nil {
+		t.Fatalf("resetInterruptedRecords() error = %v", err)
+	}
+	got, err := findByID(context.Background(), db, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("findByID() error = %v", err)
+	}
+	if got.Status != string(StatusRunning) {
+		t.Errorf("Status = %q, want %q (the reset must never touch a row claimed under its own owner token)", got.Status, StatusRunning)
+	}
+}
+
+// TestWriterRegistration_AcquireHeartbeatRelease covers the single-writer
+// registration lifecycle (queue_writers table): a fresh acquire succeeds, a
+// second acquire while the incumbent's heartbeat is fresh is refused with
+// ErrQueueWriterActive, the incumbent's heartbeat keeps its own row fresh,
+// a beat that names the wrong owner reaches nothing, an acquire past the
+// stale window steals the crashed incumbent's registration, and release
+// hands the table back so the next acquire succeeds immediately.
+func TestWriterRegistration_AcquireHeartbeatRelease(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	const stale = 2 * time.Second
+	now := time.Now()
+	if err := acquireWriterRegistration(ctx, db, testWriterOwner, now, stale); err != nil {
+		t.Fatalf("first acquireWriterRegistration() error = %v", err)
+	}
+	// A second acquire with a fresh heartbeat: refused, coded.
+	err := acquireWriterRegistration(ctx, db, "other-owner", now.Add(100*time.Millisecond), stale)
+	if !errors.Is(err, ErrQueueWriterActive) {
+		t.Fatalf("second acquireWriterRegistration() error = %v, want ErrQueueWriterActive", err)
+	}
+	if appErr, ok := apperr.As(err); !ok || appErr.Code != ErrQueueWriterActive.Code {
+		t.Fatalf("second acquireWriterRegistration() error = %v, want code %q", err, ErrQueueWriterActive.Code)
+	}
+
+	// Heartbeat: only the registered owner's own beat reaches the row.
+	ok, err := heartbeatWriterRegistration(ctx, db, "other-owner", now.Add(500*time.Millisecond))
+	if err != nil {
+		t.Fatalf("heartbeatWriterRegistration(other) error = %v", err)
+	}
+	if ok {
+		t.Fatal("heartbeatWriterRegistration(other) = true, want false (only the registered owner may refresh its own row)")
+	}
+	ok, err = heartbeatWriterRegistration(ctx, db, testWriterOwner, now.Add(500*time.Millisecond))
+	if err != nil {
+		t.Fatalf("heartbeatWriterRegistration(owner) error = %v", err)
+	}
+	if !ok {
+		t.Fatal("heartbeatWriterRegistration(owner) = false, want true")
+	}
+
+	// Still refused while the owner beats within the stale window...
+	err = acquireWriterRegistration(ctx, db, "successor", now.Add(1*time.Second), stale)
+	if !errors.Is(err, ErrQueueWriterActive) {
+		t.Fatalf("acquire against a beating owner error = %v, want ErrQueueWriterActive", err)
+	}
+	// ...and stolen once its heartbeat is older than the stale window (a
+	// zero stale window makes the incumbent stale immediately): the crashed
+	// writer's registration is taken over, exactly what a restart does.
+	if err := acquireWriterRegistration(ctx, db, "successor", now.Add(2*time.Second), 0); err != nil {
+		t.Fatalf("acquire past the stale window error = %v, want nil (the crashed incumbent's registration is stolen)", err)
+	}
+
+	// Release hands the table back: the successor (now the registered
+	// owner) releases, and a fresh acquire succeeds immediately.
+	if err := releaseWriterRegistration(ctx, db, "successor"); err != nil {
+		t.Fatalf("releaseWriterRegistration(successor) error = %v", err)
+	}
+	if err := acquireWriterRegistration(ctx, db, "third", time.Now(), stale); err != nil {
+		t.Fatalf("acquire after release error = %v, want nil (release is the graceful handover)", err)
+	}
+}
+
 func TestDeadLetterRecords(t *testing.T) {
 	db := newTestDB(t)
 
@@ -789,7 +1075,7 @@ func TestDeadLetterRecords(t *testing.T) {
 	if _, err := insertRecord(context.Background(), db, dead); err != nil {
 		t.Fatalf("insertRecord() error = %v", err)
 	}
-	if _, err := claimOne(context.Background(), db, *dead, time.Now()); err != nil {
+	if _, err := claimOne(context.Background(), db, *dead, time.Now(), testWriterOwner); err != nil {
 		t.Fatalf("claimOne() error = %v", err)
 	}
 	if moved, err := completeDeadLetter(context.Background(), db, dead.ID, "boom", time.Now()); err != nil {

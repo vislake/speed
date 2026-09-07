@@ -258,6 +258,57 @@ func AssertConforms(t *testing.T, factory func() Runnable) {
 		}
 	})
 
+	t.Run("idempotency_same_key_across_priorities_dedupes_to_first_job", func(t *testing.T) {
+		t.Helper()
+		q := startConformQueue(t, factory)
+		var calls atomic.Int32
+		if err := q.RegisterHandler(jobs.NewHandlerFunc("charge-cross-priority", func(context.Context, *jobs.Job, jobs.ProgressFn) (jobs.Result, error) {
+			calls.Add(1)
+			return jobs.Result{Data: []byte("charged")}, nil
+		})); err != nil {
+			t.Fatalf("RegisterHandler() error = %v", err)
+		}
+		mustStart(t, q)
+
+		const tenant = pkgcore.TenantID("tenant-a")
+		base := jobs.Task{Type: "charge-cross-priority", TenantID: tenant, IdempotencyKey: "invoice-43"}
+
+		// The idempotency dedupe must span the queue's own dispatch
+		// priorities: a second Enqueue for the same (TenantID, key) pair at
+		// a different priority returns the FIRST Job -- never a second,
+		// independently-executing copy -- while the surviving Job keeps the
+		// first call's priority (per-priority delivery semantics are not
+		// traded away for dedupe). This is the regression asynq.Queue had
+		// against its own three priority queues, whose TaskID-uniqueness is
+		// scoped per queue; StandaloneQueue dedupes on one (tenant, key)
+		// index with priority as a column on the one row, so it already
+		// held. Enqueue is deliberately sequential here -- deterministic on
+		// both implementations; the concurrent leg lives in the same-queue
+		// subtest above.
+		first, err := q.Enqueue(context.Background(), base, jobs.WithPriority(jobs.PriorityHigh))
+		if err != nil {
+			t.Fatalf("Enqueue(high) error = %v", err)
+		}
+		second, err := q.Enqueue(context.Background(), base, jobs.WithPriority(jobs.PriorityLow))
+		if err != nil {
+			t.Fatalf("Enqueue(low) error = %v", err)
+		}
+		if second != first {
+			t.Errorf("Enqueue(low) returned JobID %q, want the first Enqueue's %q: the same idempotency key across two priorities must produce one Job", second, first)
+		}
+
+		job := waitTerminal(t, q, pkgcore.WithTenant(context.Background(), tenant), first)
+		if job.Status != jobs.StatusSucceeded {
+			t.Fatalf("Status = %v, want %v (job: %+v)", job.Status, jobs.StatusSucceeded, job)
+		}
+		if job.Priority != jobs.PriorityHigh {
+			t.Errorf("Priority = %v, want %v (the surviving Job must keep the FIRST call's priority)", job.Priority, jobs.PriorityHigh)
+		}
+		if got := calls.Load(); got != 1 {
+			t.Errorf("Handle called %d times for one idempotency key enqueued at two priorities, want exactly 1", got)
+		}
+	})
+
 	t.Run("retry_succeeds_after_transient_failures", func(t *testing.T) {
 		t.Helper()
 		q := startConformQueue(t, factory)

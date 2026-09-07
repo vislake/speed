@@ -37,6 +37,7 @@ import (
 	"github.com/vislake/speed/go/jobs"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // Queue is the distributed deployment mode's jobs.Queue implementation --
@@ -71,8 +72,17 @@ type Queue struct {
 	tenantMu         sync.Mutex
 	runningPerTenant map[pkgcore.TenantID]int
 
-	startOnce    sync.Once
 	closeRDBOnce sync.Once
+
+	// startMu serializes Start, and started records whether a Start has
+	// ever fully succeeded (asynqlib.Server.Start has launched the
+	// processor goroutines). Together they replace the old sync.Once gate
+	// with the same shape StandaloneQueue.Start uses: a Start that FAILED
+	// leaves started false, so a later Start genuinely re-runs
+	// asynqlib.Server.Start (which itself only errors when already
+	// running), while a Start after a success is a no-op returning nil.
+	startMu sync.Mutex
+	started bool
 
 	// stopCh is the queue-depth gauge callback's lifecycle signal: it is
 	// closed when Close releases the shared Redis client, under
@@ -163,8 +173,13 @@ func WithConcurrency(n int) Option {
 // WithTenantConcurrencyLimit -- see AGENTS.md for how this is enforced
 // differently (a bounce-and-redeliver inside processTask, not a
 // pre-dequeue skip) given what asynq itself offers. Defaults to
-// DefaultTenantConcurrencyLimit.
+// DefaultTenantConcurrencyLimit. A value below 1 is refused at option time
+// with a coded panic: a limit of zero would bounce every task of every
+// tenant forever (errTenantAtCapacity), silently processing nothing.
 func WithTenantConcurrencyLimit(n int) Option {
+	if n < 1 {
+		panic(apperr.Invalid("jobs.tenant_concurrency_limit_zero"))
+	}
 	return func(q *Queue) { q.tenantConcurrency = n }
 }
 
@@ -202,8 +217,15 @@ func WithCancelledRetention(d time.Duration) Option {
 	return func(q *Queue) { q.cancelledRetention = d }
 }
 
-// WithThrottleRetryDelay overrides DefaultThrottleRetryDelay.
+// WithThrottleRetryDelay overrides DefaultThrottleRetryDelay. A negative
+// delay is refused at option time with a coded panic: retryDelay (worker.go)
+// feeds the delay through math/rand's jitter, which panics on a negative
+// range inside asynq's own processor goroutine -- an unrecovered panic
+// would crash the whole process, so the bad value must never reach it.
 func WithThrottleRetryDelay(d time.Duration) Option {
+	if d < 0 {
+		panic(apperr.Invalid("jobs.throttle_retry_delay_negative"))
+	}
 	return func(q *Queue) { q.throttleRetryDelay = d }
 }
 
@@ -326,20 +348,27 @@ func (q *Queue) handler(jobType string) jobs.Handler {
 // prevent the server from starting) and launches asynq's own background
 // processor goroutines via asynqlib.Server.Start. Like Server.Start (and
 // unlike Server.Run), this returns immediately once processing has
-// launched; it does not block waiting for shutdown. Safe to call only once
-// per Queue -- a second call is a no-op, matching StandaloneQueue.Start's
-// own contract, though enforced here by asynqlib.Server.Start's own
-// "already running" error rather than a second sync.Once layer, since
-// NewServer itself has no such guard.
+// launched; it does not block waiting for shutdown.
+//
+// A Start that FAILED may be retried by calling Start again: started stays
+// false, so the whole sequence genuinely re-runs (asynqlib.Server.Start
+// itself only ever errors when already running, never after a failure).
+// A Start after a successful one is a no-op returning nil, matching
+// StandaloneQueue.Start's own contract.
 func (q *Queue) Start(ctx context.Context) error {
-	var startErr error
-	q.startOnce.Do(func() {
-		if err := q.registerQueueDepthGauge(otel.Meter(jobs.InstrumentationName)); err != nil {
-			obs.FromContext(ctx).Warn("jobs: registering queue depth gauge failed", "error", err)
-		}
-		startErr = q.server.Start(asynqlib.HandlerFunc(q.processTask))
-	})
-	return startErr
+	q.startMu.Lock()
+	defer q.startMu.Unlock()
+	if q.started {
+		return nil
+	}
+	if err := q.registerQueueDepthGauge(otel.Meter(jobs.InstrumentationName)); err != nil {
+		obs.FromContext(ctx).Warn("jobs: registering queue depth gauge failed", "error", err)
+	}
+	if err := q.server.Start(asynqlib.HandlerFunc(q.processTask)); err != nil {
+		return err
+	}
+	q.started = true
+	return nil
 }
 
 // Close gracefully shuts down asynq's Server -- waiting for in-flight
@@ -395,19 +424,44 @@ func (q *Queue) Enqueue(ctx context.Context, task jobs.Task, opts ...jobs.Enqueu
 	now := time.Now()
 	resolved := jobs.ResolveEnqueueOptions(now, q.defaultTimeout, opts)
 
-	taskID := uuid.NewString()
-	if task.IdempotencyKey != "" {
-		// Deterministic per (tenant, idempotency key) -- see AGENTS.md's
-		// idempotency section: asynq's own TaskID-uniqueness check (below)
-		// is what makes a second Enqueue for the same pair return the
-		// first call's JobID rather than creating a second task, mapping
-		// our idempotency contract onto a primitive asynq already has
-		// rather than a bespoke check-then-insert.
-		taskID = "idem:" + string(task.TenantID) + ":" + task.IdempotencyKey
+	if task.IdempotencyKey == "" {
+		id, err := q.enqueueNew(ctx, task, resolved, uuid.NewString(), now)
+		if err != nil {
+			return "", err
+		}
+		q.logEnqueued(ctx, task, id)
+		return id, nil
 	}
+	id, fresh, err := q.enqueueIdempotent(ctx, task, resolved, now)
+	if err != nil {
+		return "", err
+	}
+	// See StandaloneQueue.Enqueue's identical fix for the full rationale:
+	// derive the logger's tenant from task.TenantID -- the Job's own
+	// owner -- rather than layering an explicit "tenant_id" kv on top of
+	// whatever obs.FromContext(ctx) already auto-attaches from ctx's own
+	// ambient tenant, which AGENTS.md documents as legitimately different
+	// (or absent) for both Queue.Enqueue and StandaloneQueue.Enqueue alike.
+	if fresh {
+		q.logEnqueued(ctx, task, id)
+	}
+	return id, nil
+}
 
-	asynqTask := asynqlib.NewTaskWithHeaders(task.Type, task.Payload, buildTaskHeaders(task, now))
-	info, err := q.client.EnqueueContext(ctx, asynqTask,
+// logEnqueued emits the "job enqueued" line both Enqueue paths share after
+// a genuinely NEW task was created -- never for an idempotent Enqueue that
+// merely returned an existing Job's id, which would misreport that Job as
+// freshly enqueued.
+func (q *Queue) logEnqueued(ctx context.Context, task jobs.Task, id jobs.JobID) {
+	obs.FromContext(pkgcore.WithTenant(ctx, task.TenantID)).Info("job enqueued", "job_id", string(id), "job_type", task.Type)
+}
+
+// enqueueNew runs one asynqlib.Client.EnqueueContext call for a task with
+// no idempotency key: a fresh random TaskID into the priority queue its
+// resolved priority selects. Returns the new Job's id (the TaskID itself).
+func (q *Queue) enqueueNew(ctx context.Context, task jobs.Task, resolved jobs.ResolvedEnqueueOptions, taskID string, now time.Time) (jobs.JobID, error) {
+	if _, err := q.client.EnqueueContext(ctx,
+		asynqlib.NewTaskWithHeaders(task.Type, task.Payload, buildTaskHeaders(task, now)),
 		asynqlib.TaskID(taskID),
 		asynqlib.Queue(queueForPriority(resolved.Priority)),
 		asynqlib.MaxRetry(resolved.MaxRetries),
@@ -417,9 +471,11 @@ func (q *Queue) Enqueue(ctx context.Context, task jobs.Task, opts ...jobs.Enqueu
 		// almost immediately.
 		asynqlib.Retention(q.completedRetention),
 		asynqlib.ProcessAt(resolved.ScheduledAt),
-	)
-	if err != nil {
+	); err != nil {
 		if errors.Is(err, asynqlib.ErrTaskIDConflict) {
+			// Defensive: a random uuid collision is astronomically
+			// unlikely, but the pre-existing code resolved the conflict
+			// by returning the colliding task's id, so keep that answer.
 			existing, ferr := q.findTaskInfo(taskID)
 			if ferr != nil {
 				return "", fmt.Errorf("jobs: look up existing job for idempotency key after conflict: %w", ferr)
@@ -428,15 +484,157 @@ func (q *Queue) Enqueue(ctx context.Context, task jobs.Task, opts ...jobs.Enqueu
 		}
 		return "", fmt.Errorf("jobs: enqueue job: %w", err)
 	}
+	return jobs.JobID(taskID), nil
+}
 
-	// See StandaloneQueue.Enqueue's identical fix for the full rationale:
-	// derive the logger's tenant from task.TenantID -- the Job's own
-	// owner -- rather than layering an explicit "tenant_id" kv on top of
-	// whatever obs.FromContext(ctx) already auto-attaches from ctx's own
-	// ambient tenant, which AGENTS.md documents as legitimately different
-	// (or absent) for both Queue.Enqueue and StandaloneQueue.Enqueue alike.
-	obs.FromContext(pkgcore.WithTenant(ctx, task.TenantID)).Info("job enqueued", "job_id", info.ID, "job_type", task.Type)
-	return jobs.JobID(info.ID), nil
+// idempotencyClaimTTL bounds how long the per-key claim below may outlive
+// the Enqueue call that won it. The claim exists only to serialize
+// concurrent first-inserts of one key; the winner releases it as soon as
+// its own insert finished, so the TTL is never the dedupe's lifetime (the
+// task record itself is) -- it only bounds how long a duplicate Enqueue
+// waits when the winner crashed between claiming and inserting, after which
+// the claim lapses and a duplicate takes over. Thirty seconds is far longer
+// than any pause a live winner can take between two Redis commands, and
+// far shorter than any wait an operator would accept after a crash.
+const idempotencyClaimTTL = 30 * time.Second
+
+// idempotencyTaskID derives a keyed Task's deterministic id, exactly as
+// before (AGENTS.md's idempotency section): "idem:" + tenant + ":" + key.
+// The deterministic id is what makes the dedupe answer stable -- a second
+// Enqueue for the same pair returns this same string, which is also the
+// JobID Get/Cancel/DeadLetterJobs resolve by -- and its lifetime in asynq's
+// own records is the dedupe's lifetime, unchanged by the claim machinery
+// below.
+func idempotencyTaskID(task jobs.Task) string {
+	return "idem:" + string(task.TenantID) + ":" + task.IdempotencyKey
+}
+
+// idempotencyClaimKey is the Redis key under which concurrent Enqueue calls
+// for one idempotency key serialize their inserts. It lives in this
+// package's own namespaced keyspace ("asynqjobs:..."), never asynq's, and
+// is deliberately separate from the task record itself: asynq's own
+// TaskID-uniqueness check is scoped PER QUEUE (internal/rdb's enqueueCmd
+// only ever looks at asynq:{<qname>}:t:<taskID> -- confirmed against the
+// pinned v0.26.0 source), so the same deterministic TaskID enqueued into
+// two of this package's three priority queues would pass both checks and
+// create two independent, concurrently-executing copies of one Job. The
+// claim key is what makes the check-and-insert atomic ACROSS the three
+// queues, letting the keyed task still land in its own priority queue.
+func idempotencyClaimKey(taskID string) string { return "asynqjobs:enqueue-claim:" + taskID }
+
+// enqueueIdempotent implements the keyed half of Enqueue: it creates one
+// Job per (TenantID, IdempotencyKey) pair no matter which of the three
+// priority queues the callers chose, returning the first Job's id --
+// queue-independently -- while still enqueueing that first Job into the
+// priority queue its own WithPriority selected (per-priority delivery
+// semantics survive; only a duplicate Enqueue is deflected to the
+// original). Fresh reports whether this call created the task (true) or
+// returned an existing Job's id (false), so Enqueue can log accordingly.
+//
+// The mechanism: the deterministic TaskID stays asynq's own dedupe record,
+// exactly as before -- while a task under that id exists anywhere in the
+// three queues, any Enqueue for the pair returns it. What the claim key
+// adds is atomicity for the CONCURRENT-first-insert race asynq's
+// per-queue check cannot arbitrate: two same-key Enqueues at different
+// priorities could both pass their own queue's check and both insert. The
+// winner of a redis SET NX on the claim key is the single inserter; it
+// re-probes for a task a completed enqueue may have left behind, inserts at
+// its own priority, and releases the claim. Losers wait -- the winner's
+// insert lands in milliseconds -- for the task to appear (dedupe answer) or
+// the claim to lapse (the winner crashed mid-insert; the loser retakes and
+// becomes the inserter itself). ctx bounds the wait. A stale claim can
+// never wedge the key: it expires on its own after idempotencyClaimTTL.
+func (q *Queue) enqueueIdempotent(ctx context.Context, task jobs.Task, resolved jobs.ResolvedEnqueueOptions, now time.Time) (id jobs.JobID, fresh bool, err error) {
+	taskID := idempotencyTaskID(task)
+	claimKey := idempotencyClaimKey(taskID)
+	for {
+		won, err := q.rdb.SetNX(ctx, claimKey, "1", idempotencyClaimTTL).Result()
+		if err != nil {
+			return "", false, fmt.Errorf("jobs: claim idempotent enqueue: %w", err)
+		}
+		if won {
+			id, fresh, err := q.enqueueIdempotentClaimed(ctx, task, resolved, taskID, queueForPriority(resolved.Priority), now)
+			if delErr := q.rdb.Del(context.Background(), claimKey).Err(); delErr != nil {
+				// Best-effort: an unreleased claim self-heals through its
+				// TTL, so a release failure only delays (never breaks) a
+				// concurrent duplicate.
+				obs.FromContext(ctx).Warn("jobs: releasing idempotent enqueue claim failed", "job_id", taskID, "error", delErr)
+			}
+			return id, fresh, err
+		}
+		// Another Enqueue holds the claim for this key right now. Wait for
+		// its task to become visible (then the outer loop's next probe
+		// settles the dedupe) or for its claim to lapse (it crashed
+		// mid-insert; the outer loop retakes the claim).
+		if _, found, err := q.waitForIdempotentTask(ctx, taskID, claimKey); err != nil {
+			return "", false, err
+		} else if found {
+			return jobs.JobID(taskID), false, nil
+		}
+	}
+}
+
+// enqueueIdempotentClaimed is the winner's half of enqueueIdempotent, run
+// while holding the claim: it re-probes the three queues (a completed
+// enqueue may have inserted since the loser loop last looked -- dedupe on
+// it), then inserts at the winner's own priority queue.
+func (q *Queue) enqueueIdempotentClaimed(ctx context.Context, task jobs.Task, resolved jobs.ResolvedEnqueueOptions, taskID, queueName string, now time.Time) (jobs.JobID, bool, error) {
+	if info, err := q.findTaskInfo(taskID); err == nil {
+		return jobs.JobID(info.ID), false, nil
+	} else if !errors.Is(err, jobs.ErrJobNotFound) {
+		return "", false, fmt.Errorf("jobs: look up existing job for idempotency key: %w", err)
+	}
+	if _, err := q.client.EnqueueContext(ctx,
+		asynqlib.NewTaskWithHeaders(task.Type, task.Payload, buildTaskHeaders(task, now)),
+		asynqlib.TaskID(taskID),
+		asynqlib.Queue(queueName),
+		asynqlib.MaxRetry(resolved.MaxRetries),
+		asynqlib.Timeout(resolved.Timeout),
+		asynqlib.Retention(q.completedRetention),
+		asynqlib.ProcessAt(resolved.ScheduledAt),
+	); err != nil {
+		if errors.Is(err, asynqlib.ErrTaskIDConflict) {
+			// Defensive: a task under this deterministic id appeared
+			// between the probe above and this insert -- only possible if
+			// another writer enqueued it without holding the claim (a
+			// replica still running a pre-fix release, whose per-queue
+			// conflict check this id passed because it landed in another
+			// queue). Dedupe on it rather than failing the call.
+			if existing, ferr := q.findTaskInfo(taskID); ferr == nil {
+				return jobs.JobID(existing.ID), false, nil
+			}
+		}
+		return "", false, fmt.Errorf("jobs: enqueue job: %w", err)
+	}
+	return jobs.JobID(taskID), true, nil
+}
+
+// waitForIdempotentTask is the loser's wait loop: it polls until either a
+// task under taskID is visible in one of the three queues (the claim holder
+// finished inserting -- the caller returns that id) or the claim key is
+// gone (the holder crashed before inserting -- the caller retakes the
+// claim and inserts itself). found distinguishes the two, so the caller
+// never pays a redundant claim round trip when the task is already there.
+func (q *Queue) waitForIdempotentTask(ctx context.Context, taskID, claimKey string) (jobs.JobID, bool, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return "", false, ctx.Err()
+		case <-time.After(15 * time.Millisecond):
+		}
+		if info, err := q.findTaskInfo(taskID); err == nil {
+			return jobs.JobID(info.ID), true, nil
+		} else if !errors.Is(err, jobs.ErrJobNotFound) {
+			return "", false, fmt.Errorf("jobs: look up existing job for idempotency key: %w", err)
+		}
+		exists, err := q.rdb.Exists(ctx, claimKey).Result()
+		if err != nil {
+			return "", false, fmt.Errorf("jobs: check idempotent enqueue claim: %w", err)
+		}
+		if exists == 0 {
+			return "", false, nil
+		}
+	}
 }
 
 // Get implements jobs.Queue.

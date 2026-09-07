@@ -45,12 +45,33 @@ var errTaskMissingTenant = apperr.Internal("jobs.asynq_task_missing_tenant")
 // it, so asynq's own retry bookkeeping (internal/rdb's Retry Lua script:
 // "if isFailure then Retried++") never increments Retried for a bounce
 // caused by this error -- a Job can be bounced any number of times by its
-// tenant being over capacity without ever burning into MaxRetries. See
-// AGENTS.md's "Per-tenant concurrency limiting" section for the full
-// reasoning, including the one narrow edge case this does not cover (a
-// bounce landing exactly on what would otherwise be a Job's final allowed
-// attempt).
+// tenant being over capacity without ever burning into MaxRetries, as long
+// as retries remain. On a Job's FINAL allowed attempt a bounce can no
+// longer be bounced again: asynq's own archive-vs-retry decision
+// (processor.go's handleFailedMessage: archive whenever retried >= retry,
+// isFailure not consulted) archives the task right after this package's
+// ErrorHandler returns. handleErrorAttempt therefore fires the terminal
+// attempt's FailureHook for such an archive-bound bounce too -- a
+// dead-letter must never skip its compensation because its last attempt
+// happened to bounce (see that function's doc comment and AGENTS.md's
+// "Per-tenant concurrency limiting" section). errCancelMarkerUnreadable
+// (below) is the bounce-class sibling this same machinery treats
+// identically.
 var errTenantAtCapacity = errors.New("jobs: tenant is at its concurrency limit")
+
+// errCancelMarkerUnreadable is returned by processTask when the
+// cancellation-marker read (queue.go's readCancelMarker) that guards every
+// attempt failed -- Redis answered an error, never "no marker". It is the
+// fail-closed answer to an unverifiable cancellation state: a Job whose
+// marker cannot be read might be cancelled, so it must not run; the
+// attempt is refused instead (P2-8). It is bounce-class, exactly like
+// errTenantAtCapacity: isFailure reports false for it, so the refusal
+// never burns a retry -- the task redelivers on the short throttle delay
+// and, once the marker read works again, either finds the marker (skips,
+// cancelled) or runs normally. See also handleErrorAttempt, which fires a
+// terminal attempt's FailureHook for an archive-bound refusal of this
+// class just as it does for errTenantAtCapacity.
+var errCancelMarkerUnreadable = errors.New("jobs: cancellation marker unreadable")
 
 // tryReserveTenantSlot and releaseTenantSlot are Queue's own admission gate
 // -- structurally the same map+mutex shape as StandaloneQueue's
@@ -82,17 +103,17 @@ func (q *Queue) releaseTenantSlot(tenant pkgcore.TenantID) {
 	}
 }
 
-// retryDelay is Queue's Config.RetryDelayFunc. It special-cases
-// errTenantAtCapacity with a short, jittered, NON-exponential delay
-// (independent of n, which counts genuine business failures only -- see
-// errTenantAtCapacity's own doc comment for why a throttle bounce never
-// advances it) and defers to q.businessRetryDelayFunc (asynqlib.
-// DefaultRetryDelayFunc unless overridden by WithRetryDelayFunc) for every
-// real Handler failure, exactly matching StandaloneQueue's own backoffDelay
-// role but implemented on top of asynq's own extension point instead of a
-// hand-rolled formula.
+// retryDelay is Queue's Config.RetryDelayFunc. It special-cases the two
+// bounce-class errors -- errTenantAtCapacity and errCancelMarkerUnreadable
+// -- with a short, jittered, NON-exponential delay (independent of n,
+// which counts genuine business failures only -- see errTenantAtCapacity's
+// own doc comment for why a throttle bounce never advances it) and defers
+// to q.businessRetryDelayFunc (asynqlib.DefaultRetryDelayFunc unless
+// overridden by WithRetryDelayFunc) for every real Handler failure, exactly
+// matching StandaloneQueue's own backoffDelay role but implemented on top
+// of asynq's own extension point instead of a hand-rolled formula.
 func (q *Queue) retryDelay(n int, err error, t *asynqlib.Task) time.Duration {
-	if errors.Is(err, errTenantAtCapacity) {
+	if errors.Is(err, errTenantAtCapacity) || errors.Is(err, errCancelMarkerUnreadable) {
 		base := q.throttleRetryDelay
 		// #nosec G404 -- jitter to avoid a redelivery thundering herd, not
 		// a security-sensitive value (no token/credential/crypto material
@@ -104,11 +125,13 @@ func (q *Queue) retryDelay(n int, err error, t *asynqlib.Task) time.Duration {
 	return q.businessRetryDelayFunc(n, err, t)
 }
 
-// isFailure is Queue's Config.IsFailure. See errTenantAtCapacity's own doc
-// comment: reporting false here is what keeps a throttle bounce from
-// consuming retry budget.
+// isFailure is Queue's Config.IsFailure. See errTenantAtCapacity's and
+// errCancelMarkerUnreadable's own doc comments: reporting false for both
+// bounce-class errors is what keeps a throttle bounce -- and a
+// cancellation-state check that could not be answered -- from consuming
+// retry budget.
 func isFailure(err error) bool {
-	return err != nil && !errors.Is(err, errTenantAtCapacity)
+	return err != nil && !errors.Is(err, errTenantAtCapacity) && !errors.Is(err, errCancelMarkerUnreadable)
 }
 
 // handleError is Queue's Config.ErrorHandler. asynq invokes it exactly once
@@ -195,11 +218,13 @@ func (q *Queue) handleError(ctx context.Context, t *asynqlib.Task, err error) {
 // the unit level: they are asynq's own accessors plus a Redis read, not
 // this package's logic.
 func (q *Queue) handleErrorAttempt(t *asynqlib.Task, err error, retried, maxRetry int, taskID string, cancelledAt *time.Time, log *slog.Logger) {
-	if errors.Is(err, errTenantAtCapacity) {
-		return // a bounce is never itself a dead-letter-worthy event.
-	}
 	if retried < maxRetry {
-		return // more retries remain; asynq will retry, not archive.
+		// More retries remain; asynq will retry, not archive. Nothing to do
+		// here for any error class: a genuine failure retries with the
+		// business backoff, a bounce-class error (errTenantAtCapacity,
+		// errCancelMarkerUnreadable) retries on the short throttle delay
+		// without consuming budget.
+		return
 	}
 	if cancelledAt != nil {
 		// A concurrent Cancel (writeCancelMarker, queue.go) already settled
@@ -219,6 +244,28 @@ func (q *Queue) handleErrorAttempt(t *asynqlib.Task, err error, retried, maxRetr
 		log.Info("job cancelled before its final failure was processed; failure hook skipped",
 			"job_id", taskID, "job_type", t.Type(), "attempts", retried+1)
 		return
+	}
+	// From here on this is the terminal attempt and no cancellation is
+	// durably recorded, which means asynq's own dispatch loop WILL archive
+	// the task (dead-letter it) immediately after this hook returns:
+	// processor.go's handleFailedMessage archives whenever retried >=
+	// maxRetry, and isFailure is not consulted for that decision --
+	// confirmed against the pinned v0.26.0 source. That archive is the
+	// money event: FailureHook.OnFailure is the dead-letter's compensation,
+	// and an archive that skips it silently strands whatever the Job was
+	// paying for. The one archive path this package used to exempt --
+	// bounce-class terminal attempts (errTenantAtCapacity,
+	// errCancelMarkerUnreadable), which short-circuited here before this
+	// check -- is therefore NOT exempt any more: a bounce on the final
+	// attempt still archives microseconds after this hook returns, so its
+	// OnFailure fires too, with the bounce itself as the recorded cause
+	// (the task's LastErr will carry the same bounce message -- see
+	// AGENTS.md's "Approximation accepted" note). Only the marker check
+	// above can silence the hook, exactly as for a genuine terminal
+	// failure.
+	if errors.Is(err, errTenantAtCapacity) || errors.Is(err, errCancelMarkerUnreadable) {
+		log.Error("job's final attempt was bounced and will be archived; firing failure hook",
+			"job_id", taskID, "job_type", t.Type(), "attempts", retried+1, "error", err)
 	}
 
 	h := q.handler(t.Type())
@@ -282,18 +329,38 @@ func (q *Queue) processTask(ctx context.Context, t *asynqlib.Task) error {
 	// accepted cost of that correctness guarantee.
 	//
 	// This is the ONLY part of processTask that touches q.rdb -- split out
-	// so processTaskUncancelled (everything else: handler lookup, tenant
+	// so the marker decision (dispatchAfterMarkerRead) stays unit-testable
+	// against a bare *Queue with no Redis at all, the same split
+	// handleError/handleErrorAttempt already uses for the same reason, and
+	// processTaskUncancelled (everything else: handler lookup, tenant
 	// header check, admission gate, progress/ResultWriter plumbing, the
-	// Handle call itself) stays unit-testable against a bare *Queue with no
-	// Redis at all; see worker_test.go. The same split
-	// handleError/handleErrorAttempt already uses for the same reason.
-	if cancelledAt, cerr := q.readCancelMarker(ctx, taskID); cerr != nil {
-		log.Warn("jobs: reading cancellation marker failed", "job_id", taskID, "error", cerr)
-	} else if cancelledAt != nil {
+	// Handle call itself) stays testable the way it already is; see
+	// worker_test.go.
+	cancelledAt, cerr := q.readCancelMarker(ctx, taskID)
+	return q.dispatchAfterMarkerRead(ctx, t, taskID, log, cancelledAt, cerr)
+}
+
+// dispatchAfterMarkerRead is processTask's marker decision, factored out of
+// the Redis read so every branch is unit-testable: an UNREADABLE marker
+// refuses the run (fail closed -- the Job might be cancelled, so it must
+// not execute; see errCancelMarkerUnreadable), a readable marker that says
+// "cancelled" skips Handle, and only a readable "not cancelled" answer lets
+// the attempt proceed to processTaskUncancelled.
+func (q *Queue) dispatchAfterMarkerRead(ctx context.Context, t *asynqlib.Task, taskID string, log *slog.Logger, cancelledAt *time.Time, readErr error) error {
+	if readErr != nil {
+		// Fail closed: an unreadable cancellation state must never let a
+		// possibly-cancelled Job execute. The refusal is bounce-class --
+		// no retry budget consumed, short throttle delay -- so a transient
+		// marker outage delays the attempt instead of losing it, and a
+		// permanent one keeps the Job safely retryable until an operator
+		// looks at Redis.
+		log.Warn("jobs: cancellation marker unreadable; refusing to run", "job_id", taskID, "error", readErr)
+		return errCancelMarkerUnreadable
+	}
+	if cancelledAt != nil {
 		log.Info("job was cancelled before this attempt started; skipping Handle", "job_id", taskID, "job_type", t.Type())
 		return nil
 	}
-
 	return q.processTaskUncancelled(ctx, t, taskID, log)
 }
 

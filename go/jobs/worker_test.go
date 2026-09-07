@@ -20,6 +20,12 @@ import (
 // guard their update with `WHERE status = 'running'`, so calling execute
 // directly against a row fixtureRecord left StatusPending would silently
 // no-op every one of those writes instead of exercising them.
+//
+// A real worker hands execute a record whose attempt was already counted
+// by the handoff (runAttempt increments rec.Attempts and persists it via
+// markAttemptStarted before calling execute); tests that seed rec.Attempts
+// = 1 mirror exactly that post-handoff state. The record's ClaimedBy is
+// left empty: execute never reads it.
 func fixtureRunningRecord(tenant pkgcore.TenantID, jobType string) *jobRecord {
 	rec := fixtureRecord(tenant, jobType)
 	rec.Status = string(StatusRunning)
@@ -326,7 +332,7 @@ func TestExecute_FailureHookPanic_RecoversInsteadOfCrashingProcess(t *testing.T)
 
 	rec := fixtureRunningRecord("tenant-a", "panics.on_failure")
 	rec.MaxRetries = 0 // exhausted on the very first attempt
-	rec.Attempts = 1   // matches what claimOne would have set for a first attempt
+	rec.Attempts = 1   // matches the post-handoff state: runAttempt counted this first attempt
 	if err := q.db.Create(rec).Error; err != nil {
 		t.Fatalf("seed running record: %v", err)
 	}
@@ -401,7 +407,7 @@ func TestExecute_FinalFailureAfterCancel_DoesNotRunOnFailure(t *testing.T) {
 
 	rec := fixtureRunningRecord("tenant-a", "cancel-race.dead_letter")
 	rec.MaxRetries = 0 // exhausted on the very first attempt
-	rec.Attempts = 1   // matches what claimOne would have set for a first attempt
+	rec.Attempts = 1   // matches the post-handoff state: runAttempt counted this first attempt
 	if err := q.db.Create(rec).Error; err != nil {
 		t.Fatalf("seed running record: %v", err)
 	}
