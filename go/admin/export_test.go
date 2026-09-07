@@ -45,9 +45,20 @@ func TestExportService_Enqueue_EmptyOperatorUserID_Refused(t *testing.T) {
 // export-leg end-to-end proof: enqueuing a real job runs a real
 // compliance.ExportService.Export against a real go/sharing.Service
 // (buildTestAdminModule's own compliance.WithSharing wiring), and the
-// job's Result carries the minted share id and token -- never run
-// synchronously inside the call that enqueues it (Enqueue returns before
-// the worker has necessarily even claimed the job).
+// job's Result carries the job-lifecycle bookkeeping a later retrieval
+// needs -- the object key, the minted share id and its expiry -- never
+// run synchronously inside the call that enqueues it (Enqueue returns
+// before the worker has necessarily even claimed the job).
+//
+// P1-B's regression lives in this same proof: the one-time download
+// token must NOT land in the persisted job result. compliance's own
+// ExportDelivery doc comment promises the token is "returned exactly
+// once and never persisted anywhere, including here", and go/sharing's
+// whole design stores only the token's hash -- so Handle, which receives
+// the token in Export's synchronous return value, must let it die there
+// rather than marshal it into the result the queue persists. Pre-fix,
+// Handle marshalled result.Delivery.Token into the job's Result and this
+// test fails on the leaked token member.
 func TestExportService_Enqueue_RunsRealExport_DeliversThroughSharing(t *testing.T) {
 	env := buildTestAdminModule(t)
 
@@ -103,11 +114,29 @@ func TestExportService_Enqueue_RunsRealExport_DeliversThroughSharing(t *testing.
 	if err := json.Unmarshal(job.Result.Data, &result); err != nil {
 		t.Fatalf("decode job.Result.Data: %v", err)
 	}
-	if result.ShareID == "" || result.Token == "" {
-		t.Errorf("export job result = %+v, want a non-empty ShareID and Token", result)
+	if result.ShareID == "" {
+		t.Errorf("export job result = %+v, want a non-empty ShareID", result)
 	}
 	if result.ObjectKey == "" {
 		t.Errorf("export job result = %+v, want a non-empty ObjectKey", result)
+	}
+	if result.ExpiresAt.IsZero() {
+		t.Errorf("export job result = %+v, want a non-zero ExpiresAt", result)
+	}
+
+	// P1-B: the persisted result must carry no token member at all -- the
+	// one-time download token is a credential the queue record would hold
+	// at rest, contradicting compliance.ExportDelivery's "never persisted
+	// anywhere, including here" contract and go/sharing's store-only-the-
+	// hash design. Decoding into the typed exportJobResult cannot assert
+	// this once the struct drops the field, so assert over the raw JSON
+	// document itself.
+	var persisted map[string]any
+	if err := json.Unmarshal(job.Result.Data, &persisted); err != nil {
+		t.Fatalf("decode job.Result.Data as a document: %v", err)
+	}
+	if leaked, ok := persisted["token"]; ok {
+		t.Fatalf("persisted export job result carries the one-time download token (%v) -- the token must return only through the synchronous path, never be stored with the job", leaked)
 	}
 }
 

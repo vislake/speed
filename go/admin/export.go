@@ -20,16 +20,34 @@ const jobTypeAuditExport = "admin.audit_export"
 
 // exportJobResult is what ExportService.Handle marshals into
 // jobs.Result.Data on a successful export: the object key the manifest
-// was stored under, and the go/sharing delivery minted for it -- the same
-// fields compliance.ExportResult/ExportDelivery already carry, re-shaped
+// was stored under, and the go/sharing delivery minted for it (share id
+// and expiry) -- the fields compliance.ExportResult/ExportDelivery
+// already carry minus the one field that must never be stored, re-shaped
 // as a stable, explicitly-tagged JSON document (rather than re-using
 // compliance's own Go types directly) so a caller decoding
 // jobs.Job.Result.Data has one well-known wire shape regardless of how
 // compliance's own internal types evolve.
+//
+// The omitted field is the one-time delivery token. It is a bearer
+// credential -- go/sharing's whole design stores only its hash, and
+// compliance's ExportDelivery doc comment promises it is "returned
+// exactly once and never persisted anywhere, including here" -- while
+// jobs.Result.Data is persisted with the job record itself, so
+// marshalling it here would put the credential at rest in the jobs
+// table. Handle receives the token in Export's synchronous return value
+// and deliberately lets it die in its own frame: the stored result keeps
+// the facts a later retrieval needs (what was exported, which share it
+// was delivered through, when it expires), and a caller that must hand
+// the download link to its recipient receives the token only through a
+// synchronous return channel -- the shape compliance.Export's own return
+// already provides -- never from a stored job record. No admin surface
+// provides such a synchronous channel yet (Enqueue returns only the job
+// id, see Enqueue's doc comment); one must exist before any operator can
+// actually relay a link, which is future surface work recorded here
+// rather than an excuse to ship the credential at rest.
 type exportJobResult struct {
 	ObjectKey string    `json:"object_key"`
 	ShareID   string    `json:"share_id"`
-	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
@@ -149,7 +167,11 @@ func (s *ExportService) Type() string { return jobTypeAuditExport }
 // admin.audit_export once the export actually completes (P1-2's fix --
 // see recordAudit's own doc comment for exactly what is and is not
 // covered), and marshals Export's outcome into the job's Result for a
-// caller polling jobs.Queue.Get to retrieve later.
+// caller polling jobs.Queue.Get to retrieve later -- the object key, the
+// minted share id and its expiry, deliberately never the one-time
+// delivery token (P1-B: the token is a bearer credential that must not
+// be persisted with the job record; see exportJobResult's own doc
+// comment for why it dies in this frame instead).
 //
 // Export's own ErrExportPartialFailure (some participant's data could not
 // be gathered, but the rest was still delivered) is returned as this
@@ -197,7 +219,6 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 	encoded, marshalErr := json.Marshal(exportJobResult{
 		ObjectKey: result.ObjectKey,
 		ShareID:   result.Delivery.ShareID,
-		Token:     result.Delivery.Token,
 		ExpiresAt: result.Delivery.ExpiresAt,
 	})
 	if marshalErr != nil {
