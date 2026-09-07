@@ -388,6 +388,23 @@ func asTenantIDString(v interface{}) string {
 // A map payload has no such ambiguity: a present key is always an explicit
 // write, even one that happens to equal the context tenant (which is
 // harmless and is not rejected by the caller of this function).
+//
+// Which schema describes a struct payload is not always stmt.Schema: GORM
+// parses stmt.Schema from the statement's Model, and a caller can decouple
+// the two — db.Model(&model).Updates(payloadStruct), the shape every
+// column-restricted Repository[T] write deliberately avoids (see
+// scopeAfterToWrittenColumns's own Model == Dest discussion) but that
+// remains legal for a bare-*gorm.DB caller. When Model and Dest differ,
+// stmt.Schema's fields describe the Model, not the payload, and reading a
+// Model-schema field's index against the payload's value would either panic
+// (a payload smaller than the field's index) or read a misaligned field —
+// both capable of fabricating a tenant_id immutability refusal for a payload
+// that never mentions tenant_id. So, mirroring exactly how GORM's own
+// ConvertToAssignments (gorm.io/gorm@v1.31.2/callbacks/update.go) decides
+// what a struct payload writes, this re-parses Dest into its own schema
+// whenever Model and Dest differ, and reads the tenant_id field from that
+// payload schema against the payload value. A payload whose own schema has
+// no tenant_id column cannot touch tenant_id, and is reported as absent.
 func updatePayloadTenantID(stmt *gorm.Statement) (value string, present bool) {
 	if stmt.Schema == nil {
 		return "", false
@@ -418,7 +435,29 @@ func updatePayloadTenantID(stmt *gorm.Statement) (value string, present bool) {
 		return "", false
 	}
 
-	raw, isZero := field.ValueOf(stmt.Context, destValue)
+	payloadField := field
+	if !destValue.CanAddr() || stmt.Dest != stmt.Model {
+		// Model and Dest are decoupled (or the payload is an unaddressable
+		// struct value): stmt.Schema describes the Model, so the tenant_id
+		// field must come from the payload's own parsed schema — the same
+		// re-parse GORM's ConvertToAssignments performs before it reads a
+		// single assignment from a struct payload. When the payload cannot
+		// be parsed at all, the check is skipped entirely rather than
+		// guessed at: a payload GORM itself cannot describe must never
+		// produce a fabricated immutability refusal.
+		updatingStmt := &gorm.Statement{DB: stmt.DB}
+		if err := updatingStmt.Parse(stmt.Dest); err != nil {
+			return "", false
+		}
+		payloadField = updatingStmt.Schema.LookUpField(tenantScopeColumn)
+		if payloadField == nil {
+			// The payload's own schema has no tenant_id column: the payload
+			// cannot touch tenant_id, whatever the Model's schema says.
+			return "", false
+		}
+	}
+
+	raw, isZero := payloadField.ValueOf(stmt.Context, destValue)
 	if isZero {
 		return "", false
 	}

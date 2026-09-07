@@ -1626,3 +1626,232 @@ func TestAuditCapturePlugin_ModelArgumentTenantDiffersFromContext_TrustsContextA
 		t.Errorf("expected the mismatch warning to name the disagreeing model_tenant_id=tenant-b, log = %q", logBuf.String())
 	}
 }
+
+// auditCaptureDashItem is the related model behind
+// auditCaptureDashNoteModel's has-many association. It needs no table in
+// this file's tests: the fixture never populates the association (a nil
+// slice is never written), and GORM resolves the association entirely from
+// the parsed schema metadata.
+type auditCaptureDashItem struct {
+	ID     string `gorm:"primaryKey;size:26"`
+	DashID string `gorm:"size:26;not null"`
+}
+
+// TableName pins the table name so it does not depend on GORM's
+// pluralization of an unexported type name.
+func (auditCaptureDashItem) TableName() string { return "audit_capture_dash_items" }
+
+// auditCaptureDashNoteModel is an Auditable, tenant-scoped fixture model
+// carrying two kinds of field that have no database column at all: an
+// association field (Related, a GORM has-many relationship GORM resolves
+// through the related table's rows, never through a column of its own) and a
+// gorm:"-" field (Secret, plaintext a model keeps in memory but deliberately
+// never persists). GORM keeps both in stmt.Schema.Fields with an empty
+// DBName — the DBName-derivation pass in schema.Parse assigns a column name
+// only when DataType is non-empty, which neither field has. fieldValuesMap
+// must skip them: no column exists whose post-write value After could
+// truthfully claim, the association's nil value and the plaintext would
+// collide on the shared "" map key, and the plaintext must never enter an
+// audit trail.
+type auditCaptureDashNoteModel struct {
+	ID       string                 `gorm:"primaryKey;size:26"`
+	TenantID string                 `gorm:"size:26;not null"`
+	Title    string                 `gorm:"size:255;not null"`
+	Related  []auditCaptureDashItem `gorm:"foreignKey:DashID;references:ID"` // association: relationship, not a column
+	Secret   string                 `gorm:"-"`
+}
+
+// TableName pins the table name so it does not depend on GORM's
+// pluralization of an unexported type name.
+func (auditCaptureDashNoteModel) TableName() string { return "audit_capture_dash_notes" }
+
+// GetTenantID satisfies dbkit's tenant-scoping contract.
+func (n auditCaptureDashNoteModel) GetTenantID() pkgcore.TenantID {
+	return pkgcore.TenantID(n.TenantID)
+}
+
+// AuditResourceType satisfies dbkit.Auditable.
+func (auditCaptureDashNoteModel) AuditResourceType() string { return "dash_note" }
+
+// TestAuditCapturePlugin_GormDashAndAssociationFields_NeverCapturedInAfter
+// pins the P0-7 regression: before the fix, fieldValuesMap iterated every
+// entry of stmt.Schema.Fields and wrote out[field.DBName] = value with no
+// check that the field has a DBName at all. A gorm:"-" field — a plaintext
+// carrier by definition, since the whole point of the tag is to keep a value
+// off the schema — and an association field both have DBName == "", so their
+// values landed in After under the shared "" key, overwriting each other,
+// with the gorm:"-" field's plaintext written straight into the audit
+// event's After (a "no plaintext PII in the audit trail" violation), on both
+// the create path and the update path. The fixed capture skips every field
+// whose DBName is empty.
+func TestAuditCapturePlugin_GormDashAndAssociationFields_NeverCapturedInAfter(t *testing.T) {
+	const plaintext = "super-secret-plaintext"
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	if err := db.Exec(`CREATE TABLE audit_capture_dash_notes (
+		id        VARCHAR(26) NOT NULL,
+		tenant_id VARCHAR(26) NOT NULL,
+		title     VARCHAR(255) NOT NULL,
+		PRIMARY KEY (tenant_id, id)
+	)`).Error; err != nil {
+		t.Fatalf("create audit_capture_dash_notes table: %v", err)
+	}
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	n := &auditCaptureDashNoteModel{ID: "n1", TenantID: "tenant-a", Title: "before", Secret: plaintext}
+	if err := db.WithContext(ctx).Create(n).Error; err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	n.Title = "after"
+	if err := db.WithContext(ctx).
+		Where("id = ?", "n1").Where("tenant_id = ?", "tenant-a").
+		Save(n).Error; err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	events := bus.captured()
+	if len(events) != 2 {
+		t.Fatalf("captured %d events, want 2 (create then update)", len(events))
+	}
+	for i, evt := range events {
+		wantOp := "create"
+		if i == 1 {
+			wantOp = "update"
+		}
+		if evt.Operation != wantOp {
+			t.Errorf("event %d Operation = %q, want %q", i, evt.Operation, wantOp)
+		}
+		if _, hasEmptyKey := evt.After[""]; hasEmptyKey {
+			t.Errorf("event %d After has a \"\" key: After = %+v — a gorm:\"-\" field or an association field (neither has a database column) must never be captured under the empty column name", i, evt.After)
+		}
+		for dbName, value := range evt.After {
+			if s, ok := value.(string); ok && s == plaintext {
+				t.Errorf("event %d After[%q] leaked the gorm:\"-\" field's plaintext %q into the audit trail: After = %+v", i, dbName, plaintext, evt.After)
+			}
+		}
+		// The concrete onward hazards the "" key created: a captured value
+		// that is not a real column value would be marshaled into the
+		// persister's diff and across the distributed bus.
+		if _, err := json.Marshal(evt.After); err != nil {
+			t.Fatalf("json.Marshal(event %d After) error = %v, want captured column values to always be JSON-marshalable", i, err)
+		}
+	}
+	// The row the events describe really is the one written: the create and
+	// update both landed, with the plaintext kept out of the database.
+	if _, err := json.Marshal(events[0].After); err != nil {
+		t.Fatalf("json.Marshal(create After) error = %v", err)
+	}
+	var persisted auditCaptureDashNoteModel
+	if err := db.WithContext(ctx).First(&persisted, "id = ?", "n1").Error; err != nil {
+		t.Fatalf("First() after the writes error = %v, want the committed row", err)
+	}
+	if persisted.Secret != "" {
+		t.Errorf("row's gorm:\"-\" field was persisted: Secret = %q, want empty (the whole point of gorm:\"-\" is that the value never reaches the database)", persisted.Secret)
+	}
+}
+
+// errAuditSavepointInnerDeliberate is the sentinel error a nested-block or
+// savepoint regression test returns from an inner write block to force
+// GORM's ROLLBACK TO SAVEPOINT for exactly that block's work. It is
+// distinct from any error dbkit or gorm could plausibly produce on its own,
+// so a test can tell "the inner block's own deliberate failure came back
+// unchanged" apart from "something else went wrong".
+var errAuditSavepointInnerDeliberate = errors.New("audit_capture_test: deliberate inner savepoint failure")
+
+// TestAuditCapturePlugin_WithTenantSession_SavepointRollback_InnerWriteNeverPublishes
+// pins the P1-9 regression: an inner write that a SAVEPOINT ... ROLLBACK TO
+// SAVEPOINT region discards must never surface in the audit trail. Before
+// the fix, capture appended every Auditable write inside a
+// WithTenantSession transaction to the transaction's audit buffer with no
+// knowledge of savepoint regions, and WithTenantSession published the whole
+// buffer once the outer transaction committed — so an inner write rolled
+// back to a savepoint was published anyway, a phantom audit row for a row
+// that never came into existence (here: two published create events for one
+// actually-committed row).
+func TestAuditCapturePlugin_WithTenantSession_SavepointRollback_InnerWriteNeverPublishes(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	err := dbkit.WithTenantSession(ctx, db, func(tx *gorm.DB) error {
+		if err := tx.Create(&testutil.Widget{ID: "outer-1", TenantID: "tenant-a", Name: "committed", Value: 1}).Error; err != nil {
+			return err
+		}
+		if err := tx.SavePoint("audit_inner_sp").Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&testutil.Widget{ID: "inner-1", TenantID: "tenant-a", Name: "rolled-back", Value: 2}).Error; err != nil {
+			return err
+		}
+		return tx.RollbackTo("audit_inner_sp").Error
+	})
+	if err != nil {
+		t.Fatalf("WithTenantSession() error = %v", err)
+	}
+
+	var count int64
+	if err := db.Raw(`SELECT COUNT(*) FROM widgets WHERE id = ?`, "inner-1").Scan(&count).Error; err != nil {
+		t.Fatalf("inner-1 count query: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("row count for inner-1 = %d, want 0 (the inner savepoint write must have been rolled back in the database)", count)
+	}
+
+	events := bus.captured()
+	if len(events) != 1 {
+		t.Fatalf("captured %d events, want exactly 1 (only the outer committed create; the rolled-back inner savepoint create must never be published)", len(events))
+	}
+	if events[0].ResourceID != "outer-1" || events[0].Operation != "create" {
+		t.Errorf("published event = %+v, want the outer-1 create", events[0])
+	}
+}
+
+// TestAuditCapturePlugin_WithTenantSession_NestedTransactionRollback_InnerWriteNeverPublishes
+// pins the same P1-9 property through GORM's own nested-transaction shape: a
+// tx.Transaction block opened inside WithTenantSession's transaction is a
+// SAVEPOINT block (gorm.io/gorm@v1.31.2/finisher_api.go's Transaction issues
+// a savepoint and rolls back to it when the block fails), and its failed
+// block's writes must likewise never surface — while the outer transaction's
+// own later writes still must.
+func TestAuditCapturePlugin_WithTenantSession_NestedTransactionRollback_InnerWriteNeverPublishes(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	err := dbkit.WithTenantSession(ctx, db, func(tx *gorm.DB) error {
+		if err := tx.Create(&testutil.Widget{ID: "outer-1", TenantID: "tenant-a", Name: "committed", Value: 1}).Error; err != nil {
+			return err
+		}
+		innerErr := tx.Transaction(func(innerTx *gorm.DB) error {
+			if err := innerTx.Create(&testutil.Widget{ID: "inner-1", TenantID: "tenant-a", Name: "rolled-back", Value: 2}).Error; err != nil {
+				return err
+			}
+			return errAuditSavepointInnerDeliberate
+		})
+		if !errors.Is(innerErr, errAuditSavepointInnerDeliberate) {
+			return fmt.Errorf("inner Transaction() error = %w, want the deliberate savepoint failure to propagate", innerErr)
+		}
+		// The outer transaction continues after the inner block rolled back.
+		return tx.Create(&testutil.Widget{ID: "outer-2", TenantID: "tenant-a", Name: "committed-too", Value: 3}).Error
+	})
+	if err != nil {
+		t.Fatalf("WithTenantSession() error = %v", err)
+	}
+
+	var count int64
+	if err := db.Raw(`SELECT COUNT(*) FROM widgets WHERE id = ?`, "inner-1").Scan(&count).Error; err != nil {
+		t.Fatalf("inner-1 count query: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("row count for inner-1 = %d, want 0 (the nested block's write must have been undone by its savepoint rollback)", count)
+	}
+
+	events := bus.captured()
+	if len(events) != 2 {
+		t.Fatalf("captured %d events, want exactly 2 (outer-1 and outer-2 creates only; the rolled-back inner block's create must never be published)", len(events))
+	}
+	if events[0].ResourceID != "outer-1" || events[1].ResourceID != "outer-2" {
+		t.Errorf("published events = %+v, want outer-1 then outer-2 creates", events)
+	}
+}

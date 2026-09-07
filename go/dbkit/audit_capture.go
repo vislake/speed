@@ -209,9 +209,36 @@ type auditBufferCtxKey struct{}
 // this codebase drives one *gorm.DB transaction handle from more than one
 // goroutine at a time; the mutex is cheap insurance, not a load-bearing
 // requirement.
+//
+// The buffer is additionally savepoint-aware: GORM resolves an inner
+// transaction block (tx.Transaction nested inside WithTenantSession's own
+// transaction, or a manual tx.SavePoint/tx.RollbackTo pair) to a SAVEPOINT
+// on the same connection (gorm.io/gorm@v1.31.2/finisher_api.go's
+// Transaction), and such an inner block can roll back — discarding its
+// writes — while the outer transaction still goes on to commit. Events
+// captured inside a region a ROLLBACK TO SAVEPOINT later discards describe
+// writes that never took effect, so publishing them after the outer commit
+// would fabricate audit rows exactly like the pre-buffer phantom-event bug
+// this mechanism exists to close. beginSavepoint/rollbackToSavepoint (fed by
+// the plugin's raw-statement observer, see afterSavepointSQL) mark the
+// event index each savepoint opened at and prune everything appended since
+// a discarded savepoint, so only events whose writes survive the outer
+// commit are ever drained.
 type auditBuffer struct {
-	mu     sync.Mutex
-	events []pkgcore.Event
+	mu         sync.Mutex
+	events     []pkgcore.Event
+	savepoints []auditSavepointMark
+}
+
+// auditSavepointMark records that a SAVEPOINT named name is open, and that
+// eventsAt is the length of the buffer when it opened — every event
+// appended at or after eventsAt belongs to the savepoint's region and must
+// be pruned if a rollback-to discards the savepoint. Frames are ordered
+// oldest first (a stack), since SQL savepoints nest: rolling back to one
+// discards every later savepoint too.
+type auditSavepointMark struct {
+	name     string
+	eventsAt int
 }
 
 // withAuditBuffer returns a copy of ctx carrying a fresh *auditBuffer, and
@@ -243,13 +270,63 @@ func (b *auditBuffer) add(evt pkgcore.Event) {
 
 // drain returns every event the buffer holds and empties it, so a second
 // drain (there should never be one, but this makes it harmless rather than
-// a duplicate-publish hazard) returns nothing.
+// a duplicate-publish hazard) returns nothing. Whatever savepoint frames
+// remain open are dropped with the events: WithTenantSession only drains
+// after its transaction committed, and no rollback-to can target a
+// savepoint after the transaction is over.
 func (b *auditBuffer) drain() []pkgcore.Event {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	out := b.events
 	b.events = nil
+	b.savepoints = nil
 	return out
+}
+
+// beginSavepoint records that a SAVEPOINT named name opened on the
+// transaction this buffer belongs to. Every event appended from now on is
+// inside the savepoint's region until a matching rollback-to (or the
+// transaction's end).
+//
+// Opening a savepoint with the name of one already open releases the older
+// one first — both dialects' SAVEPOINT semantics — so any existing frame
+// with the same name is dropped before the new frame is pushed: work done
+// between the two savepoints belongs to no live region and stays captured
+// until a rollback-to of some savepoint that opened before it.
+func (b *auditBuffer) beginSavepoint(name string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := len(b.savepoints) - 1; i >= 0; i-- {
+		if b.savepoints[i].name == name {
+			b.savepoints = append(b.savepoints[:i], b.savepoints[i+1:]...)
+			break
+		}
+	}
+	b.savepoints = append(b.savepoints, auditSavepointMark{name: name, eventsAt: len(b.events)})
+}
+
+// rollbackToSavepoint prunes every event appended since the most recent
+// open savepoint named name, and closes that savepoint and every savepoint
+// opened after it: a ROLLBACK TO SAVEPOINT discards all work done since the
+// target savepoint opened, inner savepoints included, and events describing
+// discarded work must never be published. It mirrors the SQL semantics for
+// a rollback-to of a savepoint that no longer exists (rolled back already,
+// or never opened): the database ignores it, so the buffer prunes nothing.
+func (b *auditBuffer) rollbackToSavepoint(name string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := len(b.savepoints) - 1; i >= 0; i-- {
+		if b.savepoints[i].name != name {
+			continue
+		}
+		cut := b.savepoints[i].eventsAt
+		for j := cut; j < len(b.events); j++ {
+			b.events[j] = pkgcore.Event{}
+		}
+		b.events = b.events[:cut]
+		b.savepoints = b.savepoints[:i]
+		return
+	}
 }
 
 // publishBuffered publishes every event buf holds, draining it in the
@@ -276,6 +353,24 @@ func (p *auditCapturePlugin) publishBuffered(ctx context.Context, buf *auditBuff
 // two unrelated top-level calls never collide even though they share this
 // literal key (see gorm.DB.InstanceSet's doc comment).
 const pendingAuditEventInstanceKey = "dbkit:audit_capture:pending_event"
+
+// savepointBeginSQLPrefix and savepointRollbackSQLPrefix are the exact
+// statement texts dbkit's two supported dialect drivers execute for GORM's
+// SavePoint and RollbackTo methods. v1.31.2 delegates both to the
+// dialector's SavePointerDialectorInterface, and both drivers implement it
+// the same way — github.com/glebarez/sqlite@v1.11.0 and
+// gorm.io/driver/postgres@v1.6.2 each run
+// tx.Exec("SAVEPOINT " + name) and tx.Exec("ROLLBACK TO SAVEPOINT " + name)
+// (the postgres driver's own statement text is identical, so a single
+// prefix match covers both dialects) — which routes them through the raw
+// processor, where this plugin's afterSavepointSQL observes them. The
+// statement text is case-sensitive by construction: the drivers generate
+// exactly these prefixes, and a hand-written lowercase "savepoint x"
+// statement is not a shape GORM's own SavePoint/RollbackTo produce.
+const (
+	savepointBeginSQLPrefix    = "SAVEPOINT "
+	savepointRollbackSQLPrefix = "ROLLBACK TO SAVEPOINT "
+)
 
 // auditPublishFailed reports evt as unpublishable, after the write it
 // describes has already durably committed — cause is the bus's own Publish
@@ -385,6 +480,21 @@ func (p *auditCapturePlugin) Initialize(db *gorm.DB) error {
 		Register(auditCapturePluginName+":delete_commit", p.publishPending); err != nil {
 		return err
 	}
+	// GORM's own SavePoint/RollbackTo methods never run a write processor's
+	// callback chain — v1.31.2 executes them straight through the dialector
+	// (SavePointerDialectorInterface), and both dbkit-supported drivers
+	// implement that interface by Exec-ing the SAVEPOINT statement, which
+	// does route through the raw processor. Registering After("gorm:raw")
+	// is therefore the one callback-chain hook at which a savepoint opening
+	// or a rollback-to is observable at all (see afterSavepointSQL for why
+	// the buffer needs to know). The observer only acts when the statement's
+	// context carries an audit buffer, and only for the two statement texts
+	// the drivers emit, so this registration is inert for every other raw
+	// statement and for every db without the plugin.
+	if err := db.Callback().Raw().After("gorm:raw").
+		Register(auditCapturePluginName+":savepoint", p.afterSavepointSQL); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -424,6 +534,37 @@ func (p *auditCapturePlugin) publishPending(db *gorm.DB) {
 	}
 	if err := p.bus.Publish(db.Statement.Context, evt); err != nil {
 		auditPublishFailed(db.Statement.Context, evt, err)
+	}
+}
+
+// afterSavepointSQL is registered After("gorm:raw") on every Process chain
+// (see Initialize), where it watches for the SAVEPOINT and ROLLBACK TO
+// SAVEPOINT statements both dialect drivers execute for GORM's
+// SavePoint/RollbackTo methods, and keeps the audit buffer's savepoint
+// bookkeeping in step with the database (see auditBuffer's doc comment for
+// why rolled-back savepoint regions must prune their events). It is a pure
+// observer: it never touches db.Error and never fails a statement, and
+// without an audit buffer on the statement's context — every raw statement
+// outside a WithTenantSession transaction — it does nothing at all.
+//
+// The statement's savepoint name is everything after the prefix, trimmed of
+// surrounding whitespace. Both drivers concatenate the name verbatim into
+// the SQL (GORM's nested Transaction generates sp<64-bit hash> names; a
+// manual tx.SavePoint passes the caller's own name through unchanged), and
+// the trim only ever removes incidental whitespace, never part of a name —
+// an identifier containing whitespace would not survive into SQL in the
+// first place.
+func (p *auditCapturePlugin) afterSavepointSQL(db *gorm.DB) {
+	buf, ok := auditBufferFromContext(db.Statement.Context)
+	if !ok {
+		return
+	}
+	sql := db.Statement.SQL.String()
+	switch {
+	case strings.HasPrefix(sql, savepointBeginSQLPrefix):
+		buf.beginSavepoint(strings.TrimSpace(strings.TrimPrefix(sql, savepointBeginSQLPrefix)))
+	case strings.HasPrefix(sql, savepointRollbackSQLPrefix):
+		buf.rollbackToSavepoint(strings.TrimSpace(strings.TrimPrefix(sql, savepointRollbackSQLPrefix)))
 	}
 }
 
@@ -696,9 +837,22 @@ const auditRedactedFieldValue = "[redacted]"
 // is consistent with auditableOf never matching a slice element in the
 // first place.
 //
+// A field with an empty DBName — a gorm:"-" field, whose whole point is a
+// value deliberately kept off the schema (often plaintext the model does
+// not want persisted, which must not leak into the audit trail either), or
+// an association field, which GORM resolves through the related table's
+// rows, never through a column of its own — is skipped outright: no column
+// exists whose post-write value After could truthfully claim, and capturing
+// its value under the shared "" key would both collide with every other
+// such field and put a non-column value on the wire. GORM itself keeps
+// these fields in schema.Fields with DBName == "" (schema.Parse derives a
+// column name only when DataType is non-empty), so the empty DBName is the
+// exact discriminator.
+//
 // A field carrying a GORM Serializer (see auditRedactedFieldValue's doc
 // comment for why) is captured as auditRedactedFieldValue instead of its
-// real value.
+// real value. A serializer field always has a real column, so the empty-
+// DBName skip above never interacts with the redaction.
 func fieldValuesMap(stmt *gorm.Statement) map[string]any {
 	if stmt.Schema == nil {
 		return nil
@@ -716,6 +870,13 @@ func fieldValuesMap(stmt *gorm.Statement) map[string]any {
 
 	out := make(map[string]any, len(stmt.Schema.Fields))
 	for _, field := range stmt.Schema.Fields {
+		if field.DBName == "" {
+			// No database column backs this field (a gorm:"-" field or an
+			// association field): nothing truthful to capture under its
+			// column name, and no column name exists to key it by — see the
+			// function's doc comment.
+			continue
+		}
 		if field.Serializer != nil {
 			out[field.DBName] = auditRedactedFieldValue
 			continue

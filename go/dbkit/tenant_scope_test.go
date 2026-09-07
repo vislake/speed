@@ -1260,3 +1260,96 @@ func TestTenantScopePlugin_BulkDelete_MultipleMatchingRows_OnlyDeletesCallingTen
 		t.Errorf("tenant B widget row count after tenant A's bulk delete = %d, want unchanged 1 (survived)", n)
 	}
 }
+
+// decoupledUpdatesSmallPayload is an Updates payload struct deliberately
+// smaller than the tenant-scoped model it updates. db.Model(&model).Updates
+// decouples the two: GORM parses the Model (the row selector) into
+// stmt.Schema, while the SET values come from this payload, whose own schema
+// GORM parses separately (callbacks/update.go's ConvertToAssignments). A
+// tenant-id immutability check that reads the Model's tenant_id field index
+// against this payload would read past the payload's last field and panic —
+// the regression the padded-payload twin test below pins.
+type decoupledUpdatesSmallPayload struct {
+	Name string
+}
+
+// decoupledUpdatesPaddedPayload is the sibling regression shape to
+// decoupledUpdatesSmallPayload: the payload has enough fields that reading
+// the Model's tenant_id field index against it does not panic, but the field
+// that index lands on is unrelated data (here: a display position), not a
+// tenant id. Reading it as if it were the payload's tenant_id fabricates an
+// immutability refusal for an update whose payload never mentions tenant_id
+// at all.
+type decoupledUpdatesPaddedPayload struct {
+	Name     string
+	Position string
+}
+
+// TestTenantScopeBeforeUpdate_DecoupledModelAndPayload_SmallerPayload_DoesNotPanic
+// pins the first half of the P0-8 regression: before the fix,
+// updatePayloadTenantID read the tenant_id field of stmt.Schema — the
+// decoupled Model's schema — against the update payload's own reflect value.
+// A payload with fewer fields than the Model's tenant_id field index panics
+// with "reflect: Field index out of range" inside tenantScopeBeforeUpdate,
+// taking down the whole update call. The fixed check resolves the tenant_id
+// field against the payload's own schema (exactly the re-parse GORM's
+// ConvertToAssignments performs when Model and Dest differ), so a payload
+// whose own schema has no tenant_id column is reported as "payload does not
+// touch tenant_id" and the update runs.
+func TestTenantScopeBeforeUpdate_DecoupledModelAndPayload_SmallerPayload_DoesNotPanic(t *testing.T) {
+	db := newScopedTestDB(t)
+	mustCreateWidget(t, db, tenantA, &testutil.Widget{ID: "a-1", TenantID: string(tenantA), Name: "before", Value: 1})
+
+	res := db.WithContext(ctxFor(tenantA)).Model(&testutil.Widget{}).
+		Where("id = ?", "a-1").
+		Updates(decoupledUpdatesSmallPayload{Name: "after"})
+	if res.Error != nil {
+		t.Fatalf("Updates() error = %v, want nil — db.Model(&M{}).Updates(payloadStruct) with a payload smaller than M must run, never panic or refuse inside the tenant-id immutability check", res.Error)
+	}
+
+	var got testutil.Widget
+	if err := db.WithContext(ctxFor(tenantA)).First(&got, "id = ?", "a-1").Error; err != nil {
+		t.Fatalf("First() after the decoupled update error = %v, want the updated row", err)
+	}
+	if got.Name != "after" {
+		t.Errorf("row name after Updates() = %q, want %q (the decoupled payload's real column must still be written)", got.Name, "after")
+	}
+	if got.Value != 1 {
+		t.Errorf("row value after Updates() = %d, want unchanged 1 (no column the payload does not carry may be touched)", got.Value)
+	}
+}
+
+// TestTenantScopeBeforeUpdate_DecoupledModelAndPayload_PaddedPayload_DoesNotFabricateImmutabilityRefusal
+// pins the second half of the P0-8 regression: with a payload padded out to
+// at least as many fields as the Model's tenant_id field index, the old
+// misaligned read did not panic — it silently read the payload field sitting
+// at the Model's tenant_id index (here
+// decoupledUpdatesPaddedPayload.Position, unrelated data) as if it were the
+// payload's tenant_id. Any non-empty value that is not the context tenant
+// then fabricated an ErrTenantIDImmutable refusal for an update whose
+// payload never mentions tenant_id at all. The fixed check reads the
+// tenant_id field from the payload's own schema, which has no tenant_id
+// column, so the payload is reported as not touching tenant_id and the
+// update proceeds.
+func TestTenantScopeBeforeUpdate_DecoupledModelAndPayload_PaddedPayload_DoesNotFabricateImmutabilityRefusal(t *testing.T) {
+	db := newScopedTestDB(t)
+	mustCreateWidget(t, db, tenantA, &testutil.Widget{ID: "a-1", TenantID: string(tenantA), Name: "before", Value: 1})
+
+	res := db.WithContext(ctxFor(tenantA)).Model(&testutil.Widget{}).
+		Where("id = ?", "a-1").
+		Updates(decoupledUpdatesPaddedPayload{Name: "renamed", Position: "far-left"})
+	if errors.Is(res.Error, ErrTenantIDImmutable) {
+		t.Fatalf("Updates() fabricated a tenant_id immutability refusal: error = %v; the payload struct carries no tenant_id column at all — the field sitting at the model's tenant_id field index is unrelated data (Position)", res.Error)
+	}
+	if res.Error != nil {
+		t.Fatalf("Updates() error = %v, want nil", res.Error)
+	}
+
+	var got testutil.Widget
+	if err := db.WithContext(ctxFor(tenantA)).First(&got, "id = ?", "a-1").Error; err != nil {
+		t.Fatalf("First() after the decoupled update error = %v, want the updated row", err)
+	}
+	if got.Name != "renamed" {
+		t.Errorf("row name after Updates() = %q, want %q (the decoupled payload's real column must still be written)", got.Name, "renamed")
+	}
+}
