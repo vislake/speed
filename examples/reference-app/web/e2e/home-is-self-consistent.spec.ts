@@ -124,3 +124,60 @@ test('the home surface does not promise cards it has none of', {
     `the home surface tells the reader to ask an administrator to enable a feature, which no administrator can do (home-view.tsx: "no mechanism in the app able to enable any") and which a self-registered practice has nobody to ask for. Home said: ${home}`,
   ).not.toContain(UNACTIONABLE)
 })
+
+/**
+ * The two sentences on this surface that cannot both be true.
+ *
+ * home.intro says what is here depends on the features this clinic has
+ * enabled. The empty state, since 2c383a0, says there is no feature to
+ * enable. Both render, one under the other, on every tenant today.
+ */
+const CONTRADICTION = {
+  dependsOnFlags: 'depends on the features this clinic has enabled',
+  nothingToEnable: 'no feature to enable',
+} as const
+
+/**
+ * That the home surface does not say two opposite things at once.
+ *
+ * A leftover of the fix above, and deliberately reported as a leftover
+ * rather than as a defect of the same kind: the sentence it replaced sent
+ * a reader to a person who did not exist, while this one is merely stale.
+ * Nobody is misdirected by it. But a reader arriving today reads, in
+ * order: what is here depends on the features this clinic has enabled;
+ * nothing to show yet; there is no feature to enable. The first and the
+ * third cannot both be true, and the third is the one that is.
+ *
+ * WHAT IT ASSERTS, AND WHY THAT IS NOT PRESCRIBING COPY
+ *
+ * Only that the two claims do not co-occur. Rewriting the intro so it
+ * says something true for a tenant with no flags, dropping it when the
+ * card list is empty, or removing the claim from the empty state instead
+ * would each pass -- the last one being the choice this gate would rather
+ * not see taken, since that clause is the part a reader can act on, but
+ * it is a product decision and not this gate's to make. What fails is a
+ * screen that answers its own sentence.
+ *
+ * SEPARATE TEST, AND ONLY UNTIL IT CLOSES
+ *
+ * It costs a second sign-in as the same account, which is exactly the
+ * cost the merge above removed. It is worth paying while the defect is
+ * open, because the alternative is a failing assertion inside a test the
+ * DEFAULT tier runs -- and a red fast tier is worse than a slow @pending
+ * one. When this closes, it folds into the test above and the sign-in
+ * comes back.
+ */
+test('the home surface does not answer its own sentence', {
+  tag: ['@pending', '@deployment'],
+}, async ({ page }) => {
+  await signInAs(page, DEMO_ACME_ONLY)
+
+  const home = await readSettledText(page.getByRole('main'))
+  const saysDependsOnFlags = home.includes(CONTRADICTION.dependsOnFlags)
+  const saysNothingToEnable = home.includes(CONTRADICTION.nothingToEnable)
+
+  expect(
+    saysDependsOnFlags && saysNothingToEnable,
+    `the home surface says both "${CONTRADICTION.dependsOnFlags}" and "${CONTRADICTION.nothingToEnable}", one under the other, so it contradicts itself in the space of two sentences. Home said: ${home}`,
+  ).toBe(false)
+})
