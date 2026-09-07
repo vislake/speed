@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/jobs"
@@ -117,8 +119,12 @@ import (
 // boot's queue start re-dispatches the due retry (jobs' Start recovers
 // and re-claims it). The queue's own retry budget and dead-letter close
 // the loop: past the last attempt the job dead-letters with the final
-// cause on its row and in the log, the operator signal that this
-// provisioning needs a human rather than another attempt.
+// cause on its row and in the log -- and the retry handler's OnFailure
+// (the jobs.FailureHook mechanism go/jobs' handler.go documents) adds
+// the host's own terminal signal, an Error naming the registrant and the
+// clinic whose sign-in a provisioning that outlived every automatic
+// attempt has stranded -- the operator signal that this provisioning
+// needs a human rather than another attempt.
 //
 // The 201 semantics that result are the honest ones: register answers 201
 // exactly when the account exists. The clinic is already there whenever
@@ -130,7 +136,10 @@ import (
 // self-service existed; the retry converges the clinic moments later and
 // the same sign-in then lands in it. The browser-shaped e2e gate
 // (self-service-signup.spec.ts) never sees that window, because it signs
-// in after a registration whose synchronous attempt succeeded.
+// in after a registration whose synchronous attempt succeeded; a recovery
+// gate drives it on purpose through the env switch
+// (APP_FAIL_SELF_SERVICE_PROVISION=1, failSelfServiceProvisionEnv's doc
+// comment) -- register, retry convergence, one sign-in.
 //
 // No host-side ledger stands behind any of this. A completed clinic is
 // the org rows a previous boot left in the database -- the clinic's org
@@ -172,13 +181,53 @@ type selfServiceProvisioner struct {
 	// (scheduleProvisionRetry), and the queue the retry job's handler is
 	// registered on (wireSelfService). Always set by wireSelfService.
 	queue *jobs.StandaloneQueue
-	// failProvision is the regression suite's failure-injection point
+	// failProvision is the failure-injection point
 	// (serverConfig.failSelfServiceProvision, consulted at the top of
-	// provision): when non-nil it fails every provisioning attempt it is
-	// asked about, so a test can place a failure on the synchronous
-	// delivery and watch the retry converge the same clinic. Nil in every
-	// production wiring.
+	// provision): when non-nil it fails a provisioning attempt it is
+	// asked about by returning an error, so a failure can be placed on
+	// the synchronous delivery and the retry watched converging the same
+	// clinic. The hook answers per user id, so an armed hook may fail
+	// every attempt (a test's closure, or a budget larger than the whole
+	// retry horizon) or only the first few attempts of each account
+	// (newProvisionFailureInjector, the env-driven shape). Nil under the
+	// production default (serverConfig's own doc comment).
 	failProvision func(userID string) error
+}
+
+// newProvisionFailureInjector returns the failProvision hook configFromEnv
+// arms from APP_FAIL_SELF_SERVICE_PROVISION's count (see
+// failSelfServiceProvisionEnv's doc comment in server.go): the first
+// count provisioning attempts OF EACH ACCOUNT fail -- counted per user
+// id, the hook's own argument, across the synchronous attempt and the
+// retry job's attempts alike, since every attempt consults the hook at
+// the top of provision -- and every later attempt of that same account
+// succeeds. The budget is per account, never process-global, so one
+// account's exhaustion does not silence the injection for the next
+// account a test rig registers, and the retry job's own convergence is
+// the very path N=1 exists to exercise (the register's synchronous
+// attempt consumes the account's one failure; the first retry succeeds
+// and converges the clinic). A count of 0 answers nil: the disabled
+// default that keeps an absent variable byte-identical to the hook never
+// having existed.
+func newProvisionFailureInjector(count int) func(userID string) error {
+	if count < 1 {
+		return nil
+	}
+	var mu sync.Mutex
+	remaining := make(map[string]int)
+	return func(userID string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		left, seen := remaining[userID]
+		if !seen {
+			left = count
+		}
+		if left > 0 {
+			remaining[userID] = left - 1
+			return errors.New("APP_FAIL_SELF_SERVICE_PROVISION injected a provisioning failure")
+		}
+		return nil
+	}
 }
 
 // onUserCreated is the subscription installed by wireSelfService for
@@ -271,7 +320,9 @@ type selfServiceProvisionTask struct {
 // the clinic finishes as a success rather than a duplicate-key failure.
 // A failed attempt returns its error and the queue does the rest: retry
 // with backoff while attempts remain, then a dead-letter whose row and
-// log carry the last cause.
+// log carry the last cause -- and whose OnFailure below carries the
+// host's own terminal signal naming the account the queue's generic
+// records never name.
 //
 // wireSelfService registers it directly on the app's standalone queue
 // rather than declaring it on a module registry: the registry's handler
@@ -285,8 +336,12 @@ type selfServiceProvisionJobHandler struct {
 	provisioner *selfServiceProvisioner
 }
 
-// compile-time check that the retry handler satisfies jobs.Handler.
-var _ jobs.Handler = (*selfServiceProvisionJobHandler)(nil)
+// compile-time checks that the retry handler satisfies jobs.Handler and
+// jobs.FailureHook.
+var (
+	_ jobs.Handler     = (*selfServiceProvisionJobHandler)(nil)
+	_ jobs.FailureHook = (*selfServiceProvisionJobHandler)(nil)
+)
 
 // Type implements jobs.Handler.
 func (h *selfServiceProvisionJobHandler) Type() string { return selfServiceProvisionTaskType }
@@ -311,6 +366,42 @@ func (h *selfServiceProvisionJobHandler) Handle(ctx context.Context, job *jobs.J
 		return jobs.Result{}, fmt.Errorf("provisioning the clinic of user %s: %w", task.UserID, err)
 	}
 	return jobs.Result{}, nil
+}
+
+// OnFailure implements jobs.FailureHook (go/jobs' handler.go documents the
+// mechanism): the queue invokes it at most once per job, on the final
+// attempt's failure path only, once the retry budget is exhausted and the
+// job has genuinely dead-lettered. This is the terminal half of the
+// failure semantics this file's own doc comment describes -- a
+// provisioning that outlived every automatic attempt strands its account
+// (register already answered 201 and the event never fires again), so the
+// operator signal must say WHOSE sign-in is broken. The queue's own
+// dead-letter records name the job (job_id/job_type on the row and in its
+// log line), never the account; this hook's Error is the host's own
+// terminal signal, naming the registrant (user_id, decoded from the same
+// payload Handle decodes) and the consequence -- "the account cannot sign
+// in until it is provisioned by hand", the exact consequence the file's
+// other three failure paths (scheduleProvisionRetry's queue-nil, marshal
+// and Enqueue failures) already name.
+//
+// The clinic tenant rides on the worker context the queue rebuilt for
+// this hook (go/jobs' FailureHook contract: "OnFailure receives the same
+// rebuilt tenant context Handle itself receives"), so obs.FromContext
+// carries tenant_id on the line; user_id is added explicitly because no
+// context carries it. Whatever this hook logs is not retried or otherwise
+// observed by the queue. A payload that no longer decodes (a task this
+// app itself never enqueues) cannot name the account; the log then names
+// the clinic and the cause and says the same consequence.
+func (h *selfServiceProvisionJobHandler) OnFailure(ctx context.Context, job *jobs.Job, cause error) {
+	log := obs.FromContext(ctx)
+	var task selfServiceProvisionTask
+	if err := json.Unmarshal(job.Payload, &task); err != nil || task.UserID == "" {
+		log.Error("reference-app: clinic provisioning retry dead-lettered with a task payload that names no account; the account cannot sign in until it is provisioned by hand",
+			"error", cause)
+		return
+	}
+	log.Error("reference-app: clinic provisioning exhausted its retries and dead-lettered; the account cannot sign in until it is provisioned by hand",
+		"user_id", task.UserID, "error", cause)
 }
 
 // scheduleProvisionRetry enqueues the retry job that re-runs a failed
@@ -361,11 +452,13 @@ func (p *selfServiceProvisioner) scheduleProvisionRetry(ctx context.Context, use
 // rows are all tenant data, and nothing here reads or writes across a
 // tenant boundary.
 func (p *selfServiceProvisioner) provision(ctx context.Context, userID string, clinic pkgcore.TenantID) error {
-	// failProvision is the regression suite's injection point
-	// (selfServiceProvisioner's own doc comment): armed, it fails this
-	// attempt before any step runs, so a test can place the failure on
-	// the synchronous delivery and watch the retry converge the same
-	// clinic. Never set in production wiring.
+	// failProvision is the injection point (selfServiceProvisioner's own
+	// doc comment): armed, it fails this attempt before any step runs, so
+	// a failure can be placed on the synchronous delivery and the retry
+	// watched converging the same clinic -- or, with a budget past the
+	// whole retry horizon, the exhaustion watched dead-lettering. An
+	// injected failure must read like any other provisioning failure from
+	// here on, which is what the wrap below does.
 	if p.failProvision != nil {
 		if err := p.failProvision(userID); err != nil {
 			return fmt.Errorf("reference-app: injected provisioning failure: %w", err)
@@ -579,9 +672,11 @@ func userIDFromUserCreatedPayload(payload any) (string, bool) {
 // cross-tenant query (sign_in_memberships.go), so a boot against a
 // database a previous boot provisioned clinics into needs no re-discovery
 // pass and keeps every clinic owner's sign-in working. failProvision is
-// the regression suite's failure-injection hook (nil in every production
-// wiring; a test arms it through serverConfig.failSelfServiceProvision
-// before calling buildServer), handed to the provisioner it builds.
+// the failure-injection hook serverConfig.failSelfServiceProvision carries
+// (nil under the production default; configFromEnv arms it from
+// APP_FAIL_SELF_SERVICE_PROVISION, and a test may arm it on its own
+// serverConfig before calling buildServer), handed to the provisioner it
+// builds.
 //
 // buildServer calls it AFTER the demo seeds have run, which is the
 // discriminator that keeps the demo path intact (selfServiceProvisioner's

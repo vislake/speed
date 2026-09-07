@@ -401,6 +401,31 @@ const (
 	// declaration pair exists to fix.
 	readFlyClientIPEnv = "APP_READ_FLY_CLIENT_IP"
 
+	// failSelfServiceProvisionEnv names the environment variable holding
+	// the failure-injection count for the self-service clinic
+	// provisioning chain (self_service.go). It is a TEST-AND-E2E-ONLY
+	// switch -- a real deployment must never set it -- with a strictly
+	// disabled default: absent, or "0", leaves cfg.failSelfServiceProvision
+	// nil and every boot byte-identical to the variable never having
+	// existed (newProvisionFailureInjector(0) answers nil).
+	//
+	// Set to a positive integer N, the server fails the first N
+	// provisioning attempts of EACH self-registered account -- the
+	// synchronous attempt inside the register request and the retry job's
+	// own attempts alike, since every attempt consults the same hook at
+	// the top of provision -- and succeeds on every later attempt of that
+	// account. The count is per account, never process-global, so one
+	// account's exhaustion cannot silence the injection for the next.
+	//
+	// The e2e rig drives the "provisioning fails -> the retry converges ->
+	// the sign-in lands" recovery path with N=1: a fresh self-service
+	// register fails its one synchronous attempt, the first retry (short
+	// backoff) converges the clinic, and the gate signs in once after
+	// convergence -- inside go/authn's per-account login budget, with no
+	// "retry until it passes" loop. Any value that is not a whole number,
+	// or a negative one, refuses boot naming this variable.
+	failSelfServiceProvisionEnv = "APP_FAIL_SELF_SERVICE_PROVISION"
+
 	// rootKeyPurposeConfigCipher, rootKeyPurposeOrgIndex,
 	// rootKeyPurposeNotificationIndex, rootKeyPurposePKILocalKeyCipher,
 	// rootKeyPurposeAuthnBlindIndex and rootKeyPurposeAuthnPIICipher are the
@@ -1060,17 +1085,21 @@ type serverConfig struct {
 	// to this field never having existed.
 	DisableQueueWorker bool
 
-	// failSelfServiceProvision is the regression suite's failure-injection
-	// hook for the self-service provisioning chain (self_service.go): when
-	// non-nil, every provisioning attempt the server makes consults it at
-	// the top of provision and fails when it returns an error, so a test
-	// can place a failure on the synchronous delivery of a registration's
-	// event and watch the retry job converge the same clinic. Nil (the
-	// default) is byte-identical to the hook never having existed --
-	// configFromEnv never sets it, and the reference-app suites are its
-	// only writers, each arming it on its own serverConfig before
-	// buildServer captures it into the provisioner it builds
-	// (wireSelfService).
+	// failSelfServiceProvision is the failure-injection hook for the
+	// self-service provisioning chain (self_service.go): when non-nil,
+	// every provisioning attempt the server makes consults it at the top
+	// of provision and fails when it returns an error, so a failure can
+	// be placed on the synchronous delivery of a registration's event and
+	// the retry job watched converging the same clinic. It has two
+	// writers: configFromEnv arms it from APP_FAIL_SELF_SERVICE_PROVISION
+	// (absent or "0" leaves it nil -- the production default, byte-
+	// identical to the hook never having existed -- and N arms a hook
+	// failing the first N attempts of each account;
+	// failSelfServiceProvisionEnv's own doc comment has the contract),
+	// and the reference-app suites arm it on their own serverConfig
+	// before buildServer captures it into the provisioner it builds
+	// (wireSelfService). The hook answers per user id: a test's closure
+	// counts or keys on that argument however its scenario needs.
 	failSelfServiceProvision func(userID string) error
 
 	// DisableDemoUserHeader, when true, makes buildServer wire every demo
@@ -1410,6 +1439,27 @@ func configFromEnv() (serverConfig, error) {
 		dbPath = defaultSQLitePath
 	}
 
+	// failProvisionCount is the self-service provisioning failure
+	// injection APP_FAIL_SELF_SERVICE_PROVISION arms -- 0 (absent or
+	// "0", the production default) disables it entirely; a positive N
+	// arms newProvisionFailureInjector below with a per-account budget
+	// of N failed attempts (failSelfServiceProvisionEnv's own doc
+	// comment has the full contract and the e2e shape). Anything that
+	// is not a non-negative whole number refuses boot here, naming the
+	// variable, exactly like every other strict parse configFromEnv
+	// runs.
+	failProvisionCount := 0
+	if raw := os.Getenv(failSelfServiceProvisionEnv); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil {
+			return serverConfig{}, fmt.Errorf("reference-app: %s must be a whole number of provisioning attempts to fail (absent or 0 disables the injection), got %q: %w", failSelfServiceProvisionEnv, raw, parseErr)
+		}
+		if parsed < 0 {
+			return serverConfig{}, fmt.Errorf("reference-app: %s must not be negative (absent or 0 disables the injection), got %d", failSelfServiceProvisionEnv, parsed)
+		}
+		failProvisionCount = parsed
+	}
+
 	// redisAddr stays empty when unset (or explicitly emptied): the
 	// standalone composition then resolves the "eventbus" seam from the
 	// Preset to the in-process bus, keeping the zero-external-dependency
@@ -1606,6 +1656,11 @@ func configFromEnv() (serverConfig, error) {
 		// reasoning and the demo-only shape of the value.
 		AIGatewayImageBaseURL: os.Getenv(aiGatewayImageBaseURLEnv),
 		AIGatewayImageAPIKey:  os.Getenv(aiGatewayImageAPIKeyEnv),
+		// newProvisionFailureInjector(0) answers nil, so the default --
+		// absent or "0" -- keeps the field exactly as nil as it always
+		// was; a positive count arms the injection the e2e rig drives
+		// (failSelfServiceProvisionEnv's own doc comment).
+		failSelfServiceProvision: newProvisionFailureInjector(failProvisionCount),
 	}
 	if smtpHost != "" {
 		// A real SMTP composition: declare the capabilities the
@@ -3248,9 +3303,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// attempt that fails enqueues the retry job that converges the clinic
 	// (self_service.go's # Failure semantics), and the queue's worker was
 	// started above, so the retry runs on this same process's pool.
-	// cfg.failSelfServiceProvision rides along as the regression suite's
-	// failure-injection hook -- nil here, armed by a test's own
-	// serverConfig.
+	// cfg.failSelfServiceProvision rides along as the failure-injection
+	// hook -- nil under the disabled default (APP_FAIL_SELF_SERVICE_PROVISION
+	// absent or 0), armed either by configFromEnv's own env-driven parse or
+	// by a test's serverConfig.
 	if wireErr := wireSelfService(ctx, reg, orgModule, rbacService, authnModule.Service(), standaloneQueue, cfg.failSelfServiceProvision); wireErr != nil {
 		_ = cleanup()
 		return nil, nil, nil, wireErr

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
 )
 
@@ -394,17 +396,47 @@ func TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists(t *te
 	// enough to land the registrant's org membership (the host's
 	// self_service_clinics ledger was retired in the round that moved the
 	// sign-in answer onto org's own memberships table, so the durable
-	// record of a completed provision is that row). Poll it through a
-	// second connection to the server's own database file (the
-	// same-shape second connection the audit suite's persister test
-	// uses), with the same filter org's own cross-tenant query applies --
-	// status "active", never soft-deleted (go/org/membership.go's
-	// MembershipStatusActive and go/org/membership_tenants.go's
-	// membershipTenantRow) -- a read, so no authn rate-limit budget is
-	// spent waiting for the retry.
-	pollCtx, cancelPoll := context.WithCancel(context.Background())
+	// record of a completed provision is that row).
+	// waitForClinicMembership polls it through a second connection to the
+	// server's own database file (the same-shape second connection the
+	// audit suite's persister test uses), with the same filter org's own
+	// cross-tenant query applies -- status "active", never soft-deleted
+	// (go/org/membership.go's MembershipStatusActive and
+	// go/org/membership_tenants.go's membershipTenantRow) -- a read, so no
+	// authn rate-limit budget is spent waiting for the retry.
+	waitForClinicMembership(t, cfg.SQLitePath, clinic, userID)
+
+	// The retry converged the clinic; the browser-shaped sign-in that the
+	// pre-self-service dead end used to refuse now lands in it.
+	status, code, _, tenant := browserSignIn(t, srv, selfServiceFreshEmail, selfServicePassword)
+	if status != http.StatusOK {
+		t.Fatalf("sign-in of the clinic owner after the retried provisioning: status = %d, code = %q, want %d",
+			status, code, http.StatusOK)
+	}
+	if tenant != clinic {
+		t.Fatalf("sign-in after the retried provisioning landed the principal in tenant %q, want its clinic %q", tenant, clinic)
+	}
+}
+
+// waitForClinicMembership polls clinic's registrant membership row through a
+// second connection to the SQLite file sqlitePath until it appears or the
+// deadline passes. The membership row is the durable record of a completed
+// provision once the host's self_service_clinics ledger was retired (the
+// round that moved the sign-in answer onto org's own memberships table), so
+// its appearance means a provisioning attempt ran to completion -- after a
+// failed synchronous attempt, the completing attempt can only be the retry
+// job's. The poll applies the same filter org's own cross-tenant query
+// applies -- status "active", never soft-deleted (go/org/membership.go's
+// MembershipStatusActive and go/org/membership_tenants.go's
+// membershipTenantRow). A read, so no authn rate-limit budget is spent
+// waiting; a transient busy on the shared SQLite file while the retry's own
+// writes land is a reason to poll again, never a failure.
+func waitForClinicMembership(t *testing.T, sqlitePath string, clinic pkgcore.TenantID, userID string) {
+	t.Helper()
+
+	ctx, cancelPoll := context.WithCancel(context.Background())
 	defer cancelPoll()
-	pollDB, err := dbkit.Open(pollCtx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: cfg.SQLitePath})
+	pollDB, err := dbkit.Open(ctx, dbkit.Options{Dialect: dbkit.DialectSQLite, DSN: sqlitePath})
 	if err != nil {
 		t.Fatalf("open the server's database for the membership poll: %v", err)
 	}
@@ -414,9 +446,8 @@ func TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists(t *te
 		}
 	}()
 	deadline := time.Now().Add(15 * time.Second)
-	provisioned := false
 	var lastCountErr error
-	for !provisioned {
+	for {
 		var count int64
 		countErr := pollDB.Table("memberships").
 			Where("tenant_id = ? AND user_id = ? AND status = ? AND deleted_at IS NULL",
@@ -428,25 +459,249 @@ func TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists(t *te
 			lastCountErr = countErr
 		} else {
 			lastCountErr = nil
-			provisioned = count > 0
-		}
-		if !provisioned {
-			if time.Now().After(deadline) {
-				t.Fatalf("the clinic %s never gained the registrant's membership: register answered 201, the synchronous attempt failed, and no retry converged it -- the account is stranded (last membership read error: %v)",
-					clinic, lastCountErr)
+			if count > 0 {
+				return
 			}
-			time.Sleep(200 * time.Millisecond)
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the clinic %s never gained the registrant's membership: register answered 201, the synchronous attempt failed, and no retry converged it -- the account is stranded (last membership read error: %v)",
+				clinic, lastCountErr)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+const selfServiceEnvDrivenEmail = "env-driven-founder@example.com"
+
+// selfServiceJourneyConfigFromEnv returns the serverConfig a REAL boot
+// reads (configFromEnv) under a hermetic environment: every variable
+// configFromEnv reads is cleared first, so the journey's outcome cannot
+// depend on the ambient environment the test happens to run in (a stray
+// APP_REDIS_ADDR or APP_S3_* in the shell would silently rewire a seam or
+// refuse the boot outright), with APP_DB_PATH pointed at a fresh per-test
+// temp file and APP_FAIL_SELF_SERVICE_PROVISION set to failCount.
+func selfServiceJourneyConfigFromEnv(t *testing.T, failCount string) serverConfig {
+	t.Helper()
+	for _, name := range [...]string{
+		"APP_DEPLOYMENT_MODE", "PORT", "APP_REDIS_ADDR", "APP_ROOT_KEY",
+		"APP_CONFIG_KEY", "APP_ORG_INDEX_KEY", "APP_NOTIFICATION_INDEX_KEY",
+		"APP_PKI_LOCAL_KEY_CIPHER_KEY", "APP_AUTHN_BLIND_INDEX_KEY", "APP_AUTHN_PII_CIPHER_KEY",
+		"APP_S3_ENDPOINT", "APP_S3_BUCKET", "APP_S3_ACCESS_KEY", "APP_S3_SECRET_KEY",
+		"APP_S3_REGION", "APP_S3_USE_SSL", "APP_OBJECT_STORE_ROOT",
+		"APP_SMTP_HOST", "APP_SMTP_PORT", "APP_SMTP_USERNAME", "APP_SMTP_PASSWORD",
+		"APP_SMS_GATEWAY_URL", "APP_DISABLE_QUEUE_WORKER", "APP_DISABLE_DEMO_USER_HEADER",
+		"APP_TRUSTED_PROXIES", "APP_READ_FLY_CLIENT_IP", "APP_WEB_DIST",
+		"APP_DEMO_USERS_PASSWORD", "APP_DEMO_PLATFORM_STAFF_PASSWORD",
+		"APP_AI_GATEWAY_IMAGE_BASE_URL", "APP_AI_GATEWAY_IMAGE_API_KEY",
+		"APP_FAIL_SELF_SERVICE_PROVISION",
+	} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "self-service-env-driven.db"))
+	t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", failCount)
+	cfg, err := configFromEnv()
+	if err != nil {
+		t.Fatalf("configFromEnv: %v", err)
+	}
+	return cfg
+}
+
+// TestSelfServiceSignup_EnvDrivenFirstProvisionFailure_RetryConverges_LaterSignInLandsInClinic
+// is the env-driven half of the failure journey, driven the way a real
+// boot reads it: the server is built from configFromEnv's own output with
+// APP_FAIL_SELF_SERVICE_PROVISION=1 in the environment, so a fresh
+// self-service register fails its first synchronous provisioning attempt,
+// the retry job converges the clinic, and a subsequent browser-shaped
+// sign-in lands in it. It is the e2e-drivable shape: N=1 makes the
+// recovery converge on the retry's first attempt (its backoff is short),
+// so the e2e gate can sign in once after convergence inside authn's
+// per-account login budget, with no "retry until it passes" loop.
+//
+// The armed hook itself is the evidence the synchronous attempt really
+// failed -- the account's one-attempt budget is spent by the register's
+// own attempt, and an untouched account's first attempt still fails -- so
+// the convergence this test then watches (the ledger row, provisioning's
+// last step) is provably the retry job's work, never a synchronous
+// success.
+//
+// Failing before the switch existed: configFromEnv ignored the variable,
+// cfg.failSelfServiceProvision came back nil, and this test failed at the
+// armed-hook assertion before any request was served.
+func TestSelfServiceSignup_EnvDrivenFirstProvisionFailure_RetryConverges_LaterSignInLandsInClinic(t *testing.T) {
+	cfg := selfServiceJourneyConfigFromEnv(t, "1")
+	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	srv := httptest.NewServer(handler)
+	defer func() {
+		srv.Close()
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			t.Errorf("cleanup: %v", cleanupErr)
+		}
+	}()
+
+	if cfg.failSelfServiceProvision == nil {
+		t.Fatal("APP_FAIL_SELF_SERVICE_PROVISION=1 booted a server whose provisioning is not injected -- the env switch is not wired into configFromEnv")
 	}
 
-	// The retry converged the clinic; the browser-shaped sign-in that the
-	// pre-self-service dead end used to refuse now lands in it.
-	status, code, _, tenant := browserSignIn(t, srv, selfServiceFreshEmail, selfServicePassword)
+	userID := registerFreshAccount(t, srv, selfServiceEnvDrivenEmail, selfServicePassword)
+	clinic := pkgcore.TenantID("tenant-" + userID)
+
+	// The register's synchronous attempt consumed the account's one
+	// injected failure -- the account's budget is spent, so the hook now
+	// answers nil for it (and still fails an untouched account's first
+	// attempt, proving the hook is live and per-account).
+	if err := cfg.failSelfServiceProvision(userID); err != nil {
+		t.Fatalf("the register's synchronous provisioning attempt never consumed its injected failure (hook answers %v): the convergence this test watches would not be the retry's work", err)
+	}
+	if err := cfg.failSelfServiceProvision("unrelated-fresh-account"); err == nil {
+		t.Fatal("the armed injection did not fail an untouched account's first attempt")
+	}
+
+	// The retry job converges the clinic: the ledger row (provisioning's
+	// last step) appears only once a full provisioning attempt has run,
+	// and after the failed synchronous attempt that attempt is the
+	// retry's.
+	waitForClinicMembership(t, cfg.SQLitePath, clinic, userID)
+
+	// One sign-in, once the clinic exists: it lands in the account's own
+	// clinic. This is the e2e gate's own shape -- register, converge,
+	// sign in once -- inside authn's per-account login budget.
+	status, code, _, tenant := browserSignIn(t, srv, selfServiceEnvDrivenEmail, selfServicePassword)
 	if status != http.StatusOK {
-		t.Fatalf("sign-in of the clinic owner after the retried provisioning: status = %d, code = %q, want %d",
+		t.Fatalf("sign-in of the env-driven clinic owner after the retried provisioning: status = %d, code = %q, want %d",
 			status, code, http.StatusOK)
 	}
 	if tenant != clinic {
-		t.Fatalf("sign-in after the retried provisioning landed the principal in tenant %q, want its clinic %q", tenant, clinic)
+		t.Fatalf("sign-in after the env-driven retried provisioning landed the principal in tenant %q, want its clinic %q", tenant, clinic)
+	}
+}
+
+// TestSelfServiceProvisionRetry_DeadLetter_LogsTheTerminalSignalByUserAndTenant
+// pins the retry job's terminal signal: when a provisioning retry job
+// exhausts its budget and dead-letters, the host must log an Error naming
+// the account (user_id), its clinic (tenant_id, carried by the worker
+// context the queue rebuilt for the hook) and the consequence -- the
+// account cannot sign in until it is provisioned by hand. Before the fix
+// the only terminal record was the queue's generic dead-letter log, which
+// names the job (job_id/job_type), never the account.
+//
+// The regression drives the REAL handler and a REAL queue to a genuine
+// exhaustion: an always-failing provision injection, a fast retry
+// cadence (this host's production cadence of one-second base backoff over
+// ten retries would take minutes -- the queue's own option exists for
+// tests exactly like this), and the handler's own task payload. The
+// worker context carries no attached logger, so obs.FromContext falls
+// back to slog.Default(), which the test captures.
+//
+// Failing before the fix: the handler implemented no FailureHook, so the
+// job dead-lettered with only the generic queue line and the
+// terminal-signal assertion below never matched.
+func TestSelfServiceProvisionRetry_DeadLetter_LogsTheTerminalSignalByUserAndTenant(t *testing.T) {
+	var logBuf bytes.Buffer
+	previousDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	defer slog.SetDefault(previousDefault)
+
+	ctx := context.Background()
+	db, err := dbkit.Open(ctx, dbkit.Options{
+		Dialect: dbkit.DialectSQLite,
+		DSN:     filepath.Join(t.TempDir(), "self-service-terminal.db"),
+	})
+	if err != nil {
+		t.Fatalf("dbkit.Open: %v", err)
+	}
+	defer func() {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	}()
+
+	queue := jobs.NewStandaloneQueue(db,
+		jobs.WithPollInterval(15*time.Millisecond),
+		jobs.WithBackoff(10*time.Millisecond, 50*time.Millisecond))
+	// The provisioner behind the handler needs no booted org/rbac modules
+	// here: the injection fails at the top of provision, before any
+	// org/rbac step runs, which is exactly the terminal path under test.
+	handler := &selfServiceProvisionJobHandler{provisioner: &selfServiceProvisioner{
+		failProvision: func(string) error { return errors.New("injected terminal provisioning failure") },
+	}}
+	if regErr := queue.RegisterHandler(handler); regErr != nil {
+		t.Fatalf("RegisterHandler: %v", regErr)
+	}
+	if startErr := queue.Start(ctx); startErr != nil {
+		t.Fatalf("queue Start: %v", startErr)
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if closeErr := queue.Close(closeCtx); closeErr != nil {
+			t.Errorf("queue Close: %v", closeErr)
+		}
+	}()
+
+	const userID = "terminal-account"
+	clinic := clinicTenantOf(userID)
+	payload, err := json.Marshal(selfServiceProvisionTask{UserID: userID})
+	if err != nil {
+		t.Fatalf("marshal the provisioning retry task: %v", err)
+	}
+	jobID, err := queue.Enqueue(ctx, jobs.Task{
+		Type:     selfServiceProvisionTaskType,
+		TenantID: clinic,
+		Payload:  payload,
+	}, jobs.WithMaxRetries(1))
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// The job genuinely exhausts its retries and dead-letters -- the
+	// terminal state the signal exists to announce. The poll reads under
+	// the job's own clinic tenant: jobs' access rule (CallerMayAccess)
+	// refuses a tenant-less Get of a tenant-owned job row.
+	tenantCtx := pkgcore.WithTenant(ctx, clinic)
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		job, getErr := queue.Get(tenantCtx, jobID)
+		if getErr != nil {
+			t.Fatalf("Get(%s): %v", jobID, getErr)
+		}
+		if job.Status == jobs.StatusDeadLetter {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the provisioning retry job never dead-lettered (status = %s)", job.Status)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	// Stop the queue BEFORE reading the captured log: Close joins the
+	// queue's goroutines, and the hook's Error line is written inside the
+	// dead-letter attempt's own execute call (go/jobs' worker.go), so once
+	// Close returns no goroutine can still write the buffer this test
+	// reads -- reading a bytes.Buffer a worker goroutine is still writing
+	// would be its own data race.
+	closeCtx, cancelClose := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelClose()
+	if err := queue.Close(closeCtx); err != nil {
+		t.Fatalf("queue Close: %v", err)
+	}
+
+	// The terminal signal: the host's Error line, naming the account
+	// (user_id), its clinic (tenant_id, carried by the worker context the
+	// queue rebuilt for the hook) and the consequence. Failing before the
+	// fix, the only terminal record was the queue's generic dead-letter
+	// line, which names the job, never the account.
+	signal := "reference-app: clinic provisioning exhausted its retries and dead-lettered; the account cannot sign in until it is provisioned by hand"
+	out := logBuf.String()
+	if !strings.Contains(out, signal) {
+		t.Fatalf("the exhausted provisioning never logged its terminal signal naming the account; logs:\n%s", out)
+	}
+	if !strings.Contains(out, "user_id="+userID) {
+		t.Fatalf("the terminal signal does not name the account; logs:\n%s", out)
+	}
+	if !strings.Contains(out, "tenant_id="+string(clinic)) {
+		t.Fatalf("the terminal signal does not name the clinic tenant; logs:\n%s", out)
 	}
 }

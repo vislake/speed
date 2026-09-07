@@ -1076,6 +1076,7 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	t.Setenv("APP_DISABLE_DEMO_USER_HEADER", "")
 	t.Setenv("APP_TRUSTED_PROXIES", "")
 	t.Setenv("APP_READ_FLY_CLIENT_IP", "")
+	t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", "")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -1108,6 +1109,81 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	if cfg.ReadFlyClientIP {
 		t.Fatal("ReadFlyClientIP = true, want false (the default: no vendor header is read, authn's fail-closed shape)")
 	}
+	if cfg.failSelfServiceProvision != nil {
+		t.Fatal("failSelfServiceProvision armed with an unset APP_FAIL_SELF_SERVICE_PROVISION: an absent variable must leave the self-service provisioning untouched (production behaviour unchanged)")
+	}
+}
+
+// TestConfigFromEnv_FailSelfServiceProvision_ParseAndDisableSemantics pins
+// APP_FAIL_SELF_SERVICE_PROVISION's parse contract (see
+// failSelfServiceProvisionEnv's own doc comment): absent or "0" leaves the
+// self-service provisioning uninjected, a positive integer N arms an
+// injection whose first N provisioning attempts of each account fail and
+// whose later attempts of the same account succeed, and anything else
+// (not a number, or a negative count) refuses boot with the variable
+// named. Failing before the switch existed: configFromEnv ignored the
+// variable entirely, so no value of it could arm or refuse anything.
+func TestConfigFromEnv_FailSelfServiceProvision_ParseAndDisableSemantics(t *testing.T) {
+	t.Setenv("APP_DEPLOYMENT_MODE", "")
+	t.Setenv("PORT", "")
+	t.Setenv("APP_DB_PATH", "")
+
+	t.Run("0 disables the injection", func(t *testing.T) {
+		t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", "0")
+		cfg, err := configFromEnv()
+		if err != nil {
+			t.Fatalf("configFromEnv() error = %v", err)
+		}
+		if cfg.failSelfServiceProvision != nil {
+			t.Fatal("failSelfServiceProvision armed with the variable at 0, want the disabled default")
+		}
+	})
+	t.Run("a positive count arms the injection with exactly that budget", func(t *testing.T) {
+		t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", "2")
+		cfg, err := configFromEnv()
+		if err != nil {
+			t.Fatalf("configFromEnv() error = %v", err)
+		}
+		if cfg.failSelfServiceProvision == nil {
+			t.Fatal("failSelfServiceProvision nil with the variable at 2, want the armed injection")
+		}
+		// The first two provisioning attempts of one account fail...
+		if err := cfg.failSelfServiceProvision("budget-account"); err == nil {
+			t.Fatal("the armed injection's first attempt of an account did not fail")
+		}
+		if err := cfg.failSelfServiceProvision("budget-account"); err == nil {
+			t.Fatal("the armed injection's second attempt of an account did not fail")
+		}
+		// ...and the third succeeds: the budget is per account, so the
+		// count is the number of failed attempts, never a permanent block.
+		if err := cfg.failSelfServiceProvision("budget-account"); err != nil {
+			t.Fatalf("the armed injection failed an attempt past its budget: %v", err)
+		}
+		// A different account starts its own fresh budget of N.
+		if err := cfg.failSelfServiceProvision("another-budget-account"); err == nil {
+			t.Fatal("the armed injection's first attempt of a second account did not fail")
+		}
+	})
+	t.Run("not a number refuses boot", func(t *testing.T) {
+		t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", "one")
+		_, err := configFromEnv()
+		if err == nil {
+			t.Fatal("configFromEnv() error = nil, want a parse refusal naming APP_FAIL_SELF_SERVICE_PROVISION")
+		}
+		if !strings.Contains(err.Error(), "APP_FAIL_SELF_SERVICE_PROVISION") {
+			t.Fatalf("parse refusal does not name the variable: %v", err)
+		}
+	})
+	t.Run("a negative count refuses boot", func(t *testing.T) {
+		t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", "-1")
+		_, err := configFromEnv()
+		if err == nil {
+			t.Fatal("configFromEnv() error = nil, want a refusal of a negative count")
+		}
+		if !strings.Contains(err.Error(), "APP_FAIL_SELF_SERVICE_PROVISION") {
+			t.Fatalf("negative-count refusal does not name the variable: %v", err)
+		}
+	})
 }
 
 // TestConfigFromEnv_ReadsOverrides verifies each environment variable
@@ -1123,6 +1199,7 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	t.Setenv("APP_DISABLE_DEMO_USER_HEADER", "1")
 	t.Setenv("APP_TRUSTED_PROXIES", " 172.16.0.0/12, 203.0.113.10 , ")
 	t.Setenv("APP_READ_FLY_CLIENT_IP", "true")
+	t.Setenv("APP_FAIL_SELF_SERVICE_PROVISION", "2")
 
 	cfg, err := configFromEnv()
 	if err != nil {
@@ -1169,6 +1246,19 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	}
 	if !bytes.Equal(cfg.ConfigKey, wantKey) {
 		t.Fatalf("ConfigKey = %x, want the decoded APP_CONFIG_KEY %x", cfg.ConfigKey, wantKey)
+	}
+	if cfg.failSelfServiceProvision == nil {
+		t.Fatal("failSelfServiceProvision nil with APP_FAIL_SELF_SERVICE_PROVISION=2, want the armed injection")
+	}
+	// The variable's value is the number of attempts to fail: with N=2 the
+	// first two attempts of one account fail and the third succeeds.
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := cfg.failSelfServiceProvision("override-account"); err == nil {
+			t.Fatalf("the armed injection's attempt %d of an account did not fail (N=2)", attempt)
+		}
+	}
+	if err := cfg.failSelfServiceProvision("override-account"); err != nil {
+		t.Fatalf("the armed injection failed an attempt past its two-attempt budget: %v", err)
 	}
 }
 
