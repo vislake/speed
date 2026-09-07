@@ -867,6 +867,16 @@ func openConfiguredAuthnChannels(ctx context.Context, cfgService *config.Service
 	if len(providers) == 0 {
 		return nil
 	}
+	// The bare pkgcore.WithSystemContext is deliberate here rather than
+	// tenancy.WithSystemContext, the audited wrapper: this is a boot-time
+	// declaration, run once per process start between Bootstrap and the
+	// first served request, re-affirming host configuration under the fixed
+	// "reference-app-boot" actor -- no operator session, request or ticket
+	// exists yet to attribute an audit row to, and a row every restart
+	// re-creates identically answers no question an audit reader asks. The
+	// audited wrapper exists for request-time paths, where the bus is live
+	// and the grant is an attributable action; code copying this
+	// boot-time pattern must state the same precondition.
 	sysCtx, err := pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 		Actor:   "reference-app-boot",
 		Purpose: config.SystemPurposeSystemWrite,
@@ -2840,7 +2850,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// write itself needs the module's own CredentialService, which
 	// aiGatewayModule.Credentials() exposes regardless of Bootstrap having
 	// run (constructing a Module performs no I/O), so nothing here strictly
-	// needs to wait for Bootstrap except the purpose registration.
+	// needs to wait for Bootstrap except the purpose registration. The bare
+	// pkgcore.WithSystemContext rather than the audited
+	// tenancy.WithSystemContext is deliberate, for this boot-time
+	// precondition: the write is a config-driven declaration re-affirmed
+	// identically on every restart under the fixed "reference-app-boot"
+	// actor, with no operator session or ticket to attribute an audit row
+	// to, so no audit reader has a question this grant's record would
+	// answer -- the request-time platform-credential path in ai-gateway's
+	// own handler.go, by contrast, must and does go through the audited
+	// wrapper.
 	if cfg.AIGatewayAPIKey != "" {
 		sysCtx, sysErr := pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 			Actor:   "reference-app-boot",
@@ -2860,7 +2879,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// The ai-gateway image-generation platform credential -- the same
 	// system-context path as the chat credential above, written only when
 	// cfg.AIGatewayImageAPIKey is set (see its own doc comment on
-	// serverConfig).
+	// serverConfig), including the same deliberate bare-primitive choice
+	// and its boot-time precondition: a config-driven write re-affirmed on
+	// every restart under the fixed "reference-app-boot" actor, with no
+	// operator session or ticket to attribute an audit row to.
 	if cfg.AIGatewayImageAPIKey != "" {
 		sysCtx, sysErr := pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 			Actor:   "reference-app-boot",
