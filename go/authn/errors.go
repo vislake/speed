@@ -304,10 +304,29 @@ var (
 
 	// ErrVerificationCodeInvalid is the single answer to every failed
 	// phone-login code verification: no code was ever issued, it expired,
-	// it is locked from too many wrong guesses, or the code itself was
-	// wrong. Collapsing all four into one error is the same
+	// it is locked from too many wrong guesses, the code itself was
+	// wrong, or a verification already consumed it -- a spent code,
+	// whose single-use guard its own (or a concurrent winner's) request
+	// spent, replays into this same error, never a distinct "used"
+	// answer. Collapsing every failure into one error is the same
 	// user-enumeration and information-minimization defence
-	// ErrInvalidCredentials is for password sign-in.
+	// ErrInvalidCredentials is for password sign-in -- and the collapse
+	// of a spent code in particular is the pre-authentication half of
+	// the asymmetry whose post-authentication half is the
+	// spent-vs-never-valid split ErrMFAInvalidCode and ErrMFACodeUsed
+	// draw on the step-up/MFA channel: step-up answers a caller who is
+	// already authenticated, so hearing "used" rather than "wrong" for a
+	// code they hold discloses nothing an outsider can use. A
+	// phone-login code verifies a caller who is not yet anyone, and an
+	// answer distinguishing "used" from "wrong" there would certify to
+	// an anonymous caller that the code they submitted was the genuine
+	// live credential -- an oracle confirming an intercepted or phished
+	// code. The client that may honestly hear "used" is the one that
+	// itself spent the code: @speed/auth-ui's SMSSignInForm keeps that
+	// verdict in a local spent-code memory and refuses the string
+	// client-side, never asking this answer to confirm it (see that
+	// component's file-header comment, which carries the mirror
+	// analysis).
 	ErrVerificationCodeInvalid = apperr.Unauthorized("authn.verification_code_invalid")
 
 	// ErrSMSDeliveryFailed names a verification code that could not be
