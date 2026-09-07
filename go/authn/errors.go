@@ -122,12 +122,22 @@ var (
 	// tenant they are not an active member of. It is the fail-closed
 	// answer to the single most exploited horizontal-privilege-escalation
 	// entry point in a multi-tenant product.
+	//
+	// It is deliberately never the password-login answer: password login
+	// resolves membership only after the password verified, so answering
+	// with this error would certify the password to an anonymous caller;
+	// that path folds into ErrInvalidCredentials instead (see
+	// Service.Login's doc comment). These membership errors answer paths
+	// that already know who is calling -- tenant switching, refresh, the
+	// SSO/social exchanges.
 	ErrTenantMembershipRequired = apperr.Forbidden("authn.tenant_membership_required")
 
 	// ErrTenantMembershipUnavailable is returned when membership cannot be
 	// established at all -- no MembershipReader was wired in, or the one
 	// that was failed. It never degrades into "allow": an unanswerable
-	// membership question is a refusal, not a default.
+	// membership question is a refusal, not a default. Like
+	// ErrTenantMembershipRequired it is deliberately never the
+	// password-login answer, which folds into ErrInvalidCredentials.
 	ErrTenantMembershipUnavailable = apperr.Forbidden("authn.tenant_membership_unavailable")
 
 	// ErrRevocationCheckFailed is returned when the immediate-revocation

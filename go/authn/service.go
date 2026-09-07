@@ -123,9 +123,16 @@ func (s *Service) recordAuthMetric(ctx context.Context, op string, start time.Ti
 // module uses for every cross-module fact it needs but does not own.
 //
 // A nil MembershipReader is not a permissive default. Every path that needs
-// one fails closed with ErrTenantMembershipUnavailable, because the question
-// it answers is precisely "may this person act inside this tenant", and an
-// unanswerable authorization question is a refusal.
+// one refuses rather than defaulting; the refusal's shape depends on who is
+// asking. Paths that answer an ALREADY-AUTHENTICATED caller (tenant
+// switching, refresh) fail closed with ErrTenantMembershipUnavailable --
+// because the question it answers is precisely "may this person act inside
+// this tenant", and an unanswerable authorization question is a refusal.
+// Password sign-in answers an anonymous caller and folds the same refusal
+// into its uniform ErrInvalidCredentials error instead: its membership
+// question is asked only after the password verified, so a distinguishable
+// membership error there would certify the password (see Login's doc
+// comment).
 type MembershipReader interface {
 	// ActiveMembership reports whether userID is an active member of
 	// tenantID.
@@ -587,9 +594,17 @@ func (s *Service) mapRegisterCreateConflict(ctx context.Context, user *User, err
 //
 // Every failure returns ErrInvalidCredentials, with no parameter and no
 // timing shortcut: an unknown identifier still costs one argon2id derivation,
-// so the response time does not answer the question the error refuses to. The
-// specific reason is written to the login history for the operator and for
-// the account owner's own security page.
+// so the response time does not answer the question the error refuses to.
+// That "every failure" includes a correct password whose account resolves no
+// membership -- no MembershipReader wired, no membership of any tenant, or
+// no membership of an explicitly requested one: the membership question is
+// asked only after the password verified, so an answer naming it (403
+// tenant_membership_required / tenant_membership_unavailable) would certify
+// the credential to an anonymous caller. The distinguishable membership
+// errors are reserved for paths answering an already-authenticated caller
+// (tenant switching, refresh). The specific reason is written to the login
+// history for the operator and for the account owner's own security page,
+// FailureReasonNoMembership among them.
 func (s *Service) Login(ctx context.Context, in LoginInput) (*TokenPair, error) {
 	start := time.Now()
 	pair, err := s.login(ctx, in)
@@ -722,8 +737,20 @@ func (s *Service) login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 
 	tenantID, err := s.resolveTenant(ctx, user.ID, in.TenantID)
 	if err != nil {
+		// The password verified and the account is active, so this is the
+		// last point at which the caller's credential was right -- and the
+		// one at which an answer naming the real cause (403
+		// tenant_membership_required / tenant_membership_unavailable) would
+		// certify the password to an anonymous caller, the single fact every
+		// failure above this line refuses to state. The reachable surface is
+		// not an edge case: a generated project whose membership seam is not
+		// wired yet (nil reader, resolveTenant's first branch) answers this
+		// way for every correct password, every attempt, until its owner
+		// wires a membership store. Nothing is lost by the uniform answer:
+		// recordFailure below writes the real cause into the login history,
+		// which is where the reason belongs (see Login's doc comment).
 		s.recordFailure(ctx, in, user.ID, index, FailureReasonNoMembership)
-		return nil, err
+		return nil, ErrInvalidCredentials
 	}
 
 	s.guard.RecordLoginSuccess(ctx, index)

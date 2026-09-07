@@ -305,8 +305,11 @@ func WithBlindIndexKey(key []byte) Option {
 }
 
 // WithMembershipReader supplies the seam through which authn asks whether a
-// user belongs to a tenant. Without it, sign-in and tenant switching fail
-// closed with ErrTenantMembershipUnavailable.
+// user belongs to a tenant. Without it, tenant switching and refresh fail
+// closed with ErrTenantMembershipUnavailable; password sign-in refuses too,
+// folding its membership failure into the uniform ErrInvalidCredentials
+// every failed sign-in answers -- a nil reader would otherwise certify every
+// correct password to an anonymous caller (see Service.Login's doc comment).
 func WithMembershipReader(reader MembershipReader) Option {
 	return func(o *options) { o.membership = reader }
 }

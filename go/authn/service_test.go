@@ -260,6 +260,13 @@ func TestService_Login_DoesNotDistinguishFailureCauses(t *testing.T) {
 	}
 	f.members.Add(noPassword.ID, testTenantA)
 
+	// A correct password whose account resolves no membership belongs in the
+	// same indistinguishable family: the membership question is only reached
+	// AFTER the password verified, so an answer distinguishing it from a
+	// wrong password would certify the credential -- the oracle this test
+	// exists to forbid. registerUser attaches no membership at all here.
+	memberless := f.registerUser(t, "memberless@example.com")
+
 	cases := []struct {
 		name       string
 		identifier string
@@ -270,6 +277,7 @@ func TestService_Login_DoesNotDistinguishFailureCauses(t *testing.T) {
 		{name: "wrong password", identifier: "known@example.com", password: "not the password at all", wantReason: FailureReasonBadPassword},
 		{name: "account with no password", identifier: "social-only@example.com", password: testPassword, wantReason: FailureReasonNoPassword},
 		{name: "suspended account", identifier: "suspended@example.com", password: testPassword, wantReason: FailureReasonSuspended},
+		{name: "correct password with no membership", identifier: "memberless@example.com", password: testPassword, wantReason: FailureReasonNoMembership},
 		{name: "identifier with no canonical form", identifier: "   ", password: testPassword, wantReason: FailureReasonUnknownUser},
 		{name: "malformed phone identifier", identifier: "1380000", password: testPassword, wantReason: FailureReasonUnknownUser},
 	}
@@ -302,8 +310,99 @@ func TestService_Login_DoesNotDistinguishFailureCauses(t *testing.T) {
 	if len(attempts) != 1 || attempts[0].FailureReason != FailureReasonBadPassword {
 		t.Errorf("login history = %+v, want one bad-password failure", attempts)
 	}
+	memberlessAttempts, err := f.svc.LoginHistory().ListByUser(t.Context(), memberless.ID, 10)
+	if err != nil {
+		t.Fatalf("ListByUser() error = %v", err)
+	}
+	if len(memberlessAttempts) != 1 || memberlessAttempts[0].FailureReason != FailureReasonNoMembership {
+		t.Errorf("memberless login history = %+v, want one no-membership failure", memberlessAttempts)
+	}
 	if n := f.events.Count(EventLoginFailed); n != len(cases) {
 		t.Errorf("recorded %d %s events, want %d", n, EventLoginFailed, len(cases))
+	}
+}
+
+// TestService_Login_NoMembershipIsIndistinguishableFromWrongPassword is the
+// password-confirmation-oracle regression. The login endpoint used to answer
+// an anonymous attacker whether the password was right: a wrong password
+// answered 401 authn.invalid_credentials, but a correct password whose
+// account resolved no membership -- no membership anywhere, or none of an
+// explicitly requested tenant -- answered 403 authn.tenant_membership_*
+// instead. Reaching the membership question at all means every earlier check
+// passed, so the distinguishable answer certified the credential, and in a
+// generated project whose membership seam is not wired yet (nil reader) the
+// answer held for EVERY correct password, every attempt.
+func TestService_Login_NoMembershipIsIndistinguishableFromWrongPassword(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	f.registerUser(t, "memberless@example.com") // no membership anywhere
+	// Each of the three legs below runs on its own account: a recorded
+	// failure starts the account's progressive lockout delay, and this
+	// suite's clock is frozen, so a second attempt on the same account
+	// would be refused with authn.account_locked before it reached the
+	// membership question at all.
+	f.registerUser(t, "elsewhere@example.com", testTenantA)
+	f.registerUser(t, "known@example.com", testTenantA)
+
+	// A correct password whose account has no membership anywhere must
+	// answer byte-identically to a wrong password: same code, same status,
+	// same absence of parameters.
+	_, noMembershipErr := f.svc.Login(t.Context(), LoginInput{
+		Identifier: "memberless@example.com", Password: testPassword,
+	})
+	if noMembershipErr == nil {
+		t.Fatal("Login() succeeded for an account with no resolvable membership")
+	}
+
+	// The same fold for a correct password naming a tenant the account has
+	// no membership of -- the 403 tenant_membership_required shape a member
+	// of another tenant used to draw when it asked for the wrong one.
+	_, wrongTenantErr := f.svc.Login(t.Context(), LoginInput{
+		Identifier: "elsewhere@example.com", Password: testPassword, TenantID: testTenantB,
+	})
+	if wrongTenantErr == nil {
+		t.Fatal("Login(correct password, requested tenant without membership) succeeded")
+	}
+	if appErr, ok := asAppError(wrongTenantErr); !ok || appErr.Code != ErrInvalidCredentials.Code {
+		t.Fatalf("wrong-tenant login error = %v, want %q", wrongTenantErr, ErrInvalidCredentials.Code)
+	}
+
+	_, wrongPasswordErr := f.svc.Login(t.Context(), LoginInput{
+		Identifier: "known@example.com", Password: "not the password at all",
+	})
+	if wrongPasswordErr == nil {
+		t.Fatal("Login(wrong password) succeeded")
+	}
+	a, aOK := asAppError(noMembershipErr)
+	b, bOK := asAppError(wrongPasswordErr)
+	if !aOK || !bOK {
+		t.Fatalf("Login() errors = %v and %v, want two *apperr.Error values", noMembershipErr, wrongPasswordErr)
+	}
+	if a.Code != ErrInvalidCredentials.Code {
+		t.Fatalf("membership-less login code = %q, want %q", a.Code, ErrInvalidCredentials.Code)
+	}
+	if a.Code != b.Code || a.Status != b.Status || len(a.Params) != len(b.Params) {
+		t.Fatalf("membership-less login error = %v, wrong-password login error = %v, "+
+			"want externally identical answers", a, b)
+	}
+
+	// The real cause still lands in the login history -- no operational
+	// information is lost by the uniform answer.
+	memberless, findErr := f.svc.Users().FindByEmail(t.Context(), "memberless@example.com")
+	if findErr != nil {
+		t.Fatalf("FindByEmail() error = %v", findErr)
+	}
+	attempts, listErr := f.svc.LoginHistory().ListByUser(t.Context(), memberless.ID, 10)
+	if listErr != nil {
+		t.Fatalf("ListByUser() error = %v", listErr)
+	}
+	if len(attempts) != 1 || attempts[0].Result != LoginResultFailure ||
+		attempts[0].FailureReason != FailureReasonNoMembership {
+		t.Errorf("memberless login history = %+v, want one no-membership failure", attempts)
+	}
+	if n := f.events.Count(EventLoginFailed); n != 3 {
+		t.Errorf("recorded %d %s events, want 3", n, EventLoginFailed)
 	}
 }
 
@@ -389,7 +488,12 @@ func TestService_Register_DuplicatePhoneIsRejected(t *testing.T) {
 
 // TestService_Login_FailsClosedWithoutAMembershipReader is the fail-closed
 // rule: an unanswerable "may this person act inside this tenant" is a
-// refusal, never a default.
+// refusal, never a default. The refusal's SHAPE differs by who is asking:
+// tenant switching answers an already-authenticated caller and fails closed
+// with ErrTenantMembershipUnavailable, while password sign-in answers an
+// anonymous caller and folds the same refusal into its uniform
+// ErrInvalidCredentials answer -- a distinguishable membership error there
+// would certify the password the caller just tried (see Login's doc comment).
 func TestService_Login_FailsClosedWithoutAMembershipReader(t *testing.T) {
 	t.Parallel()
 
@@ -417,11 +521,15 @@ func TestService_Login_FailsClosedWithoutAMembershipReader(t *testing.T) {
 		t.Fatalf("NewService() error = %v", err)
 	}
 
+	// The sign-in still refuses -- never a permissive default -- but with
+	// the collapsed credential answer, not the distinguishable 403 a
+	// memberless-correct-password used to draw from this nil-reader wiring.
 	_, err = unwired.Login(t.Context(), LoginInput{Identifier: "closed@example.com", Password: testPassword})
-	if !hasCode(err, ErrTenantMembershipUnavailable.Code) {
-		t.Fatalf("Login() error = %v, want code %q", err, ErrTenantMembershipUnavailable.Code)
+	if !hasCode(err, ErrInvalidCredentials.Code) {
+		t.Fatalf("Login() error = %v, want code %q", err, ErrInvalidCredentials.Code)
 	}
 
+	// The authenticated path keeps the distinguishable fail-closed answer.
 	_, err = unwired.SwitchTenant(t.Context(), pair.Principal, testTenantA)
 	if !hasCode(err, ErrTenantMembershipUnavailable.Code) {
 		t.Fatalf("SwitchTenant() error = %v, want code %q", err, ErrTenantMembershipUnavailable.Code)
@@ -429,7 +537,12 @@ func TestService_Login_FailsClosedWithoutAMembershipReader(t *testing.T) {
 }
 
 // TestService_Login_FailsClosedWhenMembershipCannotBeRead covers the other
-// unanswerable case: the reader exists but errors.
+// unanswerable case: the reader exists but errors. The sign-in refuses
+// rather than defaulting, and the refusal is the uniform credential answer
+// -- the login path never answers an anonymous caller with a membership
+// error, whatever the membership question's own fate was (the reader's
+// failure is still logged by resolveTenant for the operator, and the
+// attempt still lands in the login history under FailureReasonNoMembership).
 func TestService_Login_FailsClosedWhenMembershipCannotBeRead(t *testing.T) {
 	t.Parallel()
 
@@ -438,8 +551,8 @@ func TestService_Login_FailsClosedWhenMembershipCannotBeRead(t *testing.T) {
 	f.members.FailWith(errors.New("the membership store is down"))
 
 	_, err := f.svc.Login(t.Context(), LoginInput{Identifier: "broken@example.com", Password: testPassword})
-	if !hasCode(err, ErrTenantMembershipUnavailable.Code) {
-		t.Fatalf("Login() error = %v, want code %q", err, ErrTenantMembershipUnavailable.Code)
+	if !hasCode(err, ErrInvalidCredentials.Code) {
+		t.Fatalf("Login() error = %v, want code %q", err, ErrInvalidCredentials.Code)
 	}
 }
 
@@ -475,16 +588,20 @@ func TestService_Login_TenantSelection(t *testing.T) {
 		_, err := f.svc.Login(t.Context(), LoginInput{
 			Identifier: "member@example.com", Password: testPassword, TenantID: pkgcore.TenantID("someone-elses-tenant"),
 		})
-		if !hasCode(err, ErrTenantMembershipRequired.Code) {
-			t.Fatalf("Login() error = %v, want code %q", err, ErrTenantMembershipRequired.Code)
+		// Refused with the uniform credential answer, never the 403
+		// membership errors tenant switching gives an authenticated caller:
+		// this refusal happens only after the password verified, so a
+		// distinguishable answer would certify it (see Login's doc comment).
+		if !hasCode(err, ErrInvalidCredentials.Code) {
+			t.Fatalf("Login() error = %v, want code %q", err, ErrInvalidCredentials.Code)
 		}
 	})
 
 	t.Run("a user with no membership at all cannot sign in", func(t *testing.T) {
 		f.registerUser(t, "orphan@example.com")
 		_, err := f.svc.Login(t.Context(), LoginInput{Identifier: "orphan@example.com", Password: testPassword})
-		if !hasCode(err, ErrTenantMembershipRequired.Code) {
-			t.Fatalf("Login() error = %v, want code %q", err, ErrTenantMembershipRequired.Code)
+		if !hasCode(err, ErrInvalidCredentials.Code) {
+			t.Fatalf("Login() error = %v, want code %q", err, ErrInvalidCredentials.Code)
 		}
 	})
 }

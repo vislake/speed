@@ -279,10 +279,18 @@ powerless against the thief's CURRENT token. Selecting `WithRevocationMode(Revoc
 ### Sign-in must not answer what it refuses to answer
 
 Every failed password sign-in returns `ErrInvalidCredentials` with no parameters:
-unknown account, wrong password, no password set, and suspended account are
+unknown account, wrong password, no password set, suspended account, and a
+correct password whose account resolves no membership (no membership reader
+wired, no membership anywhere, or none of an explicitly requested tenant) are
 indistinguishable. An unknown account still costs one argon2id derivation, so a
-stopwatch cannot reopen the oracle the error message closed. The specific reason
-goes on the `login_attempts` row, for the operator and the account owner.
+stopwatch cannot reopen the oracle the error message closed. The membership
+collapse matters most: the membership question is asked only after the password
+verified, so a distinguishable membership error there (the 403
+`tenant_membership_required` / `tenant_membership_unavailable` answers) would
+certify the password -- which is why those errors are reserved for paths
+answering an already-authenticated caller (tenant switching, refresh). The
+specific reason goes on the `login_attempts` row, for the operator and the
+account owner.
 
 `login_attempts` stores the blind index of the attempted identifier, never the
 identifier. An attempt has to be countable per address — that is how credential
