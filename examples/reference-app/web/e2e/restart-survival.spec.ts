@@ -34,25 +34,21 @@
  *
  * Because that registration is released on shutdown and stolen once its
  * heartbeat goes stale, the second boot may briefly lose a race with the
- * first process's own exit. bootUntilHealthy retries for that reason --
+ * first process's own exit. bootServer retries for that reason --
  * the same thing a process supervisor does, rather than an assumption
  * about how long the window is.
  */
-import { spawn, type ChildProcess } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from '@playwright/test'
 import { DEMO_OWNER } from './test-utils/accounts.js'
-import { DEMO_PASSWORD, RESTART_API_PORT } from '../playwright.config.js'
+import { RESTART_API_PORT } from '../playwright.config.js'
+import { bootServer, routeApiTo, type OwnedServer } from './test-utils/servers.js'
 import {
   expectSignedIn,
   submitPasswordSignIn,
   visitSignIn,
 } from './test-utils/journeys.js'
-
-/** The reference-app Go module directory. */
-const serverDir = fileURLToPath(new URL('../..', import.meta.url))
 
 /**
  * The port both of this spec's processes listen on -- one port, because
@@ -80,12 +76,12 @@ test('a member signs in again after the server restarts against the same databas
 }) => {
   // The boot that seeds: an empty file, so demo seeding really runs and
   // the three accounts exist with their memberships.
-  const seeding = await bootUntilHealthy()
-  await stop(seeding)
+  const seeding = await bootServer({ port: restartPort, databasePath })
+  await seeding.stop()
 
   // The boot under test: a fresh process over the file the first one left,
   // which is the state seeding refuses to re-seed.
-  const restarted = await bootUntilHealthy()
+  const restarted: OwnedServer = await bootServer({ port: restartPort, databasePath })
 
   try {
     // Point the page's API calls at the restarted process, so what
@@ -110,13 +106,7 @@ test('a member signs in again after the server restarts against the same databas
     // no origin and no preflight involved, and fulfill returns the real
     // response to the page. The server under test is unchanged, and so
     // is what the browser believes it is talking to.
-    await page.route('**/api/**', async (route) => {
-      const url = new URL(route.request().url())
-      url.protocol = 'http:'
-      url.host = `127.0.0.1:${restartPort}`
-      const response = await route.fetch({ url: url.toString() })
-      await route.fulfill({ response })
-    })
+    await routeApiTo(page, restartPort)
 
     // One sign-in, and it happens after the restart. Signing in before it
     // would spend a second attempt against this account's per-minute rate
@@ -129,119 +119,6 @@ test('a member signs in again after the server restarts against the same databas
     // The whole point: the frame, not authn.tenant_membership_required.
     await expectSignedIn(page)
   } finally {
-    await stop(restarted)
+    await restarted.stop()
   }
 })
-
-/** Starts one reference-app server over this spec's database and port. */
-function boot(): ChildProcess {
-  return spawn('go', ['run', './cmd/server'], {
-    cwd: serverDir,
-    env: {
-      ...process.env,
-      PORT: restartPort,
-      APP_DB_PATH: databasePath,
-      APP_DEPLOYMENT_MODE: 'standalone',
-      APP_DEMO_USERS_PASSWORD: DEMO_PASSWORD,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-}
-
-/**
- * Boots a server and returns it once it answers its health endpoint,
- * starting another when one exits before becoming healthy.
- *
- * The retry is not papering over flakiness: a boot legitimately fails
- * while the previous process still holds the jobs-queue single-writer
- * registration, and the registration is released or goes stale shortly
- * after. Retrying is what a supervisor does, and it keeps this spec from
- * encoding a number that belongs to go/jobs. Every attempt's output is
- * kept, so a failure that is NOT the race says so in the report.
- */
-async function bootUntilHealthy(): Promise<ChildProcess> {
-  const deadline = Date.now() + 300_000
-  let attempts = 0
-  let transcript = ''
-  while (Date.now() < deadline) {
-    attempts += 1
-    const child = boot()
-    const said = capture(child)
-    const healthy = await waitForHealthy(child, deadline)
-    if (healthy) {
-      return child
-    }
-    transcript += `\n--- attempt ${attempts} ---\n${said()}`
-    child.kill('SIGKILL')
-    await new Promise((resolve) => setTimeout(resolve, 500))
-  }
-  throw new Error(
-    `e2e: no reference-app server became healthy on port ${restartPort} in ${attempts} attempts:${transcript.slice(-4000)}`,
-  )
-}
-
-/**
- * Collects everything a process says on BOTH streams, returning a reader
- * for it.
- *
- * Both, and all of it: two separate omissions used to hide the reason a
- * restart failed. Keeping only the last stderr chunk let `go run`'s own
- * "exit status 1" epilogue overwrite the program's explanation, and
- * reading stderr alone missed the explanation entirely whenever it went
- * to stdout -- which is where this app's structured logger writes, so
- * that was the normal case rather than the exception. The report said a
- * server had exited without ever saying why.
- */
-function capture(child: ChildProcess): () => string {
-  let said = ''
-  const collect = (chunk: Buffer): void => {
-    said += chunk.toString()
-  }
-  child.stderr?.on('data', collect)
-  child.stdout?.on('data', collect)
-  return () => said.trim()
-}
-
-/**
- * Waits until the process answers /healthz (true) or exits without ever
- * doing so (false). A cold build compiles every go/* module the app
- * imports, which is minutes rather than seconds, so the deadline is the
- * caller's whole budget.
- */
-async function waitForHealthy(child: ChildProcess, deadline: number): Promise<boolean> {
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      return false
-    }
-    const healthy = await fetch(`http://127.0.0.1:${restartPort}/healthz`)
-      .then((response) => response.ok)
-      .catch(() => false)
-    if (healthy) {
-      return true
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500))
-  }
-  return false
-}
-
-/**
- * Stops a server and waits for the process to actually be gone, rather
- * than for the signal to have been sent. The next boot competes with this
- * one for a port and for the jobs-queue registration, so "asked it to
- * stop" is not the state the next step needs.
- */
-async function stop(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return
-  }
-  const exited = new Promise<void>((resolve) => {
-    child.once('exit', () => resolve())
-  })
-  child.kill('SIGTERM')
-  const gaveUp = new Promise<void>((resolve) => setTimeout(resolve, 15_000))
-  await Promise.race([exited, gaveUp])
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill('SIGKILL')
-    await exited
-  }
-}

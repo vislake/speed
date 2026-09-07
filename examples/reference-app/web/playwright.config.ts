@@ -119,6 +119,14 @@ const imageProviderPort = runPort('E2E_IMAGE_PROVIDER_PORT', portBase + 2)
 export const RESTART_API_PORT = runPort('E2E_RESTART_PORT', portBase + 3)
 
 /**
+ * The port provisioning-recovery.spec.ts boots its own server on: a
+ * server armed with APP_FAIL_SELF_SERVICE_PROVISION, which cannot be the
+ * run's shared one because arming it there would fail the first
+ * provisioning attempt of every other gate's registration too.
+ */
+export const INJECT_API_PORT = runPort('E2E_INJECT_PORT', portBase + 4)
+
+/**
  * The loopback address every local URL in this file names.
  *
  * `127.0.0.1` rather than `localhost`, and not a style preference: the
