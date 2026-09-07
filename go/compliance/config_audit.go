@@ -57,6 +57,19 @@ var configAuditEventIDNamespace = uuid.MustParse("875a41cd-229c-4648-8633-a100d3
 // actor would need config's own event to carry an ActorType before this
 // subscriber could record it correctly -- a known limitation, not a
 // silent guess this file hides.
+//
+// P2-pkgcore-actor-1: DisplayName is left empty here because the event
+// genuinely carries no name to record: config.ItemChangedEvent (see
+// go/config/events.go) ships only config.Actor's id string, and config's
+// Set callers pass ids, never display names (go/config/values.go's own
+// doc comment: "a real deployment fills it from the authenticated
+// principal"). Filling the column would require either config's event to
+// carry the actor's display name -- a change to the go/config module,
+// outside this subscriber's control -- or this subscriber to resolve the
+// name against a users store it deliberately does not depend on. The row
+// stays fully attributable by id, exactly as the "readable after
+// rename/deletion" guarantee would want were a name available to capture
+// at write time; the empty label is recorded here, not papered over.
 func (m *Module) onConfigItemChanged(ctx context.Context, evt pkgcore.Event) error {
 	payload, ok := configItemChangedFromWire(evt.Payload)
 	if !ok {
