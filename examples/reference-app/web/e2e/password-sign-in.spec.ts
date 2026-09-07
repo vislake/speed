@@ -64,7 +64,37 @@ test('a refused sign-in renders the specific credentials message, not the generi
   page,
 }) => {
   await visitSignIn(page)
-  await submitPasswordSignIn(page, 'nobody-was-ever-registered-here@example.com', 'wrong-password')
+
+  // A never-registered address UNIQUE to this attempt, and the
+  // uniqueness is load-bearing rather than tidiness.
+  //
+  // go/authn's progressive lockout accrues per ACCOUNT on recorded
+  // failures -- thirty seconds after the first, doubling after that
+  // (ratelimit.go's loginLockoutBase), remembered for an hour. A fixed
+  // address made this gate fail ITSELF across engines: run on three
+  // projects in one invocation, chromium's deliberate failure starts a
+  // thirty-second lockout on that address and webkit's attempt, seconds
+  // later, is answered "The account is locked" instead of the
+  // credentials message. The gate then reports a product defect that is
+  // entirely its own shared state.
+  //
+  // It stayed hidden for as long as the three engines were asked for in
+  // three separate invocations (which the register budget already
+  // forces, see e2e/README.md) -- each fresh server starting with empty
+  // lockout state. One combined invocation is what surfaced it.
+  //
+  // The identity of the address was never part of what this gate
+  // checks: a never-registered address is refused with
+  // authn.invalid_credentials whichever one it is, and a fresh one
+  // carries no failure history to be locked out over. The suite's own
+  // sign-in ledger cannot help here -- it paces the two sliding
+  // windows, and the lockout is a third mechanism driven by failures
+  // rather than by attempts.
+  await submitPasswordSignIn(
+    page,
+    `nobody-was-ever-registered-here-${Date.now()}@example.com`,
+    'wrong-password',
+  )
 
   await expectSpecificError(page, AUTH_ERROR_TEXT.invalidCredentials)
   // Still on the sign-in surface: a refusal changes no session state.

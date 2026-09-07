@@ -129,6 +129,28 @@ mistake:
 |---|---|---|
 | `limitLoginByAccount`, `limitLoginByIP` | a minute | pace inside it (`payTheLoginBudget`) |
 | `limitRegisterByIP` | an hour | do not pace -- one engine per invocation |
+| the progressive lockout | 30s doubling, per account, remembered an hour | never fail the same account twice -- a gate that deliberately submits wrong credentials uses a UNIQUE address per attempt |
+
+**The third mechanism is the one the ledger cannot see**, and it cost a
+red that looked like a product defect. `go/authn`'s lockout accrues on
+recorded FAILURES, per account: thirty seconds after the first, doubling
+after that, remembered for an hour. The ledger paces attempts against
+the two sliding windows and knows nothing about it.
+
+So a gate that deliberately fails a sign-in poisons that account for
+every later gate. `password-sign-in`'s refusal gate used one fixed
+never-registered address, and asked for three engines in ONE invocation
+it failed itself: chromium's deliberate failure started a thirty-second
+lockout on that address, and webkit's attempt seconds later was answered
+"The account is locked" instead of the credentials message -- the gate
+reporting a product defect that was entirely its own shared state.
+
+It hid for as long as the three engines were asked for separately, which
+the register budget above already forces, so every earlier three-engine
+result was three fresh servers with empty lockout state. The fix is a
+unique address per attempt: the identity was never part of what the gate
+checks, and a fresh address carries no failure history to be locked out
+over.
 
 **The ledger does not see API-driven attempts.** `org-invitation-sign-in`
 drives register and login as direct requests rather than through the
