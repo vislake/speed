@@ -324,6 +324,21 @@ func (h *Handler) recordNoteCreatedAudit(ctx context.Context, note *Note, creato
 		return
 	}
 	if creatorUserID != "" {
+		// P2-pkgcore-actor-1: Actor.DisplayName is deliberately left empty
+		// here because this handler genuinely has no name to record. Its
+		// whole knowledge of the creator is the user id its host's
+		// SubjectResolver seam answered -- the seam's contract is
+		// id-only by documented design (see SubjectResolver at the bottom
+		// of this file), and in this app the creator is frequently not an
+		// account at all: the demo flows attribute creates to
+		// X-Demo-User-Id header values like demoNotesCreatorUserID, which
+		// have no user row behind them, and even a verified-Principal
+		// creator (authn.Principal) carries no display name in the token
+		// (go/authn/token.go). Filling the label would require the seam
+		// to carry a display name (and the host to resolve one from
+		// whatever it verifies), a contract change for this single audit
+		// label -- recorded here rather than silently guessed. The row
+		// stays fully attributable by id.
 		ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: creatorUserID})
 	}
 	// Resource.DisplayName is deliberately left empty rather than set to
