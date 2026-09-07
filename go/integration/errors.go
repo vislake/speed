@@ -117,12 +117,30 @@ var (
 	// See ssrf.go's ValidateWebhookURL.
 	ErrWebhookURLUnresolvable = apperr.Invalid("integration.webhook_url_unresolvable")
 
-	// ErrWebhookURLBlocked reports a webhook URL that resolves to a
+	// ErrWebhookURLBlocked reports a webhook URL whose destination is a
 	// private, loopback, link-local, multicast or otherwise
 	// never-a-legitimate-receiver address -- the SSRF refusal
 	// docs/internal/07-platform-services.md names as the most common
-	// outbound-webhook security hole. WithParam("ip", ...) names the
-	// blocked address. See ssrf.go's isBlockedIP.
+	// outbound-webhook security hole. See ssrf.go's isBlockedIP.
+	//
+	// WithParam("ip", ...) is deliberately asymmetric between the two paths
+	// that raise this code, and the asymmetry must survive any later
+	// consistency round:
+	//
+	//   - The literal-IP path (ssrf.go, ValidateWebhookURL) carries the
+	//     blocked address: the caller typed it into the URL, so the param is
+	//     an echo of what the caller already knows -- zero disclosure -- and
+	//     genuinely useful diagnostics naming exactly which address was
+	//     refused.
+	//   - The resolution path (a hostname whose DNS answer is blocked)
+	//     deliberately carries no ip param: the resolved address is
+	//     information the caller does not have -- for a name resolvable only
+	//     inside the platform's own network, exactly the answer an
+	//     internal-DNS reconnaissance oracle would give -- so echoing it
+	//     back would let a tenant admin submit hostnames and read back the
+	//     internal IPs they resolve to. The coded error plus the module's
+	//     own generic webhook_url_blocked text (which names no address, in
+	//     either locale) is the honest answer shape for that path.
 	ErrWebhookURLBlocked = apperr.Invalid("integration.webhook_url_blocked")
 
 	// ErrEventTypesRequired reports a Create/Update call with an empty

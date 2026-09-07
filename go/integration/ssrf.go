@@ -148,7 +148,18 @@ func ValidateWebhookURL(ctx context.Context, rawURL string) error {
 	}
 	for _, addr := range addrs {
 		if isBlockedIP(addr.IP) {
-			return ErrWebhookURLBlocked.WithParam("ip", addr.IP.String())
+			// Deliberately no WithParam("ip", addr.IP.String()) here: this
+			// path reached the blocked address through DNS, so the resolved
+			// address is information the caller does not have, and echoing
+			// it back would turn the refusal into an internal-DNS
+			// reconnaissance oracle -- submit hostnames, read back the
+			// internal IPs they resolve to. The literal-IP branch above
+			// (line 135) keeps its ip param, because there the caller typed
+			// the address itself and the echo discloses nothing. The coded
+			// error plus the generic webhook_url_blocked text -- which names
+			// no address -- is the honest answer shape for this path. See
+			// ErrWebhookURLBlocked's own doc comment (errors.go).
+			return ErrWebhookURLBlocked
 		}
 	}
 	return nil

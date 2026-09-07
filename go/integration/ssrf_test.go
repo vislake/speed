@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 func TestValidateWebhookURL_PrivateIPLiteral_Blocked(t *testing.T) {
@@ -30,6 +32,60 @@ func TestValidateWebhookURL_PrivateIPLiteral_Blocked(t *testing.T) {
 			}
 			if !apperrIs(err, ErrWebhookURLBlocked) {
 				t.Fatalf("ValidateWebhookURL(%q) error = %v, want ErrWebhookURLBlocked", u, err)
+			}
+		})
+	}
+}
+
+// TestValidateWebhookURL_ResolvedBlockedHost_RefusalDoesNotDiscloseResolvedIP
+// pins the deliberate asymmetry between the two blocked-refusal paths: when
+// the refused destination was reached through a DNS resolution (the caller
+// submitted a HOSTNAME), the refusal must NOT carry the resolved address in
+// its params. The resolved internal IP is information the caller does not
+// have -- for a name only resolvable inside the platform's own network it is
+// exactly the reconnaissance answer an internal-DNS oracle would give -- so
+// echoing it back would turn the refusal into a scanning oracle: submit
+// hostnames, read back the internal addresses they resolve to. The coded
+// error plus the module's own generic webhook_url_blocked text (which
+// deliberately names no address) is the honest answer shape.
+//
+// localhost resolves to a loopback address through the real resolver on any
+// standard system (hosts file, no network), so this needs no resolver seam.
+func TestValidateWebhookURL_ResolvedBlockedHost_RefusalDoesNotDiscloseResolvedIP(t *testing.T) {
+	err := ValidateWebhookURL(context.Background(), "http://localhost:8080/hook")
+	found, ok := apperr.As(err)
+	if !ok || found.Code != ErrWebhookURLBlocked.Code {
+		t.Fatalf("ValidateWebhookURL(localhost) = %v, want ErrWebhookURLBlocked", err)
+	}
+	if ip, present := found.Params["ip"]; present {
+		t.Fatalf("the resolution path's refusal carries the resolved address %v in its params -- an internal-DNS oracle for the caller; want no ip param", ip)
+	}
+}
+
+// TestValidateWebhookURL_BlockedLiteralIP_RefusalCarriesTheLiteralIP pins the
+// mirror half of the same asymmetry: when the caller TYPED the blocked
+// address into the URL, the refusal keeps carrying it in the ip param. That
+// is an echo of what the caller already knows -- zero disclosure -- and
+// genuinely useful diagnostics (which of the several addresses in the URL
+// was refused), so this path must never lose the param.
+func TestValidateWebhookURL_BlockedLiteralIP_RefusalCarriesTheLiteralIP(t *testing.T) {
+	cases := []struct{ url, wantIP string }{
+		{"http://127.0.0.1:8080/hook", "127.0.0.1"},
+		{"http://[::1]:8080/hook", "::1"},
+		{"http://10.0.0.5/hook", "10.0.0.5"},
+		{"http://172.16.0.5/hook", "172.16.0.5"},
+		{"http://192.168.1.5/hook", "192.168.1.5"},
+		{"http://100.64.0.5/hook", "100.64.0.5"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.url, func(t *testing.T) {
+			err := ValidateWebhookURL(context.Background(), tt.url)
+			found, ok := apperr.As(err)
+			if !ok || found.Code != ErrWebhookURLBlocked.Code {
+				t.Fatalf("error = %v, want ErrWebhookURLBlocked", err)
+			}
+			if got := found.Params["ip"]; got != tt.wantIP {
+				t.Fatalf("ip param = %v, want the literal address %q the caller typed", got, tt.wantIP)
 			}
 		})
 	}
@@ -64,8 +120,14 @@ func TestValidateWebhookURL_NoHost_Refused(t *testing.T) {
 
 func TestValidateWebhookURL_UnresolvableHost_Refused(t *testing.T) {
 	err := ValidateWebhookURL(context.Background(), "https://this-host-should-not-exist.invalid/hook")
-	if !apperrIs(err, ErrWebhookURLUnresolvable) {
+	found, ok := apperr.As(err)
+	if !ok || found.Code != ErrWebhookURLUnresolvable.Code {
 		t.Fatalf("error = %v, want ErrWebhookURLUnresolvable", err)
+	}
+	// The host param echoes the caller's own hostname -- zero disclosure --
+	// and stays on the answer unchanged.
+	if got := found.Params["host"]; got != "this-host-should-not-exist.invalid" {
+		t.Fatalf("host param = %v, want the caller's own hostname", got)
 	}
 }
 

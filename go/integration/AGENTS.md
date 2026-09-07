@@ -253,7 +253,7 @@ Round 1's API-key surface was, at the time round 4 shipped, a SEPARATE obligatio
 | `integration.webhook_url_required` | `Invalid` | `Service.CreateWebhookSubscription`/`UpdateWebhookSubscription` with an empty URL |
 | `integration.webhook_url_invalid` | `Invalid` | A malformed URL, one with no host, or a disallowed scheme; `WithParam("reason", ...)` names which (`ssrf.go`'s `ValidateWebhookURL`) |
 | `integration.webhook_url_unresolvable` | `Invalid` | A URL whose host could not be resolved to any address at all; `WithParam("host", ...)` |
-| `integration.webhook_url_blocked` | `Invalid` | A URL resolving to a private/loopback/link-local/multicast/CGNAT address -- the mandatory SSRF refusal; `WithParam("ip", ...)` |
+| `integration.webhook_url_blocked` | `Invalid` | A URL resolving to a private/loopback/link-local/multicast/CGNAT address -- the mandatory SSRF refusal. `WithParam("ip", ...)` is deliberately asymmetric between the two refusal paths: the literal-IP path carries the typed address (an echo of what the caller already knows), while the hostname-resolution path carries no `ip` param, so the refusal cannot double as an internal-DNS reconnaissance oracle -- the split and its reason are in the sentinel's own doc comment (`errors.go`) |
 | `integration.event_types_required` | `Invalid` | `Service.CreateWebhookSubscription`/`UpdateWebhookSubscription` with an empty `EventTypes` selection |
 | `integration.webhook_event_type_unknown` | `Invalid` | A requested public event type no `EventMapping` declares; `WithParam("event_type", ...)` |
 | `integration.invalid_event_mapping` | `Invalid` | A `WithEventMapping` declaration missing a required field; `WithParam("field", ...)` (`eventmapping.go`'s `EventMapping.validate`) |
