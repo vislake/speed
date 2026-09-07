@@ -27,11 +27,11 @@
  */
 
 import { describe, expect, it, afterEach } from 'vitest'
-import { screen, waitFor, within } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import { onlineManager } from '@tanstack/react-query'
 import userEvent from '@testing-library/user-event'
 import type { AuthnSession } from '@speed/api-sdk'
-import { uiKitResources } from '@speed/ui-kit'
+import { CONFIRM_ARM_LOCKOUT_MS, uiKitResources } from '@speed/ui-kit'
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
 import {
   errorResponse,
@@ -570,6 +570,17 @@ describe('SessionsSection', () => {
       rig.calls.some((call) => call.method === 'POST' && call.path === REVOKE_OTHERS_PATH),
     ).toBe(false)
 
+    // The arming click entered the double-click lockout window; the
+    // deliberate second click waits it out in real time, inside act, so
+    // the lockout's auto-clear lands inside act -- exactly as a user who
+    // read the re-labelled button would. The window's shape is pinned by
+    // the ui-kit P1 regression test (ConfirmDialog.test.tsx).
+    await act(async () => {
+      await new Promise((resolve) =>
+        setTimeout(resolve, CONFIRM_ARM_LOCKOUT_MS + 300),
+      )
+    })
+
     // The second click revokes; the count surfaces and the list refetches
     // to the server's answer -- both other rows revoked, the current row
     // untouched and the section-top action gone with nothing left to revoke.
@@ -654,6 +665,16 @@ describe('SessionsSection', () => {
         name: zhCN.sessions.revokeOthers.confirmLabel,
       }),
     )
+    // The arming click entered the double-click lockout window; the
+    // deliberate second click waits it out in real time, inside act, so
+    // the lockout's auto-clear lands inside act -- exactly as a user who
+    // read the re-labelled button would. The window's shape is pinned by
+    // the ui-kit P1 regression test (ConfirmDialog.test.tsx).
+    await act(async () => {
+      await new Promise((resolve) =>
+        setTimeout(resolve, CONFIRM_ARM_LOCKOUT_MS + 300),
+      )
+    })
     await user.click(
       within(dialog).getByRole('button', {
         name: UI_KIT_ZH.confirmDialog.confirmAgainLabel,

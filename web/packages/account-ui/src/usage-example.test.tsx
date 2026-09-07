@@ -33,7 +33,7 @@ import { describe, expect, it } from 'vitest'
 import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { switchLanguage } from '@speed/i18n'
-import { uiKitResources } from '@speed/ui-kit'
+import { CONFIRM_ARM_LOCKOUT_MS, uiKitResources } from '@speed/ui-kit'
 import type { AuthSession } from '@speed/auth-core'
 import {
   errorResponse,
@@ -448,6 +448,16 @@ describe('the README quick start, exercised over a real api-client', () => {
         name: zhCN.sessions.revokeOthers.confirmLabel,
       }),
     )
+    // The arming click entered the double-click lockout window; the
+    // deliberate second click waits it out in real time, inside act, so
+    // the lockout's auto-clear lands inside act -- exactly as a user who
+    // read the re-labelled button would. The window's shape is pinned by
+    // the ui-kit P1 regression test (ConfirmDialog.test.tsx).
+    await act(async () => {
+      await new Promise((resolve) =>
+        setTimeout(resolve, CONFIRM_ARM_LOCKOUT_MS + 300),
+      )
+    })
     await user.click(
       within(dialog).getByRole('button', {
         name: UI_KIT_ZH.confirmDialog.confirmAgainLabel,
