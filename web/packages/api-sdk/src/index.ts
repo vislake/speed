@@ -668,6 +668,78 @@ export interface NotificationError {
   params?: NotificationErrorParams;
 }
 
+/**
+ * The caller's tenant credit balance. The two buckets never overlap: a credit is in exactly one of available or reserved. The number a credit view renders is available -- what the tenant can spend right now.
+ */
+export interface BillingCreditBalance {
+  /** The freely spendable credit count. */
+  available: number;
+  /** The credit count set aside by reservations whose jobs have not reached a terminal status yet (each one a deduct row at status "pending" in the ledger). */
+  reserved: number;
+  /** When the balance row was last touched by a ledger mutation. */
+  updatedAt: string;
+}
+
+/**
+ * The entry's kind: "grant" is a top-up (a plan's included credits, an admin top-up), "deduct" the two-phase reservation, "expire" a single-phase deduction. "refund" is deliberately not a row type -- a refund is a deduct row whose status became "refunded" (see status).
+ */
+export type BillingCreditTransactionType = typeof BillingCreditTransactionType[keyof typeof BillingCreditTransactionType];
+
+
+export const BillingCreditTransactionType = {
+  grant: 'grant',
+  deduct: 'deduct',
+  expire: 'expire',
+} as const;
+
+/**
+ * The entry's resolution state. Grant and expire rows are single-phase and always "confirmed". A deduct row is "pending" while its reservation is outstanding, "confirmed" after the reservation was settled as a permanent spend, "refunded" after it was released back to the balance.
+ */
+export type BillingCreditTransactionStatus = typeof BillingCreditTransactionStatus[keyof typeof BillingCreditTransactionStatus];
+
+
+export const BillingCreditTransactionStatus = {
+  pending: 'pending',
+  confirmed: 'confirmed',
+  refunded: 'refunded',
+} as const;
+
+/**
+ * One append-only entry in the tenant's credit ledger. Amount is always positive; the entry's direction is implied by type and status together, never a signed value. A deduct row is inserted at status "pending" by the reservation half of the two-phase pattern, then moved in place to "confirmed" (permanent spend) or "refunded" (released back to available) -- the refund IS that status transition on the same row, never a second row.
+ */
+export interface BillingCreditTransaction {
+  /** The ledger row's id: an application-generated UUID for a grant or expire row, or the caller's own idempotency key for a deduct row. Not globally unique across tenants. */
+  id: string;
+  /** The entry's kind: "grant" is a top-up (a plan's included credits, an admin top-up), "deduct" the two-phase reservation, "expire" a single-phase deduction. "refund" is deliberately not a row type -- a refund is a deduct row whose status became "refunded" (see status). */
+  type: BillingCreditTransactionType;
+  /** The entry's resolution state. Grant and expire rows are single-phase and always "confirmed". A deduct row is "pending" while its reservation is outstanding, "confirmed" after the reservation was settled as a permanent spend, "refunded" after it was released back to the balance. */
+  status: BillingCreditTransactionStatus;
+  /** The credit count this entry moves, always positive: a confirmed deduct permanently removed it, a refunded deduct removed nothing net, a grant added it, an expire removed it. */
+  amount: number;
+  /** A short note recorded when the entry was written (for example "smilesim:<job id>" for a smile-simulation reservation, "demo:seed" for a boot-time demo grant). Free text on the ledger; the credit view may display it verbatim. */
+  reason: string;
+  /** When the entry was written. */
+  createdAt: string;
+}
+
+/**
+ * One page of the tenant's recent credit transactions.
+ */
+export interface BillingListCreditTransactionsResponse {
+  /** At most limit rows, newest first; empty when the tenant has no ledger rows yet. */
+  transactions: BillingCreditTransaction[];
+}
+
+export type BillingErrorParams = { [key: string]: unknown };
+
+/**
+ * The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in AGENTS.md's error index.
+ */
+export interface BillingError {
+  code: string;
+  params?: BillingErrorParams;
+}
+
 export type AuthnSocialAuthorizeParams = {
 redirect_uri: string;
 };
@@ -696,6 +768,13 @@ limit?: number;
  * @minimum 0
  */
 offset?: number;
+};
+
+export type BillingListCreditTransactionsParams = {
+/**
+ * The page size, from 1 through 100. Defaults to 50.
+ */
+limit?: number;
 };
 
 /**
@@ -3500,3 +3579,138 @@ export const useNotificationResendContactCode = <TError = NotificationError,
       > => {
       return useMutation(getNotificationResendContactCodeMutationOptions(options));
     }
+
+/**
+ * The tenant's current credit balance: how many credits are freely spendable (available) and how many are set aside by not-yet- resolved reservations (reserved). A tenant that has never been granted or charged credits -- no ledger rows at all -- answers an all-zero balance, never an error, so the credit view renders a zero state rather than a missing-resource refusal. The number is read from the same CreditService.Balance call business code uses, so this route and a service-side reservation never disagree about what the tenant holds.
+ * @summary Read the caller's tenant credit balance.
+ */
+export const billingGetCreditBalance = (
+
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<BillingCreditBalance>(
+      {url: `/api/v1/billing/credits/balance`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getBillingGetCreditBalanceQueryKey = () => {
+    return [
+    `/api/v1/billing/credits/balance`
+    ] as const;
+    }
+
+
+export const getBillingGetCreditBalanceQueryOptions = <TData = Awaited<ReturnType<typeof billingGetCreditBalance>>, TError = BillingError>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof billingGetCreditBalance>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getBillingGetCreditBalanceQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof billingGetCreditBalance>>> = ({ signal }) => billingGetCreditBalance(signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof billingGetCreditBalance>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type BillingGetCreditBalanceQueryResult = NonNullable<Awaited<ReturnType<typeof billingGetCreditBalance>>>
+export type BillingGetCreditBalanceQueryError = BillingError
+
+
+/**
+ * @summary Read the caller's tenant credit balance.
+ */
+
+export function useBillingGetCreditBalance<TData = Awaited<ReturnType<typeof billingGetCreditBalance>>, TError = BillingError>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof billingGetCreditBalance>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getBillingGetCreditBalanceQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * The recent window of the tenant's append-only credit ledger: at most limit rows (1-100, default 50), newest first. Every balance movement the tenant ever experienced is a row here and only here: a grant (type "grant", status "confirmed") is a top-up, an expire (type "expire", status "confirmed") a single-phase deduction, and a deduct row is the two-phase reservation lifecycle itself -- status "pending" while its credits sit in the balance's reserved bucket, "confirmed" once the reservation became a permanent spend, "refunded" once it was released back to available. A refund is therefore observable as that one deduct row's status transition (plus the balance delta the balance route reports), never as a row that silently disappears or a balance-only change with no ledger trace. The window is served from the module's full newest-first listing; a keyset-paginated read over the whole ledger is future work (see go/billing/AGENTS.md's Known limitations) -- a credit view needs the recent rows, and the ledger itself is reconstructable in full service-side today.
+ * @summary List the caller's tenant's recent credit transactions, newest first.
+ */
+export const billingListCreditTransactions = (
+    params?: BillingListCreditTransactionsParams,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<BillingListCreditTransactionsResponse>(
+      {url: `/api/v1/billing/credits/transactions`, method: 'GET',
+        params, signal
+    },
+      );
+    }
+
+
+
+
+export const getBillingListCreditTransactionsQueryKey = (params?: BillingListCreditTransactionsParams,) => {
+    return [
+    `/api/v1/billing/credits/transactions`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getBillingListCreditTransactionsQueryOptions = <TData = Awaited<ReturnType<typeof billingListCreditTransactions>>, TError = BillingError>(params?: BillingListCreditTransactionsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof billingListCreditTransactions>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getBillingListCreditTransactionsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof billingListCreditTransactions>>> = ({ signal }) => billingListCreditTransactions(params, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof billingListCreditTransactions>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type BillingListCreditTransactionsQueryResult = NonNullable<Awaited<ReturnType<typeof billingListCreditTransactions>>>
+export type BillingListCreditTransactionsQueryError = BillingError
+
+
+/**
+ * @summary List the caller's tenant's recent credit transactions, newest first.
+ */
+
+export function useBillingListCreditTransactions<TData = Awaited<ReturnType<typeof billingListCreditTransactions>>, TError = BillingError>(
+ params?: BillingListCreditTransactionsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof billingListCreditTransactions>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getBillingListCreditTransactionsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
