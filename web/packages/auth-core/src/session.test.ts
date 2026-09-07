@@ -22,7 +22,7 @@ import {
   isApiError,
 } from '@speed/api-client'
 import { bindRequestFn } from '@speed/api-sdk/runtime'
-import { authnGetMe } from '@speed/api-sdk'
+import { authnGetMe, notesListNotes } from '@speed/api-sdk'
 import {
   apiError,
   captureRejection,
@@ -42,7 +42,11 @@ import {
   SWITCH_TENANT,
 } from '../test-utils/session-harness'
 import type { Harness } from '../test-utils/session-harness'
-import { createAuthSession, isOperationSuperseded } from './session'
+import {
+  createAuthSession,
+  isOperationSuperseded,
+  OperationSupersededError,
+} from './session'
 import type { AuthSnapshot } from './session'
 
 async function expectProtocolViolation(
@@ -520,6 +524,44 @@ describe('operation supersession', () => {
     // first login's refresh token (not the second's).
     expect(harness.store.get()).toBe('access-first')
   })
+
+  it('recognises a structurally-shaped superseded error from outside the class', () => {
+    // isOperationSuperseded mirrors isApiError's lenient shape: an
+    // instanceof first, then the structural fallback, so a rejection
+    // that crossed a package boundary or a realm (a double-copied or
+    // re-packaged error) still reads as superseded instead of
+    // collapsing into a caller's unknown-error path.
+    // The structural fallback must not depend on the snapshot's
+    // literal narrowness -- a real cross-realm copy arrives as plain
+    // data -- so the duck carries a fully typed snapshot.
+    const winnerSnapshot: AuthSnapshot = {
+      state: 'authenticated',
+      principal: { user_id: 'user-1', tenant_id: 'tenant-2', session_id: 'session-1' },
+      permissionSets: { tenant: null, system: null },
+    }
+    const duck = {
+      name: 'OperationSupersededError',
+      message: 'a concurrent operation committed to the session before this one settled',
+      snapshot: winnerSnapshot,
+    }
+    expect(isOperationSuperseded(duck)).toBe(true)
+    // The real class instance keeps matching through the instanceof
+    // leg.
+    expect(isOperationSuperseded(new OperationSupersededError(duck.snapshot))).toBe(
+      true,
+    )
+    // Shapes that merely resemble the name do not match: the fallback
+    // demands the message and the snapshot payload.
+    expect(
+      isOperationSuperseded({ name: 'OperationSupersededError', snapshot: {} }),
+    ).toBe(false)
+    expect(
+      isOperationSuperseded({ name: 'OperationSupersededError', message: 'x' }),
+    ).toBe(false)
+    expect(isOperationSuperseded('OperationSupersededError')).toBe(false)
+    expect(isOperationSuperseded(null)).toBe(false)
+    expect(isOperationSuperseded(new Error('a concurrent operation'))).toBe(false)
+  })
 })
 
 describe('step-up verification', () => {
@@ -831,14 +873,71 @@ describe('refresh', () => {
     expect(harness.session.getSnapshot().principal?.user_id).toBe('user-2')
   })
 
-  it('adopts the rotated token when a tenant switch wins the race', async () => {
+  it('lets a user operation that settles after a refused-token clear still commit', async () => {
+    // Pins the deliberate asymmetry the file header documents: a
+    // logout clears AND bumps (a refresh started under the old
+    // generation must not resurrect the ended session), but the
+    // refresh-side clears -- the server's verdict that the session is
+    // over -- deliberately do NOT bump. A login that started before
+    // the refusal and settles after it is the session's legitimate
+    // successor: were the clear to bump, that login -- the one true
+    // winner, with no sibling operation anywhere -- would reject as
+    // superseded and the user would be stranded anonymous after a
+    // successful server-side login.
+    let releaseLogin!: (pair: unknown) => void
+    const loginGate = new Promise((resolve) => {
+      releaseLogin = resolve
+    })
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: (call) => {
+        const body = call.options?.body as { identifier?: string }
+        return body?.identifier === 'first@example.com'
+          ? makePair()
+          : loginGate.then(() => makePair({ access_token: 'access-second' }))
+      },
+      [REFRESH]: () => {
+        throw apiError(401, 'authn.session_expired')
+      },
+    })
+    await harness.session.loginWithPassword({
+      identifier: 'first@example.com',
+      password: 'pw',
+    })
+    expect(harness.store.get()).toBe('access-1')
+    // The second login goes out first, capturing the current
+    // generation...
+    const secondLogin = harness.session.loginWithPassword({
+      identifier: 'second@example.com',
+      password: 'pw',
+    })
+    // ...then a refresh presents the held token and is refused: the
+    // session clears to anonymous without bumping the generation.
+    await expect(harness.session.refresh()).resolves.toBe(false)
+    expect(harness.session.getSnapshot().state).toBe('anonymous')
+    // The second login's answer arrives after the clear. Its
+    // generation is still current -- no sibling operation committed --
+    // so it commits as the session's successor.
+    releaseLogin(makePair({ access_token: 'access-second' }))
+    await expect(secondLogin).resolves.toMatchObject({ state: 'authenticated' })
+    expect(harness.store.get()).toBe('access-second')
+    expect(harness.session.getSnapshot().principal?.user_id).toBe('user-1')
+  })
+
+  it('adopts the rotated token when a tenant switch wins the race, resolving false so the refused request never replays under the new tenant', async () => {
     // Regression: a refresh in flight when a tenant switch commits
     // used to lose the race wholesale -- including the rotated refresh
     // token the server issued for the one it consumed. The session
     // kept presenting the consumed token, so its next refresh read as
     // a replay, was refused, and signed the session out. The switch's
     // own access token and principal must stand; only the rotated
-    // refresh token is adopted onto them.
+    // refresh token is adopted onto them. The second regression this
+    // test pins is the resolution's meaning: a switch changed the
+    // principal, so the refresh must resolve false -- the api-client
+    // silent-401 hook reads true as "retry the refused request with
+    // the store's token", and a retry under the new tenant's token
+    // could answer with new-tenant data cached under the old tenant's
+    // key. (A step-up -- same principal -- keeps resolving true; see
+    // the test below.)
     let releaseRefresh!: () => void
     const refreshGate = new Promise<void>((resolve) => {
       releaseRefresh = resolve
@@ -880,10 +979,13 @@ describe('refresh', () => {
     expect(harness.session.getSnapshot().principal?.tenant_id).toBe('tenant-2')
     releaseRefresh()
     // The refresh lost the race for the visible state -- the switch's
-    // access token and principal stand untouched -- but the session
-    // emerged with a current token: the rotated refresh token was
-    // adopted, so it can still refresh.
-    await expect(refreshing).resolves.toBe(true)
+    // access token and principal stand untouched -- and resolves
+    // false: the request whose 401 started it spoke for the old
+    // tenant, and replaying it under the switched tenant's token could
+    // cache new-tenant data under the old tenant's key. The rotated
+    // refresh token WAS adopted (see below), so the session can still
+    // refresh; only the "worth a retry" answer is withheld.
+    await expect(refreshing).resolves.toBe(false)
     expect(harness.store.get()).toBe('access-switched')
     expect(harness.session.getSnapshot().principal?.tenant_id).toBe('tenant-2')
     await expect(harness.session.refresh()).resolves.toBe(true)
@@ -937,6 +1039,10 @@ describe('refresh', () => {
     await harness.session.verifyStepUp('654321')
     expect(harness.store.get()).toBe('access-elevated')
     releaseRefresh()
+    // True here, unlike the tenant-switch twin: a step-up keeps the
+    // principal this refresh spoke for, so the silent-401 answer
+    // "the store's token is worth a retry" stays safe -- the retried
+    // request speaks for the same identity.
     await expect(refreshing).resolves.toBe(true)
     // The elevation stands; only the rotated refresh token was adopted.
     expect(harness.store.get()).toBe('access-elevated')
@@ -987,8 +1093,13 @@ describe('refresh', () => {
       harness.calls.filter((call) => call.path === '/api/v1/authn/token/refresh'),
     ).toHaveLength(1)
     releaseRefresh()
-    await expect(first).resolves.toBe(true)
-    await expect(second).resolves.toBe(true)
+    // Both callers share one verdict, and the switch that won makes it
+    // false: a tenant switch changed the principal this refresh spoke
+    // for, so neither caller may treat the resolution as "the store's
+    // token is worth a retry" (the same old-tenant-key pollution the
+    // switch-race test above pins).
+    await expect(first).resolves.toBe(false)
+    await expect(second).resolves.toBe(false)
     // The shared result adopted the rotated refresh token onto the
     // switch's session; the switch's own access token and principal
     // stand.
@@ -1038,6 +1149,74 @@ describe('refresh', () => {
     await expect(refreshing).resolves.toBe(true)
     expect(harness.store.get()).toBe('access-2')
     expect(harness.session.getSnapshot().state).toBe('authenticated')
+  })
+})
+
+describe('subscriber notification isolation', () => {
+  it('contains a throwing subscriber: the other listeners still hear the commit and the operation still resolves', async () => {
+    // P1-9: notify() used to run listeners bare, so a host listener
+    // that throws -- registered first, Set order runs it before the
+    // hooks bridge -- froze the bridge (the React tree keeps the stale
+    // snapshot) and let the exception escape settleIssued: a login
+    // whose commit succeeded rejected with the listener's non-ApiError
+    // throw, surfacing as an unknown failure while onSignedIn never
+    // fired. Each listener is isolated: the commit it was told about
+    // stands, the other listeners hear it, and the throwing listener
+    // is the host's bug to find, not the session's to surface.
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+    })
+    const seen: AuthSnapshot[] = []
+    // Registered first, so Set iteration runs it before the recorder.
+    harness.session.subscribe(() => {
+      throw new Error('host listener bug')
+    })
+    harness.session.subscribe((snapshot) => {
+      seen.push(snapshot)
+    })
+    // The login resolves with its committed snapshot -- the listener's
+    // throw never corrupts the operation's answer.
+    const snapshot = await harness.session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    expect(snapshot.state).toBe('authenticated')
+    expect(harness.store.get()).toBe('access-1')
+    // The recorder heard the very same commit despite running after
+    // the throwing listener.
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.state).toBe('authenticated')
+  })
+
+  it('contains a throwing subscriber during a refresh-side clear too', async () => {
+    // The twin of the commit notify: a refresh whose held token is
+    // refused clears the session and notifies; a throwing subscriber
+    // must not turn that clear into an escaping exception (the
+    // refresh resolves false, never rejects) or freeze the listeners
+    // that run after it.
+    const harness = makeHarness({
+      [LOGIN_PASSWORD]: () => makePair(),
+      [REFRESH]: () => {
+        throw apiError(401, 'authn.session_expired')
+      },
+    })
+    const seen: AuthSnapshot[] = []
+    harness.session.subscribe(() => {
+      throw new Error('host listener bug')
+    })
+    harness.session.subscribe((snapshot) => {
+      seen.push(snapshot)
+    })
+    await harness.session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    await expect(harness.session.refresh()).resolves.toBe(false)
+    expect(harness.session.getSnapshot().state).toBe('anonymous')
+    expect(seen.map((snapshot) => snapshot.state)).toEqual([
+      'authenticated',
+      'anonymous',
+    ])
   })
 })
 
@@ -1661,7 +1840,165 @@ describe('with the real api-client', () => {
       fetchCalls.filter((call) => call.path === '/api/v1/authn/token/refresh'),
     ).toHaveLength(1)
   })
+
+  it('never replays a refused request under a tenant that won the refresh race', async () => {
+    // P1-8: a tenant switch committing while the silent-401 refresh is
+    // in flight used to make the refresh resolve true -- the store now
+    // holds the switched tenant's token, so the client retried the
+    // refused request with it. The server answered with the new
+    // tenant's data, and a host that keys its cache by tenant (['tenant',
+    // tenantId, ...]) cached that answer under the OLD tenant's key:
+    // the replay lands after a removeQueries eviction, so eviction
+    // cannot cover it. The safe contract: a refresh that lost the race
+    // to a principal change resolves false, and the original request
+    // fails instead of replaying under a principal it never asked.
+    const store = createMemoryAccessTokenStore()
+    const session = createAuthSession(store)
+    const fetchCalls: Array<{
+      path: string
+      method: string
+      authorization: string | null
+      body: string | null
+    }> = []
+    let notesAttempts = 0
+    let releaseRefresh!: () => void
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve
+    })
+    const fetcher: typeof fetch = async (input, init) => {
+      const url = new URL(String(input))
+      const method = init?.method ?? 'GET'
+      const authorization = new Headers(init?.headers).get('authorization')
+      const body = typeof init?.body === 'string' ? init.body : null
+      fetchCalls.push({ path: url.pathname, method, authorization, body })
+      if (url.pathname === '/api/v1/authn/login/password') {
+        return jsonResponse(200, makePair())
+      }
+      if (url.pathname === '/api/v1/notes') {
+        notesAttempts += 1
+        if (notesAttempts === 1) {
+          // The tenant-1 token the store holds is stale: refuse it and
+          // start the silent refresh.
+          return jsonResponse(401, {
+            code: 'authn.session_expired',
+            traceId: 'trace-1',
+            message: 'session expired',
+          })
+        }
+        // The shape a replay would produce: the request retried under
+        // the switched tenant's token, answered with tenant-2 data --
+        // the very cache pollution under the tenant-1 key the fix
+        // exists to prevent. A passing test must never see this call.
+        return jsonResponse(200, [])
+      }
+      if (url.pathname === '/api/v1/authn/tenant/switch') {
+        return jsonResponse(
+          200,
+          makePair({
+            access_token: 'access-switched',
+            principal: principal('user-1', 'tenant-2'),
+          }),
+        )
+      }
+      if (url.pathname === '/api/v1/authn/token/refresh') {
+        await refreshGate
+        return jsonResponse(
+          200,
+          makePair({
+            access_token: 'access-rotated',
+            refresh_token: 'refresh-2',
+          }),
+        )
+      }
+      throw new Error(`unexpected fetch: ${url.pathname}`)
+    }
+    const client = createClient({
+      baseUrl: 'https://api.test',
+      fetch: fetcher,
+      accessTokenStore: store,
+      refreshAccessToken: () => session.refresh(),
+    })
+    bindRequestFn(client)
+
+    await session.loginWithPassword({
+      identifier: 'ada@example.com',
+      password: 'pw',
+    })
+    expect(store.get()).toBe('access-1')
+
+    // The tenant-1 notes read goes out with the stale token, gets 401
+    // and starts the silent refresh -- which the gate holds open.
+    const reading = notesListNotes()
+    await waitForRefreshCall(fetchCalls)
+
+    // The tenant switch commits while the refresh is still in flight.
+    await session.switchTenant('tenant-2')
+    expect(store.get()).toBe('access-switched')
+
+    // The refresh resolves: its rotated token is adopted (the winner
+    // kept the held token the refresh just consumed) but the verdict
+    // is false -- the refused notes read spoke for tenant-1 and must
+    // not replay under tenant-2.
+    releaseRefresh()
+    const error = await captureRejection(reading)
+    expect(isApiError(error)).toBe(true)
+    if (isApiError(error)) {
+      // The refused request surfaces its 401 (auth: true -- the
+      // refresh path was tried and declined to retry), it never
+      // resolves with tenant-2's data.
+      expect(error.auth).toBe(true)
+    }
+    // Exactly one notes request was ever sent: no replay under the
+    // switched tenant's token, so no tenant-2 answer could land under
+    // a tenant-1 cache key. (Before the fix the refresh resolved true
+    // and this assertion failed on the replayed second call.)
+    expect(notesAttempts).toBe(1)
+    expect(
+      fetchCalls.filter((call) => call.path === '/api/v1/notes'),
+    ).toHaveLength(1)
+    // The switch's session stands untouched by the losing pair.
+    expect(store.get()).toBe('access-switched')
+    expect(session.getSnapshot().principal?.tenant_id).toBe('tenant-2')
+    // And the adoption really happened: the session still refreshes,
+    // presenting the rotated token, never the consumed one.
+    await expect(session.refresh()).resolves.toBe(true)
+    const refreshCalls = fetchCalls.filter(
+      (call) => call.path === '/api/v1/authn/token/refresh',
+    )
+    expect(refreshCalls).toHaveLength(2)
+    expect(JSON.parse(refreshCalls[1]?.body ?? '{}')).toMatchObject({
+      refresh_token: 'refresh-2',
+    })
+    expect(store.get()).toBe('access-rotated')
+  })
 })
+
+/** Waits until the refresh request has gone out (the refresh gate
+ * holds its answer, but the request itself must be on the wire before
+ * the race under test can start). */
+async function waitForRefreshCall(
+  fetchCalls: Array<{
+    path: string
+    method: string
+    authorization: string | null
+    body: string | null
+  }>,
+): Promise<void> {
+  for (let i = 0; i < 100; i += 1) {
+    if (
+      fetchCalls.some(
+        (call) =>
+          call.path === '/api/v1/authn/token/refresh' && call.method === 'POST',
+      )
+    ) {
+      return
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5)
+    })
+  }
+  throw new Error('the refresh request never went out')
+}
 
 /** Builds a Response with a JSON body for the fetch stand-in. */
 function jsonResponse(status: number, body: unknown): Response {

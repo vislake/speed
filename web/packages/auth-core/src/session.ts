@@ -71,7 +71,29 @@
  * rotated token from the losing pair; without that, the session's
  * next refresh would present a consumed token, read as a replay and
  * die. (A losing pair that violates the contract is dropped, never
- * cleared: the winner's session stands.) refresh() is also
+ * cleared: the winner's session stands.) What the losing refresh
+ * resolves then depends on who won: a step-up keeps the same
+ * principal, so resolving true -- the answer the silent-401 caller
+ * reads as "the store's token is worth a retry" -- is safe: the
+ * retry speaks for the identity the refused request spoke for. A
+ * tenant switch changed the principal: the retried request would
+ * carry the new tenant's token and its answer could be cached under
+ * the old tenant's key, so the losing refresh resolves false and
+ * the original request fails instead of replaying under a principal
+ * it never asked. One more asymmetry is deliberate: the two kinds
+ * of local clear share clearLocal, but only logout bumps the
+ * generation. Logout ends the session on the caller's own intent,
+ * and the bump makes everything that started under the old
+ * generation lose when it settles late -- an in-flight refresh
+ * cannot resurrect the ended session. A refresh-side clear is the
+ * server's own verdict (it refused the held token), and it happens
+ * only where the generation checks above it already excluded a
+ * committed sibling, so no late refresh exists to fend off (refresh
+ * is single-flight) -- while a user operation that started before
+ * the refusal and settles after it is the session's legitimate
+ * successor and must be allowed to commit. Bumping there would
+ * reject that operation as superseded even though it is the one
+ * true winner. refresh() is also
  * single-flight per held token:
  * concurrent callers -- the api-client silent-401 hook and an
  * application timer -- share one in-flight request, because the authn
@@ -258,15 +280,21 @@ export interface AuthSession {
    * reuse lists captured under an earlier commit. */
   setPermissionSet(domain: AuthDomain, perms: readonly string[] | null): void
   /** Silently refreshes the access token. Resolves true when the
-   * session holds a current token afterwards -- a fresh pair was
-   * stored, or (when a tenant switch or step-up committed while the
-   * refresh was in flight, keeping the held token) the rotated
-   * refresh token was adopted onto the winner's session. Resolves
-   * false when there is nothing to refresh or the refresh token was
-   * refused (the session is over). Never throws for a refused token;
-   * a transport/server failure rethrows the raw ApiError and leaves
-   * the held tokens in place. Concurrent calls presenting the same
-   * held token share a single in-flight request. */
+   * session holds a current token afterwards and the request a
+   * silent-401 caller would retry still speaks for the same
+   * principal: a fresh pair was stored, or a step-up -- the same
+   * principal -- won the race while the refresh was in flight and
+   * the rotated token was adopted onto its session. Resolves false
+   * when there is nothing to refresh, the refresh token was refused
+   * (the session is over), or a tenant switch won the race: the
+   * rotated token is still adopted there -- the winner kept the held
+   * token, which this refresh just consumed server-side -- but the
+   * refused request that triggered the refresh spoke for the old
+   * tenant and must fail rather than replay under the new one.
+   * Never throws for a refused token; a transport/server failure
+   * rethrows the raw ApiError and leaves the held tokens in place.
+   * Concurrent calls presenting the same held token share a single
+   * in-flight request. */
   refresh(): Promise<boolean>
 }
 
@@ -301,11 +329,29 @@ export class OperationSupersededError extends Error {
 }
 
 /** Type guard for OperationSupersededError, mirroring isApiError's
- * shape so callers tell the two rejection kinds apart the same way. */
+ * shape so callers tell the two rejection kinds apart the same way.
+ * Like isApiError it is intentionally lenient: an instanceof check
+ * first, then the same structural fallback -- a name, message and
+ * snapshot-shaped payload -- so a rejection that crossed a package
+ * boundary or a realm (a double-copied or re-packaged error, a
+ * structured-clone survivor) still reads as superseded rather than
+ * collapsing into a caller's unknown-error path. */
 export function isOperationSuperseded(
   value: unknown,
 ): value is OperationSupersededError {
-  return value instanceof OperationSupersededError
+  if (value instanceof OperationSupersededError) {
+    return true
+  }
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+  const candidate = value as Partial<OperationSupersededError>
+  return (
+    candidate.name === 'OperationSupersededError' &&
+    typeof candidate.message === 'string' &&
+    typeof candidate.snapshot === 'object' &&
+    candidate.snapshot !== null
+  )
 }
 
 /** A validated token-issuing response. */
@@ -440,13 +486,33 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
 
   function notify(): void {
     for (const listener of listeners) {
-      listener(snapshot)
+      try {
+        listener(snapshot)
+      } catch {
+        // A throwing listener is contained, the same way auth-ui and
+        // account-ui contain a throwing host callback: a subscriber
+        // (a host render callback, a test observer) must not be able
+        // to freeze the other listeners -- the hooks bridge among
+        // them, and a throw before it runs would leave the React tree
+        // on a stale snapshot -- nor corrupt the operation that
+        // committed: a notify that escaped settleIssued would reject a
+        // login with a listener's error instead of resolving with the
+        // committed snapshot. The listener that threw is the host's
+        // bug to find; the commit it heard about stands.
+      }
     }
   }
 
   /** Clears everything local: the store, the held refresh token and
    * the snapshot. Used by logout and by refresh when the server
-   * refuses the held token. */
+   * refuses the held token. The caller decides whether the clear ends
+   * its generation: logout clears and then bumps, so a refresh that
+   * started under the old generation cannot resurrect the ended
+   * session; the refresh-side clears deliberately do NOT bump -- the
+   * server's refusal is the session's death, but a user operation
+   * that started before the refusal and settles after it is the
+   * session's legitimate successor and must still be able to commit
+   * (see the generation-guard paragraph in the file header). */
   function clearLocal(): void {
     store.set(null)
     refreshToken = null
@@ -506,10 +572,16 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
     return snapshot
   }
 
-  /** The one actual refresh request (see refreshFlight). */
+  /** The one actual refresh request (see refreshFlight). The captured
+   * principal is the principal this refresh spoke for when it started
+   * (a snapshot principal is never null while a token is held): when a
+   * tenant switch wins the race, comparing it against the winner's
+   * principal is how the refresh decides its answer is not worth a
+   * silent-401 retry (see the adopt branch below). */
   async function runRefresh(
     held: string,
     capturedGeneration: number,
+    capturedPrincipal: AuthnPrincipal | null,
   ): Promise<boolean> {
     // The refresh request travels credential-less by declaration: the
     // generated authnRefreshToken operation carries omitAccessToken
@@ -540,6 +612,9 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
         // The server refused the held token (401: invalid, expired
         // or replayed -- the token family is terminated) or consumed
         // it against a contract-violating 2xx: the session is over.
+        // Deliberately no generation bump (see clearLocal's doc): a
+        // user operation in flight under this generation is the
+        // session's legitimate successor and must still commit.
         clearLocal()
         notify()
         return false
@@ -567,10 +642,25 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
           refreshToken = rotated.refreshToken
           // Nothing observable changed: no store write, no snapshot
           // change and no notify -- the winner's state already stands
-          // and subscribers saw it commit. Resolving true tells the
-          // silent-401 caller that the store's current token is worth
-          // a retry.
-          return true
+          // and subscribers saw it commit. Whether the resolution is
+          // worth a silent-401 retry depends on who won: the only
+          // operations that keep the held token are a tenant switch
+          // and a step-up, and the winner's principal tells them
+          // apart. A step-up keeps the principal this refresh started
+          // under -- resolving true is safe, the retried request
+          // speaks for the same identity. A tenant switch changed it:
+          // resolving true would replay the refused request under the
+          // new tenant's token, and its answer could be cached under
+          // the old tenant's key (a host's tenant-namespaced query
+          // key does not move when the tenant does), so the refresh
+          // resolves false instead and the original request fails.
+          const winner = snapshot.principal
+          const samePrincipal =
+            capturedPrincipal !== null &&
+            winner !== null &&
+            capturedPrincipal.user_id === winner.user_id &&
+            capturedPrincipal.tenant_id === winner.tenant_id
+          return samePrincipal
         } catch {
           // A contract-violating 2xx consumed the held token with
           // nothing adoptable: the session keeps the winner's tokens
@@ -585,7 +675,9 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
       issued = parseIssued(pair, true)
     } catch {
       // A 2xx consumed the held token but violated the contract: the
-      // session cannot continue on an unverifiable pair.
+      // session cannot continue on an unverifiable pair. Deliberately
+      // no generation bump (see clearLocal's doc), for the same
+      // reason as the refused-token clear above.
       clearLocal()
       notify()
       return false
@@ -732,6 +824,13 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
         return Promise.resolve(false)
       }
       const capturedGeneration = generation
+      // The principal this refresh speaks for, captured with the
+      // generation: a tenant switch that commits while the refresh is
+      // in flight is told apart from a step-up by comparing the
+      // winner's principal against this one (see runRefresh's adopt
+      // branch). Never null here: a held token and an authenticated
+      // snapshot are cleared together.
+      const capturedPrincipal = snapshot.principal
       const inFlight = refreshFlight
       if (inFlight !== null && inFlight.held === held) {
         // Same held token: share the in-flight request. The flight is
@@ -745,7 +844,7 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
         // session.
         return inFlight.promise
       }
-      const promise = runRefresh(held, capturedGeneration)
+      const promise = runRefresh(held, capturedGeneration, capturedPrincipal)
       refreshFlight = { held, promise }
       // Clear the flight slot on both paths. (promise.finally(...)
       // would hand us a second promise that rejects unhandled when
