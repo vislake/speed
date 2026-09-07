@@ -30,8 +30,9 @@ import { expect, test } from '@playwright/test'
 import {
   APP_TEXT,
   SIGN_IN_TEXT,
-  TENANT_NAMES,
-  readCurrentTenant,
+  expectOutsideDemoOrganizations,
+  expectSignedIn,
+  openSurface,
   submitPasswordSignIn,
   visitSignIn,
 } from './test-utils/journeys.js'
@@ -39,7 +40,14 @@ import {
 /** A password that satisfies authn's real policy (12 characters minimum). */
 const SIGNUP_PASSWORD = 'e2e-new-clinic-2026'
 
-test.describe('a practice signing itself up', () => {
+// @budget, not untagged: these two tests are VERIFIED (the defect a real
+// user hit is closed -- registration provisions the registrant's own
+// clinic and the sign-in reaches it), and they are out of the default run
+// only because their three sign-in attempts would take that tier to
+// exactly go/authn's per-IP ceiling of twenty per minute, where it
+// already spends seventeen. `pnpm test:e2e:budget` gives them a fresh
+// budget of their own; see e2e/README.md.
+test.describe('a practice signing itself up', { tag: '@budget' }, () => {
   test('registers, signs in, and lands in its own practice', async ({ page }) => {
     const email = `e2e-clinic-${Date.now()}@example.com`
 
@@ -61,17 +69,19 @@ test.describe('a practice signing itself up', () => {
     // In: a frame, and a practice of their own. The tenant is NOT one of
     // the demo practices -- a new registrant landing in someone else's
     // clinic would be a far worse defect than being locked out.
-    await expect(
-      page.getByRole('button', { name: APP_TEXT.navNotes }).or(
-        page.getByRole('link', { name: APP_TEXT.navNotes }),
-      ),
-      'a practice that signs itself up must reach the product',
-    ).toBeVisible()
-    const tenant = await readCurrentTenant(page).catch(() => '')
-    expect(
-      TENANT_NAMES as readonly string[],
-      'a new registrant must not land inside one of the demo practices',
-    ).not.toContain(tenant)
+    // The frame, by the one control present at every screen size -- a
+    // nav link is not in the DOM at all below the md breakpoint, which
+    // is what made this assertion fail on the iPad project while the
+    // registrant was signed in perfectly well.
+    await expectSignedIn(page)
+    // And a practice of their own. Both halves are asserted, in order:
+    // a tenant is named at all, and it is not one of the demo
+    // practices. `readCurrentTenant(...).catch(() => '')` used to stand
+    // in for the second half alone and passed whenever the read THREW,
+    // so it could not tell "landed in its own clinic" from "shows no
+    // tenant at all" -- and a new registrant landing in someone else's
+    // clinic would be a far worse defect than being locked out.
+    await expectOutsideDemoOrganizations(page)
   })
 
   test('can do the work an owner does, not merely look at it', async ({ page }) => {
@@ -99,7 +109,7 @@ test.describe('a practice signing itself up', () => {
     // surface stands in for that here because it is the write path this
     // app has today; when the case surface lands (block A), this is the
     // assertion that moves to it.
-    await page.getByRole('link', { name: APP_TEXT.navNotes }).click()
+    await openSurface(page, APP_TEXT.navNotes)
     const text = `first note in a self-registered practice ${Date.now()}`
     await page.getByRole('textbox', { name: APP_TEXT.notesTextLabel }).fill(text)
     await page.getByRole('button', { name: APP_TEXT.notesCreateSubmit }).click()

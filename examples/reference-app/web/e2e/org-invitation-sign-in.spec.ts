@@ -45,8 +45,8 @@ import {
   signInThroughApi,
 } from './test-utils/invitations.js'
 import {
-  APP_TEXT,
   TENANT_NAMES,
+  expectOutsideDemoOrganizations,
   expectSignedIn,
   readCurrentTenant,
   submitPasswordSignIn,
@@ -75,15 +75,18 @@ test('an invited colleague accepts and can then sign in to that organization', a
   const inviteeUserId = await registerThroughApi(request, invitee, INVITEE_PASSWORD)
   await visitSignIn(page)
   await submitPasswordSignIn(page, invitee, INVITEE_PASSWORD)
-  await expect(page.getByRole('link', { name: APP_TEXT.navNotes })).toBeVisible()
+  await expectSignedIn(page)
   // The invitee's own clinic is not one of the demo organizations the
   // helper knows by name -- readCurrentTenant's failure to find one IS
   // the assertion's first half (the clinic's trigger names its raw
   // tenant id, never a demo practice's name).
-  expect(
-    TENANT_NAMES,
-    'before accepting, the invitee must not be inside the organization that invited it',
-  ).not.toContain(await readCurrentTenant(page).catch(() => ''))
+  // Both halves, in order: a tenant is named at all, and it is not one
+  // of the demo organizations. The form this replaces asserted only the
+  // second and passed whenever the read THREW -- an unloaded frame, an
+  // unrendered switcher, a bug in the helper -- so it could not tell
+  // "landed in its own clinic" from "shows no tenant", and the direction
+  // it failed in was the one where it says yes.
+  await expectOutsideDemoOrganizations(page)
 
   // The acceptance steps below run through the API while the browser is
   // signed in as the invitee; a reload returns the page to the anonymous

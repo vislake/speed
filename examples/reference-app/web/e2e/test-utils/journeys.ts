@@ -344,21 +344,30 @@ export async function expectOnSurface(page: Page, heading: string): Promise<void
  */
 export async function openSurface(page: Page, name: string | RegExp): Promise<void> {
   const link = page.getByRole('link', { name })
-  const reachable = await link.isVisible().catch(() => false)
-  if (reachable) {
+  const menu = page.getByRole('button', { name: SHELL_TEXT.openNav })
+
+  // Wait for whichever entrance THIS viewport offers, rather than asking
+  // whether one is there right now.
+  //
+  // `isVisible()` is a point-in-time question with no waiting in it, and
+  // asking it first made this helper race the frame's own render: a
+  // journey that signs in and navigates immediately -- no signInAs to
+  // settle the frame first -- found neither the link nor the menu and
+  // failed with "no way to reach Notes" while both were about to appear.
+  // The direct `.click()` this helper replaced never had that problem,
+  // because a click auto-waits; the fix is to keep the waiting, not to
+  // sleep. `.or()` waits for either and settles as soon as one is
+  // visible, so a wide viewport does not pay for the narrow one's menu.
+  await expect(
+    link.or(menu).first(),
+    `no way to reach ${String(name)}: the frame offers neither that nav entry nor the menu button that would hold it`,
+  ).toBeVisible()
+
+  if (await link.isVisible()) {
     await link.click()
     return
   }
 
-  const menu = page.getByRole('button', { name: SHELL_TEXT.openNav })
-  if (!(await menu.isVisible().catch(() => false))) {
-    // Neither the link nor the menu that would hold it: the surface has
-    // no entrance at all. Said here rather than left to a click timeout,
-    // which reads like a slow page instead of a missing navigation.
-    throw new Error(
-      `e2e: no way to reach ${String(name)} -- the frame shows neither that nav entry nor the menu button that would hold it`,
-    )
-  }
   await menu.click()
   await link.waitFor({ state: 'visible' })
   await link.click()
