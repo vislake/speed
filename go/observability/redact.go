@@ -4,7 +4,11 @@ package observability
 // data-protection milestone described in docs/internal/15-roadmap.md. The
 // mandate comes from docs/internal/09-observability.md: plaintext PII,
 // secrets, tokens and full prompts never enter logs or traces; redaction
-// is on by default and must not be disableable.
+// is on by default and must not be disableable. Coverage against that
+// mandate is partial class by class -- credential keys and tokens are
+// covered here, plaintext PII and full prompts are caller-declared (see
+// the "Coverage against the data-protection mandate" section below), so
+// the mandate sentence is not an implementation claim on its own.
 // docs/internal/10-compliance-and-audit.md places the mechanism in this
 // module's logging layer -- safe by default rather than leaking by default
 // -- and defers audit-log redaction to the M1+ compliance milestone.
@@ -78,7 +82,58 @@ package observability
 // less), and it is why this rule is stated as two halves rather than one:
 // both are pinned by TestRedact_ExemptKeysUnderSensitivePaths.
 //
+// # Coverage against the data-protection mandate
+//
+// docs/internal/09-observability.md's mandatory clause lists four classes
+// that never enter logs or traces -- plaintext PII, keys and secrets,
+// tokens, and full prompts -- with redaction on by default and not
+// disableable. This package's coverage against that clause is deliberately
+// partial, and the partiality is stated class by class so the gaps stay
+// visible in the doc instead of being inferable only from what is absent:
+//
+//   - tokens: covered. The "token" key-name stem (word-boundary and
+//     terminal-suffix matched, see sensitiveStems) replaces token-named
+//     attributes wholesale, and the value-shape net (Bearer/Basic
+//     credentials, JWTs, provider-prefixed keys, secret-named URL query
+//     parameters) catches token-shaped values logged under any key.
+//   - keys and secrets: covered. The key-name stems (secret, key,
+//     password/passwd/pwd, credential, authorization, cookie) replace
+//     secret-named attributes wholesale, with the same value-shape net as
+//     the backstop. This is the class the stem list above is exhaustive
+//     over: the stems are the credential and token naming vocabularies,
+//     and a future sensitive-named key in this class is a code-review
+//     point in redact.go, not a config question.
+//   - plaintext PII (email addresses, phone numbers, and the rest): not
+//     covered -- a class-level gap recorded here, not an omission from
+//     the key list. The PII key-name space is large and grows with
+//     business code (a user_email attribute, a contact_phone, an
+//     address line, a customer's display name), so key-name matching is
+//     inherently incomplete against it, and no value shape exists that
+//     separates PII from ordinary identifiers; the caller declares what
+//     is PII instead. The declaration mechanism is the explicit
+//     sensitive-parameter shape the pkgcore round's apperr work is
+//     building (its WithSensitiveParam twin); until that mechanism
+//     lands, PII-shaped log content is the logging call site's
+//     responsibility, and this layer stays the backstop for the
+//     credential classes above, never the main line for PII.
+//   - full prompts: not covered, for the same reason and through the same
+//     mechanism: an LLM request body can carry anything, so no key-name
+//     or shape rule can enumerate it -- prompt text is content-sensitive
+//     by the caller's own declaration, with the same dependency on the
+//     pkgcore round's declaration mechanism stated above.
+//
+// The same clause's other exits are covered elsewhere, not here: this
+// package's own span attributes are kept free of secret-shaped and
+// id-bearing material by construction (see middleware.go), API-response
+// redaction belongs to the API layer (apperr), and audit records are the
+// M1+ compliance work (docs/internal/10-compliance-and-audit.md).
+//
 // # Deliberate boundaries
+//
+// What follows is the mechanism's exclusion list -- the shapes and
+// channels the rules above deliberately do not reach. The class-level
+// exclusions (plaintext PII and full prompts) live in the coverage table
+// above, never claimed covered here by their absence from this list.
 //
 //   - The record's message is NOT scanned: messages are constant strings
 //     per the logging discipline, and a redactor is not a substitute for
@@ -338,7 +393,22 @@ func redactAttr(groups []string, a slog.Attr) (slog.Attr, bool) {
 	// children are still visited (the empty segment the key contributes to
 	// their path is inert -- it can neither be exempted nor match a stem),
 	// and a string or error value is still scanned for secret shapes.
+	//
+	// Nor may the branch bypass the PATH rules: groups is an independent
+	// input the branch already holds, and a sensitive logger-level group
+	// (WithGroup("credentials")) redacts every attribute logged under it
+	// wholesale, whatever the attribute's own key -- an empty-key scalar
+	// under that group used to slip past the group-name rule to the value
+	// rules alone and render verbatim when its value had no recognizable
+	// secret shape (pinned by
+	// TestRedact_EmptyKeyScalarUnderSensitiveGroupPath_RedactedWholesale).
+	// The empty key contributes nothing to the path; the segments already
+	// in groups contribute everything, so the check runs before the value
+	// rules exactly as it does on the sibling branches below.
 	if a.Key == "" {
+		if pathSensitive(groups) {
+			return redactAttrWhole(a)
+		}
 		return redactAttrValue(a, groups, nil)
 	}
 

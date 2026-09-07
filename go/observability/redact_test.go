@@ -910,6 +910,38 @@ func TestRedact_EmptyKeyAttributes_ValueRulesStillApply(t *testing.T) {
 	})
 }
 
+// TestRedact_EmptyKeyScalarUnderSensitiveGroupPath_RedactedWholesale is
+// the regression for a path-rule bypass in redactAttr's empty-key branch
+// (P1-2): the branch used to skip the pathSensitive(groups) check every
+// sibling branch runs, reasoning only about what the empty key ITSELF
+// contributes to an attribute's key path -- true for the key's own empty
+// segment, over-broad for the branch, which already holds the segments in
+// groups as an independent input. A logger-level WithGroup("credentials")
+// context therefore redacted a non-empty benign key wholesale (the sibling
+// branches' group-name rule) while an empty-key scalar under that same
+// context reached only the value rules -- a value with no recognizable
+// secret shape passed through the group-name rule entirely. The empty key
+// contributes nothing to the path; the group context contributes
+// everything, so the empty-key branch must run the same pathSensitive
+// check as its siblings and collapse wholesale when it fires. Fails before
+// the fix (verified): the sink renders the empty-key scalar's value
+// verbatim with no redaction marker; passes after: the attribute collapses
+// to RedactedValue exactly as a non-empty key under the same group does.
+func TestRedact_EmptyKeyScalarUnderSensitiveGroupPath_RedactedWholesale(t *testing.T) {
+	var buf bytes.Buffer
+	logger := obs.FromContext(textLoggerCtx(context.Background(), &buf))
+
+	logger.WithGroup("credentials").Info("event", slog.String("", testSecret))
+
+	out := buf.String()
+	if strings.Contains(out, testSecret) {
+		t.Errorf("an empty-key scalar under a sensitive logger-level group leaked its value into the sink; got: %s", out)
+	}
+	if !strings.Contains(out, obs.RedactedValue) {
+		t.Errorf("expected the group-name rule to replace the empty-key scalar wholesale (as it does a non-empty key under the same group); got: %s", out)
+	}
+}
+
 // TestRedact_KeyStemDoesNotOverRedactCorrelationReferences is the
 // regression for the "key" stem's false-positive class: the stem used a
 // bare substring match, so any attribute whose name merely contained
