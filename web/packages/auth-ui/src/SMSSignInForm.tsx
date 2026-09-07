@@ -42,6 +42,24 @@
  * server's deliberately collapsed invalid-code refusal (authn answers
  * a spent login code exactly like a wrong one), and only a fresh code
  * -- a resend, or a request for a changed phone -- can sign in.
+ *
+ * The collapse is deliberate, and it is the pre-authentication half of
+ * an asymmetry the step-up/MFA channel's honest spent-vs-never-valid
+ * split (go/authn's ErrMFACodeUsed against ErrMFAInvalidCode) must not
+ * be copied onto this endpoint: step-up answers a caller who is
+ * already authenticated, so telling that caller a code was used rather
+ * than wrong discloses nothing an outsider can use. A phone-login code
+ * verifies a caller who is not yet anyone -- the server cannot tell
+ * the code's true holder, whose earlier submit consumed it, from a
+ * caller who merely holds a candidate code -- and an answer
+ * distinguishing "used" from "wrong" would certify to an
+ * unauthenticated caller that the code they submitted was the genuine
+ * live one, an oracle that confirms an intercepted or phished code.
+ * The honest "used" verdict can therefore live only where the truth is
+ * already known without asking the server: this form's spent-code
+ * memory, whose reach the comment on spentCode below states.
+ * go/authn's ErrVerificationCodeInvalid (errors.go) carries the same
+ * analysis from the server's side and points back here.
  */
 
 import { useCallback, useState } from 'react'
@@ -90,7 +108,14 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
   // next code request starts a new code session: a re-submission of
   // this string is refused locally with the used-code notice instead
   // of a doomed round-trip into the server's collapsed invalid-code
-  // refusal.
+  // refusal. That reach -- this browser, until the next code request --
+  // is the whole boundary of this mitigation, a design cost rather
+  // than a defect to fix by splitting (see the file header): the
+  // server cannot tell this client its code was used without telling
+  // every caller the same, so a refresh, a new tab or another device
+  // re-submitting this same exhausted code gets the server's collapsed
+  // answer, and the honest verdict is payable only locally, only while
+  // the truth is still in this memory.
   const [spentCode, setSpentCode] = useState<string | null>(null)
 
   const requestCode = useCallback(
