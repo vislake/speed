@@ -449,7 +449,7 @@ func TestService_RevokeRole_ConcurrentIdenticalRevoke_ReportsBindingNotFound(t *
 		if findErr != nil {
 			t.Fatalf("simulated concurrent RevokeRole's Find: %v", findErr)
 		}
-		if deleteErr := svc.bindings.Delete(ctx, binding.ID); deleteErr != nil {
+		if deleteErr := svc.bindings.Delete(ctx, binding.ID, revokeOriginDeliberate); deleteErr != nil {
 			t.Fatalf("simulated concurrent RevokeRole's Delete: %v", deleteErr)
 		}
 	}

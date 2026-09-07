@@ -425,7 +425,7 @@ func deleteAllBindings(t *testing.T, svc *Service, tenant pkgcore.TenantID) {
 		t.Fatalf("listing bindings: %v", err)
 	}
 	for _, row := range rows {
-		if err := svc.bindings.Delete(ctx, row.ID); err != nil {
+		if err := svc.bindings.Delete(ctx, row.ID, revokeOriginDeliberate); err != nil {
 			t.Fatalf("deleting binding %s: %v", row.ID, err)
 		}
 	}

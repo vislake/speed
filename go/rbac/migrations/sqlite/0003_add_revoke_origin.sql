@@ -1,0 +1,45 @@
+-- Adds revoke_origin to rbac_role_bindings: the marker this module's
+-- deferral D14 proposed, recording WHICH writer soft-deleted a row, so the
+-- restore-side subscribers (reap.go's onMemberRestored and onNodeRestored)
+-- re-instate exactly the rows the matching removal or deletion reaped and
+-- never an older deliberate revocation at an in-scope tuple.
+--
+-- The column is meaningful only while the row is soft-deleted (deleted_at
+-- IS NOT NULL); live rows carry the default. Three values exist, written by
+-- the three mark-delete writers this round routes through one origin-aware
+-- revoke path (RoleBindingRepository.Delete, shadowing the dbkit
+-- mark-delete the writers used before):
+--
+--   ''              -- a deliberate Service.RevokeRole revocation. Also the
+--                     value of every row that predates this migration (see
+--                     the backfill policy below).
+--   'member-removal' -- a revocation the org.member.removed reap wrote, or
+--                     one it claimed (reap.go's claimByUser re-attributes
+--                     a removed member's node-deletion rows to the
+--                     member-removal, so that only the member's own
+--                     org.member.restored event can resurrect them).
+--   'node-deletion'  -- a revocation the org.node.deleted reap wrote.
+--
+-- Re-instatement scopes by the marker: onMemberRestored restores only
+-- rows carrying 'member-removal', onNodeRestored only rows carrying
+-- 'node-deletion', and a deliberate RevokeRole row is never restored by an
+-- org restore event -- only by an explicit manual Service.RestoreRole.
+--
+-- BACKFILL POLICY (stated honestly): the rows soft-deleted before this
+-- migration are indistinguishable -- the reaps' and RevokeRole's marks
+-- were identical two-column writes -- so the ALTER cannot tell a genuinely
+-- reaped row from a deliberate revocation. Every existing row therefore
+-- lands on the deliberate value '' and is never auto-reinstated by either
+-- restore-side subscriber. That is the fail-closed direction for
+-- authorization: a revocation whose origin is unknown must not be undone
+-- by an event without an affirmative operator act, and a grant an operator
+-- genuinely wants back after an upgrade is restored the explicit way
+-- (Service.RestoreRole or a fresh AssignRole). The alternative backfill --
+-- treating unknown rows as reaped -- would silently resurrect deliberate
+-- revocations on the next member or node restore, which is precisely the
+-- privilege-escalation this round closes.
+--
+-- No index change: the column is not part of any unique constraint, and
+-- the partial unique index uq_rbac_role_bindings_tenant_user_role_node is
+-- untouched (kept identical to the postgres/ copy of this file).
+ALTER TABLE rbac_role_bindings ADD COLUMN revoke_origin VARCHAR(16) NOT NULL DEFAULT '';

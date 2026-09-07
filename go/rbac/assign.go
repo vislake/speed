@@ -220,7 +220,13 @@ func (s *Service) RevokeRole(ctx context.Context, sub Subject, role string, scop
 	if s.beforeBindingDelete != nil {
 		s.beforeBindingDelete()
 	}
-	if err := s.bindings.Delete(writeCtx, binding.ID); err != nil {
+	// The deliberate origin: this is a revocation an administrator (or
+	// automation acting for one) explicitly asked for, and the mark must
+	// say so -- an org member-restore or node-restore event must never undo
+	// it (reap.go's D14-resolution documents why). The write itself is
+	// RoleBindingRepository.Delete's origin-aware mark-delete, which
+	// shadows dbkit's two-column one; see its doc comment.
+	if err := s.bindings.Delete(writeCtx, binding.ID, revokeOriginDeliberate); err != nil {
 		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
 			// Find above and this Delete are not atomic either: two
 			// concurrent RevokeRole calls for the same binding can both

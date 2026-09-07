@@ -169,3 +169,105 @@ func TestPostgres_RestoreRole_NothingToRestore_IsReported(t *testing.T) {
 		t.Fatal("RestoreRole with nothing ever granted at this scope = nil, want an error")
 	}
 }
+
+// TestPostgres_RevokeOriginMarker_ScopesTheOrgRestorePaths re-proves the
+// revoke-origin marker round (migrations/{sqlite,postgres}/
+// 0003_add_revoke_origin.sql) against a real PostgreSQL server: the 0003
+// ALTER applies, the origin-aware mark-deletes and the claim step write
+// their values, and the org restore-side scoping -- a deliberate
+// revocation surviving a member restore, and a node restore refusing a
+// row the member-removal claimed -- behaves identically on the second
+// dialect. The flows are driven through the same events the unit tier
+// uses (the org event names are protocol strings rbac only listens to),
+// with the rows and their origins read back through raw SQL.
+func TestPostgres_RevokeOriginMarker_ScopesTheOrgRestorePaths(t *testing.T) {
+	ctx := context.Background()
+	bus := pkgcore.NewMemoryEventBus()
+	db := openRBACPostgres(t, ctx, startPostgresContainer(t, ctx))
+	svc := attachRBACService(t, db, bus)
+
+	tenantCtx := tenantContext("tenant-a")
+	define := func(key string) {
+		t.Helper()
+		if _, err := svc.DefineRole(tenantCtx, rbac.RoleDefinition{
+			Key:            key,
+			DescriptionKey: "rbac.role.member",
+			Permissions:    []string{"notes:read"},
+		}); err != nil {
+			t.Fatalf("DefineRole(%s): %v", key, err)
+		}
+	}
+	publish := func(eventType string, tenant string, payload any) {
+		t.Helper()
+		if err := bus.Publish(tenantContext(pkgcore.TenantID(tenant)), pkgcore.Event{
+			Type:     eventType,
+			TenantID: pkgcore.TenantID(tenant),
+			Payload:  payload,
+		}); err != nil {
+			t.Fatalf("publishing %s: %v", eventType, err)
+		}
+	}
+	readOrigin := func(userID, nodeID string) string {
+		t.Helper()
+		sqlDB, err := db.DB()
+		if err != nil {
+			t.Fatalf("db.DB(): %v", err)
+		}
+		var origin string
+		if err = sqlDB.QueryRowContext(ctx,
+			`SELECT revoke_origin FROM rbac_role_bindings
+			 WHERE tenant_id = $1 AND user_id = $2 AND node_id = $3 AND deleted_at IS NOT NULL`,
+			"tenant-a", userID, nodeID).Scan(&origin); err != nil {
+			t.Fatalf("reading %s's revoked row origin: %v", userID, err)
+		}
+		return origin
+	}
+
+	define("reader")
+	owner := rbac.Subject{TenantID: "tenant-a", UserID: "user-owner"}
+	kept := rbac.Subject{TenantID: "tenant-a", UserID: "user-kept"}
+	gone := rbac.Subject{TenantID: "tenant-a", UserID: "user-gone"}
+
+	// Leg 1: a deliberate revocation survives a member removal-then-restore.
+	if err := svc.AssignRole(tenantCtx, owner, "reader", rbac.Scope{}); err != nil {
+		t.Fatalf("AssignRole(owner): %v", err)
+	}
+	if err := svc.RevokeRole(tenantCtx, owner, "reader", rbac.Scope{}); err != nil {
+		t.Fatalf("RevokeRole(owner): %v", err)
+	}
+	if origin := readOrigin(owner.UserID, ""); origin != "" {
+		t.Fatalf("the deliberate revoke wrote revoke_origin %q, want the empty (deliberate) value", origin)
+	}
+	publish("org.member.removed", "tenant-a", map[string]any{"user_id": owner.UserID})
+	publish("org.member.restored", "tenant-a", map[string]any{"user_id": owner.UserID})
+	if ok, err := svc.Can(ctx, owner, "read", "notes"); err != nil || ok {
+		t.Fatalf("the owner's deliberately revoked grant came back with the member restore: Can = %v, %v; want false", ok, err)
+	}
+
+	// Leg 2: a node restore re-instates the row the node deletion reaped
+	// for a member who is still in the tenant, and refuses the row the
+	// member-removal claimed after the member left.
+	for _, sub := range []rbac.Subject{kept, gone} {
+		if err := svc.AssignRole(tenantCtx, sub, "reader", rbac.Scope{NodeID: "node-1"}); err != nil {
+			t.Fatalf("AssignRole(%s): %v", sub.UserID, err)
+		}
+	}
+	publish("org.node.deleted", "tenant-a", map[string]any{"deleted_node_ids": []any{"node-1"}})
+	if origin := readOrigin(kept.UserID, "node-1"); origin != "node-deletion" {
+		t.Fatalf("the node-deletion reap wrote revoke_origin %q, want node-deletion", origin)
+	}
+	publish("org.member.removed", "tenant-a", map[string]any{"user_id": gone.UserID})
+	if origin := readOrigin(gone.UserID, "node-1"); origin != "member-removal" {
+		t.Fatalf("the claim left the departed member's row at revoke_origin %q, want member-removal", origin)
+	}
+	if origin := readOrigin(kept.UserID, "node-1"); origin != "node-deletion" {
+		t.Fatalf("the claim touched the kept member's row: revoke_origin %q, want node-deletion", origin)
+	}
+	publish("org.node.restored", "tenant-a", map[string]any{"node_id": "node-1"})
+	if ok, err := svc.Can(ctx, kept, "read", "notes"); err != nil || !ok {
+		t.Fatalf("the kept member's reaped grant was not re-instated: Can = %v, %v", ok, err)
+	}
+	if ok, err := svc.Can(ctx, gone, "read", "notes"); err != nil || ok {
+		t.Fatalf("the departed member regained authorization with the node: Can = %v, %v; want false", ok, err)
+	}
+}

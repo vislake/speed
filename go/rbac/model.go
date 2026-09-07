@@ -164,21 +164,21 @@ type RoleBinding struct {
 
 	// DeletedAt and DeletedBy are dbkit.SoftDeletable's required pair
 	// (go/dbkit/soft_delete.go): implementing that interface below is what
-	// makes dbkit.Repository[RoleBinding].Delete -- promoted unchanged and
-	// called by Service.RevokeRole -- a mark-delete instead of a physical
-	// DELETE, and what makes dbkit.Repository[RoleBinding].Restore -- and
-	// Service.RestoreRole, which wraps it -- meaningful for this model.
-	// Neither field is ever set by application code directly: both writes
-	// go through dbkit's own reflection-based field access, exactly as
-	// TenantID does.
+	// flips this model's revoke write from a physical DELETE onto a
+	// mark-delete UPDATE, and what gives the model a working restore. The
+	// writes themselves go through this module's own origin-aware
+	// RoleBindingRepository.Delete and RoleBindingRepository.Restore
+	// (which shadow dbkit's promoted pair and extend the mark by the
+	// revoke_origin column -- see that method's and RevokeOrigin's own
+	// comments), never through dbkit's reflection-based field access and
+	// never set by hand at a call site.
 	//
 	// RoleBinding is the only one of this module's three models that
 	// adopted dbkit.SoftDeletable: it is the only one with a real
-	// delete-shaped operation to retrofit (RevokeRole's
-	// bindings.Delete(ctx, binding.ID) call) -- rbac.Role has no delete
-	// path at all today, so there is nothing on Role or RolePermission for
-	// mark-delete to change. See go/rbac/AGENTS.md's "Soft deletion"
-	// section for the full round.
+	// delete-shaped operation to retrofit (RevokeRole's revoke write) --
+	// rbac.Role has no delete path at all today, so there is nothing on
+	// Role or RolePermission for mark-delete to change. See
+	// go/rbac/AGENTS.md's "Soft deletion" section for the full round.
 	//
 	// uq_rbac_role_bindings_tenant_user_role_node became a partial index
 	// scoped WHERE deleted_at IS NULL in the same migration that adds these
@@ -188,6 +188,31 @@ type RoleBinding struct {
 	// row nobody can see.
 	DeletedAt *time.Time `gorm:"column:deleted_at"`
 	DeletedBy string     `gorm:"column:deleted_by;not null;default:''"`
+
+	// RevokeOrigin records WHICH writer soft-deleted this row, the marker
+	// deferral D14 of this module's AGENTS.md proposed. It is meaningful
+	// only while the row is soft-deleted (deleted_at IS NOT NULL): a live
+	// row always carries the empty default, and every mark-delete -- and
+	// every restore -- rewrites it, so no stale value ever survives onto a
+	// row whose state it does not describe (migrations/{postgres,sqlite}/
+	// 0003_add_revoke_origin.sql has the full value vocabulary and the
+	// backfill policy for rows that predate the column).
+	//
+	// The three writers of revoked rows all route through the one
+	// origin-aware revoke path RoleBindingRepository.Delete provides (which
+	// shadows dbkit.Repository[RoleBinding].Delete -- see that method's doc
+	// comment for why a mark-delete that cannot name its writer must be
+	// unreachable): Service.RevokeRole writes the deliberate value (''),
+	// the org.member.removed reap (reap.go's revokeReapedBindings) writes
+	// 'member-removal', and the org.node.deleted reap writes
+	// 'node-deletion'. The restore-side subscribers -- onMemberRestored and
+	// onNodeRestored -- scope their re-instatement by the marker, so a
+	// deliberate revocation is never undone by an org restore event, and a
+	// member removed from a tenant while a node-reaped row of theirs still
+	// sits revoked has that row re-attributed to the member-removal
+	// (RoleBindingRepository.claimByUser) so a later node restore cannot
+	// resurrect authorization for someone who is no longer a member.
+	RevokeOrigin string `gorm:"column:revoke_origin;size:16;not null;default:''"`
 }
 
 // TableName pins RoleBinding to rbac_role_bindings.
@@ -201,9 +226,11 @@ func (b RoleBinding) IsTenantWide() bool { return b.NodeID == "" }
 // GetDeletedAt returns RoleBinding's soft-delete marker, satisfying
 // dbkit.SoftDeletable. Like GetTenantID, this is never called by dbkit's
 // soft-delete auto-scope plugin or by Repository[RoleBinding] itself -- it
-// is a pure marker used only for the capability check that routes
-// dbkit.Repository[RoleBinding].Delete onto the mark-delete path; the
-// actual field writes go through reflection on fixed field names.
+// is a pure marker used only for the capability check that routes a
+// dbkit.Repository[RoleBinding] Delete onto the mark-delete path. The
+// actual field writes go through this module's own origin-aware
+// RoleBindingRepository.Delete/Restore methods (model.go's DeletedAt
+// comment and repository.go's method comments carry the full story).
 func (b RoleBinding) GetDeletedAt() *time.Time { return b.DeletedAt }
 
 // Compile-time checks that all three models satisfy dbkit.TenantScoped, the

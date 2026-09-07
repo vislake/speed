@@ -1006,39 +1006,52 @@ func TestService_OnMemberRestored_RedeliveryRestoresNothingTwice(t *testing.T) {
 	}
 }
 
-func TestService_OnMemberRestored_RevocationThatPredatesTheRemoval_IsAlsoRestored(t *testing.T) {
-	// The attribution boundary this handler's doc comment records
-	// (deferral D14): a soft-deleted row carries no marker saying whether
-	// the removal reap or a manual RevokeRole wrote it, so the
-	// re-instatement restores the newest revoked row at every revoked
-	// tuple in the restored member's scope -- including a tuple whose
-	// revocation predates the removal entirely and that the reap therefore
-	// never touched. While the reaps are the only production writers of
-	// revoked rows this cannot occur; once an administrator revoke surface
-	// exists, the marker D14 proposes becomes load-bearing. This test pins
-	// the current, closest-sound behaviour so a future round changing it
-	// must do so consciously.
+func TestService_OnMemberRestored_DeliberateRevocationPredatingTheRemoval_StaysRevoked(t *testing.T) {
+	// The P0-rbac-7 regression this round closes, reproduced
+	// deterministically in its simplest shape: the owner's grant is
+	// deliberately revoked (Service.RevokeRole, the same path go/admin's
+	// RoleService.RevokeRole delegates to), THEN the owner is removed from
+	// the tenant, THEN the membership is restored. The removal reap finds
+	// nothing live to reap -- the deliberate revoke predates it -- and the
+	// member restore must NOT bring the owner's grant back: the revoked
+	// row was never written by the removal, and undoing it would silently
+	// resurrect a deliberate revocation. Before this round the row carried
+	// no revoke-origin marker, the restore re-instated every revoked tuple
+	// in the restored member's scope, and the owner came back with a grant
+	// an administrator had explicitly taken away -- this test failed on
+	// that code. The marker (0003_add_revoke_origin.sql) is what lets the
+	// restore side tell the deliberate row apart: it carries the empty
+	// origin, never the member-removal one, and is left revoked.
 	svc, reg := newTestServiceWithRegistry(t)
 	sub := Subject{TenantID: "tenant-a", UserID: "user-gone"}
-	grant(t, svc, sub, "reader", Scope{}, "notes:read")
+	grant(t, svc, sub, "owner", Scope{}, "notes:read")
 
 	ctx := tenantCtx(sub.TenantID)
-	if err := svc.RevokeRole(ctx, sub, "reader", Scope{}); err != nil {
+	if err := svc.RevokeRole(ctx, sub, "owner", Scope{}); err != nil {
 		t.Fatalf("manual revoke before the removal: %v", err)
 	}
 	// The removal finds nothing live to reap -- the manual revoke predates
-	// it -- so the revoked row the restore re-instates below is provably
-	// not a row any reap wrote.
+	// it -- so the revoked row below is provably not a row any reap wrote.
 	publishMemberRemoved(t, reg, sub.TenantID, removedMember{UserID: sub.UserID})
 
 	rec := recordEvents(reg)
 	publishMemberRestored(t, reg, sub.TenantID, restoredMember{UserID: sub.UserID})
 
-	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || !ok {
-		t.Fatalf("Can after the restore = %v, %v; want the pre-removal revocation's grant back (un-attributed posture)", ok, err)
+	if ok, err := svc.Can(context.Background(), sub, "read", "notes"); err != nil || ok {
+		t.Fatalf("Can after the restore = %v, %v; want false (the deliberate revocation must survive the member restore)", ok, err)
 	}
-	if got := len(rec.ofType(EventRoleBindingRestored)); got != 1 {
-		t.Fatalf("got %d %s events, want 1 (the one pre-removal revoked tuple)", got, EventRoleBindingRestored)
+	if got := len(rec.ofType(EventRoleBindingRestored)); got != 0 {
+		t.Fatalf("got %d %s events, want 0 (nothing the removal reaped exists to restore)", got, EventRoleBindingRestored)
+	}
+	rows, err := svc.bindings.RevokedByUser(ctx, sub.UserID)
+	if err != nil {
+		t.Fatalf("listing the restored member's revoked bindings: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("got %d revoked rows after the restore, want 1 (the deliberate revocation, untouched)", len(rows))
+	}
+	if rows[0].RevokeOrigin != revokeOriginDeliberate {
+		t.Errorf("the deliberate revocation's revoke_origin = %q, want %q", rows[0].RevokeOrigin, revokeOriginDeliberate)
 	}
 }
 
@@ -1157,10 +1170,14 @@ func TestService_OnMemberRestored_OneFailedRestoreDoesNotAbortTheRest(t *testing
 	// re-instated nine of ten grants has done real work, and surfacing an
 	// error would make org's committed restore look failed. Here the
 	// restored member has two revoked bindings, and the role behind one of
-	// them is gone (its row was physically deleted behind the scenes,
-	// which nothing in this module prevents a future delete path from
-	// doing). Resolving that binding's role fails; the other binding must
-	// still be re-instated, and the handler must still return nil.
+	// them is gone by restore time: the removal reaped BOTH while both
+	// roles were still resolvable (so both rows carry the member-removal
+	// origin the restore side scopes by), and only THEN is the second
+	// role's row physically deleted behind the scenes (which nothing in
+	// this module prevents a future delete path from doing). Resolving the
+	// doomed binding's role therefore fails inside the restore pass
+	// itself, after the marker has admitted the row; the other binding
+	// must still be re-instated, and the handler must still return nil.
 	svc, reg := newTestServiceWithRegistry(t)
 	sub := Subject{TenantID: "tenant-a", UserID: "user-gone"}
 
@@ -1178,17 +1195,15 @@ func TestService_OnMemberRestored_OneFailedRestoreDoesNotAbortTheRest(t *testing
 	if err = svc.AssignRole(ctx, sub, "doomed", Scope{}); err != nil {
 		t.Fatalf("AssignRole(doomed): %v", err)
 	}
-	// The doomed grant is revoked manually first, so its row is soft-deleted
-	// before its role is destroyed and the re-instater has a row to fail on.
-	if err = svc.RevokeRole(ctx, sub, "doomed", Scope{}); err != nil {
-		t.Fatalf("RevokeRole(doomed): %v", err)
-	}
-	// Remove the role row the second revoked binding names, leaving the
-	// binding a dangling reference.
+	// The removal reaps both bindings; both roles resolve at this point, so
+	// both rows are revoked with the member-removal origin.
+	publishMemberRemoved(t, reg, sub.TenantID, removedMember{UserID: sub.UserID})
+
+	// Now the second role's row is physically deleted, leaving the revoked
+	// binding a dangling reference for the restore pass to fail on.
 	if err = svc.roles.Delete(ctx, doomed.ID); err != nil {
 		t.Fatalf("deleting the role behind the second binding: %v", err)
 	}
-	publishMemberRemoved(t, reg, sub.TenantID, removedMember{UserID: sub.UserID})
 
 	rec := recordEvents(reg)
 	publishMemberRestored(t, reg, sub.TenantID, restoredMember{UserID: sub.UserID})
@@ -1210,6 +1225,9 @@ func TestService_OnMemberRestored_OneFailedRestoreDoesNotAbortTheRest(t *testing
 	}
 	if len(rows) != 1 {
 		t.Fatalf("got %d remaining revoked bindings, want 1 (the unresolvable one)", len(rows))
+	}
+	if rows[0].RevokeOrigin != revokeOriginMemberRemoval {
+		t.Errorf("the unresolvable row's revoke_origin = %q, want %q", rows[0].RevokeOrigin, revokeOriginMemberRemoval)
 	}
 }
 
@@ -1487,5 +1505,237 @@ func TestService_OnNodeRestored_WireShapesAllReinstateTheSameBindings(t *testing
 		if len(rows) != 0 {
 			t.Fatalf("node %s (payload %T) still has %d revoked bindings after the restore", shape.nodeID, shape.payload, len(rows))
 		}
+	}
+}
+
+func TestService_OnNodeRestored_MemberRemovedWhileNodeDeleted_IsNotReinstated(t *testing.T) {
+	// The P0-rbac-8 regression this round closes, in its hardest ordering:
+	// the node is deleted FIRST (the node-deletion reap writes the
+	// member's row with the node-deletion origin), THEN the member is
+	// removed from the tenant -- the member-removal reap finds nothing
+	// live to withdraw, but its claim step re-attributes the still-revoked
+	// row to the member-removal -- and THEN the node is restored. The node
+	// restore must NOT re-instate the removed member's row: doing so would
+	// rebuild live authorization for a holder who is no longer a member,
+	// with no membership behind it. Before this round the row carried no
+	// origin, the removal recorded nothing (there was nothing live to
+	// reap), and the node restore resurrected the grant -- this test
+	// failed on that code, with the removed member's Can answering true.
+	// A second member who was never removed, whose row the same deletion
+	// reaped alongside the first, IS re-instated -- the mechanism keeps
+	// working for its intended case, and the two rows differ only in the
+	// claim.
+	svc, reg := newTestServiceWithRegistry(t)
+
+	removed := Subject{TenantID: "tenant-a", UserID: "user-removed"}
+	kept := Subject{TenantID: "tenant-a", UserID: "user-kept"}
+	ctx := tenantCtx("tenant-a")
+	grant(t, svc, removed, "reader", Scope{NodeID: "node-1"}, "notes:read")
+	grant(t, svc, kept, "reader", Scope{NodeID: "node-1"}, "notes:read")
+
+	// Node deletion reaps both live bindings at node-1 in one pass.
+	publishNodeDeleted(t, reg, "tenant-a", deletedNode{DeletedNodeIds: []string{"node-1"}})
+	rows, err := svc.bindings.RevokedByNodes(ctx, []string{"node-1"})
+	if err != nil {
+		t.Fatalf("listing revoked bindings at the deleted node: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("got %d revoked bindings after the delete, want 2", len(rows))
+	}
+	for _, row := range rows {
+		if row.RevokeOrigin != revokeOriginNodeDeletion {
+			t.Errorf("the node-deletion reap wrote revoke_origin %q, want %q", row.RevokeOrigin, revokeOriginNodeDeletion)
+		}
+	}
+
+	// The member leaves while the node is gone: nothing live to reap, but
+	// the claim step re-attributes her still-revoked row to the
+	// member-removal origin.
+	publishMemberRemoved(t, reg, "tenant-a", removedMember{UserID: removed.UserID})
+	claimed, err := svc.bindings.RevokedByUser(ctx, removed.UserID)
+	if err != nil {
+		t.Fatalf("listing the removed member's revoked bindings: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("got %d revoked rows for the removed member, want 1", len(claimed))
+	}
+	if claimed[0].RevokeOrigin != revokeOriginMemberRemoval {
+		t.Errorf("the removed member's row carries revoke_origin %q, want %q (the claim must re-attribute it)",
+			claimed[0].RevokeOrigin, revokeOriginMemberRemoval)
+	}
+
+	// The node comes back: only the member who is still in the tenant is
+	// re-instated. The removed member's Can must stay false -- pre-fix it
+	// was restored and counted into Can, which is exactly the escalation.
+	rec := recordEvents(reg)
+	publishNodeRestored(t, reg, "tenant-a", restoredNode{NodeID: "node-1"})
+
+	if ok, canErr := svc.Can(context.Background(), kept, "read", "notes"); canErr != nil || !ok {
+		t.Fatalf("the member who was never removed was not re-instated: Can = %v, %v", ok, canErr)
+	}
+	if ok, canErr := svc.Can(context.Background(), removed, "read", "notes"); canErr != nil || ok {
+		t.Fatalf("the removed member regained authorization with the node: Can = %v, %v; want false", ok, canErr)
+	}
+	rows, err = svc.bindings.RevokedByNodes(ctx, []string{"node-1"})
+	if err != nil {
+		t.Fatalf("listing revoked bindings at the restored node: %v", err)
+	}
+	if len(rows) != 1 || rows[0].UserID != removed.UserID {
+		t.Fatalf("revoked rows at the restored node = %+v, want exactly the removed member's row", rows)
+	}
+	if got := len(rec.ofType(EventRoleBindingRestored)); got != 1 {
+		t.Fatalf("got %d %s events, want 1 (only the kept member's grant)", got, EventRoleBindingRestored)
+	}
+}
+
+func TestService_OnNodeRestored_MemberRemovedBeforeTheNodeDeleted_IsNotReinstated(t *testing.T) {
+	// The P0-rbac-8 regression in its second ordering: the member is
+	// removed FIRST, while her binding at node-1 is live -- the
+	// member-removal reap revokes it with the member-removal origin -- and
+	// only THEN is the node deleted (its reap finds nothing live left to
+	// withdraw) and restored. The node restore enumerates the revoked rows
+	// at the restored node, and the member-origin row must not be among
+	// those it re-instates: the row belongs to the member's own removal,
+	// not to the node's deletion, and the member is not coming back (no
+	// org.member.restored ever fires for her). Before this round the
+	// restore re-instated every revoked row at the node regardless of who
+	// wrote the revoke, and the removed member's grant silently returned --
+	// this test failed on that code.
+	svc, reg := newTestServiceWithRegistry(t)
+
+	removed := Subject{TenantID: "tenant-a", UserID: "user-removed"}
+	grant(t, svc, removed, "reader", Scope{NodeID: "node-1"}, "notes:read")
+
+	publishMemberRemoved(t, reg, "tenant-a", removedMember{UserID: removed.UserID})
+	if ok, _ := svc.Can(context.Background(), removed, "read", "notes"); ok {
+		t.Fatal("the removed member's grant survived the removal")
+	}
+
+	publishNodeDeleted(t, reg, "tenant-a", deletedNode{DeletedNodeIds: []string{"node-1"}})
+
+	rec := recordEvents(reg)
+	publishNodeRestored(t, reg, "tenant-a", restoredNode{NodeID: "node-1"})
+
+	if ok, err := svc.Can(context.Background(), removed, "read", "notes"); err != nil || ok {
+		t.Fatalf("the removed member regained authorization with the node: Can = %v, %v; want false", ok, err)
+	}
+	rows, err := svc.bindings.RevokedByUser(tenantCtx("tenant-a"), removed.UserID)
+	if err != nil {
+		t.Fatalf("listing the removed member's revoked bindings: %v", err)
+	}
+	if len(rows) != 1 || rows[0].NodeID != "node-1" {
+		t.Fatalf("revoked rows of the removed member = %+v, want exactly the node-1 row", rows)
+	}
+	if got := len(rec.ofType(EventRoleBindingRestored)); got != 0 {
+		t.Fatalf("got %d %s events, want 0 (the node restore had nothing of its own to re-instate)", got, EventRoleBindingRestored)
+	}
+}
+
+func TestService_OnNodeRestored_ReinstatesOnlyRowsTheNodeDeletionItselfReaped(t *testing.T) {
+	// The P0-rbac-8 scoping rule at its most literal: a node restore may
+	// re-instate exactly the rows THIS node's deletion reaped -- the rows
+	// carrying the node-deletion origin -- never a deliberate RevokeRole
+	// revocation at the same node that predates the deletion. An
+	// administrator who revoked a grant while the node was still alive,
+	// and never re-granted it, made a decision the node's return must not
+	// undo; before this round the restore could not tell the deliberate
+	// row from the reaped one and undid both.
+	svc, reg := newTestServiceWithRegistry(t)
+
+	deliberate := Subject{TenantID: "tenant-a", UserID: "user-deliberate"}
+	reaped := Subject{TenantID: "tenant-a", UserID: "user-reaped"}
+	ctx := tenantCtx("tenant-a")
+	grant(t, svc, deliberate, "reader", Scope{NodeID: "node-1"}, "notes:read")
+	grant(t, svc, reaped, "reader", Scope{NodeID: "node-1"}, "notes:read")
+
+	// The deliberate revocation predates the deletion: the row is
+	// soft-deleted with the deliberate origin and the deletion reap (which
+	// only ever sees live rows) never touches it.
+	if err := svc.RevokeRole(ctx, deliberate, "reader", Scope{NodeID: "node-1"}); err != nil {
+		t.Fatalf("manual revoke before the delete: %v", err)
+	}
+	publishNodeDeleted(t, reg, "tenant-a", deletedNode{DeletedNodeIds: []string{"node-1"}})
+
+	rec := recordEvents(reg)
+	publishNodeRestored(t, reg, "tenant-a", restoredNode{NodeID: "node-1"})
+
+	// The count assertion comes BEFORE the live probes: probing a live
+	// binding revokes and restores it, which would pollute the recorder.
+	if got := len(rec.ofType(EventRoleBindingRestored)); got != 1 {
+		t.Fatalf("got %d %s events, want 1 (only the reaped binding)", got, EventRoleBindingRestored)
+	}
+	if ok, err := roleBindingLiveAt(context.Background(), svc, reaped, "reader", Scope{NodeID: "node-1"}); err != nil || !ok {
+		t.Fatalf("the reaped binding was not re-instated: live = %v, %v", ok, err)
+	}
+	if ok, err := roleBindingLiveAt(context.Background(), svc, deliberate, "reader", Scope{NodeID: "node-1"}); err != nil || ok {
+		t.Fatalf("the deliberate revocation was re-instated by the node restore: live = %v, %v; want false", ok, err)
+	}
+}
+
+func TestService_OnMemberRemoved_ClaimsOnlyTheNodeReapedRows(t *testing.T) {
+	// The claim step's precision: a member removal re-attributes the
+	// removed member's still-revoked node-deletion rows to the
+	// member-removal origin (so only her own member restore can resurrect
+	// them) and leaves every OTHER kind of revoked row exactly as it was.
+	// The removed member here holds three revoked rows when the removal
+	// lands: one the node-deletion reap wrote (must flip), one a
+	// deliberate RevokeRole wrote (must NOT flip -- no org event may ever
+	// resurrect a deliberate row, so there is nothing to claim), and one
+	// the removal itself revokes in this very pass (already member-origin,
+	// stays). A second user's node-reaped row in the same tenant is
+	// untouched too: it belongs to a different member's story.
+	svc, reg := newTestServiceWithRegistry(t)
+
+	sub := Subject{TenantID: "tenant-a", UserID: "user-gone"}
+	other := Subject{TenantID: "tenant-a", UserID: "user-other"}
+	ctx := tenantCtx("tenant-a")
+
+	// Row at node-1: the node-deletion reap writes it (node deleted while
+	// the member still held the grant).
+	grant(t, svc, sub, "reader", Scope{NodeID: "node-1"}, "notes:read")
+	publishNodeDeleted(t, reg, "tenant-a", deletedNode{DeletedNodeIds: []string{"node-1"}})
+
+	// Row at the tenant root: a deliberate revocation.
+	grant(t, svc, sub, "writer", Scope{}, "notes:write")
+	if err := svc.RevokeRole(ctx, sub, "writer", Scope{}); err != nil {
+		t.Fatalf("manual revoke: %v", err)
+	}
+
+	// Row at node-2: still live when the removal below lands, so the
+	// member-removal reap revokes it with the member-removal origin in the
+	// same pass whose claim this test inspects.
+	grant(t, svc, sub, "reader", Scope{NodeID: "node-2"}, "notes:read")
+
+	// Control: another user's node-reaped row, which the claim must not
+	// touch.
+	grant(t, svc, other, "reader", Scope{NodeID: "node-3"}, "notes:read")
+	publishNodeDeleted(t, reg, "tenant-a", deletedNode{DeletedNodeIds: []string{"node-3"}})
+
+	publishMemberRemoved(t, reg, "tenant-a", removedMember{UserID: sub.UserID})
+
+	rows, err := svc.bindings.RevokedByUser(ctx, sub.UserID)
+	if err != nil {
+		t.Fatalf("listing the removed member's revoked bindings: %v", err)
+	}
+	byNode := map[string]string{}
+	for _, row := range rows {
+		byNode[row.NodeID] = row.RevokeOrigin
+	}
+	if byNode["node-1"] != revokeOriginMemberRemoval {
+		t.Errorf("the node-reaped row's origin after the removal = %q, want %q (claimed)", byNode["node-1"], revokeOriginMemberRemoval)
+	}
+	if byNode[""] != revokeOriginDeliberate {
+		t.Errorf("the deliberate row's origin after the removal = %q, want %q (never claimed)", byNode[""], revokeOriginDeliberate)
+	}
+	if byNode["node-2"] != revokeOriginMemberRemoval {
+		t.Errorf("the row this removal reaped has origin %q, want %q", byNode["node-2"], revokeOriginMemberRemoval)
+	}
+	otherRows, err := svc.bindings.RevokedByUser(ctx, other.UserID)
+	if err != nil {
+		t.Fatalf("listing the other user's revoked bindings: %v", err)
+	}
+	if len(otherRows) != 1 || otherRows[0].RevokeOrigin != revokeOriginNodeDeletion {
+		t.Errorf("the other user's node-reaped row after the removal = %+v, want one row with origin %q",
+			otherRows, revokeOriginNodeDeletion)
 	}
 }

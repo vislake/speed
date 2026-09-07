@@ -3,6 +3,9 @@ package rbac
 import (
 	"context"
 	"encoding/json"
+	"errors"
+
+	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/observability"
@@ -39,11 +42,30 @@ import (
 // again. Where the first pair revokes, the second re-instates: a removal
 // or a delete that was undone is an org statement that the bindings the
 // corresponding reap withdrew are wanted back, and onMemberRestored /
-// onNodeRestored undo exactly those revokes through Service.RestoreRole --
-// the two handlers this file's lower half documents. Without them the
-// reaps' mark-deletes would be a one-way door: a restored member or node
-// would come back with every grant the reap withdrew still revoked,
-// silently, forever.
+// onNodeRestored undo exactly those revokes -- the two handlers this
+// file's lower half documents. Without them the reaps' mark-deletes would
+// be a one-way door: a restored member or node would come back with every
+// grant the reap withdrew still revoked, silently, forever.
+//
+// The re-instatement is precise to the row, never to the scope, because a
+// revoked row now carries the revoke-origin marker this file's
+// D14-resolution adds (migrations/{postgres,sqlite}/0003_add_revoke_origin
+// .sql, model.go's RevokeOrigin field): every mark-delete records which
+// writer performed it -- the deliberate Service.RevokeRole path, the
+// member-removal reap, or the node-deletion reap -- and the restore side
+// scopes by that marker. onMemberRestored restores only rows carrying the
+// member-removal origin, so a deliberate revocation that predates the
+// removal is never silently undone; onNodeRestored restores only rows
+// carrying the node-deletion origin, so a row the node-deletion reap wrote
+// for a user who has SINCE left the tenant is not resurrected by the
+// node's return (the member-removal reap's claim step, claimByUser,
+// re-attributes such rows to the member-removal the moment the member
+// leaves, leaving the user's own member-restore event -- which fires only
+// when the membership is genuinely live again -- as their only
+// resurrection path). The restore side un-marks each matching row BY ID
+// through RoleBindingRepository.Restore, announcing each restored grant
+// with EventRoleBindingRestored exactly as the deletion side announces
+// each revoked one.
 //
 // The module boundary is the reason this is a subscription at all, and the
 // shape of the code below is dictated by what the boundary permits:
@@ -71,25 +93,28 @@ import (
 //
 // Both reaps are deliberately NOT a bulk delete. Each live binding is
 // revoked one at a time through the same three effects an administrator's
-// manual revoke performs -- the row is mark-deleted (so a later restore of
-// the membership -- or, for onNodeDeleted, a later grant reassigned onto a
-// reused node id -- can restore the grant), the process-local decision
-// cache is invalidated, and EventRoleBindingRevoked is published so every
-// replica converges. The reason the loop stays per-binding rather than
-// becoming one bulk statement is precisely that triple: a bulk write would
-// skip the per-row mark (the restore side needs every revoked row intact
-// with its full grant tuple, which is what onMemberRestored and
-// onNodeRestored hand back to Service.RestoreRole), the per-subject cache
-// invalidation (the cache is keyed by subject; only the loop knows which
-// subjects to drop), and the per-binding convergence events. What the loop
-// does NOT do is re-read the row it is withdrawing: revokeReapedBindings
-// revokes each enumerated binding BY ID and resolves its role once per
-// distinct role per pass, where the public RevokeRole -- which takes a
-// subject, a role key and a scope and re-resolves both -- would cost one
-// full read-modify-delete cycle per binding. The two reaps run
-// synchronously inside org's own request (the in-memory bus delivers
-// in-process), so that per-binding overhead is what a many-binding
-// cascade would otherwise drag into org's single HTTP DELETE.
+// manual revoke performs -- the row is mark-deleted with the reap's origin
+// recorded in the same UPDATE (so a later restore of the membership or the
+// node -- or, for onNodeDeleted, a later grant reassigned onto a reused
+// node id -- can restore the grant; the origin is what tells the restore
+// side which rows belong to which reap, see the file header), the
+// process-local decision cache is invalidated, and EventRoleBindingRevoked
+// is published so every replica converges. The reason the loop stays
+// per-binding rather than becoming one bulk statement is precisely that
+// triple: a bulk write would skip the per-row mark and its origin (the
+// restore side needs every revoked row intact with its full grant tuple,
+// which is what onMemberRestored and onNodeRestored hand back to the
+// shared reinstateReapedBindings step), the per-subject cache invalidation
+// (the cache is keyed by subject; only the loop knows which subjects to
+// drop), and the per-binding convergence events. What the loop does NOT do
+// is re-read the row it is withdrawing: revokeReapedBindings revokes each
+// enumerated binding BY ID and resolves its role once per distinct role
+// per pass, where the public RevokeRole -- which takes a subject, a role
+// key and a scope and re-resolves both -- would cost one full
+// read-modify-delete cycle per binding. The two reaps run synchronously
+// inside org's own request (the in-memory bus delivers in-process), so
+// that per-binding overhead is what a many-binding cascade would otherwise
+// drag into org's single HTTP DELETE.
 //
 // See onMemberRemoved's, onNodeDeleted's, onMemberRestored's and
 // onNodeRestored's own doc comments for each handler's resilience
@@ -192,7 +217,8 @@ func memberUserIDFromPayload(payload any) (string, bool) {
 //     event (pkgcore.WithTenant) because a handler invoked by the
 //     distributed mode's bus runs on a context that carries none, and
 //     every Repository call would otherwise fail closed. Then the
-//     member's live bindings are revoked one by one; see
+//     member's live bindings are revoked one by one and her still-revoked
+//     node-reaped rows are claimed (see reapRoleBindings); see
 //     revokeReapedBindings for why the failures inside that pass are
 //     logged and continued rather than returned.
 //
@@ -218,19 +244,44 @@ func (s *Service) onMemberRemoved(ctx context.Context, evt pkgcore.Event) error 
 	return nil
 }
 
-// reapRoleBindings revokes every live role binding the removed member still
-// holds in the tenant ctx carries -- ctx was rebuilt from the event by
-// onMemberRemoved, so the subject here comes entirely from the event's
-// tenant and payload, never from whatever identity the delivery context
-// happened to carry (a bus subscriber context has none anyway, and a
-// publisher's identity must never steer whose grants get revoked).
+// reapRoleBindings performs the member-removal reap's two effects on the
+// removed member's bindings in the tenant ctx carries -- ctx was rebuilt
+// from the event by onMemberRemoved, so the subject here comes entirely
+// from the event's tenant and payload, never from whatever identity the
+// delivery context happened to carry (a bus subscriber context has none
+// anyway, and a publisher's identity must never steer whose grants get
+// revoked).
 //
-// The revoking itself is delegated to revokeReapedBindings, which both
-// reaps share; see that method's doc comment for why each binding is
-// withdrawn by id rather than through the public RevokeRole and what that
-// keeps and what it skips.
+// The first effect is the claim (claimNodeReapedBindings): the member's
+// still-revoked rows that the NODE-deletion reap wrote are re-attributed
+// to this removal, so a later node restore -- which might well arrive while
+// the member is still gone -- cannot resurrect authorization for someone
+// who is no longer a member. Without the claim, the row set the node
+// deletion reaped and the row set this removal revokes would disagree
+// exactly when the two reaps' events interleave, and the node restore
+// would rebuild a grant the removal had in fact ended (this file's
+// D14-resolution, P0-rbac-8).
+//
+// The second effect is the revoke itself, delegated to revokeReapedBindings
+// -- which both reaps share, and which this reap drives with the
+// member-removal origin so the rows it writes carry the marker that tells
+// onMemberRestored they are the removal's own (see that method's doc
+// comment for why each binding is withdrawn by id rather than through the
+// public RevokeRole and what that keeps and what it skips).
+//
+// Both effects fail independently and neither aborts the other: a reap
+// that revoked the live bindings but could not claim, or claimed but could
+// not revoke, logs what it could not do at Warn and moves on, exactly as
+// revokeReapedBindings treats its own per-binding failures -- a redelivery
+// is the backstop for the revokes, and the claim's own UPDATE is
+// idempotent under one. The claim runs FIRST and unconditionally because
+// it does not depend on the live-row enumeration at all: it targets rows
+// that are already revoked, and a failure to enumerate the live ones must
+// not also skip the claim.
 func (s *Service) reapRoleBindings(ctx context.Context, evt pkgcore.Event, userID string) {
 	log := observability.FromContext(ctx)
+
+	s.claimNodeReapedBindings(ctx, evt, userID)
 
 	bindings, err := s.bindings.ByUser(ctx, userID)
 	if err != nil {
@@ -238,7 +289,37 @@ func (s *Service) reapRoleBindings(ctx context.Context, evt pkgcore.Event, userI
 			"event_type", evt.Type, "user_id", userID, "error", err)
 		return
 	}
-	s.revokeReapedBindings(ctx, evt, bindings)
+	s.revokeReapedBindings(ctx, evt, bindings, revokeOriginMemberRemoval)
+}
+
+// claimNodeReapedBindings runs the member-removal reap's claim step:
+// every currently soft-deleted binding of userID that the node-deletion
+// reap wrote (revoke_origin = 'node-deletion') is re-attributed to the
+// member-removal origin (RoleBindingRepository.claimByUser). It exists
+// because the two reaps enumerate DIFFERENT row sets, and the difference
+// is exactly where a removed member's authorization could otherwise come
+// back: the node-deletion reap withdraws a binding scoped to a deleted
+// node, and if the user is removed from the tenant AFTER that -- with no
+// live binding left for the member-removal reap to withdraw -- a later
+// node restore would see a node-deletion row and re-instate it for someone
+// who is no longer a member. The claim is what tells that node restore
+// "no": the row now belongs to the member-removal, and only the user's own
+// org.member.restored event (which fires only when the membership is live
+// again) can resurrect it.
+//
+// Deliberate RevokeRole rows are deliberately left untouched: no org event
+// may ever resurrect them, so there is nothing for the claim to do. The
+// step writes no row state beyond the marker -- no decision changes, no
+// event is published, and the durable re-attribution alone is what the
+// later node-restored handler reads -- which is also why a redelivery of
+// this same removal event finds nothing left to claim and rewrites nothing
+// (the reap stays idempotent).
+func (s *Service) claimNodeReapedBindings(ctx context.Context, evt pkgcore.Event, userID string) {
+	log := observability.FromContext(ctx)
+	if err := s.bindings.claimByUser(ctx, userID); err != nil {
+		log.Warn("rbac could not claim a removed member's node-reaped role bindings",
+			"event_type", evt.Type, "user_id", userID, "error", err)
+	}
 }
 
 // eventNodeDeleted is org's org.node.deleted event, the string rbac
@@ -365,7 +446,9 @@ func (s *Service) onNodeDeleted(ctx context.Context, evt pkgcore.Event) error {
 // ids org just removed from its tree, and every binding scoped to any of
 // them is what this reap targets regardless of who holds it. The revoking
 // is delegated to the shared revokeReapedBindings (see its doc comment for
-// the per-binding cost shape), in one pass over every id the event named
+// the per-binding cost shape), driven with the node-deletion origin so the
+// rows this reap writes carry the marker that tells onNodeRestored they
+// are this deletion's own, in one pass over every id the event named
 // -- a single event for a cascade can carry many ids, and this runs one
 // enumeration and one revoke loop over all of them, never one handler
 // invocation per node.
@@ -378,28 +461,36 @@ func (s *Service) reapRoleBindingsForNodes(ctx context.Context, evt pkgcore.Even
 			"event_type", evt.Type, "error", err)
 		return
 	}
-	s.revokeReapedBindings(ctx, evt, bindings)
+	s.revokeReapedBindings(ctx, evt, bindings, revokeOriginNodeDeletion)
 }
 
 // revokeReapedBindings withdraws every live binding in bindings -- the rows
-// a removal or a deletion reap enumerated -- and is the per-binding revoke
-// step the two reaps share.
+// a removal or a deletion reap enumerated -- recording origin as the
+// revoke's writer -- and is the per-binding revoke step the two reaps
+// share: reapRoleBindings drives it with revokeOriginMemberRemoval,
+// reapRoleBindingsForNodes with revokeOriginNodeDeletion. origin is the
+// marker the restore side scopes by (see the file header's D14-resolution
+// and model.go's RevokeOrigin field comment): it is written into the same
+// mark-delete UPDATE that soft-deletes the row, atomically, so no revoked
+// row can exist whose writer this reap does not name.
 //
 // For each binding it performs exactly the three effects an administrator's
-// manual revoke performs: the soft-delete mark (bindings.Delete, the
-// identical dbkit mark-delete the public path uses), the process-local
-// cache invalidation and the EventRoleBindingRevoked announcement that
-// converges the other replicas (both inside publishBindingChanged). What it
-// skips is the RE-READING RevokeRole performs on arguments it was handed:
-// that method takes a subject, a role KEY and a scope and re-resolves the
-// binding's row and the role's id from them, while a reap already holds
-// the very row it enumerated. Each binding is therefore deleted BY ID, and
-// the role it names is resolved once per DISTINCT role per pass rather
-// than once per binding. That is the cost shape this module's performance
-// contract needs: the two reaps run synchronously inside org's own request
-// (the in-memory bus delivers in-process), and a many-binding cascade must
-// not drag org's single HTTP DELETE through one full read-modify-delete
-// cycle per binding -- measured, not timed, by the reap statement-counting
+// manual revoke performs: the soft-delete mark (bindings.Delete, now the
+// origin-aware mark-delete RoleBindingRepository.Delete shadows -- the
+// public RevokeRole path drives the same method with the deliberate
+// origin), the process-local cache invalidation and the
+// EventRoleBindingRevoked announcement that converges the other replicas
+// (both inside publishBindingChanged). What it skips is the RE-READING
+// RevokeRole performs on arguments it was handed: that method takes a
+// subject, a role KEY and a scope and re-resolves the binding's row and
+// the role's id from them, while a reap already holds the very row it
+// enumerated. Each binding is therefore deleted BY ID, and the role it
+// names is resolved once per DISTINCT role per pass rather than once per
+// binding. That is the cost shape this module's performance contract
+// needs: the two reaps run synchronously inside org's own request (the
+// in-memory bus delivers in-process), and a many-binding cascade must not
+// drag org's single HTTP DELETE through one full read-modify-delete cycle
+// per binding -- measured, not timed, by the reap statement-counting
 // regression in reap_test.go.
 //
 // A binding whose role cannot be resolved is left in place. Roles have no
@@ -420,7 +511,7 @@ func (s *Service) reapRoleBindingsForNodes(ctx context.Context, evt pkgcore.Even
 // the binding between the enumeration and this delete, exactly the
 // caller's goal, so it is not even worth a log line (the identical
 // classification RevokeRole gives its own delete's zero-rows outcome).
-func (s *Service) revokeReapedBindings(ctx context.Context, evt pkgcore.Event, bindings []RoleBinding) {
+func (s *Service) revokeReapedBindings(ctx context.Context, evt pkgcore.Event, bindings []RoleBinding, origin string) {
 	log := observability.FromContext(ctx)
 
 	resolvedRoles := make(map[string]*Role, len(bindings))
@@ -438,7 +529,7 @@ func (s *Service) revokeReapedBindings(ctx context.Context, evt pkgcore.Event, b
 			resolvedRoles[binding.RoleID] = role
 		}
 
-		if err := s.bindings.Delete(ctx, binding.ID); err != nil {
+		if err := s.bindings.Delete(ctx, binding.ID, origin); err != nil {
 			if hasCode(err, dbkit.ErrRecordNotFound.Code) {
 				continue
 			}
@@ -485,10 +576,11 @@ func (s *Service) revokeReapedBindings(ctx context.Context, evt pkgcore.Event, b
 //  4. The event carries a tenant. The tenant context is rebuilt from the
 //     event (pkgcore.WithTenant) because a handler invoked by the
 //     distributed mode's bus runs on a context that carries none, and
-//     every Repository call would otherwise fail closed. Then every
-//     revoked binding of the restored member is re-instated one tuple at a
-//     time; see reinstateRoleBindings for why the failures inside that
-//     loop are logged and continued rather than returned.
+//     every Repository call would otherwise fail closed. Then the
+//     restored member's revoked bindings that carry the member-removal
+//     origin are re-instated one row at a time; see
+//     reinstateRoleBindings for why the failures inside that loop are
+//     logged and continued rather than returned.
 //
 // The handler never returns an error. On the in-memory bus it runs
 // synchronously inside org's Restore call, after org's transaction has
@@ -512,67 +604,64 @@ func (s *Service) onMemberRestored(ctx context.Context, evt pkgcore.Event) error
 	return nil
 }
 
-// reinstateRoleBindings re-instates every revoked role binding the
-// restored member holds in the tenant ctx carries -- ctx was rebuilt from
-// the event by onMemberRestored, so the subject here comes entirely from
-// the event's tenant and payload, never from whatever identity the
-// delivery context happened to carry.
+// reinstateRoleBindings re-instates the role bindings this member's own
+// removal reaped, now that org has made the membership visible again. ctx
+// was rebuilt from the event by onMemberRestored, so the subject here
+// comes entirely from the event's tenant and payload, never from whatever
+// identity the delivery context happened to carry.
 //
-// # What "every revoked binding" re-instates
+// # What re-instates what
 //
-// The removal reap revoked every binding the member held that was live at
-// removal time (reapRoleBindings), so this side reads the mirror question:
-// every binding of this (tenant, user) that is currently revoked,
-// enumerated from the soft-deleted rows themselves
-// (RoleBindingRepository.RevokedByUser) and re-instated through
-// Service.RestoreRole -- the same tested path an administrator's manual
-// restore takes: the most recently revoked row at the (user, role, node)
-// tuple is un-marked, the process-local decision cache is invalidated, and
-// EventRoleBindingRestored is published so every replica converges.
-// RestoreRole is invoked once per tuple rather than once per row because a
-// tuple can carry several soft-deleted rows (a
-// revoke-then-reassign-then-revoke-again sequence leaves one per revoke);
-// it restores the most recent, which for a tuple the removal reaped IS the
-// reaped row, and one call per tuple keeps the announcement volume at one
-// event per grant, exactly the deletion side's one revoke event per
-// binding. A binding already live at the tuple -- regranted since the
-// removal -- makes RestoreRole a no-op, per its own idempotent contract.
+// The removal reap wrote the member-removal origin onto every row it
+// withdrew AND claimed the member's still-revoked node-deletion rows into
+// the same origin (reapRoleBindings), so the row set this side must bring
+// back is exactly: the (tenant, user)'s currently revoked bindings whose
+// revoke_origin says member-removal. It is enumerated from the soft-deleted
+// rows themselves (RoleBindingRepository.RevokedByUser) and filtered in Go
+// by the marker; every row that does NOT carry it is left revoked,
+// deliberately: a deliberate RevokeRole revocation (origin empty) is an
+// operator decision no org event may undo, and a row still carrying the
+// node-deletion origin belongs to a node restore, not a member restore.
+// That precision is what deferral D14 promised and what this round's
+// marker migration (0003_add_revoke_origin.sql) delivers; the pre-marker
+// rows the backfill left on the empty origin are treated exactly like
+// deliberate revocations -- never resurrected by an org event, restored
+// the explicit way if an operator wants them back.
 //
-// # The attribution limitation, and why this is the closest sound shape
+// Each matching row is un-marked BY ID through
+// RoleBindingRepository.Restore -- the same conditional write an
+// administrator's manual Service.RestoreRole performs on the row its
+// findMostRecentlyRevoked recovers, but addressed to the very row the
+// marker names, never to "whatever is most recently revoked at the tuple":
+// a tuple whose newest revoked row is a later deliberate revocation (or a
+// later regrant's node-deletion reap) must keep THAT row revoked while the
+// older, genuinely-reaped row comes back, and only an id-addressed restore
+// can tell the two apart. Row-level precision also makes the tuple
+// de-duplication the pre-marker loop needed unnecessary: if two
+// member-removal rows ever share one tuple (a removal cycle per row), the
+// first restore makes the tuple live and the second collides with the
+// partial unique index -- a classified skip, never an error or a second
+// live row. Each successful un-mark invalidates the subject's cached
+// decisions and publishes EventRoleBindingRestored (both inside
+// publishBindingChanged), so every replica converges exactly as it does on
+// a manual restore.
 //
-// A soft-deleted row carries no marker saying WHICH revoke wrote it: an
-// administrator's manual revocation and a reap's write leave the identical
-// two columns, both travelling through the same mark-delete path
-// (Service.RevokeRole for the manual one, revokeReapedBindings for the
-// reaps' -- the two share bindings.Delete and publishBindingChanged).
-// Re-instating every revoked tuple of the restored member therefore also
-// undoes revocations this member's removal did NOT reap -- a grant an
-// administrator deliberately withdrew while the person was still a member,
-// or one the NODE-deletion reap revoked because its node died, would come
-// back with the membership. That over-reach is unavoidable from the data
-// the reaps retain: the reaped set at removal time is exactly "the tuples
-// that were live then", which nothing stored records, and telling the
-// rows apart would need a marker this module's frozen deletion path does
-// not write. The over-reach is biased to the availability side because a
-// member restore is an affirmative, visible operator act (org's
-// MemberService.Restore is called by membership id, never fired
-// automatically), because it is the same un-attributed posture org's own
-// Restore methods take toward rows with multiple delete origins, and
-// because while the reaps are the only production writers of revoked rows
-// -- no administrator revoke surface exists yet (deferrals D1/D12) -- it
-// cannot occur at all. It is recorded, with the marker idea, as this
-// module's deferral D14.
+// A row whose role can no longer be resolved is left revoked with a Warn,
+// the identical treatment the revoke side gives an unresolvable row -- a
+// role cannot die through this module, so the anomaly is worth one log
+// line, never an abort.
 //
 // The loop never aborts on a failure, for the identical reason
 // reapRoleBindings' own doc comment gives: a member-restored delivery that
 // re-instated nine of ten bindings has done real work, and every failure
-// is logged at Warn rather than surfaced. ErrBindingNotFound from
-// RestoreRole -- the tuple gained a live row or lost its revoked row to a
-// concurrent actor between the enumeration above and the restore (the
-// classification assign.go's RestoreRole comment documents) -- means the
-// grant already holds or was withdrawn by a newer decision, so it is not
-// even worth a log line, mirroring the deletion side's identical
-// classification of the same case.
+// is logged at Warn rather than surfaced. Two outcomes are classified
+// silent, mirroring assign.go's RestoreRole treatment of its own restore
+// races: dbkit.ErrRecordNotFound -- the row is no longer revoked when the
+// un-mark lands, meaning a concurrent restore of the same row won and the
+// desired end state already holds -- and the gorm.ErrDuplicatedKey a
+// restore collides with when a live row now occupies the tuple, which
+// means the grant already exists. In both cases the caller's goal is
+// achieved by someone else's write, so neither is worth a log line.
 func (s *Service) reinstateRoleBindings(ctx context.Context, evt pkgcore.Event, userID string) {
 	log := observability.FromContext(ctx)
 
@@ -582,36 +671,7 @@ func (s *Service) reinstateRoleBindings(ctx context.Context, evt pkgcore.Event, 
 			"event_type", evt.Type, "user_id", userID, "error", err)
 		return
 	}
-	seen := make(map[string]struct{}, len(revoked))
-	for _, binding := range revoked {
-		// One restore decision per (user, role, node) tuple; see the method
-		// doc comment for why RestoreRole is tuple-addressed at all.
-		tuple := binding.UserID + "\x00" + binding.RoleID + "\x00" + binding.NodeID
-		if _, dup := seen[tuple]; dup {
-			continue
-		}
-		seen[tuple] = struct{}{}
-
-		// The revoked row names the role by id; RestoreRole names it by key,
-		// so the id is resolved once here -- the identical pattern
-		// reapRoleBindings uses for the revoke direction. Roles have no
-		// delete path in this module, so a revoked binding whose role cannot
-		// be found is an anomaly worth a log line rather than a crash.
-		role, err := s.roles.FindByID(ctx, binding.RoleID)
-		if err != nil {
-			log.Warn("rbac could not resolve a restored member's revoked binding role",
-				"event_type", evt.Type, "user_id", userID, "role_id", binding.RoleID, "error", err)
-			continue
-		}
-		sub := Subject{TenantID: evt.TenantID, UserID: binding.UserID}
-		if err := s.RestoreRole(ctx, sub, role.Key, Scope{NodeID: binding.NodeID}); err != nil {
-			if isBindingNotFound(err) {
-				continue
-			}
-			log.Warn("rbac could not restore a restored member's revoked role binding",
-				"event_type", evt.Type, "user_id", userID, "role", role.Key, "node_id", binding.NodeID, "error", err)
-		}
-	}
+	s.reinstateReapedBindings(ctx, evt, revoked, revokeOriginMemberRemoval)
 }
 
 // eventNodeRestored is org's org.node.restored event, the string rbac
@@ -669,10 +729,13 @@ func nodeRestoredNodeIDFromPayload(payload any) (string, bool) {
 }
 
 // onNodeRestored is the subscriber Attach installs for org's
-// org.node.restored event: it re-instates every role binding scoped to the
-// one node org just made visible again. org's Restore is deliberately
-// per-node, never cascading, so this re-instates exactly the one restored
-// node's bindings -- never a descendant's, which stay revoked until that
+// org.node.restored event: it re-instates the role bindings scoped to the
+// one node org just made visible again that THIS node's deletion reaped --
+// never a deliberate revocation at the node, and never a row the
+// member-removal claimed for a member who has since left (see
+// reinstateRoleBindingsForNode). org's Restore is deliberately per-node,
+// never cascading, so this re-instates exactly the one restored node's
+// bindings -- never a descendant's, which stay revoked until that
 // descendant is itself restored and fires its own event.
 //
 // # The resilience contract
@@ -696,9 +759,10 @@ func nodeRestoredNodeIDFromPayload(payload any) (string, bool) {
 //
 //  4. The event carries a tenant and a node id. The tenant context is
 //     rebuilt from the event for the same reason onMemberRestored's does,
-//     and every revoked binding scoped to the restored node is
-//     re-instated; see reinstateRoleBindingsForNode for why failures
-//     inside that loop are logged and continued rather than returned.
+//     and the revoked bindings scoped to the restored node that carry the
+//     node-deletion origin are re-instated; see
+//     reinstateRoleBindingsForNode for why failures inside that loop are
+//     logged and continued rather than returned.
 //
 // The handler never returns an error, for the same reason onNodeDeleted's
 // does not: on the in-memory bus it runs synchronously inside org's
@@ -723,26 +787,42 @@ func (s *Service) onNodeRestored(ctx context.Context, evt pkgcore.Event) error {
 	return nil
 }
 
-// reinstateRoleBindingsForNode re-instates every revoked role binding
-// scoped to the restored node, in the tenant ctx carries -- ctx was rebuilt
-// from the event by onNodeRestored, so the tenant comes entirely from the
-// event, never from whatever identity the delivery context happened to
-// carry.
+// reinstateRoleBindingsForNode re-instates the role bindings THIS node's
+// deletion reaped, now that org has made the node visible again. ctx was
+// rebuilt from the event by onNodeRestored, so the tenant comes entirely
+// from the event, never from whatever identity the delivery context
+// happened to carry.
 //
 // Unlike reinstateRoleBindings, which enumerates by user, this enumerates
 // by node: a node-restored event carries no user at all, only the one node
-// id org just made visible again, and every revoked binding scoped to it is
-// what this re-instates regardless of who holds it -- the mirror of
-// reapRoleBindingsForNodes' own per-node enumeration, one pass over the
-// revoked rows at the single restored node. Each distinct (user, role)
-// tuple at that node is re-instated through the identical RestoreRole path
-// reinstateRoleBindings already reuses -- see that method's doc comment
-// for the loop's failure handling and its attribution-limitation
-// paragraph: a revocation at this node that predates the node's deletion
-// and was never followed by a re-grant is indistinguishable from a row the
-// node-deletion reap wrote, so it is re-instated too, the same
-// un-attributed posture org's own per-node TreeService.Restore takes
-// toward its own rows (recorded as deferral D14).
+// id org just made visible again, and the revoked rows scoped to it are
+// what this re-instates -- the mirror of reapRoleBindingsForNodes' own
+// per-node enumeration, one pass over the revoked rows at the single
+// restored node, filtered in Go by the node-deletion origin the reaping
+// pass wrote onto every row it withdrew.
+//
+// The filter is the whole of the hazard closure this side must provide: a
+// node restore must bring back exactly the grants the node deletion took,
+// for holders who are still members -- and it must NOT rebuild
+// authorization for a holder who left the tenant while the node was gone.
+// The marker delivers both halves. A row that does not carry the
+// node-deletion origin stays revoked: a deliberate RevokeRole at this node
+// is an operator decision no node restore may undo, and a row the
+// member-removal reap wrote (or claimed -- reapRoleBindings re-attributes
+// a removed member's node-deletion rows to the member-removal the moment
+// she leaves) belongs to that member's own restore, not to the node's: if
+// it came back here, a user removed from the tenant would regain live
+// authorization on the node's mere return, with no membership behind it --
+// the P0-rbac-8 escalation this round closes. A node-reaped row whose
+// holder was never removed carries the origin and comes back, which is the
+// mechanism's intended case.
+//
+// Each matching row is un-marked BY ID through the same
+// reinstateReapedBindings step reinstateRoleBindings uses -- the row-level
+// restore, cache invalidation and EventRoleBindingRestored announcement
+// that method's doc comment describes in full -- so the two restore-side
+// subscribers share one un-marking loop exactly as the two reaps share one
+// revoking loop.
 func (s *Service) reinstateRoleBindingsForNode(ctx context.Context, evt pkgcore.Event, nodeID string) {
 	log := observability.FromContext(ctx)
 
@@ -752,34 +832,82 @@ func (s *Service) reinstateRoleBindingsForNode(ctx context.Context, evt pkgcore.
 			"event_type", evt.Type, "node_id", nodeID, "error", err)
 		return
 	}
-	seen := make(map[string]struct{}, len(revoked))
+	s.reinstateReapedBindings(ctx, evt, revoked, revokeOriginNodeDeletion)
+}
+
+// reinstateReapedBindings un-marks every binding in revoked that carries
+// origin -- the rows one restore-side subscriber enumerated and the
+// matching reap attributed to it -- and is the per-binding re-instatement
+// step the two restore-side subscribers share, revokeReapedBindings'
+// mirror image: the same resolved-once-per-distinct-role role resolution,
+// the same per-row write, the same publishBindingChanged effects (cache
+// invalidation and the EventRoleBindingRestored announcement that
+// converges the replicas), and the same log-and-continue failure handling.
+//
+// Each matching row is restored BY ID through RoleBindingRepository.Restore
+// -- the same conditional un-mark an administrator's manual RestoreRole
+// performs, but addressed to the very row the marker names, never to
+// "whatever is most recently revoked at the tuple", so a tuple whose newest
+// revoked row was written by a DIFFERENT writer (a later deliberate
+// revocation, a later regrant reaped by the other event) keeps that row
+// revoked while the genuinely-reaped one comes back. That row-level
+// precision is the point of the whole marker: it is what makes
+// re-instatement unable to resurrect a revocation the matching removal or
+// deletion did not make.
+//
+// A binding whose role cannot be resolved is left revoked with a Warn,
+// exactly as revokeReapedBindings leaves an unresolvable row in place.
+// Rows not carrying origin are skipped before any role resolution -- the
+// marker decides, and the row sets a subscriber may hold are otherwise
+// full of rows that must stay revoked.
+//
+// Two restore outcomes are classified silent, mirroring assign.go's
+// RestoreRole treatment of its own restore races: dbkit.ErrRecordNotFound
+// -- the row is no longer revoked by the time the un-mark lands (a
+// concurrent restore of the same row won, so the grant already holds) --
+// and the gorm.ErrDuplicatedKey a restore collides with when a live row
+// now occupies the tuple (a fresh AssignRole since the enumeration, so the
+// grant already exists). In both cases the caller's goal was achieved by
+// someone else's write, so neither is worth a log line. Anything else is
+// logged at Warn and the loop moves on, for the same reason the revoke
+// side never aborts: a restore delivery that re-instated nine of ten
+// grants has done real work, and surfacing an error would make org's
+// committed restore look failed.
+func (s *Service) reinstateReapedBindings(ctx context.Context, evt pkgcore.Event, revoked []RoleBinding, origin string) {
+	log := observability.FromContext(ctx)
+
+	resolvedRoles := make(map[string]*Role, len(revoked))
 	for _, binding := range revoked {
-		// One restore decision per (user, role) tuple at this one node; the
-		// node is constant, so the tuple key omits it. See
-		// reinstateRoleBindings' own comment for why RestoreRole is
-		// tuple-addressed at all.
-		tuple := binding.UserID + "\x00" + binding.RoleID
-		if _, dup := seen[tuple]; dup {
+		if binding.RevokeOrigin != origin {
 			continue
 		}
-		seen[tuple] = struct{}{}
+		role, ok := resolvedRoles[binding.RoleID]
+		if !ok {
+			var err error
+			role, err = s.roles.FindByID(ctx, binding.RoleID)
+			if err != nil {
+				log.Warn("rbac could not resolve a reinstated binding's role",
+					"event_type", evt.Type, "user_id", binding.UserID, "node_id", binding.NodeID,
+					"role_id", binding.RoleID, "error", err)
+				continue
+			}
+			resolvedRoles[binding.RoleID] = role
+		}
 
-		// The revoked row names the role by id; RestoreRole names it by key,
-		// so the id is resolved once here -- the identical pattern
-		// reinstateRoleBindings uses for the same reason.
-		role, err := s.roles.FindByID(ctx, binding.RoleID)
-		if err != nil {
-			log.Warn("rbac could not resolve a restored node's revoked binding role",
-				"event_type", evt.Type, "node_id", nodeID, "role_id", binding.RoleID, "error", err)
+		if err := s.bindings.Restore(ctx, binding.ID); err != nil {
+			if hasCode(err, dbkit.ErrRecordNotFound.Code) || errors.Is(err, gorm.ErrDuplicatedKey) {
+				continue
+			}
+			log.Warn("rbac could not restore a reinstated role binding",
+				"event_type", evt.Type, "node_id", binding.NodeID, "user_id", binding.UserID,
+				"role", role.Key, "error", err)
 			continue
 		}
 		sub := Subject{TenantID: evt.TenantID, UserID: binding.UserID}
-		if err := s.RestoreRole(ctx, sub, role.Key, Scope{NodeID: binding.NodeID}); err != nil {
-			if isBindingNotFound(err) {
-				continue
-			}
-			log.Warn("rbac could not restore a restored node's revoked role binding",
-				"event_type", evt.Type, "node_id", nodeID, "user_id", binding.UserID, "role", role.Key, "error", err)
+		if err := s.publishBindingChanged(ctx, EventRoleBindingRestored, sub, role, Scope{NodeID: binding.NodeID}); err != nil {
+			log.Warn("rbac could not announce a reinstated binding's restore",
+				"event_type", evt.Type, "node_id", binding.NodeID, "user_id", binding.UserID,
+				"role", role.Key, "error", err)
 		}
 	}
 }
