@@ -52,13 +52,51 @@ const retentionSweepActor = "compliance.retention_sweep"
 // schedules and retentionSweepHandler claims.
 const taskTypeRetentionSweep = "compliance.retention_sweep"
 
-// retentionSweepIdempotencyKey derives one tenant's retention-sweep task
-// idempotency key from the tenant id, mirroring go/storage's
-// expirySweepIdempotencyKey: a scheduler with two replicas, or a manual
-// re-run, collapses into one job, so a tenant is never swept by two
-// workers at once.
-func retentionSweepIdempotencyKey(tenant pkgcore.TenantID) string {
-	return "compliance.retention_sweep:" + string(tenant)
+// retentionSweepWindowSize is the period one retention-sweep idempotency
+// key covers, mirroring go/storage's expirySweepWindowSize exactly: a
+// sweep is enqueued under the key of the retentionSweepWindowSize window
+// (retentionSweepWindowStart) its enqueue falls in, so the same-window
+// duplicates the original key existed to collapse -- a scheduler with two
+// replicas, a manual re-run -- still merge into one job, while an enqueue
+// in a later window becomes a NEW job and the sweep runs again. The window
+// is what makes the sweep periodic at all: jobs' idempotency is
+// unconditional for one key on StandaloneQueue (a resolved key is held
+// forever), so a tenant-only key would give each tenant exactly one
+// retention sweep per database file -- the pre-window design's recorded
+// residual -- and, worse, a sweep job that dead-letters would poison its
+// tenant forever, since every later enqueue would keep returning the dead
+// job's id. A dead-lettered job now poisons only its own window; the next
+// window's enqueue is a fresh key and runs. Retention is a legal
+// obligation: soft-deleted rows past their retention window are hard
+// deleted within at most one retentionSweepWindowSize of the sweep that
+// should have caught them being enqueued, never "whenever the next
+// database file happens to exist".
+const retentionSweepWindowSize = time.Hour
+
+// retentionSweepWindowStart is the retention-sweep window the enqueue at
+// now belongs to -- the absolute hour boundary now.Truncate
+// (retentionSweepWindowSize) lands in, the twin of storage's
+// expirySweepWindowStart. Two replicas enqueuing within the same window
+// share one key (and one job); a tick in a later window gets its own.
+// Truncation is on the absolute clock, never a timezone-local calendar
+// cut, so every replica agrees on the boundary regardless of its own
+// location.
+func retentionSweepWindowStart(now time.Time) time.Time {
+	return now.Truncate(retentionSweepWindowSize)
+}
+
+// retentionSweepIdempotencyKey derives the jobs idempotency key of one
+// retention-sweep window for a tenant, mirroring go/storage's
+// expirySweepIdempotencyKey: the operation one key names is "the sweep of
+// windowStart", not "some sweep or other" -- a periodic task's identity
+// inherently includes WHICH period it is for. windowStart is the
+// retentionSweepWindowSize window start the enqueue belongs to
+// (retentionSweepWindowStart). A scheduler with two replicas, or a manual
+// re-run, collapses into one job within one window, so a tenant is never
+// swept by two workers at once; a dead-lettered job poisons only its own
+// window, and an enqueue in a later window runs the sweep again.
+func retentionSweepIdempotencyKey(tenant pkgcore.TenantID, windowStart time.Time) string {
+	return "compliance.retention_sweep:" + string(tenant) + ":" + windowStart.UTC().Format(time.RFC3339)
 }
 
 // TenantLister is a host-supplied, structurally typed seam letting
@@ -134,6 +172,14 @@ type RetentionService struct {
 	cfg       *config.Service
 	lister    TenantLister
 	queue     jobs.Queue
+
+	// now is the clock EnqueueRetentionSweep reads to place the enqueue in
+	// its retentionSweepWindowSize window (retentionSweepWindowStart). It
+	// is a field, not a time.Now() call at the enqueue site, so the window
+	// a sweep is enqueued under is deterministic in tests -- the same
+	// clock-seam pattern go/storage's expiry sweep uses -- while
+	// defaulting to the real clock for every production call.
+	now func() time.Time
 }
 
 // newRetentionService returns a RetentionService with no seams wired yet;
@@ -141,7 +187,7 @@ type RetentionService struct {
 // Retention registrar, and Module's own With* options attach the optional
 // *config.Service, TenantLister and jobs.Queue.
 func newRetentionService() *RetentionService {
-	return &RetentionService{}
+	return &RetentionService{now: time.Now}
 }
 
 // RetentionWindow resolves the retention window a sweep should use for
@@ -354,10 +400,17 @@ func (s *RetentionService) SweepAllTenants(ctx context.Context) (map[pkgcore.Ten
 // EnqueueRetentionSweep enqueues the retention-sweep task for the tenant
 // ctx carries, mirroring go/storage's EnqueueExpirySweep: the host-facing
 // schedule point a platform loop calls once per tenant on its own timer,
-// relying on the task's per-tenant idempotency key to collapse concurrent
-// enqueues into one job. ctx must carry a tenant (pkgcore.WithTenant);
-// with none, this returns a plain error rather than guessing one. With no
-// queue wired (WithQueue), it returns ErrQueueRequired.
+// relying on the task's window-scoped idempotency key
+// (retentionSweepIdempotencyKey) to collapse the enqueues of one
+// retentionSweepWindowSize window into one job. An enqueue whose clock has
+// moved into a later window (retentionSweepWindowStart) is a new job and
+// runs again -- this is what makes the sweep periodic on queues whose
+// idempotency is unconditional, and what keeps one dead-lettered sweep
+// from poisoning its tenant forever; see retentionSweepIdempotencyKey's
+// doc comment for the full window semantics. ctx must carry a tenant
+// (pkgcore.WithTenant); with none, this returns a plain error rather than
+// guessing one. With no queue wired (WithQueue), it returns
+// ErrQueueRequired.
 func (s *RetentionService) EnqueueRetentionSweep(ctx context.Context) error {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
@@ -369,7 +422,7 @@ func (s *RetentionService) EnqueueRetentionSweep(ctx context.Context) error {
 	_, err = s.queue.Enqueue(ctx, jobs.Task{
 		Type:           taskTypeRetentionSweep,
 		TenantID:       tenant,
-		IdempotencyKey: retentionSweepIdempotencyKey(tenant),
+		IdempotencyKey: retentionSweepIdempotencyKey(tenant, retentionSweepWindowStart(s.now())),
 	})
 	return err
 }

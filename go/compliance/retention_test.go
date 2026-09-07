@@ -356,9 +356,15 @@ func TestRetentionService_SweepAllTenants_NoListerIsAnError(t *testing.T) {
 }
 
 // TestRetentionService_EnqueueRetentionSweep_ShapesTheTask pins what the
-// schedule point puts on the queue.
+// schedule point puts on the queue: one task of the retention-sweep type
+// for the tenant in context, with no payload and with the window-scoped
+// idempotency key that collapses one retentionSweepWindowSize window's
+// concurrent enqueues into one job -- the enqueue's key naming the window
+// (retentionSweepWindowStart) its clock places it in.
 func TestRetentionService_EnqueueRetentionSweep_ShapesTheTask(t *testing.T) {
 	svc, _ := newRetentionHarness(t)
+	now := time.Date(2026, 9, 7, 10, 30, 0, 0, time.UTC)
+	svc.now = func() time.Time { return now }
 	queue := &recordingQueue{}
 	svc.queue = queue
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
@@ -376,8 +382,9 @@ func TestRetentionService_EnqueueRetentionSweep_ShapesTheTask(t *testing.T) {
 	if task.TenantID != "tenant-a" {
 		t.Errorf("task.TenantID = %q, want %q", task.TenantID, "tenant-a")
 	}
-	if task.IdempotencyKey != retentionSweepIdempotencyKey("tenant-a") {
-		t.Errorf("task.IdempotencyKey = %q, want %q", task.IdempotencyKey, retentionSweepIdempotencyKey("tenant-a"))
+	want := retentionSweepIdempotencyKey("tenant-a", retentionSweepWindowStart(now))
+	if task.IdempotencyKey != want {
+		t.Errorf("task.IdempotencyKey = %q, want %q (the enqueue's own window, not a tenant-only key)", task.IdempotencyKey, want)
 	}
 }
 
