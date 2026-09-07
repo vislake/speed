@@ -75,7 +75,7 @@ type jobRecord struct {
 // pluralization of the (unexported) type name.
 func (jobRecord) TableName() string { return jobsTable }
 
-// createJobsTableSQL is executed imperatively, with a plain CREATE TABLE IF
+// The jobs table is executed imperatively, with a plain CREATE TABLE IF
 // NOT EXISTS, the same bootstrapping pattern dbkit.MigrationRegistry
 // itself uses for its own schema_migrations table (see
 // go/dbkit/migrations.go's createSchemaMigrationsTableSQL) — not for the
@@ -87,15 +87,35 @@ func (jobRecord) TableName() string { return jobsTable }
 // routing it through dbkit.MigrationRegistry's cross-module,
 // Atlas-generated, versioned migration machinery — built for schema that
 // ships and evolves across both deployment modes — would be
-// disproportionate. The statement is written to be portable across
-// both dbkit dialects anyway
-// (VARCHAR/TEXT/INTEGER/TIMESTAMP, application-generated ids, no
-// PostgreSQL- or SQLite-specific syntax), matching the backend coding
-// standard's dual-dialect rule, even though only SQLite is exercised in
-// the standalone deployment mode — see AGENTS.md's Known
-// limitations for why this module's own tests do not also run this
-// against dbtest.NewPostgres.
-const createJobsTableSQL = `CREATE TABLE IF NOT EXISTS ` + jobsTable + ` (
+// disproportionate.
+//
+// Unlike the module's remaining statements, this one is NOT written as a
+// single string portable across both dbkit dialects, and must never be:
+// the payload and result columns hold arbitrary bytes, whose column type
+// differs between the two dialects — BLOB on SQLite, BYTEA on PostgreSQL,
+// which has no BLOB type at all (a BLOB-typed CREATE TABLE fails on
+// PostgreSQL with `type "blob" does not exist`, the same column-type bug
+// class go/integration's webhook-secret and go/org's invitation-email
+// fixes already established). ensureJobsSchema therefore selects the
+// dialect's own statement at Start time (createJobsTableSQL, below), the
+// same db.Name() branch ensureJobsClaimedByColumn already uses. Every
+// other type in the two statements — VARCHAR/INTEGER/BIGINT/TIMESTAMP —
+// is genuinely identical on both dialects, and every column except the
+// two byte columns is spelled exactly once in the shared shape of both
+// statements so they cannot drift apart. The claim that this schema runs
+// on both dialects is proven, not assumed, by the module's PostgreSQL
+// integration leg (integration_test/postgres_schema_test.go), which boots
+// a real StandaloneQueue over a real PostgreSQL: the earlier per-column
+// bug survived precisely because SQLite-only coverage never executes the
+// DDL on the dialect that rejects it.
+func createJobsTableSQL(dbName string) string {
+	if dbName == "sqlite" {
+		return createJobsTableSQLSQLite
+	}
+	return createJobsTableSQLPostgres
+}
+
+const createJobsTableSQLSQLite = `CREATE TABLE IF NOT EXISTS ` + jobsTable + ` (
 	id              VARCHAR(36) NOT NULL PRIMARY KEY,
 	type            VARCHAR(255) NOT NULL,
 	tenant_id       VARCHAR(64) NOT NULL,
@@ -107,6 +127,34 @@ const createJobsTableSQL = `CREATE TABLE IF NOT EXISTS ` + jobsTable + ` (
 	progress_pct    INTEGER NOT NULL DEFAULT 0,
 	progress_msg    VARCHAR(1000) NOT NULL DEFAULT '',
 	result          BLOB,
+	error_message   VARCHAR(4000) NOT NULL DEFAULT '',
+	attempts        INTEGER NOT NULL DEFAULT 0,
+	max_retries     INTEGER NOT NULL,
+	timeout_nanos   BIGINT NOT NULL,
+	scheduled_at    TIMESTAMP NOT NULL,
+	created_at      TIMESTAMP NOT NULL,
+	updated_at      TIMESTAMP NOT NULL,
+	started_at      TIMESTAMP,
+	completed_at    TIMESTAMP
+)`
+
+// createJobsTableSQLPostgres is the PostgreSQL spelling of
+// createJobsTableSQLSQLite: identical except for the two byte columns,
+// which PostgreSQL types BYTEA (BLOB does not exist there). See
+// createJobsTableSQL's own doc comment for why the DDL is dialect-branched
+// rather than single-statement.
+const createJobsTableSQLPostgres = `CREATE TABLE IF NOT EXISTS ` + jobsTable + ` (
+	id              VARCHAR(36) NOT NULL PRIMARY KEY,
+	type            VARCHAR(255) NOT NULL,
+	tenant_id       VARCHAR(64) NOT NULL,
+	payload         BYTEA,
+	idempotency_key VARCHAR(255) NOT NULL DEFAULT '',
+	status          VARCHAR(32) NOT NULL,
+	claimed_by      VARCHAR(64) NOT NULL DEFAULT '',
+	priority        INTEGER NOT NULL,
+	progress_pct    INTEGER NOT NULL DEFAULT 0,
+	progress_msg    VARCHAR(1000) NOT NULL DEFAULT '',
+	result          BYTEA,
 	error_message   VARCHAR(4000) NOT NULL DEFAULT '',
 	attempts        INTEGER NOT NULL DEFAULT 0,
 	max_retries     INTEGER NOT NULL,
@@ -241,9 +289,12 @@ func newWriterOwner() string { return uuid.NewString() }
 // ensureJobsSchema creates the jobs table and its indexes if they do not
 // already exist, adds the claimed_by column to a jobs table a pre-fix
 // release created without it, and creates the queue_writers single-writer
-// table. Safe to call every time Start runs.
+// table. Safe to call every time Start runs. The CREATE TABLE statement is
+// chosen by dialect (createJobsTableSQL): the byte columns' type differs
+// between SQLite (BLOB) and PostgreSQL (BYTEA), so there is no
+// single-statement spelling of the table.
 func ensureJobsSchema(ctx context.Context, db *gorm.DB) error {
-	for _, stmt := range [...]string{createJobsTableSQL, createJobsDispatchIndexSQL, createJobsIdempotencySQL} {
+	for _, stmt := range [...]string{createJobsTableSQL(db.Name()), createJobsDispatchIndexSQL, createJobsIdempotencySQL} {
 		if err := db.WithContext(ctx).Exec(stmt).Error; err != nil {
 			return fmt.Errorf("jobs: ensure schema: %w", err)
 		}
