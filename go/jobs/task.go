@@ -38,10 +38,25 @@ type Task struct {
 	// Enqueue call for the same (TenantID, IdempotencyKey) pair returns
 	// the JobID of the Job already created for the first call, without
 	// creating a second row or ever invoking Handle a second time for it —
-	// regardless of what that first Job's outcome was, including a
-	// StatusDeadLetter one. See AGENTS.md for why this is unconditional
-	// rather than conditioned on the existing Job's outcome. Left empty,
-	// every Enqueue call creates a new, independent Job.
+	// for as long as the first Job's record lives. On StandaloneQueue that
+	// lifetime is unconditional: the row is never deleted, so the dedupe
+	// holds forever, regardless of what that first Job's outcome was,
+	// including a StatusDeadLetter one (see AGENTS.md for why this is
+	// unconditional rather than conditioned on the existing Job's outcome).
+	// On the asynq-backed Queue the record's lifetime is bounded by asynq's
+	// own retention and eviction windows, so a duplicate Enqueue arriving
+	// after the first Job's record has expired creates a NEW, independent
+	// Job instead of returning the original's id — the two implementations'
+	// dedupe answers agree while the first Job's record exists and differ
+	// only after it is gone (AGENTS.md's "Idempotency" section states the
+	// exact windows). One consequence a caller must design around: a key
+	// names ONE business-operation instance, so a task whose operation
+	// repeats over time — a periodic sweep, say — must scope its key to the
+	// period it is for (the storage and compliance sweep keys carry their
+	// window start), or the dedupe intended to collapse concurrent
+	// duplicates of one run will instead collapse every later run into the
+	// first-ever one. Left empty, every Enqueue call creates a new,
+	// independent Job.
 	IdempotencyKey string
 }
 
