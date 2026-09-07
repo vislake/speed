@@ -95,6 +95,15 @@ var ErrDuplicateHandlerType = apperr.Invalid("jobs.duplicate_handler_type")
 // WithMaxRetries clamps a negative count to zero, WithTimeout falls back
 // to the queue's configured default on a non-positive duration -- stated
 // on each option there; none of those rules applies here.)
+//
+// (Queue, the distributed deployment mode's implementation in
+// go/jobs/queue/asynq, takes this same refuse-at-option-time strategy for
+// its own construction options -- its Option type doc comment states the
+// identical rule for that side, with each option's own code and threshold.
+// The two implementations of one seam validate alike by declaration, not
+// coincidence: this sentence and that one exist on purpose, so a future
+// one-sided relaxation of either side's rule cannot pass as a local
+// change.)
 type Option func(*StandaloneQueue)
 
 // WithWorkerCount sets how many Jobs StandaloneQueue executes concurrently

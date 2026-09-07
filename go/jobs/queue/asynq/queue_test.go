@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	asynqlib "github.com/hibiken/asynq"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -91,7 +92,11 @@ func TestQueue_DepthGauge_StoppedQueueDoesNotQueryRedis(t *testing.T) {
 // make the queue silently process nothing, or crash a processor goroutine
 // later, must be refused at option time with a coded panic (the same
 // convention pkgcore's constructors use) -- never accepted and left to
-// fail somewhere else.
+// fail somewhere else. Every validated construction option in queue.go is
+// pinned below -- the same completeness claim go/jobs' own
+// option_validation_test.go makes for StandaloneQueue's options -- so a
+// construction option added to queue.go without its refusal test here is
+// immediately visible.
 
 // assertOptionPanics asserts that fn panics with a coded *apperr.Error
 // carrying code.
@@ -130,4 +135,161 @@ func TestWithThrottleRetryDelay_Negative_Refused(t *testing.T) {
 func TestWithTenantConcurrencyLimit_ZeroOrNegative_Refused(t *testing.T) {
 	assertOptionPanics(t, "jobs.tenant_concurrency_limit_zero", func() { WithTenantConcurrencyLimit(0) })
 	assertOptionPanics(t, "jobs.tenant_concurrency_limit_zero", func() { WithTenantConcurrencyLimit(-2) })
+}
+
+// TestWithConcurrency_ZeroOrNegative_Refused pins the WithConcurrency
+// refusal for an EXPLICIT value below 1 (omitting the option keeps the
+// field at zero and asynqlib.NewServer's runtime.NumCPU() resolution):
+// asynqlib.NewServer silently replaces a non-positive Config.Concurrency
+// with NumCPU, so an explicit zero or negative could never be honoured
+// literally -- it would silently mean "however many CPUs this machine
+// happens to have", a machine-dependent guess indistinguishable from an
+// option never passed. Fails on the pre-fix code, where
+// WithConcurrency(0)/WithConcurrency(-1) are accepted silently.
+func TestWithConcurrency_ZeroOrNegative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.worker_count_zero", func() { WithConcurrency(0) })
+	assertOptionPanics(t, "jobs.worker_count_zero", func() { WithConcurrency(-1) })
+}
+
+// TestWithQueueWeights_AnyTierZeroOrNegative_Refused pins the per-tier
+// weight refusal on each of the three arguments: asynqlib.NewServer
+// silently drops any configured queue whose weight is not positive
+// (server.go's own p > 0 filter), while Enqueue keeps routing that
+// priority into its fixed tier (queueForPriority), so a zeroed or
+// negative tier would silently accumulate Jobs no processor ever
+// services. Fails on the pre-fix code, where every tier weight is
+// accepted silently.
+func TestWithQueueWeights_AnyTierZeroOrNegative_Refused(t *testing.T) {
+	for _, weights := range [][3]int{{0, 3, 1}, {6, 0, 1}, {6, 3, 0}, {-1, 3, 1}, {6, -1, 1}, {6, 3, -1}} {
+		assertOptionPanics(t, "jobs.queue_weight_zero", func() {
+			WithQueueWeights(weights[0], weights[1], weights[2])
+		})
+	}
+}
+
+// TestWithJobTimeout_ZeroOrNegative_Refused pins the WithJobTimeout(0)
+// refusal: a non-positive configured default can never be honoured
+// literally -- Enqueue hands it to asynqlib.Timeout, where zero is
+// asynq's own "no limit" marker (collapse onto asynq's internal fallback
+// deadline) and a negative value lands every attempt's deadline in the
+// past, and handleErrorAttempt additionally builds the FailureHook's
+// OnFailure context from it (worker.go), which a non-positive value makes
+// expire instantly. Fails on the pre-fix code, where both values are
+// accepted silently.
+func TestWithJobTimeout_ZeroOrNegative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.job_timeout_zero", func() { WithJobTimeout(0) })
+	assertOptionPanics(t, "jobs.job_timeout_zero", func() { WithJobTimeout(-time.Second) })
+}
+
+// TestWithCompletedRetention_ZeroOrNegative_Refused pins the
+// WithCompletedRetention refusal: enqueueNew passes this value as
+// asynqlib.Retention on every Enqueue, and asynq only keeps a completed
+// task's record while that retention is strictly positive (processor.go's
+// own msg.Retention > 0 gate) -- a zero or negative value would silently
+// fall back to asynq's delete-on-success behavior, and Get() for a
+// succeeded Job would answer ErrJobNotFound almost immediately, breaking
+// the exact contract DefaultCompletedRetention exists to serve. Fails on
+// the pre-fix code, where both values are accepted silently.
+func TestWithCompletedRetention_ZeroOrNegative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.completed_retention_zero", func() { WithCompletedRetention(0) })
+	assertOptionPanics(t, "jobs.completed_retention_zero", func() { WithCompletedRetention(-time.Hour) })
+}
+
+// TestWithCancelledRetention_ZeroOrNegative_Refused pins the
+// WithCancelledRetention refusal: writeCancelMarker writes each
+// cancellation marker with this value as the Redis TTL, and go-redis only
+// attaches a TTL for a positive expiration -- a zero or negative retention
+// would silently leave every marker without an expiry, reporting
+// StatusCancelled forever and growing without bound, the bounded-survival
+// design DefaultCancelledRetention's own doc comment states. Fails on the
+// pre-fix code, where both values are accepted silently.
+func TestWithCancelledRetention_ZeroOrNegative_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.cancelled_retention_zero", func() { WithCancelledRetention(0) })
+	assertOptionPanics(t, "jobs.cancelled_retention_zero", func() { WithCancelledRetention(-24 * time.Hour) })
+}
+
+// TestWithRetryDelayFunc_Nil_Refused pins the WithRetryDelayFunc(nil)
+// refusal: businessRetryDelayFunc is invoked from q.retryDelay -- asynq's
+// own processor and recoverer goroutines call it for every genuine Handler
+// failure, both outside any recover -- so a nil override would nil-deref
+// panic there, an unrecovered panic crashing the whole process, the
+// identical late-crash shape WithThrottleRetryDelay's refusal exists for.
+// Omitting the option keeps asynqlib.DefaultRetryDelayFunc. Fails on the
+// pre-fix code, where WithRetryDelayFunc(nil) is accepted silently.
+func TestWithRetryDelayFunc_Nil_Refused(t *testing.T) {
+	assertOptionPanics(t, "jobs.retry_delay_func_nil", func() { WithRetryDelayFunc(nil) })
+}
+
+// TestWithTaskCheckInterval_Negative_RefusedAndZeroDelegates pins the
+// negative-interval refusal (asynqlib.NewServer's own defaulting would
+// silently substitute its 1-second default for any non-positive value, so
+// a negative explicit value could never be honoured literally) and pins
+// that zero -- the sanctioned "asynq's own default" delegation marker --
+// is still accepted. Fails on the pre-fix code, where
+// WithTaskCheckInterval(-1s) is accepted silently.
+func TestWithTaskCheckInterval_Negative_RefusedAndZeroDelegates(t *testing.T) {
+	assertOptionPanics(t, "jobs.task_check_interval_negative", func() { WithTaskCheckInterval(-time.Second) })
+	q := &Queue{}
+	WithTaskCheckInterval(0)(q)
+	if q.taskCheckInterval != 0 {
+		t.Errorf("WithTaskCheckInterval(0) stored %v, want the zero delegation marker", q.taskCheckInterval)
+	}
+}
+
+// TestWithDelayedTaskCheckInterval_Negative_RefusedAndZeroDelegates pins
+// the negative-interval refusal (asynqlib.NewServer's defaulting catches
+// only exactly zero, so a negative value reaches asynq's forwarder
+// goroutine, whose timer busy-loops on the negative interval after Start)
+// and pins that zero -- the sanctioned "asynq's own default" delegation
+// marker -- is still accepted. Fails on the pre-fix code, where
+// WithDelayedTaskCheckInterval(-1s) is accepted silently.
+func TestWithDelayedTaskCheckInterval_Negative_RefusedAndZeroDelegates(t *testing.T) {
+	assertOptionPanics(t, "jobs.delayed_task_check_interval_negative", func() { WithDelayedTaskCheckInterval(-time.Second) })
+	q := &Queue{}
+	WithDelayedTaskCheckInterval(0)(q)
+	if q.delayedTaskCheckInterval != 0 {
+		t.Errorf("WithDelayedTaskCheckInterval(0) stored %v, want the zero delegation marker", q.delayedTaskCheckInterval)
+	}
+}
+
+// TestConstructionOptions_ValidValuesStillApply guards the other side of
+// every refusal above: a valid value must still be accepted and applied,
+// because the refusals only ever fire below each option's documented
+// threshold. One application per construction option, read back through
+// the fields NewQueue's option loop would set.
+func TestConstructionOptions_ValidValuesStillApply(t *testing.T) {
+	q := &Queue{}
+	WithConcurrency(8)(q)
+	WithTenantConcurrencyLimit(3)(q)
+	WithQueueWeights(5, 2, 1)(q)
+	WithJobTimeout(90 * time.Second)(q)
+	WithCompletedRetention(48 * time.Hour)(q)
+	WithCancelledRetention(7 * 24 * time.Hour)(q)
+	WithThrottleRetryDelay(300 * time.Millisecond)(q)
+	WithRetryDelayFunc(asynqlib.DefaultRetryDelayFunc)(q)
+
+	if q.concurrency != 8 {
+		t.Errorf("concurrency = %d, want 8", q.concurrency)
+	}
+	if q.tenantConcurrency != 3 {
+		t.Errorf("tenantConcurrency = %d, want 3", q.tenantConcurrency)
+	}
+	if q.queueWeights[queueCritical] != 5 || q.queueWeights[queueDefault] != 2 || q.queueWeights[queueLow] != 1 {
+		t.Errorf("queueWeights = %v, want {critical:5 default:2 low:1}", q.queueWeights)
+	}
+	if q.defaultTimeout != 90*time.Second {
+		t.Errorf("defaultTimeout = %v, want 90s", q.defaultTimeout)
+	}
+	if q.completedRetention != 48*time.Hour {
+		t.Errorf("completedRetention = %v, want 48h", q.completedRetention)
+	}
+	if q.cancelledRetention != 7*24*time.Hour {
+		t.Errorf("cancelledRetention = %v, want 168h", q.cancelledRetention)
+	}
+	if q.throttleRetryDelay != 300*time.Millisecond {
+		t.Errorf("throttleRetryDelay = %v, want 300ms", q.throttleRetryDelay)
+	}
+	if q.businessRetryDelayFunc == nil {
+		t.Error("businessRetryDelayFunc = nil, want the applied function")
+	}
 }

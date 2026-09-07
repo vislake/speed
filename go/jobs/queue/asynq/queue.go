@@ -157,14 +157,42 @@ var defaultQueueWeights = map[string]int{
 // structurally different fields, but the same functional-options
 // convention throughout this codebase (see observability.Option,
 // StandaloneQueue's Option).
+//
+// Every construction option here follows the same one rule StandaloneQueue's
+// Option type states (its doc comment, deliberately kept in step with this
+// one): an invalid value -- one this queue cannot honour -- is refused at
+// option time with a coded panic (an *apperr.Error carrying the code each
+// With* function's own doc comment names), never accepted and silently
+// reinterpreted, deferred, or left to fail inside asynq's own background
+// goroutines after Start has reported success. Each With* function below
+// states its exact rule and why the values it rejects are unhonourable; the
+// two server-interval options (WithTaskCheckInterval,
+// WithDelayedTaskCheckInterval) state their own rule on top of it -- zero is
+// the one sanctioned way to say "asynq's own default", a documented
+// pass-through, and a negative value is refused like any other unhonourable
+// one. Both implementations of the jobs.Queue seam declare this same
+// strategy -- StandaloneQueue's Option type doc comment says so for its own
+// construction options -- so the two sides refuse alike by declaration, not
+// coincidence, and a future one-sided relaxation is a divergence between two
+// implementations of one seam, never a local change.
 type Option func(*Queue)
 
 // WithConcurrency sets asynqlib.Config.Concurrency: the maximum number of
 // Jobs Queue executes concurrently across all tenants and queues combined,
-// the direct analog of StandaloneQueue's WithWorkerCount. Zero or negative
-// (the default here) leaves asynqlib.Config.Concurrency at its own zero
-// value, which asynqlib.NewServer resolves to runtime.NumCPU().
+// the direct analog of StandaloneQueue's WithWorkerCount. Omitted, the
+// queue runs at runtime.NumCPU() -- asynqlib.NewServer resolves a zero
+// Config.Concurrency that way, which is also this field's construction
+// default. An EXPLICIT value below 1 is refused at option time with the
+// same coded panic jobs.worker_count_zero StandaloneQueue's WithWorkerCount
+// refuses with -- the same invalid concept on the same seam: asynqlib.
+// NewServer silently replaces a non-positive Concurrency with NumCPU, so
+// an explicit zero or negative could never be honoured literally -- it
+// would silently mean "however many CPUs this machine happens to have", a
+// machine-dependent guess indistinguishable from an option never passed.
 func WithConcurrency(n int) Option {
+	if n < 1 {
+		panic(apperr.Invalid("jobs.worker_count_zero"))
+	}
 	return func(q *Queue) { q.concurrency = n }
 }
 
@@ -186,11 +214,22 @@ func WithTenantConcurrencyLimit(n int) Option {
 // WithQueueWeights overrides the relative weight asynq gives each of the
 // three fixed priority queues (store.go's queueForPriority) when choosing
 // which to service next -- passed straight through to asynqlib.
-// Config.Queues, so asynq's own documented behavior for a zero or negative
-// weight (that tier is never serviced) applies unmodified. Defaults to
-// 6/3/1 (critical/default/low), server.go's own Config.Queues example
-// ratio.
+// Config.Queues. Defaults to 6/3/1 (critical/default/low), server.go's own
+// Config.Queues example ratio.
+//
+// Every one of the three weights must be at least 1; a weight below 1 is
+// refused at option time with a coded panic (jobs.queue_weight_zero):
+// asynqlib.NewServer silently DROPS any configured queue whose weight is
+// not positive (its own p > 0 filter), while Enqueue keeps routing that
+// priority into its fixed tier regardless (queueForPriority) -- so a zero
+// or negative weight would not "turn that tier off", it would make the
+// tier's Jobs pile up in a queue no processor ever services, silently
+// never processed. Every tier this package enqueues into must be one asynq
+// actually services.
 func WithQueueWeights(critical, normal, low int) Option {
+	if critical < 1 || normal < 1 || low < 1 {
+		panic(apperr.Invalid("jobs.queue_weight_zero"))
+	}
 	return func(q *Queue) {
 		q.queueWeights = map[string]int{
 			queueCritical: critical,
@@ -202,18 +241,57 @@ func WithQueueWeights(critical, normal, low int) Option {
 
 // WithJobTimeout sets the per-attempt timeout applied to an Enqueue call
 // that does not use jobs.WithTimeout, the direct analog of StandaloneQueue's
-// WithJobTimeout. Defaults to jobs.DefaultTimeout.
+// WithJobTimeout. Defaults to jobs.DefaultTimeout. A value <= 0 is refused
+// at option time with the same coded panic jobs.job_timeout_zero
+// StandaloneQueue's WithJobTimeout refuses with: a non-positive configured
+// default can never be honoured literally here. It would silently break
+// the bounded-attempt guarantee two ways. Enqueue hands it to asynqlib.
+// Timeout on every Job that did not set its own, and asynq's own
+// computeDeadline (processor.go) treats a zero per-task timeout as unset --
+// logging an internal error and substituting asynq's own internal 30-minute
+// fallback deadline, the configured bound silently replaced; a negative
+// value instead lands the deadline in the past, so every attempt's context
+// is already expired when Handle runs. And handleErrorAttempt (worker.go)
+// builds the FailureHook's OnFailure context with context.WithTimeout(
+// q.defaultTimeout), which a non-positive value makes expire instantly --
+// the compensation path every failed Job's hook exists to run would never
+// get to run.
 func WithJobTimeout(d time.Duration) Option {
+	if d <= 0 {
+		panic(apperr.Invalid("jobs.job_timeout_zero"))
+	}
 	return func(q *Queue) { q.defaultTimeout = d }
 }
 
-// WithCompletedRetention overrides DefaultCompletedRetention.
+// WithCompletedRetention overrides DefaultCompletedRetention. A value <= 0
+// is refused at option time with a coded panic
+// (jobs.completed_retention_zero): enqueueNew passes this value as
+// asynqlib.Retention on every Enqueue (see DefaultCompletedRetention's own
+// doc comment for why it is always set), and asynq only keeps a completed
+// task's record while that retention is strictly positive (processor.go's
+// own msg.Retention > 0 gate) -- a zero or negative value would silently
+// fall back to asynq's delete-on-success behavior, and Get() for a
+// succeeded Job would answer ErrJobNotFound almost immediately, breaking
+// the exact contract this option exists to serve.
 func WithCompletedRetention(d time.Duration) Option {
+	if d <= 0 {
+		panic(apperr.Invalid("jobs.completed_retention_zero"))
+	}
 	return func(q *Queue) { q.completedRetention = d }
 }
 
-// WithCancelledRetention overrides DefaultCancelledRetention.
+// WithCancelledRetention overrides DefaultCancelledRetention. A value <= 0
+// is refused at option time with a coded panic
+// (jobs.cancelled_retention_zero): writeCancelMarker writes each
+// cancellation marker with this value as the Redis TTL, and go-redis only
+// attaches a TTL for a positive expiration -- a zero or negative retention
+// would silently leave every marker without an expiry, reporting
+// StatusCancelled forever and growing without bound, the bounded-survival
+// design DefaultCancelledRetention's own doc comment states.
 func WithCancelledRetention(d time.Duration) Option {
+	if d <= 0 {
+		panic(apperr.Invalid("jobs.cancelled_retention_zero"))
+	}
 	return func(q *Queue) { q.cancelledRetention = d }
 }
 
@@ -237,18 +315,40 @@ func WithThrottleRetryDelay(d time.Duration) Option {
 // hand-rolled backoffDelay rather than reimplementing one; WithBackoff
 // (StandaloneQueue's equivalent knob) configures a formula, not a
 // pluggable function, only because StandaloneQueue rolls its own -- this
-// is the same tuning knob shifted to asynq's own extension point.
+// is the same tuning knob shifted to asynq's own extension point. A nil
+// function is refused at option time with a coded panic
+// (jobs.retry_delay_func_nil): businessRetryDelayFunc is invoked from
+// q.retryDelay -- asynq's own processor and recoverer goroutines call it
+// for every genuine Handler failure (processor.go and recoverer.go, both
+// outside any recover) -- so a nil override would nil-deref panic there,
+// an unrecovered panic crashing the whole process, the identical
+// late-crash shape WithThrottleRetryDelay's refusal exists for. Omitting
+// the option is the only way to keep asynqlib.DefaultRetryDelayFunc.
 func WithRetryDelayFunc(fn asynqlib.RetryDelayFunc) Option {
+	if fn == nil {
+		panic(apperr.Invalid("jobs.retry_delay_func_nil"))
+	}
 	return func(q *Queue) { q.businessRetryDelayFunc = fn }
 }
 
 // WithTaskCheckInterval sets asynqlib.Config.TaskCheckInterval: how often
 // the processor polls a queue it just found empty. Left at zero (the
-// default here), asynqlib.NewServer applies its own default of 1 second.
-// Lowering it (integration_test/ uses a few tens of milliseconds) trades
-// Redis polling load for faster pickup -- the same trade-off
-// StandaloneQueue's WithPollInterval documents for its own dispatcher.
+// default here), asynqlib.NewServer applies its own default of 1 second --
+// zero is the sanctioned way to say "asynq's own default", the one
+// deliberate delegation this Option family allows. Lowering it
+// (integration_test/ uses a few tens of milliseconds) trades Redis polling
+// load for faster pickup -- the same trade-off StandaloneQueue's
+// WithPollInterval documents for its own dispatcher. A value below zero is
+// refused at option time with a coded panic
+// (jobs.task_check_interval_negative): asynqlib.NewServer's own defaulting
+// (its taskCheckInterval <= 0 check) would silently substitute its
+// 1-second default for any negative value too, so a negative explicit
+// value could never be honoured literally -- only zero means "the
+// default".
 func WithTaskCheckInterval(d time.Duration) Option {
+	if d < 0 {
+		panic(apperr.Invalid("jobs.task_check_interval_negative"))
+	}
 	return func(q *Queue) { q.taskCheckInterval = d }
 }
 
@@ -256,11 +356,22 @@ func WithTaskCheckInterval(d time.Duration) Option {
 // DelayedTaskCheckInterval: how often asynq's forwarder checks scheduled
 // and retry tasks for ones now ready to run and moves them to pending.
 // Left at zero (the default here), asynqlib.NewServer applies its own
-// default of 5 seconds -- long enough that a test asserting on WithDelay/
+// default of 5 seconds -- zero is the sanctioned way to say "asynq's own
+// default", and long enough that a test asserting on WithDelay/
 // WithScheduledAt or on retry timing should lower this, exactly as
 // integration_test/ does, the same way it lowers WithThrottleRetryDelay
-// and StandaloneQueue's own tests lower WithPollInterval/WithBackoff.
+// and StandaloneQueue's own tests lower WithPollInterval/WithBackoff. A
+// value below zero is refused at option time with a coded panic
+// (jobs.delayed_task_check_interval_negative): unlike TaskCheckInterval,
+// asynqlib.NewServer's defaulting catches only exactly zero (its == 0
+// check), so a negative value passes straight through to asynq's forwarder
+// goroutine, whose timer fires immediately and re-arms to the same
+// negative interval -- a busy loop hammering Redis inside asynq's own
+// goroutine only after Start has already reported success.
 func WithDelayedTaskCheckInterval(d time.Duration) Option {
+	if d < 0 {
+		panic(apperr.Invalid("jobs.delayed_task_check_interval_negative"))
+	}
 	return func(q *Queue) { q.delayedTaskCheckInterval = d }
 }
 
