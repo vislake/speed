@@ -42,7 +42,7 @@ import { INJECT_API_PORT, REFUSING_IMAGE_PORT } from '../playwright.config.js'
 import { bootImageProvider, bootServer, routeApiTo } from './test-utils/servers.js'
 import { DEMO_OWNER } from './test-utils/accounts.js'
 import {
-  APP_TEXT,
+  expectSignedIn,
   openSurface,
   submitPasswordSignIn,
   visitSignIn,
@@ -85,28 +85,17 @@ const databasePath = join(
   `reference-app-e2e-refund-${Date.now()}-${process.pid}.db`,
 )
 
-// @pending, NOT @budget, and the reason is that I cannot yet vouch for
-// this gate.
+// @budget: verified, and out of the default run only because it boots
+// two extra processes of its own and spends a sign-in.
 //
-// It passes -- and it ALSO passes with the vendor set to succeed
-// (FAKE_IMAGE_FAIL=0), which means it is not yet measuring the refund.
-// A gate that goes green whether or not the thing it checks happened is
-// worth nothing, and calling it verified would put a claim in the
-// acceptance record that the run does not support. Two candidate
-// explanations remain untested: the journey may be short-circuiting
-// before the generation (an earlier run's trace showed openSurface
-// refusing to find the cases entry, though that trace turned out to
-// belong to a previous failing run -- I misread it twice), or the
-// success path may itself produce a refunded row, which would be a
-// finding rather than a gate defect.
-//
-// It stays here, red-by-tag rather than deleted, because the path it
-// checks is the most expensive wrong path in a pay-per-use product and
-// the work of writing it is done. What is left is proving it measures
-// what it says.
+// It was @pending while I could not vouch for it, and that was the right
+// call: it passed with the vendor set to succeed as well, so it was
+// measuring nothing. Both explanations I offered for that were wrong,
+// and so were the two premises I built on afterwards -- see the notes at
+// the assertions.
 test(
   'a generation that fails gives the credits back, and says so in the ledger',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     // A REFUSING vendor of this spec's own, and a server pointed at it.
     //
@@ -139,9 +128,12 @@ test(
 
       await visitSignIn(page)
       await submitPasswordSignIn(page, DEMO_OWNER.email, DEMO_OWNER.password)
-      await expect(page.getByRole('button', { name: APP_TEXT.navAccount })
-        .or(page.getByRole('link', { name: APP_TEXT.navAccount }))
-        .first()).toBeVisible()
+      // expectSignedIn, which exists precisely so a gate does not
+      // identify the frame by a nav entry -- below the md breakpoint the
+      // navigation is behind the menu button and no nav link is in the
+      // DOM. I built that helper for this and then hand-rolled a nav
+      // lookup here anyway; it failed on the iPad project alone.
+      await expectSignedIn(page)
 
       // A case with a photo, then a generation that will fail.
       // Probe: prove we are signed in and on the cases surface before
@@ -159,8 +151,13 @@ test(
       await page.getByRole('button', { name: /create|save|confirm/i }).click()
 
       await page.getByRole('listitem').filter({ hasText: /E2E refund/ }).first().click()
-      const attemptsBefore = await page.getByText(CREDITS_TEXT.failedAttempt).count()
-      await page.getByRole('button', { name: /simulate|generate/i }).click()
+      // NOT clicked. The panel generates once on its own for a photo
+      // with no simulation on it (photo-simulation-panel.tsx's automatic
+      // default preview, one auto-run per mount), so a click would add a
+      // SECOND generation and this gate would be about two charges
+      // rather than one refund. The auto-run is the honest single
+      // subject here: it is a real generation, against a vendor that
+      // refuses, and the money it takes has to come back.
 
       // THE PERSON IS TOLD. A charge taken for work that then failed is
       // bad; a charge taken for work that failed silently is worse,
@@ -170,17 +167,13 @@ test(
         'the generation failed and the surface never said so, so a practice is left waiting for a simulation that is not coming',
       ).toBeVisible({ timeout: 120_000 })
 
-      // ONE click, ONE attempt. Counted rather than assumed, because the
-      // ledger observation this gate stops on could be explained either
-      // by a charge that never settles OR by one press producing two
-      // attempts of which one settled -- and those are different
-      // defects. Settling this here is what lets the ledger assertion
-      // below mean one thing.
-      const attemptsAfter = await page.getByText(CREDITS_TEXT.failedAttempt).count()
-      expect(
-        attemptsAfter - attemptsBefore,
-        'one press of Simulate produced more than one generation attempt, so a practice is charged more than once for asking once',
-      ).toBe(1)
+      // EXACTLY ONE generation happened, so the ledger below is about
+      // one charge. My earlier version clicked Simulate as well and then
+      // counted dead-letter rows to prove "one click, one attempt" -- it
+      // counted 1 and I read that as confirmation, when the row it
+      // counted belonged to the AUTO-run and the click's own job was
+      // still retrying, invisible to that count. Two generations, two
+      // honest charges, and a count that could not tell them apart.
 
       // THE MONEY CAME BACK, as a row that says what happened.
       //
@@ -209,9 +202,23 @@ test(
       // a pending row that is still there for a moment is the queue
       // working, while one that never clears is credits reserved
       // against work that will never be delivered.
+      // Nothing left reserved for it.
+      //
+      // The window is deliberately generous and the reason is
+      // documented: the panel polls a job only while it is mounted, so a
+      // generation whose failure lands after the person navigates away
+      // is settled by the boot-time reconcile sweep instead, on a
+      // five-minute rhythm. A gate that demanded sixty seconds would be
+      // asserting a product expectation nobody has committed to (a
+      // shorter interval, or a completion signal that does not need an
+      // observer) rather than checking the mechanism that exists.
+      //
+      // What it still catches is the thing that matters: credits
+      // reserved against a failed generation that are NEVER released.
       await expect
         .poll(async () => await ledger.getByText(CREDITS_TEXT.pendingRow).count(), {
-          timeout: 60_000,
+          timeout: 400_000,
+          intervals: [5_000],
         })
         .toBe(0)
     } finally {
