@@ -212,6 +212,49 @@ func TestHandler_PkiGetAuthorityJwks_NotFound(t *testing.T) {
 	}
 }
 
+// TestHandler_PkiGetAuthorityJwks_RevokedAuthorityInChain_Refused drives the
+// revoked-chain refusal through the HTTP surface -- the reachable endpoint
+// this finding names: a data plane refreshing GET
+// /api/v1/pki/authorities/{authorityId}/jwks must never be handed a revoked
+// authority's public key. The fetch answers 409 Conflict carrying the coded
+// envelope (pki.certificate_revoked), the same coded answer
+// CAService.VerifyCertificate gives for a certificate under the same chain.
+func TestHandler_PkiGetAuthorityJwks_RevokedAuthorityInChain_Refused(t *testing.T) {
+	h, _, ca := newHandlerHarness(t)
+	ctx := context.Background()
+
+	root, err := ca.CreateRootCA(ctx, RootCAParams{
+		Subject:  pkix.Name{CommonName: "speed Root CA"},
+		NotAfter: time.Now().Add(48 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateRootCA: %v", err)
+	}
+	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
+		NotAfter: time.Now().Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateIntermediateCA: %v", err)
+	}
+	intermediate.Status = AuthorityStatusRevoked
+	if err := ca.authorities.Update(ctx, intermediate); err != nil {
+		t.Fatalf("seed revoked authority: %v", err)
+	}
+
+	rec := requestPKI(t, h, "", http.MethodGet, "/api/v1/pki/authorities/"+intermediate.ID+"/jwks", nil)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d (409 Conflict); body = %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var env api.PkiError
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if env.Code == nil || *env.Code != ErrCertificateRevoked.Code {
+		t.Errorf("envelope code = %v, want %q", env.Code, ErrCertificateRevoked.Code)
+	}
+}
+
 func TestHandler_PkiGetAuthorityCrl_NotGeneratedYet(t *testing.T) {
 	h, _, ca := newHandlerHarness(t)
 	ctx := context.Background()

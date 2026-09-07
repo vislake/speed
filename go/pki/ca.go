@@ -137,11 +137,13 @@ type CAService struct {
 	queue jobs.Queue
 
 	// now is the clock EnqueueCRLRegenerate reads to place the enqueue in
-	// its DefaultCRLRegenerateWindow window (crlRegenerateWindowStart). It
-	// is a field, not a time.Now() call at the enqueue site, so the window
-	// a regeneration is enqueued under is deterministic in tests -- the
-	// same clock-seam pattern Service.now provides for the expiry scan --
-	// while defaulting to the real clock for every production call.
+	// its DefaultCRLRegenerateWindow window (crlRegenerateWindowStart) and
+	// ExportAuthorityChainJWKS reads for its per-member validity filter
+	// (jwks.go). It is a field, not a time.Now() call at the use site, so
+	// the window an enqueue lands in and the members an export vouches for
+	// are deterministic in tests -- the same clock-seam pattern
+	// Service.now provides for the expiry scan -- while defaulting to the
+	// real clock for every production call.
 	now func() time.Time
 
 	// crlRegenerateWindow is the period one CRL-regeneration idempotency

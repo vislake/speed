@@ -415,15 +415,24 @@ func (s *Service) EnsurePurpose(ctx context.Context, purpose, algorithm string, 
 // apart.
 const expiredKeyRevokeReason = "signing key expired past its NotAfter before rotation completed; EnsurePurpose created a replacement"
 
-// keyInValidity reports whether key's validity window covers now: the key
-// is usable from NotBefore through NotAfter, both ends inclusive -- the
-// identical boundary crypto/x509 applies to a certificate's validity
-// window (valid AT NotAfter, invalid a moment later). This is the single
-// predicate behind every read path's validity enforcement (ActiveSigner,
-// VerificationKeys, ExportJWKS and EnsurePurpose's existence check), so
-// the boundary is defined in exactly one place.
+// validityWindowCovers reports whether the [notBefore, notAfter] validity
+// window covers now: usable from NotBefore through NotAfter, both ends
+// inclusive -- the identical boundary crypto/x509 applies to a
+// certificate's validity window (valid AT NotAfter, invalid a moment
+// later). This is the single time-window predicate behind every read
+// path's validity enforcement -- keyInValidity (below) wraps it for
+// SigningKey rows (ActiveSigner, VerificationKeys, ExportJWKS and
+// EnsurePurpose's existence check), and ExportAuthorityChainJWKS (jwks.go)
+// applies it to each authority's parsed certificate -- so the boundary is
+// defined in exactly one place.
+func validityWindowCovers(notBefore, notAfter, now time.Time) bool {
+	return !now.Before(notBefore) && !now.After(notAfter)
+}
+
+// keyInValidity reports whether key's validity window covers now -- the
+// SigningKey-row shape of the single validityWindowCovers predicate above.
 func keyInValidity(key SigningKey, now time.Time) bool {
-	return !now.Before(key.NotBefore) && !now.After(key.NotAfter)
+	return validityWindowCovers(key.NotBefore, key.NotAfter, now)
 }
 
 // ActiveSigner returns the kid, algorithm and a context-aware signing

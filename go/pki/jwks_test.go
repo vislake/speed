@@ -13,6 +13,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // --- Service.ExportJWKS -------------------------------------------------
@@ -228,6 +229,118 @@ func TestCAService_ExportAuthorityChainJWKS_AuthorityNotFound(t *testing.T) {
 	ca := newTestCAService(t)
 	if _, err := ca.ExportAuthorityChainJWKS(context.Background(), "does-not-exist"); !apperrIs(err, ErrAuthorityNotFound) {
 		t.Errorf("ExportAuthorityChainJWKS(missing authority) error = %v, want ErrAuthorityNotFound", err)
+	}
+}
+
+// TestCAService_ExportAuthorityChainJWKS_RevokedAuthorityInChain_Refused is
+// the regression for the twin half-sync this round closes: VerifyCertificate
+// refuses an AuthorityStatusRevoked member at every hop of its chain walk,
+// but ExportAuthorityChainJWKS -- the document a data-plane cluster with no
+// X.509 path-validation library kid-matches against, which makes the export
+// the ONLY possible enforcement point for revocation -- originally walked
+// the same chain carrying only the cycle guard, never the refusal, so a
+// revoked authority's public key stayed in every refreshed document and a
+// data plane that had already pulled it kept accepting signatures made with
+// the revoked key. The revoked row is seeded directly through the
+// repository, the identical precedent revocation_test.go's own
+// chain-refusal test sets (no method in this module's public API writes
+// AuthorityStatusRevoked).
+func TestCAService_ExportAuthorityChainJWKS_RevokedAuthorityInChain_Refused(t *testing.T) {
+	ca := newTestCAService(t)
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
+
+	authority, _ := issueTestCertificate(t, ca, ctx)
+
+	authority.Status = AuthorityStatusRevoked
+	if err := ca.authorities.Update(ctx, authority); err != nil {
+		t.Fatalf("seed revoked authority: %v", err)
+	}
+
+	_, err := ca.ExportAuthorityChainJWKS(ctx, authority.ID)
+	ae, ok := apperr.As(err)
+	if !ok || ae.Code != ErrCertificateRevoked.Code {
+		t.Errorf("ExportAuthorityChainJWKS(revoked authority) error = %v, want ErrCertificateRevoked (the revoked public key must never be exported)", err)
+		return
+	}
+	if ae.Params["authority_id"] != authority.ID {
+		t.Errorf("authority_id param = %v, want the revoked authority %q", ae.Params["authority_id"], authority.ID)
+	}
+}
+
+// TestCAService_ExportAuthorityChainJWKS_RevokedRootAncestor_Refused is the
+// same regression one hop up the chain: the walk must refuse a revoked
+// ANCESTOR of the exported authority too, the identical whole-chain answer
+// VerifyCertificate gives for a certificate under the same chain -- the
+// root revoked while the exported intermediate stays AuthorityStatusActive,
+// the same shape ca_test.go's issuance-side root-ancestor pair seeds.
+func TestCAService_ExportAuthorityChainJWKS_RevokedRootAncestor_Refused(t *testing.T) {
+	ca := newTestCAService(t)
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
+
+	root, intermediate := issueRootAndIntermediate(t, ca, ctx)
+
+	root.Status = AuthorityStatusRevoked
+	if err := ca.authorities.Update(ctx, root); err != nil {
+		t.Fatalf("seed revoked root ancestor: %v", err)
+	}
+
+	_, err := ca.ExportAuthorityChainJWKS(ctx, intermediate.ID)
+	ae, ok := apperr.As(err)
+	if !ok || ae.Code != ErrCertificateRevoked.Code {
+		t.Errorf("ExportAuthorityChainJWKS(active intermediate under revoked root) error = %v, want ErrCertificateRevoked naming the revoked root", err)
+		return
+	}
+	if ae.Params["authority_id"] != root.ID {
+		t.Errorf("authority_id param = %v, want the revoked root %q, not the active intermediate", ae.Params["authority_id"], root.ID)
+	}
+}
+
+// TestCAService_ExportAuthorityChainJWKS_ExcludesAuthoritiesOutsideTheirValidityWindow
+// pins the X.509 export's own half of the validity-window enforcement, the
+// twin of TestService_ExportJWKS_ExcludesKeysOutsideTheirValidityWindow
+// above: an authority whose certificate's validity window has closed at the
+// export clock is excluded from the document -- never published for an
+// external verifier to trust -- the exact keyInValidity boundary the
+// signing-key export applies to an expired key. Before this round the
+// authority export published an out-of-validity authority's key for as long
+// as its row stayed AuthorityStatusActive, and nothing in the module ever
+// reaps an expired authority row (AGENTS.md's Known limitations record the
+// absent expiry-driven lifecycle), so the read path itself is the only
+// enforcement point.
+func TestCAService_ExportAuthorityChainJWKS_ExcludesAuthoritiesOutsideTheirValidityWindow(t *testing.T) {
+	ca := newTestCAService(t)
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
+	base := time.Now()
+
+	root, err := ca.CreateRootCA(ctx, RootCAParams{
+		Subject:  pkix.Name{CommonName: "speed Root CA"},
+		NotAfter: base.Add(7 * 24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateRootCA: %v", err)
+	}
+	intermediate, err := ca.CreateIntermediateCA(ctx, root.ID, IntermediateCAParams{
+		Subject:  pkix.Name{CommonName: "speed Intermediate CA"},
+		NotAfter: base.Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("CreateIntermediateCA: %v", err)
+	}
+
+	// Advance the service clock past the intermediate's NotAfter but not the
+	// root's -- the same clock-seam pattern the signing-key twin test uses.
+	ca.now = func() time.Time { return base.Add(48 * time.Hour) }
+
+	jwks, err := ca.ExportAuthorityChainJWKS(ctx, intermediate.ID)
+	if err != nil {
+		t.Fatalf("ExportAuthorityChainJWKS: %v", err)
+	}
+	var got []string
+	for _, k := range jwks.Keys {
+		got = append(got, k.KeyID)
+	}
+	if len(got) != 1 || got[0] != root.ID {
+		t.Fatalf("ExportAuthorityChainJWKS kids = %v, want exactly the in-validity root %q (regression: an out-of-validity authority must not stay published)", got, root.ID)
 	}
 }
 

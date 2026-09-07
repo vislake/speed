@@ -250,6 +250,85 @@ func (s *CAService) recordRevocation(ctx context.Context, cert *Certificate, rev
 	return true, nil
 }
 
+// walkAuthorityChain walks the chain that starts at startID -- startID
+// itself, then its issuer (ParentID), then that issuer's own issuer, up to
+// and including the root whose ParentID is nil -- in leaf-to-root order,
+// calling visit for each member once its Authority row is loaded and its
+// certificate parsed, and aborting with visit's error the moment one is
+// returned. ErrAuthorityNotFound when any member's row does not exist (a
+// data-integrity fault, not a normal-operation case).
+//
+// # PROTECTED CONTRACT -- the properties the two chain walks must keep consistent
+//
+// VerifyCertificate (below) and ExportAuthorityChainJWKS (jwks.go) are this
+// walk's only two callers, and both answer the same question -- "may a
+// caller trust this chain right now?" -- so the answer's load-bearing
+// refusal lives HERE, in the walk, rather than in either caller:
+//
+//   - A member whose Status is AuthorityStatusRevoked is trusted by
+//     NEITHER path. The walk refuses it with ErrCertificateRevoked naming
+//     its authority_id before visit runs, so a revoked member -- the
+//     requested authority itself or any ancestor up to the root -- fails
+//     the whole verification and the whole export alike. The refusal is
+//     enforced inside the walk precisely so no future rewrite of either
+//     caller can silently drop it: the round-3 hand-copy of this loop that
+//     ExportAuthorityChainJWKS originally walked carried over only the
+//     cycle guard and not the revocation refusal -- the half-sync this
+//     shared walk exists to prevent -- and its consequence was that a data
+//     plane refreshing the authority-chain JWKS was handed a revoked
+//     authority's public key forever.
+//   - A member whose certificate's validity window does not cover the
+//     current instant is vouched for by neither path, though the two
+//     enforce the window at different granularity: the verifier hands the
+//     pools this walk built to x509's own path validation, which refuses
+//     any chain containing an out-of-validity member (root included);
+//     the export applies the same validityWindowCovers boundary (service.go)
+//     per member and prunes an out-of-validity member from the document
+//     rather than refusing the whole export, mirroring how the
+//     key-lifecycle ExportJWKS excludes an out-of-validity key. Neither
+//     path ever vouches for the out-of-validity member itself.
+//
+// The walk is cycle-guarded: Authority.ParentID values are
+// application-generated and no database constraint prevents a corrupt
+// cycle, so the loop must not be able to spin forever on one.
+//
+// ca.go's checkNoRevokedAuthorityInChain is deliberately NOT this walk,
+// even though it traverses the same shape: it answers a different question
+// ("may nothing NEW be signed under this chain?") with a different coded
+// refusal (ErrAuthorityRevoked, never ErrCertificateRevoked -- see that
+// error's own comment), and it starts from an already-loaded Authority row
+// rather than an id.
+func (s *CAService) walkAuthorityChain(ctx context.Context, startID string, visit func(authority *Authority, cert *x509.Certificate) error) error {
+	seen := make(map[string]bool)
+	id := startID
+	for id != "" {
+		if seen[id] {
+			return fmt.Errorf("pki: authority chain cycle detected at %q", id)
+		}
+		seen[id] = true
+
+		authority, err := s.authorities.FindByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if authority.Status == AuthorityStatusRevoked {
+			return ErrCertificateRevoked.WithParam("authority_id", authority.ID)
+		}
+		authorityCert, err := parseCertificatePEM(authority.CertificatePEM)
+		if err != nil {
+			return fmt.Errorf("pki: parse authority %q certificate: %w", id, err)
+		}
+		if err := visit(authority, authorityCert); err != nil {
+			return err
+		}
+		if authority.ParentID == nil {
+			break
+		}
+		id = *authority.ParentID
+	}
+	return nil
+}
+
 // VerifyCertificate verifies certificateID's certificate (in the caller's
 // ctx tenant) against its full issuing chain, up to and including a
 // self-signed root, and returns the parsed leaf on success -- round 3's
@@ -270,7 +349,10 @@ func (s *CAService) recordRevocation(ctx context.Context, cert *Certificate, rev
 // anyway, so a future round that DOES add authority revocation (or a row
 // seeded directly, as this round's own tests do) is correctly refused from
 // day one, never silently trusted because "nothing sets this yet" quietly
-// became "nothing here needs to check it".
+// became "nothing here needs to check it". The refusal runs inside
+// walkAuthorityChain above -- the shared chain walk ExportAuthorityChainJWKS
+// (jwks.go) uses too, whose doc comment is this property's protected
+// contract -- so verification and export can never drift apart on it again.
 //
 // ErrAuthorityNotFound if the chain names an authority id that does not
 // exist (a data-integrity fault, not a normal-operation case). Any other
@@ -293,39 +375,21 @@ func (s *CAService) VerifyCertificate(ctx context.Context, certificateID string)
 	roots := x509.NewCertPool()
 	intermediates := x509.NewCertPool()
 
-	// Walk the chain from the issuing authority up to the root, cycle-
-	// guarded the same way ExportAuthorityChainJWKS (jwks.go) is: ParentID
-	// values are application-generated and this round adds no constraint
-	// preventing a corrupt cycle, so the loop must not be able to spin
-	// forever on one.
-	seen := make(map[string]bool)
-	authorityID := cert.AuthorityID
-	for authorityID != "" {
-		if seen[authorityID] {
-			return nil, fmt.Errorf("pki: authority chain cycle detected at %q", authorityID)
-		}
-		seen[authorityID] = true
-
-		authority, err := s.authorities.FindByID(ctx, authorityID)
-		if err != nil {
-			return nil, err
-		}
-		if authority.Status == AuthorityStatusRevoked {
-			return nil, ErrCertificateRevoked.WithParam("authority_id", authorityID)
-		}
-		authorityCert, err := parseCertificatePEM(authority.CertificatePEM)
-		if err != nil {
-			return nil, fmt.Errorf("pki: parse authority %q certificate: %w", authorityID, err)
-		}
+	// Load the issuing chain through walkAuthorityChain above -- the SAME
+	// walk ExportAuthorityChainJWKS (jwks.go) walks, so the cycle guard,
+	// the not-found answer and, above all, the revoked-member refusal each
+	// live in exactly one place. Every member that reaches visit has passed
+	// the walk's refusal; each is classified into the pool x509 will
+	// validate the leaf against.
+	if err := s.walkAuthorityChain(ctx, cert.AuthorityID, func(authority *Authority, authorityCert *x509.Certificate) error {
 		if authority.Type == AuthorityTypeRoot {
 			roots.AddCert(authorityCert)
 		} else {
 			intermediates.AddCert(authorityCert)
 		}
-		if authority.ParentID == nil {
-			break
-		}
-		authorityID = *authority.ParentID
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	// ExtKeyUsageAny: this module's own certificates carry no ExtKeyUsage

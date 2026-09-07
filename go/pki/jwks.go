@@ -114,30 +114,47 @@ func (s *Service) ExportJWKS(ctx context.Context, purpose string) (jose.JSONWebK
 // under this authority chain without a full X.509 path-validation library
 // of its own.
 //
-// The chain walk is cycle-guarded the same way VerifyCertificate's is
-// (revocation.go): Authority.ParentID values are application-generated and
-// this round adds no database constraint preventing a corrupt cycle.
+// The chain is walked through walkAuthorityChain (revocation.go) -- the
+// SAME walk VerifyCertificate uses, not a hand-copy -- whose doc comment
+// carries the protected-contract statement of which properties the two
+// chain walks must keep consistent. Its two load-bearing consequences for
+// this export:
 //
-// ErrAuthorityNotFound if authorityID -- or any authority found while
-// walking up its chain -- does not exist.
+//   - A chain containing an AuthorityStatusRevoked member -- authorityID
+//     itself or any ancestor up to the root -- is refused wholesale with
+//     ErrCertificateRevoked naming the revoked member's authority_id, the
+//     identical answer VerifyCertificate gives for a certificate under the
+//     same chain: the export never serves a document for a chain the
+//     module's own verifier refuses, so a data plane that refreshes from
+//     this document can never be handed a revoked authority's public key.
+//     (A data plane validating by kid-matched public key has no other
+//     enforcement point: the revoked key must stop appearing in every
+//     refreshed document the moment its compromise is believed.)
+//   - A member whose own certificate is outside its validity window at
+//     this instant -- judged against the parsed certificate's own
+//     NotBefore/NotAfter through validityWindowCovers (service.go), the
+//     same [NotBefore, NotAfter] boundary crypto/x509 applies and the
+//     key-lifecycle ExportJWKS applies to signing keys -- is excluded from
+//     the document rather than refused wholesale: like the signing keys
+//     twin above, the export prunes a member the current time has left
+//     behind and keeps the members it can still vouch for. The verifier
+//     refuses such a chain wholesale (x509 validates every member's
+//     window, root included), but that granularity difference never
+//     extends to vouching for the out-of-validity member itself.
+//
+// An excluded member's key is simply absent; a chain whose members are all
+// healthy exports unchanged. ErrAuthorityNotFound if authorityID -- or any
+// authority found while walking up its chain -- does not exist.
 func (s *CAService) ExportAuthorityChainJWKS(ctx context.Context, authorityID string) (jose.JSONWebKeySet, error) {
-	var keys []jose.JSONWebKey
-	seen := make(map[string]bool)
-
-	id := authorityID
-	for id != "" {
-		if seen[id] {
-			return jose.JSONWebKeySet{}, fmt.Errorf("pki: authority chain cycle detected at %q", id)
-		}
-		seen[id] = true
-
-		authority, err := s.authorities.FindByID(ctx, id)
-		if err != nil {
-			return jose.JSONWebKeySet{}, err
-		}
-		cert, err := parseCertificatePEM(authority.CertificatePEM)
-		if err != nil {
-			return jose.JSONWebKeySet{}, fmt.Errorf("pki: parse authority %q certificate: %w", id, err)
+	keys := make([]jose.JSONWebKey, 0)
+	now := s.now()
+	if err := s.walkAuthorityChain(ctx, authorityID, func(authority *Authority, cert *x509.Certificate) error {
+		if !validityWindowCovers(cert.NotBefore, cert.NotAfter, now) {
+			// Out-of-validity member: excluded, exactly as ExportJWKS
+			// excludes an out-of-validity signing key (keyInValidity,
+			// service.go) -- never published for an external verifier to
+			// trust. The walk continues to this member's issuer.
+			return nil
 		}
 		keys = append(keys, jose.JSONWebKey{
 			Key:       cert.PublicKey,
@@ -145,11 +162,9 @@ func (s *CAService) ExportAuthorityChainJWKS(ctx context.Context, authorityID st
 			Algorithm: string(jose.EdDSA),
 			Use:       "sig",
 		})
-
-		if authority.ParentID == nil {
-			break
-		}
-		id = *authority.ParentID
+		return nil
+	}); err != nil {
+		return jose.JSONWebKeySet{}, err
 	}
 	return jose.JSONWebKeySet{Keys: keys}, nil
 }

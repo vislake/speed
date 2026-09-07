@@ -92,7 +92,14 @@ var (
 
 	// ErrCertificateRevoked reports that CAService.VerifyCertificate refused
 	// a certificate because it -- or an authority in its chain up to the
-	// root -- is CertificateStatusRevoked / AuthorityStatusRevoked.
+	// root -- is CertificateStatusRevoked / AuthorityStatusRevoked, or that
+	// CAService.ExportAuthorityChainJWKS refused an authority-chain export
+	// because a member of the chain is AuthorityStatusRevoked. The
+	// verification and export halves share the refusal through
+	// walkAuthorityChain (revocation.go), the protected-contract chain walk
+	// whose doc comment states which properties the two walks must keep
+	// consistent; the authority_id param names the revoked member the walk
+	// met, certificate_id the revoked certificate itself.
 	// apperr.Conflict, not apperr.Invalid: the certificate's shape is fine,
 	// its current state is what conflicts with the request to trust it,
 	// the identical reasoning org.ErrInvitationRevoked already applies to
