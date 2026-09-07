@@ -202,8 +202,8 @@ export default defineConfig({
   //   @pending -- the thing it checks is still broken, or the surface it
   //   drives does not exist yet (core-journey.pending.spec.ts: the upload
   //   / generate / compare / share / cost journey the product is for;
-  //   sessions-are-distinguishable, offered-channels-work and
-  //   self-service-signup each carry their own open acceptance blocker).
+  //   sessions-are-distinguishable and offered-channels-work each carry
+  //   their own open acceptance blocker).
   //   Written ahead of the fix on purpose -- each one is an acceptance
   //   criterion, checkable the day it lands -- but a suite that is
   //   permanently red says nothing, so they are asked for by name:
@@ -211,7 +211,9 @@ export default defineConfig({
   //     pnpm test:e2e:pending
   //
   //   @budget -- VERIFIED PASSING, and out of the default run only
-  //   because the suite has no sign-in left to spend on it:
+  //   because the suite has no sign-in left to spend on it
+  //   (self-service-signup's gate moved here the round its acceptance
+  //   blocker closed -- ef8b97a -- its own file header says why):
   //
   //     pnpm test:e2e:budget
   //
