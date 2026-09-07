@@ -1316,3 +1316,69 @@ func TestService_Register_ConcurrentDuplicateAnswersTheCodedConflict(t *testing.
 		})
 	}
 }
+
+// TestService_Register_CallerContextTenantNeverReachesEventUserCreated is
+// the P1-authn-15 regression at the service layer: Service.Register used to
+// publish authn.user.created through Service.publish, which filled an
+// event's empty TenantID from the context it was published in. A host
+// composition whose tenancy middleware resolves even allowlisted pre-auth
+// routes -- go/tenancy.WithAllowlist exempts a route from the 403 on a
+// RESOLUTION FAILURE, it does not skip resolution -- hands Register a
+// context carrying the CALLER's own tenant whenever the caller holds a
+// valid bearer (the api-client attaches the held token to every request by
+// default), so registering through the app's own register form used to
+// stamp the caller's tenant onto the new account's user.created event.
+// Subscribers then read that stamp as the account's tenant: org's
+// handleUserCreated (go/org/events.go) seats the account in the caller's
+// tenant, and a host's tenant-less self-service provisioning skips it, so
+// the account got a seat in the caller's tenant and no workspace of its
+// own -- and any authenticated tenant member could add arbitrary new
+// accounts to their tenant with no invitation, permission check or email
+// verification.
+//
+// Registration is pre-tenant: the account is created in no tenant, and the
+// event must carry no tenant regardless of what the caller's context
+// holds. Failing before the fix: the event carried the caller's tenant.
+func TestService_Register_CallerContextTenantNeverReachesEventUserCreated(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+
+	// A register under a tenant-bearing caller context -- the shape a
+	// signed-in caller's register POST reaches the handler in, once a
+	// tenancy middleware has resolved their bearer. The event must carry
+	// no tenant: the tenant the caller merely holds is not an attestation
+	// registration may act on.
+	ctx := pkgcore.WithTenant(t.Context(), testTenantA)
+	if _, err := f.svc.Register(ctx, RegisterInput{
+		Email: "caller-ctx@example.com", Password: testPassword, DisplayName: "Caller Ctx",
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	evt, ok := f.events.First(EventUserCreated)
+	if !ok {
+		t.Fatal("no EventUserCreated was published")
+	}
+	if evt.TenantID != "" {
+		t.Errorf("EventUserCreated TenantID = %q, want empty: a registration under a tenant-bearing caller context must "+
+			"not stamp the caller's tenant (org's subscriber would seat the account in tenant %q, and a host's "+
+			"tenant-less self-service provisioning would skip it)",
+			evt.TenantID, testTenantA)
+	}
+
+	// The no-tenant baseline: a plain pre-auth register keeps publishing
+	// the same tenant-less event.
+	if _, err := f.svc.Register(t.Context(), RegisterInput{
+		Email: "plain-ctx@example.com", Password: testPassword, DisplayName: "Plain Ctx",
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	events := f.events.Events()
+	baseline := events[len(events)-1]
+	if baseline.Type != EventUserCreated {
+		t.Fatalf("last published event type = %q, want %q", baseline.Type, EventUserCreated)
+	}
+	if baseline.TenantID != "" {
+		t.Errorf("EventUserCreated TenantID = %q, want empty on a plain no-tenant register", baseline.TenantID)
+	}
+}

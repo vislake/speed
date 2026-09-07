@@ -160,14 +160,20 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 // a row must carry exactly the tenant its call site decided on, never one
 // that leaked in by accident.
 //
-// Two shapes of call site pass "": a PRE-AUTH event (registration, a failed
-// sign-in), where the caller is not yet authenticated and the tenant_id a
-// request merely asserts is not an attestation -- an unauthenticated caller
-// must not be able to stamp rows into a tenant's ledger by naming it -- and
-// the social-callback BIND, which is recorded at an unauthenticated
-// callback (the flow authenticates by the single-use state the signed-in
-// authorize step minted, and no session is started), so no tenant is
-// attested at recording time. Every protected operation below -- logout,
+// Two shapes of call site pass "": a PRE-AUTH action whose caller was
+// anonymous (a registration nobody authenticated, a failed sign-in), where
+// the tenant_id a request merely asserts is not an attestation -- an
+// unauthenticated caller must not be able to stamp rows into a tenant's
+// ledger by naming it -- and the social-callback BIND, which is recorded at
+// an unauthenticated callback (the flow authenticates by the single-use
+// state the signed-in authorize step minted, and no session is started), so
+// no tenant is attested at recording time. Registration records more when
+// more was attested: an authenticated register caller's own Principal claim
+// is the one tenant the request actually attested, and AuthnRegister's call
+// site layers it onto the row (the account itself is created in no tenant,
+// and the row's tenant answers "a member of which tenant initiated this
+// creation", never "which tenant the account was created in"). Every
+// protected operation below -- logout,
 // identity unbind, MFA changes, tenant switch, session revoke -- carries
 // its principal's tenant, and every sign-in success this Handler records
 // (password, SMS, social) carries the tenant the new session resolved
@@ -220,10 +226,16 @@ func (h *Handler) recordAudit(ctx context.Context, tenantID pkgcore.TenantID, ac
 // codes regenerated) carry the same tenant as the operation's own audit row,
 // which the service layer cannot know: its methods receive the acting
 // userID, and the user's tenants are not the tenant the request acted in.
-// The three call sites are exactly the protected operations whose Service
-// methods publish one of those events; every pre-authentication path layers
-// nothing, so its events stay tenant-less (see Service.publish's own doc
-// comment).
+// The call sites are exactly the protected operations whose Service methods
+// publish one of those events.
+//
+// A pre-authentication path deliberately does NOT call this: those
+// operations' events must never carry a tenant at all, and that is enforced
+// at the publish sites themselves (Service.publishTenantless) rather than
+// trusted to the absence of this layering -- a host composition may have
+// resolved the caller's bearer even on an allowlisted pre-auth route, so
+// the raw request context is not guaranteed tenant-free (see
+// Service.publishTenantless's own doc comment).
 func principalCtx(ctx context.Context, principal Principal) context.Context {
 	return pkgcore.WithTenant(ctx, principal.TenantID)
 }
@@ -519,11 +531,28 @@ func (h *Handler) AuthnRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Registration is pre-tenant: the caller is unauthenticated and the
-	// account has no membership yet (org's own machinery grants one on
-	// authn.user.created), so no tenant is attested -- recordAudit's
-	// pre-auth case, documented on the method itself.
-	h.recordAudit(ctx, "", user.ID, AuditActionUserRegister,
+	// Registration is pre-tenant by construction: the account is created in
+	// no tenant, and the authn.user.created event announcing it is
+	// published through Service.publishTenantless so it never carries one
+	// whatever this request's context holds (see that method's doc comment
+	// for why an inherited tenant would seat the account in the caller's
+	// tenant instead of leaving the host's tenant-less provisioning to
+	// create the registrant's own workspace). An authenticated caller is
+	// neither refused nor acted for: the account is an independent one (the
+	// multi-account-per-person shape), so the tenant their bearer attested
+	// is ignored by everything registration does.
+	//
+	// The audit row is the one ledger surface that records what the request
+	// itself attested: the acting Principal's TenantID claim when the
+	// caller held one -- the row answers "a member of which tenant
+	// initiated this account's creation", never "which tenant the account
+	// was created in" (none was). An anonymous caller attests nothing and
+	// the row stays tenant-less, recordAudit's pre-auth case.
+	attestedTenant := pkgcore.TenantID("")
+	if principal, ok := PrincipalFromContext(ctx); ok {
+		attestedTenant = principal.TenantID
+	}
+	h.recordAudit(ctx, attestedTenant, user.ID, AuditActionUserRegister,
 		audit.Resource{Type: "user", ID: user.ID},
 		audit.Result{Success: true})
 	obs.FromContext(ctx).Info("account registered", "user_id", user.ID)

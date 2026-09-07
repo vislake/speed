@@ -582,7 +582,10 @@ func (s *Service) recordSMSFailure(ctx context.Context, userID, index, ip, reaso
 		IP:              ip,
 		CreatedAt:       s.now(),
 	})
-	s.publish(ctx, pkgcore.Event{
+	// A failed sign-in is a pre-tenant fact -- no tenant is attested by a
+	// sign-in that resolved none, whatever the caller's context holds (see
+	// Service.publishTenantless's doc comment) -- so it never inherits one.
+	s.publishTenantless(ctx, pkgcore.Event{
 		Type: EventLoginFailed,
 		Payload: LoginFailedPayload{
 			UserID: userID,

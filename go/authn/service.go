@@ -436,6 +436,13 @@ func (s *Service) Verifier() *Verifier { return s.verifier }
 
 // Register creates an account and publishes EventUserCreated.
 //
+// Registration is PRE-TENANT: the account is created in no tenant and the
+// event announcing it carries no tenant whatever ctx holds (it is published
+// through publishTenantless -- see that method's doc comment for why an
+// inherited tenant would seat the account in the caller's tenant). ctx's
+// tenant, when a composition left one there, plays no part in anything this
+// method does.
+//
 // Known limitation, stated rather than hidden: a duplicate identifier is
 // reported as a conflict, which makes registration an account-enumeration
 // oracle in a way sign-in deliberately is not. Closing it means answering
@@ -504,7 +511,16 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error)
 		return nil, s.mapRegisterCreateConflict(ctx, user, err)
 	}
 
-	s.publish(ctx, pkgcore.Event{
+	// Registration is pre-tenant: the account is created in no tenant, and
+	// the event announcing it must carry no tenant regardless of what the
+	// caller's context holds -- a caller who merely holds a tenant (their
+	// bearer was resolved by a host composition that resolves even
+	// allowlisted pre-auth routes) is not attesting one for this account.
+	// A tenant on this event would seat the account in the caller's tenant
+	// (org's handleUserCreated) and skip the host's tenant-less
+	// self-service provisioning of the registrant's own workspace. See
+	// publishTenantless's doc comment.
+	s.publishTenantless(ctx, pkgcore.Event{
 		Type: EventUserCreated,
 		Payload: UserCreatedPayload{
 			UserID:   user.ID,
@@ -1063,7 +1079,10 @@ func (s *Service) recordFailure(ctx context.Context, in LoginInput, userID, inde
 		UserAgent:       in.UserAgent,
 		CreatedAt:       s.now(),
 	})
-	s.publish(ctx, pkgcore.Event{
+	// A failed sign-in is a pre-tenant fact -- no tenant is attested by a
+	// sign-in that resolved none, whatever the caller's context holds (see
+	// publishTenantless's doc comment) -- so it never inherits one.
+	s.publishTenantless(ctx, pkgcore.Event{
 		Type: EventLoginFailed,
 		Payload: LoginFailedPayload{
 			UserID: userID,
@@ -1089,18 +1108,68 @@ func (s *Service) record(ctx context.Context, attempt *LoginAttempt) {
 // An event whose TenantID the emitting site did not set picks up the tenant
 // of the context it is published in, when one is present. The handlers of
 // protected operations layer the acting principal's own TenantID onto the
-// ctx they hand the service (pkgcore.WithTenant, the same layering
-// recordAudit uses for audit rows -- P1-4), so the security-relevant facts
-// those operations announce -- identity unbound, MFA enrolled, recovery
-// codes regenerated -- carry the same tenant their audit rows do. Every
-// pre-authentication path layers nothing, so its events (registration, a
-// failed sign-in, a binding made at an unauthenticated callback) stay
-// tenant-less: the tenant_id an unauthenticated request merely asserts is
-// not an attestation. A site that knows its event's tenant sets TenantID
-// explicitly (the session events do, from the session row); it is never
-// overwritten here.
+// ctx they hand the service (pkgcore.WithTenant, principalCtx -- the same
+// layering recordAudit uses for audit rows, P1-4), so the security-relevant
+// facts those operations announce -- identity unbound, MFA enrolled,
+// recovery codes regenerated -- carry the same tenant their audit rows do.
+// A site that knows its event's tenant sets TenantID explicitly (the
+// session and SSO events do); it is never overwritten here.
+//
+// The context-tenant inheritance is ONLY safe for those protected-operation
+// events, whose ctx the module's own handler layered: whether a pre-tenant
+// site's event stays tenant-less must never depend on what the HOST's
+// composition put in the request context -- authn's pre-auth routes can sit
+// behind a tenancy middleware whose allowlist exempts a route from the 403
+// on a resolution FAILURE without skipping resolution, so a valid bearer on
+// an allowlisted route still gets its tenant injected. Every pre-tenant
+// site therefore publishes through publishTenantless, never through this
+// method (see publishTenantless's doc comment for what that guarantees).
 func (s *Service) publish(ctx context.Context, evt pkgcore.Event) {
-	if evt.TenantID == "" {
+	s.publishOn(ctx, evt, true)
+}
+
+// publishTenantless emits a PRE-TENANT fact -- an event that must carry no
+// tenant, whatever the context it is published in holds. Registration and
+// the social sign-in mint, a failed sign-in and an identity bound at an
+// unauthenticated callback announce facts that happened in no tenant: the
+// tenant_id a request merely holds (its caller's bearer, a body field) is
+// not an attestation, and no amount of host composition may make one.
+//
+// The "no tenant" property is load-bearing for the subscribers, which is
+// what makes an accidental leak a real defect rather than a cosmetic one:
+// org's handleUserCreated (go/org/events.go) seats a user whose
+// authn.user.created event carries a tenant in that tenant, while a host's
+// tenant-less self-service provisioning (the reference app's
+// self_service.go) creates the registrant's own workspace exactly when the
+// event carries none -- so a registration event that picked up the
+// caller's context tenant would hand the caller's tenant a membership it
+// was never granted AND deny the new account the workspace its
+// registration was supposed to create (P1-authn-15).
+//
+// A site that needs its event to carry a tenant declares it explicitly
+// through publish with evt.TenantID set (the enterprise-SSO mint does, from
+// the SSO configuration); a site whose event must never carry one calls
+// this method. Either way the declaration is the site's own, never an
+// accident of the context it runs in.
+func (s *Service) publishTenantless(ctx context.Context, evt pkgcore.Event) {
+	if evt.TenantID != "" {
+		// A pre-tenant site declaring a tenant is a programming error: the
+		// declaration would silently be dropped here. Logged at Error --
+		// the event has already been committed, so this must not turn the
+		// caller's success into a failure, but an operator must hear about
+		// the site that is lying about what it publishes.
+		obs.FromContext(ctx).Error("authn pre-tenant event published with a tenant; the tenant is dropped",
+			"event_type", evt.Type)
+		evt.TenantID = ""
+	}
+	s.publishOn(ctx, evt, false)
+}
+
+// publishOn is the delivery half shared by publish and publishTenantless;
+// inheritTenant decides whether an event without an explicit TenantID may
+// pick one up from ctx.
+func (s *Service) publishOn(ctx context.Context, evt pkgcore.Event, inheritTenant bool) {
+	if inheritTenant && evt.TenantID == "" {
 		if tenantID, ok := pkgcore.TenantFromContext(ctx); ok {
 			evt.TenantID = tenantID
 		}

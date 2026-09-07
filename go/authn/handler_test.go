@@ -390,12 +390,14 @@ func auditTenantIs(t *testing.T, evt audit.RecordedEvent, want pkgcore.TenantID)
 }
 
 // auditTenantIsEmpty is auditTenantIs's counterpart for the sites that
-// deliberately stamp no tenant -- a pre-auth event (register, a failed
-// sign-in) or an account-level event recorded at an unauthenticated
-// callback (a social bind). Empty is the fail-closed answer there: the
-// tenant a pre-auth request merely asserts is not an attestation, and an
-// unauthenticated caller must not be able to stamp rows into a tenant's
-// ledger by naming it.
+// deliberately stamp no tenant -- an account-level event recorded at an
+// unauthenticated callback (a social bind), a failed sign-in, and a
+// registration whose caller was anonymous. Empty is the fail-closed answer
+// there: the tenant a pre-auth request merely asserts is not an
+// attestation, and an unauthenticated caller must not be able to stamp rows
+// into a tenant's ledger by naming it. A registration whose caller WAS
+// authenticated carries the caller's attested tenant instead
+// (TestHandler_Register_AuthenticatedCaller_AuditRowCarriesTheAttestedTenant).
 func auditTenantIsEmpty(t *testing.T, evt audit.RecordedEvent) {
 	t.Helper()
 	if evt.TenantID != "" {
@@ -767,10 +769,59 @@ func TestHandler_Register_ValidBody_RecordsUserRegisterAuditEvent(t *testing.T) 
 	if evt.Actor.ID != *resp.ID {
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, *resp.ID)
 	}
-	// Registration is pre-tenant: the caller is unauthenticated and the
-	// account has no membership yet, so the row deliberately carries no
-	// tenant.
+	// Registration is pre-tenant, and THIS caller is anonymous -- no
+	// Principal is present, so no tenant is attested and the row carries
+	// none. An authenticated register caller's attested tenant is a
+	// different case: TestHandler_Register_AuthenticatedCaller_AuditRowCarriesTheAttestedTenant
+	// pins what this row must do when one is present.
 	auditTenantIsEmpty(t, evt)
+}
+
+// TestHandler_Register_AuthenticatedCaller_AuditRowCarriesTheAttestedTenant
+// is the P1-authn-15 consequence-(3) regression: AuthnRegister's audit row
+// used to hard-code an empty tenant, dropping the tenant the caller's own
+// Principal attested -- while the same request's authn.user.created event
+// (then) stamped that tenant onto the account's provisioning, so the row
+// and the operation's real effect disagreed. Registration itself is
+// pre-tenant by construction after this round (Service.Register publishes
+// the event through the tenant-less funnel, whatever the context holds),
+// but the row is this handler's request ledger: when the caller arrived
+// authenticated, the acting Principal's TenantID claim is the one tenant
+// the request actually attested, and the row records it -- so tenant X's
+// own audit reader sees that an account creation was initiated by one of
+// X's members. The multi-account-per-person shape is what keeps the
+// register itself succeeding for an authenticated caller (the attested
+// tenant is recorded, never acted on: the event stays tenant-less and the
+// account keeps no membership in the caller's tenant).
+//
+// Failing before the fix: the row carried no tenant although the request
+// context held a Principal attesting testTenantA.
+func TestHandler_Register_AuthenticatedCaller_AuditRowCarriesTheAttestedTenant(t *testing.T) {
+	t.Parallel()
+	h, _, recorder := newAuditTestHandler(t)
+
+	attested := &Principal{UserID: "attested-caller", TenantID: testTenantA, SessionID: "session-1"}
+	rec := doHandlerJSON(t, h, http.MethodPost, "/api/v1/authn/register", api.AuthnRegisterRequest{
+		Email: strPtr("attested-register@example.com"), Password: testPassword, DisplayName: strPtr("Attested Register"),
+	}, attested)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d: registration is a public pre-tenant operation and must succeed for an "+
+			"authenticated caller too (the multi-account-per-person shape); body = %s",
+			rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	resp := decodeBody[api.AuthnUser](t, rec)
+	if resp.ID == nil || *resp.ID == "" {
+		t.Fatal("response ID is missing")
+	}
+
+	evt := findAuditEvent(t, recorder, AuditActionUserRegister)
+	if !evt.Result.Success {
+		t.Errorf("Result.Success = false, want true")
+	}
+	if evt.Actor.ID != *resp.ID {
+		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, *resp.ID)
+	}
+	auditTenantIs(t, evt, testTenantA)
 }
 
 // TestHandler_SwitchTenant_ActiveMember_RecordsTenantSwitchAuditEvent covers

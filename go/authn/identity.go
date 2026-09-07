@@ -521,7 +521,16 @@ func (s *Service) resolveSocialAccount(ctx context.Context, external *ExternalId
 		return nil, false, err
 	}
 
-	s.publish(ctx, pkgcore.Event{
+	// The mint is pre-tenant, exactly like Service.Register's own account
+	// creation: a social sign-in resolves no tenant before the account
+	// exists, and the event announcing it must carry no tenant whatever
+	// the callback's context holds (a host composition may have resolved
+	// the caller's own bearer even on an allowlisted pre-auth route -- see
+	// publishTenantless's doc comment). A tenant on this event would seat
+	// the account in that caller tenant (org's handleUserCreated) instead
+	// of leaving the host's tenant-less provisioning to give the account
+	// its own workspace.
+	s.publishTenantless(ctx, pkgcore.Event{
 		Type: EventUserCreated,
 		Payload: UserCreatedPayload{
 			UserID:   user.ID,
@@ -751,8 +760,20 @@ func (s *Service) providerIsTrusted(name string) bool {
 }
 
 // publishIdentityBound announces a new binding.
+//
+// The event is an ACCOUNT-level fact, deliberately tenant-less whatever the
+// context holds (see publishTenantless's doc comment): the identity rows it
+// announces are platform data, and its three call sites are pre-tenant --
+// a bind completing at an unauthenticated social callback (whose audit row
+// is recorded tenant-less for the same reason, handler.go's recordAudit
+// call site), an auto-link during a social sign-in before any tenant
+// resolved, and an enterprise-SSO sign-in's bind, whose tenant-carrying
+// twin is the EventUserCreated the SSO mint publishes with the SSO
+// tenant's own TenantID declared. A bound identity never provisions
+// anything tenant-scoped, so no subscriber should ever read a tenant off
+// this event.
 func (s *Service) publishIdentityBound(ctx context.Context, identity *UserIdentity, autoLinked bool) {
-	s.publish(ctx, pkgcore.Event{
+	s.publishTenantless(ctx, pkgcore.Event{
 		Type: EventIdentityBound,
 		Payload: IdentityBoundPayload{
 			UserID:     identity.UserID,
