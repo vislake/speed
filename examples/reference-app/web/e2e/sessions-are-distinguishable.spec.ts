@@ -45,9 +45,18 @@ const MACHINE_STRINGS = ['Mozilla/', 'AppleWebKit', 'Gecko', 'curl/', 'Safari/']
  */
 const CURRENT_SESSION_MARK = 'Current session'
 
+// Closed: 6d56d71 summarizes each session's User-Agent into a
+// browser/OS label and removes the raw string from the DOM. Verified
+// here on all three engines with the fix in the tree, against the same
+// gate that had been failing on every run before it.
+//
+// @budget rather than untagged: it signs demo-owner in twice, and the
+// default tier already spends that account's whole five-per-minute
+// allowance (see e2e/README.md's budget section), so in the fast tier
+// those two attempts would be two paced waits rather than two sign-ins.
 test(
   'the sessions list says something a person can tell apart',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     // Two sign-ins from this same browser, so the list holds rows that a
     // raw User-Agent cannot distinguish -- the exact case the feature
@@ -150,10 +159,11 @@ test(
   // what the deployment tier is sized for, so it belongs in that tier
   // rather than behind a second command.
   //
-  // Its sibling above stays @pending: the rows still render raw
-  // User-Agent strings, so three sign-ins from one browser are still
-  // three identical walls of text. Same file, same feature, two
-  // findings -- one closed, one open.
+  // Its sibling above is closed too now (6d56d71 summarizes the
+  // User-Agent into a readable label), so this file's two findings --
+  // the proxy address and the unreadable rows -- are both shut. It reads
+  // as one gate per finding rather than one per surface, which is what
+  // let them be reported, fixed and retired independently.
   { tag: '@deployment' },
   async ({ page }) => {
     // Only meaningful against a real deployment. Run locally, the visitor

@@ -196,6 +196,29 @@ process.env.E2E_DB_PATH ??= join(
 const databasePath = process.env.E2E_DB_PATH
 
 /**
+ * Where this run records the sign-ins it has spent, so a gate can pace
+ * itself inside go/authn's login budget (e2e/test-utils/journeys.ts).
+ *
+ * A file rather than a module-level array, and for a reason this suite
+ * has now paid for twice: a Playwright worker serves ONE project, and
+ * switching project restarts it. A ledger held in memory therefore
+ * resets at every engine boundary while the server's own rate limiter
+ * counts the whole run -- so the pacing did nothing on the second and
+ * third engines and the refusal came back, which is exactly the "state I
+ * assumed was shared and is not" shape that the fixed-port hazard was.
+ *
+ * Through the environment for the same reason the database path is: the
+ * runner evaluates this first and every worker inherits the name, so all
+ * of them append to one file.
+ */
+process.env.E2E_LOGIN_LEDGER ??= join(
+  tmpdir(),
+  `reference-app-e2e-logins-${Date.now()}-${process.pid}.json`,
+)
+/** The run's sign-in ledger, shared by every worker. */
+export const LOGIN_LEDGER_PATH = process.env.E2E_LOGIN_LEDGER
+
+/**
  * Where the server's own output is captured for the one journey that
  * needs to read it: the invitation flow.
  *

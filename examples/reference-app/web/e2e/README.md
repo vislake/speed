@@ -26,6 +26,7 @@ budget below rather than anything about the gates.
 | *(none)* | Verified, and it fits the budget | `pnpm test:e2e` |
 | `@budget` | **Verified passing.** Out of the default run only because the suite has no sign-in left to spend | `pnpm test:e2e:budget` |
 | `@pending` | The thing it checks is **still broken**, or its surface does not exist yet | `pnpm test:e2e:pending` |
+| | **Nothing carries `@pending` today.** Every gate written against a defect has seen its fix land, so that command answers "No tests found" -- which is the honest answer and not a broken invocation | |
 | `@deployment` | Safe to run against a long-running deployment (needs no sign-in, or one) | any of the above with `E2E_BASE_URL` |
 
 `@budget` and `@pending` were one tag once, and merging them cost the
@@ -68,21 +69,88 @@ it is drawing on is not per-account. A new gate either fits in the three
 remaining slots or belongs in `@budget`, where the separate invocation
 gives it a fresh 20.
 
-Going over does not slow the suite down: it turns it red on `429` in
-whichever test loses the race, a failure that says nothing about the
-product.
+**Going over now costs time rather than a red.** `submitPasswordSignIn`
+keeps a ledger of the run's attempts and waits until the next one is
+inside both limits before making it (journeys.ts's `payTheLoginBudget`),
+extending only that test's own timeout by what the wait cost. Before
+that, crossing the budget turned the suite red on `429` in whichever
+test lost the race -- a failure that said nothing about the product and
+pointed at the wrong gate: the run that found this reported
+`visible-controls.spec.ts`, which was not the spec that overspent.
 
-**So ask the `@pending` tier for the block you mean, rather than running
-it whole.** What is actually known, kept apart because the two halves
-came from different runs: one measured run of the whole tier spent 18
-sign-ins over 2.6 minutes and crossed the per-IP pool, reddening a test
-on the budget rather than on its subject. A run of the same tier today
-did NOT -- four of its eight gates fail early, at a surface that does
-not exist yet, and never spend the sign-ins they would if they passed.
-That is the shape of the hazard: the tier's cost grows as its gates
-start passing, so the invocation that finally works is the one that
-trips the budget, and its red will point at whichever test lost the
-race. Ask for the block you mean:
+Three things about that ledger are worth knowing before trusting it:
+
+- **It is a file, not a variable.** A Playwright worker serves one
+  project and restarts at every engine boundary, so an in-memory ledger
+  reset three times per run while the server counted once -- the pacing
+  then did nothing on engines two and three. Same shape as the
+  fixed-port hazard below: state assumed shared, and not.
+- **It replicates `go/ratelimit`'s real arithmetic**, which is a
+  sliding-window *counter* over two epoch-aligned windows
+  (`thisWindow + previousWindow * (1 - elapsedFraction) <= Rate`), not a
+  rolling log. "Sixty seconds since the oldest attempt" is not the
+  boundary and waiting it out still gets refused; after five attempts in
+  one window the next is allowed only about a fifth of the way into the
+  following one. Two wrong models of this cost a run each.
+- **A refused attempt still counts.** `Allow` increments before it
+  decides, so a `429` makes the next attempt worse. The ledger records
+  every submission, not just the ones that worked.
+
+It is deliberately not a retry: it waits *before* an attempt so the
+attempt is legal, and never re-submits one the server refused. A helper
+that retried past a refusal would stop this suite being able to tell a
+regression from its own impatience.
+
+### One engine per invocation, and why pacing cannot fix it
+
+**Run each project separately.** All three engines in one invocation
+share one server process, and therefore one set of rate-limit counters:
+
+```bash
+for p in chromium webkit ipad; do pnpm test:e2e --project=$p; done
+```
+
+The default tier is green on all three engines that way, and red when
+asked for all three at once. The reason is `limitRegisterByIP`, and it
+is the one limit the pacing above deliberately does not touch: **10 per
+HOUR**. Each engine's registering specs spend about six, so three
+engines in one invocation ask for roughly eighteen, and the third engine
+is answered `authn.rate_limited` with `retry_after_seconds: 2532` --
+forty-two minutes. There is no wait that makes that a good trade: a tier
+that pauses for forty minutes is worse than one that says it cannot fit.
+Separate invocations each boot their own server, so each starts with the
+counters at zero, which is the same mechanism that makes `@budget` a
+real tier rather than a graveyard.
+
+So the two budgets need different answers, and conflating them was the
+mistake:
+
+| Limit | Window | Answer |
+|---|---|---|
+| `limitLoginByAccount`, `limitLoginByIP` | a minute | pace inside it (`payTheLoginBudget`) |
+| `limitRegisterByIP` | an hour | do not pace -- one engine per invocation |
+
+**The ledger does not see API-driven attempts.** `org-invitation-sign-in`
+drives register and login as direct requests rather than through the
+sign-in form, so those attempts spend the server's budget without ever
+reaching `payTheLoginBudget`. Its failure looks different too -- a raw
+`429` with the envelope in the message rather than the named refusal --
+which is the tell that a budget failure came from a spec the pacing
+cannot help.
+
+**Asking for one block at a time is no longer necessary, and the reason
+it used to be is worth keeping.** The hazard was that a tier's cost
+grows as its gates start passing: the run that finally works is the one
+that trips the budget, and its red points at whichever test lost the
+race rather than at the gate that overspent. That is exactly what
+happened -- one measured run of the whole tier spent 18 sign-ins over
+2.6 minutes and crossed the per-IP pool, while an earlier run of the
+same tier did not, only because four of its gates failed early at a
+surface that did not exist yet and never spent the sign-ins they would
+have if they passed. The pacing above absorbs that: the whole
+core-journey file now runs on three engines in one invocation, 18 gates
+in 3.7 minutes, most of the difference being waits. Asking for one block
+is still the fast way to check one block:
 
 ```bash
 E2E_RUN_TAGGED=1 pnpm exec playwright test \
@@ -527,14 +595,24 @@ the default tier, went green, and had never executed the `@pending` gate
 that was its own acceptance criterion -- the gate was not selected. A
 tier's green says only what that tier selected.
 
-**Open defects with a gate waiting on them** (`pnpm test:e2e:pending`):
+**Open defects with a gate waiting on them: none.** Every gate this
+suite wrote against a defect has seen its fix land, so
+`pnpm test:e2e:pending` selects nothing. What the list held, and what
+closed each one -- kept because the shape of these findings is the
+suite's own record of what it is for:
 
-| Gate | Waiting on |
-|---|---|
-| core-journey block D | `go/billing` has no HTTP surface, so a credits view has nothing to call |
-| sessions-are-distinguishable | session rows still render raw User-Agent strings, so three sign-ins from one browser are three identical walls of text |
-| current-clinic-is-visible (one of three) | a self-service clinic is shown as a raw tenant id and named on no surface |
-| offered-channels-work | SMS cannot be configured in this demo, by decision |
+| Gate | Was waiting on | Closed by |
+|---|---|---|
+| core-journey block D | `go/billing` had no HTTP surface, so a credits view had nothing to call | the credits surface, then `a9a7e22` for the cost disclosure |
+| sessions-are-distinguishable | session rows rendered raw User-Agent strings, so three sign-ins from one browser were three identical walls of text | `6d56d71` |
+| current-clinic-is-visible (one of three) | a self-service clinic was shown as a raw tenant id and named on no surface | the clinic-naming round |
+| offered-channels-work | an SMS tab was offered that the demo cannot configure | `ba061cd`, by closing the channel rather than configuring it |
+
+An empty `@pending` tier is a claim about this suite, not about the
+product: it says every defect this suite found has been fixed, and says
+nothing about the defects it never looked for. The two lists below --
+what the deployment cannot answer, and what is not gated at all -- are
+where that difference lives.
 
 **What the deployment cannot answer.** The fly.io deployment has no
 image-provider configuration (`flyctl secrets list` shows no
@@ -555,10 +633,23 @@ that journey has been walked locally and not on the deployment.
 
 **Not gated at all, and why:**
 
-- **A generation that fails giving the credits back.** The fake vendor
-  can now refuse (`FAKE_IMAGE_FAIL=1`), but the balance it should
-  restore has no surface to read, so the gate waits on block D.
-- **Team management and the admin console.** No browser surface exists.
+- **Team management.** Invitations work, but only through the API: a
+  practice cannot add a colleague by clicking, so no gate here can
+  cover it. This one is worth naming next to a green result, because
+  the green does not know the surface is missing.
+- **Downloading the result.** A practice can generate a simulation and
+  share a link, but cannot save the image.
+- **Subscription billing, usage analytics, the admin console.** No
+  browser surface exists for any of them.
+
+The refund entry used to sit here for the same reason the
+provisioning-recovery one below did -- the vendor could refuse
+(`FAKE_IMAGE_FAIL=1`) but the balance it should restore had no surface
+to read. `go/billing`'s credits surface gave it one, and
+refund-on-failed-generation.spec.ts now asserts the refunded ledger row
+rather than a balance that returned to its old number, which is the
+stronger question: a balance that came back is equally consistent with
+the charge never having been taken.
 
 The provisioning-recovery entry used to sit in this list, and what moved
 it out is worth keeping: the recovery was real from the day `dcd091c`

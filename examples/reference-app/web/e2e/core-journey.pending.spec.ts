@@ -4,47 +4,35 @@
  * comparing it with the original, sharing it with the patient, and seeing
  * what it cost.
  *
- * These are tagged @pending and left out of the default run
- * (playwright.config.ts's grepInvert). Block A's two tests now PASS --
- * the block-A surface shipped -- and are run deliberately together with
- * the rest:
+ * ALL FOUR BLOCKS PASS. Eighteen gates, one run, three engines, with
+ * the run's own throwaway OpenAI-compatible images provider standing in
+ * for the vendor (fake-image-provider.mjs under e2e/test-utils, wired in
+ * playwright.config.ts) so a freshly booted server completes the
+ * generation deterministically:
  *
- *   pnpm test:e2e:pending
+ *   pnpm test:e2e:budget
  *
- * Block B's two tests now PASS too (the block-B surface shipped: the
- * case photo carries the option pickers, the async generation with its
- * honest status, and the before/after comparison; the run's own
- * throwaway OpenAI-compatible images provider -- fake-image-provider.mjs
- * under e2e/test-utils, wired in playwright.config.ts -- is what lets a
- * freshly booted server complete the generation deterministically). To
- * run the passing A and B gates while C and D are still open:
- *
- *   pnpm exec playwright test --grep "block A|block B"
- *
- * (A must ride along with B: each run boots a fresh server and a fresh
- * database, and block B's helpers open a case that block A's own tests
- * create earlier in the same run.)
- *
- * The gates stay out of the default run for a structural reason, not an
- * implementation one: go/authn's per-IP login budget (limitLoginByIP,
- * 20 attempts per minute) is the standing ceiling the default suite is
- * sized against -- the pre-block-A default run already sits at roughly
- * 19 login attempts, and the core-journey gates' sign-ins push the
- * composed default run over the budget mid-suite (the org-invitation
- * and password-sign-in specs start answering authn.rate_limited). A
- * block whose gate rides the same demo accounts and the same per-IP
- * budget cannot join the default run until the suite's budget question
- * is answered (a per-suite rate allowance, dedicated demo accounts, or
- * fewer sign-ins elsewhere) -- recorded here as the reason these four
- * gates stay in the deliberate selection. Blocks C and D fail today,
- * and that is their present value: an
- * acceptance review found that a signed-in practice can reach nothing but
- * a notes scratchpad and an account page, while the backends for the
- * blocks below are real and tested (go/storage's three-step upload,
+ * They were @pending for a long time and the tag was earned: an
+ * acceptance review found that a signed-in practice could reach nothing
+ * but a notes scratchpad and an account page, while the backends for
+ * every block here were real and tested (go/storage's three-step upload,
  * internal/cases, internal/smilesim's async job, go/sharing's tokens,
  * go/billing's credit ledger). The gap was assembly, not capability, and
- * these gates are what turn "assembled" into something checkable rather
- * than arguable.
+ * these gates are what turned "assembled" into something checkable
+ * rather than arguable.
+ *
+ * The tag is @budget now, and that is a budget statement rather than a
+ * hedge: these gates spend eight demo-owner sign-ins, and the default
+ * tier already spends that account's whole five-per-minute allowance, so
+ * in the fast tier they would be waits rather than sign-ins. The suite
+ * paces itself inside go/authn's limits now (journeys.ts's
+ * payTheLoginBudget) instead of reddening on whichever gate lost the
+ * race -- which is why the whole file can be asked for at once, where it
+ * used to have to be asked for one block at a time.
+ *
+ * A must ride along with B: each run boots a fresh server and a fresh
+ * database, and block B's helpers open a case that block A's own tests
+ * create earlier in the same run.
  *
  * WHAT THESE ASSERT, AND WHAT THEY DELIBERATELY DO NOT
  *
@@ -125,7 +113,7 @@ const PATIENT_PHOTO = {
   ),
 }
 
-test.describe('the core journey', { tag: '@pending' }, () => {
+test.describe('the core journey', { tag: '@budget' }, () => {
   test('block A: a practice opens a case with the patient photo in one step', async ({ page }) => {
     await signInAs(page, DEMO_OWNER)
 

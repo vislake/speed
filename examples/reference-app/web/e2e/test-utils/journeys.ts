@@ -10,6 +10,8 @@
  * attribute survived.
  */
 import { expect, test, type Page } from '@playwright/test'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { LOGIN_LEDGER_PATH } from '../../playwright.config.js'
 import type { DemoAccount } from './accounts.js'
 
 /** auth-ui's sign-in surface (its own en-US bundle). */
@@ -91,36 +93,82 @@ export async function visitSignIn(page: Page): Promise<void> {
 }
 
 /**
- * go/authn's two sliding windows on sign-in, as this suite has to live
- * with them: five attempts per account per minute (limitLoginByAccount)
- * and twenty per IP per minute (limitLoginByIP), the second a pool every
- * gate in the run shares.
+ * go/authn's two limits on sign-in, as this suite has to live with them:
+ * five attempts per account per minute (limitLoginByAccount) and twenty
+ * per IP per minute (limitLoginByIP), the second a pool every gate in
+ * the run shares. Both read from go/authn/ratelimit.go.
  */
 const LOGIN_BUDGET = {
   perAccount: 5,
   perIp: 20,
   windowMs: 60_000,
-  /** So an attempt that lands exactly on the boundary is still inside. */
-  marginMs: 1_000,
 } as const
 
-/** When each account last attempted, and when this IP did, in this run. */
-const attemptsByAccount = new Map<string, number[]>()
-const attemptsByIp: number[] = []
+/** When each account attempted, and when this IP did, across the run. */
+interface LoginLedger {
+  readonly byAccount: Record<string, number[]>
+  readonly byIp: number[]
+}
 
 /**
- * How long to wait before one more attempt would be inside `limit`,
- * pruning the stamps that have already left the window.
+ * Reads the run's ledger. A missing or unreadable file is an empty
+ * ledger, never a failure: the worst it costs is one refusal that names
+ * itself, and a helper that could fail a gate over its own bookkeeping
+ * would be a worse instrument than the problem it solves.
  */
-function waitToFitOneMore(stamps: number[], limit: number, now: number): number {
-  const live = stamps.filter((at) => now - at < LOGIN_BUDGET.windowMs)
-  stamps.length = 0
-  stamps.push(...live)
-  const mustExpire = live[live.length - limit]
-  if (live.length < limit || mustExpire === undefined) {
-    return 0
+function readLedger(): LoginLedger {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(LOGIN_LEDGER_PATH, 'utf8'))
+    if (typeof parsed === 'object' && parsed !== null && 'byIp' in parsed) {
+      return parsed as LoginLedger
+    }
+  } catch {
+    // A first sign-in, or a file another worker is mid-write on.
   }
-  return LOGIN_BUDGET.windowMs - (now - mustExpire) + LOGIN_BUDGET.marginMs
+  return { byAccount: {}, byIp: [] }
+}
+
+/** Writes it back. Safe to lose: see readLedger. */
+function writeLedger(ledger: LoginLedger): void {
+  try {
+    writeFileSync(LOGIN_LEDGER_PATH, JSON.stringify(ledger))
+  } catch {
+    // Same reasoning as readLedger: bookkeeping never fails a gate.
+  }
+}
+
+/**
+ * Whether go/ratelimit would allow one more hit on `stamps` at `at`.
+ *
+ * A faithful replica of slidingWindowLimiter.Allow, because every
+ * approximation of it was wrong in a way that cost a run. It is a
+ * sliding-window COUNTER over two fixed windows, not a rolling log:
+ *
+ *   weighted = thisWindow + previousWindow * (1 - elapsedFraction)
+ *   allowed  = weighted <= Rate
+ *
+ * Three consequences the obvious model gets wrong, each of which this
+ * suite hit:
+ *
+ *   - The windows are aligned to the epoch, not to the first attempt.
+ *     "Sixty seconds since the oldest" is not the boundary; where the
+ *     attempts sat inside their window is.
+ *   - Only the current and immediately previous window are read at all.
+ *     An attempt two windows back counts for exactly nothing.
+ *   - The hit is counted BEFORE the decision, so a REFUSED attempt
+ *     increments the counter too. Refusals make the next attempt worse,
+ *     which is why the ledger records every submission and not just the
+ *     ones that worked.
+ */
+function wouldAllow(stamps: readonly number[], rate: number, at: number): boolean {
+  const per = LOGIN_BUDGET.windowMs
+  const index = Math.floor(at / per)
+  const elapsedFraction = (at % per) / per
+  const inWindow = (which: number): number =>
+    stamps.filter((stamp) => Math.floor(stamp / per) === which).length
+  // +1 for the hit being weighed: Allow increments first, then decides.
+  const weighted = inWindow(index) + 1 + inWindow(index - 1) * (1 - elapsedFraction)
+  return weighted <= rate
 }
 
 /**
@@ -146,38 +194,57 @@ function waitToFitOneMore(stamps: number[], limit: number, now: number): number 
  *
  * WHAT IT CANNOT SEE
  *
- * The ledger is this process's own. It matches the server's view only
- * because a local run boots a server of its own whose rate limiter is an
- * in-memory KVStore nothing else talks to. Against a long-lived
- * deployment (E2E_BASE_URL) another client's sign-ins are invisible here,
- * so the pacing reduces self-inflicted refusals rather than guaranteeing
- * none -- which is why signInAs still names the refusal when it comes.
+ * The ledger is this RUN's own -- a file, because a Playwright worker
+ * serves one project and restarts at every engine boundary, so an
+ * in-memory one reset three times per run while the server counted once
+ * (playwright.config.ts's LOGIN_LEDGER_PATH note). It matches the
+ * server's view only because a local run boots a server of its own whose
+ * rate limiter is an in-memory KVStore nothing else talks to. Against a
+ * long-lived deployment (E2E_BASE_URL) another client's sign-ins are
+ * invisible here, so the pacing reduces self-inflicted refusals rather
+ * than guaranteeing none -- which is why signInAs still names the refusal
+ * when it comes.
+ *
+ * Read-modify-write with no lock, which is sound only because this
+ * config runs workers: 1 and fullyParallel: false: one attempt is in
+ * flight at a time. A parallel run would need a real lock, and would
+ * blow the per-IP budget long before the ledger's races mattered.
  */
 async function payTheLoginBudget(identifier: string): Promise<void> {
-  const own = attemptsByAccount.get(identifier) ?? []
-  attemptsByAccount.set(identifier, own)
+  /** How often to re-ask. Local arithmetic only -- it costs no attempt. */
+  const step = 1_000
+  /**
+   * When to stop waiting and just try. Two windows is longer than any
+   * legitimate wait can be (a window's own contribution is gone after
+   * two), so reaching this means the ledger's model and the server's
+   * state have diverged -- in which case the honest move is to make the
+   * attempt and let the refusal name itself, not to wait forever.
+   */
+  const giveUpAt = Date.now() + 2 * LOGIN_BUDGET.windowMs
 
   for (;;) {
+    const ledger = readLedger()
+    const own = ledger.byAccount[identifier] ?? []
     const now = Date.now()
-    const wait = Math.max(
-      waitToFitOneMore(own, LOGIN_BUDGET.perAccount, now),
-      waitToFitOneMore(attemptsByIp, LOGIN_BUDGET.perIp, now),
-    )
-    if (wait <= 0) {
-      break
+    const fits =
+      wouldAllow(own, LOGIN_BUDGET.perAccount, now) &&
+      wouldAllow(ledger.byIp, LOGIN_BUDGET.perIp, now)
+
+    if (fits || now >= giveUpAt) {
+      writeLedger({
+        byAccount: { ...ledger.byAccount, [identifier]: [...own, now] },
+        byIp: [...ledger.byIp, now],
+      })
+      return
     }
+
     // The test is given exactly the time the wait costs, rather than the
     // whole suite being given a longer timeout: a genuinely hung gate
-    // should still report at its own deadline instead of three minutes
-    // later.
+    // should still report at its own deadline instead of minutes later.
     const info = test.info()
-    info.setTimeout(info.timeout + wait)
-    await new Promise((resolve) => setTimeout(resolve, wait))
+    info.setTimeout(info.timeout + step)
+    await new Promise((resolve) => setTimeout(resolve, step))
   }
-
-  const at = Date.now()
-  own.push(at)
-  attemptsByIp.push(at)
 }
 
 /**
