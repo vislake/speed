@@ -189,17 +189,21 @@ func TestDemoResolveSubject_HeaderDisabled_IgnoresHeaderUsesPrincipal(t *testing
 // any user id on every one of those routes. This test proves the switch now
 // covers the attribution header too, on two surfaces end to end:
 //
-//   - the cases list (a demoNotesSubjectResolver surface): with the switch
-//     ON, listing "my cases" while sending X-Demo-User-Id naming a
-//     different user must still answer the caller's OWN cases -- the
-//     header is not read at all.
+//   - the cases surface (a demoNotesSubjectResolver surface): with the
+//     switch ON, a create sending X-Demo-User-Id naming a different user
+//     must still be attributed to the caller's own Principal -- and the
+//     clinic-wide list, whatever creator header rides along, must answer
+//     the tenant's rows -- the header is not read at all. (The list's
+//     creator-blindness is doubly enforced since the block-A round: even
+//     with the switch OFF the list reads no creator, but the create
+//     attribution half of this leg stays the real impersonation gate.)
 //   - the notification inbox (a demoOrgSubjectResolver surface): with the
 //     switch ON, a request carrying NO demo header must resolve from the
 //     verified Principal instead of being refused as subject-less, and a
 //     request carrying a foreign X-Demo-User-Id must answer the same
 //     principal-resolved result.
 func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T) {
-	t.Run("cases list: switch on, a foreign X-Demo-User-Id cannot hijack the caller's own list", func(t *testing.T) {
+	t.Run("cases surface: switch on, a foreign X-Demo-User-Id cannot hijack attribution or the clinic list", func(t *testing.T) {
 		cfg := testConfig(t)
 		cfg.DisableDemoUserHeader = true
 		handler, cleanup, _, err := buildServer(t.Context(), cfg)
@@ -223,11 +227,21 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 			t.Fatal("created case carries no creator_user_id")
 		}
 
-		// Listing the caller's own cases while sending a FOREIGN
-		// X-Demo-User-Id must still answer the caller's own case: with the
-		// switch on the header is not read at all. (The pre-fix bug: the
-		// header was honored, the list was keyed to the foreign id, and the
-		// caller's own case vanished from its own "my cases" answer.)
+		// A second case created while sending a FOREIGN X-Demo-User-Id must
+		// carry the SAME principal attribution: with the switch on the
+		// attribution header is not read at all, so it can neither name the
+		// creator of a case nor key any list. (The pre-fix bug: the header
+		// was honored, and the caller's own case vanished from its own
+		// "my cases" answer under a foreign id.)
+		createdWithForeignHeader := createCaseAs(t, srv, token, demoNotesCreatorUserID, caseCreateBody{PatientName: "kill switch case two"})
+		if createdWithForeignHeader.CreatorUserID != created.CreatorUserID {
+			t.Fatalf("create under a foreign X-Demo-User-Id was attributed to %q, want the caller's own %q -- the attribution header must not be read when the kill switch is on",
+				createdWithForeignHeader.CreatorUserID, created.CreatorUserID)
+		}
+
+		// The clinic-wide list, whatever header rides along, answers the
+		// tenant's rows -- both principal-created cases -- never a list
+		// keyed to a header the switch has made inert.
 		resp := casesRequestAs(t, srv, http.MethodGet, casesPath, token, demoNotesCreatorUserID, nil)
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -241,13 +255,14 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 		if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
 			t.Fatalf("decode cases list: %v", err)
 		}
-		if len(list.Cases) != 1 {
-			t.Fatalf("cases list under a foreign X-Demo-User-Id, switch on: %d rows, want the caller's own 1 -- "+
-				"the attribution header must not be read when the kill switch is on (it was: the list was keyed to %q)",
-				len(list.Cases), demoNotesCreatorUserID)
+		if len(list.Cases) != 2 {
+			t.Fatalf("cases list under a foreign X-Demo-User-Id, switch on: %d rows, want the tenant's 2 -- "+
+				"the attribution header must not be read when the kill switch is on", len(list.Cases))
 		}
-		if list.Cases[0].CreatorUserID != created.CreatorUserID {
-			t.Fatalf("listed case creator = %q, want the caller's own %q", list.Cases[0].CreatorUserID, created.CreatorUserID)
+		for _, listed := range list.Cases {
+			if listed.CreatorUserID != created.CreatorUserID {
+				t.Fatalf("listed case creator = %q, want the caller's own %q", listed.CreatorUserID, created.CreatorUserID)
+			}
 		}
 	})
 

@@ -13,11 +13,16 @@
 // # Shape decision: one cases table with the patient embedded; one
 // case_photos table per photo (no patients table, no EMR)
 //
-// The P3 UI's queries -- read against what the round brief actually names:
-// a case list per clinic user, a case detail showing its photos and their
-// simulations, and the before/after pairing where one photo's simulations
-// are the "after" candidates for that "before" -- are all keyed by
-// (tenant, creator) or (tenant, case). Nothing P3 renders is keyed by
+// The P3 UI's queries -- a clinic-wide case list, a case detail showing
+// its photos and their simulations, and the before/after pairing where
+// one photo's simulations are the "after" candidates for that "before" --
+// are all keyed by (tenant) or (tenant, case). The clinic-wide list was
+// the block-A product decision: the P2b round shipped the list scoped to
+// the creating user ("my cases"), and the acceptance review found that
+// wrong for the product -- a case a receptionist opens must be visible to
+// the dentist who sees the patient next, so only the tenant boundary
+// (never the creator column) may hide a case from a colleague in the
+// same clinic. Nothing P3 renders is keyed by
 // patient: no per-patient page, no "all cases of this patient" list, no
 // patient deduplication or merge. A separate patients table earns its keep
 // only once a patient can own several cases AND the product lists or
@@ -53,20 +58,30 @@
 // not invalidate the case record itself. The case package therefore has no
 // dependency on smilesim, go/jobs or go/ai-gateway at all.
 //
-// # Surface decision: hand-mounted HTTP routes, no spec fragment
+// # Surface decision: a spec fragment, extended by the block-A web round
 //
-// The P3 UI needs three operations, so this round mounts them by hand in
-// cmd/server (cases.go) exactly as the smilesim and consult surfaces are
-// mounted -- POST /api/v1/cases (create: patient name, optional patient
-// reference, optional initial photo object ids), GET /api/v1/cases (the
-// caller's own case list, attributed through the host's SubjectResolver
-// seam the way notes' create handler attributes a note), and
-// GET /api/v1/cases/{id} (the case's detail with its photos). The routes
-// sit outside the OpenAPI machinery for the same structural reason
-// smilesim's do: no go/ module ships a fragment these routes could grow
-// into, and inventing one for an app-internal demo surface would add a
-// regeneration-and-merge obligation (api-contract.yml) for no consumer.
-// "Close/delete case" is deliberately NOT in this round's surface: closing
+// Product round P3a promoted the case surface from hand-mounted routes to
+// the fragment this package's api/ directory ships (see the fragment's
+// own header for the promotion's rationale), and the block-A web round
+// widened it from three operations to five: the clinic-wide list flip
+// (Service.List below), plus the photo upload and photo-content
+// operations the browser surface needs. Upload (POST /api/v1/cases/
+// photos/upload) is the one-shot form of go/storage's three-step upload
+// protocol the cases UI runs before a create: the handler performs
+// create/upload/complete itself over base64-encoded bytes -- JSON is the
+// only transport the app's generated frontend surface carries, so the
+// bytes travel encoded -- and returns the object id the create then
+// references. Content (GET /api/v1/cases/{caseId}/photos/
+// {photoObjectID}/content) serves one attached photo's stored bytes the
+// same way, for the case view to render. The full surface, all five
+// operations declared in the fragment and implemented by cmd/server's
+// handlers behind the generated ServerInterface: POST /api/v1/cases
+// (create: patient name, optional patient reference, optional initial
+// photo object ids), GET /api/v1/cases (the clinic-wide list -- no
+// creator attribution needed, any authenticated member of the tenant
+// may read it), GET /api/v1/cases/{id} (the case's detail with its
+// photos), the photo upload and the photo content reads above.
+// "Close/delete case" is deliberately NOT in this surface: closing
 // implies a status vocabulary and deleting implies aggregate semantics
 // (the case row and its photo rows must go together, and the storage
 // objects stay behind either way -- the case layer records references, it
@@ -103,10 +118,14 @@
 //     surface; the per-request user attribution is an identity seam, never
 //     an authorization decision). rbac permissioning of the case surface
 //     is P3 web work, exactly as notes' surface is gated today.
-//   - The case list is scoped to the creating user ("my cases"): a
-//     tenant-wide "the clinic's cases" queue, and therefore team sharing
-//     semantics, is a product decision P3 should make -- this round serves
-//     the one the brief names.
+//   - The case list is clinic-wide (the block-A decision): every case of
+//     the tenant, newest first, visible to every member of the tenant.
+//     What the list deliberately does not do is track work assignment --
+//     no per-user queues, no "my open cases" filter -- which is P3 web
+//     work when the list's interactions are designed (the P2b round's
+//     creator-scoped list was the earlier answer, replaced by this one
+//     because the product's acceptance chain requires team sharing: one
+//     patient, one chart, whichever colleague opens it).
 //   - No patient deduplication, no real PHI handling (the two embedded
 //     patient fields are treated as ordinary text; there is no encryption,
 //     no consent, no identifiers beyond what a demo intake form needs), no
@@ -130,9 +149,9 @@
 //     rather than papered over (service.go's Create doc comment).
 //
 // What P3 will need that this shape already serves: the case list query
-// (by creator, newest first), the detail query (case plus ordered photos),
-// the per-photo simulation pairing (each photo's object id feeding the P2a
-// enumeration route), and room for per-photo metadata, an add-photo
-// position-append and a real patient extraction without re-modeling what
-// this round ships.
+// (clinic-wide, newest first), the detail query (case plus ordered
+// photos), the per-photo simulation pairing (each photo's object id
+// feeding the P2a enumeration route), and room for per-photo metadata,
+// an add-photo position-append and a real patient extraction without
+// re-modeling what this round ships.
 package cases

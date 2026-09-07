@@ -4,6 +4,7 @@
   },
   "nav": {
     "home": "Home",
+    "cases": "Cases",
     "notes": "Notes",
     "account": "Account"
   },
@@ -59,6 +60,52 @@
     "intro": "Manage your sign-in sessions, recent sign-in activity and linked social accounts, and set up two-step verification.",
     "errors": {
       "authorizeUrlRefused": "This sign-in link is not a secure web address and was not opened."
+    }
+  },
+  "cases": {
+    "heading": "Cases",
+    "headingWithTitle": "{{clinic}} · {{title}}",
+    "intro": "Every case your clinic has opened, newest first — every member of the clinic sees the same list.",
+    "list": {
+      "newCase": "New case",
+      "emptyTitle": "No cases yet",
+      "emptyDescription": "Open the first case and it will show up here."
+    },
+    "create": {
+      "heading": "New case",
+      "patientNameLabel": "Patient name",
+      "patientNameRequired": "Enter the patient's name.",
+      "patientNameTooLong": "The patient name is too long. Shorten it and try again.",
+      "addPhoto": "Add photo",
+      "submit": "Create case"
+    },
+    "detail": {
+      "heading": "Case detail",
+      "backToCases": "Back to cases",
+      "openedOn": "Opened",
+      "photosHeading": "Photos",
+      "noPhotos": "No photos on this case yet.",
+      "photoAlt": "Patient photo {{index}}"
+    },
+    "errors": {
+      "invalidRequest": "The request could not be understood. Try again.",
+      "subjectUnresolved": "Your sign-in could not be recognized. Sign in again and retry.",
+      "patientNameRequired": "Enter the patient's name.",
+      "patientNameTooLong": "The patient name is too long. Shorten it and try again.",
+      "photoObjectIdRequired": "A photo is missing its storage reference. Remove it and add it again.",
+      "photoObjectIdTooLong": "A photo carries an invalid storage reference. Add it again.",
+      "duplicatePhotoObject": "The same photo was added twice. Remove the duplicate.",
+      "tooManyPhotos": "Too many photos. Remove some and try again.",
+      "photoAlreadyAttached": "This photo already belongs to another case and cannot be added again.",
+      "photoContentRequired": "The photo has no content. Choose the file again.",
+      "photoContentInvalid": "The photo content could not be read. Choose the file again.",
+      "photoContentTooLarge": "The photo file is too large. Compress it and try again.",
+      "photoRejected": "This file is not a supported image. Choose another one.",
+      "notFound": "This case could not be found. It may have been deleted.",
+      "photoNotFound": "This photo could not be found. It may have been cleaned up.",
+      "internalError": "Something went wrong on the server. Try again later.",
+      "client": "Could not reach the server. Check your connection and try again.",
+      "unknown": "Something went wrong. Try again later."
     }
   },
   "tenants": {

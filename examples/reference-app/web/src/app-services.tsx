@@ -26,8 +26,10 @@ import { createContext, useContext, useMemo } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import { usePublicConfig } from '@speed/api-client/react'
 import type { RequestFn } from '@speed/api-client'
+import { useCurrentTenant } from '@speed/auth-core'
 import type { AuthSession } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
+import { DEMO_TENANTS } from './demo-tenants.js'
 import { REFERENCE_APP_NAMESPACE } from './resources.js'
 
 /** The services the shell views compose. */
@@ -39,6 +41,24 @@ export interface AppServices {
   /** The one RequestFn the page's config reads go through (the client
    * the host bound into the api-sdk runtime seam). */
   readonly api: RequestFn
+}
+
+/**
+ * The display name of the tenant the signed-in frame is currently in,
+ * or null when the current tenant is not on the demo roster (a real
+ * deployment's tenants have no name in this host's static copy -- the
+ * demo's names live in the app namespace because no roster endpoint
+ * exists). The switcher and the cases surface read the same roster, so
+ * the name a person sees in the chrome is the name the work area
+ * shows.
+ */
+export function useCurrentTenantName(): string | null {
+  const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
+  const currentTenant = useCurrentTenant()
+  const tenant = DEMO_TENANTS.find(
+    (candidate) => candidate.id === currentTenant?.tenantId,
+  )
+  return tenant === undefined ? null : t(tenant.nameKey)
 }
 
 /** The Public config key carrying the brand name a server serves. */

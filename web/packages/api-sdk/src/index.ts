@@ -90,7 +90,7 @@ export interface CasesCase {
   patient_name: string;
   /** The clinic-given patient reference; empty means the clinic gave none. */
   patient_ref: string;
-  /** The user id of the staff member who created the case -- the "my cases" list's key. */
+  /** The user id of the staff member who created the case, as the host's SubjectResolver seam attributed the create request. Recorded on the row for the case's history; the clinic's case list is NOT filtered by it (every member of the tenant sees every case of the tenant). */
   creator_user_id: string;
   /** When the case was created, whole seconds, UTC. */
   created_at: string;
@@ -102,8 +102,37 @@ export interface CasesCase {
  * The list route's 200 answer.
  */
 export interface CasesListResponse {
-  /** The caller's own cases, newest first. */
+  /** The caller's tenant's cases, newest first. */
   cases: CasesCase[];
+}
+
+/**
+ * The photo-upload route's request body.
+ */
+export interface CasesUploadPhotoRequest {
+  /**
+     * The photo's bytes, base64-encoded (standard alphabet with padding, as the browser's FileReader data URL carries them). The decoded bytes must be non-empty and at most the surface's upload bound; storage's own probe of the stored bytes decides whether they are an acceptable image.
+     * @minLength 1
+     */
+  content_base64: string;
+}
+
+/**
+ * The photo-upload route's 201 answer.
+ */
+export interface CasesUploadPhotoResponse {
+  /** The completed go/storage photo object's id -- the value a case create's photo_object_ids list references to attach the photo to a case. */
+  object_id: string;
+}
+
+/**
+ * The photo-content route's 200 answer.
+ */
+export interface CasesPhotoContent {
+  /** The media type storage's probe assigned to the bytes at complete time (the sanitized form), e.g. image/jpeg. */
+  media_type: string;
+  /** The photo's stored bytes, base64-encoded -- the value a case view decodes into a blob URL it renders. */
+  content_base64: string;
 }
 
 export type CasesErrorParams = { [key: string]: unknown };
@@ -859,8 +888,8 @@ export const useCasesCreateCase = <TError = CasesError,
     }
 
 /**
- * Lists every case the caller created, newest first, each entry carrying its photos in attachment order (an empty list for a case whose photos arrive later). The list is keyed on the creator the host's SubjectResolver seam attributes the request to; a request no resolver can attribute is refused with cases.subject_unresolved.
- * @summary List the caller's own cases.
+ * Lists every case of the caller's tenant, newest first -- the clinic-scoped list: everyone who treats a patient together in one practice sees the same cases, and only the tenant boundary hides a case (proven by the cross-tenant refusal tests, never by the creator column). Each entry carries its photos in attachment order (an empty list for a case whose photos arrive later). The list needs no creator attribution at all: any authenticated member of the tenant may read it, and the creator a create request is attributed with is recorded on the case row, never used to hide or filter the clinic's list.
+ * @summary List every case of the caller's tenant.
  */
 export const casesListCases = (
 
@@ -907,7 +936,7 @@ export type CasesListCasesQueryError = CasesError
 
 
 /**
- * @summary List the caller's own cases.
+ * @summary List every case of the caller's tenant.
  */
 
 export function useCasesListCases<TData = Awaited<ReturnType<typeof casesListCases>>, TError = CasesError>(
@@ -916,6 +945,145 @@ export function useCasesListCases<TData = Awaited<ReturnType<typeof casesListCas
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getCasesListCasesQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Uploads one patient photo as a go/storage object of the caller's tenant and returns its object id -- the value a case create's photo_object_ids list then references. The operation is this surface's one-shot form of go/storage's three-step upload protocol: the handler runs create/upload/complete itself, computing the declared size and checksum from the decoded bytes (so no declared-vs-arrived mismatch is possible) and letting storage's own probe of the stored bytes decide the media type and refuse what is not an acceptable image. The bytes travel base64-encoded in JSON because this surface's frontend transport (the generated operations over @speed/api-client) is JSON-only; the upload page decodes nothing -- the browser file's bytes are base64-encoded once, client-side. An uploaded photo is NOT yet attached to any case: attachment happens when a case create names the object id, and the one-tenant-one-case-per-photo rule (cases.photo_already_attached) then applies like it does to any other object id. A photo never attached to a case is reclaimed by go/storage's own expiry sweep like any other object.
+ * @summary Upload one patient photo to the caller's tenant.
+ */
+export const casesUploadPhoto = (
+    casesUploadPhotoRequest: CasesUploadPhotoRequest,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<CasesUploadPhotoResponse>(
+      {url: `/api/v1/cases/photos/upload`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: casesUploadPhotoRequest, signal
+    },
+      );
+    }
+
+
+
+export const getCasesUploadPhotoMutationOptions = <TError = CasesError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof casesUploadPhoto>>, TError,{data: CasesUploadPhotoRequest}, TContext>, }
+): UseMutationOptions<Awaited<ReturnType<typeof casesUploadPhoto>>, TError,{data: CasesUploadPhotoRequest}, TContext> => {
+
+const mutationKey = ['casesUploadPhoto'];
+const {mutation: mutationOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof casesUploadPhoto>>, {data: CasesUploadPhotoRequest}> = (props) => {
+          const {data} = props ?? {};
+
+          return  casesUploadPhoto(data,)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type CasesUploadPhotoMutationResult = NonNullable<Awaited<ReturnType<typeof casesUploadPhoto>>>
+    export type CasesUploadPhotoMutationBody = CasesUploadPhotoRequest
+    export type CasesUploadPhotoMutationError = CasesError
+
+    /**
+ * @summary Upload one patient photo to the caller's tenant.
+ */
+export const useCasesUploadPhoto = <TError = CasesError,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof casesUploadPhoto>>, TError,{data: CasesUploadPhotoRequest}, TContext>, }
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof casesUploadPhoto>>,
+        TError,
+        {data: CasesUploadPhotoRequest},
+        TContext
+      > => {
+      return useMutation(getCasesUploadPhotoMutationOptions(options));
+    }
+
+/**
+ * Reads one photo of one case of the caller's tenant -- the bytes of the go/storage object a case photo references, base64-encoded in JSON with the media type storage's probe assigned at complete time, so the case view can render it (a blob URL built from the decoded bytes). The photo is addressed by its object id -- the value the case detail's photos entries carry -- never by a position the client would have to guess. An unknown case id, and a case of another tenant, both answer cases.not_found; a photo object id the case does not carry -- or whose object no longer exists in storage -- answers cases.photo_not_found; both refusals are deliberately indistinguishable from the same answer an unrelated request would get, so a caller can never probe another tenant's attachments.
+ * @summary Read one photo of one case of the caller's tenant.
+ */
+export const casesGetPhotoContent = (
+    caseId: string,
+    photoObjectID: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<CasesPhotoContent>(
+      {url: `/api/v1/cases/${caseId}/photos/${photoObjectID}/content`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getCasesGetPhotoContentQueryKey = (caseId: string,
+    photoObjectID: string,) => {
+    return [
+    `/api/v1/cases/${caseId}/photos/${photoObjectID}/content`
+    ] as const;
+    }
+
+
+export const getCasesGetPhotoContentQueryOptions = <TData = Awaited<ReturnType<typeof casesGetPhotoContent>>, TError = CasesError>(caseId: string,
+    photoObjectID: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof casesGetPhotoContent>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getCasesGetPhotoContentQueryKey(caseId,photoObjectID);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof casesGetPhotoContent>>> = ({ signal }) => casesGetPhotoContent(caseId,photoObjectID, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: caseId !== null && caseId !== undefined && photoObjectID !== null && photoObjectID !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof casesGetPhotoContent>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type CasesGetPhotoContentQueryResult = NonNullable<Awaited<ReturnType<typeof casesGetPhotoContent>>>
+export type CasesGetPhotoContentQueryError = CasesError
+
+
+/**
+ * @summary Read one photo of one case of the caller's tenant.
+ */
+
+export function useCasesGetPhotoContent<TData = Awaited<ReturnType<typeof casesGetPhotoContent>>, TError = CasesError>(
+ caseId: string,
+    photoObjectID: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof casesGetPhotoContent>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getCasesGetPhotoContentQueryOptions(caseId,photoObjectID,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

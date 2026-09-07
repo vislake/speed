@@ -68,14 +68,15 @@ type caseRecord struct {
 	// the case, attributed by the host's SubjectResolver seam at create
 	// time (cmd/server's wireCasesRoutes resolves it before the body is
 	// even read) -- never by the request itself, and never written after
-	// Create. It is the key of the "my cases" list service.ListByCreator
-	// answers: a case is created by exactly one user, and this round's list
-	// surface is scoped to that user (a tenant-wide clinic queue is a P3
-	// decision -- see the package doc comment's "Honest record" section).
-	// The column carries a NOT NULL DEFAULT '' so pre-existing rows and any
-	// caller that creates a case without a resolvable creator (tests, seed
-	// code) stay valid: an empty CreatorUserID is the "no attributable
-	// creator" sentinel, and no list is keyed on it.
+	// Create. It is the row's recorded attribution: the case list is
+	// clinic-wide (Service.List enumerates every case of the tenant,
+	// never one creator's subset -- see the package doc comment's
+	// "Shape decision" section for the block-A decision), so this column
+	// is history, not a list key. The column carries a NOT NULL
+	// DEFAULT '' so pre-existing rows and any caller that creates a case
+	// without a resolvable creator (tests, seed code) stay valid: an
+	// empty CreatorUserID is the "no attributable creator" sentinel, and
+	// no list is keyed on it.
 	CreatorUserID string `gorm:"column:creator_user_id;size:64;not null;default:''"`
 
 	// CreatedAt is populated by gorm's autoCreateTime on Create -- never

@@ -4,6 +4,7 @@
   },
   "nav": {
     "home": "首页",
+    "cases": "病例",
     "notes": "记事",
     "account": "账户"
   },
@@ -59,6 +60,52 @@
     "intro": "管理您的登录会话、最近登录记录与已关联的社交账号，并设置双重验证。",
     "errors": {
       "authorizeUrlRefused": "该登录链接不是安全的网页地址，未予打开。"
+    }
+  },
+  "cases": {
+    "heading": "病例",
+    "headingWithTitle": "{{clinic}} · {{title}}",
+    "intro": "列表展示当前诊所开立的全部病例，新的在前；同一诊所的每位成员看到的是同一份病例清单。",
+    "list": {
+      "newCase": "新建病例",
+      "emptyTitle": "还没有病例",
+      "emptyDescription": "开立第一份病例后，它会显示在这里。"
+    },
+    "create": {
+      "heading": "新建病例",
+      "patientNameLabel": "患者姓名",
+      "patientNameRequired": "请输入患者姓名。",
+      "patientNameTooLong": "患者姓名过长，请精简后再试。",
+      "addPhoto": "添加照片",
+      "submit": "创建病例"
+    },
+    "detail": {
+      "heading": "病例详情",
+      "backToCases": "返回病例列表",
+      "openedOn": "开立时间",
+      "photosHeading": "照片",
+      "noPhotos": "这份病例还没有照片。",
+      "photoAlt": "患者照片 {{index}}"
+    },
+    "errors": {
+      "invalidRequest": "请求无法识别，请重试。",
+      "subjectUnresolved": "无法识别您的登录身份，请重新登录后再试。",
+      "patientNameRequired": "请输入患者姓名。",
+      "patientNameTooLong": "患者姓名过长，请精简后再试。",
+      "photoObjectIdRequired": "有照片缺少存储引用，请移除后重新添加。",
+      "photoObjectIdTooLong": "有照片的存储引用无效，请重新添加该照片。",
+      "duplicatePhotoObject": "同一张照片被重复添加，请移除重复项。",
+      "tooManyPhotos": "照片数量超出上限，请减少后再试。",
+      "photoAlreadyAttached": "这张照片已归属另一份病例，无法重复添加。",
+      "photoContentRequired": "照片内容为空，请重新选择文件。",
+      "photoContentInvalid": "照片内容无法识别，请重新选择文件。",
+      "photoContentTooLarge": "照片文件过大，请压缩后重试。",
+      "photoRejected": "该文件不是受支持的图片，请换一张。",
+      "notFound": "找不到这份病例，它可能已被删除。",
+      "photoNotFound": "找不到这张照片，它可能已被清理。",
+      "internalError": "服务器出了点问题，请稍后再试。",
+      "client": "无法连接到服务器，请检查网络后重试。",
+      "unknown": "出了点问题，请稍后再试。"
     }
   },
   "tenants": {

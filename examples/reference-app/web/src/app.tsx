@@ -10,9 +10,11 @@
  * Routing is the app's one hand-rolled slice of chrome: the AppShell
  * nav items are anchors into the location hash (the shell never does
  * path-matching -- each item carries its own `selected`, computed
- * here), and this module parses that fragment into one of the four
- * content kinds the app knows. The three business surfaces live in
- * views/: home (config/feature-driven), notes and account. The
+ * here), and this module parses that fragment into one of the content
+ * kinds the app knows. The business surfaces live in views/: home
+ * (config/feature-driven), cases (the clinic's case list, the one-page
+ * creation flow and one case's detail -- the block-A acceptance
+ * surface), notes and account. The
  * binding callback is the account surface's subroute: the fragment
  * /auth/binding/<provider>?code=<code>&state=<state> is what the
  * account-ui BindingCallbackHandler completes at, so it parses here
@@ -39,6 +41,9 @@ import { useBrandName } from './app-services.js'
 import { REFERENCE_APP_NAMESPACE } from './resources.js'
 import { useHashRoute } from './useHashRoute.js'
 import { HomeView } from './views/home-view.js'
+import { CaseDetailView } from './views/case-detail-view.js'
+import { CasesCreateView } from './views/case-create-view.js'
+import { CasesView } from './views/cases-view.js'
 import { NotesView } from './views/notes-view.js'
 import { AccountView } from './views/account-view.js'
 import { SignInView } from './views/sign-in-view.js'
@@ -46,6 +51,8 @@ import { UserMenu } from './views/user-menu.js'
 
 /** The home fragment: the bare hash (''), '#' and '#/' all mean it. */
 export const ROUTE_HOME = '/'
+/** The cases surface fragment: the clinic's case list. */
+export const ROUTE_CASES = '/cases'
 /** The notes list fragment. */
 export const ROUTE_NOTES = '/notes'
 /** The account surface fragment. */
@@ -74,9 +81,13 @@ function isSocialProvider(value: string): value is SocialProvider {
 
 /** The fragment kinds the app renders, with the binding target a
  * provider plus the (code, state) pair its callback route completes
- * with. */
+ * with. The cases surface is three fragments: the clinic list, the
+ * one-page creation flow, and one case's detail (its id). */
 export type AppFragment =
   | { readonly kind: 'home' }
+  | { readonly kind: 'cases' }
+  | { readonly kind: 'casesCreate' }
+  | { readonly kind: 'caseDetail'; readonly caseId: string }
   | { readonly kind: 'notes' }
   | { readonly kind: 'account' }
   | { readonly kind: 'binding'; readonly target: BindingTarget }
@@ -105,11 +116,28 @@ function queryOf(fragment: string): string {
 
 /** Parses a hash fragment (without the '#') into the app fragment the
  * view layer renders. Non-route fragments degrade to unknown (home
- * content, no selected nav item). */
+ * content, no selected nav item). The cases surface's subroutes: the
+ * bare /cases is the list, /cases/new the one-page creation flow, and
+ * /cases/<id> (exactly one further segment -- a case id never carries
+ * a slash) one case's detail; any other /cases shape degrades to the
+ * unknown fragment like every other unrecognized path. */
 export function parseHashFragment(fragment: string): AppFragment {
   const path = pathOf(fragment)
   if (path === ROUTE_HOME) {
     return { kind: 'home' }
+  }
+  if (path === ROUTE_CASES) {
+    return { kind: 'cases' }
+  }
+  if (path.startsWith(`${ROUTE_CASES}/`)) {
+    const rest = path.slice(ROUTE_CASES.length + 1)
+    if (rest === 'new') {
+      return { kind: 'casesCreate' }
+    }
+    if (rest.length > 0 && !rest.includes('/')) {
+      return { kind: 'caseDetail', caseId: rest }
+    }
+    return { kind: 'unknown' }
   }
   if (path === ROUTE_NOTES) {
     return { kind: 'notes' }
@@ -135,6 +163,10 @@ function selectedNavId(fragment: AppFragment): string | null {
   switch (fragment.kind) {
     case 'home':
       return NAV_HOME
+    case 'cases':
+    case 'casesCreate':
+    case 'caseDetail':
+      return NAV_CASES
     case 'notes':
       return NAV_NOTES
     case 'account':
@@ -146,6 +178,7 @@ function selectedNavId(fragment: AppFragment): string | null {
 }
 
 const NAV_HOME = 'nav-home'
+const NAV_CASES = 'nav-cases'
 const NAV_NOTES = 'nav-notes'
 const NAV_ACCOUNT = 'nav-account'
 
@@ -169,6 +202,12 @@ export function AppView(): ReactElement {
       selected: selected === NAV_HOME,
     },
     {
+      id: NAV_CASES,
+      label: t('nav.cases'),
+      href: navHref(ROUTE_CASES),
+      selected: selected === NAV_CASES,
+    },
+    {
       id: NAV_NOTES,
       label: t('nav.notes'),
       href: navHref(ROUTE_NOTES),
@@ -187,6 +226,40 @@ export function AppView(): ReactElement {
     case 'home':
     case 'unknown':
       content = <HomeView />
+      break
+    case 'cases':
+      content = (
+        <CasesView
+          onNewCase={() => {
+            window.location.hash = `${ROUTE_CASES}/new`
+          }}
+          onOpenCase={(caseId) => {
+            window.location.hash = `${ROUTE_CASES}/${caseId}`
+          }}
+        />
+      )
+      break
+    case 'casesCreate':
+      // The one-page creation flow; its onCreated cue is the host's
+      // navigation back to the list, which remounts the list view and
+      // re-reads it (the app's staleTime-0 policy).
+      content = (
+        <CasesCreateView
+          onCreated={() => {
+            window.location.hash = ROUTE_CASES
+          }}
+        />
+      )
+      break
+    case 'caseDetail':
+      content = (
+        <CaseDetailView
+          caseId={parsed.caseId}
+          onBack={() => {
+            window.location.hash = ROUTE_CASES
+          }}
+        />
+      )
       break
     case 'notes':
       content = <NotesView />

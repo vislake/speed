@@ -3,14 +3,26 @@ info:
   title: cases
   description: >-
     The reference app's case-domain HTTP surface (internal/cases, mounted
-    by the app in cmd/server/cases.go): create a case (a clinic staff
-    member naming a patient and the photos already uploaded through
-    go/storage's own HTTP surface), list the caller's own cases, and read
-    one case's detail with its photos. Product round P3a promoted the
-    three routes from hand-written registrations to this fragment: the
-    app's handlers now implement the generated interface below, so a spec
-    change without a matching handler change cannot compile, and the
-    fragment joins the merged application document
+    by the app in cmd/server/cases.go): upload a patient photo (a
+    one-shot op that runs go/storage's create/upload/complete protocol
+    in-process and yields the object id a case create references), create
+    a case (a clinic staff member naming a patient and the photos already
+    uploaded), list the caller's tenant's cases, read one case's detail
+    with its photos, and read one photo's bytes (base64 in JSON, the
+    shape this surface's JSON-only frontend transport can carry) for the
+    case view to render. The block-A product round widened the case list
+    from the caller's own cases to every case of the caller's tenant --
+    the clinic-scoped list the acceptance chain demands: one practice's
+    staff must see the same patient's cases, and only the tenant
+    boundary (not the creator column) may hide a case from a colleague
+    in the same clinic. Product round P3a promoted the original three
+    routes from hand-written registrations to this fragment; the photo
+    upload and photo-content operations joined it when the block-A web
+    surface shipped (the frontend may only reach the backend through
+    generated operations, so every op the cases UI calls must live
+    here). The app's handlers implement the generated interface below,
+    so a spec change without a matching handler change cannot compile,
+    and the fragment joins the merged application document
     (build/openapi/speed.yaml), so the operations ship in the generated
     @speed/api-sdk surface the P3 web UI calls. A case detail's
     per-photo simulations deliberately stay on the smile-simulation
@@ -58,6 +70,7 @@ paths:
             bound was violated (cases.invalid_request_body,
             cases.patient_name_required, cases.patient_name_too_long,
             cases.patient_ref_too_long, cases.photo_object_id_required,
+            cases.photo_object_id_too_long,
             cases.duplicate_photo_object, cases.too_many_photos).
           content:
             application/json:
@@ -96,25 +109,82 @@ paths:
     get:
       operationId: cases_listCases
       tags: [cases]
-      summary: List the caller's own cases.
+      summary: List every case of the caller's tenant.
       description: >-
-        Lists every case the caller created, newest first, each entry
-        carrying its photos in attachment order (an empty list for a
-        case whose photos arrive later). The list is keyed on the
-        creator the host's SubjectResolver seam attributes the request
-        to; a request no resolver can attribute is refused with
-        cases.subject_unresolved.
+        Lists every case of the caller's tenant, newest first -- the
+        clinic-scoped list: everyone who treats a patient together in one
+        practice sees the same cases, and only the tenant boundary hides
+        a case (proven by the cross-tenant refusal tests, never by the
+        creator column). Each entry carries its photos in attachment
+        order (an empty list for a case whose photos arrive later). The
+        list needs no creator attribution at all: any authenticated
+        member of the tenant may read it, and the creator a create
+        request is attributed with is recorded on the case row, never
+        used to hide or filter the clinic's list.
       responses:
         '200':
-          description: The caller's own cases, newest first.
+          description: The caller's tenant's cases, newest first.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/CasesListResponse'
-        '401':
+        '403':
           description: >-
-            The request could not be attributed to a user
-            (cases.subject_unresolved).
+            The request carried no tenant -- an anonymous request to a
+            tenant-scoped route (tenancy.tenant_unresolved).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+        '500':
+          description: An unexpected server failure (cases.internal_error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+  /api/v1/cases/photos/upload:
+    post:
+      operationId: cases_uploadPhoto
+      tags: [cases]
+      summary: Upload one patient photo to the caller's tenant.
+      description: >-
+        Uploads one patient photo as a go/storage object of the caller's
+        tenant and returns its object id -- the value a case create's
+        photo_object_ids list then references. The operation is this
+        surface's one-shot form of go/storage's three-step upload
+        protocol: the handler runs create/upload/complete itself,
+        computing the declared size and checksum from the decoded bytes
+        (so no declared-vs-arrived mismatch is possible) and letting
+        storage's own probe of the stored bytes decide the media type
+        and refuse what is not an acceptable image. The bytes travel
+        base64-encoded in JSON because this surface's frontend transport
+        (the generated operations over @speed/api-client) is JSON-only;
+        the upload page decodes nothing -- the browser file's bytes are
+        base64-encoded once, client-side. An uploaded photo is NOT yet
+        attached to any case: attachment happens when a case create names
+        the object id, and the one-tenant-one-case-per-photo rule
+        (cases.photo_already_attached) then applies like it does to any
+        other object id. A photo never attached to a case is reclaimed by
+        go/storage's own expiry sweep like any other object.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CasesUploadPhotoRequest'
+      responses:
+        '201':
+          description: The photo was uploaded and completed; the answer names its object id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesUploadPhotoResponse'
+        '400':
+          description: >-
+            The request body was missing or malformed, or a documented
+            bound was violated (cases.invalid_request_body,
+            cases.photo_content_required, cases.photo_content_invalid,
+            cases.photo_content_too_large, cases.photo_rejected).
           content:
             application/json:
               schema:
@@ -123,6 +193,76 @@ paths:
           description: >-
             The request carried no tenant -- an anonymous request to a
             tenant-scoped route (tenancy.tenant_unresolved).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+        '500':
+          description: An unexpected server failure (cases.internal_error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+  /api/v1/cases/{caseId}/photos/{photoObjectID}/content:
+    get:
+      operationId: cases_getPhotoContent
+      tags: [cases]
+      summary: Read one photo of one case of the caller's tenant.
+      description: >-
+        Reads one photo of one case of the caller's tenant -- the bytes
+        of the go/storage object a case photo references, base64-encoded
+        in JSON with the media type storage's probe assigned at complete
+        time, so the case view can render it (a blob URL built from the
+        decoded bytes). The photo is addressed by its object id -- the
+        value the case detail's photos entries carry -- never by a
+        position the client would have to guess. An unknown case id, and
+        a case of another tenant, both answer cases.not_found; a photo
+        object id the case does not carry -- or whose object no longer
+        exists in storage -- answers cases.photo_not_found; both refusals
+        are deliberately indistinguishable from the same answer an
+        unrelated request would get, so a caller can never probe another
+        tenant's attachments.
+      parameters:
+        - name: caseId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The case's application-generated id.
+        - name: photoObjectID
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The photo's go/storage object id, as the case detail's photos entries carry it.
+      responses:
+        '200':
+          description: The photo's bytes, with the media type storage's probe assigned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesPhotoContent'
+        '400':
+          description: >-
+            The photo's bytes exceed the bound the surface can serve in
+            one answer (cases.photo_content_too_large).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+        '403':
+          description: >-
+            The request carried no tenant -- an anonymous request to a
+            tenant-scoped route (tenancy.tenant_unresolved).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CasesError'
+        '404':
+          description: >-
+            No such case under the caller's tenant (cases.not_found), or
+            no such photo on that case (cases.photo_not_found) -- the
+            same answer for another tenant's case or photo.
           content:
             application/json:
               schema:
@@ -250,7 +390,12 @@ components:
             gave none.
         creator_user_id:
           type: string
-          description: The user id of the staff member who created the case -- the "my cases" list's key.
+          description: >-
+            The user id of the staff member who created the case, as the
+            host's SubjectResolver seam attributed the create request.
+            Recorded on the row for the case's history; the clinic's
+            case list is NOT filtered by it (every member of the tenant
+            sees every case of the tenant).
         created_at:
           type: string
           format: date-time
@@ -275,8 +420,52 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CasesCase'
-          description: The caller's own cases, newest first.
+          description: The caller's tenant's cases, newest first.
       description: The list route's 200 answer.
+    CasesUploadPhotoRequest:
+      type: object
+      required:
+        - content_base64
+      properties:
+        content_base64:
+          type: string
+          minLength: 1
+          description: >-
+            The photo's bytes, base64-encoded (standard alphabet with
+            padding, as the browser's FileReader data URL carries them).
+            The decoded bytes must be non-empty and at most the
+            surface's upload bound; storage's own probe of the stored
+            bytes decides whether they are an acceptable image.
+      description: The photo-upload route's request body.
+    CasesUploadPhotoResponse:
+      type: object
+      required:
+        - object_id
+      properties:
+        object_id:
+          type: string
+          description: >-
+            The completed go/storage photo object's id -- the value a
+            case create's photo_object_ids list references to attach the
+            photo to a case.
+      description: The photo-upload route's 201 answer.
+    CasesPhotoContent:
+      type: object
+      required:
+        - media_type
+        - content_base64
+      properties:
+        media_type:
+          type: string
+          description: >-
+            The media type storage's probe assigned to the bytes at
+            complete time (the sanitized form), e.g. image/jpeg.
+        content_base64:
+          type: string
+          description: >-
+            The photo's stored bytes, base64-encoded -- the value a case
+            view decodes into a blob URL it renders.
+      description: The photo-content route's 200 answer.
     CasesError:
       type: object
       description: >-

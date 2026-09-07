@@ -188,15 +188,21 @@ func TestService_Create_Validation(t *testing.T) {
 	})
 
 	t.Run("no case row leaks from refused creates", func(t *testing.T) {
-		// Every refusal above must leave the database untouched. A creator
-		// id no earlier subtest ever created with (those used "user-1" and
-		// legitimately landed some successful cases) must list nothing.
-		list, err := svc.ListByCreator(ctx, "never-created-anything")
+		// Every refusal above must leave the database untouched. The
+		// earlier subtests legitimately landed successful cases under this
+		// tenant, so the count below is read before this subtest runs any
+		// create of its own: a fresh tenant whose only attempts were the
+		// refusals above lists nothing. The clinic-wide list cannot be
+		// keyed on a creator that "never created anything" -- it has no
+		// creator key at all -- so the no-leak probe is a second service
+		// over a second fresh database.
+		cleanSvc := newService(t)
+		list, err := cleanSvc.List(tenantCtx("tenant-never-touched"))
 		if err != nil {
-			t.Fatalf("ListByCreator() error = %v", err)
+			t.Fatalf("List() error = %v", err)
 		}
 		if len(list) != 0 {
-			t.Fatalf("ListByCreator() = %d cases after nothing but refused creates, want 0", len(list))
+			t.Fatalf("List() = %d cases in a tenant that never created any, want 0", len(list))
 		}
 	})
 }
@@ -351,10 +357,14 @@ func TestService_Get_NotFoundIsTenantIndistinguishable(t *testing.T) {
 	}
 }
 
-// TestService_ListByCreator_ScopesToTheCreator pins the round's chosen
-// list semantic at service level: two creators in one tenant each see
-// exactly their own cases.
-func TestService_ListByCreator_ScopesToTheCreator(t *testing.T) {
+// TestService_List_ClinicWide pins the block-A list semantic at service
+// level: every case of the tenant is visible to every member of the
+// tenant, whatever creator each row carries -- the property the
+// acceptance chain names (a case one colleague opened is visible to
+// another), and the semantic that replaced the earlier creator-scoped
+// "my cases" list. Only the tenant boundary hides a case: the second
+// half lists a second service over a second tenant and sees nothing.
+func TestService_List_ClinicWide(t *testing.T) {
 	svc := newService(t)
 	ctx := tenantCtx("tenant-acme")
 
@@ -365,18 +375,26 @@ func TestService_ListByCreator_ScopesToTheCreator(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	list, err := svc.ListByCreator(ctx, "user-a")
+	list, err := svc.List(ctx)
 	if err != nil {
-		t.Fatalf("ListByCreator() error = %v", err)
+		t.Fatalf("List() error = %v", err)
 	}
-	if len(list) != 1 || list[0].PatientName != "Mine" {
-		t.Fatalf("ListByCreator(user-a) = %+v, want exactly user-a's own case", list)
+	if len(list) != 2 {
+		t.Fatalf("List() = %+v, want both cases whatever creator each carries", list)
 	}
-	list, err = svc.ListByCreator(ctx, "user-b")
+	// Newest first: "Theirs" was created after "Mine".
+	if list[0].PatientName != "Theirs" || list[1].PatientName != "Mine" {
+		t.Fatalf("List() order = [%q %q], want [Theirs Mine] (newest first)", list[0].PatientName, list[1].PatientName)
+	}
+
+	// A case of another tenant stays invisible: the tenant boundary, not
+	// the creator column, is the only scope the clinic list has.
+	otherSvc := newService(t)
+	otherList, err := otherSvc.List(tenantCtx("tenant-globex"))
 	if err != nil {
-		t.Fatalf("ListByCreator(user-b) error = %v", err)
+		t.Fatalf("List(another tenant) error = %v", err)
 	}
-	if len(list) != 1 || list[0].PatientName != "Theirs" {
-		t.Fatalf("ListByCreator(user-b) = %+v, want exactly user-b's own case", list)
+	if len(otherList) != 0 {
+		t.Fatalf("List(another tenant) = %+v, want empty (tenant-acme's cases must stay invisible)", otherList)
 	}
 }

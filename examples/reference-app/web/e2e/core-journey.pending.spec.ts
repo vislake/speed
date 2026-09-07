@@ -4,18 +4,31 @@
  * comparing it with the original, sharing it with the patient, and seeing
  * what it cost.
  *
- * These are written BEFORE the surfaces they check, which is why they are
- * tagged @pending and left out of the default run (playwright.config.ts's
- * grepInvert). Run them deliberately:
+ * These are tagged @pending and left out of the default run
+ * (playwright.config.ts's grepInvert). Block A's two tests now PASS --
+ * the block-A surface shipped -- and are run deliberately together with
+ * the rest:
  *
  *   pnpm test:e2e:pending
  *
- * Every one of them fails today, and that is their present value: an
+ * They stay out of the default run for a structural reason, not an
+ * implementation one: go/authn's per-IP login budget (limitLoginByIP,
+ * 20 attempts per minute) is the standing ceiling the default suite is
+ * sized against -- the pre-block-A default run already sits at roughly
+ * 19 login attempts, and block A's journeys add the sign-ins that push
+ * the composed default run over the budget mid-suite (the org-invitation
+ * and password-sign-in specs start answering authn.rate_limited). A
+ * block whose gate rides the same demo accounts and the same per-IP
+ * budget cannot join the default run until the suite's budget question
+ * is answered (a per-suite rate allowance, dedicated demo accounts, or
+ * fewer sign-ins elsewhere) -- recorded here as the reason these two
+ * gates stay in the deliberate selection. Blocks B, C and D fail today,
+ * and that is their present value: an
  * acceptance review found that a signed-in practice can reach nothing but
- * a notes scratchpad and an account page, while the backends for all four
+ * a notes scratchpad and an account page, while the backends for the
  * blocks below are real and tested (go/storage's three-step upload,
  * internal/cases, internal/smilesim's async job, go/sharing's tokens,
- * go/billing's credit ledger). The gap is assembly, not capability, and
+ * go/billing's credit ledger). The gap was assembly, not capability, and
  * these gates are what turn "assembled" into something checkable rather
  * than arguable.
  *
@@ -37,7 +50,11 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import { DEMO_OWNER, DEMO_READER } from './test-utils/accounts.js'
-import { signInAs } from './test-utils/journeys.js'
+import {
+  readCurrentTenant,
+  signInAs,
+  switchTenant,
+} from './test-utils/journeys.js'
 
 /**
  * The accessible names the gates look for. Expectations, not decrees:
@@ -140,10 +157,18 @@ test.describe('the core journey', { tag: '@pending' }, () => {
     await (await chooser).setFiles(PATIENT_PHOTO)
     await page.getByRole('button', { name: /create|save|confirm/i }).click()
     await expect(page.getByText(name)).toBeVisible({ timeout: 30_000 })
+    // The clinic the case was opened in: the demo seeds no fixed
+    // sign-in landing tenant (an account's first tenant comes from a Go
+    // map's iteration order, randomized per boot -- journeys.ts's
+    // documented finding), so the colleague's visit is aimed at the
+    // clinic where the case actually lives, the same shift-change
+    // switch a front desk makes.
+    const clinic = await readCurrentTenant(page)
 
     // A colleague in the same practice, signing in on the same machine
     // the way a shift change happens at a front desk.
     await signInAs(page, DEMO_READER)
+    await switchTenant(page, clinic)
     await page.getByRole('link', { name: UI_NAMES.navCases }).click()
     await expect(
       page.getByText(name),

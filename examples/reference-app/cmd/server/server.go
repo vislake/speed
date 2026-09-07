@@ -2962,7 +2962,12 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: ensure cases schema: %w", err)
 	}
-	wireCasesRoutes(mux, cases.NewService(caseRepository), demoNotesSubjectResolver{headerDisabled: cfg.DisableDemoUserHeader})
+	// The photo-upload and photo-content routes (cases_photos.go) drive
+	// storageModule's own ObjectService -- the same instance the storage
+	// module's HTTP surface serves -- so the app's case surface and the
+	// module agree on what an object is and which tenant's rows each read
+	// (go/storage resolves the tenant from the request context itself).
+	wireCasesRoutes(mux, cases.NewService(caseRepository), demoNotesSubjectResolver{headerDisabled: cfg.DisableDemoUserHeader}, storageModule.ObjectService())
 
 	// wireIntegrationAuthenticated mounts go/integration round 6's
 	// mandatory-first-consumer route (cmd/server/integration_authenticate.go):

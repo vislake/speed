@@ -69,13 +69,23 @@
  * carries) -- plus GET /api/v1/notes (200, the note list of the bearer
  * principal's tenant) and POST /api/v1/notes (201, the created note,
  * appended to that tenant's list so a refetch after a create really
- * shows it). The notes answers mirror the real handler's refusals: a
- * create whose trimmed text is empty answers 400 notes.text_required
- * (internal/notes/handler.go), one over the 4000-character limit
- * answers 400 notes.text_too_long, and the deny switches below answer
- * the read/write permission refusals the rbac gate over the notes
- * module produces (403 rbac.permission_denied) -- the journeys gate and
- * error surfaces are driven by genuine refusals, never stubbed locally.
+ * shows it), and the cases surface's five operations mirroring the
+ * real fragment's clinic-wide shape: GET /api/v1/cases (200, the case
+ * list of the bearer principal's tenant), POST /api/v1/cases (201, the
+ * created case with its photos echoed, appended to that tenant's list),
+ * POST /api/v1/cases/photos/upload (201 {object_id}, the one-shot
+ * upload answer), GET /api/v1/cases/{caseId} (200, one case) and GET
+ * /api/v1/cases/{caseId}/photos/{photoObjectID}/content (200, the
+ * photo's bytes). The notes answers mirror the real handler's
+ * refusals: a create whose trimmed text is empty answers 400
+ * notes.text_required (internal/notes/handler.go), one over the
+ * 4000-character limit answers 400 notes.text_too_long, and the deny
+ * switches below answer the read/write permission refusals the rbac
+ * gate over the notes module produces (403 rbac.permission_denied) --
+ * while the cases answers mirror the real refusals through their own
+ * switches (denyCasesList, casesCreateRefusal, casesUploadRefusal,
+ * casesPhotoContentRefusal) -- the journeys gate and error surfaces are
+ * driven by genuine refusals, never stubbed locally.
  *
  * The multi-factor surface mirrors the authn handler's step-up
  * machine (the same states its own tests pin): POST
@@ -113,6 +123,7 @@
  * journey under test reached an endpoint the demo does not serve.
  */
 
+import type { CasesCase } from '@speed/api-sdk'
 import type { NotesNote } from '@speed/api-sdk'
 import type {
   AuthnIdentity,
@@ -259,6 +270,46 @@ export interface DemoServerOptions {
    * the account-view protocol-guard journeys script a hostile scheme
    * here to prove the host refuses it. */
   readonly socialAuthorizeUrl?: string
+  /** The GET /api/v1/cases list of the default tenant as first served.
+   * Stateful from there: a create appends the case later list answers
+   * of the same tenant carry (id 'case-N', the request echoed), the
+   * clinic-wide shape the real handler serves. Default [] -- the real
+   * handler's list is never a null answer. */
+  readonly initialCases?: readonly CasesCase[]
+  /** Answers every GET /api/v1/cases with the 500 internal-error
+   * envelope, the load-failure a surface renders its error state for;
+   * default false. */
+  readonly denyCasesList?: boolean
+  /** Refuses every POST /api/v1/cases with this coded answer -- a
+   * suite scripts the create refusals its surface must render (the
+   * photo-already-attached conflict, the over-long name); default
+   * undefined -- every create succeeds. */
+  readonly casesCreateRefusal?: {
+    readonly status: number
+    readonly code: string
+  }
+  /** Refuses every POST /api/v1/cases/photos/upload with this coded
+   * answer -- a suite scripts the refusals its queue must render (the
+   * probe's photo_rejected, say); default undefined -- every upload
+   * succeeds. */
+  readonly casesUploadRefusal?: {
+    readonly status: number
+    readonly code: string
+  }
+  /** Refuses every photo-content read (GET /api/v1/cases/{caseId}/
+   * photos/{photoObjectID}/content) with this coded answer; default
+   * undefined -- every attached photo's content is served. */
+  readonly casesPhotoContentRefusal?: {
+    readonly status: number
+    readonly code: string
+  }
+  /** The photo-content answer every attached photo serves (the media
+   * type the probe assigned and the stored bytes); default the demo
+   * payload above. */
+  readonly casesPhotoContent?: {
+    readonly media_type: string
+    readonly content_base64: string
+  }
 }
 
 /** What an issued access token stands for: the principal it belongs to
@@ -315,6 +366,24 @@ const SOCIAL_AUTHORIZE_PATH = /^\/api\/v1\/authn\/social\/([^/]+)\/authorize$/
  * answer goes somewhere harmless instead of nowhere. */
 const DEFAULT_SOCIAL_AUTHORIZE_URL =
   'https://sso.example.test/authorize?channel=demo'
+
+/** The parameterized cases paths: one case's detail and one attached
+ * photo's content (the block-A surface's read legs). The photo-upload
+ * route is exact-keyed in the switch, so its path never falls through
+ * to these. */
+const CASE_PATH = /^\/api\/v1\/cases\/([^/]+)$/
+const CASE_PHOTO_CONTENT_PATH =
+  /^\/api\/v1\/cases\/([^/]+)\/photos\/([^/]+)\/content$/
+
+/** The created_at every demo case answer carries -- the same fixed demo
+ * epoch the notes answers use, so journeys can pin rendered times. */
+const DEMO_CASE_CREATED_AT = DEMO_NOTE_CREATED_AT
+
+/** The photo bytes every demo photo-content answer serves unless a
+ * suite scripts its own: the base64 of the ASCII payload "photo-bytes"
+ * -- not a decodable image (the demo never renders it), but a stable,
+ * assertable payload. */
+const DEMO_PHOTO_CONTENT_BASE64 = 'cGhvdG8tYnl0ZXM='
 
 /** The demo's three sessions: the current one on the rig's own session
  * id (the same row every token-issuing answer names) plus two active
@@ -393,6 +462,15 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     initialIdentities = [],
     refuseUnbindIdentityId,
     socialAuthorizeUrl = DEFAULT_SOCIAL_AUTHORIZE_URL,
+    initialCases = [],
+    denyCasesList = false,
+    casesCreateRefusal,
+    casesUploadRefusal,
+    casesPhotoContentRefusal,
+    casesPhotoContent = {
+      media_type: 'image/png',
+      content_base64: DEMO_PHOTO_CONTENT_BASE64,
+    },
   } = options
   // The account state is stateful per responder instance (a revoke
   // marks a row for later list answers, an exchange appends a bound
@@ -424,6 +502,26 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     return list
   }
   let nextNoteId = 1
+  // The case lists are stateful per responder instance and keyed by
+  // tenant exactly like the notes lists: a create appends the case
+  // later list answers of the same tenant carry -- the clinic-wide
+  // shape the real handler's tenant-scoped repository serves.
+  const casesByTenant = new Map<string, CasesCase[]>([
+    [tenantId, [...initialCases]],
+  ])
+  const casesOf = (tenant: string): CasesCase[] => {
+    const list = casesByTenant.get(tenant)
+    if (list === undefined) {
+      const fresh: CasesCase[] = []
+      casesByTenant.set(tenant, fresh)
+      return fresh
+    }
+    return list
+  }
+  let nextCaseId = 1
+  // The object ids the demo's photo-upload answers hand out, counting
+  // per responder instance like the note and case ids.
+  let nextObjectId = 1
   // The accounts a register answered. A later sign-in of a recorded
   // identifier answers the membership refusal of a registered-but-
   // unseeded account (registration alone grants no membership).
@@ -604,6 +702,72 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         notesOf(principal.tenant_id).push(note)
         return jsonResponse(201, note)
       }
+      case 'GET /api/v1/cases': {
+        // The cases surface has no read gate (any member of the tenant
+        // may read the clinic's cases), so the list is served like any
+        // member's; the deny switch scripts the load failure a surface
+        // renders its error state for, and the bearer is resolved
+        // before it answers, exactly like the notes gates.
+        const principal = principalOf(call)
+        if (denyCasesList) {
+          return errorResponse(500, 'cases.internal_error')
+        }
+        return jsonResponse(200, { cases: casesOf(principal.tenant_id) })
+      }
+      case 'POST /api/v1/cases': {
+        const principal = principalOf(call)
+        if (casesCreateRefusal !== undefined) {
+          return errorResponse(casesCreateRefusal.status, casesCreateRefusal.code)
+        }
+        // The real service trims and validates: an empty trimmed
+        // patient name is refused before anything is stored, so the
+        // client's required rule cannot be the whole story
+        // (whitespace-only text passes it).
+        const body = bodyObject(call)
+        const raw = typeof body.patient_name === 'string' ? body.patient_name : ''
+        const patientName = raw.trim()
+        if (patientName === '') {
+          return errorResponse(400, 'cases.patient_name_required')
+        }
+        const photoObjectIds =
+          Array.isArray(body.photo_object_ids)
+            ? body.photo_object_ids.filter(
+                (entry): entry is string => typeof entry === 'string',
+              )
+            : []
+        const created: CasesCase = {
+          id: `case-${nextCaseId}`,
+          patient_name: patientName,
+          patient_ref: '',
+          creator_user_id: principal.user_id,
+          created_at: DEMO_CASE_CREATED_AT,
+          photos: photoObjectIds.map((object_id) => ({ object_id })),
+        }
+        nextCaseId += 1
+        casesOf(principal.tenant_id).push(created)
+        return jsonResponse(201, created)
+      }
+      case 'POST /api/v1/cases/photos/upload': {
+        // The bearer is resolved (and an anonymous upload fails loudly
+        // as the harness bug it is) even though the answer carries no
+        // principal: an upload is tenant-member work like every other
+        // cases route.
+        principalOf(call)
+        if (casesUploadRefusal !== undefined) {
+          return errorResponse(casesUploadRefusal.status, casesUploadRefusal.code)
+        }
+        const body = bodyObject(call)
+        const contentBase64 =
+          typeof body.content_base64 === 'string'
+            ? body.content_base64.trim()
+            : ''
+        if (contentBase64 === '') {
+          return errorResponse(400, 'cases.photo_content_required')
+        }
+        const objectId = `obj-${nextObjectId}`
+        nextObjectId += 1
+        return jsonResponse(201, { object_id: objectId })
+      }
       case 'GET /api/v1/authn/sessions':
         return jsonResponse(200, { sessions })
       case 'GET /api/v1/authn/login-history':
@@ -721,6 +885,38 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       // answer would arrive in.
       principalOf(call)
       return jsonResponse(200, { authorize_url: socialAuthorizeUrl })
+    }
+    const casePathMatch = CASE_PATH.exec(call.path)
+    if (call.method === 'GET' && casePathMatch !== null) {
+      const principal = principalOf(call)
+      const record = casesOf(principal.tenant_id).find(
+        (candidate) => candidate.id === casePathMatch[1],
+      )
+      if (record === undefined) {
+        return errorResponse(404, 'cases.not_found')
+      }
+      return jsonResponse(200, record)
+    }
+    const photoContentPathMatch = CASE_PHOTO_CONTENT_PATH.exec(call.path)
+    if (call.method === 'GET' && photoContentPathMatch !== null) {
+      const principal = principalOf(call)
+      if (casesPhotoContentRefusal !== undefined) {
+        return errorResponse(
+          casesPhotoContentRefusal.status,
+          casesPhotoContentRefusal.code,
+        )
+      }
+      const record = casesOf(principal.tenant_id).find(
+        (candidate) => candidate.id === photoContentPathMatch[1],
+      )
+      const attached =
+        record?.photos.some(
+          (photo) => photo.object_id === photoContentPathMatch[2],
+        ) ?? false
+      if (!attached) {
+        return errorResponse(404, 'cases.photo_not_found')
+      }
+      return jsonResponse(200, casesPhotoContent)
     }
     const callbackPathMatch = SOCIAL_CALLBACK_PATH.exec(call.path)
     if (call.method === 'POST' && callbackPathMatch !== null) {

@@ -1,10 +1,11 @@
 /**
  * codes-alignment.test.ts -- the reference-app shell's reachable-error
- * alignment suite: every server-emittable error code the shell's four
+ * alignment suite: every server-emittable error code the shell's five
  * surfaces can be answered with (the auth-ui sign-in/session family, the
- * account-ui signed-in family, the tenancy-ui switch family and the
- * notes create surface) is rendered through a reachable-error whitelist,
- * and this suite pins the whitelists to the server codes themselves.
+ * account-ui signed-in family, the tenancy-ui switch family, the notes
+ * create surface and the cases surface) is rendered through a
+ * reachable-error whitelist, and this suite pins the whitelists to the
+ * server codes themselves.
  *
  * The server side of the comparison is GO_PINNED below: a hand-maintained
  * enumeration of the codes the Go side of this app can answer with on
@@ -56,6 +57,7 @@ import { describe, expect, it } from 'vitest'
 import { ERROR_TEXT_CODES as AUTH_UI_ERROR_TEXT_CODES } from '../../../../web/packages/auth-ui/src/internal/error-text.js'
 import { ERROR_TEXT_CODES as ACCOUNT_UI_ERROR_TEXT_CODES } from '../../../../web/packages/account-ui/src/internal/error-text.js'
 import { ERROR_TEXT_CODES as TENANCY_UI_ERROR_TEXT_CODES } from '../../../../web/packages/tenancy-ui/src/internal/error-text.js'
+import { CASES_ERROR_TEXT_KEYS } from './cases-errors.js'
 import { NOTE_ERROR_TEXT_KEYS } from './views/notes-view.js'
 
 /**
@@ -156,6 +158,37 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // source (the deep-check below fails any drift).
   'notes.text_too_long': 'examples/reference-app/internal/notes/handler.go:80 (ErrTextTooLong)',
   'notes.internal_error': 'examples/reference-app/internal/notes/handler.go:84 (errInternal)',
+  // examples/reference-app/internal/cases/service.go -- the cases
+  // domain layer's own sentinels (the block-A round's clinic-wide list
+  // left the code set unchanged: these are the create/read refusals
+  // the cases fragment documents, now reachable text on the cases
+  // surface's routes).
+  'cases.patient_name_required': 'examples/reference-app/internal/cases/service.go:64 (ErrPatientNameRequired)',
+  'cases.patient_name_too_long': 'examples/reference-app/internal/cases/service.go:69 (ErrPatientNameTooLong)',
+  'cases.photo_object_id_required': 'examples/reference-app/internal/cases/service.go:81 (ErrPhotoObjectIDRequired)',
+  'cases.photo_object_id_too_long': 'examples/reference-app/internal/cases/service.go:86 (ErrPhotoObjectIDTooLong)',
+  'cases.duplicate_photo_object': 'examples/reference-app/internal/cases/service.go:91 (ErrDuplicatePhotoObject)',
+  'cases.too_many_photos': 'examples/reference-app/internal/cases/service.go:95 (ErrTooManyPhotos)',
+  'cases.photo_already_attached': 'examples/reference-app/internal/cases/service.go:103 (ErrPhotoAlreadyAttached)',
+  'cases.not_found': 'examples/reference-app/internal/cases/service.go:109 (ErrNotFound)',
+  'cases.subject_unresolved': 'examples/reference-app/internal/cases/service.go:122 (ErrSubjectUnresolved)',
+  // examples/reference-app/cmd/server/cases_photos.go -- the photo
+  // upload/content route sentinels the block-A round added (surface
+  // orchestration codes; the photo_content_too_large answers both the
+  // upload route and the content route).
+  'cases.photo_content_required': 'examples/reference-app/cmd/server/cases_photos.go:73 (ErrPhotoContentRequired)',
+  'cases.photo_content_invalid': 'examples/reference-app/cmd/server/cases_photos.go:78 (ErrPhotoContentInvalid)',
+  'cases.photo_content_too_large': 'examples/reference-app/cmd/server/cases_photos.go:85 (ErrPhotoContentTooLarge)',
+  'cases.photo_rejected': 'examples/reference-app/cmd/server/cases_photos.go:93 (ErrPhotoRejected)',
+  'cases.photo_not_found': 'examples/reference-app/cmd/server/cases_photos.go:100 (ErrPhotoNotFound)',
+  // examples/reference-app/cmd/server/cases.go -- the case surface's
+  // handler-level envelopes (the internal fallback writeCasesError
+  // folds every non-apperr error into, and the shared malformed-body
+  // sentinel every body-reading cases route writes -- both kept as
+  // named declarations so the audits that cite them have a stable
+  // site).
+  'cases.internal_error': 'examples/reference-app/cmd/server/cases.go:58 (casesErrInternal)',
+  'cases.invalid_request_body': 'examples/reference-app/cmd/server/cases.go:66 (casesInvalidRequestBody)',
 }
 
 /**
@@ -210,13 +243,14 @@ function nonClientCodes(codes: readonly string[]): string[] {
   return codes.filter((code) => !code.startsWith('client.'))
 }
 
-/** The four whitelists by surface, for failure messages that name the
+/** The five whitelists by surface, for failure messages that name the
  * list a drift was found in. */
 const SURFACE_WHITELISTS: Readonly<Record<string, readonly string[]>> = {
   'auth-ui sign-in/session': AUTH_UI_ERROR_TEXT_CODES,
   'account-ui signed-in family': ACCOUNT_UI_ERROR_TEXT_CODES,
   'tenancy-ui tenant switch': TENANCY_UI_ERROR_TEXT_CODES,
   'notes create surface': Object.keys(NOTE_ERROR_TEXT_KEYS),
+  'cases surface': Object.keys(CASES_ERROR_TEXT_KEYS),
 }
 
 /** A citation's path, line and sentinel identifier. */
@@ -279,10 +313,14 @@ describe('reachable-error whitelists vs the server code set', () => {
     // GO_PINNED again: composed-stack verification overturned its
     // in-app reachability, and its citation now lives in
     // WHITELISTED_BEYOND_THIS_APP with the reasoning) +
-    // rbac.permission_denied + the three notes sentinels. The size
+    // rbac.permission_denied + the three notes sentinels + the
+    // sixteen cases sentinels the block-A round's cases surface added
+    // (nine domain codes in internal/cases/service.go, five photo
+    // route codes in cmd/server/cases_photos.go, and the two
+    // handler-level envelopes in cmd/server/cases.go). The size
     // guard makes a GO_PINNED edit (in either direction) fail loudly
     // here rather than silently through the subset assertions below.
-    expect(Object.keys(GO_PINNED)).toHaveLength(38)
+    expect(Object.keys(GO_PINNED)).toHaveLength(54)
   })
 
   it('whitelists every code the server can answer with (GO_PINNED is covered)', () => {

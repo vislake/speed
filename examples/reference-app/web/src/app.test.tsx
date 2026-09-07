@@ -63,11 +63,24 @@ import { FEATURE_SMILE_PREVIEW } from './views/home-view.js'
 import { clearNotesDraft } from './views/notes-draft.js'
 
 describe('parseHashFragment', () => {
-  it('parses the three routes, with or without a leading slash', () => {
+  it('parses the four routes, with or without a leading slash', () => {
     expect(parseHashFragment('')).toEqual({ kind: 'home' })
     expect(parseHashFragment('/')).toEqual({ kind: 'home' })
+    expect(parseHashFragment('/cases')).toEqual({ kind: 'cases' })
     expect(parseHashFragment('/notes')).toEqual({ kind: 'notes' })
     expect(parseHashFragment('/account')).toEqual({ kind: 'account' })
+  })
+
+  it("parses the cases surface's subroutes: the create page and one case's detail", () => {
+    expect(parseHashFragment('/cases/new')).toEqual({ kind: 'casesCreate' })
+    expect(parseHashFragment('/cases/case-9')).toEqual({
+      kind: 'caseDetail',
+      caseId: 'case-9',
+    })
+    // A case id never carries a slash: deeper paths are unknown
+    // fragments, like every other unrecognized route.
+    expect(parseHashFragment('/cases/a/b')).toEqual({ kind: 'unknown' })
+    expect(parseHashFragment('/cases/')).toEqual({ kind: 'unknown' })
   })
 
   it('drops the query string when parsing a route', () => {
@@ -156,6 +169,57 @@ describe('AppView', () => {
           call.method === 'POST' && call.path === '/api/v1/authn/login/password',
       ),
     ).toBe(true)
+  })
+
+  it('reaches the cases surface from the nav: the clinic-titled list, the create page, and a case detail', async () => {
+    const rig = makeAppRig({
+      initialCases: [
+        {
+          id: 'case-1',
+          patient_name: 'Nav Journey Patient',
+          patient_ref: '',
+          creator_user_id: 'user-1',
+          created_at: '2026-09-04T00:00:00Z',
+          photos: [],
+        },
+      ],
+    })
+    const view = rendered(rig)
+    const user = userEvent.setup()
+    await signInWithPasswordUi(view, user)
+    await view.findByRole('link', { name: zhCN.nav.home })
+
+    // The journey's entrance is the frame's own navigation: the Cases
+    // nav item opens the clinic's case list, whose level-one title
+    // carries the current clinic's name (the block-A gate's cases leg).
+    await user.click(view.getByRole('link', { name: zhCN.nav.cases }))
+    expect(window.location.hash).toBe('#/cases')
+    const listHeading = await view.findByRole('heading', { level: 1 })
+    expect(listHeading).toHaveTextContent(
+      `${zhCN.tenants.acme} · ${zhCN.cases.heading}`,
+    )
+    expect(view.getByText('Nav Journey Patient')).toBeInTheDocument()
+    expect(
+      view.getByRole('link', { name: zhCN.nav.cases }),
+    ).toHaveAttribute('aria-current', 'page')
+
+    // The New case button opens the one-page creation flow.
+    await user.click(
+      view.getByRole('button', { name: zhCN.cases.list.newCase }),
+    )
+    expect(window.location.hash).toBe('#/cases/new')
+    await view.findByRole('textbox', {
+      name: zhCN.cases.create.patientNameLabel,
+    })
+
+    // Opening the seeded case renders its detail (empty list of photos
+    // answered for a photo-less case).
+    navigateTo('#/cases/case-1')
+    await view.findByText('Nav Journey Patient')
+    expect(view.getByText(zhCN.cases.detail.noPhotos)).toBeInTheDocument()
+    expect(
+      view.getByRole('link', { name: zhCN.nav.cases }),
+    ).toHaveAttribute('aria-current', 'page')
   })
 
   it('travels home/notes/account through the hash, lands the binding exchange back on the account fragment, and degrades unknown fragments', async () => {

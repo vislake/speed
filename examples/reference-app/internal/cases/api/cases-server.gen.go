@@ -18,7 +18,7 @@ type CasesCase struct {
 	// CreatedAt When the case was created, whole seconds, UTC.
 	CreatedAt time.Time `json:"created_at"`
 
-	// CreatorUserID The user id of the staff member who created the case -- the "my cases" list's key.
+	// CreatorUserID The user id of the staff member who created the case, as the host's SubjectResolver seam attributed the create request. Recorded on the row for the case's history; the clinic's case list is NOT filtered by it (every member of the tenant sees every case of the tenant).
 	CreatorUserID string `json:"creator_user_id"`
 
 	// ID The case's application-generated id.
@@ -55,7 +55,7 @@ type CasesError struct {
 
 // CasesListResponse The list route's 200 answer.
 type CasesListResponse struct {
-	// Cases The caller's own cases, newest first.
+	// Cases The caller's tenant's cases, newest first.
 	Cases []CasesCase `json:"cases"`
 }
 
@@ -65,20 +65,50 @@ type CasesPhoto struct {
 	ObjectID string `json:"object_id"`
 }
 
+// CasesPhotoContent The photo-content route's 200 answer.
+type CasesPhotoContent struct {
+	// ContentBase64 The photo's stored bytes, base64-encoded -- the value a case view decodes into a blob URL it renders.
+	ContentBase64 string `json:"content_base64"`
+
+	// MediaType The media type storage's probe assigned to the bytes at complete time (the sanitized form), e.g. image/jpeg.
+	MediaType string `json:"media_type"`
+}
+
+// CasesUploadPhotoRequest The photo-upload route's request body.
+type CasesUploadPhotoRequest struct {
+	// ContentBase64 The photo's bytes, base64-encoded (standard alphabet with padding, as the browser's FileReader data URL carries them). The decoded bytes must be non-empty and at most the surface's upload bound; storage's own probe of the stored bytes decides whether they are an acceptable image.
+	ContentBase64 string `json:"content_base64"`
+}
+
+// CasesUploadPhotoResponse The photo-upload route's 201 answer.
+type CasesUploadPhotoResponse struct {
+	// ObjectID The completed go/storage photo object's id -- the value a case create's photo_object_ids list references to attach the photo to a case.
+	ObjectID string `json:"object_id"`
+}
+
 // CasesCreateCaseJSONRequestBody defines body for CasesCreateCase for application/json ContentType.
 type CasesCreateCaseJSONRequestBody = CasesCreateCaseRequest
 
+// CasesUploadPhotoJSONRequestBody defines body for CasesUploadPhoto for application/json ContentType.
+type CasesUploadPhotoJSONRequestBody = CasesUploadPhotoRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
-	// CasesListCases List the caller's own cases.
+	// CasesListCases List every case of the caller's tenant.
 	// (GET /api/v1/cases)
 	CasesListCases(w http.ResponseWriter, r *http.Request)
 	// CasesCreateCase Create a case under the caller's tenant.
 	// (POST /api/v1/cases)
 	CasesCreateCase(w http.ResponseWriter, r *http.Request)
+	// CasesUploadPhoto Upload one patient photo to the caller's tenant.
+	// (POST /api/v1/cases/photos/upload)
+	CasesUploadPhoto(w http.ResponseWriter, r *http.Request)
 	// CasesGetCase Read one case of the caller's tenant.
 	// (GET /api/v1/cases/{caseId})
 	CasesGetCase(w http.ResponseWriter, r *http.Request, caseID string)
+	// CasesGetPhotoContent Read one photo of one case of the caller's tenant.
+	// (GET /api/v1/cases/{caseId}/photos/{photoObjectID}/content)
+	CasesGetPhotoContent(w http.ResponseWriter, r *http.Request, caseID string, photoObjectID string)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -118,6 +148,20 @@ func (siw *ServerInterfaceWrapper) CasesCreateCase(w http.ResponseWriter, r *htt
 	handler.ServeHTTP(w, r)
 }
 
+// CasesUploadPhoto operation middleware
+func (siw *ServerInterfaceWrapper) CasesUploadPhoto(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CasesUploadPhoto(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // CasesGetCase operation middleware
 func (siw *ServerInterfaceWrapper) CasesGetCase(w http.ResponseWriter, r *http.Request) {
 
@@ -135,6 +179,41 @@ func (siw *ServerInterfaceWrapper) CasesGetCase(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CasesGetCase(w, r, caseID)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CasesGetPhotoContent operation middleware
+func (siw *ServerInterfaceWrapper) CasesGetPhotoContent(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "caseId" -------------
+	var caseID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "caseId", r.PathValue("caseId"), &caseID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "caseId", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "photoObjectID" -------------
+	var photoObjectID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "photoObjectID", r.PathValue("photoObjectID"), &photoObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "photoObjectID", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CasesGetPhotoContent(w, r, caseID, photoObjectID)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -266,6 +345,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/cases", wrapper.CasesListCases)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/cases", wrapper.CasesCreateCase)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/cases/photos/upload", wrapper.CasesUploadPhoto)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/cases/{caseId}/photos/{photoObjectID}/content", wrapper.CasesGetPhotoContent)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/cases/{caseId}", wrapper.CasesGetCase)
 
 	return m

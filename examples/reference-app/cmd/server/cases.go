@@ -13,25 +13,31 @@
 // @speed/api-sdk surface the P3 web UI calls. cases_flow_test.go drives
 // them through the composed HTTP stack.
 //
-// The three operations the P3 web UI needs: create a case (a clinic
-// staff member naming a patient and the photos already uploaded through
-// go/storage's own HTTP surface), list the caller's own cases, and read
-// one case's detail with its photos. A case detail's per-photo
-// simulations deliberately stay on the smile-simulation surface (see
-// internal/cases's package doc comment's "Shape decision" section) --
-// fetched per photo by the P3 view from the P3a fragment that file's
-// sibling cmd/server/smilesim.go implements.
+// The five operations the P3 web UI needs: upload a patient photo (the
+// one-shot go/storage protocol wrapper the block-A round added, in
+// cases_photos.go), create a case (a clinic staff member naming a
+// patient and the photos already uploaded through that upload op), list
+// the caller's tenant's cases, read one case's detail with its photos,
+// and read one photo's bytes for the case view to render. A case
+// detail's per-photo simulations deliberately stay on the smile-
+// simulation surface (see internal/cases's package doc comment's
+// "Shape decision" section) -- fetched per photo by the P3 view from
+// the P3a fragment that file's sibling cmd/server/smilesim.go
+// implements.
 //
 // None of these operations takes a permission check of its own: in this
 // app every authenticated member of a tenant may work cases, and the
 // scoping that actually protects another tenant's rows -- dbkit's
 // tenant-injecting repository and plugin, exactly as for every other
 // tenant-domain table -- plus the per-request creator attribution
-// through the SubjectResolver seam below, are what actually gate access.
-// Like the smile-simulation surface, these routes are mounted directly
-// on mux rather than through reg.Routes/mountModuleRoutes, so none needs
-// (and cannot silently skip) an entry in demoRouteGuards' table, the
-// same structural argument smilesim.go's own header makes.
+// through the SubjectResolver seam below (create only: the case row's
+// recorded CreatorUserID), are what actually gate access. Only the
+// create route resolves a creator; the list, detail, upload and
+// photo-content routes need none. Like the smile-simulation surface,
+// these routes are mounted directly on mux rather than through
+// reg.Routes/mountModuleRoutes, so none needs (and cannot silently
+// skip) an entry in demoRouteGuards' table, the same structural
+// argument smilesim.go's own header makes.
 package main
 
 import (
@@ -40,6 +46,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/storage"
 
 	"github.com/vislake/speed/examples/reference-app/internal/cases"
 	casesapi "github.com/vislake/speed/examples/reference-app/internal/cases/api"
@@ -49,6 +56,14 @@ import (
 // not itself an *apperr.Error into a stable code, the same fallback
 // smilesim.go's own writeSmileSimError applies.
 var casesErrInternal = apperr.Internal("cases.internal_error")
+
+// casesInvalidRequestBody is the malformed-or-oversized request body
+// answer every body-reading cases route writes. It exists as a named
+// sentinel (rather than the inline apperr.Invalid(...) creation the
+// routes used to carry) so the error-mapping audits and the shell's
+// codes-alignment suite can cite a stable declaration site, exactly as
+// the notes surface's own handler sentinels are cited.
+var casesInvalidRequestBody = apperr.Invalid("cases.invalid_request_body")
 
 // casesMaxRequestBodyBytes bounds a create-case request body BEFORE it is
 // decoded, mirroring go/authn/handler.go's maxRequestBodyBytes and notes'
@@ -62,13 +77,18 @@ var casesErrInternal = apperr.Internal("cases.internal_error")
 const casesMaxRequestBodyBytes = 1 << 16
 
 // casesHandler implements casesapi.ServerInterface -- the app-side
-// implementation of the spec fragment's three operations -- backed by
-// svc and resolving the acting user through subject, the attribution
-// seam whose answers become case rows' CreatorUserID and the "my cases"
-// list's key (internal/cases's SubjectResolver doc comment).
+// implementation of the spec fragment's five operations -- backed by svc
+// and resolving the acting user through subject, the attribution seam
+// whose answer becomes a case row's CreatorUserID (internal/cases's
+// SubjectResolver doc comment). objects is the app's go/storage
+// ObjectService, which the photo-upload and photo-content operations
+// (cases_photos.go) drive and read -- the same instance the storage
+// module's own HTTP surface serves, so the app-side handlers and the
+// module's surface agree on what an object is.
 type casesHandler struct {
 	svc     *cases.Service
 	subject cases.SubjectResolver
+	objects *storage.ObjectService
 }
 
 // compile-time check that casesHandler implements every operation the
@@ -76,15 +96,15 @@ type casesHandler struct {
 // outgrew this file stops the app from compiling.
 var _ casesapi.ServerInterface = (*casesHandler)(nil)
 
-// wireCasesRoutes mounts the case domain's three routes on mux, backed
-// by svc and subject, through the generated api.HandlerFromMux helper:
-// the mount patterns come from internal/cases/api/openapi.yaml itself,
-// never a second hand-written copy. A request no resolver can attribute
-// is refused with the seam's coded 401 (cases.subject_unresolved) before
-// the body is even read, exactly the order notes' create handler
-// follows.
-func wireCasesRoutes(mux *http.ServeMux, svc *cases.Service, subject cases.SubjectResolver) {
-	casesapi.HandlerFromMux(&casesHandler{svc: svc, subject: subject}, mux)
+// wireCasesRoutes mounts the case domain's five routes on mux, backed
+// by svc, subject and the storage objects service, through the generated
+// api.HandlerFromMux helper: the mount patterns come from
+// internal/cases/api/openapi.yaml itself, never a second hand-written
+// copy. A create request no resolver can attribute is refused with the
+// seam's coded 401 (cases.subject_unresolved) before the body is even
+// read, exactly the order notes' create handler follows.
+func wireCasesRoutes(mux *http.ServeMux, svc *cases.Service, subject cases.SubjectResolver, objects *storage.ObjectService) {
+	casesapi.HandlerFromMux(&casesHandler{svc: svc, subject: subject, objects: objects}, mux)
 }
 
 // CasesCreateCase implements casesapi.ServerInterface: it handles POST
@@ -117,7 +137,7 @@ func (h *casesHandler) CasesCreateCase(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, casesMaxRequestBodyBytes)
 	var body casesapi.CasesCreateCaseRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeCasesError(w, apperr.Invalid("cases.invalid_request_body").WithCause(err))
+		writeCasesError(w, casesInvalidRequestBody.WithCause(err))
 		return
 	}
 
@@ -152,15 +172,13 @@ func (h *casesHandler) CasesCreateCase(w http.ResponseWriter, r *http.Request) {
 }
 
 // CasesListCases implements casesapi.ServerInterface: it handles GET
-// /api/v1/cases, listing the caller's own cases through the creator the
-// SubjectResolver seam attributes the request to.
+// /api/v1/cases, listing every case of the caller's tenant, newest
+// first -- the clinic-wide list the block-A product decision names (see
+// the spec fragment's own description). The list needs no creator
+// attribution: any authenticated member of the tenant may read every
+// case of the tenant, so no subject is resolved here.
 func (h *casesHandler) CasesListCases(w http.ResponseWriter, r *http.Request) {
-	creatorUserID, ok := resolveCasesSubject(w, h.subject, r)
-	if !ok {
-		return
-	}
-
-	list, err := h.svc.ListByCreator(r.Context(), creatorUserID)
+	list, err := h.svc.List(r.Context())
 	if err != nil {
 		writeCasesError(w, err)
 		return
@@ -197,8 +215,10 @@ func (h *casesHandler) CasesGetCase(w http.ResponseWriter, r *http.Request, case
 // invented or empty creator -- when no resolver is wired, when it cannot
 // attribute the request, or when it returns an empty user id (an empty
 // id is treated exactly like no id, so a seam bug can never smuggle an
-// empty creator into a case row or a list key). It is this surface's one
-// and only source of the creator, mirroring notes' handler.resolveSubject.
+// empty creator into a case row). It is this surface's one and only
+// source of the creator, and the create route is its only caller -- the
+// list, detail, upload and photo-content routes read no subject --
+// mirroring notes' handler.resolveSubject.
 func resolveCasesSubject(w http.ResponseWriter, subject cases.SubjectResolver, r *http.Request) (string, bool) {
 	if subject == nil {
 		writeCasesError(w, cases.ErrSubjectUnresolved)

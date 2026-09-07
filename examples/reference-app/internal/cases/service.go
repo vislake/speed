@@ -108,21 +108,24 @@ var (
 	// another tenant": either answer would leak another tenant's id space.
 	ErrNotFound = apperr.NotFound("cases.not_found")
 
-	// ErrSubjectUnresolved is returned when a request cannot be attributed
-	// to a user: no SubjectResolver is wired, or the wired resolver could
-	// not name the request's creator. The case surface needs the creator's
-	// user id for the case row's CreatorUserID (and therefore the "my
-	// cases" list), so an unattributable request is refused with a 401
+	// ErrSubjectUnresolved is returned when a create request cannot be
+	// attributed to a user: no SubjectResolver is wired, or the wired
+	// resolver could not name the request's creator. The create surface
+	// needs the creator's user id for the case row's recorded
+	// CreatorUserID, so an unattributable request is refused with a 401
 	// before any case is created -- never served an empty or invented
 	// creator -- mirroring the identical rule notes' SubjectResolver seam
-	// documents. cmd/server's wireCasesRoutes is the only caller that
+	// documents. Only the create route resolves a subject: the list,
+	// detail, upload and photo-content routes need no creator and read
+	// no resolver. cmd/server's wireCasesRoutes is the only caller that
 	// produces it.
 	ErrSubjectUnresolved = apperr.Unauthorized("cases.subject_unresolved")
 )
 
-// SubjectResolver is the seam through which the HTTP surface attributes a
-// request to the user who made it -- the case row's CreatorUserID and the
-// "my cases" list both key on its answer. It is cases' own copy of the
+// SubjectResolver is the seam through which the HTTP surface attributes
+// a create request to the user who made it -- the answer becomes the
+// case row's CreatorUserID (recorded attribution; the clinic's case
+// list is tenant-scoped and reads no creator). It is cases' own copy of the
 // identical declaration notes' handler.go carries: this package imports no
 // other app-internal package (see the package doc comment's "Shape
 // decision" section -- the case layer is deliberately free of the
@@ -152,7 +155,10 @@ type Case struct {
 	PatientRef string
 
 	// CreatorUserID is the user id of the staff member who created the
-	// case -- the "my cases" list's key.
+	// case, as the host's SubjectResolver seam attributed the create
+	// request. It is the row's recorded attribution -- never a list key:
+	// the clinic's case list is tenant-scoped, so every member of the
+	// tenant sees every case of the tenant.
 	CreatorUserID string
 
 	// CreatedAt is when the case was created.
@@ -334,13 +340,16 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Case, []Photo, er
 	return toCase(*record), toPhotos(photos), nil
 }
 
-// ListByCreator returns every case of ctx's tenant created by
-// creatorUserID, newest first -- the "my cases" list the round brief names.
-// A creator that has no cases answers an empty list, never an error; ctx
-// must carry a tenant (the underlying listByCreator fails closed without
-// one, never listing across tenants).
-func (s *Service) ListByCreator(ctx context.Context, creatorUserID string) ([]Case, error) {
-	records, err := s.repo.listByCreator(ctx, creatorUserID)
+// List returns every case of ctx's tenant, newest first -- the
+// clinic-wide list the round's product decision names: a case one staff
+// member created must be visible to every member of the same clinic
+// (the colleague who sees the patient next), and only the tenant
+// boundary hides a case from another practice. A tenant with no cases
+// answers an empty list, never an error; ctx must carry a tenant (the
+// underlying listByTenant fails closed without one, never listing
+// across tenants).
+func (s *Service) List(ctx context.Context) ([]Case, error) {
+	records, err := s.repo.listByTenant(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -43,13 +43,21 @@ const createCasePhotosTableSQL = `CREATE TABLE IF NOT EXISTS ` + casePhotosTable
 	created_at TIMESTAMP   NOT NULL
 )`
 
-// createCasesCreatorIndexSQL is the lookup index behind
-// Service.ListByCreator's "my cases" enumeration. Kept as its own statement
-// (CREATE INDEX IF NOT EXISTS is accepted by both SQLite and PostgreSQL)
-// because indexes cannot be declared portably inside the CREATE TABLE
-// statements above, and the model tags' index declarations only matter to
-// AutoMigrate, which this app never runs.
-const createCasesCreatorIndexSQL = `CREATE INDEX IF NOT EXISTS idx_cases_tenant_creator ON ` + casesTable + ` (tenant_id, creator_user_id)`
+// createCasesTenantListIndexSQL is the lookup index behind
+// Service.List's clinic-wide enumeration -- every case of one tenant,
+// newest first. Kept as its own statement (CREATE INDEX IF NOT EXISTS is
+// accepted by both SQLite and PostgreSQL) because indexes cannot be
+// declared portably inside the CREATE TABLE statements above, and the
+// model tags' index declarations only matter to AutoMigrate, which this
+// app never runs. It replaced the round's earlier
+// (tenant_id, creator_user_id) index, which backed the old "my cases"
+// list: no query filters by creator anymore (the clinic's list is
+// tenant-scoped, never creator-scoped), and the tenant-wide newest-first
+// read is the query that actually runs. A database file a previous boot
+// created keeps the old index harmlessly (CREATE INDEX IF NOT EXISTS
+// adds this one without touching it); the rows it used to serve are all
+// served by this one now.
+const createCasesTenantListIndexSQL = `CREATE INDEX IF NOT EXISTS idx_cases_tenant_created ON ` + casesTable + ` (tenant_id, created_at DESC)`
 
 // createCasePhotosCaseIndexSQL is the lookup index behind listing one
 // case's photos, ordered by position. It also backs the
@@ -134,7 +142,7 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	statements := []string{
 		createCasesTableSQL,
 		createCasePhotosTableSQL,
-		createCasesCreatorIndexSQL,
+		createCasesTenantListIndexSQL,
 		createCasePhotosCaseIndexSQL,
 		createCasePhotosObjectUniqueIndexSQL,
 	}
@@ -177,21 +185,25 @@ func (r *Repository) createCaseWithPhotos(ctx context.Context, record *caseRecor
 	})
 }
 
-// listByCreator returns every case belonging to ctx's tenant whose
-// CreatorUserID is creatorUserID, newest first (created_at descending,
-// with id as a stable tiebreak for two cases created within the same
-// timestamp tick) -- the "my cases" list Service.ListByCreator answers.
-// The query runs inside dbkit.WithTenantSession with the tenant half of
-// the WHERE clause injected by the tenant-scope plugin from the ctx tenant
-// -- never a post-query filter and never a hand-written tenant_id clause
-// (see go/dbkit/tenant_scope.go) -- so a caller can only ever enumerate
-// its own tenant's rows, exactly as smilesim's listByPhoto enumerates only
-// its own tenant's.
-func (r *Repository) listByCreator(ctx context.Context, creatorUserID string) ([]caseRecord, error) {
+// listByTenant returns every case belonging to ctx's tenant, newest
+// first (created_at descending, with id as a stable tiebreak for two
+// cases created within the same timestamp tick) -- the clinic-wide list
+// Service.List answers. The query runs inside dbkit.WithTenantSession
+// with the tenant half of the WHERE clause injected by the tenant-scope
+// plugin from the ctx tenant -- never a post-query filter and never a
+// hand-written tenant_id clause (see go/dbkit/tenant_scope.go) -- so a
+// caller can only ever enumerate its own tenant's rows, exactly as
+// smilesim's listByPhoto enumerates only its own tenant's. The list is
+// deliberately NOT filtered by creator: everyone who treats a patient
+// together in one practice must see the same cases, and only the tenant
+// boundary hides one (the block-A product decision the round brief and
+// the list route's spec description record). CreatorUserID stays on the
+// row as the recorded attribution of the create request; it is never a
+// list key.
+func (r *Repository) listByTenant(ctx context.Context) ([]caseRecord, error) {
 	var records []caseRecord
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.Where("creator_user_id = ?", creatorUserID).
-			Order("created_at DESC, id DESC").
+		return tx.Order("created_at DESC, id DESC").
 			Find(&records).Error
 	})
 	if err != nil {
@@ -228,7 +240,7 @@ func (r *Repository) photoObjectTaken(ctx context.Context, objectID string) (boo
 // attachment order (position ascending, with the row id as a stable
 // tiebreak) -- the detail read Service.Get answers alongside the case row
 // itself. Same WithTenantSession + plugin-injected tenant filter shape as
-// listByCreator: a caller can only ever list its own tenant's photo rows,
+// listByTenant: a caller can only ever list its own tenant's photo rows,
 // and a caseID belonging to another tenant answers an empty list rather
 // than an error (the caller's Get would have already failed its own
 // FindByID with not-found before this ever runs -- this method's contract

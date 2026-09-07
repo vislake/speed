@@ -165,11 +165,12 @@ func TestRepository_CaseRows_SurviveReopen(t *testing.T) {
 	}
 }
 
-// TestRepository_ListByCreator_ScopesAndOrders pins the "my cases" query
-// on its two axes: it returns only the named creator's cases of the ctx
-// tenant (another creator's cases in the same tenant, and the same
-// creator's cases in another tenant, both stay invisible), newest first.
-func TestRepository_ListByCreator_ScopesAndOrders(t *testing.T) {
+// TestRepository_ListByTenant_ScopesAndOrders pins the clinic-wide list
+// query on its two axes: it returns EVERY case of the ctx tenant --
+// whatever creator each row carries, so a colleague's case is as visible
+// as one's own, the block-A property the product's acceptance chain
+// demands -- newest first, and a case of another tenant stays invisible.
+func TestRepository_ListByTenant_ScopesAndOrders(t *testing.T) {
 	repo := newRepository(t)
 	ctxA := tenantCtx("tenant-a")
 	ctxB := tenantCtx("tenant-b")
@@ -191,24 +192,24 @@ func TestRepository_ListByCreator_ScopesAndOrders(t *testing.T) {
 		t.Fatalf("Create(other tenant) error = %v", err)
 	}
 
-	rows, err := repo.listByCreator(ctxA, "user-1")
+	rows, err := repo.listByTenant(ctxA)
 	if err != nil {
-		t.Fatalf("listByCreator() error = %v", err)
+		t.Fatalf("listByTenant() error = %v", err)
 	}
-	if len(rows) != 2 {
-		t.Fatalf("listByCreator(user-1) = %d rows, want 2 (the other creator's row must stay invisible)", len(rows))
+	if len(rows) != 3 {
+		t.Fatalf("listByTenant(tenant-a) = %d rows, want 3 (the other creator's row must be as visible as user-1's own)", len(rows))
 	}
-	if rows[0].PatientName != "second" || rows[1].PatientName != "first" {
-		t.Fatalf("listByCreator(user-1) order = [%q %q], want [second first] (newest first)",
-			rows[0].PatientName, rows[1].PatientName)
+	if rows[0].PatientName != "second" || rows[1].PatientName != "first" || rows[2].PatientName != "other creator" {
+		t.Fatalf("listByTenant(tenant-a) order = [%q %q %q], want [second first other creator] (newest first)",
+			rows[0].PatientName, rows[1].PatientName, rows[2].PatientName)
 	}
 
-	rows, err = repo.listByCreator(ctxB, "user-1")
+	rows, err = repo.listByTenant(ctxB)
 	if err != nil {
-		t.Fatalf("listByCreator(tenant-b) error = %v", err)
+		t.Fatalf("listByTenant(tenant-b) error = %v", err)
 	}
 	if len(rows) != 1 || rows[0].PatientName != "other tenant" {
-		t.Fatalf("listByCreator(tenant-b, user-1) = %+v, want only tenant-b's own row", rows)
+		t.Fatalf("listByTenant(tenant-b) = %+v, want only tenant-b's own row", rows)
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -16,10 +17,12 @@ import (
 // registration/sign-in surface, and a real temp-file SQLite database whose
 // cases tables the boot's own EnsureSchema created -- not a mock of any of
 // it. The tenant comes from the bearer token alone (registerAndAuthenticate's
-// own doc comment explains why Host plays no part); the acting creator
-// comes from the X-Demo-User-Id header (demoNotesSubjectResolver, the same
-// attribution seam notes' create handler uses), or from the verified
-// Principal when no header rides along.
+// own doc comment explains why Host plays no part); where a request needs
+// a creator (the create route only -- the clinic-wide list reads no
+// creator), the attribution comes from the X-Demo-User-Id header
+// (demoNotesSubjectResolver, the same attribution seam notes' create
+// handler uses), or from the verified Principal when no header rides
+// along.
 
 // caseCreateBody is the wire body this file's helpers send to POST
 // /api/v1/cases.
@@ -140,9 +143,9 @@ func assertCasesError(t *testing.T, resp *http.Response, wantStatus int, wantCod
 
 // TestCasesFlow_CreateListDetail_Journey is the case domain's composed
 // happy path: a clinic staff member creates a case for a patient with two
-// uploaded photos, sees it on the "my cases" list, and reads its detail
-// back with the photos in attachment order -- the exact queries the P3 UI
-// will make.
+// uploaded photos, sees it on the clinic's case list, and reads its
+// detail back with the photos in attachment order -- the exact queries
+// the P3 UI will make.
 func TestCasesFlow_CreateListDetail_Journey(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-journey")
@@ -229,10 +232,13 @@ func TestCasesFlow_CrossTenant_Invisible(t *testing.T) {
 	assertCasesError(t, detailResp, http.StatusNotFound, "cases.not_found", "GET detail of another tenant's case")
 }
 
-// TestCasesFlow_ListIsMineOnly pins the "my cases" semantic through the
-// composed stack: two creators in ONE tenant each see exactly their own
-// cases, whatever the other creator does.
-func TestCasesFlow_ListIsMineOnly(t *testing.T) {
+// TestCasesFlow_ListIsClinicWide pins the block-A list semantic through
+// the composed stack: two creators in ONE tenant each see BOTH cases --
+// a case one colleague opened is visible to another, the property the
+// product's acceptance chain names -- whatever creator header the
+// request carries (the header is an attribution seam for create, never a
+// list key).
+func TestCasesFlow_ListIsClinicWide(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-two-creators")
 
@@ -241,11 +247,11 @@ func TestCasesFlow_ListIsMineOnly(t *testing.T) {
 
 	for _, tc := range []struct {
 		creator   string
-		wantName  string
+		wantNames []string
 		wantCount int
 	}{
-		{creator: "user-creator-1", wantName: "Creator One's Case", wantCount: 1},
-		{creator: "user-creator-2", wantName: "Creator Two's Case", wantCount: 1},
+		{creator: "user-creator-1", wantNames: []string{"Creator Two's Case", "Creator One's Case"}, wantCount: 2},
+		{creator: "user-creator-2", wantNames: []string{"Creator Two's Case", "Creator One's Case"}, wantCount: 2},
 	} {
 		listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, acmeToken, tc.creator, nil)
 		var list struct {
@@ -256,8 +262,13 @@ func TestCasesFlow_ListIsMineOnly(t *testing.T) {
 			t.Fatalf("decode list response: %v", err)
 		}
 		listResp.Body.Close()
-		if len(list.Cases) != tc.wantCount || list.Cases[0].PatientName != tc.wantName {
-			t.Fatalf("list as %q = %+v, want exactly %q's own case (%q)", tc.creator, list.Cases, tc.creator, tc.wantName)
+		if len(list.Cases) != tc.wantCount {
+			t.Fatalf("list as %q = %+v, want %d cases (both creators' rows, newest first)", tc.creator, list.Cases, tc.wantCount)
+		}
+		for i, want := range tc.wantNames {
+			if list.Cases[i].PatientName != want {
+				t.Fatalf("list as %q = %+v, want names [%s] in order", tc.creator, list.Cases, tc.wantNames)
+			}
 		}
 	}
 }
@@ -265,8 +276,11 @@ func TestCasesFlow_ListIsMineOnly(t *testing.T) {
 // TestCasesFlow_PrincipalAttribution pins the no-demo-header path: a real
 // signed-in account acting through its access token alone is attributed
 // through the verified Principal (demoNotesSubjectResolver's fallback --
-// the browser-shaped caller), and its cases are visible to itself and to
-// no one else's list.
+// the browser-shaped caller), and its case is visible on the clinic-wide
+// list to every attribution source -- the case's recorded creator is the
+// principal's id, but the creator column never hides or splits the list,
+// so a header-attributed colleague's read of the same tenant answers the
+// same rows.
 func TestCasesFlow_PrincipalAttribution(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-principal")
@@ -276,27 +290,25 @@ func TestCasesFlow_PrincipalAttribution(t *testing.T) {
 		t.Fatalf("CreatorUserID = %q, want the account's own principal user id, distinct from the demo creator", created.CreatorUserID)
 	}
 
-	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, acmeToken, "", nil)
-	defer listResp.Body.Close()
-	var list struct {
-		Cases []testCase `json:"cases"`
-	}
-	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
-		t.Fatalf("decode list response: %v", err)
-	}
-	if len(list.Cases) != 1 || list.Cases[0].ID != created.ID {
-		t.Fatalf("headerless list = %+v, want exactly the principal-created case", list.Cases)
-	}
-
-	// The demo-header creator's own list is untouched by the principal's
-	// case: the two attribution sources key separate "my cases" scopes.
-	otherListResp := casesRequestAs(t, srv, http.MethodGet, casesPath, acmeToken, demoNotesCreatorUserID, nil)
-	defer otherListResp.Body.Close()
-	if err := json.NewDecoder(otherListResp.Body).Decode(&list); err != nil {
-		t.Fatalf("decode list response: %v", err)
-	}
-	if len(list.Cases) != 0 {
-		t.Fatalf("demo-creator list = %+v, want empty (the principal's case must not leak into it)", list.Cases)
+	for _, tc := range []struct {
+		what    string
+		creator string
+	}{
+		{what: "headerless read", creator: ""},
+		{what: "demo-creator header read", creator: demoNotesCreatorUserID},
+	} {
+		listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, acmeToken, tc.creator, nil)
+		var list struct {
+			Cases []testCase `json:"cases"`
+		}
+		if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
+			listResp.Body.Close()
+			t.Fatalf("decode list response: %v", err)
+		}
+		listResp.Body.Close()
+		if len(list.Cases) != 1 || list.Cases[0].ID != created.ID {
+			t.Fatalf("%s = %+v, want the principal-created case (the clinic list is one list, whatever creator header rides along)", tc.what, list.Cases)
+		}
 	}
 }
 
@@ -379,4 +391,123 @@ func TestCasesFlow_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T) {
 	_ = createCaseAs(t, srv, acmeToken, demoNotesCreatorUserID, caseCreateBody{
 		PatientName: "After the refused oversized body",
 	})
+}
+
+// TestCasesFlow_ColleagueSeesColleaguesCase is the block-A regression in
+// its cleanest form: two real signed-in accounts in ONE tenant; the
+// first creates a case; the second's list must contain it. The test is
+// written against API surface that predates the block-A round (create
+// and list only, no photo operations), so it compiles and runs against
+// the pre-fix code untouched -- where it FAILS, because the pre-fix list
+// answered the caller's own cases and the colleague's read came back
+// empty (one patient, two charts: the acceptance review's exact
+// finding). Against the clinic-wide list it passes. Root CLAUDE.md's
+// bug-fix test policy: this is the fail-before/pass-after pin for the
+// list-scoping fix.
+func TestCasesFlow_ColleagueSeesColleaguesCase(t *testing.T) {
+	srv, cfg, _ := buildTestServer(t)
+	aliceToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "colleague-alice")
+	bobToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "colleague-bob")
+
+	created := createCaseAs(t, srv, aliceToken, "", caseCreateBody{PatientName: "Colleague Patient"})
+
+	listResp := casesRequestAs(t, srv, http.MethodGet, casesPath, bobToken, "", nil)
+	defer listResp.Body.Close()
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("bob's GET %s status = %d, want 200", casesPath, listResp.StatusCode)
+	}
+	var list struct {
+		Cases []testCase `json:"cases"`
+	}
+	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil {
+		t.Fatalf("decode bob's list response: %v", err)
+	}
+	if len(list.Cases) != 1 || list.Cases[0].ID != created.ID {
+		t.Fatalf("bob's list = %+v, want Alice's case (a colleague in the same clinic must see it; pre-fix this list was creator-scoped and came back empty)", list.Cases)
+	}
+}
+
+// TestCasesFlow_BlockA_ClinicJourney is the composed-stack form of the
+// block-A acceptance journey the e2e gate (core-journey.pending.spec.ts's
+// two block-A tests) names: a clinic user creates a case with a real
+// photo and sees it listed with the photo readable on the case, and a
+// second user of the SAME clinic sees the first user's case in the list
+// -- the property that fails before the clinic-wide list fix (the list
+// used to answer the caller's own cases only, so the colleague's read
+// came back empty and the patient got a second chart) -- while a third
+// user in ANOTHER tenant sees neither. The journey runs through the real
+// composed HTTP stack with real signed-in accounts (no demo header, the
+// browser shape): the photo travels through the cases upload op, the
+// case through the cases fragment, and the photo's bytes come back
+// through the content op.
+func TestCasesFlow_BlockA_ClinicJourney(t *testing.T) {
+	srv, cfg, _ := buildTestServer(t)
+	aliceToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "blocka-alice")
+	bobToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "blocka-bob")
+	globexToken := registerAndAuthenticate(t, srv, cfg, "tenant-globex", "blocka-globex")
+
+	// Alice uploads a real patient photo and creates the case with it in
+	// one submission's worth of calls -- the pre-upload-then-create shape
+	// the one-page web flow performs.
+	photo := uploadPhotoAs(t, srv, aliceToken, base64.StdEncoding.EncodeToString(jpegWithExif(t)))
+	created := createCaseAs(t, srv, aliceToken, "", caseCreateBody{
+		PatientName:    "Block A Patient",
+		PhotoObjectIDs: []string{photo.ObjectID},
+	})
+	if len(created.Photos) != 1 || created.Photos[0].ObjectID != photo.ObjectID {
+		t.Fatalf("created case photos = %+v, want exactly the uploaded photo", created.Photos)
+	}
+
+	// Alice sees the case on the list and reads the photo's bytes on the
+	// case -- the photo is visible.
+	listAs := func(t *testing.T, token, what string) []testCase {
+		t.Helper()
+		resp := casesRequestAs(t, srv, http.MethodGet, casesPath, token, "", nil)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: GET %s status = %d, want 200", what, casesPath, resp.StatusCode)
+		}
+		var list struct {
+			Cases []testCase `json:"cases"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+			t.Fatalf("%s: decode list response: %v", what, err)
+		}
+		return list.Cases
+	}
+	aliceList := listAs(t, aliceToken, "alice's list")
+	if len(aliceList) != 1 || aliceList[0].ID != created.ID || aliceList[0].PatientName != "Block A Patient" {
+		t.Fatalf("alice's list = %+v, want exactly the created case", aliceList)
+	}
+	content := photoContentAs(t, srv, aliceToken, created.ID, photo.ObjectID)
+	if content.MediaType != "image/jpeg" {
+		t.Fatalf("photo media_type = %q, want image/jpeg", content.MediaType)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(content.ContentBase64)
+	if err != nil || len(decoded) == 0 {
+		t.Fatalf("photo content base64 does not decode to bytes (err=%v)", err)
+	}
+
+	// Bob, a second user of the same clinic, sees Alice's case on the
+	// clinic list and can open its photo. FAILS BEFORE the clinic-wide
+	// list fix: the list answered the caller's own cases, Bob's came back
+	// empty, and the patient would have met a colleague who could not
+	// find their last case.
+	bobList := listAs(t, bobToken, "bob's list")
+	if len(bobList) != 1 || bobList[0].ID != created.ID {
+		t.Fatalf("bob's list = %+v, want Alice's case (a colleague in the same clinic must see it)", bobList)
+	}
+	bobContent := photoContentAs(t, srv, bobToken, created.ID, photo.ObjectID)
+	if bobContent.MediaType != "image/jpeg" || bobContent.ContentBase64 != content.ContentBase64 {
+		t.Fatal("bob's photo read differs from Alice's, want the identical bytes")
+	}
+
+	// A third user in another tenant sees neither the case nor its photo:
+	// the tenant boundary, not the creator column, is the scope.
+	globexList := listAs(t, globexToken, "globex's list")
+	if len(globexList) != 0 {
+		t.Fatalf("globex's list = %+v, want empty (acme's case must stay invisible)", globexList)
+	}
+	foreign := casesRequestAs(t, srv, http.MethodGet, casePhotoContentPath(created.ID, photo.ObjectID), globexToken, "", nil)
+	assertCasesError(t, foreign, http.StatusNotFound, "cases.not_found", "another tenant's view of the case's photo")
 }

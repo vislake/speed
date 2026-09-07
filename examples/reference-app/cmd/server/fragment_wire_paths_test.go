@@ -33,4 +33,18 @@ const (
 	// detail route (operationId cases_getCase): GET
 	// caseDetailPathPrefix+"{caseId}" reads one case.
 	caseDetailPathPrefix = casesPath + "/"
+
+	// casesPhotosUploadPath is the cases fragment's photo-upload route
+	// (operationId cases_uploadPhoto, added by the block-A web round):
+	// POST a {content_base64} body, and the 201 answer carries the
+	// completed photo object's id.
+	casesPhotosUploadPath = casesPath + "/photos/upload"
 )
+
+// casePhotoContentPath builds the cases fragment's photo-content route
+// (operationId cases_getPhotoContent): GET
+// casePhotoContentPath(caseId, photoObjectID) serves one attached
+// photo's bytes.
+func casePhotoContentPath(caseID, photoObjectID string) string {
+	return casesPath + "/" + caseID + "/photos/" + photoObjectID + "/content"
+}
