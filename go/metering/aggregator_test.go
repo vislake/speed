@@ -981,6 +981,63 @@ func TestAggregator_Restart_ThresholdLoweredAcrossRestart_CrossingFires(t *testi
 	}
 }
 
+// TestAggregator_Restart_ThresholdConfiguredWhereNoneApplied_CrossingFires
+// pins the NULL-record arm of the P2-metering-B fix: a row whose folds
+// all ran under NO threshold records a nil OverageThreshold -- the
+// identical durable state a row written before migration 0006 carries
+// after it -- and a restart that CONFIGURES a threshold below the
+// existing quantity is the same "new configuration, crossing never
+// fired" shape as the lowering case: pre-fix the seed latched on the
+// quantity comparison alone and the newly configured threshold's signal
+// was silently absent for the whole period; post-fix the unattested row
+// leaves the latch open and the first fold that finds the bucket at or
+// above the threshold is the crossing event under it.
+func TestAggregator_Restart_ThresholdConfiguredWhereNoneApplied_CrossingFires(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	bus := pkgcore.NewMemoryEventBus()
+	var captured capturedEvents
+	bus.Subscribe(EventOverageThresholdCrossed, captured.handler)
+
+	// First process, no threshold configured at all: three events of 2
+	// each bring the bucket to 6, and with no threshold nothing can ever
+	// fire or be published.
+	first := NewAggregator(NewSummaryRepository(db))
+	first.bus = bus
+	for i := 0; i < 3; i++ {
+		if err := first.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 2, IdempotencyKey: idem(i), OccurredAt: at}); err != nil {
+			t.Fatalf("Ingest(%d): %v", i, err)
+		}
+	}
+	if len(captured.events) != 0 {
+		t.Fatalf("first process published %d overage event(s) with no threshold configured, want 0", len(captured.events))
+	}
+
+	// The operator configures a threshold of 5 -- below the existing
+	// quantity of 6 -- and restarts. The row's nil record attests nothing
+	// about the current configuration, so the first post-restart fold is
+	// the crossing event under it.
+	threshold := 5.0
+	restarted := NewAggregator(NewSummaryRepository(db))
+	restarted.thresholds = OverageThresholds{Default: &threshold}
+	restarted.bus = bus
+	if err := restarted.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: idem(3), OccurredAt: at}); err != nil {
+		t.Fatalf("Ingest(after restart): %v", err)
+	}
+	if len(captured.events) != 1 {
+		t.Fatalf("published %d overage event(s) after configuring a threshold below the existing quantity, want exactly 1 (pre-fix the seed latched on the quantity match alone and the newly configured threshold's crossing never fired)", len(captured.events))
+	}
+	payload, ok := captured.events[0].Payload.(OverageThresholdCrossedEvent)
+	if !ok {
+		t.Fatalf("payload type = %T, want OverageThresholdCrossedEvent", captured.events[0].Payload)
+	}
+	if payload.Threshold != threshold {
+		t.Errorf("payload.Threshold = %v, want %v", payload.Threshold, threshold)
+	}
+}
+
 // TestAggregator_RealtimeCount_NilSummariesRepository_ReturnsError is the
 // P3-metering-C regression: RealtimeCount answered a counter miss on an
 // Aggregator built with no summaries repository (NewAggregator(nil)) with
