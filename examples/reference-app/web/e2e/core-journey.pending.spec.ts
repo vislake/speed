@@ -258,31 +258,7 @@ test.describe('the core journey', { tag: '@pending' }, () => {
     await expect(comparison, 'the result must be shown against the original').toBeVisible({
       timeout: 120_000,
     })
-    const images = comparison.getByRole('img')
-    await expect(images).toHaveCount(2)
-
-    // TWO DIFFERENT images, which counting cannot tell you.
-    //
-    // A count of two passes just as happily when the surface renders the
-    // ORIGINAL twice -- and "before and before" is a defect this gate
-    // exists to catch, not one it may wave through: it is the product's
-    // entire proposition rendered as a no-op, and it would look right in
-    // a screenshot. The e2e fake provider deliberately answers with
-    // different bytes than the patient photo, but that only helps if
-    // something compares them, and nothing here did.
-    //
-    // Compared by source rather than by pixels: two storage objects are
-    // two URLs, which is the cheapest honest difference. A surface that
-    // renders one object twice fails here; one that renders the same
-    // IMAGE from two different objects is not a defect this gate is
-    // about.
-    const sources = await images.evaluateAll((nodes) =>
-      nodes.map((node) => (node as HTMLImageElement).currentSrc || (node as HTMLImageElement).src),
-    )
-    expect(
-      new Set(sources).size,
-      `the comparison shows the same image twice (${sources.join(' , ')}), so nothing about the simulation is on screen`,
-    ).toBe(2)
+    await expectBeforeAndAfter(comparison.getByRole('img'), "the practice's comparison")
   })
 
   test('block C: the result becomes a link a patient can open', async ({ page, context }) => {
@@ -313,47 +289,36 @@ test.describe('the core journey', { tag: '@pending' }, () => {
       // simulation at all could pass it. The image has to be one the
       // browser actually decoded, which a broken or missing source is
       // not.
-      // A PAGE, not a file.
+      // A PAGE with the PAIR on it, not a file and not the result alone.
       //
       // go/sharing's public route answers the resource's raw bytes with
       // its own MIME type (handler.go's io.Copy over the resolved
       // content), so handing a patient that URL directly opens a bare
-      // image in their browser: no practice name, no explanation, and --
-      // the part that matters most -- no BEFORE. "Before/after
-      // comparison" is a core requirement, and a link that carries only
-      // the after half does not meet it.
+      // image in their browser: no practice name, no explanation, and no
+      // BEFORE. This gate passed that shape until it was looked at --
+      // a browser given image bytes builds a document around an <img>,
+      // so an image-role check and a decoded-width check both hold.
+      // Found by reading the gate as though it had already passed and
+      // asking what it would have let through, which is the only defence
+      // available for a gate written before its surface exists.
       //
-      // This gate passed that shape until now: a browser given image
-      // bytes builds a document around an <img>, so an image-role check
-      // and a decoded-width check both hold. Found by reading the gate
-      // as though it had already passed and asking what it would have
-      // let through -- the only defence available for a gate written
-      // before its surface exists.
+      // Both requirements below were settled as product decisions rather
+      // than assumed here: "before/after comparison" is a core
+      // requirement and it has to hold on the PATIENT's side -- the
+      // result alone is not a delivery, and narrowing the comparison to
+      // something only the clinic sees was considered and rejected. So
+      // the patient's landing is a side-by-side page.
       //
-      // Asserted as "the view says something", which is the least this
-      // can require without dictating a design: a bare image document
-      // has no text in it at all. What the page should actually say --
-      // the practice's name, the patient's, an explanation, the pair
-      // side by side -- is a product decision this does not make.
+      // Text first, because it is the cheapest way to tell a page from a
+      // file: a bare image document contains no text at all. What the
+      // page should SAY -- the practice's name, the patient's, an
+      // explanation -- is still a product decision this does not make.
       await expect(
         patientPage.locator('body'),
-        'the patient received a bare file rather than a page: nothing on it says whose smile this is, and the before half of the comparison is not there at all',
+        'the patient received a bare file rather than a page: nothing on it says whose smile this is',
       ).not.toHaveText('')
 
-      const shown = patientPage.getByRole('img').first()
-      await expect(shown, 'a patient opening the link must see the simulation').toBeVisible()
-      const decoded = await shown.evaluate((node) => {
-        const image = node as HTMLImageElement
-        return { complete: image.complete, width: image.naturalWidth }
-      })
-      expect(
-        decoded,
-        'the patient page shows an image that never loaded, so the patient sees a broken frame where their new smile should be',
-      ).toEqual({ complete: true, width: expect.any(Number) })
-      expect(
-        decoded.width,
-        'the patient page shows a zero-width image, so nothing of the simulation reached them',
-      ).toBeGreaterThan(0)
+      await expectBeforeAndAfter(patientPage.getByRole('img'), "the patient's page")
     } finally {
       await patient.close()
     }
@@ -432,6 +397,56 @@ async function openCaseWithPhoto(page: Page): Promise<void> {
     page.getByRole('img', { name: /photo|patient|before/i }).first(),
     'the case just created does not show the photo submitted with it',
   ).toBeVisible({ timeout: 30_000 })
+}
+
+/**
+ * Asserts a region shows a genuine before/after pair: two images, both
+ * decoded by the browser, and NOT the same image twice.
+ *
+ * One implementation, shared by the clinic's own comparison (block B)
+ * and the patient's page (block C), because the two must hold the same
+ * property and a change to what counts as a pair must not leave one
+ * side checking something the other stopped checking.
+ *
+ * Each half of it has caught something. Counting alone passes when a
+ * surface renders the ORIGINAL twice -- the product's whole proposition
+ * rendered as a no-op, and it looks right in a screenshot. Requiring the
+ * images to have decoded catches a broken source, which is what a
+ * patient would actually report: a broken frame where their new smile
+ * should be.
+ *
+ * Compared by source rather than by pixels: two storage objects are two
+ * URLs, the cheapest honest difference. A surface rendering one object
+ * twice fails; one rendering the same IMAGE from two different objects
+ * is not what this is about.
+ */
+async function expectBeforeAndAfter(
+  images: import('@playwright/test').Locator,
+  what: string,
+): Promise<void> {
+  await expect(images, `${what} does not show two images`).toHaveCount(2)
+
+  const shown = await images.evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const image = node as HTMLImageElement
+      return {
+        source: image.currentSrc || image.src,
+        decoded: image.complete && image.naturalWidth > 0,
+      }
+    }),
+  )
+
+  const broken = shown.filter((image) => !image.decoded).map((image) => image.source)
+  expect(
+    broken,
+    `${what} shows an image that never loaded (${broken.join(' , ')}), which is a broken frame where a smile should be`,
+  ).toEqual([])
+
+  const sources = shown.map((image) => image.source)
+  expect(
+    new Set(sources).size,
+    `${what} shows the same image twice (${sources.join(' , ')}), so nothing about the simulation is on screen`,
+  ).toBe(2)
 }
 
 /**
