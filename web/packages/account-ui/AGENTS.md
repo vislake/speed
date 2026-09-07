@@ -60,6 +60,13 @@ verification); two take no props at all.
    never declares enabled or disabled — a 403 `authn.step_up_required`
    on an enroll attempt is the discovery that a factor exists, and the
    section opens its step-up dialog and remembers the gated action.
+   The enrollment warning's signal is the caller's own elevation, not
+   the path that reached the wizard: EnrollTOTP answers 200 for a
+   pending replacement whenever the presented token already carries
+   fresh second-factor proof (its `amr` holds `mfa:totp` or
+   `mfa:recovery_code`), so a wizard reached under such a token — an
+   earlier step-up still warm in the session included — renders the
+   replacement warning, whatever the status code the enroll answered.
    The spec's delete-semantics shape the dialogs: revoking one's own
    session is low-loss (no second confirmation on the row), revoking
    the rest is a ui-kit danger `ConfirmDialog` with double confirm.
@@ -203,7 +210,9 @@ whitelist-to-bundle pairing is pinned in both languages by
 Recorded, with the current disposition, in the README's Known
 limitations and Deferrals sections. The load-bearing ones for a
 contributor: the spec ships no factor-status/disable/change-password
-operations, so `MfaSection` discovers state through 403s and the
+operations, so `MfaSection` discovers state through 403s plus the
+token's own `amr` (the replacement-warning signal — an enrollment
+under second-factor proof replaces an active factor) and the
 change-password cascade stays missing end to end; enrollment is
 manual-entry (no QR or clipboard dependency); recovery codes are
 show-once, never re-fetchable; the session list renders the server's

@@ -5,15 +5,21 @@
  * host builds -- real api-client, real session, generated mutations.
  *
  * The suite pins the plan's discover-by-acting machine: a first setup
- * answers 200 straight into the wizard (no warning), the confirm opens
- * the show-once codes, and saving resets everything -- re-entering needs
- * a brand-new enroll request, nothing is cached. An enroll or regenerate
- * refused 403 authn.step_up_required opens the challenge dialog, whose
- * success re-runs exactly the gated action: enroll then shows the
- * replacement warning (the 403 is the one reliable signal an active
- * factor exists), regenerate opens the codes panel or -- a race the
- * server cannot fully rule out -- answers 404 authn.mfa_not_enrolled and
- * renders its guide text. A cancel retries nothing. Confirm answers: a
+ * answers 200 straight into the wizard (no warning -- no active factor
+ * existed to replace), the confirm opens the show-once codes, and
+ * saving resets everything -- re-entering needs a brand-new enroll
+ * request, nothing is cached. The replacement warning reads the
+ * caller's elevation, never the path that reached the wizard: an
+ * enroll or regenerate refused 403 authn.step_up_required opens the
+ * challenge dialog, whose success re-runs exactly the gated action --
+ * the enroll retry rides the elevated token (whose amr carries the
+ * factor) and shows the warning, the regenerate retry opens the codes
+ * panel or -- a race the server cannot fully rule out -- answers 404
+ * authn.mfa_not_enrolled and renders its guide text -- and a wizard
+ * reached under a token an EARLIER step-up left warm shows the warning
+ * too, because EnrollTOTP answers 200 for a pending replacement
+ * whenever the presented token already carries second-factor proof. A
+ * cancel retries nothing. Confirm answers: a
  * wrong code is a field error that stays retryable through the silent
  * 401-refresh leg, 429 renders its code text over the still-open wizard,
  * and a 409 authn.mfa_already_enrolled race closes the wizard; a dead
@@ -69,13 +75,19 @@ const ENROLL_BODY = {
 const CODES_BODY = { recovery_codes: RECOVERY_CODES }
 
 /** The step-up 200: a fresh access token and no refresh token (a step-up
- * reuses the caller's existing one, so the body omits it). */
+ * reuses the caller's existing one, so the body omits it). The
+ * principal carries the rotated token's amr -- the session's methods
+ * plus the just-verified factor, exactly what the real server's
+ * token-issuing answers send -- because the replacement warning reads
+ * that amr, and these journeys step up with a six-digit code (a TOTP
+ * shape). */
 const STEP_UP_BODY = {
   access_token: 'access-2',
   principal: {
     user_id: 'user-1',
     tenant_id: 'tenant-1',
     session_id: 'session-1',
+    amr: ['password', 'mfa:totp'],
   },
 }
 
@@ -114,7 +126,9 @@ describe('MfaSection', () => {
     await renderSection(rig.session)
 
     // A first setup answers 200 straight into the wizard -- and renders
-    // no replacement warning, which belongs to the 403 path only.
+    // no replacement warning: no active factor exists, and the caller's
+    // token carries no second-factor proof, the two halves of the
+    // warning's signal.
     await userEvent.click(
       screen.getByRole('button', {
         name: zhCN.mfa.authenticator.enrollButton,
@@ -165,6 +179,119 @@ describe('MfaSection', () => {
     )
     expect(await screen.findByText(SECRET)).toBeTruthy()
     expect(enrollCalls).toBe(2)
+
+    await expectNoAxeViolations()
+  })
+
+  it('warn before the confirm when a warm step-up token re-enters set-authenticator over an active factor', async () => {
+    // The bug this pins: EnrollTOTP answers 200 -- starting a pending
+    // replacement that deliberately leaves the ACTIVE factor in place
+    // until a confirm retires it -- whenever the presented token
+    // already carries fresh second-factor proof, and refuses with 403
+    // authn.step_up_required only an UNELEVATED caller. The warning
+    // used to render only when the wizard was reached through that 403,
+    // so a caller who regenerated recovery codes behind a step-up (the
+    // token now carrying the factor) and then re-entered
+    // set-authenticator within the token's lifetime got a warning-free
+    // wizard whose confirm silently voided the codes just saved. The
+    // server never asked for step-up on the enroll leg at all: the
+    // warning must read the caller's elevation -- the signal that a
+    // replacement is pending -- not the path that reached the wizard.
+    let regenerateCalls = 0
+    let enrollCalls = 0
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'POST' && call.path === REGENERATE_PATH) {
+        regenerateCalls += 1
+        if (regenerateCalls === 1) {
+          // The handler gates regeneration unconditionally.
+          return errorResponse(403, 'authn.step_up_required')
+        }
+        return jsonResponse(200, CODES_BODY)
+      }
+      if (call.method === 'POST' && call.path === STEP_UP_PATH) {
+        // The verified step-up rotates the token to one whose amr
+        // carries the factor -- the elevation that opens EnrollTOTP's
+        // own gate for the replace below.
+        return jsonResponse(200, STEP_UP_BODY)
+      }
+      if (call.method === 'POST' && call.path === ENROLL_PATH) {
+        enrollCalls += 1
+        // An active factor exists and the presented token carries the
+        // amr: the enrollment answers 200 straight into the pending
+        // replacement -- no step-up refusal on this leg at all.
+        return jsonResponse(200, ENROLL_BODY)
+      }
+      if (call.method === 'POST' && call.path === CONFIRM_PATH) {
+        return jsonResponse(200, CODES_BODY)
+      }
+      return errorResponse(500, 'internal')
+    })
+    await signInWithPassword(rig)
+    await renderSection(rig.session)
+
+    // The user's story: an active factor is enrolled, and the session's
+    // step-up proof was just earned regenerating recovery codes.
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: zhCN.mfa.recoveryCodes.regenerateButton,
+      }),
+    )
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    await userEvent.type(
+      screen.getByLabelText(zhCN.mfa.stepUp.codeLabel),
+      CONFIRM_CODE,
+    )
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: zhCN.mfa.stepUp.confirmLabel,
+      }),
+    )
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(
+      await screen.findByText(zhCN.mfa.recoveryCodes.showOnceTitle),
+    ).toBeTruthy()
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: zhCN.mfa.recoveryCodes.savedLabel,
+      }),
+    )
+    expect(
+      screen.queryByText(zhCN.mfa.recoveryCodes.showOnceTitle),
+    ).toBeNull()
+
+    // Re-enter set-authenticator within the token's lifetime: the
+    // enroll answers 200 -- no dialog, no step-up refusal -- and the
+    // wizard must still carry the replacement warning before the
+    // confirm that voids the codes just saved.
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: zhCN.mfa.authenticator.enrollButton,
+      }),
+    )
+    expect(await screen.findByText(SECRET)).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(
+      screen.getByText(zhCN.mfa.authenticator.replacingNotice),
+    ).toBeTruthy()
+    expect(enrollCalls).toBe(1)
+    expect(regenerateCalls).toBe(2)
+
+    // The warned confirm opens the show-once codes as usual.
+    await userEvent.type(
+      screen.getByLabelText(zhCN.mfa.authenticator.codeLabel),
+      CONFIRM_CODE,
+    )
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: zhCN.mfa.authenticator.confirmLabel,
+      }),
+    )
+    expect(
+      await screen.findByText(zhCN.mfa.recoveryCodes.showOnceTitle),
+    ).toBeTruthy()
 
     await expectNoAxeViolations()
   })

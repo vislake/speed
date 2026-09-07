@@ -88,13 +88,18 @@ const RECOVERY_CODES = [
 ]
 
 // The step-up 200: a fresh access token and no refresh token (a step-up
-// reuses the caller's existing one, so the body omits it).
+// reuses the caller's existing one, so the body omits it). The
+// principal carries the rotated token's amr -- the demo account signed
+// in through GitHub, and this journey steps up with a six-digit code --
+// because the replacement warning the retried enroll must show reads
+// that amr, exactly what the real server's token-issuing answers send.
 const STEP_UP_BODY = {
   access_token: 'access-2',
   principal: {
     user_id: 'user-1',
     tenant_id: 'tenant-1',
     session_id: 'session-1',
+    amr: ['social:github', 'mfa:totp'],
   },
 }
 

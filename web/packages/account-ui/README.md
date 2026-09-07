@@ -376,18 +376,30 @@ caller's current access token carries no fresh second-factor proof.
 
 Two entry actions run through the same discover-by-acting machine:
 
-- Set up an authenticator. A 200 answer means no active factor existed
-  and the enrollment is pending: the wizard opens showing the secret
-  and the provisioning URI -- both rendered as text, because the
+- Set up an authenticator. A 200 answer opens the wizard showing the
+  secret and the provisioning URI -- both rendered as text, because the
   package ships no QR dependency and no clipboard mechanism, so manual
   entry is the supported path -- then a six-digit confirm makes the
   factor active and the confirm answer's recovery codes open the
-  show-once panel. A 403 means an active factor does exist: the step-up
-  dialog opens, and only its success path re-runs the enrollment --
-  that 403 is the one reliable signal an active factor exists, so the
+  show-once panel. Whether that 200 is a first setup or the replacement
+  of an active factor is decided by the caller's own elevation, never
+  by the answer's status code: the authn module's EnrollTOTP refuses an
+  unelevated caller who already has an active factor with 403
+  `authn.step_up_required`, but answers 200 -- starting a pending
+  replacement that leaves the ACTIVE factor in place until a confirm
+  retires it -- as soon as the access token carries fresh second-factor
+  proof (its `amr` holds `mfa:totp` or `mfa:recovery_code`). The
   replacement warning (this replaces your existing authenticator)
-  renders only when the wizard was reached through the step-up, never
-  on a first setup.
+  therefore renders whenever the wizard is reached under such a token:
+  after the step-up a 403 drew (the verified retry rides the elevated
+  token), and when an earlier step-up elsewhere in the session is still
+  warm -- the token, never the path that reached the wizard, is the
+  signal, so a caller re-entering set-up with a warm token still sees
+  the warning before a confirm that silently voids the recovery codes
+  the last regeneration showed. A 403 on an unproved entry opens the
+  step-up dialog, whose success path re-runs the enrollment once; a
+  first setup (no active factor, and the caller carries no second-factor
+  proof) shows no warning.
 - Regenerate recovery codes. The handler gates this unconditionally, so
   an unelevated caller gets 403 whether or not a factor exists: the
   step-up dialog opens, and its success path re-runs the regeneration.

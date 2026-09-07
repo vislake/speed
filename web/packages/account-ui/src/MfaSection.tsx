@@ -14,18 +14,29 @@
  * Two entry actions, each running through the same discover-by-acting
  * machine:
  *
- *  - Set up an authenticator (useAuthnEnrollTOTP). A 200 answer means no
- *    active factor existed and the enrollment is pending: the wizard
- *    opens showing the secret and the provisioning URI (both rendered as
- *    text -- the package ships no QR dependency and no clipboard
- *    mechanism, so manual entry is the supported path), then a six-digit
- *    confirm (useAuthnConfirmTOTP) makes the factor active and the
- *    confirm answer's recovery codes open the show-once panel. A 403
- *    means an active factor does exist: the step-up dialog opens, and
- *    only its success path re-runs the enrollment -- that 403 is the one
- *    reliable signal an active factor exists, so the replacement warning
- *    ("this replaces your existing authenticator") renders only when the
- *    wizard was reached through the step-up, never on a first setup.
+ *  - Set up an authenticator (useAuthnEnrollTOTP). A 200 answer opens
+ *    the wizard showing the secret and the provisioning URI (both
+ *    rendered as text -- the package ships no QR dependency and no
+ *    clipboard mechanism, so manual entry is the supported path), then a
+ *    six-digit confirm (useAuthnConfirmTOTP) makes the factor active and
+ *    the confirm answer's recovery codes open the show-once panel.
+ *    Whether that 200 was a first setup or the replacement of an active
+ *    factor is decided by the caller's own elevation, never by the
+ *    answer's status code: EnrollTOTP refuses an unelevated caller who
+ *    already has an active factor with 403 authn.step_up_required, but
+ *    answers 200 -- starting a pending replacement that deliberately
+ *    leaves the ACTIVE factor in place until a confirm retires it -- as
+ *    soon as the access token carries fresh second-factor proof. The
+ *    replacement warning ("this replaces your existing authenticator")
+ *    therefore renders whenever the wizard was reached under such a
+ *    token, whether the proof arrived through the step-up this 403 drew
+ *    (the verified retry rides the elevated token) or through an earlier
+ *    step-up still warm in the session: the token is the signal, never
+ *    the path that reached the wizard, so a caller re-entering set-up
+ *    with a warm token still sees the warning before a confirm that
+ *    silently voids the recovery codes the last regeneration showed. A
+ *    403 on an unproved entry opens the step-up dialog, whose success
+ *    path re-runs the enrollment exactly once.
  *
  *  - Regenerate recovery codes (useAuthnRegenerateRecoveryCodes). The
  *    handler gates this unconditionally, so an unelevated caller gets 403
@@ -112,11 +123,46 @@ function recoveryCodesOf(answer: CodesAnswer): string[] | null {
   return codes
 }
 
-/** The in-progress enrollment: what the wizard shows and how it was
- * reached (the replacement warning renders only for the 403-reached
- * wizard). The fields are text because no QR/clipboard mechanism
- * ships; the server always answers both, kept optional-string so an
- * empty value simply renders no row. */
+/** The authn method names whose presence in a token-issuing answer's
+ * principal.amr means the access token carries fresh proof of a second
+ * factor -- verbatim copies of the authn module's MethodMFATOTP and
+ * MethodMFARecoveryCode constants (the spec's AuthnPrincipal.amr is a
+ * plain string array, and the client that decides on its contents owns
+ * its own copies, kept in step with the server by the shared spec --
+ * the same no-import discipline the package's provider vocabulary
+ * follows). A step-up answer rotates the access token and appends the
+ * verified method to its amr; a natural refresh mints from the
+ * session's own amr list again, so the proof lives exactly as long as
+ * the token that carries it. */
+const SECOND_FACTOR_AMR_METHODS: readonly string[] = [
+  'mfa:totp',
+  'mfa:recovery_code',
+]
+
+/** Whether an amr list carries fresh second-factor proof: the client
+ * half of the signal EnrollTOTP's own gate reads -- an active factor
+ * exists whenever the server could have minted such an amr (step-up
+ * verifies against a real factor and no operation removes an active
+ * one), so an enrollment sent under such a token is a pending
+ * replacement by construction. */
+function hasSecondFactorProof(
+  amr: readonly string[] | null | undefined,
+): boolean {
+  return (
+    amr !== undefined &&
+    amr !== null &&
+    amr.some((method) => SECOND_FACTOR_AMR_METHODS.includes(method))
+  )
+}
+
+/** The in-progress enrollment: what the wizard shows and whether
+ * confirming it replaces an active factor (the replacement warning --
+ * "this replaces your existing authenticator" -- renders when the
+ * wizard was reached under a token carrying second-factor proof, the
+ * caller-side half of EnrollTOTP's own gate; see startEnroll). The
+ * fields are text because no QR/clipboard mechanism ships; the server
+ * always answers both, kept optional-string so an empty value simply
+ * renders no row. */
 interface EnrollWizard {
   readonly secret: string
   readonly provisioningUri: string
@@ -153,24 +199,42 @@ export function MfaSection({ session }: MfaSectionProps) {
     regenerateMutation.isPending
 
   /**
-   * Run the enroll operation. A 403 on the idle entry opens the gate
-   * (the retry then runs with replacing=true and never re-gates); a 403
-   * on the retry itself is not gateable again and renders its text.
+   * Run the enroll operation. Whether the wizard warns is sampled from
+   * the caller's current elevation at send time, never inferred from
+   * the answer's status code: the server answers 200 for a pending
+   * replacement exactly when the presented token carries fresh
+   * second-factor proof (an unelevated caller with an active factor is
+   * refused 403 authn.step_up_required instead), so an enrollment sent
+   * under such a token replaces an active factor by construction --
+   * even when no step-up drew this call, because an earlier step-up is
+   * still warm in the session. A 403 on an unproved entry opens the
+   * gate (the verified retry then rides the elevated token and lands in
+   * the replacing wizard); a 403 on an attempt that was sent proved is
+   * an elevation that raced away mid-flight and renders its text rather
+   * than re-gating.
    */
-  async function startEnroll(afterStepUp: boolean): Promise<void> {
+  async function startEnroll(): Promise<void> {
     setBanner(null)
     setConfirmCode('')
     setConfirmFieldError(null)
+    // Sampled before the request, exactly like the server samples the
+    // token the request presents: an elevation lost to a mid-flight
+    // natural refresh only makes the server refuse (403) where this
+    // sample said proved -- never a silent replacement behind a
+    // warning-free wizard.
+    const replacing = hasSecondFactorProof(
+      session.getSnapshot().principal?.amr,
+    )
     try {
       const response = await enrollMutation.mutateAsync()
       setWizard({
         secret: response.secret ?? '',
         provisioningUri: response.provisioning_uri ?? '',
-        replacing: afterStepUp,
+        replacing,
       })
     } catch (error) {
       const failure = errorCodeOf(error)
-      if (failure === 'authn.step_up_required' && !afterStepUp) {
+      if (failure === 'authn.step_up_required' && !replacing) {
         setGate('enroll')
         return
       }
@@ -208,7 +272,10 @@ export function MfaSection({ session }: MfaSectionProps) {
     const action = gate
     setGate(null)
     if (action === 'enroll') {
-      void startEnroll(true)
+      // The retry rides the elevated token the step-up just settled:
+      // startEnroll samples its second-factor amr and opens the wizard
+      // with the replacement warning.
+      void startEnroll()
     } else if (action === 'regenerate') {
       void regenerateCodes(true)
     }
@@ -412,7 +479,7 @@ export function MfaSection({ session }: MfaSectionProps) {
             <Button
               variant="outlined"
               disabled={entryBusy}
-              onClick={() => void startEnroll(false)}
+              onClick={() => void startEnroll()}
             >
               {t('mfa.authenticator.enrollButton')}
             </Button>
