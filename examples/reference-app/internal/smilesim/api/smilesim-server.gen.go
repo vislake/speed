@@ -194,6 +194,15 @@ type SmilesimSimulation struct {
 // SmilesimSimulationStatus The job's live status, read from the queue at call time -- never a snapshot stored by the service, so an enumeration always reflects what a job-status poll would answer right now.
 type SmilesimSimulationStatus string
 
+// SmilesimSimulationContent The simulation-content read's 200 answer for one generated image.
+type SmilesimSimulationContent struct {
+	// ContentBase64 The stored bytes, base64-encoded -- the same JSON-carried transport the cases surface's photo-content route uses.
+	ContentBase64 string `json:"content_base64"`
+
+	// MediaType The media type go/storage's probe assigned to the stored bytes at complete time.
+	MediaType string `json:"media_type"`
+}
+
 // SmilesimSimulationOptions One simulation's parameterized option set, shared by the simulate route's request body and by every response that echoes the effective options a simulation was generated with.
 type SmilesimSimulationOptions struct {
 	// SmileStyle The character of the simulated smile. Defaults to natural when omitted.
@@ -235,6 +244,9 @@ type ServerInterface interface {
 	// SmilesimListPhotoSimulations List every simulation generated from one photo.
 	// (GET /api/v1/smile-simulation/photos/{photoObjectID}/simulations)
 	SmilesimListPhotoSimulations(w http.ResponseWriter, r *http.Request, photoObjectID string)
+	// SmilesimGetSimulationContent Read one simulation's generated image content.
+	// (GET /api/v1/smile-simulation/photos/{photoObjectID}/simulations/{jobID}/content)
+	SmilesimGetSimulationContent(w http.ResponseWriter, r *http.Request, photoObjectID string, jobID string)
 	// SmilesimSimulate Enqueue one smile-simulation job for a completed photo.
 	// (POST /api/v1/smile-simulation/simulate)
 	SmilesimSimulate(w http.ResponseWriter, r *http.Request)
@@ -292,6 +304,41 @@ func (siw *ServerInterfaceWrapper) SmilesimListPhotoSimulations(w http.ResponseW
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SmilesimListPhotoSimulations(w, r, photoObjectID)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SmilesimGetSimulationContent operation middleware
+func (siw *ServerInterfaceWrapper) SmilesimGetSimulationContent(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "photoObjectID" -------------
+	var photoObjectID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "photoObjectID", r.PathValue("photoObjectID"), &photoObjectID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "photoObjectID", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "jobID" -------------
+	var jobID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "jobID", r.PathValue("jobID"), &jobID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "jobID", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SmilesimGetSimulationContent(w, r, photoObjectID, jobID)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -438,6 +485,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/smile-simulation/simulate", wrapper.SmilesimSimulate)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/smile-simulation/jobs/{jobID}", wrapper.SmilesimGetJob)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/smile-simulation/photos/{photoObjectID}/simulations", wrapper.SmilesimListPhotoSimulations)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/smile-simulation/photos/{photoObjectID}/simulations/{jobID}/content", wrapper.SmilesimGetSimulationContent)
 
 	return m
 }

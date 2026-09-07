@@ -31,7 +31,9 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 
@@ -41,6 +43,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 
 	aigateway "github.com/vislake/speed/go/ai-gateway"
+	"github.com/vislake/speed/go/storage"
 
 	"github.com/vislake/speed/examples/reference-app/internal/smilesim"
 	smilesimapi "github.com/vislake/speed/examples/reference-app/internal/smilesim/api"
@@ -51,19 +54,61 @@ import (
 // consult.go's own writeConsultError applies.
 var smileSimErrInternal = apperr.Internal("smilesim.internal_error")
 
+// The simulate route's two request-shape envelopes, named declarations so
+// the error-mapping audits of the web host (the codes-alignment suite,
+// which cites every reachable code to the declaration that defines it)
+// can cite stable sites -- the block-B round made these codes reachable
+// text on the smile-simulation surface for the first time.
+var (
+	// smilesimErrInvalidRequestBody is the malformed-body answer every
+	// body-reading smile route writes, mirroring casesInvalidRequestBody's
+	// identical role on the cases surface.
+	smilesimErrInvalidRequestBody = apperr.Invalid("smilesim.invalid_request_body")
+
+	// smilesimErrPhotoObjectIDRequired refuses a simulate request that
+	// names no photo to generate from.
+	smilesimErrPhotoObjectIDRequired = apperr.Invalid("smilesim.photo_object_id_required")
+)
+
+// The simulation-content route's coded refusals (see
+// SmilesimGetSimulationContent's own doc comment). Each is a NotFound, so
+// no refusal of the read ever hints at whether another tenant's
+// simulation or object exists behind the caller's question -- the same
+// outward shape the cases surface's own photo-content refusal
+// (cases.photo_not_found) takes.
+var (
+	// smileSimErrSimulationNotFound is the answer for a job the named
+	// photo has no record of under the caller's tenant.
+	smileSimErrSimulationNotFound = apperr.NotFound("smilesim.simulation_not_found")
+
+	// smileSimErrOutputNotReady is the answer for a simulation whose job
+	// has not succeeded: no generated image exists to serve yet.
+	smileSimErrOutputNotReady = apperr.NotFound("smilesim.output_not_ready")
+
+	// smileSimErrOutputNotFound is the answer when a succeeded
+	// simulation's stored bytes no longer exist (the object was deleted
+	// or reclaimed by the expiry sweep).
+	smileSimErrOutputNotFound = apperr.NotFound("smilesim.output_not_found")
+)
+
 // smilesimHandler implements smilesimapi.ServerInterface -- the app-side
-// implementation of the spec fragment's three operations: enqueue one
+// implementation of the spec fragment's four operations: enqueue one
 // async simulation (POST /api/v1/smile-simulation/simulate), poll its
-// job status (GET /api/v1/smile-simulation/jobs/{jobID}) and enumerate
+// job status (GET /api/v1/smile-simulation/jobs/{jobID}), enumerate
 // every simulation generated from one photo (GET
-// /api/v1/smile-simulation/photos/{photoObjectID}/simulations), backed
-// by svc and queue.
+// /api/v1/smile-simulation/photos/{photoObjectID}/simulations) and read
+// one simulation's generated image content (GET
+// /api/v1/smile-simulation/photos/{photoObjectID}/simulations/
+// {jobID}/content, the block-B round's addition the before/after
+// comparison view renders), backed by svc, queue and the storage
+// objects service.
 //
-// None of the three operations takes a subject or checks a permission of
+// None of the four operations takes a subject or checks a permission of
 // its own: in this app every authenticated member of a tenant may request
 // a simulation, and the tenant scoping that actually protects another
 // tenant's photo -- go/storage's own ObjectService.OpenContent, read
-// inside the job handler from the job's own rebuilt tenant context --
+// inside the job handler from the job's own rebuilt tenant context and
+// by the content operation below from the request's own --
 // another tenant's job id -- go/jobs' own Queue.Get, which reports
 // ErrJobNotFound for an id outside ctx's tenant, indistinguishable from
 // an unknown one -- and another tenant's simulation rows --
@@ -90,6 +135,12 @@ type smilesimHandler struct {
 	// MembershipReader to. Always non-nil in this app's wiring; nil would
 	// make every named-recipient request fail closed rather than pass.
 	memberships *signInMemberships
+	// objects is the app's go/storage ObjectService, which the
+	// simulation-content operation drives to read one generated image's
+	// stored bytes -- the same instance the cases surface's photo routes
+	// (cases_photos.go) drive, so both surfaces agree on what an object
+	// is and which tenant's rows each read resolves.
+	objects *storage.ObjectService
 }
 
 // compile-time check that smilesimHandler implements every operation the
@@ -97,13 +148,14 @@ type smilesimHandler struct {
 // outgrew this file stops the app from compiling.
 var _ smilesimapi.ServerInterface = (*smilesimHandler)(nil)
 
-// wireSmileSim mounts this surface's three routes on mux, backed by svc
-// and queue, through the generated api.HandlerFromMux helper: the mount
-// patterns come from internal/smilesim/api/openapi.yaml itself, never a
-// second hand-written copy. memberships is the store SmilesimSimulate's
-// recipient gate asks (see the handler type's own doc comment).
-func wireSmileSim(mux *http.ServeMux, svc *smilesim.Service, queue jobs.Queue, memberships *signInMemberships) {
-	smilesimapi.HandlerFromMux(&smilesimHandler{svc: svc, queue: queue, memberships: memberships}, mux)
+// wireSmileSim mounts this surface's four routes on mux, backed by svc,
+// queue and the storage objects service, through the generated
+// api.HandlerFromMux helper: the mount patterns come from
+// internal/smilesim/api/openapi.yaml itself, never a second hand-written
+// copy. memberships is the store SmilesimSimulate's recipient gate asks
+// (see the handler type's own doc comment).
+func wireSmileSim(mux *http.ServeMux, svc *smilesim.Service, queue jobs.Queue, memberships *signInMemberships, objects *storage.ObjectService) {
+	smilesimapi.HandlerFromMux(&smilesimHandler{svc: svc, queue: queue, memberships: memberships, objects: objects}, mux)
 }
 
 // SmilesimSimulate implements smilesimapi.ServerInterface: it handles
@@ -118,11 +170,11 @@ func wireSmileSim(mux *http.ServeMux, svc *smilesim.Service, queue jobs.Queue, m
 func (h *smilesimHandler) SmilesimSimulate(w http.ResponseWriter, r *http.Request) {
 	var body smilesimapi.SmilesimSimulateRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeSmileSimError(w, apperr.Invalid("smilesim.invalid_request_body").WithCause(err))
+		writeSmileSimError(w, smilesimErrInvalidRequestBody.WithCause(err))
 		return
 	}
 	if body.PhotoObjectID == "" {
-		writeSmileSimError(w, apperr.Invalid("smilesim.photo_object_id_required"))
+		writeSmileSimError(w, smilesimErrPhotoObjectIDRequired)
 		return
 	}
 
@@ -284,6 +336,88 @@ func (h *smilesimHandler) SmilesimListPhotoSimulations(w http.ResponseWriter, r 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(smilesimapi.SmilesimPhotoSimulations{Simulations: simulations})
+}
+
+// SmilesimGetSimulationContent implements smilesimapi.ServerInterface: it
+// handles GET /api/v1/smile-simulation/photos/{photoObjectID}/simulations/
+// {jobID}/content, serving one simulation's generated image's stored
+// bytes -- base64-encoded with the media type go/storage's probe
+// assigned, the same JSON-only transport the cases surface's
+// photo-content route speaks (cases_photos.go) -- for the comparison view
+// to render the result beside the original photo.
+//
+// The gate is the enumeration the list route already answers, narrowed to
+// one job: ListSimulationsByPhoto resolves the tenant from the request
+// context itself, so its answer can only ever name simulations of the
+// caller's own tenant -- an unknown photo, or a job that photo has no
+// record of under this tenant, is the same simulation_not_found refusal,
+// never a probe of whether another tenant's generation exists. A
+// simulation whose job has not succeeded has no image to serve
+// (output_not_ready), and a succeeded one whose stored bytes no longer
+// exist answers output_not_found.
+func (h *smilesimHandler) SmilesimGetSimulationContent(w http.ResponseWriter, r *http.Request, photoObjectID string, jobID string) {
+	outcomes, err := h.svc.ListSimulationsByPhoto(r.Context(), photoObjectID)
+	if err != nil {
+		writeSmileSimError(w, err)
+		return
+	}
+	// Index scan rather than a per-id lookup: the enumeration is this
+	// surface's own tenant-scoped answer for the photo, and the record
+	// it carries for the job (its live status and output object, read
+	// from the queue by ListSimulationsByPhoto) is exactly the outcome
+	// this route needs.
+	var match *smilesim.SimulationOutcome
+	for i := range outcomes {
+		if outcomes[i].JobID == jobs.JobID(jobID) {
+			match = &outcomes[i]
+			break
+		}
+	}
+	if match == nil {
+		writeSmileSimError(w, smileSimErrSimulationNotFound)
+		return
+	}
+	if match.Status != jobs.StatusSucceeded || match.OutputObjectID == "" {
+		writeSmileSimError(w, smileSimErrOutputNotReady)
+		return
+	}
+
+	obj, rc, err := h.objects.OpenContent(r.Context(), match.OutputObjectID)
+	if err != nil {
+		if hasCasesPhotoCode(err, storage.ErrObjectNotFound.Code) {
+			writeSmileSimError(w, smileSimErrOutputNotFound)
+			return
+		}
+		writeSmileSimError(w, smileSimErrInternal.WithCause(err))
+		return
+	}
+	defer func() { _ = rc.Close() }()
+
+	// The serve bound mirrors the cases photo-content route's own: an
+	// honest simulation image stays far below it, and a larger one is
+	// refused rather than buffered in full. An over-bound read is an
+	// internal surprise, not a client fact, so it folds to the internal
+	// envelope with the reason in params.
+	raw, err := io.ReadAll(io.LimitReader(rc, maxPhotoBytes+1))
+	if err != nil {
+		writeSmileSimError(w, smileSimErrInternal.WithCause(err))
+		return
+	}
+	if int64(len(raw)) > maxPhotoBytes {
+		writeSmileSimError(w, smileSimErrInternal.WithParam("reason", "simulation content exceeds the serve bound"))
+		return
+	}
+
+	mediaType := "application/octet-stream"
+	if obj.MIME != nil && *obj.MIME != "" {
+		mediaType = *obj.MIME
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(smilesimapi.SmilesimSimulationContent{
+		MediaType:     mediaType,
+		ContentBase64: base64.StdEncoding.EncodeToString(raw),
+	})
 }
 
 // toSmilesimOptions converts the service's resolved option set to its

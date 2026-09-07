@@ -535,6 +535,82 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SmilesimError'
+  /api/v1/smile-simulation/photos/{photoObjectID}/simulations/{jobID}/content:
+    servers: []
+    get:
+      operationId: smilesim_getSimulationContent
+      tags:
+        - smilesim
+      summary: Read one simulation's generated image content.
+      description: >-
+        Serves the stored bytes of the image one simulation job generated,
+        base64-encoded in JSON with the media type go/storage's probe assigned
+        -- the same JSON-only transport the cases surface's photo-content route
+        uses, so the comparison view can render the result beside the original
+        photo. The simulation is addressed the way the per-photo enumeration
+        lists it: by its generation job's id under the photo it was generated
+        from. The job-status route stays the poll for the outcome; this route is
+        the read of the bytes once the job has succeeded. A job the photo has no
+        record of under the caller's tenant answers 404
+        (smilesim.simulation_not_found), a job that has not succeeded answers
+        404 (smilesim.output_not_ready), and a succeeded simulation whose stored
+        bytes no longer exist answers 404 (smilesim.output_not_found) -- each
+        refusal the same outward shape, never probing whether another tenant's
+        object still exists.
+      parameters:
+        - name: photoObjectID
+          in: path
+          required: true
+          schema:
+            type: string
+          description: >-
+            The go/storage object id of the photo the simulation was generated
+            from.
+        - name: jobID
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The generation job's id, as the per-photo enumeration lists it.
+      responses:
+        '200':
+          description: >-
+            The generated image's stored bytes, base64-encoded with the
+            probe-assigned media type.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmilesimSimulationContent'
+        '401':
+          description: The access token was missing or invalid (authn.token_invalid).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmilesimError'
+        '403':
+          description: >-
+            The request carried no tenant -- an anonymous request to a
+            tenant-scoped route (tenancy.tenant_unresolved).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmilesimError'
+        '404':
+          description: >-
+            The photo has no such simulation under the caller's tenant
+            (smilesim.simulation_not_found), the job has not succeeded yet
+            (smilesim.output_not_ready), or the stored bytes of a succeeded
+            simulation no longer exist (smilesim.output_not_found).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmilesimError'
+        '500':
+          description: An unexpected server failure (smilesim.internal_error).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmilesimError'
   /api/v1/authn/register:
     servers: []
     post:
@@ -1981,6 +2057,23 @@ components:
             $ref: '#/components/schemas/SmilesimSimulation'
           description: The photo's simulations, newest first.
       description: The per-photo enumeration route's 200 answer.
+    SmilesimSimulationContent:
+      type: object
+      required:
+        - media_type
+        - content_base64
+      properties:
+        media_type:
+          type: string
+          description: >-
+            The media type go/storage's probe assigned to the stored bytes at
+            complete time.
+        content_base64:
+          type: string
+          description: >-
+            The stored bytes, base64-encoded -- the same JSON-carried transport
+            the cases surface's photo-content route uses.
+      description: The simulation-content read's 200 answer for one generated image.
     SmilesimError:
       type: object
       description: >-

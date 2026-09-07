@@ -141,6 +141,27 @@ var validToothShades = map[ToothShade]bool{
 	ToothShadeUltraWhite: true,
 }
 
+// The option-validation sentinels, named as package-level declarations so
+// the app's error-mapping audits (the codes-alignment suite of the web
+// host, which cites every reachable code to the declaration that defines
+// it) can cite stable sites -- the block-B round made these codes
+// reachable text on the smile-simulation surface's error mapping for the
+// first time. Each carries the offending value in params; the three are
+// HTTP 400 once they cross a route.
+var (
+	// ErrUnsupportedSmileStyle refuses a SmileStyle outside the
+	// vocabulary (smilesim.unsupported_smile_style).
+	ErrUnsupportedSmileStyle = apperr.Invalid("smilesim.unsupported_smile_style")
+
+	// ErrUnsupportedToothShade refuses a ToothShade outside the
+	// vocabulary (smilesim.unsupported_tooth_shade).
+	ErrUnsupportedToothShade = apperr.Invalid("smilesim.unsupported_tooth_shade")
+
+	// ErrStrengthOutOfRange refuses a Strength outside (0, 1], including
+	// NaN and the excluded zero (smilesim.strength_out_of_range).
+	ErrStrengthOutOfRange = apperr.Invalid("smilesim.strength_out_of_range")
+)
+
 // Validate reports whether o is a legal, fully-specified option set. Every
 // failure is a coded *apperr.Error (HTTP 400 once it crosses a route): a
 // smile style or tooth shade outside the vocabulary is refused with
@@ -151,15 +172,13 @@ var validToothShades = map[ToothShade]bool{
 // is clamped, for the reason Strength's own bound constants document.
 func (o SimulationOptions) Validate() error {
 	if !validSmileStyles[o.SmileStyle] {
-		return apperr.Invalid("smilesim.unsupported_smile_style").
-			WithParam("value", string(o.SmileStyle))
+		return ErrUnsupportedSmileStyle.WithParam("value", string(o.SmileStyle))
 	}
 	if !validToothShades[o.ToothShade] {
-		return apperr.Invalid("smilesim.unsupported_tooth_shade").
-			WithParam("value", string(o.ToothShade))
+		return ErrUnsupportedToothShade.WithParam("value", string(o.ToothShade))
 	}
 	if math.IsNaN(o.Strength) || o.Strength <= minSimulationStrength || o.Strength > maxSimulationStrength {
-		return apperr.Invalid("smilesim.strength_out_of_range").
+		return ErrStrengthOutOfRange.
 			WithParam("value", strengthText(o.Strength)).
 			WithParam("min_exclusive", strengthText(minSimulationStrength)).
 			WithParam("max_inclusive", strengthText(maxSimulationStrength))

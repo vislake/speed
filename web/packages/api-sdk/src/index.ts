@@ -293,6 +293,16 @@ export interface SmilesimPhotoSimulations {
   simulations: SmilesimSimulation[];
 }
 
+/**
+ * The simulation-content read's 200 answer for one generated image.
+ */
+export interface SmilesimSimulationContent {
+  /** The media type go/storage's probe assigned to the stored bytes at complete time. */
+  media_type: string;
+  /** The stored bytes, base64-encoded -- the same JSON-carried transport the cases surface's photo-content route uses. */
+  content_base64: string;
+}
+
 export type SmilesimErrorParams = { [key: string]: unknown };
 
 /**
@@ -1359,6 +1369,80 @@ export function useSmilesimListPhotoSimulations<TData = Awaited<ReturnType<typeo
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getSmilesimListPhotoSimulationsQueryOptions(photoObjectID,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * Serves the stored bytes of the image one simulation job generated, base64-encoded in JSON with the media type go/storage's probe assigned -- the same JSON-only transport the cases surface's photo-content route uses, so the comparison view can render the result beside the original photo. The simulation is addressed the way the per-photo enumeration lists it: by its generation job's id under the photo it was generated from. The job-status route stays the poll for the outcome; this route is the read of the bytes once the job has succeeded. A job the photo has no record of under the caller's tenant answers 404 (smilesim.simulation_not_found), a job that has not succeeded answers 404 (smilesim.output_not_ready), and a succeeded simulation whose stored bytes no longer exist answers 404 (smilesim.output_not_found) -- each refusal the same outward shape, never probing whether another tenant's object still exists.
+ * @summary Read one simulation's generated image content.
+ */
+export const smilesimGetSimulationContent = (
+    photoObjectID: string,
+    jobID: string,
+ signal?: AbortSignal
+) => {
+
+
+      return speedRequest<SmilesimSimulationContent>(
+      {url: `/api/v1/smile-simulation/photos/${photoObjectID}/simulations/${jobID}/content`, method: 'GET', signal
+    },
+      );
+    }
+
+
+
+
+export const getSmilesimGetSimulationContentQueryKey = (photoObjectID: string,
+    jobID: string,) => {
+    return [
+    `/api/v1/smile-simulation/photos/${photoObjectID}/simulations/${jobID}/content`
+    ] as const;
+    }
+
+
+export const getSmilesimGetSimulationContentQueryOptions = <TData = Awaited<ReturnType<typeof smilesimGetSimulationContent>>, TError = SmilesimError>(photoObjectID: string,
+    jobID: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof smilesimGetSimulationContent>>, TError, TData>, }
+) => {
+
+const {query: queryOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getSmilesimGetSimulationContentQueryKey(photoObjectID,jobID);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof smilesimGetSimulationContent>>> = ({ signal }) => smilesimGetSimulationContent(photoObjectID,jobID, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: photoObjectID !== null && photoObjectID !== undefined && jobID !== null && jobID !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof smilesimGetSimulationContent>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type SmilesimGetSimulationContentQueryResult = NonNullable<Awaited<ReturnType<typeof smilesimGetSimulationContent>>>
+export type SmilesimGetSimulationContentQueryError = SmilesimError
+
+
+/**
+ * @summary Read one simulation's generated image content.
+ */
+
+export function useSmilesimGetSimulationContent<TData = Awaited<ReturnType<typeof smilesimGetSimulationContent>>, TError = SmilesimError>(
+ photoObjectID: string,
+    jobID: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof smilesimGetSimulationContent>>, TError, TData>, }
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getSmilesimGetSimulationContentQueryOptions(photoObjectID,jobID,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

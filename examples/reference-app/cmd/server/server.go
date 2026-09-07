@@ -218,6 +218,31 @@ const (
 	// deployment mode, where MultiReplicaSafe is required of both seams.
 	redisAddrEnv = "APP_REDIS_ADDR"
 
+	// aiGatewayImageBaseURLEnv and aiGatewayImageAPIKeyEnv name the
+	// environment variables that point the smile-simulation pipeline at an
+	// OpenAI-compatible images endpoint: when aiGatewayImageAPIKeyEnv is
+	// set, configFromEnv fills cfg.AIGatewayImageBaseURL/APIKey, and
+	// buildServer writes the platform-wide image-generation credential at
+	// boot (see those fields' own doc comment). Both unset -- the default
+	// -- preserves the pre-block-B zero-setup posture exactly: the image
+	// credential row is never written and a simulate request dead-letters
+	// with the gateway's coded credential refusal until an operator names
+	// a provider. The pair exists because the block-B journey must be
+	// runnable against a real booted server without editing Go code: the
+	// browser end-to-end suite boots `go run ./cmd/server` and points the
+	// pair at its own throwaway provider (playwright.config.ts), the same
+	// demo-password shape APP_DEMO_USERS_PASSWORD already establishes for
+	// the seeded demo accounts -- a non-secret value only a disposable
+	// server ever uses. The API key is NOT a secret by construction here:
+	// it is the value a local or CI-only fake provider accepts; a real
+	// deployment's key travels the same env vars and is this app's own
+	// documented operator wiring, never a committed value.
+	aiGatewayImageBaseURLEnv = "APP_AI_GATEWAY_IMAGE_BASE_URL"
+	// #nosec G101 -- an ENVIRONMENT VARIABLE NAME, not a credential value:
+	// the same gosec hardcoded-credential heuristic exception
+	// s3SecretKeyEnv's own #nosec comment documents.
+	aiGatewayImageAPIKeyEnv = "APP_AI_GATEWAY_IMAGE_API_KEY"
+
 	// s3EndpointEnv, s3BucketEnv, s3AccessKeyEnv and s3SecretKeyEnv name the
 	// environment variables that together compose a real S3-compatible
 	// ObjectStore (objectstore/s3.NewObjectStore) for the "objectstore"
@@ -1220,9 +1245,13 @@ type serverConfig struct {
 	// provider. The two credentials are deliberately independent rows of
 	// the SAME ai_gateway_credentials table (keyed by provider name) --
 	// see go/ai-gateway/AGENTS.md's round-2 section on why chat and image
-	// credentials need no schema change to coexist. configFromEnv never
-	// sets either, the identical zero-setup posture AIGatewayAPIKey's own
-	// doc comment describes; smilesim_flow_test.go is what sets both.
+	// credentials need no schema change to coexist. configFromEnv fills
+	// both from aiGatewayImageBaseURLEnv/aiGatewayImageAPIKeyEnv when the
+	// API key variable is set (their doc comment carries the reasoning
+	// and the non-secret shape of the e2e value); when both are unset, the
+	// zero-setup posture of the chat pair above applies unchanged -- no
+	// credential row is written, and smilesim_flow_test.go is the other
+	// caller that sets both.
 	AIGatewayImageBaseURL string
 	AIGatewayImageAPIKey  string
 
@@ -1557,6 +1586,13 @@ func configFromEnv() (serverConfig, error) {
 		// the ordinary demo users' credential source.
 		DemoUsersPassword:         os.Getenv(demoUsersPasswordEnv),
 		DemoPlatformStaffPassword: os.Getenv(demoPlatformStaffPasswordEnv),
+		// Filled from the environment when the API key variable is set,
+		// left empty otherwise (the zero-setup default that skips the
+		// image-credential write at boot entirely) -- see
+		// aiGatewayImageBaseURLEnv's own doc comment for the full
+		// reasoning and the demo-only shape of the value.
+		AIGatewayImageBaseURL: os.Getenv(aiGatewayImageBaseURLEnv),
+		AIGatewayImageAPIKey:  os.Getenv(aiGatewayImageAPIKeyEnv),
 	}
 	if smtpHost != "" {
 		// A real SMTP composition: declare the capabilities the
@@ -2935,7 +2971,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// the SAME store authn's MembershipReader reads, attached to org above
 	// (see wireSmileSim's own doc comment and cmd/server/smilesim.go's
 	// validateSimulateRecipient).
-	wireSmileSim(mux, smileSimService, standaloneQueue, memberships)
+	// storageModule.ObjectService() is the fourth wireSmileSim argument:
+	// the simulation-content route reads a generated image's stored bytes
+	// through the same instance the cases photo routes drive (see
+	// wireSmileSim's own doc comment).
+	wireSmileSim(mux, smileSimService, standaloneQueue, memberships, storageModule.ObjectService())
 
 	// wireCasesRoutes mounts product round P2b's case domain
 	// (internal/cases, mounted in cmd/server/cases.go): the tenant-scoped

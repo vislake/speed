@@ -48,3 +48,13 @@ const (
 func casePhotoContentPath(caseID, photoObjectID string) string {
 	return casesPath + "/" + caseID + "/photos/" + photoObjectID + "/content"
 }
+
+// smileSimulationContentPath builds the smile-simulation fragment's
+// simulation-content route (operationId smilesim_getSimulationContent,
+// added by the block-B web round): GET
+// smileSimulationContentPath(photoObjectID, jobID) serves one
+// simulation's generated image's stored bytes for the before/after
+// comparison view.
+func smileSimulationContentPath(photoObjectID, jobID string) string {
+	return "/api/v1/smile-simulation/photos/" + photoObjectID + "/simulations/" + jobID + "/content"
+}
