@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/binary"
 	"hash/crc32"
 	"image"
@@ -390,6 +391,205 @@ func TestSanitizePNG_TrailingGarbageDiscarded(t *testing.T) {
 	assertDecodesEqual(t, "trailing garbage", out, base)
 }
 
+// assertNoneContain fails when out contains any of the marker-content
+// needles, naming the first one found. It is the "no marker content
+// survives into the served bytes" proof: a strip that merely reported
+// success while the content rode through fails here, and a strip that
+// removed the whole segment or chunk cannot fail it.
+func assertNoneContain(t *testing.T, label string, out []byte, needles ...string) {
+	t.Helper()
+	for _, n := range needles {
+		if bytes.Contains(out, []byte(n)) {
+			t.Fatalf("%s: marker content %q survives in the stripped bytes", label, n)
+		}
+	}
+}
+
+// iptcField appends one IPTC-IIM data set to dst in the wire form a
+// Photoshop image-resource block carries: the 0x1C field tag, record
+// number 2 (IPTC), the data-set number, a two-byte big-endian length and
+// the value. An IPTC parser reads these fields; the walker's decision to
+// drop the carrier never depends on its internal layout, so the load on
+// this construction is that the content really is IPTC-IIM data.
+func iptcField(dst []byte, dataset byte, value string) []byte {
+	dst = append(dst, 0x1C, 0x02, dataset)
+	dst = binary.BigEndian.AppendUint16(dst, uint16(len(value)))
+	return append(dst, value...)
+}
+
+// irbIPTCPayload returns the bytes of an APP13 payload that is a real
+// Photoshop image-resource block (IRB): the "Photoshop 3.0" signature,
+// the IRB length, and one 8BIM resource of id 0x0404 (the IPTC-NAA
+// record) whose data is an IPTC-IIM stream holding By-line (2:25), City
+// (2:90) and Copyright notice (2:116) data sets -- the authorship and
+// location vocabulary whose carrier this payload is.
+func irbIPTCPayload() []byte {
+	p := []byte("Photoshop 3.0\x00")
+	var res []byte
+	res = append(res, "8BIM"...)
+	res = binary.BigEndian.AppendUint16(res, 0x0404) // IPTC-NAA record
+	res = append(res, 0x00, 0x00)                    // empty Pascal name, padded to even
+	var iim []byte
+	iim = iptcField(iim, 0x19, "Jane Doe")                    // 2:25 By-line
+	iim = iptcField(iim, 0x5A, "Shanghai")                    // 2:90 City
+	iim = iptcField(iim, 0x74, "Copyright (c) 2026 Jane Doe") // 2:116 Copyright notice
+	res = binary.BigEndian.AppendUint32(res, uint32(len(iim)))
+	res = append(res, iim...)
+	if len(iim)%2 == 1 {
+		res = append(res, 0x00) // resource data is padded to an even length
+	}
+	p = binary.BigEndian.AppendUint32(p, uint32(len(res)))
+	return append(p, res...)
+}
+
+// itxtXMPData returns the data field of an iTXt chunk carrying an XMP
+// packet under the keyword the PNG specification reserves for Adobe XMP,
+// in the uncompressed form: keyword, NUL, compression flag 0, compression
+// method 0, language tag, NUL, translated keyword, NUL, then the packet.
+// The packet holds a GPS position (exif namespace) and an author (Dublin
+// Core creator), so the content needles name both protected classes.
+func itxtXMPData() []byte {
+	d := []byte("XML:com.adobe.xmp\x00")
+	d = append(d, 0x00, 0x00) // compression flag 0, compression method 0
+	d = append(d, "x-default\x00"...)
+	d = append(d, "\x00"...)
+	xmp := `<x:xmpmeta xmlns:x="adobe:ns:meta/">` +
+		`<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
+		`<rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" ` +
+		`xmlns:dc="http://purl.org/dc/elements/1.1/" exif:GPSLatitude="31,2304N" ` +
+		`exif:GPSLongitude="121,4737E">` +
+		`<dc:creator><rdf:Seq><rdf:li>Jane Doe</rdf:li></rdf:Seq></dc:creator>` +
+		`</rdf:Description></rdf:RDF></x:xmpmeta>`
+	return append(d, xmp...)
+}
+
+// ztxtCommentData returns the data field of a zTXt chunk: keyword, NUL,
+// compression method 0 (zlib), and the compressed comment text, returned
+// whole so the test can assert the compressed bytes' absence verbatim --
+// content an assertion on the plain text could not see.
+func ztxtCommentData() (compressed []byte) {
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	if _, err := zw.Write([]byte("GPS: 31.2304 N 121.4737 E; Studio: Jane Doe")); err != nil {
+		panic(err) // writing to a bytes.Buffer cannot fail
+	}
+	if err := zw.Close(); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+func TestSanitizeJPEG_StripsApp13IPTC(t *testing.T) {
+	base := testutil.JPEG(t, 48, 32)
+	// A real IRB-with-IPTC APP13 (0xED), spliced in where Photoshop would
+	// have written it, plus a second APP13 whose payload is not an IRB --
+	// the boundary pin: the covered carrier is the IRB, so a non-IRB APP13
+	// rides through exactly as an APP1 that is neither EXIF nor XMP does.
+	withIPTC := insertAPPSegment(t, base, 0xED, irbIPTCPayload())
+	foreign := []byte("com.example.vendor-app13-not-an-irb")
+	withBoth := insertAPPSegment(t, withIPTC, 0xED, foreign)
+	out, err := sanitizeJPEG(withBoth)
+	if err != nil {
+		t.Fatalf("sanitizeJPEG: %v", err)
+	}
+	assertNoneContain(t, "app13 iptc strip", out, "Jane Doe", "Shanghai", "Copyright (c) 2026", "Photoshop 3.0")
+	if !bytes.Contains(out, foreign) {
+		t.Fatal("non-IRB APP13 payload was stripped")
+	}
+	assertDecodesEqual(t, "app13 ip13 strip", out, base)
+	again, err := sanitizeJPEG(out)
+	if err != nil {
+		t.Fatalf("sanitizeJPEG (second pass): %v", err)
+	}
+	if !bytes.Equal(again, out) {
+		t.Fatal("strip is not idempotent")
+	}
+}
+
+func TestSanitizeJPEG_StripsCommentSegments(t *testing.T) {
+	base := testutil.JPEG(t, 48, 32)
+	// COM (0xFE) is the free-text comment marker: no signature can
+	// classify its payload, so the whole marker is the covered carrier
+	// and a comment that names a photographer and a GPS position must not
+	// survive -- free text is exactly how either protected class can
+	// arrive without any structured vocabulary.
+	comment := "photographer Jane Doe; GPS 31.2304 N 121.4737 E"
+	withComment := insertAPPSegment(t, base, 0xFE, []byte(comment))
+	out, err := sanitizeJPEG(withComment)
+	if err != nil {
+		t.Fatalf("sanitizeJPEG: %v", err)
+	}
+	assertNoneContain(t, "comment strip", out, "photographer Jane Doe", "GPS 31.2304 N 121.4737 E")
+	assertDecodesEqual(t, "comment strip", out, base)
+	again, err := sanitizeJPEG(out)
+	if err != nil {
+		t.Fatalf("sanitizeJPEG (second pass): %v", err)
+	}
+	if !bytes.Equal(again, out) {
+		t.Fatal("strip is not idempotent")
+	}
+}
+
+func TestSanitizePNG_StripsITXtXMP(t *testing.T) {
+	base := testutil.PNG(t, 32, 24)
+	// iTXt under the XML:com.adobe.xmp keyword is the carrier the PNG
+	// specification gives Adobe XMP -- the same geotag/authorship packet
+	// APP1 carries on JPEG -- so the GPS position and creator inside it
+	// must not survive into the served bytes.
+	withXMP := insertPNGChunk(t, base, "iTXt", itxtXMPData())
+	out, err := sanitizePNG(withXMP)
+	if err != nil {
+		t.Fatalf("sanitizePNG: %v", err)
+	}
+	assertNoneContain(t, "itxt xmp strip", out, "31,2304N", "121,4737E", "Jane Doe", "XML:com.adobe.xmp")
+	assertDecodesEqual(t, "itxt xmp strip", out, base)
+	again, err := sanitizePNG(out)
+	if err != nil {
+		t.Fatalf("sanitizePNG (second pass): %v", err)
+	}
+	if !bytes.Equal(again, out) {
+		t.Fatal("strip is not idempotent")
+	}
+}
+
+func TestSanitizePNG_StripsTextChunkFamily(t *testing.T) {
+	base := testutil.PNG(t, 32, 24)
+	// The rest of the text family: a tEXt pair under the Author and
+	// Location keywords, and a zTXt whose comment text is zlib-compressed
+	// (the content needle is the compressed bytes themselves). tIME is the
+	// boundary pin -- an ancillary chunk outside the text family rides
+	// through, like every chunk that is not a covered carrier.
+	withText := insertPNGChunk(t, base, "tEXt", []byte("Author\x00Jane Doe"))
+	withText = insertPNGChunk(t, withText, "tEXt", []byte("Location\x00Shanghai"))
+	zblob := ztxtCommentData()
+	withText = insertPNGChunk(t, withText, "zTXt", append([]byte("Comment\x00\x00"), zblob...))
+	withText = insertPNGChunk(t, withText, "tIME", []byte{0x07, 0xE6, 0x09, 0x08, 0x12, 0x34, 0x56})
+	out, err := sanitizePNG(withText)
+	if err != nil {
+		t.Fatalf("sanitizePNG: %v", err)
+	}
+	assertNoneContain(t, "text family strip", out, "Jane Doe", "Shanghai")
+	if bytes.Contains(out, zblob) {
+		t.Fatal("zTXt comment content survives in the stripped bytes")
+	}
+	for _, chunkType := range []string{"tEXt", "zTXt"} {
+		if bytes.Contains(out, []byte(chunkType)) {
+			t.Fatalf("text-family chunk type %q survives the strip", chunkType)
+		}
+	}
+	if !bytes.Contains(out, []byte("tIME")) {
+		t.Fatal("chunk outside the text family was stripped")
+	}
+	assertDecodesEqual(t, "text family strip", out, base)
+	again, err := sanitizePNG(out)
+	if err != nil {
+		t.Fatalf("sanitizePNG (second pass): %v", err)
+	}
+	if !bytes.Equal(again, out) {
+		t.Fatal("strip is not idempotent")
+	}
+}
+
 func TestSanitizeContent(t *testing.T) {
 	baseJPEG := testutil.JPEG(t, 48, 32)
 	basePNG := testutil.PNG(t, 32, 24)
@@ -444,6 +644,31 @@ func TestSanitizeContent(t *testing.T) {
 			t.Fatalf("changed=%v, exif chunk present: %v", changed, bytes.Contains(out, pngChunkExif))
 		}
 		assertDecodesEqual(t, "png exif strip", out, basePNG)
+	})
+	t.Run("jpeg app13 and comment stripped", func(t *testing.T) {
+		withMeta := insertAPPSegment(t, baseJPEG, 0xED, irbIPTCPayload())
+		withMeta = insertAPPSegment(t, withMeta, 0xFE, []byte("photographer Jane Doe"))
+		out, changed, err := sanitizeContent(withMeta, "image/jpeg")
+		if err != nil {
+			t.Fatalf("sanitizeContent: %v", err)
+		}
+		if !changed {
+			t.Fatal("ip13/comment-bearing jpeg reported unchanged")
+		}
+		assertNoneContain(t, "jpeg app13+comment", out, "Jane Doe", "Shanghai", "Photoshop 3.0", "photographer Jane Doe")
+		assertDecodesEqual(t, "jpeg app13+comment strip", out, baseJPEG)
+	})
+	t.Run("png text chunks stripped", func(t *testing.T) {
+		withXMP := insertPNGChunk(t, basePNG, "iTXt", itxtXMPData())
+		out, changed, err := sanitizeContent(withXMP, "image/png")
+		if err != nil {
+			t.Fatalf("sanitizeContent: %v", err)
+		}
+		if !changed {
+			t.Fatal("itxt-bearing png reported unchanged")
+		}
+		assertNoneContain(t, "png itxt xmp", out, "31,2304N", "Jane Doe", "XML:com.adobe.xmp")
+		assertDecodesEqual(t, "png itxt xmp strip", out, basePNG)
 	})
 	t.Run("non-image media type passes through", func(t *testing.T) {
 		opaque := []byte("an allowlisted pdf whose internals storage does not parse")

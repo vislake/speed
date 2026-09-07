@@ -136,9 +136,15 @@ authority:
    (`storage.pixel_limit_exceeded`, param `max_pixels`; an undecodable header is
    `storage.image_unreadable`).
 6. The metadata strip (`sanitize.go`) removes location and authorship metadata
-   before the object is readable: JPEG APP1 segments carrying EXIF (the container
-   that holds GPS coordinates and camera authorship) and Adobe XMP, and PNG's
-   `eXIf` chunk. Stripping is **structural, not re-encoding**: decodable pixel
+   before the object is readable, by carrier class: on JPEG, APP1 segments
+   carrying EXIF (the container that holds GPS coordinates and camera
+   authorship) or Adobe XMP, APP13 segments carrying Photoshop's
+   image-resource block (IPTC-IIM, the By-line/Credit/Copyright and
+   City/Country vocabulary), and COM comment segments (free text, no
+   signature can classify it); on PNG, the `eXIf` chunk and the text-chunk
+   family `tEXt`/`zTXt`/`iTXt` — `iTXt` being PNG's own carrier for the same
+   XMP packet APP1 carries on JPEG. Stripping is **structural, not
+   re-encoding**: decodable pixel
    data passes through untouched, and the walkers are strict about structure
    (bounds, lengths, CRCs, required IEND terminator) and fail closed on anything
    they cannot account for — a file whose metadata could be stripped but whose
@@ -457,15 +463,22 @@ invocation full-check.yml's integration-tiers job runs for this module:
 
 ## Known limitations
 
-- **The strip is structural, not a full decode.** Metadata smuggled into the
-  entropy-coded scan data of an image — rather than into the segment/chunk
-  carriers this walker knows — is out of scope for a structural strip, and the
-  header-only pixel probe (`DecodeConfig`) cannot see corruption or smuggled
-  metadata below the header. The module's own tests construct the carriers the
-  walker knows; anything the walker cannot verify structurally is refused rather
-  than passed through. Full-decode verification (and re-encode-based sanitizing)
-  is the processing round's work, which is where thumbnails already force a
-  full decode to happen.
+- **The strip is structural, not a full decode, and it classifies carriers,
+  never payload bytes.** On the admitted types it covers the standardized
+  carriers of location and authorship metadata — on JPEG, EXIF and XMP
+  (APP1), IPTC-IIM inside Photoshop's image-resource block (APP13), and COM
+  free-text comments; on PNG, `eXIf` and the text-chunk family
+  `tEXt`/`zTXt`/`iTXt` (iTXt the XMP carrier). A segment or chunk that
+  carries no recognized vocabulary rides through untouched, exactly as
+  metadata smuggled into the entropy-coded scan data does — the walker can
+  verify container structure, never content semantics, and unclassifiable
+  payload is the re-encode round's work. The header-only pixel probe
+  (`DecodeConfig`) cannot see corruption or smuggled metadata below the
+  header. The module's own tests construct real carriers for every covered
+  class; anything the walker cannot verify structurally is refused rather
+  than passed through. Full-decode verification (and re-encode-based
+  sanitizing) is the processing round's work, which is where thumbnails
+  already force a full decode to happen.
 - The cursor page composes the keyset query on the plugin-guarded `*gorm.DB`
   exactly as `go/dbkit/AGENTS.md`'s "Known limitations" option 1 prescribes,
   inside `dbkit.WithTenantSession`; this file never writes `tenant_id = ?` and
@@ -733,3 +746,48 @@ whose regressions fail before and pass after:
   (exactly three segments) and `DerivativeKey` (exactly four) exist so the day an
   id alphabet changes, the violation is a loud builder error at the single
   create/derive site, never a silently reshaped key.
+
+## Round note — carrier-class metadata strip: APP13 IRB/IPTC, COM, the PNG text family (2026-09-08)
+
+A reviewer finding (P1) closed the gap between the strip's rule and its
+execution. The rule enumerates two content classes — location and authorship
+metadata — not two containers, but the walkers' drops covered only APP1-EXIF,
+APP1-XMP and PNG `eXIf`, while APP13 (Photoshop IRB, carrying IPTC-IIM's
+By-line/Copyright/City/Country/Sub-location) and COM (free text) flowed
+through JPEG whole, and PNG's tEXt family rode through whole. The heart of
+the finding is that this was not a cold container being missed: `iTXt` under
+the `XML:com.adobe.xmp` keyword is the PNG standard's own carrier for the
+same Adobe XMP packet sanitize.go's scope note names as the geolocation and
+authorship carrier — explicitly stripped on one admitted type, untouched on
+the other. A malicious uploader needed no smuggling: a Lightroom/Photoshop
+JPEG export commonly carries APP13 IPTC, a PS-saved PNG carries iTXt XMP, and
+both pass the walkers' strict structural validation (correct lengths, CRCs
+included) while carrying GPS and bylines straight into the object the
+platform serves — through `Complete`'s irreversible write-back and, in the
+reference app, onto sharing's unauthenticated access route.
+
+The fix follows the rule's classes, not a longer marker list: the walkers now
+enumerate the carrier families that can carry the two classes on each
+admitted type and drop each family wholesale. On JPEG: EXIF and XMP (APP1,
+by payload signature — unchanged), IPTC-IIM (APP13 whose payload is a
+Photoshop image-resource block, dropped whole so the strip never depends on
+the IRB's internal resource layout), and COM — free text has no signature
+that could classify it, so the whole marker is the carrier and every comment
+segment goes. On PNG: `eXIf` (unchanged) plus the tEXt family (`tEXt`/`zTXt`/
+`iTXt`), iTXt the XMP carrier and the other two keyworded free text no
+structure check can classify. The strip classifies carriers, never payload
+bytes — the honest boundary, stated in sanitize.go's scope note and in the
+Known limitations list above: an APP segment or ancillary chunk carrying no
+recognized vocabulary rides through, exactly as entropy-smuggled bytes do.
+The admission gate's promise is reconciled to that same boundary: errors.go's
+"an admitted type is a promise" wording and validate.go's `strippable` now
+measure against the carrier classes the walkers actually enumerate, never
+against byte purity no structural walk could deliver. ICC APP2 stays kept
+(decoders need it for correct color), as do APP0 and other vendor APP
+segments — pinned by the existing keep-tests and the new non-IRB APP13 and
+tIME boundary pins. Regressions build real carriers — an IRB-with-IPTC APP13
+holding IIM By-line/City/Copyright data sets, COM comments, an iTXt XMP
+packet with exif GPS and dc:creator content, tEXt Author/Location pairs and
+a zlib-compressed zTXt — and assert the marker content itself is absent from
+the stripped bytes, not merely that a rewrite happened; every strip stays
+idempotent and decode-equal to the pristine base.

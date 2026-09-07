@@ -142,8 +142,11 @@ func isImageMediaType(mt string) bool {
 
 // mediaTypeCoverage is the module's record of what it can do to one media
 // type's bytes: pixel-check them (a decoder is registered in this file's
-// import block) and metadata-strip them (sanitize.go has a structural
-// walker for the type).
+// import block) and metadata-strip them (sanitize.go ships a structural
+// walker for the type, over the location/authorship carrier classes that
+// walker's own scope note enumerates -- strippable is measured against
+// that declared coverage, never against payload bytes no structural walk
+// can classify).
 type mediaTypeCoverage struct {
 	decodable  bool
 	strippable bool

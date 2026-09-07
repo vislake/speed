@@ -492,9 +492,11 @@ func (s *ObjectService) Upload(ctx context.Context, objectID string, contentLeng
 //     (storage.pixel_limit_exceeded past it, storage.image_unreadable when
 //     undecodable), which also yields the finalized dimensions.
 //  10. Image bytes pass the structural sanitizer (storage.image_unreadable
-//     on refusal), and when the sanitizer removed metadata -- EXIF and XMP
-//     from JPEG, the eXIf chunk from PNG; GPS coordinates and authorship
-//     included -- the sanitized bytes atomically replace the stored ones.
+//     on refusal), and when the sanitizer removed metadata -- EXIF, XMP and
+//     IPTC-IIM (APP1/APP13) and COM comments from JPEG, the eXIf chunk and
+//     the text-chunk family (tEXt/zTXt/iTXt, XMP's PNG carrier) from PNG;
+//     GPS coordinates and authorship included -- the sanitized bytes
+//     atomically replace the stored ones.
 //
 // The row then advances to completed with the finalized metadata -- Size,
 // MIME, ChecksumSHA256 and the dimensions, all describing the bytes

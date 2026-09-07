@@ -142,10 +142,14 @@ var (
 	// type the module cannot admit safely. The whitelist may only admit a
 	// type the module can apply its full safety envelope to -- pixel-check
 	// the probed bytes (a registered decoder) AND strip their metadata
-	// (sanitize.go's walkers) -- because an admitted type is a promise that
-	// every completed object of that type carries both protections, and the
-	// module refuses configurations that would silently trade one away. It
-	// is a wiring error, so Module.Register is where it surfaces.
+	// (sanitize.go's walkers, over the location/authorship carrier classes
+	// those walkers enumerate for the type; the strip classifies carriers,
+	// never payload bytes) -- because an admitted type is a promise that
+	// every completed object of that type carries both protections, a
+	// promise measured against the strip's declared scope rather than
+	// against byte purity no structural walk could deliver, and the module
+	// refuses configurations that would silently trade one away. It is a
+	// wiring error, so Module.Register is where it surfaces.
 	ErrAllowedTypeUnsupported = apperr.Internal("storage.allowed_type_unsupported")
 
 	// ErrStoreUnavailable reports an object-store access refused before

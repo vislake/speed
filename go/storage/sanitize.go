@@ -15,17 +15,40 @@ import (
 // passes through untouched, so the sanitized output decodes to exactly the
 // image the uploader sent -- only the metadata containers are gone.
 //
-// Scope, deliberately: the walkers below cover the metadata carriers that
-// ride in the file's marker stream -- JPEG APP segments wherever they appear,
-// before the first scan, between the scans of a progressive or hierarchical
-// JPEG, or appended after the image's EOI marker -- and the PNG chunk stream
-// (eXIf). Metadata that a hostile encoder smuggles into the entropy-coded
-// data itself is out of scope for a structural strip: the JPEG walker walks
-// the entropy data only to locate where the scan ends, never to parse it. A
-// file the walker cannot verify structurally is refused rather than passed
-// through. Every error returned here is a plain error; the caller maps it
-// onto ErrImageUnreadable so the refusal carries the code index's shape and
-// the cause keeps the detail.
+// Scope, deliberately, and by carrier class rather than by individual
+// marker: the walkers below strip every standardized carrier of the two
+// protected content classes -- location and authorship -- that rides in the
+// file's marker stream. On JPEG those carriers are EXIF and XMP (both ride
+// the APP1 segment, identified by their payload signatures), IPTC-IIM, the
+// vocabulary holding By-line/Copyright/City/Country (it rides APP13 as a
+// Photoshop image-resource block, so an APP13 whose payload is an IRB is
+// dropped whole -- the strip never depends on the IRB's internal layout),
+// and COM, the free-text comment marker, whose payload no signature can
+// classify, so the whole marker is the carrier and every COM segment goes.
+// On PNG they are the eXIf chunk and the text-chunk family tEXt/zTXt/iTXt:
+// iTXt under the XML:com.adobe.xmp keyword is the carrier the PNG
+// specification gives the same Adobe XMP packet APP1 carries on JPEG --
+// camera serials, geotags, editing history -- and tEXt and zTXt carry
+// keyworded free text (Author, Copyright, Location, Comment) whose meaning
+// no structure check can establish, so the whole family is dropped. A
+// covered carrier is stripped wherever it appears -- before the first scan,
+// between the scans of a progressive or hierarchical JPEG, or appended
+// after the image's EOI marker (the tail drop below takes everything past
+// EOI and IEND).
+//
+// The strip classifies carriers, never payload bytes: a segment or chunk
+// that carries no recognized vocabulary rides through untouched, exactly as
+// bytes smuggled into the entropy-coded data do -- APP2's ICC profile is
+// kept because a decoder needs it to render color correctly, APP0's JFIF
+// header is kept, and an APP segment or ancillary chunk whose payload names
+// no covered carrier is not the rule's metadata, any more than a hostile
+// encoder's bytes inside the entropy stream are: the JPEG walker walks the
+// entropy data only to locate where the scan ends, never to parse it, and a
+// structural walk can verify container structure, never content semantics.
+// A file the walker cannot verify structurally is refused rather than
+// passed through. Every error returned here is a plain error; the caller
+// maps it onto ErrImageUnreadable so the refusal carries the code index's
+// shape and the cause keeps the detail.
 //
 // Both walkers are strict about structure (bounds, lengths, CRCs, required
 // terminators) and fail closed on anything they cannot account for: a file
@@ -42,8 +65,18 @@ var (
 	exifSignature = []byte("Exif\x00\x00")
 	// xmpSignature prefixes the APP1 payload of Adobe's XMP packet, the
 	// sibling metadata carrier (camera serials, geotags, editing history)
-	// that shares the APP1 marker with EXIF.
+	// that shares the APP1 marker with EXIF. The same packet rides PNG's
+	// chunk stream in an iTXt chunk under the XML:com.adobe.xmp keyword;
+	// both carriers are stripped, so the vocabulary dies on the two
+	// admitted types together, never on one.
 	xmpSignature = []byte("http://ns.adobe.com/xap/1.0/\x00")
+	// irbSignature prefixes the payload of an APP13 segment that carries
+	// Photoshop's image-resource block (IRB), the container IPTC-IIM --
+	// the By-line/Credit/Copyright and City/Country/Sub-location half of
+	// the authorship-and-location vocabulary -- rides in as its 0x0404
+	// resource. The signature is "Photoshop 3.0" followed by a zero byte,
+	// per Adobe's IRB convention.
+	irbSignature = []byte("Photoshop 3.0\x00")
 )
 
 const (
@@ -57,14 +90,24 @@ const (
 	jpegSOS = 0xDA
 	// jpegApp1 is the APP1 marker, the segment EXIF and XMP ride in.
 	jpegApp1 = 0xE1
+	// jpegApp13 is the APP13 marker, the segment Photoshop image-resource
+	// blocks -- and IPTC-IIM inside them -- ride in.
+	jpegApp13 = 0xED
+	// jpegCOM is the comment marker, a length-carrying free-text segment.
+	jpegCOM = 0xFE
 	// jpegTEM is the standalone "temporary private use" marker.
 	jpegTEM = 0x01
 )
 
-// sanitizeJPEG returns a copy of raw with its EXIF and XMP APP1 segments
-// removed, or an error when the JPEG structure cannot be verified. Only
-// APP1 is dropped -- APP2's ICC profile is kept, as are APP0's JFIF header,
-// quantisation and Huffman tables, and everything else a decoder needs.
+// sanitizeJPEG returns a copy of raw with the APP segments that carry
+// location and authorship metadata removed -- EXIF and XMP (APP1, by
+// payload signature), IPTC-IIM (APP13 whose payload is Photoshop's
+// image-resource block) and every COM comment segment (free text) -- or an
+// error when the JPEG structure cannot be verified. APP2's ICC profile is
+// kept, as are APP0's JFIF header, quantisation and Huffman tables, APP
+// segments whose payload carries no recognized vocabulary, and everything
+// else a decoder needs: the strip classifies carriers, never payload
+// bytes.
 //
 // The walk is marker-based: SOI, then one marker per step, each either
 // standalone (TEM, the restart markers), length-carrying (everything a
@@ -183,10 +226,25 @@ func sanitizeJPEG(raw []byte) ([]byte, error) {
 				return nil, errors.New("jpeg: segment extends past end of data")
 			}
 			payload := raw[i+2 : segEnd]
-			if code == jpegApp1 && (bytes.HasPrefix(payload, exifSignature) || bytes.HasPrefix(payload, xmpSignature)) {
+			// The drop decision follows the carrier classes of the strip's
+			// rule: EXIF and XMP ride APP1, IPTC-IIM rides APP13 inside a
+			// Photoshop image-resource block, and COM is free text whose
+			// whole marker is the carrier. Each arm drops the segment
+			// wholesale, so the content dies with the container.
+			switch {
+			case code == jpegApp1 && (bytes.HasPrefix(payload, exifSignature) || bytes.HasPrefix(payload, xmpSignature)):
 				// Dropped: this APP1 is EXIF or XMP, the carriers this
 				// strip exists for.
-			} else {
+			case code == jpegApp13 && bytes.HasPrefix(payload, irbSignature):
+				// Dropped: this APP13 is a Photoshop image-resource
+				// block, the container IPTC-IIM rides in. The whole IRB
+				// goes, so IPTC is stripped wherever it sits inside
+				// regardless of the IRB's resource layout.
+			case code == jpegCOM:
+				// Dropped: COM is the free-text comment marker. No
+				// signature can classify free text, so the marker class
+				// itself is the covered carrier and every comment goes.
+			default:
 				clean = append(clean, raw[markerStart:segEnd]...)
 			}
 			i = segEnd
@@ -237,18 +295,31 @@ var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
 // pngChunkExif is the chunk type of the EXIF chunk the walker drops.
 var pngChunkExif = []byte("eXIf")
 
+// pngChunkText, pngChunkZtxt and pngChunkItxt are the chunk types of the
+// PNG text-chunk family the walker drops: tEXt and zTXt carry keyworded
+// free text, and iTXt is the chunk the PNG specification designates for
+// international text -- the carrier of the same Adobe XMP packet APP1
+// carries on JPEG, under the XML:com.adobe.xmp keyword.
+var (
+	pngChunkText = []byte("tEXt")
+	pngChunkZtxt = []byte("zTXt")
+	pngChunkItxt = []byte("iTXt")
+)
+
 // pngChunkEnd is the chunk type that terminates a PNG's chunk stream. It is
 // the walker's required terminator: a PNG without IEND is truncated, however
 // plausible its pixel chunks looked.
 var pngChunkEnd = []byte("IEND")
 
-// sanitizePNG returns a copy of raw with its eXIf chunk removed, or an error
-// when the PNG structure cannot be verified. Every chunk is walked and its
-// CRC-32 checked against the stored value -- the checksum is what makes the
-// walk authoritative: a chunk whose bytes cannot be verified is refused
-// rather than passed through. Chunks after IEND are outside the file's
-// structure and are not carried over; output is a valid PNG regardless of
-// what the upload appended.
+// sanitizePNG returns a copy of raw with its eXIf chunk and its text chunks
+// removed -- the whole tEXt/zTXt/iTXt family, iTXt being the carrier the
+// specification gives Adobe XMP -- or an error when the PNG structure cannot
+// be verified. Every chunk is walked and its CRC-32 checked against the
+// stored value -- the checksum is what makes the walk authoritative: a chunk
+// whose bytes cannot be verified is refused rather than passed through, and
+// a text chunk is dropped only after that verification has passed. Chunks
+// after IEND are outside the file's structure and are not carried over;
+// output is a valid PNG regardless of what the upload appended.
 func sanitizePNG(raw []byte) ([]byte, error) {
 	if len(raw) < len(pngSignature) || !bytes.Equal(raw[:len(pngSignature)], pngSignature) {
 		return nil, errors.New("png: missing signature")
@@ -275,6 +346,17 @@ func sanitizePNG(raw []byte) ([]byte, error) {
 		switch {
 		case bytes.Equal(chunkType, pngChunkExif):
 			// Dropped: the EXIF chunk, the carrier this strip exists for.
+		case bytes.Equal(chunkType, pngChunkText),
+			bytes.Equal(chunkType, pngChunkZtxt),
+			bytes.Equal(chunkType, pngChunkItxt):
+			// Dropped: the text-chunk family. iTXt under the
+			// XML:com.adobe.xmp keyword is PNG's carrier for the XMP
+			// packet -- geotags, camera serials, editing history -- APP1
+			// carries on JPEG, and tEXt and zTXt carry keyworded free
+			// text (Author, Copyright, Location, Comment) whose meaning
+			// no structure check can establish, so the whole family is
+			// the covered carrier and every text chunk goes. A decoder
+			// never needs any of them.
 		case bytes.Equal(chunkType, pngChunkEnd):
 			clean = append(clean, raw[i:dataEnd+4]...)
 			return clean, nil
