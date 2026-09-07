@@ -614,9 +614,17 @@ async function openCaseWithSimulation(page: Page): Promise<void> {
  * note, or an explicit "generate the first preview" button that makes the
  * spend a choice -- any of them passes. Silence does not.
  */
+// Closed: a9a7e22 discloses the automatic first preview's credit cost
+// before it runs. Verified on the fix branch on all three engines and by
+// reading what a dentist actually sees -- the line sits under the Smile
+// simulation heading, ahead of the option pickers, and names the figure
+// ("10 credits") rather than only the idea of a cost.
+//
+// @budget rather than untagged: it opens a case and attaches a photo,
+// which the default tier's sign-in budget cannot absorb.
 test(
   'opening a case does not spend a credit without telling anyone',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     await signInAs(page, DEMO_OWNER)
 

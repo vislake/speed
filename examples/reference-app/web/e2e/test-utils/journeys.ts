@@ -9,7 +9,7 @@
  * here and be re-read by a human, not silently pass because a hidden
  * attribute survived.
  */
-import { expect, type Page } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import type { DemoAccount } from './accounts.js'
 
 /** auth-ui's sign-in surface (its own en-US bundle). */
@@ -91,6 +91,96 @@ export async function visitSignIn(page: Page): Promise<void> {
 }
 
 /**
+ * go/authn's two sliding windows on sign-in, as this suite has to live
+ * with them: five attempts per account per minute (limitLoginByAccount)
+ * and twenty per IP per minute (limitLoginByIP), the second a pool every
+ * gate in the run shares.
+ */
+const LOGIN_BUDGET = {
+  perAccount: 5,
+  perIp: 20,
+  windowMs: 60_000,
+  /** So an attempt that lands exactly on the boundary is still inside. */
+  marginMs: 1_000,
+} as const
+
+/** When each account last attempted, and when this IP did, in this run. */
+const attemptsByAccount = new Map<string, number[]>()
+const attemptsByIp: number[] = []
+
+/**
+ * How long to wait before one more attempt would be inside `limit`,
+ * pruning the stamps that have already left the window.
+ */
+function waitToFitOneMore(stamps: number[], limit: number, now: number): number {
+  const live = stamps.filter((at) => now - at < LOGIN_BUDGET.windowMs)
+  stamps.length = 0
+  stamps.push(...live)
+  const mustExpire = live[live.length - limit]
+  if (live.length < limit || mustExpire === undefined) {
+    return 0
+  }
+  return LOGIN_BUDGET.windowMs - (now - mustExpire) + LOGIN_BUDGET.marginMs
+}
+
+/**
+ * Waits until this sign-in is inside go/authn's budget, then records it.
+ *
+ * THIS IS NOT A RETRY LOOP, and the difference is the whole reason it is
+ * shaped this way. It waits BEFORE an attempt so the attempt is legal; it
+ * never re-submits one the server refused. A helper that retried past a
+ * refusal would destroy this suite's ability to tell a real regression
+ * from its own impatience -- the rule provisioning-recovery.spec.ts's
+ * header states, and which the budget refusal below still enforces.
+ *
+ * WHY IT IS NEEDED AT ALL
+ *
+ * The @budget tier signs demo-owner in seven times and runs in about
+ * thirty seconds, so all seven land in one sixty-second window against a
+ * five-per-minute limit. The tier was not passing because it fit the
+ * budget; it was passing on the runs slow enough to spread the attempts
+ * out, and failing on the fast ones -- as one just did, naming
+ * visible-controls.spec.ts, which is not the gate that overspent. A
+ * suite whose result depends on how fast it happens to run is reporting
+ * its own timing, not the product.
+ *
+ * WHAT IT CANNOT SEE
+ *
+ * The ledger is this process's own. It matches the server's view only
+ * because a local run boots a server of its own whose rate limiter is an
+ * in-memory KVStore nothing else talks to. Against a long-lived
+ * deployment (E2E_BASE_URL) another client's sign-ins are invisible here,
+ * so the pacing reduces self-inflicted refusals rather than guaranteeing
+ * none -- which is why signInAs still names the refusal when it comes.
+ */
+async function payTheLoginBudget(identifier: string): Promise<void> {
+  const own = attemptsByAccount.get(identifier) ?? []
+  attemptsByAccount.set(identifier, own)
+
+  for (;;) {
+    const now = Date.now()
+    const wait = Math.max(
+      waitToFitOneMore(own, LOGIN_BUDGET.perAccount, now),
+      waitToFitOneMore(attemptsByIp, LOGIN_BUDGET.perIp, now),
+    )
+    if (wait <= 0) {
+      break
+    }
+    // The test is given exactly the time the wait costs, rather than the
+    // whole suite being given a longer timeout: a genuinely hung gate
+    // should still report at its own deadline instead of three minutes
+    // later.
+    const info = test.info()
+    info.setTimeout(info.timeout + wait)
+    await new Promise((resolve) => setTimeout(resolve, wait))
+  }
+
+  const at = Date.now()
+  own.push(at)
+  attemptsByIp.push(at)
+}
+
+/**
  * Fills and submits the password sign-in form. Does not assert the
  * outcome: callers assert either the frame (success) or the error banner
  * (refusal), and a helper that assumed success could not serve both.
@@ -100,6 +190,7 @@ export async function submitPasswordSignIn(
   identifier: string,
   password: string,
 ): Promise<void> {
+  await payTheLoginBudget(identifier)
   await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(identifier)
   await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(password)
   await page.getByRole('button', { name: SIGN_IN_TEXT.submit }).click()

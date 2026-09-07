@@ -147,11 +147,23 @@ test(
 test(
   'a phone number without a country code is refused with instructions, not a bare rejection',
   async ({ page }) => {
-    // This one is NOT pending: it passes today, and it passes because
-    // someone wrote the best error message in this product. It is here to
-    // keep it that way -- and as the standard the other messages are held
-    // to, since a refusal that says only "invalid" leaves a person
-    // guessing while this one leaves them typing.
+    // NOT pending, and as of ba061cd not running here either: this
+    // deployment offers only the password channel, so the surface that
+    // renders this message is unreachable and the test stands down.
+    //
+    // Recorded rather than quietly left to skip, because a permanently
+    // skipped test is the "gate that runs nowhere" this suite warns about
+    // wearing a green tick. What it guarded is the best error message in
+    // this product -- auth-ui's authn.invalid_phone, which says what is
+    // wrong, what to do, and shows an example -- and that message is now
+    // unguarded HERE. It still ships in @speed/auth-ui and its own
+    // package tests cover it; what is gone is the consumer-level proof
+    // that a real deployment renders it.
+    //
+    // Deliberately not relocated to another surface to keep it running:
+    // the closest candidate is the registration password-policy message,
+    // which is a different message, and a test that quietly changes its
+    // subject to stay green is worth less than one that says it stopped.
     await visitSignIn(page)
     const smsTab = page.getByRole('tab', { name: SIGN_IN_TEXT.smsTab })
     test.skip((await smsTab.count()) === 0, 'the SMS channel is not offered in this deployment')
