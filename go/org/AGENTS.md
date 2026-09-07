@@ -90,7 +90,7 @@ The token is 32 bytes from `crypto/rand`, base64url-encoded for the link and ret
 
 The address is encrypted at rest through the serializer named by `org.EmailSerializerName`, and made queryable by `dbkit.NewBlindIndexer("email_index", key, dbkit.NormalizeEmail)` — the exact facility the root `CLAUDE.md`'s Traps section requires instead of a reimplementation. Every write goes through `Index`, every lookup through `Equal`. **The blind-index key must be a different secret from the encryption key**; dbkit takes them through two constructors for that reason.
 
-`dbkit.NormalizeEmail` deliberately performs no structural validation (its doc comment calls that "the caller's input-quality problem"). org is that caller, so `validateInviteEmail` does one minimal syntactic check before anything is indexed, stored, counted or sent.
+`dbkit.NormalizeEmail` performs a structural gate of its own when it indexes (no `@`, an empty side of the `@`, a second `@`, a dotless or edge-dotted domain, whitespace/control or non-ASCII characters, or an overlong address are all errors). org still runs `validateInviteEmail` first: the refusal must be org's coded `ErrInvalidEmail`, and it must land before the address costs a rate-limit slot or a mail attempt.
 
 ### Acceptance is tenantless
 

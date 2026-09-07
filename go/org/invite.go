@@ -223,10 +223,12 @@ func (s *InviteService) Invite(ctx context.Context, req InviteRequest) (*InviteR
 	if err != nil {
 		return nil, err
 	}
-	// Structural validation first, then the index. dbkit.NormalizeEmail
-	// normalizes without validating -- by design, see its doc comment -- so
-	// without this an address that cannot possibly deliver would still index
-	// cleanly and spend a rate-limit slot and a mail attempt.
+	// Structural validation first, then the index: an address that cannot
+	// possibly deliver must be refused here -- with org's coded
+	// ErrInvalidEmail, before it spends a rate-limit slot or a mail attempt.
+	// dbkit.NormalizeEmail performs a structural gate of its own when it
+	// indexes; this check is the earlier one and the one that decides org's
+	// answer.
 	address, err := validateInviteEmail(req.Email)
 	if err != nil {
 		return nil, err

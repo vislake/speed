@@ -57,6 +57,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -289,8 +290,14 @@ func createWebhookSubscription(t *testing.T, srv *httptest.Server, token, url st
 func triggerOrgMemberJoined(t *testing.T, srv *httptest.Server, cfg serverConfig, mailer *capturingMailer, tenant pkgcore.TenantID, namePrefix, inviteeEmail string) orgMembership {
 	t.Helper()
 
-	inviterToken := registerAndAuthenticate(t, srv, cfg, tenant, namePrefix+"-inviter")
-	inviteeToken := registerAndAuthenticate(t, srv, cfg, tenant, namePrefix+"-invitee")
+	// The name prefix is display text ("Webhook Success") and not an email
+	// local part, and the register route's canonical-form gate (dbkit's
+	// NormalizeEmail) refuses an address whose local part holds a space -- so
+	// the mailbox name is spelled without one, while the display names and
+	// demo-user ids below keep the human-readable prefix.
+	mailbox := strings.ReplaceAll(namePrefix, " ", "-")
+	inviterToken := registerAndAuthenticate(t, srv, cfg, tenant, mailbox+"-inviter")
+	inviteeToken := registerAndAuthenticate(t, srv, cfg, tenant, mailbox+"-invitee")
 
 	var root orgNode
 	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", inviterToken, "",

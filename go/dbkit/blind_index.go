@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"gorm.io/gorm/clause"
 )
@@ -88,22 +89,82 @@ func BlindIndex(key []byte, normalized string) string {
 // per-column contract stays explicit.
 type NormalizeFunc func(raw string) (string, error)
 
+// maxEmailLength is the longest address NormalizeEmail accepts: the length
+// limit RFC 5321 places on a mailbox forward path. It is the same ceiling
+// go/org's invitation gate enforces with its own constant.
+const maxEmailLength = 254
+
 // NormalizeEmail implements the canonical form for email addresses: the
 // input, trimmed of surrounding whitespace, lowercased. " User@Example.COM "
 // and "user@example.com" both normalize to "user@example.com", so a value
 // typed with stray spaces or a different case still indexes to (and queries)
-// the same canonical address. It performs no structural validation: an input
-// that is not a real email address normalizes consistently on both sides of
-// a lookup and is the caller's input-quality problem, not a normalization
-// ambiguity.
+// the same canonical address.
 //
-// It returns an error for an input that is empty or all whitespace: an
-// absent value has no canonical form and must not be indexed at all — leave
-// the index column NULL for it instead (see BlindIndexer).
+// It also applies a minimal structural check — the syntactic rigor its
+// sibling NormalizePhoneE164 applies to numbers — so an input that is not
+// even the shape of a mailbox refuses to index at all. The columns this
+// normalizer serves hold addresses products actually send mail to, and an
+// account, an invitation or a verified contact created for a shape like
+// "alice@examplecom" would have no deliverable address, with every email
+// flow built on it broken forever. The checks are syntactic, not semantic:
+// whether the mailbox genuinely exists and accepts mail is the caller's
+// input-quality problem, exactly the division of labor NormalizePhoneE164
+// documents for numbers.
+//
+//   - No "@" is an error: an address needs a separator between its local
+//     part and its domain.
+//   - An empty local part or an empty domain is an error: one side of the
+//     separator must not be missing.
+//   - More than one "@" is an error.
+//   - A domain with no "." is an error: "examplecom" names no host a
+//     message could be routed to.
+//   - A domain starting or ending with "." is an error.
+//   - Whitespace or control characters anywhere are an error: surrounding
+//     whitespace is trimmed, but an address is otherwise a single token —
+//     an embedded space never belongs to a mailbox name, and a line break
+//     smuggled into an address is a header-injection attempt, not an
+//     address.
+//   - Non-ASCII characters are an error: the addresses these columns hold
+//     are ASCII mailbox names, and lowercasing must never change an
+//     input's byte length between passes (the normalization contract is
+//     idempotence).
+//   - More than 254 characters is an error (the RFC 5321 forward-path
+//     limit).
+//
+// Normalized input passes through unchanged apart from the lowercasing,
+// making the function deterministic and idempotent. It returns an error for
+// an input that is empty or all whitespace; an absent value has no canonical
+// form and must not be indexed at all (see BlindIndexer).
 func NormalizeEmail(raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
 		return "", errors.New("dbkit: email normalization: input is empty")
+	}
+	if len(s) > maxEmailLength {
+		return "", fmt.Errorf("dbkit: email normalization: longer than %d characters: the RFC 5321 forward-path limit", maxEmailLength)
+	}
+	for _, r := range s {
+		switch {
+		case r > 0x7f:
+			return "", errors.New("dbkit: email normalization: non-ASCII characters: the addresses this canonical form serves are ASCII mailbox names")
+		case unicode.IsSpace(r) || unicode.IsControl(r):
+			return "", errors.New("dbkit: email normalization: whitespace or control characters: an address is a single token, never a header or a display name")
+		}
+	}
+	local, domain, found := strings.Cut(s, "@")
+	switch {
+	case !found:
+		return "", errors.New("dbkit: email normalization: no \"@\": an address needs a local part and a domain")
+	case local == "":
+		return "", errors.New("dbkit: email normalization: empty local part before the \"@\"")
+	case domain == "":
+		return "", errors.New("dbkit: email normalization: empty domain after the \"@\"")
+	case strings.Contains(domain, "@"):
+		return "", errors.New("dbkit: email normalization: more than one \"@\"")
+	case !strings.Contains(domain, "."):
+		return "", errors.New("dbkit: email normalization: the domain has no \".\": a mailbox must sit on a named host")
+	case strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, "."):
+		return "", errors.New("dbkit: email normalization: the domain must not start or end with a \".\"")
 	}
 	return strings.ToLower(s), nil
 }

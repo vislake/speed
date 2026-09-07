@@ -256,10 +256,11 @@ const maxEmailLen = 254
 // lets org spend a rate-limit slot and a mail attempt on a value that cannot
 // possibly be one.
 //
-// It exists because dbkit.NormalizeEmail explicitly does NOT do it: that
-// function's contract is to normalize consistently on both sides of a lookup
-// and it documents structural validity as "the caller's input-quality
-// problem". org is that caller, and this is where it holds up its end.
+// It exists because the refusal must be org's own coded ErrInvalidEmail and
+// must land before the address costs a rate-limit slot or a mail attempt.
+// dbkit.NormalizeEmail performs a structural gate of its own when it
+// indexes, so this check is not the only guard on the address -- it is the
+// earliest one, and the one that decides org's coded answer.
 //
 // The address is never echoed into the error: an error's parameters are
 // rendered, logged and traced, and an address is PII.

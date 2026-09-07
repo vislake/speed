@@ -77,7 +77,6 @@ func TestNormalizeEmail_CanonicalForms(t *testing.T) {
 		{name: "already canonical", raw: "user@example.com", want: "user@example.com"},
 		{name: "uppercase is lowercased", raw: "User@Example.COM", want: "user@example.com"},
 		{name: "surrounding whitespace is trimmed", raw: "  User@Example.COM  ", want: "user@example.com"},
-		{name: "internal whitespace preserved", raw: "a@b.c d", want: "a@b.c d"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -107,6 +106,87 @@ func TestNormalizeEmail_CanonicalForms(t *testing.T) {
 				t.Errorf("NormalizeEmail(%q) = %q, nil error; want an error (an absent value has no canonical form)", raw, got)
 			}
 		})
+	}
+}
+
+// TestNormalizeEmail_RejectsSyntaxInvalid pins NormalizeEmail's structural
+// gate: input that is not even the shape of a mailbox must error rather than
+// index, because the blind-index columns this normalizer serves hold
+// addresses products actually send mail to -- an account, an invitation or a
+// verified contact created for a shape like "alice@examplecom" would have no
+// deliverable address, and every email flow built on it would be broken
+// forever. Each rejection's error carries its written-out reason, in the
+// same style as NormalizePhoneE164's rejections.
+func TestNormalizeEmail_RejectsSyntaxInvalid(t *testing.T) {
+	testsErr := []struct {
+		name    string
+		raw     string
+		reasons []string // stable fragments of the expected error message
+	}{
+		{name: "no at sign", raw: "not-an-address", reasons: []string{`no "@"`}},
+		{name: "no local part", raw: "@example.com", reasons: []string{"local part"}},
+		{name: "no domain", raw: "user@", reasons: []string{"empty domain"}},
+		{name: "two at signs", raw: "user@@example.com", reasons: []string{"more than one"}},
+		{name: "domain with no dot", raw: "alice@examplecom", reasons: []string{`no "."`}},
+		{name: "dotless single-label domain", raw: "alice@localhost", reasons: []string{`no "."`}},
+		{name: "domain starting with a dot", raw: "alice@.example.com", reasons: []string{"start or end"}},
+		{name: "domain ending with a dot", raw: "alice@example.com.", reasons: []string{"start or end"}},
+		{name: "inner space", raw: "alice smith@example.com", reasons: []string{"whitespace or control"}},
+		{name: "space inside the domain", raw: "alice@example .com", reasons: []string{"whitespace or control"}},
+		{name: "line break", raw: "alice@example.com\nBcc: victim", reasons: []string{"whitespace or control"}},
+		{name: "tab", raw: "alice@example\t.com", reasons: []string{"whitespace or control"}},
+		{name: "non-ASCII local part", raw: "alice@exämple.com", reasons: []string{"non-ASCII"}},
+	}
+	for _, tt := range testsErr {
+		t.Run("rejects "+tt.name, func(t *testing.T) {
+			got, err := NormalizeEmail(tt.raw)
+			if err == nil {
+				t.Fatalf("NormalizeEmail(%q) = %q, nil error; want an error", tt.raw, got)
+			}
+			for _, reason := range tt.reasons {
+				if !strings.Contains(err.Error(), reason) {
+					t.Errorf("NormalizeEmail(%q) error = %q, want it to mention %q", tt.raw, err, reason)
+				}
+			}
+		})
+	}
+
+	t.Run("rejects an input longer than the RFC 5321 forward-path limit", func(t *testing.T) {
+		long := strings.Repeat("a", maxEmailLength) + "@example.com"
+		got, err := NormalizeEmail(long)
+		if err == nil {
+			t.Fatalf("NormalizeEmail(overlong) = %q, nil error; want an error", got)
+		}
+		if !strings.Contains(err.Error(), "longer than 254") {
+			t.Errorf("NormalizeEmail(overlong) error = %q, want it to mention %q", err, "longer than 254")
+		}
+	})
+}
+
+// TestBlindIndexer_SyntaxInvalidEmail_Errors pins the mechanism to the
+// normalizer's structural gate on both sides: an indexer bound to
+// NormalizeEmail refuses "alice@examplecom" -- a shape that trims and
+// lowercases cleanly and so used to index -- on Index and on Equal alike,
+// with each error naming the column it happened on. Regression for the
+// alice@examplecom account whose email flows would be permanently broken.
+func TestBlindIndexer_SyntaxInvalidEmail_Errors(t *testing.T) {
+	indexer, err := NewBlindIndexer("email_index", testKey("blind-indexer-syntax"), NormalizeEmail)
+	if err != nil {
+		t.Fatalf("NewBlindIndexer() error = %v", err)
+	}
+
+	for _, raw := range []string{"alice@examplecom", "no-at-sign", "user@@"} {
+		if got, err := indexer.Index(raw); err == nil {
+			t.Errorf("Index(%q) = %q, nil error; want an error", raw, got)
+		} else if !strings.Contains(err.Error(), `blind index column "email_index"`) {
+			t.Errorf("Index(%q) error = %q, want it to name the column", raw, err)
+		}
+
+		if got, err := indexer.Equal(raw); err == nil {
+			t.Errorf("Equal(%q) = %+v, nil error; want an error", raw, got)
+		} else if !strings.Contains(err.Error(), `blind index column "email_index"`) {
+			t.Errorf("Equal(%q) error = %q, want it to name the column", raw, err)
+		}
 	}
 }
 
