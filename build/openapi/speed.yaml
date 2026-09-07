@@ -1046,8 +1046,13 @@ paths:
                 $ref: '#/components/schemas/AuthnTokenPair'
         '401':
           description: >-
-            The code was wrong, replayed, or an unknown or already-used recovery
-            code (authn.mfa_invalid_code).
+            The code was refused. A code that was never valid -- a wrong TOTP
+            code, or a recovery code no issued row matches -- answers
+            authn.mfa_invalid_code; a code that was valid but is spent -- one
+            whose single-use guard already consumed it, or whose recovery-code
+            row is marked used -- answers authn.mfa_code_used instead, so a
+            holder of a consumed code is told it is spent rather than asked to
+            retry a code that can never verify again.
           content:
             application/json:
               schema:

@@ -328,9 +328,19 @@ func TestRecoveryCodes_AreStoredHashed(t *testing.T) {
 	}
 }
 
-// TestRecoveryCode_WorksOnceThenFails proves a recovery code satisfies
-// exactly one step-up and is refused on a second attempt.
-func TestRecoveryCode_WorksOnceThenFails(t *testing.T) {
+// TestRecoveryCode_ConsumedCode_AnswersUsedNotInvalid is regression (c)
+// of the honest-step-up-error round: a recovery code satisfies exactly one
+// step-up, and the second presentation of the SAME code -- the shape a
+// superseded-race loser or a double submit leaves -- must still be REFUSED
+// (the code is single-use; the refusal is unchanged), but it must answer
+// authn.mfa_code_used rather than the authn.mfa_invalid_code a never-
+// issued code answers: the code was real and is gone, which is the truth
+// a step-up surface needs to stop telling its user the code is wrong and
+// retryable. The code strings are literals rather than sentinel .Code
+// references so this test compiles and FAILS against the pre-fix module
+// (whose replay answer was authn.mfa_invalid_code) -- the fail-before
+// half of the regression.
+func TestRecoveryCode_ConsumedCode_AnswersUsedNotInvalid(t *testing.T) {
 	t.Parallel()
 
 	f := newServiceFixture(t)
@@ -342,8 +352,8 @@ func TestRecoveryCode_WorksOnceThenFails(t *testing.T) {
 	if _, err := f.svc.VerifyStepUp(t.Context(), principal, codes[0], "203.0.113.10"); err != nil {
 		t.Fatalf("first VerifyStepUp(recovery code) error = %v", err)
 	}
-	if _, err := f.svc.VerifyStepUp(t.Context(), principal, codes[0], "203.0.113.10"); !hasCode(err, ErrMFAInvalidCode.Code) {
-		t.Errorf("second VerifyStepUp(same recovery code) error = %v, want ErrMFAInvalidCode", err)
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, codes[0], "203.0.113.10"); !hasCode(err, "authn.mfa_code_used") {
+		t.Errorf("second VerifyStepUp(same recovery code) error = %v, want code authn.mfa_code_used (refused, but honestly: consumed, not invalid)", err)
 	}
 }
 
@@ -386,9 +396,20 @@ func TestVerifyStepUp_TOTPCode_EnrichesAMR(t *testing.T) {
 	}
 }
 
-// TestVerifyStepUp_TOTPCode_CannotBeReplayed proves a TOTP code accepted
-// once by VerifyStepUp cannot immediately be reused for a second step-up.
-func TestVerifyStepUp_TOTPCode_CannotBeReplayed(t *testing.T) {
+// TestVerifyStepUp_ConsumedTOTPCode_AnswersUsedNotInvalid is regression
+// (a) of the honest-step-up-error round: a TOTP code accepted once by
+// VerifyStepUp -- the winner of a step-up, or the loser of a superseded
+// race whose code still verified server-side -- cannot immediately be
+// reused, and the re-submission of that SAME code must still be REFUSED
+// (the replay guard, step <= LastUsedStep, is the security control and is
+// unchanged), but it must answer authn.mfa_code_used rather than the
+// authn.mfa_invalid_code a never-valid code answers: the code is spent,
+// and the caller must be told so instead of being asked to retry a code
+// that can never verify again. The code strings are literals rather than
+// sentinel .Code references so this test compiles and FAILS against the
+// pre-fix module (whose replay answer was authn.mfa_invalid_code) -- the
+// fail-before half of the regression.
+func TestVerifyStepUp_ConsumedTOTPCode_AnswersUsedNotInvalid(t *testing.T) {
 	t.Parallel()
 
 	f := newServiceFixture(t)
@@ -405,8 +426,46 @@ func TestVerifyStepUp_TOTPCode_CannotBeReplayed(t *testing.T) {
 	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.12"); err != nil {
 		t.Fatalf("first VerifyStepUp() error = %v", err)
 	}
-	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.12"); !hasCode(err, ErrMFAInvalidCode.Code) {
-		t.Errorf("second VerifyStepUp(same code) error = %v, want ErrMFAInvalidCode", err)
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, code, "203.0.113.12"); !hasCode(err, "authn.mfa_code_used") {
+		t.Errorf("second VerifyStepUp(same code) error = %v, want code authn.mfa_code_used (refused, but honestly: consumed, not invalid)", err)
+	}
+}
+
+// TestVerifyStepUp_WrongTOTPCode_AnswersInvalidCode is regression (b) of
+// the honest-step-up-error round, the pin that keeps the split one-way: a
+// code the factor's secret never produces must keep answering
+// authn.mfa_invalid_code -- the spent-code distinction must never leak to
+// a guesser, who can only ever present codes that fail the actual TOTP
+// check.
+func TestVerifyStepUp_WrongTOTPCode_AnswersInvalidCode(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "mfa-wrong@example.com", testTenantA)
+	enrollAndConfirmTOTP(t, f, user.ID)
+	principal := loginPrincipal(t, f, user, testTenantA)
+
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, "000000", "203.0.113.12"); !hasCode(err, ErrMFAInvalidCode.Code) {
+		t.Errorf("VerifyStepUp(wrong code) error = %v, want ErrMFAInvalidCode", err)
+	}
+}
+
+// TestVerifyStepUp_AnotherUsersRecoveryCode_AnswersInvalidCode is the
+// recovery half of regression (b): a recovery code issued to ANOTHER user
+// is a code no row of this user's matches, so it must keep answering
+// authn.mfa_invalid_code -- the consumed-versus-never-issued split must
+// not turn another user's real code into a distinguishable answer here.
+func TestVerifyStepUp_AnotherUsersRecoveryCode_AnswersInvalidCode(t *testing.T) {
+	t.Parallel()
+
+	f := newServiceFixture(t)
+	user := f.registerUser(t, "mfa-cross@example.com", testTenantA)
+	other := f.registerUser(t, "mfa-cross-other@example.com", testTenantA)
+	_, otherCodes := enrollAndConfirmTOTP(t, f, other.ID)
+	principal := loginPrincipal(t, f, user, testTenantA)
+
+	if _, err := f.svc.VerifyStepUp(t.Context(), principal, otherCodes[0], "203.0.113.12"); !hasCode(err, ErrMFAInvalidCode.Code) {
+		t.Errorf("VerifyStepUp(another user's recovery code) error = %v, want ErrMFAInvalidCode", err)
 	}
 }
 

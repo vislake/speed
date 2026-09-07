@@ -54,6 +54,7 @@
 "authn.sms_delivery_failed" = "The text message could not be sent. Try again shortly."
 "authn.mfa_not_enrolled" = "Two-factor authentication is not enabled."
 "authn.mfa_already_enrolled" = "Two-factor authentication is already enabled."
+"authn.mfa_code_used" = "That code has already been used. Enter a fresh code."
 "authn.mfa_invalid_code" = "That code is incorrect."
 "authn.step_up_required" = "This action requires verifying two-factor authentication again."
 "authn.session_not_found" = "No such session."

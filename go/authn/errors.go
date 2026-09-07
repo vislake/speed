@@ -300,11 +300,38 @@ var (
 	// factor that is already active.
 	ErrMFAAlreadyEnrolled = apperr.Conflict("authn.mfa_already_enrolled")
 
-	// ErrMFAInvalidCode is the single answer to every failed second-factor
-	// verification: a wrong TOTP code, a replayed one, or an unknown or
-	// already-used recovery code. Collapsing these is the same
-	// information-minimization defence ErrVerificationCodeInvalid is.
+	// ErrMFAInvalidCode is the answer to a second-factor code that was
+	// never valid: a TOTP code the factor's secret does not produce, or a
+	// recovery code no issued row matches (never issued to this user, or
+	// invalidated by a batch regeneration). Collapsing those together is
+	// the same information-minimization defence ErrVerificationCodeInvalid
+	// is -- a guesser must not be able to tell a wrong guess from an
+	// issued-code miss.
+	//
+	// The spent-code shape -- a code that IS valid but whose single-use
+	// guard has already consumed it -- deliberately does NOT collapse into
+	// this code (it answers ErrMFACodeUsed instead). That split discloses
+	// nothing a brute-forcer can use: the two answers differ only for a
+	// code that already passed the actual TOTP check or matched an issued
+	// recovery row, which means the caller is already in possession of the
+	// code -- the distinction exists so a holder of a consumed code is not
+	// told "invalid, try again" for a code that can never verify again.
 	ErrMFAInvalidCode = apperr.Unauthorized("authn.mfa_invalid_code")
+
+	// ErrMFACodeUsed is the answer to a second-factor code that was valid
+	// but is spent: a TOTP code whose step the factor's replay guard has
+	// already advanced past (the code itself was verified, or a newer code
+	// was, making this one unreachable forever), an already-used recovery
+	// code, or a verification that lost its compare-and-swap race to a
+	// concurrent use of the same code. The refusal is exactly the one
+	// ErrMFAInvalidCode carries -- the code stays single-use, the guard is
+	// unchanged -- but the answer names the truth a mislabeled "invalid"
+	// would hide: the code cannot verify because it already did (or was
+	// superseded), never because it was wrong, and the remedy is a fresh
+	// code, not a retry of this one. The disclosure is bounded to callers
+	// already holding a valid code (see ErrMFAInvalidCode's own comment),
+	// so no guessing oracle opens.
+	ErrMFACodeUsed = apperr.Unauthorized("authn.mfa_code_used")
 
 	// ErrStepUpRequired is returned by RequireStepUp when the calling
 	// Principal's access token carries no recent second-factor proof.
@@ -376,6 +403,7 @@ var errorCodes = []string{
 	ErrMFANotEnrolled.Code,
 	ErrMFAAlreadyEnrolled.Code,
 	ErrMFAInvalidCode.Code,
+	ErrMFACodeUsed.Code,
 	ErrStepUpRequired.Code,
 	ErrSessionNotFound.Code,
 	ErrInvalidRequestBody.Code,

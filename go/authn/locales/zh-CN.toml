@@ -52,6 +52,7 @@
 "authn.sms_delivery_failed" = "短信发送失败，请稍后重试。"
 "authn.mfa_not_enrolled" = "尚未启用两步验证。"
 "authn.mfa_already_enrolled" = "两步验证已经启用。"
+"authn.mfa_code_used" = "该验证码已使用，请输入新的验证码。"
 "authn.mfa_invalid_code" = "验证码错误。"
 "authn.step_up_required" = "该操作需要再次完成两步验证。"
 "authn.session_not_found" = "会话不存在。"

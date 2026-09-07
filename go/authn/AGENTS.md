@@ -498,6 +498,26 @@ followed by a write. `MFAFactorRepository.UpdateLastUsedStep` and
 `last_used_step` counter and to a recovery code's `used_at IS NULL` check,
 respectively. Do not "simplify" any of these four into a plain read-then-branch — that reopens exactly the race replay detection exists to close.
 
+The REFUSAL is one control, but its classification is not one code:
+`ErrMFACodeUsed` (`authn.mfa_code_used`) answers a code that passed the
+actual TOTP check or matched an issued recovery row but is spent — the
+replay guard already advanced past its step, the row is marked used, or
+the compare-and-swap lost to a concurrent use of the same code — while
+`ErrMFAInvalidCode` (`authn.mfa_invalid_code`) answers a code that was
+never valid (a wrong TOTP code, or a recovery code no issued row
+matches). The split exists so a holder of a consumed code is told it is
+consumed instead of "invalid, try again"; it discloses nothing a
+brute-forcer can use, because only a caller already in possession of a
+genuine code can observe it (a wrong guess can never match a spent
+row's step or hash). Verification therefore looks a used recovery code
+up too (`RecoveryCodeRepository.FindByUserAndHash`; the unused-only
+`FindUnusedByUserAndHash` stays for callers that only ever handle an
+unused code). Do not collapse the spent-code shape back into
+`ErrMFAInvalidCode` — a user who re-submits a code their own earlier
+submit consumed would be told it is wrong and retryable when it can
+never verify again — and do not weaken the refusal itself: spent is
+still refused, only the answer differs.
+
 ### Step-up elevation is NOT persisted to the session — that is what bounds it
 
 `VerifyStepUp` mints a fresh access token whose AMR gained `mfa:totp` or

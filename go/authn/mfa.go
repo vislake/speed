@@ -370,11 +370,33 @@ func (r *RecoveryCodeRepository) ReplaceAll(ctx context.Context, userID string, 
 }
 
 // FindUnusedByUserAndHash returns userID's unused recovery code matching
-// hash, or ErrNotFound.
+// hash, or ErrNotFound. Step-up verification deliberately does NOT use
+// this lookup -- see FindByUserAndHash for why -- but the method stays
+// for callers whose own logic only ever handles an unused code (a code
+// that is not unused and not present both collapse to ErrNotFound here).
 func (r *RecoveryCodeRepository) FindUnusedByUserAndHash(ctx context.Context, userID, hash string) (*UserRecoveryCode, error) {
 	var c UserRecoveryCode
 	err := r.db.WithContext(ctx).
 		Where("user_id = ? AND code_hash = ? AND used_at IS NULL", userID, hash).
+		First(&c).Error
+	if err != nil {
+		return nil, translate(err)
+	}
+	return &c, nil
+}
+
+// FindByUserAndHash returns userID's recovery code matching hash, used or
+// not, or ErrNotFound. Step-up verification uses THIS lookup (not the
+// unused-only FindUnusedByUserAndHash) so a code that was issued but has
+// already been consumed can be told apart from a code that was never
+// issued: the former answers ErrMFACodeUsed, the latter
+// ErrMFAInvalidCode -- the honest split whose disclosure bound
+// ErrMFAInvalidCode's own doc comment records (only a caller already
+// holding an issued code can observe it).
+func (r *RecoveryCodeRepository) FindByUserAndHash(ctx context.Context, userID, hash string) (*UserRecoveryCode, error) {
+	var c UserRecoveryCode
+	err := r.db.WithContext(ctx).
+		Where("user_id = ? AND code_hash = ?", userID, hash).
 		First(&c).Error
 	if err != nil {
 		return nil, translate(err)
@@ -713,42 +735,59 @@ func (s *Service) verifySecondFactor(ctx context.Context, userID, code string) (
 
 // verifyTOTPFactor validates code against factor and advances its replay
 // guard, refusing a code whose matched step is not strictly newer than the
-// factor's LastUsedStep -- the check that makes a code single-use.
+// factor's LastUsedStep -- the check that makes a code single-use. The
+// refusal itself is unchanged; only its classification is: a code that
+// NEVER validates answers ErrMFAInvalidCode, while a code that validates
+// but is refused by the guard -- it was verified before, or the guard
+// advanced past its step -- answers ErrMFACodeUsed, so a holder of a
+// spent code is told it is spent instead of "invalid, try again"
+// (ErrMFAInvalidCode's doc comment carries the disclosure analysis).
 func (s *Service) verifyTOTPFactor(ctx context.Context, factor *UserMFAFactor, code string) error {
 	ok, step := totp.Validate(factor.Secret, code, totpSkewSteps)
 	if !ok {
 		return ErrMFAInvalidCode
 	}
 	if step <= factor.LastUsedStep {
-		return ErrMFAInvalidCode
+		return ErrMFACodeUsed
 	}
 	won, err := s.mfaFactors.UpdateLastUsedStep(ctx, factor.ID, factor.LastUsedStep, step)
 	if err != nil {
 		return err
 	}
 	if !won {
-		return ErrMFAInvalidCode
+		// Lost the compare-and-swap to a concurrent verification of the
+		// same step: that verification consumed the code. Spent, not
+		// invalid -- same refusal, honest classification.
+		return ErrMFACodeUsed
 	}
 	return nil
 }
 
 // verifyRecoveryCode validates and single-use-consumes one of userID's
-// recovery codes.
+// recovery codes. A code no issued row matches -- never issued to this
+// user, or invalidated by a batch regeneration -- answers
+// ErrMFAInvalidCode; a code whose row is already marked used, or whose
+// compare-and-swap a concurrent use won, answers ErrMFACodeUsed: the
+// code was real and is gone, which is the truth a step-up surface needs
+// to tell a user who just burned their last one.
 func (s *Service) verifyRecoveryCode(ctx context.Context, userID, code string) error {
 	hash := hashRecoveryCode(code)
-	row, err := s.recoveryCodes.FindUnusedByUserAndHash(ctx, userID, hash)
+	row, err := s.recoveryCodes.FindByUserAndHash(ctx, userID, hash)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return ErrMFAInvalidCode
 		}
 		return err
 	}
+	if row.UsedAt != nil {
+		return ErrMFACodeUsed
+	}
 	won, err := s.recoveryCodes.MarkUsed(ctx, row.ID, s.now())
 	if err != nil {
 		return err
 	}
 	if !won {
-		return ErrMFAInvalidCode
+		return ErrMFACodeUsed
 	}
 	return nil
 }
