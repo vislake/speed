@@ -388,9 +388,11 @@ export interface DemoServerOptions {
    * grant as the ledger's one row. Stateful from there, the way the
    * real handler's tenant-scoped ledger is: each accepted simulation
    * job appends its own deduct row (10 credits, reason
-   * 'smilesim:simulate', status pending while the job runs) and the
-   * job's terminal outcome settles it in place -- succeeded moves the
-   * row to confirmed (reserved released), dead_letter moves it to
+   * 'smilesim:simulate', status pending while the job runs, its
+   * reservation held out of available the way the real server's
+   * PreDeduct holds it) and the job's terminal outcome settles it in
+   * place -- succeeded moves the row to confirmed (reserved released,
+   * the reservation a permanent spend), dead_letter moves it to
    * refunded (the reservation's credits released back to available) --
    * so the credit-view journeys observe a consumption and a refund the
    * way they would against the real server. */
@@ -830,9 +832,10 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   // status at read time: pending while the job runs, confirmed once it
   // succeeded, refunded once it died -- the reservation's credits
   // released back to available in the latter case, exactly the refund
-  // shape the real server's settleCredit performs. Balance and rows
-  // derive from the same statuses so the two reads never disagree
-  // about what the tenant holds.
+  // shape the real server's settleCredit performs (see the balance
+  // math below for how the release reads). Balance and rows derive
+  // from the same statuses so the two reads never disagree about what
+  // the tenant holds.
   function creditLedgerState(tenant: string): {
     balance: { available: number; reserved: number; updatedAt: string }
     transactions: readonly BillingCreditTransaction[]
@@ -875,10 +878,24 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     const confirmed = dynamicRows.filter((row) => row.status === 'confirmed')
     const pending = dynamicRows.filter((row) => row.status === 'pending')
     void tenant
+    // The balance math mirrors the real server's two-phase deltas
+    // (go/billing's CreditService): a deduct row is a reservation whose
+    // amount PreDeduct took out of available when its job was accepted,
+    // so that amount is missing from available while the row reads
+    // pending and stays missing once the reservation became the
+    // permanent spend of a confirmed row. A refunded row is the
+    // reservation released back to available -- Refund's own delta --
+    // so its amount is present again and the row contributes to
+    // neither bucket. Stating available this way keeps the tenant's
+    // total (available + reserved) conserved at every read, and it is
+    // what makes a dead_letter generation's refund observable as a
+    // balance that returns to the seed: the reservation left it, the
+    // refund released it back.
     return {
       balance: {
         available:
-          baseAvailable - confirmed.length * DEMO_SIMULATION_CREDIT_COST,
+          baseAvailable -
+          (confirmed.length + pending.length) * DEMO_SIMULATION_CREDIT_COST,
         reserved:
           baseReserved + pending.length * DEMO_SIMULATION_CREDIT_COST,
         updatedAt: scripted?.balance.updatedAt ?? DEMO_NOTE_CREATED_AT,

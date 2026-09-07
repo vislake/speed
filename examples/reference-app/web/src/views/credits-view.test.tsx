@@ -236,7 +236,9 @@ describe('CreditsView', () => {
   it('renders a pending reservation as in-progress while reserved, then settled after confirmation', async () => {
     // A generation still running shows its deduct row pending -- the
     // reservation half of the two-phase shape -- and the balance's
-    // reserved bucket carries its amount while available stays whole.
+    // reserved bucket carries its amount, held out of available the
+    // way the real server's reservation holds it (the demo mirror's
+    // own ledger regressions pin the same numbers).
     const rig = makeRealClientRig(demoServer())
     await signInWithPassword(rig)
     const jobRef = await smilesimSimulate({

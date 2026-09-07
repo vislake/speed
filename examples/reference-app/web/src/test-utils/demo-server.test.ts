@@ -13,11 +13,22 @@
  * wrong). Calling the responder throws synchronously, so each refused
  * case goes through a promise-wrapping helper -- the shape a fetch
  * stand-in would surface either way.
+ *
+ * The second describe pins the billing ledger the same responder
+ * serves (creditLedgerState): the balance movements of an accepted
+ * simulation job's reservation across its terminal outcomes, driven
+ * through the same real-call journey -- sign-in, simulate, the
+ * deterministic job-status polls, the billing reads under the issued
+ * bearer.
  */
 
 import { describe, expect, it } from 'vitest'
 import type { RealCall } from './real-client.js'
-import { demoServer } from './demo-server.js'
+import {
+  DEMO_CREDIT_SEED_GRANT,
+  DEMO_SIMULATION_CREDIT_COST,
+  demoServer,
+} from './demo-server.js'
 
 /** The protected read every signed-in notes journey starts with. */
 const NOTE_LIST_CALL: RealCall = {
@@ -108,5 +119,159 @@ describe('demo-server bearer principal', () => {
     expect(list.status).toBe(403)
     const body = (await list.json()) as { readonly code: string }
     expect(body.code).toBe('rbac.permission_denied')
+  })
+})
+
+describe('demo-server credit ledger', () => {
+  /** Signs in as the owner account and returns the bearer the
+   * responder's own login answer issued (the same journey shape the
+   * bearer suites above use). */
+  async function signInBearer(
+    respond: ReturnType<typeof demoServer>,
+  ): Promise<string> {
+    const login = await respond({
+      method: 'POST',
+      path: '/api/v1/authn/login/password',
+      query: '',
+      authorization: null,
+      body: JSON.stringify({ identifier: 'owner@example.test' }),
+    })
+    const pair = (await login.json()) as { readonly access_token: string }
+    return `Bearer ${pair.access_token}`
+  }
+
+  /** Accepts one simulation under the bearer, returning its job id. */
+  async function acceptSimulation(
+    respond: ReturnType<typeof demoServer>,
+    bearer: string,
+  ): Promise<string> {
+    const simulate = await respond({
+      method: 'POST',
+      path: '/api/v1/smile-simulation/simulate',
+      query: '',
+      authorization: bearer,
+      body: JSON.stringify({
+        photo_object_id: 'photo-1',
+        options: {
+          smile_style: 'natural',
+          tooth_shade: 'natural',
+          strength: 1,
+        },
+      }),
+    })
+    const answer = (await simulate.json()) as { readonly job_id: string }
+    return answer.job_id
+  }
+
+  /** Advances one job by one status read: the responder's deterministic
+   * progression runs pending -> running on the first read and reaches
+   * its terminal outcome (succeeded, or dead_letter under the
+   * simulateJobOutcome option) on the second. */
+  async function pollJob(
+    respond: ReturnType<typeof demoServer>,
+    bearer: string,
+    jobId: string,
+  ): Promise<string> {
+    const poll = await respond({
+      method: 'GET',
+      path: `/api/v1/smile-simulation/jobs/${jobId}`,
+      query: '',
+      authorization: bearer,
+      body: '',
+    })
+    const answer = (await poll.json()) as { readonly status: string }
+    return answer.status
+  }
+
+  /** The balance read's own answer, narrowed to the two numbers the
+   * billing fragment names (the answer also carries updatedAt, which
+   * the ledger regressions do not assert). */
+  async function readBalance(
+    respond: ReturnType<typeof demoServer>,
+    bearer: string,
+  ): Promise<{ available: number; reserved: number }> {
+    const balance = await respond({
+      method: 'GET',
+      path: '/api/v1/billing/credits/balance',
+      query: '',
+      authorization: bearer,
+      body: '',
+    })
+    const body = (await balance.json()) as {
+      available: number
+      reserved: number
+    }
+    return { available: body.available, reserved: body.reserved }
+  }
+
+  it("holds a dead_letter job's reservation out of available and releases it back at the refund (regression a)", async () => {
+    // The full failed-generation journey against one responder: the
+    // balance must move the way the real server's two-phase credit
+    // lifecycle moves it (go/billing's PreDeduct takes the reservation
+    // out of Available into Reserved when the job opens, and Refund
+    // puts it back when the job dies -- smilesim's settleCredit runs
+    // the refund for a dead_letter). A mirror whose available never
+    // leaves the seed while a reservation is live states the same ten
+    // credits twice, and its refunded row releases nothing a balance
+    // read could observe -- the shape that left the refund gate with no
+    // charge-taken to verify the return of.
+    const respond = demoServer({ simulateJobOutcome: 'dead_letter' })
+    const bearer = await signInBearer(respond)
+
+    // A freshly booted tenant: available at the boot-time grant,
+    // nothing reserved.
+    expect(await readBalance(respond, bearer)).toEqual({
+      available: DEMO_CREDIT_SEED_GRANT,
+      reserved: 0,
+    })
+
+    // An accepted job is a live reservation: its amount sits in the
+    // reserved bucket and out of available.
+    const jobId = await acceptSimulation(respond, bearer)
+    expect(await readBalance(respond, bearer)).toEqual({
+      available: DEMO_CREDIT_SEED_GRANT - DEMO_SIMULATION_CREDIT_COST,
+      reserved: DEMO_SIMULATION_CREDIT_COST,
+    })
+
+    // The job dies: the refund releases the reservation back to
+    // available -- the balance is back at the full seed with nothing
+    // reserved, the answer the real server's Refund leaves for a
+    // generation that failed after its reservation opened.
+    await pollJob(respond, bearer, jobId)
+    expect(await pollJob(respond, bearer, jobId)).toBe('dead_letter')
+    expect(await readBalance(respond, bearer)).toEqual({
+      available: DEMO_CREDIT_SEED_GRANT,
+      reserved: 0,
+    })
+  })
+
+  it('reads a succeeded job as a permanent spend, confirmed behaviour unchanged (regression b)', async () => {
+    // A succeeded generation's reservation became the permanent spend:
+    // available reads the seed minus its cost, nothing reserved -- the
+    // consumption every journey that scripts a succeeded row relies on.
+    const respond = demoServer()
+    const bearer = await signInBearer(respond)
+    const jobId = await acceptSimulation(respond, bearer)
+    await pollJob(respond, bearer, jobId)
+    expect(await pollJob(respond, bearer, jobId)).toBe('succeeded')
+    expect(await readBalance(respond, bearer)).toEqual({
+      available: DEMO_CREDIT_SEED_GRANT - DEMO_SIMULATION_CREDIT_COST,
+      reserved: 0,
+    })
+  })
+
+  it('reads a still-running job as a live reservation (regression c)', async () => {
+    // A generation that has not reached its terminal outcome keeps its
+    // reservation open: the reserved bucket carries its amount while
+    // the job runs, and available is that amount lighter -- never a
+    // balance that states the reserved credits twice.
+    const respond = demoServer()
+    const bearer = await signInBearer(respond)
+    const jobId = await acceptSimulation(respond, bearer)
+    expect(await pollJob(respond, bearer, jobId)).toBe('running')
+    expect(await readBalance(respond, bearer)).toEqual({
+      available: DEMO_CREDIT_SEED_GRANT - DEMO_SIMULATION_CREDIT_COST,
+      reserved: DEMO_SIMULATION_CREDIT_COST,
+    })
   })
 })
