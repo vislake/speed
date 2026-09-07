@@ -634,4 +634,106 @@ describe('MfaSection', () => {
 
     await expectNoAxeViolations()
   })
+
+  it('refuse a codes-less confirm success as a protocol violation: the factor is active but no empty "save these codes" panel claims codes the answer never carried', async () => {
+    // The confirm flow has already activated the factor server-side and
+    // codes are show-once and never re-fetchable, so a 2xx carrying no
+    // codes must not render an empty success panel -- that would leave a
+    // fresh factor with zero backup codes behind a panel that claims
+    // otherwise. The client.protocol text renders and the wizard closes
+    // (its pending factor is gone: a re-confirm would answer the 409
+    // mfa_already_enrolled race).
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'POST' && call.path === ENROLL_PATH) {
+        return jsonResponse(200, ENROLL_BODY)
+      }
+      if (call.method === 'POST' && call.path === CONFIRM_PATH) {
+        // A 2xx whose body carries no recovery_codes key.
+        return jsonResponse(200, {})
+      }
+      return errorResponse(500, 'internal')
+    })
+    await signInWithPassword(rig)
+    await renderSection(rig.session)
+    await openEnrollWizard()
+
+    await userEvent.type(
+      screen.getByLabelText(zhCN.mfa.authenticator.codeLabel),
+      CONFIRM_CODE,
+    )
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: zhCN.mfa.authenticator.confirmLabel,
+      }),
+    )
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe(zhCN.errors.client.protocol)
+    // No success panel and no wizard: the section returns to its idle
+    // entries, and the regenerate entry is the way to new codes.
+    expect(
+      screen.queryByText(zhCN.mfa.recoveryCodes.showOnceTitle),
+    ).toBeNull()
+    await waitFor(() => expect(screen.queryByText(SECRET)).toBeNull())
+    expect(
+      screen.getByRole('button', {
+        name: zhCN.mfa.recoveryCodes.regenerateButton,
+      }),
+    ).toBeTruthy()
+
+    await expectNoAxeViolations()
+  })
+
+  it('refuse a codes-less regenerate success as a protocol violation after the step-up retry', async () => {
+    let regenerateCalls = 0
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'POST' && call.path === REGENERATE_PATH) {
+        regenerateCalls += 1
+        if (regenerateCalls === 1) {
+          // The handler gates regeneration unconditionally.
+          return errorResponse(403, 'authn.step_up_required')
+        }
+        // The verified retry answers 2xx without the codes.
+        return jsonResponse(200, {})
+      }
+      if (call.method === 'POST' && call.path === STEP_UP_PATH) {
+        return jsonResponse(200, STEP_UP_BODY)
+      }
+      return errorResponse(500, 'internal')
+    })
+    await signInWithPassword(rig)
+    await renderSection(rig.session)
+
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: zhCN.mfa.recoveryCodes.regenerateButton,
+      }),
+    )
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+    await userEvent.type(
+      screen.getByLabelText(zhCN.mfa.stepUp.codeLabel),
+      CONFIRM_CODE,
+    )
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: zhCN.mfa.stepUp.confirmLabel,
+      }),
+    )
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe(zhCN.errors.client.protocol)
+    // No codes panel: an empty "save these codes" view would claim codes
+    // the answer did not carry.
+    expect(
+      screen.queryByText(zhCN.mfa.recoveryCodes.showOnceTitle),
+    ).toBeNull()
+    expect(regenerateCalls).toBe(2)
+
+    await expectNoAxeViolations()
+  })
 })

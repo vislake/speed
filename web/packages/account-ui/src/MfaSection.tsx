@@ -41,7 +41,13 @@
  * vanished) close the wizard and render their code text; a wrong code is
  * a field-level error and stays retryable; everything else (the shared
  * rate limiter, the session-lifecycle family, client.*) renders its code
- * text banner. The show-once recovery-codes panel is the only place the
+ * text banner. A 2xx whose body carries no recovery codes is refused
+ * like the auth-core session refuses a contract-violating answer: the
+ * confirm has already activated the factor server-side while the codes
+ * are show-once and never re-fetchable, so an empty success panel would
+ * ship a fresh factor with zero backup codes -- the wizard closes over
+ * the client.protocol banner instead, and the regenerate entry is the
+ * way forward. The show-once recovery-codes panel is the only place the
  * codes ever appear (they are served in plaintext exactly once): it
  * shows the ten codes and a single "I have saved them" exit, and leaving
  * it resets all state -- nothing in this package caches or re-fetches
@@ -81,6 +87,30 @@ export interface MfaSectionProps {
 
 /** The action a step-up challenge, once won, re-runs. */
 type GatedAction = 'enroll' | 'regenerate'
+
+/**
+ * The success answer of the two code-issuing operations (confirm and
+ * regenerate), typed structurally so the guard needs no generated-type
+ * import: whatever the operations' generated response types name the
+ * field, the show-once panel needs the recovery_codes array.
+ */
+interface CodesAnswer {
+  readonly recovery_codes?: string[] | null
+}
+
+/**
+ * The codes of a code-issuing success answer, or null when the answer
+ * carries none (absent, not an array, or empty). The server always
+ * issues a full batch on both operations, so null is a protocol
+ * violation -- never something an empty success panel may paper over.
+ */
+function recoveryCodesOf(answer: CodesAnswer): string[] | null {
+  const codes = answer.recovery_codes
+  if (codes === undefined || !Array.isArray(codes) || codes.length === 0) {
+    return null
+  }
+  return codes
+}
 
 /** The in-progress enrollment: what the wizard shows and how it was
  * reached (the replacement warning renders only for the 403-reached
@@ -153,7 +183,17 @@ export function MfaSection({ session }: MfaSectionProps) {
     setBanner(null)
     try {
       const response = await regenerateMutation.mutateAsync()
-      setCodes(response.recovery_codes ?? [])
+      const codes = recoveryCodesOf(response)
+      if (codes === null) {
+        // A success answer carrying no codes is a protocol violation:
+        // the codes are show-once and never re-fetchable, so an empty
+        // success panel would claim codes the answer did not carry.
+        // Refuse it with client.protocol, exactly like auth-core
+        // refuses a token-issuing 2xx that violates its contract.
+        setBanner('client.protocol')
+        return
+      }
+      setCodes(codes)
     } catch (error) {
       const failure = errorCodeOf(error)
       if (failure === 'authn.step_up_required' && !afterStepUp) {
@@ -192,10 +232,21 @@ export function MfaSection({ session }: MfaSectionProps) {
     setConfirmFieldError(null)
     try {
       const response = await confirmMutation.mutateAsync({ data: { code } })
+      // The confirm activated the factor server-side: the wizard's
+      // pending state is gone whatever the answer carries.
       setWizard(null)
       setConfirmCode('')
+      const codes = recoveryCodesOf(response)
+      if (codes === null) {
+        // The same protocol refusal as the regenerate path: the codes
+        // are show-once and never re-fetchable, so a 2xx without them
+        // would leave a freshly activated factor with zero backup
+        // codes behind an empty "please save these codes" panel.
+        setBanner('client.protocol')
+        return
+      }
       setBanner(null)
-      setCodes(response.recovery_codes ?? [])
+      setCodes(codes)
     } catch (error) {
       const failure = errorCodeOf(error)
       if (failure === 'authn.mfa_invalid_code') {
@@ -253,6 +304,7 @@ export function MfaSection({ session }: MfaSectionProps) {
           </Typography>
           <Box
             component="ul"
+            role="list"
             sx={{ m: 0, mb: 2, pl: 0, listStyle: 'none' }}
           >
             {codes.map((code) => (
