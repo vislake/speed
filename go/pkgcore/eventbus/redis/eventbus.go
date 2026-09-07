@@ -426,17 +426,46 @@ func (b *EventBus) runReader(eventType string) {
 // createGroup makes sure the stream and this instance's consumer group on it
 // exist, retrying until they do or the bus is closed. The group is created
 // at the live end of the stream ("$"), so a group never replays history: a
-// subscriber starts receiving events published after its subscription.
+// subscriber starts receiving events published after its subscription. A
+// group that already exists is adopted rather than retried: it is this
+// instance's own group, in a state this reader simply has not heard of yet
+// (see the BUSYGROUP arm below).
 func (b *EventBus) createGroup(ctx context.Context, stream, group string) error {
 	for {
-		if err := b.client.XGroupCreateMkStream(ctx, stream, group, "$").Err(); err == nil {
+		err := b.client.XGroupCreateMkStream(ctx, stream, group, "$").Err()
+		if err == nil {
 			return nil
-		} else if ctx.Err() != nil {
+		}
+		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// The instance id makes the group name unique per bus, so a group
-		// either exists because this reader created it or does not exist at
-		// all; either way, retrying the creation is the whole recovery.
+		if strings.Contains(err.Error(), "BUSYGROUP") {
+			// BUSYGROUP is the recovery, not a retryable failure: it answers
+			// when the group already exists, and the instance id makes the
+			// group name unique per bus, so an existing group can only be one
+			// this reader's own earlier XGroupCreateMkStream created
+			// server-side whose success reply was lost -- a dropped
+			// connection or a failover between the server executing the
+			// create and this client reading the reply. The comment this arm
+			// replaces claimed that outcome impossible -- "a group either
+			// exists because this reader created it or does not exist at
+			// all; either way, retrying the creation is the whole recovery"
+			// -- but its first arm is exactly the failure: when this reader
+			// created the group without learning so, the creation can never
+			// succeed again, and retrying BUSYGROUP would spin for the rest
+			// of the process's life, silently delivering nothing of the type
+			// on this replica while Publish kept succeeding. The group is the
+			// durable consumer-group state and it exists: creation has
+			// effectively succeeded, so the reader adopts the group and
+			// starts consuming at its last-delivered position. (MKSTREAM
+			// stays on the create for the genuinely-absent case, the only
+			// one that needs the stream made.)
+			slog.Default().Info("pkgcore/eventbus/redis: consumer group already exists; adopting it",
+				"stream", stream,
+				"group", group,
+			)
+			return nil
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
