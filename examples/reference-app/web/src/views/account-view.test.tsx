@@ -560,10 +560,14 @@ describe('AccountView', () => {
     }
 
     // Unbind is single-confirmed: the danger dialog's own confirm is
-    // the whole gate.
+    // the whole gate. The action is named after its row, the account-ui
+    // twin of the sessions list's revokeAriaWithDevice.
     await user.click(
       view.getByRole('button', {
-        name: accountUiZhCN.bindings.unbind,
+        name: accountUiZhCN.bindings.unbindAriaWithProvider.replaceAll(
+          '{{provider}}',
+          accountUiZhCN.bindings.provider.github,
+        ),
       }),
     )
     const dialog = await view.findByRole('dialog')
@@ -586,7 +590,10 @@ describe('AccountView', () => {
     )
     expect(
       view.getByRole('button', {
-        name: accountUiZhCN.bindings.unbind,
+        name: accountUiZhCN.bindings.unbindAriaWithProvider.replaceAll(
+          '{{provider}}',
+          accountUiZhCN.bindings.provider.github,
+        ),
       }),
     ).toBeInTheDocument()
     expect(
