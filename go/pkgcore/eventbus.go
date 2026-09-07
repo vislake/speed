@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 )
 
@@ -53,9 +54,12 @@ type memoryEventBus struct {
 // NewMemoryEventBus returns an in-memory EventBus for the single-process
 // standalone deployment mode. Publish invokes the subscribed handlers
 // synchronously, in registration order, on the calling goroutine, so a
-// published event is fully handled by the time Publish returns. The returned
-// bus is safe for concurrent Subscribe and Publish calls, and handlers may
-// themselves call Subscribe or Publish without deadlocking.
+// published event is fully handled by the time Publish returns; a handler
+// that panics is contained and logged rather than unwound through the caller
+// (see Publish), matching the containment the distributed implementations'
+// reader goroutines give a subscriber. The returned bus is safe for
+// concurrent Subscribe and Publish calls, and handlers may themselves call
+// Subscribe or Publish without deadlocking.
 func NewMemoryEventBus() EventBus {
 	return &memoryEventBus{handlers: make(map[string][]EventHandler)}
 }
@@ -77,6 +81,17 @@ func (b *memoryEventBus) Subscribe(eventType string, h EventHandler) {
 // Publish invokes every handler subscribed to evt.Type synchronously, in
 // registration order. A handler that returns an error does not stop the ones
 // after it: all failures are collected and returned as a single joined error.
+// A handler that panics is contained the same way -- the panic is recovered,
+// logged as an Error, and the handlers registered after it still run -- so a
+// buggy subscriber can never tear through a Publish call that may be running
+// on a background goroutine with no recover of its own (a jobs handler, a
+// subscription chain, a periodic scheduler), the containment the distributed
+// implementations' delivery machinery gives a subscriber on another replica
+// (see eventbus/redis.EventBus's runRemoteHandler and its siblings). The
+// recovered panic is logged and dropped, never returned as an error: like
+// those implementations' recover blocks it is not a handler failure a caller
+// could act on, and a synchronous caller with no other failures gets nil
+// exactly as it would if the panicking handler had not been subscribed.
 // Publish returns nil when the event has no subscribers or when every handler
 // succeeds.
 func (b *memoryEventBus) Publish(ctx context.Context, evt Event) error {
@@ -87,12 +102,37 @@ func (b *memoryEventBus) Publish(ctx context.Context, evt Event) error {
 
 	failures := make([]error, 0, len(handlers))
 	for i, h := range handlers {
-		if err := h(ctx, evt); err != nil {
+		if err := runMemoryBusHandler(ctx, evt, i, h); err != nil {
 			failures = append(failures, fmt.Errorf("pkgcore: handler %d for event %q failed: %w", i, evt.Type, err))
 		}
 	}
 
 	return errors.Join(failures...)
+}
+
+// runMemoryBusHandler invokes one subscribed handler with the containment
+// Publish promises. A panic raised by the handler is recovered here rather
+// than let to unwind through the publisher: the memory bus is the standalone
+// deployment mode's whole delivery machinery, so no reader goroutine of its
+// own exists to absorb a panic the way the distributed implementations'
+// readers do, and the caller of Publish is frequently a background goroutine
+// with no recover of its own. The recovered panic is reported through the
+// standard library's log/slog -- pkgcore is the dependency floor of the
+// workspace and cannot import go/observability, the same reason
+// warnIfNotDurable reaches for slog.Default() directly -- with the handler
+// index, the event type and the panic value, and the handler's siblings
+// still run.
+func runMemoryBusHandler(ctx context.Context, evt Event, i int, h EventHandler) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Default().Error("pkgcore: in-process event bus handler panicked; recovered so the event's remaining handlers still run",
+				"event_type", evt.Type,
+				"handler", i,
+				"panic", fmt.Sprintf("%v", r),
+			)
+		}
+	}()
+	return h(ctx, evt)
 }
 
 // handlersFor returns a private snapshot of the handlers subscribed to

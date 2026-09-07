@@ -994,11 +994,19 @@ func WithPreset(preset Preset) KernelOption {
 // compares it against the deployment mode's requirement exactly as it does
 // for a preset-resolved implementation, so an injected bus that lacks a
 // required capability is rejected the same way a preset-resolved one would
-// be. A nil bus leaves the Preset's resolution for this seam in place.
+// be. A nil bus panics, exactly as a nil NewRegistry argument does: nil is
+// the shape of a wiring mistake -- a construction that failed, a config
+// lookup that found nothing -- never of a choice, and silently falling back
+// to the Preset's implementation would hide that mistake (a host that
+// genuinely wants the Preset's resolution for a seam simply omits the
+// option, or appends it only when its value exists). The capability
+// argument is ignored for a nil value under the old shape, which let
+// WithEventBus(nil, MultiReplicaSafe) quietly express a requirement nothing
+// validated; refusing nil closes that door too.
 func WithEventBus(bus EventBus, capabilities Capability) KernelOption {
 	return func(k *Kernel) {
 		if bus == nil {
-			return
+			panic("pkgcore: WithEventBus requires a non-nil EventBus: a nil value would silently fall back to the preset's default implementation, hiding a wiring mistake")
 		}
 		k.eventBus = kernelSeam[EventBus]{value: bus, capabilities: capabilities, injected: true}
 	}
@@ -1008,7 +1016,7 @@ func WithEventBus(bus EventBus, capabilities Capability) KernelOption {
 func WithKVStore(store KVStore, capabilities Capability) KernelOption {
 	return func(k *Kernel) {
 		if store == nil {
-			return
+			panic("pkgcore: WithKVStore requires a non-nil KVStore: a nil value would silently fall back to the preset's default implementation, hiding a wiring mistake")
 		}
 		k.kv = kernelSeam[KVStore]{value: store, capabilities: capabilities, injected: true}
 	}
@@ -1018,7 +1026,7 @@ func WithKVStore(store KVStore, capabilities Capability) KernelOption {
 func WithMailer(mailer Mailer, capabilities Capability) KernelOption {
 	return func(k *Kernel) {
 		if mailer == nil {
-			return
+			panic("pkgcore: WithMailer requires a non-nil Mailer: a nil value would silently fall back to the preset's default implementation, hiding a wiring mistake")
 		}
 		k.mailer = kernelSeam[Mailer]{value: mailer, capabilities: capabilities, injected: true}
 	}
@@ -1032,7 +1040,7 @@ func WithMailer(mailer Mailer, capabilities Capability) KernelOption {
 func WithObjectStore(store ObjectStore, capabilities Capability) KernelOption {
 	return func(k *Kernel) {
 		if store == nil {
-			return
+			panic("pkgcore: WithObjectStore requires a non-nil ObjectStore: a nil value would silently fall back to the preset's default implementation, hiding a wiring mistake")
 		}
 		k.objectStore = kernelSeam[ObjectStore]{value: store, capabilities: capabilities, injected: true}
 	}
@@ -1062,8 +1070,9 @@ func (k *Kernel) DeploymentMode() DeploymentMode { return k.deploymentMode }
 // seamResolution names what Bootstrap resolved for one seam: the Preset key
 // it resolves under, which implementation it ended up with, and the
 // Capability that implementation declared. It is the shared shape the
-// capability-validation pass and the SurvivesRestart startup warning both
-// consume, so a Bootstrap does not resolve the same information twice.
+// capability-validation pass, the SurvivesRestart startup warning and the
+// boot's seam-composition Info line all consume, so a Bootstrap does not
+// resolve the same information twice.
 type seamResolution struct {
 	// seamKey is the Preset key the seam resolves under: "eventbus", "kv",
 	// "mailer" or "objectstore".
@@ -1192,7 +1201,12 @@ func warnIfNotDurable(res seamResolution) {
 // its three siblings) this retrofit removed: one capability comparison, run
 // once per seam, that does not grow as more implementations are registered.
 // An implementation that does not declare SurvivesRestart logs a startup
-// warning instead of failing Bootstrap; see warnIfNotDurable.
+// warning instead of failing Bootstrap; see warnIfNotDurable. Every
+// successful seam resolution is announced by one startup Info line naming
+// what the four seams resolved to (a preset-resolved Registration.Name or
+// "<injected>" for a host-supplied value), so a boot whose resolution
+// differs from what its operator intended is visible in the startup log
+// rather than silent.
 //
 // It fails, without registering anything further, on an invalid deployment
 // mode, on a seam whose resolved implementation does not satisfy the
@@ -1262,6 +1276,27 @@ func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (reg *Registr
 			return nil, capErr
 		}
 	}
+
+	// One Info line announces what the four seams resolved to, for every
+	// boot, whatever the composition: a preset-resolved implementation by its
+	// Registration.Name, a host-supplied value as "<injected>". This is the
+	// composition visibility the durability warnings below cannot carry --
+	// warnIfNotDurable speaks only about the seams it judges worth warning
+	// over, and stays silent about a Stateless implementation like
+	// mailer.console, which is exactly the silence that lets a standalone
+	// install that forgot WithMailer(NewSMTPMailer(...)) start up printing
+	// its verification codes to stdout and reporting success. The line is
+	// fact, not judgement, so it never has that hole: a forgot-mailer boot
+	// visibly resolves mailer=mailer.console, a wired one mailer=<injected>,
+	// and every preset-resolution question an operator can ask about this
+	// process is answered at startup.
+	slog.Default().Info("pkgcore: bootstrapped seam composition",
+		presetKeyEventBus, busRes.implementation,
+		presetKeyKVStore, kvRes.implementation,
+		presetKeyMailer, mailerRes.implementation,
+		presetKeyObjectStore, objectStoreRes.implementation,
+	)
+
 	for _, res := range resolvedSeams {
 		warnIfNotDurable(res)
 	}

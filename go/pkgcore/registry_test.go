@@ -1999,6 +1999,68 @@ func TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam(t *testing.T) {
 	}
 }
 
+// TestBootstrap_LogsOneInfoLineNamingEveryResolvedSeam pins Bootstrap's
+// seam-composition visibility: after the four seams resolve, Bootstrap logs
+// ONE Info line naming seam -> implementation for all four, preset-resolved
+// and injected alike. warnIfNotDurable's restart warnings cannot carry that
+// visibility -- they sit on the durability axis and stay silent about a
+// Stateless implementation like mailer.console, which is exactly the
+// silence that lets a standalone install that forgot
+// WithMailer(NewSMTPMailer(...)) start up printing its verification codes
+// to stdout and reporting success. The line is fact, not judgement, so it
+// has no such hole: a boot with no WithMailer logs mailer=mailer.console
+// (the fail-before shape: nothing was logged about the mailer seam's
+// resolution), and a boot whose mailer seam is wired logs mailer=<injected>
+// instead -- the discriminator between "chose the console" and "forgot the
+// wiring".
+//
+// The slog default logger is process-global, so the test swaps it for a
+// capture handler and restores it on the way out. It must not run in
+// parallel with another test that bootstraps a Kernel; the package's
+// t.Parallel tests only resume after every sequential test has finished, so
+// this one never overlaps them.
+func TestBootstrap_LogsOneInfoLineNamingEveryResolvedSeam(t *testing.T) {
+	bootOutput := func(opts ...KernelOption) string {
+		var buf bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		defer slog.SetDefault(previous)
+
+		if _, err := NewKernel(opts...).Bootstrap(context.Background()); err != nil {
+			t.Fatalf("Bootstrap() error = %v, want nil", err)
+		}
+		return buf.String()
+	}
+
+	t.Run("a_default_standalone_boot_names_all_four_preset_implementations", func(t *testing.T) {
+		out := bootOutput()
+		for _, want := range []string{
+			"pkgcore: bootstrapped seam composition",
+			"eventbus=eventbus.memory",
+			"kv=kv.memory",
+			"mailer=mailer.console",
+			"objectstore=objectstore.local",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("bootstrap logged %q, want an Info composition line mentioning %q", out, want)
+			}
+		}
+	})
+
+	t.Run("a_boot_with_an_injected_mailer_names_it_as_injected", func(t *testing.T) {
+		out := bootOutput(WithMailer(NewConsoleMailer(), Stateless))
+		if !strings.Contains(out, "mailer=<injected>") {
+			t.Errorf("bootstrap logged %q, want the composition line to name the injected mailer as <injected>", out)
+		}
+		if strings.Contains(out, "mailer=mailer.console") {
+			t.Errorf("bootstrap logged %q, want no composition entry claiming the mailer seam is mailer.console when one was injected", out)
+		}
+		if !strings.Contains(out, "kv=kv.memory") {
+			t.Errorf("bootstrap logged %q, want the composition line to still name the unwired kv seam's preset implementation", out)
+		}
+	})
+}
+
 func TestBootstrap_UnknownDeploymentMode_ReturnsError(t *testing.T) {
 	var order []string
 
@@ -2018,25 +2080,47 @@ func TestBootstrap_UnknownDeploymentMode_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestWithEventBus_NilBusKeepsTheDeploymentModeDefault(t *testing.T) {
-	reg, err := NewKernel(WithEventBus(nil, MultiReplicaSafe)).Bootstrap(context.Background())
-	if err != nil {
-		t.Fatalf("Bootstrap() error = %v, want nil", err)
+// TestSeamOptions_PanicOnNilValue pins the nil rule's consistency across
+// every door that accepts a seam value in this file: NewRegistry panics on a
+// nil argument (a registry whose Mailer() sends nothing and reports success
+// is the alternative it refuses), and each With* option must refuse a nil
+// the same way. A nil option value would silently leave the Preset's
+// resolution in place -- the forgot-mailer hazard exactly: a host whose
+// wiring produced a nil mailer (an SMTP construction that failed, a config
+// lookup that found nothing) believes it wired SMTP while every
+// verification code prints to stdout and reports success, and only the
+// boot's seam-composition Info line (mailer=<injected> never appears) would
+// give the mistake away. A host that genuinely wants the Preset's
+// resolution for a seam omits the option instead of passing nil.
+func TestSeamOptions_PanicOnNilValue(t *testing.T) {
+	tests := []struct {
+		name       string
+		optionName string
+		kernel     func() *Kernel
+	}{
+		{"eventbus", "WithEventBus", func() *Kernel { return NewKernel(WithEventBus(nil, MultiReplicaSafe)) }},
+		{"kv", "WithKVStore", func() *Kernel { return NewKernel(WithKVStore(nil, MultiReplicaSafe)) }},
+		{"mailer", "WithMailer", func() *Kernel { return NewKernel(WithMailer(nil, MultiReplicaSafe)) }},
+		{"objectstore", "WithObjectStore", func() *Kernel { return NewKernel(WithObjectStore(nil, MultiReplicaSafe)) }},
 	}
-	if reg.EventBus() == nil {
-		t.Error("EventBus() is nil, want the standalone deployment mode's default")
-	}
-}
 
-// TestWithKVStore_NilStoreKeepsTheDeploymentModeDefault mirrors
-// TestWithEventBus_NilBusKeepsTheDeploymentModeDefault for the key-value seam.
-func TestWithKVStore_NilStoreKeepsTheDeploymentModeDefault(t *testing.T) {
-	reg, err := NewKernel(WithKVStore(nil, MultiReplicaSafe)).Bootstrap(context.Background())
-	if err != nil {
-		t.Fatalf("Bootstrap() error = %v, want nil", err)
-	}
-	if reg.KVStore() == nil {
-		t.Error("KVStore() is nil, want the standalone deployment mode's default")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatal("NewKernel with a nil seam value did not panic, want it to")
+				}
+				msg, ok := r.(string)
+				if !ok {
+					t.Fatalf("panic value is %T %v, want a string naming the option", r, r)
+				}
+				if !strings.Contains(msg, tt.optionName) || !strings.Contains(msg, "requires a non-nil") {
+					t.Errorf("panic message %q does not name %s and its non-nil requirement", msg, tt.optionName)
+				}
+			}()
+			tt.kernel()
+		})
 	}
 }
 
@@ -2178,32 +2262,6 @@ func TestBootstrap_WiresTheDeploymentModeMailerIntoTheRegistry(t *testing.T) {
 				t.Errorf("wired mailer output = %q, want it to carry the sent message", got)
 			}
 		})
-	}
-}
-
-// TestWithMailer_NilMailerKeepsTheDeploymentModeDefault mirrors
-// TestWithEventBus_NilBusKeepsTheDeploymentModeDefault and its KVStore
-// counterpart for the mail seam.
-func TestWithMailer_NilMailerKeepsTheDeploymentModeDefault(t *testing.T) {
-	reg, err := NewKernel(WithMailer(nil, MultiReplicaSafe)).Bootstrap(context.Background())
-	if err != nil {
-		t.Fatalf("Bootstrap() error = %v, want nil", err)
-	}
-	if reg.Mailer() == nil {
-		t.Error("Mailer() is nil, want the standalone deployment mode's default")
-	}
-}
-
-// TestWithObjectStore_NilStoreKeepsTheDeploymentModeDefault mirrors
-// TestWithMailer_NilMailerKeepsTheDeploymentModeDefault and its older
-// counterparts for the object-store seam.
-func TestWithObjectStore_NilStoreKeepsTheDeploymentModeDefault(t *testing.T) {
-	reg, err := NewKernel(WithObjectStore(nil, MultiReplicaSafe)).Bootstrap(context.Background())
-	if err != nil {
-		t.Fatalf("Bootstrap() error = %v, want nil", err)
-	}
-	if reg.ObjectStore() == nil {
-		t.Error("ObjectStore() is nil, want the standalone deployment mode's default")
 	}
 }
 

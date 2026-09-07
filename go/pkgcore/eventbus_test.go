@@ -1,8 +1,10 @@
 package pkgcore
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strings"
@@ -322,5 +324,73 @@ func TestMemoryEventBusConcurrentSubscribeAndPublish(t *testing.T) {
 	maxCalls := minCalls * (concurrentSubscribers + preRegisteredHandlers)
 	if handlerCalls < minCalls || handlerCalls > maxCalls {
 		t.Errorf("handlers invoked %d times, want between %d and %d", handlerCalls, minCalls, maxCalls)
+	}
+}
+
+// TestMemoryEventBus_PanickingHandlerIsContainedAndDoesNotStopLaterHandlers
+// pins the memory bus's subscriber-panic isolation: the standalone
+// deployment mode runs every delivery synchronously on the publisher's own
+// goroutine, and a Publish call often sits on a background goroutine with
+// no recover of its own (a jobs handler, a subscription chain, a periodic
+// scheduler), so an uncontained subscriber panic would tear through the
+// caller -- every later-registered handler skipped -- and, with no recover
+// anywhere up the stack, kill the whole process. The three distributed
+// implementations already contain a subscriber panic on their delivery
+// machinery (eventbus/redis.EventBus.runRemoteHandler and its siblings
+// recover, log and move on); this test pins the in-memory bus to the same
+// containment: the panic is recovered, logged as an Error, and the handlers
+// registered after the panicking one still run, the same continuation the
+// error-isolation contract already guarantees for a handler that merely
+// returns an error.
+//
+// A recovered panic is not returned as an error: like the distributed
+// implementations' recover blocks it is logged and dropped, so a caller
+// that treats Publish's returned error as retryable never retries a
+// delivery whose only problem was a panic.
+//
+// The slog default logger is process-global, so the test swaps it for a
+// capture handler and restores it on the way out. It must not run in
+// parallel with another test that publishes on a memory bus: the package's
+// t.Parallel tests only resume after every sequential test has finished, so
+// this one never overlaps them.
+func TestMemoryEventBus_PanickingHandlerIsContainedAndDoesNotStopLaterHandlers(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(previous)
+
+	bus := NewMemoryEventBus()
+	var later []string
+	record := func(name string) EventHandler {
+		return func(_ context.Context, _ Event) error {
+			later = append(later, name)
+			return nil
+		}
+	}
+	bus.Subscribe(orderCreatedEvent, func(_ context.Context, _ Event) error {
+		panic("handler bug: panics on every delivery")
+	})
+	bus.Subscribe(orderCreatedEvent, record("second"))
+	bus.Subscribe(orderCreatedEvent, record("third"))
+
+	// Publish is synchronous on this goroutine, so an uncontained panic
+	// fails the test right here, before any assertion below runs -- the
+	// fail-before shape of the regression.
+	err := bus.Publish(context.Background(), Event{Type: orderCreatedEvent})
+	if err != nil {
+		t.Fatalf("Publish() error = %v, want nil: a recovered panic is logged and dropped, never a returned failure", err)
+	}
+	if !slices.Equal(later, []string{"second", "third"}) {
+		t.Errorf("handlers registered after the panicking one ran = %v, want [second third]", later)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "level=ERROR") {
+		t.Errorf("captured log %q, want the recovered panic logged at Error level", out)
+	}
+	for _, want := range []string{"panicked", orderCreatedEvent, "handler bug: panics on every delivery"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("captured log %q does not mention %q", out, want)
+		}
 	}
 }
