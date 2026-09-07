@@ -29,6 +29,26 @@ func (s scriptedLimiter) Allow(context.Context, string, ratelimit.Limit) (rateli
 	return ratelimit.Decision{Allowed: s.allowed, ResetAfter: s.resetAfter}, nil
 }
 
+// recordingLimiter is a ratelimit.Limiter double that records every
+// dimension key it was asked about and answers each Allow with the same
+// fixed Decision. The tenantless-call tests below need to prove a call
+// NEVER reached the limiter at all, which an allowed/denied answer alone
+// cannot distinguish from a call that reached it and passed -- an empty
+// keys slice is the only honest proof of "not consulted".
+type recordingLimiter struct {
+	allowed bool
+	err     error
+	keys    []string
+}
+
+func (r *recordingLimiter) Allow(_ context.Context, key string, _ ratelimit.Limit) (ratelimit.Decision, error) {
+	r.keys = append(r.keys, key)
+	if r.err != nil {
+		return ratelimit.Decision{}, r.err
+	}
+	return ratelimit.Decision{Allowed: r.allowed}, nil
+}
+
 // TestGateway_RateLimiter_NoHostAttached_IsANoOp proves a Gateway built with
 // NewGateway alone (never attached to a registry by Module.Register --
 // gatewayTestFixture's own construction) enforces no rate limit at all,
@@ -167,5 +187,79 @@ func TestModule_Register_AttachesGatewayHost(t *testing.T) {
 	}
 	if _, ok := m.Gateway().rateLimiter(); !ok {
 		t.Error("rateLimiter() ok = false after Bootstrap, want a real Limiter over the resolved KVStore")
+	}
+}
+
+// --- tenantless call sites never feed the rate limiter the empty string ---
+
+// TestGateway_Chat_TenantlessContext_DoesNotConsultRateLimiter is the
+// call-site regression for gateway.go's Chat: a context carrying no tenant
+// (a system-context caller -- CredentialService.Resolve's own doc comment
+// names tenantless calls legal) must NEVER reach the per-tenant limiter
+// with an empty-string tenant, silently sharing one bucket with every
+// other tenantless caller. The deny-all recorder proves non-consultation:
+// were the call to reach the limiter, the fixed denial would refuse it.
+func TestGateway_Chat_TenantlessContext_DoesNotConsultRateLimiter(t *testing.T) {
+	provider := &fakeChatProvider{chatResp: ChatResponse{Message: ChatMessage{Role: RoleAssistant, Content: "ok"}}}
+	g := gatewayTestFixture(t, provider)
+	limiter := &recordingLimiter{allowed: false}
+	g.limiter = limiter
+
+	if _, err := g.Chat(context.Background(), chatReq()); err != nil {
+		t.Fatalf("Chat on a tenantless context = %v, want success -- the per-tenant limiter must not be consulted for a call with no tenant dimension", err)
+	}
+	if len(limiter.keys) != 0 {
+		t.Fatalf("tenantless Chat consulted the rate limiter with %v, want no consultation at all", limiter.keys)
+	}
+	if provider.chatCalls != 1 {
+		t.Errorf("provider was called %d times, want 1", provider.chatCalls)
+	}
+}
+
+// TestGateway_ChatStream_TenantlessContext_DoesNotConsultRateLimiter is the
+// streaming twin of the Chat test above: ChatStream's tenantless path must
+// likewise skip the per-tenant limiter rather than feed it the empty
+// string.
+func TestGateway_ChatStream_TenantlessContext_DoesNotConsultRateLimiter(t *testing.T) {
+	provider := &fakeChatProvider{
+		streamOut: []ChatChunk{{Delta: "hi", FinishReason: "stop"}},
+	}
+	g := gatewayTestFixture(t, provider)
+	limiter := &recordingLimiter{allowed: false}
+	g.limiter = limiter
+
+	out, err := g.ChatStream(context.Background(), chatReq())
+	if err != nil {
+		t.Fatalf("ChatStream on a tenantless context = %v, want success", err)
+	}
+	if chunk := <-out; chunk.Err != nil {
+		t.Fatalf("terminal chunk = %+v, want a clean stream end", chunk)
+	}
+	if len(limiter.keys) != 0 {
+		t.Fatalf("tenantless ChatStream consulted the rate limiter with %v, want no consultation at all", limiter.keys)
+	}
+}
+
+// TestGateway_GenerateImage_TenantlessContext_RefusedBeforeRateLimiter is
+// the call-site regression for image_gateway.go's GenerateImage: the call
+// requires a tenant (ErrImageRequiresTenant -- a jobs.Task must carry one),
+// and that refusal must fire BEFORE the per-tenant rate limiter is reached
+// -- a tenantless call is refused with the coded error, never fed to the
+// limiter as the empty-string tenant.
+func TestGateway_GenerateImage_TenantlessContext_RefusedBeforeRateLimiter(t *testing.T) {
+	provider := &fakeImageProvider{}
+	g, queue, _ := imageGatewayTestFixture(t, provider)
+	limiter := &recordingLimiter{allowed: false}
+	g.limiter = limiter
+
+	_, err := g.GenerateImage(context.Background(), imageReq())
+	if got, ok := apperrCode(err); !ok || got != ErrImageRequiresTenant.Code {
+		t.Fatalf("GenerateImage on a tenantless context = %v, want ErrImageRequiresTenant", err)
+	}
+	if len(limiter.keys) != 0 {
+		t.Fatalf("tenantless GenerateImage consulted the rate limiter with %v, want no consultation at all", limiter.keys)
+	}
+	if queue.calls != 0 {
+		t.Fatalf("queue was called %d times with no tenant, want 0", queue.calls)
 	}
 }

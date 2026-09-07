@@ -73,6 +73,49 @@ var (
 	// its own audit event), mirroring config's ScopeSystem rule exactly.
 	ErrSystemScopeRequiresSystemContext = apperr.Forbidden("aigateway.system_scope_requires_system_context")
 
+	// ErrBaseURLInvalid reports a tenant BYOK credential write whose baseURL
+	// is malformed, names no host, or uses a scheme other than http/https.
+	// WithParam("reason", ...) names which -- "unparseable", "missing_host"
+	// or "scheme" (the latter carrying the offending scheme in its own
+	// WithParam("scheme", ...)). See ssrf.go's ValidateBaseURL.
+	ErrBaseURLInvalid = apperr.Invalid("aigateway.base_url_invalid")
+
+	// ErrBaseURLUnresolvable reports a tenant BYOK credential write whose
+	// baseURL host could not be resolved to any address at all --
+	// WithParam("host", ...) names the host. See ssrf.go's ValidateBaseURL.
+	ErrBaseURLUnresolvable = apperr.Invalid("aigateway.base_url_unresolvable")
+
+	// ErrBaseURLBlocked reports a tenant BYOK credential write whose baseURL
+	// names a private, loopback, link-local, multicast or otherwise
+	// never-a-legitimate-vendor-destination address -- the SSRF refusal
+	// that keeps one tenant from turning the platform's own network into a
+	// request source pointed at the platform's intranet. See ssrf.go's
+	// isBlockedIP and the file header there for why this is the tenant-
+	// scope write's check and why the platform-scope write deliberately
+	// skips it.
+	//
+	// WithParam("ip", ...) is deliberately asymmetric between the two paths
+	// that raise this code, and the asymmetry must survive any later
+	// consistency round:
+	//
+	//   - The literal-IP path (ssrf.go, ValidateBaseURL) carries the blocked
+	//     address: the caller typed it into the URL, so the param is an
+	//     echo of what the caller already knows -- zero disclosure -- and
+	//     genuinely useful diagnostics naming exactly which address was
+	//     refused.
+	//   - The resolution path (a hostname whose DNS answer is blocked)
+	//     deliberately carries no ip param: the resolved address is
+	//     information the caller does not have -- for a name resolvable only
+	//     inside the platform's own network, exactly the answer an
+	//     internal-DNS reconnaissance oracle would give -- so echoing it
+	//     back would let a tenant admin submit hostnames and read back the
+	//     internal IPs they resolve to. The coded error, whose generic
+	//     base_url_blocked rendering names no address, is the honest answer
+	//     shape for that path. This mirrors go/integration's
+	//     ErrWebhookURLBlocked asymmetry (integration/errors.go) exactly --
+	//     the two refusals must keep agreeing.
+	ErrBaseURLBlocked = apperr.Invalid("aigateway.base_url_blocked")
+
 	// ErrProviderRequestFailed reports a transport-level failure calling a
 	// ChatProvider's upstream vendor endpoint: a network error, a
 	// non-2xx HTTP status, or a stream that ended in an I/O error before
