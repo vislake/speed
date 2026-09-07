@@ -205,6 +205,33 @@ func TestRoleChangedFromWire_ForeignPayload_IsNotThisEvent(t *testing.T) {
 	}
 }
 
+// TestAuditActions_ValuesPinnedAsLiterals pins the three audit action
+// strings to their literal values. The strings are a cross-boundary
+// contract: host audit panels and compliance queries filter on them, and
+// under lockstep versioning a changed value compiles fine everywhere while
+// downstream consumers mismatch silently. The reconciliation tests in
+// audit_test.go cannot catch such a change -- they resolve both the
+// registered set and the emitted sites through these same constants, so a
+// rename or a typo moves both sides in lockstep -- which is exactly why a
+// pinning test has to exist. Renaming any of these values is a breaking
+// change.
+func TestAuditActions_ValuesPinnedAsLiterals(t *testing.T) {
+	cases := []struct {
+		constant string
+		value    string
+		want     string
+	}{
+		{constant: "AuditActionRoleDefine", value: AuditActionRoleDefine, want: "rbac.role.define"},
+		{constant: "AuditActionRoleAssign", value: AuditActionRoleAssign, want: "rbac.role.assign"},
+		{constant: "AuditActionRoleRevoke", value: AuditActionRoleRevoke, want: "rbac.role.revoke"},
+	}
+	for _, tc := range cases {
+		if tc.value != tc.want {
+			t.Errorf("%s = %q, want the literal %q", tc.constant, tc.value, tc.want)
+		}
+	}
+}
+
 func TestEventDecls_MatchTheDeclaredTypesAndPayloads(t *testing.T) {
 	// The declaration is what a subscriber (and the future event catalog)
 	// reads to know which concrete type to expect. A payload type name
