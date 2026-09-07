@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 	"image"
 	"image/draw"
+	"strings"
 	"testing"
 
 	"github.com/vislake/speed/go/storage/internal/testutil"
@@ -44,6 +45,22 @@ func exifPayload() []byte {
 func xmpPayload() []byte {
 	p := append([]byte(nil), xmpSignature...)
 	return append(p, "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"></x:xmpmeta>"...)
+}
+
+// xmpExtensionPayload returns the payload of one APP1 extended-XMP segment,
+// laid out as the XMP specification's JPEG storage rules give it: the
+// "http://ns.adobe.com/xmp/extension/\0" signature, then the pair's 128-bit
+// GUID as 32 ASCII hex characters, then the full length of the serialized
+// extended XMP and this portion's offset within it (each a big-endian
+// uint32), then the portion's own bytes. The walker never looks deeper than
+// the signature, so the header's load-bearing part is that the whole
+// segment -- portion bytes included -- disappears.
+func xmpExtensionPayload(guid string, fullLen, offset uint32, portion []byte) []byte {
+	p := append([]byte(nil), "http://ns.adobe.com/xmp/extension/\x00"...)
+	p = append(p, guid...)
+	p = binary.BigEndian.AppendUint32(p, fullLen)
+	p = binary.BigEndian.AppendUint32(p, offset)
+	return append(p, portion...)
 }
 
 // insertAPPSegment splices a length-carrying APP segment carrying payload
@@ -153,6 +170,88 @@ func TestSanitizeJPEG_StripsExifAndXMP(t *testing.T) {
 	}
 	assertDecodesEqual(t, "exif+xmp strip", out, base)
 	// Idempotent: the second pass over an already-clean file changes nothing.
+	again, err := sanitizeJPEG(out)
+	if err != nil {
+		t.Fatalf("sanitizeJPEG (second pass): %v", err)
+	}
+	if !bytes.Equal(again, out) {
+		t.Fatal("strip is not idempotent")
+	}
+}
+
+// TestSanitizeJPEG_StripsExtendedXMP pins the XMP vocabulary's overflow
+// carrier. The XMP specification caps what a standard XMP packet may hold at
+// what one APP1 segment carries, so a serialized package that outgrows the
+// cap -- large edit histories or regional data genuinely do -- is split
+// across APP1 segments under a second signature, each segment leading with
+// the extension signature, the pair's GUID, the package's full length and
+// the portion's offset, then the portion's bytes, and the main packet
+// naming the GUID in its xmpNote:HasExtendedXMP property. The extension
+// carrier is a standard carrier of the same vocabulary the main packet
+// rides, so both must die: the fixture below is a real pair as a writer
+// emits it -- a standard main packet followed by the extension segments in
+// offset order -- whose GPS position and creator the overflow moved into
+// the extension portions, so their survival in the served bytes, not merely
+// "the strip ran", is what the assertions pin.
+func TestSanitizeJPEG_StripsExtendedXMP(t *testing.T) {
+	base := testutil.JPEG(t, 48, 32)
+	// The pair's shared identifier: one 128-bit GUID as 32 ASCII hex
+	// characters, matching between HasExtendedXMP and every extension
+	// segment header.
+	const guid = "0f6e8a2b3c4d5e6f708192a3b4c5d6e7"
+	main := `<x:xmpmeta xmlns:x="adobe:ns:meta/">` +
+		`<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
+		`<rdf:Description rdf:about="" xmlns:xmpNote="http://ns.adobe.com/xmp/note/" ` +
+		`xmpNote:HasExtendedXMP="` + guid + `">` +
+		`</rdf:Description></rdf:RDF></x:xmpmeta>`
+	mainPayload := append(append([]byte(nil), xmpSignature...), main...)
+	// The serialized extended XMP, built large on purpose: an APP1 payload
+	// ceiling of 65,533 bytes minus the extension header (35-byte signature,
+	// 32-byte GUID, two 4-byte lengths) leaves at most 65,458 bytes of
+	// package per segment, and a package that fits one segment would never
+	// be split -- the overflow is what makes the extension carrier real.
+	// The package holds the GPS position and the creator, moved here out of
+	// the main packet, beside an editing history (xmpMM) padded past the
+	// cap.
+	history := strings.Repeat(
+		`<rdf:li rdf:parseType="Resource"><stEvt:action>edited</stEvt:action>`+
+			`<stEvt:when>2026-09-08T09:00:00+08:00</stEvt:when>`+
+			`<stEvt:softwareAgent>Adobe Photoshop Lightroom Classic</stEvt:softwareAgent>`+
+			`<stEvt:changed>/metadata</stEvt:changed></rdf:li>`, 300)
+	ext := `<x:xmpmeta xmlns:x="adobe:ns:meta/">` +
+		`<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
+		`<rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" ` +
+		`xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" ` +
+		`xmlns:stEvt="http://ns.adobe.com/xap/1.0/sType/ResourceEvent#" ` +
+		`exif:GPSLatitude="31,2304N" exif:GPSLongitude="121,4737E">` +
+		`<dc:creator><rdf:Seq><rdf:li>Jane Doe</rdf:li></rdf:Seq></dc:creator>` +
+		`<xmpMM:History><rdf:Seq>` + history + `</rdf:Seq></xmpMM:History>` +
+		`</rdf:Description></rdf:RDF></x:xmpmeta>`
+	if len(ext) <= 65458 {
+		t.Fatalf("fixture extended xmp does not overflow one APP1 segment: %d bytes", len(ext))
+	}
+	split := len(ext) / 2
+	fullLen := uint32(len(ext))
+	// insertAPPSegment lands each new segment directly after SOI, so the
+	// calls below run in reverse and the file ends up in the standard's
+	// order: the main packet first, then the extension segments by offset.
+	withExt := insertAPPSegment(t, base, jpegApp1,
+		xmpExtensionPayload(guid, fullLen, uint32(split), []byte(ext[split:])))
+	withExt = insertAPPSegment(t, withExt, jpegApp1,
+		xmpExtensionPayload(guid, fullLen, 0, []byte(ext[:split])))
+	withPair := insertAPPSegment(t, withExt, jpegApp1, mainPayload)
+	out, err := sanitizeJPEG(withPair)
+	if err != nil {
+		t.Fatalf("sanitizeJPEG: %v", err)
+	}
+	if bytes.Contains(out, xmpSignature) {
+		t.Fatal("main xmp packet survives the strip")
+	}
+	if bytes.Contains(out, []byte("http://ns.adobe.com/xmp/extension/\x00")) {
+		t.Fatal("extended-xmp segments survive the strip")
+	}
+	assertNoneContain(t, "extended xmp strip", out, "31,2304N", "121,4737E", "Jane Doe", guid)
+	assertDecodesEqual(t, "extended xmp strip", out, base)
 	again, err := sanitizeJPEG(out)
 	if err != nil {
 		t.Fatalf("sanitizeJPEG (second pass): %v", err)

@@ -18,13 +18,17 @@ import (
 // Scope, deliberately, and by carrier class rather than by individual
 // marker: the walkers below strip every standardized carrier of the two
 // protected content classes -- location and authorship -- that rides in the
-// file's marker stream. On JPEG those carriers are EXIF and XMP (both ride
-// the APP1 segment, identified by their payload signatures), IPTC-IIM, the
-// vocabulary holding By-line/Copyright/City/Country (it rides APP13 as a
-// Photoshop image-resource block, so an APP13 whose payload is an IRB is
-// dropped whole -- the strip never depends on the IRB's internal layout),
-// and COM, the free-text comment marker, whose payload no signature can
-// classify, so the whole marker is the carrier and every COM segment goes.
+// file's marker stream. On JPEG those carriers are EXIF and XMP -- XMP in
+// both of its standard APP1 carriers: the packet under the xap signature,
+// and extended XMP, the extension-signed segments the standard splits a
+// package too large for one APP1 into, the second standard carrier of the
+// same vocabulary, matched and dropped whole exactly like the first --
+// plus IPTC-IIM, the vocabulary holding By-line/Copyright/City/Country (it
+// rides APP13 as a Photoshop image-resource block, so an APP13 whose
+// payload is an IRB is dropped whole -- the strip never depends on the
+// IRB's internal layout), and COM, the free-text comment marker, whose
+// payload no signature can classify, so the whole marker is the carrier and
+// every COM segment goes.
 // On PNG they are the eXIf chunk and the text-chunk family tEXt/zTXt/iTXt:
 // iTXt under the XML:com.adobe.xmp keyword is the carrier the PNG
 // specification gives the same Adobe XMP packet APP1 carries on JPEG --
@@ -70,6 +74,19 @@ var (
 	// both carriers are stripped, so the vocabulary dies on the two
 	// admitted types together, never on one.
 	xmpSignature = []byte("http://ns.adobe.com/xap/1.0/\x00")
+	// xmpExtensionSignature prefixes the payload of the APP1 segment that
+	// carries extended XMP, the XMP vocabulary's overflow carrier: a
+	// standard XMP packet must fit what one APP1 segment holds, so the
+	// specification splits a serialized package that outgrows it into
+	// extension-signed segments, each leading with this signature, the
+	// pair's 128-bit GUID, the package's full length and this portion's
+	// offset (both big-endian uint32s), then the portion's bytes. The
+	// vocabulary is the same packet's -- geotags, camera serials, editing
+	// history -- and the main packet names the GUID in its
+	// xmpNote:HasExtendedXMP property, so this second standard carrier of
+	// it dies with the first: the walker matches the signature and drops
+	// the whole segment, never parsing its portion headers.
+	xmpExtensionSignature = []byte("http://ns.adobe.com/xmp/extension/\x00")
 	// irbSignature prefixes the payload of an APP13 segment that carries
 	// Photoshop's image-resource block (IRB), the container IPTC-IIM --
 	// the By-line/Credit/Copyright and City/Country/Sub-location half of
@@ -100,8 +117,10 @@ const (
 )
 
 // sanitizeJPEG returns a copy of raw with the APP segments that carry
-// location and authorship metadata removed -- EXIF and XMP (APP1, by
-// payload signature), IPTC-IIM (APP13 whose payload is Photoshop's
+// location and authorship metadata removed -- EXIF and XMP in both of its
+// APP1 carriers, the packet and the extension-signed overflow segments the
+// standard splits an oversized package into (APP1, by payload signature),
+// IPTC-IIM (APP13 whose payload is Photoshop's
 // image-resource block) and every COM comment segment (free text) -- or an
 // error when the JPEG structure cannot be verified. APP2's ICC profile is
 // kept, as are APP0's JFIF header, quantisation and Huffman tables, APP
@@ -227,14 +246,18 @@ func sanitizeJPEG(raw []byte) ([]byte, error) {
 			}
 			payload := raw[i+2 : segEnd]
 			// The drop decision follows the carrier classes of the strip's
-			// rule: EXIF and XMP ride APP1, IPTC-IIM rides APP13 inside a
-			// Photoshop image-resource block, and COM is free text whose
-			// whole marker is the carrier. Each arm drops the segment
-			// wholesale, so the content dies with the container.
+			// rule: EXIF and XMP ride APP1 -- XMP under either of its two
+			// standard signatures, the packet's and the extension's -- and
+			// IPTC-IIM rides APP13 inside a Photoshop image-resource block,
+			// while COM is free text whose whole marker is the carrier.
+			// Each arm drops the segment wholesale, so the content dies
+			// with the container.
 			switch {
-			case code == jpegApp1 && (bytes.HasPrefix(payload, exifSignature) || bytes.HasPrefix(payload, xmpSignature)):
-				// Dropped: this APP1 is EXIF or XMP, the carriers this
-				// strip exists for.
+			case code == jpegApp1 && (bytes.HasPrefix(payload, exifSignature) ||
+				bytes.HasPrefix(payload, xmpSignature) ||
+				bytes.HasPrefix(payload, xmpExtensionSignature)):
+				// Dropped: this APP1 is EXIF or XMP, the packet or its
+				// extension overflow, the carriers this strip exists for.
 			case code == jpegApp13 && bytes.HasPrefix(payload, irbSignature):
 				// Dropped: this APP13 is a Photoshop image-resource
 				// block, the container IPTC-IIM rides in. The whole IRB
