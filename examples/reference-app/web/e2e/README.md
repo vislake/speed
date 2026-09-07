@@ -619,28 +619,38 @@ lives.
 |---|---|---|
 | keep-the-result | no way to save the generated image -- the only way out of the product is a screenshot | unbuilt surface |
 | add-a-colleague | no surface for a practice's people, so a colleague can only be invited through the API | unbuilt surface |
-| the-ledger-reads-as-a-statement | the credits ledger shows `go/billing`'s machine annotation (`smilesim:simulate`, `demo:seed`) to the clinic owner reading their billing history | defect |
 
-**Every gate in that list came from walking the product by hand.** Two
-are surfaces the brief names and nobody built; the third is a defect a
-suite cannot ask about, because asking required reading a screen the way
-its reader does. It is the sharpest of them: `go/billing`
+**Both remaining gates wait on a surface the brief names and nobody
+built. No gate here waits on a defect.** Four defects were found by
+walking the product by hand in this session and all four are closed --
+the home surface's unactionable instruction, the share panel's
+placeholder, the home intro contradicting the empty state, and the
+credits ledger showing `go/billing`'s machine annotation to the clinic
+owner. That last one was the sharpest: `go/billing`
 declares `Reason` "machine-readable annotation with a declared shape,
 never free text" -- narrowed precisely so it would not carry writing
 meant for people, since the audit trail copies it verbatim -- and the app
 renders it under a label that already says the same thing in the
 reader's own language.
 
-It asserts a PROPERTY rather than a wording -- that no
-billing-reason-shaped token appears in a row -- so dropping it, folding
-it behind a details affordance, or translating it into a phrase are each
-a pass. What fails is showing a reader text written for a machine.
+Its gate asserted a PROPERTY rather than a wording -- that no
+billing-reason-shaped token appears in a row -- leaving dropping,
+folding behind a details affordance, and translating all open. `48d54e9`
+took the strongest of the three: the reason never enters the rendering,
+which is robust against the whole family rather than against the two
+tokens this app happens to produce. The gate stays, @budget now, and
+still asserts the shape.
 
-The intro contradiction that sat in this list is closed (`794e472`,
-by rendering the intro only beside the cards its words describe), and
-its assertion folded back into the home gate rather than staying a
-second test: as its own test it cost a second sign-in as the same
-account, which the default tier paid for in pacing.
+Writing that gate is also where the fourth instance of this suite's
+oldest mistake was caught before it cost anything. Billing's shape read
+literally -- letters and digits joined by `:` `_` `-` -- matches the
+ledger's own legitimate text: `1:00` in a timestamp is digits joined by
+a colon, `Top-up` is letters joined by a hyphen. A pattern written that
+way would have reported both as machine tokens, and reported them to the
+round that had just fixed the real one. Requiring a letter first and a
+`:` or `_` straight after the first segment separates them, checked
+against five real reason shapes and thirteen legitimate strings before
+committing.
 
 **Two defects were found by walking the journey as a person, and both are
 closed.** A click-through as a freshly self-registered practice --

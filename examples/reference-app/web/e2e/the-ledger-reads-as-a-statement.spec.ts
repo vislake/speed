@@ -79,9 +79,23 @@ import { CASE_UI } from './test-utils/cases.js'
  */
 const BILLING_REASON_SHAPE = /\b[A-Za-z][A-Za-z0-9]*[:_][A-Za-z0-9][A-Za-z0-9:_-]*/
 
+// Closed by 48d54e9, and by the strongest of the three options this
+// gate left open: the reason never enters the rendering at all. Not a
+// label-mapping table -- that would go stale the moment a consumer names
+// a tag nobody mapped -- and not a translation, but absence, which is
+// robust against the whole family rather than the two tokens this app
+// happens to produce today. The meta line carries the date alone, the
+// rowMeta key is gone from both locale bundles, the stale comment about
+// "free text" is corrected, and an inline sentence records the contract
+// so a later well-meaning round does not put it back.
+//
+// Verified on all three engines. The gate stays and keeps asserting the
+// SHAPE, so a reason reaching the screen under any name fails here.
+// @budget rather than untagged: it spends a sign-in and the default
+// tier has none of demo-owner's allowance left.
 test(
   'the credits ledger shows no machine annotation to the person reading it',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     await signInAs(page, DEMO_OWNER)
     await openSurface(page, CASE_UI.navCredits)
