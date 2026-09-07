@@ -14,6 +14,7 @@
 import { act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
+import { flushSync } from 'react-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { switchLanguage } from '@speed/i18n'
 import zhCN from '../locales/zh-CN.json' with { type: 'json' }
@@ -217,6 +218,63 @@ describe('DataTable', () => {
     expect(region).toHaveTextContent('')
     fireEvent.click(utils.getByRole('button', { name: 'refresh' }))
     expect(region).toHaveTextContent(zhCN.dataTable.loading)
+    expect(utils.getByRole('progressbar')).toBeInTheDocument()
+  })
+
+  it('mounts the loading region empty when the empty phase begins already loading (D5 regression)', () => {
+    // The P2-6 sibling path above fixes the empty-then-refresh route, but
+    // the same mount-with-text shape survives on the transition where the
+    // empty phase BEGINS already loading: rows empty out and loading flips
+    // in the same host commit (a filter that clears the current page while
+    // the next query runs). The region is born inside that commit, so its
+    // text was born with it and the announcement never fired -- live
+    // regions speak about content changes that follow their own
+    // existence, never text that mounts together with them. POST-FIX the
+    // region's first committed frame is empty whatever transition enters
+    // the empty phase: the loading text is gated behind a one-commit lag
+    // armed by an effect after that first commit, so it always fills a
+    // region the screen reader already knows. The assertion between the
+    // two commits below is what distinguishes the shapes: the region's
+    // text content must still be empty the moment the node first appears
+    // (pre-fix it already holds the loading text). A stateful host drives
+    // the flip; flushSync lands its one commit synchronously, and the act
+    // scope holds back the post-commit effect that fills the region until
+    // this assertion has seen the birth frame.
+    function EmptyingRefreshHarness() {
+      const [rows, setRows] = useState<readonly Member[]>(MEMBERS)
+      const [loading, setLoading] = useState(false)
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => {
+              setRows([])
+              setLoading(true)
+            }}
+          >
+            clear and reload
+          </button>
+          <DataTable
+            rows={rows}
+            columns={BASE_COLUMNS}
+            rowKey={keyOf}
+            loading={loading}
+          />
+        </>
+      )
+    }
+    const utils = renderWithProviders(<EmptyingRefreshHarness />)
+    expect(utils.getByText('Ada')).toBeInTheDocument()
+    expect(utils.queryByRole('status')).not.toBeInTheDocument()
+    act(() => {
+      flushSync(() => {
+        utils.getByRole('button', { name: 'clear and reload' }).click()
+      })
+      const region = utils.getByRole('status')
+      expect(region.textContent).toBe('')
+    })
+    const region = utils.getByRole('status')
+    expect(region.textContent).toContain(zhCN.dataTable.loading)
     expect(utils.getByRole('progressbar')).toBeInTheDocument()
   })
 

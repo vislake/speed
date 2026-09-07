@@ -29,7 +29,13 @@
  * region that only appeared together with its text could never announce
  * the empty-list-then-refresh path -- live regions speak about content
  * changes that follow their own existence, not text that mounts with
- * them.
+ * them. The empty phase's first committed frame is therefore empty
+ * whatever transition entered the phase: a phase that begins already
+ * loading (rows emptied and loading flipped in the same host commit)
+ * shows the region empty for one commit, the loading text filling it on
+ * the next -- the same fill-an-existing-region shape, guaranteed for
+ * every route into the empty phase rather than only the refresh of a
+ * phase that began not loading.
  *
  * The stock placeholder's title is a real heading element whose correct
  * level only the host knows (see EmptyState's own heading-level note):
@@ -82,7 +88,7 @@
  * (resource table in the README) and follows the active language.
  */
 
-import { useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import Box from '@mui/material/Box'
 import Checkbox from '@mui/material/Checkbox'
@@ -273,6 +279,26 @@ export function DataTable<T>({
 }: DataTableProps<T>) {
   const { t } = useUiKitTranslation()
 
+  const emptyPhase = rows.length === 0
+
+  // The loading live region must never mount together with its text: a
+  // role="status" region announces only content changes that follow its
+  // own insertion, so text born in the same commit as the region would
+  // be silent -- the gap the P2-6 fix closed for the empty-then-refresh
+  // path would otherwise survive for any empty phase that begins already
+  // loading (rows emptied and loading flipped in the same host commit).
+  // The loading text below is therefore gated on `statusRegionCommitted`,
+  // which lags the empty phase by one commit: the effect after the
+  // phase's first commit arms it, so the region's first committed frame
+  // is empty whatever transition entered the phase, and the text fills
+  // an existing region a commit later. Leaving the empty phase disarms
+  // it, so the next phase's region also spends its own first committed
+  // frame empty, whatever loading state that phase begins with.
+  const [statusRegionCommitted, setStatusRegionCommitted] = useState(false)
+  useEffect(() => {
+    setStatusRegionCommitted(emptyPhase)
+  }, [emptyPhase])
+
   const selectable = onSelectionChange !== undefined
   const sortingEnabled = onSortChange !== undefined && sort !== undefined
   const selected = new Set<string | number>(selectedRowKeys ?? [])
@@ -424,7 +450,11 @@ export function DataTable<T>({
                       together with its text -- see the file header. The
                       empty-phase region has no children and therefore
                       zero height: it is rendered, never display:none,
-                      because a hidden region would not be live. */}
+                      because a hidden region would not be live. Its first
+                      committed frame is empty even when the phase begins
+                      already loading: the text below renders only once
+                      `statusRegionCommitted` arms it, one commit after
+                      the region mounts. */}
                   <Box
                     role="status"
                     sx={
@@ -440,7 +470,7 @@ export function DataTable<T>({
                         : { display: 'flex' }
                     }
                   >
-                    {loading ? (
+                    {loading && statusRegionCommitted ? (
                       <>
                         <CircularProgress
                           size={22}
