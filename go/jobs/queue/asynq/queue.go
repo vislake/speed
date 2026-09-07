@@ -633,6 +633,12 @@ const idempotencyClaimTTL = 30 * time.Second
 // JobID Get/Cancel/DeadLetterJobs resolve by -- and its lifetime in asynq's
 // own records is the dedupe's lifetime, unchanged by the claim machinery
 // below.
+//
+// The composition is verbatim: the caller's key text is this string's
+// tail, and through it the tail of the JobID every job_id attribute this
+// queue logs carries. Task.IdempotencyKey's caller-side warning is
+// therefore the only content gate the key text ever passes -- this
+// function deliberately does no content screening of its own.
 func idempotencyTaskID(task jobs.Task) string {
 	return "idem:" + string(task.TenantID) + ":" + task.IdempotencyKey
 }

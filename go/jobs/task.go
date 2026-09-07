@@ -70,8 +70,33 @@ type Task struct {
 	// period it is for (the storage and compliance sweep keys carry their
 	// window start), or the dedupe intended to collapse concurrent
 	// duplicates of one run will instead collapse every later run into the
-	// first-ever one. Left empty, every Enqueue call creates a new,
-	// independent Job.
+	// first-ever one.
+	//
+	// "Derived from the business operation", the phrase this field's
+	// AGENTS.md example uses, means deterministic — a replay of the same
+	// operation reproduces the key, which is what lets a duplicate
+	// Enqueue dedupe onto the first Job's id. It says nothing about
+	// secrecy, and unlike Payload and Result — whose do-not-put-
+	// credentials warnings this one mirrors — the key is not opaque
+	// bytes: the asynq-backed Queue composes it verbatim into its
+	// deterministic TaskID ("idem:" + tenantID + ":" + key), which IS
+	// the JobID that queue's enqueue and claim-recovery log lines carry
+	// in their job_id attribute, and the text is persisted with the Job's
+	// own record for the record's whole lifetime on both queues —
+	// StandaloneQueue's idempotency_key column, the asynq-backed queue's
+	// TaskID and task headers. A key that embeds an email address, a
+	// phone number or a token therefore puts that text into the
+	// platform's logs and job records verbatim, and no redaction layer
+	// can recognize it for removal — go/observability's value-shape net
+	// catches credential shapes, never PII, and job_id is exempt from
+	// even that scan so log lines stay joinable. Build the key from
+	// the operation's own opaque identifiers, exactly as the AGENTS.md
+	// example shows; where the
+	// operation's only natural identity is a PII-bearing value (an
+	// invite addressed to an email, say), hash that value into the key
+	// rather than embedding it.
+	//
+	// Left empty, every Enqueue call creates a new, independent Job.
 	IdempotencyKey string
 }
 

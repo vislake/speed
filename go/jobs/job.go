@@ -137,7 +137,10 @@ type Job struct {
 	Payload []byte
 
 	// IdempotencyKey is the enqueuing Task's idempotency key, if any
-	// (empty when the Task did not set one).
+	// (empty when the Task did not set one). Task.IdempotencyKey's
+	// warning applies unchanged to this text as read back here: the
+	// record persists it, and on the asynq-backed Queue it is embedded
+	// verbatim in the Job's own id.
 	IdempotencyKey string
 
 	// Status is this Job's current lifecycle state.
