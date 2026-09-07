@@ -165,12 +165,17 @@ export const TENANT_NAMES = [APP_TEXT.tenantAcme, APP_TEXT.tenantGlobex] as cons
 
 /** The tenant the frame is currently scoped to, read from the switcher. */
 export async function readCurrentTenant(page: Page): Promise<string> {
-  for (const name of TENANT_NAMES) {
-    if ((await page.getByRole('button', { name }).count()) > 0) {
-      return name
-    }
+  const label = await readTenantLabel(page)
+  if ((TENANT_NAMES as readonly string[]).includes(label)) {
+    return label
   }
-  throw new Error('e2e: the frame shows no known tenant in its switcher')
+  // Naming what it actually saw, because the previous form could not:
+  // it probed for each demo name in turn and threw "no known tenant"
+  // either way, so a frame scoped to a self-service clinic and a frame
+  // showing no switcher at all produced the same message.
+  throw new Error(
+    `e2e: the frame's switcher shows "${label}", which is not one of the demo practices`,
+  )
 }
 
 /** The other configured tenant, for a spec that needs to cross the boundary. */
@@ -180,6 +185,77 @@ export function otherTenant(current: string): string {
     throw new Error(`e2e: no counterpart tenant for ${current}`)
   }
   return other
+}
+
+/**
+ * The label the tenant switcher is currently showing, WHATEVER it says.
+ *
+ * The counterpart to readCurrentTenant, and the difference is the point:
+ * readCurrentTenant only recognises the two demo practices, so it cannot
+ * describe a frame scoped to any other tenant -- and self-service
+ * registration creates exactly that, a clinic of the registrant's own
+ * whose trigger shows a tenant id no helper knows by name.
+ *
+ * It exists because the alternative was being used and was unsound:
+ * `TENANT_NAMES.not.toContain(await readCurrentTenant(page).catch(() => ''))`
+ * passes whenever readCurrentTenant THROWS -- an unloaded frame, an
+ * unrendered switcher, a bug in the helper itself -- so it cannot tell
+ * "landed in its own clinic" from "shows no tenant at all", and the
+ * direction it fails in is the one where it says yes. An assertion about
+ * where a person landed needs to name where they landed.
+ *
+ * Read from the chrome's own buttons rather than by an accessible name,
+ * because the name is the answer being looked for. The chrome's other
+ * controls are known and skipped; tenancy-ui's own no-tenant label is
+ * returned as itself rather than treated as absence, since "signed in
+ * with no organization" is a real state and worth being able to assert.
+ *
+ * textContent, NOT innerText, and this is the mirror image of the choice
+ * the session-address gate had to make in the other direction. innerText
+ * returns text as RENDERED, and MUI's Button applies
+ * `text-transform: uppercase` -- so the switcher reads back "ACME
+ * DENTAL" while the tenant is named "Acme Dental", and every comparison
+ * against a configured name fails. textContent is the DOM's own text,
+ * which is what the accessible name is computed from and what a screen
+ * reader announces, so it is the identity. (Its own hazard --
+ * concatenating adjacent elements with no separator -- does not apply to
+ * one button's label, which is why the two gates land on opposite
+ * answers: ask "what does this render as" and innerText is right; ask
+ * "which tenant is this" and only the untransformed text is.)
+ */
+export async function readTenantLabel(page: Page): Promise<string> {
+  const chromeControls = [SESSION_TEXT.signOut, SHELL_TEXT.openNav] as const
+  const buttons = page.locator('header button')
+  const count = await buttons.count()
+  for (let index = 0; index < count; index += 1) {
+    const label = ((await buttons.nth(index).textContent()) ?? '').replace(/\s+/g, ' ').trim()
+    if (label === '' || chromeControls.some((control) => label === control)) {
+      continue
+    }
+    return label
+  }
+  throw new Error('e2e: the frame shows no tenant switcher in its chrome')
+}
+
+/**
+ * Asserts the frame is scoped to a tenant, and that it is NOT one of the
+ * demo organizations.
+ *
+ * Both halves, in that order, and the first is what the assertion this
+ * replaces was missing: a person has to have landed SOMEWHERE before
+ * "not there" means anything. Used by the invitation journey to establish
+ * that an invitee is outside the inviting organization before accepting
+ * -- the control that makes the acceptance afterwards prove something.
+ */
+export async function expectOutsideDemoOrganizations(page: Page): Promise<void> {
+  const landed = await readTenantLabel(page)
+  expect(landed, 'the frame names no tenant at all, so it cannot be said where this person landed').not.toBe(
+    '',
+  )
+  expect(
+    TENANT_NAMES as readonly string[],
+    `the frame is scoped to ${landed}, one of the demo organizations, so nothing later can prove an invitation opened it`,
+  ).not.toContain(landed)
 }
 
 /**
