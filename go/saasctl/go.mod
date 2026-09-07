@@ -20,7 +20,7 @@ require (
 	github.com/vislake/speed/go/pkgcore v0.0.0-00010101000000-000000000000
 	github.com/vislake/speed/go/ratelimit v0.0.0-00010101000000-000000000000 // indirect
 	github.com/vislake/speed/go/rbac v0.0.0-00010101000000-000000000000
-	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000 // indirect
+	github.com/vislake/speed/go/tenancy v0.0.0-00010101000000-000000000000
 )
 
 // golang.org/x/mod is one of the direct third-party dependencies, justified
