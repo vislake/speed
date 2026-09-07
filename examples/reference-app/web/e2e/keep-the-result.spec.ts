@@ -23,12 +23,13 @@
  * WHAT IT ASSERTS, AND WHAT IT LEAVES OPEN
  *
  * That pressing the control the surface offers produces a file the
- * browser actually receives -- a real download event, with a name, of
- * non-trivial size. It does not prescribe the format, the filename, one
- * button or two (the original and the result are both plausibly worth
- * saving), a zip, or whether the bytes come from go/storage directly or
- * through a fresh render. Any of those passes. What does not pass is a
- * surface where the only way out is a screenshot.
+ * browser actually receives -- a real download event, with a name,
+ * whose first bytes are an image (or an archive of them). It does not
+ * prescribe the format, the filename, one button or two (the original
+ * and the result are both plausibly worth saving), a zip, or whether the
+ * bytes come from go/storage directly or through a fresh render. Any of
+ * those passes. What does not pass is a surface where the only way out
+ * is a screenshot.
  *
  * @pending, in the tag's second sense: not "this is broken" but "this
  * surface does not exist yet". The app's own en-US bundle contains no
@@ -44,6 +45,7 @@
  * server, which is the same mechanism that makes @budget a real tier.
  */
 import { expect, test } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
 import { DEMO_OWNER } from './test-utils/accounts.js'
 import { signInAs } from './test-utils/journeys.js'
 import { openCaseWithSimulation } from './test-utils/cases.js'
@@ -61,8 +63,44 @@ import { openCaseWithSimulation } from './test-utils/cases.js'
  */
 const KEEP_IT = /download|save (the )?(image|result|simulation|photo)|export/i
 
-/** Below this a "file" is an error page or an empty placeholder. */
-const PLAUSIBLE_IMAGE_BYTES = 200
+/**
+ * What a real image file starts with. PNG, JPEG, RIFF (WebP), and PK for
+ * an archive of several, since the gate allows a zip of the pair.
+ *
+ * IDENTITY, NOT SIZE, and this replaced a byte threshold that would have
+ * falsely accused a correct implementation. The threshold was 200 bytes
+ * on the reasoning that anything smaller is an error page -- but the
+ * simulation this suite generates comes from its own fake vendor and is
+ * a 1x1 PNG of SIXTY-NINE bytes (the patient photo is seventy), so a
+ * gate demanding 200 would have reported "an error page saves just as
+ * successfully as a simulation does" about a download that was perfectly
+ * correct, and reported it to the very round that implemented the
+ * feature.
+ *
+ * It is the third threshold in this suite to be wrong in the same
+ * structural way -- the sessions gate once compared character counts,
+ * and the rule it produced applies here unchanged: a threshold loose
+ * enough to accept the good case is loose enough to accept the bad one,
+ * and one tight enough to catch the bad case catches the good one too.
+ * The magic number answers the question the threshold was groping for --
+ * "is this actually an image" -- exactly, and it accepts a legitimately
+ * tiny one.
+ */
+const IMAGE_OR_ARCHIVE_MAGIC: readonly (readonly number[])[] = [
+  [0x89, 0x50, 0x4e, 0x47], // PNG
+  [0xff, 0xd8, 0xff], // JPEG
+  [0x52, 0x49, 0x46, 0x46], // RIFF, which is how WebP starts
+  [0x50, 0x4b, 0x03, 0x04], // PK: a zip of the pair
+]
+
+/**
+ * The control that reveals a page's secondary actions, when there is
+ * one. A download button next to Share is one honest layout; a download
+ * item inside an overflow menu is another, and a gate that only looked
+ * for the first would report "there is no way to save this" about the
+ * second.
+ */
+const OVERFLOW = /more|actions|options|menu/i
 
 test(
   'a practice can save the simulation it paid for, not just look at it',
@@ -75,17 +113,41 @@ test(
     // failure says "there is no way to save this" rather than "a
     // download never started" -- which is also true when the control is
     // there and broken, and does not distinguish the two.
-    const control = page.getByRole('button', { name: KEEP_IT }).or(
-      page.getByRole('link', { name: KEEP_IT }),
-    )
+    const control = page
+      .getByRole('button', { name: KEEP_IT })
+      .or(page.getByRole('link', { name: KEEP_IT }))
+      .or(page.getByRole('menuitem', { name: KEEP_IT }))
+
+    // Looked for behind an overflow menu too, before concluding there is
+    // nowhere to save from. Not doing so would have made this gate
+    // accuse a correct implementation of having no control at all,
+    // purely because it put it where a secondary action usually goes.
+    if (!(await control.first().isVisible().catch(() => false))) {
+      const overflow = page.getByRole('button', { name: OVERFLOW })
+      if (await overflow.first().isVisible().catch(() => false)) {
+        await overflow.first().click()
+      }
+    }
+
     await expect(
       control.first(),
-      'a practice can generate a simulation and share a temporary link, but has no way to keep the image it spent credits on -- the only way out of the product is a screenshot',
+      'a practice can generate a simulation and share a temporary link, but has no way to keep the image it spent credits on -- neither beside the result nor in an overflow menu -- so the only way out of the product is a screenshot',
     ).toBeVisible({ timeout: 15_000 })
 
     const arriving = page.waitForEvent('download', { timeout: 30_000 })
     await control.first().click()
-    const file = await arriving
+
+    // Named rather than left as a bare timeout. "waitForEvent(download)
+    // exceeded 30000ms" says nothing about what happened; the likely
+    // shapes are a control that opens the image in a tab instead of
+    // handing it over, or one wired to nothing at all, and an
+    // implementer reading the failure should be told which question to
+    // ask.
+    const file = await arriving.catch(() => {
+      throw new Error(
+        'the control was pressed and no file ever arrived: either it opens the image somewhere instead of handing it to the browser, or it is wired to nothing -- a practice that clicks it still has no copy of what it paid for',
+      )
+    })
 
     // A real file, named, with bytes in it. Each of the three is a
     // separate way this can be shipped and still not work: a click that
@@ -101,10 +163,11 @@ test(
     const saved = await file.path()
     expect(saved, 'the browser reported a download that has no file behind it').not.toBeNull()
 
-    const { size } = await import('node:fs/promises').then((fs) => fs.stat(saved as string))
+    const bytes = await readFile(saved as string)
+    const head = [...bytes.subarray(0, 4)]
     expect(
-      size,
-      `the saved file is ${size} bytes, which is not an image -- an error page or an empty placeholder saves just as successfully as a simulation does`,
-    ).toBeGreaterThan(PLAUSIBLE_IMAGE_BYTES)
+      IMAGE_OR_ARCHIVE_MAGIC.some((magic) => magic.every((byte, at) => head[at] === byte)),
+      `the saved file does not begin like an image or an archive (first bytes ${head.join(' ')}, ${bytes.length} in total) -- an error page or an empty placeholder saves just as successfully as a simulation does, and a practice only finds out when it tries to open the file`,
+    ).toBe(true)
   },
 )

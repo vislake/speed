@@ -52,9 +52,15 @@
  * @pending tier being its own invocation against its own freshly booted
  * server, which is the same mechanism that makes @budget a real tier.
  */
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import { DEMO_OWNER } from './test-utils/accounts.js'
-import { expectSignedIn, openSurface, readCurrentTenant, signInAs } from './test-utils/journeys.js'
+import {
+  APP_TEXT,
+  expectSignedIn,
+  openSurface,
+  readCurrentTenant,
+  signInAs,
+} from './test-utils/journeys.js'
 
 /**
  * Where the practice's people are managed. Expectations of accessible
@@ -81,6 +87,45 @@ const TEAM_UI = {
 /** How the surface says an invitation is out and not yet accepted. */
 const OUTSTANDING = /pending|invited|awaiting|not yet accepted|sent/i
 
+/**
+ * Gets to wherever the practice's people are managed, trying both places
+ * this gate said it would allow.
+ *
+ * The first version of this called openSurface and nothing else, which
+ * made the code contradict the header directly above it: the header
+ * promises not to prescribe where the surface lives -- "a nav entry, the
+ * account page, a clinic settings area" -- while openSurface accepts
+ * only a nav entry. An implementation that put member management on the
+ * account page, exactly as permitted, would have been told the practice
+ * has nowhere to manage its people.
+ *
+ * That is the same mistake the org-invitation gate made once already,
+ * asserting a landing rather than reachability, and it is worth catching
+ * before the round that will be judged by it rather than after: a gate
+ * whose comment and whose code disagree will be believed on the comment
+ * and enforced on the code.
+ */
+async function reachThePractisesPeople(page: Page): Promise<void> {
+  // A surface of its own, reached the way any surface is -- which also
+  // handles the narrow viewport, where the entry sits in the drawer.
+  try {
+    await openSurface(page, TEAM_UI.surface)
+    return
+  } catch {
+    // Allowed: it may not be a surface of its own at all.
+  }
+
+  // Or a section of the account surface, the other place it could
+  // honestly live. The invite affordance rather than a heading is what
+  // is looked for, because a section's title is a design choice and the
+  // ability to invite is the capability.
+  await openSurface(page, APP_TEXT.navAccount)
+  await expect(
+    page.getByRole('button', { name: TEAM_UI.invite }).first(),
+    'a practice has nowhere to manage its people: no navigation entry for a team, members or clinic-settings surface, and no way to invite anyone from the account surface either',
+  ).toBeVisible({ timeout: 15_000 })
+}
+
 test(
   'an owner can invite a colleague into the clinic by clicking',
   { tag: '@pending' },
@@ -99,7 +144,7 @@ test(
     // practice has nowhere to manage its people, which is a different
     // finding from an invite form that does not work -- and the second
     // message would be wrong about the first.
-    await openSurface(page, TEAM_UI.surface)
+    await reachThePractisesPeople(page)
 
     const colleague = `e2e-colleague-${Date.now()}@example.com`
     await page.getByRole('button', { name: TEAM_UI.invite }).first().click()
