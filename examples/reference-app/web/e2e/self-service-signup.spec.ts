@@ -82,6 +82,16 @@ test.describe('a practice signing itself up', () => {
     await page.getByRole('textbox', { name: SIGN_IN_TEXT.identifierLabel }).fill(email)
     await page.getByRole('textbox', { name: SIGN_IN_TEXT.passwordLabel }).fill(SIGNUP_PASSWORD)
     await page.getByRole('button', { name: APP_TEXT.registerSubmit }).click()
+    // Wait for the register verdict before leaving the register surface.
+    // The surface's "Back to sign in" control exists from the moment the
+    // register form shows, so clicking it while the request is still in
+    // flight races the register's own verdict: when the request then
+    // settles, the host's onRegistered flips the view to the
+    // created-account panel and the sign-in form never appears. Leg one
+    // waits for the same panel -- the product tells a registrant to sign
+    // in with the credentials they just registered, so the gate takes
+    // that turn in the same order.
+    await expect(page.getByRole('status')).toContainText(APP_TEXT.registerSuccess)
     await page.getByRole('button', { name: APP_TEXT.registerBackToSignIn }).click()
     await submitPasswordSignIn(page, email, SIGNUP_PASSWORD)
 
