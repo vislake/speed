@@ -285,6 +285,32 @@ recheck that might have skipped it), writes the in-app row and/or drives
 the email/SMS transports, and settles one `send_records` row per attempted
 channel.
 
+The params channel is the one dispatch surface that reaches the recipient
+verbatim: `Dispatch.Params` persists into the in-app inbox row and comes
+back out through the inbox API, so it may carry only what the type's own
+copy interpolates -- never delivery-internal context (an operator's
+free-text justification, an actor's user id). Every type now states that
+surface explicitly through its declaration's `RecipientVisibleParams`
+(pkgcore, added 2026-09): a non-nil list, the empty one included, is
+authoritative, and `Dispatch` refuses any dispatch carrying a parameter
+outside it before anything is enqueued (`ErrDispatchParamsNotAllowed`,
+code `notification.dispatch_params_not_allowed`, naming the type in
+"type_key" and the offending keys in "params"); the delivery path
+independently narrows a payload that nevertheless reaches it -- a job
+enqueued before the declaration restricted its params -- down to the
+declared set (delivery.go's `recipientVisibleOnly`, applied before
+anything renders, before the delivery key is derived and before the row
+is written), so a stale in-flight payload can no more leak internal
+context than a fresh dispatch can, and the derived key never depends on a
+parameter the declaration has forbidden. A type whose declaration leaves
+the list nil (the pre-annotation legacy value) stays unrestricted, byte
+for byte as before. The delivery suite pins both boundaries:
+`TestDelivery_Dispatch_RefusesParamsOutsideRecipientVisibleDeclaration`
+covers the dispatch refusal, and
+`TestDelivery_StalePayloadParams_NarrowedBeforeRowAndKey` the stale-payload
+narrowing; the wire code and its HTTP status ride errors_test.go's
+literal code table.
+
 Record semantics (`send_record.go`): `succeeded` is written only after the
 transport accepted the send, `failed` after a failure exhausted an attempt,
 `skipped` after a deliberate non-send whose reason will not change by
