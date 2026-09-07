@@ -36,6 +36,27 @@
 // deployment observes what the first one publishes, and these assertions
 // check that claim against the pair the factory builds.
 //
+// # What the suite does NOT assert: handler-error reporting
+//
+// The seam contract does not promise that Publish reports a failing
+// handler's error to the publisher: reporting is possible only for handlers
+// an implementation runs synchronously on the publisher's own goroutine,
+// while a broker-backed bus's deliveries to other replicas run on its own
+// reader goroutines, after Publish has returned, where no publisher exists
+// to receive the failure (pkgcore.EventBus's own doc comment draws this
+// line, and each implementation's docs describe how its machinery handles
+// such failures). This suite therefore never asserts that Publish returns a
+// failing handler's error -- an assertion that would reject a conformant
+// implementation whose delivery runs on its own goroutines -- and pins only
+// the property the contract does promise: a failing handler does not
+// prevent the handlers after it from running. Where an implementation
+// genuinely reports handler failures (the in-memory bus reports every one,
+// being the only shape in which every handler runs on the publisher's own
+// goroutine), that behavior is the implementation's own, verified by its
+// own tests (pkgcore's eventbus_test.go) rather than asserted here as a
+// property every implementation must share, and the suite's own acceptance
+// test pins that an implementation which cannot report is still accepted.
+//
 // # Capability-gated assertions
 //
 // AssertConforms takes the capability bits the implementation under test
@@ -237,15 +258,19 @@ func payloadSequence(payload any) (int, bool) {
 // subscribers is a no-op; a single subscriber receives the exact Event
 // published; several handlers subscribed to the same type are all invoked,
 // in registration order; a handler subscribed to a different type is not
-// invoked; and a handler that returns an error is reported by Publish
-// without preventing the handlers after it from running. Then, for an
-// implementation declaring MultiReplicaSafe, the cross-instance
-// assertions: an event published on the first instance is delivered to a
-// subscriber on the second; an event published before a subscription
-// existed is never replayed to the late subscriber while one published
-// after it is delivered; and a handler that panics on the receiving
-// instance does not stop later events of the same type from reaching the
-// healthy handlers subscribed alongside it.
+// invoked; and a handler that returns an error does not prevent the
+// handlers after it from running -- the suite deliberately does not assert
+// that Publish reports the failing handler's error, because reporting is an
+// implementation property the seam contract does not promise (a bus whose
+// delivery runs on its own goroutines cannot report a handler's failure to
+// any publisher; see the package doc comment and pkgcore.EventBus's own).
+// Then, for an implementation declaring MultiReplicaSafe, the
+// cross-instance assertions: an event published on the first instance is
+// delivered to a subscriber on the second; an event published before a
+// subscription existed is never replayed to the late subscriber while one
+// published after it is delivered; and a handler that panics on the
+// receiving instance does not stop later events of the same type from
+// reaching the healthy handlers subscribed alongside it.
 //
 // factory must return a pair of buses ready for immediate use, with no
 // subscribers of their own — AssertConforms subscribes only the handlers
@@ -388,7 +413,7 @@ func assertConforms(t *testing.T, caps pkgcore.Capability, factory func() (pkgco
 		}
 	})
 
-	t.Run("a_handler_error_is_reported_without_blocking_the_next_handler", func(t *testing.T) {
+	t.Run("a_handler_error_does_not_block_the_next_handler", func(t *testing.T) {
 		t.Helper()
 		bus, _ := factory()
 		eventType := subscript(conformEventType, "handler-error")
@@ -403,9 +428,20 @@ func assertConforms(t *testing.T, caps pkgcore.Capability, factory func() (pkgco
 			return nil
 		})
 
-		err := bus.Publish(context.Background(), pkgcore.Event{Type: eventType, Payload: conformPayload{}})
-		if err == nil {
-			t.Error("Publish() error = nil, want a non-nil error reporting the failing handler")
+		if err := bus.Publish(context.Background(), pkgcore.Event{Type: eventType, Payload: conformPayload{}}); err != nil {
+			// Tolerated, deliberately: whether Publish reports a failing
+			// handler is an implementation property, not a promise of the
+			// seam contract (pkgcore.EventBus's doc comment draws the line
+			// by where the handler ran) -- an implementation that delivers
+			// on its own goroutines cannot report a handler's failure to
+			// any publisher and still satisfies the contract, so the
+			// error's presence is asserted neither way here. What every
+			// implementation promises, and what this subtest pins, is the
+			// continuation: the failing handler did not stop the handler
+			// registered after it. (An implementation's own reporting
+			// behavior is verified by its own tests; the in-memory bus's
+			// error-joining is pinned in pkgcore's eventbus_test.go.)
+			t.Logf("Publish reported the failing handler (%v): reporting is this implementation's own property, exercised but not required", err)
 		}
 
 		select {

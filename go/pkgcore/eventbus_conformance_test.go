@@ -24,6 +24,15 @@ import (
 // EventBus seam — this is what proves the retrofit did not silently change
 // NewMemoryEventBus's own behavior for its existing callers.
 //
+// The seam contract does not promise that Publish reports a failing
+// handler's error (the shared suite therefore does not assert it; see
+// eventbustest's package doc comment). The in-memory bus's own
+// error-returning behavior — the "additional property" its synchronous
+// same-goroutine delivery gives it, which no broker-backed bus can provide
+// for a handler delivered on another replica — is pinned right here in
+// this package instead, by eventbus_test.go's TestMemoryEventBusPublish,
+// whose failing-handler cases assert the joined error Publish returns.
+//
 // The in-memory bus is single-process, so the factory returns the same
 // instance twice: the faithful two-instance model of a one-replica
 // deployment (see eventbustest's package doc comment). The zero caps

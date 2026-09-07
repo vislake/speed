@@ -190,8 +190,11 @@ func ExampleEventBus() {
 		return nil
 	})
 
-	// A failing handler does not stop the handlers registered after it; every
-	// failure is reported back to the publisher instead.
+	// A failing handler does not stop the handlers registered after it. The
+	// in-memory bus reports every failure back to the publisher through
+	// Publish's error -- a property of this implementation, not of the
+	// EventBus seam, which a broker-backed bus could not honour for a
+	// handler it delivers to on another replica.
 	bus.Subscribe("authn.user_created", func(ctx context.Context, evt pkgcore.Event) error {
 		return errors.New("mailer unavailable")
 	})
