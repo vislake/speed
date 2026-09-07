@@ -30,6 +30,13 @@
  * announcement retires with the commit that dropped it, and the rendered
  * text additionally derives only from rows the current `rows` prop still
  * carries, so the region never points at a file the queue has let go.
+ * The deferred re-announcement honours the same rule at fire time: a
+ * host rows update can land between the commit that armed it and its
+ * 0ms timer (a microtask-ordered update overtakes the timer), so the
+ * re-announcement re-checks its target row against the latest committed
+ * rows -- still present and still settled in the announced state -- and
+ * stays silent when the row was retried or removed in the meantime,
+ * instead of resurrecting stale text over the row's new fate.
  *
  * Render shape: rows render as one real list (a `ul` with the explicit
  * `role="list"` -- WebKit strips list semantics from a list-style-none
@@ -194,6 +201,12 @@ export function FileUploader({
   // state written during render.
   const announcementRef = useRef<Announcement>(null)
   announcementRef.current = announcement
+  // Mirror of the latest committed rows for the deferred re-announcement
+  // (see the diff effect): that 0ms timer can fire after commits that
+  // changed its target row's fate, and only the latest rows say what is
+  // still true at fire time. Written during render, like announcementRef.
+  const rowsRef = useRef<readonly FileUploaderRow[] | null>(null)
+  rowsRef.current = rows
   // The deferred re-announcement of a settle whose text repeats the
   // standing one (see the diff effect). Owned across effect instances;
   // cleared only when superseded, when the queue empties, or on unmount.
@@ -301,6 +314,24 @@ export function FileUploader({
       }
       reannounceTimerRef.current = setTimeout(() => {
         reannounceTimerRef.current = null
+        // A host rows update can land between this commit and the 0ms
+        // fire (a microtask-ordered update overtakes the timer). Only
+        // refill when the row this re-announcement speaks of is still in
+        // the latest committed rows AND still settled in the announced
+        // state: if it was removed or retried in the meantime, its stale
+        // settle text must not be resurrected -- the commit that changed
+        // its fate already decided what the region should say.
+        const target = rowsRef.current?.find(
+          (row) => row.id === nextChange.rowId,
+        )
+        const targetStillSettled =
+          target !== undefined &&
+          (nextChange.kind === 'uploaded'
+            ? target.status === 'succeeded'
+            : target.status === 'failed')
+        if (!targetStillSettled) {
+          return
+        }
         setAnnouncement((current) =>
           current === null
             ? {
