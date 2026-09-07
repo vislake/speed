@@ -695,7 +695,15 @@ func TestEventBus_ConformsToEventBusContract(t *testing.T) {
 	ctx := context.Background()
 	client := startRedisClient(t, ctx)
 
-	eventbustest.AssertConforms(t, func() (pkgcore.EventBus, pkgcore.EventBus) {
+	// The caps argument is this implementation's declaration — register.go's
+	// init declares MultiReplicaSafe | SurvivesRestart, and this package's
+	// own register_test.go pins the registry to return exactly those bits —
+	// and the capability-gated suite runs the cross-instance assertions for
+	// the MultiReplicaSafe half of that declaration. (Its SurvivesRestart
+	// half names broker-held stream state; the shared suite runs no EventBus
+	// restart protocol — see eventbustest's package doc comment — and this
+	// leg's backend holds that state in Redis itself.)
+	eventbustest.AssertConforms(t, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart, func() (pkgcore.EventBus, pkgcore.EventBus) {
 		busA := eventbusredis.NewEventBus(client)
 		busB := eventbusredis.NewEventBus(client)
 		t.Cleanup(busA.Close)

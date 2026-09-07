@@ -31,10 +31,25 @@ const (
 	// is only ever one replica to share state with.
 	MultiReplicaSafe Capability = 1 << iota
 
-	// SurvivesRestart means the implementation's state outlives the process
-	// that wrote it: restarting the process does not silently drop data. An
-	// in-memory KVStore, an in-process EventBus and a throwaway temporary
-	// ObjectStore directory all lack it. Unlike MultiReplicaSafe, no
+	// SurvivesRestart means the state the implementation reads and writes
+	// outlives a restart of the service that holds it: the service -- the
+	// Redis server behind a kv.redis store, the PostgreSQL server behind a
+	// kv.postgres one, the NATS server behind a kv.nats one -- can stop and
+	// start again without silently dropping the data the implementation
+	// stored through it. It is never the application process that restarts
+	// in this capability's sense: a process that merely talks to the
+	// service can be restarted freely and everything it wrote through the
+	// service comes back, and restarting the application process alone
+	// proves nothing about the service behind it (a JetStream bucket
+	// provisioned on memory storage loses every key when the NATS server
+	// itself restarts, while a process-only restart never reveals that).
+	// kvstoretest.AssertSurvivesRestart, the contract-suite verification of
+	// the bit, therefore drives a genuine restart of the state-holding
+	// service -- for an integration leg, the real container -- between the
+	// write and the read, so a declaration is a promise that protocol
+	// checks. An in-memory KVStore, an in-process EventBus and a throwaway
+	// temporary ObjectStore directory all lack it: the service holding
+	// their state is the process itself. Unlike MultiReplicaSafe, no
 	// deployment mode requires this capability -- losing state across a
 	// restart is a legitimate, deliberate choice for development or a
 	// throwaway composition -- so Kernel.Bootstrap never fails an assembly

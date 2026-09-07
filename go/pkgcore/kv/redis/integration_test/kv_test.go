@@ -431,7 +431,13 @@ func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 	ctx := context.Background()
 	clientA, clientB := startRedisClientPair(t, ctx)
 
-	kvstoretest.AssertConforms(t, func() (pkgcore.KVStore, pkgcore.KVStore) {
+	// The caps argument is this implementation's declaration — register.go's
+	// init declares MultiReplicaSafe | SurvivesRestart, and this package's
+	// own register_test.go pins the registry to return exactly those bits —
+	// so the capability-gated suite runs the cross-instance assertions for
+	// the MultiReplicaSafe half of that declaration against the independent
+	// connection pair below.
+	kvstoretest.AssertConforms(t, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart, func() (pkgcore.KVStore, pkgcore.KVStore) {
 		return kvredis.NewKVStore(clientA), kvredis.NewKVStore(clientB)
 	})
 }
@@ -452,7 +458,13 @@ func TestKVStore_DeclaredSurvivesRestart_ProvenAgainstContainerRestart(t *testin
 	ctx := context.Background()
 	container, client := startRedisPersistent(t, ctx)
 
-	kvstoretest.AssertSurvivesRestart(t,
+	// The caps argument carries the declaration this protocol verifies (the
+	// same bits register.go's init declares and register_test.go pins); the
+	// protocol refuses a call whose caps do not declare SurvivesRestart, so
+	// this run is the SurvivesRestart half of the declaration's
+	// verification, its container restart the state-holding-service restart
+	// pkgcore.Capability's doc comment names.
+	kvstoretest.AssertSurvivesRestart(t, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart,
 		func() pkgcore.KVStore {
 			return kvredis.NewKVStore(client)
 		},

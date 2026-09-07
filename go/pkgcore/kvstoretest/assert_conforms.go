@@ -31,10 +31,21 @@
 // level of the implementation's actual behaviour rather than its
 // declaration.
 //
+// AssertConforms takes those declared capability bits as its caps argument
+// (the same bits the implementation's register.go init declares and its
+// register_test.go pins), and gates its assertions on them: the
+// cross-instance assertions run only for an implementation declaring
+// MultiReplicaSafe, so a declaration is a promise the gated contract
+// verifies and an implementation declaring no bit runs the single-instance
+// checks only.
+//
 // SurvivesRestart, the other capability bit KVStore implementations can
-// declare, is verified separately by AssertSurvivesRestart: it needs a
-// restart of whatever process holds the data between the write and the
-// read, which no per-subtest factory pair can express.
+// declare, is verified separately by AssertSurvivesRestart, whose own caps
+// argument carries the same declaration and refuses a call that does not
+// declare the bit: it needs a restart of the service that holds the data
+// between the write and the read — pkgcore.Capability's own SurvivesRestart
+// doc comment names that service as the restart's target — which no
+// per-subtest factory pair can express.
 package kvstoretest
 
 import (
@@ -59,13 +70,31 @@ const (
 
 // AssertConforms verifies that the pair of KVStores the factory returns —
 // two instances of one deployment, per the package doc comment — satisfies
-// the contract documented on pkgcore.KVStore. Each subtest calls factory to
-// get its own store pair and operates on keys it derives from the subtest
-// name (see conformKey), so subtests sharing a long-lived backing store (as
-// the Redis integration leg does, one container per test file) never
-// collide on key names even though AssertConforms does not require factory
-// to return empty stores. The single-instance checks run against the
-// pair's first store; the cross-instance ones use both.
+// the contract documented on pkgcore.KVStore. caps must carry the
+// capability bits the implementation under test declares about itself — the
+// same bits its register.go init (or the host's WithKVStore call) declares,
+// which the package's own register_test.go pins against the registry — and
+// it selects which assertions run: the single-instance checks below run for
+// every implementation, and the cross-instance checks run only for one that
+// declares MultiReplicaSafe, because an implementation claiming that bit is
+// claiming exactly that a second instance of the same deployment observes
+// what the first one writes — the claim those checks verify against the
+// pair the factory builds. An implementation declaring neither
+// MultiReplicaSafe nor SurvivesRestart (the in-memory store) runs the
+// single-instance checks only. SurvivesRestart, the other capability bit
+// KVStore implementations can declare, is verified separately by
+// AssertSurvivesRestart, whose own signature carries the caps and refuses a
+// call that does not declare the bit: it needs a restart of whatever
+// service holds the data between the write and the read, which no
+// per-subtest factory pair can express.
+//
+// Each subtest calls factory to get its own store pair and operates on keys
+// it derives from the subtest name (see conformKey), so subtests sharing a
+// long-lived backing store (as the Redis integration leg does, one
+// container per test file) never collide on key names even though
+// AssertConforms does not require factory to return empty stores. The
+// single-instance checks run against the pair's first store; the
+// cross-instance ones use both.
 //
 // What AssertConforms checks, in order: Get on a key that was never set
 // reports a miss, not an error; Set followed by Get round-trips the exact
@@ -92,7 +121,7 @@ const (
 // of performing the operation. Then the cross-instance assertions: a value
 // set through one instance is readable through the other, and a delete
 // through one instance removes the key for the other.
-func AssertConforms(t *testing.T, factory func() (pkgcore.KVStore, pkgcore.KVStore)) {
+func AssertConforms(t *testing.T, caps pkgcore.Capability, factory func() (pkgcore.KVStore, pkgcore.KVStore)) {
 	t.Helper()
 
 	t.Run("get_on_a_never_set_key_reports_a_miss_not_an_error", func(t *testing.T) {
@@ -445,11 +474,15 @@ func AssertConforms(t *testing.T, factory func() (pkgcore.KVStore, pkgcore.KVSto
 		}
 	})
 
+	if !caps.Has(pkgcore.MultiReplicaSafe) {
+		return
+	}
+
 	t.Run("a_value_set_on_one_instance_is_readable_on_the_other", func(t *testing.T) {
 		t.Helper()
 		storeA, storeB := factory()
 		if err := checkValueVisibleAcrossInstances(storeA, storeB, conformKey(t, "cross-instance-round-trip")); err != nil {
-			t.Error(err)
+			t.Errorf("%v", err)
 		}
 	})
 
@@ -457,7 +490,7 @@ func AssertConforms(t *testing.T, factory func() (pkgcore.KVStore, pkgcore.KVSto
 		t.Helper()
 		storeA, storeB := factory()
 		if err := checkDeleteVisibleAcrossInstances(storeA, storeB, conformKey(t, "cross-instance-delete")); err != nil {
-			t.Error(err)
+			t.Errorf("%v", err)
 		}
 	})
 }

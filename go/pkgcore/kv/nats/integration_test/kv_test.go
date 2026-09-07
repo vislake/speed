@@ -467,7 +467,16 @@ func TestKVStore_DeclaredSurvivesRestart_RunsTheSharedVerification(t *testing.T)
 	ctx := context.Background()
 	container, conn := startNATSConnWithContainer(t, ctx)
 
-	kvstoretest.AssertSurvivesRestart(t,
+	// The caps argument carries the declaration this protocol verifies (the
+	// same bits register.go's init declares and this file's
+	// TestInit_RegistersKVNatsOnTheSharedRegistry_WithCapabilities pins);
+	// the protocol refuses a call whose caps do not declare SurvivesRestart,
+	// so this run is the SurvivesRestart half of the declaration's
+	// verification, its container restart the state-holding-service restart
+	// pkgcore.Capability's doc comment names — the restart that would expose
+	// a MemoryStorage-adopted bucket, which NewKVStore's own refusal (below)
+	// makes unreachable through this store.
+	kvstoretest.AssertSurvivesRestart(t, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart,
 		func() pkgcore.KVStore {
 			kv, err := kvnats.NewKVStore(ctx, conn, "survives-restart-it")
 			if err != nil {
@@ -532,7 +541,13 @@ func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 		t.Fatalf("NewKVStore() on the second connection error = %v, want nil", err)
 	}
 
-	kvstoretest.AssertConforms(t, func() (pkgcore.KVStore, pkgcore.KVStore) {
+	// The caps argument is this implementation's declaration — register.go's
+	// init declares MultiReplicaSafe | SurvivesRestart (pinned by
+	// TestInit_RegistersKVNatsOnTheSharedRegistry_WithCapabilities above) —
+	// so the capability-gated suite runs the cross-instance assertions for
+	// the MultiReplicaSafe half of that declaration against the independent
+	// connection pair below.
+	kvstoretest.AssertConforms(t, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart, func() (pkgcore.KVStore, pkgcore.KVStore) {
 		return storeA, storeB
 	})
 }

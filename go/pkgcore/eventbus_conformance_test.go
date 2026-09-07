@@ -26,12 +26,14 @@ import (
 //
 // The in-memory bus is single-process, so the factory returns the same
 // instance twice: the faithful two-instance model of a one-replica
-// deployment (see eventbustest's package doc comment), under which the
-// suite's cross-instance assertions reduce to ordinary local-delivery
-// checks the bus satisfies.
+// deployment (see eventbustest's package doc comment). The zero caps
+// argument is the in-memory bus's own declaration — "eventbus.memory"
+// registers with no capability bits — so the capability-gated suite runs
+// the single-instance checks only, exactly the assertions a bus that
+// claims no MultiReplicaSafe and no SurvivesRestart is entitled to run.
 func TestMemoryEventBus_ConformsToEventBusContract(t *testing.T) {
 	t.Parallel()
-	eventbustest.AssertConforms(t, func() (pkgcore.EventBus, pkgcore.EventBus) {
+	eventbustest.AssertConforms(t, 0, func() (pkgcore.EventBus, pkgcore.EventBus) {
 		bus := pkgcore.NewMemoryEventBus()
 		return bus, bus
 	})

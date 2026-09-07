@@ -135,7 +135,16 @@ func TestEventBus_AssertConforms(t *testing.T) {
 	pool := startPostgresPool(t, ctx)
 
 	seq := 0
-	eventbustest.AssertConforms(t, func() (pkgcore.EventBus, pkgcore.EventBus) {
+	// The caps argument is this implementation's declaration — register.go's
+	// init declares MultiReplicaSafe | SurvivesRestart, and this package's
+	// own register_test.go pins the registry to return exactly those bits —
+	// and the capability-gated suite runs the cross-instance assertions for
+	// the MultiReplicaSafe half of that declaration. (Its SurvivesRestart
+	// half names broker-held outbox state and is verified by this file's own
+	// catch-up proofs — a full restart under the same replicaID, and a
+	// severed-and-reconnected listener — the per-leg shape eventbustest's
+	// package doc comment names for an EventBus's durable-cursor claim.)
+	eventbustest.AssertConforms(t, pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart, func() (pkgcore.EventBus, pkgcore.EventBus) {
 		seq++
 		busA := eventbuspostgres.NewEventBus(pool, fmt.Sprintf("conform-replica-a-%d", seq))
 		busB := eventbuspostgres.NewEventBus(pool, fmt.Sprintf("conform-replica-b-%d", seq))

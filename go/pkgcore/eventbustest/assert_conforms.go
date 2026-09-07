@@ -34,13 +34,32 @@
 // about itself when it registers: an implementation declaring
 // MultiReplicaSafe is claiming exactly that a second instance of the same
 // deployment observes what the first one publishes, and these assertions
-// check that claim against the pair the factory builds. Every integration
-// leg whose implementation declares the bit runs this suite against a real
-// pair; an implementation that cannot satisfy the claim fails here, the
-// same way Kernel.Bootstrap fails an assembly whose resolved implementation
-// cannot satisfy the deployment mode's requirements (ErrCapabilityUnsatisfied),
+// check that claim against the pair the factory builds.
+//
+// # Capability-gated assertions
+//
+// AssertConforms takes the capability bits the implementation under test
+// declares and gates its assertions on them, so a declaration is a promise
+// the suite verifies and an implementation's verification follows from its
+// own declaration rather than from what a suite author happened to wire:
+// the single-instance assertions run for every implementation, the
+// cross-instance assertions run only for one declaring MultiReplicaSafe
+// (its two-instance pair is the verification — every integration leg whose
+// implementation declares the bit runs them against a real pair; an
+// implementation that cannot satisfy the claim fails here, the same way
+// Kernel.Bootstrap fails an assembly whose resolved implementation cannot
+// satisfy the deployment mode's requirements (ErrCapabilityUnsatisfied),
 // but at the level of the implementation's actual behaviour rather than its
-// declaration.
+// declaration). Of the bits an EventBus implementation can declare, this
+// suite verifies MultiReplicaSafe. SurvivesRestart names broker-held
+// delivery state that must outlive a restart of the service holding it; an
+// EventBus keeps no state of its own that a write-then-read protocol could
+// read back (the bus is the transport, not the record), so no EventBus
+// restart protocol exists in the shared suite and the claim is verified
+// per-leg where a backend makes it observable — eventbus/postgres's
+// integration tier re-proves catch-up across a full process restart under
+// the same replicaID, the durable-cursor shape SurvivesRestart names for a
+// bus.
 package eventbustest
 
 import (
@@ -154,37 +173,50 @@ func payloadSequence(payload any) (int, bool) {
 
 // AssertConforms verifies that the pair of EventBus instances the factory
 // returns — two instances of one deployment, per the package doc comment —
-// satisfies the contract documented on pkgcore.EventBus. It calls factory
-// once per checked property (t.Run subtest), never assuming state left by
-// an earlier subtest is visible in the next: each subtest subscribes to its
-// own event type variant (see the subscript helper), so subtests can run
-// against a shared long-lived pair (as the Redis/PostgreSQL/NATS
-// integration legs do, one container per test file rather than per case)
-// without their handlers colliding. Subtests may run in any order; the
-// single-instance ones use the factory's first instance, the
-// cross-instance ones use both.
+// satisfies the contract documented on pkgcore.EventBus. caps must carry
+// the capability bits the implementation under test declares about itself
+// — the same bits its register.go init (or the host's WithEventBus call)
+// declares, which the package's own register_test.go pins against the
+// registry — and it selects which assertions run: the single-instance
+// checks below run for every implementation, and the cross-instance checks
+// run only for one that declares MultiReplicaSafe, because an
+// implementation claiming that bit is claiming exactly that a second
+// instance of the same deployment observes what the first one publishes —
+// the claim those checks verify against the pair the factory builds. An
+// implementation declaring neither MultiReplicaSafe nor SurvivesRestart
+// (the in-memory bus) runs the single-instance checks only.
+//
+// AssertConforms calls factory once per checked property (t.Run subtest),
+// never assuming state left by an earlier subtest is visible in the next:
+// each subtest subscribes to its own event type variant (see the subscript
+// helper), so subtests can run against a shared long-lived pair (as the
+// Redis/PostgreSQL/NATS integration legs do, one container per test file
+// rather than per case) without their handlers colliding. Subtests may run
+// in any order; the single-instance ones use the factory's first instance,
+// the cross-instance ones use both.
 //
 // What AssertConforms checks, in order: a published event with no
 // subscribers is a no-op; a single subscriber receives the exact Event
 // published; several handlers subscribed to the same type are all invoked,
 // in registration order; a handler subscribed to a different type is not
 // invoked; and a handler that returns an error is reported by Publish
-// without preventing the handlers after it from running. Then the
-// cross-instance assertions: an event published on the first instance is
-// delivered to a subscriber on the second; an event published before a
-// subscription existed is never replayed to the late subscriber while one
-// published after it is delivered; and a handler that panics on the
-// receiving instance does not stop later events of the same type from
-// reaching the healthy handlers subscribed alongside it.
+// without preventing the handlers after it from running. Then, for an
+// implementation declaring MultiReplicaSafe, the cross-instance
+// assertions: an event published on the first instance is delivered to a
+// subscriber on the second; an event published before a subscription
+// existed is never replayed to the late subscriber while one published
+// after it is delivered; and a handler that panics on the receiving
+// instance does not stop later events of the same type from reaching the
+// healthy handlers subscribed alongside it.
 //
 // factory must return a pair of buses ready for immediate use, with no
 // subscribers of their own — AssertConforms subscribes only the handlers
 // each subtest registers, so a factory returning buses that already have
 // other subscribers on conformEventType-derived types would make the "no
 // subscribers" and "in registration order" checks unreliable.
-func AssertConforms(t *testing.T, factory func() (pkgcore.EventBus, pkgcore.EventBus)) {
+func AssertConforms(t *testing.T, caps pkgcore.Capability, factory func() (pkgcore.EventBus, pkgcore.EventBus)) {
 	t.Helper()
-	assertConforms(t, factory, crossInstanceBudget)
+	assertConforms(t, caps, factory, crossInstanceBudget)
 }
 
 // assertConforms is AssertConforms with an injectable cross-instance wait
@@ -194,7 +226,7 @@ func AssertConforms(t *testing.T, factory func() (pkgcore.EventBus, pkgcore.Even
 // seconds per subtest (each wait runs to its deadline), and the teeth
 // checks would dominate the package's unit-test time for no additional
 // certainty.
-func assertConforms(t *testing.T, factory func() (pkgcore.EventBus, pkgcore.EventBus), crossBudget time.Duration) {
+func assertConforms(t *testing.T, caps pkgcore.Capability, factory func() (pkgcore.EventBus, pkgcore.EventBus), crossBudget time.Duration) {
 	t.Helper()
 
 	t.Run("publish_with_no_subscribers_is_a_no_op", func(t *testing.T) {
@@ -345,11 +377,15 @@ func assertConforms(t *testing.T, factory func() (pkgcore.EventBus, pkgcore.Even
 		}
 	})
 
+	if !caps.Has(pkgcore.MultiReplicaSafe) {
+		return
+	}
+
 	t.Run("an_event_published_on_one_instance_is_delivered_to_the_other", func(t *testing.T) {
 		t.Helper()
 		publisher, receiver := factory()
 		if err := checkCrossInstanceDelivery(publisher, receiver, subscript(conformEventType, "cross-instance"), crossBudget); err != nil {
-			t.Error(err)
+			t.Errorf("%v", err)
 		}
 	})
 
@@ -357,7 +393,7 @@ func assertConforms(t *testing.T, factory func() (pkgcore.EventBus, pkgcore.Even
 		t.Helper()
 		publisher, receiver := factory()
 		if err := checkNoCatchUpForLateSubscriber(publisher, receiver, subscript(conformEventType, "late-subscription"), crossBudget); err != nil {
-			t.Error(err)
+			t.Errorf("%v", err)
 		}
 	})
 
@@ -365,7 +401,7 @@ func assertConforms(t *testing.T, factory func() (pkgcore.EventBus, pkgcore.Even
 		t.Helper()
 		publisher, receiver := factory()
 		if err := checkPanicDoesNotWedgeDelivery(publisher, receiver, subscript(conformEventType, "panic-isolation"), crossBudget); err != nil {
-			t.Error(err)
+			t.Errorf("%v", err)
 		}
 	})
 }

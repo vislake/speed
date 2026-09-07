@@ -1722,6 +1722,64 @@ func TestBootstrap_WiresTheDeploymentModeKVStoreIntoTheRegistry(t *testing.T) {
 // parallel with another test that bootstraps a Kernel; the package's
 // t.Parallel tests only resume after every sequential test has finished, so
 // this one never overlaps them.
+// accumulatingMailer is a deliberately stateful Mailer for the Bootstrap
+// warning tests below: every Send increments a counter the struct holds, the
+// minimal shape of state a process restart would drop. The built-in
+// mailers hold nothing across calls, which is exactly the distinction the
+// Stateless bit exists to draw (see Stateless's own doc comment).
+type accumulatingMailer struct {
+	sent int
+}
+
+func (m *accumulatingMailer) Send(ctx context.Context, mail Mail) error {
+	m.sent++
+	return nil
+}
+
+// TestBootstrap_StatelessSeamSkipsWarning_StatefulBitlessSeamWarns pins the
+// Stateless/SurvivesRestart warning distinction at the Bootstrap layer, on
+// the seam the Stateless bit was added for: a boot whose mailer seam
+// resolves to a Stateless implementation must print no restart warning for
+// it, while a boot whose mailer seam resolves to an implementation that
+// holds state without declaring SurvivesRestart must print one, naming the
+// seam. The two halves use the same slog capture and the same
+// WithMailer-shaped injection the existing
+// TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam uses for the preset
+// shape; these two exercises are the injected-host-implementation half that
+// test cannot reach (a host injecting an implementation declares its caps
+// itself, so the distinction between Stateless and bitless-stateful is the
+// host's to get right — and this is the pin that keeps warnIfNotDurable
+// honest about it). The default preset seams still warn in both boots
+// (eventbus.memory, kv.memory, objectstore.local), so each half asserts
+// only about the mailer seam's own line.
+func TestBootstrap_StatelessSeamSkipsWarning_StatefulBitlessSeamWarns(t *testing.T) {
+	bootOutput := func(opts ...KernelOption) string {
+		var buf bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		defer slog.SetDefault(previous)
+
+		if _, err := NewKernel(opts...).Bootstrap(context.Background()); err != nil {
+			t.Fatalf("Bootstrap() error = %v, want nil", err)
+		}
+		return buf.String()
+	}
+
+	t.Run("a_stateless_mailer_boot_produces_no_restart_warning", func(t *testing.T) {
+		out := bootOutput(WithMailer(NewConsoleMailer(), Stateless))
+		if strings.Contains(out, "seam=mailer") {
+			t.Errorf("bootstrap logged %q, want no restart warning for the stateless injected mailer", out)
+		}
+	})
+
+	t.Run("a_stateful_bitless_mailer_boot_warns_naming_the_seam", func(t *testing.T) {
+		out := bootOutput(WithMailer(&accumulatingMailer{}, 0))
+		if !strings.Contains(out, "seam=mailer") {
+			t.Errorf("bootstrap logged %q, want a restart warning naming the mailer seam for a stateful implementation without SurvivesRestart", out)
+		}
+	})
+}
+
 func TestBootstrap_WarnsOncePerNonSurvivingStatefulSeam(t *testing.T) {
 	var buf bytes.Buffer
 	previous := slog.Default()

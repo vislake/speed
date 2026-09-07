@@ -50,3 +50,58 @@ func TestAssertDoesNotSurviveRestart_PassesForAStoreWhoseDataDiesWithItsProcess(
 		t.Fatalf("AssertDoesNotSurviveRestart rejected a store whose data dies with its process: %v", err)
 	}
 }
+
+// The four tests below pin the declaration-to-protocol coupling the caps
+// parameters enforce: the positive protocol must be called with caps that
+// declare SurvivesRestart and the negative one with caps that do not, and
+// neither may be called with a nil factory or restart closure. These
+// guards are what make "the declaration alone, with no protocol run, and a
+// protocol run with the wrong declaration" both refuse themselves instead
+// of silently verifying nothing.
+
+func TestCheckSurvivesRestartCall_RefusesCapsWithoutSurvivesRestart(t *testing.T) {
+	factory := func() pkgcore.KVStore { return pkgcore.NewMemoryKVStore() }
+	restart := func() {}
+	for _, caps := range []pkgcore.Capability{0, pkgcore.MultiReplicaSafe} {
+		if err := checkSurvivesRestartCall(caps, factory, restart); err == nil {
+			t.Errorf("checkSurvivesRestartCall(%v) accepted caps that do not declare SurvivesRestart, want a refusal", caps)
+		}
+	}
+}
+
+func TestCheckSurvivesRestartCall_AcceptsCapsDeclaringSurvivesRestart(t *testing.T) {
+	if err := checkSurvivesRestartCall(pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart,
+		func() pkgcore.KVStore { return pkgcore.NewMemoryKVStore() }, func() {}); err != nil {
+		t.Errorf("checkSurvivesRestartCall(MultiReplicaSafe|SurvivesRestart) error = %v, want nil", err)
+	}
+}
+
+func TestCheckSurvivesRestartCall_RefusesNilFactoryAndNilRestart(t *testing.T) {
+	caps := pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart
+	restart := func() {}
+	if err := checkSurvivesRestartCall(caps, nil, restart); err == nil {
+		t.Error("checkSurvivesRestartCall() accepted a nil factory, want a refusal")
+	}
+	if err := checkSurvivesRestartCall(caps, func() pkgcore.KVStore { return pkgcore.NewMemoryKVStore() }, nil); err == nil {
+		t.Error("checkSurvivesRestartCall() accepted a nil restart, want a refusal: a SurvivesRestart declaration must be verified against a genuine restart of the state-holding service, never against nothing")
+	}
+}
+
+func TestCheckDoesNotSurviveRestartCall_RefusesCapsDeclaringSurvivesRestart(t *testing.T) {
+	factory := func() pkgcore.KVStore { return pkgcore.NewMemoryKVStore() }
+	restart := func() {}
+	for _, caps := range []pkgcore.Capability{0, pkgcore.MultiReplicaSafe} {
+		if err := checkDoesNotSurviveRestartCall(caps, factory, restart); err != nil {
+			t.Errorf("checkDoesNotSurviveRestartCall(%v) error = %v, want nil for caps without SurvivesRestart", caps, err)
+		}
+	}
+	if err := checkDoesNotSurviveRestartCall(pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart, factory, restart); err == nil {
+		t.Error("checkDoesNotSurviveRestartCall(MultiReplicaSafe|SurvivesRestart) accepted caps declaring SurvivesRestart, want a refusal")
+	}
+	if err := checkDoesNotSurviveRestartCall(pkgcore.MultiReplicaSafe, nil, restart); err == nil {
+		t.Error("checkDoesNotSurviveRestartCall() accepted a nil factory, want a refusal")
+	}
+	if err := checkDoesNotSurviveRestartCall(pkgcore.MultiReplicaSafe, factory, nil); err == nil {
+		t.Error("checkDoesNotSurviveRestartCall() accepted a nil restart, want a refusal")
+	}
+}

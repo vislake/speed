@@ -332,7 +332,15 @@ func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 	ctx := context.Background()
 	clientA, clientB := startMemcachedClientPair(t, ctx)
 
-	kvstoretest.AssertConforms(t, func() (pkgcore.KVStore, pkgcore.KVStore) {
+	// The caps argument is this implementation's declaration — register.go's
+	// init declares MultiReplicaSafe alone (this package's register_test.go
+	// pins the registry to return exactly that bit, never SurvivesRestart) —
+	// so the capability-gated suite runs the cross-instance assertions for
+	// the MultiReplicaSafe half of that declaration against the independent
+	// dual-client pair below, and runs no restart protocol: the bit that
+	// would demand one is honestly absent, and its absence is pinned by the
+	// does-not-survive protocol in the test after this one.
+	kvstoretest.AssertConforms(t, pkgcore.MultiReplicaSafe, func() (pkgcore.KVStore, pkgcore.KVStore) {
 		return kvmemcached.NewKVStore(clientA), kvmemcached.NewKVStore(clientB)
 	})
 }
@@ -351,7 +359,14 @@ func TestKVStore_DataDoesNotSurviveRestart_ConsistentWithItsHonestDeclaration(t 
 	ctx := context.Background()
 	container, hostPort := startMemcachedPersistent(t, ctx)
 
-	kvstoretest.AssertDoesNotSurviveRestart(t,
+	// The caps argument carries the declaration whose absence this protocol
+	// pins (the same MultiReplicaSafe-only bits register.go's init declares
+	// and register_test.go checks); the protocol refuses a call whose caps
+	// declare SurvivesRestart, so this run is the negative half of the
+	// declaration's verification — the honest non-declaration's factual
+	// basis, proven against a genuine restart of the Memcached container
+	// itself.
+	kvstoretest.AssertDoesNotSurviveRestart(t, pkgcore.MultiReplicaSafe,
 		func() pkgcore.KVStore {
 			return kvmemcached.NewKVStore(memcache.New(hostPort))
 		},

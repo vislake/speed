@@ -62,7 +62,11 @@ func TestBuiltinMailerRegistry_ResolvesEveryDocumentedName(t *testing.T) {
 	if impl == nil {
 		t.Error("Build(\"mailer.smtp\") returned a nil Mailer")
 	}
-	if want := MultiReplicaSafe | SurvivesRestart; caps != want {
+	// The declaration-audit round aligned mailer.smtp to the Stateless
+	// trichotomy slot (it holds no cross-call state -- every Send dials
+	// fresh) while keeping MultiReplicaSafe for the distributed mode's
+	// requirement; see the registration comment in builtin_implementations.go.
+	if want := MultiReplicaSafe | Stateless; caps != want {
 		t.Errorf("Build(%q) capabilities = %v, want %v", "mailer.smtp", caps, want)
 	}
 }

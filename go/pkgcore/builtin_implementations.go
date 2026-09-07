@@ -85,8 +85,25 @@ func newBuiltinMailerRegistry() *SeamRegistry[Mailer] {
 		New:          func(Config) (Mailer, error) { return NewConsoleMailer(), nil },
 	})
 	mustRegister(r, Registration[Mailer]{
+		// The declaration-audit trichotomy (holds state and outlives a
+		// restart -> SurvivesRestart; holds state and does not -> neither,
+		// Bootstrap warns; holds NO state -> Stateless) classifies
+		// mailer.smtp as Stateless the same way it classifies
+		// mailer.console: every Send dials a fresh connection to the relay
+		// (net/smtp's smtp.NewClient per Send; see smtp_mailer.go) and the
+		// struct holds only its config, so there is no cross-call state a
+		// restart could drop. The pre-audit declaration carried
+		// SurvivesRestart over that empty claim -- nothing this
+		// implementation holds survives or fails to survive, the relay's
+		// own durability being the relay's business -- and this round drops
+		// it. MultiReplicaSafe stays: DeploymentModeDistributed requires it
+		// of every seam, and any number of replicas sharing one relay is
+		// exactly the bit's promise, vacuously satisfied by a
+		// connection-per-Send shape. warnIfNotDurable skips a Stateless
+		// implementation, so the banner behaviour is unchanged by the
+		// audit.
 		Name:         "mailer.smtp",
-		Capabilities: MultiReplicaSafe | SurvivesRestart,
+		Capabilities: MultiReplicaSafe | Stateless,
 		New:          smtpMailerFromConfig,
 	})
 	return r
@@ -95,6 +112,24 @@ func newBuiltinMailerRegistry() *SeamRegistry[Mailer] {
 func newBuiltinObjectStoreRegistry() *SeamRegistry[ObjectStore] {
 	r := NewSeamRegistry[ObjectStore]()
 	mustRegister(r, Registration[ObjectStore]{
+		// Known limitation of the one-Registration-one-capability-set shape
+		// versus a capability that depends on Config, recorded rather than
+		// fixed: Capabilities is unconditionally 0 while
+		// localObjectStoreFromConfig has two durability modes -- a
+		// throwaway MkdirTemp root (honestly 0: the random root dies with
+		// the process that created it, since nothing after a restart can
+		// find it again, and it is the shape every config-less preset build
+		// takes) and a host-supplied persistent cfg["directory"] whose
+		// objects genuinely outlive a process restart (the directory
+		// outlasts the process), over which the warnIfNotDurable startup
+		// banner names a loss that does not exist. The registration is
+		// deliberately NOT split into two names this round: under-declaring
+		// is the safe direction (warnIfNotDurable treats SurvivesRestart
+		// and Stateless equivalently, no deployment mode requires the bit,
+		// and a host with a persistent directory can inject the store
+		// directly with WithObjectStore(store, SurvivesRestart) when it
+		// wants the banner gone), and splitting would change the name space
+		// hosts and Presets already pin.
 		Name:         "objectstore.local",
 		Capabilities: 0,
 		New:          localObjectStoreFromConfig,
