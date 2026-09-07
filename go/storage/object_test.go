@@ -376,8 +376,15 @@ func TestObjectService_Create_ReservesUploadRowAndCanonicalizesTheType(t *testin
 	if !row.UploadExpiresAt.After(now) || !row.UploadExpiresAt.Before(now.Add(31*time.Minute)) {
 		t.Errorf("upload window expires at %v, want roughly now+30m", row.UploadExpiresAt)
 	}
-	if row.ExpiresAt != nil {
-		t.Errorf("ExpiresAt = %v with no requested retention, want nil", *row.ExpiresAt)
+	// No requested retention is no longer "never expires": the module's
+	// maximum lifetime is the default life of an ordinary upload, so the row
+	// carries an expiry at roughly now + the configured maximum. The test
+	// service's configuration runs the module-default 90-day ceiling.
+	if row.ExpiresAt == nil {
+		t.Fatal("ExpiresAt = nil with no requested retention, want the default life at the module's configured maximum")
+	}
+	if !row.ExpiresAt.After(now.Add(89*24*time.Hour)) || !row.ExpiresAt.Before(now.Add(91*24*time.Hour)) {
+		t.Errorf("ExpiresAt = %v, want roughly now + the configured maximum lifetime (90 days)", *row.ExpiresAt)
 	}
 
 	// A requested retention inside the maximum lands on the row as an expiry;
@@ -392,6 +399,125 @@ func TestObjectService_Create_ReservesUploadRowAndCanonicalizesTheType(t *testin
 	if _, err := svc.Create(ctx, CreateParams{DeclaredSize: 4096, Retention: 90 * 24 * time.Hour}); err != nil {
 		t.Fatalf("retention exactly at the maximum refused: %v", err)
 	}
+}
+
+// TestObjectService_Create_NoRetentionRequestIsBoundedByTheLifetimeCeiling
+// is the P2 regression for the default path: WithMaxObjectLifetime documents
+// "the longest an object may be retained before it expires", and a host sets
+// that option expecting an unconditional cap. Before the fix an upload that
+// requested NO retention defaulted to never-expiring -- the cap applied only
+// to explicitly requested retentions -- so under a short configured maximum
+// an ordinary upload carried no expiry at all and the sweep could never reap
+// it. After the fix the default path is bounded: an unrequested retention
+// means the object lives exactly the configured maximum.
+func TestObjectService_Create_NoRetentionRequestIsBoundedByTheLifetimeCeiling(t *testing.T) {
+	cap := 10 * time.Minute
+	svc, _, _, _ := newTestService(t, func(cfg *serviceConfig) {
+		cfg.maxObjectLifetime = cap
+	})
+	ctx := serviceCtx("tenant-a")
+	now := time.Now()
+
+	// The declaration itself is the ordinary upload shape: no retention
+	// requested at all. The row must carry the default life at the cap.
+	row, err := svc.Create(ctx, CreateParams{DeclaredSize: 4096})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if row.ExpiresAt == nil {
+		t.Fatal("ExpiresAt = nil for an upload that requested no retention; the default path must be bounded by the configured maximum lifetime")
+	}
+	if row.ExpiresAt.Before(now.Add(cap-30*time.Second)) || row.ExpiresAt.After(now.Add(cap+30*time.Second)) {
+		t.Fatalf("ExpiresAt = %v, want roughly now + the configured maximum lifetime (%v)", *row.ExpiresAt, cap)
+	}
+
+	// Complete the object inside its window, then ask the expiry listing
+	// whether the row is due past the cap: the completed object must be
+	// listed once its default life has run out -- the state the expiry sweep
+	// reaps. Before the fix the row carried no expiry and could never be
+	// listed, surviving the cap forever.
+	content := testutil.JPEG(t, 4, 4)
+	completed, err := svc.Create(ctx, CreateParams{DeclaredSize: int64(len(content)), DeclaredType: "image/jpeg"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if uploadErr := svc.Upload(ctx, completed.ID, nil, bytes.NewReader(content)); uploadErr != nil {
+		t.Fatalf("Upload: %v", uploadErr)
+	}
+	if _, completeErr := svc.Complete(ctx, completed.ID); completeErr != nil {
+		t.Fatalf("Complete: %v", completeErr)
+	}
+	due, err := svc.objects.listExpiredCompleted(ctx, now.Add(cap+time.Minute))
+	if err != nil {
+		t.Fatalf("listExpiredCompleted: %v", err)
+	}
+	found := false
+	for _, expired := range due {
+		if expired.ID == completed.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the completed object is not listed as expired past the configured maximum; the default path survived past the cap")
+	}
+}
+
+// TestObjectService_Create_NoExpiryRequest_IsGatedByTheHostAllowance pins
+// the two deliberate acts a never-expiring object requires: the host must
+// have permitted the class (WithNoExpiryAllowed -> cfg.noExpiryAllowed) AND
+// the create must request the member (CreateParams.NoExpiry). A NoExpiry
+// request against a module whose host never opted in is a coded refusal --
+// never a silent exception to the lifetime ceiling -- and a NoExpiry
+// request that also names a finite retention is a contradiction and is
+// refused the same way regardless of the allowance.
+func TestObjectService_Create_NoExpiryRequest_IsGatedByTheHostAllowance(t *testing.T) {
+	t.Run("no allowance: a NoExpiry request is refused", func(t *testing.T) {
+		svc, _, _, _ := newTestService(t, nil)
+		_, err := svc.Create(serviceCtx("tenant-a"), CreateParams{DeclaredSize: 4096, NoExpiry: true})
+		assertCode(t, err, ErrNoExpiryNotAllowed.Code)
+	})
+	t.Run("no allowance: NoExpiry alongside a finite retention is refused as a contradiction", func(t *testing.T) {
+		svc, _, _, _ := newTestService(t, nil)
+		_, err := svc.Create(serviceCtx("tenant-a"), CreateParams{
+			DeclaredSize: 4096,
+			Retention:    24 * time.Hour,
+			NoExpiry:     true,
+		})
+		assertCode(t, err, ErrInvalidExpiry.Code)
+	})
+	t.Run("allowance granted: an explicit NoExpiry request leaves the row without an expiry", func(t *testing.T) {
+		svc, _, _, _ := newTestService(t, func(cfg *serviceConfig) {
+			cfg.noExpiryAllowed = true
+		})
+		row, err := svc.Create(serviceCtx("tenant-a"), CreateParams{DeclaredSize: 4096, NoExpiry: true})
+		if err != nil {
+			t.Fatalf("Create with NoExpiry on an allowing module: %v", err)
+		}
+		if row.ExpiresAt != nil {
+			t.Errorf("ExpiresAt = %v, want nil -- an explicitly requested never-expiring object", *row.ExpiresAt)
+		}
+		// An ordinary upload on the same module still defaults to the cap:
+		// the allowance opens a door for explicit requests, never for
+		// omissions.
+		ordinary, err := svc.Create(serviceCtx("tenant-a"), CreateParams{DeclaredSize: 4096})
+		if err != nil {
+			t.Fatalf("Create without NoExpiry on an allowing module: %v", err)
+		}
+		if ordinary.ExpiresAt == nil {
+			t.Error("an ordinary upload on an allowing module has no expiry; the default path must stay bounded by the cap")
+		}
+	})
+	t.Run("allowance granted: the contradiction is still refused", func(t *testing.T) {
+		svc, _, _, _ := newTestService(t, func(cfg *serviceConfig) {
+			cfg.noExpiryAllowed = true
+		})
+		_, err := svc.Create(serviceCtx("tenant-a"), CreateParams{
+			DeclaredSize: 4096,
+			Retention:    24 * time.Hour,
+			NoExpiry:     true,
+		})
+		assertCode(t, err, ErrInvalidExpiry.Code)
+	})
 }
 
 func TestObjectService_Create_RefusesAContextWithoutTenant(t *testing.T) {

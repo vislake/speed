@@ -97,10 +97,18 @@ type serviceConfig struct {
 	// window has passed are refused by Upload and Complete alike; sweeping
 	// them is a later round's job.
 	uploadTTL time.Duration
-	// maxObjectLifetime is the ceiling a create's requested retention may
-	// not pass. Zero requested retention -- an object that never expires --
-	// is always allowed; the ceiling clamps what a tenant may ask for.
+	// maxObjectLifetime is the default life of an upload that requests no
+	// retention AND the ceiling a requested finite retention may not pass:
+	// a create requesting nothing gets an expiry at this ceiling, a create
+	// asking for more is refused, and only an explicit never-expiring
+	// request (CreateParams.NoExpiry) may outlive it, and only when
+	// noExpiryAllowed says the deployment permits such objects.
 	maxObjectLifetime time.Duration
+	// noExpiryAllowed is whether the deployment permits never-expiring
+	// objects at all. It is set by the host's WithNoExpiryAllowed option;
+	// false makes a NoExpiry create request a coded refusal rather than a
+	// silent exception to the lifetime ceiling.
+	noExpiryAllowed bool
 	// allowedTypes is the module's allowlist, exact lowercase media types.
 	// It gates both the declared type at create time and the probed type at
 	// complete time.
@@ -208,10 +216,21 @@ type CreateParams struct {
 	// in which case no comparison is performed.
 	DeclaredChecksum string
 	// Retention is how long the completed object may live before it
-	// expires. Zero means the object does not expire. A positive value
-	// longer than the module's configured maximum is refused at create
-	// time, before any byte is transferred.
+	// expires. Zero requests no particular retention, which means the
+	// object's life defaults to the module's configured maximum -- the
+	// ordinary upload is bounded by the host's WithMaxObjectLifetime
+	// ceiling, never silently permanent. A positive value longer than that
+	// maximum is refused at create time, before any byte is transferred.
 	Retention time.Duration
+	// NoExpiry requests an object that never expires -- the one retention
+	// that outlives the module's configured maximum. It is refused
+	// (storage.no_expiry_not_allowed) unless the module was built with
+	// WithNoExpiryAllowed, so a never-expiring object requires both a host
+	// that explicitly permits the class and a create that explicitly
+	// requests the member; no omission ever produces one. NoExpiry
+	// together with a positive Retention is a contradiction and is refused
+	// with storage.invalid_expiry.
+	NoExpiry bool
 }
 
 // Create opens a new object: it validates the declaration, reserves the
@@ -225,10 +244,22 @@ type CreateParams struct {
 // (storage.invalid_size), one above the module's ceiling
 // (storage.object_too_large), a malformed DeclaredChecksum
 // (storage.invalid_checksum), a DeclaredType outside the module's allowlist
-// (storage.type_not_allowed), and a Retention past the module's maximum
-// (storage.invalid_expiry). The declared type is canonicalized (parameters
-// stripped, case folded) before it is stored, so the row always holds the
-// canonical form of what the uploader meant.
+// (storage.type_not_allowed), and a retention request the module's policy
+// cannot honour -- a positive Retention past the module's maximum, or a
+// NoExpiry request that also names a finite retention (both answer
+// storage.invalid_expiry), and a NoExpiry request on a module that does
+// not permit never-expiring objects (storage.no_expiry_not_allowed). The
+// declared type is canonicalized (parameters stripped, case folded) before
+// it is stored, so the row always holds the canonical form of what the
+// uploader meant.
+//
+// The row's expiry is settled here too. A positive Retention lands on the
+// row as an expiry at that deadline; a zero Retention -- no request at all,
+// the ordinary upload -- lands as an expiry at the module's configured
+// maximum lifetime, so an unconfigured upload is bounded by the host's
+// ceiling rather than silently permanent; and only an explicit NoExpiry
+// request, on a module whose host permitted the class, leaves the row
+// without an expiry (ExpiresAt nil, the state the expiry sweep skips).
 //
 // The caller's tenant comes from the context (pkgcore.WithTenant), never
 // from a parameter -- the multi-tenant rules leave no other source. A
@@ -255,7 +286,22 @@ func (s *ObjectService) Create(ctx context.Context, params CreateParams) (Object
 			return Object{}, err
 		}
 	}
-	if params.Retention > 0 && params.Retention > s.cfg.maxObjectLifetime {
+	// The retention policy, settled before any byte is accepted:
+	//   - NoExpiry with a finite Retention is a contradiction -- the caller
+	//     asked for both a deadline and none -- and is refused.
+	//   - A finite Retention past the configured maximum is refused; the
+	//     maximum is the ceiling of what may be requested.
+	//   - NoExpiry on a module whose host never permitted never-expiring
+	//     objects (WithNoExpiryAllowed) is refused: outliving the maximum is
+	//     a permission, not a spelling of the default request.
+	if params.NoExpiry && params.Retention > 0 {
+		return Object{}, ErrInvalidExpiry.WithParam(
+			"max_lifetime_days", int64(s.cfg.maxObjectLifetime/(24*time.Hour)))
+	}
+	if params.NoExpiry && !s.cfg.noExpiryAllowed {
+		return Object{}, ErrNoExpiryNotAllowed
+	}
+	if !params.NoExpiry && params.Retention > s.cfg.maxObjectLifetime {
 		return Object{}, ErrInvalidExpiry.WithParam(
 			"max_lifetime_days", int64(s.cfg.maxObjectLifetime/(24*time.Hour)))
 	}
@@ -268,7 +314,8 @@ func (s *ObjectService) Create(ctx context.Context, params CreateParams) (Object
 	key, err := ObjectKey(tenant, id)
 	if err != nil {
 		// The key grammar cannot fail on a UUID it just generated; if it
-		// ever does, this is a bug in this module, not a client error.
+		// ever does, this is a bug in this module (or a tenant id that is
+		// not slash-free -- see key.go's grammar), not a client error.
 		return Object{}, ErrInternal.WithCause(err)
 	}
 	now := time.Now()
@@ -282,8 +329,17 @@ func (s *ObjectService) Create(ctx context.Context, params CreateParams) (Object
 		DeclaredChecksum: params.DeclaredChecksum,
 		UploadExpiresAt:  now.Add(s.cfg.uploadTTL),
 	}
-	if params.Retention > 0 {
+	switch {
+	case params.NoExpiry:
+		// The explicitly requested never-expiring object: ExpiresAt stays
+		// nil, the state the expiry sweep skips.
+	case params.Retention > 0:
 		expiresAt := now.Add(params.Retention)
+		row.ExpiresAt = &expiresAt
+	default:
+		// No retention requested: the default life is the configured
+		// maximum, never no expiry -- see CreateParams.Retention's doc.
+		expiresAt := now.Add(s.cfg.maxObjectLifetime)
 		row.ExpiresAt = &expiresAt
 	}
 	if err := s.objects.Create(ctx, &row); err != nil {

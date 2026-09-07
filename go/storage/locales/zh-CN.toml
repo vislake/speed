@@ -35,6 +35,12 @@
 
 "storage.invalid_expiry" = "保留期限无效,最长 {{.max_lifetime_days}} 天。"
 
+"storage.no_expiry_not_allowed" = "不允许创建永不过期的对象:当前部署未启用该能力。"
+
+"storage.sweep_partial_failure" = "清理任务部分失败,{{.failed_rows}} 个对象未能处理,将在下次清理时重试。"
+
+"storage.allowed_type_unsupported" = "不允许将类型 {{.type}} 加入允许列表:该模块无法对它完成像素校验和元数据剥离。可安全加入的类型:{{.admissible}}。"
+
 "storage.store_unavailable" = "文件存储暂不可用,请稍后重试。"
 
 "storage.store_error" = "文件存储操作失败,请稍后重试。"

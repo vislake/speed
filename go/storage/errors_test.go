@@ -40,6 +40,7 @@ var errorCatalog = []struct {
 	{"ErrPixelLimitExceeded", ErrPixelLimitExceeded, "storage.pixel_limit_exceeded", http.StatusBadRequest},
 	{"ErrImageUnreadable", ErrImageUnreadable, "storage.image_unreadable", http.StatusBadRequest},
 	{"ErrInvalidExpiry", ErrInvalidExpiry, "storage.invalid_expiry", http.StatusBadRequest},
+	{"ErrNoExpiryNotAllowed", ErrNoExpiryNotAllowed, "storage.no_expiry_not_allowed", http.StatusBadRequest},
 	{"ErrInvalidSize", ErrInvalidSize, "storage.invalid_size", http.StatusBadRequest},
 	{"ErrInvalidRequestBody", ErrInvalidRequestBody, "storage.invalid_request_body", http.StatusBadRequest},
 	{"ErrInvalidLimit", ErrInvalidLimit, "storage.invalid_limit", http.StatusBadRequest},
@@ -48,6 +49,8 @@ var errorCatalog = []struct {
 	{"ErrStoreError", ErrStoreError, "storage.store_error", http.StatusInternalServerError},
 	{"ErrInternal", ErrInternal, "storage.internal_error", http.StatusInternalServerError},
 	{"ErrQueueRequired", ErrQueueRequired, "storage.queue_required", http.StatusInternalServerError},
+	{"ErrSweepPartialFailure", ErrSweepPartialFailure, "storage.sweep_partial_failure", http.StatusInternalServerError},
+	{"ErrAllowedTypeUnsupported", ErrAllowedTypeUnsupported, "storage.allowed_type_unsupported", http.StatusInternalServerError},
 }
 
 // TestErrorCatalog_IsComplete makes the promise at the top of errorCatalog

@@ -10,6 +10,7 @@ import (
 	_ "image/png"  // register the PNG decoder
 	"mime"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -137,6 +138,71 @@ func checkDeclaredTypeMatches(declared, probed string) error {
 // ceiling and the dimension columns to bound.
 func isImageMediaType(mt string) bool {
 	return strings.HasPrefix(mt, "image/")
+}
+
+// mediaTypeCoverage is the module's record of what it can do to one media
+// type's bytes: pixel-check them (a decoder is registered in this file's
+// import block) and metadata-strip them (sanitize.go has a structural
+// walker for the type).
+type mediaTypeCoverage struct {
+	decodable  bool
+	strippable bool
+}
+
+// mediaTypeSafety is the module's one place of record tying the three facts
+// the whitelist's safety promise rests on -- which probed types have a
+// registered decoder, which have metadata-strip coverage, and what the
+// whitelist may therefore admit. Register enforces the whitelist side of the
+// table (module.go: every WithAllowedTypes entry must pass
+// checkAdmittedMediaType), so a type with a decoder but no strip walker --
+// image/gif below -- can never be admitted by configuration: a host that
+// wants it must first give the module strip coverage for it, the same round
+// that would flip this table's strippable half.
+var mediaTypeSafety = map[string]mediaTypeCoverage{
+	// The module default allowlist: full coverage, both halves true.
+	"image/jpeg": {decodable: true, strippable: true},
+	"image/png":  {decodable: true, strippable: true},
+	// image/gif is decodable (its decoder sits in the pixel-check envelope
+	// above) but has NO metadata-strip coverage: sanitize.go ships no GIF
+	// walker, so a GIF's comment and application extensions would ride
+	// through the strip stage untouched. The type is recorded here with its
+	// honest halves -- decodable true, strippable false -- so the admission
+	// gate refuses it with the missing half named, rather than letting a
+	// pixel-checked, un-stripped GIF into the whitelist as if it carried
+	// both protections.
+	"image/gif": {decodable: true, strippable: false},
+}
+
+// checkAdmittedMediaType reports whether the whitelist may admit mt: the
+// module must be able to apply its full safety envelope -- pixel-check AND
+// metadata-strip -- to every byte that will complete under the type. A type
+// missing either half is refused with ErrAllowedTypeUnsupported naming the
+// type and the types that do carry full coverage, so a host configuring the
+// whitelist is told what it asked for and what it could have asked for.
+// Module.Register is the gate's caller; a configured type cannot reach the
+// service's allowlist past it.
+func checkAdmittedMediaType(mt string) error {
+	caps, known := mediaTypeSafety[mt]
+	if known && caps.decodable && caps.strippable {
+		return nil
+	}
+	return ErrAllowedTypeUnsupported.
+		WithParam("type", mt).
+		WithParam("admissible", strings.Join(admissibleMediaTypes(), ","))
+}
+
+// admissibleMediaTypes returns the media types the whitelist may currently
+// admit -- every table entry carrying both halves of the safety envelope --
+// in sorted order, for the admission gate's refusal message and its tests.
+func admissibleMediaTypes() []string {
+	var out []string
+	for mt, caps := range mediaTypeSafety {
+		if caps.decodable && caps.strippable {
+			out = append(out, mt)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // decodeImageFacts decodes enough of buf to establish its pixel dimensions,

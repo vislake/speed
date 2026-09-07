@@ -194,6 +194,43 @@ func TestKeyBuilder_RejectsMalformedComponents(t *testing.T) {
 	}
 }
 
+// TestKeyBuilder_EnforcesTheFixedSegmentCount pins the grammar's shape
+// guarantee: an object key is exactly three "/"-joined segments and a
+// derivative key exactly four, enforced by the builders themselves. A
+// tenant id, object id or kind that smuggles in a "/" would otherwise pass
+// every per-segment rule while fabricating extra segments -- blurring where
+// one component ends and the next begins, and potentially reading as
+// another key family entirely. Today's uuid-shaped ids cannot contain a
+// "/", so the count enforcement is a promise about the future: the day an
+// id alphabet changes, the violation is a loud builder error at the single
+// create/derive site, never a silently reshaped key.
+func TestKeyBuilder_EnforcesTheFixedSegmentCount(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func() (string, error)
+	}{
+		{"tenant id containing a slash", func() (string, error) {
+			return ObjectKey("a/b", testObjectID)
+		}},
+		{"object id containing a slash", func() (string, error) {
+			return ObjectKey(pkgcore.TenantID(testTenantID), "a/b")
+		}},
+		{"object id containing a slash-shaped derivative suffix", func() (string, error) {
+			return ObjectKey(pkgcore.TenantID(testTenantID), "a/derivatives/b")
+		}},
+		{"derivative kind containing a slash", func() (string, error) {
+			return DerivativeKey(pkgcore.TenantID(testTenantID), testObjectID, "a/b")
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := tc.build(); !errors.Is(err, ErrInvalidKey) {
+				t.Errorf("key builder error = %v, want ErrInvalidKey", err)
+			}
+		})
+	}
+}
+
 // TestKeyMaxLen_MatchesTheKeyColumns pins keyMaxLen to the schema contract
 // its own doc comment promises: the value equals the VARCHAR(512) width of
 // every key column in every dialect's migration, so a key the grammar

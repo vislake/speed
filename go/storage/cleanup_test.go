@@ -529,17 +529,24 @@ func TestLifecycleService_Sweep_DeletesExpiredCompletedObjects(t *testing.T) {
 	}
 }
 
-// TestLifecycleService_Sweep_FailsFastAndLetsTheNextRunFinish pins the
-// sweep's fail-fast contract: a store failure on one expired object stops
-// the pass with that row left in deleting -- bytes intact -- and the rows
-// later in the listing untouched; the next run finishes both, announcing
-// each deletion exactly once.
-func TestLifecycleService_Sweep_FailsFastAndLetsTheNextRunFinish(t *testing.T) {
+// TestLifecycleService_Sweep_OneRowSFailureDoesNotStarveThePass pins the
+// sweep's partial-failure contract, the shape compliance's SweepTenant sets
+// for its own participants: one object whose deletion fails permanently
+// must not starve the rest of the tenant's expiry pass. The sweep records
+// the failing row (its protocol stays resumable -- the row sits in deleting
+// with its bytes intact for a later run) and still runs every row that
+// follows it, then answers the coded partial-failure error so the caller
+// knows the pass was not clean. Before this contract the sweep failed fast:
+// the first refusing row stopped the pass, and since the listing order is
+// deterministic a row that failed on every pass starved every row after it
+// indefinitely -- later expiries that a plow-through pass would have
+// converged sat un-reaped forever behind the poison row.
+func TestLifecycleService_Sweep_OneRowSFailureDoesNotStarveThePass(t *testing.T) {
 	life, _, _, store, _, bus := newCleanupHarness(t)
 	ctx := serviceCtx("tenant-a")
 
 	// Two expired completed objects; the listing order is created_at ASC,
-	// so a = the earlier one fails first.
+	// so a = the earlier one is the poison row.
 	a := newCompleted("exp-a", "tenant-a", time.Now().Add(-3*time.Hour))
 	past := time.Now().Add(-2 * time.Hour)
 	a.ExpiresAt = &past
@@ -551,15 +558,18 @@ func TestLifecycleService_Sweep_FailsFastAndLetsTheNextRunFinish(t *testing.T) {
 	store.objects[b.Key] = bytes.Repeat([]byte{0xCD}, 64)
 
 	// The sweep's first store call is a's byte removal; failing it is the
-	// fail-fast crash this test pins.
+	// poison this test pins. The failure is permanent: every pass re-lists a
+	// first and every pass would hit the same refusal.
 	failing := &failStore{fakeStore: store, failErr: errors.New("store on fire"), failOn: 1}
 	life.host = &fakeHost{store: failing, bus: bus}
 
 	err := life.Sweep(ctx)
-	assertCode(t, err, ErrStoreError.Code)
+	assertCode(t, err, ErrSweepPartialFailure.Code)
 
-	// The first object's delete failed at its byte removal: marked deleting,
-	// bytes intact. The second was never reached.
+	// The poison row's delete failed at its byte removal: marked deleting,
+	// bytes intact -- the state the next run resumes. The row after it was
+	// still swept in the same pass: a healthy object's expiry never waits on
+	// a poisoned neighbour, and b's deletion announced itself.
 	got, err := life.objects.FindByID(ctx, a.ID)
 	if err != nil {
 		t.Fatalf("FindByID(%s): %v", a.ID, err)
@@ -570,30 +580,30 @@ func TestLifecycleService_Sweep_FailsFastAndLetsTheNextRunFinish(t *testing.T) {
 	if _, ok := store.bytes(a.Key); !ok {
 		t.Errorf("bytes under %q vanished although the store failed before removing them", a.Key)
 	}
-	gotB, err := life.objects.FindByID(ctx, b.ID)
-	if err != nil {
-		t.Fatalf("FindByID(%s): %v", b.ID, err)
+	assertObjectGone(t, life.objects, ctx, b.ID)
+	if _, ok := store.bytes(b.Key); ok {
+		t.Errorf("bytes still under %q although b's expiry delete ran in the same pass", b.Key)
 	}
-	if gotB.State != ObjectStateCompleted {
-		t.Errorf("row %s state = %q, want %q -- the failed pass must not touch rows after the failing one", b.ID, gotB.State, ObjectStateCompleted)
+	if len(bus.events) != 1 {
+		t.Errorf("events = %d, want exactly one -- b's deletion, committed in the same pass as a's failure", len(bus.events))
+	}
+	payload, ok := bus.events[0].Payload.(ObjectDeletedPayload)
+	if !ok || payload.ObjectID != b.ID {
+		t.Errorf("event payload = %+v, want object %s", bus.events[0].Payload, b.ID)
 	}
 
-	// The store recovers; the next run resumes a's deletion and finishes
-	// b's, announcing both.
+	// The store recovers; the next run resumes a's deletion and converges,
+	// announcing it exactly once more.
 	life.host = &fakeHost{store: store, bus: bus}
 	if err := life.Sweep(ctx); err != nil {
 		t.Fatalf("second Sweep: %v", err)
 	}
 	assertObjectGone(t, life.objects, ctx, a.ID)
-	assertObjectGone(t, life.objects, ctx, b.ID)
 	if _, ok := store.bytes(a.Key); ok {
 		t.Errorf("bytes still under %q after the second sweep", a.Key)
 	}
-	if _, ok := store.bytes(b.Key); ok {
-		t.Errorf("bytes still under %q after the second sweep", b.Key)
-	}
 	if len(bus.events) != 2 {
-		t.Errorf("events = %d, want two -- one per deletion the second sweep finished", len(bus.events))
+		t.Errorf("events = %d, want two -- one per deletion", len(bus.events))
 	}
 }
 

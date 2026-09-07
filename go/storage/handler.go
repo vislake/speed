@@ -177,10 +177,11 @@ func (h *Handler) StorageListObjects(w http.ResponseWriter, r *http.Request, par
 // beyond the configured maximum is refused by ObjectService (which owns the
 // bound), while an ExpiresAt already past -- or exactly now -- is refused
 // here, because time.Until of it has no positive lifetime and passing it
-// through would silently convert the caller's explicit deadline into "never
-// expires". Both halves write the same storage.invalid_expiry with the same
-// parameter, so a caller cannot tell the two refusals apart, because it
-// does not need to.
+// through would silently convert the caller's explicit deadline into the
+// module default (an absent deadline now means "the configured maximum
+// lifetime", never "never expires"). Both halves write the same
+// storage.invalid_expiry with the same parameter, so a caller cannot tell
+// the two refusals apart, because it does not need to.
 func (h *Handler) StorageCreateObject(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if _, ok := mustTenant(w, r); !ok {
@@ -346,6 +347,17 @@ func (h *Handler) StorageUploadObjectContent(w http.ResponseWriter, r *http.Requ
 // change the answer -- so it is logged and left to the client's own
 // truncated-body detection; likewise a close failure is logged, never
 // raised.
+//
+// Every response carries the two storage-type hardening headers: X-Content-
+// Type-Options: nosniff, so no browser ever second-guesses the probed
+// Content-Type into a renderable one, and Content-Disposition: attachment,
+// so a navigated response downloads instead of rendering as a document.
+// Both are unconditional -- their absence was tolerable only while the
+// whitelist could admit nothing a browser would render, a property no
+// future widening of WithAllowedTypes may rely on (the module's own
+// admission gate, module.go's Register check, is the other half of that
+// promise). Subresource loads (<img>, <video>) are unaffected by the
+// disposition; only document-level rendering is refused.
 func (h *Handler) StorageGetObjectContent(w http.ResponseWriter, r *http.Request, objectID api.ObjectID) {
 	ctx := r.Context()
 	if _, ok := mustTenant(w, r); !ok {
@@ -368,6 +380,8 @@ func (h *Handler) StorageGetObjectContent(w http.ResponseWriter, r *http.Request
 		mime = *obj.MIME
 	}
 	w.Header().Set("Content-Type", mime)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", "attachment")
 	if obj.Size != nil {
 		w.Header().Set("Content-Length", strconv.FormatInt(*obj.Size, 10))
 	}

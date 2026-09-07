@@ -181,8 +181,14 @@ func TestHandler_StorageCreateObject_DeclaresAnUpload(t *testing.T) {
 	if obj.UploadExpiresAt == nil || !obj.UploadExpiresAt.After(time.Now()) {
 		t.Errorf("uploadExpiresAt = %v, want a future window", obj.UploadExpiresAt)
 	}
-	if obj.ExpiresAt != nil {
-		t.Errorf("expiresAt = %v, want absent on an object that never expires", obj.ExpiresAt)
+	// An absent expiresAt in the request no longer means "never expires": the
+	// module's maximum lifetime is the default life of an ordinary upload, so
+	// the declaration carries an expiry at the default ceiling (90 days on
+	// the handler harness's unconfigured module).
+	if obj.ExpiresAt == nil {
+		t.Error("expiresAt absent on an upload that requested no retention; the default path must be bounded by the module's maximum lifetime")
+	} else if !obj.ExpiresAt.After(time.Now().Add(89*24*time.Hour)) || !obj.ExpiresAt.Before(time.Now().Add(91*24*time.Hour)) {
+		t.Errorf("expiresAt = %v, want roughly now + the default maximum lifetime (90 days)", *obj.ExpiresAt)
 	}
 	// The finalized half stays absent on the wire, never empty strings.
 	if obj.Size != nil || obj.MimeType != nil || obj.ChecksumSha256 != nil || obj.Width != nil || obj.Height != nil {
@@ -722,6 +728,19 @@ func TestHandler_StorageGetObjectContent_StreamsBytes(t *testing.T) {
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "image/jpeg" {
 		t.Errorf("Content-Type = %q, want the probed image/jpeg", ct)
+	}
+	// The storage-type hardening headers: nosniff stops a browser from
+	// second-guessing the Content-Type, and attachment keeps bytes the
+	// endpoint was never meant to render as a document from rendering on a
+	// navigated response. Both are unconditional -- their absence was safe
+	// only while the whitelist could admit nothing renderable, a property
+	// no future widening of the whitelist may rely on (module.go's Register
+	// admission gate is the other half of that promise).
+	if nn := rec.Header().Get("X-Content-Type-Options"); nn != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want %q", nn, "nosniff")
+	}
+	if cd := rec.Header().Get("Content-Disposition"); cd != "attachment" {
+		t.Errorf("Content-Disposition = %q, want %q", cd, "attachment")
 	}
 	row, err := h.objects.FindByID(serviceCtx("tenant-a"), *completed.ID)
 	if err != nil {

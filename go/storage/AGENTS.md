@@ -57,18 +57,29 @@ isolation layers; both run the shared `tenancytest.AssertIsolated` suite
 after the `With*` options have been applied and handed the registry when
 `Register` runs. Its methods:
 
-- `Create(ctx, CreateParams{DeclaredSize, DeclaredType, DeclaredChecksum, Retention})`
+- `Create(ctx, CreateParams{DeclaredSize, DeclaredType, DeclaredChecksum, Retention, NoExpiry})`
   validates the declaration and reserves the row in `ObjectStateUploading`.
   Refusals happen here, before any byte transfers: non-positive size
   (`storage.invalid_size`), size above the module ceiling
   (`storage.object_too_large`, param `max_bytes`), malformed checksum
   (`storage.invalid_checksum`), a declared type outside the allowlist
   (`storage.type_not_allowed`), retention past the module maximum
-  (`storage.invalid_expiry`). The declared type is canonicalized (parameters
+  (`storage.invalid_expiry`), a never-expiring request on a module whose host
+  did not opt in (`storage.no_expiry_not_allowed`), and a never-expiring
+  request that also names a finite retention (`storage.invalid_expiry`). The
+  declared type is canonicalized (parameters
   stripped, case folded) before storage; the declared checksum must be 64
   lowercase hex characters, refused otherwise so no two spellings of one digest
   can drift apart. A context without a tenant fails closed (`storage.internal_error`
   wrapping `pkgcore.ErrNoTenant`).
+  **The row's expiry is settled at create**: a requested finite retention
+  lands as that deadline; NO request — the ordinary upload — lands as an
+  expiry at the module's configured maximum lifetime (`WithMaxObjectLifetime`,
+  so an unconfigured upload is bounded by the host's ceiling, never silently
+  permanent); and only an explicit `NoExpiry: true` on a module built with
+  `WithNoExpiryAllowed()` leaves the row without an expiry (the `expires_at`
+  NULL state the sweep skips). Never-expiring objects therefore require two
+  deliberate acts — a host option and a per-object request — never an omission.
 - `Upload(ctx, objectID, contentLength *int64, body)` streams the body into the
   host's store, bounded byte for byte by the declared size. The optional
   `contentLength` is the transport-observed length when one exists: a value that
@@ -115,7 +126,11 @@ authority:
 4. Media type probed from content magic bytes (`http.DetectContentType` — never a
    filename or a caller-controlled header), checked against the allowlist
    (`storage.type_not_allowed`, param `allowed`), then the declared type checked
-   against the probe when one was declared (`storage.type_mismatch`).
+   against the probe when one was declared (`storage.type_mismatch`). The
+   allowlist itself is bounded before any of this runs: Register's admission
+   gate (`checkAdmittedMediaType`, validate.go's `mediaTypeSafety`) refuses a
+   configured type the module cannot pixel-check AND metadata-strip, so an
+   admitted type is a promise that steps 5 and 6 both apply to it.
 5. Images decode their header only (`image.DecodeConfig` — no full decode in this
    round) and their pixel count is checked against the module ceiling
    (`storage.pixel_limit_exceeded`, param `max_pixels`; an undecodable header is
@@ -219,9 +234,17 @@ and announces its event), reclaims every upload whose window closed (bytes and
 rows removed silently — nothing ever read the upload, so no subscriber has
 anything to forget), and deletes every completed object whose retention
 deadline passed (the same protocol and event as an explicit delete;
-`expires_at` NULL — an object that never expires — is skipped). Each phase
-fails fast on the first refusing row, leaving that row in a state the next
-pass resumes: deleting rows stay deleting, expired rows stay as they were.
+`expires_at` NULL — an object that never expires — is skipped). One object's
+failure does not stop the pass — the shape compliance's `SweepTenant` applies
+to its own participants, adopted here because the sweep listings are
+deterministic and a fail-fast pass would hit the same first refusing row on
+every run, starving every row after it indefinitely: a permanently failing
+object (a poisoned store key, say) must not block the rest of the tenant's
+expiry work. Each failing row is logged with its id and left in the state the
+next pass resumes — deleting rows stay deleting, expired rows stay as they
+were — and the pass ends with `storage.sweep_partial_failure` (param
+`failed_rows`) when any row failed, so a caller that checks only `err != nil`
+still learns the pass was not clean.
 Reclaiming an upload is safe against a completion racing it only because the
 upload window is enforced at the finalize write itself, not at listing time:
 `finalizeUpload` refuses a completion whose window closed mid-flight
@@ -265,13 +288,23 @@ magic numbers:
 | `WithMaxImagePixels` | 40 000 000 | image pixel ceiling, enforced at complete |
 | `WithDerivativeMaxEdge` | 320 px | longer-edge cap `DeriveService` downscales generated derivatives to |
 | `WithUploadTTL` | 30 min | how long a declared upload may stay unfinished |
-| `WithMaxObjectLifetime` | 90 days | retention ceiling, enforced at create |
-| `WithAllowedTypes` | image/jpeg, image/png | media-type allowlist; nil resolves to the module default |
+| `WithMaxObjectLifetime` | 90 days | the default life of an upload that requests no retention AND the ceiling on requested finite retentions — an unconfigured upload expires at this ceiling, never silently; only an explicit never-expiring request may outlive it (see `WithNoExpiryAllowed`) |
+| `WithNoExpiryAllowed` | off | permits never-expiring objects: without it a `CreateParams.NoExpiry` request is refused (`storage.no_expiry_not_allowed`); with it, each such object still needs its own explicit `NoExpiry: true` |
+| `WithAllowedTypes` | image/jpeg, image/png | media-type allowlist; nil resolves to the module default. Register refuses (`storage.allowed_type_unsupported`) any configured type the module cannot pixel-check AND metadata-strip (validate.go's `mediaTypeSafety`) |
 
 `Register(reg *pkgcore.Registry)` performs no I/O and:
 
 - requires the queue `WithQueue` wired — a queueless Register fails with
   `storage.queue_required` before declaring anything;
+- runs the allowlist admission gate — every configured type (the module
+  default when none was configured) must be one the module can pixel-check
+  AND metadata-strip (`checkAdmittedMediaType`, validate.go), a misconfiguration
+  failing with `storage.allowed_type_unsupported` before anything is declared.
+  The gate makes the whitelist's safety promise a checked one: a type can no
+  longer be admitted with a decoder but no strip coverage (image/gif's state —
+  see `mediaTypeSafety`), and the "three facts in three files" that used to
+  describe the whitelist — which types have a decoder, which have a strip
+  walker, what may be admitted — now live in the one table;
 - declares permissions `storage:read` and `storage:write`, audit actions
   `storage.object.create` / `storage.object.complete` / `storage.object.delete`,
   and the published events `storage.object.completed` (payload
@@ -384,8 +417,10 @@ plain unit suite under `-race`:
   no store wired (the mark lets a later run finish), a mid-protocol store
   failure leaving the work resumable, warn-and-stand event publishing, the
   sweep's three phases (deterministic resumption order, silent upload
-  reclamation, expired-completed deletion), fail-fast recovery on the next
-  pass, and the expiry-sweep task's shape, tenant requirement and handler;
+  reclamation, expired-completed deletion), the partial-failure contract —
+  one row's refusal never starves the rows after it, the failed row is left
+  resumable and the pass answers `storage.sweep_partial_failure` — and the
+  expiry-sweep task's shape, tenant requirement and handler;
 - `example_test.go` — three compiled-and-run godoc examples: the
   repository-level journey (`Example`), the full host-shaped transfer
   lifecycle (`ExampleObjectService`), and the end-of-life journey
@@ -632,3 +667,69 @@ a padded clean file passes through byte-identical with nothing written back.
 What remains invisible to a structural strip is unchanged and still recorded
 in "Known limitations": metadata smuggled into the entropy-coded data
 itself.
+
+## Round note — reviewer-findings batch: default-life cap, sweep partial failures, whitelist admission gate, content hardening, key shape (2026-09-07)
+
+Five review findings closed in one round, all behavioural or doc-only changes
+whose regressions fail before and pass after:
+
+- **The lifetime option now governs the default path** (P2-1). `WithMaxObjectLifetime`
+  documents "the longest an object may be retained before it expires", and the
+  enforcement used to compare only when a create EXPLICITLY requested a retention —
+  an ordinary upload (no request) defaulted to never-expiring, so the option's
+  promise did not hold for the path most uploads take. `Create` now settles every
+  row's expiry: a requested finite retention lands as that deadline (capped as
+  before), NO request defaults to the configured maximum, and only an explicit
+  `CreateParams.NoExpiry` request — on a module whose host opted in with the new
+  `WithNoExpiryAllowed()` option — leaves the row without an expiry. The product
+  choice, stated: never-expiring objects remain representable (the `expires_at`
+  NULL state the sweep skips) but require two deliberate acts, a host option and
+  a per-object request; omission produces bounded life, never permanence. The
+  module's own HTTP surface offers no never-expiring spelling (the fragment's
+  create description says so); a host whose product needs permanent objects
+  requests them through `ObjectService` behind its own opt-in.
+  **Cross-repo consequence, recorded for the follow-up round that owns it:** the
+  reference app's `periodic_scheduler_flow_test.go`
+  (`TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject`) declares
+  its "survivor" with no expiresAt and asserts the create response carries none —
+  the pre-change no-expiry default this fix retires. The survivor now carries an
+  expiry at the default ceiling (it still outlives the test's 3-second sweep),
+  so that test's `survivor.ExpiresAt != ""` assertion must move to the
+  reference-app side of the change.
+- **The sweep no longer fails fast; one row's failure cannot starve the tenant's
+  expiry pass** (P2-3). Storage's `Sweep` used to stop at the first refusing row;
+  compliance's `SweepTenant` runs every participant and aggregates the failures.
+  The asymmetry holds because the sweep's listings are deterministic: a row that
+  fails permanently is re-listed first on every pass, so a fail-fast sweep would
+  never reach the rows after it — the compliance shape is the right one at row
+  granularity too. `Sweep` now runs every row of every phase, logs each failure
+  with its id, and answers `storage.sweep_partial_failure` (param `failed_rows`)
+  when any row failed; failed rows stay in the state the next pass resumes.
+- **The whitelist admission gate makes the safety envelope a checked invariant**
+  (P2-5/P2-6). The three facts that used to live apart — which probed types have a
+  decoder, which have metadata-strip coverage, what the whitelist may admit — now
+  live in validate.go's `mediaTypeSafety` table, and Register refuses
+  (`storage.allowed_type_unsupported`, naming the type and the admissible set)
+  any configured type the module cannot pixel-check AND metadata-strip.
+  image/gif is recorded with its honest halves (decodable, not strippable) and is
+  therefore refused admission — a host that wants GIFs must first give the module
+  a GIF strip walker, the same round that flips the table's strippable half. The
+  content endpoint's two hardening headers — `X-Content-Type-Options: nosniff`
+  and `Content-Disposition: attachment` — are now unconditional, so serving bytes
+  is safe regardless of how wide the whitelist ever grows.
+- **The reclaim's load-bearing dependency is recorded at the code** (P2-2
+  residue): `reclaimUpload`'s no-event shortcut and its licence to remove a row
+  family outside the delete protocol rest on there being no path that returns a
+  completed row (which may carry derivatives) to uploading. The day a re-upload
+  or back-to-uploading transition appears, the reclaim would delete a completed
+  object's family with no protocol and no event — that hazard is written down
+  beside the reclaim code.
+- **The key grammar's fixed shapes are now enforced by segment count** (P2-4
+  residue, state-then-fix). The validator checked every segment but not how many
+  there were; a tenant id or object id that smuggled in a "/" would pass every
+  per-segment rule while fabricating segments and blurring the boundary between
+  key components and key families. Today's uuid-shaped ids cannot contain a "/",
+  so no reachable input changes behavior — the count checks in `ObjectKey`
+  (exactly three segments) and `DerivativeKey` (exactly four) exist so the day an
+  id alphabet changes, the violation is a loud builder error at the single
+  create/derive site, never a silently reshaped key.

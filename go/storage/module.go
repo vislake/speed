@@ -136,14 +136,18 @@ type Module struct {
 	// overrides through the With* options below, resolved into the
 	// service's config at construction: maxUploadBytes caps declared
 	// uploads, uploadTTL bounds the upload window, maxImagePixels caps
-	// image dimensions, maxObjectLifetime caps requested retentions, and
-	// allowedTypes (nil resolving to the module default) gates declared
-	// and probed media types alike.
+	// image dimensions, maxObjectLifetime is the default life AND the
+	// ceiling of requested retentions (a create requesting none defaults
+	// to it; see WithMaxObjectLifetime's doc comment), noExpiryAllowed
+	// opens the one door past that ceiling (never-expiring objects, each
+	// still explicitly requested), and allowedTypes (nil resolving to the
+	// module default) gates declared and probed media types alike.
 	maxUploadBytes    int64
 	maxImagePixels    int64
 	derivativeMaxEdge int
 	uploadTTL         time.Duration
 	maxObjectLifetime time.Duration
+	noExpiryAllowed   bool
 	allowedTypes      []string
 }
 
@@ -210,6 +214,19 @@ func WithUploadTTL(ttl time.Duration) Option {
 
 // WithMaxObjectLifetime sets the longest an object may be retained before
 // it expires. Non-positive values are ignored.
+//
+// The ceiling is unconditional in both directions it governs. It is the
+// DEFAULT life of an upload that requests no retention at all: a create
+// with no explicit request is not a never-expiring object but one whose
+// life defaults to this ceiling (the option's promise -- "the longest an
+// object may be retained" -- is what the default path relies on, so an
+// unconfigured upload expires at the ceiling like any other). And it is the
+// CEILING of every requested finite retention: a create asking for more is
+// refused at create time, before any byte is transferred. The one object
+// that outlives the ceiling is a never-expiring one, and reaching that
+// state takes two deliberate acts -- a host that explicitly allows
+// never-expiring objects (WithNoExpiryAllowed) and a create that explicitly
+// requests one (CreateParams.NoExpiry) -- never an omission.
 func WithMaxObjectLifetime(lifetime time.Duration) Option {
 	return func(m *Module) {
 		if lifetime > 0 {
@@ -218,18 +235,40 @@ func WithMaxObjectLifetime(lifetime time.Duration) Option {
 	}
 }
 
+// WithNoExpiryAllowed permits the module's service to create never-expiring
+// objects. The module's maximum lifetime (WithMaxObjectLifetime, or its
+// default) is otherwise unconditional: an object that never expires would
+// outlive the ceiling every deployment starts from, so CreateParams.NoExpiry
+// is refused unless the host states -- here, at construction, where a
+// reviewer sees it -- that its deployment allows permanent objects. A host
+// that never calls this option cannot produce a never-expiring object
+// through the service by omission or by accident; each permanent object
+// still requires its own explicit NoExpiry request on top of this option.
+func WithNoExpiryAllowed() Option {
+	return func(m *Module) { m.noExpiryAllowed = true }
+}
+
 // WithAllowedTypes restricts which media types storage accepts. Types are
-// exact, lowercase media types such as "image/png" or "application/pdf".
-// ObjectService enforces the restriction twice: at create time against the
-// declared type, and at complete time against the media type probed from
-// the stored bytes -- a type that never passes either gate cannot become a
-// completed object.
+// exact, lowercase media types. ObjectService enforces the restriction
+// twice: at create time against the declared type, and at complete time
+// against the media type probed from the stored bytes -- a type that never
+// passes either gate cannot become a completed object.
 //
 // The default -- nil -- resolves to the module's own default allowlist of
 // image/jpeg and image/png (defaultAllowedTypes), so a host that
 // configures nothing gets a real restriction, never an open door. A host
 // that needs more types calls WithAllowedTypes with the full set it wants;
 // each call replaces the whole set.
+//
+// The whitelist is bounded by what the module can do to an admitted type's
+// bytes: a type may be admitted only when the module can pixel-check the
+// probed content (a registered decoder) AND strip its metadata (sanitize.go's
+// walkers) -- an admitted type is a promise that every completed object of
+// that type carries both protections, and today exactly image/jpeg and
+// image/png hold them. Register is the gate: a configuration naming any
+// other type fails with ErrAllowedTypeUnsupported at registration, before
+// anything runs, so a host can never silently trade an upload's metadata
+// strip for a wider list (see checkAdmittedMediaType in validate.go).
 func WithAllowedTypes(types ...string) Option {
 	return func(m *Module) {
 		m.allowedTypes = append([]string(nil), types...)
@@ -259,6 +298,7 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 		maxImagePixels:    m.maxImagePixels,
 		uploadTTL:         m.uploadTTL,
 		maxObjectLifetime: m.maxObjectLifetime,
+		noExpiryAllowed:   m.noExpiryAllowed,
 		allowedTypes:      m.allowedTypes,
 	})
 	m.derive = newDeriveService(m.objects, m.derivatives, m.derivativeMaxEdge, m.maxImagePixels)
@@ -288,8 +328,9 @@ const (
 // defaultAllowedTypes is the module's default media-type allowlist,
 // applied when a host configures none (see WithAllowedTypes). JPEG and PNG
 // cover the reference-app class of uploads -- dental imagery -- and
-// nothing else; a host that needs wider types configures the set
-// explicitly.
+// nothing else, and they are exactly the types the module's safety
+// envelope (pixel-check plus metadata strip) covers, which is the bound
+// Register enforces on any explicit set a host configures.
 var defaultAllowedTypes = []string{"image/jpeg", "image/png"}
 
 // Objects returns the module's object-metadata repository, the sanctioned
@@ -378,9 +419,13 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // catalog, registers the handlers of the two task types the module's
 // services schedule -- the thumbnail-derive task ObjectService.Complete
 // enqueues and the expiry-sweep task EnqueueExpirySweep schedules -- and
-// validates the one wiring the module cannot live without: a queue,
-// without which Register returns ErrQueueRequired (see WithQueue's doc
-// comment for the reasoning).
+// validates the wiring the module cannot live without: a queue, without
+// which Register returns ErrQueueRequired (see WithQueue's doc comment for
+// the reasoning), and a media-type allowlist every entry of which the
+// module can pixel-check AND metadata-strip, without which Register
+// returns ErrAllowedTypeUnsupported (see WithAllowedTypes's doc comment).
+// Both checks run before anything is declared, so a mis-wired module fails
+// its own registration rather than booting half-policyed.
 //
 // The module's HTTP surface is registered too: Handler is built here and
 // mounted on the host's router at apiPath. Routes.Mount is a plain
@@ -388,6 +433,22 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if m.queue == nil {
 		return ErrQueueRequired
+	}
+	// The whitelist admission gate: every configured type -- the module
+	// default when the host configured none -- must be one the module can
+	// apply its full safety envelope to. A host that names image/gif gets a
+	// coded refusal naming the type, not a silently narrower promise; the
+	// gate keeps the three facts that used to live apart -- which types have
+	// a decoder, which have a metadata strip, what the whitelist may admit --
+	// in one checked place (validate.go's checkAdmittedMediaType).
+	allowed := m.allowedTypes
+	if allowed == nil {
+		allowed = defaultAllowedTypes
+	}
+	for _, mt := range allowed {
+		if err := checkAdmittedMediaType(mt); err != nil {
+			return err
+		}
 	}
 	if err := reg.Permissions.Add(PermissionRead, PermissionWrite); err != nil {
 		return err

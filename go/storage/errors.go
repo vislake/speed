@@ -116,8 +116,37 @@ var (
 	ErrImageUnreadable = apperr.Invalid("storage.image_unreadable")
 
 	// ErrInvalidExpiry reports a requested retention lifetime longer than
-	// the module's configured maximum, or otherwise unsatisfiable.
+	// the module's configured maximum, or otherwise unsatisfiable -- a
+	// never-expiring request that also names a finite retention, say.
 	ErrInvalidExpiry = apperr.Invalid("storage.invalid_expiry")
+
+	// ErrNoExpiryNotAllowed reports a CreateParams.NoExpiry request made of
+	// a module that was not built with WithNoExpiryAllowed. The module's
+	// maximum lifetime is the default life of an ordinary upload, and an
+	// object that never expires would outlive that ceiling; only a host that
+	// explicitly permits never-expiring objects (WithNoExpiryAllowed) may
+	// have its service create them, so every other NoExpiry request is
+	// refused here rather than silently honoured as a ceiling exception.
+	ErrNoExpiryNotAllowed = apperr.Invalid("storage.no_expiry_not_allowed")
+
+	// ErrSweepPartialFailure reports a LifecycleService.Sweep pass in which
+	// at least one object could not be processed. The pass runs every row
+	// regardless -- one object's failure never starves the rest of the
+	// tenant's expiry work -- and this coded error is how a caller that
+	// checks only "err != nil" still learns that the pass was not clean;
+	// the failed rows were logged by id and stay in the state the next pass
+	// resumes.
+	ErrSweepPartialFailure = apperr.Internal("storage.sweep_partial_failure")
+
+	// ErrAllowedTypeUnsupported reports a WithAllowedTypes entry for a media
+	// type the module cannot admit safely. The whitelist may only admit a
+	// type the module can apply its full safety envelope to -- pixel-check
+	// the probed bytes (a registered decoder) AND strip their metadata
+	// (sanitize.go's walkers) -- because an admitted type is a promise that
+	// every completed object of that type carries both protections, and the
+	// module refuses configurations that would silently trade one away. It
+	// is a wiring error, so Module.Register is where it surfaces.
+	ErrAllowedTypeUnsupported = apperr.Internal("storage.allowed_type_unsupported")
 
 	// ErrStoreUnavailable reports an object-store access refused before
 	// any operation was attempted -- the host wired no ObjectStore at

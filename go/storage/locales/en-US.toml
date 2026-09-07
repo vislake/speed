@@ -37,6 +37,12 @@
 
 "storage.invalid_expiry" = "That retention period is invalid. The maximum is {{.max_lifetime_days}} days."
 
+"storage.no_expiry_not_allowed" = "Never-expiring objects are not allowed: this deployment has not enabled them."
+
+"storage.sweep_partial_failure" = "The expiry sweep completed with partial failures: {{.failed_rows}} object(s) could not be processed and will be retried by the next sweep."
+
+"storage.allowed_type_unsupported" = "The type {{.type}} cannot be added to the allowed-types list: this module cannot apply its pixel-check and metadata-strip coverage to it. Types that can be admitted safely: {{.admissible}}."
+
 "storage.store_unavailable" = "The file store is unavailable right now. Try again later."
 
 "storage.store_error" = "A file-store operation failed. Try again later."

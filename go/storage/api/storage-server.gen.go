@@ -25,7 +25,7 @@ type StorageCreateObjectRequest struct {
 	// DeclaredType The object's media type, such as "image/jpeg" or "image/png". The server canonicalizes it (parameters stripped, case-folded) and checks it against the host's allowlist.
 	DeclaredType string `json:"declaredType"`
 
-	// ExpiresAt An absolute retention deadline after which the object is swept. Must be in the future and within the host's lifetime ceiling. Omit for an object that never expires.
+	// ExpiresAt An absolute retention deadline after which the object is swept. Must be in the future and within the host's lifetime ceiling. Omit to let the default apply: an upload that names no deadline lives exactly the host's configured maximum lifetime -- the ordinary upload is never silently permanent, and this surface offers no never-expiring spelling (a host whose product needs permanent objects requests them explicitly through ObjectService, behind the host's own WithNoExpiryAllowed configuration).
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 

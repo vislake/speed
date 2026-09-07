@@ -291,14 +291,7 @@ func (s *LifecycleService) Delete(ctx context.Context, objectID string) error {
 // pkgcore.WithTenant -- because every query the sweep runs is tenant-scoped.
 //
 // The three phases run on one now, captured once so the two expiry listings
-// agree on what "expired" means within one pass, and each phase fails fast:
-// the first row that refuses stops the pass, with that row left in the
-// state the next pass can resume (a deleting row stays deleting, an
-// expired upload or object stays as it was). A tenant is swept at most one
-// worker at a time by the task's idempotency key, so a failed row is
-// normally the store or the database itself -- failing the pass rather than
-// plowing through the rest of the rows on a broken seam is what keeps each
-// row's error attributable.
+// agree on what "expired" means within one pass:
 //
 //   - Phase 1 resumes interrupted deletions: every ObjectStateDeleting row
 //     is run through Delete, which continues the protocol from wherever it
@@ -312,19 +305,41 @@ func (s *LifecycleService) Delete(ctx context.Context, objectID string) error {
 //     row whose retention deadline (expires_at) passed before now runs the
 //     full Delete protocol, expiry being the same deletion the API would
 //     have performed, announced with the same event.
+//
+// One object's failure does not stop the pass: every other row still runs,
+// the shape compliance's SweepTenant applies to its own participants. A
+// tenant is swept at most one worker at a time by the task's idempotency
+// key and the sweep listings are deterministic, so a fail-fast pass would
+// hit the same first refusing row on every run and never reach the rows
+// after it -- one permanently failing object (a poisoned store key, say)
+// would starve the rest of the tenant's expiry work indefinitely. Instead
+// each failing row is logged with its id and left in the state the next
+// pass resumes -- a deleting row stays deleting, an expired upload or
+// object stays as it was -- and when any row failed, the pass ends with
+// ErrSweepPartialFailure carrying the failed count, so a caller checking
+// only "err != nil" still learns that the pass was not clean. (A seam-wide
+// outage -- the store itself down -- makes every row of a phase fail; the
+// sweep still walks the phase once, and the queue's retry policy re-runs
+// the pass on the next attempt exactly as it re-ran a fail-fast one. Only
+// the listings themselves fail the pass outright: a tenant whose rows
+// cannot be read can have none of its cleanup run, and that is reported
+// as-is rather than guessed at.)
 func (s *LifecycleService) Sweep(ctx context.Context) error {
 	now := time.Now()
+	failures := 0
 
 	// Phase 1: rows in deleting exist only because a Delete did not finish;
-	// resume each one's protocol.
+	// resume each one's protocol. A row whose resume fails stays deleting,
+	// bytes intact, for the next pass.
 	deleting, err := s.objects.listStateRows(ctx, ObjectStateDeleting)
 	if err != nil {
 		return err
 	}
 	for _, row := range deleting {
-		err = s.Delete(ctx, row.ID)
-		if err != nil {
-			return err
+		if deleteErr := s.Delete(ctx, row.ID); deleteErr != nil {
+			failures++
+			observability.FromContext(ctx).Warn("expiry sweep could not finish an interrupted deletion",
+				"object_id", row.ID, "error", deleteErr)
 		}
 	}
 
@@ -334,9 +349,10 @@ func (s *LifecycleService) Sweep(ctx context.Context) error {
 		return err
 	}
 	for _, row := range uploads {
-		err = s.reclaimUpload(ctx, row)
-		if err != nil {
-			return err
+		if reclaimErr := s.reclaimUpload(ctx, row); reclaimErr != nil {
+			failures++
+			observability.FromContext(ctx).Warn("expiry sweep could not reclaim an expired upload",
+				"object_id", row.ID, "error", reclaimErr)
 		}
 	}
 
@@ -347,10 +363,15 @@ func (s *LifecycleService) Sweep(ctx context.Context) error {
 		return err
 	}
 	for _, row := range expired {
-		err = s.Delete(ctx, row.ID)
-		if err != nil {
-			return err
+		if deleteErr := s.Delete(ctx, row.ID); deleteErr != nil {
+			failures++
+			observability.FromContext(ctx).Warn("expiry sweep could not delete an expired object",
+				"object_id", row.ID, "error", deleteErr)
 		}
+	}
+
+	if failures > 0 {
+		return ErrSweepPartialFailure.WithParam("failed_rows", failures)
 	}
 	return nil
 }
@@ -362,6 +383,17 @@ func (s *LifecycleService) Sweep(ctx context.Context) error {
 // is already gone -- two sweeps racing over one tenant's rows both list an
 // upload, and the second one's removal of nothing is convergence, not an
 // error.
+//
+// The no-event shortcut, and the whole of the reclaim's licence to remove
+// a row family outside the delete protocol, rests on one dependency: no
+// path in this module returns a completed row -- one whose bytes were
+// finalized and which may carry derivatives -- to uploading. Only rows that
+// never completed can read uploading, and only they are reclaimed. The day
+// someone adds a re-upload or a back-to-uploading transition for completed
+// objects, this reclaim would delete a completed object's family -- its
+// original bytes, its derivative rows and their bytes -- with no delete
+// protocol and no EventObjectDeleted for the subscribers that watched that
+// object complete, and that hazard (the reviewer's P2-4) becomes live.
 func (s *LifecycleService) reclaimUpload(ctx context.Context, row Object) error {
 	st, err := s.requireStore()
 	if err != nil {

@@ -37,11 +37,21 @@ import (
 //	<tenantID>/<objectID>/original                  -- the object's own bytes
 //	<tenantID>/<objectID>/derivatives/<kind>        -- one derivative's bytes
 //
-// A tenant id and an object id are the module's own id alphabet
-// (uuid-shaped: lowercase hex and hyphens), so a segment can never smuggle
-// in a "/" or a dot segment -- but the builder still validates every
-// segment through the same validator a key from the wild would go through,
-// so the grammar holds even if a future id alphabet forgets to be so tame.
+// The shapes are fixed: an object key is exactly three "/"-joined segments
+// and a derivative key exactly four, and the builders enforce the count
+// (ObjectKey and DerivativeKey check their own joined result) on top of the
+// per-segment rules. The count is what keeps the boundary between the
+// components honest if an id alphabet ever stops being tame: a tenant id or
+// object id that smuggles in a "/" would fabricate extra segments -- a key
+// that still satisfies every per-segment rule while blurring where one
+// component ends and the next begins, and, at the extreme, an object key
+// of one pair that reads as a derivative key of another. Today the ids are
+// the module's own uuid-shaped alphabet (lowercase hex and hyphens, no
+// "/"), so the count check can never fire on them; it exists so the day an
+// id alphabet changes, the violation is a loud builder error at the single
+// create/derive call site, never a silently reshaped key. Every segment is
+// still validated through the same validator a key from the wild would go
+// through, per-segment rules included.
 const (
 	// keyMaxLen is the maximum total length of an object-store key in
 	// bytes. It equals the VARCHAR(512) width of the key columns in
@@ -70,21 +80,34 @@ const (
 var ErrInvalidKey = errors.New("storage: invalid object-store key")
 
 // ObjectKey returns the deterministic object-store key of object's content:
-// "<tenantID>/<objectID>/original".
+// "<tenantID>/<objectID>/original" -- exactly three "/"-joined segments.
+// The shape's segment count is enforced here (see the grammar doc above):
+// a tenant or object id containing a "/" makes four segments and is
+// refused, so the key's fixed shape cannot silently stretch.
 func ObjectKey(tenant pkgcore.TenantID, objectID string) (string, error) {
 	key := string(tenant) + "/" + objectID + "/" + keyOriginalSegment
 	if err := validateKey(key); err != nil {
 		return "", err
 	}
+	if n := strings.Count(key, "/"); n != 2 {
+		return "", fmt.Errorf("%w: object key %q has %d segment separators, want exactly 2 (%s/%s/%s)",
+			ErrInvalidKey, key, n, "<tenantID>", "<objectID>", keyOriginalSegment)
+	}
 	return key, nil
 }
 
 // DerivativeKey returns the deterministic object-store key of one
-// derivative of an object: "<tenantID>/<objectID>/derivatives/<kind>".
+// derivative of an object: "<tenantID>/<objectID>/derivatives/<kind>" --
+// exactly four "/"-joined segments, count-enforced the same way ObjectKey
+// enforces its own shape.
 func DerivativeKey(tenant pkgcore.TenantID, objectID, kind string) (string, error) {
 	key := string(tenant) + "/" + objectID + "/" + keyDerivativesSegment + "/" + kind
 	if err := validateKey(key); err != nil {
 		return "", err
+	}
+	if n := strings.Count(key, "/"); n != 3 {
+		return "", fmt.Errorf("%w: derivative key %q has %d segment separators, want exactly 3 (%s/%s/%s/%s)",
+			ErrInvalidKey, key, n, "<tenantID>", "<objectID>", keyDerivativesSegment, "<kind>")
 	}
 	return key, nil
 }

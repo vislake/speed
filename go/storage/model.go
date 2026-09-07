@@ -150,8 +150,13 @@ type Object struct {
 	// completed; a row still in ObjectStateUploading past it is swept.
 	UploadExpiresAt time.Time `gorm:"column:upload_expires_at;not null"`
 
-	// ExpiresAt is the tenant-retention deadline of the completed object,
-	// when the tenant asked for one. NULL means the object does not expire.
+	// ExpiresAt is the tenant-retention deadline of the completed object.
+	// ObjectService settles it at create time: a requested finite retention
+	// lands here, an upload that requests no retention lands as the module's
+	// configured maximum lifetime, and only an explicit never-expiring
+	// request -- on a deployment whose host permitted the class
+	// (WithNoExpiryAllowed) -- leaves it NULL. NULL means the object does
+	// not expire, and the expiry sweep skips such rows.
 	ExpiresAt *time.Time `gorm:"column:expires_at"`
 
 	// CreatedAt and UpdatedAt are the standard lifecycle timestamps,

@@ -241,3 +241,75 @@ func TestIsImageMediaType(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckAdmittedMediaType pins the whitelist admission gate's verdicts:
+// a type the module can pixel-check AND metadata-strip is admitted; a type
+// with a decoder but no strip coverage (image/gif -- see mediaTypeSafety)
+// and a type with neither half are both refused with the coded error naming
+// the type and the set that can be admitted, so a host configuring the
+// whitelist learns both what it asked for and what it could have asked for.
+// Module.Register is the gate's caller; this test pins the gate itself.
+func TestCheckAdmittedMediaType(t *testing.T) {
+	for _, mt := range []string{"image/jpeg", "image/png"} {
+		if err := checkAdmittedMediaType(mt); err != nil {
+			t.Errorf("checkAdmittedMediaType(%q) = %v, want nil", mt, err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		mt   string
+	}{
+		{"a decodable type without strip coverage", "image/gif"},
+		{"a type with neither decoder nor strip coverage", "application/pdf"},
+		{"a renderable document type", "text/html"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkAdmittedMediaType(tc.mt)
+			if !hasCode(err, ErrAllowedTypeUnsupported.Code) {
+				t.Fatalf("checkAdmittedMediaType(%q) error = %v, want storage.allowed_type_unsupported", tc.mt, err)
+			}
+			appErr, _ := apperr.As(err)
+			if appErr.Params["type"] != tc.mt {
+				t.Errorf("type param = %v, want %q", appErr.Params["type"], tc.mt)
+			}
+			if appErr.Params["admissible"] != strings.Join(admissibleMediaTypes(), ",") {
+				t.Errorf("admissible param = %v, want %q", appErr.Params["admissible"], strings.Join(admissibleMediaTypes(), ","))
+			}
+		})
+	}
+}
+
+// TestAdmissibleMediaTypes_AreExactlyTheFullCoverageTypes pins the
+// admissible set to the safety table itself: whatever mediaTypeSafety
+// records with both halves true is what the whitelist may admit, so the
+// gate can never advertise a set the table does not back. Today that set is
+// the module's own default allowlist -- the gate may never grow narrower
+// than the default it was born enforcing -- and no other type may slip in
+// without also gaining its decoder and strip walker.
+func TestAdmissibleMediaTypes_AreExactlyTheFullCoverageTypes(t *testing.T) {
+	admissible := admissibleMediaTypes()
+	want := []string{"image/jpeg", "image/png"}
+	if len(admissible) != len(want) {
+		t.Fatalf("admissibleMediaTypes() = %v, want %v", admissible, want)
+	}
+	for i := range want {
+		if admissible[i] != want[i] {
+			t.Errorf("admissibleMediaTypes() = %v, want %v", admissible, want)
+		}
+	}
+	for mt, caps := range mediaTypeSafety {
+		inAdmissible := false
+		for _, a := range admissible {
+			if a == mt {
+				inAdmissible = true
+			}
+		}
+		if caps.decodable && caps.strippable && !inAdmissible {
+			t.Errorf("mediaTypeSafety marks %q with full coverage but admissibleMediaTypes omits it", mt)
+		}
+		if inAdmissible && (!caps.decodable || !caps.strippable) {
+			t.Errorf("admissibleMediaTypes includes %q although mediaTypeSafety lacks full coverage for it", mt)
+		}
+	}
+}

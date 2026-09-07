@@ -288,11 +288,16 @@ func sanitizePNG(raw []byte) ([]byte, error) {
 
 // sanitizeContent strips metadata from bytes the pipeline already probed as
 // mime, returning the sanitized bytes and whether they changed. The media
-// type dispatch is exact: image/jpeg and image/png have a structural strip;
-// every other allowlisted type has no metadata carrier this module knows how
-// to strip, so it passes through unchanged with changed=false -- the
-// pipeline's choice to store the bytes or not belongs to its caller, this
-// function only reports.
+// type dispatch is exact: image/jpeg and image/png have a structural strip.
+// The pass-through branch below is the honest record that this module knows
+// no metadata carrier to strip in any other type -- which is exactly why
+// the whitelist may not admit one: Register's admission gate
+// (checkAdmittedMediaType, validate.go) refuses any configured type whose
+// strip coverage is missing, so no type without a walker here can reach the
+// pipeline as an admitted one. The branch stays for direct calls (tests,
+// a future type's walker round) and reports changed=false as it always did
+// -- the pipeline's choice to store the bytes or not belongs to its caller,
+// this function only reports.
 func sanitizeContent(raw []byte, mime string) ([]byte, bool, error) {
 	switch mime {
 	case "image/jpeg":

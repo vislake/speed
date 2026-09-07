@@ -216,6 +216,55 @@ func TestModule_Register_RefusesAQueuelessBoot(t *testing.T) {
 	}
 }
 
+// TestModule_Register_RefusesAnUnadmittableAllowedType pins the whitelist's
+// admission gate: a media type may enter WithAllowedTypes only when the
+// module can apply its full safety envelope to it -- pixel-check the probed
+// bytes (a registered decoder) AND strip their metadata (sanitize.go's
+// walkers). image/gif is decodable (the pixel-check envelope) but has no
+// metadata-strip coverage, so admitting it would silently trade a
+// pixel-checked, un-stripped file for the platform's strip guarantee; the
+// gate refuses the configuration at Register, the single place wiring
+// completeness is checked, instead of letting the mismatch ride until an
+// upload. A type with neither half (a document type, say) is refused the
+// same way.
+func TestModule_Register_RefusesAnUnadmittableAllowedType(t *testing.T) {
+	cases := []struct {
+		name  string
+		types []string
+	}{
+		{"a decodable type without metadata-strip coverage", []string{"image/jpeg", "image/gif"}},
+		{"a type with neither decoder nor strip coverage", []string{"image/jpeg", "application/pdf"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := pkgcore.NewKernel().
+				Bootstrap(context.Background(), newWiredModule(t, nil, WithAllowedTypes(tc.types...)))
+			if !hasCode(err, ErrAllowedTypeUnsupported.Code) {
+				t.Fatalf("Bootstrap with allowed types %v error = %v, want storage.allowed_type_unsupported", tc.types, err)
+			}
+		})
+	}
+}
+
+// TestModule_Register_AdmitsTheDefaultAllowlistAndOnlyIt pins the gate's
+// admissible side: the module default and an explicit configuration naming
+// exactly the types with full safety coverage register cleanly, and those
+// types are the module's own two -- the gate may never grow narrower than
+// the default it was born enforcing.
+func TestModule_Register_AdmitsTheDefaultAllowlistAndOnlyIt(t *testing.T) {
+	t.Run("no WithAllowedTypes option", func(t *testing.T) {
+		if _, err := pkgcore.NewKernel().Bootstrap(context.Background(), newWiredModule(t, nil)); err != nil {
+			t.Fatalf("Bootstrap with the default allowlist: %v", err)
+		}
+	})
+	t.Run("the full safety set spelled out", func(t *testing.T) {
+		if _, err := pkgcore.NewKernel().Bootstrap(context.Background(),
+			newWiredModule(t, nil, WithAllowedTypes("image/jpeg", "image/png"))); err != nil {
+			t.Fatalf("Bootstrap with the safety-covered allowlist: %v", err)
+		}
+	})
+}
+
 // TestModule_Options_StoreTheirValues pins that each With* option writes the
 // value its doc comment promises, into the field the enforcing rounds read.
 func TestModule_Options_StoreTheirValues(t *testing.T) {
@@ -273,6 +322,28 @@ func TestModule_Options_IgnoreNonsenseValues(t *testing.T) {
 	}
 }
 
+// TestModule_Options_NoExpiryAllowed_IsOffByDefaultAndFlowsToTheService
+// pins the never-expiry permission: a module built without WithNoExpiryAllowed
+// has it off -- so a NoExpiry create request is refused (object_test.go's
+// gating test) -- and the option flips exactly the field the service's
+// config is built from, never some other copy a reviewer would have to
+// chase.
+func TestModule_Options_NoExpiryAllowed_IsOffByDefaultAndFlowsToTheService(t *testing.T) {
+	if m := NewModule(nil); m.noExpiryAllowed {
+		t.Error("noExpiryAllowed defaults to true; a host must opt in to never-expiring objects")
+	}
+	if m := NewModule(nil); m.ObjectService().cfg.noExpiryAllowed {
+		t.Error("service config carries noExpiryAllowed = true on a module built without the option")
+	}
+	m := NewModule(nil, WithNoExpiryAllowed())
+	if !m.noExpiryAllowed {
+		t.Error("WithNoExpiryAllowed did not set the module field")
+	}
+	if !m.ObjectService().cfg.noExpiryAllowed {
+		t.Error("the option did not reach the service config the enforcing create reads")
+	}
+}
+
 // TestModule_Options_AllowedTypes_ReplaceAndDefaultOpen pins the two
 // promises of WithAllowedTypes: each call replaces the whole set (the last
 // call wins, never a union), and the default -- nil on the module, meaning
@@ -286,10 +357,10 @@ func TestModule_Options_AllowedTypes_ReplaceAndDefaultOpen(t *testing.T) {
 		t.Errorf("default allowedTypes on the module = %v, want nil (meaning: resolve to the module default when the service is built)", m.allowedTypes)
 	}
 
-	m := NewModule(nil, WithAllowedTypes("image/png"), WithAllowedTypes("application/pdf", "image/jpeg"))
+	m := NewModule(nil, WithAllowedTypes("image/png"), WithAllowedTypes("image/png", "image/jpeg"))
 	got := m.allowedTypes
-	if len(got) != 2 || got[0] != "application/pdf" || got[1] != "image/jpeg" {
-		t.Errorf("allowedTypes after two WithAllowedTypes calls = %v, want [application/pdf image/jpeg] -- the last call replaces", got)
+	if len(got) != 2 || got[0] != "image/png" || got[1] != "image/jpeg" {
+		t.Errorf("allowedTypes after two WithAllowedTypes calls = %v, want [image/png image/jpeg] -- the last call replaces", got)
 	}
 
 	// The option copies the caller's slice: mutating it afterwards must not
@@ -303,10 +374,13 @@ func TestModule_Options_AllowedTypes_ReplaceAndDefaultOpen(t *testing.T) {
 
 	// An explicit option flows through to the service the module built; a
 	// module-level nil is resolved there to the module default, which the
-	// service test pins at the newObjectService level.
-	m3 := NewModule(nil, WithAllowedTypes("application/pdf"))
-	if got := m3.ObjectService().cfg.allowedTypes; len(got) != 1 || got[0] != "application/pdf" {
-		t.Errorf("service allowlist after WithAllowedTypes(application/pdf) = %v, want [application/pdf]", got)
+	// service test pins at the newObjectService level. (The option itself
+	// stores any type; whether a stored type may actually be served is the
+	// Register admission gate's question, pinned by
+	// TestModule_Register_RefusesAnUnadmittableAllowedType above.)
+	m3 := NewModule(nil, WithAllowedTypes("image/png"))
+	if got := m3.ObjectService().cfg.allowedTypes; len(got) != 1 || got[0] != "image/png" {
+		t.Errorf("service allowlist after WithAllowedTypes(image/png) = %v, want [image/png]", got)
 	}
 }
 
