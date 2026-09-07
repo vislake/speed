@@ -47,13 +47,12 @@ type OrgError struct {
 	Params *map[string]interface{} `json:"params,omitempty"`
 }
 
-// OrgInvitation A pending (or resolved) offer to join the tenant. The invitee's address is deliberately absent from this schema: it is PII, encrypted at rest, and org's own convention (see invite.go) is never to echo it into anything that leaves the process boundary. emailIndex is the address's HMAC blind index -- safe to display for de-duplication purposes, and not reversible to the address without the index key.
+// OrgInvitation A pending (or resolved) offer to join the tenant. The invitee's address is deliberately absent from this schema: it is PII, encrypted at rest, and org's own convention (see invite.go) is never to echo it into anything that leaves the process boundary. The address's blind index is absent for the same reason, stated more strongly: HMAC non-invertibility (go/dbkit/blind_index.go) resists offline dictionary attacks, never an online oracle. Invitation creation accepts a caller-chosen address, so a caller who can create invitations can collect (address, index) pairs under this deployment's key, and an index echoed in a response would turn that dictionary into a membership test for the address of every listed invitation. A listed row carries only identifiers that do not name the invitee: its invitation id, the node it binds to, its status, expiry and timestamps.
 type OrgInvitation struct {
-	CreatedAt  *time.Time `json:"createdAt,omitempty"`
-	EmailIndex *string    `json:"emailIndex,omitempty"`
-	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
-	ID         *string    `json:"id,omitempty"`
-	NodeID     *string    `json:"nodeId,omitempty"`
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	ID        *string    `json:"id,omitempty"`
+	NodeID    *string    `json:"nodeId,omitempty"`
 
 	// Status One of "pending", "accepted", "revoked".
 	Status *string `json:"status,omitempty"`

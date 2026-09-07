@@ -121,10 +121,9 @@ type orgNode struct {
 }
 
 type orgInvitation struct {
-	ID         string `json:"id"`
-	NodeID     string `json:"nodeId"`
-	EmailIndex string `json:"emailIndex"`
-	Status     string `json:"status"`
+	ID     string `json:"id"`
+	NodeID string `json:"nodeId"`
+	Status string `json:"status"`
 }
 
 type orgMembership struct {
@@ -170,8 +169,11 @@ type orgListMembersResponse struct {
 //
 // It fails the test outright on anything outside 2xx, and otherwise decodes
 // the response into out (nil to skip decoding, for 204 No Content
-// responses).
-func orgRequest(t *testing.T, srv *httptest.Server, method, path, token, subjectUserID string, body, out any) {
+// responses). It returns the raw response bytes either way, so a caller can
+// assert on the wire shape itself -- the shape a real client's code would
+// see -- rather than only on the decoded subset in out (callers that do not
+// need the bytes simply ignore the return value).
+func orgRequest(t *testing.T, srv *httptest.Server, method, path, token, subjectUserID string, body, out any) []byte {
 	t.Helper()
 
 	var reader io.Reader
@@ -204,16 +206,20 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, token, subject
 	}
 	defer resp.Body.Close()
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body for %s %s: %v", method, path, err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
 		t.Fatalf("%s %s status = %d, want 2xx; body = %s",
 			method, path, resp.StatusCode, respBody)
 	}
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		if err := json.Unmarshal(respBody, out); err != nil {
 			t.Fatalf("decode response for %s %s: %v", method, path, err)
 		}
 	}
+	return respBody
 }
 
 // TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd is
@@ -286,15 +292,22 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 	// caller org_createInvitation resolves through SubjectResolver (the demo
 	// header here), never a value the request body could forge.
 	var invitation orgInvitation
-	orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations", inviterToken, inviterUserID,
+	invitationBody := orgRequest(t, srv, http.MethodPost, "/api/v1/org/invitations", inviterToken, inviterUserID,
 		map[string]string{"email": inviteeEmail, "nodeId": storeA.ID}, &invitation)
 	if invitation.NodeID != storeA.ID || invitation.Status != "pending" {
 		t.Fatalf("invitation = %+v, want nodeId %q and status \"pending\"", invitation, storeA.ID)
 	}
-	if invitation.EmailIndex == "" || invitation.EmailIndex == inviteeEmail {
-		t.Fatalf("invitation.EmailIndex = %q, want a non-empty blind index distinct from the plaintext address "+
-			"(the response must never echo the address itself -- see toInvitationResponse's own doc comment)",
-			invitation.EmailIndex)
+	// The response must echo neither the address nor its blind index, on
+	// the raw wire: org's own convention never echoes the address, and
+	// since org P1-1 it never echoes the index either -- HMAC
+	// non-invertibility is no defense against an online oracle when
+	// invitation creation itself yields (address, index) pairs (see
+	// toInvitationResponse's own doc comment in go/org/handler.go).
+	if bytes.Contains(invitationBody, []byte(inviteeEmail)) {
+		t.Fatal("the invitation response echoes the invitee's plaintext address")
+	}
+	if bytes.Contains(invitationBody, []byte("emailIndex")) {
+		t.Fatal("the invitation response carries the emailIndex key")
 	}
 
 	// The invitation response carries no token (see capturingMailer's own

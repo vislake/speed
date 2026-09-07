@@ -460,18 +460,25 @@ func toMembershipResponse(m *Membership) api.OrgMembership {
 }
 
 // toInvitationResponse converts inv to its spec-generated JSON response
-// type. It deliberately never touches inv.Email: the address is PII, and
+// type. It deliberately never reads inv.Email: the address is PII, and
 // this module's convention (invitation.go, invite.go) is never to echo it
-// into anything that leaves the process boundary -- only EmailIndex, the
-// non-reversible HMAC digest, is exposed.
+// into anything that leaves the process boundary. It deliberately never
+// reads inv.EmailIndex either: HMAC non-invertibility (dbkit's blind
+// index) resists OFFLINE dictionary attacks, never an online oracle --
+// invitation creation accepts a caller-chosen address, so a caller who can
+// create invitations can collect (address, index) pairs under the
+// deployment-wide, tenant-unsalted blind-index key, and an index echoed in
+// a response would let them test whether any candidate address has a
+// pending invitation anywhere in the deployment. A row the caller is
+// allowed to see is identified by its invitation id; the invitee's
+// identity is not part of it.
 func toInvitationResponse(inv *Invitation) api.OrgInvitation {
 	return api.OrgInvitation{
-		ID:         &inv.ID,
-		NodeID:     &inv.NodeID,
-		EmailIndex: &inv.EmailIndex,
-		Status:     &inv.Status,
-		ExpiresAt:  &inv.ExpiresAt,
-		CreatedAt:  &inv.CreatedAt,
+		ID:        &inv.ID,
+		NodeID:    &inv.NodeID,
+		Status:    &inv.Status,
+		ExpiresAt: &inv.ExpiresAt,
+		CreatedAt: &inv.CreatedAt,
 	}
 }
 

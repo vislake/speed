@@ -363,11 +363,16 @@ func TestHandler_OrgCreateInvitation_UnresolvedSubject_Returns401(t *testing.T) 
 	assertErrorCode(t, rec, http.StatusUnauthorized, ErrSubjectUnresolved.Code)
 }
 
-// TestHandler_OrgCreateInvitation_Success_NeverExposesEmailOrToken pins the
-// PII rule this module holds itself to everywhere else (invite.go,
+// TestHandler_OrgCreateInvitation_Success_NeverExposesEmailTokenOrBlindIndex
+// pins the PII rule this module holds itself to everywhere else (invite.go,
 // invitation.go): the response is a spec-generated api.OrgInvitation, which
-// has no field the plaintext address or the bearer token could occupy.
-func TestHandler_OrgCreateInvitation_Success_NeverExposesEmailOrToken(t *testing.T) {
+// has no field the plaintext address or the bearer token could occupy --
+// and, since org P1-1, no field the blind index could occupy either. HMAC
+// non-invertibility is no defense against an online oracle, and invitation
+// creation itself yields (address, index) pairs (toInvitationResponse's own
+// doc comment carries the argument); the sibling list-all regression is
+// TestHandler_OrgListInvitations_Success_ExposesNoBlindIndex.
+func TestHandler_OrgCreateInvitation_Success_NeverExposesEmailTokenOrBlindIndex(t *testing.T) {
 	h, m, host := newTestHandler(t, fixedSubject{userID: "u-inviter", ok: true})
 	ctx := tenantCtx("tenant-a")
 	root, _, _ := seedTree(t, m.tree, ctx)
@@ -378,17 +383,29 @@ func TestHandler_OrgCreateInvitation_Success_NeverExposesEmailOrToken(t *testing
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, body %q", rec.Code, rec.Body.String())
 	}
-	if strings.Contains(rec.Body.String(), "invitee@example.test") {
+	body := rec.Body.String()
+	if strings.Contains(body, "invitee@example.test") {
 		t.Fatal("the response body leaks the invitee's plaintext address")
+	}
+	// The module under test and this test derive the index from the same
+	// test key (newTestModule wires newTestEmailIndexer), so the digest the
+	// stored row really carries is computable here deterministically.
+	indexer := newTestEmailIndexer(t)
+	wantIndex, err := indexer.Index("invitee@example.test")
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if strings.Contains(body, "emailIndex") {
+		t.Fatal("the response body carries the emailIndex key")
+	}
+	if strings.Contains(body, wantIndex) {
+		t.Fatal("the response body leaks the invitation's blind index")
 	}
 
 	var inv api.OrgInvitation
 	decodeBody(t, rec, &inv)
 	if inv.ID == nil || *inv.ID == "" {
 		t.Fatal("created invitation carries no id")
-	}
-	if inv.EmailIndex == nil || *inv.EmailIndex == "" {
-		t.Error("EmailIndex is empty, want the blind index")
 	}
 	if inv.Status == nil || *inv.Status != InvitationStatusPending {
 		t.Errorf("Status = %v, want %q", inv.Status, InvitationStatusPending)
@@ -417,6 +434,70 @@ func TestHandler_OrgListInvitations_ReturnsPending(t *testing.T) {
 	decodeBody(t, rec, &resp)
 	if resp.Invitations == nil || len(*resp.Invitations) != 1 {
 		t.Fatalf("Invitations = %v, want exactly 1", resp.Invitations)
+	}
+}
+
+// TestHandler_OrgListInvitations_Success_ExposesNoBlindIndex pins org P1-1:
+// the invitation list-all SUCCESS response must not carry any listed
+// invitation's blind index, in any form -- not the "emailIndex" key, and
+// not one invitation's EmailIndex value in the raw response bytes.
+//
+// Why the value matters as much as the key: HMAC non-invertibility
+// (go/dbkit/blind_index.go) resists OFFLINE dictionary attacks; it is no
+// defense against an online oracle. Invitation creation accepts a
+// caller-chosen address, so a caller who can create invitations can
+// collect (address, index) pairs under the deployment-wide, tenant-
+// unsalted blind-index key -- and an index echoed in the list response
+// then lets them test whether any candidate address has a pending
+// invitation in any tenant of the deployment. The rows a caller is allowed
+// to see are identified by their invitation id; the invitee's identity is
+// none of the list's business.
+func TestHandler_OrgListInvitations_Success_ExposesNoBlindIndex(t *testing.T) {
+	h, m, _ := newTestHandler(t, fixedSubject{userID: "u-inviter", ok: true})
+	ctx := tenantCtx("tenant-a")
+	root, _, _ := seedTree(t, m.tree, ctx)
+
+	// Several pending invitations, created the way a caller (and an
+	// attacker) would: through the create endpoint, address chosen by the
+	// caller. The per-tenant budget is 50/hour and each address is used
+	// once, so three creates stay clear of both rate-limit dimensions.
+	emails := []string{"ada@example.test", "grace@example.test", "lin@example.test"}
+	for _, email := range emails {
+		rec := doRequest(h, ctx, http.MethodPost, "/api/v1/org/invitations", api.OrgCreateInvitationRequest{
+			Email: email, NodeID: root.ID,
+		})
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create invitation for %s: status = %d, body %q", email, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Ground truth: the blind index each row is really stored under, read
+	// back through the service. The model field stays -- only the API
+	// surface must stop echoing it -- so this is what the response bytes
+	// are checked against.
+	invitations, err := m.invites.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(invitations) != len(emails) {
+		t.Fatalf("List returned %d invitation(s), want %d", len(invitations), len(emails))
+	}
+
+	rec := doRequest(h, ctx, http.MethodGet, "/api/v1/org/invitations", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list invitations: status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.Bytes()
+	if bytes.Contains(body, []byte("emailIndex")) {
+		t.Fatalf("list-all response carries the emailIndex key: %q", rec.Body.String())
+	}
+	for i := range invitations {
+		if bytes.Contains(body, []byte(invitations[i].EmailIndex)) {
+			t.Fatalf("list-all response leaks invitation %s's blind index %q -- invitation "+
+				"creation yields (address, index) pairs under the deployment-wide key, so an "+
+				"echoed index is an online oracle for the address of every listed invitation",
+				invitations[i].ID, invitations[i].EmailIndex)
+		}
 	}
 }
 
