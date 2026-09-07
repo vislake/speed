@@ -225,6 +225,16 @@ func (c *capturedLogs) Handle(_ context.Context, r slog.Record) error {
 func (c *capturedLogs) WithAttrs([]slog.Attr) slog.Handler { return c }
 func (c *capturedLogs) WithGroup(string) slog.Handler      { return c }
 
+// noWarn fails the test if any captured record sits at Warn level or above.
+func (c *capturedLogs) noWarn(t *testing.T) {
+	t.Helper()
+	for _, r := range c.records {
+		if r.Level >= slog.LevelWarn {
+			t.Fatalf("captured an unexpected %s record: %s", r.Level, r.Message)
+		}
+	}
+}
+
 // warnedAbout fails the test unless a captured Warn record carries an
 // "item" attribute equal to wantItem.
 func (c *capturedLogs) warnedAbout(t *testing.T, wantItem string) {
@@ -1473,6 +1483,114 @@ func TestService_RemoteDelivery_InvalidatesFromTheWireMap(t *testing.T) {
 	default:
 		t.Fatal("no watch delivery from the remote-shaped event")
 	}
+}
+
+func TestService_RemoteDelivery_JudgesSensitivityByTheLocalSchema(t *testing.T) {
+	// The subscriber must classify a changed item as sensitive from its
+	// own frozen schema, never from the payload's Sensitive flag alone:
+	// the publisher classifies from its own schema copy, and during a
+	// rolling upgrade the copies disagree. An old copy that still believes
+	// a key plaintext can publish the key's real value in the clear with
+	// Sensitive:false; a copy that already believes the key Sensitive must
+	// not decode that wire value and hand it to its watchers as plaintext.
+	// The local judgment wins -- the delivery is redacted, the wire value
+	// is never decoded -- and the divergence itself is Warned, because it
+	// means the replicas' schema snapshots have drifted apart. (Regression:
+	// Redacted and the decode decision used to follow the wire field, so
+	// the value a skewed peer published in the clear reached watchers
+	// labeled Redacted:false.)
+	svc := attachDefaultServiceForTest(t)
+
+	// deliver sends one change through the subscriber exactly as the
+	// distributed bus would: the struct marshaled to JSON and decoded into
+	// any, so the payload travels through itemChangedFromJSONMap.
+	deliver := func(t *testing.T, ctx context.Context, key, newValue string, payloadSensitive bool) {
+		t.Helper()
+		now := time.Now().Truncate(time.Second).UTC()
+		raw, err := json.Marshal(ItemChangedEvent{
+			Key: key, Scope: ScopeTenant, TenantID: "tenant-a",
+			Actor: "carol", OldValue: "", NewValue: newValue,
+			Sensitive: payloadSensitive, ChangedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		var wire any
+		if err = json.Unmarshal(raw, &wire); err != nil {
+			t.Fatalf("json.Unmarshal into any: %v", err)
+		}
+		if err := svc.onItemChanged(ctx, pkgcore.Event{
+			Type: EventConfigItemChanged, TenantID: "tenant-a", Payload: wire,
+		}); err != nil {
+			t.Fatalf("onItemChanged: %v", err)
+		}
+	}
+
+	// Leg 1, the rolling-skew shape: support.reply_email is Sensitive in
+	// this process's schema, but the remote change claims Sensitive:false
+	// and carries a value in the clear. The local judgment wins: the
+	// watcher receives a redacted delivery and the wire value never
+	// becomes Data, and the divergence is logged as a Warn naming the key.
+	const leaked = "ops-leak@example.com"
+	logsSkew := &capturedLogs{}
+	ctxSkew := obs.WithLogger(context.Background(), slog.New(logsSkew))
+	deliveredSkew := make(chan Value, 1)
+	if err := svc.Watch("support.reply_email", func(v Value) { deliveredSkew <- v }); err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	deliver(t, ctxSkew, "support.reply_email", leaked, false)
+	select {
+	case v := <-deliveredSkew:
+		if !v.Redacted || v.Data != nil {
+			t.Fatalf("skewed delivery = %+v, want Redacted:true with Data nil -- the wire value %q must not reach watchers as plaintext", v, leaked)
+		}
+		if v.Scope != ScopeTenant {
+			t.Fatalf("skewed delivery scope = %q, want %q", v.Scope, ScopeTenant)
+		}
+	default:
+		t.Fatal("no watch delivery for the skewed change")
+	}
+	logsSkew.warnedAbout(t, "support.reply_email")
+
+	// Leg 2, agreement on sensitive: the remote agrees the key is
+	// Sensitive and redacts itself; the delivery stays redacted and no
+	// divergence Warn fires.
+	logsAgreeSensitive := &capturedLogs{}
+	ctxAgreeSensitive := obs.WithLogger(context.Background(), slog.New(logsAgreeSensitive))
+	deliveredAgreeSensitive := make(chan Value, 1)
+	if err := svc.Watch("support.reply_email", func(v Value) { deliveredAgreeSensitive <- v }); err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	deliver(t, ctxAgreeSensitive, "support.reply_email", redactedMarker, true)
+	select {
+	case v := <-deliveredAgreeSensitive:
+		if !v.Redacted || v.Data != nil {
+			t.Fatalf("sensitive agreement delivery = %+v, want a redacted value (Data nil)", v)
+		}
+	default:
+		t.Fatal("no watch delivery for the sensitive agreement change")
+	}
+	logsAgreeSensitive.noWarn(t)
+
+	// Leg 3, agreement on plaintext: a key this process's schema marks
+	// non-sensitive arrives claimed non-sensitive; the value decodes into
+	// Data, Redacted stays false and no Warn fires.
+	logsAgreePlain := &capturedLogs{}
+	ctxAgreePlain := obs.WithLogger(context.Background(), slog.New(logsAgreePlain))
+	deliveredAgreePlain := make(chan Value, 1)
+	if err := svc.Watch("brand.site_name", func(v Value) { deliveredAgreePlain <- v }); err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	deliver(t, ctxAgreePlain, "brand.site_name", "Studio A2", false)
+	select {
+	case v := <-deliveredAgreePlain:
+		if v.Redacted || v.Data != "Studio A2" {
+			t.Fatalf("plain agreement delivery = %+v, want the plaintext value decoded", v)
+		}
+	default:
+		t.Fatal("no watch delivery for the plain agreement change")
+	}
+	logsAgreePlain.noWarn(t)
 }
 
 func TestService_ConcurrentReadBackfill_NeverOutlivesTheWritersInvalidate(t *testing.T) {

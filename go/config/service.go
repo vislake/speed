@@ -772,25 +772,39 @@ func (s *Service) startPoller() {
 // own payload handling. The cache invalidation -- the part that must not
 // fail -- happens before anything can. A payload of neither shape is
 // ignored by construction, with the invalidation already done.
-func (s *Service) onItemChanged(_ context.Context, evt pkgcore.Event) error {
+func (s *Service) onItemChanged(ctx context.Context, evt pkgcore.Event) error {
 	payload, ok := itemChangedFromWire(evt.Payload)
 	if !ok {
 		return nil
 	}
 	s.cache.invalidate(payload.Key, payload.Scope, pkgcore.TenantID(payload.TenantID))
+	// Whether the changed item is a Sensitive one is this process's own
+	// schema's answer, never the payload's Sensitive flag's: the publisher
+	// classifies from its own frozen schema copy, and during a rolling
+	// upgrade the copies disagree -- an old copy that still believes a key
+	// plaintext can publish the key's real value in the clear. The local
+	// judgment decides the redaction (failing closed on a locally
+	// Sensitive key whatever the remote claimed), and a disagreement is
+	// Warned, because it means the replicas' schema snapshots have drifted
+	// apart and an operator should know. It is deliberately not an error:
+	// returning one would misreport a remote Set as failed (see the
+	// handler's doc comment).
+	item, known := s.schema.lookup(payload.Key)
+	sensitive := known && item.sensitive
+	if sensitive != payload.Sensitive {
+		obs.FromContext(ctx).Warn("config: remote change-event sensitivity flag disagrees with the local schema; the local judgment governs", "item", payload.Key, "scope", string(payload.Scope), "payload_sensitive", payload.Sensitive, "schema_sensitive", sensitive)
+	}
 	// A Sensitive item's change delivers a redacted Value: the canonical
 	// form on the bus is the marker, and the real value never leaves this
 	// process (see events.go).
-	value := Value{Scope: payload.Scope, Redacted: payload.Sensitive}
-	if !payload.Sensitive {
-		if item, ok := s.schema.lookup(payload.Key); ok {
-			// The NewValue was canonicalized by the publisher, so a decode
-			// failure here is corruption, not a semantic case; a watcher
-			// still fires with Data == nil rather than being dropped, and
-			// the cache is already invalidated either way.
-			if data, err := decodeValue(item.typ, payload.NewValue); err == nil {
-				value.Data = data
-			}
+	value := Value{Scope: payload.Scope, Redacted: sensitive}
+	if !sensitive && known {
+		// The NewValue was canonicalized by the publisher, so a decode
+		// failure here is corruption, not a semantic case; a watcher
+		// still fires with Data == nil rather than being dropped, and
+		// the cache is already invalidated either way.
+		if data, err := decodeValue(item.typ, payload.NewValue); err == nil {
+			value.Data = data
 		}
 	}
 	s.watchers.fire(payload.Key, value)
