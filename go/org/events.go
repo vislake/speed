@@ -129,16 +129,19 @@ type (
 
 	// MemberInvited is the payload of org.member.invited.
 	//
-	// It carries the blind index of the invitee's address, NEVER the address
-	// itself. An event payload is written to a broker, logged by whoever
-	// subscribes and often traced; putting an email address in one publishes
-	// PII to every one of those places. A subscriber that must reach the
-	// person reads the invitation row through org, where the address is
-	// encrypted at rest.
+	// It never carries the invitee's address, nor any derivation of it --
+	// the address's blind index included. An event payload is written to a
+	// broker, logged by whoever subscribes and often traced, and the blind
+	// index is not a safe surrogate for the address in any of those places:
+	// a keyed digest of a low-entropy value is dictionary-reversible for any
+	// holder with a candidate list, so carrying it would publish an offline
+	// oracle for the invitee's address across the process boundary. A
+	// subscriber that must reach the person reads the invitation row through
+	// org, where the address is encrypted at rest; the payload identifies
+	// the invitation and its context, nothing more.
 	MemberInvited struct {
 		InvitationID  string `json:"invitation_id"`
 		NodeID        string `json:"node_id"`
-		EmailIndex    string `json:"email_index"`
 		InviterUserID string `json:"inviter_user_id"`
 	}
 

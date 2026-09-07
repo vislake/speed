@@ -461,8 +461,10 @@ func toMembershipResponse(m *Membership) api.OrgMembership {
 
 // toInvitationResponse converts inv to its spec-generated JSON response
 // type. It deliberately never reads inv.Email: the address is PII, and
-// this module's convention (invitation.go, invite.go) is never to echo it
-// into anything that leaves the process boundary. It deliberately never
+// this module's convention (invitation.go, invite.go, events.go) is never
+// to echo it into anything that leaves the process boundary -- org.member.
+// invited's own payload carries the invitation id, never the address or any
+// derivation of it, the same rule responses follow. It deliberately never
 // reads inv.EmailIndex either: HMAC non-invertibility (dbkit's blind
 // index) resists OFFLINE dictionary attacks, never an online oracle --
 // invitation creation accepts a caller-chosen address, so a caller who can

@@ -273,7 +273,6 @@ func (s *InviteService) Invite(ctx context.Context, req InviteRequest) (*InviteR
 	publishEvent(ctx, s.host, EventMemberInvited, MemberInvited{
 		InvitationID:  invitation.ID,
 		NodeID:        invitation.NodeID,
-		EmailIndex:    invitation.EmailIndex,
 		InviterUserID: invitation.InviterUserID,
 	})
 

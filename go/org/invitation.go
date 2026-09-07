@@ -108,8 +108,12 @@ type Invitation struct {
 	Email string `gorm:"column:email;serializer:org_email_enc;not null"`
 
 	// EmailIndex is the HMAC blind index of Email, the only way this table
-	// can be searched by address. It is safe to log and to put in an event:
-	// it is a keyed digest, not the address.
+	// can be searched by address. It never rides an org event payload or an
+	// org HTTP response: a keyed digest of a low-entropy value is
+	// dictionary-reversible for any holder with a candidate list, which is
+	// why org.member.invited carries the invitation's id and a subscriber
+	// that must reach the invitee reads this row (events.go's MemberInvited
+	// doc comment states the same rule from the payload's side).
 	EmailIndex string `gorm:"column:email_index;size:64;not null;index"`
 
 	// InviterUserID is the member who issued the invitation.

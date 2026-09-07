@@ -1,7 +1,9 @@
 package org
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -105,8 +107,13 @@ func TestInviteService_Invite_CreatesStoresAndSends(t *testing.T) {
 		t.Error("the message body does not carry the accept link")
 	}
 
-	// And the invitation was announced, carrying the blind index rather than
-	// the address.
+	// And the invitation was announced. The payload identifies the row it
+	// announces -- never the invitee, and never a derivation of the invitee's
+	// address: org.member.invited carries no blind index (MemberInvited's own
+	// doc comment in events.go). The address discipline of the serialized
+	// form a broker actually carries is pinned separately, against this same
+	// real publish path, by
+	// TestInviteService_Invite_PublishedMemberInvited_ExposesNoBlindIndex.
 	invited := f.host.bus.events(EventMemberInvited)
 	if len(invited) != 1 {
 		t.Fatalf("published %d member-invited events, want 1", len(invited))
@@ -115,11 +122,65 @@ func TestInviteService_Invite_CreatesStoresAndSends(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload is %T, want org.MemberInvited", invited[0].Payload)
 	}
-	if payload.EmailIndex != inv.EmailIndex || payload.InvitationID != inv.ID {
-		t.Errorf("payload = %+v, want the invitation's own ids", payload)
+	if payload.InvitationID != inv.ID {
+		t.Errorf("payload invitation_id = %q, want the invitation's own id %q", payload.InvitationID, inv.ID)
 	}
-	if strings.Contains(payload.EmailIndex, "@") {
-		t.Error("the event payload carries an address rather than a blind index")
+}
+
+// TestInviteService_Invite_PublishedMemberInvited_ExposesNoBlindIndex pins
+// the wire contract of org.member.invited at its real publish site: the
+// payload identifies the invitation and its context, and it must carry
+// NEITHER the invitee's address NOR the address's blind index.
+//
+// Why the blind index counts as much as the address: an HMAC digest of a
+// low-entropy value is dictionary-reversible for any holder with a candidate
+// list, and an event payload is written to a broker, logged by whoever
+// subscribes and often traced -- in the distributed deployment mode the
+// broker is a Redis Streams cross-process boundary. The in-process struct is
+// not the contract; the JSON form the bus actually carries is (events.go's
+// payload doc block), so the assertions run against the serialized payload:
+// no "email_index" key, and not the invitation's index value in the bytes.
+// A subscriber that must reach the invitee reads the invitation row through
+// org, where the address is encrypted at rest.
+func TestInviteService_Invite_PublishedMemberInvited_ExposesNoBlindIndex(t *testing.T) {
+	f := newInviteFixture(t)
+	result := f.invite(t, "ada@example.test")
+
+	invited := f.host.bus.events(EventMemberInvited)
+	if len(invited) != 1 {
+		t.Fatalf("published %d member-invited events, want 1", len(invited))
+	}
+	payload, ok := invited[0].Payload.(MemberInvited)
+	if !ok {
+		t.Fatalf("payload is %T, want org.MemberInvited", invited[0].Payload)
+	}
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal the published payload: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("unmarshal the marshaled payload: %v", err)
+	}
+	for _, key := range []string{"email", "email_index"} {
+		if _, present := fields[key]; present {
+			t.Errorf("published payload carries the %q key: %s", key, encoded)
+		}
+	}
+	if bytes.Contains(encoded, []byte(result.Invitation.EmailIndex)) {
+		t.Errorf("serialized payload carries the invitation's blind index %q: %s",
+			result.Invitation.EmailIndex, encoded)
+	}
+	for key, want := range map[string]string{
+		"invitation_id":   result.Invitation.ID,
+		"node_id":         result.Invitation.NodeID,
+		"inviter_user_id": result.Invitation.InviterUserID,
+	} {
+		got, present := fields[key].(string)
+		if !present || got != want {
+			t.Errorf("payload %s = %v, want %q", key, fields[key], want)
+		}
 	}
 }
 

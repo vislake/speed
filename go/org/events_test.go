@@ -688,15 +688,29 @@ func TestEventPayloads_CarryJSONTags(t *testing.T) {
 	}
 }
 
-// TestMemberInvited_CarriesNoAddress is a security assertion, not a shape
-// one: an event payload is written to a broker, logged by whoever subscribes
-// and often traced, so an email address in one publishes PII to all three.
-func TestMemberInvited_CarriesNoAddress(t *testing.T) {
+// TestMemberInvited_CarriesNoAddressOrIndex is a security assertion, not a
+// shape one: an event payload is written to a broker, logged by whoever
+// subscribes and often traced, and the invitee's address in one publishes
+// PII to all three -- and so does the address's blind index, a keyed digest
+// of a low-entropy value that any holder with a candidate list can reverse.
+// The check reads both the Go field name and the json tag, because the tag
+// is what the broker's map keys are built from. This round's upgrade: the
+// payload used to carry EmailIndex (its json tag "email_index") on the
+// "digest, not the address" reasoning this very comment's predecessor
+// recorded; a digest of a low-entropy value IS an identifier, so the
+// assertion now forbids the address and every derivation of it alike. The
+// payload identifies the invitation; a subscriber that must reach the
+// person reads the invitation row through org (MemberInvited's doc comment).
+func TestMemberInvited_CarriesNoAddressOrIndex(t *testing.T) {
 	typ := reflect.TypeOf(MemberInvited{})
 	for i := range typ.NumField() {
-		name := strings.ToLower(typ.Field(i).Name)
-		if name == "email" {
-			t.Errorf("MemberInvited declares a field %q; it must carry the blind index only", typ.Field(i).Name)
+		field := typ.Field(i)
+		name := strings.ToLower(field.Name)
+		tagName, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if name == "email" || name == "emailindex" || tagName == "email" || tagName == "email_index" {
+			t.Errorf("MemberInvited declares a field %q (json %q); it must carry neither the "+
+				"address nor any derivation of it, its blind index included",
+				field.Name, tagName)
 		}
 	}
 }
