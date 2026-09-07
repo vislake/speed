@@ -29,7 +29,11 @@
 // -- a JetStream KV bucket's TTL is a whole-bucket setting, and cannot
 // express "IncrByFloat resets expiry only when it creates the key, preserves
 // it when it increments an existing one," so bucket TTL is never touched by
-// this package, and MaxAge is left at zero (never expire) throughout.
+// this package: buckets this package creates leave MaxAge at zero (never
+// expire), and an existing bucket whose operator gave it a TTL is refused at
+// adoption with ErrUnadoptableBucket rather than adopted, since the server
+// would silently expire that bucket's ttl<=0 "stores forever" keys on its
+// own clock (NewKVStore's doc comment lists the full adoptable surface).
 //
 // The pinned nats.go v1.53.1 does expose a server-side per-key TTL -- the
 // KeyTTL create option, which requires the bucket-level LimitMarkerTTL to be
@@ -138,6 +142,19 @@ const (
 	incrBackoffCap  = 20 * time.Millisecond
 )
 
+// ErrUnadoptableBucket is returned by NewKVStore when the probe that found
+// an existing JetStream KV bucket reports a configuration the store this
+// package hands back cannot honour: adopting such a bucket would make a
+// declaration the package registers silently false, or overthrow a contract
+// pkgcore.KVStore pins for every implementation, while startup -- including
+// the deployment-mode capability checks Kernel.Bootstrap runs over the
+// resolved "kv.nats" implementation -- would go on believing the declaration.
+// The wrapped error names the bucket, the offending configuration and the
+// declaration or contract it contradicts, so an operator who pre-provisioned
+// the bucket knows exactly what to change; the refusal never rewrites or
+// deletes the operator's bucket.
+var ErrUnadoptableBucket = errors.New("pkgcore/kv/nats: existing bucket configuration is not adoptable by this implementation")
+
 // kvStore is the distributed deployment mode's NATS-backed KVStore: a thin,
 // stateless wrapper over a jetstream.KeyValue handle bound to one bucket.
 // Nothing here holds a mutex or any other in-process state of its own --
@@ -160,12 +177,13 @@ type kvStore struct {
 // Redis key can.
 //
 // The provisioning is probe-then-create, never create-or-update: an
-// existing bucket is probed with a plain KeyValue lookup and adopted
-// untouched, whatever its configuration. Update-overwriting an existing
-// bucket with this constructor's defaults used to silently rewrite a
-// configuration a provisioning operator set deliberately -- replica count,
-// storage engine, history depth and TTL all collapsed back to this
-// constructor's hardcoded single-replica, one-entry-history, no-TTL,
+// existing bucket is probed with a plain KeyValue lookup and adopted when
+// its configuration can satisfy what this implementation declares and
+// relies on, and refused with ErrUnadoptableBucket otherwise. Update-
+// overwriting an existing bucket with this constructor's defaults used to
+// silently rewrite a configuration a provisioning operator set deliberately
+// -- replica count, storage engine, history depth and TTL all collapsed
+// back to this constructor's single-replica, one-entry-history, no-TTL,
 // file-storage defaults the moment a store was built against it (a
 // pre-provisioned three-replica production bucket quietly demoted to
 // single-replica, with all the availability that replication existed to
@@ -178,6 +196,38 @@ type kvStore struct {
 // package doc comment for why this package's own envelope is what carries
 // expiry instead), and Storage defaults to jetstream.FileStorage, which is
 // what lets this implementation declare pkgcore.SurvivesRestart.
+//
+// The adoptable surface is deliberately narrow, because it is exactly the
+// surface the package's declarations and contracts cover: adopting a bucket
+// must never make a registered declaration silently false, or overthrow a
+// contract pkgcore.KVStore pins for every implementation, while the
+// deployment-mode capability checks Kernel.Bootstrap runs over the resolved
+// "kv.nats" implementation go on believing the declaration. Two
+// configuration facts are therefore verified before a pre-provisioned
+// bucket is adopted (adoptionRefusal):
+//
+//   - Storage must be jetstream.FileStorage. A MemoryStorage bucket loses
+//     every key it holds the moment the NATS server itself restarts,
+//     silently forfeiting the pkgcore.SurvivesRestart capability "kv.nats"'s
+//     registration declares -- exactly the claim the bootstrap capability
+//     check exists to enforce, and the one adoption used to bypass.
+//   - TTL must be zero. A whole-bucket TTL silently expires keys this store
+//     wrote with ttl <= 0 -- pkgcore.KVStore's stores-forever contract -- on
+//     the server's own clock, overthrowing the envelope expiry design this
+//     package builds on (see the package doc comment). Expiring must stay
+//     entirely with each value's own envelope, as it is on the buckets this
+//     constructor creates.
+//
+// Every other configuration fact an operator set is adopted untouched and
+// is never a refusal reason: History depth, Description, MaxValueSize,
+// Replicas, Placement and the rest are preserved byte for byte, since none
+// of them can contradict a declared claim. Replicas in particular is not a
+// checked dimension: pkgcore.MultiReplicaSafe speaks of concurrent
+// application replicas sharing one bucket -- which JetStream's own
+// server-side revision arbitration provides at any replication factor --
+// never of the bucket's server-side replication, which can only make
+// durability better than the single-replica bucket this constructor
+// creates, never worse.
 //
 // Two builders racing to provision the same never-seen bucket are resolved
 // by re-probing: the loser's create answers "already in use", and the loser
@@ -206,9 +256,16 @@ func NewKVStore(ctx context.Context, nc *nats.Conn, bucket string) (pkgcore.KVSt
 
 	// Probe first: an existing bucket is adopted as-is, never re-created or
 	// re-configured -- see the constructor doc comment for the rewrite
-	// hazard this probe exists to prevent.
+	// hazard this probe exists to prevent -- but only when its configuration
+	// can satisfy what this implementation declares and relies on. An
+	// unadoptable bucket is refused with ErrUnadoptableBucket, never adopted
+	// with the declaration silently falsified (the constructor doc comment's
+	// adoptable-surface list names the two checked dimensions).
 	kv, err := js.KeyValue(ctx, bucket)
 	if err == nil {
+		if refusalErr := refuseUnadoptable(ctx, bucket, kv); refusalErr != nil {
+			return nil, refusalErr
+		}
 		return &kvStore{kv: kv}, nil
 	}
 	if !errors.Is(err, jetstream.ErrBucketNotFound) {
@@ -222,14 +279,65 @@ func NewKVStore(ctx context.Context, nc *nats.Conn, bucket string) (pkgcore.KVSt
 	if bucketNameInUse(err) {
 		// Lost a provisioning race against another builder of this
 		// never-before-seen bucket: the bucket exists now, so adopt it the
-		// same way a pre-provisioned one would have been adopted. If the
-		// re-probe finds nothing, the create failed for a reason other than
-		// the race and the original error is the honest answer.
+		// same way a pre-provisioned one would have been adopted -- through
+		// the same configuration verification, so a winner this constructor
+		// itself created (always compliant) or an operator bucket that won
+		// the race instead is refused, not adopted, when it cannot satisfy
+		// the declarations. If the re-probe finds nothing, the create failed
+		// for a reason other than the race and the original error is the
+		// honest answer.
 		if winner, probeErr := js.KeyValue(ctx, bucket); probeErr == nil {
+			if refusalErr := refuseUnadoptable(ctx, bucket, winner); refusalErr != nil {
+				return nil, refusalErr
+			}
 			return &kvStore{kv: winner}, nil
 		}
 	}
 	return nil, fmt.Errorf("pkgcore/kv/nats: provision bucket %q: %w", bucket, err)
+}
+
+// refuseUnadoptable reads bucket's effective configuration back from the
+// server and returns adoptionRefusal's verdict on it, or a read-back error.
+// It is the one place an adopted bucket's configuration enters the package,
+// shared by NewKVStore's two adoption paths -- the plain probe and the
+// lost-create-race re-probe -- so neither can diverge on what is adoptable.
+func refuseUnadoptable(ctx context.Context, bucket string, kv jetstream.KeyValue) error {
+	status, err := kv.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("pkgcore/kv/nats: read back adopted bucket %q configuration: %w", bucket, err)
+	}
+	return adoptionRefusal(status.Config())
+}
+
+// adoptionRefusal reports why the effective configuration cfg makes the
+// bucket unadoptable, or nil when it may be adopted. The two refusal
+// dimensions are exactly the two facts that can make a declaration this
+// package registers silently false or overthrow a contract pkgcore.KVStore
+// pins: a Storage other than jetstream.FileStorage (a MemoryStorage bucket
+// loses every key on a NATS server restart, forfeiting the registered
+// pkgcore.SurvivesRestart) and a nonzero TTL (the server silently expires
+// the bucket's ttl<=0 "stores forever" keys on its own clock). They are
+// evaluated in this fixed order, so a bucket violating both is refused for
+// the first one, deterministically. Everything else an operator configured
+// -- History, Description, MaxValueSize, Replicas, Placement -- is never a
+// refusal reason and is adopted untouched; see the constructor doc comment's
+// adoptable-surface list for the full decision surface.
+func adoptionRefusal(cfg jetstream.KeyValueConfig) error {
+	switch cfg.Storage {
+	case jetstream.FileStorage:
+		// The storage every declaration and contract in this package rests on.
+	case jetstream.MemoryStorage:
+		return fmt.Errorf("%w: bucket %q uses memory storage, which loses every key it holds when the NATS server itself restarts: only file storage (the configuration NewKVStore itself creates) can satisfy the pkgcore.SurvivesRestart capability this implementation declares -- delete the bucket and let NewKVStore create it, or re-provision it with file storage",
+			ErrUnadoptableBucket, cfg.Bucket)
+	default:
+		return fmt.Errorf("%w: bucket %q uses an unrecognized storage type (%d), which this implementation cannot vouch for: only file storage (the configuration NewKVStore itself creates) can satisfy the pkgcore.SurvivesRestart capability this implementation declares -- delete the bucket and let NewKVStore create it, or re-provision it with file storage",
+			ErrUnadoptableBucket, cfg.Bucket, cfg.Storage)
+	}
+	if cfg.TTL > 0 {
+		return fmt.Errorf("%w: bucket %q carries a whole-bucket TTL of %v, which silently expires keys this store wrote with a ttl <= 0 on the server's own clock: pkgcore.KVStore's stores-forever contract requires the bucket itself to never expire a key, since expiry lives in each value's own envelope (the configuration NewKVStore itself creates) -- delete the bucket and let NewKVStore create it, or re-provision it with no TTL",
+			ErrUnadoptableBucket, cfg.Bucket, cfg.TTL)
+	}
+	return nil
 }
 
 // bucketNameInUse reports whether err is one of the answers a JetStream

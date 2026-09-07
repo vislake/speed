@@ -21,11 +21,15 @@ package nats
 import (
 	"bytes"
 	"context"
+	"errors"
 	"math"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // TestNewKVStore_PanicsOnNilConn pins that a nil connection is a wiring error
@@ -226,5 +230,86 @@ func TestKVStore_Set_EnvelopeSizeOverflowValueRefused(t *testing.T) {
 	value := *(*[]byte)(unsafe.Pointer(&header))
 	if err := store.Set(context.Background(), "k", value, 0); err == nil {
 		t.Fatal("Set() error = nil, want a refusal error for a value whose envelope size arithmetic would overflow")
+	}
+}
+
+// TestAdoptionRefusal pins the adoptable-bucket decision surface hermetically,
+// without a NATS server: adoptionRefusal is a pure decision over the effective
+// configuration the server reports, so every row of the surface -- the two
+// refusal dimensions and the tolerated fields -- is exercised here fast and
+// deterministically, while the integration tier's own refusal and compliant-
+// adoption tests prove the same surface end to end against a real server.
+//
+// The refusal must be the named ErrUnadoptableBucket (errors.Is-matchable,
+// never a bare string) and must name the dimension that disqualifies the
+// bucket, so an operator who pre-provisioned it knows what to change.
+func TestAdoptionRefusal(t *testing.T) {
+	t.Parallel()
+
+	const bucket = "decision-surface"
+	tests := []struct {
+		name        string
+		cfg         jetstream.KeyValueConfig
+		wantRefusal bool
+		wantInError string
+	}{
+		{
+			name: "file storage, no TTL, unset replication",
+			cfg:  jetstream.KeyValueConfig{Bucket: bucket, Storage: jetstream.FileStorage},
+		},
+		{
+			name: "file storage, no TTL, replicated",
+			cfg:  jetstream.KeyValueConfig{Bucket: bucket, Storage: jetstream.FileStorage, Replicas: 3},
+		},
+		{
+			name: "file storage, no TTL, operator extras",
+			cfg: jetstream.KeyValueConfig{
+				Bucket:      bucket,
+				Storage:     jetstream.FileStorage,
+				History:     10,
+				Replicas:    1,
+				Description: "provisioned by an operator",
+			},
+		},
+		{
+			name:        "memory storage, no TTL",
+			cfg:         jetstream.KeyValueConfig{Bucket: bucket, Storage: jetstream.MemoryStorage},
+			wantRefusal: true,
+			wantInError: "memory storage",
+		},
+		{
+			name:        "file storage with a bucket TTL",
+			cfg:         jetstream.KeyValueConfig{Bucket: bucket, Storage: jetstream.FileStorage, TTL: 45 * time.Second},
+			wantRefusal: true,
+			wantInError: "TTL",
+		},
+		{
+			name:        "memory storage with a bucket TTL reports storage first",
+			cfg:         jetstream.KeyValueConfig{Bucket: bucket, Storage: jetstream.MemoryStorage, TTL: 45 * time.Second},
+			wantRefusal: true,
+			wantInError: "memory storage",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := adoptionRefusal(tt.cfg)
+			if !tt.wantRefusal {
+				if err != nil {
+					t.Fatalf("adoptionRefusal() error = %v, want nil for an adoptable configuration", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrUnadoptableBucket) {
+				t.Fatalf("adoptionRefusal() error = %v, want it to wrap %v", err, ErrUnadoptableBucket)
+			}
+			if !strings.Contains(err.Error(), tt.wantInError) {
+				t.Errorf("adoptionRefusal() error = %q, want it to name the disqualifying dimension %q", err, tt.wantInError)
+			}
+			if !strings.Contains(err.Error(), bucket) {
+				t.Errorf("adoptionRefusal() error = %q, want it to name the refused bucket %q", err, bucket)
+			}
+		})
 	}
 }

@@ -546,24 +546,23 @@ func TestKVStore_ConformsToKVStoreContract(t *testing.T) {
 	kvstoretest.AssertConforms(t, func() pkgcore.KVStore { return kv })
 }
 
-// TestKVStore_NewKVStore_AdoptsPreProvisionedBucketUntouched is the
-// regression for the bucket-rewrite hazard NewKVStore used to carry: it
-// provisioned through nats.go's CreateOrUpdateKeyValue, which -- for a
-// bucket that already exists -- re-applies the constructor's own hardcoded
-// defaults (single replica, one-entry history, no TTL, file storage) on top
-// of whatever configuration the bucket actually had. A pre-provisioned
-// bucket configured deliberately -- memory storage, a ten-entry history, a
-// whole-bucket TTL, a description naming its operator -- was silently
-// rewritten to the constructor defaults the moment a store was built
-// against it, a single-replica downgrade of a bucket someone had provisioned
-// for a reason.
-//
-// NewKVStore must instead probe first and adopt an existing bucket
-// untouched: this test provisions a deliberately distinctive bucket, builds
-// a store over it, and reads the bucket's configuration back through a raw
-// jetstream client -- asserting every distinctive field survived byte for
-// byte, and that the adopted store is usable.
-func TestKVStore_NewKVStore_AdoptsPreProvisionedBucketUntouched(t *testing.T) {
+// TestKVStore_NewKVStore_RefusesAdoptedMemoryStorageBucket is the regression
+// for the first half of the adopt-anything hazard NewKVStore's probe used to
+// carry: an existing bucket was adopted with no check at all, so a bucket an
+// operator provisioned on memory storage -- which loses every key it holds
+// the moment the NATS server itself restarts -- was silently adopted while
+// this package's registration went on declaring pkgcore.SurvivesRestart, and
+// the distributed-mode bootstrap capability check against that declaration
+// passed on a claim the adopted bucket already contradicted (the check
+// exists to fail startup, naming the seam, when a composition cannot run in
+// the declared mode; adoption bypassed it entirely). Adoption must instead
+// refuse a bucket whose configuration cannot satisfy what this
+// implementation declares: NewKVStore must fail with the named
+// kvnats.ErrUnadoptableBucket rather than hand back a store whose
+// persistence the operator never provisioned for, and the refusal must
+// leave the operator's bucket exactly as provisioned -- never rewritten
+// toward the constructor defaults, never deleted.
+func TestKVStore_NewKVStore_RefusesAdoptedMemoryStorageBucket(t *testing.T) {
 	ctx := context.Background()
 	conn := startNATSConn(t, ctx)
 	js, err := jetstream.New(conn)
@@ -571,12 +570,101 @@ func TestKVStore_NewKVStore_AdoptsPreProvisionedBucketUntouched(t *testing.T) {
 		t.Fatalf("jetstream.New() error = %v, want nil", err)
 	}
 
-	const bucket = "adopt-untouched"
+	const bucket = "adopt-memory-refused"
+	if _, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:  bucket,
+		Storage: jetstream.MemoryStorage,
+	}); err != nil {
+		t.Fatalf("CreateKeyValue() error = %v, want nil", err)
+	}
+
+	if _, err := kvnats.NewKVStore(ctx, conn, bucket); !errors.Is(err, kvnats.ErrUnadoptableBucket) {
+		t.Fatalf("NewKVStore() error = %v, want it to wrap %v: a memory-storage bucket cannot satisfy the declared pkgcore.SurvivesRestart",
+			err, kvnats.ErrUnadoptableBucket)
+	}
+
+	stream, err := js.Stream(ctx, "KV_"+bucket)
+	if err != nil {
+		t.Fatalf("read back bucket %q: %v", bucket, err)
+	}
+	if cfg := stream.CachedInfo().Config; cfg.Storage != jetstream.MemoryStorage {
+		t.Errorf("refused bucket storage = %v, want memory untouched: the refusal must not rewrite or delete the operator's bucket", cfg.Storage)
+	}
+}
+
+// TestKVStore_NewKVStore_RefusesAdoptedBucketLevelTTL is the regression for
+// the second half of the adopt-anything hazard: a bucket whose operator gave
+// it a whole-bucket TTL was silently adopted too, yet such a bucket
+// overthrows the stores-forever contract every KVStore implementation pins --
+// Set(k, v, 0) promises "no expiry", and the server would purge the key when
+// the bucket's own MaxAge ran out, with nothing in the value's own envelope
+// able to outlive a bucket setting (see the package doc comment for why this
+// package leaves MaxAge at zero on every bucket it creates). NewKVStore must
+// refuse the bucket with the named kvnats.ErrUnadoptableBucket, leaving its
+// configuration untouched, rather than adopt a store on which a ttl<=0 write
+// silently expires.
+func TestKVStore_NewKVStore_RefusesAdoptedBucketLevelTTL(t *testing.T) {
+	ctx := context.Background()
+	conn := startNATSConn(t, ctx)
+	js, err := jetstream.New(conn)
+	if err != nil {
+		t.Fatalf("jetstream.New() error = %v, want nil", err)
+	}
+
+	const bucket = "adopt-ttl-refused"
+	if _, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: bucket,
+		TTL:    45 * time.Second,
+	}); err != nil {
+		t.Fatalf("CreateKeyValue() error = %v, want nil", err)
+	}
+
+	if _, err := kvnats.NewKVStore(ctx, conn, bucket); !errors.Is(err, kvnats.ErrUnadoptableBucket) {
+		t.Fatalf("NewKVStore() error = %v, want it to wrap %v: a bucket-level TTL silently expires ttl<=0 (stores-forever) writes",
+			err, kvnats.ErrUnadoptableBucket)
+	}
+
+	stream, err := js.Stream(ctx, "KV_"+bucket)
+	if err != nil {
+		t.Fatalf("read back bucket %q: %v", bucket, err)
+	}
+	if cfg := stream.CachedInfo().Config; cfg.MaxAge != 45*time.Second {
+		t.Errorf("refused bucket TTL = %v, want 45s untouched: the refusal must not rewrite or delete the operator's bucket", cfg.MaxAge)
+	}
+}
+
+// TestKVStore_NewKVStore_AdoptsPreProvisionedCompliantBucket is the
+// probe-then-adopt regression for the configuration the constructor may
+// still adopt: a pre-provisioned bucket is adopted untouched -- never
+// re-created or re-configured (the rewrite hazard the probe-first fix
+// closed) -- exactly when its configuration satisfies what this
+// implementation declares and relies on: file storage (the persistence the
+// registered pkgcore.SurvivesRestart claim rests on) and no whole-bucket TTL
+// (the envelope design's MaxAge-zero assumption). Every other field an
+// operator set deliberately -- this test uses a ten-entry history, an
+// explicit single-replica replication factor and a description naming the
+// operator -- is preserved byte for byte, since none of them contradicts a
+// declared claim (history depth and replication only ever make the bucket
+// more capable, never less durable).
+//
+// The adopted store must also be a working store with the forever contract
+// intact: a ttl<=0 write must still live after an envelope-dated write on
+// the same store has come and gone, which is exactly the contract a
+// bucket-level TTL would have overthrown.
+func TestKVStore_NewKVStore_AdoptsPreProvisionedCompliantBucket(t *testing.T) {
+	ctx := context.Background()
+	conn := startNATSConn(t, ctx)
+	js, err := jetstream.New(conn)
+	if err != nil {
+		t.Fatalf("jetstream.New() error = %v, want nil", err)
+	}
+
+	const bucket = "adopt-compliant"
 	if _, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
 		Bucket:      bucket,
 		History:     10,
-		Storage:     jetstream.MemoryStorage,
-		TTL:         45 * time.Second,
+		Storage:     jetstream.FileStorage,
+		Replicas:    1,
 		Description: "provisioned by an operator, must survive adoption",
 	}); err != nil {
 		t.Fatalf("CreateKeyValue() error = %v, want nil", err)
@@ -584,13 +672,14 @@ func TestKVStore_NewKVStore_AdoptsPreProvisionedBucketUntouched(t *testing.T) {
 
 	store, err := kvnats.NewKVStore(ctx, conn, bucket)
 	if err != nil {
-		t.Fatalf("NewKVStore() error = %v, want nil", err)
+		t.Fatalf("NewKVStore() error = %v, want nil for a file-storage, no-TTL bucket", err)
 	}
 
-	// The bucket's configuration must be byte-for-byte what the operator
+	// The tolerated fields must be byte-for-byte what the operator
 	// provisioned. Before the probe-first fix, NewKVStore's
-	// CreateOrUpdateKeyValue collapsed every one of these fields back to its
-	// constructor default (history 1, file storage, no TTL, no description).
+	// CreateOrUpdateKeyValue collapsed them all back to its constructor
+	// defaults (history 1, no description); the adoption checks must keep the
+	// same hands-off promise for everything they do not refuse.
 	stream, err := js.Stream(ctx, "KV_"+bucket)
 	if err != nil {
 		t.Fatalf("read back bucket %q: %v", bucket, err)
@@ -599,22 +688,71 @@ func TestKVStore_NewKVStore_AdoptsPreProvisionedBucketUntouched(t *testing.T) {
 	if cfg.MaxMsgsPerSubject != 10 {
 		t.Errorf("adopted bucket history = %d, want 10: NewKVStore must not rewrite a pre-provisioned bucket's config", cfg.MaxMsgsPerSubject)
 	}
-	if cfg.Storage != jetstream.MemoryStorage {
-		t.Errorf("adopted bucket storage = %v, want memory: NewKVStore must not rewrite a pre-provisioned bucket's config", cfg.Storage)
+	if cfg.Storage != jetstream.FileStorage {
+		t.Errorf("adopted bucket storage = %v, want file: NewKVStore must not rewrite a pre-provisioned bucket's config", cfg.Storage)
 	}
-	if cfg.MaxAge != 45*time.Second {
-		t.Errorf("adopted bucket TTL = %v, want 45s: NewKVStore must not rewrite a pre-provisioned bucket's config", cfg.MaxAge)
+	if cfg.Replicas != 1 {
+		t.Errorf("adopted bucket replication = %d, want 1: NewKVStore must not rewrite a pre-provisioned bucket's config", cfg.Replicas)
+	}
+	if cfg.MaxAge != 0 {
+		t.Errorf("adopted bucket TTL = %v, want 0: a compliant bucket must carry no whole-bucket TTL", cfg.MaxAge)
 	}
 	if cfg.Description != "provisioned by an operator, must survive adoption" {
 		t.Errorf("adopted bucket description = %q, want the provisioned one: NewKVStore must not rewrite a pre-provisioned bucket's config", cfg.Description)
 	}
 
-	// And the adopted store must be a working store over that bucket.
-	if err := store.Set(ctx, "k", []byte("v"), 0); err != nil {
+	// And the adopted store must work with the stores-forever contract
+	// intact: the ttl<=0 write must outlive the envelope-dated one.
+	if err := store.Set(ctx, "forever", []byte("v"), 0); err != nil {
 		t.Fatalf("Set() on the adopted store error = %v, want nil", err)
 	}
-	if value, found, err := store.Get(ctx, "k"); err != nil || !found || string(value) != "v" {
-		t.Errorf("Get() = (%q, %t, %v), want (\"v\", true, nil) on the adopted store", value, found, err)
+	if err := store.Set(ctx, "ephemeral", []byte("gone"), 200*time.Millisecond); err != nil {
+		t.Fatalf("Set() on the adopted store error = %v, want nil", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	if value, found, err := store.Get(ctx, "forever"); err != nil || !found || string(value) != "v" {
+		t.Errorf("Get(forever) = (%q, %t, %v), want (\"v\", true, nil): a ttl<=0 write on the adopted bucket must not expire", value, found, err)
+	}
+	if _, found, err := store.Get(ctx, "ephemeral"); err != nil || found {
+		t.Errorf("Get(ephemeral) = (%t, %v), want (false, nil) once its envelope-dated expiry passed", found, err)
+	}
+}
+
+// TestKVStore_NewKVStore_CreatesACompliantBucketFromScratch pins the create
+// half of the constructor is untouched by the adoption checks: a genuinely
+// absent bucket is still provisioned, and the configuration NewKVStore
+// itself creates -- file storage, no whole-bucket TTL -- is exactly the
+// configuration the adoption checks accept, so a store built by creating its
+// bucket and one built by adopting a pre-provisioned bucket can never diverge
+// in what the package's registration declares of them.
+func TestKVStore_NewKVStore_CreatesACompliantBucketFromScratch(t *testing.T) {
+	ctx := context.Background()
+	conn := startNATSConn(t, ctx)
+	js, err := jetstream.New(conn)
+	if err != nil {
+		t.Fatalf("jetstream.New() error = %v, want nil", err)
+	}
+
+	const bucket = "create-compliant"
+	store, err := kvnats.NewKVStore(ctx, conn, bucket)
+	if err != nil {
+		t.Fatalf("NewKVStore() error = %v, want nil", err)
+	}
+	if err := store.Set(ctx, "k", []byte("v"), 0); err != nil {
+		t.Fatalf("Set() error = %v, want nil", err)
+	}
+
+	stream, err := js.Stream(ctx, "KV_"+bucket)
+	if err != nil {
+		t.Fatalf("read back bucket %q: %v", bucket, err)
+	}
+	cfg := stream.CachedInfo().Config
+	if cfg.Storage != jetstream.FileStorage {
+		t.Errorf("created bucket storage = %v, want file: the create path must keep provisioning the storage the registered %s claim rests on", cfg.Storage, pkgcore.SurvivesRestart)
+	}
+	if cfg.MaxAge != 0 {
+		t.Errorf("created bucket TTL = %v, want 0: the create path must keep provisioning the MaxAge-zero bucket the envelope design assumes", cfg.MaxAge)
 	}
 }
 
