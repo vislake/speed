@@ -21,14 +21,16 @@ info:
     pinned at v2.8.0 uses this directory's own oapi-codegen.yaml -- see that
     file for the exact command.
 
-    This round wires this fragment into .github/workflows/api-contract.yml's
-    regenerate-then-diff gate (backend-only, mirroring org's and storage's
-    own single-fragment entries in that workflow) -- round 1's honest
-    "neither Taskfile.yml's api:gen task nor api-contract.yml includes this
-    fragment yet" gap is closed on the CI side; Taskfile.yml's api:gen task
-    list still does not name admin explicitly (a separate, smaller gap left
-    for a future round, matching how pki's own Taskfile leg and
-    api-contract.yml leg closed in two different rounds).
+    This fragment is wired into both regeneration halves now. Taskfile.yml's
+    api:gen task names admin explicitly: its backend generator list includes
+    this directory, with its own leg running the pinned oapi-codegen here
+    exactly as for every other fragment. api-contract.yml's
+    regenerate-then-diff gate carries the same single-fragment entry
+    (backend-only, mirroring org's and storage's own entries in that
+    workflow). Round 1's honest "neither Taskfile.yml's api:gen task nor
+    api-contract.yml includes this fragment yet" gap is closed on both
+    sides, so a spec edit needs no hand regeneration and no hand diffing:
+    the same gate that guards every other fragment guards this one.
 
     Every operation here is a platform-operations action gated on a
     rbac.SystemDomain permission (admin:access, admin:tenants_manage,
