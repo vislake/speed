@@ -54,6 +54,7 @@ import {
 import { base64ToBytes } from '../base64.js'
 import { useDateFormatter } from '../use-date-formatter.js'
 import { CasePhoto } from './case-photo.js'
+import { SimulationShareAction } from './simulation-share-action.js'
 
 /** The documented smile-style vocabulary, in server order (the ladder
  * from the most conservative change to the fullest one). The displayed
@@ -577,6 +578,15 @@ export function PhotoSimulationPanel({
           <Typography variant="caption" color="text.secondary">
             {attemptSummary(t, newestSucceeded)}
           </Typography>
+          {/* The block-C share action: the practice turns this completed
+          simulation into a patient-facing link. Mounted under the
+          comparison with a key of the simulation's own job, so a newer
+          result replaces a minted link by remount rather than carrying
+          it over. */}
+          <SimulationShareAction
+            key={`share-${newestSucceeded.job_id}`}
+            simulation={newestSucceeded}
+          />
         </Box>
       )}
 

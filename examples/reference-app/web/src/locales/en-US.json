@@ -137,6 +137,18 @@
         "unknown": "Something went wrong. Try again later."
       }
     },
+    "share": {
+      "action": "Share with patient",
+      "linkLabel": "Share link",
+      "expiresOn": "Link expires {date}",
+      "errors": {
+        "permissionDenied": "You don't have permission to share results with patients. Ask an owner of your clinic.",
+        "rateLimited": "Too many share links were created just now. Wait a moment and try again.",
+        "internal": "Something went wrong on the server. Try again later.",
+        "client": "The share link could not be created. Check your connection and try again.",
+        "unknown": "Something went wrong creating the share link. Try again later."
+      }
+    },
     "errors": {
       "invalidRequest": "The request could not be understood. Try again.",
       "subjectUnresolved": "Your sign-in could not be recognized. Sign in again and retry.",
@@ -164,5 +176,18 @@
   },
   "clinic": {
     "currentClinic": "Current clinic: {{name}}"
+  },
+  "shareView": {
+    "heading": "Your smile simulation",
+    "intro": "Your dental clinic shared this preview with you.",
+    "imageAlt": "Simulated smile",
+    "errors": {
+      "notAccessible": "This link is no longer available. It may have expired, or the clinic may have stopped sharing it. Ask the clinic for a fresh link.",
+      "rateLimited": "Too many visits in a short time. Wait a moment and try again.",
+      "resourceUnavailable": "This link's image could not be loaded. Ask the clinic to check that the simulation is still available.",
+      "internal": "Something went wrong on the server. Try again later.",
+      "client": "The image could not be loaded. Check your connection and try again.",
+      "unknown": "This preview could not be shown. Try again later."
+    }
   }
 }

@@ -48,6 +48,7 @@ import { NotesView } from './views/notes-view.js'
 import { AccountView } from './views/account-view.js'
 import { SignInView } from './views/sign-in-view.js'
 import { UserMenu } from './views/user-menu.js'
+import { ShareView } from './views/share-view.js'
 
 /** The home fragment: the bare hash (''), '#' and '#/' all mean it. */
 export const ROUTE_HOME = '/'
@@ -61,6 +62,11 @@ export const ROUTE_ACCOUNT = '/account'
  * the path is the provider, the query the (code, state) pair the
  * exchange completes with. */
 export const BINDING_ROUTE_PREFIX = '/auth/binding/'
+
+/** The patient share fragment prefix: /share/<token> is the link a
+ * completed simulation's share action hands out, opened by whoever
+ * holds it. */
+export const SHARE_ROUTE_PREFIX = '/share/'
 
 /** The demo's social provider set: the authn spec's five providers,
  * in the account-ui vocabulary. The demo server configures none of
@@ -91,6 +97,7 @@ export type AppFragment =
   | { readonly kind: 'notes' }
   | { readonly kind: 'account' }
   | { readonly kind: 'binding'; readonly target: BindingTarget }
+  | { readonly kind: 'share'; readonly token: string }
   | { readonly kind: 'unknown' }
 
 export interface BindingTarget {
@@ -145,6 +152,19 @@ export function parseHashFragment(fragment: string): AppFragment {
   if (path === ROUTE_ACCOUNT) {
     return { kind: 'account' }
   }
+  // The patient share fragment: /share/<token> -- one further segment
+  // (a share token is base64url and never carries a slash), exactly as
+  // /cases/<id> constrains its own id. The token is validated only for
+  // shape here; whether it names a live share is the access route's own
+  // answer, and a garbage token degrades to the page's honest refusal
+  // text rather than a client-side guess.
+  if (path.startsWith(SHARE_ROUTE_PREFIX)) {
+    const token = path.slice(SHARE_ROUTE_PREFIX.length)
+    if (token.length > 0 && !token.includes('/')) {
+      return { kind: 'share', token }
+    }
+    return { kind: 'unknown' }
+  }
   if (path.startsWith(BINDING_ROUTE_PREFIX)) {
     const provider = path.slice(BINDING_ROUTE_PREFIX.length)
     const params = new URLSearchParams(queryOf(fragment))
@@ -172,6 +192,10 @@ function selectedNavId(fragment: AppFragment): string | null {
     case 'account':
     case 'binding':
       return NAV_ACCOUNT
+    case 'share':
+      // The share fragment renders its own standalone page, never a nav
+      // item -- see AppView's early return below.
+      return null
     case 'unknown':
       return null
   }
@@ -192,6 +216,17 @@ export function AppView(): ReactElement {
   const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
   const fragment = useHashRoute()
   const parsed = parseHashFragment(fragment)
+
+  // The patient share fragment is the one surface of this app that must
+  // render WITHOUT the product shell: whoever opens a share link --
+  // signed out (the ordinary patient), signed in -- is here for one
+  // simulation, not for the clinic's frame, and a signed-out visitor
+  // must never meet the sign-in surface instead of their simulation.
+  // The page renders standalone before any shell branch.
+  if (parsed.kind === 'share') {
+    return <ShareView token={parsed.token} />
+  }
+
   const selected = selectedNavId(parsed)
 
   const navItems: readonly AppShellNavItem[] = [

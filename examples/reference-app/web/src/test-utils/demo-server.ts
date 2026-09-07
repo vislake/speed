@@ -110,7 +110,18 @@
  * {name}), mirrors the host route cmd/server/clinic_name.go mounts:
  * the org root name of the bearer principal's tenant, served for the
  * off-roster clinics the demo roster's host copy cannot name (see the
- * clinic-naming paragraph above).
+ * clinic-naming paragraph above). The smile-simulation and sharing
+ * surfaces ride the same shape: the simulation endpoints under
+ * /api/v1/smile-simulation answer the block-B read legs (the
+ * job-status, per-photo enumeration and content reads over the
+ * deterministic job ledger, plus the simulate 202), and the block-C
+ * sharing endpoints answer the clinic's mint and the patient's open --
+ * POST /api/v1/sharing/shares (201, a share echoing the body's
+ * resourceRef plus its once-returned bearer token; the reader-shaped
+ * principal's mint answers the rbac gate's 403) and GET
+ * /api/v1/sharing/access (200, the shared simulation's raw bytes --
+ * genuinely public, no bearer resolved -- or the scripted refusal
+ * through the shareAccessRefusal switch).
  *
  * The multi-factor surface mirrors the authn handler's step-up
  * machine (the same states its own tests pin): POST
@@ -370,6 +381,27 @@ export interface DemoServerOptions {
    * straight into a clinic-shaped tenant without the register turn
    * scripts this); default REGISTERED_CLINIC_DEFAULT_NAME. */
   readonly clinicName?: string
+  /** Refuses every POST /api/v1/sharing/shares with this coded answer
+   * -- a suite scripts the create refusals its surface must render (the
+   * module's 429 sharing.rate_limited); default undefined -- every
+   * create succeeds (a create from the reader-shaped principal answers
+   * the rbac gate's 403 rbac.permission_denied behind the `reader`
+   * option, the grant asymmetry the Go suite pins for sharing:create).
+   */
+  readonly sharesCreateRefusal?: {
+    readonly status: number
+    readonly code: string
+  }
+  /** Refuses every GET /api/v1/sharing/access with this coded answer --
+   * a suite scripts the refusals the patient page must render (the
+   * expired/revoked 404 sharing.not_accessible, the rate limit's 429,
+   * the 502 sharing.resource_unavailable); default undefined -- the
+   * access route serves the shared simulation's bytes. The route is
+   * genuinely public: its answer never resolves a bearer. */
+  readonly shareAccessRefusal?: {
+    readonly status: number
+    readonly code: string
+  }
 }
 
 /** The name the fixture gives a registered account's clinic when its
@@ -409,9 +441,10 @@ function bodyObject(call: RealCall): Record<string, unknown> {
   }
 }
 
-/** The permission code the notes module's rbac gate answers a caller
- * without the requested grant with (ErrPermissionDenied). */
-const NOTES_DENIED_CODE = 'rbac.permission_denied'
+/** The permission code an rbac gate answers a caller without the
+ * requested grant with (ErrPermissionDenied) -- the notes module's
+ * write gate and the sharing module's create gate alike. */
+const RBAC_PERMISSION_DENIED_CODE = 'rbac.permission_denied'
 
 /** The effective options of a simulate body: the documented defaults
  * (natural smile, natural shade, full strength -- the same defaults
@@ -488,6 +521,20 @@ const SIMULATION_CONTENT_PATH =
 /** The created_at every demo case answer carries -- the same fixed demo
  * epoch the notes answers use, so journeys can pin rendered times. */
 const DEMO_CASE_CREATED_AT = DEMO_NOTE_CREATED_AT
+
+/** The expiry every minted demo share answers with: the real server's
+ * forced default is 30 days from creation (go/sharing's
+ * defaultShareExpiry), and the demo's clock stands at the fixed epoch
+ * above. */
+const DEMO_SHARE_EXPIRES_AT = '2026-10-04T00:00:00Z'
+
+/** The raw bytes the access route serves for a granted share -- the
+ * decoded form of the simulation-result payload above, since the
+ * shared object IS the simulation's output. Not a decodable image:
+ * jsdom loads no images, and the api-client's refusal to parse these
+ * bytes as JSON is exactly the patient page's live-share retry signal.
+ */
+const DEMO_SHARE_CONTENT_BYTES = 'simulation-result-bytes'
 
 /** The photo bytes every demo photo-content answer serves unless a
  * suite scripts its own: the base64 of the ASCII payload "photo-bytes"
@@ -595,6 +642,8 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
       content_base64: DEMO_SIMULATION_CONTENT_BASE64,
     },
     clinicName,
+    sharesCreateRefusal,
+    shareAccessRefusal,
   } = options
   // The account state is stateful per responder instance (a revoke
   // marks a row for later list answers, an exchange appends a bound
@@ -665,6 +714,12 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   >()
   const simulationJobOrder: string[] = []
   let nextSimulationJobId = 1
+  // The share-ledger counters: ids and bearer tokens count up per
+  // responder instance like the note, case and object ids -- each mint
+  // answers a distinct token, the once-returned credential the share
+  // link carries.
+  let nextShareId = 1
+  let nextShareToken = 1
 
   /** The live status of one accepted job under this responder's
    * deterministic progression (see the ledger comment above). */
@@ -913,7 +968,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         // mask an app regression into fetching protected data without a
         // token.
         if (denyNotesRead) {
-          return errorResponse(403, NOTES_DENIED_CODE)
+          return errorResponse(403, RBAC_PERMISSION_DENIED_CODE)
         }
         return jsonResponse(200, { notes: notesOf(principal.tenant_id) })
       }
@@ -924,7 +979,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         // (its list is served, its create refused, the way the Go
         // demo-users suite pins the read-only member).
         if (denyNotesWrite || (reader && principal.user_id === DEMO_READER_USER_ID)) {
-          return errorResponse(403, NOTES_DENIED_CODE)
+          return errorResponse(403, RBAC_PERMISSION_DENIED_CODE)
         }
         // The real handler trims and validates: an empty trimmed text is
         // refused before anything is stored, so the client's required
@@ -1115,6 +1170,65 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
           : DEMO_MFA_RECOVERY_CODES
         factorActive = true
         return jsonResponse(200, { recovery_codes: [...answered] })
+      }
+      case 'POST /api/v1/sharing/shares': {
+        const principal = principalOf(call)
+        // The create gate mirrors the rbac gate the real owner-facing
+        // route sits behind (sharing.PathShares, sharingPermissionFor
+        // selecting sharing:create for POST): the global refusal switch
+        // a suite scripts, and -- behind the reader option -- the
+        // reader's own grant asymmetry (its share create answers the
+        // rbac gate's 403, exactly like its note create answers the
+        // notes write gate's).
+        if (sharesCreateRefusal !== undefined) {
+          return errorResponse(
+            sharesCreateRefusal.status,
+            sharesCreateRefusal.code,
+          )
+        }
+        if (reader && principal.user_id === DEMO_READER_USER_ID) {
+          return errorResponse(403, RBAC_PERMISSION_DENIED_CODE)
+        }
+        const body = bodyObject(call)
+        const resourceRef =
+          typeof body.resourceRef === 'string' ? body.resourceRef.trim() : ''
+        if (resourceRef === '') {
+          return errorResponse(400, 'sharing.resource_ref_required')
+        }
+        // The minted share and its once-returned bearer token, echoing
+        // the owner-facing route's 201 shape; the expiry mirrors the
+        // real server's forced default (30 days from the demo epoch).
+        const token = `share-token-${nextShareToken}`
+        nextShareToken += 1
+        const share = {
+          id: `share-${nextShareId}`,
+          resourceRef,
+          expiresAt: DEMO_SHARE_EXPIRES_AT,
+          viewCount: 0,
+          passwordProtected: false,
+          sensitive: false,
+          createdAt: DEMO_CASE_CREATED_AT,
+        }
+        nextShareId += 1
+        return jsonResponse(201, { share, token })
+      }
+      case 'GET /api/v1/sharing/access': {
+        // The one genuinely public route: no bearer is resolved -- a
+        // patient holds no session, and the real route answers from the
+        // share token alone (go/sharing's Service.AccessPublic). The
+        // refusal switch scripts the answers the patient page renders;
+        // a granted answer is the shared simulation's raw bytes, the
+        // same payload the simulation-content answers carry.
+        if (shareAccessRefusal !== undefined) {
+          return errorResponse(shareAccessRefusal.status, shareAccessRefusal.code)
+        }
+        return new Response(DEMO_SHARE_CONTENT_BYTES, {
+          status: 200,
+          headers: {
+            'Content-Type': 'image/png',
+            'Cache-Control': 'no-store',
+          },
+        })
       }
       default:
         break

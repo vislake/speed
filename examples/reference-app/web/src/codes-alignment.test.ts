@@ -1,11 +1,13 @@
 /**
  * codes-alignment.test.ts -- the reference-app shell's reachable-error
- * alignment suite: every server-emittable error code the shell's six
+ * alignment suite: every server-emittable error code the shell's eight
  * surfaces can be answered with (the auth-ui sign-in/session family, the
  * account-ui signed-in family, the tenancy-ui switch family, the notes
- * create surface, the cases surface and the smile-simulation surface the
- * block-B round added) is rendered through a reachable-error whitelist,
- * and this suite pins the whitelists to the server codes themselves.
+ * create surface, the cases surface, the smile-simulation surface the
+ * block-B round added, and the two block-C share surfaces: the clinic's
+ * share action on the case page and the patient's share page) is
+ * rendered through a reachable-error whitelist, and this suite pins the
+ * whitelists to the server codes themselves.
  *
  * The server side of the comparison is GO_PINNED below: a hand-maintained
  * enumeration of the codes the Go side of this app can answer with on
@@ -59,12 +61,32 @@ import { ERROR_TEXT_CODES as ACCOUNT_UI_ERROR_TEXT_CODES } from '../../../../web
 import { ERROR_TEXT_CODES as TENANCY_UI_ERROR_TEXT_CODES } from '../../../../web/packages/tenancy-ui/src/internal/error-text.js'
 import { CASES_ERROR_TEXT_KEYS } from './cases-errors.js'
 import { SMILE_SIM_ERROR_TEXT_KEYS } from './smile-sim-errors.js'
+import {
+  SHARE_ACTION_ERROR_TEXT_KEYS,
+  SHARE_VIEW_ERROR_TEXT_KEYS,
+} from './share-errors.js'
 import { NOTE_ERROR_TEXT_KEYS } from './views/notes-view.js'
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
 import enUS from './locales/en-US.json' with { type: 'json' }
 
+/** Reads one dotted key out of a bundle, or '' when the key is missing
+ * or holds a non-string -- the shared text lookup the bilingual
+ * regression tests below run against both app bundles. */
+function textOf(bundle: Record<string, unknown>, key: string): string {
+  const value = key
+    .split('.')
+    .reduce<unknown>(
+      (node, segment) =>
+        typeof node === 'object' && node !== null
+          ? (node as Record<string, unknown>)[segment]
+          : undefined,
+      bundle,
+    )
+  return typeof value === 'string' ? value : ''
+}
+
 /**
- * The server-emittable codes of this app's four surfaces, each cited to
+ * The server-emittable codes of this app's surfaces, each cited to
  * the source of the sentinel that defines it. The authn sentinels all
  * live in go/authn/errors.go; rbac.permission_denied is go/rbac's
  * ErrPermissionDenied, and the notes codes are the notes module
@@ -219,6 +241,19 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   // go/ai-gateway/errors.go -- the entitlement-gate refusal a simulate
   // answers for a tenant whose subscription lacks the image model.
   'aigateway.entitlement_denied': 'go/ai-gateway/errors.go:42 (ErrEntitlementDenied)',
+  // go/sharing/errors.go and go/sharing/ratelimit.go -- the sharing
+  // module's sentinels the block-C round's two surfaces made reachable
+  // text (the clinic share action's POST /api/v1/sharing/shares can be
+  // answered with the create rate limit and the internal envelope; the
+  // patient page's GET /api/v1/sharing/access can be answered with the
+  // outward-identical not-accessible refusal, the per-IP/per-token rate
+  // limit, the granted-but-unopenable 502 and the internal envelope.
+  // The route-level rbac answer the share action can draw is the
+  // already-pinned rbac.permission_denied above).
+  'sharing.internal_error': 'go/sharing/errors.go:92 (ErrInternal)',
+  'sharing.not_accessible': 'go/sharing/errors.go:60 (ErrNotAccessible)',
+  'sharing.resource_unavailable': 'go/sharing/errors.go:109 (ErrResourceUnavailable)',
+  'sharing.rate_limited': 'go/sharing/ratelimit.go:79 (ErrRateLimited)',
 }
 
 /**
@@ -273,7 +308,7 @@ function nonClientCodes(codes: readonly string[]): string[] {
   return codes.filter((code) => !code.startsWith('client.'))
 }
 
-/** The six whitelists by surface, for failure messages that name the
+/** The eight whitelists by surface, for failure messages that name the
  * list a drift was found in. */
 const SURFACE_WHITELISTS: Readonly<Record<string, readonly string[]>> = {
   'auth-ui sign-in/session': AUTH_UI_ERROR_TEXT_CODES,
@@ -282,6 +317,8 @@ const SURFACE_WHITELISTS: Readonly<Record<string, readonly string[]>> = {
   'notes create surface': Object.keys(NOTE_ERROR_TEXT_KEYS),
   'cases surface': Object.keys(CASES_ERROR_TEXT_KEYS),
   'smile-simulation surface': Object.keys(SMILE_SIM_ERROR_TEXT_KEYS),
+  'share action (case detail)': Object.keys(SHARE_ACTION_ERROR_TEXT_KEYS),
+  'patient share page': Object.keys(SHARE_VIEW_ERROR_TEXT_KEYS),
 }
 
 /** A citation's path, line and sentinel identifier. */
@@ -354,10 +391,13 @@ describe('reachable-error whitelists vs the server code set', () => {
     // three option-validation sentinels in internal/smilesim/options.go
     // that round named, and the three gateway/queue sentinels a
     // simulate call can surface from go/jobs, go/billing and
-    // go/ai-gateway). The size guard makes a GO_PINNED edit (in either
-    // direction) fail loudly here rather than silently through the
-    // subset assertions below.
-    expect(Object.keys(GO_PINNED)).toHaveLength(67)
+    // go/ai-gateway) + the four sharing sentinels the block-C round's
+    // two surfaces added (three in go/sharing/errors.go and the
+    // creation/access rate-limit sentinel in go/sharing/ratelimit.go).
+    // The size guard makes a GO_PINNED edit (in either direction) fail
+    // loudly here rather than silently through the subset assertions
+    // below.
+    expect(Object.keys(GO_PINNED)).toHaveLength(71)
   })
 
   it('renders a bilingual text for every reachable smile-simulation code', () => {
@@ -369,23 +409,58 @@ describe('reachable-error whitelists vs the server code set', () => {
     // key actually exists in both app bundles, resolves to a non-empty
     // string, and is never the unknown fallback (an entry that maps to
     // the fallback is a code with no text of its own).
-    const textOf = (bundle: Record<string, unknown>, key: string): string => {
-      const value = key
-        .split('.')
-        .reduce<unknown>(
-          (node, segment) =>
-            typeof node === 'object' && node !== null
-              ? (node as Record<string, unknown>)[segment]
-              : undefined,
-          bundle,
-        )
-      return typeof value === 'string' ? value : ''
-    }
     const unknownEn = textOf(enUS, 'cases.sim.errors.unknown')
     const unknownZh = textOf(zhCN, 'cases.sim.errors.unknown')
     expect(unknownEn).not.toBe('')
     expect(unknownZh).not.toBe('')
     for (const [code, textKey] of Object.entries(SMILE_SIM_ERROR_TEXT_KEYS)) {
+      if (code.startsWith('client.')) {
+        continue
+      }
+      const en = textOf(enUS, textKey)
+      const zh = textOf(zhCN, textKey)
+      expect(en, `${code} maps to ${textKey}, which is missing or empty in en-US`).not.toBe('')
+      expect(zh, `${code} maps to ${textKey}, which is missing or empty in zh-CN`).not.toBe('')
+      expect(en, `${code} maps to ${textKey}, which resolves to the unknown fallback`).not.toBe(unknownEn)
+      expect(zh, `${code} maps to ${textKey}, which resolves to the unknown fallback`).not.toBe(unknownZh)
+    }
+  })
+
+  it('renders a bilingual text for every reachable share-action code', () => {
+    // Regression (c) of the block-C gate, the clinic half: a code the
+    // case page's share action can be answered with must resolve to
+    // HUMAN text in both languages -- the rbac gate's denial, the
+    // module's creation rate limit and the internal envelope included
+    // -- never a raw key and never another language's text.
+    const unknownEn = textOf(enUS, 'cases.share.errors.unknown')
+    const unknownZh = textOf(zhCN, 'cases.share.errors.unknown')
+    expect(unknownEn).not.toBe('')
+    expect(unknownZh).not.toBe('')
+    for (const [code, textKey] of Object.entries(SHARE_ACTION_ERROR_TEXT_KEYS)) {
+      if (code.startsWith('client.')) {
+        continue
+      }
+      const en = textOf(enUS, textKey)
+      const zh = textOf(zhCN, textKey)
+      expect(en, `${code} maps to ${textKey}, which is missing or empty in en-US`).not.toBe('')
+      expect(zh, `${code} maps to ${textKey}, which is missing or empty in zh-CN`).not.toBe('')
+      expect(en, `${code} maps to ${textKey}, which resolves to the unknown fallback`).not.toBe(unknownEn)
+      expect(zh, `${code} maps to ${textKey}, which resolves to the unknown fallback`).not.toBe(unknownZh)
+    }
+  })
+
+  it('renders a bilingual text for every reachable patient-page code', () => {
+    // Regression (c) of the block-C gate, the patient half: a code the
+    // share page can be answered with must resolve to HUMAN text in
+    // both languages -- the outward-identical not-accessible refusal
+    // (expired and revoked alike, per the module's rule 5), the rate
+    // limit, the granted-but-unopenable 502 and the internal envelope
+    // -- never a raw key and never another language's text.
+    const unknownEn = textOf(enUS, 'shareView.errors.unknown')
+    const unknownZh = textOf(zhCN, 'shareView.errors.unknown')
+    expect(unknownEn).not.toBe('')
+    expect(unknownZh).not.toBe('')
+    for (const [code, textKey] of Object.entries(SHARE_VIEW_ERROR_TEXT_KEYS)) {
       if (code.startsWith('client.')) {
         continue
       }

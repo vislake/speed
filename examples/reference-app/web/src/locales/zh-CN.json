@@ -137,6 +137,18 @@
         "unknown": "出了点问题，请稍后重试。"
       }
     },
+    "share": {
+      "action": "分享给患者",
+      "linkLabel": "分享链接",
+      "expiresOn": "链接于 {date} 到期",
+      "errors": {
+        "permissionDenied": "您没有权限向患者分享结果。如需分享，请联系诊所的负责人。",
+        "rateLimited": "分享链接创建得太频繁，请稍后再试。",
+        "internal": "创建分享链接时服务器出了点问题，请稍后重试。",
+        "client": "分享链接创建失败，请检查网络后重试。",
+        "unknown": "创建分享链接时出了点问题，请稍后重试。"
+      }
+    },
     "errors": {
       "invalidRequest": "请求无法识别，请重试。",
       "subjectUnresolved": "无法识别您的登录身份，请重新登录后再试。",
@@ -164,5 +176,18 @@
   },
   "clinic": {
     "currentClinic": "当前诊所：{{name}}"
+  },
+  "shareView": {
+    "heading": "您的微笑模拟",
+    "intro": "您的牙科诊所与您分享了本次模拟效果。",
+    "imageAlt": "模拟后的微笑",
+    "errors": {
+      "notAccessible": "该链接已无法访问：可能已过期，或诊所已停止分享。请联系诊所获取新的链接。",
+      "rateLimited": "访问过于频繁，请稍后再试。",
+      "resourceUnavailable": "图片暂时无法加载，请联系诊所确认模拟结果仍可查看。",
+      "internal": "服务器出了点问题，请稍后重试。",
+      "client": "图片加载失败，请检查网络后重试。",
+      "unknown": "无法显示此预览，请稍后重试。"
+    }
   }
 }

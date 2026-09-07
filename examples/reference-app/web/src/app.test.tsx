@@ -107,6 +107,28 @@ describe('parseHashFragment', () => {
     })
   })
 
+  it('parses the patient share fragment into its token', () => {
+    // The block-C link shape: /share/<token>, one further segment
+    // exactly as the case-detail route constrains its own id (a share
+    // token is base64url and never carries a slash).
+    expect(parseHashFragment('/share/aB3-z_9-xyz')).toEqual({
+      kind: 'share',
+      token: 'aB3-z_9-xyz',
+    })
+    expect(parseHashFragment('share/token-1')).toEqual({
+      kind: 'share',
+      token: 'token-1',
+    })
+    expect(parseHashFragment('/share/token-1?lang=en-US')).toEqual({
+      kind: 'share',
+      token: 'token-1',
+    })
+    // Share-shaped fragments without a token degrade to unknown like
+    // every other unrecognized path.
+    expect(parseHashFragment('/share/')).toEqual({ kind: 'unknown' })
+    expect(parseHashFragment('/share/a/b')).toEqual({ kind: 'unknown' })
+  })
+
   it('degrades anything else to unknown', () => {
     expect(parseHashFragment('/nope')).toEqual({ kind: 'unknown' })
     expect(parseHashFragment('nope')).toEqual({ kind: 'unknown' })
@@ -134,6 +156,35 @@ describe('AppView', () => {
     expect(
       view.getByRole('button', { name: zhCN.signIn.registerAction }),
     ).toBeInTheDocument()
+    expect(configGets(rig)).toBe(1)
+    expect(rig.calls).toHaveLength(1)
+  })
+
+  it('renders the patient share page for a share fragment: no sign-in gate, no frame, no config fetch', async () => {
+    // The block-C visitor journey: an anonymous visitor opens the
+    // share link and meets the simulation page itself -- the sign-in
+    // surface that owns every other anonymous fragment never appears,
+    // and neither does the clinic frame (no nav, no brand fetch: the
+    // page's whole network activity is the image load, which jsdom
+    // never performs).
+    const rig = makeAppRig()
+    const view = rendered(rig)
+    navigateTo(`/share/patient-token-1`)
+
+    expect(await view.findByText(zhCN.shareView.heading)).toBeInTheDocument()
+    const image = view.getByRole('img', { name: zhCN.shareView.imageAlt })
+    expect(image.getAttribute('src')).toBe(
+      `${window.location.origin}/api/v1/sharing/access?token=patient-token-1`,
+    )
+    expect(
+      view.queryByRole('link', { name: zhCN.nav.home }),
+    ).not.toBeInTheDocument()
+    expect(
+      view.queryByRole('button', { name: zhCN.signIn.registerAction }),
+    ).not.toBeInTheDocument()
+    // The page added nothing to the one config fetch the anonymous
+    // first paint made before the fragment was entered: the patient
+    // page itself performs no API traffic.
     expect(configGets(rig)).toBe(1)
     expect(rig.calls).toHaveLength(1)
   })
