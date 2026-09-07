@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
@@ -165,6 +168,29 @@ const createJobsTableSQLPostgres = `CREATE TABLE IF NOT EXISTS ` + jobsTable + `
 	started_at      TIMESTAMP,
 	completed_at    TIMESTAMP
 )`
+
+// progressMsgColumnRunes and errorMessageColumnRunes are the character
+// widths of the jobs table's progress_msg and error_message columns: the
+// 1000 and 4000 in the VARCHAR(1000)/VARCHAR(4000) both
+// createJobsTableSQL statements spell (the two statements share every
+// non-byte column's spelling, per createJobsTableSQL's own doc comment).
+// PostgreSQL enforces the width by character count -- an overlong value
+// makes the UPDATE fail with 22001 -- while SQLite never enforces a
+// VARCHAR length at all. These constants are the single source of truth
+// the write-side cut (fitDescriptiveText, below) reads, declared next to
+// the DDL so the two cannot drift apart: changing a column's width means
+// changing the DDL and this constant together, and the module's
+// PostgreSQL integration leg
+// (integration_test/postgres_overlong_message_test.go) fails any drift
+// that makes the cut wider than the column (the 22001 recurs) -- the
+// same shared-constant-next-to-the-declaration pattern dbkit/audit's
+// model.go documents for its own column rune counts.
+const (
+	// progressMsgColumnRunes bounds progress_msg (a cut column).
+	progressMsgColumnRunes = 1000
+	// errorMessageColumnRunes bounds error_message (a cut column).
+	errorMessageColumnRunes = 4000
+)
 
 // createJobsDispatchIndexSQL supports the dispatcher's claim query (status
 // + scheduled_at, ordered by priority) without a full table scan.
@@ -560,8 +586,80 @@ func markAttemptStarted(ctx context.Context, db *gorm.DB, id string, now time.Ti
 		}).Error
 }
 
+// fitColumnValue renders v storable in a column of at most maxRunes
+// characters, mirroring the same-shaped helper go/dbkit/audit ships for
+// its own descriptive columns (repository.go's fitColumnValue -- that one
+// is unexported and this module does not depend on dbkit, so the cut is
+// copied, not imported). cut reports whether the value had to be
+// shortened; a value that only needed invalid-UTF-8 sanitization reports
+// cut=false, so the caller can say which change happened (the warning's
+// reason attribute). Invalid UTF-8 runs are sanitized to the Unicode
+// replacement character (one per consecutive run, so two arbitrary byte
+// runs never concatenate into a different valid value), then the value is
+// cut at maxRunes runes when it is longer -- never at maxRunes bytes,
+// which could split a multi-byte character and store garbage a UTF-8
+// PostgreSQL would refuse with 22021. A value that is already valid UTF-8
+// and within the bound is returned unchanged.
+func fitColumnValue(v string, maxRunes int) (fitted string, cut bool) {
+	if len(v) <= maxRunes && utf8.ValidString(v) {
+		return v, false
+	}
+	runes := []rune(strings.ToValidUTF8(v, "\uFFFD"))
+	cut = len(runes) > maxRunes
+	if cut {
+		runes = runes[:maxRunes]
+	}
+	return string(runes), cut
+}
+
+// fitDescriptiveText is the write-side choke point every persistence of a
+// descriptive message on the jobs table passes through (updateProgress's
+// progress_msg below, completeRetrying's and completeDeadLetter's
+// error_message): it renders v fit for descriptive column columnName,
+// whose declared width is maxRunes, and warns -- never refuses -- when
+// the value had to be changed. error_message and progress_msg are
+// DESCRIPTIVE fields, so an overlong value is cut to its column's width,
+// applying the dbkit/audit fitEventToColumns division of labour in the
+// cut direction: the identifier-class fields there refuse, the
+// descriptive ones cut, and a refusal is exactly the failure this
+// function exists to make impossible. On PostgreSQL an overlong value
+// makes the terminal-transition UPDATE fail with 22001 and the task
+// stays StatusRunning -- the retry-budget write (settleFailedAttempt)
+// that could advance the state machine is precisely the write that
+// cannot land, and the only recovery, the next Start's
+// resetInterruptedRecords, re-runs the handler, which fails with the
+// same overlong error, whose write is refused again: the task never
+// reaches a terminal state until the code stops refusing.
+//
+// Every change is recorded in a structured warning through
+// obs.FromContext(ctx) -- jobs sits above go/observability, unlike
+// dbkit/audit, which falls back to slog.Default for the same reason its
+// own warning does -- naming the job, the column, the value's original
+// character count, the column's limit and which change was made
+// (column_width or invalid_utf8), so a truncation -- an integrity loss
+// that would otherwise be unrecordable once the database had stored the
+// cut silently -- leaves an operator-recoverable trace.
+func fitDescriptiveText(ctx context.Context, jobID, column string, v string, maxRunes int) string {
+	fitted, cut := fitColumnValue(v, maxRunes)
+	if fitted == v {
+		return fitted
+	}
+	reason := "invalid_utf8"
+	if cut {
+		reason = "column_width"
+	}
+	obs.FromContext(ctx).Warn("jobs: message changed to fit its column",
+		"job_id", jobID,
+		"column", column,
+		"original_chars", utf8.RuneCountInString(v),
+		"limit_chars", maxRunes,
+		"reason", reason)
+	return fitted
+}
+
 // updateProgress persists one progress report.
 func updateProgress(ctx context.Context, db *gorm.DB, id string, pct int, msg string) error {
+	msg = fitDescriptiveText(ctx, id, "progress_msg", msg, progressMsgColumnRunes)
 	return db.WithContext(ctx).Model(&jobRecord{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
@@ -611,6 +709,11 @@ func completeSucceeded(ctx context.Context, db *gorm.DB, id string, result Resul
 // completeSucceeded: execute records the retry log line and the retry
 // metrics only after a genuine running -> retrying move.
 func completeRetrying(ctx context.Context, db *gorm.DB, id string, cause string, nextAttempt time.Time, now time.Time) (bool, error) {
+	// The recorded cause is unbounded handler error text (worker.go's
+	// settleFailedAttempt passes cause.Error()); fitDescriptiveText cuts it
+	// to the error_message column's declared width -- never refused, since
+	// a refusal is precisely the 22001 wedge this cut exists to prevent.
+	cause = fitDescriptiveText(ctx, id, "error_message", cause, errorMessageColumnRunes)
 	res := db.WithContext(ctx).Model(&jobRecord{}).
 		Where("id = ? AND status = ?", id, string(StatusRunning)).
 		Updates(map[string]any{
@@ -636,6 +739,11 @@ func completeRetrying(ctx context.Context, db *gorm.DB, id string, cause string,
 // genuine running -> dead-letter transition. See FailureHook's own doc
 // comment for the boundary.
 func completeDeadLetter(ctx context.Context, db *gorm.DB, id string, cause string, now time.Time) (bool, error) {
+	// The recorded cause is unbounded handler error text (worker.go's
+	// settleFailedAttempt passes cause.Error()); fitDescriptiveText cuts it
+	// to the error_message column's declared width -- never refused, since
+	// a refusal is precisely the 22001 wedge this cut exists to prevent.
+	cause = fitDescriptiveText(ctx, id, "error_message", cause, errorMessageColumnRunes)
 	result := db.WithContext(ctx).Model(&jobRecord{}).
 		Where("id = ? AND status = ?", id, string(StatusRunning)).
 		Updates(map[string]any{

@@ -1,11 +1,15 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
@@ -1136,5 +1140,139 @@ func TestQueueDepthByTypeAndStatus(t *testing.T) {
 	}
 	if _, ok := byKey["type-a|"+string(StatusSucceeded)]; ok {
 		t.Errorf("succeeded Jobs must not appear in the backlog-depth gauge, got an entry for type-a|succeeded")
+	}
+}
+
+// The three tests below pin the write-side choke point that keeps the two
+// descriptive text columns of the jobs table fed only values that fit
+// their declared widths: error_message is VARCHAR(4000) and progress_msg
+// is VARCHAR(1000), spelled identically in both of store.go's
+// createJobsTableSQL statements. Those widths are character counts that
+// PostgreSQL enforces (an overlong value makes the UPDATE fail with
+// 22001, the task never reaches its terminal state, and its recovery
+// needs a process restart that re-runs the same overlong failure) and
+// SQLite never enforces -- which is exactly why these tests assert the
+// CUT value read back after the write: the cut is application-layer
+// behaviour, identical on both dialects, while the database's refusal
+// (and the running-state wedge it leaves behind) exists only on
+// PostgreSQL and is pinned by the integration leg
+// (integration_test/postgres_overlong_message_test.go). Pre-fix, SQLite
+// happily stores the overlong value, so the width assertion here fails;
+// post-fix the choke point has cut it before the write, and each test's
+// structured-warning assertion fails if a cut ever stops warning.
+func TestCompleteDeadLetter_OverlongCause_TruncatedToColumnWidth(t *testing.T) {
+	db := newTestDB(t)
+	rec := fixtureRecord("tenant-a", "t")
+	if _, err := insertRecord(context.Background(), db, rec); err != nil {
+		t.Fatalf("insertRecord() error = %v", err)
+	}
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
+		t.Fatalf("claimOne() error = %v", err)
+	}
+
+	prevDefault := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+
+	// The recorded cause is unbounded handler error text (worker.go's
+	// settleFailedAttempt stores cause.Error()): 1500 characters past the
+	// column's 4000-character width.
+	longCause := strings.Repeat("x", 5500)
+	moved, err := completeDeadLetter(context.Background(), db, rec.ID, longCause, time.Now())
+	if err != nil || !moved {
+		t.Fatalf("completeDeadLetter() = (%v, %v), want (true, nil): the terminal transition must never be refused because the cause is overlong", moved, err)
+	}
+
+	got, err := findByID(context.Background(), db, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("findByID() error = %v", err)
+	}
+	if got.Status != string(StatusDeadLetter) {
+		t.Errorf("Status = %q, want %q", got.Status, StatusDeadLetter)
+	}
+	if want := strings.Repeat("x", 4000); got.Error != want {
+		t.Errorf("stored error_message is %d characters, want exactly %d (the declared VARCHAR(4000) width, head of the cause preserved)", utf8.RuneCountInString(got.Error), utf8.RuneCountInString(want))
+	}
+	out := buf.String()
+	if !strings.Contains(out, "jobs: message changed to fit its column") ||
+		!strings.Contains(out, "column=error_message") || !strings.Contains(out, "reason=column_width") {
+		t.Errorf("missing the structured truncation warning naming the error_message column and the column_width reason:\n%s", out)
+	}
+}
+
+func TestCompleteRetrying_OverlongCause_TruncatedToColumnWidth(t *testing.T) {
+	db := newTestDB(t)
+	rec := fixtureRecord("tenant-a", "t")
+	if _, err := insertRecord(context.Background(), db, rec); err != nil {
+		t.Fatalf("insertRecord() error = %v", err)
+	}
+	if _, err := claimOne(context.Background(), db, *rec, time.Now(), testWriterOwner); err != nil {
+		t.Fatalf("claimOne() error = %v", err)
+	}
+
+	prevDefault := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+
+	next := time.Now().Add(10 * time.Second).UTC().Truncate(time.Second)
+	longCause := strings.Repeat("x", 5500)
+	moved, err := completeRetrying(context.Background(), db, rec.ID, longCause, next, time.Now())
+	if err != nil || !moved {
+		t.Fatalf("completeRetrying() = (%v, %v), want (true, nil): the retry transition must never be refused because the cause is overlong", moved, err)
+	}
+
+	got, err := findByID(context.Background(), db, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("findByID() error = %v", err)
+	}
+	if got.Status != string(StatusRetrying) {
+		t.Errorf("Status = %q, want %q", got.Status, StatusRetrying)
+	}
+	if want := strings.Repeat("x", 4000); got.Error != want {
+		t.Errorf("stored error_message is %d characters, want exactly %d (the declared VARCHAR(4000) width, head of the cause preserved)", utf8.RuneCountInString(got.Error), utf8.RuneCountInString(want))
+	}
+	out := buf.String()
+	if !strings.Contains(out, "jobs: message changed to fit its column") ||
+		!strings.Contains(out, "column=error_message") || !strings.Contains(out, "reason=column_width") {
+		t.Errorf("missing the structured truncation warning naming the error_message column and the column_width reason:\n%s", out)
+	}
+}
+
+func TestUpdateProgress_OverlongMessage_TruncatedToColumnWidth(t *testing.T) {
+	db := newTestDB(t)
+	rec := fixtureRecord("tenant-a", "t")
+	if _, err := insertRecord(context.Background(), db, rec); err != nil {
+		t.Fatalf("insertRecord() error = %v", err)
+	}
+
+	prevDefault := slog.Default()
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prevDefault) })
+
+	// 1500 multi-byte runes (4500 UTF-8 bytes): the cut must land on a
+	// rune boundary, never split a character, and must fit the column's
+	// 1000-character width however wide the bytes are.
+	longMsg := strings.Repeat("é", 1500)
+	if err := updateProgress(context.Background(), db, rec.ID, 42, longMsg); err != nil {
+		t.Fatalf("updateProgress() error = %v", err)
+	}
+
+	got, err := findByID(context.Background(), db, JobID(rec.ID))
+	if err != nil {
+		t.Fatalf("findByID() error = %v", err)
+	}
+	if got.ProgressPct != 42 {
+		t.Errorf("ProgressPct = %d, want 42", got.ProgressPct)
+	}
+	if want := strings.Repeat("é", 1000); got.ProgressMsg != want {
+		t.Errorf("stored progress_msg is %d characters, want exactly %d (the declared VARCHAR(1000) width, head of the message preserved)", utf8.RuneCountInString(got.ProgressMsg), utf8.RuneCountInString(want))
+	}
+	out := buf.String()
+	if !strings.Contains(out, "jobs: message changed to fit its column") ||
+		!strings.Contains(out, "column=progress_msg") || !strings.Contains(out, "reason=column_width") {
+		t.Errorf("missing the structured truncation warning naming the progress_msg column and the column_width reason:\n%s", out)
 	}
 }
