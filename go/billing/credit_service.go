@@ -183,6 +183,16 @@ type PreDeductInput struct {
 // whatever its current Status) returns that existing row rather than
 // erroring or reserving a second time -- PreDeduct is itself idempotent
 // under retry.
+//
+// Keeping a reservation settleable is the caller's obligation: the module
+// performs no library-side reclamation of stuck pending reservations -- a
+// Pending row whose owner never Confirms or Refunds it (a caller that
+// died mid-flight, a job that was never reaped) sits in Reserved forever,
+// with no expiry and no sweep of this module's own. The reference app
+// meets that obligation with its own durable job-id-to-key mapping and a
+// scheduled settlement sweep (examples/reference-app/internal/smilesim's
+// ReservationStore/ReconcileOutstandingCredits), and every consumer that
+// reserves credits must arrange an equivalent path of its own.
 func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*CreditTransaction, error) {
 	if in.Amount <= 0 {
 		return nil, ErrInvalidAmount.WithParam("amount", in.Amount)

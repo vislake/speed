@@ -276,16 +276,31 @@ func (r *PaymentEventRepository) markStatus(ctx context.Context, id string, stat
 // InsertIfNew inserts evt and reports (true, nil), unless a row already
 // exists for evt's (Channel, ProviderEventID) pair -- the unique index the
 // migration applies -- in which case it reports (false, nil) and leaves the
-// existing row untouched. evt.ID is generated when left empty.
+// existing row untouched. evt.ID is generated when left empty. It is the
+// row-level half of docs/internal/06-billing-and-metering.md's
+// insert-first-to-dedup rule, proven on its own: every channel redelivers
+// the same event on retry or timeout, and this is the guard that keeps one
+// event's row in the ledger exactly once.
 //
-// This is the sanctioned way to satisfy
-// docs/internal/06-billing-and-metering.md's insert-first-to-dedup rule: a
-// caller MUST call this before running any side effect the event implies
-// (driving a Subscription/Invoice transition, granting credits), and must
-// treat inserted=false exactly like "already handled, answer success and do
-// nothing else" -- every channel redelivers the same event on retry or
-// timeout, and re-running the side effect on a redelivery is the double-
-// charge/double-grant bug the rule exists to prevent.
+// What this method deliberately does NOT prescribe is the shape of the
+// processing that follows an inserted=true answer -- an earlier revision
+// of this comment prescribed an insert-then-run-side-effects recipe (the
+// side effects a fresh event implies: driving a Subscription/Invoice
+// transition, granting credits), which cannot be made atomic on top of
+// this method as written: the row commits in its own short transaction
+// (Repository Create), and dbkit refuses nested sessions, so the effects
+// would necessarily run in a second transaction, with a crash in between
+// leaving a recorded-but-never-processed event whose redelivery dedups
+// against the row and never runs the effects either. Whether the chain
+// settles on that shape with an out-of-band compensation, or on a
+// different one -- effects inside the same transaction as an
+// idempotent-insert of the event row -- is to be determined when the
+// webhook-processing chain is actually connected: the round that builds
+// the live HTTP surface, the loop that drives Subscription/Invoice
+// transitions from this row and marks ProcessedAt (AGENTS.md's own Scope
+// table), none of which exists yet. This method ships no caller outside
+// tests (VerifyWebhook and InsertIfNew alike), so no recipe is left
+// waiting for the first person to follow it.
 //
 // ctx must carry the tenant NormalizedEvent.TenantID decoded to (see that
 // field's own doc comment) -- dbkit.Repository[T].Create resolves and
