@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -844,6 +845,11 @@ func TestHandler_ListTypes_NegotiatesTheDescriptionLanguage(t *testing.T) {
 		{"unsupported language", "fr-FR", zh},
 		{"quality-zero preference skipped", "en;q=0, fr-FR", zh},
 		{"preferred list", "fr-FR, en;q=0.8", en},
+		{"uppercase tag matches case-insensitively", "EN-US", en},
+		{"lowercase tag matches case-insensitively", "zh-cn", zh},
+		{"uppercase prefix matches case-insensitively", "EN", en},
+		{"uppercase zero weight skipped", "en;Q=0, fr-FR", zh},
+		{"decimal zero weight skipped", "en;q=0.0, fr-FR", zh},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var header map[string]string
@@ -1259,21 +1265,27 @@ func newFlushRecorder() *flushRecorder {
 	return &flushRecorder{}
 }
 
-// announceInbox pushes one inbox-created announcement onto the hub in the
-// payload shape the delivery job publishes (events.go's InboxCreatedPayload)
-// -- the frame the stream route filters and forwards.
+// announceInbox pushes one inbox-created announcement through the hub's
+// real bus-handler path (HandleEvent, subscribed during Register) in the
+// payload shape the delivery job publishes (events.go's
+// InboxCreatedPayload): HandleEvent marshals the payload, reads the
+// announcement's own recipient scope from it and fans it out scoped -- the
+// exact path a delivery job's bus publish takes, which the stream tests
+// drive.
 func (e *handlerEnv) announceInbox(t *testing.T, id, recipient, tenant string) {
 	t.Helper()
-	payload, err := json.Marshal(InboxCreatedPayload{
-		MessageID:       id,
-		TenantID:        tenant,
-		RecipientUserID: recipient,
-		TypeKey:         "clinic.appointment_reminder",
-	})
-	if err != nil {
-		t.Fatalf("marshal announcement: %v", err)
+	if err := e.hub.HandleEvent(context.Background(), pkgcore.Event{
+		Type:     EventInboxCreated,
+		TenantID: pkgcore.TenantID(tenant),
+		Payload: InboxCreatedPayload{
+			MessageID:       id,
+			TenantID:        tenant,
+			RecipientUserID: recipient,
+			TypeKey:         "clinic.appointment_reminder",
+		},
+	}); err != nil {
+		t.Fatalf("announce inbox event %s: %v", id, err)
 	}
-	e.hub.Publish(payload)
 }
 
 // sseFrames splits a recorded stream body into its frames, each the
@@ -1356,11 +1368,12 @@ func TestHandler_Stream_DeliversTheMatchingAnnouncementAsAnSSEFrame(t *testing.T
 	})
 }
 
-// TestHandler_Stream_SkipsAnnouncementsForOthers pins the route's filtering:
-// announcements for another recipient of the caller's tenant, or for the
-// caller in another tenant (a user of several), never reach the wire -- the
-// flush sequence stays at headers plus the one matching frame, and the
-// body carries only that frame.
+// TestHandler_Stream_SkipsAnnouncementsForOthers pins the composed
+// hub-plus-route contract: announcements for another recipient of the
+// caller's tenant, or for the caller in another tenant (a user of several),
+// never reach the wire -- the hub's scoped fan-out refuses them at publish
+// time, the flush sequence stays at headers plus the one matching frame,
+// and the body carries only that frame.
 func TestHandler_Stream_SkipsAnnouncementsForOthers(t *testing.T) {
 	env := newHandlerEnv(t)
 
@@ -1394,10 +1407,13 @@ func TestHandler_Stream_SkipsAnnouncementsForOthers(t *testing.T) {
 	})
 }
 
-// TestHandler_Stream_SkipsUnreadableFrames pins the route's robustness on a
-// frame that will not unmarshal into an announcement: it is skipped, never
-// forwarded and never allowed to fail the stream -- the flush sequence
-// stays headers plus the one good frame.
+// TestHandler_Stream_SkipsUnreadableFrames pins the composed
+// hub-plus-route robustness on a frame that will not unmarshal into an
+// announcement: an unscoped publish (the raw-bytes hub.Publish a malformed
+// bus event would fall back to) names no recipient, so the recipient-scoped
+// stream connection never receives it -- the flush sequence stays headers
+// plus the one good announcement frame, and the malformed frame never
+// reaches the wire.
 func TestHandler_Stream_SkipsUnreadableFrames(t *testing.T) {
 	env := newHandlerEnv(t)
 
@@ -1554,6 +1570,154 @@ func TestHandler_Stream_FindsFlusherThroughAWrappingResponseWriter(t *testing.T)
 	if got := rec.statusCode(); got != http.StatusOK {
 		t.Fatalf("status = %d, want %d", got, http.StatusOK)
 	}
+	cancel()
+	waitUntil(t, "the handler exited", func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+// TestNegotiateLocale_ZeroWeightsAndCaseInsensitiveTags drives the language
+// negotiation rules negotiateLocale's doc comment promises, on the inputs
+// the HTTP-level table above exercises through the route plus the weight
+// spellings only a direct call can cover cheaply: a zero weight must be
+// recognized in every form the qvalue grammar allows -- "q=0", "q=0.0",
+// "Q=0", spaces around the parameter -- and language-tag matching is
+// case-insensitive per RFC 4647, so "EN-US" and "zh-cn" answer their
+// languages exactly as their canonical spellings do.
+func TestNegotiateLocale_ZeroWeightsAndCaseInsensitiveTags(t *testing.T) {
+	catalog := testClinicCatalog(t)
+	for _, tc := range []struct {
+		name   string
+		header string
+		want   string
+	}{
+		{"uppercase exact tag", "EN-US", "en-US"},
+		{"lowercase exact tag", "zh-cn", "zh-CN"},
+		{"uppercase prefix", "EN", "en-US"},
+		{"lowercase tag with weight", "en-us;q=0.9", "en-US"},
+		{"decimal zero weight skipped", "en;q=0.0, fr-FR", "zh-CN"},
+		{"uppercase zero weight skipped", "en;Q=0, fr-FR", "zh-CN"},
+		{"trailing decimal zero on the only match", "en-US;q=0.0", "zh-CN"},
+		{"zero weight then a weighted match", "fr-FR;q=0.9, en-US;q=0.0, zh-CN;q=0.5", "zh-CN"},
+		{"spaces around the weight", "en-US; q = 0.0", "zh-CN"},
+		{"non-zero weights keep header order", "en-US;q=0.7, zh-CN;q=1", "en-US"},
+		{"default when nothing is acceptable", "en;q=0, fr-FR;q=0.0", "zh-CN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := negotiateLocale(catalog, tc.header); got != tc.want {
+				t.Errorf("negotiateLocale(%q) = %q, want %q", tc.header, got, tc.want)
+			}
+		})
+	}
+}
+
+// gatedFlushWriter wraps a flushRecorder with a gate that can stop Flush
+// from returning: while the gate is closed, the route's per-frame flush
+// blocks, which stops the route from reading another message off its
+// connection -- the exact state of a stream client on a slow link. The
+// route is then the only reader of its connection buffer, and the buffer
+// (hubConnBuffer deep) is all that stands between a published announcement
+// and a dropped one.
+type gatedFlushWriter struct {
+	rec *flushRecorder
+
+	mu   sync.Mutex
+	gate chan struct{} // nil until block() arms it
+}
+
+func (w *gatedFlushWriter) Header() http.Header { return w.rec.Header() }
+
+func (w *gatedFlushWriter) WriteHeader(status int) { w.rec.WriteHeader(status) }
+
+func (w *gatedFlushWriter) Write(p []byte) (int, error) { return w.rec.Write(p) }
+
+func (w *gatedFlushWriter) Flush() {
+	w.mu.Lock()
+	gate := w.gate
+	w.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	w.rec.Flush()
+}
+
+// block arms the gate: every Flush from now on blocks until release.
+func (w *gatedFlushWriter) block() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.gate = make(chan struct{})
+}
+
+// release opens the gate, letting the blocked flushes complete.
+func (w *gatedFlushWriter) release() {
+	w.mu.Lock()
+	gate := w.gate
+	w.gate = nil
+	w.mu.Unlock()
+	if gate != nil {
+		close(gate)
+	}
+}
+
+// TestHandler_Stream_OwnAnnouncementsSurviveACrossTenantFlood pins the
+// stream's flood protection: while the client is not draining (its flush
+// gated), announcements for OTHER recipients and OTHER tenants of the same
+// replica arrive far deeper than the connection buffer's hubConnBuffer
+// depth -- and the caller's own announcement, published after the flood,
+// still arrives. A hub that delivered every announcement to every
+// connection would have let the foreign flood fill the buffer and drop the
+// caller's own copy.
+func TestHandler_Stream_OwnAnnouncementsSurviveACrossTenantFlood(t *testing.T) {
+	env := newHandlerEnv(t)
+
+	rec := newFlushRecorder()
+	gated := &gatedFlushWriter{rec: rec}
+	ctx, cancel := context.WithCancel(tenantCtx(handlerTenant))
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		env.h.ServeHTTP(gated, httptest.NewRequest(http.MethodGet, apiPath+"/stream", nil).WithContext(ctx))
+	}()
+	waitUntil(t, "the stream opened", func() bool { return rec.flushCount() >= 1 })
+
+	// The client stops draining: every subsequent flush blocks, so the route
+	// cannot read another announcement off its connection buffer.
+	gated.block()
+
+	// One own announcement is already on its way (its frame is written, its
+	// flush queued behind the gate)...
+	env.announceInbox(t, "m-before-flood", handlerUser, handlerTenant)
+	// ...and then the foreign flood, several times deeper than the buffer.
+	for i := 0; i < 3*hubConnBuffer; i++ {
+		env.announceInbox(t, fmt.Sprintf("m-foreign-%d", i), "user-9", handlerTenant)
+		env.announceInbox(t, fmt.Sprintf("m-other-tenant-%d", i), handlerUser, handlerOtherTenant)
+	}
+	// The caller's own announcement after the flood: this is the copy a
+	// full buffer would drop.
+	env.announceInbox(t, "m-after-flood", handlerUser, handlerTenant)
+
+	gated.release()
+
+	waitUntil(t, "both own announcements were written", func() bool { return rec.flushCount() >= 3 })
+	frames := sseFrames(t, rec.bodyText())
+	if len(frames) != 2 {
+		t.Fatalf("frames = %d (%q), want exactly the two own announcements", len(frames), rec.bodyText())
+	}
+	if !strings.Contains(frames[0], "m-before-flood") || !strings.Contains(frames[1], "m-after-flood") {
+		t.Errorf("frames = %q, want m-before-flood then m-after-flood", rec.bodyText())
+	}
+	for _, f := range frames {
+		if strings.Contains(f, "m-foreign-") || strings.Contains(f, "m-other-tenant-") {
+			t.Errorf("a foreign announcement reached the wire: %q", f)
+		}
+	}
+
 	cancel()
 	waitUntil(t, "the handler exited", func() bool {
 		select {

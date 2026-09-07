@@ -64,6 +64,7 @@
 
 "notification.invalid_list_params" = "The {{.field}} parameter ({{.value}}) is outside the range this API serves."
 "notification.send_record_tenant_required" = "Listing send records requires a tenant."
+"notification.send_record_filter_invalid" = "The {{.field}} parameter ({{.value}}) is outside the range this search serves: a zero limit would be an unbounded read."
 
 "notification.contact.verify_code.sms" = "Your verification code is {{.code}}. It is valid for {{.minutes}} minutes."
 

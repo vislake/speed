@@ -2,6 +2,8 @@ package notification
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -247,4 +249,100 @@ func assertNoMessage(t *testing.T, c *HubConn) {
 		t.Fatalf("received unexpected message %q", got)
 	default:
 	}
+}
+
+// announceFor pushes one inbox-created announcement through the hub's bus
+// handler (the path HandleEvent takes for every event the module's own
+// deliveries publish), scoped to the recipient the payload names.
+func announceFor(h *Hub, id, recipient, tenant string) error {
+	return h.HandleEvent(context.Background(), pkgcore.Event{
+		Type:     EventInboxCreated,
+		TenantID: pkgcore.TenantID(tenant),
+		Payload: InboxCreatedPayload{
+			MessageID:       id,
+			TenantID:        tenant,
+			RecipientUserID: recipient,
+			TypeKey:         "clinic.appointment_reminder",
+		},
+	})
+}
+
+// TestHub_ScopedConnectionReceivesOnlyItsOwnAnnouncements pins the
+// per-recipient scope: a connection subscribed through SubscribeFor
+// receives exactly the announcements for its own (tenant, recipient) pair
+// -- another recipient of the same tenant, or this recipient in another
+// tenant, is never enqueued for it -- while an unscoped connection still
+// receives every announcement.
+func TestHub_ScopedConnectionReceivesOnlyItsOwnAnnouncements(t *testing.T) {
+	h := NewHub()
+	own := h.SubscribeFor("tenant-acme", "user-7")
+	everything := h.Subscribe()
+
+	publish := func(id, user, tenant string) {
+		t.Helper()
+		if err := announceFor(h, id, user, tenant); err != nil {
+			t.Fatalf("announceFor(%s): %v", id, err)
+		}
+	}
+	publish("m-other-user", "user-8", "tenant-acme")
+	publish("m-other-tenant", "user-7", "tenant-bella")
+	assertNoMessage(t, own)
+
+	publish("m-mine", "user-7", "tenant-acme")
+	assertMessage(t, own, nil)
+	assertNoMessage(t, own)
+
+	// The unscoped connection saw all three, in publish order.
+	for _, id := range []string{"m-other-user", "m-other-tenant", "m-mine"} {
+		msg := assertMessage(t, everything, nil)
+		var ann InboxCreatedPayload
+		if err := json.Unmarshal(msg, &ann); err != nil {
+			t.Fatalf("unmarshal %q: %v", msg, err)
+		}
+		if ann.MessageID != id {
+			t.Errorf("unscoped connection received %q, want %q in publish order", ann.MessageID, id)
+		}
+	}
+	assertNoMessage(t, everything)
+}
+
+// TestHub_ForeignAnnouncementsNeverFillAScopedConnectionsBuffer pins the
+// flood protection at the buffer itself: hundreds of announcements for
+// other recipients and other tenants -- the volume of the whole platform on
+// a busy replica -- never enter a scoped connection's buffer, so the
+// caller's own announcement, published after the flood, is still delivered
+// and never dropped for a buffer the foreign volume filled.
+func TestHub_ForeignAnnouncementsNeverFillAScopedConnectionsBuffer(t *testing.T) {
+	h := NewHub()
+	c := h.SubscribeFor("tenant-acme", "user-7")
+
+	for i := 0; i < 3*hubConnBuffer; i++ {
+		if err := announceFor(h, fmt.Sprintf("m-flood-%d", i), "user-9", "tenant-acme"); err != nil {
+			t.Fatalf("announce foreign flood %d: %v", i, err)
+		}
+		if err := announceFor(h, fmt.Sprintf("m-flood-tenant-%d", i), "user-7", "tenant-bella"); err != nil {
+			t.Fatalf("announce foreign-tenant flood %d: %v", i, err)
+		}
+	}
+	// Not one foreign announcement may be buffered on the scoped connection.
+	assertNoMessage(t, c)
+
+	if err := announceFor(h, "m-mine", "user-7", "tenant-acme"); err != nil {
+		t.Fatalf("announce own message: %v", err)
+	}
+	assertMessage(t, c, nil)
+}
+
+// TestHub_ScopedConnectionRefusesUnscopedPublishes pins the scope rule on
+// the publish side: a raw unscoped Publish names no recipient, so a
+// recipient-scoped connection never receives it -- a malformed or
+// unscoped frame cannot enter the stream's buffer either.
+func TestHub_ScopedConnectionRefusesUnscopedPublishes(t *testing.T) {
+	h := NewHub()
+	c := h.SubscribeFor("tenant-acme", "user-7")
+	open := h.Subscribe()
+
+	h.Publish([]byte("{not json"))
+	assertNoMessage(t, c)
+	assertMessage(t, open, []byte("{not json"))
 }

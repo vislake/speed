@@ -770,3 +770,37 @@ func TestSendRecordRepository_SaveGuarded_PreservesCreatedAt(t *testing.T) {
 		t.Errorf("ListByFilter around the first attempt's instant = %+v, want the retried delivery's one record (a zeroed created_at is invisible to From/To)", page)
 	}
 }
+
+// TestSendRecordRepository_ListByFilter_ValidatesLimitAndOffset pins the
+// paging parameters' honest handling: a zero Limit is gorm's "no limit" --
+// an unbounded read the caller never asked for -- and a negative Offset is
+// meaningless, so both are refused with the filter's coded error before any
+// query runs, never silently served as an unlimited dump or a nonsense
+// page. A valid page still answers exactly as before.
+func TestSendRecordRepository_ListByFilter_ValidatesLimitAndOffset(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewSendRecordRepository(db)
+
+	insertSendRecordFixture(t, db, testSendRecord(t, "sr-1", "tenant-acme", "key-1"))
+	insertSendRecordFixture(t, db, testSendRecord(t, "sr-2", "tenant-acme", "key-2"))
+
+	_, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme"})
+	if err == nil {
+		t.Fatal("ListByFilter with a zero Limit succeeded, want the coded refusal (a zero limit is an unbounded read in gorm)")
+	}
+	assertCode(t, err, "notification.send_record_filter_invalid")
+
+	_, err = repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 50, Offset: -1})
+	if err == nil {
+		t.Fatal("ListByFilter with a negative Offset succeeded, want the coded refusal")
+	}
+	assertCode(t, err, "notification.send_record_filter_invalid")
+
+	got, err := repo.ListByFilter(tenantCtx("tenant-acme"), SendRecordFilter{TenantID: "tenant-acme", Limit: 50})
+	if err != nil {
+		t.Fatalf("ListByFilter(valid page): %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("ListByFilter(valid page) = %d rows, want the 2 inserted records", len(got))
+	}
+}

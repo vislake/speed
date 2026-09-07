@@ -841,3 +841,48 @@ func TestRepository_ReadAll_FlipsOnlyTheCallerOwnsUnreadAndCounts(t *testing.T) 
 		t.Errorf("tenant-bright's unread row was touched: %+v", brightRows)
 	}
 }
+
+// TestRepository_ReadAll_FailureMidwayAppliesNothing pins ReadAll's
+// atomicity: the mark-all-read write is ONE statement in ONE session, so a
+// failure while the statement runs cannot leave the batch half-applied --
+// every row the call was about to flip stays unread. The injection is a
+// real SQLite trigger that aborts the read_at update of one specific row:
+// a per-row loop (the old shape) would have flipped the earlier rows
+// before the aborted row stopped it, leaving the partial state this test
+// refuses; the single-statement shape rolls the whole batch back instead.
+func TestRepository_ReadAll_FailureMidwayAppliesNothing(t *testing.T) {
+	db := newTestDB(t)
+	repo := NewRepository(db)
+	ctx := tenantCtx("tenant-acme")
+
+	if err := repo.Create(ctx, testMessage("inbox-a")); err != nil {
+		t.Fatalf("Create(inbox-a): %v", err)
+	}
+	if err := repo.Create(ctx, testMessage("inbox-b")); err != nil {
+		t.Fatalf("Create(inbox-b): %v", err)
+	}
+	// A real statement-level failure for exactly one row of the batch: the
+	// trigger aborts any UPDATE that would stamp inbox-b's read_at.
+	if err := db.Exec(`CREATE TRIGGER trg_readall_fail_b
+		BEFORE UPDATE OF read_at ON in_app_messages
+		WHEN NEW.id = 'inbox-b'
+		BEGIN
+			SELECT RAISE(ABORT, 'injected read_all failure');
+		END`).Error; err != nil {
+		t.Fatalf("create the failing trigger: %v", err)
+	}
+
+	if _, err := repo.ReadAll(ctx, "user-7"); err == nil {
+		t.Fatal("ReadAll succeeded despite the injected failure, want the error back")
+	}
+
+	for _, id := range []string{"inbox-a", "inbox-b"} {
+		got, err := repo.FindByID(ctx, id)
+		if err != nil {
+			t.Fatalf("FindByID(%s): %v", id, err)
+		}
+		if got.ReadAt != nil {
+			t.Errorf("row %s was marked read by the failed ReadAll: ReadAt = %v, want the batch to apply nothing on failure", id, got.ReadAt)
+		}
+	}
+}

@@ -3,6 +3,7 @@ package notification
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	"gorm.io/gorm"
@@ -131,14 +132,19 @@ type SendRecord struct {
 	// attempt never reached the transport.
 	DurationMs int64 `gorm:"column:duration_ms;not null"`
 
-	// Error is the attempt's outcome text: the raw text of the cause error
-	// on failed records (a transport message, a render failure, a host-seam
-	// error -- the wrap sites may interpolate identifiers such as a user
-	// id, so the text is not a sanitized payload and operators treat it as
-	// untrusted diagnostic text), a short reason on skipped records
-	// (delivery.go's skipReason* constants), the empty-string sentinel
-	// otherwise -- never a stack trace. Truncation happens at the write
-	// site, to the column's 4000-char budget.
+	// Error is the attempt's outcome text: the text of the cause error on
+	// failed records -- never a stack trace -- with one deliberate
+	// sanitization: the recipient's own address is redacted out of every
+	// transport failure before the text is stored (delivery.go's
+	// redactRecipientAddresses), so the column -- and every read of it,
+	// the D10 operator search first among them -- never carries the
+	// plaintext PII the module itself holds. Other interpolated
+	// identifiers (a user id in a host-seam wrap) can still appear, so
+	// operators still treat the text as untrusted diagnostic text. A
+	// short reason fills skipped records (delivery.go's skipReason*
+	// constants) and the empty-string sentinel fills succeeded ones.
+	// Truncation happens at the write site, to the column's 4000-char
+	// budget.
 	Error string `gorm:"column:error;size:4000;not null"`
 
 	// ProviderReceiptID is the transport provider's own message id, empty
@@ -281,10 +287,11 @@ func (r *SendRecordRepository) SaveGuarded(ctx context.Context, rec *SendRecord)
 // tenant scoping. Every other field is optional: its zero value matches
 // everything.
 //
-// Limit must be positive and Offset non-negative -- the identical contract
-// repository.go's ListForRecipient documents for its own list surface: the
-// caller resolves the spec's default and cap before calling ListByFilter,
-// and nothing is silently clamped here.
+// Limit must be positive and Offset non-negative: the two are enforced by
+// ListByFilter itself (ErrSendRecordFilterInvalid otherwise), because a
+// zero Limit is gorm's "no limit" -- an unbounded read the caller never
+// asked for -- and only the repository can refuse it at the read's single
+// entry point, whatever caller reaches the method.
 type SendRecordFilter struct {
 	// TenantID is the tenant to search. Required.
 	TenantID string
@@ -302,13 +309,15 @@ type SendRecordFilter struct {
 	// To, when non-zero, excludes records created strictly after it.
 	To time.Time
 
-	// Limit bounds the number of rows returned. See the type's own doc
-	// comment: the caller resolves this before calling, ListByFilter never
-	// clamps it.
+	// Limit bounds the number of rows returned. Must be positive:
+	// ListByFilter refuses a non-positive value (ErrSendRecordFilterInvalid)
+	// rather than let gorm's zero-means-unlimited silently serve an
+	// unbounded read.
 	Limit int
 
 	// Offset skips this many matching rows before the page ListByFilter
-	// returns starts.
+	// returns starts. Must be non-negative: ListByFilter refuses a negative
+	// value (ErrSendRecordFilterInvalid).
 	Offset int
 }
 
@@ -319,6 +328,12 @@ type SendRecordFilter struct {
 // This is D10's operator-facing search (docs/internal/23-admin.md):
 // "did this delivery actually go out, and what happened".
 //
+// Limit and Offset are validated before the query runs: a non-positive
+// Limit or a negative Offset is refused with ErrSendRecordFilterInvalid
+// naming the field and its value (the zero-Limit case would otherwise
+// silently read the tenant's whole record set, gorm treating Limit(0) as
+// "no limit").
+//
 // This is a single-tenant read, matching D2's established mechanism for
 // every other cross-tenant admin read in this codebase: a caller needing
 // every tenant's records (go/admin's own HTTP handler) loops this method
@@ -327,6 +342,21 @@ type SendRecordFilter struct {
 func (r *SendRecordRepository) ListByFilter(ctx context.Context, filter SendRecordFilter) ([]SendRecord, error) {
 	if filter.TenantID == "" {
 		return nil, ErrSendRecordTenantRequired
+	}
+	// The paging parameters are validated here, before any query: a zero
+	// Limit is gorm's "no limit" -- an unbounded read no caller asked for,
+	// served silently -- and a negative Offset is a page nothing can mean.
+	// The filter's doc comment promises Limit positive and Offset
+	// non-negative; the promise is enforced here, coded, never trusted to
+	// every future caller (go/admin's D10 search included).
+	if filter.Limit <= 0 || filter.Offset < 0 {
+		field, value := "limit", filter.Limit
+		if filter.Limit > 0 {
+			field, value = "offset", filter.Offset
+		}
+		return nil, ErrSendRecordFilterInvalid.
+			WithParam("field", field).
+			WithParam("value", strconv.Itoa(value))
 	}
 
 	q := r.db.WithContext(ctx).Where("tenant_id = ?", filter.TenantID)

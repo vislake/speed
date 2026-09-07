@@ -120,22 +120,30 @@ func (r *Repository) ListForRecipient(ctx context.Context, recipientUserID, grou
 // unread-count operation, openapi.yaml). A message that is unread but
 // already expired does not count.
 //
-// The count is fetched as rows and measured with len rather than a COUNT
-// query, because the module's data path never reaches for gorm's Count on a
-// bare connection (dbkit/AGENTS.md's "Known limitations" prescribes the
-// repository shapes this module may use, and a count is not one of them).
-// A recipient's inbox is a pageable surface -- bounded in practice by the
-// list cap and by expiry -- so materializing it to count it stays cheap.
+// The count is a real COUNT query -- one statement the database answers
+// with the number, never a materialization of the recipient's unread rows
+// -- built the way go/dbkit/AGENTS.md's "Known limitations" prescribes for
+// a query shape Repository[T]'s minimal surface does not grow: on the same
+// *gorm.DB, against a TenantScoped model, inside dbkit.WithTenantSession
+// so the PostgreSQL RLS session variable is set for it too. GORM's Count
+// finisher can only anchor to a table through a Model destination, and the
+// Model is exactly what carries the type to the isolation plugin -- the
+// plugin injects WHERE tenant_id for a statement whose Model implements
+// TenantScoped, so this method's one .Model call is what makes the count
+// tenant-scoped rather than a bypass of the guard (the module's sole
+// raw-gorm-bypass allowlist entry: tools/semgrep_rules/raw-gorm-bypass.yml,
+// which records the same reasoning). Counting must not load every unread
+// row's bytes onto the worker just to answer with their number.
 func (r *Repository) UnreadCount(ctx context.Context, recipientUserID string) (int, error) {
-	var msgs []InboxMessage
+	var count int64
 	now := time.Now().UTC()
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.
+		return tx.Model(&InboxMessage{}).
 			Where("recipient_user_id = ?", recipientUserID).
 			Where("read_at IS NULL AND (expiry_at IS NULL OR expiry_at > ?)", now).
-			Find(&msgs).Error
+			Count(&count).Error
 	})
-	return len(msgs), err
+	return int(count), err
 }
 
 // MarkRead marks messageID -- one of recipientUserID's own inbox rows in
@@ -189,35 +197,30 @@ func (r *Repository) MarkRead(ctx context.Context, recipientUserID, messageID st
 // unread gets (0, nil), the answer that distinguishes "nothing was unread"
 // from "everything was already read" without a second round trip.
 //
-// Each flipped row is written through the promoted Update rather than one
-// hand-written statement, because that is the module's only sanctioned
-// write path; the loop is bounded by the rows the predicate matched, and a
-// row that disappears between the fetch and its own write (another replica
-// deleting it) is skipped rather than counted or failed. Every other write
-// failure stops the loop and reports the error with the flips so far.
+// The whole batch is ONE UPDATE statement inside ONE dbkit.WithTenantSession:
+// the write's atomicity is the database's, so a failure while the statement
+// runs -- a constraint, a trigger, a store error -- applies nothing rather
+// than a partial batch of already-flipped rows. The statement is built on
+// the same *gorm.DB against a TenantScoped destination, exactly the shape
+// the module's own contact transitions use (contact.go's markUnsubscribed),
+// so the isolation plugin injects WHERE tenant_id for the statement and the
+// update can never reach another tenant's rows. RowsAffected is the answer:
+// how many rows the predicate actually matched at write time -- a row
+// another replica removed between the caller's last read and this write
+// simply does not match, which is the row-vanished case the old per-row
+// loop used to skip one write at a time.
 func (r *Repository) ReadAll(ctx context.Context, recipientUserID string) (int, error) {
-	var msgs []InboxMessage
-	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.
-			Where("recipient_user_id = ?", recipientUserID).
-			Where("read_at IS NULL").
-			Find(&msgs).Error
-	})
-	if err != nil {
-		return 0, err
-	}
-
 	now := time.Now().UTC()
-	marked := 0
-	for i := range msgs {
-		msgs[i].ReadAt = &now
-		if err := r.Update(ctx, &msgs[i]); err != nil {
-			if isRecordNotFound(err) {
-				continue
-			}
-			return marked, err
+	var flipped int64
+	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
+		res := tx.
+			Where("recipient_user_id = ? AND read_at IS NULL", recipientUserID).
+			Updates(&InboxMessage{ReadAt: &now})
+		if res.Error != nil {
+			return res.Error
 		}
-		marked++
-	}
-	return marked, nil
+		flipped = res.RowsAffected
+		return nil
+	})
+	return int(flipped), err
 }

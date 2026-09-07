@@ -38,10 +38,14 @@ complete, honest list of what this round deliberately does not ship.
   `Deliveries().Dispatch` call) into one rendered message per recipient
   per selected channel, with one `send_records` row per attempt as the
   replay-safe outcome log. Replay dedupe collapses an identical
-  re-dispatch onto the already-settled record; nothing aggregates or
-  rate-limits routine deliveries this round (the module's rate limits
-  cover verification-code sends and the consent-create path only) --
-  those delivery-path shapes are deferred below.
+  re-dispatch onto the already-settled record -- an identical re-dispatch
+  absent a fresh per-occurrence marker (`Dispatch.OccurrenceID`), which a
+  deliberate resend sets so its delivery is a new occurrence with its own
+  record; a dispatch's locale participates in the derived key the same
+  way, so a resend rendered in a new locale delivers in it; nothing
+  aggregates or rate-limits routine deliveries this round (the module's
+  rate limits cover verification-code sends and the consent-create path
+  only) -- those delivery-path shapes are deferred below.
 - The module's own HTTP surface under `/api/v1/notifications`, served by a
   handler compiled against the generated interface of its own OpenAPI
   fragment, plus the realtime inbox stream.
@@ -156,8 +160,12 @@ omits -- server-sent events are not an OpenAPI 3.0 media type (the fragment's
 header records the omission) -- hand-mounted by `NewHandler` as a method
 pattern of exactly the shape the generated registrations use. It is own-data
 self-service like every other route: tenant and caller are resolved before the
-stream opens, and only that caller's announcements in that tenant's rows pass
-the filter. The route carries no heartbeat (see "Known limitations").
+stream opens, and the connection subscribes to the hub scoped to that exact
+pair (`SubscribeFor`), so the hub itself drops every announcement for another
+recipient or another tenant at publish time, before it could occupy the
+connection's buffer -- a flood of other tenants' announcements can never crowd
+the caller's own out of its buffer. The route carries no heartbeat (see
+"Known limitations").
 
 ### Events, jobs, audit, permissions, types
 
@@ -274,9 +282,13 @@ retrying -- no address on file, an external contact whose consent lapsed.
 `Error` is the failure's own text: the wrapped cause message a failed attempt
 returned (delivery.go's fail-and-retry / fail-and-stop paths), or a short
 `skipReason*` phrase on skipped records, byte-truncated at the write site to
-the column's 4000-char budget. It is raw by design -- the module's tests pin
-exact transport strings such as `smtp: connection refused` -- never a stack
-trace, never a message the module synthesized.
+the column's 4000-char budget. The text is raw except for one deliberate
+sanitization -- the recipient's own address is redacted out of transport
+failures before storage (delivery.go's `redactRecipientAddresses`), so the
+column and its reads never carry the plaintext PII the module itself holds
+-- the module's tests pin exact transport strings such as
+`smtp: connection refused`, and never a stack trace, never a message the
+module synthesized.
 
 At-most-once, honestly stated: across the RETRIES of one delivery the
 pipeline converges without a second send -- the job probes the record's
@@ -463,9 +475,12 @@ claims it works.
   console sender will register there and every host's wiring simplifies.
 - **The platform-staff push consumer.** The hub's per-connection
   `Subscribe` returns connections a platform-staff shell will one day push
-  to browsers or devices; that consumer is a later round's work. What ships
-  is the hub itself, its `EventInboxCreated` subscription, and the HTTP
-  stream that reads it per replica.
+  to browsers or devices; that consumer is a later round's work (it would
+  subscribe unscoped and do its own recipient routing, exactly as the
+  inbox stream's `SubscribeFor` scoping keeps one recipient's stream to
+  its own announcements). What ships is the hub itself, its
+  `EventInboxCreated` subscription, and the HTTP stream that reads it per
+  replica.
 - **Tenant-enforced preference tiers.** The preference matrix ships two of
   the design's three tiers (docs/internal/07's preference-precedence row:
   personal settings > tenant-enforced policy > type default): a
@@ -482,7 +497,8 @@ claims it works.
   or rate-limits the delivery path this round: the module's rate limits
   gate verification-code sends and the consent-create path, and the
   delivery job sends every dispatch through as rendered (replay dedupe
-  collapses identical re-dispatches only). The design's same-type
+  collapses identical re-dispatches only; a deliberate resend dispatches
+  under a fresh per-occurrence marker and delivers). The design's same-type
   aggregation -- a short burst of one type coalescing into few messages, a
   bulk-import failure must not mean five hundred emails -- and the
   per-type delivery limits that go with it are a later round's work on

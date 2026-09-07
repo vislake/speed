@@ -93,8 +93,10 @@ const jsonContentType = "application/json; charset=utf-8"
 // hand, as a method pattern of exactly the shape api.HandlerFromMux
 // registers for the spec's own paths. It is own-data self-service like
 // every other route: tenant and caller are resolved before the stream
-// opens, and only that caller's announcements in that tenant's rows pass
-// the filter.
+// opens, and the connection subscribes to the hub scoped to that exact
+// pair (hub.go's SubscribeFor), so the hub drops every announcement for
+// another recipient or tenant before it could reach the connection's
+// buffer (handleStream's doc comment has the detail).
 // handlerHost is the registry slice the HTTP surface reads at call time:
 // the merged message catalog the type directory renders its descriptions
 // from. It is declared as an interface -- delivery.go's deliveryHost and
@@ -624,22 +626,29 @@ func (h *Handler) NotificationUpdatePreference(w http.ResponseWriter, r *http.Re
 // inbox, in the caller's tenant, the moment the delivery job commits its
 // row.
 //
-// The frames are the bus event the delivery published (InboxCreated-
-// Payload: message_id, tenant_id, recipient_user_id and type_key), filtered
-// here to the caller's own recipient id and tenant -- an announcement for
-// another recipient of the same tenant, or for this recipient in another
-// tenant (a user of several), is skipped, never forwarded. Each frame is
+// The connection is scoped at subscription time, before the stream opens:
+// the caller's tenant and user id are already resolved (mustTenant then
+// resolveSubject), so handleStream subscribes through Hub.SubscribeFor and
+// the hub itself -- at publish time, BEFORE the frame would enter this
+// connection's buffer -- drops every announcement for another recipient or
+// another tenant (a user of several). The frames this route reads are
+// therefore the caller's own announcements, and nothing else: the frames
+// are the bus event the delivery published (InboxCreatedPayload:
+// message_id, tenant_id, recipient_user_id and type_key), and each is
 //
 //	event: message
 //	data: {the payload's JSON}
 //
-// followed by a flush. The connection carries no inbox content: the row is
-// durable in the database before the announcement goes out, and the
-// consumer reads it back through GET /messages -- the hub's whole value is
-// latency, and a frame dropped for a slow or disconnected consumer loses
-// nothing (hub.go's doc comment). There is no replay and no resume: a
-// client that reconnects starts reading announcements from that moment and
-// catches up over the list surface.
+// followed by a flush. The scoped subscription is what keeps a flood of
+// other tenants' announcements -- the volume of the whole platform -- from
+// filling this one connection's buffer and crowding out the caller's own
+// announcements (hub.go's doc comment). The connection carries no inbox
+// content: the row is durable in the database before the announcement goes
+// out, and the consumer reads it back through GET /messages -- the hub's
+// whole value is latency, and a frame dropped for a slow or disconnected
+// consumer loses nothing. There is no replay and no resume: a client that
+// reconnects starts reading announcements from that moment and catches up
+// over the list surface.
 //
 // The stream sends no heartbeat. A connection that survives with no
 // announcements is indistinguishable from a dead one until a proxy or the
@@ -670,7 +679,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, ErrInternal.WithCause(errors.New("notification: the stream route needs a flushing response writer")))
 		return
 	}
-	conn := h.hub.Subscribe()
+	conn := h.hub.SubscribeFor(string(tenant), userID)
 	defer conn.Close()
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -678,7 +687,6 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	tenantID := string(tenant)
 	for {
 		select {
 		case <-r.Context().Done():
@@ -686,16 +694,9 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
 			// (deferred) removes the connection from the hub.
 			return
 		case msg := <-conn.Messages():
-			var ann InboxCreatedPayload
-			if err := json.Unmarshal(msg, &ann); err != nil {
-				// The hub only ever marshals declared payload structs, so
-				// an unmarshalable frame is impossible in a running system;
-				// skip rather than fail the stream over it.
-				continue
-			}
-			if ann.RecipientUserID != userID || ann.TenantID != tenantID {
-				continue
-			}
+			// Every frame the hub enqueues on a scoped connection is one
+			// of the caller's own announcements (see the doc above), so
+			// the route frames it as-is -- no per-frame re-check.
 			if _, err := fmt.Fprintf(w, "event: message\ndata: %s\n\n", msg); err != nil {
 				return
 			}
@@ -906,14 +907,22 @@ func toTypeResponse(t pkgcore.NotificationType, description string) api.Notifica
 // matches "en-US"), and zh-CN -- the module's default language -- when
 // nothing matches, the header is empty, or no catalog is attached yet.
 //
-// The header's relative q-values are deliberately ignored beyond q=0: a
-// part explicitly weighted 0 is "not acceptable" and is skipped, and the
-// remaining parts answer in header order, which is exactly the latitude
-// RFC 7231's section 5.3.1 gives a server ("the most specific reference
-// has precedence"; order of preference is expressed by the header's own
-// ordering). The fallback never crosses languages: a request that accepts
-// nothing the catalog supports gets the default language, never a
-// half-rendered or silently substituted one.
+// Matching is case-insensitive, per RFC 4647's "language-range matching is
+// case-insensitive" rule: a client's "EN-US" or "zh-cn" answers its
+// language exactly as the canonical spellings do, because language tags
+// are case-insensitive identifiers and a caseful comparison would refuse a
+// perfectly usable copy over letter case.
+//
+// The header's relative q-values are deliberately ignored beyond the zero
+// weight: a part whose q parameter says the language is not acceptable --
+// a weight of zero in any spelling the qvalue grammar allows ("q=0",
+// "q=0.0", "Q=0", "q=0.00") -- is skipped, and the remaining parts answer
+// in header order, which is exactly the latitude RFC 7231's section 5.3.1
+// gives a server ("the most specific reference has precedence"; order of
+// preference is expressed by the header's own ordering). The fallback
+// never crosses languages: a request that accepts nothing the catalog
+// supports gets the default language, never a half-rendered or silently
+// substituted one.
 func negotiateLocale(catalog *i18n.Catalog, header string) string {
 	if catalog == nil {
 		return i18n.LocaleZHCN
@@ -928,25 +937,52 @@ func negotiateLocale(catalog *i18n.Catalog, header string) string {
 			continue
 		}
 		if params := strings.Split(tag, ";"); len(params) > 1 {
-			for _, p := range params[1:] {
-				p = strings.TrimSpace(p)
-				if strings.HasPrefix(p, "q=") && p[2:] == "0" {
-					goto nextPart
-				}
+			if !partAccepted(params[1:]) {
+				// The part's q parameter weights it 0: not acceptable.
+				continue
 			}
 			tag = strings.TrimSpace(params[0])
 		}
 		if tag == "" {
 			continue
 		}
+		lowerTag := strings.ToLower(tag)
 		for _, have := range supported {
-			if have == tag || strings.HasPrefix(have, tag+"-") {
+			if strings.EqualFold(have, tag) ||
+				strings.HasPrefix(strings.ToLower(have), lowerTag+"-") {
 				return have
 			}
 		}
-	nextPart:
 	}
 	return i18n.LocaleZHCN
+}
+
+// partAccepted reports whether one Accept-Language part's parameters still
+// leave the part acceptable. The only parameter this negotiation reads is
+// the q weighting, whose parameter name is case-insensitive (RFC 7230
+// section 3.2.6): a weight of zero -- in any spelling the qvalue grammar
+// produces, so "q=0", "q=0.0", "Q=0" and their padded variants -- marks
+// the part not acceptable, and any parseable non-zero weight leaves it
+// acceptable. An unparseable q value is not a zero weight and leaves the
+// part standing at its default weight; where several q parameters appear,
+// the last one governs. Relative ordering between non-zero weights is the
+// caller's (header-order) business.
+func partAccepted(params []string) bool {
+	weight := 1.0
+	weighted := false
+	for _, p := range params {
+		name, value, ok := strings.Cut(strings.TrimSpace(p), "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(name), "q") {
+			continue
+		}
+		w, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil {
+			continue
+		}
+		weight = w
+		weighted = true
+	}
+	return !weighted || weight > 0
 }
 
 // SubjectResolver is the seam that answers "who is the HTTP caller" for

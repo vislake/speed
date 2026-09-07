@@ -48,6 +48,7 @@ var errorCatalog = []struct {
 
 	// The send-record group (send_record.go).
 	{"ErrSendRecordTenantRequired", ErrSendRecordTenantRequired, "notification.send_record_tenant_required", http.StatusBadRequest},
+	{"ErrSendRecordFilterInvalid", ErrSendRecordFilterInvalid, "notification.send_record_filter_invalid", http.StatusBadRequest},
 
 	// The Register-time wiring group (module.go).
 	{"ErrSMSSenderRequired", ErrSMSSenderRequired, "notification.sms_sender_required", http.StatusInternalServerError},

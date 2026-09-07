@@ -177,7 +177,7 @@ var (
 	ErrMessageNotFound = apperr.NotFound("notification.message_not_found")
 )
 
-// The send-record group: the one error send_record.go's ListByFilter (D10,
+// The send-record group: the errors send_record.go's ListByFilter (D10,
 // docs/internal/23-admin.md) can return.
 var (
 	// ErrSendRecordTenantRequired reports a ListByFilter call whose
@@ -189,6 +189,17 @@ var (
 	// forgotten-tenant-filter shape the rest of this codebase refuses
 	// outright rather than risks.
 	ErrSendRecordTenantRequired = apperr.Invalid("notification.send_record_tenant_required")
+
+	// ErrSendRecordFilterInvalid reports a ListByFilter call whose paging
+	// parameters fall outside the module's bounds: a Limit that is not
+	// positive -- zero in particular, which gorm's Limit(0) would silently
+	// serve as "no limit", an unbounded read no caller asked for -- or a
+	// negative Offset. The refusal names the offending parameter ("limit"
+	// or "offset") and the value it was given, mirroring the message-list
+	// surface's own ErrInvalidListParams; the repository enforces the
+	// bounds itself because it is the read's single entry point, whatever
+	// caller reaches it.
+	ErrSendRecordFilterInvalid = apperr.Invalid("notification.send_record_filter_invalid")
 )
 
 // The HTTP-transport group: every error the module's HTTP handler (handler.go)

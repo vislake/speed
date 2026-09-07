@@ -940,6 +940,77 @@ func TestContact_MarkBounced_TerminalAndIdempotent(t *testing.T) {
 	}
 }
 
+// TestContact_MarkBounced_NeverOverwritesThePermanentUnsubscribe pins the
+// consent ledger's terminal-state precedence: a transport hard failure that
+// lands AFTER the recipient unsubscribed must not flip the row to bounced --
+// the permanent-unsubscribe fact is the one the ledger keeps, and delivery
+// already refuses the row on it. The row's status after MarkBounced stays
+// unsubscribed, and the deliverability gate keeps answering with the
+// unsubscribe refusal, never the bounce.
+func TestContact_MarkBounced_NeverOverwritesThePermanentUnsubscribe(t *testing.T) {
+	env := newContactEnv(t)
+	ctx := tenantCtx("tenant-acme")
+
+	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: testPhone})
+	if err != nil {
+		t.Fatalf("CreateContact: %v", err)
+	}
+	code := smsCodeAt(t, env.smsBuf, 0)
+	if _, err := env.svc.VerifyCode(ctx, VerifyCodeInput{ContactID: contact.ID, Code: code}); err != nil {
+		t.Fatalf("VerifyCode: %v", err)
+	}
+	if _, err := env.svc.Unsubscribe(ctx, UnsubscribeInput{ContactID: contact.ID}); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+
+	if err := env.svc.MarkBounced(ctx, contact.ID); err != nil {
+		t.Fatalf("MarkBounced on the unsubscribed contact: %v", err)
+	}
+	row := mustFindContact(t, env, ctx, contact.ID)
+	if row.Status != ContactStatusUnsubscribed {
+		t.Errorf("row status after MarkBounced on an unsubscribed contact = %s, want unsubscribed kept", row.Status)
+	}
+	if _, err := env.svc.EnsureDeliverable(ctx, contact.ID); err == nil {
+		t.Error("EnsureDeliverable succeeded, want the unsubscribed refusal")
+	} else {
+		assertCode(t, err, ErrContactUnsubscribed.Code)
+	}
+}
+
+// TestContact_MarkBouncedCAS_RefusesAnUnsubscribedRow pins the same
+// precedence at the compare-and-swap itself -- the statement that decides
+// under concurrency: the CAS refuses a row that is unsubscribed (or already
+// bounced) instead of overwriting the terminal state, exactly as a
+// concurrent unsubscribe landing between delivery's gate check and its
+// bounce marking must survive the race.
+func TestContact_MarkBouncedCAS_RefusesAnUnsubscribedRow(t *testing.T) {
+	env := newContactEnv(t)
+	ctx := tenantCtx("tenant-acme")
+
+	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: testPhone})
+	if err != nil {
+		t.Fatalf("CreateContact: %v", err)
+	}
+	code := smsCodeAt(t, env.smsBuf, 0)
+	if _, verifyErr := env.svc.VerifyCode(ctx, VerifyCodeInput{ContactID: contact.ID, Code: code}); verifyErr != nil {
+		t.Fatalf("VerifyCode: %v", verifyErr)
+	}
+	if _, unsubErr := env.svc.Unsubscribe(ctx, UnsubscribeInput{ContactID: contact.ID}); unsubErr != nil {
+		t.Fatalf("Unsubscribe: %v", unsubErr)
+	}
+
+	moved, err := env.svc.markBounced(ctx, contact.ID)
+	if err != nil {
+		t.Fatalf("markBounced CAS: %v", err)
+	}
+	if moved {
+		t.Error("markBounced CAS moved the unsubscribed row, want the refusal")
+	}
+	if row := mustFindContact(t, env, ctx, contact.ID); row.Status != ContactStatusUnsubscribed {
+		t.Errorf("row status after the refused CAS = %s, want unsubscribed", row.Status)
+	}
+}
+
 // TestContact_UnknownIDReturnsNotFound covers every id-addressed method's
 // absent-row answer: one refusal shape (contact_not_found) whichever
 // operation names a row that does not exist, so callers can classify the
@@ -1288,11 +1359,15 @@ func TestContact_ListForTenant_SameCreatedAt_IdDescTiebreak(t *testing.T) {
 }
 
 // TestContactService_List_ReturnsTheRosterNewestFirst is the service face of
-// the same contract: List answers the tenant's whole roster, newest first,
-// and returns the model rows -- whose Address field carries the decrypted
-// plaintext (the serializer decrypts on read). Stripping the address is the
-// response layer's job; this test pins that the service itself is where the
-// roster ends and the plaintext begins.
+// the same contract: List answers the tenant's whole roster, newest first --
+// and the roster read NEVER decrypts the addresses it serves no part of.
+// The API row the roster feeds (toContactResponse) carries id, channel,
+// status and created_at only, so the roster query selects exactly those
+// columns: the encrypted address column stays untouched on read, and the
+// returned rows' Address (and AddressIndex) fields are empty rather than
+// carrying plaintext that would only be stripped by the response layer.
+// A caller that needs a contact's address reads the full row
+// (FindByID/ByChannelAndAddressIndex), where the serializer still decrypts.
 func TestContactService_List_ReturnsTheRosterNewestFirst(t *testing.T) {
 	env := newContactEnv(t)
 	ctx := tenantCtx("tenant-acme")
@@ -1322,8 +1397,21 @@ func TestContactService_List_ReturnsTheRosterNewestFirst(t *testing.T) {
 	if got[0].ID != "contact-new" || got[1].ID != "contact-old" {
 		t.Errorf("List = %v, want [contact-new contact-old]", contactIDsOf(got))
 	}
-	if got[0].Address != newer || got[1].Address != older {
-		t.Errorf("List returned addresses %q and %q, want the decrypted plaintext %q and %q",
-			got[0].Address, got[1].Address, newer, older)
+	if got[0].Address != "" || got[1].Address != "" {
+		t.Errorf("List returned addresses %q and %q, want the roster read to serve no plaintext (the address column is not selected)",
+			got[0].Address, got[1].Address)
+	}
+	if got[0].AddressIndex != "" || got[1].AddressIndex != "" {
+		t.Errorf("List returned blind indexes %q and %q, want them unselected on the roster read too",
+			got[0].AddressIndex, got[1].AddressIndex)
+	}
+	// The full-row read still decrypts: the roster projection must not have
+	// changed what the encrypted column holds or how a row is read back.
+	row, err := env.svc.repo.FindByID(ctx, "contact-new")
+	if err != nil {
+		t.Fatalf("FindByID(contact-new): %v", err)
+	}
+	if row.Address != newer {
+		t.Errorf("FindByID returned address %q, want the decrypted plaintext %q", row.Address, newer)
 	}
 }

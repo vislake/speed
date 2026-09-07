@@ -1697,3 +1697,278 @@ func TestDelivery_RetriedAttemptKeepsCreatedAtAndTimeBoundedAuditVisibility(t *t
 		t.Errorf("time-bounded ListByFilter after the retry = %+v, want the retried delivery's one record (a zeroed created_at is invisible to From/To)", page)
 	}
 }
+
+// TestDelivery_RepeatedDispatchOfOneDelivery_SettlesOneRecord pins the
+// dedupe contract the resend regressions below rest on: dispatching the
+// SAME dispatch twice is ONE delivery -- the queue's own retry of a job
+// re-runs an identical payload, and the derived key must keep that retry
+// from double-sending. A deliberate resend is therefore a DIFFERENT
+// dispatch, and the module must give the caller a way to say so (see
+// TestDelivery_ResendAfterALocaleChange_DeliversInTheNewLocale and the
+// per-occurrence marker test).
+func TestDelivery_RepeatedDispatchOfOneDelivery_SettlesOneRecord(t *testing.T) {
+	env := newDeliveryEnv(t)
+	env.resolver.byUser[deliveryUser] = deliveryAddresses
+	ctx := tenantCtx(deliveryTenant)
+	d := deliveryDispatch()
+
+	if err := env.dispatchAndAttempt(t, d); err != nil {
+		t.Fatalf("first delivery attempt: %v", err)
+	}
+	if err := env.dispatchAndAttempt(t, d); err != nil {
+		t.Fatalf("second delivery attempt: %v", err)
+	}
+
+	if mails := env.host.mailer.messages(); len(mails) != 1 {
+		t.Errorf("mailer sent %d messages for two dispatches of one delivery, want the single send", len(mails))
+	}
+	rec := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if rec == nil || rec.Status != SendRecordStatusSucceeded {
+		t.Fatalf("email record = %+v, want the one succeeded record", rec)
+	}
+}
+
+// TestDelivery_ResendWithAFreshOccurrenceID_DeliversAgain pins the
+// occurrence half of the delivery key's contract: a DELIBERATE resend --
+// identical type, recipient, channel, locale and parameters, re-dispatched
+// under a fresh OccurrenceID -- is a new delivery, not the old one's
+// replay. The derived key hashes the occurrence marker, so each resend
+// settles its own send record and sends again; without the marker a resend
+// is indistinguishable from the queue's own retry of the old job and is
+// correctly swallowed (TestDelivery_RepeatedDispatchOfOneDelivery_SettlesOneRecord
+// pins that side).
+func TestDelivery_ResendWithAFreshOccurrenceID_DeliversAgain(t *testing.T) {
+	env := newDeliveryEnv(t)
+	env.resolver.byUser[deliveryUser] = deliveryAddresses
+	ctx := tenantCtx(deliveryTenant)
+
+	first := deliveryDispatch()
+	first.OccurrenceID = "occurrence-1"
+	if err := env.dispatchAndAttempt(t, first); err != nil {
+		t.Fatalf("first delivery attempt: %v", err)
+	}
+
+	// The identical content, deliberately re-dispatched: the demo-shape
+	// "the patient asked again" occurrence. The rendered copy is identical;
+	// only the occurrence is new.
+	resend := deliveryDispatch()
+	resend.OccurrenceID = "occurrence-2"
+	if err := env.dispatchAndAttempt(t, resend); err != nil {
+		t.Fatalf("resend attempt: %v", err)
+	}
+
+	mails := env.host.mailer.messages()
+	if len(mails) != 2 {
+		t.Fatalf("mailer sent %d messages, want 2: the original delivery and the deliberate resend", len(mails))
+	}
+	if mails[0].To[0] != deliveryAddresses.Email || mails[1].To[0] != deliveryAddresses.Email {
+		t.Errorf("mail recipients = %v then %v, want the resolved address for both deliveries", mails[0].To, mails[1].To)
+	}
+
+	firstRec := env.sendRecordByChannel(t, ctx, first, ChannelEmail)
+	resendRec := env.sendRecordByChannel(t, ctx, resend, ChannelEmail)
+	if firstRec == nil || firstRec.Status != SendRecordStatusSucceeded {
+		t.Fatalf("first delivery record = %+v, want succeeded", firstRec)
+	}
+	if resendRec == nil || resendRec.Status != SendRecordStatusSucceeded {
+		t.Fatalf("resend record = %+v, want its own succeeded record", resendRec)
+	}
+	if firstRec.ID == resendRec.ID {
+		t.Errorf("the resend adopted the original delivery's record id %s, want one record per occurrence", firstRec.ID)
+	}
+	if firstRec.IdempotencyKey == resendRec.IdempotencyKey {
+		t.Errorf("the resend derived the original delivery's key %s, want a distinct key per occurrence", firstRec.IdempotencyKey)
+	}
+}
+
+// TestDelivery_ResendAfterALocaleChange_DeliversInTheNewLocale pins the
+// locale half of the delivery key's contract: the copy is rendered in the
+// recipient's locale, so a resend whose locale changed is NOT the delivery
+// the record already logs -- it must deliver again, in the new locale,
+// rather than be swallowed by the dedupe probe as the old delivery's
+// replay. A delivery key that leaves the locale out of its derivation
+// cannot tell the two dispatches apart.
+func TestDelivery_ResendAfterALocaleChange_DeliversInTheNewLocale(t *testing.T) {
+	env := newDeliveryEnv(t)
+	env.resolver.byUser[deliveryUser] = deliveryAddresses
+
+	zh := deliveryDispatch() // the fixture's zh-CN copy
+	if err := env.dispatchAndAttempt(t, zh); err != nil {
+		t.Fatalf("zh-CN delivery attempt: %v", err)
+	}
+	en := deliveryDispatch()
+	en.Locale = "en-US"
+	if err := env.dispatchAndAttempt(t, en); err != nil {
+		t.Fatalf("en-US delivery attempt: %v", err)
+	}
+
+	mails := env.host.mailer.messages()
+	if len(mails) != 2 {
+		t.Fatalf("mailer sent %d messages, want 2: the zh-CN delivery and the en-US resend", len(mails))
+	}
+	if mails[0].Subject != "预约提醒" || mails[1].Subject != "Appointment reminder" {
+		t.Errorf("mail subjects = %q then %q, want the zh-CN copy then the en-US copy", mails[0].Subject, mails[1].Subject)
+	}
+	rec := env.sendRecordByChannel(t, tenantCtx(deliveryTenant), en, ChannelEmail)
+	if rec == nil || rec.Status != SendRecordStatusSucceeded {
+		t.Fatalf("en-US resend record = %+v, want its own succeeded record under its own key", rec)
+	}
+}
+
+// TestDelivery_GatewayErrorEmbeddingTheRecipientAddress_NeverReachesTheStoredRecord
+// pins the send-record PII rule: a transport error that quotes the
+// recipient's address (an SMTP 5xx names the mailbox it rejected) is the
+// record's raw cause today, and the send_records.error column -- the text
+// the D10 operator search reads back -- must never store the address
+// plaintext. The module knows the address it handed the transport, so the
+// stored text replaces it instead of trusting the gateway's wording.
+func TestDelivery_GatewayErrorEmbeddingTheRecipientAddress_NeverReachesTheStoredRecord(t *testing.T) {
+	env := newDeliveryEnv(t)
+	env.resolver.byUser[deliveryUser] = deliveryAddresses
+	ctx := tenantCtx(deliveryTenant)
+	d := deliveryDispatch()
+
+	env.host.mailer.failWith = fmt.Errorf("smtp: 550 %s: recipient address rejected", deliveryAddresses.Email)
+	if err := env.dispatchAndAttempt(t, d); err == nil {
+		t.Fatal("attempt with the refusing gateway succeeded, want the retryable error back")
+	}
+
+	rec := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if rec == nil || rec.Status != SendRecordStatusFailed {
+		t.Fatalf("email record after the refusal = %+v, want failed", rec)
+	}
+	if strings.Contains(rec.Error, deliveryAddresses.Email) {
+		t.Errorf("record error carries the plaintext address: %q", rec.Error)
+	}
+	if !strings.Contains(rec.Error, "smtp: 550") || !strings.Contains(rec.Error, "[redacted]") {
+		t.Errorf("record error = %q, want the gateway's message kept with the address replaced by the redaction marker", rec.Error)
+	}
+}
+
+// TestDelivery_ContactBounceCarryingTheAddress_StoredRecordAndReadbackNeverCarryIt
+// is the external-contact half of the PII rule: a permanent gateway refusal
+// quoting the contact's address settles a failed record (and marks the
+// contact bounced), and neither the record's own error text nor the rows
+// the D10 operator search (ListByFilter) returns may contain the address.
+func TestDelivery_ContactBounceCarryingTheAddress_StoredRecordAndReadbackNeverCarryIt(t *testing.T) {
+	env := newDeliveryEnv(t)
+	ctx := tenantCtx(deliveryTenant)
+
+	const address = "wangfang@external.example.com"
+	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
+		Channel:    ChannelEmail,
+		Address:    address,
+		ConsentRef: "consent-ref-1",
+	})
+	if err != nil {
+		t.Fatalf("create the verified contact: %v", err)
+	}
+
+	d := Dispatch{
+		TypeKey: fixtureTypeAppointment,
+		Recipient: DispatchRecipient{
+			Class:     RecipientClassExternal,
+			ContactID: contact.ID,
+		},
+		Locale: "zh-CN",
+		Params: renderTestParams,
+	}
+	env.host.mailer.failWith = fmt.Errorf("smtp: 550 <%s>: mailbox unavailable: %w", address, ErrTransportPermanent)
+	if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
+		t.Fatalf("delivery attempt: %v", attemptErr)
+	}
+
+	rec := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+	if rec == nil || rec.Status != SendRecordStatusFailed {
+		t.Fatalf("email record after the permanent refusal = %+v, want failed", rec)
+	}
+	if strings.Contains(rec.Error, address) {
+		t.Errorf("record error carries the plaintext contact address: %q", rec.Error)
+	}
+	if !strings.Contains(rec.Error, "[redacted]") {
+		t.Errorf("record error = %q, want the address replaced by the redaction marker", rec.Error)
+	}
+
+	rows, err := env.svc.sendRecs.ListByFilter(ctx, SendRecordFilter{TenantID: deliveryTenant, Limit: 50})
+	if err != nil {
+		t.Fatalf("ListByFilter: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ListByFilter returned %d rows, want the one failed record", len(rows))
+	}
+	if strings.Contains(rows[0].Error, address) {
+		t.Errorf("the operator readback carries the plaintext contact address: %q", rows[0].Error)
+	}
+	if !strings.Contains(rows[0].Error, "[redacted]") {
+		t.Errorf("the operator readback = %q, want the redacted marker", rows[0].Error)
+	}
+	row, err := env.contacts.repo.FindByID(ctx, contact.ID)
+	if err != nil {
+		t.Fatalf("FindByID after the refusal: %v", err)
+	}
+	if row.Status != ContactStatusBounced {
+		t.Errorf("contact status after the permanent refusal = %s, want bounced", row.Status)
+	}
+}
+
+// TestDelivery_ContactVerifiedOnAnUnknownChannel_RecordsAndStops pins the
+// corrupt-row path of the contact delivery: a verified contact whose
+// channel no transport can serve (impossible through CreateContact's
+// validation, reachable only by a row written around it) must settle as a
+// recorded, terminal failure -- the record the operator reads, the job
+// NOT walked through the retry-and-dead-letter horizon -- never a bare
+// error that retries pointlessly and logs nothing.
+func TestDelivery_ContactVerifiedOnAnUnknownChannel_RecordsAndStops(t *testing.T) {
+	env := newDeliveryEnv(t)
+	ctx := tenantCtx(deliveryTenant)
+
+	contact, err := env.contacts.CreateContact(ctx, ContactCreateInput{
+		Channel:    ChannelEmail,
+		Address:    "wangfang@external.example.com",
+		ConsentRef: "consent-ref-1",
+	})
+	if err != nil {
+		t.Fatalf("create the verified contact: %v", err)
+	}
+	// Corrupt the row the way only a writer around the module's own
+	// validation could: a channel outside the transport vocabulary.
+	row, err := env.contacts.repo.FindByID(ctx, contact.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	row.Channel = "carrier-pigeon"
+	if updateErr := env.contacts.repo.Update(ctx, row); updateErr != nil {
+		t.Fatalf("corrupt the contact's channel: %v", updateErr)
+	}
+
+	d := Dispatch{
+		TypeKey: fixtureTypeAppointment,
+		Recipient: DispatchRecipient{
+			Class:     RecipientClassExternal,
+			ContactID: contact.ID,
+		},
+		Locale: "zh-CN",
+		Params: renderTestParams,
+	}
+	if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
+		t.Fatalf("delivery attempt on the corrupt channel returned %v, want the terminal stop (no queue retry)", attemptErr)
+	}
+	if mails := env.host.mailer.messages(); len(mails) != 0 {
+		t.Errorf("mailer sent %d messages on an unknown channel, want none", len(mails))
+	}
+
+	key, err := deriveDeliveryKey(deliveryTenant, d, "carrier-pigeon")
+	if err != nil {
+		t.Fatalf("deriveDeliveryKey: %v", err)
+	}
+	rec, err := env.svc.sendRecs.ByTenantAndKey(ctx, deliveryTenant, key)
+	if err != nil {
+		t.Fatalf("ByTenantAndKey: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("no send record for the unknown-channel delivery, want the terminal refusal recorded")
+	}
+	if rec.Status != SendRecordStatusFailed {
+		t.Errorf("record status = %s, want %s", rec.Status, SendRecordStatusFailed)
+	}
+}

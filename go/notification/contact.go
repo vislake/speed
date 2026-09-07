@@ -273,10 +273,24 @@ func (r *VerifiedContactRepository) ByChannelAndAddressIndex(ctx context.Context
 // contract, and it is the tenant's roster, not one user's: a contact
 // belongs to the tenant that verified it, so any identified caller of the
 // tenant sees the roster the tenant's staff manages.
+//
+// The read is deliberately a PROJECTION of exactly the columns the roster
+// serves -- id, channel, status and created_at -- and nothing else: the
+// encrypted Address column and the blind index beside it are never
+// selected, so the roster read performs no decryption at all and carries
+// no plaintext into a caller whose API shape strips it anyway. The
+// returned rows' Address, AddressIndex and the consent/code bookkeeping
+// fields are therefore empty, and such a row must never be written back
+// with a Save-style update (it would blank the columns it never read); a
+// caller that needs a contact's address reads the full row through
+// FindByID or ByChannelAndAddressIndex, where the serializer decrypts.
 func (r *VerifiedContactRepository) ListForTenant(ctx context.Context) ([]VerifiedContact, error) {
 	var contacts []VerifiedContact
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.Order("created_at DESC, id DESC").Find(&contacts).Error
+		return tx.
+			Select("id", "channel", "status", "created_at").
+			Order("created_at DESC, id DESC").
+			Find(&contacts).Error
 	})
 	return contacts, err
 }
@@ -412,10 +426,13 @@ func auditResourceContact(c *VerifiedContact) audit.Resource {
 // it). No pagination and no filters exist: the roster is the tenant's
 // full external-recipient ledger.
 //
-// The returned rows still carry their decrypted Address -- the service
-// works on the model, whose serializer decrypts the column on read -- so a
-// caller rendering an API response must strip it (the handler's
-// toContactResponse drops it; the address is PII the API never echoes).
+// The roster is served without its addresses: ListForTenant reads a
+// projection of the columns the API actually returns, so the returned
+// rows' Address field is empty -- never decrypted, never carried into a
+// caller whose response shape drops it (the handler's toContactResponse
+// serves id, channel, status and created_at only; the address is PII the
+// API never echoes). A caller that needs a contact's address reads the
+// full row through FindByID or ByChannelAndAddressIndex.
 func (s *ContactService) List(ctx context.Context) ([]VerifiedContact, error) {
 	contacts, err := s.repo.ListForTenant(ctx)
 	if err != nil {
@@ -885,6 +902,13 @@ func (s *ContactService) markUnsubscribed(ctx context.Context, id string) (bool,
 // that bounced is a later-round remediation, recorded under AGENTS.md's
 // "Platform-blacklist writers and bounce remediation" deferral. The call
 // is idempotent for a contact that already bounced.
+//
+// The transition never overwrites the other terminal state: a contact that
+// has permanently unsubscribed stays unsubscribed, whatever the transport
+// reports afterwards -- the unsubscribe is the ledger's durable fact about
+// the recipient's wishes, and delivery already refuses the row on it (the
+// CAS below carries the refusal, so the same holds when the unsubscribe
+// races the bounce marking between the delivery's gate check and here).
 func (s *ContactService) MarkBounced(ctx context.Context, contactID string) error {
 	contact, err := s.repo.FindByID(ctx, contactID)
 	if err != nil {
@@ -901,20 +925,27 @@ func (s *ContactService) MarkBounced(ctx context.Context, contactID string) erro
 		return errInternal(err)
 	}
 	if !moved {
-		// A concurrent transition won the CAS. Whatever status the row
-		// landed in, delivery's own re-check will refuse or allow by the
-		// row's actual status, so there is nothing to reconcile here.
+		// The CAS refused: the row is already bounced, or a concurrent
+		// transition -- an unsubscribe above all -- won the race and the
+		// row now holds a terminal state this bounce must not overwrite.
+		// Whatever status the row landed in, delivery's own re-check
+		// refuses or allows by the row's actual status, so there is
+		// nothing to reconcile here.
 		return nil
 	}
 	return nil
 }
 
-// markBounced moves any non-bounced contact to bounced (compare-and-swap;
-// RowsAffected semantics as in markUnsubscribed).
+// markBounced moves a non-terminal contact to bounced (compare-and-swap;
+// RowsAffected semantics as in markUnsubscribed). The WHERE refuses both
+// terminal states -- a row that already bounced and, decisively, a row
+// that has permanently unsubscribed: the unsubscribe fact outranks a
+// transport's later hard failure, and the CAS is the statement-level
+// guarantee that an unsubscribe racing the bounce marking survives it.
 func (s *ContactService) markBounced(ctx context.Context, id string) (bool, error) {
 	moved := false
 	err := dbkit.WithTenantSession(ctx, s.repo.db, func(tx *gorm.DB) error {
-		res := tx.Where("id = ? AND status <> ?", id, ContactStatusBounced).
+		res := tx.Where("id = ? AND status <> ? AND status <> ?", id, ContactStatusBounced, ContactStatusUnsubscribed).
 			Updates(&VerifiedContact{Status: ContactStatusBounced})
 		if res.Error != nil {
 			return res.Error

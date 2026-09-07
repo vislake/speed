@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -90,6 +91,29 @@ type Dispatch struct {
 	// of the delivery key derivation, so two dispatches that differ only
 	// in parameters are two deliveries.
 	Params map[string]any `json:"params"`
+
+	// OccurrenceID names the delivery OCCURRENCE this Dispatch is -- the
+	// deliberate-resend marker. It is optional, never renders, and never
+	// appears in an inbox row's params: it exists so a caller can
+	// intentionally deliver the same type, recipient and parameters more
+	// than once -- a reminder re-sent because the patient asked, a demo
+	// re-triggered -- by dispatching the new occurrence under a fresh id.
+	//
+	// The derived delivery key (deriveDeliveryKey) hashes it, so two
+	// dispatches that differ only in OccurrenceID are two deliveries: each
+	// settles its own send record and, on the in-app channel, its own
+	// inbox row, and neither's replay probe swallows the other. Two
+	// dispatches that share an occurrence id -- or that both leave it
+	// empty -- are ONE delivery: the queue's retry of a job re-runs the
+	// same payload, and that retry must keep converging on the first
+	// attempt's record, which is exactly why the marker is a first-class
+	// field rather than another template parameter to stuff into Params
+	// (the reference app's smilesim glue carries its per-occurrence job id
+	// in Params today; a parameter renders into the copy and round-trips
+	// through the inbox row's API shape, neither of which a delivery
+	// marker should do). Empty is the ordinary value: most notifications
+	// occur once per (type, recipient, parameters).
+	OccurrenceID string `json:"occurrence_id,omitempty"`
 }
 
 // DispatchRecipient is the recipient half of a Dispatch: which class of
@@ -660,13 +684,17 @@ func (s *DeliveryService) deliverUserEmail(ctx context.Context, tenantID string,
 	err = s.sendMail(ctx, parts, []string{addrs.Email})
 	rec.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
+		// The transport error may quote the address it rejected; the send
+		// record must never store the plaintext, so the stored text is the
+		// redacted one (classification still runs on the original error).
+		cause := redactRecipientAddresses(err, addrs.Email)
 		if errors.Is(err, ErrTransportPermanent) {
 			// A user's address is the host's data, not a verified_contacts
 			// row, so there is no contact to mark bounced -- the refusal
 			// is terminal, recorded, and the job stops.
-			return s.failAndStop(ctx, tenantID, rec, err)
+			return s.failAndStop(ctx, tenantID, rec, cause)
 		}
-		return s.failAndRetry(ctx, tenantID, rec, err)
+		return s.failAndRetry(ctx, tenantID, rec, cause)
 	}
 	rec.Status = SendRecordStatusSucceeded
 	return s.settle(ctx, tenantID, rec)
@@ -697,10 +725,11 @@ func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d
 	err = s.sendSMS(ctx, parts, addrs.Phone)
 	rec.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
+		cause := redactRecipientAddresses(err, addrs.Phone)
 		if errors.Is(err, ErrTransportPermanent) {
-			return s.failAndStop(ctx, tenantID, rec, err)
+			return s.failAndStop(ctx, tenantID, rec, cause)
 		}
-		return s.failAndRetry(ctx, tenantID, rec, err)
+		return s.failAndRetry(ctx, tenantID, rec, cause)
 	}
 	rec.Status = SendRecordStatusSucceeded
 	return s.settle(ctx, tenantID, rec)
@@ -754,10 +783,6 @@ func (s *DeliveryService) deliverToContact(ctx context.Context, tenantID string,
 		return err
 	}
 
-	if !isContactChannel(contact.Channel) {
-		return fmt.Errorf("notification: contact %s is verified on channel %q", contact.ID, contact.Channel)
-	}
-
 	rec := s.sendRecordFor(tenantID, d, contact.Channel)
 	rec.ContactID = contact.ID
 	key, err := deriveDeliveryKey(tenantID, d, contact.Channel)
@@ -780,8 +805,15 @@ func (s *DeliveryService) deliverToContact(ctx context.Context, tenantID string,
 	case ChannelSMS:
 		return s.deliverContactSMS(ctx, tenantID, d, contact, rec)
 	default:
+		// A verified contact whose channel no transport can serve -- a row
+		// only a writer around CreateContact's own channel validation could
+		// have produced -- is a terminal state, not a retryable one: the
+		// attempt is recorded as a failed send under the corrupt channel
+		// and the job stops, so an operator reads the refusal in the send
+		// records and nothing walks the retry-and-dead-letter horizon over
+		// a row that will never heal.
 		return s.failAndStop(ctx, tenantID, rec,
-			fmt.Errorf("notification: deliver to contact %s on channel %q", contact.ID, contact.Channel))
+			fmt.Errorf("notification: contact %s is verified on unknown channel %q", contact.ID, contact.Channel))
 	}
 }
 
@@ -830,12 +862,13 @@ func (s *DeliveryService) deliverContactEmail(ctx context.Context, tenantID stri
 	err = s.sendMail(ctx, parts, []string{contact.Address})
 	rec.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
+		cause := redactRecipientAddresses(err, contact.Address)
 		if errors.Is(err, ErrTransportPermanent) {
 			// The address rejects mail. Mark the tenant's own contact
 			// bounced -- its future deliveries are refused by the ledger
 			// before any transport -- record the failed attempt, and stop.
 			bounceErr := s.contacts.MarkBounced(ctx, contact.ID)
-			stopErr := s.failAndStop(ctx, tenantID, rec, err)
+			stopErr := s.failAndStop(ctx, tenantID, rec, cause)
 			if bounceErr != nil {
 				// The bounce did not land; the record did. Retrying
 				// re-runs the whole path and converges the bounce.
@@ -843,7 +876,7 @@ func (s *DeliveryService) deliverContactEmail(ctx context.Context, tenantID stri
 			}
 			return stopErr
 		}
-		return s.failAndRetry(ctx, tenantID, rec, err)
+		return s.failAndRetry(ctx, tenantID, rec, cause)
 	}
 	rec.Status = SendRecordStatusSucceeded
 	return s.settle(ctx, tenantID, rec)
@@ -861,15 +894,16 @@ func (s *DeliveryService) deliverContactSMS(ctx context.Context, tenantID string
 	err = s.sendSMS(ctx, parts, contact.Address)
 	rec.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
+		cause := redactRecipientAddresses(err, contact.Address)
 		if errors.Is(err, ErrTransportPermanent) {
 			bounceErr := s.contacts.MarkBounced(ctx, contact.ID)
-			stopErr := s.failAndStop(ctx, tenantID, rec, err)
+			stopErr := s.failAndStop(ctx, tenantID, rec, cause)
 			if bounceErr != nil {
 				return errors.Join(stopErr, bounceErr)
 			}
 			return stopErr
 		}
-		return s.failAndRetry(ctx, tenantID, rec, err)
+		return s.failAndRetry(ctx, tenantID, rec, cause)
 	}
 	rec.Status = SendRecordStatusSucceeded
 	return s.settle(ctx, tenantID, rec)
@@ -916,6 +950,57 @@ const (
 // skip reason can overflow the schema.
 const sendRecordErrorBudget = 4000
 
+// sendRecordRedactionMarker is the replacement text redactRecipientAddresses
+// substitutes for a recipient address inside an error message about to be
+// stored on a send record -- the observable answer that the text WAS
+// redacted, never an empty hole the reader must guess at.
+const sendRecordRedactionMarker = "[redacted]"
+
+// redactRecipientAddresses returns cause with every occurrence of any
+// non-empty address in addresses replaced by sendRecordRedactionMarker --
+// the text a send record may store. A transport failure routinely quotes
+// the recipient (an SMTP 5xx names the mailbox it rejected, an SMS gateway
+// error the number), and the send record -- and every read of it, the D10
+// operator search first among them -- must never carry the plaintext
+// address, PII the module holds and therefore can strip itself rather than
+// trust a gateway's wording. The redaction is a best-effort replacement of
+// exactly the address strings the module handed the transport: an address
+// re-formatted by the transport is outside what any caller-side fix could
+// recognize. When no address occurs the original error is returned
+// unchanged, identity intact; when one does, the redacted text travels on
+// an error that still Unwraps to the original, so errors.Is/As against the
+// transport's own wrapped sentinels keep working on the retried failure.
+func redactRecipientAddresses(cause error, addresses ...string) error {
+	text := cause.Error()
+	redacted := false
+	for _, address := range addresses {
+		if address == "" || !strings.Contains(text, address) {
+			continue
+		}
+		text = strings.ReplaceAll(text, address, sendRecordRedactionMarker)
+		redacted = true
+	}
+	if !redacted {
+		return cause
+	}
+	return &redactedError{redacted: text, original: cause}
+}
+
+// redactedError is the error redactRecipientAddresses produces when it had
+// to redact: Error() renders the redacted text, and Unwrap exposes the
+// original error, so the delivery job's retry signals -- and a host's
+// OnFailure classification through errors.Is -- still see the transport's
+// own wrapped error while every stored or logged rendering of the failure
+// stays free of the recipient's address.
+type redactedError struct {
+	redacted string
+	original error
+}
+
+func (e *redactedError) Error() string { return e.redacted }
+
+func (e *redactedError) Unwrap() error { return e.original }
+
 // sendRecordFor returns the send record a delivery attempt over channel will
 // settle, carrying every field known before the attempt runs: the tenant,
 // the type, the channel and the recipient class and id. The record's ID is
@@ -939,8 +1024,8 @@ func (s *DeliveryService) sendRecordFor(tenantID string, d Dispatch, channel str
 }
 
 // deriveDeliveryKey derives the delivery key one (tenant, recipient,
-// type, channel, parameters) send is recorded under: the SHA-256 of the
-// canonical JSON of the seed below, hex-encoded.
+// type, channel, locale, occurrence, parameters) send is recorded under:
+// the SHA-256 of the canonical JSON of the seed below, hex-encoded.
 //
 // The key is what makes the whole pipeline replay-safe. The delivery job
 // recomputes it on every attempt and probes send_records with it, so a
@@ -954,9 +1039,17 @@ func (s *DeliveryService) sendRecordFor(tenantID string, d Dispatch, channel str
 // The parameters participate in the derivation because two dispatches that
 // differ only in what the copy says are two different deliveries -- a
 // reminder for the same appointment and a cancellation of it must not
-// collapse into one key. The recipient's id and the channel do likewise:
-// one dispatch fans out to one key per channel, so each channel's delivery
-// is independently replay-safe.
+// collapse into one key. The locale participates for the same reason on
+// the language axis: a delivery rendered in another locale is a different
+// copy, and a resend after a locale change must deliver in the new locale,
+// never be swallowed by the old delivery's record. The recipient's id and
+// the channel do likewise: one dispatch fans out to one key per channel,
+// so each channel's delivery is independently replay-safe. The caller's
+// per-occurrence marker (Dispatch.OccurrenceID) participates last: a
+// deliberate resend of identical content is a new occurrence, and the
+// caller names it by dispatching under a fresh marker -- without one, two
+// dispatches of identical content stay the one delivery the replay probe
+// dedupes, which is what keeps a queue retry from double-sending.
 func deriveDeliveryKey(tenantID string, d Dispatch, channel string) (string, error) {
 	seed := deliveryKeySeed{
 		TenantID:       tenantID,
@@ -965,6 +1058,8 @@ func deriveDeliveryKey(tenantID string, d Dispatch, channel string) (string, err
 		UserID:         d.Recipient.UserID,
 		ContactID:      d.Recipient.ContactID,
 		Channel:        channel,
+		Locale:         deliveryLocale(d),
+		OccurrenceID:   d.OccurrenceID,
 		Params:         d.Params,
 	}
 	raw, err := json.Marshal(seed)
@@ -973,6 +1068,22 @@ func deriveDeliveryKey(tenantID string, d Dispatch, channel string) (string, err
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// deliveryLocale returns the locale the copy of d is actually rendered in
+// -- the value the delivery key must key on, since a different rendered
+// copy is a different delivery. A user recipient renders in the dispatch's
+// own Locale; an external contact's copy renders in the platform default
+// locale whatever the dispatch's Locale field says (that field is
+// contractually ignored for the external class -- see Dispatch.Locale), so
+// the key uses the rendered default rather than an ignored field whose
+// variation between two otherwise identical dispatches would invent a
+// delivery that renders the same copy twice.
+func deliveryLocale(d Dispatch) string {
+	if d.Recipient.Class == RecipientClassExternal {
+		return platformDefaultLocale
+	}
+	return d.Locale
 }
 
 // deliveryKeySeed is the canonical shape deriveDeliveryKey hashes. It is
@@ -989,6 +1100,8 @@ type deliveryKeySeed struct {
 	UserID         string         `json:"user_id,omitempty"`
 	ContactID      string         `json:"contact_id,omitempty"`
 	Channel        string         `json:"channel"`
+	Locale         string         `json:"locale"`
+	OccurrenceID   string         `json:"occurrence_id,omitempty"`
 	Params         map[string]any `json:"params"`
 }
 
@@ -1188,14 +1301,6 @@ func (s *DeliveryService) skipAndStop(ctx context.Context, tenantID string, rec 
 	rec.Status = SendRecordStatusSkipped
 	rec.Error = reason
 	return s.settle(ctx, tenantID, rec)
-}
-
-// isContactChannel reports whether channel is one of the two transport
-// channels a verified contact can be reached on. In-app is not among them:
-// the in-app channel belongs to users, and the consent ledger's own
-// vocabulary refuses a contact on it (ErrContactInvalidChannel).
-func isContactChannel(channel string) bool {
-	return channel == ChannelEmail || channel == ChannelSMS
 }
 
 // The host-seam accessors below read the registry slice attached during

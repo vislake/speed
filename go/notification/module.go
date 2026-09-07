@@ -80,8 +80,10 @@ type Module struct {
 	// hub is this replica's inbox-announcement fan-out, constructed at
 	// NewModule time and subscribed to EventInboxCreated during Register.
 	// The platform-staff shell that pushes announcements to browsers or
-	// devices is a later round's consumer of hub.Subscribe (hub.go's doc
-	// comment); this round's delivery pipeline is the producer side.
+	// devices is a later round's consumer of the connections hub.Subscribe
+	// returns (hub.go's doc comment); the inbox stream's own connections
+	// subscribe scoped through SubscribeFor; this round's delivery
+	// pipeline is the producer side.
 	hub *Hub
 
 	// queue is the jobs.Queue delivery jobs are enqueued on (Dispatch) and

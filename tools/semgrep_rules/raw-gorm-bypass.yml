@@ -21,6 +21,17 @@
 #     docs/internal/17-risks.md row 46 and the store.go file-header
 #     comment); the plain *gorm.DB dbkit.Open returns is the documented
 #     pattern for that data domain.
+#   * go/notification/repository.go -- the inbox unread-count's single
+#     flagged call, a tenant-scoped COUNT query (UnreadCount). The COUNT
+#     is gorm's Count finisher, which can only be anchored to a table
+#     through a Model destination; Repository[T]'s minimal surface grows
+#     no Count of its own, and dbkit's tenant-scoping plugin is designed
+#     around exactly this shape (its own doc comment names
+#     db.Model(&Widget{}).Count(&n)), injecting WHERE tenant_id from the
+#     Model's TenantScoped type -- so the one .Model call is what makes
+#     the count tenant-scoped rather than a bypass of the guard. The
+#     method's doc comment records the choice; nothing else in the file
+#     (or module) uses the three bypass entry points.
 #   * go/authn/internal/testutil/testutil.go -- a test-fixture helper,
 #     the same category the wholesale "**/*_test.go" exclude already
 #     covers, but it cannot be named "*_test.go" itself: authn's own
@@ -93,6 +104,7 @@ rules:
         # Allowlist (see header).
         - "**/go/dbkit/**"
         - "**/go/jobs/store.go"
+        - "**/go/notification/repository.go"
         - "**/go/authn/internal/testutil/testutil.go"
         - "**/go/pki/internal/testutil/migration_dedupe.go"
         - "**/go/authn/identity.go"
