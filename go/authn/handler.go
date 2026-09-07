@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -241,16 +242,23 @@ func auditFailureReason(err error) string {
 	return "unknown"
 }
 
-// headerFlyClientIP and headerXForwardedFor are the forwarding headers
-// this module reads when the request's direct peer is a declared trusted
-// proxy (see clientIP and WithTrustedProxies): Fly-Client-IP, the address
-// Fly.io's proxy overwrites on every request it forwards, and
-// X-Forwarded-For, the chain of proxies a request passed through that
-// generic reverse proxies append to. They are deliberately only ever read
-// under the trusted-peer gate clientIP enforces -- never for a request
-// whose RemoteAddr is not a declared proxy.
+// headerXForwardedFor is the forwarding header this module reads for a
+// request whose direct peer is a declared trusted proxy (see clientIP and
+// WithTrustedProxies): the chain of proxies a request passed through that
+// generic reverse proxies append to. It is read under the trusted-peer
+// gate ALONE, with no per-header host declaration, because the chain
+// carries its own protection: a proxy appends the peer it saw, so the
+// right-to-left walk strips entries the declared proxies themselves
+// appended and never trusts anything a client wrote -- see
+// xForwardedForClientIP.
+//
+// headerFlyClientIP is the internal alias of the VendorClientIPHeader
+// constant of the same name (module.go): a single-hop vendor header, read
+// ONLY when the host opted into it with WithVendorClientIPHeaders -- the
+// reason it cannot share X-Forwarded-For's gate-only treatment is that
+// option's own doc comment.
 const (
-	headerFlyClientIP   = "Fly-Client-IP"
+	headerFlyClientIP   = string(VendorClientIPHeaderFlyClientIP)
 	headerXForwardedFor = "X-Forwarded-For"
 )
 
@@ -259,7 +267,7 @@ const (
 //
 // The address a deployment behind a reverse proxy wants recorded is the
 // client's, not the proxy's: the platform-injected forwarding headers
-// (headerFlyClientIP on Fly.io, headerXForwardedFor generally) carry it,
+// (headerXForwardedFor generally, headerFlyClientIP on Fly.io) carry it,
 // but a header is only what it claims to be when the proxy -- not an
 // arbitrary client -- wrote it. So the derivation is gated on the
 // host-declared trusted-proxy list Service carries (WithTrustedProxies):
@@ -270,42 +278,65 @@ const (
 // address by setting a header: it is not a declared proxy, so its headers
 // are never read.
 //
-// For a request from a declared proxy, headerFlyClientIP is read first
-// when present -- Fly.io's proxy overwrites it per request, making it the
-// platform's own answer rather than a chain to parse -- and
-// headerXForwardedFor second. A proxy appends the peer it saw to
-// X-Forwarded-For, so the header may carry entries the client itself
-// supplied in front of the proxy's own; the chain is therefore walked
-// from the right -- the end the trusted proxies appended -- stripping the
-// entries that name declared proxies until the first entry that names no
-// declared proxy, the address the leftmost trusted proxy actually saw, is
-// found. An entry that does not parse as an IP address (an empty slot, a
-// hostname) ends the walk with no answer: the chain is not what this
-// deployment's proxies write, and recording the peer is the honest result
-// rather than an address guessed past a malformed entry.
+// Two different header kinds are read under that gate, on two different
+// footings:
+//
+//   - headerXForwardedFor needs no per-header declaration, because the
+//     chain protects itself. A proxy appends the peer it saw to
+//     X-Forwarded-For, so the header may carry entries the client itself
+//     supplied in front of the proxy's own; the chain is therefore walked
+//     from the right -- the end the trusted proxies appended -- stripping
+//     the entries that name declared proxies until the first entry that
+//     names no declared proxy, the address the leftmost trusted proxy
+//     actually saw, is found. An entry that does not parse as an IP
+//     address (an empty slot, a hostname) ends the walk with no answer:
+//     the chain is not what this deployment's proxies write, and
+//     recording the peer is the honest result rather than an address
+//     guessed past a malformed entry.
+//
+//   - a single-hop vendor header (VendorClientIPHeader, headerFlyClientIP
+//     among them) is read ONLY when the host opted into that specific
+//     header with WithVendorClientIPHeaders, and even then only when the
+//     chain walk above produced no answer. The peer gate alone can never
+//     authorize such a header: "the request came from a declared proxy"
+//     cannot distinguish Fly's proxy -- which overwrites Fly-Client-IP on
+//     every request -- from a generic reverse proxy that forwards a
+//     client-chosen Fly-Client-IP verbatim, because both look identical
+//     to this process; only the host knows which topology it runs, and
+//     the opt-in is its declaration. Ordering the protected chain walk
+//     first guarantees the unprotected single-hop read can never
+//     short-circuit it.
 func (h *Handler) clientIP(r *http.Request) string {
 	peer := remoteAddrHost(r.RemoteAddr)
 	if len(h.svc.trustedProxies) == 0 || !peerWithinAny(peer, h.svc.trustedProxies) {
 		return peer
 	}
-	if client, ok := flyClientIP(r.Header.Get(headerFlyClientIP)); ok {
-		return client
-	}
 	if client, ok := xForwardedForClientIP(r.Header.Get(headerXForwardedFor), h.svc.trustedProxies); ok {
 		return client
+	}
+	for _, hdr := range h.svc.vendorClientIPHeaders {
+		if client, ok := singleHopClientIP(r.Header.Get(string(hdr))); ok {
+			return client
+		}
 	}
 	return peer
 }
 
-// remoteAddrHost extracts the host part of a RemoteAddr -- "host:port",
-// or a bracketed "[::1]:port" -- returning the address unchanged when it
-// carries no port.
+// remoteAddrHost extracts the host part of a RemoteAddr -- "host:port" or
+// a bracketed "[::1]:port". net.SplitHostPort does the splitting, which is
+// what also leaves a BARE address -- one carrying no port at all, a shape
+// the manual last-colon split this replaced could not handle: a bare IPv6
+// like "::1" lost everything after its first colon and came back as the
+// garbage ":".
 func remoteAddrHost(remoteAddr string) string {
-	host := remoteAddr
-	if idx := strings.LastIndex(host, ":"); idx != -1 && !strings.Contains(host[idx:], "]") {
-		host = host[:idx]
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		// SplitHostPort returns the host unbracketed: "[::1]:443" gives
+		// "::1" directly.
+		return host
 	}
-	return strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	// Not "host:port": the address is bare. Strip the brackets a bare
+	// address could still carry ("[::1]"), and return the rest as-is.
+	return strings.TrimSuffix(strings.TrimPrefix(remoteAddr, "["), "]")
 }
 
 // peerWithinAny reports whether peer is an IP address contained in one of
@@ -321,13 +352,16 @@ func peerWithinAny(peer string, nets []netip.Prefix) bool {
 	return peerWithinAddr(addr.Unmap(), nets)
 }
 
-// flyClientIP validates and canonicalizes a headerFlyClientIP value. Only
-// the first comma-separated entry is read -- Fly.io's proxy sets a single
-// value, overwriting whatever the client sent -- and an entry that does
-// not parse as an IP address reports not-ok, sending the caller on to
-// headerXForwardedFor or, failing that, the connection address, rather
-// than recording a value no proxy wrote.
-func flyClientIP(value string) (string, bool) {
+// singleHopClientIP validates and canonicalizes a vendor client-address
+// header value -- the wire value of a VendorClientIPHeader the host opted
+// into (WithVendorClientIPHeaders), headerFlyClientIP among them. Only
+// the first comma-separated entry is read: the vendors these headers
+// belong to set a single value, overwriting whatever the client sent,
+// so a chain would mean the header is not one that vendor's proxy wrote.
+// An entry that does not parse as an IP address reports not-ok, and the
+// caller falls through to the connection address rather than recording a
+// value no proxy wrote.
+func singleHopClientIP(value string) (string, bool) {
 	entry := value
 	if idx := strings.IndexByte(entry, ','); idx != -1 {
 		entry = entry[:idx]

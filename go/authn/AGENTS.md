@@ -60,7 +60,8 @@ import in the other direction is a merge blocker rather than a style note.
 | `WithFeatureGate` | Makes this module's declared feature flags (`authn.password_login`, `authn.sms_login`, the five `authn.social.*` channels, `authn.sso.oidc`) effective at request time. `*config.Service` satisfies the `FeatureGate` interface structurally. See "Feature flags are enforced through a host-supplied gate" below. |
 | `WithClock`, `WithIssuer`, `WithAccessTokenTTL`, `WithRefreshTokenTTL`, `WithSessionTTL`, `WithRevocationMode`, `WithPasswordParams`, `WithPasswordPolicy` | Everything else. A nil or non-positive value leaves the default in place. |
 | `WithSMSSender`, `WithDeploymentMode`, `WithSMSCodeTTL`, `WithSMSCodeMaxAttempts` | The phone-login transport and its lifetime/attempt budget. See "A distributed deployment must wire an `SMSSender`" below for what `WithDeploymentMode` is for. |
-| `WithTrustedProxies(proxies ...string)` | The IP addresses and CIDR prefixes of the reverse proxies requests arrive through, so `Handler.clientIP` recovers the real client address from the forwarding headers those proxies inject (`Fly-Client-IP` on Fly.io, `X-Forwarded-For` generally) instead of recording the proxy itself -- see "Every recorded address is the client's, gated on host-declared trusted proxies" below. Empty (the default) keeps every request recording its direct connection address. |
+| `WithTrustedProxies(proxies ...string)` | The IP addresses and CIDR prefixes of the reverse proxies requests arrive through, so `Handler.clientIP` recovers the real client address from the `X-Forwarded-For` chain those proxies append instead of recording the proxy itself -- see "Every recorded address is the client's, gated on host-declared trusted proxies" below. Empty (the default) keeps every request recording its direct connection address. |
+| `WithVendorClientIPHeaders(headers ...VendorClientIPHeader)` | The per-header opt-in that authorizes reading a single-hop vendor client-address header (`VendorClientIPHeaderFlyClientIP`, wire value `Fly-Client-IP`) for a request whose peer is a declared trusted proxy. The `VendorClientIPHeader` set is closed -- any other value is refused at wiring time -- and the default is none. See "Every recorded address is the client's, gated on host-declared trusted proxies" below for why the trusted-proxy declaration alone must never authorize such a header. |
 
 ### Feature flags are enforced through a host-supplied gate
 
@@ -639,21 +640,50 @@ app's Fly.io finding (every recorded address was the proxy's internal
 `172.16.45.218`, never the client's): a request's direct connection address
 (`RemoteAddr`) is the answer UNLESS the host declared the proxies it receives
 requests through (`WithTrustedProxies`) AND that request's peer is one of
-them, in which case the platform-injected forwarding headers are read --
-`Fly-Client-IP` first (Fly.io's proxy overwrites it per request), then
-`X-Forwarded-For`, walked from the right and stripping the entries that name
-declared proxies until the first untrusted entry, the address the leftmost
-trusted proxy actually saw, is found. Everything else -- no proxies declared,
-a peer that is not one of them, a malformed chain, a chain naming only
-proxies -- falls back to the connection address. That gate is what keeps a
-direct client from minting its own recorded address with a spoofed header: a
-header is only read from a request whose peer the HOST declared trustworthy.
+them, in which case the forwarding headers are read. Everything else -- no
+proxies declared, a peer that is not one of them, a malformed chain, a chain
+naming only proxies -- falls back to the connection address. That gate is what
+keeps a direct client from minting its own recorded address with a spoofed
+header: a header is only read from a request whose peer the HOST declared
+trustworthy.
+
+WHICH header may be read under that gate is a second, separate decision, and
+it is the shape the P0 header-selection follow-up (the reference app's own
+audit) corrected. Two kinds exist, on two footings:
+
+- **`X-Forwarded-For` needs no per-header declaration.** The chain protects
+  itself: a proxy appends the peer it saw, so `clientIP` walks the chain from
+  the right, stripping the entries that name declared proxies until the first
+  untrusted entry -- the address the leftmost trusted proxy actually saw -- is
+  found; an entry that does not parse as an IP ends the walk with no answer.
+  The entries that decide the answer are the declared proxies' own appended
+  work, so nothing a client wrote can displace them.
+- **A single-hop vendor header (`VendorClientIPHeaderFlyClientIP`, wire value
+  `Fly-Client-IP`) is read ONLY when the host opted into that specific header
+  (`WithVendorClientIPHeaders`) -- and even then only when the chain walk
+  produced no answer.** The reason it cannot share `X-Forwarded-For`'s
+  gate-only footing is that the gate cannot tell the two topologies apart: a
+  request from Fly's proxy (which overwrites `Fly-Client-IP` per request) and
+  a request from a generic reverse proxy (nginx, ALB, Envoy, Cloudflare --
+  which forwards unknown headers verbatim) are identical to the process behind
+  them. Reading the vendor header for every declared proxy therefore let a
+  client smuggle its own value through any non-Fly proxy a host had declared,
+  minting its own recorded address AND its own rate-limiter bucket (the
+  register budget's only dimension). Only the host knows which topology it
+  runs, so the opt-in is its declaration, mirroring `WithSecureCookies`; the
+  closed `VendorClientIPHeader` set (validated at wiring time) keeps the
+  option from becoming a bare list of arbitrary header names, each
+  recreating the same hole. A Fly.io deployment declares its proxy ranges with
+  `WithTrustedProxies` AND opts into the Fly header here; a deployment behind
+  a generic proxy configured to append to `X-Forwarded-For` needs only
+  `WithTrustedProxies`.
+
 Entries that are neither IP addresses nor CIDR prefixes are refused at wiring
-time (`newOptions`), and a declared proxy must overwrite or strip forwarding
-headers it receives from its own clients, so a client cannot smuggle a header
-through the proxy it is trusted for (Fly.io's proxy does; a generic reverse
-proxy must be configured to). The module never guesses a proxy range or a
-header's provenance from the request itself.
+time (`newOptions`), and a declared proxy must overwrite or strip the
+`X-Forwarded-For` it receives from its own clients, so a client cannot smuggle
+a header through the proxy it is trusted for (Fly.io's proxy does; a generic
+reverse proxy must be configured to). The module never guesses a proxy range
+or a header's provenance from the request itself.
 
 ### `RevokeSession` on someone else's session answers 404, never 403
 

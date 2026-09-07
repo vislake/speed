@@ -433,3 +433,41 @@ func TestWithTrustedProxies_ValidatesItsEntries(t *testing.T) {
 		})
 	}
 }
+
+// TestWithVendorClientIPHeaders_RequiresKnownHeaders pins the closed-set
+// contract of the vendor client-IP header opt-in (P0-authn-14): only the
+// declared VendorClientIPHeader constants may be read, and an entry that
+// is not one of them -- a bare host-typed header name -- is refused at
+// wiring time. That refusal is what keeps the option an opt-in into a
+// documented, single-hop header whose vendor's proxy genuinely overwrites
+// it, rather than a list of arbitrary names a host could point at
+// anything, each recreating the same trust-or-don't hole. X-Forwarded-For
+// in particular must never be opt-innable: it is the self-protecting
+// default path, read under the trusted-peer gate alone.
+func TestWithVendorClientIPHeaders_RequiresKnownHeaders(t *testing.T) {
+	t.Parallel()
+
+	keys := testutil.NewKeySource(t, "kid-active")
+	db := testutil.NewDB(t)
+
+	cfg, err := newOptions([]Option{
+		WithKeySource(keys),
+		WithBlindIndexKey(testutil.BlindIndexKey()),
+		WithVendorClientIPHeaders(VendorClientIPHeaderFlyClientIP),
+	})
+	if err != nil {
+		t.Fatalf("newOptions() error = %v", err)
+	}
+	if len(cfg.vendorClientIPHeaders) != 1 || cfg.vendorClientIPHeaders[0] != VendorClientIPHeaderFlyClientIP {
+		t.Errorf("vendorClientIPHeaders = %v, want exactly [Fly-Client-IP]", cfg.vendorClientIPHeaders)
+	}
+
+	for _, entry := range []VendorClientIPHeader{"X-Forwarded-For", "X-Real-IP", "True-Client-IP", "CF-Connecting-IP", "X-Made-Up"} {
+		t.Run(string(entry), func(t *testing.T) {
+			if _, err := NewModule(db, WithKeySource(keys), WithBlindIndexKey(testutil.BlindIndexKey()),
+				WithVendorClientIPHeaders(entry)); err == nil {
+				t.Errorf("NewModule() error = nil, want a rejection of the unknown vendor header %q", entry)
+			}
+		})
+	}
+}

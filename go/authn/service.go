@@ -253,6 +253,14 @@ type Service struct {
 	// doc comment.
 	trustedProxies []netip.Prefix
 
+	// vendorClientIPHeaders is WithVendorClientIPHeaders' validated value:
+	// the single-hop vendor client-address headers this deployment's proxy
+	// genuinely overwrites, which Handler.clientIP reads -- after the
+	// X-Forwarded-For chain walk, never before it -- for a request whose
+	// peer is within trustedProxies. Empty (the default) reads no vendor
+	// header at all. See that option's doc comment.
+	vendorClientIPHeaders []VendorClientIPHeader
+
 	// authCount and authDuration back the
 	// "authn.auth.count"/"authn.auth.duration" instruments
 	// registerAuthMetrics wires from NewService. recordAuthMetric guards
@@ -376,17 +384,18 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 		redirects:        cfg.redirects,
 		trustedProviders: slices.Clone(cfg.trustedProviders),
 
-		kv:                 kv,
-		guard:              newRateGuard(kv),
-		sms:                cfg.smsSender,
-		smsCodeTTL:         cfg.smsCodeTTL,
-		smsCodeMaxAttempts: cfg.smsCodeMaxAttempts,
-		verificationCodes:  verificationCodes,
-		mfaFactors:         mfaFactors,
-		recoveryCodes:      recoveryCodes,
-		issuer:             cfg.issuer,
-		secureCookies:      cfg.secureCookies,
-		trustedProxies:     slices.Clone(cfg.trustedProxyNets),
+		kv:                    kv,
+		guard:                 newRateGuard(kv),
+		sms:                   cfg.smsSender,
+		smsCodeTTL:            cfg.smsCodeTTL,
+		smsCodeMaxAttempts:    cfg.smsCodeMaxAttempts,
+		verificationCodes:     verificationCodes,
+		mfaFactors:            mfaFactors,
+		recoveryCodes:         recoveryCodes,
+		issuer:                cfg.issuer,
+		secureCookies:         cfg.secureCookies,
+		trustedProxies:        slices.Clone(cfg.trustedProxyNets),
+		vendorClientIPHeaders: slices.Clone(cfg.vendorClientIPHeaders),
 
 		authCount:    authCount,
 		authDuration: authDuration,

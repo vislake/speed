@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -1876,8 +1877,21 @@ func strPtr(s string) *string { return &s }
 // client address; without them (or from a peer that is not one), a request
 // carrying spoofed forwarding headers still records its connection
 // address. The derivation tests below exercise clientIP directly; the
-// flow test drives the whole sign-in path and reads the recorded rows and
-// responses back.
+// flow tests drive whole sign-in and registration paths and read the
+// recorded rows and responses back.
+//
+// The header-selection follow-up round (the P0 finding that reading
+// Fly-Client-IP for ANY declared proxy handed the client the recorded and
+// rate-limited address through any generic reverse proxy that forwards
+// unknown headers verbatim -- nginx, ALB, Envoy, Cloudflare) re-aimed this
+// suite at host-declared header semantics: X-Forwarded-For -- the
+// self-protecting chain walk, whose rightmost entry a trusted proxy itself
+// appended -- is the one forwarding header read under the trusted-peer
+// gate alone, while a single-hop vendor header (Fly-Client-IP) is read
+// ONLY when the host opted into that specific header
+// (WithVendorClientIPHeaders) for a deployment whose proxy genuinely
+// overwrites it on every request. The XFF cases below pin the default
+// shape; the vendor-header cases have tests of their own.
 
 // signInFrom issues a password sign-in for identifier on h over a request
 // whose direct connection address is peer (r.RemoteAddr) and which carries
@@ -1902,28 +1916,23 @@ func signInFrom(h *Handler, identifier, peer string, headers [][2]string) *httpt
 	return rec
 }
 
-// TestHandler_ClientIP_DeclaredProxyForwardingHeaders_ResolvesTheRealClient
-// is regression (a) at the derivation level: with the proxies declared
+// TestHandler_ClientIP_DeclaredProxyXForwardedFor_ResolvesTheRealClient
+// pins the X-Forwarded-For half of the trusted-proxy shape at the
+// derivation level: with the proxies declared
 // (WithTrustedProxies("203.0.113.0/24")), a request whose direct peer is
-// one of them carries the real client in the platform-injected forwarding
-// headers, and clientIP must return that address -- where the pre-fix code
-// returned the proxy (the finding's 172.16.45.218). Fly-Client-IP wins
-// when present (Fly.io's proxy overwrites it per request); X-Forwarded-For
+// one of them carries the real client in the chain the proxy appended to
+// X-Forwarded-For, and clientIP must return that address -- where the
+// pre-fix code returned the proxy (the finding's 172.16.45.218). The chain
 // is walked from the right, stripping entries that name declared proxies,
 // so a client's own spoofed prefix entries can never displace the address
-// the trusted proxy appended.
-func TestHandler_ClientIP_DeclaredProxyForwardingHeaders_ResolvesTheRealClient(t *testing.T) {
+// the trusted proxy appended. X-Forwarded-For is read under the
+// trusted-peer gate alone, no per-header host declaration required: the
+// walk itself is the protection, the rightmost entries being the work of
+// the declared proxies only.
+func TestHandler_ClientIP_DeclaredProxyXForwardedFor_ResolvesTheRealClient(t *testing.T) {
 	t.Parallel()
 	h, _ := newTestHandler(t, WithTrustedProxies("203.0.113.0/24"))
 
-	t.Run("fly client ip wins", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
-		req.RemoteAddr = "203.0.113.10:443"
-		req.Header.Set(headerFlyClientIP, "198.51.100.7")
-		if got := h.clientIP(req); got != "198.51.100.7" {
-			t.Errorf("clientIP = %q, want the Fly-Client-IP value %q", got, "198.51.100.7")
-		}
-	})
 	t.Run("x-forwarded-for single value", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
 		req.RemoteAddr = "203.0.113.10:443"
@@ -1977,7 +1986,105 @@ func TestHandler_ClientIP_DeclaredProxyForwardingHeaders_ResolvesTheRealClient(t
 			t.Errorf("clientIP = %q, want the peer %q when the chain names only proxies", got, "203.0.113.10")
 		}
 	})
-	t.Run("unparseable fly client ip falls through to x-forwarded-for", func(t *testing.T) {
+}
+
+// TestHandler_ClientIP_VendorHeader_RequiresHostOptIn is the P0-authn-14
+// regression at the derivation level: a single-hop vendor header
+// (Fly-Client-IP) is read ONLY when the host opted into that specific
+// header (WithVendorClientIPHeaders), never merely because the request's
+// direct peer is a declared proxy. The deployment this test stands in for
+// declared its GENERIC reverse proxy (nginx/ALB/Envoy/Cloudflare -- the
+// shapes that forward unknown headers verbatim, never stripping a
+// Fly-specific one), so a client-chosen Fly-Client-IP must never become
+// the recorded address: with the honest X-Forwarded-For chain in hand it
+// is the chain's answer that wins, and without one it is the peer. The
+// pre-fix code failed both halves -- the reviewer's probe returned the
+// client-chosen value 192.0.2.66 over the chain's own 198.51.100.7, and
+// accepted 192.0.2.66, 8.8.8.8, 203.0.113.250 (inside the declared trust
+// range itself -- X-Forwarded-For would have stripped it) and ::1.
+func TestHandler_ClientIP_VendorHeader_RequiresHostOptIn(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(t, WithTrustedProxies("203.0.113.0/24"))
+
+	t.Run("client-chosen fly client ip never becomes the address", func(t *testing.T) {
+		// No X-Forwarded-For at all: the ordinary shape for a generic
+		// proxy on a request the client crafted. The only address this
+		// deployment actually observed is the peer.
+		for _, chosen := range []string{"192.0.2.66", "8.8.8.8", "203.0.113.250", "::1"} {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+			req.RemoteAddr = "203.0.113.10:443"
+			req.Header.Set(headerFlyClientIP, chosen)
+			if got := h.clientIP(req); got != "203.0.113.10" {
+				t.Errorf("client-chosen Fly-Client-IP %q became the recorded address %q; want the peer 203.0.113.10", chosen, got)
+			}
+		}
+	})
+	t.Run("x-forwarded-for truth wins over a smuggled fly client ip", func(t *testing.T) {
+		// The strongest exploit shape: the honest chain the deployment's
+		// own proxy appended is PRESENT and names the true client
+		// (198.51.100.7), while the client has additionally smuggled a
+		// Fly-Client-IP the proxy did not strip. The pre-fix code had the
+		// truth in hand and preferred the attacker's value.
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "203.0.113.10:443"
+		req.Header.Set(headerXForwardedFor, "198.51.100.7")
+		req.Header.Set(headerFlyClientIP, "192.0.2.66")
+		if got := h.clientIP(req); got != "198.51.100.7" {
+			t.Errorf("clientIP = %q, want the X-Forwarded-For truth %q over the client-chosen Fly-Client-IP", got, "198.51.100.7")
+		}
+	})
+	t.Run("malformed fly client ip changes nothing", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "203.0.113.10:443"
+		req.Header.Set(headerXForwardedFor, "198.51.100.7")
+		req.Header.Set(headerFlyClientIP, "garbage")
+		if got := h.clientIP(req); got != "198.51.100.7" {
+			t.Errorf("clientIP = %q, want the X-Forwarded-For truth %q", got, "198.51.100.7")
+		}
+	})
+}
+
+// TestHandler_ClientIP_OptedInVendorHeader_PreservesTheLegitimateFlyShape
+// is regression (b) of P0-authn-14 at the derivation level: the host that
+// opted into headerFlyClientIP (WithVendorClientIPHeaders) is a REAL Fly
+// deployment whose proxy overwrites the header on every request it
+// forwards, and that legitimate shape must keep working -- a request from
+// the declared proxy carrying the proxy-written Fly-Client-IP records it.
+// The opt-in is what the handler built in the vendor-opt-in test above
+// deliberately lacks; the two tests together pin both sides of the
+// host-declared contract.
+func TestHandler_ClientIP_OptedInVendorHeader_PreservesTheLegitimateFlyShape(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(t,
+		WithTrustedProxies("203.0.113.0/24"),
+		WithVendorClientIPHeaders(VendorClientIPHeaderFlyClientIP))
+
+	t.Run("proxy-overwritten fly client ip is recorded", func(t *testing.T) {
+		// The request shape the pre-fix declared-proxy test asserted: a
+		// Fly deployment's proxy wrote the header, no X-Forwarded-For is
+		// in play, and the recorded address is the forwarded client's.
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "203.0.113.10:443"
+		req.Header.Set(headerFlyClientIP, "198.51.100.7")
+		if got := h.clientIP(req); got != "198.51.100.7" {
+			t.Errorf("clientIP = %q, want the Fly-Client-IP value %q (the opted-in Fly shape)", got, "198.51.100.7")
+		}
+	})
+	t.Run("chain walk answers first and agrees with the fly header", func(t *testing.T) {
+		// Fly's proxy appends the client to X-Forwarded-For too, so the
+		// protected chain walk answers before the vendor header is even
+		// consulted -- the ordering that guarantees the unprotected
+		// single-hop read can never short-circuit the self-protecting
+		// path. Both sources carry the same truth here.
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
+		req.RemoteAddr = "203.0.113.10:443"
+		req.Header.Set(headerXForwardedFor, "198.51.100.7, 203.0.113.9")
+		req.Header.Set(headerFlyClientIP, "198.51.100.7")
+		if got := h.clientIP(req); got != "198.51.100.7" {
+			t.Errorf("clientIP = %q, want the chain's %q with the Fly header agreeing", got, "198.51.100.7")
+		}
+	})
+	t.Run("unparseable fly value falls through to x-forwarded-for", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
 		req.RemoteAddr = "203.0.113.10:443"
 		req.Header.Set(headerFlyClientIP, "garbage")
@@ -2120,6 +2227,66 @@ func TestHandler_LoginThroughDeclaredProxy_RecordsAndReportsTheClientAddress(t *
 	directSessions = decodeBody[api.AuthnListSessionsResponse](t, directSessionsRec)
 	if got := sessionResponseIP(*directSessions.Sessions, *spoofWirePair.Principal.SessionID); got != "192.0.2.55" {
 		t.Errorf("spoofed direct sessions response IP = %q, want the connection address %q", got, "192.0.2.55")
+	}
+}
+
+// registerFrom issues a registration for email on h over a request whose
+// direct connection address is peer (r.RemoteAddr) and which carries the
+// given headers -- the request shape clientIP's trusted-proxy gate decides
+// on, and the one register's per-IP rate-limit bucket is keyed by.
+// doHandlerJSON cannot produce one: httptest.NewRequest always originates
+// from its own fixed 192.0.2.1 address.
+func registerFrom(h *Handler, email, peer string, headers [][2]string) *httptest.ResponseRecorder {
+	body, err := json.Marshal(api.AuthnRegisterRequest{
+		Email:    strPtr(email),
+		Password: testPassword,
+	})
+	if err != nil {
+		panic(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/register", bytes.NewReader(body))
+	req.RemoteAddr = peer
+	for _, kv := range headers {
+		req.Header.Set(kv[0], kv[1])
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestHandler_RegisterThroughDeclaredGenericProxy_RateLimitIgnoresTheClientChosenFlyHeader
+// is regression (c) of P0-authn-14 end to end: CheckRegister's per-IP
+// bucket (10 registrations per hour, IP the one dimension -- there is no
+// account yet to key a second one on) must keep counting the deployment's
+// own proxy address when a client behind a declared GENERIC proxy rotates
+// a smuggled Fly-Client-IP on every attempt. The pre-fix code gave each
+// attempt its own client-chosen bucket and the eleventh registration
+// succeeded -- unlimited account creation through one HTTP header; the
+// fix (no vendor header opted in) keys every attempt on the peer, and the
+// eleventh is refused with authn.rate_limited.
+func TestHandler_RegisterThroughDeclaredGenericProxy_RateLimitIgnoresTheClientChosenFlyHeader(t *testing.T) {
+	t.Parallel()
+	h, _ := newTestHandler(t, WithTrustedProxies("203.0.113.0/24"))
+
+	// Ten successful registrations from the declared proxy peer, each with
+	// a DIFFERENT client-chosen Fly-Client-IP: the per-IP register budget
+	// (10/hour) is exhausted on the peer regardless of the header values.
+	for i := 1; i <= 10; i++ {
+		spoof := fmt.Sprintf("192.0.2.%d", i)
+		rec := registerFrom(h, fmt.Sprintf("bucket-%d@example.com", i), "203.0.113.10:443",
+			[][2]string{{headerFlyClientIP, spoof}})
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("registration %d status = %d, want %d; body = %s", i, rec.Code, http.StatusCreated, rec.Body.String())
+		}
+	}
+	rec := registerFrom(h, "bucket-11@example.com", "203.0.113.10:443",
+		[][2]string{{headerFlyClientIP, "192.0.2.99"}})
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("eleventh registration status = %d, want %d (a client-chosen Fly-Client-IP must not buy a fresh register bucket); body = %s",
+			rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+	if got := deref(decodeAuthnError(t, rec).Code); got != "authn.rate_limited" {
+		t.Errorf("eleventh registration error code = %q, want %q", got, "authn.rate_limited")
 	}
 }
 

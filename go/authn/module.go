@@ -263,6 +263,14 @@ type options struct {
 	// WithTrustedProxies for what declaring a proxy changes.
 	trustedProxyNets []netip.Prefix
 
+	// vendorClientIPHeaders is WithVendorClientIPHeaders' input: the
+	// single-hop vendor client-address headers (VendorClientIPHeader) this
+	// deployment's proxy genuinely overwrites on every request, read by
+	// handler.go's clientIP for a request whose peer is a declared trusted
+	// proxy. newOptions validates the closed set; Service carries the
+	// result.
+	vendorClientIPHeaders []VendorClientIPHeader
+
 	// featureGate makes the module's declared feature flags effective at
 	// request time; nil keeps every channel enabled. See FeatureGate.
 	featureGate FeatureGate
@@ -442,41 +450,109 @@ func WithSecureCookies(secure bool) Option {
 	return func(o *options) { o.secureCookies = secure }
 }
 
+// VendorClientIPHeader names one of the single-hop client-address headers
+// this module knows how to read: a platform-specific header that ONE
+// vendor's proxy genuinely OVERWRITES with the client's address on every
+// request it forwards. The value is single-hop by design -- no chain of
+// proxy-appended entries to walk, which is exactly what makes such a
+// header unsafe to read on the trusted-peer gate alone. The set of known
+// headers is CLOSED: a WithVendorClientIPHeaders entry that is not one of
+// the constants below is refused at wiring time (newOptions), so the
+// option can never become a bare list of host-typed header names -- every
+// member documents the deployment shape in which reading it is honest.
+type VendorClientIPHeader string
+
+const (
+	// VendorClientIPHeaderFlyClientIP is Fly.io's proxy header, set to
+	// the real client address on every request the Fly proxy forwards.
+	// Opting in is honest ONLY for a deployment whose requests genuinely
+	// arrive through Fly's proxy: any other reverse proxy in front of the
+	// same application (nginx, ALB, Envoy, Cloudflare) forwards an
+	// unknown request header verbatim, so a client could send its own
+	// value through a proxy that is not Fly's.
+	VendorClientIPHeaderFlyClientIP VendorClientIPHeader = "Fly-Client-IP"
+)
+
 // WithTrustedProxies names the reverse proxies requests are received
 // through, so handler.go's clientIP can recover the real client address
-// from the forwarding headers those proxies inject ("Fly-Client-IP" on
-// Fly.io, "X-Forwarded-For" generally) instead of recording the proxy
-// itself -- the session/login-history defect the reference app's Fly.io
-// deployment exposed, where every recorded address was the proxy's
-// internal 172.16.x one.
+// from the forwarding headers those proxies inject instead of recording
+// the proxy itself -- the session/login-history defect the reference
+// app's Fly.io deployment exposed, where every recorded address was the
+// proxy's internal 172.16.x one.
 //
 // A request's recorded address (the rate-limiter key, the session row, the
 // login-history row) is otherwise its direct connection address,
 // RemoteAddr. That fallback stays, and this option only widens it for the
 // requests that genuinely came through a declared proxy: the forwarding
 // headers are read ONLY when the request's RemoteAddr is one of the
-// declared proxies, so a direct client that sets Fly-Client-IP or
-// X-Forwarded-For itself changes nothing -- the spoof this gating exists
-// to keep out. This is bootstrap configuration, declared once by the host
-// at startup from its own knowledge of its topology (an operator behind a
+// declared proxies, so a direct client that sets X-Forwarded-For or a
+// vendor header itself changes nothing -- the spoof this gating exists to
+// keep out. This is bootstrap configuration, declared once by the host at
+// startup from its own knowledge of its topology (an operator behind a
 // proxy knows the proxy's address; the module never guesses), exactly like
 // WithSecureCookies.
+//
+// Declaring a proxy authorizes exactly ONE header on its own:
+// X-Forwarded-For, whose chain walk (handler.go's xForwardedForClientIP)
+// is self-protecting -- the entries at the right end of the chain are
+// ones the declared proxies themselves appended, so the walk never trusts
+// anything a client wrote. A single-hop VENDOR header (Fly-Client-IP and
+// its peers, see VendorClientIPHeader) is a different animal: the peer
+// gate cannot tell "the request came from Fly's proxy" from "the request
+// came from a generic proxy that forwards a client-chosen Fly-Client-IP
+// verbatim", because both look identical to this process. Only the host
+// knows which topology it runs, so a vendor header is read only when the
+// host additionally opted into that specific header with
+// WithVendorClientIPHeaders. A deployment whose generic proxy is
+// configured to append to X-Forwarded-For needs nothing more than this
+// option; a Fly.io deployment declares its proxy ranges here AND opts into
+// headerFlyClientIP there.
 //
 // Each entry is an IP address or a CIDR prefix -- "203.0.113.10", or
 // "172.16.0.0/12" for a whole proxy range. An entry that is neither is
 // refused at wiring time (newOptions): it can never match a peer, so
 // accepting it would silently keep recording the proxy address this option
-// was meant to fix. A declared proxy must overwrite or strip forwarding
-// headers it receives from its own clients, so a client cannot smuggle a
-// header through the proxy it is trusted for: Fly.io's proxy overwrites
-// headerFlyClientIP on every request it forwards, which is why a Fly
-// deployment can declare its proxy ranges outright; a generic reverse
+// was meant to fix. A declared proxy must overwrite or strip the
+// X-Forwarded-For it receives from its own clients, so a client cannot
+// smuggle a header through the proxy it is trusted for; a generic reverse
 // proxy must be configured to do the same.
 //
 // The default is EMPTY: no proxy declared, every request records its
 // direct connection address exactly as this module always did.
 func WithTrustedProxies(proxies ...string) Option {
 	return func(o *options) { o.trustedProxies = append(o.trustedProxies, proxies...) }
+}
+
+// WithVendorClientIPHeaders opts the deployment into reading the named
+// single-hop vendor client-address headers (VendorClientIPHeader) for a
+// request whose direct peer is a declared trusted proxy
+// (WithTrustedProxies). The default is NONE: X-Forwarded-For is the one
+// forwarding header read under the trusted-peer gate alone, and no vendor
+// header is read until the host says its own proxy genuinely overwrites
+// it on every request it forwards.
+//
+// That declaration is the point of the option, and it is why the opt-in
+// exists per KNOWN header rather than as a list of arbitrary names (the
+// closed VendorClientIPHeader set, validated at wiring time): reading a
+// single-hop header on the trusted-peer gate alone -- the shape this
+// option replaced -- let a client smuggle Fly-Client-IP through any
+// declared generic reverse proxy that forwards unknown headers verbatim
+// (nginx, ALB, Envoy, Cloudflare), minting its own recorded address and
+// its own rate-limiter bucket at will. The host opts in only when its
+// proxy is the header's own vendor and genuinely overwrites it, the same
+// topology statement WithSecureCookies makes about TLS termination --
+// never a fact this module could infer from the request, since a generic
+// proxy and the vendor's proxy are indistinguishable to the process
+// behind them.
+//
+// Opting in never widens the request gate: the header is still read only
+// from a request whose peer is a declared proxy, and handler.go's clientIP
+// consults it only when the X-Forwarded-For chain walk -- the
+// self-protecting path -- produced no answer, so a client-chosen vendor
+// value can never displace the chain's truth. Entries are consulted in
+// declaration order.
+func WithVendorClientIPHeaders(headers ...VendorClientIPHeader) Option {
+	return func(o *options) { o.vendorClientIPHeaders = append(o.vendorClientIPHeaders, headers...) }
 }
 
 // WithFederationHTTPClient replaces the HTTP client the ENTERPRISE single
@@ -600,6 +676,19 @@ func newOptions(opts []Option) (options, error) {
 		cfg.trustedProxyNets = append(cfg.trustedProxyNets, prefix)
 	}
 	cfg.trustedProxies = nil
+	// Validate the vendor-header opt-in's closed set: an entry that is
+	// not one of the declared VendorClientIPHeader constants is a bare
+	// host-typed header name, which would recreate -- under a new option
+	// -- the single-hop trust hole (a client smuggling its own value
+	// through a generic proxy) WithVendorClientIPHeaders exists to keep
+	// out, so it is refused here, at wiring time.
+	for _, hdr := range cfg.vendorClientIPHeaders {
+		switch hdr {
+		case VendorClientIPHeaderFlyClientIP:
+		default:
+			return options{}, fmt.Errorf("authn: %q is not a known vendor client-IP header; opt in through the declared VendorClientIPHeader constants only", hdr)
+		}
+	}
 	return cfg, nil
 }
 
