@@ -2070,6 +2070,24 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		authn.WithSocialProviders(cfg.SocialProviders...),
 		authn.WithRedirectAllowlist(cfg.RedirectAllowlist),
 		authn.WithTrustedProviders(cfg.TrustedProviders...),
+		// Immediate revocation: every sign-out this app drives -- a user's
+		// own logout, the self-service session revoke, and the
+		// refresh-replay theft response -- must cut off an unexpired access
+		// token AT ONCE rather than at its natural expiry. authn's
+		// enforcement is default-wired, not a second option: the service
+		// attaches its session manager to the verifier Service().Verifier()
+		// hands out, and the authn.Middleware call below consults it with
+		// no WithRevocationChecker of its own -- so this single selection
+		// is the whole wiring, and the plain
+		// authn.Middleware(authnModule.Service().Verifier()) every consumer
+		// skeleton copies is exactly the enforced composition (this was the
+		// P1 hole: no checker was wired anywhere, and immediate revocation
+		// was a stored list nobody consulted). The cost is one key-value
+		// read per authenticated request, the documented price of immediate
+		// mode, against the in-process store in standalone boots and Redis
+		// in the distributed composition; a deployment that prefers
+		// natural-mode's zero per-request cost deletes this option.
+		authn.WithRevocationMode(authn.RevocationModeImmediate),
 		// The trusted-proxy declaration (trustedProxiesEnv): the proxy
 		// addresses whose requests may carry the forwarding headers authn
 		// reads, so this app's session and login-history records carry the
@@ -3179,6 +3197,17 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// every token twice over two code paths free to drift. Running
 	// authn.Middleware first verifies once; NewPrincipalResolver then just
 	// reads the already-verified Principal out of the request context.
+	//
+	// Session revocation rides on the same call with no extra option: this
+	// app selects immediate revocation in authnOpts above
+	// (WithRevocationMode(RevocationModeImmediate)), the Service attaches
+	// its SessionManager as the revocation source of the verifier
+	// Service().Verifier() hands out, and authn.Middleware consults that
+	// source on every request whose token verifies -- so the plain
+	// Middleware(verifier) call below is exactly the enforced composition,
+	// not a silently unenforced one (the P1 hole this wiring closes;
+	// go/authn/AGENTS.md's "Immediate revocation is enforced by default,
+	// not by host ceremony" section has the mechanism).
 	//
 	// The consequence that matters here: authn.Middleware is OPTIONAL
 	// auth (a missing token proceeds with no Principal; an invalid one

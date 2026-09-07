@@ -10,7 +10,10 @@ package main
 // that then successfully calls the notes API, plus the self-service
 // session-management surface: list devices, view login history, revoke
 // one device, and prove that device's refresh token now fails while
-// another device's still works.
+// another device's still works. The revoke leg also proves the immediate
+// half: the revoked device's own unexpired access token is refused on its
+// very next request (this app runs in immediate revocation mode), the P1
+// regression that closes here.
 //
 // A second test below is the regression proof that closes the reference-app
 // wiring gap the authn channel-flag round recorded (go/authn/AGENTS.md's
@@ -436,6 +439,30 @@ func TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement(t *testing.T) {
 		body, _ := io.ReadAll(revokedRefreshResp.Body)
 		t.Fatalf("refresh the revoked sms session status = %d, want %d; body = %s",
 			revokedRefreshResp.StatusCode, http.StatusUnauthorized, body)
+	}
+
+	// The revoked session's OWN access token is refused on its very next
+	// request too, not merely at its natural expiry: this app runs in
+	// immediate revocation mode (server.go wires
+	// authn.WithRevocationMode(authn.RevocationModeImmediate)), and the
+	// session manager is the revocation source Middleware consults by
+	// default, so an unexpired token issued moments ago must stop working
+	// at the revoke. This is the P1 regression: before the fix no
+	// revocation checker was wired anywhere in the composed app -- the
+	// authn.Middleware call carried no WithRevocationChecker -- so the
+	// check never ran and this request succeeded.
+	var revokedAccess struct {
+		Code string `json:"code"`
+	}
+	revokedAccessResp := authnJSON(t, client, http.MethodGet, srv.URL+"/api/v1/authn/sessions", smsPair.AccessToken, nil, &revokedAccess)
+	if revokedAccessResp.StatusCode != http.StatusUnauthorized {
+		body, _ := io.ReadAll(revokedAccessResp.Body)
+		t.Fatalf("request with the revoked sms session's access token status = %d, want %d; body = %s",
+			revokedAccessResp.StatusCode, http.StatusUnauthorized, body)
+	}
+	if revokedAccess.Code != authn.ErrSessionRevoked.Code {
+		t.Fatalf("request with the revoked sms session's access token error code = %q, want %q",
+			revokedAccess.Code, authn.ErrSessionRevoked.Code)
 	}
 
 	var stillWorks tokenPairResponse
