@@ -468,8 +468,7 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 			// after a writer-gate lapse no-ops the identical write.
 			// logDiscardedOutcome probes the row and reports what it
 			// actually says.
-			if cancelled := q.logDiscardedOutcome(log, rec, durationMS,
-				"job cancelled before its success could be recorded, outcome discarded"); cancelled {
+			if cancelled := q.logDiscardedOutcome(log, rec, durationMS, StatusSucceeded); cancelled {
 				job.Status = StatusCancelled
 			}
 		}
@@ -504,8 +503,7 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 			// show it as dead-lettered. logDiscardedOutcome probes the row
 			// and picks the truthful record; the in-memory job mirrors the
 			// persisted state only for a genuine cancellation.
-			if cancelled := q.logDiscardedOutcome(log, rec, durationMS,
-				"job cancelled before its final failure could dead-letter, outcome discarded"); cancelled {
+			if cancelled := q.logDiscardedOutcome(log, rec, durationMS, StatusDeadLetter); cancelled {
 				job.Status = StatusCancelled
 			}
 			return
@@ -551,8 +549,7 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 		// moved == false: the retry write no-op'd -- the same two-cause
 		// no-op as the success and dead-letter branches (see
 		// logDiscardedOutcome), never cancellation by assumption.
-		if cancelled := q.logDiscardedOutcome(log, rec, durationMS,
-			"job cancelled before its failure could schedule a retry, outcome discarded"); cancelled {
+		if cancelled := q.logDiscardedOutcome(log, rec, durationMS, StatusRetrying); cancelled {
 			job.Status = StatusCancelled
 		}
 	}
@@ -564,17 +561,19 @@ func (q *StandaloneQueue) execute(rec jobRecord) {
 // conditional write landed. It probes the row to classify that no-op
 // honestly, because a plain no-op has two causes with opposite meanings: a
 // concurrent Cancel (Queue.Cancel's markCancelled won the race and the row
-// is StatusCancelled -- the cancelMessage the caller passes is then the
-// truthful record), or another writer's resetInterruptedRecords/claimOne
-// stealing the row after a writer-gate lapse (the row is back in Pending,
-// Running under a different claimed_by, or already settled by the other
-// execution -- the very first symptom of a double execution, which the
-// pre-fix code's blanket cancellation explanation erased exactly when it
-// mattered). Returns whether the row was genuinely StatusCancelled, so the
-// caller mirrors that state onto its in-memory Job only then. A probe that
-// cannot read the row logs the failure and answers false: the discard is
-// logged, its cause is not guessed.
-func (q *StandaloneQueue) logDiscardedOutcome(log *slog.Logger, rec jobRecord, durationMS int64, cancelMessage string) bool {
+// is StatusCancelled -- discardedStatus, the terminal status the no-op'd
+// write was trying to persist, is then the truthful record, logged as the
+// discarded_outcome attribute), or another writer's
+// resetInterruptedRecords/claimOne stealing the row after a writer-gate
+// lapse (the row is back in Pending, Running under a different claimed_by,
+// or already settled by the other execution -- the very first symptom of a
+// double execution, which the pre-fix code's blanket cancellation
+// explanation erased exactly when it mattered). Returns whether the row was
+// genuinely StatusCancelled, so the caller mirrors that state onto its
+// in-memory Job only then. A probe that cannot read the row logs the
+// failure and answers false: the discard is logged, its cause is not
+// guessed.
+func (q *StandaloneQueue) logDiscardedOutcome(log *slog.Logger, rec jobRecord, durationMS int64, discardedStatus Status) bool {
 	found, err := findByID(context.Background(), q.db, JobID(rec.ID))
 	if err != nil {
 		log.Warn("jobs: outcome not persisted; row state unreadable, outcome discarded",
@@ -582,8 +581,9 @@ func (q *StandaloneQueue) logDiscardedOutcome(log *slog.Logger, rec jobRecord, d
 		return false
 	}
 	if found.Status == string(StatusCancelled) {
-		log.Info(cancelMessage,
-			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS)
+		log.Info("job cancelled before its outcome could be recorded, outcome discarded",
+			"job_id", rec.ID, "job_type", rec.Type, "attempts", rec.Attempts, "duration_ms", durationMS,
+			"discarded_outcome", string(discardedStatus))
 		return true
 	}
 	log.Warn("jobs: outcome not persisted: row not running when the write landed, outcome discarded",

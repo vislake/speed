@@ -45,11 +45,12 @@ var _ Handler = (*succeedingCancelRaceHandler)(nil)
 // success metrics for a Job that never succeeded. The records must now fire
 // strictly after completeSucceeded's transition report and only for a
 // genuine running -> succeeded move, leaving the cancelled Job exactly one
-// truthful record: the "job cancelled before its success could be recorded,
-// outcome discarded" Info line. Deterministic by construction, exactly like
-// the dead-letter half: markCancelled lands before execute's success path
-// runs. Fails on the pre-fix code, where the success log and both success
-// instruments fire before the no-op write is discovered.
+// truthful record: the "job cancelled before its outcome could be recorded,
+// outcome discarded" Info line carrying the discarded_outcome=succeeded
+// attribute. Deterministic by construction, exactly like the dead-letter
+// half: markCancelled lands before execute's success path runs. Fails on
+// the pre-fix code, where the success log and both success instruments fire
+// before the no-op write is discovered.
 func TestExecute_SuccessAfterCancel_RecordsNoSuccessMetricOrLog(t *testing.T) {
 	reader := setupTestMeterProvider(t)
 	q := NewStandaloneQueue(newTestDB(t))
@@ -120,8 +121,11 @@ func TestExecute_SuccessAfterCancel_RecordsNoSuccessMetricOrLog(t *testing.T) {
 	if got := strings.Count(out, "job succeeded"); got != 1 {
 		t.Errorf(`"job succeeded" log line appears %d times, want exactly 1 (the control's genuine success only)`, got)
 	}
-	if !strings.Contains(out, "job cancelled before its success could be recorded, outcome discarded") {
+	if !strings.Contains(out, "job cancelled before its outcome could be recorded, outcome discarded") {
 		t.Error("missing the cancelled-outcome Info line -- the one truthful record a cancelled Job's discarded success is allowed to emit")
+	}
+	if !strings.Contains(out, "discarded_outcome=succeeded") {
+		t.Error("cancelled-outcome Info line lacks the discarded_outcome=succeeded attribute naming the success record the cancellation discarded")
 	}
 }
 
@@ -146,10 +150,11 @@ var _ Handler = (*failingCancelRaceHandler)(nil)
 // and fake retry metrics for a Job that was cancelled, never retrying. The
 // records must now fire strictly after completeRetrying's transition report
 // and only for a genuine running -> retrying move, leaving the cancelled
-// Job exactly one truthful record: the "job cancelled before its failure
-// could schedule a retry, outcome discarded" Info line. Deterministic by
-// construction, exactly like the success and dead-letter halves. Fails on
-// the pre-fix code.
+// Job exactly one truthful record: the "job cancelled before its outcome
+// could be recorded, outcome discarded" Info line carrying the
+// discarded_outcome=retrying attribute. Deterministic by construction,
+// exactly like the success and dead-letter halves. Fails on the pre-fix
+// code.
 func TestExecute_RetryAfterCancel_RecordsNoRetryMetricOrLog(t *testing.T) {
 	reader := setupTestMeterProvider(t)
 	q := NewStandaloneQueue(newTestDB(t))
@@ -213,7 +218,10 @@ func TestExecute_RetryAfterCancel_RecordsNoRetryMetricOrLog(t *testing.T) {
 	if got := strings.Count(out, "scheduling retry"); got != 1 {
 		t.Errorf(`"scheduling retry" log line appears %d times, want exactly 1 (the control's genuine retry only)`, got)
 	}
-	if !strings.Contains(out, "job cancelled before its failure could schedule a retry, outcome discarded") {
+	if !strings.Contains(out, "job cancelled before its outcome could be recorded, outcome discarded") {
 		t.Error("missing the cancelled-outcome Info line -- the one truthful record a cancelled Job's discarded failure is allowed to emit")
+	}
+	if !strings.Contains(out, "discarded_outcome=retrying") {
+		t.Error("cancelled-outcome Info line lacks the discarded_outcome=retrying attribute naming the retry record the cancellation discarded")
 	}
 }

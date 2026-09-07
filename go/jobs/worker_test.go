@@ -448,9 +448,10 @@ func TestExecute_FinalFailureAfterCancel_DoesNotRunOnFailure(t *testing.T) {
 // persisted. The records must now fire strictly AFTER completeDeadLetter's
 // transition report and only for a genuine running -> dead-letter move,
 // leaving a cancelled Job exactly one truthful record: the "job cancelled
-// before its final failure could dead-letter, outcome discarded" Info
-// line. Fails on the pre-fix code, where the dead-letter log and both
-// metric instruments fire before the no-op write is discovered.
+// before its outcome could be recorded, outcome discarded" Info line
+// carrying the discarded_outcome=dead_letter attribute. Fails on the
+// pre-fix code, where the dead-letter log and both metric instruments fire
+// before the no-op write is discovered.
 func TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric(t *testing.T) {
 	reader := setupTestMeterProvider(t)
 	q := NewStandaloneQueue(newTestDB(t))
@@ -533,8 +534,11 @@ func TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric(t *testi
 	if got := strings.Count(out, "moved to dead letter"); got != 1 {
 		t.Errorf("dead-letter log line appears %d times, want exactly 1 (the control's genuine dead-letter only)", got)
 	}
-	if !strings.Contains(out, "job cancelled before its final failure could dead-letter, outcome discarded") {
-		t.Error("missing the cancelled-outcome Info line -- the one truthful record a cancelled Job's discarded failure is allowed to emit")
+	if got := strings.Count(out, "job cancelled before its outcome could be recorded, outcome discarded"); got != 1 {
+		t.Errorf("cancelled-outcome Info line appears %d times, want exactly 1 (the one truthful record a cancelled Job's discarded failure is allowed to emit)", got)
+	}
+	if !strings.Contains(out, "discarded_outcome=dead_letter") {
+		t.Error("cancelled-outcome Info line lacks the discarded_outcome=dead_letter attribute naming the dead-letter record the cancellation discarded")
 	}
 }
 
@@ -621,8 +625,8 @@ func TestExecute_NoOpOutcomeWrite_RowStolenByAnotherWriter_LogsHonestlyNotCancel
 	if succeededHandles != 1 {
 		t.Fatalf("Handle ran %d times, want exactly 1 (the leg must prove the job genuinely executed before judging its log lines)", succeededHandles)
 	}
-	if out := buf.String(); strings.Contains(out, "cancelled before its success could be recorded") {
-		t.Errorf("stolen row logged as cancelled: %s -- a row another writer reset is NOT a cancelled job; the cancel explanation erased the double-run evidence", out)
+	if out := buf.String(); strings.Contains(out, "job cancelled before its outcome could be recorded") {
+		t.Errorf("stolen row logged as cancelled (success leg): %s -- a row another writer reset is NOT a cancelled job; the cancel explanation erased the double-run evidence", out)
 	} else if !strings.Contains(out, "row not running when the write landed") {
 		t.Errorf("missing the honest discarded-outcome line for the stolen row: %s", out)
 	}
@@ -639,8 +643,8 @@ func TestExecute_NoOpOutcomeWrite_RowStolenByAnotherWriter_LogsHonestlyNotCancel
 	if retriedHandles != 1 {
 		t.Fatalf("Handle ran %d times, want exactly 1 (the leg must prove the job genuinely executed before judging its log lines)", retriedHandles)
 	}
-	if out := buf.String(); strings.Contains(out, "cancelled before its failure could schedule a retry") {
-		t.Errorf("stolen row logged as cancelled: %s -- a row another writer reset is NOT a cancelled job; the cancel explanation erased the double-run evidence", out)
+	if out := buf.String(); strings.Contains(out, "job cancelled before its outcome could be recorded") {
+		t.Errorf("stolen row logged as cancelled (retry leg): %s -- a row another writer reset is NOT a cancelled job; the cancel explanation erased the double-run evidence", out)
 	} else if !strings.Contains(out, "row not running when the write landed") {
 		t.Errorf("missing the honest discarded-outcome line for the stolen row: %s", out)
 	}
@@ -657,8 +661,8 @@ func TestExecute_NoOpOutcomeWrite_RowStolenByAnotherWriter_LogsHonestlyNotCancel
 	if deadLetteredHandles != 1 {
 		t.Fatalf("Handle ran %d times, want exactly 1 (the leg must prove the job genuinely executed before judging its log lines)", deadLetteredHandles)
 	}
-	if out := buf.String(); strings.Contains(out, "cancelled before its final failure could dead-letter") {
-		t.Errorf("stolen row logged as cancelled: %s -- a row another writer reset is NOT a cancelled job; the cancel explanation erased the double-run evidence", out)
+	if out := buf.String(); strings.Contains(out, "job cancelled before its outcome could be recorded") {
+		t.Errorf("stolen row logged as cancelled (dead-letter leg): %s -- a row another writer reset is NOT a cancelled job; the cancel explanation erased the double-run evidence", out)
 	} else if !strings.Contains(out, "row not running when the write landed") {
 		t.Errorf("missing the honest discarded-outcome line for the stolen row: %s", out)
 	}
