@@ -91,9 +91,10 @@ const (
 // one of RecipientUserID / ContactID names the recipient (the other stays
 // the empty-string sentinel), Channel is a channel key, Status one of the
 // SendRecordStatus* values, DurationMs the transport call's wall time, and
-// Error the attempt's outcome text -- the raw cause text on failed
-// records, a short reason on skipped ones, the empty-string sentinel on
-// succeeded ones (the field's comment spells the contents out).
+// Error the attempt's bounded outcome classification -- a failure class on
+// failed records, a short reason on skipped ones, the empty-string
+// sentinel on succeeded ones, and never any failure text (the field's
+// comment spells the contents out).
 // IdempotencyKey is the derived delivery key (delivery.go's
 // deriveDeliveryKey) that makes the whole record a replay-checkable unit.
 // ProviderReceiptID is reserved for the transport provider's own message
@@ -132,19 +133,23 @@ type SendRecord struct {
 	// attempt never reached the transport.
 	DurationMs int64 `gorm:"column:duration_ms;not null"`
 
-	// Error is the attempt's outcome text: the text of the cause error on
-	// failed records -- never a stack trace -- with one deliberate
-	// sanitization: the recipient's own address is redacted out of every
-	// transport failure before the text is stored (delivery.go's
-	// redactRecipientAddresses), so the column -- and every read of it,
-	// the D10 operator search first among them -- never carries the
-	// plaintext PII the module itself holds. Other interpolated
-	// identifiers (a user id in a host-seam wrap) can still appear, so
-	// operators still treat the text as untrusted diagnostic text. A
-	// short reason fills skipped records (delivery.go's skipReason*
-	// constants) and the empty-string sentinel fills succeeded ones.
-	// Truncation happens at the write site, to the column's 4000-char
-	// budget.
+	// Error is the attempt's bounded outcome classification, and nothing
+	// else: on failed records one of the failureReason* classes delivery's
+	// settle sites choose (delivery.go), on skipped records one of the
+	// short skipReason* reasons, and the empty-string sentinel on
+	// succeeded ones. The raw cause text of a failure is deliberately
+	// never stored, whatever its origin: a transport failure routinely
+	// echoes the recipient's address in whatever form the transport chose
+	// -- not reliably the normalized form the module handed it -- and
+	// send_records is a platform table with no deletion path, so the
+	// stored text could carry plaintext PII no caller-side guard could
+	// recognize. The class is decided where the code knows it, at the
+	// settle site, and the error that reaches the record reads as the
+	// class while still Unwrapping to its original cause for errors.Is/As.
+	// Every read of the column -- the D10 operator search first among them
+	// -- sees only these bounded vocabularies, never transport or seam
+	// text. Rows written before this shape shipped may still hold
+	// diagnostic text; operators treat those as untrusted.
 	Error string `gorm:"column:error;size:4000;not null"`
 
 	// ProviderReceiptID is the transport provider's own message id, empty

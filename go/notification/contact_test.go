@@ -1493,19 +1493,21 @@ func TestContactService_List_ReturnsTheRosterNewestFirst(t *testing.T) {
 	}
 }
 
-// TestContact_CodeSendFailure_RedactsTheRecipientAddressFromTheError pins
-// the redaction of the verification-code send path's transport failures.
+// TestContact_CodeSendFailure_CarriesOnlyTheBoundedClassification pins the
+// verification-code send path's transport failures under the module's
+// bounded transport classification (delivery.go's classifyTransportCause).
 // A code send is the security rules' one permitted message to a not-yet-
 // verified address, and its payload carries the plaintext code, so a
 // transport error that echoed the recipient would be one diagnostic log
-// line away from a PII leak -- delivery.go's four send paths redact for
-// exactly this reason before their failure text is stored, and this path,
-// which has no send record to store into, must redact before the error
-// leaves at all. The redaction preserves the error's classification (the
-// apperr code and the wrapped cause stay reachable through errors.Is), the
-// plaintext code never enters the error, and ordinary code sends are
-// unaffected.
-func TestContact_CodeSendFailure_RedactsTheRecipientAddressFromTheError(t *testing.T) {
+// line away from a PII leak -- and the echo's form is the transport's to
+// choose, never reliably the normalized form this module handed it, so no
+// caller-side text surgery can guarantee the address stays out. The error
+// that leaves this path therefore carries the bounded classification alone
+// ("transport refused" for a permanent refusal, "transport failed" for a
+// retryable failure), while the original cause stays reachable through
+// Unwrap (errors.Is still sees ErrTransportPermanent), the plaintext code
+// never enters the error, and ordinary code sends are unaffected.
+func TestContact_CodeSendFailure_CarriesOnlyTheBoundedClassification(t *testing.T) {
 	t.Run("email", func(t *testing.T) {
 		env := newContactEnv(t)
 		ctx := tenantCtx("tenant-acme")
@@ -1517,16 +1519,17 @@ func TestContact_CodeSendFailure_RedactsTheRecipientAddressFromTheError(t *testi
 			t.Fatal("CreateContact succeeded while the mailer refused, want the delivery-failed error")
 		}
 		assertCode(t, err, ErrContactCodeDeliveryFailed.Code)
-		if text := err.Error(); strings.Contains(text, address) {
+		want := ErrContactCodeDeliveryFailed.Code + ": " + failureReasonTransportRefused
+		if text := err.Error(); text != want {
+			t.Errorf("the delivery-failed error = %q, want the bounded classification text %q (no transport text, no address)", text, want)
+		} else if strings.Contains(text, address) {
 			t.Errorf("the delivery-failed error carries the plaintext address: %q", text)
-		} else if !strings.Contains(text, "[redacted]") {
-			t.Errorf("the delivery-failed error = %q, want the address replaced by the redaction marker", text)
 		}
 		if contactCodeRe.MatchString(err.Error()) {
 			t.Errorf("the delivery-failed error carries a six-digit run (the code must never enter it): %q", err.Error())
 		}
 		if !errors.Is(err, ErrTransportPermanent) {
-			t.Errorf("the redacted error lost the transport's wrapped sentinel (errors.Is = false)")
+			t.Errorf("the classified error lost the transport's wrapped sentinel (errors.Is = false)")
 		}
 		env.host.mailer.failWith = nil
 
@@ -1544,22 +1547,23 @@ func TestContact_CodeSendFailure_RedactsTheRecipientAddressFromTheError(t *testi
 		ctx := tenantCtx("tenant-acme")
 		const address = testPhone
 
-		env.svc.sms = &recordingSMSSender{failWith: fmt.Errorf("sms: 550 %s: invalid number: %w", address, ErrTransportPermanent)}
+		env.svc.sms = &recordingSMSSender{failWith: fmt.Errorf("sms: 550 %s: network glitch", address)}
 		_, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelSMS, Address: address})
 		if err == nil {
 			t.Fatal("CreateContact succeeded while the SMS sender refused, want the delivery-failed error")
 		}
 		assertCode(t, err, ErrContactCodeDeliveryFailed.Code)
-		if text := err.Error(); strings.Contains(text, address) {
+		want := ErrContactCodeDeliveryFailed.Code + ": " + failureReasonTransportFailed
+		if text := err.Error(); text != want {
+			t.Errorf("the delivery-failed error = %q, want the bounded classification text %q (no transport text, no address)", text, want)
+		} else if strings.Contains(text, address) {
 			t.Errorf("the delivery-failed error carries the plaintext address: %q", text)
-		} else if !strings.Contains(text, "[redacted]") {
-			t.Errorf("the delivery-failed error = %q, want the address replaced by the redaction marker", text)
 		}
 		if contactCodeRe.MatchString(err.Error()) {
 			t.Errorf("the delivery-failed error carries a six-digit run (the code must never enter it): %q", err.Error())
 		}
-		if !errors.Is(err, ErrTransportPermanent) {
-			t.Errorf("the redacted error lost the transport's wrapped sentinel (errors.Is = false)")
+		if errors.Is(err, ErrTransportPermanent) {
+			t.Errorf("a transient failure classified as the permanent refusal (errors.Is = true)")
 		}
 		env.svc.sms = NewConsoleSMSSender(env.smsBuf)
 

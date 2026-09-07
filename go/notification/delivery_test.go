@@ -921,8 +921,8 @@ func TestDelivery_TransientTransportFailureIsRecordedAndRetried(t *testing.T) {
 	if rec.Status != SendRecordStatusFailed {
 		t.Errorf("email record status = %s, want %s", rec.Status, SendRecordStatusFailed)
 	}
-	if !strings.Contains(rec.Error, "smtp: connection refused") {
-		t.Errorf("email record error = %q, want the transport cause recorded", rec.Error)
+	if rec.Error != failureReasonTransportFailed {
+		t.Errorf("email record error = %q, want the bounded transient-transport classification %q", rec.Error, failureReasonTransportFailed)
 	}
 	if got := len(env.host.mailer.messages()); got != 0 {
 		t.Errorf("mailer recorded %d sent messages for a refused send, want none", got)
@@ -968,8 +968,8 @@ func TestDelivery_SMSTransientFailureIsRecordedAndRetried(t *testing.T) {
 	if rec == nil || rec.Status != SendRecordStatusFailed {
 		t.Fatalf("SMS record after the failure = %+v, want failed", rec)
 	}
-	if !strings.Contains(rec.Error, "gateway: timeout") {
-		t.Errorf("SMS record error = %q, want the transport cause recorded", rec.Error)
+	if rec.Error != failureReasonTransportFailed {
+		t.Errorf("SMS record error = %q, want the bounded transient-transport classification %q", rec.Error, failureReasonTransportFailed)
 	}
 
 	env.sms.failWith = nil
@@ -1009,8 +1009,8 @@ func TestDelivery_PermanentTransportFailureStopsTheChannelWithoutRetrying(t *tes
 	if rec == nil || rec.Status != SendRecordStatusFailed {
 		t.Fatalf("email record after the permanent failure = %+v, want failed", rec)
 	}
-	if !strings.Contains(rec.Error, "550 mailbox unavailable") {
-		t.Errorf("email record error = %q, want the terminal cause recorded", rec.Error)
+	if rec.Error != failureReasonTransportRefused {
+		t.Errorf("email record error = %q, want the bounded permanent-transport classification %q", rec.Error, failureReasonTransportRefused)
 	}
 	if got := len(env.host.mailer.messages()); got != 0 {
 		t.Errorf("mailer recorded %d sent messages for a refused send, want none", got)
@@ -1328,8 +1328,8 @@ func TestDelivery_MissingTemplateCopyStopsTheAttempt(t *testing.T) {
 	if rec == nil || rec.Status != SendRecordStatusFailed {
 		t.Fatalf("record after the render failure = %+v, want failed", rec)
 	}
-	if rec.Error == "" {
-		t.Error("record error is empty, want the render cause recorded")
+	if rec.Error != failureReasonRenderFailed {
+		t.Errorf("record error = %q, want the bounded render-failure classification %q", rec.Error, failureReasonRenderFailed)
 	}
 	if row := env.inboxRowByChannel(t, ctx, d); row != nil {
 		t.Error("a render-failed delivery wrote an inbox row")
@@ -1442,8 +1442,8 @@ func TestDelivery_ResolverFailureIsRecordedAndRetried(t *testing.T) {
 		if rec == nil || rec.Status != SendRecordStatusFailed {
 			t.Fatalf("channel %s record after the resolver failure = %+v, want failed", channel, rec)
 		}
-		if !strings.Contains(rec.Error, "resolve addresses") {
-			t.Errorf("channel %s record error = %q, want the resolver cause recorded", channel, rec.Error)
+		if rec.Error != failureReasonResolutionFailed {
+			t.Errorf("channel %s record error = %q, want the bounded resolution-failure classification %q", channel, rec.Error, failureReasonResolutionFailed)
 		}
 	}
 	// The in-app channel never consulted the resolver.
@@ -1843,14 +1843,17 @@ func TestDelivery_ResendAfterALocaleChange_DeliversInTheNewLocale(t *testing.T) 
 	}
 }
 
-// TestDelivery_GatewayErrorEmbeddingTheRecipientAddress_NeverReachesTheStoredRecord
-// pins the send-record PII rule: a transport error that quotes the
-// recipient's address (an SMTP 5xx names the mailbox it rejected) is the
-// record's raw cause today, and the send_records.error column -- the text
-// the D10 operator search reads back -- must never store the address
-// plaintext. The module knows the address it handed the transport, so the
-// stored text replaces it instead of trusting the gateway's wording.
-func TestDelivery_GatewayErrorEmbeddingTheRecipientAddress_NeverReachesTheStoredRecord(t *testing.T) {
+// TestDelivery_GatewayEchoingTheRecipientAddress_NeverReachesTheStoredRecord
+// pins the send-record PII rule in its ordinary shape: a transport error
+// that quotes the recipient's address (an SMTP 5xx names the mailbox it
+// rejected) is what a delivery failure returns, and the send_records.error
+// column -- the text the D10 operator search reads back -- must never
+// store it. The module stores no transport text at all: the failed attempt
+// carries the bounded classification, and not even the exact form of the
+// address the module handed the transport appears anywhere (the
+// non-normalized echo -- the form no caller-side guard could predict -- is
+// the regression test further below).
+func TestDelivery_GatewayEchoingTheRecipientAddress_NeverReachesTheStoredRecord(t *testing.T) {
 	env := newDeliveryEnv(t)
 	env.resolver.byUser[deliveryUser] = deliveryAddresses
 	ctx := tenantCtx(deliveryTenant)
@@ -1865,11 +1868,11 @@ func TestDelivery_GatewayErrorEmbeddingTheRecipientAddress_NeverReachesTheStored
 	if rec == nil || rec.Status != SendRecordStatusFailed {
 		t.Fatalf("email record after the refusal = %+v, want failed", rec)
 	}
+	if rec.Error != failureReasonTransportFailed {
+		t.Errorf("record error = %q, want the bounded transient-transport classification %q (no transport text stored)", rec.Error, failureReasonTransportFailed)
+	}
 	if strings.Contains(rec.Error, deliveryAddresses.Email) {
 		t.Errorf("record error carries the plaintext address: %q", rec.Error)
-	}
-	if !strings.Contains(rec.Error, "smtp: 550") || !strings.Contains(rec.Error, "[redacted]") {
-		t.Errorf("record error = %q, want the gateway's message kept with the address replaced by the redaction marker", rec.Error)
 	}
 }
 
@@ -1877,7 +1880,9 @@ func TestDelivery_GatewayErrorEmbeddingTheRecipientAddress_NeverReachesTheStored
 // is the external-contact half of the PII rule: a permanent gateway refusal
 // quoting the contact's address settles a failed record (and marks the
 // contact bounced), and neither the record's own error text nor the rows
-// the D10 operator search (ListByFilter) returns may contain the address.
+// the D10 operator search (ListByFilter) returns may contain the address
+// -- the record carries only the bounded permanent-transport
+// classification, whatever form the gateway's echo took.
 func TestDelivery_ContactBounceCarryingTheAddress_StoredRecordAndReadbackNeverCarryIt(t *testing.T) {
 	env := newDeliveryEnv(t)
 	ctx := tenantCtx(deliveryTenant)
@@ -1910,11 +1915,11 @@ func TestDelivery_ContactBounceCarryingTheAddress_StoredRecordAndReadbackNeverCa
 	if rec == nil || rec.Status != SendRecordStatusFailed {
 		t.Fatalf("email record after the permanent refusal = %+v, want failed", rec)
 	}
+	if rec.Error != failureReasonTransportRefused {
+		t.Errorf("record error = %q, want the bounded permanent-transport classification %q (no transport text stored)", rec.Error, failureReasonTransportRefused)
+	}
 	if strings.Contains(rec.Error, address) {
 		t.Errorf("record error carries the plaintext contact address: %q", rec.Error)
-	}
-	if !strings.Contains(rec.Error, "[redacted]") {
-		t.Errorf("record error = %q, want the address replaced by the redaction marker", rec.Error)
 	}
 
 	rows, err := env.svc.sendRecs.ListByFilter(ctx, SendRecordFilter{TenantID: deliveryTenant, Limit: 50})
@@ -1924,11 +1929,11 @@ func TestDelivery_ContactBounceCarryingTheAddress_StoredRecordAndReadbackNeverCa
 	if len(rows) != 1 {
 		t.Fatalf("ListByFilter returned %d rows, want the one failed record", len(rows))
 	}
+	if rows[0].Error != failureReasonTransportRefused {
+		t.Errorf("the operator readback = %q, want the bounded permanent-transport classification %q", rows[0].Error, failureReasonTransportRefused)
+	}
 	if strings.Contains(rows[0].Error, address) {
 		t.Errorf("the operator readback carries the plaintext contact address: %q", rows[0].Error)
-	}
-	if !strings.Contains(rows[0].Error, "[redacted]") {
-		t.Errorf("the operator readback = %q, want the redacted marker", rows[0].Error)
 	}
 	row, err := env.contacts.repo.FindByID(ctx, contact.ID)
 	if err != nil {
@@ -1937,6 +1942,86 @@ func TestDelivery_ContactBounceCarryingTheAddress_StoredRecordAndReadbackNeverCa
 	if row.Status != ContactStatusBounced {
 		t.Errorf("contact status after the permanent refusal = %s, want bounced", row.Status)
 	}
+}
+
+// TestDelivery_TransportEchoingTheAddressInANonNormalizedForm_NeverReachesTheStoredRecord
+// is the P1 regression the bounded-classification shape exists for. The
+// module hands a transport the normalized form of the recipient's address
+// (a lowercased email, an E.164 phone), while the transport echoes the
+// mailbox it rejected in whatever form IT chose -- an uppercase rendering
+// of the email, a plus-less MSISDN. The old caller-side guard redacted by
+// exact substring match against the module's own normalized form, so an
+// echo in any other form failed the Contains check and the record stored
+// the transport's message verbatim: plaintext PII in a platform table with
+// no deletion path, readable through the D10 operator search. After the
+// fix no transport text is stored at all -- the failed record carries the
+// bounded classification, and the raw echo cannot reach the column in ANY
+// form, normalized or not.
+//
+// The classification is asserted as its literal text ("transport refused",
+// the value of the module's unexported failureReasonTransportRefused
+// constant) so this regression reads identically against the unfixed code.
+func TestDelivery_TransportEchoingTheAddressInANonNormalizedForm_NeverReachesTheStoredRecord(t *testing.T) {
+	const refused = "transport refused"
+
+	t.Run("uppercase email echo", func(t *testing.T) {
+		env := newDeliveryEnv(t)
+		env.resolver.byUser[deliveryUser] = deliveryAddresses
+		ctx := tenantCtx(deliveryTenant)
+		d := deliveryDispatch()
+
+		echo := strings.ToUpper(deliveryAddresses.Email)
+		env.host.mailer.failWith = fmt.Errorf("smtp: 550 <%s>: mailbox unavailable: %w", echo, ErrTransportPermanent)
+		if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
+			t.Fatalf("permanent refusal returned %v, want the terminal stop", attemptErr)
+		}
+
+		rec := env.sendRecordByChannel(t, ctx, d, ChannelEmail)
+		if rec == nil || rec.Status != SendRecordStatusFailed {
+			t.Fatalf("email record after the refusal = %+v, want failed", rec)
+		}
+		if strings.Contains(rec.Error, deliveryAddresses.Email) || strings.Contains(rec.Error, echo) {
+			t.Errorf("record error carries the plaintext address: %q", rec.Error)
+		}
+		if rec.Error != refused {
+			t.Errorf("record error = %q, want the bounded classification %q (no transport text stored)", rec.Error, refused)
+		}
+
+		rows, err := env.svc.sendRecs.ListByFilter(ctx, SendRecordFilter{TenantID: deliveryTenant, Status: SendRecordStatusFailed, Limit: 50})
+		if err != nil {
+			t.Fatalf("ListByFilter: %v", err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("ListByFilter returned %d failed rows, want the one failed email record", len(rows))
+		}
+		if rows[0].Error != refused || strings.Contains(rows[0].Error, echo) {
+			t.Errorf("the operator readback = %q, want the bounded classification alone", rows[0].Error)
+		}
+	})
+
+	t.Run("plus-less phone echo", func(t *testing.T) {
+		env := newDeliveryEnv(t)
+		env.resolver.byUser[deliveryUser] = deliveryAddresses
+		ctx := tenantCtx(deliveryTenant)
+		d := deliveryDispatch()
+
+		echo := strings.TrimPrefix(deliveryAddresses.Phone, "+")
+		env.sms.failWith = fmt.Errorf("gateway: 550 %s: invalid number: %w", echo, ErrTransportPermanent)
+		if attemptErr := env.dispatchAndAttempt(t, d); attemptErr != nil {
+			t.Fatalf("permanent refusal returned %v, want the terminal stop", attemptErr)
+		}
+
+		rec := env.sendRecordByChannel(t, ctx, d, ChannelSMS)
+		if rec == nil || rec.Status != SendRecordStatusFailed {
+			t.Fatalf("SMS record after the refusal = %+v, want failed", rec)
+		}
+		if strings.Contains(rec.Error, deliveryAddresses.Phone) || strings.Contains(rec.Error, echo) {
+			t.Errorf("record error carries the plaintext address: %q", rec.Error)
+		}
+		if rec.Error != refused {
+			t.Errorf("record error = %q, want the bounded classification %q (no transport text stored)", rec.Error, refused)
+		}
+	})
 }
 
 // TestDelivery_ContactVerifiedOnAnUnknownChannel_RecordsAndStops pins the
@@ -2062,8 +2147,8 @@ func TestDelivery_ContactDeliveryOfAnUndeclaredType_NeverReachesTheTransport(t *
 	if rec.Status != SendRecordStatusFailed {
 		t.Errorf("record status = %s, want %s", rec.Status, SendRecordStatusFailed)
 	}
-	if rec.Error != ErrTypeNotFound.Code {
-		t.Errorf("record error = %q, want the type-not-found code %q", rec.Error, ErrTypeNotFound.Code)
+	if rec.Error != failureReasonTypeUndeclared {
+		t.Errorf("record error = %q, want the bounded undeclared-type classification %q", rec.Error, failureReasonTypeUndeclared)
 	}
 
 	// Leg two: the module declares its type; the same delivery renders and

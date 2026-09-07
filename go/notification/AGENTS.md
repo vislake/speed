@@ -289,16 +289,22 @@ Record semantics (`send_record.go`): `succeeded` is written only after the
 transport accepted the send, `failed` after a failure exhausted an attempt,
 `skipped` after a deliberate non-send whose reason will not change by
 retrying -- no address on file, an external contact whose consent lapsed.
-`Error` is the failure's own text: the wrapped cause message a failed attempt
-returned (delivery.go's fail-and-retry / fail-and-stop paths), or a short
-`skipReason*` phrase on skipped records, byte-truncated at the write site to
-the column's 4000-char budget. The text is raw except for one deliberate
-sanitization -- the recipient's own address is redacted out of transport
-failures before storage (delivery.go's `redactRecipientAddresses`), so the
-column and its reads never carry the plaintext PII the module itself holds
--- the module's tests pin exact transport strings such as
-`smtp: connection refused`, and never a stack trace, never a message the
-module synthesized.
+`Error` carries only the module's bounded vocabularies: on failed records one
+of the `failureReason*` classifications the settle site chose (delivery.go's
+fail-and-retry / fail-and-stop paths), on skipped records a short
+`skipReason*` phrase, and the empty sentinel on succeeded ones. The raw text
+of a failure is deliberately never stored, whatever its origin -- the
+mechanism that once stood between transport errors and the column was a
+caller-side redaction of the recipient's address by exact substring match,
+and a transport echoes the address in whatever form IT chose, not reliably
+the normalized form the module handed it, so such a guard systematically
+missed the most likely inputs and the column could still carry plaintext
+PII. The record therefore stores a classification instead of any text
+(delivery.go's `classifiedError` keeps the original cause reachable through
+Unwrap for the job's `errors.Is`/`apperr.As` signals); `send_records` is a
+platform table with no deletion path, and its reads -- the D10 operator
+search first among them -- see only the bounded vocabulary. The module's
+tests pin the classification values, never transport strings.
 
 At-most-once, honestly stated: across the RETRIES of one delivery the
 pipeline converges without a second send -- the job probes the record's
@@ -332,12 +338,13 @@ indexed. Consent arrives two ways:
   the verified_contacts row itself -- never a separate table, never the
   plaintext (see "The verification code rides on the contact row"). A code
   send whose transport refuses is reported through
-  `ErrContactCodeDeliveryFailed` with the recipient's address redacted out
-  of the wrapped cause (contact.go's `sendCode`, the same
-  `redactRecipientAddresses` the delivery paths apply before their failure
-  text is stored): the code-send payload carries the plaintext code to a
+  `ErrContactCodeDeliveryFailed` carrying the bounded transport
+  classification as its cause text (contact.go's `sendCode`, through the
+  same `classifyTransportCause` the delivery paths use -- the raw cause
+  stays reachable through Unwrap, so the permanent signal survives
+  `errors.Is`): the code-send payload carries the plaintext code to a
   not-yet-verified address, so its error -- and any future diagnostic log
-  that renders it -- must never carry the address either.
+  that renders it -- must never carry the address in any form either.
   `VerifyCode` is a compare-and-swap: only the pending row's own code
   verifies it, the row's status -- never the columns -- is what makes a
   consumed or superseded code unusable, and concurrent verifies race on the

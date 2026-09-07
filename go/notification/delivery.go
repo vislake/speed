@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -558,8 +557,7 @@ func (s *DeliveryService) deliverUserChannel(ctx context.Context, tenantID strin
 		// preference matrix validates every stored selection against the
 		// types.go vocabulary. A corrupt stored row surfacing here is
 		// recorded and stopped, not looped on.
-		return s.failAndStop(ctx, tenantID, rec,
-			fmt.Errorf("notification: deliver on unknown channel %q", channel))
+		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonUnknownChannel, fmt.Errorf("notification: deliver on unknown channel %q", channel)))
 	}
 }
 
@@ -588,7 +586,7 @@ func (s *DeliveryService) deliverInbox(ctx context.Context, tenantID string, d D
 		if err != nil {
 			// A render failure is terminal -- the template or catalog
 			// will not heal on retry -- and is recorded as such.
-			return s.failAndStop(ctx, tenantID, rec, err)
+			return s.failAndStop(ctx, tenantID, rec, classify(failureReasonRenderFailed, err))
 		}
 		if err := s.inbox.Create(ctx, row); err != nil {
 			// The unique index on dedupe_key refuses a duplicate insert,
@@ -602,7 +600,7 @@ func (s *DeliveryService) deliverInbox(ctx context.Context, tenantID string, d D
 				return perr
 			}
 			if winner == nil {
-				return s.failAndRetry(ctx, tenantID, rec, err)
+				return s.failAndRetry(ctx, tenantID, rec, classify(failureReasonInboxWriteFailed, err))
 			}
 			row = winner
 		}
@@ -612,7 +610,7 @@ func (s *DeliveryService) deliverInbox(ctx context.Context, tenantID string, d D
 		// The row is durable; only its announcement failed. Record the
 		// failed attempt and retry -- the retry's probe finds the row and
 		// re-announces instead of re-writing.
-		return s.failAndRetry(ctx, tenantID, rec, err)
+		return s.failAndRetry(ctx, tenantID, rec, classify(failureReasonInboxAnnounceFailed, err))
 	}
 	rec.Status = SendRecordStatusSucceeded
 	return s.settle(ctx, tenantID, rec)
@@ -675,14 +673,13 @@ func (s *DeliveryService) announceInbox(ctx context.Context, tenantID string, d 
 // host's mailer.
 func (s *DeliveryService) deliverUserEmail(ctx context.Context, tenantID string, d Dispatch, rec *SendRecord) error {
 	if s.resolver == nil {
-		return s.failAndStop(ctx, tenantID, rec, ErrUserAddressResolverRequired)
+		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonResolverMissing, ErrUserAddressResolverRequired))
 	}
 	addrs, err := s.resolver.Resolve(ctx, d.Recipient.UserID)
 	if err != nil {
 		// Address resolution failed -- a store hiccup in the host's
 		// identity half. Record the failed attempt and retry.
-		return s.failAndRetry(ctx, tenantID, rec,
-			fmt.Errorf("notification: resolve addresses for user %s: %w", d.Recipient.UserID, err))
+		return s.failAndRetry(ctx, tenantID, rec, classify(failureReasonResolutionFailed, fmt.Errorf("notification: resolve addresses for user %s: %w", d.Recipient.UserID, err)))
 	}
 	if addrs.Email == "" {
 		// No email on file is a legitimate, possibly temporary state -- a
@@ -693,17 +690,18 @@ func (s *DeliveryService) deliverUserEmail(ctx context.Context, tenantID string,
 
 	parts, err := renderContent(s.catalog(), d.Locale, d.TypeKey, ChannelEmail, d.Params)
 	if err != nil {
-		return s.failAndStop(ctx, tenantID, rec, err)
+		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonRenderFailed, err))
 	}
 
 	start := time.Now()
 	err = s.sendMail(ctx, parts, []string{addrs.Email})
 	rec.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
-		// The transport error may quote the address it rejected; the send
-		// record must never store the plaintext, so the stored text is the
-		// redacted one (classification still runs on the original error).
-		cause := redactRecipientAddresses(err, addrs.Email)
+		// The record stores no transport text: a transport error may echo the
+		// recipient's address in whatever form the transport chose, so the
+		// bounded classification is what the record carries, while the raw
+		// cause stays reachable through Unwrap for errors.Is/As.
+		cause := classifyTransportCause(err)
 		if errors.Is(err, ErrTransportPermanent) {
 			// A user's address is the host's data, not a verified_contacts
 			// row, so there is no contact to mark bounced -- the refusal
@@ -721,12 +719,11 @@ func (s *DeliveryService) deliverUserEmail(ctx context.Context, tenantID string,
 // copy (a single text).
 func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d Dispatch, rec *SendRecord) error {
 	if s.resolver == nil {
-		return s.failAndStop(ctx, tenantID, rec, ErrUserAddressResolverRequired)
+		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonResolverMissing, ErrUserAddressResolverRequired))
 	}
 	addrs, err := s.resolver.Resolve(ctx, d.Recipient.UserID)
 	if err != nil {
-		return s.failAndRetry(ctx, tenantID, rec,
-			fmt.Errorf("notification: resolve addresses for user %s: %w", d.Recipient.UserID, err))
+		return s.failAndRetry(ctx, tenantID, rec, classify(failureReasonResolutionFailed, fmt.Errorf("notification: resolve addresses for user %s: %w", d.Recipient.UserID, err)))
 	}
 	if addrs.Phone == "" {
 		return s.skipAndStop(ctx, tenantID, rec, skipReasonNoPhone)
@@ -734,14 +731,14 @@ func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d
 
 	parts, err := renderContent(s.catalog(), d.Locale, d.TypeKey, ChannelSMS, d.Params)
 	if err != nil {
-		return s.failAndStop(ctx, tenantID, rec, err)
+		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonRenderFailed, err))
 	}
 
 	start := time.Now()
 	err = s.sendSMS(ctx, parts, addrs.Phone)
 	rec.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
-		cause := redactRecipientAddresses(err, addrs.Phone)
+		cause := classifyTransportCause(err)
 		if errors.Is(err, ErrTransportPermanent) {
 			return s.failAndStop(ctx, tenantID, rec, cause)
 		}
@@ -834,7 +831,7 @@ func (s *DeliveryService) deliverToContact(ctx context.Context, tenantID string,
 	// unknown-channel row below takes, since no retry can declare a type
 	// nobody declared.
 	if _, err := s.prefs.lookupType(d.TypeKey); err != nil {
-		return s.failAndStop(ctx, tenantID, rec, err)
+		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonTypeUndeclared, err))
 	}
 
 	switch contact.Channel {
@@ -850,8 +847,7 @@ func (s *DeliveryService) deliverToContact(ctx context.Context, tenantID string,
 		// and the job stops, so an operator reads the refusal in the send
 		// records and nothing walks the retry-and-dead-letter horizon over
 		// a row that will never heal.
-		return s.failAndStop(ctx, tenantID, rec,
-			fmt.Errorf("notification: contact %s is verified on unknown channel %q", contact.ID, contact.Channel))
+		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonUnknownChannel, fmt.Errorf("notification: contact %s is verified on unknown channel %q", contact.ID, contact.Channel)))
 	}
 }
 
@@ -893,14 +889,14 @@ func (s *DeliveryService) settleContactRefusal(ctx context.Context, tenantID str
 func (s *DeliveryService) deliverContactEmail(ctx context.Context, tenantID string, d Dispatch, contact *VerifiedContact, rec *SendRecord) error {
 	parts, err := renderContent(s.catalog(), platformDefaultLocale, d.TypeKey, ChannelEmail, d.Params)
 	if err != nil {
-		return s.failAndStop(ctx, tenantID, rec, err)
+		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonRenderFailed, err))
 	}
 
 	start := time.Now()
 	err = s.sendMail(ctx, parts, []string{contact.Address})
 	rec.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
-		cause := redactRecipientAddresses(err, contact.Address)
+		cause := classifyTransportCause(err)
 		if errors.Is(err, ErrTransportPermanent) {
 			// The address rejects mail. Mark the tenant's own contact
 			// bounced -- its future deliveries are refused by the ledger
@@ -925,14 +921,14 @@ func (s *DeliveryService) deliverContactEmail(ctx context.Context, tenantID stri
 func (s *DeliveryService) deliverContactSMS(ctx context.Context, tenantID string, d Dispatch, contact *VerifiedContact, rec *SendRecord) error {
 	parts, err := renderContent(s.catalog(), platformDefaultLocale, d.TypeKey, ChannelSMS, d.Params)
 	if err != nil {
-		return s.failAndStop(ctx, tenantID, rec, err)
+		return s.failAndStop(ctx, tenantID, rec, classify(failureReasonRenderFailed, err))
 	}
 
 	start := time.Now()
 	err = s.sendSMS(ctx, parts, contact.Address)
 	rec.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
-		cause := redactRecipientAddresses(err, contact.Address)
+		cause := classifyTransportCause(err)
 		if errors.Is(err, ErrTransportPermanent) {
 			bounceErr := s.contacts.MarkBounced(ctx, contact.ID)
 			stopErr := s.failAndStop(ctx, tenantID, rec, cause)
@@ -971,10 +967,23 @@ func (s *DeliveryService) sendSMS(ctx context.Context, parts map[string]string, 
 	return s.sms.Send(ctx, SMS{To: to, Text: parts["text"]})
 }
 
-// The short reasons a skipped send record carries in its Error column. A
-// skip is a deliberate non-send -- no address on file, consent withdrawn,
-// the address bounced -- and the reason is the operator's whole answer on
-// why; the empty-string sentinel covers the records that never skipped.
+// The bounded outcome text a send record's Error column carries. The column
+// stores no failure text of any origin: a transport failure routinely echoes
+// the recipient's address in whatever form the transport chose -- not
+// necessarily the normalized form the module handed it -- and send_records
+// is a platform table with no deletion path, so the module refuses to store
+// any raw cause text at all. A failed record instead carries the
+// classification of its failure, decided at the settle site, where the code
+// knows which class the failure is; a skipped record carries the short
+// reason of the deliberate non-send; a succeeded record carries the
+// empty-string sentinel. Both vocabularies are closed and module-authored,
+// so the column -- and every read of it, the D10 operator search first
+// among them -- can never carry plaintext PII.
+//
+// The skip reasons: a skip is a deliberate non-send -- no address on file,
+// consent withdrawn, the address bounced -- and the reason is the
+// operator's whole answer on why; the empty-string sentinel covers the
+// records that never skipped.
 const (
 	skipReasonNoEmail      = "no email address on file"
 	skipReasonNoPhone      = "no phone number on file"
@@ -982,62 +991,66 @@ const (
 	skipReasonBounced      = "contact bounced"
 )
 
-// sendRecordErrorBudget is the longest message the Error column of a send
-// record can hold -- the column's own 4000-char width (send_record.go).
-// Truncation happens here, at the write site, so no transport message and no
-// skip reason can overflow the schema.
-const sendRecordErrorBudget = 4000
+// The failure classifications of a failed send record, grouped by the
+// settle site that decides them. failureReasonTransportRefused and
+// failureReasonTransportFailed classify a transport error by its
+// permanent/transient signal (ErrTransportPermanent): refused is terminal
+// and stops the channel (and, on the contact path, marks the contact
+// bounced), failed is retried. failureReasonResolutionFailed and
+// failureReasonResolverMissing cover the host's user-address resolver
+// seam; failureReasonRenderFailed covers every copy-render refusal (a
+// missing template or catalog is terminal and cannot heal on retry);
+// failureReasonTypeUndeclared covers the contact path's registry gate;
+// failureReasonUnknownChannel the corrupt-row refusal on both recipient
+// paths; and failureReasonInboxWriteFailed / failureReasonInboxAnnounceFailed
+// the in-app channel's two retried infrastructure failures.
+const (
+	failureReasonTransportRefused    = "transport refused"
+	failureReasonTransportFailed     = "transport failed"
+	failureReasonResolutionFailed    = "user address resolution failed"
+	failureReasonResolverMissing     = "user address resolver not wired"
+	failureReasonRenderFailed        = "render failed"
+	failureReasonTypeUndeclared      = "notification type not declared"
+	failureReasonUnknownChannel      = "unknown delivery channel"
+	failureReasonInboxWriteFailed    = "inbox row write failed"
+	failureReasonInboxAnnounceFailed = "inbox announcement failed"
+)
 
-// sendRecordRedactionMarker is the replacement text redactRecipientAddresses
-// substitutes for a recipient address inside an error message about to be
-// stored on a send record -- the observable answer that the text WAS
-// redacted, never an empty hole the reader must guess at.
-const sendRecordRedactionMarker = "[redacted]"
-
-// redactRecipientAddresses returns cause with every occurrence of any
-// non-empty address in addresses replaced by sendRecordRedactionMarker --
-// the text a send record may store. A transport failure routinely quotes
-// the recipient (an SMTP 5xx names the mailbox it rejected, an SMS gateway
-// error the number), and the send record -- and every read of it, the D10
-// operator search first among them -- must never carry the plaintext
-// address, PII the module holds and therefore can strip itself rather than
-// trust a gateway's wording. The redaction is a best-effort replacement of
-// exactly the address strings the module handed the transport: an address
-// re-formatted by the transport is outside what any caller-side fix could
-// recognize. When no address occurs the original error is returned
-// unchanged, identity intact; when one does, the redacted text travels on
-// an error that still Unwraps to the original, so errors.Is/As against the
-// transport's own wrapped sentinels keep working on the retried failure.
-func redactRecipientAddresses(cause error, addresses ...string) error {
-	text := cause.Error()
-	redacted := false
-	for _, address := range addresses {
-		if address == "" || !strings.Contains(text, address) {
-			continue
-		}
-		text = strings.ReplaceAll(text, address, sendRecordRedactionMarker)
-		redacted = true
-	}
-	if !redacted {
-		return cause
-	}
-	return &redactedError{redacted: text, original: cause}
+// classifiedError is the error every failing settle site records and
+// returns: Error() renders the bounded classification -- one of the
+// failureReason* values above -- while Unwrap exposes the original cause,
+// so the delivery job's retry signals -- and a host's OnFailure
+// classification through errors.Is or apperr.As -- still see the
+// transport's own wrapped error and the module's coded errors, even though
+// no raw text travels in the record or in the returned error's own
+// message.
+type classifiedError struct {
+	reason string
+	cause  error
 }
 
-// redactedError is the error redactRecipientAddresses produces when it had
-// to redact: Error() renders the redacted text, and Unwrap exposes the
-// original error, so the delivery job's retry signals -- and a host's
-// OnFailure classification through errors.Is -- still see the transport's
-// own wrapped error while every stored or logged rendering of the failure
-// stays free of the recipient's address.
-type redactedError struct {
-	redacted string
-	original error
+func (e *classifiedError) Error() string { return e.reason }
+
+func (e *classifiedError) Unwrap() error { return e.cause }
+
+// classify returns cause under the bounded classification reason: the
+// returned error reads as reason and unwraps to cause. Every failing
+// settle site builds its record's outcome this way.
+func classify(reason string, cause error) error {
+	return &classifiedError{reason: reason, cause: cause}
 }
 
-func (e *redactedError) Error() string { return e.redacted }
-
-func (e *redactedError) Unwrap() error { return e.original }
+// classifyTransportCause classifies a transport failure by its permanent
+// signal: a cause wrapping ErrTransportPermanent is a refusal (terminal),
+// any other transport failure is retried -- the two failureReasonTransport*
+// values. The delivery paths' four send sites and the verification-code
+// send path (contact.go's sendCode) share the classification.
+func classifyTransportCause(cause error) error {
+	if errors.Is(cause, ErrTransportPermanent) {
+		return classify(failureReasonTransportRefused, cause)
+	}
+	return classify(failureReasonTransportFailed, cause)
+}
 
 // sendRecordFor returns the send record a delivery attempt over channel will
 // settle, carrying every field known before the attempt runs: the tenant,
@@ -1161,8 +1174,10 @@ func (s *DeliveryService) alreadyDelivered(ctx context.Context, tenantID, key st
 // write every delivery path funnels through. It probes the record already
 // under the attempt's key, adopts its id (a retry overwrites its earlier
 // attempts' row in place, so one delivery keeps one record for life) or
-// invents one for the first write, truncates the recorded message to the
-// column's budget, and returns nil when the record landed. A record that
+// invents one for the first write, and returns nil when the record landed.
+// The outcome text is bounded by construction -- the failure classes and
+// skip reasons above never approach the column's width -- so settle does no
+// write-site truncation. A record that
 // fails to land is returned as an error: the attempt's outcome must be
 // visible even when the record write itself failed, which is what makes a
 // lost succeeded record a retried delivery rather than a silent gap in the
@@ -1206,10 +1221,6 @@ func (s *DeliveryService) alreadyDelivered(ctx context.Context, tenantID, key st
 // branch is where an existing row's id is ever picked up); only the
 // guarded writes below can meet an already-succeeded row.
 func (s *DeliveryService) settle(ctx context.Context, tenantID string, rec *SendRecord) error {
-	if len(rec.Error) > sendRecordErrorBudget {
-		rec.Error = rec.Error[:sendRecordErrorBudget]
-	}
-
 	adopted := rec.ID != ""
 	if !adopted {
 		existing, err := s.sendRecs.ByTenantAndKey(ctx, tenantID, rec.IdempotencyKey)
@@ -1307,8 +1318,10 @@ func (s *DeliveryService) recordDeliveryMetrics(ctx context.Context, rec *SendRe
 	}
 }
 
-// failAndRetry records the attempt as a failed send record carrying cause,
-// then returns cause (joined with a record-write failure, should one land):
+// failAndRetry records the attempt as a failed send record carrying cause's
+// bounded classification (every failing settle site passes a classifiedError,
+// so the record stores the class, never raw cause text), then returns cause
+// (joined with a record-write failure, should one land):
 // the job's retry is the response to a failure that may resolve, and the
 // record keeps every attempt observable while the job converges.
 func (s *DeliveryService) failAndRetry(ctx context.Context, tenantID string, rec *SendRecord, cause error) error {
@@ -1320,7 +1333,8 @@ func (s *DeliveryService) failAndRetry(ctx context.Context, tenantID string, rec
 	return cause
 }
 
-// failAndStop records the attempt as a failed send record carrying cause and
+// failAndStop records the attempt as a failed send record carrying cause's
+// bounded classification (the same classifiedError contract as failAndRetry) and
 // returns nil: the failure is terminal -- the template is missing, the
 // transport refuses the address, the wiring is broken -- and retrying would
 // repeat it, not resolve it. Only a record-write failure surfaces, because a

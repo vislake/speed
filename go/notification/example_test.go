@@ -170,7 +170,7 @@ func ExampleSendRecordRepository_ListByFilter() {
 		RecipientClass:  notification.RecipientClassUser,
 		RecipientUserID: "user-7",
 		Status:          notification.SendRecordStatusFailed,
-		Error:           "sms provider refused",
+		Error:           "transport failed",
 		IdempotencyKey:  "delivery-key-2",
 	}
 	if err = repo.Create(ctx, failed); err != nil {
@@ -192,7 +192,7 @@ func ExampleSendRecordRepository_ListByFilter() {
 	}
 
 	// Output:
-	// channel=sms status=failed error=sms provider refused
+	// channel=sms status=failed error=transport failed
 }
 
 // ExampleNotificationPreferences walks the preference matrix the way a host
