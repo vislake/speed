@@ -386,6 +386,30 @@ export default defineConfig({
           // stdout stays out of the test report either way.
           // Only stdout is redirected: stderr stays on the process, so a
           // server that fails to boot still says so in the test report.
+          //
+          // THE COST OF THAT, since it is now worth knowing: everything
+          // Kernel.Bootstrap says goes to stderr and is therefore NOT in
+          // this file. pkgcore announces its resolved seam composition
+          // and warns about implementations that do not survive a
+          // restart through slog.Default() -- it cannot do otherwise,
+          // being the module every other one sits on, so it can never
+          // import observability -- and this app runs buildServer, which
+          // is where Bootstrap happens, deliberately BEFORE obs.Init
+          // (main.go says why). So those lines are Go's default text
+          // format on stderr while everything a gate reads here is the
+          // structured logger's stdout.
+          //
+          // Measured, not assumed: a probe boot answers
+          // "pkgcore: bootstrapped seam composition eventbus=... " plus
+          // two restart warnings on stderr, and zero occurrences on
+          // stdout. So a gate that wants to assert on a boot-time line
+          // -- which composition the process actually resolved, say --
+          // cannot use the shared server at all; it needs its own
+          // through test-utils/servers.ts, whose bootServer captures
+          // BOTH streams for exactly this reason. Left as it is rather
+          // than redirecting stderr too, because that would take a
+          // failed boot out of the test report, which is the one thing
+          // this redirection was careful to keep.
           command: `sh -c 'go run ./cmd/server > "${SERVER_LOG_PATH}"'`,
           cwd: serverDir,
           url: `http://${loopback}:${apiPort}/healthz`,
