@@ -1,11 +1,16 @@
 package safehttp
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -301,5 +306,159 @@ func TestNewClient_AppliesItsOptions(t *testing.T) {
 	}
 	if !errors.Is(err, ErrBlockedAddress) {
 		t.Errorf("Do() error = %v, want it to wrap ErrBlockedAddress", err)
+	}
+}
+
+// TestGuard_Client_RefusesA307Or308RedirectToAForbiddenScheme is the
+// scheme half of the redirect policy: the scheme of every hop is
+// re-checked before the hop is followed, not only hop zero's.
+//
+// The harm is specific to 307 and 308: those two statuses re-send the
+// request body, and this guard fronts destinations whose bodies carry
+// credentials -- the SMS gateway's phone-number-and-verification-code body,
+// an OIDC exchange's authorization code. An https destination answering
+// 307/308 with an http Location must therefore be refused BY SCHEME before
+// the body is re-sent in cleartext across the public internet: the dialler
+// would admit the hop (it re-checks addresses, never schemes), so without
+// this check a redirect silently downgrades the transport the body travels
+// on.
+//
+// The guarded client's own transport is deliberately replaced here: its
+// dialler refuses loopback -- the very property TestGuard_ClientCannotReachALoopbackServer
+// pins -- so no httptest server can be reached through it. The replacement
+// is the TLS test server's own transport, which keeps everything else about
+// Client() intact, including the redirect policy under test.
+//
+// Before the policy checked schemes, this test failed: the client followed
+// the downgrading redirect and the capture server received the re-sent
+// body.
+func TestGuard_Client_RefusesA307Or308RedirectToAForbiddenScheme(t *testing.T) {
+	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(fmt.Sprintf("%d", status), func(t *testing.T) {
+			var (
+				captureMu sync.Mutex
+				captured  []byte
+			)
+			capture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				captureMu.Lock()
+				captured = body
+				captureMu.Unlock()
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(capture.Close)
+
+			hop0 := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Location", capture.URL+"/capture")
+				w.WriteHeader(status)
+			}))
+			t.Cleanup(hop0.Close)
+
+			client := NewGuard().Client()
+			client.Transport = hop0.Client().Transport
+
+			// The body shape of the flow whose leak this check exists to
+			// stop: a phone number and a verification code.
+			body := []byte(`{"to":"+15551234567","text":"your code is 123456"}`)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, hop0.URL+"/sms", bytes.NewBuffer(body))
+			if err != nil {
+				t.Fatalf("build the request: %v", err)
+			}
+			resp, err := client.Do(req)
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			if !errors.Is(err, ErrBlockedScheme) {
+				t.Errorf("Do() error = %v; a %d redirect to an http Location must be refused by scheme, not followed", err, status)
+			}
+
+			captureMu.Lock()
+			reSent := len(captured) > 0
+			captureMu.Unlock()
+			if reSent {
+				t.Errorf("the %d redirect re-sent the request body to the capture server; the scheme-downgrading hop must never be dialled", status)
+			}
+		})
+	}
+}
+
+// TestGuard_Client_StillFollowsARedirectThatKeepsAnAllowedScheme pins the
+// no-over-blocking side of the redirect policy's scheme re-check: a hop
+// whose scheme is still allowed is followed exactly as it was before the
+// check existed. The chain here stays https end to end under the guard's
+// default https-only allowlist.
+func TestGuard_Client_StillFollowsARedirectThatKeepsAnAllowedScheme(t *testing.T) {
+	var hop *httptest.Server
+	hop = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/final" {
+			fmt.Fprint(w, "final reached")
+			return
+		}
+		w.Header().Set("Location", hop.URL+"/final")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(hop.Close)
+
+	client := NewGuard().Client()
+	client.Transport = hop.Client().Transport // loopback; see TestGuard_Client_RefusesA307Or308RedirectToAForbiddenScheme
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, hop.URL+"/start", nil)
+	if err != nil {
+		t.Fatalf("build the request: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Do() error = %v; an https-to-https redirect must still be followed", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read the final response: %v", err)
+	}
+	if string(got) != "final reached" {
+		t.Errorf("final response body = %q, want %q", got, "final reached")
+	}
+	if resp.Request.URL.Path != "/final" {
+		t.Errorf("final request path = %q, want %q", resp.Request.URL.Path, "/final")
+	}
+}
+
+// TestGuard_Client_DistinguishesASchemeRefusalFromAHopCountRefusal proves
+// the two refusals keep their own vocabularies: a chain that ends on the
+// hop-count bound refuses with the hop-count error -- never with a scheme
+// refusal -- and the scheme refusal the tests above pin never masquerades
+// as a hop-count one.
+func TestGuard_Client_DistinguishesASchemeRefusalFromAHopCountRefusal(t *testing.T) {
+	// http is in the allowlist here on purpose: the hop that ends this
+	// chain is refused for its LENGTH, so the error must be the hop-count
+	// one, distinguishable from ErrBlockedScheme.
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", server.URL+"/hop")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewGuard(WithAllowedSchemes("http", "https")).Client()
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil        // no environment proxy inside a test
+	client.Transport = transport // loopback; see TestGuard_Client_RefusesA307Or308RedirectToAForbiddenScheme
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/start", nil)
+	if err != nil {
+		t.Fatalf("build the request: %v", err)
+	}
+	resp, err := client.Do(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("Do() followed the chain past the hop bound")
+	}
+	if errors.Is(err, ErrBlockedScheme) {
+		t.Errorf("Do() error = %v; an over-long chain of allowed-scheme hops must not be reported as a scheme refusal", err)
+	}
+	if !strings.Contains(err.Error(), "stopped after 5 redirects") {
+		t.Errorf("Do() error = %v, want the hop-count refusal message", err)
 	}
 }

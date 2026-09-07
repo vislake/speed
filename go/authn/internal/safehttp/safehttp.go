@@ -163,6 +163,16 @@ func defaultResolve(ctx context.Context, host string) ([]netip.Addr, error) {
 	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 }
 
+// checkAllowedScheme is CheckScheme's scheme half, shared with the redirect
+// policy: it refuses u when u's scheme is not in the guard's allowlist,
+// wrapping ErrBlockedScheme.
+func (g *Guard) checkAllowedScheme(u *url.URL) error {
+	if !slices.Contains(g.cfg.schemes, strings.ToLower(u.Scheme)) {
+		return fmt.Errorf("%w: %q", ErrBlockedScheme, u.Scheme)
+	}
+	return nil
+}
+
 // CheckScheme is the scheme half of ValidateURL: it parses raw and refuses
 // it when it is not an absolute URL or when its scheme is not one of this
 // guard's allowed schemes. The host is neither resolved nor checked here --
@@ -171,12 +181,17 @@ func defaultResolve(ctx context.Context, host string) ([]netip.Addr, error) {
 // connects to.
 //
 // It exists as its own method because the dialler checks addresses, never
-// schemes: ValidateURL's "not the security boundary" disclaimer covers its
-// address checks, but the scheme requirement has no dial-time twin, so a
-// caller whose destination must stay confidential -- or must simply never
-// be reached over a non-http scheme -- runs this check itself on the path
-// that matters. Resolving nothing, it can run at request time without a
-// network round trip of its own.
+// schemes -- a dial sees only an address, so the scheme requirement has no
+// dial-time twin. The hops a destination answers with are covered by
+// Client's redirect policy, which re-checks every redirect hop's scheme
+// before following it (a 307/308 hop re-sends the request body, so an https
+// destination answering with an http Location must not be followed into
+// cleartext). What has no second moment anywhere is the FIRST request's own
+// scheme, the one URL the caller chose, so a caller whose destination must
+// stay confidential -- or must simply never be reached over a non-http
+// scheme -- runs this check itself wherever that URL is used. Resolving
+// nothing, it can run at request time without a network round trip of its
+// own.
 func (g *Guard) CheckScheme(raw string) (*url.URL, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -185,8 +200,8 @@ func (g *Guard) CheckScheme(raw string) (*url.URL, error) {
 	if !parsed.IsAbs() || parsed.Host == "" {
 		return nil, fmt.Errorf("%w: destination must be an absolute URL", ErrBlockedScheme)
 	}
-	if !slices.Contains(g.cfg.schemes, strings.ToLower(parsed.Scheme)) {
-		return nil, fmt.Errorf("%w: %q", ErrBlockedScheme, parsed.Scheme)
+	if err := g.checkAllowedScheme(parsed); err != nil {
+		return nil, err
 	}
 	return parsed, nil
 }
@@ -202,10 +217,12 @@ func (g *Guard) CheckScheme(raw string) (*url.URL, error) {
 // It is a pre-flight check, run when a URL is saved so the operator gets a
 // clear error at the moment they can fix it. It is NOT the security boundary
 // for the address checks -- Client's dialler is, and it re-checks every
-// address it actually connects to. The scheme half has no such second
-// moment: no dial-time mechanism checks schemes, so a caller whose
-// destination's scheme must stay restricted runs CheckScheme itself wherever
-// the URL is used, not only where it is saved.
+// address it actually connects to. The scheme half's second moment is
+// Client's redirect policy, which re-checks every redirect hop's scheme
+// before it is followed; what has no second moment is the first request's
+// own scheme, so a caller whose destination's scheme must stay restricted
+// runs CheckScheme itself wherever that URL is used, not only where it is
+// saved.
 func (g *Guard) ValidateURL(ctx context.Context, raw string) (*url.URL, error) {
 	parsed, err := g.CheckScheme(raw)
 	if err != nil {
@@ -295,7 +312,14 @@ func checkDialAddress(address string) error {
 func (g *Guard) CheckDialAddress(address string) error { return checkDialAddress(address) }
 
 // Client returns an *http.Client whose every connection -- including every
-// redirect hop -- passes through the connect-time check.
+// redirect hop -- passes through the connect-time check, and whose every
+// redirect hop is refused when its scheme is not allowed. The scheme
+// re-check matters because 307/308 redirects re-send the request body:
+// a guarded client's request body can carry a credential (an SMS
+// verification code, an OIDC authorization code), so an https destination
+// answering with an http Location must not be followed into cleartext --
+// the dialler would admit the hop, since it re-checks addresses, never
+// schemes.
 //
 // The transport takes no proxy: a proxied request connects to the proxy, so
 // the address the dialler validates is the proxy's and the destination is
@@ -321,7 +345,16 @@ func (g *Guard) Client() *http.Client {
 	return &http.Client{
 		Transport: transport,
 		Timeout:   g.cfg.timeout,
-		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// req is the request the redirect would ISSUE next, so its
+			// scheme is the next hop's scheme, re-checked against the
+			// same allowlist CheckScheme applies. The refusal is a
+			// scheme refusal (ErrBlockedScheme), distinct from the
+			// hop-count refusal below, in the guard's own error
+			// vocabulary.
+			if err := g.checkAllowedScheme(req.URL); err != nil {
+				return err
+			}
 			if len(via) >= maxHops {
 				return fmt.Errorf("safehttp: stopped after %d redirects", maxHops)
 			}
