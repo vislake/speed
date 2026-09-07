@@ -321,14 +321,32 @@ func stemMatches(stem, seg string) bool {
 //     an _id-marked attribute holds a row reference -- go/integration's
 //     "key_id" logs an API-key row's opaque id, precisely so an operator
 //     can tell which key failed its last-used update.
+//
 //   - a segment ending in "idempotency_key" ("idempotency_key",
-//     "credit_idempotency_key"): the repository-wide derived-idempotency-
-//     key convention (go/jobs' queue metadata, go/metering's outbox,
-//     go/billing's credit ledger, go/notification's delivery key all
-//     derive the key from the operation's own identity -- hashed, never
-//     caller-supplied), whose values are correlation identifiers --
+//     "credit_idempotency_key"): the repository-wide idempotency-key
+//     naming convention (go/jobs' queue metadata, go/metering's outbox,
+//     go/billing's credit ledger and go/notification's delivery key all
+//     key one business-operation instance by a deterministic id derived
+//     from the operation's own identity -- never random -- a correlation
+//     identifier whose value the log line exists to show:
 //     examples/reference-app's smilesim logs "credit_idempotency_key"
 //     precisely so an operator can reconcile an orphaned reservation.
+//
+//     The exemption does not rest on the value being safe by
+//     construction: of the four conventions only go/notification's
+//     delivery key is actually hashed -- go/jobs' is the enqueuing
+//     caller's own key text, embedded verbatim in its asynq TaskID, and
+//     go/metering's and go/billing's are the calling code's own -- so a
+//     caller that embeds credentials or PII in a key puts that text
+//     under an exempted name. What the exemption narrows is only the
+//     "key" stem, never the value net or the PII boundary: a
+//     secret-shaped value logged under a surviving idempotency_key name
+//     is still masked in place, exactly as under key_id (pinned by
+//     TestRedact_KeyStemDoesNotOverRedactCorrelationReferences), while
+//     PII-shaped text is caller-declared content this layer cannot
+//     recognize -- the owning module's field doc is the caller's gate
+//     (go/jobs' Task.IdempotencyKey warns that its text rides verbatim
+//     into the logged JobID).
 //
 // Everything else the word-boundary match still catches redacts as
 // before, and the exemptions apply to the "key" stem only: "id_token",
@@ -352,7 +370,11 @@ func keyStemMatches(seg string) bool {
 // stem addition or an adversarial id value (tenant names are user-chosen
 // strings) can never start mangling correlation fields. Exemption means
 // the whole attribute is passed through untouched: no key rule, no
-// value-shape scan.
+// value-shape scan. What the value contains is the logging call site's
+// responsibility, not this map's: on the asynq-backed queue the job_id
+// values embed the enqueuing caller's raw Task.IdempotencyKey text
+// (go/jobs' own field doc warns key builders of exactly that), and such a
+// value passes through untouched by this exemption's design.
 var neverRedactKeys = map[string]struct{}{
 	TraceIDKey:  {},
 	SpanIDKey:   {},
