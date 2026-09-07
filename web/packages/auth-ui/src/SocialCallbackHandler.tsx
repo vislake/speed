@@ -23,6 +23,19 @@
  * pending notice and the authenticated session) stays in place.
  * Nothing here navigates: the props come from the host's own route and
  * the success callback is the host's.
+ *
+ * An exchange that lost a concurrent sign-in race (a sibling login
+ * committed to the session while this exchange was in flight) answers
+ * with auth-core's OperationSupersededError, not a failure: the
+ * session is authenticated now -- under the winner's identity, which
+ * is not necessarily this exchange's -- so the handler fires no
+ * onSignedIn (a one-shot side effect must not fire for an identity
+ * the session is not running under; the winning call fires its own)
+ * and never flips to the failed state, whose retry would re-submit an
+ * already-consumed single-use code. The pending notice stays up and
+ * the host's own snapshot hooks observe the winner's session; a
+ * re-entry to the callback route with the session authenticated takes
+ * the ordinary already-signed-in path above.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -31,6 +44,7 @@ import Button from '@mui/material/Button'
 import CircularProgress from '@mui/material/CircularProgress'
 import Typography from '@mui/material/Typography'
 import type { AuthSession } from '@speed/auth-core'
+import { isOperationSuperseded } from '@speed/auth-core'
 import type { SocialProvider } from './SocialSignInSection.js'
 import { useAuthUiTranslation } from './internal/translation.js'
 import { InlineError, errorCodeOf } from './internal/inline-error.js'
@@ -105,6 +119,14 @@ export function SocialCallbackHandler({
       try {
         await session.completeSocialLogin(provider, { code, state })
       } catch (error) {
+        if (isOperationSuperseded(error)) {
+          // This exchange lost a concurrent sign-in race (see the file
+          // header): no failed state -- whose retry would re-submit the
+          // already-consumed single-use code -- and no onSignedIn, which
+          // the winning call fires for the identity the session is
+          // actually running under. The pending notice stays up.
+          return
+        }
         if (run === runRef.current) {
           setErrorCode(errorCodeOf(error))
           setStatus('failed')

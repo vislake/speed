@@ -15,11 +15,12 @@
 
 import { StrictMode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SocialCallbackHandler } from './SocialCallbackHandler.js'
 import { renderWithProviders } from '../test-utils/render.js'
 import {
+  LOGIN_PASSWORD,
   SOCIAL_CALLBACK,
   apiError,
   makeHarness,
@@ -303,5 +304,66 @@ describe('SocialCallbackHandler', () => {
     ).toBeInTheDocument()
     // Exactly one exchange ran.
     expect(harness.calls).toHaveLength(1)
+  })
+
+  it('treat a superseded exchange as the lost race it is: no failed state, no onSignedIn', async () => {
+    // A sibling login committing through the same session while this
+    // exchange is in flight makes auth-core reject it with
+    // OperationSupersededError when its answer arrives: the session is
+    // authenticated under the WINNER's identity, which is not
+    // necessarily this exchange's. The handler must not flip to the
+    // failed state -- its retry would re-submit the already-consumed
+    // single-use code -- and must not fire onSignedIn, a one-shot side
+    // effect reserved for the identity the session actually runs
+    // under (the winning call fires its own). The pending notice stays
+    // up for the host to observe the winner's session and navigate.
+    let releaseSocial!: (value: unknown) => void
+    const socialGate = new Promise((resolve) => {
+      releaseSocial = resolve
+    })
+    const harness = makeHarness({
+      [SOCIAL_CALLBACK]: () =>
+        socialGate.then(() => ({ tokens: makePair() })),
+      [LOGIN_PASSWORD]: () => makePair(),
+    })
+    const onSignedIn = vi.fn()
+    renderWithProviders(
+      <SocialCallbackHandler
+        session={harness.session}
+        provider="google"
+        code={CODE}
+        state={STATE}
+        onSignedIn={onSignedIn}
+      />,
+    )
+    // The exchange is in flight (the gate holds its answer).
+    await waitFor(() => expect(harness.calls).toHaveLength(1))
+    // The winning password login commits while the exchange is in
+    // flight.
+    await act(async () => {
+      await harness.session.loginWithPassword({
+        identifier: 'alice@example.com',
+        password: 'pw',
+      })
+    })
+    expect(harness.store.get()).toBe('access-1')
+    // The exchange's answer arrives after the winner committed:
+    // auth-core rejects it as superseded. No failure banner, no retry
+    // button, no onSignedIn, and the loser's tokens never applied.
+    await act(async () => {
+      releaseSocial(makePair({ access_token: 'access-social' }))
+    })
+    await waitFor(() =>
+      expect(
+        screen.getByText(zhCN.socialCallback.pending),
+      ).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: zhCN.socialCallback.retry }),
+    ).not.toBeInTheDocument()
+    expect(onSignedIn).not.toHaveBeenCalled()
+    expect(harness.store.get()).toBe('access-1')
+    expect(harness.calls).toHaveLength(2)
   })
 })

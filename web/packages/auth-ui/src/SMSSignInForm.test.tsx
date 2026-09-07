@@ -15,11 +15,12 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SMSSignInForm } from './SMSSignInForm.js'
 import { renderWithProviders } from '../test-utils/render.js'
 import {
+  LOGIN_PASSWORD,
   LOGIN_SMS,
   REQUEST_SMS_CODE,
   apiError,
@@ -392,5 +393,61 @@ describe('SMSSignInForm', () => {
     await waitFor(() =>
       expect(screen.getByLabelText(zhCN.smsSignIn.codeLabel)).toHaveValue(''),
     )
+  })
+
+  it('treat a superseded code-step submit as the lost race it is, rendering no error', async () => {
+    // A concurrent sign-in (here the password channel committing
+    // through the same session while the SMS login is still in
+    // flight) makes auth-core reject the SMS submit with
+    // OperationSupersededError when its answer arrives: the losing
+    // submit must not render the generic error banner (it is not a
+    // failure) and must not fire onSignedIn (the winning call fired
+    // its own exactly once, for the identity the session actually
+    // runs under).
+    let releaseSms!: (value: unknown) => void
+    const smsGate = new Promise((resolve) => {
+      releaseSms = resolve
+    })
+    const harness = makeHarness({
+      [REQUEST_SMS_CODE]: () => undefined,
+      [LOGIN_SMS]: () => smsGate,
+      [LOGIN_PASSWORD]: () => makePair(),
+    })
+    const onSignedIn = vi.fn()
+    renderWithProviders(
+      <SMSSignInForm session={harness.session} onSignedIn={onSignedIn} />,
+    )
+    await requestCode(PHONE)
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toBeInTheDocument(),
+    )
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText(zhCN.smsSignIn.codeLabel), CODE)
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.submit }),
+    )
+    // The winning password login commits while the SMS login is in
+    // flight.
+    await act(async () => {
+      await harness.session.loginWithPassword({
+        identifier: 'alice@example.com',
+        password: 'pw',
+      })
+    })
+    expect(harness.store.get()).toBe('access-1')
+    // The SMS answer arrives after the winner committed: auth-core
+    // rejects it as superseded, and the form treats that as the lost
+    // race it is -- quiet, retryable, no error banner, no onSignedIn.
+    await act(async () => {
+      releaseSms(makePair())
+    })
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: zhCN.smsSignIn.submit }),
+      ).toBeEnabled(),
+    )
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(onSignedIn).not.toHaveBeenCalled()
+    expect(harness.store.get()).toBe('access-1')
   })
 })

@@ -24,6 +24,15 @@
  * and a throwing host callback is contained (it is not a login
  * failure, never renders an error, never escapes as an unhandled
  * rejection). The heading above the form is host content.
+ *
+ * A code-step submit whose login lost a concurrent race (the password
+ * channel's, a social exchange, a second instance of a sign-in form
+ * committed to the session while this one was in flight) answers with
+ * auth-core's OperationSupersededError, not a failure: the losing
+ * submit renders no error banner and fires no onSignedIn (the winning
+ * call fires its own exactly once), and the session being
+ * authenticated now is the host's own snapshot to observe through its
+ * auth-core hooks.
  */
 
 import { useCallback, useState } from 'react'
@@ -35,6 +44,7 @@ import { useForm } from 'react-hook-form'
 import type { SubmitHandler } from 'react-hook-form'
 import { FormLayout, FormField } from '@speed/ui-kit'
 import type { AuthSession } from '@speed/auth-core'
+import { isOperationSuperseded } from '@speed/auth-core'
 import { useAuthUiTranslation } from './internal/translation.js'
 import { InlineError, errorCodeOf } from './internal/inline-error.js'
 
@@ -98,6 +108,14 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
         code: values.code,
       })
     } catch (error) {
+      if (isOperationSuperseded(error)) {
+        // This submit lost a concurrent sign-in race (see the file
+        // header): a lost race is not a failure -- no error banner,
+        // and no onSignedIn, which the winning call already fired
+        // exactly once. The session being authenticated now is the
+        // host's own snapshot to observe.
+        return
+      }
       setErrorCode(errorCodeOf(error))
       return
     }
