@@ -269,11 +269,21 @@ enqueues (the payload is also the job payload, so its JSON shape is part of
 the queue contract), and every decision that can change between enqueue and
 delivery -- the recipient's channel preferences, an external contact's
 consent and status, the addresses on file -- is re-checked at send time by
-the job, never frozen into the payload. The job renders the type's copy for
-the recipient's locale from the merged catalog (send time, never enqueue
-time; a render can never precede the recheck that might have skipped it),
-writes the in-app row and/or drives the email/SMS transports, and settles one
-`send_records` row per attempted channel.
+the job, never frozen into the payload. The type registry is part of that
+send-time recheck on BOTH recipient paths: a user delivery resolves its
+channels through `ResolveForDelivery` (which refuses an undeclared type
+before any channel exists), and a contact delivery consults the same live
+registry before anything renders, terminal-refusing an undeclared type and
+recording the refusal under the contact's own channel -- a message that
+went out for a type nobody declared would bypass the preference matrix,
+the unsubscribe decision and the declared default channel strategy the
+declaration owns, and the refusal cannot wait for the renderer, because an
+undeclared type whose templates happened to exist would render fine. The
+job renders the type's copy for the recipient's locale from the merged
+catalog (send time, never enqueue time; a render can never precede the
+recheck that might have skipped it), writes the in-app row and/or drives
+the email/SMS transports, and settles one `send_records` row per attempted
+channel.
 
 Record semantics (`send_record.go`): `succeeded` is written only after the
 transport accepted the send, `failed` after a failure exhausted an attempt,
@@ -320,7 +330,14 @@ indexed. Consent arrives two ways:
   code is 6 decimal digits from `crypto/rand`, valid 5 minutes, one pending
   code per contact, stored as its SHA-256 hash with its expiry in columns on
   the verified_contacts row itself -- never a separate table, never the
-  plaintext (see "The verification code rides on the contact row").
+  plaintext (see "The verification code rides on the contact row"). A code
+  send whose transport refuses is reported through
+  `ErrContactCodeDeliveryFailed` with the recipient's address redacted out
+  of the wrapped cause (contact.go's `sendCode`, the same
+  `redactRecipientAddresses` the delivery paths apply before their failure
+  text is stored): the code-send payload carries the plaintext code to a
+  not-yet-verified address, so its error -- and any future diagnostic log
+  that renders it -- must never carry the address either.
   `VerifyCode` is a compare-and-swap: only the pending row's own code
   verifies it, the row's status -- never the columns -- is what makes a
   consumed or superseded code unusable, and concurrent verifies race on the
@@ -588,8 +605,12 @@ against the real API.
 
 The Docker-backed integration tier lives in `integration_test/` (run as
 `go test -tags=integration ./integration_test/...` from the module dir): a
-PostgreSQL leg that applies the module's postgres migration set from zero
-and re-runs the isolation suites against a real server, and a Redis leg
+PostgreSQL leg that applies the module's postgres migration set from zero,
+re-runs the isolation suites against a real server, and executes the
+delivery log's guarded rewrite (`SendRecordRepository.SaveGuarded`) through
+the repository against real PostgreSQL -- the save path's only second-
+dialect execution, pinning the statement's guard semantics and its
+literal-bound succeeded sentinel on the second dialect -- and a Redis leg
 proving an inbox delivery announced on one replica's bus reaches the other
 replica's hub (the cross-replica shape the unit tier cannot compose). The
 same directory carries the `clinic` demo module, an in-tree consumer that
