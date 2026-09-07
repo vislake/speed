@@ -366,6 +366,69 @@ func TestScopeService_MemberNodeIDs_AfterAMove_FollowsTheSubtree(t *testing.T) {
 	}
 }
 
+// TestScopeService_MemberNodeIDs_AfterRestoreOfMovedAncestor_ResolvesUnderTheRealParent
+// is the consumer-visible half of the P1-org-restore-path proof: after the
+// four-step sequence (cascade-delete hub's subtree, restore hub, move hub
+// onto a new branch, restore hub's descendant), the descendant used to come
+// back LIVE under a stale Path naming hub's old location. rbac-shaped scope
+// resolution reads the tree through those very paths -- MemberNodeIDs is the
+// prefix scan a subtree grant is decided against -- so a membership anchored
+// at hub's REAL (new) position could not see the restored descendant, while
+// a membership anchored under the OLD branch still could: the grant
+// consequences of the corruption in both directions. MemberNodeIDs must
+// resolve the descendant under its real parent and nowhere else.
+func TestScopeService_MemberNodeIDs_AfterRestoreOfMovedAncestor_ResolvesUnderTheRealParent(t *testing.T) {
+	m, _ := newTestModule(t)
+	ctx := tenantCtx("tenant-a")
+	_, north, south := seedTree(t, m.Tree(), ctx)
+	hub, err := m.Tree().CreateChild(ctx, north.ID, "Regional Hub", "group")
+	if err != nil {
+		t.Fatalf("CreateChild(hub): %v", err)
+	}
+	store, err := m.Tree().CreateChild(ctx, hub.ID, "Store 7", "store")
+	if err != nil {
+		t.Fatalf("CreateChild(store): %v", err)
+	}
+
+	// The four-step sequence from tree_test.go's own regression test.
+	if delErr := m.Tree().Delete(ctx, hub.ID, true); delErr != nil {
+		t.Fatalf("Delete(hub) cascade: %v", delErr)
+	}
+	if _, restErr := m.Tree().Restore(ctx, hub.ID); restErr != nil {
+		t.Fatalf("Restore(hub): %v", restErr)
+	}
+	if _, moveErr := m.Tree().Move(ctx, hub.ID, south.ID); moveErr != nil {
+		t.Fatalf("Move(hub, south): %v", moveErr)
+	}
+	if _, restErr := m.Tree().Restore(ctx, store.ID); restErr != nil {
+		t.Fatalf("Restore(store): %v", restErr)
+	}
+
+	// A membership at the descendant's real parent must see it...
+	if _, addErr := m.Members().Add(ctx, "u-manager", hub.ID); addErr != nil {
+		t.Fatalf("Add(manager, hub): %v", addErr)
+	}
+	managerScope, err := m.scope.MemberNodeIDs(ctx, "u-manager")
+	if err != nil {
+		t.Fatalf("MemberNodeIDs(manager): %v", err)
+	}
+	if !slices.Contains(managerScope, store.ID) {
+		t.Errorf("the manager at hub's real position sees %v, want the restored store %q included", managerScope, store.ID)
+	}
+
+	// ...and a membership under the OLD branch must not.
+	if _, addErr := m.Members().Add(ctx, "u-north", north.ID); addErr != nil {
+		t.Fatalf("Add(north user, north): %v", addErr)
+	}
+	northScope, err := m.scope.MemberNodeIDs(ctx, "u-north")
+	if err != nil {
+		t.Fatalf("MemberNodeIDs(north user): %v", err)
+	}
+	if slices.Contains(northScope, store.ID) {
+		t.Errorf("a scope anchored under the old branch sees %v and still covers the restored store %q", northScope, store.ID)
+	}
+}
+
 func TestScopeService_NoTenantContext_FailsClosed(t *testing.T) {
 	m, _ := newTestModule(t)
 	ctx := context.Background()

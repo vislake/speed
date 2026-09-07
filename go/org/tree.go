@@ -799,11 +799,14 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 	})
 }
 
-// Restore makes a previously mark-deleted node visible again, wrapping the
-// promoted dbkit.Repository[OrgNode].Restore -- the mark-delete inverse
-// Repository.deleteLeaf/deleteSubtree's own doc comments point to -- and
-// re-reading the row so the caller gets its current data back, exactly as
-// Rename does after its own write.
+// Restore makes a previously mark-deleted node visible again -- the
+// mark-delete inverse Repository.deleteLeaf/deleteSubtree's own doc comments
+// point to -- re-reading the row so the caller gets its current data back,
+// exactly as Rename does after its own write. A restore is never a bare
+// marker clear: the write also re-expresses the row under the parent it
+// returns to (see "Restore re-expresses the row under its parent's CURRENT
+// path" below), so no restore can leave a live row whose Path/Depth disagree
+// with its live parent.
 //
 // It reports ErrNodeNotFound both for an id with nothing to restore (never
 // existed, belongs to another tenant) and for an id that exists but is not
@@ -881,6 +884,39 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 // check, since a root's ParentID is always the empty-string sentinel and it
 // is never itself deletable (ErrRootNotDeletable).
 //
+// # Restore re-expresses the row under its parent's CURRENT path
+//
+// A restored node's stored Path and Depth were last written while the row
+// was still live -- and a live parent can MOVE while its child is
+// mark-deleted: Move's per-row rewrite carries WHERE deleted_at IS NULL, so
+// a soft-deleted descendant is invisible to it and keeps the path naming
+// the parent's OLD position (Delete's cascade leaves stored paths untouched
+// by design). Clearing the markers without re-deriving Path/Depth would
+// then resurrect a row whose materialized path disagrees with its own
+// ParentID chain -- the state path.go's own doc comment calls "corrupt, not
+// a supported state" -- through nothing but documented operations
+// (cascade-delete a subtree, restore its ancestor, move that ancestor,
+// restore a descendant), with subtree-scope consequences in both
+// directions: a scope anchored under the old location keeps covering the
+// resurrected row while the real parent's own subtree no longer does.
+// Restore therefore re-expresses every row it brings back under the live
+// parent's CURRENT path -- Path = buildPath(parent.Path, nodeID), Depth
+// re-derived from it -- which, for a parent untouched since the delete,
+// reproduces the stored values exactly. The parent's path comes from the
+// very row the liveness check below locks, read inside the same
+// transaction, so it is current at write time; it is validated first (a
+// corrupt stored parent path is refused with ErrInternal, never propagated
+// into the resurrected row). Re-expression is bounded by the same depth
+// envelope every other write obeys: a parent can legally sit AT maxDepth
+// with a deleted child beneath it (Move's depth check counts only the live
+// subtree, to which a mark-deleted child is invisible), so a restore whose
+// re-expression would land the child at maxDepth+1 -- a row no CreateChild
+// under that same parent could have produced -- is refused with
+// ErrMaxDepthExceeded. For the tenant root the re-expression is identity: a
+// root's canonical path is built from its own id alone (buildPath("", id),
+// rootDepth), which is what CreateRoot wrote and what nothing else may
+// change.
+//
 // # Atomicity against a concurrent cascade delete of the parent
 //
 // The initial findByIDIncludingDeleted read below stays its own, separate,
@@ -913,17 +949,34 @@ func (s *TreeService) Restore(ctx context.Context, nodeID string) (*OrgNode, err
 
 	err = withRetry(func() error {
 		return dbkit.WithTenantSession(ctx, s.repo.db, func(tx *gorm.DB) error {
-			if !existing.IsRoot() {
-				if _, lockErr := lockLiveNode(tx, existing.ParentID); lockErr != nil {
-					if errors.Is(lockErr, gorm.ErrRecordNotFound) {
-						return ErrRestoreParentNotLive.
-							WithParam("node_id", nodeID).
-							WithParam("parent_id", existing.ParentID)
-					}
-					return ErrInternal.WithCause(lockErr)
-				}
+			if existing.IsRoot() {
+				// A root's canonical placement is built from its own id alone;
+				// no parent is locked or re-expressed against.
+				return restoreNodeTx(tx, nodeID, buildPath("", nodeID), rootDepth)
 			}
-			return restoreNodeTx(tx, nodeID)
+			parent, lockErr := lockLiveNode(tx, existing.ParentID)
+			if lockErr != nil {
+				if errors.Is(lockErr, gorm.ErrRecordNotFound) {
+					return ErrRestoreParentNotLive.
+						WithParam("node_id", nodeID).
+						WithParam("parent_id", existing.ParentID)
+				}
+				return ErrInternal.WithCause(lockErr)
+			}
+			// Re-express the restored row under this locked parent's CURRENT
+			// path -- see Restore's doc comment above -- deriving nothing from
+			// the row's own stale stored path. The parent's path is validated
+			// before anything is built on it, exactly as CreateChild and Move
+			// validate the stored paths they derive new rows from.
+			if pathErr := validatePath(parent.Path); pathErr != nil {
+				return ErrInternal.WithCause(pathErr)
+			}
+			path := buildPath(parent.Path, nodeID)
+			depth := depthOf(path)
+			if depth > s.maxDepth {
+				return ErrMaxDepthExceeded.WithParam("max_depth", s.maxDepth)
+			}
+			return restoreNodeTx(tx, nodeID, path, depth)
 		})
 	})
 	if err != nil {
@@ -948,21 +1001,30 @@ func (s *TreeService) Restore(ctx context.Context, nodeID string) (*OrgNode, err
 	return node, nil
 }
 
-// restoreNodeTx clears deleted_at/deleted_by on the node identified by id,
-// inside an already-open transaction, mirroring
-// dbkit.Repository[OrgNode].Restore's own conditional shape (deleted_at IS
-// NOT NULL, so a live or never-existing row reports gorm.ErrRecordNotFound
-// rather than silently no-opping) without opening a second transaction of
-// its own -- TreeService.Restore needs this write in the SAME transaction as
-// its parent-liveness lock, which the promoted, single-call Restore method
-// cannot express.
-func restoreNodeTx(tx *gorm.DB, id string) error {
+// restoreNodeTx clears deleted_at/deleted_by on the node identified by id --
+// and writes the path/depth placement the row is restored into -- inside an
+// already-open transaction, mirroring dbkit.Repository[OrgNode].Restore's own
+// conditional shape (deleted_at IS NOT NULL, so a live or never-existing row
+// reports gorm.ErrRecordNotFound rather than silently no-opping) without
+// opening a second transaction of its own -- TreeService.Restore needs this
+// write in the SAME transaction as its parent-liveness lock and the locked
+// parent's path read, which the promoted, single-call Restore method cannot
+// express.
+//
+// path/depth are the restored row's re-expressed placement under the parent
+// Restore locked (see TreeService.Restore's own doc comment): the one UPDATE
+// writes them together with the cleared markers, so a resurrected row can
+// never carry a Path/Depth that disagrees with the live parent chain it
+// returns to. The caller derives the placement from a validated parent path
+// and passes the tenant root's own canonical placement (buildPath("", id),
+// rootDepth) for a root restore.
+func restoreNodeTx(tx *gorm.DB, id, path string, depth int) error {
 	res := tx.
 		Where("id = ?", id).
 		Where("deleted_at IS NOT NULL").
 		Unscoped().
-		Select("DeletedAt", "DeletedBy").
-		Updates(&OrgNode{DeletedAt: nil, DeletedBy: ""})
+		Select("DeletedAt", "DeletedBy", "Path", "Depth").
+		Updates(&OrgNode{DeletedAt: nil, DeletedBy: "", Path: path, Depth: depth})
 	if res.Error != nil {
 		return res.Error
 	}

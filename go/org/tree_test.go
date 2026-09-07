@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1513,6 +1514,142 @@ func TestTreeService_Restore_DeadParent_RefusesRestore(t *testing.T) {
 	}
 	if _, err := tree.Restore(ctx, store.ID); err != nil {
 		t.Fatalf("Restore(store) after Restore(north): %v, want success", err)
+	}
+}
+
+// TestTreeService_Restore_AfterAncestorMoved_ReexpressesUnderTheCurrentParent
+// is the P1-org-restore-path regression proof: the four-step sequence --
+// cascade-delete a subtree, restore its ancestor, move that ancestor, restore
+// a descendant -- used to leave the descendant LIVE with a stale materialized
+// Path naming the ancestor's OLD location. Move's rewrite carries
+// WHERE deleted_at IS NULL on every row it touches, so a mark-deleted
+// descendant is invisible to it and never has its path rebased when its live
+// ancestor moves; Restore then cleared deleted_at/deleted_by without
+// recomputing Path/Depth, resurrecting a row whose Path disagrees with its
+// own ParentID chain -- the state path.go's own doc comment and model.go call
+// "corrupt, not a supported state". The corruption has subtree-grant
+// consequences in BOTH directions: the old branch's prefix scan still
+// surfaces the row (a scope anchored under the old location covers it), while
+// the real parent's subtree no longer does (a scope anchored at the restored
+// ancestor misses its own live child). Restore must therefore re-express the
+// row it brings back under its live parent's CURRENT path -- the parent is
+// locked and read inside the same transaction as the write -- never resurrect
+// the stored, stale one.
+func TestTreeService_Restore_AfterAncestorMoved_ReexpressesUnderTheCurrentParent(t *testing.T) {
+	db := newTestDB(t)
+	tree := newTestTreeOn(t, db)
+	ctx := tenantCtx("tenant-a")
+
+	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
+	north := mustCreateChild(t, tree, ctx, root.ID, "North Region")
+	hub := mustCreateChild(t, tree, ctx, north.ID, "Regional Hub")
+	store := mustCreateChild(t, tree, ctx, hub.ID, "Store 7")
+	south := mustCreateChild(t, tree, ctx, root.ID, "South Region")
+
+	// Step 1: cascade-delete hub's subtree -- hub and store both go dead.
+	if err := tree.Delete(ctx, hub.ID, true); err != nil {
+		t.Fatalf("Delete(hub) cascade: %v", err)
+	}
+	// Step 2: restore the ancestor alone (per-node, never cascading).
+	if _, err := tree.Restore(ctx, hub.ID); err != nil {
+		t.Fatalf("Restore(hub): %v", err)
+	}
+	// Step 3: move the restored ancestor onto a new branch. The still-
+	// mark-deleted store keeps its stored Path, which names hub's old
+	// position.
+	if _, err := tree.Move(ctx, hub.ID, south.ID); err != nil {
+		t.Fatalf("Move(hub, south): %v", err)
+	}
+	// Step 4: restore the descendant.
+	restored, err := tree.Restore(ctx, store.ID)
+	if err != nil {
+		t.Fatalf("Restore(store): %v", err)
+	}
+
+	hubCurrent, err := tree.Get(ctx, hub.ID)
+	if err != nil {
+		t.Fatalf("Get(hub) after the move: %v", err)
+	}
+	if want := buildPath(hubCurrent.Path, store.ID); restored.Path != want {
+		t.Errorf("restored store Path = %q, want %q (hub's CURRENT path + its own id) -- the row must be re-expressed under hub's new position under %q, not resurrected with the stale one",
+			restored.Path, want, south.ID)
+	}
+	if want := hubCurrent.Depth + 1; restored.Depth != want {
+		t.Errorf("restored store Depth = %d, want %d", restored.Depth, want)
+	}
+
+	// The real parent's subtree now covers the restored row...
+	hubSubtree, err := tree.Subtree(ctx, hub.ID)
+	if err != nil {
+		t.Fatalf("Subtree(hub): %v", err)
+	}
+	if !slices.Contains(nodeIDs(hubSubtree), store.ID) {
+		t.Errorf("Subtree(hub) = %v, want the restored store %q included", nodeIDs(hubSubtree), store.ID)
+	}
+	// ...and the OLD branch's subtree no longer does: a scope anchored under
+	// the old location must stop covering the restored row the moment its
+	// ancestor moved away.
+	northSubtree, err := tree.Subtree(ctx, north.ID)
+	if err != nil {
+		t.Fatalf("Subtree(north): %v", err)
+	}
+	if slices.Contains(nodeIDs(northSubtree), store.ID) {
+		t.Errorf("Subtree(north) = %v still covers the restored store %q; a stale path must not survive restore", nodeIDs(northSubtree), store.ID)
+	}
+
+	assertNoOrphans(t, db, ctx, "four-step restore sequence")
+}
+
+// TestTreeService_Restore_WouldLandBeyondMaxDepth_Refused pins the guard that
+// keeps Restore's re-expression inside the same depth envelope every other
+// tree write obeys. A parent can end up at maxDepth with a deleted child the
+// move that put it there never counted: Move's depth check runs over the
+// live subtree only, and a mark-deleted descendant is invisible to it.
+// Re-expressing that child on restore would land it at maxDepth+1 -- a live
+// row no CreateChild under the same parent could ever have produced -- so
+// Restore must refuse with the identical ErrMaxDepthExceeded rather than
+// resurrect a row deeper than the module's own bound permits.
+func TestTreeService_Restore_WouldLandBeyondMaxDepth_Refused(t *testing.T) {
+	tree := newTestTree(t) // default maxDepth = 8
+	ctx := tenantCtx("tenant-a")
+
+	root := mustCreateRoot(t, tree, ctx, "Acme Dental")
+	// An 8-deep chain under the root: the deepest level maxDepth admits.
+	chain := make([]*OrgNode, 0, 8)
+	parent := root
+	for i := 0; i < 8; i++ {
+		parent = mustCreateChild(t, tree, ctx, parent.ID, fmt.Sprintf("level %d", i+1))
+		chain = append(chain, parent)
+	}
+	leaf := chain[7] // depth 8 == maxDepth
+	leafParent := chain[6]
+
+	// A second, 7-deep chain provides the target that lets leaf's parent
+	// move down one more level while the leaf is dead.
+	target := root
+	for i := 0; i < 7; i++ {
+		target = mustCreateChild(t, tree, ctx, target.ID, fmt.Sprintf("other %d", i+1))
+	}
+
+	// Kill the leaf, then move its live parent to depth 8 -- a move Move's
+	// own live-subtree depth check approves, since the dead leaf is
+	// invisible to it.
+	if err := tree.Delete(ctx, leaf.ID, false); err != nil {
+		t.Fatalf("Delete(leaf): %v", err)
+	}
+	if _, err := tree.Move(ctx, leafParent.ID, target.ID); err != nil {
+		t.Fatalf("Move(leafParent, %q): %v", target.ID, err)
+	}
+
+	// Restoring the leaf would re-express it at depth 9 under its now-depth-8
+	// parent: refuse, exactly as CreateChild under that same parent would.
+	_, err := tree.Restore(ctx, leaf.ID)
+	if !hasCode(err, ErrMaxDepthExceeded.Code) {
+		t.Fatalf("Restore(leaf) error = %v, want org.max_depth_exceeded", err)
+	}
+	// The refusal must be a pure read: leaf stays exactly as dead as it was.
+	if _, getErr := tree.Get(ctx, leaf.ID); getErr == nil {
+		t.Fatal("Restore(leaf) resurrected the row despite refusing")
 	}
 }
 
