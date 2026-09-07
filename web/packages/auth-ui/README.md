@@ -256,6 +256,20 @@ the number has no E.164 form (no leading '+' and country code) and
 `authn.rate_limited` when the attempt trips the send policy, each
 through the one banner.
 
+A code-step submit whose login lost a concurrent sign-in race --
+another channel's login, or a second instance of a sign-in form,
+committed to the session while this submit was in flight -- is
+answered by auth-core with `OperationSupersededError`, and no
+`onSignedIn` fires (the winning call fires its own exactly once). The
+SMS channel must also hear what a lost race cost it: a phone-login
+code is single-use server-side, so the losing submit spent the very
+code its own answer verified. The form renders the used-code notice
+(`smsSignIn.codeUsed`), clears the code field, and refuses a
+re-submission of that exact code locally -- the server would only
+answer the spent code with the same `authn.verification_code_invalid`
+it answers every dead code with, and the form knows better. Only a
+fresh code (resend, or a request for a changed phone) can sign in.
+
 | Prop | Type | Notes |
 |---|---|---|
 | `session` | `AuthSession` (required) | the session the SMS sign-in drives |
@@ -416,7 +430,7 @@ identical leaf key sets, enforced by registration and by
 | Section | Purpose |
 |---|---|
 | `passwordSignIn.*` | the password channel: title, field labels, submit |
-| `smsSignIn.*` | the SMS channel: title, phone/code labels, send/resubmit/change-phone actions, the sent notice |
+| `smsSignIn.*` | the SMS channel: title, phone/code labels, send/resubmit/change-phone actions, the sent notice, the used-code notice |
 | `register.*` | the registration channel: labels, submit, the no-callback success panel |
 | `social.*` | the social section: the divider title and one name per provider (`social.provider.<provider>`) |
 | `socialCallback.*` | the callback handler: the pending notice, the retry action |

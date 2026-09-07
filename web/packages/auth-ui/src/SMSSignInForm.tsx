@@ -29,10 +29,19 @@
  * channel's, a social exchange, a second instance of a sign-in form
  * committed to the session while this one was in flight) answers with
  * auth-core's OperationSupersededError, not a failure: the losing
- * submit renders no error banner and fires no onSignedIn (the winning
- * call fires its own exactly once), and the session being
- * authenticated now is the host's own snapshot to observe through its
- * auth-core hooks.
+ * submit fires no onSignedIn (the winning call fires its own exactly
+ * once), and the session being authenticated now is the host's own
+ * snapshot to observe through its auth-core hooks. One consequence the
+ * password channel never faces, the SMS code step must hear: a
+ * phone-login code is single-use server-side, so the losing submit's
+ * own 2xx spent the very code it verified even though the login never
+ * landed. The form therefore never advertises that code as retryable:
+ * it renders the used-code notice, clears the code field, and
+ * remembers the exact spent code -- re-submitting that string is
+ * answered locally with the same notice rather than sent into the
+ * server's deliberately collapsed invalid-code refusal (authn answers
+ * a spent login code exactly like a wrong one), and only a fresh code
+ * -- a resend, or a request for a changed phone -- can sign in.
  */
 
 import { useCallback, useState } from 'react'
@@ -71,10 +80,27 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
   const [sentTo, setSentTo] = useState<string | null>(null)
   const [sendingCode, setSendingCode] = useState(false)
   const [errorCode, setErrorCode] = useState<string | null>(null)
+  // The used-code notice: the current code session's last submit lost
+  // a concurrent sign-in race after its code verified server-side --
+  // the code is SPENT, and only a fresh one can sign in (see the file
+  // header) -- or re-submitted the very code one did. Renders in the
+  // code step, never while an error is showing.
+  const [codeUsed, setCodeUsed] = useState(false)
+  // The exact code a superseded answer proved spent, kept until the
+  // next code request starts a new code session: a re-submission of
+  // this string is refused locally with the used-code notice instead
+  // of a doomed round-trip into the server's collapsed invalid-code
+  // refusal.
+  const [spentCode, setSpentCode] = useState<string | null>(null)
 
   const requestCode = useCallback(
     async (phone: string) => {
       setErrorCode(null)
+      // A fresh code starts a new code session: the previous one's
+      // used-code notice and spent-code memory describe a code the new
+      // request invalidates.
+      setCodeUsed(false)
+      setSpentCode(null)
       setSendingCode(true)
       try {
         await session.requestSMSCode({ phone })
@@ -102,6 +128,17 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
       return
     }
     setErrorCode(null)
+    setCodeUsed(false)
+    if (values.code !== '' && values.code === spentCode) {
+      // The very code the superseded answer proved spent (see the file
+      // header) is being submitted again: answer with the used-code
+      // notice and clear it -- never a doomed round-trip into the
+      // server's collapsed invalid-code refusal, never an endless
+      // retry of a dead code.
+      form.resetField('code', { defaultValue: '' })
+      setCodeUsed(true)
+      return
+    }
     try {
       await session.loginWithSMSCode({
         phone: sentTo ?? values.phone,
@@ -110,10 +147,19 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
     } catch (error) {
       if (isOperationSuperseded(error)) {
         // This submit lost a concurrent sign-in race (see the file
-        // header): a lost race is not a failure -- no error banner,
-        // and no onSignedIn, which the winning call already fired
-        // exactly once. The session being authenticated now is the
-        // host's own snapshot to observe.
+        // header): its own request genuinely verified the code
+        // server-side -- which is exactly why it is now SPENT, its
+        // single-use guard consumed by this very 2xx -- but the login
+        // never landed. The code is never retryable: render the
+        // used-code notice, clear the field and remember the spent
+        // code, so a re-submission of this exact string is answered
+        // locally instead of drawing the server's collapsed
+        // invalid-code refusal. No onSignedIn: the winning call fired
+        // its own exactly once, and the session being authenticated
+        // now is the host's own snapshot to observe.
+        form.resetField('code', { defaultValue: '' })
+        setSpentCode(values.code)
+        setCodeUsed(true)
         return
       }
       setErrorCode(errorCodeOf(error))
@@ -130,6 +176,10 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
 
   const editPhone = (): void => {
     setErrorCode(null)
+    // Leaving the code step clears its attempt state: a re-entry
+    // always runs requestCode, which starts a fresh code session.
+    setCodeUsed(false)
+    setSpentCode(null)
     setStep('phone')
   }
 
@@ -199,7 +249,13 @@ export function SMSSignInForm({ session, onSignedIn }: SMSSignInFormProps) {
           </Box>
         </>
       )}
-      <InlineError code={errorCode} />
+      {codeUsed ? (
+        <Alert severity="error" role="alert" sx={{ width: '100%' }}>
+          {t('smsSignIn.codeUsed')}
+        </Alert>
+      ) : (
+        <InlineError code={errorCode} />
+      )}
     </FormLayout>
   )
 }

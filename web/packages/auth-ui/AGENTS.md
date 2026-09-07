@@ -28,9 +28,17 @@ never decides what happens after a sign-in.
   keeps the throw out of the fire-and-forget promise as an unhandled
   rejection. A submit whose login lost a concurrent sign-in race
   (auth-core's `OperationSupersededError`) is likewise not an error:
-  the form renders nothing and fires no callback -- the winning call
-  fires its own exactly once, and the host observes the authenticated
-  snapshot through its own hooks.
+  the form renders no failure banner and fires no callback -- the
+  winning call fires its own exactly once, and the host observes the
+  authenticated snapshot through its own hooks. The SMS code step is
+  the one exception: a phone-login code is single-use server-side, so
+  the losing submit spent the very code its own 2xx verified, and the
+  form must never advertise it as retryable. It renders the used-code
+  notice (a local `smsSignIn.codeUsed` text, never an error-code
+  whitelist entry -- the server answers a spent login code exactly
+  like a wrong one, `authn.verification_code_invalid`) and clears the
+  field, and re-submitting that exact code is refused locally with the
+  same notice: only a fresh code can sign in.
 - **Headless logic lives in `@speed/auth-core`.** `loginWithPassword`,
   `requestSMSCode`, `loginWithSMSCode`, `register`,
   `socialAuthorizeUrl`, `completeSocialLogin`, `logout`, `refresh` —

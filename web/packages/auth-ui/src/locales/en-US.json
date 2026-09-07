@@ -12,6 +12,7 @@
     "sentNotice": "Code sent to {{phone}}",
     "codeLabel": "Verification code",
     "submit": "Sign in",
+    "codeUsed": "That code has already been used. Request a new one.",
     "resendCode": "Resend code",
     "editPhone": "Change phone number"
   },

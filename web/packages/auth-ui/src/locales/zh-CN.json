@@ -12,6 +12,7 @@
     "sentNotice": "验证码已发送至 {{phone}}",
     "codeLabel": "验证码",
     "submit": "登录",
+    "codeUsed": "该验证码已被使用，请重新获取。",
     "resendCode": "重新发送",
     "editPhone": "更换手机号"
   },

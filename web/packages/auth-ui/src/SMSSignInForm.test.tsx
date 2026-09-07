@@ -404,15 +404,20 @@ describe('SMSSignInForm', () => {
     )
   })
 
-  it('treat a superseded code-step submit as the lost race it is, rendering no error', async () => {
+  it('tell a superseded code-step submit that its code is spent: used-code notice, cleared field, no onSignedIn', async () => {
     // A concurrent sign-in (here the password channel committing
     // through the same session while the SMS login is still in
     // flight) makes auth-core reject the SMS submit with
-    // OperationSupersededError when its answer arrives: the losing
-    // submit must not render the generic error banner (it is not a
-    // failure) and must not fire onSignedIn (the winning call fired
-    // its own exactly once, for the identity the session actually
-    // runs under).
+    // OperationSupersededError when its answer arrives. That answer is
+    // a genuine 2xx, and a phone-login code is single-use server-side:
+    // the losing submit SPENT the very code its own answer verified,
+    // even though the login never landed. The form must not fire
+    // onSignedIn (the winning call fired its own exactly once) and
+    // must not present the spent code as intact and retryable (a
+    // re-submit of it would draw the server's collapsed invalid-code
+    // refusal forever -- the bug this regression pins): it renders the
+    // used-code notice and clears the field, so only a fresh code can
+    // sign in.
     let releaseSms!: (value: unknown) => void
     const smsGate = new Promise((resolve) => {
       releaseSms = resolve
@@ -445,18 +450,136 @@ describe('SMSSignInForm', () => {
     })
     expect(harness.store.get()).toBe('access-1')
     // The SMS answer arrives after the winner committed: auth-core
-    // rejects it as superseded, and the form treats that as the lost
-    // race it is -- quiet, retryable, no error banner, no onSignedIn.
+    // rejects it as superseded. The form says the code was used, the
+    // spent code leaves the field, and no onSignedIn fires.
     await act(async () => {
       releaseSms(makePair())
+    })
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        zhCN.smsSignIn.codeUsed,
+      ),
+    )
+    expect(
+      (
+        screen.getByLabelText(zhCN.smsSignIn.codeLabel) as HTMLInputElement
+      ).value,
+    ).toBe('')
+    expect(onSignedIn).not.toHaveBeenCalled()
+    expect(harness.store.get()).toBe('access-1')
+  })
+
+  it('never re-submit a code the superseded answer proved spent: answered locally, and a fresh code signs in', async () => {
+    // The code the superseded submit proved spent (the test above)
+    // must never ride into a second submission. The harness answers a
+    // second LOGIN_SMS carrying that code the way the server would:
+    // the single-use guard already spent it on the first submit's
+    // own 2xx, so the re-submission is refused with the collapsed
+    // invalid-code answer authn deliberately gives every dead code.
+    // Pre-fix the form kept the spent code in the field and answered
+    // the second submit with that refusal forever -- the endless
+    // retry of a dead code this regression pins. The form now knows
+    // the exact string its superseded answer proved spent: the
+    // re-submission is answered locally with the used-code notice and
+    // never reaches the network, and the recovery path is a fresh
+    // code -- resend, then the new code signs in for real.
+    let loginAttempts = 0
+    let releaseSms!: () => void
+    const smsGate = new Promise<void>((resolve) => {
+      releaseSms = resolve
+    })
+    const harness = makeHarness({
+      [REQUEST_SMS_CODE]: () => undefined,
+      [LOGIN_PASSWORD]: () => makePair(),
+      [LOGIN_SMS]: (call) => {
+        loginAttempts += 1
+        const body = call.options?.body as { code?: unknown } | undefined
+        if (loginAttempts > 1 && body?.code === CODE) {
+          // The consumed-code answer: the first submit's 2xx already
+          // spent this code server-side.
+          throw apiError(401, 'authn.verification_code_invalid')
+        }
+        return smsGate.then(() => makePair())
+      },
+    })
+    const onSignedIn = vi.fn()
+    renderWithProviders(
+      <SMSSignInForm session={harness.session} onSignedIn={onSignedIn} />,
+    )
+    await requestCode(PHONE)
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toBeInTheDocument(),
+    )
+    const user = userEvent.setup()
+    const codeInput = screen.getByLabelText(
+      zhCN.smsSignIn.codeLabel,
+    ) as HTMLInputElement
+    await user.type(codeInput, CODE)
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.submit }),
+    )
+    // The winning password login commits while the SMS login is in
+    // flight; the SMS answer then settles as superseded.
+    await act(async () => {
+      await harness.session.loginWithPassword({
+        identifier: 'alice@example.com',
+        password: 'pw',
+      })
+    })
+    await act(async () => {
+      releaseSms()
     })
     await waitFor(() =>
       expect(
         screen.getByRole('button', { name: zhCN.smsSignIn.submit }),
       ).toBeEnabled(),
     )
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    // The same code is typed and submitted again -- the retry the
+    // pre-fix form advertised with the spent code still in the field.
+    await user.clear(codeInput)
+    await user.type(codeInput, CODE)
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.submit }),
+    )
+    // The re-submission of the spent code is answered locally with
+    // the used-code notice, never by a network round-trip into the
+    // server's invalid-code refusal.
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        zhCN.smsSignIn.codeUsed,
+      ),
+    )
+    // The calls so far are the code request, the superseded SMS
+    // login and the test's own winning password login -- the spent
+    // code's re-submission added nothing to the network.
+    expect(harness.calls).toHaveLength(3)
+    expect(loginAttempts).toBe(1)
+    expect(codeInput.value).toBe('')
+    expect(
+      screen.queryByText(zhCN.errors.authn.verification_code_invalid),
+    ).toBeNull()
     expect(onSignedIn).not.toHaveBeenCalled()
     expect(harness.store.get()).toBe('access-1')
+    // The recovery path is a fresh code: resend starts a new code
+    // session (clearing the used-code notice), and the new code signs
+    // in for real.
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.resendCode }),
+    )
+    await waitFor(() => expect(harness.calls).toHaveLength(4))
+    expect(harness.calls[3]?.options?.body).toEqual({ phone: PHONE })
+    await waitFor(() =>
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument(),
+    )
+    await user.type(codeInput, '654321')
+    await user.click(
+      screen.getByRole('button', { name: zhCN.smsSignIn.submit }),
+    )
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
+    expect(harness.calls).toHaveLength(5)
+    expect(harness.calls[4]?.options?.body).toEqual({
+      phone: PHONE,
+      code: '654321',
+    })
   })
 })
