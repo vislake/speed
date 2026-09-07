@@ -120,6 +120,62 @@ func TestHandler_SetPlatformCredential_EmptyAPIKey_Invalid(t *testing.T) {
 	}
 }
 
+func TestHandler_SetTenantCredential_BlockedBaseURL_Refused(t *testing.T) {
+	h := newTestHandler(t)
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-1"))
+
+	// The HTTP surface's own refusal shape: the tenant write naming a
+	// loopback baseUrl answers 400 with the coded aigateway.base_url_blocked
+	// envelope -- CredentialService's SSRF validation surfacing through the
+	// handler verbatim, never an uncoded error.
+	status, body := doHandlerRequest(t, h, ctx, http.MethodPut,
+		"/api/v1/ai-gateway/credentials/"+ProviderOpenAICompatible+"/tenant",
+		`{"apiKey":"sk-test","baseUrl":"http://127.0.0.1:9000/v1"}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if body["code"] != ErrBaseURLBlocked.Code {
+		t.Fatalf("code = %v, want %q", body["code"], ErrBaseURLBlocked.Code)
+	}
+}
+
+func TestHandler_SetTenantCredential_PublicBaseURL_Stored(t *testing.T) {
+	h := newTestHandler(t)
+	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-1"))
+
+	status, body := doHandlerRequest(t, h, ctx, http.MethodPut,
+		"/api/v1/ai-gateway/credentials/"+ProviderOpenAICompatible+"/tenant",
+		`{"apiKey":"sk-test","baseUrl":"https://93.184.216.34/v1"}`)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %v", status, http.StatusOK, body)
+	}
+	if body["scope"] != string(CredentialScopeTenant) {
+		t.Fatalf("scope = %v, want %q", body["scope"], CredentialScopeTenant)
+	}
+	if body["baseUrl"] != "https://93.184.216.34/v1" {
+		t.Fatalf("baseUrl = %v, want %q", body["baseUrl"], "https://93.184.216.34/v1")
+	}
+}
+
+func TestHandler_SetPlatformCredential_PrivateBaseURL_StillAccepted(t *testing.T) {
+	h := newTestHandler(t)
+
+	// The scope-boundary pin at the HTTP layer: the platform-wide write
+	// naming a private baseUrl is still accepted -- the operator's own
+	// default is outside the SSRF guard (ssrf.go's file header; the
+	// reference app's boot-time platform credential lives on the same
+	// trusted side).
+	status, body := doHandlerRequest(t, h, context.Background(), http.MethodPut,
+		"/api/v1/ai-gateway/credentials/"+ProviderOpenAICompatible+"/platform",
+		`{"apiKey":"sk-platform","baseUrl":"http://10.0.0.9:9000/v1"}`)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %v", status, http.StatusOK, body)
+	}
+	if body["scope"] != string(CredentialScopeSystem) {
+		t.Fatalf("scope = %v, want %q", body["scope"], CredentialScopeSystem)
+	}
+}
+
 func TestHandler_SetPlatformCredential_NoBaseURL_OmitsBaseURLField(t *testing.T) {
 	h := newTestHandler(t)
 

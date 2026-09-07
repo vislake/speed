@@ -103,6 +103,18 @@ func NewOpenAICompatibleProvider(baseURL, apiKey string, opts ...OpenAICompatibl
 	return p
 }
 
+// setHTTPClient implements httpClientSettable (ssrf.go): Gateway.resolve
+// swaps a freshly built provider's client for guardedProviderHTTPClient
+// when the credential that built it resolved at the tenant tier. Not part
+// of the public construction API -- hosts configure a client through
+// WithHTTPClient -- and nil is ignored, mirroring that option's own nil
+// guard.
+func (p *OpenAICompatibleProvider) setHTTPClient(c *http.Client) {
+	if c != nil {
+		p.httpClient = c
+	}
+}
+
 // compile-time check that *OpenAICompatibleProvider satisfies ChatProvider.
 var _ ChatProvider = (*OpenAICompatibleProvider)(nil)
 

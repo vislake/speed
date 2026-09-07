@@ -121,7 +121,9 @@ func ExampleHandler() {
 
 	// Write the platform-wide default -- gated on PermissionManagePlatform
 	// in a real deployment, never PermissionWrite (module.go's own doc
-	// comment on the two constants).
+	// comment on the two constants). The platform row is the operator's
+	// own default, deliberately outside the tenant-baseUrl SSRF guard
+	// (ssrf.go's file header), so the hostname needs no resolvability.
 	platformStatus, platformBody := do(ctx, http.MethodPut, credentialPath+"/platform",
 		`{"apiKey":"sk-platform-default","baseUrl":"https://api.example.com/v1"}`)
 	fmt.Println("set platform credential: status", platformStatus, "scope", platformBody["scope"])
@@ -133,9 +135,14 @@ func ExampleHandler() {
 
 	// Write the tenant's OWN BYOK credential -- gated on PermissionWrite,
 	// an ordinary tenant-scoped permission distinct from the platform
-	// write's PermissionManagePlatform above.
+	// write's PermissionManagePlatform above. A tenant-tier baseUrl is
+	// SSRF-validated at write time (ValidateBaseURL), so the example names
+	// a literal public IP: a hostname this example cannot resolve -- or
+	// one resolving to a private, loopback or link-local address -- would
+	// be refused with aigateway.base_url_unresolvable /
+	// aigateway.base_url_blocked.
 	tenantStatus, tenantBody := do(tenantCtx, http.MethodPut, credentialPath+"/tenant",
-		`{"apiKey":"sk-tenant-byok","baseUrl":"https://tenant.example.com/v1"}`)
+		`{"apiKey":"sk-tenant-byok","baseUrl":"https://93.184.216.34/v1"}`)
 	fmt.Println("set tenant credential: status", tenantStatus, "scope", tenantBody["scope"])
 
 	// The same tenant now resolves to its OWN row, overriding the

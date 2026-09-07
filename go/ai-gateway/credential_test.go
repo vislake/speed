@@ -113,7 +113,11 @@ func TestCredentialService_Resolve_TenantBYOKOverridesPlatformRow(t *testing.T) 
 	}
 
 	acmeCtx := pkgcore.WithTenant(t.Context(), "tenant-acme")
-	if err = svc.SetTenantCredential(acmeCtx, ProviderOpenAICompatible, "sk-acme-byok", "https://acme.example/v1"); err != nil {
+	// A literal public IP: tenant-tier base URLs are SSRF-validated at write
+	// time now (credential.go), and a hostname this test cannot resolve
+	// would be refused as unresolvable -- the IP is what this test's
+	// resolution-override point needs, and it is never dialed here.
+	if err = svc.SetTenantCredential(acmeCtx, ProviderOpenAICompatible, "sk-acme-byok", "https://93.184.216.34/v1"); err != nil {
 		t.Fatalf("SetTenantCredential: %v", err)
 	}
 
@@ -277,7 +281,7 @@ func TestCredentialService_SetPlatformCredential_PrivateBaseURL_StillAccepted(t 
 		t.Fatalf("WithSystemContext: %v", err)
 	}
 
-	if err := svc.SetPlatformCredential(sysCtx, ProviderOpenAICompatible, "sk-platform", "http://10.0.0.9:9000/v1"); err != nil {
+	if err = svc.SetPlatformCredential(sysCtx, ProviderOpenAICompatible, "sk-platform", "http://10.0.0.9:9000/v1"); err != nil {
 		t.Fatalf("SetPlatformCredential(private baseURL) = %v, want nil -- the platform-scope write is operator-trusted", err)
 	}
 	cred, err := svc.Resolve(t.Context(), ProviderOpenAICompatible)

@@ -14,12 +14,22 @@ import (
 // ratelimit consumer table records for this module: per-tenant request-rate
 // limiting, independent of the credit-based cost quota Entitlements
 // already enforces. It applies go/ratelimit to Gateway's three call
-// sites -- Chat, ChatStream and GenerateImage -- the same one-dimension
-// shape go/sharing's checkCreateRateLimit applies to its own single
-// per-tenant dimension, with the underlying Limiter built lazily over the
-// host's KVStore (rateLimiter, below) so it always reads whichever
-// implementation the running deployment mode actually resolved, never one
-// captured before Bootstrap ran.
+// sites -- Chat, ChatStream and GenerateImage, whenever the call carries a
+// tenant -- the same one-dimension shape go/sharing's checkCreateRateLimit
+// applies to its own single per-tenant dimension, with the underlying
+// Limiter built lazily over the host's KVStore (rateLimiter, below) so it
+// always reads whichever implementation the running deployment mode
+// actually resolved, never one captured before Bootstrap ran.
+//
+// A call whose context carries no tenant never reaches this limiter: the
+// three call sites gate on pkgcore.TenantFromContext's ok themselves --
+// GenerateImage refuses the tenantless call outright (ErrImageRequiresTenant,
+// image_gateway.go) and Chat/ChatStream skip the check for a system-context
+// caller (gateway.go) -- so the empty string is never fed in as a tenant
+// key. A per-tenant limiter has no dimension for a caller that is not a
+// tenant; silently sharing one empty-string bucket across every tenantless
+// caller would merge callers the moment such a key was ever reused for a
+// quota or billing dimension.
 //
 // Positioned as the FIRST check in the pipeline, before checkEntitlement:
 // a request-rate limit protects the gateway (and the vendor credentials it
@@ -96,14 +106,12 @@ func (g *Gateway) rateLimiter() (ratelimit.Limiter, bool) {
 
 // checkRateLimit guards every Gateway entry point's one dimension: how many
 // calls tenant has made recently, across Chat, ChatStream and
-// GenerateImage combined. tenant is read by the caller via
-// pkgcore.TenantFromContext, which returns "" when ctx carries none (a
-// system-context caller, or a chat-only Gateway used with no tenant
-// middleware at all) -- every such caller shares one counter, exactly the
-// "no better identifier, one shared bucket" consequence
-// go/integration/seams.go's Extractor doc comment already establishes for
-// its own optional dimensions, rather than a refusal that would change
-// existing tenant-less-caller behavior.
+// GenerateImage combined. tenant is never the empty string: the three call
+// sites pass it only when pkgcore.TenantFromContext reported a tenant
+// present (image_gateway.go's GenerateImage refuses the tenantless call
+// before reaching this method; gateway.go's Chat and ChatStream skip it) --
+// see this file's own header comment for why a tenantless call must never
+// be keyed on "".
 //
 // A limiter that cannot be built at all (no host wired) is a no-op --
 // ErrRateLimited is never returned in that case -- mirroring Entitlements'

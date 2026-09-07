@@ -229,7 +229,13 @@ func TestGateway_GenerateImage_UnroutedModel_Refused(t *testing.T) {
 	provider := &fakeImageProvider{}
 	g, queue, _ := imageGatewayTestFixture(t, provider)
 
-	_, err := g.GenerateImage(context.Background(), ImageRequest{
+	// The call carries a tenant: the tenant requirement is the pipeline's
+	// first check (a tenantless call is refused with ErrImageRequiresTenant
+	// before routing is ever consulted -- the dedicated tenantless tests
+	// pin that), so this test drives the routing refusal on a tenantful
+	// call.
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	_, err := g.GenerateImage(tenantCtx, ImageRequest{
 		Model: "image:unrouted", Operation: ImageOperationTextToImage, Prompt: "x",
 	})
 	if got, ok := apperrCode(err); !ok || got != ErrUnroutedModel.Code {
@@ -247,7 +253,11 @@ func TestGateway_GenerateImage_EntitlementDenied_NeverEnqueues(t *testing.T) {
 	})
 	g, queue, _ := imageGatewayTestFixture(t, provider, WithEntitlements(denied))
 
-	_, err := g.GenerateImage(context.Background(), imageReq())
+	// Tenantful, for the identical reason the unrouted-model test above
+	// states: this test isolates the entitlement gate, not the tenant
+	// requirement.
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	_, err := g.GenerateImage(tenantCtx, imageReq())
 	if got, ok := apperrCode(err); !ok || got != ErrEntitlementDenied.Code {
 		t.Fatalf("GenerateImage err = %v, want ErrEntitlementDenied", err)
 	}

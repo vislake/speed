@@ -146,6 +146,13 @@ func (g *Gateway) resolve(ctx context.Context, logicalModel string) (ChatProvide
 	if err != nil {
 		return nil, route, fmt.Errorf("aigateway: resolve provider %q for model %q: %w", route.Provider, logicalModel, err)
 	}
+	// A credential that resolved at the tenant tier is the caller's own
+	// influence over where this call dials, so its provider must dial
+	// through the SSRF-guarded client -- the dial-time re-check that closes
+	// the DNS-rebinding window between this credential's validated write
+	// and this call (ssrf.go's file header). A platform-tier row is the
+	// operator's own default and is left on the provider's ordinary client.
+	guardTenantScopeDial(provider, cred.Scope)
 	return provider, route, nil
 }
 
@@ -238,9 +245,17 @@ func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	}
 	logicalModel := req.Model
 
-	tenant, _ := pkgcore.TenantFromContext(ctx)
-	if err := g.checkRateLimit(ctx, string(tenant)); err != nil {
-		return ChatResponse{}, err
+	// The rate limiter is per-tenant: a tenantless call (a system-context
+	// caller -- CredentialService.Resolve's own doc comment names tenantless
+	// calls legal) has no tenant dimension for it, so the check is skipped
+	// rather than silently keyed on the empty string and shared with every
+	// other tenantless caller -- see checkRateLimit's own doc comment. The
+	// entitlement and resolve legs below run for tenantless callers exactly
+	// as they always did.
+	if tenant, ok := pkgcore.TenantFromContext(ctx); ok {
+		if err := g.checkRateLimit(ctx, string(tenant)); err != nil {
+			return ChatResponse{}, err
+		}
 	}
 
 	if err := g.checkEntitlement(ctx, logicalModel); err != nil {
@@ -284,9 +299,13 @@ func (g *Gateway) ChatStream(ctx context.Context, req ChatRequest) (<-chan ChatC
 	}
 	logicalModel := req.Model
 
-	tenant, _ := pkgcore.TenantFromContext(ctx)
-	if err := g.checkRateLimit(ctx, string(tenant)); err != nil {
-		return nil, err
+	// The identical per-tenant limiter gating Chat's own call site applies
+	// here -- see the comment there for why a tenantless context skips the
+	// check rather than feeding it the empty string.
+	if tenant, ok := pkgcore.TenantFromContext(ctx); ok {
+		if err := g.checkRateLimit(ctx, string(tenant)); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := g.checkEntitlement(ctx, logicalModel); err != nil {

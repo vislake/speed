@@ -178,6 +178,12 @@ func (g *Gateway) resolveImage(ctx context.Context, logicalModel string) (ImageP
 	if err != nil {
 		return nil, route, fmt.Errorf("aigateway: resolve image provider %q for model %q: %w", route.Provider, logicalModel, err)
 	}
+	// The identical tenant-tier dial guard Gateway.resolve applies to chat
+	// providers applies here -- see that call site's comment and ssrf.go's
+	// file header. It runs in the job worker too (callProvider re-resolves
+	// fresh at execution time), so a tenant BYOK image credential is
+	// dial-guarded wherever the job executes, on whichever replica.
+	guardTenantScopeDial(provider, cred.Scope)
 	return provider, route, nil
 }
 
@@ -193,12 +199,23 @@ func (g *Gateway) GenerateImage(ctx context.Context, req ImageRequest) (jobs.Job
 	}
 	logicalModel := req.Model
 
-	tenant, _ := pkgcore.TenantFromContext(ctx)
-	if err := g.checkRateLimit(ctx, string(tenant)); err != nil {
+	// GenerateImage requires a tenant, full stop: every jobs.Task must
+	// carry one (jobs.Task.TenantID's own doc comment), and this call is
+	// the enqueuing side. The requirement is therefore enforced HERE, in
+	// the rate limiter's own pipeline position, so the per-tenant limiter
+	// is only ever reached with a real tenant dimension -- never with the
+	// empty string a pre-round unchecked TenantFromContext fed it. The
+	// coded refusal is ErrImageRequiresTenant, the same error the later
+	// duplicate check used to raise.
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return "", ErrImageRequiresTenant
+	}
+	if err = g.checkRateLimit(ctx, string(tenant)); err != nil {
 		return "", err
 	}
 
-	if err := g.checkEntitlement(ctx, logicalModel); err != nil {
+	if err = g.checkEntitlement(ctx, logicalModel); err != nil {
 		return "", err
 	}
 
@@ -206,17 +223,12 @@ func (g *Gateway) GenerateImage(ctx context.Context, req ImageRequest) (jobs.Job
 	// missing credential -- the built provider itself is discarded; the
 	// job handler resolves its own, fresh, at execution time (see this
 	// file's own doc comment for why).
-	if _, _, err := g.resolveImage(ctx, logicalModel); err != nil {
+	if _, _, err = g.resolveImage(ctx, logicalModel); err != nil {
 		return "", err
 	}
 
 	if g.imageQueue == nil || g.objectService == nil {
 		return "", ErrImageGenerationUnavailable
-	}
-
-	tenant, err := pkgcore.MustTenantFromContext(ctx)
-	if err != nil {
-		return "", ErrImageRequiresTenant
 	}
 
 	payload, err := json.Marshal(imageGenerateTaskPayload{

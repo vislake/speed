@@ -79,13 +79,15 @@ func TestGateway_RateLimiter_PrefersInjectedOverride(t *testing.T) {
 
 // TestGateway_Chat_RateLimited_RefusesWithErrRateLimited proves a denied
 // Allow decision refuses Chat with ErrRateLimited BEFORE checkEntitlement
-// or the provider is ever reached.
+// or the provider is ever reached. The call carries a tenant: the limiter
+// is per-tenant, and a tenantless call skips it entirely (the dedicated
+// tenantless-call tests at the end of this file pin that).
 func TestGateway_Chat_RateLimited_RefusesWithErrRateLimited(t *testing.T) {
 	provider := &fakeChatProvider{chatResp: ChatResponse{Message: ChatMessage{Role: RoleAssistant, Content: "ok"}}}
 	g := gatewayTestFixture(t, provider)
 	g.limiter = scriptedLimiter{allowed: false, resetAfter: 42 * time.Second}
 
-	_, err := g.Chat(context.Background(), chatReq())
+	_, err := g.Chat(pkgcore.WithTenant(context.Background(), "tenant-acme"), chatReq())
 	appErr, ok := apperr.As(err)
 	if !ok || appErr.Code != ErrRateLimited.Code {
 		t.Fatalf("Chat() error = %v, want ErrRateLimited", err)
@@ -99,13 +101,16 @@ func TestGateway_Chat_RateLimited_RefusesWithErrRateLimited(t *testing.T) {
 }
 
 // TestGateway_Chat_NotRateLimited_Succeeds proves an allowed Allow decision
-// lets Chat proceed through the rest of the pipeline unchanged.
+// lets Chat proceed through the rest of the pipeline unchanged -- on a
+// tenantful call, the only shape that consults the per-tenant limiter at
+// all.
 func TestGateway_Chat_NotRateLimited_Succeeds(t *testing.T) {
 	provider := &fakeChatProvider{chatResp: ChatResponse{Message: ChatMessage{Role: RoleAssistant, Content: "ok"}}}
 	g := gatewayTestFixture(t, provider)
 	g.limiter = scriptedLimiter{allowed: true}
 
-	if _, err := g.Chat(context.Background(), chatReq()); err != nil {
+	tenantCtx := pkgcore.WithTenant(context.Background(), "tenant-acme")
+	if _, err := g.Chat(tenantCtx, chatReq()); err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
 	if provider.chatCalls != 1 {
@@ -115,13 +120,14 @@ func TestGateway_Chat_NotRateLimited_Succeeds(t *testing.T) {
 
 // TestGateway_ChatStream_RateLimited_RefusesBeforeCallingTheProvider proves
 // ChatStream's own rate-limit check runs before it ever calls the
-// provider's ChatStream method.
+// provider's ChatStream method -- on a tenantful call, the only shape that
+// consults the per-tenant limiter at all.
 func TestGateway_ChatStream_RateLimited_RefusesBeforeCallingTheProvider(t *testing.T) {
 	provider := &fakeChatProvider{}
 	g := gatewayTestFixture(t, provider)
 	g.limiter = scriptedLimiter{allowed: false, resetAfter: 7 * time.Second}
 
-	_, err := g.ChatStream(context.Background(), chatReq())
+	_, err := g.ChatStream(pkgcore.WithTenant(context.Background(), "tenant-acme"), chatReq())
 	appErr, ok := apperr.As(err)
 	if !ok || appErr.Code != ErrRateLimited.Code {
 		t.Fatalf("ChatStream() error = %v, want ErrRateLimited", err)
@@ -153,7 +159,7 @@ func TestGateway_GenerateImage_RateLimited_RefusesBeforeEnqueuing(t *testing.T) 
 }
 
 // TestGateway_RateLimiter_UnderlyingStoreError_WrapsAsInternal proves a
-// Limiter failure (a KVStore outage) fails Chat closed with
+// Limiter failure (a KVStore outage) fails a tenantful Chat closed with
 // ErrRateLimitCheckFailed rather than silently allowing the call through,
 // mirroring go/sharing's identical
 // TestService_RateLimiter_UnderlyingStoreError_WrapsAsInternal.
@@ -162,7 +168,7 @@ func TestGateway_RateLimiter_UnderlyingStoreError_WrapsAsInternal(t *testing.T) 
 	g := gatewayTestFixture(t, provider)
 	g.limiter = scriptedLimiter{err: errors.New("kv store unavailable")}
 
-	_, err := g.Chat(context.Background(), chatReq())
+	_, err := g.Chat(pkgcore.WithTenant(context.Background(), "tenant-acme"), chatReq())
 	appErr, ok := apperr.As(err)
 	if !ok || appErr.Code != ErrRateLimitCheckFailed.Code {
 		t.Fatalf("Chat() error = %v, want ErrRateLimitCheckFailed", err)

@@ -4,12 +4,14 @@ Round 1 shipped `docs/internal/08-ai-gateway.md`'s unified-abstraction-layer
 section: a chat-only LLM gateway. Round 2 shipped the design doc's
 multi-modal-expansion section: `ImageProvider`, the async-only
 `Gateway.GenerateImage` pipeline, and the go/storage + go/jobs integration
-round 1 deliberately left unbuilt. Round 3 (this round) ships the HTTP
-surface for reading and writing platform and tenant BYOK credentials --
-the module's own OpenAPI fragment, its generator wiring, its handler, its
-reference-app consumer and its tests -- closing the "no admin/HTTP
-surface" limitation rounds 1 and 2 recorded below. See "What round 3
-adds".
+round 1 deliberately left unbuilt. Round 3 shipped the HTTP surface for
+reading and writing platform and tenant BYOK credentials -- the module's
+own OpenAPI fragment, its generator wiring, its handler, its reference-app
+consumer and its tests -- closing the "no admin/HTTP surface" limitation
+rounds 1 and 2 recorded below. Round 4 (this round) ships the SSRF guard
+for the tenant-writable BYOK base URL (the reviewer-ringed P0 this module
+carried) plus the explicit tenantless-call handling at Gateway's three
+rate-limit call sites (the adjudicated P1). See "What round 4 adds".
 
 ## What round 1 shipped
 
@@ -296,6 +298,73 @@ adds".
   and the reference app's `ai_gateway_flow_test.go` is the mandatory first
   consumer's end-to-end proof (next section).
 
+## What round 4 adds
+
+- **SSRF defense for the tenant BYOK base URL** (`ssrf.go`, `errors.go`,
+  `credential.go`, `gateway.go`, `image_gateway.go`): a tenant admin
+  writes the base URL of an OpenAI-compatible endpoint that the
+  platform's own network then dials presenting the credential's API key --
+  the exact outbound-dial primitive root `CLAUDE.md`'s Security rules
+  protect for webhooks ("SSRF protection is mandatory, including
+  DNS-rebinding protection"), which this module carried with zero
+  validation. Two checks, deliberately mirroring `go/integration/ssrf.go`'s
+  shape and tests case for case (this module sits on integration's own
+  tier, so the small stdlib-only helpers are duplicated, not shared):
+  creation-time refusal through `ValidateBaseURL` (parse, http/https
+  scheme whitelist, literal-IP or real-DNS per-address check over the
+  same blocked ranges integration refuses -- loopback, private,
+  link-local, CGNAT, NAT64/IPv4-compatible/site-local IPv6, and the rest
+  of the stdlib classification), and a dial-time re-check that PINS the
+  address actually connected: a tenant-tier credential's provider is
+  swapped onto `guardedProviderHTTPClient`, whose transport resolves the
+  host once, refuses any blocked candidate, and dials the validated IP by
+  address -- never a second re-resolution a rebinding DNS answer could
+  steer. A hostname that passed validation when stored but resolves to an
+  internal address by call time fails the call closed.
+- **The scope boundary, stated in code** (`ssrf.go`'s file header,
+  `credential.go`'s both setter doc comments): only the TENANT-tier write
+  is validated (and only the tenant-tier dial is guarded), because only
+  that tier is tenant-influenceable. The platform-wide row is written by
+  the operator under an audited system context, and an intranet
+  OpenAI-compatible LLM gateway is a legitimate platform default -- the
+  reference app's boot-time platform credential and its loopback test
+  harness live on that trusted side of the boundary, unchanged.
+- **The no-IP-echo rule, inherited from integration's own narrowing**
+  (96697dc): a blocked refusal reached through DNS resolution never
+  carries the resolved address in its params (that would make the refusal
+  an internal-DNS reconnaissance oracle -- submit hostnames, read back
+  internal IPs); a refusal of a literal IP the caller typed still echoes
+  it. The asymmetry is pinned by tests on both sides, and
+  `ErrBaseURLBlocked`'s own doc comment demands the two modules' refusals
+  keep agreeing.
+- Three new coded errors, Invalid-classified like integration's:
+  `aigateway.base_url_invalid`, `aigateway.base_url_unresolvable`,
+  `aigateway.base_url_blocked`. An empty baseUrl stays legal to store
+  ("no base URL configured").
+- **Tenantless call sites never feed the rate limiter the empty string**
+  (`gateway.go`, `image_gateway.go`, `ratelimit.go`): Chat and ChatStream
+  gate their per-tenant limiter check on `pkgcore.TenantFromContext`'s
+  ok -- a tenantless (system-context) call, which the module's own docs
+  bless, skips the check with the reason stated at the call site rather
+  than sharing an empty-string bucket with every other tenantless caller;
+  GenerateImage hoists its existing tenant requirement
+  (`ErrImageRequiresTenant`) into the limiter's own pipeline position, so
+  the limiter is only ever reached with a real tenant dimension.
+- Product decision, recorded not implemented: the stronger convergence --
+  a platform-declared whitelist of base URLs only -- stays future product
+  work; the legitimate capability (a tenant pointing its BYOK credential
+  at any PUBLIC OpenAI-compatible vendor) is deliberately preserved.
+- Tests: `ssrf_test.go` mirrors integration's suite (blocked literals,
+  the no-echo/echo asymmetry, public-IP allowed, scheme/malformed/
+  no-host/unresolvable refusals, the dial-time refusal of loopback and
+  the non-refusal of public addresses) plus resolve/resolveImage wiring
+  proofs that a tenant-tier credential's provider carries the guarded
+  client and a platform-tier one does not; `credential_test.go`,
+  `handler_test.go` and the reference app's `ai_gateway_flow_test.go`
+  pin the refusals through the service, the HTTP envelope and the
+  composed stack; `ratelimit_test.go` pins that tenantless calls never
+  consult the limiter.
+
 ## Reference-app consumer
 
 `examples/reference-app/internal/consult` remains round 1's mandatory first
@@ -345,14 +414,25 @@ aigateway:write in every demo tenant, deliberately NOT
 aigateway:manage_platform) proves on the composed stack that a
 tenant-scoped principal really is refused the platform-wide write while
 the demo owner (BuiltinRoleOwner) is not.
-`cmd/server/ai_gateway_flow_test.go` then proves the write-then-resolve
-connection with real calls: a tenant BYOK credential for the chat provider
-written over HTTP redirects the next real consult call from the boot-time
-platform default endpoint to the tenant's own endpoint presenting the
-tenant's own key on the wire, and the identical redirect is proven for the
-image provider through the async smile-simulation pipeline -- the second
-job reaches the tenant's images endpoint while the boot-time one is never
-called again.
+`cmd/server/ai_gateway_flow_test.go` then proves the round-4 guard's
+write-then-resolve shape with real calls. Its two BYOK legs deliberately
+REPLACE the round-3 redirect proof (which wrote a tenant credential
+naming a loopback fake endpoint and asserted the next real call reached
+it presenting the tenant key -- the exact primitive the round-4 P0 fix
+closes, and a test that confirmed a defect is false comfort): a tenant
+BYOK write naming a loopback endpoint (literal, and through a hostname
+whose DNS answer is blocked) is refused on the composed stack with
+aigateway.base_url_blocked and stored nowhere -- subsequent consult calls
+and smile-simulation jobs keep answering through the boot-time platform
+credential, and the refused endpoint never receives a request -- while a
+write naming a public-shaped endpoint still lands and the read surface
+(the same `Resolve` the call path uses) answers with the tenant's own
+row, preserving the legitimate arbitrary-public-vendor capability. The
+redirect-to-a-second-endpoint wire proof, which cannot survive a real
+dial guard (a fake vendor can only listen on loopback), is carried by the
+module's own unit suite: `credential_test.go`'s tenant-row-over-platform
+`Resolve` proof plus `ssrf_test.go`'s resolve-level guarded-client wiring
+proofs.
 
 ## Known limitations / deferred
 
@@ -362,9 +442,28 @@ called again.
   top without changing `ModelRoute`'s shape. This applies to image routes
   exactly as it does to chat ones -- the two share one mechanism.
 - The credential HTTP surface is validate-shape-only: a write stores what
-  it is given (a non-empty key, an optional base URL) and no provider
-  round-trip happens until a real call resolves and uses it -- no vendor
-  contact and no key-validity check at write time, by design.
+  it is given (a non-empty key, an optional base URL -- the base URL
+  SSRF-validated at tenant scope since round 4, see "What round 4 adds")
+  and no provider round-trip happens until a real call resolves and uses
+  it -- no vendor contact and no key-validity check at write time, by
+  design.
+- The dial-time SSRF pin (`guardedProviderHTTPClient`) only reaches
+  providers that implement this module's unexported `httpClientSettable`
+  -- its two OpenAI-compatible built-ins, which are the ones its own
+  registry factories construct. A third-party provider subpackage that
+  registers into `ChatProviderRegistry`/`ImageProviderRegistry` builds
+  its own HTTP client and dials outside the guard; such a provider is
+  responsible for its own outbound-dial safety (its constructor sees the
+  tenant-supplied base URL in its config), a boundary `ssrf.go`'s file
+  header records. The platform-tier write is deliberately outside both
+  checks by scope boundary, not by gap (intranet LLM gateways are a
+  legitimate operator-chosen platform default).
+- The stronger base-URL convergence -- a platform-declared whitelist of
+  vendor base URLs, instead of arbitrary-public-URL tenant BYOK -- is a
+  recorded product decision for a later round, deliberately not
+  implemented by the SSRF round (the coordinator's call; the legitimate
+  "point at another public OpenAI-compatible vendor" capability is
+  preserved and test-pinned).
 - The credential surface is write-only and upsert-shaped: no read-back of
   a stored key (deliberate -- no response ever echoes it), no per-key
   metadata beyond provider/scope/baseUrl, no rotation or expiry lifecycle,
