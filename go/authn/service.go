@@ -123,16 +123,22 @@ func (s *Service) recordAuthMetric(ctx context.Context, op string, start time.Ti
 // module uses for every cross-module fact it needs but does not own.
 //
 // A nil MembershipReader is not a permissive default. Every path that needs
-// one refuses rather than defaulting; the refusal's shape depends on who is
-// asking. Paths that answer an ALREADY-AUTHENTICATED caller (tenant
-// switching, refresh) fail closed with ErrTenantMembershipUnavailable --
-// because the question it answers is precisely "may this person act inside
-// this tenant", and an unanswerable authorization question is a refusal.
-// Password sign-in answers an anonymous caller and folds the same refusal
-// into its uniform ErrInvalidCredentials error instead: its membership
-// question is asked only after the password verified, so a distinguishable
-// membership error there would certify the password (see Login's doc
-// comment).
+// one refuses rather than defaulting; whether the refusal reaches the
+// caller as-is or folds into a uniform failure is the resolveTenant call
+// site's decision, taken on the axis of whether a distinguishable answer
+// would certify something an attacker could only obtain by guessing --
+// resolveTenant's doc comment classifies all four call sites under it.
+// The paths whose answer certifies nothing guessable -- authenticated
+// callers (tenant switching, refresh) and the social/SSO/SMS-code session
+// start, whose certified secret is a one-time code already spent by the
+// attempt that reaches this call -- fail closed with
+// ErrTenantMembershipUnavailable, because the question it answers is
+// precisely "may this person act inside this tenant", and an unanswerable
+// authorization question is a refusal. Password sign-in answers an
+// anonymous caller who just verified a guessable, reusable credential and
+// folds the same refusal into its uniform ErrInvalidCredentials error
+// instead: a distinguishable membership error there would certify the
+// password (see Login's doc comment).
 type MembershipReader interface {
 	// ActiveMembership reports whether userID is an active member of
 	// tenantID.
@@ -600,10 +606,14 @@ func (s *Service) mapRegisterCreateConflict(ctx context.Context, user *User, err
 // no membership of an explicitly requested one: the membership question is
 // asked only after the password verified, so an answer naming it (403
 // tenant_membership_required / tenant_membership_unavailable) would certify
-// the credential to an anonymous caller. The distinguishable membership
-// errors are reserved for paths answering an already-authenticated caller
-// (tenant switching, refresh). The specific reason is written to the login
-// history for the operator and for the account owner's own security page,
+// the password, a guessable and reusable secret, to an anonymous caller.
+// The distinguishable membership errors belong to the paths where they
+// certify nothing an attacker could only obtain by guessing: authenticated
+// callers (tenant switching, refresh), and the social/SSO/SMS-code session
+// start, whose certified secret is a one-time code the attempt itself has
+// already spent -- resolveTenant's doc comment classifies all four call
+// sites on that axis. The specific reason is written to the login history
+// for the operator and for the account owner's own security page,
 // FailureReasonNoMembership among them.
 func (s *Service) Login(ctx context.Context, in LoginInput) (*TokenPair, error) {
 	start := time.Now()
@@ -1000,6 +1010,50 @@ func (s *Service) mintPairWithAMR(ctx context.Context, user *User, session *Sess
 // resolveTenant answers "may this user act inside this tenant", picking the
 // user's first tenant when none was requested. It never falls back to a
 // permissive answer.
+//
+// It always answers with the same distinguishable errors
+// (ErrTenantMembershipRequired, ErrTenantMembershipUnavailable); whether a
+// call site lets that answer reach its caller or folds it into a uniform
+// failure is that site's decision, taken on one axis: would a
+// distinguishable answer certify something an attacker could only obtain by
+// guessing? A site folds when it would; otherwise it lets the error
+// through, because the question the error answers is precisely "may this
+// person act inside this tenant" and an unanswerable authorization question
+// is a refusal. The four call sites sort themselves under that axis:
+//
+//   - login (password sign-in): the caller is anonymous and the credential
+//     this call sits just past is a password -- the one secret in this
+//     module an attacker can keep guessing at, and one whose validity
+//     survives the attempt, so an answer naming the membership cause would
+//     certify it. login folds: recordFailure writes the specific reason
+//     (FailureReasonNoMembership) to the login history and the caller
+//     answers the uniform ErrInvalidCredentials every other sign-in
+//     failure answers (see Login's doc comment).
+//
+//   - startExternalSession (social sign-in, enterprise SSO and SMS-code
+//     session start): the caller is anonymous, but the secret the exchange
+//     just certified is not something an attacker could only obtain by
+//     guessing -- for social and SSO it is an IdP authorization code, minted
+//     per session by the identity provider and bound to this client and
+//     redirect URI, and for SMS-code login a one-time code delivered to the
+//     number the caller must own to receive it (successful verification IS
+//     the ownership proof, per LoginWithSMSCode). All of them are
+//     single-use, spent by this very attempt, so a distinguishable answer
+//     certifies nothing that survives to be exploited. It answers as-is: a
+//     no-membership user of a working Google login is told membership is
+//     the problem, the actionable answer, not that their login was
+//     invalid.
+//
+//   - refresh: the caller is authenticated -- resolveRotation above
+//     accepted a refresh token only the session's user could present. A
+//     distinguishable answer certifies no guessable secret, only the
+//     caller's own membership facts. It answers as-is.
+//
+//   - SwitchTenant: the caller is authenticated -- the principal was
+//     verified against the live session above this call. Same reasoning as
+//     refresh: the answer certifies the caller's own membership in the
+//     target tenant, the one fact this method exists to establish. It
+//     answers as-is.
 func (s *Service) resolveTenant(ctx context.Context, userID string, requested pkgcore.TenantID) (pkgcore.TenantID, error) {
 	if s.membership == nil {
 		return "", ErrTenantMembershipUnavailable
