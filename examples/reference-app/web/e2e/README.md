@@ -72,6 +72,29 @@ Going over does not slow the suite down: it turns it red on `429` in
 whichever test loses the race, a failure that says nothing about the
 product.
 
+**So ask the `@pending` tier for the block you mean, rather than running
+it whole.** What is actually known, kept apart because the two halves
+came from different runs: one measured run of the whole tier spent 18
+sign-ins over 2.6 minutes and crossed the per-IP pool, reddening a test
+on the budget rather than on its subject. A run of the same tier today
+did NOT -- four of its eight gates fail early, at a surface that does
+not exist yet, and never spend the sign-ins they would if they passed.
+That is the shape of the hazard: the tier's cost grows as its gates
+start passing, so the invocation that finally works is the one that
+trips the budget, and its red will point at whichever test lost the
+race. Ask for the block you mean:
+
+```bash
+E2E_RUN_TAGGED=1 pnpm exec playwright test \
+  e2e/core-journey.pending.spec.ts --grep "block C"
+```
+
+This matters most to a round whose acceptance criterion is one of these
+gates: running the whole tier to check one block produces a red that
+says nothing, which is the same worthless answer as a default-tier green
+that never selected the gate. A rule that says "run the gate" has to say
+"run that gate".
+
 What keeps `@budget` a real tier rather than a graveyard: each run boots
 its own server, so a **separate invocation** starts with the rate-limit
 counters at zero and a full budget of its own. That is why the answer is
