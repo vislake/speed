@@ -324,17 +324,35 @@ test.describe('the core journey', { tag: '@pending' }, () => {
 
     // What this generation cost, where the generation happened: a
     // pay-per-use product that spends silently is one nobody trusts.
+    //
+    // A NUMBER, not the vocabulary. The first draft of this asserted
+    // only that text matching /credit|cost|usage/i appeared somewhere on
+    // the page, which a nav entry called "Usage" satisfies on its own --
+    // so a surface that said the word "credits" and no amount would have
+    // passed a gate whose whole subject is how much was spent. A cost
+    // that does not say how much is not a cost.
+    const cost = page.getByRole('main').getByText(UI_NAMES.cost).first()
+    await expect(cost, 'a generation must say what it cost').toBeVisible()
     await expect(
-      page.getByText(UI_NAMES.cost).first(),
-      'a generation must say what it cost',
-    ).toBeVisible()
+      cost,
+      'the surface names the idea of a cost but never an amount, so a practice still cannot tell what this generation spent',
+    ).toContainText(/\d/)
 
     // And the standing balance, somewhere a person can check it.
-    await page.getByRole('link', { name: /account|billing|usage/i }).click()
+    // Reached through openSurface: below the md breakpoint the
+    // navigation is behind the menu button, and clicking the link
+    // directly is the desktop-only mistake this suite has now made six
+    // times.
+    await openSurface(page, /account|billing|usage/i)
+    const balance = page.getByRole('main').getByText(/balance|remaining|credits/i).first()
     await expect(
-      page.getByText(/balance|remaining|credits/i).first(),
+      balance,
       'the practice must be able to see its remaining credits',
     ).toBeVisible()
+    await expect(
+      balance,
+      'the balance surface names credits but shows no figure, so nobody can tell whether they can afford the next simulation',
+    ).toContainText(/\d/)
   })
 })
 
