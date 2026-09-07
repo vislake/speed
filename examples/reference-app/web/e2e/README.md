@@ -798,13 +798,22 @@ Both tiers pass, including the whole create-case → photo → generate →
 share → credits chain, which writes through storage, cases, smilesim,
 sharing and billing.
 
-**The condition:** that was measured with the capture scope set to three
-models -- `org.OrgNode`, `org.Membership`, `org.Invitation` (read from
-`server.go`'s `AuditModels`, not taken on report). `Note` is
-deliberately outside it and keeps its separate persister connection. A
-round that widens the scope -- especially onto the notes write shape,
-which is where the deadlock was originally seen -- invalidates this
-green rather than inheriting it, and the re-run is these same two tiers.
+**The condition:** that was measured with the capture scope at three
+models -- `org.OrgNode`, `org.Membership`, `org.Invitation`. `Note` is
+deliberately outside it and keeps its separate persister connection.
+
+Where to read that scope moved once already, and the new place is the
+one to watch: `c5290a10` replaced the app's literal list with
+`AuditModels: org.AuditableModels()`, so the owning module now holds it
+(`go/org/module.go`, currently returning exactly those three) and the
+app can no longer drift from org's own view of what it audits. The
+condition therefore watches `AuditableModels()`'s return, not a list in
+`server.go`.
+
+A round that widens it -- especially onto the notes write shape, where
+the deadlock was originally seen -- invalidates this green rather than
+inheriting it, and the re-run is these same two tiers. Both were re-run
+after `c5290a10` itself: default 20 passed, @budget 26 passed.
 
 **What the deployment cannot answer.** The fly.io deployment has no
 image-provider configuration (`flyctl secrets list` shows no
