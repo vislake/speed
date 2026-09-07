@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -189,10 +190,16 @@ func TestIsBlockedIP(t *testing.T) {
 	}
 }
 
-// TestNewSafeHTTPClient_RefusesLoopbackAtDialTime proves the second half of
-// this file's own SSRF defense: even a URL that somehow reached delivery
-// time (bypassing ValidateWebhookURL, or one whose DNS answer changed after
-// creation) is refused at the point of actually connecting, never sent.
+// TestNewSafeHTTPClient_RefusesLoopbackAtDialTime proves the CHECK half of
+// the dial-time defense: a dial whose address -- literal or resolved -- is
+// a blocked range is refused at the point of actually connecting, never
+// sent. The dial address here is the httptest server's literal loopback
+// IP, so this test exercises the literal-IP branch with no DNS at all: it
+// proves isBlockedIP runs inside DialContext and refuses a blocked
+// literal. It does NOT prove the rebinding property -- that the address
+// actually handed to the dialer is the validated IP literal, never a
+// re-resolved hostname -- which is pinned by
+// TestNewSafeHTTPClient_DialsTheValidatedIPLiteral below.
 func TestNewSafeHTTPClient_RefusesLoopbackAtDialTime(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -226,5 +233,80 @@ func TestNewSafeHTTPClient_AllowsPublicAddress(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "blocked") {
 		t.Fatalf("a public address was refused as blocked: %v", err)
+	}
+}
+
+// TestNewSafeHTTPClient_DialsTheValidatedIPLiteral pins the rebinding-
+// defeating property this file's own header comment names as the whole
+// reason the dial ring exists: the address handed to the dialer for a
+// HOSTNAME input is the IP LITERAL that the dial-time resolution itself
+// validated, never the hostname -- so nothing between the check and the
+// connection performs a second, independent DNS lookup a rebinding
+// attacker could answer differently. This is the property the two literal-
+// address dial tests above do not exercise (a literal loopback input needs
+// no resolution and a literal public input needs no pin), and it cannot be
+// built against the real resolver offline, which is exactly why the two
+// seams below exist: resolveWebhookHost scripts the DNS answers (a
+// first-public-then-private sequence), and webhookDialFunc records the
+// address an actual dial would connect to instead of opening a real
+// connection. This is the twin of go/ai-gateway/ssrf_test.go's identical
+// test, per the two modules' keep-in-step rule.
+//
+// Walk: the first guarded dial's resolution answers a public address; the
+// dial seam must receive exactly that address as an IP literal
+// ("93.184.216.34:443") and exactly ONE resolution may have happened -- a
+// second lookup between the check and the dial is precisely the window the
+// pin closes. A second guarded dial, answered by the rebinding attacker's
+// next (private) answer, is refused as blocked with the dial seam never
+// called. A regression that dials the raw hostname instead of the
+// validated IP fails the first assertion.
+func TestNewSafeHTTPClient_DialsTheValidatedIPLiteral(t *testing.T) {
+	answers := []net.IPAddr{
+		{IP: net.ParseIP("93.184.216.34")}, // public: the first resolution's answer
+		{IP: net.ParseIP("10.0.0.5")},      // private: a rebinding answer to a later resolution
+	}
+	resolutions := 0
+	origResolve := resolveWebhookHost
+	resolveWebhookHost = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		resolutions++
+		if resolutions > len(answers) {
+			return nil, errors.New("test resolver: no more scripted answers")
+		}
+		return []net.IPAddr{answers[resolutions-1]}, nil
+	}
+	defer func() { resolveWebhookHost = origResolve }()
+
+	var dialed []string
+	origDial := webhookDialFunc
+	webhookDialFunc = func(_ context.Context, _, addr string) (net.Conn, error) {
+		dialed = append(dialed, addr)
+		return nil, errors.New("test dial: connection deliberately not opened")
+	}
+	defer func() { webhookDialFunc = origDial }()
+
+	transport := newSafeHTTPClient(webhookDeliveryTimeout).Transport.(*http.Transport)
+	ctx := context.Background()
+
+	if _, err := transport.DialContext(ctx, "tcp", "receiver.example.test:443"); err == nil {
+		t.Fatal("the first guarded dial unexpectedly succeeded")
+	}
+	if resolutions != 1 {
+		t.Fatalf("resolutions = %d, want exactly 1 -- a second lookup between the check and the dial is the rebinding window this pin closes", resolutions)
+	}
+	if len(dialed) != 1 || dialed[0] != "93.184.216.34:443" {
+		t.Fatalf("address handed to the dialer = %v, want exactly the validated public IP literal %q -- never the input hostname and never a later resolution's answer", dialed, "93.184.216.34:443")
+	}
+
+	// The same guarded dial again, with the next resolution now answering a
+	// private address: refused as blocked, and nothing reaches the dialer.
+	_, err := transport.DialContext(ctx, "tcp", "receiver.example.test:443")
+	if err == nil || !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("the second guarded dial error = %v, want the blocked-address refusal", err)
+	}
+	if resolutions != 2 {
+		t.Fatalf("resolutions = %d, want 2", resolutions)
+	}
+	if len(dialed) != 1 {
+		t.Fatalf("dial seam called %d times, want exactly once -- a blocked answer must never reach the dialer", len(dialed))
 	}
 }

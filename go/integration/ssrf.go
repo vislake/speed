@@ -234,6 +234,32 @@ const webhookDialTimeout = 5 * time.Second
 // failure if it ever needs to.
 var errBlockedDialAddress = errors.New("integration: webhook delivery refused: destination resolves to a blocked address")
 
+// webhookDialFunc performs the one TCP dial newSafeHTTPClient's transport
+// issues for a single validated candidate address. It is a package-level
+// function variable, not a private method, so a test can replace it and
+// observe exactly what the guard hands to the dialer -- the seam the
+// dial-time pinning property is asserted through: the dialed address must
+// be the validated candidate's IP LITERAL, never the original hostname, or
+// the rebinding window this file's header comment closes would be open (a
+// re-resolution inside the dial would let a rebinding DNS answer steer the
+// connection). The default implementation builds a fresh dialer per
+// attempt, carrying webhookDialTimeout exactly as the pre-seam code did.
+// This is the twin of go/ai-gateway/ssrf.go's providerDialFunc, per the
+// two modules' keep-in-step rule.
+var webhookDialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: webhookDialTimeout}
+	return dialer.DialContext(ctx, network, addr)
+}
+
+// resolveWebhookHost resolves host the way newSafeHTTPClient's transport
+// needs it resolved at dial time. It is a package-level function variable
+// for the same reason webhookDialFunc is: the dial-time pinning property
+// cannot be exercised against the real resolver in an offline test, so the
+// rebinding sequence (an answer that changes between resolutions) is
+// scripted through this seam -- see ssrf_test.go's
+// TestNewSafeHTTPClient_DialsTheValidatedIPLiteral.
+var resolveWebhookHost = net.DefaultResolver.LookupIPAddr
+
 // webhookTransportIdleTimeout is the IdleConnTimeout of the shared
 // transport newSafeHTTPClient builds: how long an idle keep-alive
 // connection to a receiver is kept for reuse before it is closed. Sane and
@@ -268,7 +294,6 @@ var defaultWebhookHTTPClient = newSafeHTTPClient(webhookDeliveryTimeout)
 // surface and, per Go's default of 10, more hops than any legitimate
 // webhook receiver needs.
 func newSafeHTTPClient(timeout time.Duration) *http.Client {
-	dialer := &net.Dialer{Timeout: webhookDialTimeout}
 	transport := &http.Transport{
 		// Sane idle-connection hygiene for the module-level shared
 		// transport (defaultWebhookHTTPClient): IdleConnTimeout bounds how
@@ -289,7 +314,7 @@ func newSafeHTTPClient(timeout time.Duration) *http.Client {
 			if literal := net.ParseIP(host); literal != nil {
 				candidates = []net.IP{literal}
 			} else {
-				resolved, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+				resolved, err := resolveWebhookHost(ctx, host)
 				if err != nil {
 					return nil, err
 				}
@@ -308,7 +333,9 @@ func newSafeHTTPClient(timeout time.Duration) *http.Client {
 				// hostname), so nothing in between this check and the
 				// connection performs a second, independent DNS lookup
 				// that a rebinding attacker could answer differently.
-				conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+				// The dial itself goes through webhookDialFunc so a test
+				// can assert this property -- see that seam's own comment.
+				conn, err := webhookDialFunc(ctx, network, net.JoinHostPort(ip.String(), port))
 				if err == nil {
 					return conn, nil
 				}
