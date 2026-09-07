@@ -663,6 +663,22 @@ describe('FileUploader', () => {
   })
 
   describe('accessibility', () => {
+    it('declares the queue ul list role explicitly — WebKit strips list semantics from a list-style-none ul (P3-uikit-10 regression)', () => {
+      // jsdom hands a plain ul its implicit list role regardless of
+      // styling, so a role query would pass even unstyled — only the
+      // explicit attribute proves the WebKit remediation: WebKit removes
+      // list semantics from a list-style-none ul's accessibility tree,
+      // and the explicit role="list" is what restores them for assistive
+      // tech.
+      const view = renderHarness({
+        rows: [uploadingRow('r1', 'a.jpg'), succeededRow('r2', 'b.jpg')],
+      })
+      const queue = view.container.querySelector('ul')
+      expect(queue).not.toBeNull()
+      expect(queue).toHaveAttribute('role', 'list')
+      expect(view.getAllByRole('listitem')).toHaveLength(2)
+    })
+
     it('is axe-clean at idle', async () => {
       renderHarness({
         rows: [],

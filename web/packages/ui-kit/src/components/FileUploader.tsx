@@ -26,8 +26,10 @@
  * re-announces a tick later -- identical text is not a change, and a
  * live region only speaks about changes.
  *
- * Render shape: rows render as cards below the trigger once the queue has
- * content; an empty `rows` renders no queue at all. Each row's action-
+ * Render shape: rows render as one real list (a `ul` with the explicit
+ * `role="list"` -- WebKit strips list semantics from a list-style-none
+ * `ul` -- whose items are the queue cards) below the trigger once the
+ * queue has content; an empty `rows` renders no queue at all. Each row's action-
  * button group (Cancel while uploading; Retry/Remove once settled) is a
  * responsive `flexWrap: 'wrap'` flex row, purely additive CSS, so a long
  * file name plus several action buttons cannot overflow a narrow queue
@@ -416,8 +418,13 @@ export function FileUploader({
         </Box>
       ) : null}
       {rows.length > 0 ? (
+        /* The rows are one real list: a screen-reader user hears each
+           file as one item of a list with a boundary between rows,
+           never a flat div stack. role="list" keeps the list semantics
+           under WebKit, which strips them from a list-style-none ul. */
         <Box
           component="ul"
+          role="list"
           sx={{
             width: '100%',
             listStyle: 'none',
