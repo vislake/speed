@@ -139,9 +139,12 @@
  * discover-by-acting signal that an active factor exists -- to a caller
  * whose access token carries no fresh second-factor proof; POST
  * /api/v1/authn/mfa/step-up verifies DEMO_MFA_CONFIRM_CODE and answers
- * an access-only token elevated for the principal (a wrong code answers
- * 400 authn.mfa_invalid_code; the elevation lives only in that token,
- * per errors.go's ErrStepUpRequired contract); and POST
+ * an access-only token elevated for the principal, its answered
+ * principal carrying the fresh second-factor amr -- the session's
+ * methods plus the verified factor, the signal the account surface's
+ * replacement warning reads (a wrong code answers 400
+ * authn.mfa_invalid_code; the elevation lives only in that token, per
+ * errors.go's ErrStepUpRequired contract); and POST
  * /api/v1/authn/mfa/totp/confirm makes the factor active (a second
  * session's confirm while one is pending answers 409
  * authn.mfa_already_enrolled to an unelevated caller), answering the
@@ -1337,11 +1340,18 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         // A successful verification settles an access-only token whose
         // elevation stands for the fresh proof; it lives only in this
         // token's lifetime, exactly as the authn handler's contract
-        // records (never persisted, never outliving the token).
+        // records (never persisted, never outliving the token). The
+        // answered principal carries the rotated token's amr -- the
+        // session's methods plus the just-verified factor, the shape
+        // the real server's token-issuing answers send and the signal
+        // the account surface's replacement warning reads (MfaSection
+        // samples principal.amr; the demo's sessions are password
+        // sessions).
         const verified = {
           user_id: principal.user_id,
           tenant_id: principal.tenant_id,
           session_id: principal.session_id,
+          amr: ['password', 'mfa:totp'],
         }
         return jsonResponse(200, {
           access_token: issueAccess(verified, true),
