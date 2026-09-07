@@ -242,7 +242,15 @@ type User struct {
 
 	// PasswordHash is a PHC-encoded argon2id digest, or the empty string
 	// for an account with no password at all (social-only or SSO-only).
-	PasswordHash string `gorm:"size:255;not null"`
+	//
+	// The digest is a credential and must never leave this module: no
+	// projection, response, event or log carries it. The json:"-" tag is
+	// what makes a mistaken whole-struct marshal impossible rather than a
+	// review finding -- this model carries no other JSON tags, so without
+	// it a marshal would emit the hash under its field name, and nothing
+	// in this module marshals the struct today (each field that a response
+	// needs is copied onto an API type by hand).
+	PasswordHash string `gorm:"size:255;not null" json:"-"`
 
 	// DisplayName is the name shown in the product. It is not an
 	// identifier and is not unique.
