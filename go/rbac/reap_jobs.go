@@ -28,6 +28,23 @@ import (
 // have ended. A task the queue retries until it succeeds is the honest
 // convergence for that failure shape.
 //
+// One prerequisite of that convergence is the enqueue itself, and it has
+// no retry home of its own: the bus never redelivers and the subscribers
+// must return nil (an error would surface inside org's committed
+// request), so a reap task that never lands is a task no retry can
+// converge. A jobs store is a database like any other -- StandaloneQueue's
+// SQLite, asynq's Redis -- and an Enqueue failure is therefore the same
+// transient-failure class the queue's own retries exist for; the
+// subscribers fall back to the synchronous reaping on an enqueue failure
+// rather than letting the event pass un-reaped (reap.go's onMemberRemoved
+// and onNodeDeleted document the fall-through). The fallback reaps
+// whatever the failure spared: on the standalone shape, where the queue
+// and the rbac tables share one SQLite file, a store-wide outage takes
+// the synchronous run down with it and the reap's failure is logged
+// exactly like the no-queue host's; on a host whose queue store is
+// separate (asynq's Redis against rbac's own database), the reaping
+// proceeds straight through the outage.
+//
 // Idempotency discipline: each task's payload is the event instance's own
 // identity -- the removal's (tenant, user, membership id) or the
 // deletion's (tenant, node id set) -- and that identity is also the
@@ -47,8 +64,8 @@ import (
 // execution did. The residual window is a restore processed while its
 // removal's reap task is still queued or running -- sub-worker-latency
 // automation, never an operator's restore -- and the wrong end state it
-// produces is a revoked binding for a member org made visible again
-// again: fail-closed (missing access, never unauthorized access), and
+// produces is a revoked binding for a member org made visible again:
+// fail-closed (missing access, never unauthorized access), and
 // healed by the member's next removal-and-restore cycle, whose reinstate
 // pass re-lifts every member-removal row. That is the direction this
 // module accepts residual risk in; the leak direction the reaps exist to
@@ -126,9 +143,10 @@ func nodeReapKey(tenant pkgcore.TenantID, nodeIDs []string) string {
 // queue-backed replacement for running reapRoleBindings synchronously
 // inside the event delivery; see this file's header comment for the full
 // shape. Returns the queue's error unwrapped, for the caller (the
-// subscriber) to log -- a subscriber must never return it, since on the
-// in-memory bus an error here would surface inside org's committed Remove
-// call.
+// subscriber) to log and fall back to the synchronous reaping (see
+// reap.go's onMemberRemoved for the fall-through) -- a subscriber must
+// never return it, since on the in-memory bus an error here would surface
+// inside org's committed Remove call.
 func (s *Service) enqueueMemberReap(ctx context.Context, tenant pkgcore.TenantID, userID, membershipID string) error {
 	payload, err := json.Marshal(reapMemberPayload{UserID: userID, MembershipID: membershipID})
 	if err != nil {

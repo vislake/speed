@@ -120,8 +120,11 @@ import (
 // key and a scope and re-resolves both -- would cost one full
 // read-modify-delete cycle per binding. Where the loop RUNS depends on the
 // host's wiring: on a host with a jobs queue (Module.WithQueue) each reap
-// is a queue task the queue retries until it converges (reap_jobs.go); on
-// a host without one the reaps run synchronously inside org's own request
+// is a queue task the queue retries until it converges (reap_jobs.go -- an
+// enqueue failure, the jobs store itself momentarily unavailable, falls
+// back to the synchronous run rather than letting the event pass
+// un-reaped; see the two subscribers' fall-through comments); on a host
+// without one the reaps run synchronously inside org's own request
 // (the in-memory bus delivers in-process) -- where that per-binding
 // overhead is what a many-binding cascade would otherwise drag into org's
 // single HTTP DELETE -- with failures logged and never retried. The
@@ -274,7 +277,12 @@ func membershipIDFromPayload(payload any) (string, bool) {
 //     wired a jobs queue (Module.WithQueue -- see reap_jobs.go's header
 //     comment for the full shape): with a queue, the reap is ENQUEUED as
 //     a task and its failures are the queue's to retry; without one, it
-//     runs synchronously here, its failures logged and never retried.
+//     runs synchronously here, its failures logged and never retried. An
+//     ENQUEUE failure falls back to that same synchronous run instead of
+//     abandoning the removal: a reap task that never lands cannot be
+//     retried, and a jobs store is a database like any other (see the
+//     fall-through comment on the call below and reap_jobs.go's header
+//     comment).
 //
 // The handler never returns an error. On the in-memory bus it runs
 // synchronously inside org's Remove call, after org's transaction has
@@ -296,18 +304,31 @@ func (s *Service) onMemberRemoved(ctx context.Context, evt pkgcore.Event) error 
 	ctx = pkgcore.WithTenant(ctx, evt.TenantID)
 	if s.queue != nil {
 		membershipID, _ := membershipIDFromPayload(evt.Payload)
-		if err := s.enqueueMemberReap(ctx, evt.TenantID, userID, membershipID); err != nil {
-			observability.FromContext(ctx).Warn("rbac could not enqueue a removed member's reaping; the removal's bindings may stay live",
+		if err := s.enqueueMemberReap(ctx, evt.TenantID, userID, membershipID); err == nil {
+			return nil
+		} else {
+			// The enqueue failed and the handler must still return nil --
+			// an error would surface inside org's committed Remove, and
+			// neither bus redelivers -- so a dropped enqueue would leave
+			// the removed member's bindings live forever: the residue the
+			// queue exists to converge, abandoned at its very first hop. A
+			// jobs store is a database like any other, so this is the same
+			// transient-failure class the queue's own retries exist for;
+			// the synchronous reaping below -- the no-queue host's path,
+			// directly callable here -- runs instead, and only a failure
+			// of the reaping itself is left logged (reap_jobs.go's header
+			// comment records the premise).
+			observability.FromContext(ctx).Warn("rbac could not enqueue a removed member's reaping; reaping synchronously instead",
 				"event_type", evt.Type, "user_id", userID, "error", err)
 		}
-		return nil
 	}
 	if err := s.reapRoleBindings(ctx, evt, userID); err != nil {
-		// The synchronous fallback for a host that wired no queue: one
-		// aggregate log line for whatever the reap could not complete,
-		// instead of the per-binding lines the pass used to emit. Nothing
-		// retries it -- that is exactly what wiring a queue buys (see
-		// reap_jobs.go's header comment).
+		// The synchronous fallback for a host that wired no queue -- or,
+		// falling through from above, for a queue-backed host whose enqueue
+		// just failed: one aggregate log line for whatever the reap could
+		// not complete, instead of the per-binding lines the pass used to
+		// emit. Nothing retries it -- that is exactly what wiring a queue
+		// buys (see reap_jobs.go's header comment).
 		observability.FromContext(ctx).Warn("rbac could not fully reap a removed member's role bindings",
 			"event_type", evt.Type, "user_id", userID, "error", err)
 	}
@@ -345,10 +366,11 @@ func (s *Service) onMemberRemoved(ctx context.Context, evt pkgcore.Event) error 
 // and a failure to enumerate the live ones must not also skip the claim --
 // and every failure anywhere in the pass is returned as one joined error
 // for the CALLER to handle, never silently dropped. The caller is either
-// onMemberRemoved's no-queue fallback (logs the joined error at Warn and
-// moves on, the pre-queue behavior) or the queue-backed reap task
-// (memberReapTask, which returns it so the queue retries the reap -- the
-// retry home the old design's redelivery backstop never was; see
+// onMemberRemoved's synchronous fallback -- the no-queue host's path, and
+// the enqueue-failure fall-through's own, which logs the joined error at
+// Warn and moves on (the pre-queue behavior) -- or the queue-backed reap
+// task (memberReapTask, which returns it so the queue retries the reap --
+// the retry home the old design's redelivery backstop never was; see
 // reap_jobs.go's header comment). The claim's own UPDATE is idempotent, so
 // a retry that reaches it again rewrites nothing.
 func (s *Service) reapRoleBindings(ctx context.Context, evt pkgcore.Event, userID string) error {
@@ -491,8 +513,9 @@ func nodeDeletedIDsFromPayload(payload any) ([]string, bool) {
 //     context is rebuilt from the event for the same reason
 //     onMemberRemoved's does, and the reaping happens the same two ways
 //     that subscriber's does: enqueued as a task when the host wired a
-//     jobs queue, run synchronously (failures logged, never retried)
-//     otherwise.
+//     jobs queue (an enqueue failure falling back to the synchronous run
+//     exactly as that subscriber's does), run synchronously (failures
+//     logged, never retried) otherwise.
 //
 // The handler never returns an error, for the same reason onMemberRemoved's
 // does not: on the in-memory bus it runs synchronously inside org's Delete
@@ -514,15 +537,23 @@ func (s *Service) onNodeDeleted(ctx context.Context, evt pkgcore.Event) error {
 
 	ctx = pkgcore.WithTenant(ctx, evt.TenantID)
 	if s.queue != nil {
-		if err := s.enqueueNodeReap(ctx, evt.TenantID, nodeIDs); err != nil {
-			observability.FromContext(ctx).Warn("rbac could not enqueue the reaping of bindings scoped to deleted nodes; they may stay live",
+		if err := s.enqueueNodeReap(ctx, evt.TenantID, nodeIDs); err == nil {
+			return nil
+		} else {
+			// The enqueue failed -- the node-deletion mirror of
+			// onMemberRemoved's own enqueue failure, with the same
+			// consequence if the event were simply dropped (the bindings
+			// scoped to the deleted nodes stay live): the synchronous
+			// reaping below runs instead; see that subscriber's
+			// fall-through comment for the reasoning.
+			observability.FromContext(ctx).Warn("rbac could not enqueue the reaping of bindings scoped to deleted nodes; reaping synchronously instead",
 				"event_type", evt.Type, "error", err)
 		}
-		return nil
 	}
 	if err := s.reapRoleBindingsForNodes(ctx, evt, nodeIDs); err != nil {
-		// The synchronous fallback for a host that wired no queue; see
-		// onMemberRemoved's identical call for the shape.
+		// The synchronous fallback for a host that wired no queue -- or,
+		// falling through from above, for a queue-backed host whose enqueue
+		// just failed; see onMemberRemoved's identical call for the shape.
 		observability.FromContext(ctx).Warn("rbac could not fully reap the bindings scoped to deleted nodes",
 			"event_type", evt.Type, "error", err)
 	}

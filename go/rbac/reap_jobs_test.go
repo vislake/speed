@@ -3,6 +3,7 @@ package rbac
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -30,6 +31,14 @@ import (
 // the queue's worker executes the task. Waiting is bounded by a deadline
 // loop over the observable end state (the binding rows), never by a fixed
 // sleep.
+//
+// One more property is pinned here: the enqueue itself has no retry home
+// -- a reap task that never lands is a task no retry can converge (the
+// bus never redelivers and the subscribers must still return nil), so an
+// Enqueue failure falls back to the synchronous reaping. The two
+// EnqueueFailure tests below wire a queue whose Enqueue always fails and
+// assert the bindings are still reaped; pre-fix, the subscribers' only
+// answer to a failed enqueue was a Warn that left the bindings live.
 
 // waitFor polls cond until it reports true or deadline passes. A bounded
 // deadline loop is the deterministic core of every worker test here: the
@@ -342,4 +351,103 @@ func TestMemberReapTask_UnreadablePayload_FailsTheAttempt(t *testing.T) {
 // like removedMember does for MemberRemoved (reap_test.go).
 type nodeDeleted struct {
 	DeletedNodeIds []string `json:"deleted_node_ids"`
+}
+
+// failingQueue is a jobs.Queue whose Enqueue always fails with err -- the
+// "the jobs store is momentarily unavailable" case, which is exactly what
+// a transient database failure looks like from the subscriber's side. Get
+// and Cancel share the same failure so no method of the interface ever
+// reports success. calls counts Enqueue invocations, so a test can prove
+// the enqueue path was taken (and failed) rather than the no-queue path.
+type failingQueue struct {
+	err   error
+	calls int
+}
+
+func (q *failingQueue) Enqueue(context.Context, jobs.Task, ...jobs.EnqueueOption) (jobs.JobID, error) {
+	q.calls++
+	return "", q.err
+}
+
+func (q *failingQueue) Get(context.Context, jobs.JobID) (*jobs.Job, error) {
+	return nil, q.err
+}
+
+func (q *failingQueue) Cancel(context.Context, jobs.JobID) error {
+	return q.err
+}
+
+func TestService_OnMemberRemoved_EnqueueFailure_FallsBackToTheSynchronousReap(t *testing.T) {
+	// The enqueue path's own failure shape: the queue's Enqueue fails --
+	// the jobs store is a database like any other, and this is the same
+	// transient-failure class the queue's retries exist to converge, only
+	// with no retry to converge it, since a task that never landed cannot
+	// be retried -- and the removed member's bindings are still reaped.
+	// Pre-fix, the subscriber's only answer to the failed enqueue was a
+	// Warn: the handler returned nil, the bus never redelivered, and the
+	// removal's bindings stayed live forever -- the P1 end state the
+	// queue-backed round closed, narrowed to the enqueue window. The
+	// subscriber falls back to the synchronous reaping instead.
+	db := newRBACTestDB(t)
+	q := &failingQueue{err: errors.New("jobs store unavailable")}
+	svc, reg := attachTestService(t, db, WithQueue(q))
+
+	removed := Subject{TenantID: "tenant-a", UserID: "user-gone"}
+	grant(t, svc, removed, "reader", Scope{}, "notes:read")
+	grant(t, svc, removed, "writer", Scope{NodeID: "node-1"}, "notes:write")
+
+	rec := recordEvents(reg)
+	publishMemberRemoved(t, reg, removed.TenantID, removedMember{
+		MembershipID: "membership-1",
+		UserID:       removed.UserID,
+	})
+
+	if q.calls != 1 {
+		t.Fatalf("the subscriber called Enqueue %d times, want 1 -- the enqueue path must have been taken and failed", q.calls)
+	}
+	// The in-memory bus runs the subscriber synchronously inside Publish,
+	// so when the helper returns the fallback has already run.
+	if rows := liveBindings(t, svc, removed.TenantID, removed.UserID); len(rows) != 0 {
+		t.Fatalf("the removal's reap did not fall back: %d live bindings remain after the enqueue failure, want 0", len(rows))
+	}
+	if got := len(rec.ofType(EventRoleBindingRevoked)); got != 2 {
+		t.Fatalf("got %d %s events, want 2 (the synchronous fallback revokes one binding at a time)", got, EventRoleBindingRevoked)
+	}
+	if ok, _ := svc.Can(context.Background(), removed, "read", "notes"); ok {
+		t.Fatal("Can stayed true after the enqueue failure -- the fallback did not reap")
+	}
+}
+
+func TestService_OnNodeDeleted_EnqueueFailure_FallsBackToTheSynchronousReap(t *testing.T) {
+	// The node-deletion reap's own leg of the same fallback: a queue whose
+	// Enqueue always fails must not leave the bindings scoped to a deleted
+	// node live -- the subscriber reaps synchronously instead, exactly as
+	// the member-removal side does.
+	db := newRBACTestDB(t)
+	q := &failingQueue{err: errors.New("jobs store unavailable")}
+	svc, reg := attachTestService(t, db, WithQueue(q))
+
+	holder := Subject{TenantID: "tenant-a", UserID: "user-1"}
+	grant(t, svc, holder, "reader", Scope{NodeID: "node-1"}, "notes:read")
+	grant(t, svc, holder, "editor", Scope{NodeID: "node-2"}, "notes:write")
+
+	rec := recordEvents(reg)
+	bus := reg.Events.Bus()
+	if err := bus.Publish(pkgcore.WithTenant(context.Background(), "tenant-a"), pkgcore.Event{
+		Type:     eventNodeDeleted,
+		TenantID: "tenant-a",
+		Payload:  nodeDeleted{DeletedNodeIds: []string{"node-1", "node-2"}},
+	}); err != nil {
+		t.Fatalf("publishing %s: %v", eventNodeDeleted, err)
+	}
+
+	if q.calls != 1 {
+		t.Fatalf("the subscriber called Enqueue %d times, want 1 -- the enqueue path must have been taken and failed", q.calls)
+	}
+	if rows := liveBindings(t, svc, "tenant-a", "user-1"); len(rows) != 0 {
+		t.Fatalf("the deletion's reap did not fall back: %d live bindings remain after the enqueue failure, want 0", len(rows))
+	}
+	if got := len(rec.ofType(EventRoleBindingRevoked)); got != 2 {
+		t.Fatalf("got %d %s events, want 2 (the synchronous fallback revokes one binding at a time)", got, EventRoleBindingRevoked)
+	}
 }
