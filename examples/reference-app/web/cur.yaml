@@ -1,0 +1,47 @@
+- generic [ref=e29]:
+  - banner [ref=e30]:
+    - link "Skip to content" [ref=e31] [cursor=pointer]:
+      - /url: "#_r_6_"
+    - generic [ref=e32]:
+      - heading "Smile Studio" [level=6] [ref=e34]
+      - generic [ref=e35]:
+        - button "Acme Dental" [ref=e38] [cursor=pointer]
+        - button "Sign out" [ref=e39] [cursor=pointer]
+  - navigation "Main navigation" [ref=e43]:
+    - list [ref=e44]:
+      - listitem [ref=e45]:
+        - link "Home" [ref=e46] [cursor=pointer]:
+          - /url: "#/"
+          - generic [ref=e48]: Home
+      - listitem [ref=e49]:
+        - link "Notes" [ref=e50] [cursor=pointer]:
+          - /url: "#/notes"
+          - generic [ref=e52]: Notes
+      - listitem [ref=e53]:
+        - link "Account" [ref=e54] [cursor=pointer]:
+          - /url: "#/account"
+          - generic [ref=e56]: Account
+  - main [ref=e57]:
+    - generic [ref=e62]:
+      - heading "Notes" [level=1] [ref=e63]
+      - paragraph [ref=e64]: Jot down what you are working on; the list shows every note your current tenant has created.
+      - generic [ref=e65]:
+        - generic [ref=e66]:
+          - generic [ref=e82]: Text
+          - generic [ref=e67]:
+            - textbox "Text" [ref=e68]: Patient consultation notes - crown recommended for tooth 14
+            - group:
+              - generic: Text
+        - alert [ref=e83]:
+          - img [ref=e85]
+          - generic [ref=e87]: Something went wrong. Try again later.
+        - button "Create note" [ref=e70] [cursor=pointer]: Create note
+      - table "Data table" [ref=e73]:
+        - rowgroup [ref=e74]:
+          - row "Text Created" [ref=e75]:
+            - columnheader "Text" [ref=e76]
+            - columnheader "Created" [ref=e77]
+        - rowgroup [ref=e78]:
+          - row "Patient record at the FIRST clinic Sep 7, 2026, 8:20 AM" [ref=e79]:
+            - cell "Patient record at the FIRST clinic" [ref=e80]
+            - cell "Sep 7, 2026, 8:20 AM" [ref=e81]
