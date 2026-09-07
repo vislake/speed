@@ -781,6 +781,31 @@ every commit that lands widens the gap without changing the result.
 `flyctl status` plus a `git log --since` against the deploy time is how
 to size it before quoting a deployment green.
 
+**One green with a condition attached: the audit bus.** `2ecb30a` wired
+`dbkit.Options.AuditBus` in the app, reversing a choice the root census
+had recorded as deliberate -- and that shape has real deadlock history
+(the write-capture plugin publishing synchronously, on the write's own
+goroutine, into a persister on the same SQLite file, which used to reach
+`SQLITE_BUSY`). A later round closed it by buffering the events and
+publishing only after the write's transaction genuinely commits, but the
+record scopes that fix to the `WithTenantSession`/`Repository[T]` shape.
+
+So the interesting question for this suite was never whether audit rows
+land -- that is a unit-level question -- but whether any write path
+HANGS. A deadlock surfaces as a request that never answers, which is the
+failure mode a browser suite drives most of and catches most easily.
+Both tiers pass, including the whole create-case → photo → generate →
+share → credits chain, which writes through storage, cases, smilesim,
+sharing and billing.
+
+**The condition:** that was measured with the capture scope set to three
+models -- `org.OrgNode`, `org.Membership`, `org.Invitation` (read from
+`server.go`'s `AuditModels`, not taken on report). `Note` is
+deliberately outside it and keeps its separate persister connection. A
+round that widens the scope -- especially onto the notes write shape,
+which is where the deadlock was originally seen -- invalidates this
+green rather than inheriting it, and the re-run is these same two tiers.
+
 **What the deployment cannot answer.** The fly.io deployment has no
 image-provider configuration (`flyctl secrets list` shows no
 `APP_AI_GATEWAY_IMAGE_*` entry -- re-checked, still one secret), so a
