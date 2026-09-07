@@ -264,7 +264,13 @@ export interface AuthSession {
   switchTenant(tenantId: string): Promise<AuthSnapshot>
   /** Re-proves a second factor for the current session; the elevation
    * lives in the access token just minted. Same
-   * OperationSupersededError contract as switchTenant. */
+   * OperationSupersededError contract as switchTenant -- with the one
+   * difference the superseded caller must hear: a step-up code is
+   * single-use server-side, so a superseded verification's code was
+   * consumed by its own successful answer even though the elevation
+   * never landed. The caller must never offer to resubmit that same
+   * code (the server answers the spent code with authn.mfa_code_used,
+   * not with success); a retry is only ever a fresh code. */
   verifyStepUp(code: string): Promise<AuthSnapshot>
   /** Host-attached permission list for one domain: replaces the list
    * the snapshot carries with a defensive copy (mutating the caller's

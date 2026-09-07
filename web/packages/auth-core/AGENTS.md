@@ -55,7 +55,12 @@ below this layer.
   it as the lost race it is — no failure UI, and never a one-shot
   side effect (a redirect, an `onSwitched`) for a tenant or identity
   the session is not actually running under; the winning call fires
-  its own.
+  its own. `verifyStepUp`'s supersession carries a cost its caller
+  must hear: a step-up code is single-use server-side, so a
+  verification that lost the race spent the very code its own 2xx
+  verified — the caller must never offer that same code again, only a
+  fresh one (the server answers the spent code with
+  `authn.mfa_code_used`, never with success).
 - **`refresh()` is the silent path.** It resolves `false` (never
   rejects) for an invalid/expired/refused refresh token and signs the
   session out locally; it rethrows raw only for transport/server
