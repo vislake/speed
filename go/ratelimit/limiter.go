@@ -9,24 +9,67 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // ErrInvalidLimit is returned by Allow when the supplied Limit is not usable
-// (a Rate or Per that is zero or negative, or a Per so large that
-// windowTTLFactor*Per would overflow a time.Duration -- see maxPer). A
-// limiter is a security-relevant primitive: garbage input from a caller is a
-// programmer error and must fail loudly and unambiguously, not be silently
-// reinterpreted as always-allow or always-deny. Callers classify it with
-// errors.Is.
+// (a Rate or Per that is zero or negative, a Rate of 1 -- which has its own
+// coded wrapper, ErrRateOneUnsupported, so the specific reason stays
+// distinguishable -- or a Per so large that windowTTLFactor*Per would
+// overflow a time.Duration -- see maxPer). A limiter is a security-relevant
+// primitive: garbage input from a caller is a programmer error and must fail
+// loudly and unambiguously, not be silently reinterpreted as always-allow or
+// always-deny. Callers classify it with errors.Is.
 var ErrInvalidLimit = errors.New("ratelimit: invalid limit")
 
+// ErrRateOneUnsupported is returned by Allow -- in place of, and wrapping,
+// ErrInvalidLimit -- when the supplied Limit has Rate == 1. Whatever Per it
+// is paired with, this limiter cannot honour a Rate of 1 literally: "once
+// per Per" would require the one hit a window admits to stop counting
+// against the window after it, and it never does. The weighted sliding-window
+// formula combined with "every call is a hit" (see slidingWindowLimiter's own
+// doc comment, "Saturating clients permanently lose one slot per window")
+// instead collapses Rate == 1 into "allowed exactly once ever, then denied
+// forever": the very first window admits the one hit, every later window
+// admits none, and the attempts those windows deny keep their own counters at
+// 1, handing the same permanent refusal to each next window. A Rate of 2 or
+// more always leaves at least Rate-1 admission per window under the same
+// sustained saturation, so the collapse to zero is unique to Rate 1.
+//
+// Accepting a Limit whose literal semantics cannot be honoured would hand a
+// host that wrote Rate: 1 meaning "once per Per" -- the natural spelling of
+// "once a day" -- a limiter that locks the key out forever after its first
+// use instead, with the permanent-lockout behaviour arriving in production
+// only once the window rolls over. Refusal is the only honest answer, on the
+// same reasoning the jobs module applies to its own un-honourable
+// construction values (WithConcurrency and WithWorkerCount refuse a value
+// below 1 at option time because asynqlib.NewServer would silently
+// reinterpret it; see go/jobs/queue/asynq): a coded refusal beats silently
+// delivering a different, permanently-denying behaviour. Callers that treat
+// any invalid Limit as a programmer error keep classifying this one with
+// errors.Is(err, ErrInvalidLimit); callers that need the specific reason
+// match the code "ratelimit.rate_one_unsupported" with errors.As, or compare
+// against this sentinel with errors.Is (Allow returns it undecorated).
+//
+// A host that genuinely wants roughly one admission per interval should use
+// Rate: 2 with the interval as Per: at most two requests are admitted per
+// window, and a caller whose attempts genuinely stay within one per window
+// is never denied. An exactly-once-per-interval guarantee is not expressible
+// at any Rate (a straddling pair of attempts around a window boundary would
+// defeat it) and belongs in the caller's own last-success gate, not in a
+// rate-limit window.
+var ErrRateOneUnsupported = apperr.Invalid("ratelimit.rate_one_unsupported").WithCause(ErrInvalidLimit)
+
 // Limit is the rate a key is allowed to be hit at: Rate occurrences per Per
-// duration. Rate must be strictly positive, and Per must be strictly
-// positive and no larger than maxPer; Allow rejects anything else with an
-// error wrapping ErrInvalidLimit rather than guessing what an invalid Limit
-// was meant to do.
+// duration. Rate must be at least 2 -- a Rate of 1, whatever Per it is
+// paired with, cannot be honoured literally by the sliding-window formula
+// and is refused with ErrRateOneUnsupported (see that error's own doc
+// comment) -- and Per must be strictly positive and no larger than maxPer;
+// Allow rejects anything else with an error wrapping ErrInvalidLimit rather
+// than guessing what an invalid Limit was meant to do.
 type Limit struct {
-	// Rate is the number of requests allowed within Per.
+	// Rate is the number of requests allowed within Per. Values below 2
+	// are refused: see Limit's own doc comment and ErrRateOneUnsupported.
 	Rate int
 	// Per is the length of the window Rate applies to.
 	Per time.Duration
@@ -36,6 +79,14 @@ type Limit struct {
 func (l Limit) validate() error {
 	if l.Rate <= 0 || l.Per <= 0 {
 		return fmt.Errorf("%w: rate=%d per=%s (both must be > 0)", ErrInvalidLimit, l.Rate, l.Per)
+	}
+	if l.Rate == 1 {
+		// See ErrRateOneUnsupported for why Rate == 1 is refused: whatever
+		// Per it is paired with, the weighted sliding-window formula cannot
+		// honour "once per Per" -- it would collapse into "allowed once ever,
+		// then denied forever". Refusing here, before the store is touched,
+		// beats accepting a Limit whose literal semantics are undeliverable.
+		return ErrRateOneUnsupported
 	}
 	if l.Per > maxPer {
 		return fmt.Errorf("%w: per=%s exceeds the maximum of %s (windowTTLFactor*per must fit in a time.Duration)", ErrInvalidLimit, l.Per, maxPer)
@@ -195,8 +246,13 @@ func New(store pkgcore.KVStore) Limiter {
 // bursted (the documented contract's own "Rate occurrences allowed per
 // Per"), is therefore admitted the full limit.Rate only in the very first
 // window it ever uses a key in, then at most limit.Rate-1 every window
-// after that, forever, with no self-recovery — a complete, permanent
-// lockout at Rate == 1.
+// after that, forever, with no self-recovery. At Rate == 1 — where
+// "at most limit.Rate-1" is zero — that collapse is a complete, permanent
+// lockout from a key's second window on, whatever Per, which is exactly why
+// Limit.validate refuses a Rate of 1 outright (ErrRateOneUnsupported):
+// "once per Per" cannot be honoured literally by this formula, and a coded
+// refusal beats silently delivering "allowed exactly once ever, then denied
+// forever" to a host that wrote Rate: 1 meaning "once a day".
 //
 // This is safe-direction (it never over-admits) and a faithful consequence
 // of the weighted formula above combined with "every call is a hit"
@@ -204,9 +260,11 @@ func New(store pkgcore.KVStore) Limiter {
 // formula — see AGENTS.md's Known limitations for the full analysis,
 // including why avoiding it needs a different, unimplemented algorithm
 // (increment only on an allowed call) rather than a correction to this one.
-// TestAllow_SaturatingClient_ConvergesToRateMinusOnePerWindow and
-// TestAllow_SaturatingClient_Rate1_LocksOutPermanently in limiter_test.go
-// pin this down deterministically, independent of intra-window timing.
+// TestAllow_SaturatingClient_ConvergesToRateMinusOnePerWindow in
+// limiter_test.go pins the Rate >= 2 shape down deterministically,
+// independent of intra-window timing, and
+// TestAllow_RateOne_RefusedWithCodedReasonBeforeStoreTouched pins the
+// Rate == 1 refusal.
 //
 // # The TTL-attachment race, closed
 //

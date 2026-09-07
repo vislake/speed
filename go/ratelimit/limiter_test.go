@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // waitForFreshWindowStart blocks until shortly after a real window boundary
@@ -41,6 +42,7 @@ func TestAllow_InvalidLimit_ReturnsErrInvalidLimit(t *testing.T) {
 	}{
 		{name: "zero rate", limit: Limit{Rate: 0, Per: time.Second}},
 		{name: "negative rate", limit: Limit{Rate: -1, Per: time.Second}},
+		{name: "rate one", limit: Limit{Rate: 1, Per: time.Second}},
 		{name: "zero per", limit: Limit{Rate: 5, Per: 0}},
 		{name: "negative per", limit: Limit{Rate: 5, Per: -time.Second}},
 		{name: "both zero", limit: Limit{Rate: 0, Per: 0}},
@@ -80,7 +82,10 @@ func TestAllow_InvalidLimit_ReturnsErrInvalidLimit(t *testing.T) {
 // against the overflow fix over-correcting and rejecting the largest Per
 // that is actually safe to use.
 func TestAllow_PerAtMaxBoundary_StillAccepted(t *testing.T) {
-	limit := Limit{Rate: 1, Per: maxPer}
+	// Rate 2, never 1: a Rate of 1 is itself refused by validate these days
+	// (ErrRateOneUnsupported), and this test is about the Per bound, not the
+	// Rate bound.
+	limit := Limit{Rate: 2, Per: maxPer}
 	lim := New(pkgcore.NewMemoryKVStore())
 	ctx := context.Background()
 
@@ -333,38 +338,56 @@ func TestAllow_SaturatingClient_ConvergesToRateMinusOnePerWindow(t *testing.T) {
 	}
 }
 
-// TestAllow_SaturatingClient_Rate1_LocksOutPermanently is the sharpest
-// instance of TestAllow_SaturatingClient_ConvergesToRateMinusOnePerWindow's
-// property: for Rate == 1, "rate-1 admitted per window" is zero. A key hit
-// once every window is allowed exactly once, ever, then denied every
-// window after that, indefinitely, for as long as it keeps being hit at
-// least once per window. See AGENTS.md's Known limitations.
-func TestAllow_SaturatingClient_Rate1_LocksOutPermanently(t *testing.T) {
-	const per = 200 * time.Millisecond
-	const windows = 4
-	limit := Limit{Rate: 1, Per: per}
-	lim := New(pkgcore.NewMemoryKVStore())
+// TestAllow_RateOne_RefusedWithCodedReasonBeforeStoreTouched is the
+// regression test for the Rate == 1 refusal (see ErrRateOneUnsupported): a
+// Limit{Rate: 1} -- the natural spelling of "once per Per", and of "once a
+// day" in production -- is rejected by Limit.validate before the store is
+// ever touched, with an error that both wraps ErrInvalidLimit (so callers
+// that classify every invalid Limit alike keep working) and carries the
+// distinct code "ratelimit.rate_one_unsupported" (so a host whose Rate-1
+// configuration is refused can recognize exactly what was wrong).
+//
+// Before the refusal existed, this exact input was accepted: the very first
+// hit on a fresh key was Allowed and every hit in every later window was
+// denied forever -- the permanent-lockout shape the former
+// TestAllow_SaturatingClient_Rate1_LocksOutPermanently used to pin -- the
+// opposite of the "once per Per" semantics the caller meant, arriving in
+// production only once the window rolled over (a day after the first hit,
+// for the Per: 24h a host would pair with "once a day").
+//
+// The erroringKVStore wrapper below (failMethod IncrByFloatWithTTL) makes
+// the "before the store is ever touched" promise part of the assertion: on
+// unfixed code Allow(Rate: 1) reaches the wrapper's failing
+// IncrByFloatWithTTL and surfaces the wrapper's own error, so the
+// ErrInvalidLimit assertions fail; on fixed code validate refuses first and
+// the wrapper is never reached. Either way the failure is deterministic,
+// with no timing involved.
+func TestAllow_RateOne_RefusedWithCodedReasonBeforeStoreTouched(t *testing.T) {
+	limit := Limit{Rate: 1, Per: time.Hour}
 	ctx := context.Background()
-	key := "rate-one-client"
 
-	windowStart := waitForFreshWindowStart(per)
+	fake := &erroringKVStore{
+		KVStore:    pkgcore.NewMemoryKVStore(),
+		failMethod: "IncrByFloatWithTTL",
+		err:        errors.New("store must not be touched for a Rate-1 limit"),
+	}
+	dec, err := New(fake).Allow(ctx, "rate-one-key", limit)
 
-	for w := 0; w < windows; w++ {
-		target := windowStart.Add(time.Duration(w) * per).Add(per / 10)
-		if d := time.Until(target); d > 0 {
-			time.Sleep(d)
-		}
-
-		dec, err := lim.Allow(ctx, key, limit)
-		if err != nil {
-			t.Fatalf("window %d: Allow: %v", w, err)
-		}
-
-		if want := w == 0; dec.Allowed != want {
-			t.Fatalf("window %d: Allowed = %t, want %t (Rate=1 is admitted only in the very "+
-				"first window a key is ever used in, then denied permanently -- see AGENTS.md's "+
-				"Known limitations)", w, dec.Allowed, want)
-		}
+	if !errors.Is(err, ErrInvalidLimit) {
+		t.Fatalf("err = %v, want an error wrapping ErrInvalidLimit (Rate 1 is an invalid limit like any other)", err)
+	}
+	if !errors.Is(err, ErrRateOneUnsupported) {
+		t.Fatalf("err = %v, want the ErrRateOneUnsupported refusal -- the Rate-1 case must stay distinguishable from the generic invalid limit", err)
+	}
+	var appErr *apperr.Error
+	if !errors.As(err, &appErr) {
+		t.Fatalf("err = %v, want an *apperr.Error to match on its code", err)
+	}
+	if appErr.Code != "ratelimit.rate_one_unsupported" {
+		t.Fatalf("apperr code = %q, want %q", appErr.Code, "ratelimit.rate_one_unsupported")
+	}
+	if dec != (Decision{}) {
+		t.Fatalf("Decision = %+v, want the zero value on a validation error", dec)
 	}
 }
 
