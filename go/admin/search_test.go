@@ -17,6 +17,7 @@ import (
 	"github.com/vislake/speed/go/org"
 	orgmigrations "github.com/vislake/speed/go/org/migrations"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/tenancy"
 )
 
 // testBlindIndexKey is a fixed 32-byte key for these tests' own blind
@@ -143,7 +144,9 @@ func TestSearchService_Users_DelegatesToAuthn(t *testing.T) {
 	authnSvc := newTestAuthnService(t)
 	orgModule := newTestOrgModule(t)
 	tenants := NewTenantService(NewTenantRepository(testutil.NewDB(t)))
+	reg := newTestRegistry()
 	search := NewSearchService(authnSvc, orgModule.Members(), tenants)
+	search.attach(reg.EventBus())
 
 	ctx := context.Background()
 	if _, err := authnSvc.Register(ctx, authn.RegisterInput{
@@ -152,12 +155,64 @@ func TestSearchService_Users_DelegatesToAuthn(t *testing.T) {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	got, err := search.Users(ctx, authn.UserSearchQuery{Email: "search-target@example.com"})
+	got, err := search.Users(ctx, "operator-1", authn.UserSearchQuery{Email: "search-target@example.com"})
 	if err != nil {
 		t.Fatalf("Users() error = %v", err)
 	}
 	if len(got) != 1 || got[0].DisplayName != "Search Target" {
 		t.Fatalf("Users() = %+v, want exactly Search Target", got)
+	}
+}
+
+// TestSearchService_Users_SearchLeavesAuditedSystemContext is the
+// D6-search P1's regression test at the service boundary: Users must run
+// the search under D2's audited tenancy.WithSystemContext wrapper exactly
+// like MembershipsOf, with the platform OPERATOR as pkgcore.SystemReason.
+// Actor -- never the searched-for user -- so a cross-tenant search that
+// answers with plaintext email and phone leaves a tenancy.
+// system_context.entered audit record naming who performed it. On unfixed
+// main Users was a wrapper-less passthrough to authn.Service.SearchUsers
+// that did not even take an operator, so the search published no
+// system-context event and left no trace at all.
+func TestSearchService_Users_SearchLeavesAuditedSystemContext(t *testing.T) {
+	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
+
+	authnSvc := newTestAuthnService(t)
+	orgModule := newTestOrgModule(t)
+	tenants := NewTenantService(NewTenantRepository(testutil.NewDB(t)))
+	reg := newTestRegistry()
+	search := NewSearchService(authnSvc, orgModule.Members(), tenants)
+	search.attach(reg.EventBus())
+
+	ctx := context.Background()
+	if _, err := authnSvc.Register(ctx, authn.RegisterInput{
+		Email: "search-target@example.com", Password: "a perfectly fine passphrase", DisplayName: "Search Target",
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	var entered []tenancy.SystemContextEnteredEvent
+	reg.EventBus().Subscribe(tenancy.EventSystemContextEntered, func(_ context.Context, evt pkgcore.Event) error {
+		var e tenancy.SystemContextEnteredEvent
+		if err := decodeEventPayload(evt.Payload, &e); err != nil {
+			return err
+		}
+		entered = append(entered, e)
+		return nil
+	})
+
+	got, err := search.Users(ctx, "operator-1", authn.UserSearchQuery{Email: "search-target@example.com"})
+	if err != nil {
+		t.Fatalf("Users() error = %v", err)
+	}
+	if len(got) != 1 || got[0].DisplayName != "Search Target" {
+		t.Fatalf("Users() = %+v, want exactly Search Target", got)
+	}
+	if len(entered) != 1 {
+		t.Fatalf("Users() published %d tenancy.system_context.entered events, want exactly 1 -- the search must take the audited D2 wrapper, never a direct untrailed read", len(entered))
+	}
+	if entered[0].Actor != "operator-1" || entered[0].Purpose != SystemPurposeAdminCrossTenant {
+		t.Fatalf("system-context event = %+v, want Actor operator-1 under %s -- the trail must name the OPERATOR, never the searched-for user", entered[0], SystemPurposeAdminCrossTenant)
 	}
 }
 

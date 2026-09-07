@@ -217,7 +217,21 @@ func toAdminTenant(t Tenant) api.AdminTenant {
 // --- D6: cross-tenant user search -----------------------------------------
 
 // AdminSearchUsers implements api.ServerInterface.
+//
+// callerUserID is resolved first, exactly like every other admin read of
+// another module's data (AdminListUserMemberships, AdminListAuditEvents,
+// AdminGetUsageSummary, AdminListSendRecords): D6's search half answers
+// with plaintext email and phone from identity data, and the operator
+// identified here is the Actor of the audited system-context record
+// SearchService.Users takes out for the search -- on unfixed main this
+// handler never read the caller at all, and a search left no
+// attributable trace (see search.go's Users doc comment).
 func (h *Handler) AdminSearchUsers(w http.ResponseWriter, r *http.Request, params api.AdminSearchUsersParams) {
+	callerID, err := callerUserID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	q := authn.UserSearchQuery{}
 	if params.Email != nil {
 		q.Email = *params.Email
@@ -232,7 +246,7 @@ func (h *Handler) AdminSearchUsers(w http.ResponseWriter, r *http.Request, param
 		q.Limit = *params.Limit
 	}
 
-	users, err := h.search.Users(r.Context(), q)
+	users, err := h.search.Users(r.Context(), callerID, q)
 	if err != nil {
 		writeError(w, err)
 		return

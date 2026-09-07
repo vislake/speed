@@ -7,9 +7,11 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/vislake/speed/go/admin/api"
 	"github.com/vislake/speed/go/authn"
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
@@ -197,5 +199,63 @@ func TestHandler_RoleWritePaths_BindingAndRoleEventsCarryActor(t *testing.T) {
 	}
 	if len(bindingActors) != 1 || bindingActors[0] != operator {
 		t.Fatalf("role-binding event ActorUserID = %v, want exactly [%s] -- the binding operator must be on the event", bindingActors, operator)
+	}
+}
+
+// TestHandler_AdminSearchUsers_LeavesAuditedTrailNamingOperator is the
+// D6-search P1's regression test, at the real composed-HTTP boundary: a
+// cross-tenant user search (GET /api/v1/admin/users) must resolve the
+// calling operator from the verified Principal and leave exactly one
+// tenancy.system_context.entered audit record naming that operator as
+// Actor under SystemPurposeAdminCrossTenant -- identically to the D6
+// second half (AdminListUserMemberships/MembershipsOf) and to every other
+// D2 audited read. On unfixed main AdminSearchUsers never read the
+// caller's Principal and SearchService.Users was a wrapper-less
+// passthrough to authn.Service.SearchUsers, so a search that returns
+// plaintext email and phone from identity data (encrypted at rest) left no
+// audit trace of which operator searched the user directory at all.
+func TestHandler_AdminSearchUsers_LeavesAuditedTrailNamingOperator(t *testing.T) {
+	env := buildTestAdminModule(t)
+	ctx := context.Background()
+
+	const operatorID = "operator-search-audited-7"
+	const targetEmail = "search-audit-target@example.com"
+	if _, err := env.Authn.Service().Register(ctx, authn.RegisterInput{
+		Email: targetEmail, Password: "a perfectly fine passphrase", DisplayName: "Search Audit Target",
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	var entered []tenancy.SystemContextEnteredEvent
+	env.Registry.EventBus().Subscribe(tenancy.EventSystemContextEntered, func(_ context.Context, evt pkgcore.Event) error {
+		var e tenancy.SystemContextEnteredEvent
+		if err := decodeEventPayload(evt.Payload, &e); err != nil {
+			return err
+		}
+		entered = append(entered, e)
+		return nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/users?email="+url.QueryEscape(targetEmail), nil)
+	req = req.WithContext(authn.WithPrincipal(req.Context(), authn.Principal{UserID: operatorID}))
+	w := httptest.NewRecorder()
+
+	env.Admin.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want %d", w.Code, w.Body.String(), http.StatusOK)
+	}
+	var resp api.AdminSearchUsersResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Users) != 1 || resp.Users[0].Email == nil || *resp.Users[0].Email != targetEmail {
+		t.Fatalf("search = %+v, want exactly the registered account for %q", resp.Users, targetEmail)
+	}
+	if len(entered) != 1 {
+		t.Fatalf("AdminSearchUsers published %d tenancy.system_context.entered events, want exactly 1 -- the search must take the audited D2 wrapper, never a direct untrailed read", len(entered))
+	}
+	if entered[0].Actor != operatorID || entered[0].Purpose != SystemPurposeAdminCrossTenant {
+		t.Fatalf("system-context event = %+v, want Actor %q under %s -- the trail must name the OPERATOR, never the searched-for user", entered[0], operatorID, SystemPurposeAdminCrossTenant)
 	}
 }

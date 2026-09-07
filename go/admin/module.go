@@ -96,12 +96,15 @@ const (
 
 // SystemPurposeAdminCrossTenant is the pkgcore.SystemPurpose admin
 // registers for every cross-tenant operation it performs under D2's
-// mechanism: D6's membership composition, D7's cross-tenant audit query,
-// and D5's cross-tenant notification dispatch to an impersonation target.
-// One purpose covers all three, since they are all instances of the same
-// underlying operation D2 describes -- "admin acting across the tenant
-// boundary it does not itself belong to" -- and docs/internal/23-admin.md's
-// D2 section registers exactly one purpose for this module.
+// mechanism: D6's user search AND membership composition (both halves of
+// D6 take the audited wrapper -- see search.go), D7's cross-tenant audit
+// query, D5's cross-tenant notification dispatch to an impersonation
+// target, D9's per-tenant usage dashboard and D10's cross-tenant
+// send-record search. One purpose covers all of them, since they are all
+// instances of the same underlying operation D2 describes -- "admin
+// acting across the tenant boundary it does not itself belong to" -- and
+// docs/internal/23-admin.md's D2 section registers exactly one purpose
+// for this module.
 const SystemPurposeAdminCrossTenant pkgcore.SystemPurpose = "admin.cross_tenant"
 
 // NotificationTypeImpersonationStarted is the notification type D5
