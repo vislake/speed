@@ -35,10 +35,25 @@ var layerOrder = [...]string{LayerGlobal, LayerTenant, LayerKey}
 // field disables that layer entirely -- LayeredLimiter.Allow skips calling
 // Limiter.Allow for a disabled layer altogether, rather than passing a
 // Limit that go/ratelimit.Limit.validate would reject as ErrInvalidLimit
-// (Rate must be strictly positive; see go/ratelimit/limiter.go). A
-// LayeredLimits zero value therefore disables all three layers, which is a
-// legal, if unusual, configuration: every request is allowed, with
-// LayeredDecision.Layer left empty.
+// (an enabled layer's Rate must be at least 2; see
+// go/ratelimit/limiter.go). A LayeredLimits zero value therefore disables
+// all three layers, which is a legal, if unusual, configuration: every
+// request is allowed, with LayeredDecision.Layer left empty.
+//
+// A Rate of 1 is refused by go/ratelimit rather than accepted -- whatever
+// Per it is paired with, that limiter cannot honour "once per Per": the
+// weighted sliding-window formula would admit a key's very first hit and
+// deny every later window's hits forever, each window's own hit keeping
+// count against the next one (see go/ratelimit/AGENTS.md's Known
+// limitations). "A layer that lets one request through per interval" must
+// therefore not be spelled Rate: 1; it will surface as an
+// ErrRateOneUnsupported-wrapped error on every Allow of that layer. A host
+// with roughly that goal should use Rate: 2 with the interval as Per: at
+// most two requests are admitted per window, and a caller whose attempts
+// genuinely stay within one per window is never denied. A hard
+// once-per-interval cap is not expressible at any Rate (a pair of attempts
+// straddling a window boundary would defeat it) and belongs in the caller's
+// own last-success gate, not in a rate-limit window.
 type LayeredLimits struct {
 	// Global bounds every request this module's caller routes through
 	// LayeredLimiter, regardless of tenant or key -- the platform-wide

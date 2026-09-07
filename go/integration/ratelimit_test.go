@@ -40,23 +40,29 @@ func TestLayeredLimiter_AllThreeLayersAllow(t *testing.T) {
 
 func TestLayeredLimiter_GlobalLayerDenies_TenantAndKeyNeverConsulted(t *testing.T) {
 	l := newTestLayeredLimiter(LayeredLimits{
-		Global: ratelimit.Limit{Rate: 1, Per: minute},
+		// An exhaustible layer is spelled Rate: 2 -- a Rate of 1 is refused
+		// by go/ratelimit as un-honourable, see LayeredLimits' own doc
+		// comment -- so the global layer here holds a two-hit budget, and
+		// the request that proves exhaustion is the third.
+		Global: ratelimit.Limit{Rate: 2, Per: minute},
 		Tenant: ratelimit.Limit{Rate: 100, Per: minute},
 		Key:    ratelimit.Limit{Rate: 100, Per: minute},
 	})
 	ctx := context.Background()
 
-	if got, err := l.Allow(ctx, "g", "t1", "k1"); err != nil || !got.Allowed {
-		t.Fatalf("first Allow = %+v, err=%v, want the global layer's first hit to be allowed", got, err)
+	for _, hit := range []struct{ tenant, key string }{{"t1", "k1"}, {"t2", "k2"}} {
+		if got, err := l.Allow(ctx, "g", hit.tenant, hit.key); err != nil || !got.Allowed {
+			t.Fatalf("Allow(tenant=%q key=%q) = %+v, err=%v, want allowed (the global layer's two-hit budget is not exhausted yet)", hit.tenant, hit.key, got, err)
+		}
 	}
 
-	// The global layer's single-hit budget is now exhausted. A DIFFERENT
+	// The global layer's two-hit budget is now exhausted. A DIFFERENT
 	// tenant and key, each well within their own limits, must still be
 	// denied: the global layer denies the whole request before the tenant
 	// or key layer is ever consulted.
-	got, err := l.Allow(ctx, "g", "t2", "k2")
+	got, err := l.Allow(ctx, "g", "t3", "k3")
 	if err != nil {
-		t.Fatalf("second Allow: %v", err)
+		t.Fatalf("third Allow: %v", err)
 	}
 	if got.Allowed {
 		t.Error("Allowed = true, want the exhausted global layer to deny every tenant/key")
@@ -68,25 +74,31 @@ func TestLayeredLimiter_GlobalLayerDenies_TenantAndKeyNeverConsulted(t *testing.
 
 func TestLayeredLimiter_TenantLayerDenies_KeyLayerNeverConsulted(t *testing.T) {
 	l := newTestLayeredLimiter(LayeredLimits{
+		// An exhaustible layer is spelled Rate: 2 -- a Rate of 1 is refused
+		// by go/ratelimit as un-honourable, see LayeredLimits' own doc
+		// comment -- so the tenant layer here holds a two-hit budget, and
+		// the request that proves exhaustion is the third.
 		Global: ratelimit.Limit{Rate: 100, Per: minute},
-		Tenant: ratelimit.Limit{Rate: 1, Per: minute},
+		Tenant: ratelimit.Limit{Rate: 2, Per: minute},
 		Key:    ratelimit.Limit{Rate: 100, Per: minute},
 	})
 	ctx := context.Background()
 
-	if got, err := l.Allow(ctx, "g", "t1", "k1"); err != nil || !got.Allowed {
-		t.Fatalf("first Allow = %+v, err=%v", got, err)
+	for _, key := range []string{"k1", "k2"} {
+		if got, err := l.Allow(ctx, "g", "t1", key); err != nil || !got.Allowed {
+			t.Fatalf("Allow(key=%q) = %+v, err=%v, want allowed (the tenant layer's two-hit budget is not exhausted yet)", key, got, err)
+		}
 	}
 
 	// A different key under the SAME tenant must be denied by the
 	// exhausted tenant layer, even though that key's own layer has never
 	// been hit.
-	got, err := l.Allow(ctx, "g", "t1", "k2")
+	got, err := l.Allow(ctx, "g", "t1", "k3")
 	if err != nil {
-		t.Fatalf("second Allow: %v", err)
+		t.Fatalf("third Allow: %v", err)
 	}
 	if got.Allowed {
-		t.Error("Allowed = true, want the exhausted tenant layer to deny a second key under the same tenant")
+		t.Error("Allowed = true, want the exhausted tenant layer to deny a third key under the same tenant")
 	}
 	if got.Layer != LayerTenant {
 		t.Errorf("Layer = %q, want %q", got.Layer, LayerTenant)
@@ -95,22 +107,28 @@ func TestLayeredLimiter_TenantLayerDenies_KeyLayerNeverConsulted(t *testing.T) {
 
 func TestLayeredLimiter_KeyLayerDenies_OtherKeysUnaffected(t *testing.T) {
 	l := newTestLayeredLimiter(LayeredLimits{
+		// An exhaustible layer is spelled Rate: 2 -- a Rate of 1 is refused
+		// by go/ratelimit as un-honourable, see LayeredLimits' own doc
+		// comment -- so the key layer here holds a two-hit budget, and the
+		// request that proves exhaustion is the third on the same key.
 		Global: ratelimit.Limit{Rate: 100, Per: minute},
 		Tenant: ratelimit.Limit{Rate: 100, Per: minute},
-		Key:    ratelimit.Limit{Rate: 1, Per: minute},
+		Key:    ratelimit.Limit{Rate: 2, Per: minute},
 	})
 	ctx := context.Background()
 
-	if got, err := l.Allow(ctx, "g", "t1", "k1"); err != nil || !got.Allowed {
-		t.Fatalf("first Allow = %+v, err=%v", got, err)
+	for i := 1; i <= 2; i++ {
+		if got, err := l.Allow(ctx, "g", "t1", "k1"); err != nil || !got.Allowed {
+			t.Fatalf("Allow (same key) hit %d = %+v, err=%v, want allowed (the key layer's two-hit budget is not exhausted yet)", i, got, err)
+		}
 	}
 
 	deny, err := l.Allow(ctx, "g", "t1", "k1")
 	if err != nil {
-		t.Fatalf("second Allow (same key): %v", err)
+		t.Fatalf("third Allow (same key): %v", err)
 	}
 	if deny.Allowed || deny.Layer != LayerKey {
-		t.Errorf("second Allow (same key) = %+v, want denied at %q", deny, LayerKey)
+		t.Errorf("third Allow (same key) = %+v, want denied at %q", deny, LayerKey)
 	}
 
 	// A second key under the same tenant has its own, unexhausted budget.
@@ -119,7 +137,7 @@ func TestLayeredLimiter_KeyLayerDenies_OtherKeysUnaffected(t *testing.T) {
 		t.Fatalf("Allow (other key): %v", err)
 	}
 	if !other.Allowed {
-		t.Errorf("Allow (other key) = %+v, want the untouched key-1 quota to leave key-2 unaffected", other)
+		t.Errorf("Allow (other key) = %+v, want the exhausted key-1 quota to leave key-2 unaffected", other)
 	}
 }
 

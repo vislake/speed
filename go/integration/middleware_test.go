@@ -142,12 +142,13 @@ func TestAuthMiddleware_ValidKey_AttachesTenantAndAuthenticatedAPIKey_CallsNext(
 // composed behind authentication in the classic chain and never sees a
 // request that fails to authenticate (middleware.go's own doc comment
 // documents the corrected layering). With the guard wired at a budget of
-// one global hit, the first forged request passes the guard and is refused
-// by Authenticate (401); the second is refused BY THE GUARD (429) before
-// authentication runs.
+// two global hits -- the smallest budget go/ratelimit accepts, a Rate of 1
+// being refused as un-honourable (see LayeredLimits' own doc comment) -- the
+// first two forged requests pass the guard and are refused by Authenticate
+// (401); the third is refused BY THE GUARD (429) before authentication runs.
 func TestAuthMiddleware_WithAuthenticationGuard_ForgedRequestsPayTheLimit(t *testing.T) {
 	guard := NewHTTPGuard(newTestLayeredLimiter(LayeredLimits{
-		Global: ratelimit.Limit{Rate: 1, Per: minute},
+		Global: ratelimit.Limit{Rate: 2, Per: minute},
 	}), "integration-test-auth-guard", func(_ *http.Request) (string, string) {
 		// No authentication has run when the guard evaluates, so no
 		// tenant/key identifiers exist to derive -- the empty-identifier
@@ -176,25 +177,27 @@ func TestAuthMiddleware_WithAuthenticationGuard_ForgedRequestsPayTheLimit(t *tes
 		return rec
 	}
 
-	// Request 1 passes the guard's single-hit budget and is refused by
+	// Requests 1 and 2 pass the guard's two-hit budget and are refused by
 	// authentication itself.
-	first := forged()
-	if next.called {
-		t.Fatal("next was called for a forged request")
+	for i := 1; i <= 2; i++ {
+		resp := forged()
+		if next.called {
+			t.Fatal("next was called for a forged request")
+		}
+		assertErrorEnvelope(t, resp, http.StatusUnauthorized, "integration.authentication_failed")
 	}
-	assertErrorEnvelope(t, first, http.StatusUnauthorized, "integration.authentication_failed")
 
-	// Request 2 is refused by the GUARD (budget exhausted) before
+	// Request 3 is refused by the GUARD (budget exhausted) before
 	// Authenticate ever runs: 429, never 401.
-	second := forged()
+	third := forged()
 	if next.called {
 		t.Fatal("next was called for a forged request")
 	}
-	assertErrorEnvelope(t, second, http.StatusTooManyRequests, "integration.rate_limited")
-	if got := second.Header().Get(headerRateLimitLayer); got != LayerGlobal {
+	assertErrorEnvelope(t, third, http.StatusTooManyRequests, "integration.rate_limited")
+	if got := third.Header().Get(headerRateLimitLayer); got != LayerGlobal {
 		t.Errorf("X-RateLimit-Layer = %q, want %q", got, LayerGlobal)
 	}
-	if second.Header().Get("Retry-After") == "" {
+	if third.Header().Get("Retry-After") == "" {
 		t.Error("Retry-After header is empty on the guard's 429")
 	}
 }

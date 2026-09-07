@@ -44,29 +44,35 @@ func TestHTTPGuard_Middleware_Allowed_CallsNext(t *testing.T) {
 }
 
 func TestHTTPGuard_Middleware_Denied_Returns429WithHeaders(t *testing.T) {
-	g := newTestGuard(t, LayeredLimits{Key: ratelimit.Limit{Rate: 1, Per: minute}}, fixedExtractor("t1", "k1"))
+	// An exhaustible key layer is spelled Rate: 2 -- a Rate of 1 is refused
+	// by go/ratelimit as un-honourable, see LayeredLimits' own doc comment
+	// -- so the first two requests consume the key's budget and the third
+	// is the one denied.
+	g := newTestGuard(t, LayeredLimits{Key: ratelimit.Limit{Rate: 2, Per: minute}}, fixedExtractor("t1", "k1"))
 
-	firstCalled := false
-	secondCalled := false
-	called := &firstCalled
+	calls := 0
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		*called = true
+		calls++
 		w.WriteHeader(http.StatusOK)
 	})
 	mw := g.Middleware(next)
 
-	// First request consumes the single-hit budget and must reach next.
-	firstRec := httptest.NewRecorder()
-	mw.ServeHTTP(firstRec, httptest.NewRequest(http.MethodGet, "/", nil))
-	if !firstCalled || firstRec.Code != http.StatusOK {
-		t.Fatalf("first request: called=%v status=%d, want called=true status=200", firstCalled, firstRec.Code)
+	// The two in-budget requests must both reach next.
+	for i := 1; i <= 2; i++ {
+		rec := httptest.NewRecorder()
+		mw.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d (within the budget): status = %d, want 200 (next should have been called)", i, rec.Code)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("next was called %d times across the two in-budget requests, want 2", calls)
 	}
 
-	// Second request must be denied without reaching next.
-	called = &secondCalled
+	// The third request must be denied without reaching next.
 	rec := httptest.NewRecorder()
 	mw.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	if secondCalled {
+	if calls != 2 {
 		t.Error("next was called on the request that should have been denied")
 	}
 

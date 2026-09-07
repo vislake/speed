@@ -46,16 +46,18 @@ func ExampleWithAuthenticationGuard() {
 		return
 	}
 
-	// A guard over the module's own three-layer limiter, budgeted at one
-	// global hit per minute for the demo. Its Extractor runs BEFORE any
-	// authentication, so it cannot read resolved tenant/key identifiers
-	// from the request context; the empty-identifier answer it returns here
-	// charges the global layer (and, were they enabled, the shared
-	// anonymous counters of the tenant/key layers) -- see
+	// A guard over the module's own three-layer limiter, budgeted at two
+	// global hits per minute for the demo (the smallest budget
+	// go/ratelimit accepts: a Rate of 1 is refused as un-honourable -- see
+	// integration.LayeredLimits' own doc comment). Its Extractor runs
+	// BEFORE any authentication, so it cannot read resolved tenant/key
+	// identifiers from the request context; the empty-identifier answer it
+	// returns here charges the global layer (and, were they enabled, the
+	// shared anonymous counters of the tenant/key layers) -- see
 	// WithAuthenticationGuard's own doc comment.
 	guard := integration.NewHTTPGuard(
 		integration.NewLayeredLimiter(ratelimit.New(pkgcore.NewMemoryKVStore()), integration.LayeredLimits{
-			Global: ratelimit.Limit{Rate: 1, Per: time.Minute},
+			Global: ratelimit.Limit{Rate: 2, Per: time.Minute},
 		}),
 		"example-auth-guard",
 		func(*http.Request) (tenantKey, apiKeyID string) { return "", "" },
@@ -92,15 +94,17 @@ func ExampleWithAuthenticationGuard() {
 		return rec.Code
 	}
 
-	// The first forged request passes the guard's single-hit budget and is
-	// refused by authentication itself; the second is refused BY THE GUARD
+	// The first two forged requests pass the guard's two-hit budget and are
+	// refused by authentication itself; the third is refused BY THE GUARD
 	// -- 429 -- before any Authenticate call runs.
 	fmt.Println("forged request 1:", forge())
 	fmt.Println("forged request 2:", forge())
+	fmt.Println("forged request 3:", forge())
 
 	// Output:
 	// forged request 1: 401
-	// forged request 2: 429
+	// forged request 2: 401
+	// forged request 3: 429
 }
 
 // ExampleAuthMiddleware demonstrates the full inbound-authentication path:
