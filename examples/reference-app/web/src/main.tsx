@@ -14,10 +14,13 @@
  *  1. i18n -- one fresh bilingual instance under the browser's default
  *     negotiation (the ?lang= URL parameter, the stored choice, then
  *     the navigator languages, zh-CN last), with every namespace a
- *     rendered unit can read registered exactly once: the five
+ *     rendered unit can read registered exactly once: the six
  *     namespace-shipping package families (ui-kit, whose built-in
  *     strings the components compose without saying so, layout-kit,
- *     auth-ui, tenancy-ui and account-ui) plus the app's own
+ *     auth-ui, tenancy-ui, account-ui and product-shell -- the shell
+ *     this app composes, whose one string of its own, the polite
+ *     announcement of its session-ended flip, renders only where the
+ *     host registered its namespace) plus the app's own
  *     reference-app namespace. Cross-language fallback is impossible
  *     by construction: a missing key renders as the key itself.
  *
@@ -100,6 +103,10 @@ import { LAYOUT_KIT_NAMESPACE, layoutKitResources } from '@speed/layout-kit'
 import { AUTH_UI_NAMESPACE, authUiResources } from '@speed/auth-ui'
 import { TENANCY_UI_NAMESPACE, tenancyUiResources } from '@speed/tenancy-ui'
 import { ACCOUNT_UI_NAMESPACE, accountUiResources } from '@speed/account-ui'
+import {
+  PRODUCT_SHELL_NAMESPACE,
+  productShellResources,
+} from '@speed/product-shell'
 import { AppView } from './app.js'
 import { AppServicesProvider } from './app-services.js'
 import {
@@ -235,6 +242,7 @@ export function bootstrapReferenceApp(
   registerNamespace(i18n, AUTH_UI_NAMESPACE, authUiResources)
   registerNamespace(i18n, TENANCY_UI_NAMESPACE, tenancyUiResources)
   registerNamespace(i18n, ACCOUNT_UI_NAMESPACE, accountUiResources)
+  registerNamespace(i18n, PRODUCT_SHELL_NAMESPACE, productShellResources)
   registerNamespace(i18n, REFERENCE_APP_NAMESPACE, referenceAppResources)
 
   const accessTokenStore = createMemoryAccessTokenStore()

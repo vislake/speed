@@ -25,15 +25,21 @@
  * degrade to home with nothing selected, and a sign-out after the
  * frame converges to the session-ended screen and back to the sign-in
  * surface -- the session still anonymous, the config cache still one
- * fetch. A bilingual leg proves the frame and the auth surface speak
- * the active language while the served brand stays verbatim.
+ * fetch, and the shell's own polite announcement of that flip (its
+ * product-shell namespace, registered by this host at bootstrap like
+ * every sibling's) carrying the human session-ended text in the
+ * status region, in the active language, never the raw key
+ * (reference-app-web.md P2-refappweb-1). A bilingual leg proves the
+ * frame and the auth surface speak the active language while the
+ * served brand stays verbatim.
  *
  * Built-in strings are asserted through the bundles they render from --
- * the app's own zh-CN/en-US fixtures imported relatively, the auth-ui
- * and account-ui copy through the packages' locale fixtures (relative
- * imports, the product-shell precedent) -- never inline: the CJK scan
- * treats test files as English text like everything else, and inline
- * copy would both violate that rule and drift from the resources.
+ * the app's own zh-CN/en-US fixtures imported relatively, the auth-ui,
+ * account-ui and product-shell copy through the packages' locale
+ * fixtures (relative imports, the product-shell precedent) -- never
+ * inline: the CJK scan treats test files as English text like
+ * everything else, and inline copy would both violate that rule and
+ * drift from the resources.
  */
 
 import { act, waitFor } from '@testing-library/react'
@@ -43,6 +49,8 @@ import { switchLanguage } from '@speed/i18n'
 import accountUiZhCN from '../../../../web/packages/account-ui/src/locales/zh-CN.json' with { type: 'json' }
 import authUiEnUS from '../../../../web/packages/auth-ui/src/locales/en-US.json' with { type: 'json' }
 import authUiZhCN from '../../../../web/packages/auth-ui/src/locales/zh-CN.json' with { type: 'json' }
+import productShellEnUS from '../../../../web/packages/product-shell/src/locales/en-US.json' with { type: 'json' }
+import productShellZhCN from '../../../../web/packages/product-shell/src/locales/zh-CN.json' with { type: 'json' }
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
 import enUS from './locales/en-US.json' with { type: 'json' }
 import { parseHashFragment } from './app.js'
@@ -431,6 +439,53 @@ describe('AppView', () => {
         (call) => call.method === 'POST' && call.path === '/api/v1/authn/logout',
       ),
     ).toBe(true)
+  })
+
+  it('announces the session-ended flip from the registered product-shell namespace: human text, never the raw key (reference-app-web.md P2-refappweb-1)', async () => {
+    // The ended branch of the shell is the app's one unsolicited
+    // whole-page switch -- a server-ended session and an explicit
+    // sign-out being the same snapshot flip -- and its polite
+    // role="status" announcement is the one string the shell renders
+    // from its own product-shell namespace, which the host registers
+    // at bootstrap like every sibling's (product-shell's resources.ts
+    // declares the obligation). An unregistered host keeps the focus
+    // half only: the shell's registration guard renders no region, so
+    // assistive tech hears nothing when the whole page silently
+    // switches under them -- the shape of this app before this
+    // regression, which composed the shell without ever registering
+    // its namespace.
+    const rig = makeAppRig()
+    const view = rendered(rig)
+    const user = userEvent.setup()
+    await signInWithPasswordUi(view, user)
+    await view.findByRole('link', { name: zhCN.nav.notes })
+
+    await user.click(
+      view.getByRole('button', { name: authUiZhCN.signOut.label }),
+    )
+    // The flip into the ended view mounts the polite region with the
+    // zh-CN copy this boot speaks (the suite's pinned language) --
+    // the human text, whose absence is the regression, never the raw
+    // key fallbackLng:false would render for a missing key.
+    const region = await view.findByRole('status')
+    await waitFor(() =>
+      expect(region.textContent).toBe(
+        productShellZhCN.announcements.sessionEnded,
+      ),
+    )
+    // The announcement speaks the active language: a language switch
+    // under the standing ended view re-renders the region from the
+    // en-US bundle.
+    await act(async () => {
+      await switchLanguage(view.i18n, 'en-US')
+    })
+    await waitFor(() =>
+      expect(region.textContent).toBe(
+        productShellEnUS.announcements.sessionEnded,
+      ),
+    )
+    // Whatever the language, the region never carries the raw key.
+    expect(region.textContent).not.toContain('announcements.sessionEnded')
   })
 
   it('speaks the active language in the frame while the served brand stays verbatim', async () => {

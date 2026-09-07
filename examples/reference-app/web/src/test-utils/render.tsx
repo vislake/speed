@@ -15,10 +15,12 @@
  *
  * The i18n instance is created per call with a deterministic
  * configuration (no storage, no URL, no navigator) and every namespace
- * a rendered unit can read is registered: the five namespace-shipping
+ * a rendered unit can read is registered: the six namespace-shipping
  * package families the app composes -- ui-kit (whose built-in strings
  * components compose without saying so), layout-kit, auth-ui,
- * tenancy-ui and account-ui -- plus the app's own reference-app
+ * tenancy-ui, account-ui and product-shell (whose one string, the
+ * polite announcement of its session-ended flip, renders only where
+ * the namespace is registered) -- plus the app's own reference-app
  * namespace. A fresh instance per call keeps registerNamespace's
  * double-registration guard from firing across tests. This harness is
  * the app layer's own copy of the account-ui package's harness --
@@ -48,6 +50,10 @@ import { LAYOUT_KIT_NAMESPACE, layoutKitResources } from '@speed/layout-kit'
 import { AUTH_UI_NAMESPACE, authUiResources } from '@speed/auth-ui'
 import { TENANCY_UI_NAMESPACE, tenancyUiResources } from '@speed/tenancy-ui'
 import { ACCOUNT_UI_NAMESPACE, accountUiResources } from '@speed/account-ui'
+import {
+  PRODUCT_SHELL_NAMESPACE,
+  productShellResources,
+} from '@speed/product-shell'
 import { AppServicesProvider } from '../app-services.js'
 import type { AppServices } from '../app-services.js'
 import {
@@ -84,7 +90,7 @@ export interface RenderWithProvidersResult extends RenderResult {
 
 export const TEST_LANGUAGES = ['zh-CN', 'en-US'] as const
 
-/** Fresh bilingual instance with all six namespaces registered. */
+/** Fresh bilingual instance with all seven namespaces registered. */
 export function createAppI18n(language: string = 'zh-CN'): I18nInstance {
   const instance = createI18n({
     supportedLanguages: TEST_LANGUAGES,
@@ -98,6 +104,7 @@ export function createAppI18n(language: string = 'zh-CN'): I18nInstance {
   registerNamespace(instance, AUTH_UI_NAMESPACE, authUiResources)
   registerNamespace(instance, TENANCY_UI_NAMESPACE, tenancyUiResources)
   registerNamespace(instance, ACCOUNT_UI_NAMESPACE, accountUiResources)
+  registerNamespace(instance, PRODUCT_SHELL_NAMESPACE, productShellResources)
   registerNamespace(instance, REFERENCE_APP_NAMESPACE, referenceAppResources)
   return instance
 }

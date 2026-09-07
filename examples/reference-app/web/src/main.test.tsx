@@ -45,6 +45,7 @@ import {
   getAuthnListLoginHistoryQueryKey,
   getAuthnListSessionsQueryKey,
 } from '@speed/api-sdk'
+import { PRODUCT_SHELL_NAMESPACE } from '@speed/product-shell'
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
 import { bootstrapReferenceApp } from './main.js'
 import { evictQueriesOnSessionEnd } from './main.js'
@@ -230,6 +231,16 @@ describe('bootstrapReferenceApp', () => {
     // The composed app booted anonymous: the sign-in surface stands in
     // the frame, speaking the pinned language.
     expect(boot?.i18n.language).toBe('zh-CN')
+    // The bootstrap registers every namespace a rendered unit reads,
+    // the product-shell namespace among them: product-shell's own
+    // resources.ts declares the host obligation, and the shell's
+    // session-ended announcement renders only where the registration
+    // happened (reference-app-web.md P2-refappweb-1) -- the bundle
+    // check is the registration itself, at the layer the finding
+    // names, independent of any journey reaching the ended view.
+    expect(
+      boot?.i18n.hasResourceBundle('zh-CN', PRODUCT_SHELL_NAMESPACE),
+    ).toBe(true)
     expect(boot?.queryClient).toBeInstanceOf(QueryClient)
     expect(
       await screen.findByRole('button', { name: zhCN.signIn.registerAction }),
