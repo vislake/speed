@@ -178,9 +178,10 @@
     "currentClinic": "当前诊所：{{name}}"
   },
   "shareView": {
-    "heading": "您的微笑模拟",
-    "intro": "您的牙科诊所与您分享了本次模拟效果。",
-    "imageAlt": "模拟后的微笑",
+    "heading": "您的微笑预览",
+    "intro": "您的牙科诊所与您分享了这份预览：对照您的原始照片与模拟后的微笑。",
+    "beforeImageAlt": "原始照片",
+    "afterImageAlt": "模拟后的微笑",
     "errors": {
       "notAccessible": "该链接已无法访问：可能已过期，或诊所已停止分享。请联系诊所获取新的链接。",
       "rateLimited": "访问过于频繁，请稍后再试。",

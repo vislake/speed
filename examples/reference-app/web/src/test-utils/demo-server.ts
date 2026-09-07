@@ -392,6 +392,17 @@ export interface DemoServerOptions {
     readonly status: number
     readonly code: string
   }
+  /** Refuses the SECOND POST /api/v1/sharing/shares of the run with
+   * this coded answer -- a suite scripts the share action's
+   * half-refused-pair shape (one half of the before/after pair mints,
+   * the other is refused, and the minted half must be revoked again);
+   * default undefined -- every create succeeds (the first create of a
+   * run still succeeds under this option, and so does every create
+   * after the second). */
+  readonly sharesCreateSecondRefusal?: {
+    readonly status: number
+    readonly code: string
+  }
   /** Refuses every GET /api/v1/sharing/access with this coded answer --
    * a suite scripts the refusals the patient page must render (the
    * expired/revoked 404 sharing.not_accessible, the rate limit's 429,
@@ -488,6 +499,11 @@ const NOTE_TEXT_LIMIT = 4000
  * revoke-others route is exact-keyed in the switch, so its path never
  * falls through to these. */
 const SESSION_PATH = /^\/api\/v1\/authn\/sessions\/([^/]+)$/
+/** The share-revoke path (POST /api/v1/sharing/shares/{shareId}/revoke,
+ * sharing.PathShares with the module's /revoke suffix): the share
+ * action's compensation leg, revoking the half of a failed pair that
+ * did mint. */
+const SHARE_REVOKE_PATH = /^\/api\/v1\/sharing\/shares\/([^/]+)\/revoke$/
 const IDENTITY_PATH = /^\/api\/v1\/authn\/identities\/([^/]+)$/
 const SOCIAL_CALLBACK_PATH = /^\/api\/v1\/authn\/social\/([^/]+)\/callback$/
 const SOCIAL_AUTHORIZE_PATH = /^\/api\/v1\/authn\/social\/([^/]+)\/authorize$/
@@ -643,6 +659,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     },
     clinicName,
     sharesCreateRefusal,
+    sharesCreateSecondRefusal,
     shareAccessRefusal,
   } = options
   // The account state is stateful per responder instance (a revoke
@@ -720,6 +737,9 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   // link carries.
   let nextShareId = 1
   let nextShareToken = 1
+  // The create call count, for the half-refused-pair switch (the
+  // second create of a run is the one a suite can script to fail).
+  let shareCreateCount = 0
 
   /** The live status of one accepted job under this responder's
    * deterministic progression (see the ledger comment above). */
@@ -1186,6 +1206,19 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
             sharesCreateRefusal.code,
           )
         }
+        if (
+          sharesCreateSecondRefusal !== undefined &&
+          shareCreateCount === 1
+        ) {
+          // The run's second create (its first is answered above by
+          // the counter not matching yet): the half-refused pair.
+          shareCreateCount += 1
+          return errorResponse(
+            sharesCreateSecondRefusal.status,
+            sharesCreateSecondRefusal.code,
+          )
+        }
+        shareCreateCount += 1
         if (reader && principal.user_id === DEMO_READER_USER_ID) {
           return errorResponse(403, RBAC_PERMISSION_DENIED_CODE)
         }
@@ -1236,6 +1269,14 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     // The parameterized paths cannot ride the exact-key switch; each
     // matcher guards its own method and shape, and an unpinned request
     // still fails loudly at the end.
+    const shareRevokeMatch = SHARE_REVOKE_PATH.exec(call.path)
+    if (call.method === 'POST' && shareRevokeMatch !== null) {
+      // The compensation leg of the share action: an owner revoking a
+      // share it just minted answers 200 with the revoked share, as the
+      // real owner-facing route answers (the spec's revoke operation).
+      principalOf(call)
+      return jsonResponse(200, {})
+    }
     const sessionPathMatch = SESSION_PATH.exec(call.path)
     if (call.method === 'DELETE' && sessionPathMatch !== null) {
       const session = sessions.find(

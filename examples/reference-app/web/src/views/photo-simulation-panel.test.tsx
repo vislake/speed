@@ -131,14 +131,27 @@ describe('PhotoSimulationPanel', () => {
     try {
       const view = await renderCaseDetail({ initialCases: [caseWithPhoto()] })
 
-      // Choose a non-default option set, so the generation that comes
-      // back is demonstrably the one chosen.
-      // The panel is interactive once the case record (and its photo)
-    // has loaded.
-    await view.findByRole('button', { name: 'Simulate smile' })
-    await userEvent.click(view.getByRole('radio', { name: 'Bright' }))
-    await userEvent.click(view.getByRole('radio', { name: 'Ultra-white' }))
-    await userEvent.click(view.getByRole('button', { name: 'Simulate smile' }))
+      // A freshly opened photo with no simulation attempt gets the
+      // panel's one automatic default generation: the comparison
+      // appears without a click -- the shape the acceptance journey
+      // rides on. Once it has, a generation from a chosen option set
+      // is an ordinary second one: choose a non-default option set
+      // and generate, so the generation that comes back is
+      // demonstrably the one chosen, with the in-flight state saying
+      // so honestly along the way.
+      await view.findByRole('button', { name: 'Simulate smile' })
+      const comparison = await view.findByRole(
+        'region',
+        { name: 'Before and after' },
+        { timeout: 8000 },
+      )
+      await waitFor(
+        () => expect(within(comparison).getAllByRole('img')).toHaveLength(2),
+        { timeout: 8000 },
+      )
+      await userEvent.click(view.getByRole('radio', { name: 'Bright' }))
+      await userEvent.click(view.getByRole('radio', { name: 'Ultra-white' }))
+      await userEvent.click(view.getByRole('button', { name: 'Simulate smile' }))
 
       // Generation is asynchronous, and the page says so honestly: a
       // status live region appears and reports the job's progression
@@ -151,15 +164,10 @@ describe('PhotoSimulationPanel', () => {
         ),
       )
 
-      // Once the job completes, the result is shown against the
-      // original: one comparison region carrying exactly two images
-      // (the original renders through its own content read once the
-      // region mounts, so the pair is waited for together).
-      const comparison = await view.findByRole(
-        'region',
-        { name: 'Before and after' },
-        { timeout: 8000 },
-      )
+      // The second result supersedes the comparison while the region
+      // keeps showing a genuine pair (the original renders through its
+      // own content read; the result's image is waited for as part of
+      // the pair, so both halves are checked together).
       await waitFor(() =>
         expect(within(comparison).getAllByRole('img')).toHaveLength(2),
       )
@@ -177,14 +185,20 @@ describe('PhotoSimulationPanel', () => {
       // the wire (the demo's photo bytes vs its simulation-result
       // bytes), each materialized into a blob of the served media type.
       // The original appears twice on the page (the photo column and
-      // the comparison), so its bytes arrive in two blobs.
-      await waitFor(() => expect(blobDoubles.blobs).toHaveLength(3))
+      // the comparison), so its bytes arrive in two blobs; the
+      // automatic preview's result and the chosen-options result each
+      // arrive once (the superseded result's blob is revoked when the
+      // comparison switches, but its materialization is recorded).
+      await waitFor(() => expect(blobDoubles.blobs).toHaveLength(4), {
+        timeout: 8000,
+      })
       const texts = await Promise.all(
         blobDoubles.blobs.map((blob) => blob.text()),
       )
       expect(texts.sort()).toEqual([
         'photo-bytes',
         'photo-bytes',
+        'simulation-result-bytes',
         'simulation-result-bytes',
       ])
       for (const blob of blobDoubles.blobs) {
@@ -215,22 +229,29 @@ describe('PhotoSimulationPanel', () => {
   it('generates again from a changed option set and keeps both attempts', async () => {
     const view = await renderCaseDetail({ initialCases: [caseWithPhoto()] })
 
-    await view.findByRole('button', { name: 'Simulate smile' })
-    await userEvent.click(view.getByRole('button', { name: 'Simulate smile' }))
-    // First generation completes: the comparison appears.
-    await view.findByRole('region', { name: 'Before and after' }, { timeout: 8000 })
-    await waitFor(() =>
-      expect(
-        view.getAllByText('Natural smile · Natural teeth · 100% strength')
-          .length,
-      ).toBeGreaterThan(0),
+    // The photo's automatic default generation (Natural) settles into
+    // the comparison first -- the first attempt on the record.
+    const simulate = await view.findByRole('button', {
+      name: 'Simulate smile',
+    })
+    await view.findByRole(
+      'region',
+      { name: 'Before and after' },
+      { timeout: 8000 },
+    )
+    await waitFor(
+      () =>
+        expect(
+          view.getAllByText('Natural smile · Natural teeth · 100% strength')
+            .length,
+        ).toBeGreaterThan(0),
+      { timeout: 8000 },
     )
 
-    // A second generation with different options is a NEW generation:
-    // the control re-enables once the first settles, and the new result
-    // supersedes the comparison while both attempts stay on the record.
-    const simulate = view.getByRole('button', { name: 'Simulate smile' })
-    await waitFor(() => expect(simulate).toBeEnabled())
+    // A generation from a changed option set is a NEW generation: the
+    // control re-enables once the automatic preview settles, and the
+    // new result supersedes the comparison while both attempts stay on
+    // the record.
     await userEvent.click(view.getByRole('radio', { name: 'Subtle' }))
     await userEvent.click(view.getByRole('radio', { name: 'White' }))
     await userEvent.click(simulate)
@@ -305,8 +326,9 @@ describe('PhotoSimulationPanel', () => {
       },
     })
 
+    // The photo's automatic generation completes into the comparison,
+    // whose result-image read is refused by the route's answer.
     await view.findByRole('button', { name: 'Simulate smile' })
-    await userEvent.click(view.getByRole('button', { name: 'Simulate smile' }))
     const comparison = await view.findByRole(
       'region',
       { name: 'Before and after' },

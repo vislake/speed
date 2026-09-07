@@ -178,9 +178,10 @@
     "currentClinic": "Current clinic: {{name}}"
   },
   "shareView": {
-    "heading": "Your smile simulation",
-    "intro": "Your dental clinic shared this preview with you.",
-    "imageAlt": "Simulated smile",
+    "heading": "Your smile preview",
+    "intro": "Your dental clinic shared this preview with you. Compare your original photo with the simulated smile.",
+    "beforeImageAlt": "Original photo",
+    "afterImageAlt": "Simulated smile",
     "errors": {
       "notAccessible": "This link is no longer available. It may have expired, or the clinic may have stopped sharing it. Ask the clinic for a fresh link.",
       "rateLimited": "Too many visits in a short time. Wait a moment and try again.",

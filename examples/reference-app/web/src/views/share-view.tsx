@@ -1,31 +1,38 @@
 /**
  * share-view.tsx -- the block-C patient surface: the page a share link
  * opens, rendered for anyone holding the link, signed in or not. The
- * page carries one image -- the shared smile simulation -- loaded
- * straight from go/sharing's public access route
+ * page carries the shared before/after pair side by side -- the
+ * original photo and the smile simulation the clinic generated from it
+ * -- each image loaded straight from go/sharing's public access route
  * (/api/v1/sharing/access?token=..., the genuinely unauthenticated
- * route this host allowlists), so the bytes the browser decodes are the
- * bytes the share resolves, never a blob the page fetched under a
- * session: the block-B blob pattern cannot work here, because a patient
- * holds no session and the simulation-content route is an authenticated
- * surface. A granted load shows the image; a refused one -- an expired
- * or revoked link, a visitor over the route's rate budget, a simulation
- * object storage can no longer open -- shows one human message in the
- * page's own language, resolved from the refusal envelope's code
- * through the patient page's reachable-error whitelist
- * (share-errors.ts), never a broken frame and never a crash.
+ * route this host allowlists) under its own half's share token, so the
+ * bytes the browser decodes are the bytes each share resolves, never a
+ * blob the page fetched under a session: the block-B blob pattern
+ * cannot work here, because a patient holds no session and the
+ * simulation-content route is an authenticated surface. The two halves
+ * of the link are the two shares the clinic's share action minted
+ * (views/simulation-share-action.tsx) -- one resource per share is
+ * go/sharing's model -- and the acceptance gate holds this page to the
+ * same pair the clinic's own comparison shows: two images, both
+ * genuinely decoded, never the same image twice.
  *
- * How the refusal is learned: the browser's image load itself carries
- * no answer body a page can read, so when the image fails the page
- * asks the same route once more through the app's one RequestFn
- * (credential-less by declaration -- the visitor holds no session).
- * A refused answer carries the envelope and its code; an answer of raw
+ * A refused link -- an expired or revoked share, a visitor over the
+ * route's rate budget, a resource storage can no longer open -- shows
+ * one human message in the page's own language, resolved from the
+ * refusal envelope's code through the patient page's reachable-error
+ * whitelist (share-errors.ts), never a broken frame and never a crash.
+ *
+ * How a refusal is learned: the browser's image load itself carries no
+ * answer body a page can read, so when an image fails the page asks
+ * that half's own route once more through the app's one RequestFn
+ * (credential-less by declaration -- the visitor holds no session). A
+ * refused answer carries the envelope and its code; an answer of raw
  * bytes (the request function cannot parse an image as JSON and
- * refuses it as client.protocol) means the share IS live and the
+ * refuses it as client.protocol) means that share IS live and the
  * failed image load was transient, so the image is remounted for one
- * retry before any message is shown. The happy path is exactly one
- * request -- the image load itself -- so a live share is never
- * double-counted as two views by this page.
+ * retry before any message is shown. The happy path is exactly two
+ * requests -- the two image loads themselves -- so a live link is
+ * never double-counted as four views by this page.
  */
 
 import { useState } from 'react'
@@ -42,30 +49,49 @@ import { shareErrorCodeOf, shareViewErrorTextKey } from '../share-errors.js'
  * load failed transiently before the transport message is shown. */
 const MAX_IMAGE_RETRIES = 1
 
-/** One shared simulation's phase: the image on its current attempt, or
- * the refusal message a failed load resolved to. */
-type ShareViewPhase =
+/** One half of the shared pair's phase: the image on its current
+ * attempt, or the refusal message its failed load resolved to. */
+type SidePhase =
   | { readonly kind: 'image'; readonly attempt: number }
   | { readonly kind: 'refused'; readonly code: string }
 
-/** The patient-facing page one share link opens (see the file header). */
-export function ShareView({ token }: { readonly token: string }): ReactElement {
+/** The pair's phases, one entry per half, keyed by the share's role in
+ * the comparison. */
+interface PairPhases {
+  readonly before: SidePhase
+  readonly after: SidePhase
+}
+
+type PairSide = keyof PairPhases
+
+/** The patient-facing page one share link opens (see the file header).
+ * beforeToken and afterToken are the two halves' share tokens, in the
+ * order the clinic's share action put them in the link. */
+export function ShareView({
+  beforeToken,
+  afterToken,
+}: {
+  readonly beforeToken: string
+  readonly afterToken: string
+}): ReactElement {
   const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
   const { api } = useAppServices()
-  const [phase, setPhase] = useState<ShareViewPhase>({
-    kind: 'image',
-    attempt: 0,
+  const [phases, setPhases] = useState<PairPhases>({
+    before: { kind: 'image', attempt: 0 },
+    after: { kind: 'image', attempt: 0 },
   })
 
-  const accessUrl = `${window.location.origin}${SHARE_ACCESS_PATH}?token=${encodeURIComponent(token)}`
+  const accessUrl = (token: string): string =>
+    `${window.location.origin}${SHARE_ACCESS_PATH}?token=${encodeURIComponent(token)}`
 
-  /** Diagnoses one failed image load: asks the access route why. The
-   * answer drives the phase -- a refusal envelope shows its code's
-   * text, while a live-share answer (raw bytes the request function
-   * cannot parse, refused as client.protocol) remounts the image for
-   * one retry. Guarded by the attempt that failed, so a stale answer
-   * can never overwrite a newer phase. */
-  const diagnose = (attempt: number): void => {
+  /** Diagnoses one failed image load: asks that half's access route
+   * why. The answer drives that half's phase -- a refusal envelope
+   * shows its code's text, while a live-share answer (raw bytes the
+   * request function cannot parse, refused as client.protocol)
+   * remounts the image for one retry. Guarded by the side and attempt
+   * that failed, so a stale answer can never overwrite a newer phase. */
+  const diagnose = (side: PairSide, attempt: number): void => {
+    const token = side === 'before' ? beforeToken : afterToken
     api<unknown>(SHARE_ACCESS_PATH, {
       query: { token },
       omitAccessToken: true,
@@ -76,28 +102,88 @@ export function ShareView({ token }: { readonly token: string }): ReactElement {
         // than resolving. Kept as a defensive no-op so a future change
         // in that contract degrades to the transport message, never a
         // hang.
-        setPhase((current) =>
-          current.kind === 'image' && current.attempt === attempt
-            ? { kind: 'refused', code: 'client.protocol' }
-            : current,
-        )
+        setPhases((current) => {
+          const phase = current[side]
+          if (phase.kind !== 'image' || phase.attempt !== attempt) {
+            return current
+          }
+          return { ...current, [side]: { kind: 'refused', code: 'client.protocol' } }
+        })
       },
       (error: unknown) => {
         const code = shareErrorCodeOf(error)
-        setPhase((current) => {
-          if (current.kind !== 'image' || current.attempt !== attempt) {
+        setPhases((current) => {
+          const phase = current[side]
+          if (phase.kind !== 'image' || phase.attempt !== attempt) {
             return current
           }
           if (code === 'client.protocol' && attempt < MAX_IMAGE_RETRIES) {
             // The share is live -- the access route answered real
             // bytes -- so the failed image load was transient; retry.
-            return { kind: 'image', attempt: attempt + 1 }
+            return { ...current, [side]: { kind: 'image', attempt: attempt + 1 } }
           }
-          return { kind: 'refused', code }
+          return { ...current, [side]: { kind: 'refused', code } }
         })
       },
     )
   }
+
+  // The page refuses as a whole: the link is one pair, and a half that
+  // is gone makes the pair incomplete -- the first half to refuse names
+  // the message, and a link whose halves died together (the ordinary
+  // expiry) shows the same honest text either side would.
+  const refusedCode =
+    phases.before.kind === 'refused'
+      ? phases.before.code
+      : phases.after.kind === 'refused'
+        ? phases.after.code
+        : null
+
+  const beforeImage = (phase: SidePhase): ReactElement => (
+    <Box
+      component="img"
+      key={`before-${phase.kind === 'image' ? phase.attempt : ''}`}
+      src={accessUrl(beforeToken)}
+      alt={t('shareView.beforeImageAlt')}
+      onError={() => {
+        if (phase.kind === 'image') {
+          diagnose('before', phase.attempt)
+        }
+      }}
+      sx={{
+        display: 'block',
+        maxWidth: '100%',
+        maxHeight: 420,
+        objectFit: 'contain',
+        borderRadius: 1,
+        border: '1px solid',
+        borderColor: 'divider',
+      }}
+    />
+  )
+
+  const afterImage = (phase: SidePhase): ReactElement => (
+    <Box
+      component="img"
+      key={`after-${phase.kind === 'image' ? phase.attempt : ''}`}
+      src={accessUrl(afterToken)}
+      alt={t('shareView.afterImageAlt')}
+      onError={() => {
+        if (phase.kind === 'image') {
+          diagnose('after', phase.attempt)
+        }
+      }}
+      sx={{
+        display: 'block',
+        maxWidth: '100%',
+        maxHeight: 420,
+        objectFit: 'contain',
+        borderRadius: 1,
+        border: '1px solid',
+        borderColor: 'divider',
+      }}
+    />
+  )
 
   return (
     <Box
@@ -107,7 +193,7 @@ export function ShareView({ token }: { readonly token: string }): ReactElement {
         flexDirection: 'column',
         alignItems: 'center',
         padding: { xs: 3, sm: 6 },
-        maxWidth: 720,
+        maxWidth: 900,
         margin: '0 auto',
         textAlign: 'center',
       }}
@@ -118,32 +204,28 @@ export function ShareView({ token }: { readonly token: string }): ReactElement {
       <Typography variant="body1" color="text.secondary" sx={{ marginTop: 1 }}>
         {t('shareView.intro')}
       </Typography>
-      {phase.kind === 'refused' ? (
+      {refusedCode !== null ? (
         <Typography
           variant="body1"
           role="alert"
           sx={{ marginTop: 4, maxWidth: 460 }}
         >
-          {t(shareViewErrorTextKey(phase.code))}
+          {t(shareViewErrorTextKey(refusedCode))}
         </Typography>
       ) : (
         <Box
-          component="img"
-          key={phase.attempt}
-          src={accessUrl}
-          alt={t('shareView.imageAlt')}
-          onError={() => diagnose(phase.attempt)}
           sx={{
-            display: 'block',
+            display: 'flex',
+            gap: { xs: 2, sm: 4 },
+            flexWrap: 'wrap',
+            justifyContent: 'center',
+            alignItems: 'flex-start',
             marginTop: 4,
-            maxWidth: '100%',
-            maxHeight: 480,
-            objectFit: 'contain',
-            borderRadius: 1,
-            border: '1px solid',
-            borderColor: 'divider',
           }}
-        />
+        >
+          <Box sx={{ maxWidth: 380 }}>{beforeImage(phases.before)}</Box>
+          <Box sx={{ maxWidth: 380 }}>{afterImage(phases.after)}</Box>
+        </Box>
       )}
     </Box>
   )

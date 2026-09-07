@@ -1,22 +1,24 @@
 /**
  * ShareView contract -- the block-C patient surface at the component
- * level: the page one share link opens renders the shared simulation
- * straight from the public access route for anyone holding the link --
- * no session attached, no sign-in, no app frame -- and a refused link
- * (expired, revoked, over the route's rate budget, an output storage
- * can no longer open, a transport failure) resolves through the
- * patient page's reachable-error whitelist to one honest human message
- * in the page's own language, never a broken frame and never a crash.
+ * level: the page one share link opens renders the shared BEFORE/AFTER
+ * pair straight from the public access route for anyone holding the
+ * link -- no session attached, no sign-in, no app frame -- each half
+ * under its own share token, and a refused link (expired, revoked,
+ * over the route's rate budget, a resource storage can no longer open,
+ * a transport failure) resolves through the patient page's
+ * reachable-error whitelist to one honest human message in the page's
+ * own language, never a broken frame and never a crash.
  *
  * The browser-decode half of the acceptance shape (naturalWidth over a
  * real answer) cannot run in jsdom -- images never load here -- so it
  * is pinned at the two layers that can: the wire journey in the Go
  * suite (cmd/server/share_journey_flow_test.go decodes the access
- * route's real bytes) and the e2e gate that opens the real page in a
- * real browser (web/e2e/core-journey.pending.spec.ts). What this suite
- * pins is the page's own contract: the image element consumes the
- * access route's answer directly, and every refusal the route can
- * answer renders its coded, bilingual text.
+ * route's real bytes for both halves) and the e2e gate that opens the
+ * real page in a real browser (web/e2e/core-journey.pending.spec.ts).
+ * What this suite pins is the page's own contract: two image elements,
+ * one per half of the pair, each consuming its own half's access-route
+ * answer directly, and every refusal the route can answer rendering
+ * its coded, bilingual text.
  */
 
 import { fireEvent, waitFor } from '@testing-library/react'
@@ -29,7 +31,8 @@ import { makeRealClientRig } from '../test-utils/real-client.js'
 import { renderWithAppServices } from '../test-utils/render.js'
 import { ShareView } from './share-view.js'
 
-const TOKEN = 'patient-token-1'
+const BEFORE_TOKEN = 'patient-before-token'
+const AFTER_TOKEN = 'patient-after-token'
 const SHARE_ACCESS_PATH = '/api/v1/sharing/access'
 
 /** Mounts the patient page over the real-client rig -- the anonymous
@@ -41,18 +44,18 @@ function renderShareView(
 } {
   const rig = makeRealClientRig(demoServer(options))
   const view = renderWithAppServices(
-    <ShareView token={TOKEN} />,
+    <ShareView beforeToken={BEFORE_TOKEN} afterToken={AFTER_TOKEN} />,
     { session: rig.session, api: rig.api },
     { attach: false, language: 'en-US' },
   )
   return { ...view, calls: rig.calls }
 }
 
-/** The page's image element, by its accessible name in the active
- * language. */
+/** One half of the pair's image element, by its accessible name in the
+ * active language. */
 function imageOf(
   view: ReturnType<typeof renderWithAppServices>,
-  name: string = 'Simulated smile',
+  name: string,
 ): HTMLElement {
   const image = view.getByRole('img', { name })
   if (!(image instanceof HTMLImageElement)) {
@@ -61,31 +64,39 @@ function imageOf(
   return image
 }
 
-/** The access requests the page made: the image load itself is a
- * browser fetch jsdom never performs, so the observable legs are the
+/** The access requests the page made: the image loads themselves are
+ * browser fetches jsdom never performs, so the observable legs are the
  * diagnosis probes, each carrying no bearer (a patient holds none). */
 function accessGets(view: ReturnType<typeof renderShareView>): RealCall[] {
   return view.calls.filter((call) => call.path === SHARE_ACCESS_PATH)
 }
 
 describe('ShareView', () => {
-  it('renders the shared simulation from the public access route, no session attached', () => {
+  it('renders the shared before/after pair from the public access route, no session attached', () => {
     // The page a share link opens is the patient's, not the clinic's:
-    // heading and one image whose source is the access route's answer
-    // -- the real bytes the browser decodes -- never a signed-in
-    // surface's blob.
+    // heading and two images -- the original photo and the simulated
+    // smile -- each sourced from its own half's access-route answer,
+    // the real bytes the browser decodes, never a signed-in surface's
+    // blob.
     const view = renderShareView()
     expect(
-      view.getByRole('heading', { name: 'Your smile simulation' }),
+      view.getByRole('heading', { name: 'Your smile preview' }),
     ).toBeInTheDocument()
-    const image = imageOf(view)
-    expect(image.getAttribute('src')).toBe(
-      `${window.location.origin}${SHARE_ACCESS_PATH}?token=${TOKEN}`,
+    const before = imageOf(view, 'Original photo')
+    expect(before.getAttribute('src')).toBe(
+      `${window.location.origin}${SHARE_ACCESS_PATH}?token=${BEFORE_TOKEN}`,
     )
+    const after = imageOf(view, 'Simulated smile')
+    expect(after.getAttribute('src')).toBe(
+      `${window.location.origin}${SHARE_ACCESS_PATH}?token=${AFTER_TOKEN}`,
+    )
+    // The two halves load from different URLs: two shares, two tokens
+    // -- the shape the browser must fetch two distinct objects from.
+    expect(before.getAttribute('src')).not.toBe(after.getAttribute('src'))
     // No request was made under a session: the visitor's page performs
     // no API call at all until an image load fails (and even that probe
-    // is credential-less, below) -- the happy path is one browser image
-    // load and nothing else.
+    // is credential-less, below) -- the happy path is two browser image
+    // loads and nothing else.
     expect(view.calls).toHaveLength(0)
   })
 
@@ -93,21 +104,43 @@ describe('ShareView', () => {
     // sharing.not_accessible is the module's single outward answer for
     // every refusal of a recognized token -- expired, revoked,
     // view-exhausted and password-refused are indistinguishable by
-    // design -- so the page renders its one honest text.
+    // design -- so the page renders its one honest text for either
+    // half that refuses.
     const view = renderShareView({
       shareAccessRefusal: { status: 404, code: 'sharing.not_accessible' },
     })
-    fireEvent.error(imageOf(view))
+    fireEvent.error(imageOf(view, 'Original photo'))
 
     const refusal = await view.findByRole('alert')
     expect(refusal.textContent).toBe(
       'This link is no longer available. It may have expired, or the clinic may have stopped sharing it. Ask the clinic for a fresh link.',
     )
     expect(view.queryByRole('img')).not.toBeInTheDocument()
-    // The diagnosis asked the access route itself, credential-less.
+    // The diagnosis asked the refusing half's route itself,
+    // credential-less.
     const probes = accessGets(view)
     expect(probes).toHaveLength(1)
     expect(probes[0]?.authorization).toBeNull()
+    expect(probes[0]?.query).toBe(`?token=${BEFORE_TOKEN}`)
+  })
+
+  it('refuses the whole pair when the after half is gone', async () => {
+    // The refusal is per half, the page is one pair: whichever half
+    // fails first names the message, and the other half's image is
+    // taken down with it -- a half-open link is not a deliverable.
+    const view = renderShareView({
+      shareAccessRefusal: { status: 404, code: 'sharing.not_accessible' },
+    })
+    fireEvent.error(imageOf(view, 'Simulated smile'))
+
+    const refusal = await view.findByRole('alert')
+    expect(refusal.textContent).toBe(
+      'This link is no longer available. It may have expired, or the clinic may have stopped sharing it. Ask the clinic for a fresh link.',
+    )
+    expect(view.queryByRole('img')).not.toBeInTheDocument()
+    const probes = accessGets(view)
+    expect(probes).toHaveLength(1)
+    expect(probes[0]?.query).toBe(`?token=${AFTER_TOKEN}`)
   })
 
   it('renders every refusal the access route can answer through its own code text', async () => {
@@ -143,7 +176,7 @@ describe('ShareView', () => {
       const view = renderShareView({
         shareAccessRefusal: { status: scenario.status, code: scenario.code },
       })
-      fireEvent.error(imageOf(view))
+      fireEvent.error(imageOf(view, 'Original photo'))
       const refusal = await view.findByRole('alert')
       expect(
         refusal.textContent,
@@ -153,19 +186,19 @@ describe('ShareView', () => {
     }
   })
 
-  it('retries once when the share is live but the image load failed transiently', async () => {
+  it('retries once when a half is live but its image load failed transiently', async () => {
     // A live share answers the diagnosis with real bytes, which the
     // request function refuses as client.protocol -- the page's retry
     // signal: the image is remounted for one more attempt before any
     // message is shown. A second failure of a live share is the
     // transport message, not an infinite loop.
     const view = renderShareView()
-    fireEvent.error(imageOf(view))
+    fireEvent.error(imageOf(view, 'Original photo'))
 
     // The retry: a fresh image element (same source) replaces the
-    // failed one.
-    await waitFor(() => expect(view.getAllByRole('img')).toHaveLength(1))
-    fireEvent.error(imageOf(view))
+    // failed one, and the other half never moved.
+    await waitFor(() => expect(view.getAllByRole('img')).toHaveLength(2))
+    fireEvent.error(imageOf(view, 'Original photo'))
 
     const refusal = await view.findByRole('alert')
     expect(refusal.textContent).toBe(
@@ -182,11 +215,11 @@ describe('ShareView', () => {
         : responder(call)
     const rig = makeRealClientRig(failingResponder)
     const view = renderWithAppServices(
-      <ShareView token={TOKEN} />,
+      <ShareView beforeToken={BEFORE_TOKEN} afterToken={AFTER_TOKEN} />,
       { session: rig.session, api: rig.api },
       { attach: false, language: 'en-US' },
     )
-    fireEvent.error(imageOf(view))
+    fireEvent.error(imageOf(view, 'Original photo'))
 
     const refusal = await view.findByRole('alert')
     expect(refusal.textContent).toBe(
@@ -205,11 +238,11 @@ describe('ShareView', () => {
       }),
     )
     const view = renderWithAppServices(
-      <ShareView token={TOKEN} />,
+      <ShareView beforeToken={BEFORE_TOKEN} afterToken={AFTER_TOKEN} />,
       { session: rig.session, api: rig.api },
       { attach: false, language: 'zh-CN' },
     )
-    fireEvent.error(imageOf(view, zhCN.shareView.imageAlt))
+    fireEvent.error(imageOf(view, zhCN.shareView.beforeImageAlt))
     const refusal = await view.findByRole('alert')
     expect(refusal.textContent).toBe(zhCN.shareView.errors.notAccessible)
   })

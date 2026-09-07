@@ -107,26 +107,32 @@ describe('parseHashFragment', () => {
     })
   })
 
-  it('parses the patient share fragment into its token', () => {
-    // The block-C link shape: /share/<token>, one further segment
-    // exactly as the case-detail route constrains its own id (a share
-    // token is base64url and never carries a slash).
-    expect(parseHashFragment('/share/aB3-z_9-xyz')).toEqual({
+  it('parses the patient share fragment into the before/after pair of tokens', () => {
+    // The block-C link shape: /share/<before>/<after>, exactly two
+    // further segments (a share token is base64url and never carries a
+    // slash), constraining the pair the same way the case-detail route
+    // constrains its own id.
+    expect(parseHashFragment('/share/aB3-z_9-xyz/Tk-42_xz')).toEqual({
       kind: 'share',
-      token: 'aB3-z_9-xyz',
+      beforeToken: 'aB3-z_9-xyz',
+      afterToken: 'Tk-42_xz',
     })
-    expect(parseHashFragment('share/token-1')).toEqual({
+    expect(parseHashFragment('share/token-1/token-2')).toEqual({
       kind: 'share',
-      token: 'token-1',
+      beforeToken: 'token-1',
+      afterToken: 'token-2',
     })
-    expect(parseHashFragment('/share/token-1?lang=en-US')).toEqual({
+    expect(parseHashFragment('/share/token-1/token-2?lang=en-US')).toEqual({
       kind: 'share',
-      token: 'token-1',
+      beforeToken: 'token-1',
+      afterToken: 'token-2',
     })
-    // Share-shaped fragments without a token degrade to unknown like
-    // every other unrecognized path.
+    // Share-shaped fragments without the full pair degrade to unknown
+    // like every other unrecognized path -- a lone token cannot name a
+    // comparison, and neither can a link with a third segment.
     expect(parseHashFragment('/share/')).toEqual({ kind: 'unknown' })
-    expect(parseHashFragment('/share/a/b')).toEqual({ kind: 'unknown' })
+    expect(parseHashFragment('/share/token-1')).toEqual({ kind: 'unknown' })
+    expect(parseHashFragment('/share/a/b/c')).toEqual({ kind: 'unknown' })
   })
 
   it('degrades anything else to unknown', () => {
@@ -162,20 +168,29 @@ describe('AppView', () => {
 
   it('renders the patient share page for a share fragment: no sign-in gate, no frame, no config fetch', async () => {
     // The block-C visitor journey: an anonymous visitor opens the
-    // share link and meets the simulation page itself -- the sign-in
+    // share link and meets the before/after pair -- the sign-in
     // surface that owns every other anonymous fragment never appears,
     // and neither does the clinic frame (no nav, no brand fetch: the
-    // page's whole network activity is the image load, which jsdom
-    // never performs).
+    // page's whole network activity is the two image loads, which
+    // jsdom never performs).
     const rig = makeAppRig()
     const view = rendered(rig)
-    navigateTo(`/share/patient-token-1`)
+    navigateTo(`/share/patient-before-token/patient-after-token`)
 
     expect(await view.findByText(zhCN.shareView.heading)).toBeInTheDocument()
-    const image = view.getByRole('img', { name: zhCN.shareView.imageAlt })
-    expect(image.getAttribute('src')).toBe(
-      `${window.location.origin}/api/v1/sharing/access?token=patient-token-1`,
+    const before = view.getByRole('img', {
+      name: zhCN.shareView.beforeImageAlt,
+    })
+    expect(before.getAttribute('src')).toBe(
+      `${window.location.origin}/api/v1/sharing/access?token=patient-before-token`,
     )
+    const after = view.getByRole('img', {
+      name: zhCN.shareView.afterImageAlt,
+    })
+    expect(after.getAttribute('src')).toBe(
+      `${window.location.origin}/api/v1/sharing/access?token=patient-after-token`,
+    )
+    expect(before.getAttribute('src')).not.toBe(after.getAttribute('src'))
     expect(
       view.queryByRole('link', { name: zhCN.nav.home }),
     ).not.toBeInTheDocument()

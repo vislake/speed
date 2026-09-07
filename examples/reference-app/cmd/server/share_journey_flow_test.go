@@ -2,14 +2,16 @@
 // wire level through the real composed HTTP stack -- the same stack and
 // the same canned provider smile_journey_flow_test.go uses for the
 // block-B journey: a clinic user with a completed smile simulation on a
-// case photo mints a patient-facing share link for the simulation's
-// result, an unauthenticated visitor (no token, no session, no demo
-// header) opens that link and receives the generated image's real bytes
-// through go/sharing's public access route (cmd/server/sharing_resolver.go
-// resolving the share's ResourceRef -- the simulation output object -- to
-// go/storage content), and a share that has been revoked or has expired
-// refuses the same visitor honestly: the 404 sharing.not_accessible
-// envelope, never bytes and never a crash.
+// case photo mints a patient-facing share link for the before/after pair
+// (one share for the original photo, one for the simulation's result --
+// the shape the patient page renders side by side), an unauthenticated
+// visitor (no token, no session, no demo header) opens that link and
+// receives both resources' real bytes through go/sharing's public access
+// route (cmd/server/sharing_resolver.go resolving each share's
+// ResourceRef -- a go/storage object id -- to go/storage content), and a
+// share that has been revoked or has expired refuses the same visitor
+// honestly: the 404 sharing.not_accessible envelope, never bytes and
+// never a crash.
 //
 // The server half of this journey is all pre-existing, separately proven
 // machinery (go/sharing's create/access/revoke surface, proven end to
@@ -17,14 +19,17 @@
 // cases+simulation legs, proven in smile_journey_flow_test.go). What this
 // round assembles is the product surface -- the clinic's share action and
 // the patient's page -- which cannot be driven by a Go wire test alone;
-// the web host's own journeys (photo-simulation-panel.test.tsx's share
-// leg, views/share-view.test.tsx) and the block-C e2e gate
+// the web host's own journeys (views/simulation-share-action.test.tsx,
+// views/share-view.test.tsx) and the block-C e2e gate
 // (web/e2e/core-journey.pending.spec.ts) cover the browser shape. This
 // file pins the wire facts those surfaces rest on, end to end over a REAL
-// simulation result: the shared bytes ARE the generated image (the
-// browser-decode claim the e2e gate checks with naturalWidth is proven
-// here at the source -- image.Decode over what /api/v1/sharing/access
-// actually answered), distinct from the uploaded before-photo, and the
+// simulation result: each shared resource's bytes ARE what the sharing
+// side means them to be -- the before half is the uploaded patient
+// photo, the after half is the vendor's generated image, distinct from
+// the photo they were generated from (the browser-decode and
+// mutual-difference claims the e2e gate checks with naturalWidth and
+// source URLs are proven here at the source -- image.Decode over what
+// /api/v1/sharing/access actually answered for each token) -- and the
 // refused visitor is answered with the module's one honest 404 code,
 // whatever the refusal reason.
 package main
@@ -44,12 +49,13 @@ import (
 
 // TestShareJourney_CompletedSimulationSharedToAnonymousVisitor is block
 // C's wire journey in one pass: photo upload, case creation, simulation
-// to its succeeded status, the share minted by the practice (demo-owner,
-// the same actor sharing_flow_test.go proves holds sharing:create), and
-// the unauthenticated visitor's read of the shared result -- genuine
-// image bytes that decode, that equal the vendor's generated output, and
-// that differ from the patient photo they were generated from. The same
-// share then answers the revoked visitor with the honest 404 envelope.
+// to its succeeded status, the before/after pair of shares minted by the
+// practice (demo-owner, the same actor sharing_flow_test.go proves holds
+// sharing:create), and the unauthenticated visitor's reads of both
+// shared resources -- the before half answers the uploaded patient
+// photo's own bytes, the after half answers the vendor's generated
+// image, each decodable and neither the other. Both shares then answer
+// the revoked visitor with the honest 404 envelope, independently.
 func TestShareJourney_CompletedSimulationSharedToAnonymousVisitor(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
@@ -92,81 +98,139 @@ func TestShareJourney_CompletedSimulationSharedToAnonymousVisitor(t *testing.T) 
 		t.Fatalf("succeeded job carried no output_object_id; status = %+v", status)
 	}
 
-	// The share the practice mints for the completed simulation: the
-	// ResourceRef is the simulation's OUTPUT object -- the "after" the
-	// patient is meant to see -- created through the real owner-facing
-	// route as demo-owner (the sharing:create grant sharing_flow_test.go
+	// The PAIR of shares the practice's share action mints for the
+	// completed simulation: one share per half of the comparison the
+	// patient page renders -- the BEFORE photo and the simulation's
+	// OUTPUT object -- each created through the real owner-facing route
+	// as demo-owner (the sharing:create grant sharing_flow_test.go
 	// pins), with no explicit expiry so the tenant's forced default
-	// applies.
-	createBody, err := json.Marshal(map[string]any{"resourceRef": outputObjectID})
-	if err != nil {
-		t.Fatalf("marshal create body: %v", err)
+	// applies to both.
+	mintPair := func() map[string]testCreateShareResponse {
+		created := map[string]testCreateShareResponse{}
+		for name, resourceRef := range map[string]string{
+			"before": photo.ObjectID,
+			"after":  outputObjectID,
+		} {
+			body, err := json.Marshal(map[string]any{"resourceRef": resourceRef})
+			if err != nil {
+				t.Fatalf("marshal create body: %v", err)
+			}
+			createResp := storageRequest(t, srv, http.MethodPost, sharing.PathShares,
+				token, demoOwnerUserID, "application/json", bytes.NewReader(body))
+			var share testCreateShareResponse
+			decodeSharingBody(t, createResp, http.StatusCreated, "create "+name+" simulation share", &share)
+			if share.Token == "" || share.Share.ID == "" {
+				t.Fatalf("%s create response = %+v, want a token and a share id", name, share)
+			}
+			if share.Share.ResourceRef != resourceRef {
+				t.Fatalf("%s share resource_ref = %q, want %q", name, share.Share.ResourceRef, resourceRef)
+			}
+			created[name] = share
+		}
+		return created
 	}
-	createResp := storageRequest(t, srv, http.MethodPost, sharing.PathShares,
-		token, demoOwnerUserID, "application/json", bytes.NewReader(createBody))
-	var created testCreateShareResponse
-	decodeSharingBody(t, createResp, http.StatusCreated, "create simulation share", &created)
-	if created.Token == "" || created.Share.ID == "" {
-		t.Fatalf("create response = %+v, want a token and a share id", created)
-	}
-	if created.Share.ResourceRef != outputObjectID {
-		t.Fatalf("created share resource_ref = %q, want the simulation output object %q",
-			created.Share.ResourceRef, outputObjectID)
+	pair := mintPair()
+
+	// The patient's side: a genuinely unauthenticated GET of each half
+	// of the share link -- no Authorization header, no demo header, no
+	// session -- and the bytes that come back are that half of the
+	// comparison itself: decodable, the before half the uploaded photo
+	// and the after half the vendor's generated image, and never each
+	// other.
+	readAccess := func(token string) (*http.Response, []byte) {
+		access := sharingAccessRequest(t, srv, token, "")
+		raw, err := io.ReadAll(access.Body)
+		access.Body.Close()
+		if err != nil {
+			t.Fatalf("read access response: %v", err)
+		}
+		if access.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: status = %d, want 200; body = %s", sharing.PathAccess, access.StatusCode, raw)
+		}
+		return access, raw
 	}
 
-	// The patient's side: a genuinely unauthenticated GET of the share
-	// link -- no Authorization header, no demo header, no session -- and
-	// the bytes that come back are the simulation itself: decodable, the
-	// vendor's generated image, and not the before photo.
-	access := sharingAccessRequest(t, srv, created.Token, "")
-	raw, err := io.ReadAll(access.Body)
-	access.Body.Close()
-	if err != nil {
-		t.Fatalf("read access response: %v", err)
+	beforeResp, rawBefore := readAccess(pair["before"].Token)
+	// The before half is the uploaded patient photo exactly as the
+	// storage module holds it -- the completion pipeline's structural
+	// metadata strip has removed the EXIF profile the upload carried,
+	// so the reference is the storage surface's own content answer for
+	// the same object (cases_photos_test.go's identical comparison),
+	// never the pre-sanitization upload bytes.
+	storageBefore := storageRequest(t, srv, http.MethodGet,
+		"/api/v1/storage/objects/"+photo.ObjectID+"/content",
+		token, demoOwnerUserID, "", nil)
+	storageBeforeBytes, readErr := io.ReadAll(storageBefore.Body)
+	storageBefore.Body.Close()
+	if readErr != nil {
+		t.Fatalf("read storage content body: %v", readErr)
 	}
-	if access.StatusCode != http.StatusOK {
-		t.Fatalf("GET %s: status = %d, want 200; body = %s", sharing.PathAccess, access.StatusCode, raw)
+	if storageBefore.StatusCode != http.StatusOK {
+		t.Fatalf("storage content status = %d, want 200", storageBefore.StatusCode)
 	}
-	if !bytes.Equal(raw, imgServer.generatedPNG) {
-		t.Fatalf("shared bytes differ from the vendor's generated image (%d vs %d bytes)", len(raw), len(imgServer.generatedPNG))
+	if !bytes.Equal(rawBefore, storageBeforeBytes) {
+		t.Fatalf("shared before bytes differ from the photo's own storage content (%d vs %d bytes)",
+			len(rawBefore), len(storageBeforeBytes))
 	}
-	if bytes.Equal(raw, jpeg) {
-		t.Fatalf("shared bytes equal the before photo's -- the patient link would show the original, not the simulation")
+	if bytes.Equal(rawBefore, jpeg) {
+		t.Fatalf("shared before bytes equal the pre-sanitization upload -- the EXIF-bearing photo should never be what a share serves")
 	}
-	if _, _, decodeErr := image.Decode(bytes.NewReader(raw)); decodeErr != nil {
-		t.Fatalf("shared content is not a decodable image: %v", decodeErr)
+	if _, _, decodeErr := image.Decode(bytes.NewReader(rawBefore)); decodeErr != nil {
+		t.Fatalf("shared before content is not a decodable image: %v", decodeErr)
 	}
-	if got := access.Header.Get("Content-Type"); got != "image/png" {
-		t.Errorf("Content-Type = %q, want image/png (the media type the browser decodes by)", got)
-	}
-	if got := access.Header.Get("Cache-Control"); got != "no-store" {
-		t.Errorf("Cache-Control = %q, want no-store on the access answer", got)
+	if got := beforeResp.Header.Get("Content-Type"); got != "image/jpeg" {
+		t.Errorf("before Content-Type = %q, want image/jpeg (the media type the browser decodes by)", got)
 	}
 
-	// The practice revokes the share, and the very same visitor is
-	// refused honestly on the next open: 404 with the module's one
-	// outward refusal code -- never bytes, never a crash, and never a
-	// hint of which refusal reason applied.
-	revokeResp := storageRequest(t, srv, http.MethodPost,
-		sharing.PathShares+"/"+created.Share.ID+"/revoke", token, demoOwnerUserID, "", nil)
-	decodeSharingBody(t, revokeResp, http.StatusOK, "revoke simulation share", &testSharingShare{})
-	refused := sharingAccessRequest(t, srv, created.Token, "")
-	refusedBody, err := io.ReadAll(refused.Body)
-	refused.Body.Close()
-	if err != nil {
-		t.Fatalf("read refused response: %v", err)
+	afterResp, rawAfter := readAccess(pair["after"].Token)
+	if !bytes.Equal(rawAfter, imgServer.generatedPNG) {
+		t.Fatalf("shared after bytes differ from the vendor's generated image (%d vs %d bytes)",
+			len(rawAfter), len(imgServer.generatedPNG))
 	}
-	if refused.StatusCode != http.StatusNotFound {
-		t.Fatalf("GET %s after revoke: status = %d, want 404; body = %s", sharing.PathAccess, refused.StatusCode, refusedBody)
+	if bytes.Equal(rawAfter, jpeg) {
+		t.Fatalf("shared after bytes equal the before photo's -- the patient link would show the original, not the simulation")
 	}
-	var envelope struct {
-		Code string `json:"code"`
+	if _, _, decodeErr := image.Decode(bytes.NewReader(rawAfter)); decodeErr != nil {
+		t.Fatalf("shared after content is not a decodable image: %v", decodeErr)
 	}
-	if err := json.Unmarshal(refusedBody, &envelope); err != nil {
-		t.Fatalf("decode refused body %s: %v", refusedBody, err)
+	if got := afterResp.Header.Get("Content-Type"); got != "image/png" {
+		t.Errorf("after Content-Type = %q, want image/png (the media type the browser decodes by)", got)
 	}
-	if envelope.Code != "sharing.not_accessible" {
-		t.Fatalf("refused code = %q, want sharing.not_accessible; body = %s", envelope.Code, refusedBody)
+	if got := afterResp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("after Cache-Control = %q, want no-store on the access answer", got)
+	}
+
+	// The practice revokes both shares, and the very same visitor is
+	// refused honestly on the next open of either: 404 with the
+	// module's one outward refusal code -- never bytes, never a crash,
+	// and never a hint of which refusal reason applied.
+	revoke := func(shareID string) {
+		revokeResp := storageRequest(t, srv, http.MethodPost,
+			sharing.PathShares+"/"+shareID+"/revoke", token, demoOwnerUserID, "", nil)
+		decodeSharingBody(t, revokeResp, http.StatusOK, "revoke simulation share", &testSharingShare{})
+	}
+	for _, name := range []string{"before", "after"} {
+		share := pair[name]
+		revoke(share.Share.ID)
+		refused := sharingAccessRequest(t, srv, share.Token, "")
+		refusedBody, err := io.ReadAll(refused.Body)
+		refused.Body.Close()
+		if err != nil {
+			t.Fatalf("read refused response: %v", err)
+		}
+		if refused.StatusCode != http.StatusNotFound {
+			t.Fatalf("GET %s after revoking the %s share: status = %d, want 404; body = %s",
+				sharing.PathAccess, name, refused.StatusCode, refusedBody)
+		}
+		var envelope struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(refusedBody, &envelope); err != nil {
+			t.Fatalf("decode refused body %s: %v", refusedBody, err)
+		}
+		if envelope.Code != "sharing.not_accessible" {
+			t.Fatalf("refused code = %q, want sharing.not_accessible; body = %s", envelope.Code, refusedBody)
+		}
 	}
 }
 

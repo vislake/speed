@@ -61,3 +61,24 @@ export async function createPatientShare(
     body: { resourceRef },
   })
 }
+
+/**
+ * Revokes one of this tenant's shares by its owner-facing id (POST
+ * /api/v1/sharing/shares/{shareId}/revoke). The block-C share action
+ * uses it as its one compensation leg: when one half of a minted
+ * before/after pair cannot be created, the half that succeeded is
+ * revoked again so a failed share action never leaves a live,
+ * unhanded-out link behind. Best-effort by contract -- the caller
+ * never shows the answer to a person (the mint's own refusal is what
+ * the surface renders); a revoke that itself fails leaves the orphan
+ * share to the module's own default-expiry sweep, which is the same
+ * end every unopened share meets.
+ */
+export async function revokePatientShare(
+  api: RequestFn,
+  shareId: string,
+): Promise<void> {
+  await api<unknown>(`${SHARE_CREATE_PATH}/${encodeURIComponent(shareId)}/revoke`, {
+    method: 'POST',
+  })
+}

@@ -22,7 +22,7 @@
  * (smile-sim-errors.ts) to bilingual text, never a raw code.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -390,6 +390,75 @@ export function PhotoSimulationPanel({
   })
 
   const simulate = useSmilesimSimulate()
+  const simulations = simulationsQuery.data?.simulations ?? []
+
+  // Whether this panel has already started a simulation on the person's
+  // behalf (the automatic default preview below) -- one auto-run per
+  // photo per panel lifetime, whatever else happens afterwards.
+  const autoPreviewStartedRef = useRef(false)
+
+  // The automatic default preview: a photo that has NO simulation
+  // attempt of any kind yet -- the state every freshly attached photo
+  // opens in -- is given one automatic generation with the service's
+  // documented default options the moment this panel can act. The case
+  // page opens on a photo with nothing but the pickers and a blank
+  // promise otherwise; the practice's first look at a new patient
+  // photo is the comparison this auto-run produces, and the block-C
+  // gate's own journey opens a case this way. Any existing attempt --
+  // queued, running, succeeded or failed -- leaves the panel hands-off,
+  // and a person clicking Simulate is never doubled up: the button is
+  // disabled while the auto-run is in flight, and the run's own
+  // progress is the same honest in-flight region every generation
+  // reports. Deliberately one-shot rather than re-runnable: a person
+  // who changes the options and clicks Simulate starts an ordinary
+  // second generation, exactly as before.
+  useEffect(() => {
+    if (tenantId === null) {
+      return
+    }
+    if (simulationsQuery.isLoading || simulationsQuery.isError) {
+      return
+    }
+    if (autoPreviewStartedRef.current) {
+      return
+    }
+    if (simulations.length > 0) {
+      return
+    }
+    if (pollingJobID !== null || simulate.isPending) {
+      return
+    }
+    autoPreviewStartedRef.current = true
+    simulate.mutate(
+      {
+        data: {
+          photo_object_id: photoObjectID,
+          options: {
+            smile_style: style,
+            tooth_shade: shade,
+            strength,
+          },
+        },
+      },
+      {
+        onSuccess: (jobRef) => {
+          setPollingJobID(jobRef.job_id)
+        },
+      },
+    )
+  }, [
+    tenantId,
+    photoObjectID,
+    simulationsQuery.isLoading,
+    simulationsQuery.isError,
+    simulations.length,
+    pollingJobID,
+    simulate,
+    simulate.isPending,
+    style,
+    shade,
+    strength,
+  ])
 
   const status = jobQuery.data?.status
   const terminal =
@@ -431,7 +500,6 @@ export function PhotoSimulationPanel({
           ? null
           : status
 
-  const simulations = simulationsQuery.data?.simulations ?? []
   const succeeded = simulations.filter(
     (entry) => entry.status === 'succeeded' && entry.output_object_id,
   )
@@ -579,13 +647,15 @@ export function PhotoSimulationPanel({
             {attemptSummary(t, newestSucceeded)}
           </Typography>
           {/* The block-C share action: the practice turns this completed
-          simulation into a patient-facing link. Mounted under the
-          comparison with a key of the simulation's own job, so a newer
-          result replaces a minted link by remount rather than carrying
-          it over. */}
+          simulation into a patient-facing link for the before/after
+          pair -- the photo the simulation was generated from and its
+          output object. Mounted under the comparison with a key of the
+          simulation's own job, so a newer result replaces a minted
+          link by remount rather than carrying it over. */}
           <SimulationShareAction
             key={`share-${newestSucceeded.job_id}`}
             simulation={newestSucceeded}
+            photoObjectId={photoObjectID}
           />
         </Box>
       )}

@@ -63,9 +63,11 @@ export const ROUTE_ACCOUNT = '/account'
  * exchange completes with. */
 export const BINDING_ROUTE_PREFIX = '/auth/binding/'
 
-/** The patient share fragment prefix: /share/<token> is the link a
- * completed simulation's share action hands out, opened by whoever
- * holds it. */
+/** The patient share fragment prefix: /share/<token>/<token> is the
+ * link a completed simulation's share action hands out, opened by
+ * whoever holds it. The two tokens name the before/after pair's two
+ * shares (one resource per share is go/sharing's model), before
+ * first, in the order the patient page renders them. */
 export const SHARE_ROUTE_PREFIX = '/share/'
 
 /** The demo's social provider set: the authn spec's five providers,
@@ -97,7 +99,11 @@ export type AppFragment =
   | { readonly kind: 'notes' }
   | { readonly kind: 'account' }
   | { readonly kind: 'binding'; readonly target: BindingTarget }
-  | { readonly kind: 'share'; readonly token: string }
+  | {
+      readonly kind: 'share'
+      readonly beforeToken: string
+      readonly afterToken: string
+    }
   | { readonly kind: 'unknown' }
 
 export interface BindingTarget {
@@ -152,16 +158,26 @@ export function parseHashFragment(fragment: string): AppFragment {
   if (path === ROUTE_ACCOUNT) {
     return { kind: 'account' }
   }
-  // The patient share fragment: /share/<token> -- one further segment
-  // (a share token is base64url and never carries a slash), exactly as
-  // /cases/<id> constrains its own id. The token is validated only for
-  // shape here; whether it names a live share is the access route's own
-  // answer, and a garbage token degrades to the page's honest refusal
-  // text rather than a client-side guess.
+  // The patient share fragment: /share/<before>/<after> -- exactly two
+  // further segments (a share token is base64url and never carries a
+  // slash), constraining the pair the same way /cases/<id> constrains
+  // its own id. The tokens are validated only for shape here; whether
+  // they name live shares is the access route's own answer, and a
+  // garbage link degrades to the page's honest refusal text rather
+  // than a client-side guess.
   if (path.startsWith(SHARE_ROUTE_PREFIX)) {
-    const token = path.slice(SHARE_ROUTE_PREFIX.length)
-    if (token.length > 0 && !token.includes('/')) {
-      return { kind: 'share', token }
+    const rest = path.slice(SHARE_ROUTE_PREFIX.length)
+    const slash = rest.indexOf('/')
+    if (slash > 0) {
+      const beforeToken = rest.slice(0, slash)
+      const afterToken = rest.slice(slash + 1)
+      if (
+        beforeToken.length > 0 &&
+        afterToken.length > 0 &&
+        !afterToken.includes('/')
+      ) {
+        return { kind: 'share', beforeToken, afterToken }
+      }
     }
     return { kind: 'unknown' }
   }
@@ -224,7 +240,12 @@ export function AppView(): ReactElement {
   // must never meet the sign-in surface instead of their simulation.
   // The page renders standalone before any shell branch.
   if (parsed.kind === 'share') {
-    return <ShareView token={parsed.token} />
+    return (
+      <ShareView
+        beforeToken={parsed.beforeToken}
+        afterToken={parsed.afterToken}
+      />
+    )
   }
 
   const selected = selectedNavId(parsed)

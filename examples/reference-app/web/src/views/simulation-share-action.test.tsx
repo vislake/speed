@@ -4,13 +4,18 @@
  * its own: the case detail page mounted over the real api-client rig
  * answering from the demo responder's genuine Response objects. A
  * completed simulation's comparison carries the share action; clicking
- * it mints a share for the simulation's OUTPUT object through the
- * owner-facing route and puts the patient link -- a real, copyable,
- * absolute URL -- in a read-only textbox with the expiry the server
- * resolved beside it. Refusals resolve through the share action's
- * reachable-error whitelist to human text, including the rbac gate's
- * denial a practice member without sharing:create genuinely draws and
- * the module's creation rate limit.
+ * it mints the BEFORE/AFTER pair -- one share per half of the
+ * comparison the patient page renders, the original photo and the
+ * simulation's output object -- through the owner-facing route and puts
+ * the patient link (a real, copyable, absolute URL carrying both
+ * halves' tokens) in a read-only textbox with the expiry the server
+ * resolved beside it. A mint where either half is refused shows that
+ * refusal's bilingual text and revokes the half that did mint -- a
+ * failed share action leaves no live, unhanded-out link behind -- while
+ * refusals resolve through the share action's reachable-error whitelist
+ * to human text, including the rbac gate's denial a practice member
+ * without sharing:create genuinely draws and the module's creation
+ * rate limit.
  */
 
 import { waitFor, within } from '@testing-library/react'
@@ -82,16 +87,25 @@ async function renderCaseDetailForShare(
   return { ...view, calls: rig.calls }
 }
 
-/** Drives one generation to completion on the rendered case page: the
- * panel's simulate button through the job's deterministic progression
- * to the succeeded comparison -- the state the share action requires. */
-async function completeOneSimulation(view: Awaited<ReturnType<typeof renderCaseDetailForShare>>): Promise<void> {
-  await view.findByRole('button', { name: 'Simulate smile' })
-  await userEvent.click(view.getByRole('button', { name: 'Simulate smile' }))
-  await view.findByRole(
-    'region',
-    { name: 'Before and after' },
-    { timeout: 8000 },
+/** The share-action posts the rig recorded. */
+function shareMints(
+  view: Awaited<ReturnType<typeof renderCaseDetailForShare>>,
+): ReturnType<typeof makeRealClientRig>['calls'] {
+  return view.calls.filter(
+    (call) =>
+      call.method === 'POST' && call.path === '/api/v1/sharing/shares',
+  )
+}
+
+/** The compensation revokes the rig recorded. */
+function shareRevokes(
+  view: Awaited<ReturnType<typeof renderCaseDetailForShare>>,
+): ReturnType<typeof makeRealClientRig>['calls'] {
+  return view.calls.filter(
+    (call) =>
+      call.method === 'POST' &&
+      call.path.startsWith('/api/v1/sharing/shares/') &&
+      call.path.endsWith('/revoke'),
   )
 }
 
@@ -104,46 +118,51 @@ describe('SimulationShareAction', () => {
       })
 
       // No share control exists before a simulation completes.
-      await view.findByRole('button', { name: 'Simulate smile' })
       expect(
         view.queryByRole('button', { name: 'Share with patient' }),
       ).not.toBeInTheDocument()
 
-      await completeOneSimulation(view)
+      // The photo's first generation (the panel's automatic default
+      // preview) completes into the comparison.
+      const comparison = await view.findByRole(
+        'region',
+        { name: 'Before and after' },
+        { timeout: 8000 },
+      )
 
-      // The comparison's share action mints the link for the newest
-      // succeeded simulation's OUTPUT object: one POST through the
-      // owner-facing route, carrying the bearer and the output id.
-      const comparison = view.getByRole('region', { name: 'Before and after' })
+      // The comparison's share action mints the PAIR -- one share for
+      // the original photo and one for the newest succeeded output --
+      // through the owner-facing route: two POSTs carrying the bearer
+      // and each half's object id.
       await userEvent.click(
         within(comparison).getByRole('button', { name: 'Share with patient' }),
       )
 
       const link = await view.findByRole('textbox', { name: 'Share link' })
-      const expected = new URL('/#/share/share-token-1', window.location.href)
-        .href
+      const expected = new URL(
+        '/#/share/share-token-1/share-token-2',
+        window.location.href,
+      ).href
       expect(
         link,
-        'the share control must produce an absolute, copyable URL',
+        'the share control must produce an absolute, copyable URL carrying both halves',
       ).toHaveValue(expected)
 
       // The expiry the server resolved is shown beside the link.
       expect(view.getByText(/^Link expires /)).toBeInTheDocument()
 
-      const mints = view.calls.filter(
-        (call) =>
-          call.method === 'POST' &&
-          call.path === '/api/v1/sharing/shares',
-      )
-      expect(mints).toHaveLength(1)
-      const mint = mints[0]
-      if (mint === undefined) {
-        throw new Error('the share mint call was never recorded')
-      }
-      expect(mint.authorization).toMatch(/^Bearer /)
-      expect(JSON.parse(mint.body)).toEqual({
+      const mints = shareMints(view)
+      expect(mints).toHaveLength(2)
+      expect(mints[0]?.authorization).toMatch(/^Bearer /)
+      expect(JSON.parse(mints[0]?.body ?? '{}')).toEqual({
+        resourceRef: 'photo-1',
+      })
+      expect(JSON.parse(mints[1]?.body ?? '{}')).toEqual({
         resourceRef: 'sim-out-job-1',
       })
+      // The share action's own compensation never fires on the happy
+      // path: nothing was refused, so nothing is revoked.
+      expect(shareRevokes(view)).toHaveLength(0)
     } finally {
       blobDouble.restore()
     }
@@ -160,9 +179,12 @@ describe('SimulationShareAction', () => {
         { initialCases: [caseWithPhoto()], reader: true },
         DEMO_READER_IDENTIFIER,
       )
-      await completeOneSimulation(view)
+      const comparison = await view.findByRole(
+        'region',
+        { name: 'Before and after' },
+        { timeout: 8000 },
+      )
 
-      const comparison = view.getByRole('region', { name: 'Before and after' })
       await userEvent.click(
         within(comparison).getByRole('button', { name: 'Share with patient' }),
       )
@@ -179,6 +201,10 @@ describe('SimulationShareAction', () => {
       expect(
         view.getByRole('button', { name: 'Share with patient' }),
       ).toBeEnabled()
+      // Both halves of the pair drew the same gate; nothing to
+      // compensate.
+      expect(shareMints(view)).toHaveLength(2)
+      expect(shareRevokes(view)).toHaveLength(0)
     } finally {
       blobDouble.restore()
     }
@@ -191,9 +217,11 @@ describe('SimulationShareAction', () => {
         initialCases: [caseWithPhoto()],
         sharesCreateRefusal: { status: 429, code: 'sharing.rate_limited' },
       })
-      await completeOneSimulation(view)
-
-      const comparison = view.getByRole('region', { name: 'Before and after' })
+      const comparison = await view.findByRole(
+        'region',
+        { name: 'Before and after' },
+        { timeout: 8000 },
+      )
       const action = within(comparison).getByRole('button', {
         name: 'Share with patient',
       })
@@ -205,6 +233,8 @@ describe('SimulationShareAction', () => {
           'Too many share links were created just now. Wait a moment and try again.',
         ),
       )
+      // Both halves refused; nothing minted, nothing to revoke.
+      expect(shareRevokes(view)).toHaveLength(0)
 
       // Retry mints again (and is refused again by the same answer):
       // a refusal is never a dead end.
@@ -212,14 +242,65 @@ describe('SimulationShareAction', () => {
         name: 'Share with patient',
       })
       await userEvent.click(actionAgain)
-      await waitFor(() =>
-        expect(
-          view.calls.filter(
-            (call) =>
-              call.method === 'POST' && call.path === '/api/v1/sharing/shares',
-          ),
-        ).toHaveLength(2),
+      await waitFor(() => expect(shareMints(view)).toHaveLength(4))
+      expect(shareRevokes(view)).toHaveLength(0)
+    } finally {
+      blobDouble.restore()
+    }
+  })
+
+  it('revokes the half of a pair that did mint when the other half is refused', async () => {
+    // The half-refused pair: the before half mints, the after half is
+    // refused by the create rate limit. All-or-nothing means no link --
+    // the refusal's own text is shown -- and the minted half is revoked
+    // again on the spot, so a failed share action leaves no live,
+    // unhanded-out link behind.
+    const blobDouble = installBlobURLDouble()
+    try {
+      const view = await renderCaseDetailForShare({
+        initialCases: [caseWithPhoto()],
+        sharesCreateSecondRefusal: {
+          status: 429,
+          code: 'sharing.rate_limited',
+        },
+      })
+      const comparison = await view.findByRole(
+        'region',
+        { name: 'Before and after' },
+        { timeout: 8000 },
       )
+      await userEvent.click(
+        within(comparison).getByRole('button', { name: 'Share with patient' }),
+      )
+
+      const refusal = await view.findByRole('alert')
+      expect(refusal.textContent).toBe(
+        'Too many share links were created just now. Wait a moment and try again.',
+      )
+      expect(
+        view.queryByRole('textbox', { name: 'Share link' }),
+      ).not.toBeInTheDocument()
+
+      // The before half (the run's first create) minted as share-1 and
+      // was revoked again as the compensation leg.
+      const revokes = shareRevokes(view)
+      expect(revokes).toHaveLength(1)
+      expect(revokes[0]?.path).toBe(
+        '/api/v1/sharing/shares/share-1/revoke',
+      )
+      expect(revokes[0]?.authorization).toMatch(/^Bearer /)
+
+      // Retryable: the next attempt mints a fresh pair (the
+      // second-create refusal scripts only the run's second create).
+      await userEvent.click(
+        view.getByRole('button', { name: 'Share with patient' }),
+      )
+      const link = await view.findByRole('textbox', { name: 'Share link' })
+      const expected = new URL(
+        '/#/share/share-token-2/share-token-3',
+        window.location.href,
+      ).href
+      expect(link).toHaveValue(expected)
     } finally {
       blobDouble.restore()
     }
