@@ -1,7 +1,8 @@
 {
   "tenantSwitcher": {
     "noCurrentTenant": "无当前组织",
-    "switching": "正在切换…"
+    "switchingTo": "正在切换到{{tenant}}…",
+    "switchedTo": "已切换到{{tenant}}。"
   },
   "errors": {
     "authn": {

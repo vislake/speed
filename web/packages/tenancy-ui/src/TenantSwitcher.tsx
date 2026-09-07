@@ -6,11 +6,34 @@
  * noCurrentTenant text while the host has none -- data lag on first
  * render, or a pre-auth mount). Clicking it opens the host-supplied
  * tenant list; picking a row that is not the current tenant drives
- * session.switchTenant(id) and closes the menu immediately. While the
- * switch is in flight the trigger is inert and a role="status" notice
- * renders the switching text -- a live-region announcement, never a
- * blocking overlay, and the trigger label itself stays put so the current
- * tenant never visually flickers mid-switch. "Inert" is deliberately not
+ * session.switchTenant(id) and closes the menu immediately. The trigger
+ * renders with `color="inherit"` by default, so its text follows the
+ * ambient text color instead of defaulting to the primary palette
+ * color: mounted inside a colored header (the common host placement,
+ * next to the sign-out action in an AppBar whose background is the
+ * primary color), an inherited color resolves to the surface's own
+ * contrastText and stays legible where a primary-on-primary default
+ * would vanish (reference-app acceptance: the trigger once measured
+ * 1:1 against its own AppBar). On a plain surface the same inheritance
+ * resolves to the surrounding text color, which is equally safe -- the
+ * one thing the default never does is paint itself in the palette
+ * color of the very surface it usually sits on.
+ *
+ * While the switch is in flight the trigger is inert and one
+ * role="status" notice renders -- a live-region announcement, never a
+ * blocking overlay, and the trigger label itself stays put so the
+ * current tenant never visually flickers mid-switch. The notice names
+ * where the switch is going (the switchingTo text) and, once the
+ * switch commits, becomes the switchedTo confirmation naming the
+ * tenant the session now runs under -- a context change that silently
+ * alters which rows are on screen must announce itself, and it must do
+ * so in a live region, because a person using a screen reader cannot
+ * glance at the chrome to check (the acceptance gate for "switching
+ * clinic says so"). The confirmation stays on the page until the next
+ * switch begins (or the next attempt fails, when the failure's code
+ * text replaces it) -- deliberately no auto-dismiss timer, so the
+ * announcement's lifetime never races a reader's processing of it.
+ * "Inert" is deliberately not
  * the native disabled attribute here: the menu closes onto the trigger
  * at the moment the flight starts, and MUI's focus trap restores focus
  * to the trigger on close -- a native-disabled control cannot take
@@ -20,10 +43,8 @@
  * stays focusable while the flight is pending, inert in the accessible
  * way: aria-disabled, its open handler refusing while pending, and the
  * disabled look rendered from the theme tokens (see the Button below).
- * A successful switch is deliberately quiet: the session committed (the
- * store holds the fresh access token, the snapshot flipped), the host
- * observes the principal change through its own auth-core hooks, and
- * onSwitched fires exactly once per committed switch, after the commit
+ * A successful switch fires
+ * onSwitched exactly once per committed switch, after the commit
  * -- refetching, navigation, permission-list re-attachment and
  * previous-tenant query-cache cleanup are the host's to run then. A
  * throwing host callback is contained: it is not a switch failure (the
@@ -153,6 +174,16 @@ export interface TenantSwitcherProps {
   readonly onSwitched?: (tenantId: string) => void
 }
 
+/** The one live-region notice a switch drives: its text changes from
+ * the in-flight announcement to the committed one, so a screen reader
+ * hears the destination and then the completion from a single region. */
+interface SwitchNotice {
+  /** The display name of the tenant the switch is going to / landed in. */
+  readonly tenantName: string
+  /** False while the flight is pending, true once the switch committed. */
+  readonly committed: boolean
+}
+
 export function TenantSwitcher({
   session,
   tenants,
@@ -164,6 +195,7 @@ export function TenantSwitcher({
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
   const [pending, setPending] = useState(false)
   const [errorCode, setErrorCode] = useState<string | null>(null)
+  const [notice, setNotice] = useState<SwitchNotice | null>(null)
 
   const menuOpen = anchorEl !== null
   const currentTenant =
@@ -187,7 +219,7 @@ export function TenantSwitcher({
   // row can reach switchTo in the same window.
   const switching = useRef(false)
 
-  const switchTo = async (tenantId: string): Promise<void> => {
+  const switchTo = async (tenant: TenantOption): Promise<void> => {
     // One switch at a time: a second attempt while a flight is pending
     // is refused before any await, never queued. The first flight's
     // commit wins and fires onSwitched for its tenant exactly once --
@@ -198,6 +230,10 @@ export function TenantSwitcher({
     switching.current = true
     setErrorCode(null)
     setPending(true)
+    // The notice announces the destination while the flight is pending
+    // and the landed tenant once it commits (the file header explains
+    // why a committed context change must say so out loud).
+    setNotice({ tenantName: tenant.name, committed: false })
     // The principal this switch speaks for, captured before the first
     // attempt: a superseded outcome can only still reach the session
     // through a later refresh while the SAME user owns it. The user_id
@@ -206,6 +242,7 @@ export function TenantSwitcher({
     // replaced or cleared the family; see the file header for the one
     // case the proxy cannot tell apart).
     const issuedBy = session.getSnapshot().principal
+    let committed = false
     try {
       // One request per attempt, staying pending across them. When the
       // attempt is superseded -- a sibling operation committed to the
@@ -218,7 +255,8 @@ export function TenantSwitcher({
       // silently dropped).
       for (let attempt = 0; ; attempt += 1) {
         try {
-          await session.switchTenant(tenantId)
+          await session.switchTenant(tenant.id)
+          committed = true
           break
         } catch (error) {
           if (!isOperationSuperseded(error)) {
@@ -229,20 +267,20 @@ export function TenantSwitcher({
             // owning the session. Contribute nothing -- no alert, no
             // onSwitched (the residual drift window needs three or more
             // concurrent commits; see the file header).
-            return
+            break
           }
           const winner = error.snapshot.principal
           const canStillDrift =
             winner !== null &&
             issuedBy !== null &&
             winner.user_id === issuedBy.user_id &&
-            winner.tenant_id !== tenantId
+            winner.tenant_id !== tenant.id
           if (!canStillDrift) {
             // The session already runs under the requested tenant (the
             // race was redundant), or a different principal took it
             // over (the token family was replaced -- no drift can
             // follow). Contribute nothing.
-            return
+            break
           }
           // The drift condition holds: re-issue the same request. The
           // flight stays pending; the loop breaks only on a commit.
@@ -252,19 +290,29 @@ export function TenantSwitcher({
       // A genuine failure of the switch (the membership, account-status,
       // token-verification, session-lifecycle or transport answers): the
       // state is exactly as it was (the auth-core contract) and the
-      // answer's code text renders below.
+      // answer's code text renders below. The notice is cleared so the
+      // failure's own text is the only message standing.
       setErrorCode(errorCodeOf(error))
-      return
     } finally {
       setPending(false)
       switching.current = false
     }
+    if (!committed) {
+      // The switch did not land (a genuine failure, a spent
+      // reconciliation budget, or nothing left to reconcile): no
+      // confirmation to announce, and on a failure the code text below
+      // already replaced the notice.
+      setNotice(null)
+      return
+    }
+    // The commit: the confirmation announces the tenant the session now
+    // runs under (see the file header for why the announcement must
+    // survive the flight), and onSwitched fires exactly once, after the
+    // in-flight state cleared, so the commit never surfaces as an error
+    // through this component.
+    setNotice({ tenantName: tenant.name, committed: true })
     try {
-      // The commit is the host's to observe: the snapshot flipped to the
-      // requested tenant and onSwitched fires exactly once, after the
-      // in-flight state cleared, so the commit never surfaces as an
-      // error through this component.
-      onSwitched?.(tenantId)
+      onSwitched?.(tenant.id)
     } catch {
       // A throwing host callback is not a switch failure (onSwitched's
       // contract): the commit already happened and nothing here renders
@@ -280,6 +328,15 @@ export function TenantSwitcher({
         <Button
           type="button"
           variant="outlined"
+          // Inherit the ambient text color instead of defaulting to the
+          // primary palette color: hosts mount this control inside a
+          // colored AppBar (whose own text is its contrastText), where
+          // a primary-colored default reads primary-on-primary (the
+          // acceptance measurement that named the trigger at 1:1). On a
+          // plain surface the inherited color is the surrounding text
+          // color, equally legible -- the file header has the full
+          // rationale.
+          color="inherit"
           disabled={triggerNativeDisabled}
           aria-disabled={triggerInert || undefined}
           aria-haspopup="menu"
@@ -314,9 +371,17 @@ export function TenantSwitcher({
             ? t('tenantSwitcher.noCurrentTenant')
             : currentTenant.name}
         </Button>
-        {pending ? (
-          <Typography component="span" role="status">
-            {t('tenantSwitcher.switching')}
+        {notice !== null ? (
+          <Typography
+            component="span"
+            role="status"
+            sx={{ color: 'inherit' }}
+          >
+            {notice.committed
+              ? t('tenantSwitcher.switchedTo', { tenant: notice.tenantName })
+              : t('tenantSwitcher.switchingTo', {
+                  tenant: notice.tenantName,
+                })}
           </Typography>
         ) : null}
       </Box>
@@ -341,7 +406,7 @@ export function TenantSwitcher({
                 return
               }
               setAnchorEl(null)
-              void switchTo(tenant.id)
+              void switchTo(tenant)
             }}
           >
             {tenant.name}

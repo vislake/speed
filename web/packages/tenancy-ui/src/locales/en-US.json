@@ -1,7 +1,8 @@
 {
   "tenantSwitcher": {
     "noCurrentTenant": "No current organization",
-    "switching": "Switching…"
+    "switchingTo": "Switching to {{tenant}}…",
+    "switchedTo": "Switched to {{tenant}}."
   },
   "errors": {
     "authn": {

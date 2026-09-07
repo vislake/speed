@@ -10,21 +10,25 @@
  * native-disabled trigger cannot take focus in a real browser and the
  * round trip would strand focus on document.body; jsdom reports the
  * same code path as focus on the disabled trigger, which the focus
- * regression test pins against) -- and a role="status" notice renders
- * the switching text, and a synchronous entry guard in the switch
- * handler refuses any second attempt in that window; jsdom cannot stage
- * such an attempt -- the closing list unmounts synchronously here
- * instead of animating out, so no activation can reach the handler
- * mid-flight, and the guard's browser-tier window (rows of the
- * still-closing list, mounted and clickable for the exit transition) is
- * the reference-app Playwright journeys' to pin. A successful switch is
- * quiet (no alert) and fires
+ * regression test pins against) -- and one role="status" notice names
+ * the destination (switchingTo) and then, once the switch commits, the
+ * landed tenant (switchedTo): the same live region announces the flight
+ * and confirms the commit, because a context change that silently
+ * alters which rows a host shows must say so out loud. A synchronous
+ * entry guard in the switch handler refuses any second attempt in that
+ * window; jsdom cannot stage such an attempt -- the closing list
+ * unmounts synchronously here instead of animating out, so no
+ * activation can reach the handler mid-flight, and the guard's
+ * browser-tier window (rows of the still-closing list, mounted and
+ * clickable for the exit transition) is the reference-app Playwright
+ * journeys' to pin. A successful switch is announced (no alert --
+ * nothing failed -- but a role=status confirmation) and fires
  * onSwitched exactly once per committed switch, after the commit --
  * including the reconciling re-issue a superseded switch triggers when
  * it loses a race (the racing describe below); a throwing onSwitched is
- * contained: the commit stands, no error renders, and no rejection
- * escapes the fire-and-forget row handler. A rejected switch renders the
- * answer's code
+ * contained: the commit stands and still announces itself, no error
+ * renders, and no rejection escapes the fire-and-forget row handler. A
+ * rejected switch clears the notice, renders the answer's code
  * text in one alert, changes nothing locally -- the store keeps its
  * token and the trigger stays ready to retry, and a retry clears the
  * alert. The session-lifecycle codes resolve to their own texts in the
@@ -38,6 +42,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { switchLanguage } from '@speed/i18n'
+import { createAppTheme } from '@speed/ui-kit'
 import { TenantSwitcher } from './TenantSwitcher.js'
 import type { TenantSwitcherProps } from './TenantSwitcher.js'
 import { renderWithProviders } from '../test-utils/render.js'
@@ -59,9 +64,23 @@ const TENANTS = [
   { id: 'tenant-2', name: 'Bright Smile Clinic' },
 ] as const
 
-const SWITCHING_ZH = zhCN.tenantSwitcher.switching
 const NO_CURRENT_ZH = zhCN.tenantSwitcher.noCurrentTenant
 const NO_CURRENT_EN = enUS.tenantSwitcher.noCurrentTenant
+
+/** The zh switchingTo text with one tenant name interpolated. */
+function SWITCHING_TO_ZH(tenant: string): string {
+  return zhCN.tenantSwitcher.switchingTo.replace('{{tenant}}', tenant)
+}
+
+/** The zh switchedTo text with one tenant name interpolated. */
+function SWITCHED_TO_ZH(tenant: string): string {
+  return zhCN.tenantSwitcher.switchedTo.replace('{{tenant}}', tenant)
+}
+
+/** The en switchedTo text with one tenant name interpolated. */
+function SWITCHED_TO_EN(tenant: string): string {
+  return enUS.tenantSwitcher.switchedTo.replace('{{tenant}}', tenant)
+}
 
 /** Signs the harness session in through the real login operation. */
 async function signIn(harness: Harness): Promise<void> {
@@ -98,7 +117,55 @@ async function openMenu(user: ReturnType<typeof userEvent.setup>) {
   }
 }
 
+/** The WCAG 2.1 contrast ratio between two hex colours. */
+function contrastRatio(a: string, b: string): number {
+  const channel = (value: number): number => {
+    const c = value / 255
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+  }
+  const luminance = (hex: string): number => {
+    const value = hex.replace('#', '')
+    const r = Number.parseInt(value.slice(0, 2), 16)
+    const g = Number.parseInt(value.slice(2, 4), 16)
+    const b = Number.parseInt(value.slice(4, 6), 16)
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+  }
+  const lighter = Math.max(luminance(a), luminance(b))
+  const darker = Math.min(luminance(a), luminance(b))
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
 describe('TenantSwitcher', () => {
+  it('default the trigger to an inheriting color, never the primary palette color', async () => {
+    // Regression for the acceptance measurement that named the trigger
+    // at 1:1: a trigger defaulting to the primary palette color
+    // vanishes on the very surface it usually sits on -- an AppBar
+    // whose background IS the primary color (the reference-app header
+    // measured rgb(37,99,235) text on an rgb(37,99,235) background).
+    // color="inherit" makes the text follow the ambient color: the
+    // AppBar's own contrastText there, the surrounding text color on a
+    // plain surface.
+    const harness = makeHarness({ [LOGIN_PASSWORD]: () => makePair() })
+    await signIn(harness)
+    renderSwitcher(harness)
+    const trigger = screen.getByRole('button', { name: 'Sunshine Dental' })
+    expect(trigger).toHaveClass('MuiButton-colorInherit')
+    expect(trigger).not.toHaveClass('MuiButton-colorPrimary')
+    // The token relationship the inheritance relies on, guarded here
+    // because jsdom resolves no cascaded styles: while an AppBar keeps
+    // painting primary.main, its own contrastText must stay at WCAG AA
+    // distance from it, or an inherited control is legible nowhere.
+    // The composed real-browser proof is the reference-app
+    // visible-controls e2e gate.
+    const { theme } = createAppTheme()
+    const ratio = contrastRatio(
+      theme.palette.primary.main,
+      theme.palette.primary.contrastText,
+    )
+    expect(ratio).toBeGreaterThanOrEqual(4.5)
+    expect(theme.palette.primary.main).not.toBe(theme.palette.primary.contrastText)
+  })
+
   it('show the current tenant and open the full list, current row disabled', async () => {
     const harness = makeHarness({ [LOGIN_PASSWORD]: () => makePair() })
     await signIn(harness)
@@ -158,9 +225,16 @@ describe('TenantSwitcher', () => {
     expect(harness.calls[1]?.options?.body).toEqual({ tenant_id: 'tenant-2' })
     expect(onSwitched).toHaveBeenCalledTimes(1)
     expect(onSwitched).toHaveBeenCalledWith('tenant-2')
-    // Success is quiet: no alert, the list closed, the trigger back to
-    // its idle label (host data, unchanged by the switch) and enabled.
+    // The switch announces itself: no alert (nothing failed), but the
+    // role=status confirmation names the tenant the session now runs
+    // under -- a context change that silently alters which rows a host
+    // shows must say so out loud (the reference-app acceptance gate for
+    // "switching clinic says so"). The list closed, the trigger is back
+    // to its idle label (host data, unchanged by the switch) and
+    // enabled.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    const status = screen.getByRole('status')
+    expect(status).toHaveTextContent(SWITCHED_TO_ZH('Bright Smile Clinic'))
     await waitFor(() =>
       expect(screen.queryByRole('menu')).not.toBeInTheDocument(),
     )
@@ -191,8 +265,10 @@ describe('TenantSwitcher', () => {
     const trigger = screen.getByRole('button', { name: 'Sunshine Dental' })
     expect(trigger).toHaveAttribute('aria-disabled', 'true')
     expect(trigger).not.toHaveAttribute('disabled')
+    // The notice names the destination, so the in-flight announcement
+    // is not a promise without an object.
     const status = screen.getByRole('status')
-    expect(status).toHaveTextContent(SWITCHING_ZH)
+    expect(status).toHaveTextContent(SWITCHING_TO_ZH('Bright Smile Clinic'))
     expect(harness.calls).toHaveLength(2)
     await act(async () => {
       resolveSwitch(
@@ -208,7 +284,10 @@ describe('TenantSwitcher', () => {
       ).toBeEnabled(),
     )
     expect(onSwitched).toHaveBeenCalledTimes(1)
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    // The same live region now confirms the commit: the switching
+    // announcement must not be the last thing a screen reader user
+    // hears about a context change that already happened.
+    expect(status).toHaveTextContent(SWITCHED_TO_ZH('Bright Smile Clinic'))
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
@@ -301,12 +380,15 @@ describe('TenantSwitcher', () => {
       // The host's own work failed, but the switch committed and the
       // contract holds: the callback fired exactly once with the new
       // tenant, nothing rendered an error (a throwing host callback is
-      // not a switch failure), and the throw was contained instead of
-      // becoming an unhandled rejection of the fire-and-forget promise.
+      // not a switch failure -- the commit still announces itself), and
+      // the throw was contained instead of becoming an unhandled
+      // rejection of the fire-and-forget promise.
       expect(onSwitched).toHaveBeenCalledTimes(1)
       expect(onSwitched).toHaveBeenCalledWith('tenant-2')
       expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+      expect(screen.getByRole('status')).toHaveTextContent(
+        SWITCHED_TO_ZH('Bright Smile Clinic'),
+      )
       await waitFor(() =>
         expect(
           screen.getByRole('button', { name: 'Sunshine Dental' }),
@@ -471,7 +553,12 @@ describe('TenantSwitcher', () => {
     const user = userEvent.setup()
     const { other } = await openMenu(user)
     await user.click(other)
-    expect(screen.getByRole('status')).toHaveTextContent(enUS.tenantSwitcher.switching)
+    expect(screen.getByRole('status')).toHaveTextContent(
+      enUS.tenantSwitcher.switchingTo.replace(
+        '{{tenant}}',
+        'Bright Smile Clinic',
+      ),
+    )
     await act(async () => {
       resolveSwitch(
         makePair({
@@ -481,7 +568,9 @@ describe('TenantSwitcher', () => {
       )
     })
     await waitFor(() =>
-      expect(screen.queryByRole('status')).not.toBeInTheDocument(),
+      expect(screen.getByRole('status')).toHaveTextContent(
+        SWITCHED_TO_EN('Bright Smile Clinic'),
+      ),
     )
   })
 
@@ -682,7 +771,20 @@ describe('TenantSwitcher', () => {
       expect(onSwitchedA).toHaveBeenCalledTimes(1)
       expect(harness.store.get()).toBe('access-tenant-3')
       expect(screen.queryAllByRole('alert')).toHaveLength(0)
-      expect(screen.queryAllByRole('status')).toHaveLength(0)
+      // Both committed switches announced themselves: instance A on
+      // tenant-2, instance B (after its corrective re-issue) on
+      // tenant-3. The two confirmations carry different tenant names,
+      // so the pair is asserted as a set rather than by DOM order.
+      const statusTexts = screen
+        .queryAllByRole('status')
+        .map((status) => status.textContent ?? '')
+      expect(statusTexts).toHaveLength(2)
+      expect(statusTexts).toEqual(
+        expect.arrayContaining([
+          SWITCHED_TO_ZH('Bright Smile Clinic'),
+          SWITCHED_TO_ZH('Third Practice'),
+        ]),
+      )
       await waitFor(() => {
         const rows = screen.getAllByRole('button', {
           name: 'Sunshine Dental',

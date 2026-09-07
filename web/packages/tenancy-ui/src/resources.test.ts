@@ -53,8 +53,17 @@ describe('tenancy-ui resources', () => {
       i18n.t('tenantSwitcher.noCurrentTenant', { ns: TENANCY_UI_NAMESPACE }),
     ).toBe(zhCN.tenantSwitcher.noCurrentTenant)
     expect(
-      i18n.t('tenantSwitcher.switching', { ns: TENANCY_UI_NAMESPACE }),
-    ).toBe(zhCN.tenantSwitcher.switching)
+      i18n.t('tenantSwitcher.switchingTo', {
+        ns: TENANCY_UI_NAMESPACE,
+        tenant: 'Bright Smile Clinic',
+      }),
+    ).toBe(zhCN.tenantSwitcher.switchingTo.replace('{{tenant}}', 'Bright Smile Clinic'))
+    expect(
+      i18n.t('tenantSwitcher.switchedTo', {
+        ns: TENANCY_UI_NAMESPACE,
+        tenant: 'Bright Smile Clinic',
+      }),
+    ).toBe(zhCN.tenantSwitcher.switchedTo.replace('{{tenant}}', 'Bright Smile Clinic'))
   })
 
   it('render the en-US bundle verbatim after a language switch', async () => {
@@ -65,8 +74,17 @@ describe('tenancy-ui resources', () => {
       i18n.t('tenantSwitcher.noCurrentTenant', { ns: TENANCY_UI_NAMESPACE }),
     ).toBe(enUS.tenantSwitcher.noCurrentTenant)
     expect(
-      i18n.t('tenantSwitcher.switching', { ns: TENANCY_UI_NAMESPACE }),
-    ).toBe(enUS.tenantSwitcher.switching)
+      i18n.t('tenantSwitcher.switchingTo', {
+        ns: TENANCY_UI_NAMESPACE,
+        tenant: 'Bright Smile Clinic',
+      }),
+    ).toBe(enUS.tenantSwitcher.switchingTo.replace('{{tenant}}', 'Bright Smile Clinic'))
+    expect(
+      i18n.t('tenantSwitcher.switchedTo', {
+        ns: TENANCY_UI_NAMESPACE,
+        tenant: 'Bright Smile Clinic',
+      }),
+    ).toBe(enUS.tenantSwitcher.switchedTo.replace('{{tenant}}', 'Bright Smile Clinic'))
   })
 
   it('resolve nested errors-section keys to dedicated text, never the fallback', () => {

@@ -10,11 +10,18 @@ in as a prop) but entirely controlled: it never consumes the auth-core
 hooks, never reads session state beyond the single operation it drives,
 never attaches or persists a session, never navigates and never touches
 the network directly -- every request is the session's own generated
-operation over the host-bound client. A successful switch is quiet and
-fires the host's `onSwitched` callback exactly once, after the commit;
+operation over the host-bound client. A successful switch announces
+itself through a `role="status"` live region (a context change that
+silently alters which rows a host shows must say so out loud) and fires
+the host's `onSwitched` callback exactly once, after the commit;
 everything that happens next -- refetching the tenant's data, cleaning
 the previous tenant's query cache, re-attaching `/me`-derived
-permission lists -- is the host's. Every built-in string renders from
+permission lists -- is the host's. The trigger renders with
+`color="inherit"`, so its text follows the ambient surface colour: on
+the coloured AppBar hosts usually mount it in (whose background is the
+primary colour and whose own text is its contrastText), an inherited
+colour stays legible where a primary-coloured default would read
+primary-on-primary. Every built-in string renders from
 the bilingual `tenancy-ui` namespace registered through `@speed/i18n`.
 
 ## What ships
@@ -191,9 +198,16 @@ Behaviour, all of it controlled and test-pinned:
   is the generated operation over the host-bound client; the tenant
   travels in the switch request body, never in a header (tenant context
   travels in the access token, per the frontend standards).
-- **While the switch is in flight the trigger is inert and a
-  `role="status"` notice renders the `tenantSwitcher.switching` text**,
-  so the affordance never queues a second switch behind the first.
+- **While the switch is in flight the trigger is inert and one
+  `role="status"` notice names the destination -- the
+  `tenantSwitcher.switchingTo` text with the picked tenant's name --
+  then, once the switch commits, becomes the
+  `tenantSwitcher.switchedTo` confirmation naming the tenant the
+  session now runs under**, so the affordance never queues a second
+  switch behind the first and a completed context change is never
+  silent. The confirmation stays until the next switch begins (no
+  auto-dismiss timer), so its lifetime never races a screen reader's
+  processing of it.
   Inert means `aria-disabled` plus a refused open handler, never the
   native `disabled` attribute: the menu closes onto the trigger at the
   moment the flight starts, and the focus MUI restores to the trigger
@@ -201,9 +215,11 @@ Behaviour, all of it controlled and test-pinned:
   native-disabled control cannot take focus in a browser, and the
   round trip would strand focus on `document.body`, leaving a failed
   switch unreachable from where the keyboard user is.
-- **A successful switch is quiet**: the list closes, the trigger
-  re-enables and no alert renders. `onSwitched` fires exactly once per
-  committed switch, after the commit -- never for a failed one.
+- **A successful switch is announced, never noisy**: the list closes,
+  the trigger re-enables, no alert renders (nothing failed), and the
+  in-flight notice above becomes the `switchedTo` confirmation in the
+  same live region. `onSwitched` fires exactly once per committed
+  switch, after the commit -- never for a failed one.
 - **A switch that loses a race on the same session reconciles instead
   of vanishing.** Two `TenantSwitcher` instances (chrome plus a drawer
   copy) racing `switchTenant` to different tenants both succeed
