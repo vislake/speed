@@ -616,6 +616,266 @@ func TestHandler_SharingGetShare_NeverExposesTokenOrPasswordHash(t *testing.T) {
 	}
 }
 
+// --- P2-b: a view is consumed only when the content was actually delivered --
+
+// TestHandler_SharingAccessShare_MaxViewsOne_ResolverFailure_DoesNotSpendTheView
+// is the P2-b regression: an access whose serve fails at the resolver (the
+// resource behind its ResourceRef could not be opened) must NOT permanently
+// consume one of the share's MaxViews. The unfixed route recorded the view
+// inside Service.AccessPublic -- before Handler ever asked the resolver for
+// bytes -- so a MaxViews=1 share whose only serve attempt failed at the
+// resolver was left permanently spent even though nobody ever saw its
+// content. The fixed route records the view only once the content was
+// actually delivered: the failed attempt is logged honestly as denied and
+// the share's one view survives for a genuine retry.
+func TestHandler_SharingAccessShare_MaxViewsOne_ResolverFailure_DoesNotSpendTheView(t *testing.T) {
+	one := 1
+	svc, _ := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "ref-1", MaxViews: &one})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	resolver := &fakeResourceResolver{err: io.ErrUnexpectedEOF}
+	h := NewHandler(svc, resolver)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, accessRequest(created.Token, nil))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("failed-serve status = %d, body = %s, want 502", rec.Code, rec.Body.String())
+	}
+
+	share, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if share.ViewCount != 0 {
+		t.Fatalf("ViewCount = %d after the resolver-failed serve, want 0 -- a serve nobody saw must not spend the share's only view", share.ViewCount)
+	}
+	entries, err := svc.ListAccessLog(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("ListAccessLog: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Outcome != AccessOutcomeDenied {
+		t.Fatalf("access log after the failed serve = %+v, want exactly one denied entry -- a refused serve must be logged as refused", entries)
+	}
+
+	// The resolver is healthy again. The share's one view is still
+	// available, so the retry succeeds and consumes it exactly once.
+	resolver.err = nil
+	resolver.mime = "text/plain"
+	resolver.body = "hello"
+
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, accessRequest(created.Token, nil))
+	if rec2.Code != http.StatusOK || rec2.Body.String() != "hello" {
+		t.Fatalf("retry status = %d, body = %q, want 200 %q", rec2.Code, rec2.Body.String(), "hello")
+	}
+	share, err = svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get (after retry): %v", err)
+	}
+	if share.ViewCount != 1 {
+		t.Errorf("ViewCount = %d after the successful retry, want 1", share.ViewCount)
+	}
+}
+
+// TestHandler_SharingAccessShare_MaxViewsOne_NoResolverWired_DoesNotSpendTheView
+// is the same P2-b regression for the no-resolver arm: a host that mounts
+// the access route without wiring a ResourceResolver answers every granted
+// access with ErrResourceUnavailable, and under the unfixed code each of
+// those 502s permanently consumed one of the share's MaxViews -- a
+// MaxViews=1 share behind an unwired resolver could never be served at all.
+func TestHandler_SharingAccessShare_MaxViewsOne_NoResolverWired_DoesNotSpendTheView(t *testing.T) {
+	one := 1
+	svc, _ := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "ref-1", MaxViews: &one})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	h := NewHandler(svc, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, accessRequest(created.Token, nil))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("no-resolver status = %d, body = %s, want 502", rec.Code, rec.Body.String())
+	}
+
+	share, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if share.ViewCount != 0 {
+		t.Fatalf("ViewCount = %d after the no-resolver 502, want 0 -- a serve that never happened must not spend the share's only view", share.ViewCount)
+	}
+	entries, err := svc.ListAccessLog(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("ListAccessLog: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Outcome != AccessOutcomeDenied {
+		t.Fatalf("access log after the no-resolver 502 = %+v, want exactly one denied entry", entries)
+	}
+}
+
+// interruptedBody is an io.ReadCloser that delivers a fixed prefix of bytes
+// and then fails with err -- the reader-side shape of a storage or transport
+// failure interrupting a serve mid-stream, after the 200 and partial content
+// have already been committed to the response.
+type interruptedBody struct {
+	prefix string
+	err    error
+	sent   bool
+}
+
+func (b *interruptedBody) Read(p []byte) (int, error) {
+	if !b.sent {
+		b.sent = true
+		return copy(p, b.prefix), nil
+	}
+	return 0, b.err
+}
+
+func (b *interruptedBody) Close() error { return nil }
+
+// interruptingResolver hands every OpenResource call a body that dies
+// mid-read -- the shape of a resource whose bytes start flowing and then
+// stop.
+type interruptingResolver struct{ prefix string }
+
+func (interruptingResolver) OpenResource(context.Context, string) (ResourceContent, error) {
+	return ResourceContent{MIME: "text/plain", Body: &interruptedBody{prefix: "partial", err: io.ErrUnexpectedEOF}}, nil
+}
+
+// TestHandler_SharingAccessShare_InterruptedServe_LoggedDenied_DoesNotSpendTheView
+// is the P2-b regression's interrupted-delivery arm: an access whose content
+// stream dies partway -- after the 200 and partial bytes were written -- must
+// be logged honestly as denied (the unfixed route logged it granted, because
+// the view was recorded before the serve ever started) and must not consume
+// one of the share's MaxViews, so a MaxViews=1 share survives a flaky first
+// attempt for a genuine retry.
+func TestHandler_SharingAccessShare_InterruptedServe_LoggedDenied_DoesNotSpendTheView(t *testing.T) {
+	one := 1
+	svc, _ := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "ref-1", MaxViews: &one})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	h := NewHandler(svc, interruptingResolver{prefix: "partial"})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, accessRequest(created.Token, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("interrupted-serve status = %d, want 200 -- the response was already committed when the stream died", rec.Code)
+	}
+	if got := rec.Body.String(); got != "partial" {
+		t.Fatalf("interrupted-serve body = %q, want %q -- the content that made it out before the interruption", got, "partial")
+	}
+
+	share, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if share.ViewCount != 0 {
+		t.Fatalf("ViewCount = %d after the interrupted serve, want 0 -- an interrupted delivery must not spend the share's only view", share.ViewCount)
+	}
+	entries, err := svc.ListAccessLog(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("ListAccessLog: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Outcome != AccessOutcomeDenied {
+		t.Fatalf("access log after the interrupted serve = %+v, want exactly one denied entry -- an interrupted delivery must be logged as refused", entries)
+	}
+
+	// With the resource healthy again, the share still has its one view: a
+	// retry delivers the full content and consumes it exactly once.
+	h.resolver = fakeResourceResolver{mime: "text/plain", body: "full content"}
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, accessRequest(created.Token, nil))
+	if rec2.Code != http.StatusOK || rec2.Body.String() != "full content" {
+		t.Fatalf("retry status = %d, body = %q, want 200 %q", rec2.Code, rec2.Body.String(), "full content")
+	}
+	share, err = svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get (after retry): %v", err)
+	}
+	if share.ViewCount != 1 {
+		t.Errorf("ViewCount = %d after the successful retry, want 1", share.ViewCount)
+	}
+	entries, err = svc.ListAccessLog(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("ListAccessLog (after retry): %v", err)
+	}
+	outcomes := map[string]int{}
+	for _, e := range entries {
+		outcomes[e.Outcome]++
+	}
+	if outcomes[AccessOutcomeDenied] != 1 || outcomes[AccessOutcomeGranted] != 1 {
+		t.Errorf("access log outcomes after the interrupted serve and its successful retry = %v, want one denied and one granted", outcomes)
+	}
+}
+
+// TestHandler_SharingAccessShare_SuccessfulServe_ConsumesExactlyOnce pins the
+// grant side of the P2-b fix: a genuinely successful serve records exactly
+// one view and exactly one granted log entry -- never two -- and the
+// exhausted share then refuses the very next attempt with the identical
+// outward answer.
+func TestHandler_SharingAccessShare_SuccessfulServe_ConsumesExactlyOnce(t *testing.T) {
+	one := 1
+	svc, _ := newTestService(t, nil)
+	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "ref-1", MaxViews: &one})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	h := NewHandler(svc, fakeResourceResolver{mime: "text/plain", body: "hello"})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, accessRequest(created.Token, nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "hello" {
+		t.Fatalf("serve status = %d, body = %q, want 200 %q", rec.Code, rec.Body.String(), "hello")
+	}
+
+	share, err := svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if share.ViewCount != 1 {
+		t.Fatalf("ViewCount = %d after one successful serve of a MaxViews=1 share, want exactly 1", share.ViewCount)
+	}
+	entries, err := svc.ListAccessLog(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("ListAccessLog: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Outcome != AccessOutcomeGranted {
+		t.Fatalf("access log after the successful serve = %+v, want exactly one granted entry", entries)
+	}
+
+	// The exhausted share refuses the very next attempt with the identical
+	// outward answer, and consumes nothing further.
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, accessRequest(created.Token, nil))
+	if rec2.Code != http.StatusNotFound {
+		t.Fatalf("second-serve status = %d, body = %s, want 404", rec2.Code, rec2.Body.String())
+	}
+	share, err = svc.Get(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("Get (after the refused second serve): %v", err)
+	}
+	if share.ViewCount != 1 {
+		t.Errorf("ViewCount = %d after the refused second serve, want 1 -- a refusal must not consume or double-count", share.ViewCount)
+	}
+	entries, err = svc.ListAccessLog(testCtx(), created.Share.ID)
+	if err != nil {
+		t.Fatalf("ListAccessLog (after the refused second serve): %v", err)
+	}
+	outcomes := map[string]int{}
+	for _, e := range entries {
+		outcomes[e.Outcome]++
+	}
+	if outcomes[AccessOutcomeDenied] != 1 || outcomes[AccessOutcomeGranted] != 1 {
+		t.Errorf("access log outcomes = %v, want one granted (the successful serve) and one denied (the refused second serve)", outcomes)
+	}
+}
+
 // compile-time check that Handler still satisfies api.ServerInterface --
 // duplicated from handler.go's own assertion so a reader of this test file
 // sees the contract without following an import.

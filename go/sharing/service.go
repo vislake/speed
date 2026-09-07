@@ -493,89 +493,28 @@ func (s *Service) emitSensitiveAudit(ctx context.Context, share *Share) error {
 // the row Access hands back always reflects the view that was actually
 // counted and logged.
 func (s *Service) Access(ctx context.Context, token string, p AccessParams) (*Share, error) {
-	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	share, err := s.authorizeAttempt(ctx, token, p)
 	if err != nil {
+		// Every refusal (or store failure) is already settled by the time it
+		// is returned -- one denied log row and one denied event on every
+		// recognized-token refusal, exactly as this method's own doc comment
+		// promises above.
 		return nil, err
 	}
-	now := s.now()
-
-	share, err := s.shares.byTokenHash(ctx, hashShareToken(token))
+	// Authorized: record the granted view immediately, through the guarded
+	// single-winner record (settleGranted's own doc comment). For a caller
+	// of this Service-level surface, the authorization IS the grant -- there
+	// is no further step between the decision and the content changing hands
+	// that this module can see fail. The module's own HTTP access route is
+	// the one caller for whom that is NOT true: it must deliver the share's
+	// content through the host's ResourceResolver first, so it uses the
+	// authorize-without-recording path instead (authorizePublicAccess plus
+	// settleAccessGranted/settleAccessDenied) -- see authorizeAttempt's own
+	// doc comment for why a view consumed at the authorization would be a
+	// MaxViews budget spent by a delivery that never happened.
+	result, granted, err := s.settleGranted(ctx, share, p)
 	if err != nil {
-		// A store failure is not a refusal reason: log it and surface
-		// the internal error, never the outward 404 a genuine refusal
-		// answers with (see the doc comment above).
-		if !hasCode(err, ErrNotAccessible.Code) {
-			observability.FromContext(ctx).Error("sharing access token lookup failed", "error", err)
-			return nil, err
-		}
-		// No row to log against -- nothing in this tenant matches the
-		// token at all, so there is no ShareID to attribute a log entry
-		// to. Still pay the argon2id cost a real password check would
-		// pay, so an unrecognized token is not distinguishable by timing
-		// from a known, password-protected share.
-		burnSharePasswordCheck(p.Password)
-		return nil, ErrNotAccessible
-	}
-
-	passwordOK := true
-	if share.PasswordHash != nil {
-		if p.Password == nil {
-			// Pay the same argon2id cost a supplied guess would pay,
-			// rather than returning in the time a missing-field check
-			// takes.
-			burnSharePasswordCheck(nil)
-			passwordOK = false
-		} else if ok, verr := verifySharePassword(*share.PasswordHash, *p.Password); verr != nil || !ok {
-			passwordOK = false
-		}
-	} else {
-		// No password configured at all -- still burn the check so a
-		// prober cannot tell "no password required" apart from "wrong
-		// password" by response latency.
-		burnSharePasswordCheck(p.Password)
-	}
-
-	var (
-		granted   bool
-		result    = share
-		recordErr error
-	)
-	if passwordOK {
-		// The granted log row travels with the view recording, committed in
-		// the SAME guarded transaction when the guard wins (recordView's
-		// own doc comment) -- so a granted access whose log row cannot be
-		// written rolls the count back with it instead of leaving the share
-		// exhausted by an access that failed. The entry is only ever
-		// inserted by the attempt that actually records the view; every
-		// other outcome below writes its own denied row instead.
-		pending := s.accessLogEntry(tenant, share.ID, AccessOutcomeGranted, p)
-		result, granted, recordErr = s.recordView(ctx, share, now, pending)
-	}
-
-	// Exactly one log row and one event per call, on every path below --
-	// a recordView store failure included: its attempt is recorded as
-	// denied (the only outcome vocabulary the log has for an access whose
-	// decision could not be determined) and announced on the bus, and the
-	// failure itself is what Access returns afterwards. A granted outcome
-	// needs no further write here: its row already committed inside
-	// recordView's transaction.
-	var logErr error
-	if !granted {
-		logErr = s.writeAccessLog(ctx, s.accessLogEntry(tenant, share.ID, AccessOutcomeDenied, p))
-	}
-	if pubErr := s.publish(ctx, pkgcore.Event{
-		Type:     EventShareAccessed,
-		TenantID: tenant,
-		Payload:  ShareAccessedPayload{ShareID: share.ID, Granted: granted, IP: p.IP, Referrer: p.Referrer},
-	}); pubErr != nil {
-		observability.FromContext(ctx).Warn("share-accessed event publish failed", "share_id", share.ID, "error", pubErr)
-	}
-
-	if recordErr != nil {
-		return nil, recordErr
-	}
-	if logErr != nil {
-		return nil, logErr
+		return nil, err
 	}
 	if !granted {
 		return nil, ErrNotAccessible
@@ -632,10 +571,26 @@ func (s *Service) Access(ctx context.Context, token string, p AccessParams) (*Sh
 // where every recognized-token refusal still pays its argon2id check
 // exactly as before.
 func (s *Service) AccessPublic(ctx context.Context, token string, p AccessParams) (*Share, error) {
-	if err := s.checkAccessRateLimit(ctx, p.IP, hashShareToken(token)); err != nil {
+	tenant, err := s.accessPublicPrelude(ctx, token, p)
+	if err != nil {
 		return nil, err
 	}
+	return s.Access(pkgcore.WithTenant(ctx, tenant), token, p)
+}
 
+// accessPublicPrelude runs the two checks that come before a token is
+// recognized at all on the genuinely unauthenticated surface: the caller's
+// access rate limit (ratelimit.go's checkAccessRateLimit, keyed on p.IP and
+// the hashed token, ErrRateLimited on denial) and the token-to-tenant
+// resolution (ShareRepository.tenantForTokenHash, whose unrecognized-hash
+// answer is ErrNotAccessible and whose store failures log an Error and
+// surface as internal errors, never as a refusal). AccessPublic and
+// authorizePublicAccess both start here, so both anonymous entry points
+// refuse exactly alike.
+func (s *Service) accessPublicPrelude(ctx context.Context, token string, p AccessParams) (pkgcore.TenantID, error) {
+	if err := s.checkAccessRateLimit(ctx, p.IP, hashShareToken(token)); err != nil {
+		return "", err
+	}
 	tenant, err := s.shares.tenantForTokenHash(ctx, hashShareToken(token))
 	if err != nil {
 		// A store failure is not "no such token": log it and surface
@@ -644,11 +599,240 @@ func (s *Service) AccessPublic(ctx context.Context, token string, p AccessParams
 		// byTokenHash error path applies.
 		if !hasCode(err, ErrNotAccessible.Code) {
 			observability.FromContext(ctx).Error("sharing tenant-for-token lookup failed", "error", err)
+			return "", err
+		}
+		return "", ErrNotAccessible
+	}
+	return tenant, nil
+}
+
+// authorizePublicAccess is the access route's authorize-without-recording
+// phase (Handler.SharingAccessShare): the genuinely unauthenticated entry
+// point that runs accessPublicPrelude and then every one of Access's refusal
+// checks (authorizeAttempt), settling any refusal as one denied log row and
+// one denied event exactly as AccessPublic does, but recording NO view and
+// NO granted row on success. The route records the view only once the
+// share's content was actually delivered (settleAccessGranted) and settles
+// every serve failure in between as denied (settleAccessDenied) -- see
+// authorizeAttempt's own doc comment for why recording at the authorization
+// instead would spend a MaxViews budget on a delivery that never happened.
+func (s *Service) authorizePublicAccess(ctx context.Context, token string, p AccessParams) (*Share, error) {
+	tenant, err := s.accessPublicPrelude(ctx, token, p)
+	if err != nil {
+		return nil, err
+	}
+	return s.authorizeAttempt(pkgcore.WithTenant(ctx, tenant), token, p)
+}
+
+// authorizeAttempt is the no-record half of an access decision: every one of
+// Access's refusal checks runs here, in the identical order and with the
+// identical outward answers -- the tenant-scoped token lookup (byTokenHash),
+// the constant-time password check with its argon2id burns on every path a
+// recognized token can take, and the share's own current liveness
+// (Share.isLive: not revoked, not expired, not exhausted). A refusal settles
+// the attempt before it is returned, exactly as Access's refusal paths
+// always settled one: one denied log row and one EventShareAccessed with
+// Granted false, with a log-row write failure surfacing as the internal
+// error rule 4 demands rather than a refusal that leaves no trail. An
+// unrecognized token is the one refusal with no settle at all -- there is no
+// Share row to attribute an entry to (Access's own doc comment).
+//
+// On success NOTHING is recorded: no view, no granted row. Recording is the
+// caller's own next step, and the two callers differ deliberately in WHEN
+// that step is honest:
+//
+//   - Access calls settleGranted immediately. Its contract is
+//     "authorization IS the grant": there is no step this module can see
+//     between the decision and the content changing hands, so the view is
+//     recorded at the decision.
+//
+//   - The HTTP access route does NOT record at the decision. Between the
+//     authorization and the content actually reaching the viewer stand the
+//     resolver open and the whole response stream -- both of which can fail
+//     (or, for an unwired resolver, be absent entirely) -- and a view
+//     consumed by an access whose content was never delivered is a MaxViews
+//     budget permanently spent by a failure. The route records only after
+//     the content was fully delivered (settleAccessGranted) and settles
+//     every serve failure in between as denied (settleAccessDenied), so the
+//     budget and the log both tell the truth: a MaxViews=1 share survives a
+//     serve that fails at the resolver or dies mid-stream, for a genuine
+//     retry.
+func (s *Service) authorizeAttempt(ctx context.Context, token string, p AccessParams) (*Share, error) {
+	tenant, err := pkgcore.MustTenantFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now()
+
+	share, err := s.shares.byTokenHash(ctx, hashShareToken(token))
+	if err != nil {
+		// A store failure is not a refusal reason: log it and surface
+		// the internal error, never the outward 404 a genuine refusal
+		// answers with (see Access's own doc comment).
+		if !hasCode(err, ErrNotAccessible.Code) {
+			observability.FromContext(ctx).Error("sharing access token lookup failed", "error", err)
+			return nil, err
+		}
+		// No row to log against -- nothing in this tenant matches the
+		// token at all, so there is no ShareID to attribute a log entry
+		// to. Still pay the argon2id cost a real password check would
+		// pay, so an unrecognized token is not distinguishable by timing
+		// from a known, password-protected share.
+		burnSharePasswordCheck(p.Password)
+		return nil, ErrNotAccessible
+	}
+
+	passwordOK := true
+	if share.PasswordHash != nil {
+		if p.Password == nil {
+			// Pay the same argon2id cost a supplied guess would pay,
+			// rather than returning in the time a missing-field check
+			// takes.
+			burnSharePasswordCheck(nil)
+			passwordOK = false
+		} else if ok, verr := verifySharePassword(*share.PasswordHash, *p.Password); verr != nil || !ok {
+			passwordOK = false
+		}
+	} else {
+		// No password configured at all -- still burn the check so a
+		// prober cannot tell "no password required" apart from "wrong
+		// password" by response latency.
+		burnSharePasswordCheck(p.Password)
+	}
+	if !passwordOK {
+		if err := s.settleDenied(ctx, tenant, share, p); err != nil {
 			return nil, err
 		}
 		return nil, ErrNotAccessible
 	}
-	return s.Access(pkgcore.WithTenant(ctx, tenant), token, p)
+
+	// A share that is no longer live at decision time is refused here -- the
+	// read-only twin of the write-time liveness guard recordView's own WHERE
+	// clauses enforce. For Access this is a harmless pre-check (the guarded
+	// record would refuse the same share a moment later); for the HTTP route
+	// it is the enforcement point itself: without it, a request for an
+	// exhausted, expired or revoked share would authorize, stream the whole
+	// resource, and only THEN discover there was no view left to record -- a
+	// MaxViews ceiling that never refused anyone.
+	if !share.isLive(now) {
+		if err := s.settleDenied(ctx, tenant, share, p); err != nil {
+			return nil, err
+		}
+		return nil, ErrNotAccessible
+	}
+	return share, nil
+}
+
+// settleGranted records one authorized access's view: it drives the guarded
+// view recording (recordView -- the compare-and-swap retry loop for a
+// limited share, the atomic server-side increment for an unlimited one) with
+// a granted log entry that commits in the SAME guarded transaction, then
+// settles the outcome:
+//
+//   - The guard won: the view is counted, the granted row committed, and one
+//     EventShareAccessed with Granted true is published. The returned *Share
+//     reflects the counted view and granted is true.
+//
+//   - The guard refused -- the share was revoked, expired, or exhausted by a
+//     concurrent viewer between the authorization (authorizeAttempt) and
+//     this settle, which on the HTTP route means DURING the delivery. The
+//     attempt is settled as denied (one denied row, one denied event) and no
+//     view is consumed: a delivery can only be recorded as granted while the
+//     share is still live enough to hold the view it would consume. On the
+//     route the response has already been committed by then; the log row is
+//     the record. granted is false and err is nil.
+//
+//   - The store failed (recordView's own error, or the denied settle's log
+//     row failing to write on the refused branch). The attempt still leaves
+//     its trail -- settleDenied's row and event are attempted before the
+//     error is returned -- and the store error is what the caller surfaces,
+//     exactly as Access's own store-failure path always did.
+//
+// ctx need not carry the share's tenant: it is derived from the share's own
+// row, so the HTTP route can settle with its bare request context.
+func (s *Service) settleGranted(ctx context.Context, share *Share, p AccessParams) (*Share, bool, error) {
+	tenant := pkgcore.TenantID(share.GetTenantID())
+	grantedCtx := pkgcore.WithTenant(ctx, tenant)
+	now := s.now()
+	pending := s.accessLogEntry(tenant, share.ID, AccessOutcomeGranted, p)
+
+	result, granted, recordErr := s.recordView(grantedCtx, share, now, pending)
+	if recordErr != nil {
+		// The attempt still leaves its trail before the store error
+		// surfaces: one denied row and one denied event. A denied-row write
+		// failure here is logged inside settleDenied's own writeAccessLog;
+		// the recordView store error is the one the caller sees, exactly as
+		// Access's store-failure path always returned it first.
+		_ = s.settleDenied(grantedCtx, tenant, share, p)
+		return nil, false, recordErr
+	}
+	if !granted {
+		if err := s.settleDenied(grantedCtx, tenant, share, p); err != nil {
+			return nil, false, err
+		}
+		return nil, false, nil
+	}
+	s.publishAccessEvent(grantedCtx, tenant, share.ID, true, p)
+	return result, true, nil
+}
+
+// settleDenied records one access attempt's denied outcome: exactly one
+// denied log row -- a write failure returns the ErrInternal rule 4 demands
+// rather than a refusal that leaves no trail -- and exactly one
+// EventShareAccessed with Granted false, published best-effort AFTER the row
+// attempt, so a log-write failure never silences the event either (the event
+// bus is not the durable trail). ctx must carry the share's tenant (Access
+// and authorizeAttempt already hold it; settleAccessDenied derives it from
+// the share for the HTTP route); tenant is the same value, passed
+// separately because the entry, the event and the caller's own accounting
+// all need it and a MustTenantFromContext here would re-read what the caller
+// already holds.
+func (s *Service) settleDenied(ctx context.Context, tenant pkgcore.TenantID, share *Share, p AccessParams) error {
+	writeErr := s.writeAccessLog(ctx, s.accessLogEntry(tenant, share.ID, AccessOutcomeDenied, p))
+	s.publishAccessEvent(ctx, tenant, share.ID, false, p)
+	return writeErr
+}
+
+// publishAccessEvent announces one access attempt's outcome on the bus --
+// best-effort exactly as Access's own inline publish always was: a failure
+// is a logged Warn, never a returned error, because the durable fact the
+// event announces (the attempt's log row) was already written or attempted
+// by the caller.
+func (s *Service) publishAccessEvent(ctx context.Context, tenant pkgcore.TenantID, shareID string, granted bool, p AccessParams) {
+	if pubErr := s.publish(ctx, pkgcore.Event{
+		Type:     EventShareAccessed,
+		TenantID: tenant,
+		Payload:  ShareAccessedPayload{ShareID: shareID, Granted: granted, IP: p.IP, Referrer: p.Referrer},
+	}); pubErr != nil {
+		observability.FromContext(ctx).Warn("share-accessed event publish failed", "share_id", shareID, "error", pubErr)
+	}
+}
+
+// settleAccessDenied settles an access the route authorized but never
+// delivered -- the no-resolver answer, the resolver's own failure to open
+// the resource, or the content stream dying partway through the response --
+// as one denied log row and one denied event, consuming nothing (the share
+// keeps every view it had). The share's tenant comes from its own row, so
+// the route's bare request context suffices. A log-write failure returns the
+// ErrInternal rule 4 demands; the route then answers that instead of the
+// underlying serve failure, exactly as Access refuses rather than answering
+// when its own denied row cannot be written.
+func (s *Service) settleAccessDenied(ctx context.Context, share *Share, p AccessParams) error {
+	tenant := pkgcore.TenantID(share.GetTenantID())
+	return s.settleDenied(pkgcore.WithTenant(ctx, tenant), tenant, share, p)
+}
+
+// settleAccessGranted records the view for an access whose content was fully
+// delivered: the guarded view recording and the granted log row commit in
+// one transaction (settleGranted's own doc comment), exactly once per
+// genuinely successful serve. A share that ceased to be live while the
+// delivery was in flight is settled inside settleGranted as denied, with no
+// view consumed. The response has already been committed by the time this
+// runs, so a returned error (a store failure) can only be logged, never
+// answered.
+func (s *Service) settleAccessGranted(ctx context.Context, share *Share, p AccessParams) error {
+	_, _, err := s.settleGranted(ctx, share, p)
+	return err
 }
 
 // recordView drives the share's view-recording guard to a definitive

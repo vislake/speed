@@ -1,6 +1,7 @@
 package sharing
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -64,10 +65,13 @@ const HeaderSharePassword = "X-Sharing-Password"
 // resolution of its own either.
 //
 // Handler performs no data access of its own beyond the calls each
-// operation's own contract requires -- Service.AccessPublic (svc) for the
-// share-access decision plus ResourceResolver.OpenResource (resolver,
-// optionally nil) for the resource's bytes once access is granted, and,
-// for the five PathShares operations, a direct one-to-one call into
+// operation's own contract requires -- Service's access-route trio for the
+// share-access decision and its settlement (authorizePublicAccess,
+// settleAccessDenied and settleAccessGranted, the authorize-deliver-consume
+// flow SharingAccessShare's own doc comment describes) plus
+// ResourceResolver.OpenResource (resolver, optionally nil) for the
+// resource's bytes once access is authorized, and, for the five PathShares
+// operations, a direct one-to-one call into
 // Service.Create/Revoke/Get/ListAccessLog/List -- never a new business
 // rule of its own.
 type Handler struct {
@@ -77,12 +81,14 @@ type Handler struct {
 }
 
 // NewHandler returns a Handler serving every operation this module's
-// api/openapi.yaml declares through svc, resolving a granted share's
+// api/openapi.yaml declares through svc, resolving an authorized share's
 // ResourceRef through resolver. resolver may be nil: a share whose access
-// is granted then answers ErrResourceUnavailable rather than serving bytes
-// it has no way to reach -- a host that mounts the access route without
-// wiring a resolver gets a route that always fails past the access-decision
-// stage, never one that panics. The five PathShares operations never touch
+// is authorized then answers ErrResourceUnavailable rather than serving
+// bytes it has no way to reach -- a host that mounts the access route
+// without wiring a resolver gets a route that always fails past the
+// access-decision stage, never one that panics. Such a refused serve is
+// settled as denied and consumes none of the share's views (SharingAccessShare's
+// own doc comment). The five PathShares operations never touch
 // resolver at all.
 //
 // Unlike every other module's handler in this codebase, this one cannot
@@ -130,11 +136,36 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // SharingAccessShare implements api.ServerInterface: GET
 // /api/v1/sharing/access. See api/openapi.yaml's own operation description
 // for the full outward contract; this method is deliberately thin --
-// extract the request's two inputs, delegate the access decision to
-// Service.AccessPublic in full, then delegate the resource read to
-// resolver -- because every rule that actually matters (outward-identical
-// refusals, the constant-time password check, revocation with no caching)
+// extract the request's inputs, delegate the access decision to
+// Service.authorizePublicAccess, then delegate the resource read to
+// resolver and the view recording to Service's settle methods -- because
+// every rule that actually matters (outward-identical refusals, the
+// constant-time password check, revocation with no caching, and the rule
+// that a view is consumed only when the content was actually delivered)
 // already lives in Service and must not be duplicated here.
+//
+// # The serve flow: authorize, deliver, then consume
+//
+// A limited share's view is the budget this route exists to spend, and it
+// is spent ONLY once the share's content has actually reached the viewer:
+//
+//  1. authorizePublicAccess runs every refusal check (rate limit, token
+//     lookup, the constant-time password check, current liveness) and
+//     records NOTHING on success -- no view, no granted log row. Refusals
+//     are settled as one denied row and one denied event, exactly as
+//     Service.Access settles them.
+//  2. The content is resolved (resolver) and streamed to the response. An
+//     unwired resolver, a resolver failure, or a stream that dies partway
+//     through settles the attempt as DENIED (settleAccessDenied): the
+//     visitor never got the content, so the share keeps its views and the
+//     log says refused -- the pre-fix flow recorded the view inside
+//     Service.AccessPublic at the start of this method instead, so any of
+//     those failure shapes permanently spent a MaxViews=1 share whose
+//     content nobody ever saw (Service.authorizeAttempt's doc comment has
+//     the full reasoning).
+//  3. Only after the body has been fully copied does settleAccessGranted
+//     consume the view and commit the granted log row, in one guarded
+//     transaction.
 //
 // Cache-Control: no-store is set FIRST, before any other work, so every
 // response this method can possibly produce -- including one that panics
@@ -145,25 +176,45 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) SharingAccessShare(w http.ResponseWriter, r *http.Request, params api.SharingAccessShareParams) {
 	w.Header().Set("Cache-Control", "no-store")
 	ctx := r.Context()
-
-	share, err := h.svc.AccessPublic(ctx, params.Token, AccessParams{
+	p := AccessParams{
 		Password:  params.XSharingPassword,
 		IP:        clientIP(r),
 		UserAgent: r.UserAgent(),
 		Referrer:  r.Referer(),
-	})
+	}
+
+	// Step 1: authorize WITHOUT consuming -- see the doc comment above for
+	// why the view must not be recorded before the content exists.
+	share, err := h.svc.authorizePublicAccess(ctx, params.Token, p)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
+	// The settles below can run after the response has been committed -- and
+	// an interrupted stream is exactly the case where the client is already
+	// gone, which is when net/http cancels the request context. A canceled
+	// context would cancel the very log write rule 4 exists to guarantee, so
+	// the settles run on a context that survives the request.
+	settleCtx := context.WithoutCancel(ctx)
+
 	if h.resolver == nil {
+		// Authorized, but nothing can serve this share's content: settle the
+		// attempt as denied -- the share keeps every view it had -- and
+		// answer the distinct 502. A settle failure means the refusal left
+		// no trail: answer the internal error rule 4 demands instead, the
+		// same way Service.Access refuses rather than answering when its own
+		// denied row cannot be written.
+		if settleErr := h.svc.settleAccessDenied(settleCtx, share, p); settleErr != nil {
+			writeError(w, settleErr)
+			return
+		}
 		writeError(w, ErrResourceUnavailable)
 		return
 	}
-	// The tenant Service.AccessPublic resolved (from the token alone, per
+	// The tenant authorizePublicAccess resolved (from the token alone, per
 	// its own doc comment) lives only inside that call -- it never mutated
-	// r.Context(). Rebuild it here from the granted share's own row
+	// r.Context(). Rebuild it here from the share's own row
 	// (share.GetTenantID(), the tenant_id column the tenant-scope plugin
 	// populated when the row was created) so ResourceResolver
 	// implementations that themselves require ctx to carry a tenant (like
@@ -172,6 +223,10 @@ func (h *Handler) SharingAccessShare(w http.ResponseWriter, r *http.Request, par
 	resourceCtx := pkgcore.WithTenant(ctx, share.GetTenantID())
 	content, err := h.resolver.OpenResource(resourceCtx, share.ResourceRef)
 	if err != nil {
+		if settleErr := h.svc.settleAccessDenied(settleCtx, share, p); settleErr != nil {
+			writeError(w, settleErr)
+			return
+		}
 		writeError(w, ErrResourceUnavailable.WithCause(err))
 		return
 	}
@@ -192,8 +247,29 @@ func (h *Handler) SharingAccessShare(w http.ResponseWriter, r *http.Request, par
 	}
 	w.WriteHeader(http.StatusOK)
 	if _, copyErr := io.Copy(w, content.Body); copyErr != nil {
+		// The response is already committed -- 200 and however many bytes
+		// made it out. Settle the interrupted delivery honestly: one denied
+		// row and one denied event, no view consumed, so a flaky first
+		// attempt never spends a limited share's budget. A settle failure
+		// here can only be logged: there is no response left to answer
+		// with.
 		observability.FromContext(ctx).Warn("share resource stream failed",
 			"share_id", share.ID, "error", copyErr)
+		if settleErr := h.svc.settleAccessDenied(settleCtx, share, p); settleErr != nil {
+			observability.FromContext(ctx).Error("share stream interruption could not be logged",
+				"share_id", share.ID, "error", settleErr)
+		}
+		return
+	}
+
+	// Step 3: the full content reached the viewer -- only NOW is the view
+	// consumed and the access logged granted (settleAccessGranted commits
+	// the guarded view record and the granted log row in one transaction).
+	// The response is already committed, so a settle failure can only be
+	// logged.
+	if settleErr := h.svc.settleAccessGranted(settleCtx, share, p); settleErr != nil {
+		observability.FromContext(ctx).Error("share access delivery could not be settled",
+			"share_id", share.ID, "error", settleErr)
 	}
 }
 

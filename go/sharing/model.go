@@ -24,8 +24,12 @@ const (
 	// view.
 	AccessOutcomeGranted = "granted"
 	// AccessOutcomeDenied records every other outcome -- an unknown token,
-	// a revoked, expired or view-exhausted share, or a missing/wrong
-	// password -- deliberately without distinguishing which. Access's own
+	// a revoked, expired or view-exhausted share, a missing/wrong password,
+	// and, on the module's HTTP access route (handler.go), every serve that
+	// was authorized but never delivered: an unwired or failing resource
+	// resolver, a content stream that died partway through, or a delivery
+	// whose share ceased to be live before its view could be recorded --
+	// deliberately without distinguishing which. Access's own
 	// doc comment explains why the reasons collapse into one outward
 	// answer; the log keeps the same non-distinction rather than leaking
 	// the distinction into an owner-facing report that could itself be

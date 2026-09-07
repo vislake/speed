@@ -92,16 +92,18 @@ var (
 	ErrInternal = apperr.Internal("sharing.internal_error")
 
 	// ErrResourceUnavailable reports that Handler's public access route
-	// (handler.go) reached a share whose Access already granted -- a real
-	// view was already recorded -- but the resource behind its ResourceRef
-	// could not actually be read: no ResourceResolver was wired
+	// (handler.go) authorized a share but the resource behind its
+	// ResourceRef could not actually be read: no ResourceResolver was wired
 	// (Handler.resolver nil) or the wired one returned an error opening it.
+	// The attempt is settled as denied -- one denied access-log row, no view
+	// consumed (SharingAccessShare's own doc comment) -- so a MaxViews
+	// budget is never spent by a serve whose content nobody saw.
 	// This is deliberately a distinct, undisguised failure from
 	// ErrNotAccessible: rule 5's outward-identical-answer property covers
-	// the question "is this token/password valid", which Access has
-	// already answered yes to by the time this error can occur, so there is
-	// nothing left to hide by collapsing this into the same 404 -- doing so
-	// would instead hide a real operational fault (a broken resolver, a
+	// the question "is this token/password valid", which the authorization
+	// has already answered yes to by the time this error can occur, so there
+	// is nothing left to hide by collapsing this into the same 404 -- doing
+	// so would instead hide a real operational fault (a broken resolver, a
 	// resource genuinely gone from its own store) behind a code that means
 	// "check your token", which is actively misleading to whoever operates
 	// this deployment. Status 502: the share surface itself worked: the
