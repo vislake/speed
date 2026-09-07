@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -317,9 +318,12 @@ func methodMetricLabel(method string) string {
 //     sanitizeRouteLabel's own doc comment for that third, orthogonal
 //     dimension of the same unauthenticated-DoS class the count and
 //     length caps close). When the host registers the application's real
-//     route table (RegisterMountedRoutes), those routes are seeded into
-//     the limiter at construction, so the distinct-value budget cannot be
-//     exhausted by attacker garbage before a real route is ever requested
+//     route table (RegisterMountedRoutes), every entry -- a
+//     pkgcore.MountedRoute.Path, the PREFIX the module's handler was
+//     mounted at -- is seeded into the limiter at construction as the
+//     label of its whole mount subtree, so the distinct-value budget
+//     cannot be exhausted by attacker garbage before a real route is ever
+//     requested and no request at or below a real mount can ever overflow
 //     (see routeLabelLimiter.seed). None of this requires knowing an
 //     application's real route set in advance -- the bounds just stop
 //     minting new distinct values, and bloating any single one of them,
@@ -342,20 +346,25 @@ func methodMetricLabel(method string) string {
 // AnnotateTenant treats tenant_id (span attribute, never a metric label)
 // for exactly the same reason.
 //
-// The route bound is a circuit breaker, not a precision fix: a
-// legitimate, low-cardinality parameterized route (for example
-// "/api/v1/billing/subscriptions/{id}") mounted downstream of
-// tenancy.Middleware would still record one distinct value per ID up to
-// the cap, silently losing per-route granularity once past it, rather
-// than collapsing cleanly to the route template the way a real
-// route-capture mechanism (mirroring AnnotateTenant, but for the matched
-// pattern) would. Building that mechanism remains future work this
-// foundational round does not do; the route limiter exists so the
-// interim state is "bounded but occasionally imprecise" instead of
-// "unbounded and exploitable today." Flag this explicitly before adding
-// a parameterized route anywhere downstream of this middleware. The
-// method bound has no equivalent imprecision: its known set is complete
-// by construction, so the method dimension is never approximate.
+// The route bound is a circuit breaker, not a precision fix: once
+// requests pass, the closest thing this middleware has to a route
+// template is the mount-prefix label a seeded subtree folds onto (see
+// RegisterMountedRoutes), so every distinct template mounted under one
+// prefix -- say "/api/v1/billing/subscriptions/{id}" and
+// "/api/v1/billing/subscriptions/{id}/comments" under the seeded
+// "/api/v1/billing" -- shares that one prefix as its label, and a route
+// the host mounted but did not register (added after
+// RegisterMountedRoutes, for example) still records one distinct value
+// per distinct request path up to the cap before collapsing to the
+// overflow bucket. That is a deliberate, bounded imprecision -- the
+// alternative to an unbounded label space -- and true per-template
+// folding (mirroring AnnotateTenant, but for the matched pattern)
+// remains future work: the route limiter exists so the interim state is
+// "bounded but occasionally imprecise" instead of "unbounded and
+// exploitable today." Flag this explicitly before adding a parameterized
+// route anywhere downstream of this middleware. The method bound has no
+// equivalent imprecision: its known set is complete by construction, so
+// the method dimension is never approximate.
 func Middleware(next http.Handler) http.Handler {
 	meter := otel.Meter(instrumentationName)
 	requestCount, err := meter.Int64Counter(
@@ -539,19 +548,33 @@ var (
 )
 
 // RegisterMountedRoutes hands Middleware the application's real route
-// table -- the paths of the pkgcore.MountedRoute values the host's modules
-// registered on their pkgcore.Registry (the registry's Routes registrar:
-// pkgcore.Registry.Routes.Routes()) -- so the route label limiter every
-// Middleware instance creates can reserve a place for each real route
-// BEFORE any request traffic arrives. Without that reservation, the
-// limiter's distinct-value budget (MaxRouteLabelValues) is
-// first-come-first-served: an attacker sending enough distinct garbage
-// paths right after startup fills the budget and collapses every genuine
-// route to RouteLabelOverflowValue for the life of the process -- per-route
-// metrics gone even though no bound was violated. A seeded route keeps its
-// slot whatever garbage arrives later; paths the table does not name
-// (host-level routes such as "/healthz", or routes added after this call)
-// are not seeded and remain subject to the ordinary bounded behavior.
+// table -- the pkgcore.MountedRoute values the host's modules registered
+// on their pkgcore.Registry (the registry's Routes registrar:
+// pkgcore.Registry.Routes.Routes()), plus any host-level routes the host
+// mounts itself -- so the route label limiter every Middleware instance
+// creates can reserve a place for each real route BEFORE any request
+// traffic arrives. Without that reservation, the limiter's
+// distinct-value budget (MaxRouteLabelValues) is first-come-first-served:
+// an attacker sending enough distinct garbage paths right after startup
+// fills the budget and collapses every genuine route to
+// RouteLabelOverflowValue for the life of the process -- per-route metrics
+// gone even though no bound was violated.
+//
+// A registered entry is a mount PREFIX, not the full path of any one
+// operation: pkgcore.MountedRoute.Path is "the prefix the handler was
+// mounted at" (pkgcore/registry.go), and every operation of the mounted
+// handler lies at or below it. Each entry is therefore seeded as the
+// label of its whole mount subtree -- a request whose path is the
+// entry's own path or lies below it (net/http ServeMux subtree
+// semantics; see routeLabelLimiter.seed and belowSeededMount) is labeled
+// with the entry's path itself, whatever garbage arrives later. The
+// label's granularity ceiling is thus the mount: every template under
+// one prefix shares the prefix as its label. This is the closest the
+// limiter can get to route-template folding without a real route-capture
+// mechanism; a route the host did not register here (added after this
+// call, say) is not covered and remains subject to the ordinary bounded
+// behavior -- exact recording while the budget allows, then the overflow
+// bucket.
 //
 // Call it once, at assembly time, before constructing the Middleware that
 // serves the traffic: Middleware snapshots the registered paths at
@@ -562,15 +585,17 @@ var (
 // exactly like request-time labels when they are seeded, so the same
 // bounds apply to them (see routeLabelLimiter.seed).
 //
-// examples/reference-app does not call this yet: its buildServer mounts
-// module routes on the mux from the same registry table this function
-// consumes, but main.go's run constructs obs.Middleware without handing
-// the table over. The wiring is a one-line addition next to that
-// construction once a consumer round picks it up; until then, this
-// function is exercised by this package's own tests (and its behavior is
-// pinned by middleware_test.go's
-// TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded), which is what keeps
-// the mechanism honest while it waits for its host call site.
+// examples/reference-app is the mandatory first consumer: its buildServer
+// calls this with the module table reg.Routes.Routes() holds plus the two
+// host-level routes (/healthz and /metrics) it mounts on the mux
+// directly, and its obs_route_seed_test.go drives the real composed
+// stack through the garbage-flood scenario. The mechanism's behavioral
+// proof inside this module is middleware_test.go's
+// TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded, and the
+// mount-subtree semantics -- a deep operation under a seeded prefix
+// keeping its own series after the budget is exhausted -- are pinned by
+// TestMiddleware_RealRoutesBelowSeededPrefixes_SurviveStartupGarbage and
+// TestMiddleware_SeededMountPrefix_FoldsRequestsAtOrBelowIt.
 func RegisterMountedRoutes(routes []pkgcore.MountedRoute) {
 	mountedRoutesMu.Lock()
 	defer mountedRoutesMu.Unlock()
@@ -619,11 +644,28 @@ func registeredRoutePaths() []string {
 // concurrently, under -race, for exactly this reason. At construction the
 // host's registered route table is seeded into it (see
 // RegisterMountedRoutes and seed), so real routes claim their budget
-// slots before any request traffic can.
+// slots -- and, as mount-subtree labels, every request at or below them
+// -- before any request traffic can.
 type routeLabelLimiter struct {
 	mu    sync.Mutex
 	seen  map[string]struct{}
 	limit int
+	// seeded is every seed entry that successfully reserved a budget slot
+	// (see seed), kept most-specific-first so label()'s first subtree
+	// match is the deepest mount covering the request.
+	seeded []seededMount
+}
+
+// seededMount is one seed entry remembered for request-to-subtree
+// matching: label is the value label() returns (the registered path,
+// truncated and UTF-8-sanitized exactly like any other value), and match
+// is label with any trailing "/" removed -- the root against which a
+// request's path is tested for "at or below" (see belowSeededMount), so
+// a registration of "/api/v1/notes" and one of "/api/v1/notes/" cover
+// the same subtree while emitting the entry's own spelling verbatim.
+type seededMount struct {
+	label string
+	match string
 }
 
 // newRouteLabelLimiter returns a routeLabelLimiter that lets up to limit
@@ -634,11 +676,14 @@ func newRouteLabelLimiter(limit int) *routeLabelLimiter {
 }
 
 // label returns path unchanged if it has already been recorded, or if
-// fewer than limit distinct values have been recorded so far (in which
-// case path itself is now recorded); otherwise it returns
-// RouteLabelOverflowValue without recording path, so the number of
-// distinct values label can ever return stays fixed at limit+1 for the
-// lifetime of l.
+// path lies at or below a seeded mount (see seed), in which case the
+// seed's own value is returned -- that value's budget slot was reserved
+// at construction, so nothing new is recorded and the overflow machinery
+// is never consulted; or if fewer than limit distinct values have been
+// recorded so far (in which case path itself is now recorded); otherwise
+// it returns RouteLabelOverflowValue without recording path, so the
+// number of distinct values label can ever return stays fixed at limit+1
+// for the lifetime of l.
 //
 // path is passed through truncateRouteLabel (capped at MaxRouteLabelLength
 // bytes) and sanitizeRouteLabel (invalid UTF-8 replaced) BEFORE any of the
@@ -666,6 +711,18 @@ func (l *routeLabelLimiter) label(path string) string {
 	if _, ok := l.seen[path]; ok {
 		return path
 	}
+	// A request at or below a seeded mount is labeled with the seed's own
+	// value -- see seed for why every seed is a mount PREFIX whose whole
+	// subtree this closes. The scan is over the seeded mounts only, each
+	// of which already occupies a budget slot, so this branch neither
+	// records nor consults the overflow machinery; most-specific-first
+	// ordering (seed sorts on every insertion) makes the first match the
+	// deepest mount covering the request.
+	for _, m := range l.seeded {
+		if belowSeededMount(m.match, path) {
+			return m.label
+		}
+	}
 	if len(l.seen) >= l.limit {
 		return RouteLabelOverflowValue
 	}
@@ -673,18 +730,48 @@ func (l *routeLabelLimiter) label(path string) string {
 	return path
 }
 
-// seed reserves a place for path in l's seen set without ever consulting
-// the limit-to-overflow machinery: used at construction time to pre-insert
-// the application's real routes (see RegisterMountedRoutes) so that
-// request-time garbage paths cannot exhaust the distinct-value budget and
-// collapse a real route to RouteLabelOverflowValue before the route is
-// ever requested. path goes through the same truncation and UTF-8
-// sanitization as label's inputs, so a seed can never occupy more than
-// MaxRouteLabelLength bytes or introduce an invalid-UTF-8 value into l.seen
-// (a real route is a valid string by construction, but the discipline is
-// uniform). Once the set is full -- only possible when a host registered
-// more routes than MaxRouteLabelValues, which is its own
-// beyond-any-planned-route-count signal -- further seeds are dropped.
+// belowSeededMount reports whether request path is the seeded mount's own
+// path or lies below it, following the subtree semantics of the
+// net/http.ServeMux mount the seed represents: a handler mounted at P
+// serves P and everything under P/, never a path that merely shares P as
+// a string prefix (a request "/api/v1/notesXYZ" is not below a mount at
+// "/api/v1/notes"). match is the seed's path with any trailing "/"
+// removed, so trailing-slash and bare spellings of one mount cover the
+// same subtree; a match of "" -- a seed of "/", a mount at the root --
+// is below every request, since every request path starts with "/".
+func belowSeededMount(match, path string) bool {
+	return path == match || strings.HasPrefix(path, match+"/")
+}
+
+// seed reserves a place for path in l's seen set and registers path as a
+// mount-subtree label, without ever consulting the limit-to-overflow
+// machinery: used at construction time to pre-insert the application's
+// real route table (see RegisterMountedRoutes) so that request-time
+// garbage paths cannot exhaust the distinct-value budget and collapse a
+// real route to RouteLabelOverflowValue before the route is ever
+// requested. Every seed is a pkgcore.MountedRoute.Path -- the PREFIX a
+// module's handler was mounted at (pkgcore/registry.go), not the full
+// path of any one operation -- so an exact-string reservation alone
+// would protect only the request whose whole path IS that prefix, and
+// every genuine operation path deeper than its mount would still compete
+// with garbage for the remaining budget. seed therefore also remembers
+// path as the label of its whole subtree: label() returns the seed's own
+// value for every request at or below it (see belowSeededMount), which
+// is the closest this limiter can get to route-template folding without
+// a real route-capture mechanism, and which makes garbage sent below a
+// real mount unable to mint a label or consume a budget slot at all.
+//
+// path goes through the same truncation and UTF-8 sanitization as label's
+// inputs, so a seed can never occupy more than MaxRouteLabelLength bytes
+// or introduce an invalid-UTF-8 value into l.seen (a real route is a
+// valid string by construction, but the discipline is uniform). Once the
+// set is full -- only possible when a host registered more routes than
+// MaxRouteLabelValues, which is its own beyond-any-planned-route-count
+// signal -- further seeds are dropped, and a dropped seed is not
+// registered as a mount-subtree label either: every entry in l.seeded
+// has its label present in l.seen, which is what keeps the
+// distinct-values bound at limit+1 no matter how many requests its
+// subtree attracts.
 func (l *routeLabelLimiter) seed(path string) {
 	path = truncateRouteLabel(path)
 	path = sanitizeRouteLabel(path)
@@ -698,6 +785,14 @@ func (l *routeLabelLimiter) seed(path string) {
 		return
 	}
 	l.seen[path] = struct{}{}
+	l.seeded = append(l.seeded, seededMount{label: path, match: strings.TrimRight(path, "/")})
+	// Most-specific mount first, so label()'s linear scan can stop at the
+	// first match: among overlapping seeds only the deepest can contain
+	// the request's path, and seeds whose subtrees do not overlap can
+	// never both match one path.
+	sort.SliceStable(l.seeded, func(i, j int) bool {
+		return len(l.seeded[i].match) > len(l.seeded[j].match)
+	})
 }
 
 // sanitizeRouteLabel replaces every maximal byte sequence in path that is

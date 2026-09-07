@@ -1149,6 +1149,212 @@ func TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded(t *testing.T) {
 	}
 }
 
+// TestMiddleware_RealRoutesBelowSeededPrefixes_SurviveStartupGarbage is
+// the regression for the P1-obs-8 gap in the seed's PREFIX semantics:
+// pkgcore.MountedRoute.Path is the PREFIX a module's handler was mounted
+// at (pkgcore/registry.go), while the route limiter's runtime input is
+// the request's full URL.Path and its seen-set is an exact-string map --
+// so the exact-match seed shipped by the earlier round protected only
+// the request whose whole path WAS a mount prefix. Every genuine
+// operation path deeper than its mount -- /api/v1/authn/login/password
+// under the /api/v1/authn prefix, and with it authn's twenty, org's
+// eleven, notification's eleven, storage's seven and sharing's one
+// operations -- was unseeded and still collapsed to
+// obs.RouteLabelOverflowValue once startup garbage had exhausted the
+// budget: the P1-8 consequence held for almost every real route. The
+// seed now treats each entry as covering its whole mount subtree -- a
+// request at or below a seeded path is labeled with the seeded path
+// itself, the closest this limiter can get to route-template folding
+// without a real route-capture mechanism -- so a deep operation
+// requested only after the budget is exhausted still records a
+// measurable series of its own (under its mount's label), never the
+// overflow bucket. The two prefix==path baselines below (the shape the
+// pre-fix regression TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded
+// already pinned) must keep passing before and after, so a failure of
+// the deep-route assertion cannot be blamed on the flood not reaching
+// the limiter. Fails before the fix (verified): no series labeled
+// http.route="/api/v1/authn" exists -- the deep operation's request
+// lands in the overflow bucket instead, whose count is one higher than
+// the 104 the garbage alone produces.
+func TestMiddleware_RealRoutesBelowSeededPrefixes_SurviveStartupGarbage(t *testing.T) {
+	reader := setupMeterProvider(t)
+
+	// The shape a real host registers: host-level leaf routes plus the
+	// module mount PREFIXES its pkgcore registry carries (mirrors
+	// examples/reference-app/cmd/server/server.go's own
+	// obs.RegisterMountedRoutes call).
+	obs.RegisterMountedRoutes([]pkgcore.MountedRoute{
+		{Path: "/healthz"},
+		{Path: "/metrics"},
+		{Path: "/api/v1/notes"},
+		{Path: "/api/v1/authn"},
+	})
+	t.Cleanup(func() { obs.RegisterMountedRoutes(nil) })
+
+	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Saturate the distinct-value budget with attacker garbage OUTSIDE
+	// every seeded prefix. With 4 seeds reserving 4 of the 256 budget
+	// slots, 356 garbage paths leave 252 tracked verbatim and 104
+	// overflowing; both numbers are deterministic and the assertions
+	// below rely on them.
+	const (
+		garbagePaths = obs.MaxRouteLabelValues + 100
+		seededRoutes = 4
+	)
+	for i := 0; i < garbagePaths; i++ {
+		path := fmt.Sprintf("/attacker-garbage-path-%d", i)
+		handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, path, ""))
+	}
+
+	// The real traffic, first requested only after the budget is
+	// exhausted: the two prefix==path baselines (a host leaf route and a
+	// module mount requested at its own path) and the regression's real
+	// case -- a genuine operation path several segments below its
+	// mount's prefix, which no exact-string seed could ever have
+	// protected.
+	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, "/healthz", ""))
+	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, "/api/v1/notes", ""))
+	handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, "/api/v1/authn/login/password", ""))
+
+	rm := collect(t, reader)
+	counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+
+	series := map[string]int64{}
+	var totalRecorded int64
+	for _, dp := range counter.DataPoints {
+		totalRecorded += dp.Value
+		series[labelMap(dp.Attributes)["http.route"]] += dp.Value
+	}
+
+	// Baselines (pass before the fix too): a host leaf route and a module
+	// mount requested at its own path keep their seeded series.
+	for _, path := range []string{"/healthz", "/api/v1/notes"} {
+		if got := series[path]; got != 1 {
+			t.Fatalf("baseline http.route=%q recorded %d requests, want exactly 1 (the one real request above); series: %v",
+				path, got, series)
+		}
+	}
+
+	// The regression: the deep operation keeps a measurable series of its
+	// own, labeled by its mount's seeded prefix -- never the overflow
+	// bucket. Pre-fix the request lands in {overflow} and no
+	// /api/v1/authn series exists at all.
+	if got := series["/api/v1/authn"]; got != 1 {
+		t.Errorf("http.route=%q (the seeded mount prefix the deep operation request /api/v1/authn/login/password must fold onto) recorded %d requests, want exactly 1: the deep operation collapsed to %q despite its mount prefix being seeded",
+			"/api/v1/authn", got, obs.RouteLabelOverflowValue)
+	}
+
+	// The overflow bucket holds exactly the garbage that overflowed: 356
+	// garbage paths minus the 252 the 4-seed-reduced budget tracked.
+	// Pre-fix the deep operation's request is in here too, making it one
+	// higher.
+	const overflowedGarbage = garbagePaths - (obs.MaxRouteLabelValues - seededRoutes)
+	if got := series[obs.RouteLabelOverflowValue]; got != overflowedGarbage {
+		t.Errorf("overflow bucket recorded %d requests, want %d (the garbage paths beyond the seeded budget; pre-fix the deep operation's request lands here too, making it %d)",
+			got, overflowedGarbage, overflowedGarbage+1)
+	}
+
+	// No request was lost or double-counted: 356 garbage + 3 real.
+	if totalRecorded != int64(garbagePaths+3) {
+		t.Errorf("sum of all recorded requests = %d, want %d", totalRecorded, garbagePaths+3)
+	}
+
+	// Boundedness holds all the same (folding must not grow the bound):
+	// the 4 seeds reserve 4 of the 256 slots, 252 garbage paths are
+	// tracked verbatim, the 3 requested real routes emit their pre-seeded
+	// series and the remaining 104 garbage paths share the single
+	// overflow bucket -- 252 tracked garbage + 3 requested real routes +
+	// 1 overflow bucket = obs.MaxRouteLabelValues distinct series, the
+	// same ceiling the exact-match seed enforced. Pre-fix the deep
+	// operation emits nothing of its own, so only 255 series exist.
+	if got := len(counter.DataPoints); got != obs.MaxRouteLabelValues {
+		t.Errorf("got %d distinct series, want exactly %d (252 tracked garbage + 3 requested real routes + 1 overflow bucket): folding onto seeded prefixes must not grow the series bound",
+			got, obs.MaxRouteLabelValues)
+	}
+}
+
+// TestMiddleware_SeededMountPrefix_FoldsRequestsAtOrBelowIt pins the
+// subtree semantics the seed's PREFIX interpretation implements in the
+// quiet case (no garbage, the budget nowhere near exhaustion): a seeded
+// entry is the label for every request AT its path or BELOW it, matching
+// net/http ServeMux subtree mounting with a "/"-segment boundary (so
+// "/api/v1/notesXYZ" is not below a "/api/v1/notes" mount), and when two
+// seeds overlap the deeper mount wins for its own subtree (an "/api/v1"
+// mount and an "/api/v1/notes" mount nested under it each label their
+// own traffic). A request under NO seeded mount keeps the ordinary
+// exact-record behavior, minting its own label while the budget allows.
+// The fold is unconditional rather than reserved for a full budget,
+// which is what keeps labels deterministic -- the same series for the
+// same operation whatever order traffic and garbage arrive in -- and
+// what keeps attacker garbage below a seeded prefix from ever minting a
+// label at all. Fails before the fix (verified): the exact-match seed
+// leaves /api/v1/notes/abc, /api/v1/notesXYZ and /api/v1/billing/xyz to
+// each mint their own verbatim series, so the /api/v1/notes series
+// counts 1, no /api/v1 series exists and a "/api/v1/notes/abc" series
+// does.
+func TestMiddleware_SeededMountPrefix_FoldsRequestsAtOrBelowIt(t *testing.T) {
+	reader := setupMeterProvider(t)
+
+	// Two overlapping seeds -- a broad "/api/v1" mount and the narrower
+	// "/api/v1/notes" module mount registered under it (the registry
+	// allows a host to register both; the more specific entry must win
+	// for its own subtree) -- plus one host-level leaf route.
+	obs.RegisterMountedRoutes([]pkgcore.MountedRoute{
+		{Path: "/api/v1"},
+		{Path: "/api/v1/notes"},
+		{Path: "/healthz"},
+	})
+	t.Cleanup(func() { obs.RegisterMountedRoutes(nil) })
+
+	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, path := range []string{
+		"/healthz",            // the seeded leaf, requested at its own path
+		"/api/v1/notes",       // the narrow mount, requested at its own path
+		"/api/v1/notes/abc",   // below the narrow mount: folds onto /api/v1/notes
+		"/api/v1/notesXYZ",    // not below the notes mount (no "/" boundary), but below /api/v1
+		"/api/v1/billing/xyz", // below the broad mount only: folds onto /api/v1
+		"/outside/garbage-1",  // under no seeded mount: ordinary exact-record
+	} {
+		handler.ServeHTTP(httptest.NewRecorder(), newTestRequest(http.MethodGet, path, ""))
+	}
+
+	rm := collect(t, reader)
+	counter := findSum(t, findMetric(t, rm, requestCountMetricName))
+
+	series := map[string]int64{}
+	for _, dp := range counter.DataPoints {
+		series[labelMap(dp.Attributes)["http.route"]] += dp.Value
+	}
+
+	if got := series["/api/v1/notes"]; got != 2 {
+		t.Errorf("http.route=%q recorded %d requests, want 2 (the mount's own path and the request below it both fold onto it; pre-fix the below-mount request minted its own verbatim series instead)",
+			"/api/v1/notes", got)
+	}
+	if got := series["/api/v1"]; got != 2 {
+		t.Errorf("http.route=%q recorded %d requests, want 2 (the sibling-shaped /api/v1/notesXYZ path and /api/v1/billing/xyz, both below the broad mount but not the narrow one; pre-fix no /api/v1 series existed at all)",
+			"/api/v1", got)
+	}
+	if got := series["/healthz"]; got != 1 {
+		t.Errorf("http.route=%q recorded %d requests, want 1 (the seeded leaf requested at its own path)", "/healthz", got)
+	}
+	if _, ok := series["/api/v1/notes/abc"]; ok {
+		t.Errorf("request /api/v1/notes/abc minted its own verbatim series: below a seeded mount it must fold onto the mount's label instead (the pre-fix exact-match behavior); series: %v", series)
+	}
+	if _, ok := series["/api/v1/notesXYZ"]; ok {
+		t.Errorf("request /api/v1/notesXYZ minted its own verbatim series: it lies below the seeded /api/v1 mount and must fold there; only a path below NO seeded mount may mint; series: %v", series)
+	}
+	if got := series["/outside/garbage-1"]; got != 1 {
+		t.Errorf("http.route=%q recorded %d requests, want 1: a request under no seeded mount keeps the ordinary exact-record behavior",
+			"/outside/garbage-1", got)
+	}
+}
+
 // erroringMeterProvider and erroringMeter stand in for a MeterProvider
 // whose instrument construction fails, so
 // TestMiddleware_InstrumentConstructionError_IsReported can prove the
