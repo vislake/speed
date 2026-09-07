@@ -432,6 +432,17 @@ func TestHandler_LoginWithPassword_ValidCredentials_RecordsLoginAuditEvent(t *te
 	if evt.Actor.ID != user.ID {
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
+	// P2-pkgcore-actor-1: a human subject's audit record must carry the
+	// account's display name, resolved from the users table at record time
+	// (recordAudit's own doc comment in handler.go). An empty
+	// Actor.DisplayName means the trail can no longer say who this actor
+	// was once the account is renamed or deleted -- the very readability
+	// pkgcore.Actor.DisplayName exists for. On unfixed main every human
+	// actor was recorded id-only, so this assertion fails there.
+	if evt.Actor.DisplayName != user.DisplayName {
+		t.Errorf("Actor.DisplayName = %q, want %q (the registered account's own display name)",
+			evt.Actor.DisplayName, user.DisplayName)
+	}
 	// The new session resolved tenant A (the caller's only membership),
 	// so the login record must carry it: tenant-scoped audit reads
 	// (audit.Repository.ListByTenant) filter on tenant_id, and authn's

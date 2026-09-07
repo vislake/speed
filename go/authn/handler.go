@@ -196,6 +196,20 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 // attempt, for instance), in which case ctx is left exactly as given and
 // Emit falls back to its own "no actor set" zero value.
 //
+// P2-pkgcore-actor-1: when an actor IS known, its display name is
+// resolved from the users table at record time (h.svc.Users().FindByID)
+// and carried on the Actor, so the audit record stays readable after the
+// account is renamed or deleted -- the purpose pkgcore.Actor.DisplayName
+// documents for itself. The resolution is deliberately inside this one
+// funnel rather than at its call sites: every site's actor is an authn
+// user id it knows only as an id (a Principal carries no display name,
+// see token.go), and the users table is the single honest source for the
+// label. A lookup failure is Warn-logged and the record proceeds
+// id-only -- the id remains the authoritative attribution, and a
+// best-effort label failure must not turn an already-committed
+// operation's audit record into a lost one, exactly like an Emit failure
+// below.
+//
 // A failure is logged, not returned, for the identical reason
 // recordNoteCreatedAudit's own doc comment gives: the underlying
 // operation has already been committed and answered to the caller, so an
@@ -205,7 +219,14 @@ func (h *Handler) recordAudit(ctx context.Context, tenantID pkgcore.TenantID, ac
 		return
 	}
 	if actorID != "" {
-		ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: actorID})
+		actor := pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: actorID}
+		if user, err := h.svc.Users().FindByID(ctx, actorID); err != nil {
+			obs.FromContext(ctx).Warn("authn could not resolve the audit actor's display name; recording id-only",
+				"user_id", actorID, "error", err)
+		} else {
+			actor.DisplayName = user.DisplayName
+		}
+		ctx = pkgcore.WithActor(ctx, actor)
 	}
 	ctx = pkgcore.WithTenant(ctx, tenantID)
 	if err := audit.Emit(ctx, h.bus, h.auditActions, audit.Input{
