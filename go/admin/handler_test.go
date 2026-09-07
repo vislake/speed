@@ -259,3 +259,54 @@ func TestHandler_AdminSearchUsers_LeavesAuditedTrailNamingOperator(t *testing.T)
 		t.Fatalf("system-context event = %+v, want Actor %q under %s -- the trail must name the OPERATOR, never the searched-for user", entered[0], operatorID, SystemPurposeAdminCrossTenant)
 	}
 }
+
+// TestHandler_AdminListAuditEvents_FiltersByOnBehalfOf is P2-1's
+// end-to-end regression test: an investigator asking "what did THIS
+// administrator do during their impersonation sessions?" must get exactly
+// the audit rows written while that administrator impersonated a user --
+// and no others. Pre-fix the endpoint had no on_behalf_of dimension at
+// all: the request below answered 200 with every row in the tenant (the
+// silent-failure signature this finding is about -- a plausible-looking
+// list with no error), because the on_behalf_of fields the response
+// already carried could be read but never queried, and an administrator
+// never appears as actor on an impersonation-era row.
+func TestHandler_AdminListAuditEvents_FiltersByOnBehalfOf(t *testing.T) {
+	env := buildTestAdminModule(t)
+	auditRepo := audit.NewRepository(env.DB)
+
+	// Four rows in one tenant: two written during admin-1's impersonation
+	// sessions (actor = the impersonated user, on_behalf_of = admin-1),
+	// one during admin-2's session, and one ordinary row written directly
+	// with no impersonation at all (no on_behalf_of identity).
+	insertImpersonationTestEvent(t, auditRepo, "tenant-a", "impersonated-user-a", "admin-1", "notes.note.update")
+	insertImpersonationTestEvent(t, auditRepo, "tenant-a", "impersonated-user-b", "admin-1", "notes.note.create")
+	insertImpersonationTestEvent(t, auditRepo, "tenant-a", "impersonated-user-c", "admin-2", "notes.note.delete")
+	insertTestEvent(t, auditRepo, "tenant-a", "notes.note.read")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-events?tenantId=tenant-a&onBehalfOf=admin-1", nil)
+	req = req.WithContext(authn.WithPrincipal(req.Context(), authn.Principal{UserID: "operator-audit-query-1"}))
+	w := httptest.NewRecorder()
+
+	env.Admin.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want %d", w.Code, w.Body.String(), http.StatusOK)
+	}
+	var resp api.AdminListAuditEventsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Events) != 2 {
+		t.Fatalf("onBehalfOf=admin-1 returned %d events, want exactly 2 -- admin-1's impersonation-era rows and no others (the pre-fix code ignores the parameter and returns all %d rows, silently)", len(resp.Events), 4)
+	}
+	actors := make(map[string]bool, len(resp.Events))
+	for _, evt := range resp.Events {
+		if evt.OnBehalfOfID == nil || *evt.OnBehalfOfID != "admin-1" {
+			t.Fatalf("event %s returned for onBehalfOf=admin-1 carries on_behalf_of_id %v, want admin-1", evt.ID, evt.OnBehalfOfID)
+		}
+		actors[evt.ActorID] = true
+	}
+	if !actors["impersonated-user-a"] || !actors["impersonated-user-b"] {
+		t.Fatalf("onBehalfOf=admin-1 events' actors = %v, want impersonated-user-a and impersonated-user-b -- admin-2's impersonation row and the direct row must be excluded", actors)
+	}
+}

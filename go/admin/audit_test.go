@@ -59,6 +59,23 @@ func insertTestEvent(t *testing.T, repo *audit.Repository, tenantID, action stri
 	}
 }
 
+// insertImpersonationTestEvent inserts one audit event written during an
+// impersonation session: Actor is the impersonated user the session
+// substituted, OnBehalfOf the real administrator behind it (pkgcore's
+// dual-identity rule) -- the row shape admin's own ImpersonationMiddleware
+// actually writes (pipeline.go).
+func insertImpersonationTestEvent(t *testing.T, repo *audit.Repository, tenantID, actorID, onBehalfOfID, action string) {
+	t.Helper()
+	evt := &audit.AuditEvent{TenantID: tenantID, Action: action, OccurredAt: time.Now().UTC()}
+	evt.SetActor(pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: actorID})
+	evt.SetOnBehalfOf(&pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: onBehalfOfID})
+	evt.SetResource(audit.Resource{Type: "note", ID: "note-1"})
+	evt.SetResult(audit.Result{Success: true})
+	if err := repo.Insert(context.Background(), evt); err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+}
+
 func TestAuditService_Query_SingleTenant(t *testing.T) {
 	svc, auditRepo, _ := newTestAuditService(t)
 	insertTestEvent(t, auditRepo, "tenant-a", "notes.note.create")

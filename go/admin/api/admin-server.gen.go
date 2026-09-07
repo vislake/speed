@@ -245,15 +245,16 @@ type AdminUser struct {
 
 // AdminListAuditEventsParams defines parameters for AdminListAuditEvents.
 type AdminListAuditEventsParams struct {
-	TenantID *string    `form:"tenantId,omitempty" json:"tenantId,omitempty"`
-	Actor    *string    `form:"actor,omitempty" json:"actor,omitempty"`
-	Resource *string    `form:"resource,omitempty" json:"resource,omitempty"`
-	Action   *string    `form:"action,omitempty" json:"action,omitempty"`
-	From     *time.Time `form:"from,omitempty" json:"from,omitempty"`
-	To       *time.Time `form:"to,omitempty" json:"to,omitempty"`
-	Success  *bool      `form:"success,omitempty" json:"success,omitempty"`
-	Limit    *int       `form:"limit,omitempty" json:"limit,omitempty"`
-	Offset   *int       `form:"offset,omitempty" json:"offset,omitempty"`
+	TenantID   *string    `form:"tenantId,omitempty" json:"tenantId,omitempty"`
+	Actor      *string    `form:"actor,omitempty" json:"actor,omitempty"`
+	OnBehalfOf *string    `form:"onBehalfOf,omitempty" json:"onBehalfOf,omitempty"`
+	Resource   *string    `form:"resource,omitempty" json:"resource,omitempty"`
+	Action     *string    `form:"action,omitempty" json:"action,omitempty"`
+	From       *time.Time `form:"from,omitempty" json:"from,omitempty"`
+	To         *time.Time `form:"to,omitempty" json:"to,omitempty"`
+	Success    *bool      `form:"success,omitempty" json:"success,omitempty"`
+	Limit      *int       `form:"limit,omitempty" json:"limit,omitempty"`
+	Offset     *int       `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
 // AdminListSendRecordsParams defines parameters for AdminListSendRecords.
@@ -392,6 +393,19 @@ func (siw *ServerInterfaceWrapper) AdminListAuditEvents(w http.ResponseWriter, r
 			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "actor"})
 		} else {
 			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "actor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "onBehalfOf" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "onBehalfOf", r.URL.Query(), &params.OnBehalfOf, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "onBehalfOf"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "onBehalfOf", Err: err})
 		}
 		return
 	}

@@ -297,7 +297,12 @@ paths:
         A thin HTTP shell over compliance.AuditQuery -- see AuditService's
         own doc comment. tenantId absent means "every tenant this operator
         is entitled to see" (the cross-tenant, system-context-gated path);
-        present means the single-tenant path.
+        present means the single-tenant path. onBehalfOf narrows the
+        result to rows written during an impersonation session whose real
+        administrator (the row's on-behalf-of identity) is the given id --
+        the impersonation-accountability read dimension: an administrator
+        never appears as the actor on such a row, so only this filter can
+        answer "what did this administrator do through impersonation".
       parameters:
         - name: tenantId
           in: query
@@ -305,6 +310,11 @@ paths:
           schema:
             type: string
         - name: actor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: onBehalfOf
           in: query
           required: false
           schema:

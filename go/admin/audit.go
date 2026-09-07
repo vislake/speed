@@ -19,11 +19,16 @@ type AuditFilter struct {
 	// tenant this operator is entitled to see", the cross-tenant path.
 	TenantID string
 	Actor    string
-	Resource string
-	Action   string
-	From     time.Time
-	To       time.Time
-	Success  *bool
+	// OnBehalfOf narrows to rows written during an impersonation session
+	// whose real administrator (the row's on-behalf-of identity, never its
+	// actor -- the impersonated user is the actor on such a row) is this
+	// operator id: the impersonation-accountability read dimension (P2-1).
+	OnBehalfOf string
+	Resource   string
+	Action     string
+	From       time.Time
+	To         time.Time
+	Success    *bool
 }
 
 // AuditService is D7's whole contribution: a thin HTTP-facing wrapper over
@@ -62,12 +67,13 @@ func (s *AuditService) attach(bus pkgcore.EventBus) { s.bus = bus }
 // calls QueryAcrossTenants with that full list under one system context.
 func (s *AuditService) Query(ctx context.Context, actorUserID string, filter AuditFilter) ([]audit.AuditEvent, error) {
 	qf := compliance.QueryFilter{
-		Actor:    filter.Actor,
-		Resource: filter.Resource,
-		Action:   filter.Action,
-		From:     filter.From,
-		To:       filter.To,
-		Success:  filter.Success,
+		Actor:      filter.Actor,
+		OnBehalfOf: filter.OnBehalfOf,
+		Resource:   filter.Resource,
+		Action:     filter.Action,
+		From:       filter.From,
+		To:         filter.To,
+		Success:    filter.Success,
 	}
 
 	reason := pkgcore.SystemReason{

@@ -378,6 +378,9 @@ func (h *Handler) AdminListAuditEvents(w http.ResponseWriter, r *http.Request, p
 	if params.Actor != nil {
 		filter.Actor = *params.Actor
 	}
+	if params.OnBehalfOf != nil {
+		filter.OnBehalfOf = *params.OnBehalfOf
+	}
 	if params.Resource != nil {
 		filter.Resource = *params.Resource
 	}
