@@ -70,6 +70,10 @@ var (
 	// is fine-grained enough to distinguish "may impersonate an ordinary
 	// business-tenant user" from "may impersonate a fellow platform
 	// operator", so the only safe default is refusing the latter outright.
+	// It is the subject-side half of the SystemDomain boundary: the
+	// granting-side half -- writing roles or bindings INTO the system
+	// domain through the role-management surface -- is closed by the twin
+	// ErrRolesSystemDomainForbidden.
 	ErrImpersonationTargetForbidden = apperr.Invalid("admin.impersonation_target_forbidden")
 
 	// ErrImpersonationGrantEnded is returned by EndGrant when the grant
@@ -148,6 +152,30 @@ var (
 	// host has called AttachRBAC gets this refusal instead of a
 	// nil-service panic.
 	ErrRBACServiceRequired = apperr.Internal("admin.rbac_service_required")
+
+	// ErrRolesSystemDomainForbidden is returned by every RoleService (D8)
+	// tenant-naming write when the request names rbac.SystemDomain -- the
+	// platform-operations pseudo-tenant -- as the tenant to write into.
+	// The role-management surface is gated on admin:roles_manage, and the
+	// role catalog is single and global with no domain partitioning:
+	// admin's own admin:* permissions live in it, so accepting the system
+	// tenant as an ordinary request-body tenant would let a roles_manage-
+	// only caller define a role carrying admin:impersonate (or any other
+	// admin:*) inside the system domain and bind it to themselves --
+	// collapsing the nine admin permission boundaries D1 draws into one.
+	// SystemDomain's role catalog and bindings are the platform's internal
+	// domain, administered by hosts out of band, directly against
+	// rbac.Service under a system-tenant context (the shape the reference
+	// app's seedDemoPlatformStaff takes), never through this surface. This
+	// is refused unconditionally, never merely gated on a stricter
+	// permission: no admin permission is fine-grained enough to distinguish
+	// "may manage a customer tenant's roles" from "may delegate
+	// platform-operator authority", so the only safe default is refusing
+	// SystemDomain outright. It is the granting-side twin of
+	// ErrImpersonationTargetForbidden's subject-side refusal: a grant may
+	// neither be SCOPED to the system domain as an impersonation target
+	// nor WRITTEN into it through the role surface.
+	ErrRolesSystemDomainForbidden = apperr.Invalid("admin.roles_system_domain_forbidden")
 
 	// ErrUsageModulesNotWired is returned by UsageService.Summary (D9)
 	// when NEITHER go/metering nor go/billing was ever wired through
@@ -232,6 +260,7 @@ var errorCodes = []string{
 	ErrNotificationModuleRequired.Code,
 	ErrQueueRequired.Code,
 	ErrRBACServiceRequired.Code,
+	ErrRolesSystemDomainForbidden.Code,
 	ErrUsageModulesNotWired.Code,
 	ErrExportOperatorRequired.Code,
 	ErrRequestBodyInvalid.Code,

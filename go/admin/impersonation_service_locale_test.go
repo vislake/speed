@@ -246,7 +246,6 @@ func TestImpersonationService_Start_TargetNotAMember_RefusedWithNoGrant(t *testi
 func TestImpersonationService_Start_AdminRoleRevoked_LiveGrantAutomaticallyEnded(t *testing.T) {
 	env := buildTestAdminModule(t)
 	env.Admin.AttachRBAC(env.RBAC)
-	roles := env.Admin.Roles()
 	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
 		t.Fatalf("RegisterHandler() error = %v", err)
 	}
@@ -262,14 +261,18 @@ func TestImpersonationService_Start_AdminRoleRevoked_LiveGrantAutomaticallyEnded
 		t.Fatalf("Members().Add() error = %v", addErr)
 	}
 
-	role, err := roles.DefineRole(context.Background(), string(rbac.SystemDomain), rbac.RoleDefinition{
+	// Seed the administrator's system-domain grant directly against
+	// rbac.Service -- the out-of-band bootstrap path hosts use for every
+	// system-domain write, which is exactly what RoleService's own refusal
+	// of the pseudo-tenant preserves (checkTenantWritable's doc comment).
+	systemCtx := pkgcore.WithTenant(context.Background(), rbac.SystemDomain)
+	if _, seedErr := env.RBAC.DefineRole(systemCtx, rbac.RoleDefinition{
 		Key:         "impersonator-flow",
 		Permissions: []string{PermissionImpersonate},
-	})
-	if err != nil {
-		t.Fatalf("DefineRole() error = %v", err)
+	}); seedErr != nil {
+		t.Fatalf("DefineRole() error = %v", seedErr)
 	}
-	if assignErr := roles.AssignRole(context.Background(), string(rbac.SystemDomain), adminUser, role.Key, ""); assignErr != nil {
+	if assignErr := env.RBAC.AssignRole(systemCtx, rbac.Subject{TenantID: rbac.SystemDomain, UserID: adminUser}, "impersonator-flow", rbac.Scope{}); assignErr != nil {
 		t.Fatalf("AssignRole() error = %v", assignErr)
 	}
 
@@ -287,7 +290,7 @@ func TestImpersonationService_Start_AdminRoleRevoked_LiveGrantAutomaticallyEnded
 		t.Fatal("Lookup() = false immediately after Start, want the fresh grant Active")
 	}
 
-	if revokeErr := roles.RevokeRole(context.Background(), string(rbac.SystemDomain), adminUser, role.Key, ""); revokeErr != nil {
+	if revokeErr := env.RBAC.RevokeRole(systemCtx, rbac.Subject{TenantID: rbac.SystemDomain, UserID: adminUser}, "impersonator-flow", rbac.Scope{}); revokeErr != nil {
 		t.Fatalf("RevokeRole() error = %v", revokeErr)
 	}
 
@@ -315,7 +318,6 @@ func TestImpersonationService_Start_AdminRoleRevoked_LiveGrantAutomaticallyEnded
 func TestImpersonationService_Start_AdminKeepsPermissionViaOtherRole_GrantSurvives(t *testing.T) {
 	env := buildTestAdminModule(t)
 	env.Admin.AttachRBAC(env.RBAC)
-	roles := env.Admin.Roles()
 	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
 		t.Fatalf("RegisterHandler() error = %v", err)
 	}
@@ -331,22 +333,25 @@ func TestImpersonationService_Start_AdminKeepsPermissionViaOtherRole_GrantSurviv
 		t.Fatalf("Members().Add() error = %v", addErr)
 	}
 
-	roleA, err := roles.DefineRole(context.Background(), string(rbac.SystemDomain), rbac.RoleDefinition{
+	// Seed both granting roles directly against rbac.Service -- the
+	// out-of-band bootstrap path hosts use for every system-domain write
+	// (checkTenantWritable's doc comment).
+	systemCtx := pkgcore.WithTenant(context.Background(), rbac.SystemDomain)
+	if _, seedErr := env.RBAC.DefineRole(systemCtx, rbac.RoleDefinition{
 		Key: "impersonator-a", Permissions: []string{PermissionImpersonate},
-	})
-	if err != nil {
-		t.Fatalf("DefineRole(a) error = %v", err)
+	}); seedErr != nil {
+		t.Fatalf("DefineRole(a) error = %v", seedErr)
 	}
-	roleB, err := roles.DefineRole(context.Background(), string(rbac.SystemDomain), rbac.RoleDefinition{
+	if _, seedErr := env.RBAC.DefineRole(systemCtx, rbac.RoleDefinition{
 		Key: "impersonator-b", Permissions: []string{PermissionImpersonate},
-	})
-	if err != nil {
-		t.Fatalf("DefineRole(b) error = %v", err)
+	}); seedErr != nil {
+		t.Fatalf("DefineRole(b) error = %v", seedErr)
 	}
-	if assignErrA := roles.AssignRole(context.Background(), string(rbac.SystemDomain), adminUser, roleA.Key, ""); assignErrA != nil {
+	adminSub := rbac.Subject{TenantID: rbac.SystemDomain, UserID: adminUser}
+	if assignErrA := env.RBAC.AssignRole(systemCtx, adminSub, "impersonator-a", rbac.Scope{}); assignErrA != nil {
 		t.Fatalf("AssignRole(a) error = %v", assignErrA)
 	}
-	if assignErrB := roles.AssignRole(context.Background(), string(rbac.SystemDomain), adminUser, roleB.Key, ""); assignErrB != nil {
+	if assignErrB := env.RBAC.AssignRole(systemCtx, adminSub, "impersonator-b", rbac.Scope{}); assignErrB != nil {
 		t.Fatalf("AssignRole(b) error = %v", assignErrB)
 	}
 
@@ -361,7 +366,7 @@ func TestImpersonationService_Start_AdminKeepsPermissionViaOtherRole_GrantSurviv
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	if err := roles.RevokeRole(context.Background(), string(rbac.SystemDomain), adminUser, roleA.Key, ""); err != nil {
+	if err := env.RBAC.RevokeRole(systemCtx, adminSub, "impersonator-a", rbac.Scope{}); err != nil {
 		t.Fatalf("RevokeRole(a) error = %v", err)
 	}
 
