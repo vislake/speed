@@ -224,8 +224,11 @@ type auditBufferCtxKey struct{}
 // event index each savepoint opened at and prune everything appended since
 // the savepoint's region opened — a rollback-to keeps the target savepoint
 // itself live (both dialects retain it), so its frame keeps pruning until
-// the transaction's own end — and only events whose writes survive the
-// outer commit are ever drained.
+// the transaction's own end. The frame stack mirrors SQL's same-name
+// shadowing (see auditSavepointMark), and the observer moves frames only
+// for statements the database accepted, never for refused ones (see
+// afterSavepointSQL). Only events whose writes survive the outer commit are
+// ever drained.
 type auditBuffer struct {
 	mu         sync.Mutex
 	events     []pkgcore.Event
@@ -241,6 +244,18 @@ type auditBuffer struct {
 // rolled-back-to savepoint's own frame survives the rollback (see
 // rollbackToSavepoint), so it can keep pruning events its still-live
 // savepoint later discards.
+//
+// The stack also mirrors SQL's same-name shadowing: a SAVEPOINT whose name
+// a live savepoint already holds shadows the older savepoint instead of
+// releasing it — the older one stays alive, merely unreachable by that name
+// until the newer savepoint is destroyed (a rollback-to of an enclosing
+// savepoint destroys every savepoint established after its target) — so
+// beginSavepoint pushes a second frame with the same name and leaves the
+// older frame in place. A rollback-to scans the stack from the right for a
+// name, so it always prunes against the newest same-name frame, exactly the
+// savepoint the database resolves the name to; once every newer same-name
+// savepoint is gone, the older frame is the scan's target again, exactly as
+// the older savepoint is the database's.
 type auditSavepointMark struct {
 	name     string
 	eventsAt int
@@ -293,20 +308,24 @@ func (b *auditBuffer) drain() []pkgcore.Event {
 // inside the savepoint's region until a matching rollback-to (or the
 // transaction's end).
 //
-// Opening a savepoint with the name of one already open releases the older
-// one first — both dialects' SAVEPOINT semantics — so any existing frame
-// with the same name is dropped before the new frame is pushed: work done
-// between the two savepoints belongs to no live region and stays captured
-// until a rollback-to of some savepoint that opened before it.
+// The new frame is pushed without touching any older frame that already
+// holds the name: a SAVEPOINT with the name of a live savepoint shadows the
+// older savepoint on both dialects rather than releasing it, so the older
+// savepoint — and with it the region its frame marks — stays alive until a
+// rollback-to of an enclosing savepoint destroys the newer one, after which
+// the older savepoint is the name's target again (see auditSavepointMark).
+// The frame stack keeps one frame per accepted SAVEPOINT, exactly the
+// database's own stack of live savepoints. Frames are only ever missing or
+// stale where the database's and the buffer's views can legitimately
+// differ: refused statements, which never reach this method (see
+// afterSavepointSQL), and hand-written RELEASE SQL, which no observer
+// recognizes on any driver and which only a raw-Exec caller can issue —
+// both shapes are the caller's own doing, and rollback-to of a released
+// name is refused by the database, so the gate in afterSavepointSQL keeps
+// the stale frame from ever pruning.
 func (b *auditBuffer) beginSavepoint(name string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for i := len(b.savepoints) - 1; i >= 0; i-- {
-		if b.savepoints[i].name == name {
-			b.savepoints = append(b.savepoints[:i], b.savepoints[i+1:]...)
-			break
-		}
-	}
 	b.savepoints = append(b.savepoints, auditSavepointMark{name: name, eventsAt: len(b.events)})
 }
 
@@ -322,10 +341,24 @@ func (b *auditBuffer) beginSavepoint(name string) {
 // the same still-live savepoint continues truncating the buffer to the same
 // point, exactly as the database keeps reverting to the same savepoint.
 // Only the transaction's own end closes a frame — drain, which
-// WithTenantSession calls after the outer transaction committed. It mirrors
-// the SQL semantics for a rollback-to of a savepoint that no longer exists
-// (rolled back already through an enclosing savepoint, released, or never
-// opened): the database ignores it, so the buffer prunes nothing.
+// WithTenantSession calls after the outer transaction committed.
+//
+// The scan is from the right, so it always prunes against the newest frame
+// with the name — the frame of the savepoint the database resolves the name
+// to (see auditSavepointMark's shadowing note) — and leaves older same-name
+// frames untouched below it, exactly as their still-live, still-shadowed
+// savepoints stay untouched in the database.
+//
+// A rollback-to of a savepoint that no longer exists in the database (never
+// opened, or destroyed by an earlier rollback-to of an enclosing savepoint,
+// or released) is refused, not ignored — and afterSavepointSQL's db.Error
+// gate keeps this method from running on it at all. The released case in
+// particular leaves this method with nothing to recognize: RELEASE is not a
+// statement shape GORM's own SavePoint/RollbackTo emit on either driver,
+// and no observer watches for hand-written RELEASE SQL, so the method could
+// never have "handled" a released savepoint — the refusal of the later
+// rollback-to of the released name is what closes the case, and only the
+// observer can see that refusal.
 func (b *auditBuffer) rollbackToSavepoint(name string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -340,10 +373,14 @@ func (b *auditBuffer) rollbackToSavepoint(name string) {
 		b.events = b.events[:cut]
 		// The frames after the target's are savepoints the database just
 		// destroyed (rolling back to a savepoint discards every savepoint
-		// established after it) — drop them. The target's own frame stays:
-		// rollback-to does not destroy its savepoint on either dialect, and
-		// keeping the frame is what lets a second rollback-to of the same
-		// still-live savepoint prune events appended since the first one.
+		// established after it, newer same-name frames included) — drop them.
+		// The target's own frame stays, along with every older frame,
+		// same-name ones included: rollback-to does not destroy its savepoint
+		// on either dialect, and keeping the frames is what lets a second
+		// rollback-to of the same still-live savepoint prune events appended
+		// since the first one — or, once every newer same-name savepoint is
+		// gone, reach the older shadowed savepoint a later rollback discards
+		// work back to.
 		b.savepoints = b.savepoints[:i+1]
 		return
 	}
@@ -508,9 +545,12 @@ func (p *auditCapturePlugin) Initialize(db *gorm.DB) error {
 	// is therefore the one callback-chain hook at which a savepoint opening
 	// or a rollback-to is observable at all (see afterSavepointSQL for why
 	// the buffer needs to know). The observer only acts when the statement's
-	// context carries an audit buffer, and only for the two statement texts
-	// the drivers emit, so this registration is inert for every other raw
-	// statement and for every db without the plugin.
+	// context carries an audit buffer, the statement itself succeeded
+	// (db.Error nil — see afterSavepointSQL for why a refused savepoint
+	// statement must never move the buffer), and the statement text is one
+	// of the two the drivers emit, so this registration is inert for every
+	// other raw statement, every refused one, and every db without the
+	// plugin.
 	if err := db.Callback().Raw().After("gorm:raw").
 		Register(auditCapturePluginName+":savepoint", p.afterSavepointSQL); err != nil {
 		return err
@@ -563,9 +603,36 @@ func (p *auditCapturePlugin) publishPending(db *gorm.DB) {
 // SavePoint/RollbackTo methods, and keeps the audit buffer's savepoint
 // bookkeeping in step with the database (see auditBuffer's doc comment for
 // why rolled-back savepoint regions must prune their events). It is a pure
-// observer: it never touches db.Error and never fails a statement, and
+// observer: it never modifies db.Error and never fails a statement, and
 // without an audit buffer on the statement's context — every raw statement
 // outside a WithTenantSession transaction — it does nothing at all.
+//
+// It acts only on savepoint statements the database actually accepted: when
+// db.Error is set the statement was refused, and acting on its text alone
+// would drive the buffer's frame stack out of step with the database. GORM's
+// processor.Execute (gorm.io/gorm@v1.31.2/callbacks.go) runs this whole
+// callback chain unconditionally, with no short-circuit when an earlier
+// callback failed, so a refused statement still reaches this observer with
+// its statement text intact — the error is the only sign the database did
+// not do what the text says. Reading db.Error is also the only place the
+// refusal is reliably visible at all: on the sqlite driver the refusal never
+// surfaces through SavePoint/RollbackTo's own result (the glebarez dialector
+// discards the Exec result and always reports success), so nothing between
+// the observer and the caller can tell that a rollback-to of a nonexistent
+// savepoint did not happen except this chain's own db.Error. Refusals reach
+// this observer through exactly three shapes: a ROLLBACK TO of a name no
+// live savepoint answers to (never opened, or destroyed by an earlier
+// rollback-to of an enclosing savepoint), a SAVEPOINT or ROLLBACK TO whose
+// name the database's grammar refuses (the drivers concatenate the caller's
+// name into the SQL unquoted), and a ROLLBACK TO of a released savepoint.
+// The last shape is how the released case closes without the
+// observer recognizing RELEASE statements at all: RELEASE is not a shape
+// GORM's own SavePoint/RollbackTo ever emit on either driver (the dialector
+// interface has no release operation), so a release can only reach a
+// transaction as hand-written raw SQL, invisible to this observer — but it
+// destroys the savepoint, and the later rollback-to of the released name is
+// refused, so the same db.Error gate keeps the stale frame from pruning
+// anything.
 //
 // The statement's savepoint name is everything after the prefix, trimmed of
 // surrounding whitespace. Both drivers concatenate the name verbatim into
@@ -575,6 +642,9 @@ func (p *auditCapturePlugin) publishPending(db *gorm.DB) {
 // an identifier containing whitespace would not survive into SQL in the
 // first place.
 func (p *auditCapturePlugin) afterSavepointSQL(db *gorm.DB) {
+	if db.Error != nil {
+		return
+	}
 	buf, ok := auditBufferFromContext(db.Statement.Context)
 	if !ok {
 		return

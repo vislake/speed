@@ -1935,3 +1935,228 @@ func TestAuditCapturePlugin_WithTenantSession_SecondRollbackToSameSavepoint_Disc
 		t.Errorf("published events = %+v, want outer-1 then outer-2 creates", events)
 	}
 }
+
+// TestAuditCapturePlugin_WithTenantSession_ReleaseThenRollbackTo_CommittedRowsStillPublish
+// pins the refused-statement half of the savepoint observer's contract: the
+// observer must act only on savepoint statements the database actually
+// accepted, never on statement text alone. GORM's own SavePoint/RollbackTo
+// never emit a RELEASE on either supported driver (the dialector interface
+// has no release operation), so a release can only reach the transaction as
+// hand-written SQL through the raw escape hatch — and a RELEASE destroys the
+// named savepoint with no statement the observer could ever recognize as
+// releasing it. The SQL semantics then close the case by themselves: a
+// ROLLBACK TO of the released name is refused by the database ("no such
+// savepoint", verified against real SQLite), so the rows written after the
+// release commit with the outer transaction, and the observer must not prune
+// their events. Before this fix the observer read only the statement text
+// prefix and never db.Error, so the refused rollback-to pruned the buffer to
+// the now-stale frame of the released savepoint: the two committed rows
+// (inside-1, whose create sat inside the released region — released, not
+// rolled back, so committed — and after-release, whose create sat between the
+// release and the refused rollback-to) published no audit events at all.
+func TestAuditCapturePlugin_WithTenantSession_ReleaseThenRollbackTo_CommittedRowsStillPublish(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	err := dbkit.WithTenantSession(ctx, db, func(tx *gorm.DB) error {
+		if err := tx.SavePoint("audit_released_sp").Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&testutil.Widget{ID: "inside-1", TenantID: "tenant-a", Name: "committed", Value: 1}).Error; err != nil {
+			return err
+		}
+		// RELEASE is not a shape GORM's own SavePoint/RollbackTo produce on
+		// either dialect driver, so it is issued here as the hand-written SQL
+		// that is its only route into a transaction.
+		if err := tx.Exec("RELEASE SAVEPOINT audit_released_sp").Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&testutil.Widget{ID: "after-release", TenantID: "tenant-a", Name: "committed-too", Value: 2}).Error; err != nil {
+			return err
+		}
+		// Refused: audit_released_sp no longer exists. On this driver the
+		// refusal never even surfaces through the method's own error (the
+		// dialector discards the Exec result), so the caller cannot tell the
+		// rollback did not happen — which is exactly why the buffer must read
+		// the database's answer where it is visible instead of trusting the
+		// statement text.
+		return tx.RollbackTo("audit_released_sp").Error
+	})
+	if err != nil {
+		t.Fatalf("WithTenantSession() error = %v", err)
+	}
+
+	// Database ground truth first: both rows committed — the release kept
+	// inside-1's work, the refused rollback-to discarded nothing.
+	for _, id := range []string{"inside-1", "after-release"} {
+		var count int64
+		if err := db.Raw(`SELECT COUNT(*) FROM widgets WHERE id = ?`, id).Scan(&count).Error; err != nil {
+			t.Fatalf("%s count query: %v", id, err)
+		}
+		if count != 1 {
+			t.Errorf("row count for %s = %d, want 1 (the row committed with the outer transaction)", id, count)
+		}
+	}
+
+	events := bus.captured()
+	if len(events) != 2 {
+		t.Fatalf("captured %d events, want exactly 2 (inside-1 and after-release creates; the refused rollback-to of the released savepoint must prune nothing)", len(events))
+	}
+	if events[0].ResourceID != "inside-1" || events[1].ResourceID != "after-release" {
+		t.Errorf("published events = %+v, want inside-1 then after-release creates", events)
+	}
+}
+
+// TestAuditCapturePlugin_WithTenantSession_ShadowedSameNameSavepoint_RolledBackRegionNeverPublishes
+// pins the shadowing half of the savepoint buffer's model: a SAVEPOINT whose
+// name a live savepoint already holds does not release the older one — it
+// shadows it. The older savepoint stays alive, merely unreachable by that
+// name until the newer one is destroyed (a rollback-to of an enclosing
+// savepoint destroys every savepoint established after its target), and is
+// the name's target again from then on. The buffer must keep the older same-
+// name frame exactly the way the database keeps the older savepoint. Before
+// this fix beginSavepoint deleted the older same-name frame at the reopen, so
+// a rollback-to that destroyed the newer savepoint through an enclosing
+// rollback and then rolled back to the now-reachable older one pruned nothing
+// the older frame should have covered: between-1's row (written between the
+// two shadow_sp savepoints, discarded by the final rollback-to of the older
+// savepoint) and disc-3's row (written after mid_sp's rollback, discarded by
+// that same rollback) were rolled back in the real database while their
+// captured events rode the outer commit's publish — two ghost audit events
+// for rows that never came into existence.
+func TestAuditCapturePlugin_WithTenantSession_ShadowedSameNameSavepoint_RolledBackRegionNeverPublishes(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	err := dbkit.WithTenantSession(ctx, db, func(tx *gorm.DB) error {
+		if err := tx.Create(&testutil.Widget{ID: "outer-1", TenantID: "tenant-a", Name: "committed", Value: 0}).Error; err != nil {
+			return err
+		}
+		// First shadow_sp: the savepoint whose region the final rollback-to
+		// (below) discards, after the second shadow_sp stops shadowing it.
+		if err := tx.SavePoint("audit_shadow_sp").Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&testutil.Widget{ID: "between-1", TenantID: "tenant-a", Name: "discarded-last", Value: 1}).Error; err != nil {
+			return err
+		}
+		// The enclosing savepoint whose own rollback destroys the second
+		// shadow_sp below (every savepoint established after mid_sp dies with
+		// it) — which is what makes the older shadow_sp reachable again.
+		if err := tx.SavePoint("audit_mid_sp").Error; err != nil {
+			return err
+		}
+		// Second shadow_sp: same name as the first — the database shadows the
+		// older savepoint instead of releasing it.
+		if err := tx.SavePoint("audit_shadow_sp").Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&testutil.Widget{ID: "disc-2", TenantID: "tenant-a", Name: "discarded-by-mid", Value: 2}).Error; err != nil {
+			return err
+		}
+		if err := tx.RollbackTo("audit_mid_sp").Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&testutil.Widget{ID: "disc-3", TenantID: "tenant-a", Name: "discarded-last", Value: 3}).Error; err != nil {
+			return err
+		}
+		// The second shadow_sp is gone (mid_sp's rollback destroyed it), so
+		// this rollback-to targets the older shadow_sp — and discards
+		// everything since the older one opened: between-1 and disc-3 with it.
+		if err := tx.RollbackTo("audit_shadow_sp").Error; err != nil {
+			return err
+		}
+		return tx.Create(&testutil.Widget{ID: "outer-2", TenantID: "tenant-a", Name: "committed-too", Value: 4}).Error
+	})
+	if err != nil {
+		t.Fatalf("WithTenantSession() error = %v", err)
+	}
+
+	// Database ground truth first: only the two outer rows may exist.
+	for _, id := range []string{"outer-1", "outer-2"} {
+		var count int64
+		if err := db.Raw(`SELECT COUNT(*) FROM widgets WHERE id = ?`, id).Scan(&count).Error; err != nil {
+			t.Fatalf("%s count query: %v", id, err)
+		}
+		if count != 1 {
+			t.Errorf("row count for %s = %d, want 1 (the row committed with the outer transaction)", id, count)
+		}
+	}
+	for _, id := range []string{"between-1", "disc-2", "disc-3"} {
+		var count int64
+		if err := db.Raw(`SELECT COUNT(*) FROM widgets WHERE id = ?`, id).Scan(&count).Error; err != nil {
+			t.Fatalf("%s count query: %v", id, err)
+		}
+		if count != 0 {
+			t.Errorf("row count for %s = %d, want 0 (the row must be rolled back in the database)", id, count)
+		}
+	}
+
+	events := bus.captured()
+	if len(events) != 2 {
+		t.Fatalf("captured %d events, want exactly 2 (outer-1 and outer-2 creates only; the shadowed savepoint region's creates must never be published — between-1 and disc-3 least of all, since a rollback-to of the older, reachable-again savepoint is what discarded them)", len(events))
+	}
+	if events[0].ResourceID != "outer-1" || events[1].ResourceID != "outer-2" {
+		t.Errorf("published events = %+v, want outer-1 then outer-2 creates", events)
+	}
+}
+
+// TestAuditCapturePlugin_WithTenantSession_RefusedSavepointStatement_ActsOnNothing
+// pins the observer's refusal gate on the SAVEPOINT side: a SAVEPOINT the
+// database refuses must not open a buffer frame any more than a refused
+// ROLLBACK TO may prune one. The savepoint name is passed through the
+// caller's own SavePoint/RollbackTo arguments, so an identifier with an
+// embedded space lands in the SQL verbatim — "SAVEPOINT bad name" is refused
+// by SQLite's grammar (as is the matching "ROLLBACK TO SAVEPOINT bad name"),
+// a refusal verified against a real database. Before this fix the observer
+// read only the statement text prefix, so the refused SAVEPOINT still pushed
+// a frame and the refused rollback-to pruned to it: kept-1's create, which
+// sat between the two refused statements, was rolled back nowhere — the
+// database committed it — yet its captured event was pruned and the outer
+// commit published only kept-2's.
+func TestAuditCapturePlugin_WithTenantSession_RefusedSavepointStatement_ActsOnNothing(t *testing.T) {
+	bus := &capturedBus{}
+	db := openAuditCaptureTestDB(t, bus)
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+
+	err := dbkit.WithTenantSession(ctx, db, func(tx *gorm.DB) error {
+		// "SAVEPOINT bad name" is a syntax error on real SQLite: the driver
+		// concatenates the caller's name into the SQL unquoted, and a space
+		// ends the identifier. Neither statement below ever takes effect.
+		if err := tx.SavePoint("bad name").Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&testutil.Widget{ID: "kept-1", TenantID: "tenant-a", Name: "committed", Value: 1}).Error; err != nil {
+			return err
+		}
+		if err := tx.RollbackTo("bad name").Error; err != nil {
+			return err
+		}
+		return tx.Create(&testutil.Widget{ID: "kept-2", TenantID: "tenant-a", Name: "committed-too", Value: 2}).Error
+	})
+	if err != nil {
+		t.Fatalf("WithTenantSession() error = %v", err)
+	}
+
+	// Database ground truth first: both rows committed — neither refused
+	// statement discarded anything.
+	for _, id := range []string{"kept-1", "kept-2"} {
+		var count int64
+		if err := db.Raw(`SELECT COUNT(*) FROM widgets WHERE id = ?`, id).Scan(&count).Error; err != nil {
+			t.Fatalf("%s count query: %v", id, err)
+		}
+		if count != 1 {
+			t.Errorf("row count for %s = %d, want 1 (the row committed with the outer transaction)", id, count)
+		}
+	}
+
+	events := bus.captured()
+	if len(events) != 2 {
+		t.Fatalf("captured %d events, want exactly 2 (kept-1 and kept-2 creates; the refused savepoint statements must act on nothing — kept-1 least of all, since its event was pruned by a rollback the database refused)", len(events))
+	}
+	if events[0].ResourceID != "kept-1" || events[1].ResourceID != "kept-2" {
+		t.Errorf("published events = %+v, want kept-1 then kept-2 creates", events)
+	}
+}
