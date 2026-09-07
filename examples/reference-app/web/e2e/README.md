@@ -640,10 +640,32 @@ paid for once:
   is not enough -- a link that expires by design is not the clinic's own
   copy.
 
+**A stopped machine is not a broken deployment.** `flyctl status` reports
+the app `suspended` with its machine `stopped` whenever nothing has
+visited it for a while -- that is fly's idle auto-stop, and the first
+request wakes it in about three seconds. Probe with
+`curl https://<app>.fly.dev/healthz` before reporting a deployment as
+down; the machine state alone will say it is, and be wrong.
+
+**Two of the `@deployment` gates need a password this suite does not
+hold.** `flyctl secrets list` shows one secret, `APP_DEMO_USERS_PASSWORD`,
+whose value is not the suite's own default -- so the gates that sign in
+as a demo account are refused there, and `signInAs` names exactly that
+rather than reporting a missing control. Setting `E2E_DEMO_PASSWORD` to
+the deployment's own value is what makes them runnable. Rotating the
+secret instead is not a substitute: the demo accounts were registered
+with the old value at boot, so a new one only takes effect together with
+wiping the database it seeded them into.
+
+So a `@deployment` run today answers three of the five gates -- the
+address serves an HTML document, the page mounts the app, and it loads
+with no failed asset or console error -- and names its own reason for
+the other two.
+
 **What the deployment cannot answer.** The fly.io deployment has no
 image-provider configuration (`flyctl secrets list` shows no
-`APP_AI_GATEWAY_IMAGE_*` entry), so a generation there reaches for a
-vendor that is not configured and fails. Everything up to that point is
+`APP_AI_GATEWAY_IMAGE_*` entry -- re-checked, still one secret), so a
+generation there reaches for a vendor that is not configured and fails. Everything up to that point is
 verifiable on the deployment -- registration, sign-in, the clinic's own
 name, a case with its photograph, the smile and shade choices -- and
 everything from the generation onward is verifiable only locally, where
