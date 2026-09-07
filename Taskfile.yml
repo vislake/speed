@@ -246,10 +246,10 @@ tasks:
     silent: true
 
   api:gen:
-    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, cases, smilesim, org, storage, authn, notification, sharing, pki, admin, integration and ai-gateway, plus the frontend SDK for every fragment in the merged document (orval -> @speed/api-sdk, notes + cases + smilesim + authn + notification).
+    desc: Regenerate the generated API surface of every module that ships an OpenAPI fragment -- backend (oapi-codegen types + ServerInterface) for notes, cases, smilesim, org, storage, authn, notification, billing, sharing, pki, admin, integration and ai-gateway, plus the frontend SDK for every fragment in the merged document (orval -> @speed/api-sdk, notes + cases + smilesim + authn + notification + billing).
     # The backend half of the contract-change flow (docs/internal/
     # 21-api-contract.md's order: edit the spec, regenerate, compile
-    # failures reveal every handler to fix) is real for the twelve
+    # failures reveal every handler to fix) is real for the thirteen
     # surfaces that ship a fragment: this task runs oapi-codegen, pinned
     # at v2.8.0, over each module's own api/openapi.yaml with that
     # directory's own oapi-codegen.yaml -- rewriting
@@ -263,6 +263,10 @@ tasks:
     # go/org/api/org-server.gen.go, go/storage/api/storage-server.gen.go,
     # go/authn/api/authn-server.gen.go,
     # go/notification/api/notification-server.gen.go,
+    # go/billing/api/billing-server.gen.go (billing's leg added by the
+    # block-D frontend round, the same chore(ci)-shaped follow-up
+    # go/sharing's 9366b9d and go/pki's 28a7332 discharged for their own
+    # backend-only fragments),
     # go/sharing/api/sharing-server.gen.go, go/pki/api/pki-server.gen.go,
     # go/admin/api/admin-server.gen.go (admin's leg added by the same
     # round that wired its fragment into api-contract.yml),
@@ -271,7 +275,8 @@ tasks:
     # generated ServerInterface's growth is what makes an un-updated handler
     # stop compiling (the compile-time assertions live in
     # internal/notes/handler.go, go/org/handler.go, go/storage/handler.go,
-    # go/authn/handler.go, go/notification/handler.go, go/sharing/handler.go,
+    # go/authn/handler.go, go/notification/handler.go, go/billing/handler.go,
+    # go/sharing/handler.go,
     # go/pki/handler.go, go/admin/handler.go, go/integration/handler.go,
     # go/ai-gateway/handler.go -- and, for the app's own case-domain and
     # smile-simulation fragments, cmd/server/cases.go and
@@ -279,7 +284,8 @@ tasks:
     #
     # The frontend half of the api:gen promise is live for every fragment
     # in the merged document: the api:merge dependency below joins the
-    # notes, cases, smilesim, authn and notification fragments into
+    # notes, cases, smilesim, authn, notification and billing fragments
+    # into
     # build/openapi/speed.yaml, and the orval leg below regenerates the
     # @speed/api-sdk package from that merged document -- orval pinned at
     # 8.17.0 and run from web/ via pnpm dlx (orval is never a workspace
@@ -288,7 +294,10 @@ tasks:
     # notification joined the merged document when its recipient-facing
     # HTTP surface shipped (the notification round): its fragment feeds
     # the merge and orval like authn's, because its operations are
-    # self-service surfaces a consumer shell's SDK calls. The cases and
+    # self-service surfaces a consumer shell's SDK calls. billing joined
+    # in the block-D frontend round for the same reason: the credit
+    # view's balance and ledger reads are the first in-workspace web
+    # caller of its two operations. The cases and
     # smilesim fragments joined in the P3a round for the same reason:
     # they are the reference app's own case-domain and smile-simulation
     # surfaces, the operations the P3 web UI calls. org's and storage's
@@ -332,7 +341,7 @@ tasks:
     #
     # Keep the commands in lockstep with
     # .github/workflows/api-contract.yml's regeneration steps: the same
-    # go run from the same twelve backend directories, and the same pnpm
+    # go run from the same thirteen backend directories, and the same pnpm
     # dlx orval + fixup pair from web/, then that workflow's porcelain
     # gate fails any PR whose spec change was not committed with its
     # regenerated artifact.
@@ -372,6 +381,10 @@ tasks:
         go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
           -config oapi-codegen.yaml openapi.yaml
       - |
+        cd go/billing/api && \
+        go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
+          -config oapi-codegen.yaml openapi.yaml
+      - |
         cd go/sharing/api && \
         go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
           -config oapi-codegen.yaml openapi.yaml
@@ -401,9 +414,11 @@ tasks:
     # carve-out) in its own right once two or more fragments exist (which
     # happened when authn's fragment landed alongside notes', grew a
     # third member when notification's recipient-facing surface shipped,
-    # and grew to five when the P3a round joined the reference app's own
+    # grew to five when the P3a round joined the reference app's own
     # cases and smilesim fragments, whose operations the P3 web UI
-    # calls),
+    # calls, and grew to six when the block-D frontend round joined
+    # billing's read-only credits surface, whose operations the credit
+    # view calls),
     # and it is also the frontend leg's input: api:gen depends on this
     # task (see above), so a fragment edit regenerates through a fresh
     # merge rather than a stale committed speed.yaml. The merge itself
@@ -431,6 +446,7 @@ tasks:
         examples/reference-app/internal/smilesim/api/openapi.yaml
         go/authn/api/openapi.yaml
         go/notification/api/openapi.yaml
+        go/billing/api/openapi.yaml
         -o build/openapi/speed.yaml
       - node web/scripts/redocly-join-fixup.mjs
       - pnpm --package=@redocly/cli@2.51.1 dlx redocly lint build/openapi/speed.yaml --config redocly.yaml

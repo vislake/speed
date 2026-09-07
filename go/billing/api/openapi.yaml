@@ -37,15 +37,20 @@ info:
     exists this fragment stays read-only rather than shipping an endpoint
     nothing calls.
 
-    Merging this fragment into an application-wide build/openapi/speed.yaml
-    stays future work, exactly as it does for go/storage's and
-    go/sharing's own backend-leg-only fragments: the frontend SDK leg of
-    task api:gen draws only on the merged document, and these operations
-    have no in-workspace web consumer yet.
+    This fragment is part of the application-wide build/openapi/speed.yaml
+    merged document: the round that built the credit view joined it there
+    (the tags this fragment's operations carry are the membership shape
+    every merged fragment uses, the same treatment notification's
+    recipient-facing fragment received when its surface shipped), so task
+    api:gen's frontend SDK leg generates these two operations into
+    @speed/api-sdk for the credit view that calls them -- the reverse of
+    the backend-leg-only deferral go/storage's and go/sharing's own
+    fragments still carry.
   version: 0.0.0
 paths:
   /api/v1/billing/credits/balance:
     get:
+      tags: [billing]
       operationId: billing_getCreditBalance
       summary: Read the caller's tenant credit balance.
       description: >-
@@ -73,6 +78,7 @@ paths:
                 $ref: '#/components/schemas/BillingError'
   /api/v1/billing/credits/transactions:
     get:
+      tags: [billing]
       operationId: billing_listCreditTransactions
       summary: List the caller's tenant's recent credit transactions, newest first.
       description: >-
