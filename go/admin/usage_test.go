@@ -217,3 +217,146 @@ func TestUsageService_Summary_DisplayNameLookupFails_SurfacedNotSilentlyBlank(t 
 		t.Errorf("log output = %q, want a WARN-level record for the swallowed-no-more failure", out)
 	}
 }
+
+// TestUsageService_Summary_MaterializesExactlyOneZeroBalanceRowPerRowlessTenant
+// pins the write contract Summary's own doc comment now states (P2-2, the
+// claim/call alignment): the billing leg reads balances through
+// billing.CreditService.Balance, whose documented materialize-on-first-read
+// contract creates one zero-valued billing_credit_balances row per ledger
+// tenant that has no row yet. The pre-fix doc called this surface
+// "read-only" while Balance was doing exactly that -- this test
+// demonstrates the materialization the honest claim must state, and pins
+// the rest of the documented write shape around it: a tenant that already
+// has a row is never written (its stored row and its answer are exactly
+// what its own credit history produced -- the guardrail a future
+// read-shape change must keep), a repeated Summary writes nothing further,
+// and no credit-transaction row is ever created.
+func TestUsageService_Summary_MaterializesExactlyOneZeroBalanceRowPerRowlessTenant(t *testing.T) {
+	env := buildTestAdminModule(t)
+
+	const (
+		tenantWithBalance = pkgcore.TenantID("tenant-usage-write-balanced")
+		tenantRowless     = pkgcore.TenantID("tenant-usage-write-rowless")
+	)
+	for _, tc := range []struct {
+		id   pkgcore.TenantID
+		name string
+	}{
+		{tenantWithBalance, "Has Balance Co"},
+		{tenantRowless, "Never Touched Credits Co"},
+	} {
+		if _, err := env.Org.Tree().CreateRoot(pkgcore.WithTenant(context.Background(), tc.id), tc.name, "workspace"); err != nil {
+			t.Fatalf("CreateRoot(%q) error = %v", tc.id, err)
+		}
+	}
+
+	// A real credit grant for tenantWithBalance: a real row worth 500, and
+	// the ledger transaction behind it. tenantRowless has no row at all --
+	// Summary is about to be the first thing that could ever materialize
+	// one for it.
+	if _, err := env.Billing.Credits().Grant(pkgcore.WithTenant(context.Background(), tenantWithBalance), billing.GrantInput{Amount: 500, Reason: "usage-write-test"}); err != nil {
+		t.Fatalf("Grant() error = %v", err)
+	}
+
+	// The test's own seat on the billing_credit_balances table, through
+	// billing's exported repository type over the shared test db -- the
+	// fixture-read shape testAdminEnv.DB's own doc comment sanctions,
+	// never a raw query.
+	balances := billing.NewCreditBalanceRepository(env.DB)
+	readBalance := func(id pkgcore.TenantID) *billing.CreditBalance {
+		t.Helper()
+		row, err := balances.FindByID(pkgcore.WithTenant(context.Background(), id), string(id))
+		if err != nil {
+			t.Fatalf("FindByID(%q) error = %v, want a stored balance row", id, err)
+		}
+		return row
+	}
+	balanceRowExists := func(id pkgcore.TenantID) bool {
+		t.Helper()
+		_, err := balances.FindByID(pkgcore.WithTenant(context.Background(), id), string(id))
+		return err == nil
+	}
+	transactionCount := func(id pkgcore.TenantID) int {
+		t.Helper()
+		rows, err := billing.NewCreditTransactionRepository(env.DB).ListByTenant(pkgcore.WithTenant(context.Background(), id))
+		if err != nil {
+			t.Fatalf("ListByTenant(%q) error = %v", id, err)
+		}
+		return len(rows)
+	}
+
+	if !balanceRowExists(tenantWithBalance) {
+		t.Fatalf("precondition: tenant %q should have a stored balance row after Grant", tenantWithBalance)
+	}
+	if balanceRowExists(tenantRowless) {
+		t.Fatalf("precondition: tenant %q should have no stored balance row yet", tenantRowless)
+	}
+
+	svc := NewUsageService(env.Metering, env.Billing, env.Admin.Tenants())
+	svc.attach(env.Registry.EventBus())
+
+	first, err := svc.Summary(context.Background(), "operator-1")
+	if err != nil {
+		t.Fatalf("Summary() error = %v", err)
+	}
+	findRow := func(rows []UsageSummaryRow, id pkgcore.TenantID) *UsageSummaryRow {
+		t.Helper()
+		for i := range rows {
+			if rows[i].TenantID == string(id) {
+				return &rows[i]
+			}
+		}
+		t.Fatalf("Summary() rows = %+v, want a row for %q", rows, id)
+		return nil
+	}
+
+	// The documented write happened: tenantRowless now has the zero-valued
+	// row Balance materialized, and its answer row is that zero balance --
+	// the only way billing's own read surface could ever answer a tenant
+	// that has never touched credits.
+	rowlessRow := findRow(first, tenantRowless)
+	if rowlessRow.CreditBalance == nil {
+		t.Fatalf("row for %q: CreditBalance = nil, want the materialized zero balance (billing is wired)", tenantRowless)
+	}
+	if rowlessRow.CreditBalance.Available != 0 || rowlessRow.CreditBalance.Reserved != 0 {
+		t.Errorf("row for %q: CreditBalance = %+v, want Available=0 Reserved=0", tenantRowless, rowlessRow.CreditBalance)
+	}
+	stored := readBalance(tenantRowless)
+	if stored.Available != 0 || stored.Reserved != 0 {
+		t.Errorf("stored balance row for %q = %+v, want the zero-valued row Summary materialized", tenantRowless, stored)
+	}
+
+	// A tenant that already had a row was never written: its stored row and
+	// its answer are exactly what Grant created, unchanged by the summary.
+	balancedRow := findRow(first, tenantWithBalance)
+	if balancedRow.CreditBalance == nil || balancedRow.CreditBalance.Available != 500 || balancedRow.CreditBalance.Reserved != 0 {
+		t.Errorf("row for %q: CreditBalance = %+v, want Available=500 Reserved=0 (the stored row, unchanged)", tenantWithBalance, balancedRow.CreditBalance)
+	}
+	storedBalanced := readBalance(tenantWithBalance)
+	if storedBalanced.Available != 500 || storedBalanced.Reserved != 0 {
+		t.Errorf("stored balance row for %q = %+v, want Available=500 (unchanged by Summary)", tenantWithBalance, storedBalanced)
+	}
+
+	// Nothing else was written: the rowless tenant's credit-transaction
+	// ledger is still empty after the summary that materialized its balance
+	// row.
+	if n := transactionCount(tenantRowless); n != 0 {
+		t.Errorf("credit transactions for %q after Summary = %d, want 0 (Summary writes no ledger rows)", tenantRowless, n)
+	}
+
+	// A repeated Summary writes nothing further and answers identically:
+	// the same stored rows, the same answer rows.
+	second, err := svc.Summary(context.Background(), "operator-1")
+	if err != nil {
+		t.Fatalf("second Summary() error = %v", err)
+	}
+	if n := transactionCount(tenantRowless); n != 0 {
+		t.Errorf("credit transactions for %q after second Summary = %d, want 0", tenantRowless, n)
+	}
+	for _, id := range []pkgcore.TenantID{tenantWithBalance, tenantRowless} {
+		firstRow, secondRow := findRow(first, id), findRow(second, id)
+		if !reflect.DeepEqual(firstRow.CreditBalance, secondRow.CreditBalance) {
+			t.Errorf("tenant %q: CreditBalance changed between summaries: %+v -> %+v", id, firstRow.CreditBalance, secondRow.CreditBalance)
+		}
+	}
+}

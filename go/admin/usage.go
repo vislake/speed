@@ -28,7 +28,13 @@ type UsageSummaryRow struct {
 
 	// CreditBalance is the tenant's current credits-ledger balance, read
 	// through billing.CreditService.Balance -- nil when go/billing was
-	// never wired through WithBilling.
+	// never wired through WithBilling, and non-nil whenever it WAS wired,
+	// with no third case: Balance's documented materialize-on-first-read
+	// contract (go/billing/credit_service.go) guarantees a row even for a
+	// tenant that has never touched credits, and that materialization --
+	// one zero-valued billing_credit_balances row per ledger tenant
+	// lacking one -- is the one write UsageService.Summary performs (see
+	// UsageService's own doc comment).
 	CreditBalance *billing.CreditBalance
 
 	// ActiveSubscription is the tenant's currently active subscription,
@@ -36,17 +42,31 @@ type UsageSummaryRow struct {
 	// when go/billing was never wired AND when the tenant simply has none
 	// active right now (Active's own (nil, nil) "no active subscription"
 	// answer); UsageService.Summary does not attempt to distinguish the
-	// two reasons for a nil value here, since CreditBalance (present
-	// whenever go/billing is wired at all, per Balance's own
-	// materialize-on-first-read contract) already tells a caller which
-	// case applies.
+	// two reasons for a nil value here, since CreditBalance (non-nil
+	// whenever go/billing is wired at all -- see its own comment above)
+	// already tells a caller which case applies.
 	ActiveSubscription *billing.Subscription
 }
 
 // UsageService is D9's runtime: admin's own tenant-by-tenant stitching of
 // go/metering's and go/billing's ALREADY-REAL, per-tenant query methods --
-// no new database table, no new aggregate, exactly D9's own design
-// (docs/internal/23-admin.md). It is a read-only aggregation surface.
+// no new database table, no new aggregate of admin's own, exactly D9's own
+// design (docs/internal/23-admin.md).
+//
+// The surface is read-only against go/metering's own tables and admin's
+// own ledger, but deliberately NOT against go/billing's credits ledger:
+// the billing leg reads each tenant's balance through
+// billing.CreditService.Balance, whose documented materialize-on-first-
+// read contract (go/billing/credit_service.go) creates the row it reads
+// back for a tenant that has none yet -- billing's composed surface offers
+// no balance read that would answer "no row" for a tenant that has never
+// touched credits without first materializing it. Summary therefore
+// performs exactly one kind of write: one zero-valued
+// billing_credit_balances row per ledger tenant lacking a row, nothing for
+// a tenant that already has one, nothing on any other table, and nothing
+// further when the same tenant is summarized again. The claim and the call
+// agree because this doc says so: it is not a read-only surface, and that
+// materialization is the whole of what it writes.
 type UsageService struct {
 	metering *metering.Module // nil when WithMetering was never applied
 	billing  *billing.Module  // nil when WithBilling was never applied
@@ -73,6 +93,14 @@ func (s *UsageService) attach(bus pkgcore.EventBus) { s.bus = bus }
 // under D2's mechanism -- looping tenancy.WithSystemContext per tenant,
 // exactly like SearchService.MembershipsOf and AuditService's cross-
 // tenant path.
+//
+// Writes: none against admin's own tables, go/metering's tables, or any
+// subscription or credit-transaction table; exactly one zero-valued
+// billing_credit_balances row per ledger tenant that has no balance row
+// yet, created by the billing leg's Balance call (its documented
+// materialize-on-first-read contract -- see UsageService's own doc
+// comment). A tenant that already has a row is never written by Summary,
+// and a repeated Summary writes nothing further.
 //
 // actorUserID identifies the platform operator making this cross-tenant
 // read, for pkgcore.SystemReason.Actor. When neither go/metering nor
