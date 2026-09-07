@@ -138,7 +138,10 @@ type SweepResult struct {
 	// part-way through hard-deleted the rows it reports reaping, and
 	// TotalReaped -- and the sweep audit's Changes["reaped"] breakdown --
 	// must count rows that are genuinely and irreversibly gone even when
-	// the callback also errored.
+	// the callback also errored. This map (with the failure-site log in
+	// SweepTenant) is the error text's home: the sweep audit's own
+	// Changes["errors"] entry records the classification instead, never
+	// the text (see emitSweepAudit).
 	Errors map[string]error
 }
 
@@ -252,12 +255,16 @@ func (s *RetentionService) RetentionWindow(ctx context.Context, tenant pkgcore.T
 // The whole pass, once every participant has run, is recorded as exactly
 // one AuditActionRetentionSweep audit event (never one per participant)
 // via dbkit/audit.Emit, with Resource naming the tenant and Changes
-// carrying the full per-participant reaped/error breakdown. A failure to
-// publish that audit event is reported by wrapping ErrAuditRecordFailed --
-// see that error's own doc comment for why it is surfaced rather than
-// swallowed, and why it does not erase the SweepResult already computed:
-// SweepTenant returns both the SweepResult and the wrapped audit error
-// together in that case, never a nil result.
+// carrying the full per-participant reaped breakdown plus a
+// classification-only record of which participants failed -- each failed
+// participant's name keyed to participantErrorMarker, never the error
+// text, whose homes are the returned SweepResult.Errors and the
+// failure-site log (see emitSweepAudit). A failure to publish that audit
+// event is reported by wrapping ErrAuditRecordFailed -- see that error's
+// own doc comment for why it is surfaced rather than swallowed, and why
+// it does not erase the SweepResult already computed: SweepTenant returns
+// both the SweepResult and the wrapped audit error together in that case,
+// never a nil result.
 func (s *RetentionService) SweepTenant(ctx context.Context, tenant pkgcore.TenantID) (SweepResult, error) {
 	now := time.Now()
 	window, err := s.RetentionWindow(ctx, tenant)
@@ -305,6 +312,18 @@ func (s *RetentionService) SweepTenant(ctx context.Context, tenant pkgcore.Tenan
 			// identical count-on-error semantics ErasureService.Erase's
 			// own accounting applies to ErasureResult.Erased.
 			result.Errors[p.Name] = err
+			// The participant error's text is logged here -- behind
+			// go/observability's redaction layer -- never written into the
+			// audit record's Changes, whose errors entry classifies each
+			// failed participant by name keyed to participantErrorMarker
+			// (see emitSweepAudit, and the erasure path's identical rule):
+			// the changes column is effectively permanent, and sweep-path
+			// error text can carry internal row or storage details no
+			// audit reader was ever promised. This log line and the
+			// returned SweepResult.Errors keep the text available to the
+			// operator and this call's own caller.
+			observability.FromContext(sysCtx).Error("compliance: retention sweep participant failed",
+				"participant", p.Name, "error", err)
 		}
 	}
 
@@ -322,12 +341,23 @@ func (s *RetentionService) SweepTenant(ctx context.Context, tenant pkgcore.Tenan
 // context (still carrying the sweep's own system Actor and the tenant),
 // matching how tenancy.WithSystemContext itself publishes its own
 // SystemContextEntered event against the original, non-elevated ctx.
+//
+// Changes["errors"] carries a classification only -- each failed
+// participant's name keyed to participantErrorMarker -- deliberately
+// never the participant error's text: dbkit/audit's Diff content contract
+// (emit.go) forbids sensitive content in the changes column, which is
+// effectively permanent, and sweep-path error text can carry internal row
+// or storage details. The error text's homes are the returned
+// SweepResult.Errors (this call's own caller) and the structured log at
+// the failure site in SweepTenant (behind go/observability's redaction
+// layer) -- the identical rule the erasure path's emitErasureAudit
+// already follows.
 func (s *RetentionService) emitSweepAudit(ctx context.Context, result SweepResult) error {
 	changes := map[string]any{"reaped": result.Reaped}
 	if result.HasErrors() {
 		errs := make(map[string]string, len(result.Errors))
-		for name, err := range result.Errors {
-			errs[name] = err.Error()
+		for name := range result.Errors {
+			errs[name] = participantErrorMarker
 		}
 		changes["errors"] = errs
 	}

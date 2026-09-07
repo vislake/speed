@@ -93,9 +93,11 @@ func insertExportAuditRowWithResult(t *testing.T, repo *audit.Repository, tenant
 // exportObjectKey namespace and records the audit row a REAL partial
 // export leaves for it -- Success false with the participants-failed
 // reason, Changes.After carrying the contributing participants and the
-// per-participant errors map alongside object_key and share_expires_at
-// (emitExportAudit's exact partial shape) -- the row whose stored object
-// the sweep must reap once its share expires. Returns the object key.
+// classification-only per-participant errors map (each failed participant
+// keyed to participantErrorMarker, never the callback's error text)
+// alongside object_key and share_expires_at (emitExportAudit's exact
+// partial shape) -- the row whose stored object the sweep must reap once
+// its share expires. Returns the object key.
 func seedPartialExportDelivery(t *testing.T, repo *audit.Repository, store pkgcore.ObjectStore, tenant pkgcore.TenantID, id string, shareExpiresAt time.Time) string {
 	t.Helper()
 	key := exportObjectKey(tenant, id)
@@ -105,7 +107,7 @@ func seedPartialExportDelivery(t *testing.T, repo *audit.Repository, store pkgco
 	}
 	insertExportAuditRowWithResult(t, repo, tenant, id, key, shareExpiresAt, false, "participants failed: testutil.failing_export", map[string]any{
 		"participants": []string{"testutil.fake_note"},
-		"errors":       map[string]string{"testutil.failing_export": "gather failed"},
+		"errors":       map[string]string{"testutil.failing_export": participantErrorMarker},
 	})
 	return key
 }

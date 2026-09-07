@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/vislake/speed/go/dbkit/audit"
+	"github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/sharing"
 )
@@ -21,13 +22,39 @@ import (
 // and ExportService.Export emits under, once per export request.
 const AuditActionExportRequest = "compliance.export.request"
 
+// participantErrorMarker is the classification-only value an export's or a
+// retention sweep's failure record stores for each failed participant --
+// in ExportManifest.Errors, in emitExportAudit's and emitSweepAudit's
+// Changes["errors"] entry: the participant's Name is the map key, this
+// constant the classification. It is the sweep and export halves of the
+// identical rule erasureAuditErrorMarker (erasure.go) applies to the
+// erasure path's audit record: the record says WHO failed and THAT it
+// failed -- never the error text itself. The text must not reach either
+// of this constant's two write surfaces, for two distinct reasons. The
+// audit events' changes column is effectively permanent -- dbkit/audit/
+// emit.go's Diff contract: "Anything written here is effectively
+// permanent" -- and participant failure text can carry identifiers and
+// internal details no audit reader was ever promised. And
+// ExportManifest.Errors is serialized into the manifest Export stores and
+// delivers over an unauthenticated, single-view go/sharing link: the link
+// holder -- the export's recipient -- is entitled to read the export's
+// data, not platform-internal failure text that can name other subjects,
+// internal object keys or infrastructure details (the audience argument:
+// two audiences conflated into one). The text's legitimate homes are the
+// structured log at each failure site (behind go/observability's
+// redaction layer) and the in-process results and returned errors --
+// SweepResult.Errors and ErasureResult.Errors on those paths,
+// ErrExportDeliveryFailed's own wrapped cause on the delivery path.
+const participantErrorMarker = "failed"
+
 // ExportManifest is one data-export package: every registered
 // participant's own gathered data for one tenant, keyed by participant
-// Name, plus any per-participant gathering error. It is the JSON document
-// ExportService.Export stores through pkgcore.ObjectStore and then
-// delivers as a short-lived, single-view go/sharing.Share (round 2, see
-// deliverExport): the manifest is the tenant-level export bundle itself,
-// and the share is the credentialed window on the stored copy of it.
+// Name, plus any per-participant gathering classification. It is the JSON
+// document ExportService.Export stores through pkgcore.ObjectStore and
+// then delivers as a short-lived, single-view go/sharing.Share (round 2,
+// see deliverExport): the manifest is the tenant-level export bundle
+// itself, and the share is the credentialed window on the stored copy of
+// it.
 type ExportManifest struct {
 	// Tenant is the tenant the export was gathered for.
 	Tenant pkgcore.TenantID `json:"tenant"`
@@ -36,9 +63,19 @@ type ExportManifest struct {
 	// Participants maps participant Name to the JSON-serializable value
 	// its Export callback returned.
 	Participants map[string]any `json:"participants"`
-	// Errors maps participant Name to the error its Export callback
-	// returned, for participants whose callback failed -- a participant
-	// present here contributes nothing to Participants for this run.
+	// Errors maps participant Name to participantErrorMarker for
+	// participants whose Export callback failed -- a participant present
+	// here contributes nothing to Participants for this run. The map is a
+	// classification, deliberately never the callback's error text: this
+	// manifest is the deliverable Export stores and hands to its
+	// recipient over an unauthenticated, single-view go/sharing link, and
+	// the link holder is entitled to read the export's data, not
+	// platform-internal failure text that can name other subjects,
+	// internal object keys or infrastructure details (participantErrorMarker's
+	// own doc comment, and the same classification-only rule the erasure
+	// path's audit record already follows). The error text's home is the
+	// structured log at the gather site, behind go/observability's
+	// redaction layer.
 	Errors map[string]string `json:"errors,omitempty"`
 }
 
@@ -249,13 +286,16 @@ func exportObjectKey(tenant pkgcore.TenantID, id string) string {
 // module cannot deliver is not a completed export.
 //
 // Like Sweep and Erase, one participant's Export failing does not stop
-// the gathering of the rest: the failure lands in ExportManifest.Errors,
-// and the manifest is still built, marshaled, stored and delivered -- a
-// partial export is still useful evidence of what was gathered and what
-// was not. Export returns ErrExportPartialFailure whenever
-// ExportManifest.HasErrors() is true, so a caller decides whether to
-// re-run Export once the failing participant is healthy again rather than
-// assuming a complete gather.
+// the gathering of the rest: the failure lands in ExportManifest.Errors
+// as a classification (the participant's Name keyed to
+// participantErrorMarker -- never the callback's error text, which the
+// delivered manifest must not carry; see participantErrorMarker's doc
+// comment for where the text goes instead), and the manifest is still
+// built, marshaled, stored and delivered -- a partial export is still
+// useful evidence of what was gathered and what was not. Export returns
+// ErrExportPartialFailure whenever ExportManifest.HasErrors() is true, so
+// a caller decides whether to re-run Export once the failing participant
+// is healthy again rather than assuming a complete gather.
 //
 // A failure to deliver the already-stored manifest through go/sharing --
 // as opposed to a participant failing to contribute data -- is reported as
@@ -332,10 +372,23 @@ func (s *ExportService) Export(ctx context.Context, tenant pkgcore.TenantID) (*E
 		}
 		data, exportErr := p.Export(ctx, tenant)
 		if exportErr != nil {
+			// The participant's error text is logged here -- behind
+			// go/observability's redaction layer -- never written into the
+			// manifest's Errors entry, which is the classification-only
+			// participantErrorMarker: the manifest is the export
+			// deliverable, delivered to its recipient over an
+			// unauthenticated, single-view share link whose holder is
+			// entitled to the export's data, not platform-internal failure
+			// text (see participantErrorMarker's doc comment, and the
+			// erasure path's identical classification rule). The manifest
+			// itself must still say WHO failed and THAT it failed -- the
+			// marker is that record.
 			if manifest.Errors == nil {
 				manifest.Errors = make(map[string]string)
 			}
-			manifest.Errors[p.Name] = exportErr.Error()
+			manifest.Errors[p.Name] = participantErrorMarker
+			observability.FromContext(ctx).Error("compliance: export participant failed",
+				"participant", p.Name, "error", exportErr)
 			continue
 		}
 		manifest.Participants[p.Name] = data
@@ -356,6 +409,15 @@ func (s *ExportService) Export(ctx context.Context, tenant pkgcore.TenantID) (*E
 
 	delivery, deliverErr := s.deliverExport(ctx, tenant, key)
 	if deliverErr != nil {
+		// The transport error's text is logged here -- behind
+		// go/observability's redaction layer -- and carried to this call's
+		// own caller as ErrExportDeliveryFailed's wrapped cause below,
+		// never written into the audit record's FailureReason, which
+		// emitExportAudit classifies as "delivery failed" instead (the
+		// audit row is effectively permanent; see participantErrorMarker's
+		// doc comment).
+		observability.FromContext(ctx).Error("compliance: export delivery failed",
+			"error", deliverErr)
 		// A manifest that could not be delivered must not stay stored: it
 		// is an un-shareable copy of the tenant's complete data with no
 		// legitimate consumer path, and leaving it behind
@@ -482,19 +544,38 @@ func (s *ExportService) exportDeliveryExpiry(ctx context.Context, tenant pkgcore
 // failure rather than any participant gathering failure, since a manifest
 // gathered without errors but never delivered is still not a completed
 // export from the requester's point of view.
+//
+// Changes["errors"] carries a classification only -- each failed
+// participant's name keyed to participantErrorMarker -- deliberately
+// never the participant error's text: dbkit/audit's Diff content contract
+// (emit.go) forbids sensitive content in the changes column, which is
+// effectively permanent. The same classification applies to a delivery
+// failure's FailureReason ("delivery failed", never the transport error's
+// text): the transport error's homes are the structured log at the
+// delivery-failure site in Export (behind go/observability's redaction
+// layer) and the returned ErrExportDeliveryFailed's own wrapped cause,
+// not the audit row. The participant error text's home is the structured
+// log at the gather site; ExportManifest.Errors itself already holds the
+// classification (see its field doc), and this map rebuilds it explicitly
+// so the audit record never depends on whatever the manifest happens to
+// carry.
 func (s *ExportService) emitExportAudit(ctx context.Context, tenant pkgcore.TenantID, key string, manifest ExportManifest, delivery ExportDelivery, deliverErr error) error {
 	changes := map[string]any{
 		"object_key":   key,
 		"participants": participantNames(manifest.Participants),
 	}
 	if manifest.HasErrors() {
-		changes["errors"] = manifest.Errors
+		errs := make(map[string]string, len(manifest.Errors))
+		for name := range manifest.Errors {
+			errs[name] = participantErrorMarker
+		}
+		changes["errors"] = errs
 	}
 	success := !manifest.HasErrors()
 	failureReason := exportFailureReason(manifest)
 	if deliverErr != nil {
 		success = false
-		failureReason = fmt.Sprintf("delivery failed: %s", deliverErr.Error())
+		failureReason = "delivery failed"
 	} else {
 		changes["share_id"] = delivery.ShareID
 		changes["share_expires_at"] = delivery.ExpiresAt

@@ -2,7 +2,9 @@ package compliance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -430,5 +432,94 @@ func TestRetentionSweepHandler_RejectsAPayload(t *testing.T) {
 	job := &jobs.Job{Type: taskTypeRetentionSweep, TenantID: "tenant-a", Payload: []byte(`{"unexpected":true}`)}
 	if _, err := h.Handle(context.Background(), job, nil); err == nil {
 		t.Error("Handle with a non-empty payload = nil error, want one")
+	}
+}
+
+// TestRetentionService_SweepTenant_ChangesRecordClassificationNeverErrorText
+// pins the audit-trail content rule for the sweep path: a participant
+// whose Sweep callback failed must appear in the sweep audit event's
+// Changes as a classification (the participant's name keyed to
+// participantErrorMarker) -- never with the callback's error text
+// verbatim. The changes column is the one place on the audit table from
+// which nothing can ever be removed (dbkit/audit/emit.go's Diff content
+// contract: "Anything written here is effectively permanent"), and a
+// sweep-path error can carry internal row or storage details no audit
+// reader was ever promised. The error text's homes are the returned
+// SweepResult.Errors (asserted below to still carry the raw error -- the
+// in-process home) and the structured log at the failure site, behind
+// go/observability's redaction layer -- never the permanent audit record.
+// The unfixed emitSweepAudit wrote err.Error() verbatim into
+// Changes["errors"], so the assertions below fail against it.
+func TestRetentionService_SweepTenant_ChangesRecordClassificationNeverErrorText(t *testing.T) {
+	bus := pkgcore.NewMemoryEventBus()
+	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
+		t.Fatalf("declare audit action: %v", err)
+	}
+	pkgcore.RegisterSystemPurpose(SystemPurposeRetentionSweep)
+
+	captured := &[]audit.RecordedEvent{}
+	bus.Subscribe(audit.EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
+		if rec, ok := evt.Payload.(audit.RecordedEvent); ok {
+			*captured = append(*captured, rec)
+		}
+		return nil
+	})
+
+	// The failure text names an internal object key -- the class of
+	// platform-internal content the permanent record must never carry.
+	carving := errors.New("hard delete compliance/exports/tenant-a/x.json failed: object store timeout")
+	failing := pkgcore.RetentionParticipant{
+		Name: "testutil.carving_sweep",
+		// NoopErase satisfies the registrar's mandatory-Erase rule; the
+		// retention sweep under test never invokes it.
+		Erase: testutil.NoopErase,
+		Sweep: func(context.Context, pkgcore.TenantID, time.Time) (int, error) {
+			return 0, carving
+		},
+	}
+	if err := reg.Retention.Add(failing); err != nil {
+		t.Fatalf("register failing participant: %v", err)
+	}
+	svc := newRetentionService()
+	svc.retention = reg.Retention
+	svc.bus = bus
+	svc.actions = reg.AuditActions
+
+	result, err := svc.SweepTenant(context.Background(), "tenant-a")
+	if !hasCode(err, ErrSweepPartialFailure.Code) {
+		t.Fatalf("SweepTenant error = %v, want %s", err, ErrSweepPartialFailure.Code)
+	}
+	// The raw error must still reach this call's own caller -- the
+	// in-process home that makes the classification in the audit record a
+	// lossless trade for everyone entitled to the text.
+	if !errors.Is(result.Errors["testutil.carving_sweep"], carving) {
+		t.Errorf("SweepResult.Errors[%q] = %v, want the raw error preserved for the caller", "testutil.carving_sweep", result.Errors["testutil.carving_sweep"])
+	}
+
+	events := *captured
+	if len(events) != 1 {
+		t.Fatalf("captured audit events = %d, want 1", len(events))
+	}
+	changes := events[0].Changes
+	if changes == nil {
+		t.Fatal("audit event Changes = nil, want the reaped/errors breakdown")
+	}
+	errs, ok := changes.After["errors"].(map[string]string)
+	if !ok {
+		t.Fatalf("Changes.After[\"errors\"] = %T, want map[string]string -- the classification map, never the raw errors", changes.After["errors"])
+	}
+	if got := errs["testutil.carving_sweep"]; got != participantErrorMarker {
+		t.Errorf("Changes errors[%q] = %q, want the classification marker %q", "testutil.carving_sweep", got, participantErrorMarker)
+	}
+	raw, marshalErr := json.Marshal(changes)
+	if marshalErr != nil {
+		t.Fatalf("json.Marshal(Changes) error = %v", marshalErr)
+	}
+	if strings.Contains(string(raw), carving.Error()) {
+		t.Errorf("the participant error text %q was carved into the audit trail Changes: %s", carving.Error(), raw)
+	}
+	if events[0].Result.Success {
+		t.Error("audit Result.Success = true, want false -- the participant error must still mark the pass failed")
 	}
 }

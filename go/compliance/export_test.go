@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/vislake/speed/go/dbkit"
+	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/sharing"
@@ -54,16 +56,40 @@ var _ SharingCreator = (*fakeSharingCreator)(nil)
 // at t.TempDir(), and a fakeSharingCreator standing in for go/sharing.
 func newExportHarness(t *testing.T) (*ExportService, *testutil.FakeRepository, pkgcore.ObjectStore, *fakeSharingCreator) {
 	t.Helper()
+	svc, repo, store, fakeSharing, _ := newExportHarnessWith(t)
+	return svc, repo, store, fakeSharing
+}
+
+// newExportHarnessWith is newExportHarness plus two things the export
+// audit-content tests need: the caller's own extra participants registered
+// alongside the shared testutil.FakeNote one, and a subscriber capturing
+// every audit.RecordedEvent published on the bus (dbkit/audit.Emit's own
+// EventRecorded), so a test can assert an export's audit event without a
+// real database-backed audit.Repository -- the same captured-events shape
+// erasure_test.go's newErasureServiceWith provides for the erasure path.
+func newExportHarnessWith(t *testing.T, extra ...pkgcore.RetentionParticipant) (*ExportService, *testutil.FakeRepository, pkgcore.ObjectStore, *fakeSharingCreator, *[]audit.RecordedEvent) {
+	t.Helper()
 	bus := pkgcore.NewMemoryEventBus()
 	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
 	if err := reg.AuditActions.Add(AuditActionExportRequest); err != nil {
 		t.Fatalf("declare audit action: %v", err)
 	}
 
+	captured := &[]audit.RecordedEvent{}
+	bus.Subscribe(audit.EventRecorded, func(_ context.Context, evt pkgcore.Event) error {
+		if rec, ok := evt.Payload.(audit.RecordedEvent); ok {
+			*captured = append(*captured, rec)
+		}
+		return nil
+	})
+
 	repo := testutil.NewFakeRepository(testutil.NewDB(t))
 	participant := testutil.NewParticipant("testutil.fake_note", repo)
 	if err := reg.Retention.Add(participant); err != nil {
 		t.Fatalf("register fake participant: %v", err)
+	}
+	if err := reg.Retention.Add(extra...); err != nil {
+		t.Fatalf("register extra participants: %v", err)
 	}
 
 	store := pkgcore.NewLocalObjectStore(t.TempDir())
@@ -74,7 +100,7 @@ func newExportHarness(t *testing.T) (*ExportService, *testutil.FakeRepository, p
 	svc.actions = reg.AuditActions
 	svc.store = store
 	svc.sharing = fakeSharing
-	return svc, repo, store, fakeSharing
+	return svc, repo, store, fakeSharing, captured
 }
 
 // TestExportService_Export_GathersAndStoresParticipantData proves the
@@ -644,5 +670,198 @@ func TestExportService_Export_DeliversThroughRealSharingService(t *testing.T) {
 	}
 	if _, ok := stored.Participants["testutil.fake_note"]; !ok {
 		t.Errorf("stored manifest missing participant %q: %+v", "testutil.fake_note", stored.Participants)
+	}
+}
+
+// TestExportService_Export_ParticipantErrorClassifiedNeverRawText pins the
+// manifest-content rule for the export path: a participant whose Export
+// callback failed must appear in the gathered ExportManifest.Errors as a
+// classification -- the participant's name keyed to participantErrorMarker
+// -- never with the callback's error text verbatim. The manifest is the
+// export deliverable: Export marshals it to JSON, stores it through the
+// ObjectStore and delivers the stored object over an unauthenticated,
+// single-view go/sharing link, so raw failure text would travel to exactly
+// the audience not entitled to platform-internal diagnostics -- the link
+// holder, who is entitled to read the export's data but not internal
+// failure text that can name other subjects, internal object keys or
+// infrastructure details (the finding's audience argument). The text's
+// home is the structured log at the gather site, behind
+// go/observability's redaction layer; neither the returned manifest nor
+// the stored bytes may carry it. The unfixed code wrote
+// exportErr.Error() into the manifest, so both assertions fail against it.
+func TestExportService_Export_ParticipantErrorClassifiedNeverRawText(t *testing.T) {
+	// The failure text names an internal object key -- the class of
+	// platform-internal content the deliverable must never carry.
+	internal := errors.New("gather compliance/exports/tenant-a/obj.json failed: object store timeout")
+	failing := pkgcore.RetentionParticipant{
+		// NoopSweep and NoopErase satisfy the registrar's mandatory-Sweep
+		// and mandatory-Erase rules; the export service under test never
+		// invokes either.
+		Name:  "testutil.carving_export",
+		Sweep: testutil.NoopSweep,
+		Erase: testutil.NoopErase,
+		Export: func(context.Context, pkgcore.TenantID) (any, error) {
+			return nil, internal
+		},
+	}
+	svc, repo, store, fakeSharing, _ := newExportHarnessWith(t, failing)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
+	if !hasCode(err, ErrExportPartialFailure.Code) {
+		t.Fatalf("Export error = %v, want %s", err, ErrExportPartialFailure.Code)
+	}
+	if got := result.Manifest.Errors["testutil.carving_export"]; got != participantErrorMarker {
+		t.Errorf("Manifest.Errors[%q] = %q, want the classification marker %q -- never the error text", "testutil.carving_export", got, participantErrorMarker)
+	}
+	raw, marshalErr := json.Marshal(result.Manifest)
+	if marshalErr != nil {
+		t.Fatalf("json.Marshal(manifest) error = %v", marshalErr)
+	}
+	if strings.Contains(string(raw), internal.Error()) {
+		t.Errorf("the participant error text %q was serialized into the returned export manifest: %s", internal.Error(), raw)
+	}
+
+	// The stored object -- the exact bytes a delivered share link would
+	// hand its holder -- must not carry the text either.
+	r, err := store.GetObject(context.Background(), result.ObjectKey)
+	if err != nil {
+		t.Fatalf("GetObject(%q): %v", result.ObjectKey, err)
+	}
+	defer r.Close()
+	storedRaw, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read stored manifest: %v", err)
+	}
+	if strings.Contains(string(storedRaw), internal.Error()) {
+		t.Errorf("the participant error text %q was serialized into the STORED export manifest: %s", internal.Error(), storedRaw)
+	}
+	if len(fakeSharing.calls) != 1 {
+		t.Fatalf("sharing.Create calls = %d, want 1 -- a partial export still delivers", len(fakeSharing.calls))
+	}
+}
+
+// TestExportService_Export_AuditChangesClassifyParticipantErrorNeverText
+// pins the audit-trail content rule on the export path: a participant
+// whose Export callback failed must appear in the export audit event's
+// Changes as a classification (the participant's name keyed to
+// participantErrorMarker) -- never with the callback's error text
+// verbatim. The changes column is the one place on the audit table from
+// which nothing can ever be removed (dbkit/audit/emit.go's Diff content
+// contract: "Anything written here is effectively permanent"), and the
+// text can name other subjects and internal object keys the export bundle
+// itself was gathering. The error text's homes are the structured log at
+// the gather site (behind go/observability's redaction layer) and the
+// returned in-process result -- never the permanent audit record. The
+// unfixed emitExportAudit wrote the whole raw-text map into
+// Changes["errors"], so the assertions below fail against it.
+func TestExportService_Export_AuditChangesClassifyParticipantErrorNeverText(t *testing.T) {
+	// The failure text names another subject whose rows the gather was
+	// touching -- the class of content the permanent record must never
+	// carry.
+	internal := errors.New("gather failed for rows subject-9 owns: database connection refused")
+	failing := pkgcore.RetentionParticipant{
+		Name:  "testutil.carving_export",
+		Sweep: testutil.NoopSweep,
+		Erase: testutil.NoopErase,
+		Export: func(context.Context, pkgcore.TenantID) (any, error) {
+			return nil, internal
+		},
+	}
+	svc, repo, _, _, captured := newExportHarnessWith(t, failing)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	_, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
+	if !hasCode(err, ErrExportPartialFailure.Code) {
+		t.Fatalf("Export error = %v, want %s", err, ErrExportPartialFailure.Code)
+	}
+
+	events := *captured
+	if len(events) != 1 {
+		t.Fatalf("captured audit events = %d, want 1", len(events))
+	}
+	if events[0].Action != AuditActionExportRequest {
+		t.Fatalf("audit event action = %q, want %q", events[0].Action, AuditActionExportRequest)
+	}
+	changes := events[0].Changes
+	if changes == nil {
+		t.Fatal("audit event Changes = nil, want the participants/errors breakdown")
+	}
+	errs, ok := changes.After["errors"].(map[string]string)
+	if !ok {
+		t.Fatalf("Changes.After[\"errors\"] = %T, want map[string]string -- the classification map, never the raw errors", changes.After["errors"])
+	}
+	if got := errs["testutil.carving_export"]; got != participantErrorMarker {
+		t.Errorf("Changes errors[%q] = %q, want the classification marker %q", "testutil.carving_export", got, participantErrorMarker)
+	}
+	raw, marshalErr := json.Marshal(changes)
+	if marshalErr != nil {
+		t.Fatalf("json.Marshal(Changes) error = %v", marshalErr)
+	}
+	if strings.Contains(string(raw), internal.Error()) {
+		t.Errorf("the participant error text %q was carved into the audit trail Changes: %s", internal.Error(), raw)
+	}
+	if events[0].Result.Success {
+		t.Error("audit Result.Success = true, want false -- the participant error must still mark the export failed")
+	}
+	if !strings.Contains(events[0].Result.FailureReason, "testutil.carving_export") {
+		t.Errorf("audit Result.FailureReason = %q, want it to name the failing participant", events[0].Result.FailureReason)
+	}
+	if strings.Contains(events[0].Result.FailureReason, internal.Error()) {
+		t.Errorf("the participant error text %q was carved into audit Result.FailureReason: %q", internal.Error(), events[0].Result.FailureReason)
+	}
+}
+
+// TestExportService_Export_DeliveryFailureAuditClassifiesReasonNeverText
+// pins the transport half of the same rule: a failure to deliver the
+// already-stored manifest through go/sharing is audited with the
+// classification "delivery failed" -- never the transport error's text,
+// which can name internal object keys or infrastructure endpoints. The
+// text's legitimate homes are the returned error (Export wraps the
+// transport error as ErrExportDeliveryFailed's own cause, asserted below)
+// and the structured log at the failure site, behind go/observability's
+// redaction layer; the audit record -- effectively permanent -- carries
+// only the classification. The unfixed code wrote
+// fmt.Sprintf("delivery failed: %s", deliverErr.Error()) into the audit
+// event's FailureReason, so the assertions below fail against it.
+func TestExportService_Export_DeliveryFailureAuditClassifiesReasonNeverText(t *testing.T) {
+	transport := errors.New("create share for compliance/exports/tenant-a/x.json failed: sharing database unavailable")
+	svc, repo, _, fakeSharing, captured := newExportHarnessWith(t)
+	fakeSharing.failWith = transport
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	_, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
+	if !hasCode(err, ErrExportDeliveryFailed.Code) {
+		t.Fatalf("Export error = %v, want %s", err, ErrExportDeliveryFailed.Code)
+	}
+	if !errors.Is(err, transport) {
+		t.Errorf("Export error = %v, want the transport error preserved as the returned error's cause -- its in-process home", err)
+	}
+
+	events := *captured
+	if len(events) != 1 {
+		t.Fatalf("captured audit events = %d, want 1", len(events))
+	}
+	if events[0].Action != AuditActionExportRequest {
+		t.Fatalf("audit event action = %q, want %q", events[0].Action, AuditActionExportRequest)
+	}
+	if events[0].Result.Success {
+		t.Error("audit Result.Success = true, want false -- the delivery failure must mark the export failed")
+	}
+	if got := events[0].Result.FailureReason; got != "delivery failed" {
+		t.Errorf("audit Result.FailureReason = %q, want the classification %q -- never the transport error text", got, "delivery failed")
+	}
+	if strings.Contains(events[0].Result.FailureReason, transport.Error()) {
+		t.Errorf("the transport error text %q was carved into audit Result.FailureReason: %q", transport.Error(), events[0].Result.FailureReason)
+	}
+	raw, marshalErr := json.Marshal(events[0])
+	if marshalErr != nil {
+		t.Fatalf("json.Marshal(event) error = %v", marshalErr)
+	}
+	if strings.Contains(string(raw), transport.Error()) {
+		t.Errorf("the transport error text %q was carved into the audit event: %s", transport.Error(), raw)
 	}
 }
