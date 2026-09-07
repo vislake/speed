@@ -111,7 +111,9 @@ claiming "verified" without qualification.
 **Adding a gate:** if it signs in more than once, leave it untagged --
 it belongs to the local tier. If it must run against a deployment, keep
 it to one sign-in and pick an account the neighbouring `@deployment`
-gates are not using.
+gates are not using. Then read "How a gate here has gone wrong" below
+and check yours against it -- every item there is a real defect from
+this suite, and the convenient locator is usually the wrong one.
 
 The first run compiles the Go server, which takes minutes; later runs
 reuse the build cache and the whole suite finishes in seconds.
@@ -149,6 +151,93 @@ port, a fixed temp path, a fixed container name or a fixed database file
 all have this shape. This suite's run-unique SQLite path and log file were
 already built that way; the ports were the one place it had not been
 applied.
+
+## How a gate here has gone wrong
+
+Every item below is a real defect found in THIS suite, most of them in
+one day, and they are all one mistake: **the gate measured something
+adjacent to the property instead of the property.** They are written
+down because the next person adding a gate will reach for the same
+convenient locator, and because two of them were about to accuse the
+product of a defect it did not have -- which is the most expensive thing
+an acceptance suite can do. A false accusation spends a round's work on
+nothing and teaches everyone to discount the next report.
+
+**A locator that stands in for the element you mean.**
+`getByRole('listitem').first()` clicked the frame's Home nav entry, not
+the first case row -- the nav is a list, ahead of `main` in the DOM -- so
+every gate using that helper sat on Home and never saw a case detail
+page. `document.querySelectorAll('li')` collected the nav entries into
+the "session rows". Scope to `main`, or to the section you mean.
+
+**An accessible-name match is a SUBSTRING match.** `{ name: 'Account' }`
+also matched "Linked social accounts" and failed on strict mode -- a
+gate reporting a locator problem where a reader expects a product
+problem. Page titles want `level: 1`.
+
+**A check that is satisfied by absence.** "No private address appears"
+is equally true of a list showing no address at all. "No nav link is on
+the page" is equally true on a phone, where no nav link is ever on the
+page -- so a "the frame is gone" check passed on the iPad project for a
+reason unrelated to signing out, and would have kept passing if signing
+out had stopped working. Assert the thing is there, THEN assert what it
+must not be.
+
+**A count that cannot tell two things from one thing twice.** "The
+comparison shows two images" passes when the surface renders the
+original twice -- the product's whole proposition rendered as a no-op,
+and it looks right in a screenshot. Compare them.
+
+**A latent false accusation, harmless only while a real failure masks
+it.** The unscoped session rows would have flagged "Home" and "Account"
+as rows with nothing to tell them apart -- but only once the genuine
+User-Agent defect above it was fixed and stopped failing first. It would
+have surfaced as a regression in the round that fixed the real thing,
+and been blamed on it.
+
+**`isVisible()` does not wait.** It is a point-in-time question, so a
+helper that asks it first races the page's own render: a journey that
+signed in and navigated immediately found neither the nav link nor the
+menu button and failed with "no way to reach Notes" while both were
+about to appear. A `.click()` auto-waits, which is why replacing one
+with a check regressed it. Wait for whichever entrance the viewport
+offers (`link.or(menu)`).
+
+**`textContent` and `innerText` are wrong in opposite directions.**
+`textContent` concatenates adjacent elements with no separator, so an
+address arrived as `password223.70.82.202` and a word-boundary pattern
+could not match it. `innerText` returns text as RENDERED, and MUI
+uppercases button labels, so a tenant read back as `ACME DENTAL` and
+matched no configured name. Ask what something renders as, innerText;
+ask which value it is, textContent.
+
+**A gate that depends on winning a race is not a gate.** "A generation
+in flight must say so" passed or failed on whether it beat the fake
+vendor's instant answer. The fix was to make the requirement observable
+-- the fake now takes 300ms, which is closer to a real generation, not
+further -- and not to weaken the assertion. That distinction matters,
+because raising a stand-in's fidelity and tuning the evidence to fit an
+assertion look identical in a diff.
+
+**A gate written before its surface exists cannot be told apart, by
+running it, from one that is merely plausible.** Blocks B, C and D were
+all written ahead of delivery on purpose, and all three had holes: an
+unscoped status region, a patient page satisfied by a logo, and a cost
+check satisfied by the WORD "credits" with no figure anywhere. The only
+defence available then is to read the gate as though it had already
+passed and ask what it would have let through. That found two of them.
+
+**A helper that documents an intention it does not have.**
+`openCaseWithPhoto` promised to create a case "when the run has none"
+and never created anything, so every block-B gate failed the moment
+block B's surface landed. If a comment describes behaviour, the code has
+to have it.
+
+**A gate that runs nowhere.** One test skipped itself unless
+`E2E_BASE_URL` was set and did not carry `@deployment`, so the
+deployment run filtered it out and the local run skipped it. Excluded at
+both ends, it looked like a gate and was a comment. See the tier rule
+above.
 
 ## Why this tier exists
 
