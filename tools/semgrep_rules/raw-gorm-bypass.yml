@@ -32,6 +32,21 @@
 #     path ever writes, precisely so a real test can prove the read-time
 #     check catches it -- the same reason test files are excluded
 #     wholesale rather than enumerated (see header below).
+#   * go/pki/internal/testutil/migration_dedupe.go -- a test-fixture
+#     helper, the same category the wholesale "**/*_test.go" exclude
+#     already covers, but it cannot be named "*_test.go" itself: the
+#     migration-0008 duplicate-ledger regression's SQLite unit legs
+#     (migration_dedupe_test.go) and its real-PostgreSQL leg
+#     (go/pki/integration_test/postgres_migration_dedupe_test.go, a
+#     separate package) both import these helpers, and a "_test.go"-
+#     suffixed file is only ever compiled into its own package's test
+#     binary. Its flagged calls probe state no dbkit.Repository serves
+#     -- revocation-ledger row counts and ids, each dialect's index
+#     catalog (sqlite_master / pg_indexes), and the schema_migrations
+#     ledger -- registry/platform rows, never tenant-owned data,
+#     observed to rewind a deployment stranded at migration 0008 and
+#     assert the remediated end state (go/pki/AGENTS.md's Testing
+#     section records the round).
 #   * go/authn/identity.go   -- identity-domain rows (users,
 #     user_identities) that dbkit.Repository[T] cannot serve: the generic
 #     constraint requires TenantScoped, which identity data deliberately
@@ -79,4 +94,5 @@ rules:
         - "**/go/dbkit/**"
         - "**/go/jobs/store.go"
         - "**/go/authn/internal/testutil/testutil.go"
+        - "**/go/pki/internal/testutil/migration_dedupe.go"
         - "**/go/authn/identity.go"
