@@ -24,8 +24,8 @@
  * journeys' to pin. A successful switch is announced (no alert --
  * nothing failed -- but a role=status confirmation) and fires
  * onSwitched exactly once per committed switch, after the commit --
- * including the reconciling re-issue a superseded switch triggers when
- * it loses a race (the racing describe below); a throwing onSwitched is
+ * never for a switch that loses a commit race, which stays lost
+ * (the racing describe below); a throwing onSwitched is
  * contained: the commit stands and still announces itself, no error
  * renders, and no rejection escapes the fire-and-forget row handler. A
  * rejected switch clears the notice, renders the answer's code
@@ -617,25 +617,24 @@ describe('TenantSwitcher', () => {
   })
 
   describe('two instances racing a switch on one shared session', () => {
-    // Regression for web-auth-api.md P2-1 plus the P1-1 supersession
-    // reconciliation: this component's own switching-ref guard only
-    // refuses a second concurrent call THROUGH ITSELF -- it says nothing
-    // about a second TenantSwitcher instance mounted elsewhere (host
-    // chrome plus a mobile drawer copy, a transient double-mount during
-    // a route transition) calling switchTenant on the same shared
-    // session. auth-core's settleIssued makes the losing call reject
-    // with OperationSupersededError -- the loser must not fire its own
-    // onSwitched for a tenant the session is not running under. But the
-    // loser's request DID go through server-side, and the server
-    // session's stored current tenant is whichever request wrote it
-    // last -- normally the loser's, since the browser's requests arrive
-    // in order -- so a quiet swallow leaves the session able to drift
-    // into the loser's tenant on the next silent refresh (the refresh
-    // mints for the server-stored current tenant) with no onSwitched to
-    // move the host's caches. The superseded switch therefore
-    // reconciles by re-issuing its own request (bounded; see the file
-    // header): the tenant the server actually committed lands as a
-    // real, announced commit and no silent drift can follow.
+    // Regression for web-auth-api.md P2-1: this component's own
+    // switching-ref guard only refuses a second concurrent call
+    // THROUGH ITSELF -- it says nothing about a second TenantSwitcher
+    // instance mounted elsewhere (host chrome plus a mobile drawer
+    // copy, a transient double-mount during a route transition) calling
+    // switchTenant on the same shared session. auth-core's settleIssued
+    // rejects whichever request answers after a sibling committed with
+    // OperationSupersededError -- and supersession is decided by
+    // RESPONSE settlement order, never send order, so either racing
+    // request can be the loser. The loser's own request DID go through
+    // server-side, but it cannot know whose write the session row keeps
+    // (see the file header), so a superseded switch stays LOST: no
+    // error, no re-issue, no onSwitched -- the winning operation's own
+    // commit fired its own callback exactly once, for the tenant the
+    // session genuinely runs under, and the controlled component
+    // converges to that same tenant through the host's own
+    // currentTenantId. The three tests below pin both settlement
+    // orders and the drift-probe residual the lost-race rule records.
     const TENANTS_3 = [
       { id: 'tenant-1', name: 'Sunshine Dental' },
       { id: 'tenant-2', name: 'Bright Smile Clinic' },
@@ -709,8 +708,9 @@ describe('TenantSwitcher', () => {
         // The refresh endpoint mints for the server-stored current
         // tenant -- the last switch request the server processed. In the
         // race below that is tenant-3 (instance B's request), so a
-        // refresh after the race is the drift probe: a session that did
-        // not reconcile would silently flip onto tenant-3 here.
+        // refresh after the race is the drift probe: it converges the
+        // session onto tenant-3, the convergence the lost-race rule's
+        // recorded residual leaves to the session's own refresh path.
         [REFRESH]: () =>
           makePair({
             access_token: 'access-refreshed',
@@ -724,7 +724,16 @@ describe('TenantSwitcher', () => {
       return { harness, releaseTenant2, releaseTenant3 }
     }
 
-    it('reconcile the superseded switch: every commit fires onSwitched, the loser included', async () => {
+    it('keep a superseded switch lost: the winner reports its own commit, the loser contributes nothing', async () => {
+      // Settlement order mirrors send order: instance A's tenant-2
+      // request settles first and commits; instance B's tenant-3
+      // request settles second and is superseded. B's own server write
+      // may be the one the session row now holds -- but a superseded
+      // request cannot know that (see the file header), so it stays
+      // lost: no corrective re-issue, no onSwitched, no error. The
+      // winner's commit is the only report, and the session runs the
+      // tenant it committed. Fails before the lost-race correction:
+      // B's re-issue fires onSwitchedB('tenant-3') on a fourth call.
       const { harness, releaseTenant2, releaseTenant3 } = makeRacingHarness()
       await signIn(harness)
       const onSwitchedA = vi.fn()
@@ -750,11 +759,65 @@ describe('TenantSwitcher', () => {
       expect(harness.store.get()).toBe('access-tenant-2')
 
       // tenant-3's response answers successfully too, but only after
-      // tenant-2 already committed: B lost the generation race. Its own
-      // server write is the one the session row now holds, so the
-      // superseded call reconciles by re-issuing the switch -- B's
-      // onSwitched fires exactly once, for the corrective's commit, and
-      // nothing renders an error.
+      // tenant-2 already committed: B lost the generation race and
+      // stays lost -- the losing request is never re-issued, fires no
+      // onSwitched and renders no error.
+      releaseTenant3(
+        makePair({
+          access_token: 'access-tenant-3',
+          principal: {
+            user_id: 'user-1',
+            tenant_id: 'tenant-3',
+            session_id: 'session-1',
+          },
+        }),
+      )
+      // Flush the superseded rejection and the lost-race exit.
+      await act(async () => {})
+      expect(onSwitchedB).not.toHaveBeenCalled()
+      expect(harness.calls).toHaveLength(3) // login + the two racing requests
+      expect(harness.store.get()).toBe('access-tenant-2')
+      expect(harness.session.getSnapshot().principal?.tenant_id).toBe(
+        'tenant-2',
+      )
+      expect(screen.queryAllByRole('alert')).toHaveLength(0)
+      // Only the winner's commit announced itself; the loser's
+      // in-flight notice cleared with the lost race.
+      const statusTexts = screen
+        .queryAllByRole('status')
+        .map((status) => status.textContent ?? '')
+      expect(statusTexts).toEqual([SWITCHED_TO_ZH('Bright Smile Clinic')])
+      await waitFor(() => {
+        const rows = screen.getAllByRole('button', {
+          name: 'Sunshine Dental',
+        }) as [HTMLElement, HTMLElement]
+        expect(rows[0]).toBeEnabled()
+        expect(rows[1]).toBeEnabled()
+      })
+    })
+
+    it('never re-commit a superseded request: the earlier-sent switch settling last stays lost', async () => {
+      // The D2 drift shape, settlement order inverted: instance A
+      // issues its tenant-2 request first and instance B its tenant-3
+      // request second, but B's response settles FIRST and commits. A's
+      // response settles second, so A -- the EARLIER-sent request, the
+      // tenant the user already left behind -- is the superseded one.
+      // The pre-correction reconciliation re-issued A here, actively
+      // switching the session back onto the abandoned tenant; a
+      // superseded request must stay lost and the session must settle
+      // on B, the tenant the user actually settled on. Fails before:
+      // the corrective re-issue commits access-2 on a fourth call and
+      // fires onSwitchedA('tenant-2').
+      const { harness, releaseTenant2, releaseTenant3 } = makeRacingHarness()
+      await signIn(harness)
+      const onSwitchedA = vi.fn()
+      const onSwitchedB = vi.fn()
+      renderRacingSwitchers(harness, onSwitchedA, onSwitchedB)
+      const user = userEvent.setup()
+      await startRace(harness, user)
+
+      // tenant-3's response settles first and commits: the session runs
+      // tenant-3 and B's host is told, exactly once.
       releaseTenant3(
         makePair({
           access_token: 'access-tenant-3',
@@ -767,24 +830,34 @@ describe('TenantSwitcher', () => {
       )
       await waitFor(() => expect(onSwitchedB).toHaveBeenCalledTimes(1))
       expect(onSwitchedB).toHaveBeenCalledWith('tenant-3')
-      expect(harness.calls).toHaveLength(4) // the corrective re-issue
-      expect(onSwitchedA).toHaveBeenCalledTimes(1)
       expect(harness.store.get()).toBe('access-tenant-3')
+
+      // tenant-2's response settles afterwards: A is superseded -- even
+      // though it was sent first -- and stays lost.
+      releaseTenant2(
+        makePair({
+          access_token: 'access-tenant-2',
+          principal: {
+            user_id: 'user-1',
+            tenant_id: 'tenant-2',
+            session_id: 'session-1',
+          },
+        }),
+      )
+      await act(async () => {})
+      expect(onSwitchedA).not.toHaveBeenCalled()
+      expect(harness.calls).toHaveLength(3) // login + the two racing requests
+      expect(harness.store.get()).toBe('access-tenant-3')
+      expect(harness.session.getSnapshot().principal?.tenant_id).toBe(
+        'tenant-3',
+      )
       expect(screen.queryAllByRole('alert')).toHaveLength(0)
-      // Both committed switches announced themselves: instance A on
-      // tenant-2, instance B (after its corrective re-issue) on
-      // tenant-3. The two confirmations carry different tenant names,
-      // so the pair is asserted as a set rather than by DOM order.
+      // Only B's commit announced itself; A's in-flight notice cleared
+      // with the lost race, so nothing on A's instance is left pending.
       const statusTexts = screen
         .queryAllByRole('status')
         .map((status) => status.textContent ?? '')
-      expect(statusTexts).toHaveLength(2)
-      expect(statusTexts).toEqual(
-        expect.arrayContaining([
-          SWITCHED_TO_ZH('Bright Smile Clinic'),
-          SWITCHED_TO_ZH('Third Practice'),
-        ]),
-      )
+      expect(statusTexts).toEqual([SWITCHED_TO_ZH('Third Practice')])
       await waitFor(() => {
         const rows = screen.getAllByRole('button', {
           name: 'Sunshine Dental',
@@ -794,17 +867,20 @@ describe('TenantSwitcher', () => {
       })
     })
 
-    it('leave no silent drift: the host observes the outcome actually committed', async () => {
-      // The regression for P1-1, in the mechanism's own terms. A
-      // superseded switch whose server write landed (the session row's
-      // current tenant is the loser's tenant) must not resolve into a
-      // later silent refresh flipping the session there behind the
-      // host's back: the host's session state must match the server's
-      // current tenant THROUGH AN ANNOUNCED COMMIT, with onSwitched
-      // invalidating the caches for the outcome actually committed.
-      // Fails before the reconciliation fix: the superseded call
-      // swallows quietly, the refresh drifts the session onto tenant-3
-      // and onSwitchedB never fires.
+    it('leave the superseded switch lost across the refresh probe: only the session own refresh moves the principal', async () => {
+      // The drift-probe descendant of the pre-correction
+      // no-silent-drift regression, recording the lost-race rule's
+      // residual. When responses settle in send order (the race below:
+      // A first, B second), the superseded request is the later-sent
+      // one, so its server write is the last one the session row keeps
+      // -- the refresh mints for it. A superseded request can never
+      // know that (settlement order is not send order), so it stays
+      // lost even here; the session converges to the server row only
+      // through its own refresh path, announced by no onSwitched. The
+      // recorded alternative -- re-issuing the lost request -- is the
+      // active wrong switch the regression above pins when settlement
+      // order inverts. Fails before: the corrective re-issue fires
+      // onSwitchedB('tenant-3') on a fourth call before the refresh.
       const { harness, releaseTenant2, releaseTenant3 } = makeRacingHarness()
       await signIn(harness)
       const onSwitchedA = vi.fn()
@@ -824,6 +900,7 @@ describe('TenantSwitcher', () => {
         }),
       )
       await waitFor(() => expect(onSwitchedA).toHaveBeenCalledTimes(1))
+      expect(onSwitchedA).toHaveBeenCalledWith('tenant-2')
 
       releaseTenant3(
         makePair({
@@ -835,13 +912,15 @@ describe('TenantSwitcher', () => {
           },
         }),
       )
-      // Flush the superseded rejection and whatever reconciliation it
-      // triggers (the corrective re-issue commits here when the fix is
-      // in place) before probing the refresh path.
+      // Flush the superseded rejection and the lost-race exit before
+      // probing the refresh path.
       await act(async () => {})
+      expect(onSwitchedB).not.toHaveBeenCalled()
+
       // A silent refresh mints for the server-stored current tenant --
-      // tenant-3, the write that landed last. The session the host
-      // observes must be tenant-3 either way...
+      // tenant-3, the write that landed last. The session converges
+      // there through the refresh's own commit; the lost instance
+      // contributes nothing along the way.
       let refreshed = false
       await act(async () => {
         refreshed = await harness.session.refresh()
@@ -850,13 +929,10 @@ describe('TenantSwitcher', () => {
       expect(harness.session.getSnapshot().principal?.tenant_id).toBe(
         'tenant-3',
       )
-      // ...but it must have got there through an announced commit: the
-      // host caches invalidate on the outcome actually committed, never
-      // through a silent drift that no onSwitched ever reported.
-      expect(onSwitchedB).toHaveBeenCalledTimes(1)
-      expect(onSwitchedB).toHaveBeenCalledWith('tenant-3')
-      expect(onSwitchedA).toHaveBeenCalledTimes(1)
       expect(harness.store.get()).toBe('access-refreshed')
+      expect(onSwitchedA).toHaveBeenCalledTimes(1)
+      expect(onSwitchedB).not.toHaveBeenCalled()
+      expect(harness.calls).toHaveLength(4) // login + two switches + the refresh
       expect(screen.queryAllByRole('alert')).toHaveLength(0)
     })
   })

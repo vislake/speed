@@ -36,11 +36,19 @@
  * @speed/api-client run for real here. Component tests keep using the
  * harness, which is the right tool when a test must script raw
  * ApiErrors or inspect the RequestFn contract directly.
+ *
+ * A second journey pins the lost-race rule (the D2 correction of the
+ * supersession handling, see the component header): a switch the user
+ * issues through the switcher settles after a sibling operation on the
+ * same session committed first, so the UI request is superseded. It
+ * stays lost -- no corrective re-issue -- and the host hook converges
+ * the trigger onto the tenant the sibling committed, never back to the
+ * abandoned pick.
  */
 
 import type { ReactElement } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   I18nextProvider,
@@ -294,5 +302,126 @@ describe('the README quick start, exercised over a real api-client', () => {
       { tenant_id: 'tenant-1' },
       { tenant_id: 'tenant-1' },
     ])
+  })
+
+  it('never re-commit a superseded switch over the real client: the trigger settles on the sibling tenant', async () => {
+    // The D2 drift shape at journey level: the user picks tenant-2
+    // through the switcher (its response is gated), then a sibling
+    // operation on the same session -- the shape another mounted
+    // switch surface produces -- commits tenant-3 first. The UI's own
+    // request answers afterwards and is superseded: it must stay lost
+    // (no corrective re-issue, no onSwitched), and the host hook
+    // re-renders the trigger onto tenant-3, the tenant the user
+    // actually settled on -- never back to the abandoned tenant-2.
+    // Fails before the lost-race correction: the corrective re-issue
+    // commits access-2, fires onSwitched('tenant-2') and flips the
+    // trigger back to Bright Smile Clinic.
+    let releaseTenant2!: (response: Response) => void
+    const tenant2Gate = new Promise<Response>((resolve) => {
+      releaseTenant2 = resolve
+    })
+    let tenant2Requests = 0
+    const rig = makeRealClientRig((call) => {
+      switch (call.path) {
+        case LOGIN_PASSWORD:
+          return jsonResponse(200, makePair())
+        case SWITCH_TENANT: {
+          const body = JSON.parse(call.body ?? 'null') as {
+            tenant_id?: string
+          }
+          if (body.tenant_id === 'tenant-2') {
+            tenant2Requests += 1
+            if (tenant2Requests === 1) {
+              // The UI request stays open until the test settles the race.
+              return tenant2Gate
+            }
+            // A corrective re-issue of the abandoned switch would be a
+            // fresh request and answers like one (the pre-correction
+            // code's replay -- a Response body is single-use, so the
+            // replayed request must not be answered with the consumed
+            // gate response, or the replay would die on a network error
+            // instead of showing the corruption it causes).
+            return jsonResponse(200, switchPair('access-2', 'tenant-2'))
+          }
+          // The sibling's switch answers immediately.
+          return jsonResponse(200, switchPair('access-3', 'tenant-3'))
+        }
+      }
+      throw new Error(`no scripted answer for ${call.method} ${call.path}`)
+    })
+    attachSession(rig.session)
+    const i18n = createI18n({
+      supportedLanguages: ['zh-CN', 'en-US'],
+      defaultLanguage: 'zh-CN',
+      storage: null,
+      urlParameterName: null,
+      navigatorLanguages: [],
+    })
+    registerNamespace(i18n, TENANCY_UI_NAMESPACE, tenancyUiResources)
+    registerNamespace(i18n, UI_KIT_NAMESPACE, uiKitResources)
+    const onSwitched = vi.fn()
+    render(
+      <I18nextProvider i18n={i18n}>
+        <AppThemeProvider i18n={i18n}>
+          <DemoHost session={rig.session} onSwitched={onSwitched} />
+        </AppThemeProvider>
+      </I18nextProvider>,
+    )
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByText('Workspace dashboard')).toBeInTheDocument()
+
+    // The user picks tenant-2 through the switcher; its response is
+    // gated while the flight is pending.
+    await user.click(screen.getByRole('button', { name: 'Sunshine Dental' }))
+    await user.click(
+      await screen.findByRole('menuitem', { name: 'Bright Smile Clinic' }),
+    )
+    await waitFor(() => expect(rig.calls).toHaveLength(2))
+
+    // The sibling commits tenant-3 before the UI request settles: the
+    // host hook re-renders the trigger onto the settled tenant.
+    await act(async () => {
+      await rig.session.switchTenant('tenant-3')
+    })
+    expect(rig.store.get()).toBe('access-3')
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Harbor View Orthodontics' }),
+      ).toBeEnabled(),
+    )
+
+    // The UI request settles afterwards: superseded, so it stays lost.
+    // Nothing reports, no corrective request fires, and the trigger
+    // stays on the tenant the user settled on.
+    await act(async () => {
+      releaseTenant2(jsonResponse(200, switchPair('access-2', 'tenant-2')))
+    })
+    expect(onSwitched).not.toHaveBeenCalled()
+    expect(rig.store.get()).toBe('access-3')
+    expect(
+      screen.getByRole('button', { name: 'Harbor View Orthodontics' }),
+    ).toBeEnabled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    // No in-flight announcement is left standing on the lost flight.
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    // Yield once so a spurious corrective request would have landed,
+    // then pin the request list: no fourth call ever fires.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(
+      rig.calls.map((call) => `${call.method} ${call.path}`),
+    ).toEqual([
+      'POST /api/v1/authn/login/password',
+      'POST /api/v1/authn/tenant/switch',
+      'POST /api/v1/authn/tenant/switch',
+    ])
+    expect(
+      rig.calls
+        .filter((call) => call.path === SWITCH_TENANT)
+        .map((call) => JSON.parse(call.body ?? 'null')),
+    ).toEqual([{ tenant_id: 'tenant-2' }, { tenant_id: 'tenant-3' }])
   })
 })

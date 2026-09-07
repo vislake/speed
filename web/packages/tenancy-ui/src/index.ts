@@ -12,12 +12,15 @@
  * observes the principal flip through its own auth-core hooks) and
  * fires onSwitched exactly once per committed switch, and renders a
  * reachable error's code text -- never a raw key -- on failure, leaving
- * the state unchanged and the row retryable. When a switch loses a
+ * the state unchanged and the row retryable. A switch that loses a
  * concurrent race on the same session (a second TenantSwitcher
- * instance), the superseded call reconciles by re-issuing its own
- * request (bounded) so the tenant the server actually committed lands
- * as a real, announced commit instead of a later silent refresh drift.
- * The current-tenant row is disabled and never re-triggers a switch.
+ * instance, or another session operation committing first) is
+ * superseded and stays lost: nothing renders, nothing is re-issued, no
+ * onSwitched fires -- the winning operation's own commit already fired
+ * its own, and the trigger converges to the tenant the session runs
+ * under through the host's currentTenantId (see the component header
+ * for the residual the lost-race rule records). The current-tenant row
+ * is disabled and never re-triggers a switch.
  *
  * The component is controlled: the session arrives as a prop, the tenant
  * list is host data, and the current tenant id is a host value. Nothing

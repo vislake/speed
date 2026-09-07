@@ -220,21 +220,25 @@ Behaviour, all of it controlled and test-pinned:
   in-flight notice above becomes the `switchedTo` confirmation in the
   same live region. `onSwitched` fires exactly once per committed
   switch, after the commit -- never for a failed one.
-- **A switch that loses a race on the same session reconciles instead
-  of vanishing.** Two `TenantSwitcher` instances (chrome plus a drawer
-  copy) racing `switchTenant` to different tenants both succeed
-  server-side; the session row keeps whichever request wrote it last,
-  and auth-core rejects the client-side loser with
-  `OperationSupersededError`. The superseded call re-issues its own
-  switch (bounded), so the tenant the server actually committed lands
-  as a real, announced commit -- without it, the next silent refresh
-  (which mints for the server-stored current tenant) would drift the
-  session into the loser's tenant behind the host's back: no
-  `onSwitched`, no cache invalidation, the tenant permission list
-  silently dropped. A race whose loser is a different principal (a
-  login or logout replaced the token family) cannot drift and stays
-  quiet. The host's `onSwitched` fires once per commit, so in a race it
-  may report a tenant a reconciling commit supersedes moments later; a
+- **A switch that loses a race on the same session stays lost.** Two
+  `TenantSwitcher` instances (chrome plus a drawer copy) racing
+  `switchTenant` to different tenants both succeed server-side, and
+  auth-core rejects whichever request answers after a sibling committed
+  -- supersession is decided by response settlement order, never send
+  order -- with `OperationSupersededError`. The superseded call is a
+  lost race, not a failure: nothing renders, no re-issue fires, no
+  `onSwitched` fires (the winning operation's own commit fired its own
+  exactly once, for the tenant the session genuinely runs under), and
+  the trigger converges to that same tenant through the host's
+  `currentTenantId`. Re-issuing the lost request would be actively
+  wrong: when the earlier-sent request settles last, a re-issue would
+  re-commit the tenant the user already abandoned. The recorded
+  residual: when responses settle in send order, the superseded request
+  is the later-sent one, so the server row keeps its tenant and the
+  next silent refresh (which mints for the server-stored current
+  tenant) converges the session there through the session's own refresh
+  path, announced by no `onSwitched`. The host's `onSwitched` fires
+  exactly once per committed switch and never for a lost race; a
   handler that refetches for whatever tenant it is told ends consistent
   with the session.
 - **A refused switch renders the answer's code text in one

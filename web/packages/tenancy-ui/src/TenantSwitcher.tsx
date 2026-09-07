@@ -51,48 +51,43 @@
  * onSwitched contract) and never surfaces as one -- no error banner,
  * and no unhandled rejection from the fire-and-forget row handler.
  *
- * A switch that loses a commit race reconciles instead of vanishing.
- * When this instance's own switch request answers successfully but a
- * concurrent sibling operation on the same session -- another
- * TenantSwitcher instance's switch, most plausibly, since this
- * component's own entry guard already rules out a second concurrent
- * call through itself -- committed first, auth-core's switchTenant
- * rejects with OperationSupersededError rather than resolving: this
- * request did go through server-side, but the session it would have
- * described is not the one now current, so treating the answer as a
- * commit would fire onSwitched for a tenant the session is not actually
- * running under. The session row the server keeps, however, is a shared
- * fact both racing requests wrote: the server stores the current tenant
- * per session, and the authn refresh mints the next access token for
- * whatever request wrote it last -- normally this superseded one, since
- * a browser's requests arrive in order. A quiet swallow would therefore
- * leave the session able to DRIFT into this request's tenant on the
- * next silent refresh: the principal flips with no commit, no
- * onSwitched, no cache invalidation, and the tenant-domain permission
- * list silently dropped -- the host's caches and lists would describe
- * the tenant it was told about, not the one the session runs. The
- * superseded path therefore reconciles: it re-issues the same switch
- * request while the drift condition holds -- the winning snapshot still
- * shows the same user (the component's proxy for "the held token family
- * still reaches this request's server-side write": a logout or another
- * user's login replaced or cleared the family, so the write is
- * unreachable and the superseded call contributes nothing; a same-user
- * login is the one case the proxy cannot tell apart, and the re-issue
- * then simply lands the requested switch on the fresh session,
- * announced, if the membership still holds) and the session runs under
- * a tenant other than the one requested -- so the tenant the server
- * actually committed lands as a real, announced commit and no silent
- * drift can follow. The reconciliation is bounded: at most
- * MAX_SWITCH_ATTEMPTS
- * requests per user intent (see below), and a superseded call gives up
- * quietly when the bound is spent -- the residual drift window then
- * needs three or more concurrent commits to the same session inside one
- * flight, vanishing enough to record rather than engineer for. The
- * reconciliation's commit fires onSwitched for the requested tenant
- * exactly once, so in a two-instance race the host observes the
- * winner's commit and then the reconciling one, each truthful at the
- * moment it fired; the exactly-once contract holds per commit, not per
- * race. A failed switch leaves the state exactly as it was (the
+ * A switch that loses a commit race stays lost. When this instance's
+ * own switch request answers successfully but a concurrent sibling
+ * operation on the same session -- another TenantSwitcher instance's
+ * switch, most plausibly, since this component's own entry guard
+ * already rules out a second concurrent call through itself --
+ * committed first, auth-core's switchTenant rejects with
+ * OperationSupersededError rather than resolving: this request did go
+ * through server-side, but the session it would have described is not
+ * the one now current, so treating the answer as a commit would fire
+ * onSwitched for a tenant the session is not actually running under.
+ * The superseded call therefore treats itself as a lost race, not a
+ * failure: nothing renders, nothing is re-issued, no onSwitched fires
+ * -- the winning operation's own commit already fired its own callback
+ * exactly once, for the tenant the session genuinely runs under, and
+ * this component is controlled (the trigger reads the host's own
+ * currentTenantId), so the UI converges to that same tenant. The
+ * correction of the earlier reconcile-by-re-issue design rests on one
+ * fact: supersession is decided by RESPONSE settlement order, not send
+ * order (auth-core rejects whichever request's answer settles after a
+ * sibling committed), and settlement order carries no information
+ * about whose write the server session row actually keeps. When
+ * responses settle in send order, the superseded request is the
+ * later-sent one, so its own write is the last one the row holds and a
+ * re-issue would converge, announced. When the EARLIER-sent request
+ * settles last (its response was delayed past the sibling's -- the
+ * user moved on, and the tenant they picked second already committed),
+ * the same re-issue would re-commit the tenant the user already
+ * abandoned, actively switching the session and rewriting the server
+ * row away from the tenant the user settled on. The component cannot
+ * tell the two apart, so the sound rule is: a superseded request is
+ * lost. The residual that rule accepts, recorded rather than
+ * engineered: in the send-order case the row keeps the lost request's
+ * tenant, and the next silent refresh mints for it -- the session
+ * converges there through auth-core's own refresh path, announced by
+ * no onSwitched; re-issuing the lost request to announce it is the
+ * active wrong switch this correction removes. A failed switch leaves
+ * the state exactly as it was (the
  * auth-core contract: a raw ApiError rejection with zero state change)
  * and renders the answer's code text in one InlineError under the
  * control -- the whitelist of reachable codes (the membership and
@@ -134,16 +129,6 @@ import type { AuthSession } from '@speed/auth-core'
 import { isOperationSuperseded } from '@speed/auth-core'
 import { errorCodeOf, InlineError } from './internal/inline-error.js'
 import { useTenancyUiTranslation } from './internal/translation.js'
-
-/**
- * The most switch requests one user intent may issue: the original plus
- * the corrective re-issues a superseded outcome triggers (see the file
- * header). Each re-issue is a fresh session operation, so the bound is
- * what keeps a pathological pile-up of racing commits from looping this
- * component's requests forever; when the bound is spent the superseded
- * call gives up quietly.
- */
-const MAX_SWITCH_ATTEMPTS = 3
 
 /** One switchable tenant: the id the switch is called with, and the name
  * the trigger and the list show. */
@@ -221,9 +206,7 @@ export function TenantSwitcher({
 
   const switchTo = async (tenant: TenantOption): Promise<void> => {
     // One switch at a time: a second attempt while a flight is pending
-    // is refused before any await, never queued. The first flight's
-    // commit wins and fires onSwitched for its tenant exactly once --
-    // unless that commit is superseded and reconciled below.
+    // is refused before any await, never queued.
     if (switching.current) {
       return
     }
@@ -234,74 +217,39 @@ export function TenantSwitcher({
     // and the landed tenant once it commits (the file header explains
     // why a committed context change must say so out loud).
     setNotice({ tenantName: tenant.name, committed: false })
-    // The principal this switch speaks for, captured before the first
-    // attempt: a superseded outcome can only still reach the session
-    // through a later refresh while the SAME user owns it. The user_id
-    // is the proxy for "the held token family still reaches this
-    // request's server-side write" (a logout or another user's login
-    // replaced or cleared the family; see the file header for the one
-    // case the proxy cannot tell apart).
-    const issuedBy = session.getSnapshot().principal
     let committed = false
     try {
-      // One request per attempt, staying pending across them. When the
-      // attempt is superseded -- a sibling operation committed to the
-      // session first -- this request's own server write may be the one
-      // the session row now holds, so the outcome reconciles by
-      // re-issuing the switch: the tenant the server actually committed
-      // must land as a real, announced commit, or a later silent
-      // refresh drifts the session into it behind the host's back (no
-      // onSwitched, no cache invalidation, the tenant permission list
-      // silently dropped).
-      for (let attempt = 0; ; attempt += 1) {
-        try {
-          await session.switchTenant(tenant.id)
-          committed = true
-          break
-        } catch (error) {
-          if (!isOperationSuperseded(error)) {
-            throw error
-          }
-          if (attempt + 1 >= MAX_SWITCH_ATTEMPTS) {
-            // The reconciliation budget is spent: racing operations keep
-            // owning the session. Contribute nothing -- no alert, no
-            // onSwitched (the residual drift window needs three or more
-            // concurrent commits; see the file header).
-            break
-          }
-          const winner = error.snapshot.principal
-          const canStillDrift =
-            winner !== null &&
-            issuedBy !== null &&
-            winner.user_id === issuedBy.user_id &&
-            winner.tenant_id !== tenant.id
-          if (!canStillDrift) {
-            // The session already runs under the requested tenant (the
-            // race was redundant), or a different principal took it
-            // over (the token family was replaced -- no drift can
-            // follow). Contribute nothing.
-            break
-          }
-          // The drift condition holds: re-issue the same request. The
-          // flight stays pending; the loop breaks only on a commit.
-        }
-      }
+      // One request per user intent. When a sibling operation commits
+      // to the session before this request's answer settles, auth-core
+      // rejects with OperationSupersededError and this request is a
+      // LOST RACE -- never re-issued (the file header explains why
+      // re-issuing a superseded request can actively re-commit a tenant
+      // the user abandoned), never an error: the winning operation's
+      // own commit already fired its own onSwitched for the tenant the
+      // session actually runs under, and this controlled component
+      // converges to it through the host's currentTenantId.
+      await session.switchTenant(tenant.id)
+      committed = true
     } catch (error) {
-      // A genuine failure of the switch (the membership, account-status,
-      // token-verification, session-lifecycle or transport answers): the
-      // state is exactly as it was (the auth-core contract) and the
-      // answer's code text renders below. The notice is cleared so the
-      // failure's own text is the only message standing.
-      setErrorCode(errorCodeOf(error))
+      if (!isOperationSuperseded(error)) {
+        // A genuine failure of the switch (the membership,
+        // account-status, token-verification, session-lifecycle or
+        // transport answers): the state is exactly as it was (the
+        // auth-core contract) and the answer's code text renders below.
+        // The notice is cleared so the failure's own text is the only
+        // message standing.
+        setErrorCode(errorCodeOf(error))
+      }
     } finally {
       setPending(false)
       switching.current = false
     }
     if (!committed) {
-      // The switch did not land (a genuine failure, a spent
-      // reconciliation budget, or nothing left to reconcile): no
-      // confirmation to announce, and on a failure the code text below
-      // already replaced the notice.
+      // The switch did not land: a genuine failure (whose code text
+      // below already replaced the notice) or a superseded race that
+      // stays lost -- no confirmation to announce, because the session
+      // runs the winner's tenant and the winner's own commit announced
+      // it.
       setNotice(null)
       return
     }

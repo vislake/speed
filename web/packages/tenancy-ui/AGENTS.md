@@ -133,12 +133,17 @@ lists after a commit. None of that happens here, by design.
 
 One behavioural note for hosts that mount more than one `TenantSwitcher`
 on a session (chrome plus a drawer copy): two instances racing the same
-session produce two genuine commits -- the winner's, and the superseded
-loser's reconciliation re-issue, which converges the session onto the
-tenant the server actually committed (never a silent drift). The host's
-`onSwitched` fires once per commit, so it may report a tenant that a
-reconciling commit supersedes moments later; a handler that refetches
-for whatever tenant it is told ends consistent with the session.
+session settle by response order, and whichever request answers after a
+sibling committed is superseded -- a lost race, never re-issued (a
+re-issue would actively re-commit a tenant the user abandoned when the
+earlier-sent request settles last) and never reported. The winning
+commit is the only one: its instance fires `onSwitched` exactly once
+for the tenant the session genuinely runs under, and the host's own
+`currentTenantId` converges the trigger. The lost-race rule's recorded
+residual is that a session row keeping the lost request's tenant (the
+send-order case) converges at the next silent refresh through the
+session's own refresh path, with no `onSwitched`; the component header
+carries the full reasoning.
 
 ## Language
 
