@@ -30,7 +30,19 @@ import "time"
 // dbkit.Cipher. Whether a row is encrypted is decided by the schema's
 // Sensitive flag at read time, never by a marker on the row itself: a
 // marker would let an attacker who can read the table tell which columns
-// are worth stealing.
+// are worth stealing. The read-time decision has a cost: a row carries no
+// "am I encrypted" fact of its own, so nothing checks a row's encryption
+// state against the schema's current declaration. Flipping an existing
+// item's Sensitive flag is therefore a data migration, and this module
+// neither provides one nor detects a missed rewrite -- old rows are simply
+// read under the new interpretation. Rows written plaintext and read as
+// Sensitive fail the decrypt step, so the item errors on every read until
+// its rows are rewritten under the new declaration; rows written sealed
+// and read as plaintext surface the stored base64(ciphertext) text itself
+// as the value -- a string item serves it verbatim, and an item whose
+// declaration also became Public serves it out to the pre-auth endpoint.
+// A module changing an item's sensitivity must rewrite the item's rows in
+// the same change; no code here can catch the missing one.
 type row struct {
 	Key      string `gorm:"primaryKey;size:100"`
 	Scope    string `gorm:"primaryKey;size:16"`
