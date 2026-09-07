@@ -96,10 +96,35 @@ describe('EmptyState', () => {
   })
 
   it('passes axe over every variant', async () => {
+    // The full-scan assertion needs the page-heading context a real
+    // page supplies: page-has-heading-one is determinate in jsdom now
+    // (see the axe helper header), so a document with no h1 fails the
+    // scan instead of passing by indeterminacy. Each variant renders
+    // the way a correctly-migrated caller would -- under the page's
+    // h1 and declaring the headingLevel that continues the page order;
+    // the stock h6 default under a real h1 is a genuine heading-order
+    // skip, which the two regression tests below pin.
     for (const variant of ['empty', 'noPermission', 'error'] as const) {
-      renderWithProviders(<EmptyState variant={variant} />)
+      renderWithProviders(
+        <div>
+          <h1>Page title</h1>
+          <EmptyState variant={variant} headingLevel="h2" />
+        </div>,
+      )
     }
     await expectNoAxeViolations()
+  })
+
+  it('fails the axe scan when the document has no page heading instead of passing by indeterminacy', async () => {
+    // The mechanism the variants scan above works around by supplying
+    // the h1 itself. A component rendered with no h1 anywhere in the
+    // scan's document used to pass: page-has-heading-one reported
+    // "incomplete" under jsdom (its modal probe needs document APIs
+    // jsdom lacks) and the axe helper checked only violations. The
+    // helper now restores determinacy, so the isolated render FAILS
+    // the scan with the rule's real answer instead of silently passing.
+    renderWithProviders(<EmptyState headingLevel="h2" />)
+    await expect(expectNoAxeViolations()).rejects.toThrow(/page-has-heading-one/)
   })
 
   // Regression for the account-ui audit's CONFIRMED P2-1 finding: the

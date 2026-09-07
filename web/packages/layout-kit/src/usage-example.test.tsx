@@ -42,6 +42,12 @@ function AppContent({ initialStatus }: { readonly initialStatus: RouteGuardStatu
   const [status] = useState<RouteGuardStatus>(initialStatus)
   return (
     <AppShell navItems={NAV_ITEMS} header="My App">
+      {/* The host page's h1 lives in the content inside AppShell's main
+          landmark: the shell is chrome and renders no page heading of
+          its own, and the composed axe scan needs the real page shape
+          (page-has-heading-one is determinate in jsdom -- see the axe
+          helper header). */}
+      <h1>Protected screen</h1>
       <RouteGuard status={status}>
         <p>Protected screen content</p>
       </RouteGuard>

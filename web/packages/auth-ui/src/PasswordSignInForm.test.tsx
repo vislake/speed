@@ -143,7 +143,17 @@ describe('PasswordSignInForm', () => {
 
   it('pass axe with no violations', async () => {
     const harness = makeHarness({ [LOGIN_PASSWORD]: () => makePair() })
-    renderWithProviders(<PasswordSignInForm session={harness.session} />)
+    // Rendered under the page h1 a real host page supplies: the form
+    // renders no heading of its own (the page above it is host
+    // content), and page-has-heading-one is determinate in jsdom now
+    // (see the axe helper header) -- a scan without that context fails
+    // instead of passing by indeterminacy.
+    renderWithProviders(
+      <div>
+        <h1>Sign in</h1>
+        <PasswordSignInForm session={harness.session} />
+      </div>,
+    )
     await expectNoAxeViolations()
   })
 

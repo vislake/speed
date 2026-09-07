@@ -256,7 +256,15 @@ describe('SignOutButton', () => {
       },
     })
     await signIn(harness)
-    renderWithProviders(<SignOutButton session={harness.session} />)
+    // Rendered under the page h1 a real host page supplies, like every
+    // axe scan in this package (page-has-heading-one is determinate in
+    // jsdom -- see the axe helper header).
+    renderWithProviders(
+      <div>
+        <h1>Account</h1>
+        <SignOutButton session={harness.session} />
+      </div>,
+    )
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: LABEL_ZH }))
     await waitFor(() =>

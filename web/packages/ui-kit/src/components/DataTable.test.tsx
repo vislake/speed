@@ -53,14 +53,31 @@ const BASE_COLUMNS: readonly DataTableColumn<Member>[] = [
 
 const keyOf = (row: Member): number => row.id
 
-function renderTable(props: Partial<DataTableProps<Member>> = {}) {
-  return renderWithProviders(
+function renderTable(
+  props: Partial<DataTableProps<Member>> = {},
+  options: { heading?: string } = {},
+) {
+  const table = (
     <DataTable
       rows={MEMBERS}
       columns={BASE_COLUMNS}
       rowKey={keyOf}
       {...props}
-    />,
+    />
+  )
+  return renderWithProviders(
+    options.heading !== undefined ? (
+      // The axe scans render under a real page h1 (page-has-heading-one
+      // is determinate in jsdom -- see the axe helper header), the way
+      // a real host page would mount the table. Behavioural tests keep
+      // rendering the bare table; only scans opt into the context.
+      <div>
+        <h1>{options.heading}</h1>
+        {table}
+      </div>
+    ) : (
+      table
+    ),
   )
 }
 
@@ -694,36 +711,50 @@ describe('DataTable', () => {
         ...BASE_COLUMNS,
         { id: 'plan', header: 'Plan', priority: 'low', cell: () => 'Pro' },
       ]
-      renderTable({ columns })
+      renderTable({ columns }, { heading: 'Members' })
       await expectNoAxeViolations()
     })
   })
 
+  // Each scan renders the table under a real page h1 (the renderTable
+  // `heading` option): page-has-heading-one is determinate in jsdom now
+  // (see the axe helper header), so a scan document without an h1 fails
+  // instead of passing by indeterminacy -- the h1 is the page context a
+  // real host page supplies.
   it('passes axe over a fully loaded table', async () => {
-    renderTable({
-      selectedRowKeys: [1],
-      onSelectionChange: vi.fn(),
-      sort: { columnId: 'name', direction: 'asc' },
-      onSortChange: vi.fn(),
-      filter: { value: '', onValueChange: vi.fn() },
-      pagination: {
-        page: 0,
-        rowsPerPage: 2,
-        count: 3,
-        onPageChange: vi.fn(),
-        onRowsPerPageChange: vi.fn(),
+    renderTable(
+      {
+        selectedRowKeys: [1],
+        onSelectionChange: vi.fn(),
+        sort: { columnId: 'name', direction: 'asc' },
+        onSortChange: vi.fn(),
+        filter: { value: '', onValueChange: vi.fn() },
+        pagination: {
+          page: 0,
+          rowsPerPage: 2,
+          count: 3,
+          onPageChange: vi.fn(),
+          onRowsPerPageChange: vi.fn(),
+        },
       },
-    })
+      { heading: 'Members' },
+    )
     await expectNoAxeViolations()
   })
 
   it('passes axe over the loading state', async () => {
-    renderTable({ rows: [], loading: true })
+    renderTable({ rows: [], loading: true }, { heading: 'Members' })
     await expectNoAxeViolations()
   })
 
   it('passes axe over the empty placeholder state', async () => {
-    renderTable({ rows: [] })
+    // emptyHeadingLevel supplied, as a correctly-migrated caller would:
+    // the stock placeholder h6 under the real page h1 is a genuine
+    // heading-order skip (pinned by the two P2-3 tests below).
+    renderTable(
+      { rows: [], emptyHeadingLevel: 'h2' },
+      { heading: 'Members' },
+    )
     await expectNoAxeViolations()
   })
 

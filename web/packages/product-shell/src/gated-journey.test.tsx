@@ -59,6 +59,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { registerNamespace } from '@speed/i18n'
 import { RouteGuard } from '@speed/layout-kit'
 import type { AppShellNavItem, RouteGuardStatus } from '@speed/layout-kit'
+import { EmptyState } from '@speed/ui-kit'
 import {
   TENANCY_UI_NAMESPACE,
   tenancyUiResources,
@@ -249,6 +250,13 @@ function GatedTenantApp({
     onClick: () => setView(entry.id),
   }))
 
+  // The denied fallback this host composes is the migrated shape the
+  // layout-kit suite prescribes: the page carries a real h1, so the
+  // fallback EmptyState declares the headingLevel that continues the
+  // page order (h2, under the page h1) instead of RouteGuard's stock
+  // h6 default -- whose skip under a real page heading the layout-kit
+  // suite pins and declares out of scope for its own scans.
+  const deniedFallback = <EmptyState variant="noPermission" headingLevel="h2" />
   let content: ReactNode
   if (view === 'home') {
     content = (
@@ -260,14 +268,14 @@ function GatedTenantApp({
     )
   } else if (view === 'notes') {
     content = (
-      <RouteGuard status={gate('notes')} onDenied={onDenied}>
+      <RouteGuard status={gate('notes')} onDenied={onDenied} deniedFallback={deniedFallback}>
         <h2>Notes</h2>
         <p>The tenant&apos;s notes list.</p>
       </RouteGuard>
     )
   } else {
     content = (
-      <RouteGuard status={gate('members')} onDenied={onDenied}>
+      <RouteGuard status={gate('members')} onDenied={onDenied} deniedFallback={deniedFallback}>
         <h2>Members</h2>
         <p>The tenant&apos;s member roster.</p>
       </RouteGuard>
@@ -297,6 +305,12 @@ function GatedTenantApp({
           </Button>
         </Box>
       )}
+      {/* The host page's h1, above the view content and the gates: the
+          chrome renders no page heading of its own, and every axe scan
+          of the composed page needs the real page shape
+          (page-has-heading-one is determinate in jsdom -- see the axe
+          helper header). */}
+      <h1>My app</h1>
       {content}
     </ProductShell>
   )
@@ -621,7 +635,12 @@ describe('host-side gating composition', () => {
         screen.getByText(authUiZhCN.sessionEnded.description),
       ).toBeInTheDocument()
       expect(screen.queryByRole('banner')).not.toBeInTheDocument()
-      expect(screen.queryByRole('main')).not.toBeInTheDocument()
+      // The frame is gone (banner above), but the ended screen is the
+      // whole page now: its container IS the page's main landmark
+      // (ProductShell renders the ended branch as `main` -- the
+      // landmark-one-main rule a page must answer), with the frame's
+      // own main unmounted.
+      expect(screen.getByRole('main')).toBeInTheDocument()
       expect(rig.store.get()).toBeNull()
       // The client reports the failed refresh through its reporter with
       // the original refusal's code, never the refresh's own.

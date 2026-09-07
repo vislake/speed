@@ -65,6 +65,7 @@ const failedAnnouncement = (name: string): string =>
  */
 function renderHarness(
   initial: FileUploaderProps,
+  options: { heading?: string } = {},
 ): RenderWithProvidersResult & {
   setRows(rows: readonly FileUploaderRow[]): void
 } {
@@ -76,7 +77,21 @@ function renderHarness(
     applyRowsRef.current = setRows
     return <FileUploader {...initial} rows={rows} />
   }
-  const view = renderWithProviders(<Harness />)
+  const view = renderWithProviders(
+    options.heading !== undefined ? (
+      // The axe scans render under a real page h1 (page-has-heading-one
+      // is determinate in jsdom -- see the axe helper header), the way
+      // a real host page would mount the uploader. Behavioural tests
+      // keep rendering the bare widget; only scans opt into the
+      // context.
+      <div>
+        <h1>{options.heading}</h1>
+        <Harness />
+      </div>
+    ) : (
+      <Harness />
+    ),
+  )
   return {
     ...view,
     setRows(rows: readonly FileUploaderRow[]): void {
@@ -679,42 +694,59 @@ describe('FileUploader', () => {
       expect(view.getAllByRole('listitem')).toHaveLength(2)
     })
 
+    // Each scan renders the widget under a real page h1 (the
+    // renderHarness `heading` option): page-has-heading-one is
+    // determinate in jsdom now (see the axe helper header), so a scan
+    // document without an h1 fails instead of passing by indeterminacy
+    // -- the h1 is the page context a real host page supplies.
     it('is axe-clean at idle', async () => {
-      renderHarness({
-        rows: [],
-        onSelectFiles: vi.fn(),
-        allowDrop: true,
-      })
+      renderHarness(
+        {
+          rows: [],
+          onSelectFiles: vi.fn(),
+          allowDrop: true,
+        },
+        { heading: 'Uploads' },
+      )
       await expectNoAxeViolations()
     })
 
     it('is axe-clean across populated states', async () => {
-      renderHarness({
-        rows: [
-          uploadingRow('r1', 'up.jpg', 0.4),
-          failedRow('r2', 'bad.jpg', 'The upload answered 503.'),
-          succeededRow('r3', 'done.jpg'),
-        ],
-        onSelectFiles: vi.fn(),
-        allowDrop: true,
-        onCancel: vi.fn(),
-        onRetry: vi.fn(),
-        onRemove: vi.fn(),
-      })
+      renderHarness(
+        {
+          rows: [
+            uploadingRow('r1', 'up.jpg', 0.4),
+            failedRow('r2', 'bad.jpg', 'The upload answered 503.'),
+            succeededRow('r3', 'done.jpg'),
+          ],
+          onSelectFiles: vi.fn(),
+          allowDrop: true,
+          onCancel: vi.fn(),
+          onRetry: vi.fn(),
+          onRemove: vi.fn(),
+        },
+        { heading: 'Uploads' },
+      )
       await expectNoAxeViolations()
     })
 
     it('is axe-clean as a queue-only view and when disabled', async () => {
-      renderHarness({
-        rows: [uploadingRow('r1', 'up.jpg'), succeededRow('r2', 'done.jpg')],
-      })
+      renderHarness(
+        {
+          rows: [uploadingRow('r1', 'up.jpg'), succeededRow('r2', 'done.jpg')],
+        },
+        { heading: 'Uploads' },
+      )
       await expectNoAxeViolations()
-      renderHarness({
-        rows: [],
-        onSelectFiles: vi.fn(),
-        allowDrop: true,
-        disabled: true,
-      })
+      renderHarness(
+        {
+          rows: [],
+          onSelectFiles: vi.fn(),
+          allowDrop: true,
+          disabled: true,
+        },
+        { heading: 'Uploads' },
+      )
       await expectNoAxeViolations()
     })
   })

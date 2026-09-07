@@ -555,6 +555,13 @@ describe('AppShell', () => {
   })
 
   describe('accessibility', () => {
+    // Both closed-layout scans render the shell with the page content a
+    // real host puts inside `main` -- including the page's h1, which
+    // chrome deliberately does not render itself: page-has-heading-one
+    // is determinate in jsdom now (see the axe helper header), so a
+    // scan document without an h1 fails instead of passing by
+    // indeterminacy. The shell's own landmark structure (a real main)
+    // answers landmark-one-main; region stays enabled.
     it('has no axe violations on the desktop layout, with region enabled', async () => {
       mockMatchMedia(true)
       renderWithProviders(
@@ -563,7 +570,7 @@ describe('AppShell', () => {
           header={<span>Speed Admin</span>}
           userMenu={<span>Jane Doe</span>}
         >
-          <p>Main content</p>
+          <h1>Main content</h1>
         </AppShell>,
       )
       await expectNoAxeViolations()
@@ -573,9 +580,34 @@ describe('AppShell', () => {
       mockMatchMedia(false)
       renderWithProviders(
         <AppShell navItems={NAV_ITEMS}>
-          <p>Main content</p>
+          <h1>Main content</h1>
         </AppShell>,
       )
+      await expectNoAxeViolations()
+    })
+
+    it('has no axe violations on the mobile layout with the drawer OPEN, with region enabled', async () => {
+      // Regression: the axe runs above scan the mobile drawer closed --
+      // the only state in which the scans used to run -- while OPEN the
+      // temporary drawer is a real modal (role=dialog aria-modal) and
+      // the only usable state of mobile navigation. Pre-fix the open
+      // drawer's paper had no accessible name: axe's aria-dialog-name
+      // rule failed the paper (impact serious) and no scan measured it.
+      // The drawer's paper now carries the nav label as its dialog name
+      // (see AppShell.tsx), and this scan runs over the open state.
+      // Page-context rules are exempted while the modal is open, the
+      // same passForModal semantics a browser applies.
+      mockMatchMedia(false)
+      const user = userEvent.setup()
+      const { getByRole } = renderWithProviders(
+        <AppShell navItems={NAV_ITEMS}>
+          <h1>Main content</h1>
+        </AppShell>,
+      )
+      await user.click(getByRole('button', { name: zhCN.appShell.openNav }))
+      expect(
+        document.querySelector('.MuiDrawer-paper')?.getAttribute('aria-modal'),
+      ).toBe('true')
       await expectNoAxeViolations()
     })
   })

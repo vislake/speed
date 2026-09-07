@@ -151,8 +151,15 @@ describe('SocialSignInSection', () => {
     const harness = makeHarness({
       [SOCIAL_AUTHORIZE]: () => ({ authorize_url: GOOGLE_AUTH_URL }),
     })
+    // Rendered under the page h1 a real host page supplies: the section
+    // renders no heading of its own, and page-has-heading-one is
+    // determinate in jsdom now (see the axe helper header) -- a scan
+    // without that context fails instead of passing by indeterminacy.
     renderWithProviders(
-      <SocialSignInSection session={harness.session} providers={PROVIDERS} />,
+      <div>
+        <h1>Sign in</h1>
+        <SocialSignInSection session={harness.session} providers={PROVIDERS} />
+      </div>,
     )
     await expectNoAxeViolations()
   })

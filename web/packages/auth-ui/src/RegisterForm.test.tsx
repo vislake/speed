@@ -286,7 +286,16 @@ describe('RegisterForm', () => {
 
   it('pass axe with no violations', async () => {
     const harness = makeHarness({ [REGISTER]: () => ALICE })
-    renderWithProviders(<RegisterForm session={harness.session} />)
+    // Rendered under the page h1 a real host page supplies: the form
+    // renders no heading of its own, and page-has-heading-one is
+    // determinate in jsdom now (see the axe helper header) -- a scan
+    // without that context fails instead of passing by indeterminacy.
+    renderWithProviders(
+      <div>
+        <h1>Create account</h1>
+        <RegisterForm session={harness.session} />
+      </div>,
+    )
     await expectNoAxeViolations()
   })
 

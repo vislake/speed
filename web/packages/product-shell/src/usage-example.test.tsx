@@ -267,7 +267,12 @@ describe('README usage example', () => {
       screen.getByText(authUiZhCN.sessionEnded.description),
     ).toBeInTheDocument()
     expect(screen.queryByRole('banner')).not.toBeInTheDocument()
-    expect(screen.queryByRole('main')).not.toBeInTheDocument()
+    // The frame is gone (banner above), but the ended screen is the
+    // whole page now: its container IS the page's main landmark
+    // (ProductShell renders the ended branch as `main` -- the
+    // landmark-one-main rule a page must answer), with the frame's own
+    // main unmounted.
+    expect(screen.getByRole('main')).toBeInTheDocument()
 
     // The ended screen's action returns to the host's sign-in view.
     await user.click(

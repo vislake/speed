@@ -254,6 +254,12 @@ describe('ProductShell view machine', () => {
         userMenu={<p>account menu</p>}
         headerActions={<p>actions</p>}
       >
+        {/* The host page's h1 lives in the content inside the frame's
+            main landmark, the way every real host composes it: the
+            chrome renders no page heading of its own, and
+            page-has-heading-one is determinate in jsdom now (see the
+            axe helper header). */}
+        <h1>My app</h1>
         <p>app content</p>
       </ProductShell>,
     )

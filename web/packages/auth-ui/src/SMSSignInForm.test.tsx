@@ -317,7 +317,16 @@ describe('SMSSignInForm', () => {
     const harness = makeHarness({
       [REQUEST_SMS_CODE]: () => undefined,
     })
-    renderWithProviders(<SMSSignInForm session={harness.session} />)
+    // Rendered under the page h1 a real host page supplies: the form
+    // renders no heading of its own, and page-has-heading-one is
+    // determinate in jsdom now (see the axe helper header) -- a scan
+    // without that context fails instead of passing by indeterminacy.
+    renderWithProviders(
+      <div>
+        <h1>Sign in</h1>
+        <SMSSignInForm session={harness.session} />
+      </div>,
+    )
     await expectNoAxeViolations()
   })
 

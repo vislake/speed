@@ -184,8 +184,16 @@ describe('SignInScreen', () => {
 
   it('pass axe with no violations', async () => {
     const harness = makeHarness({ [LOGIN_PASSWORD]: () => makePair() })
+    // Rendered under the page h1 a real host page supplies: the screen
+    // renders no heading of its own (branding and the page heading are
+    // host content above it), and page-has-heading-one is determinate
+    // in jsdom now (see the axe helper header) -- a scan without that
+    // context fails instead of passing by indeterminacy.
     renderWithProviders(
-      <SignInScreen session={harness.session} social={{ providers: SOCIAL_PROVIDERS }} />,
+      <div>
+        <h1>Sign in</h1>
+        <SignInScreen session={harness.session} social={{ providers: SOCIAL_PROVIDERS }} />
+      </div>,
     )
     await expectNoAxeViolations()
   })

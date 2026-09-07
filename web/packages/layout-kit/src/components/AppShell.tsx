@@ -393,6 +393,15 @@ export function AppShell({
             open={mobileOpen}
             onClose={() => setMobileOpen(false)}
             ModalProps={{ keepMounted: true }}
+            // The open temporary drawer is a real modal: MUI gives its
+            // paper role="dialog" with aria-modal, and axe's
+            // aria-dialog-name rule fails an unnamed dialog -- measured
+            // on the OPEN state by the suite's open-drawer axe scan,
+            // which only a named drawer can pass. The drawer IS the
+            // navigation, so its dialog name reuses the nav landmark's
+            // own bilingual label rather than inventing a fourth
+            // appShell string.
+            slotProps={{ paper: { 'aria-label': t('appShell.navLabel') } }}
             sx={{
               '& .MuiDrawer-paper': {
                 boxSizing: 'border-box',

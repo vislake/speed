@@ -243,7 +243,16 @@ describe('FormLayout', () => {
 
   it('passes axe over a labeled form', async () => {
     const onSubmit = vi.fn<SubmitHandler<MemberFormValues>>()
-    const utils = renderWithProviders(<FullForm onSubmit={onSubmit} />)
+    // Rendered under a real page h1: page-has-heading-one is determinate
+    // in jsdom now (see the axe helper header), so a scan document
+    // without an h1 fails instead of passing by indeterminacy -- the h1
+    // is the page context a real host page supplies.
+    const utils = renderWithProviders(
+      <div>
+        <h1>Members</h1>
+        <FullForm onSubmit={onSubmit} />
+      </div>,
+    )
     const user = userEvent.setup()
     await user.click(utils.getByRole('button', { name: 'Save member' }))
     await expectNoAxeViolations()

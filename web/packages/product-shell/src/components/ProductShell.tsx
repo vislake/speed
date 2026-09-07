@@ -238,7 +238,13 @@ export function ProductShell({
   }
   if (reachedApp) {
     return (
-      <Box ref={branchContainerRef} tabIndex={-1}>
+      // The ended branch replaces the whole app page, so its container
+      // IS the page's main landmark (axe's landmark-one-main rule
+      // requires one -- measured by the suite's ended-branch scans; the
+      // authenticated branch's main comes from AppShell, and only one
+      // branch renders at a time). Focus still lands on it through the
+      // same tabIndex={-1} mechanism AppShell's own main uses.
+      <Box ref={branchContainerRef} component="main" tabIndex={-1}>
         {announcementsRegistered && (
           <Box component="p" role="status" sx={srOnlyRegionSx}>
             {announced ? t('announcements.sessionEnded') : ''}

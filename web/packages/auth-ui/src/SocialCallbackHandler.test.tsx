@@ -256,13 +256,21 @@ describe('SocialCallbackHandler', () => {
           resolveExchange = resolve
         }),
     })
+    // Rendered under the page h1 a real host page supplies: the
+    // handler renders no heading of its own, and page-has-heading-one
+    // is determinate in jsdom now (see the axe helper header) -- a
+    // scan without that context fails instead of passing by
+    // indeterminacy.
     renderWithProviders(
-      <SocialCallbackHandler
-        session={harness.session}
-        provider="google"
-        code={CODE}
-        state={STATE}
-      />,
+      <div>
+        <h1>Completing sign in</h1>
+        <SocialCallbackHandler
+          session={harness.session}
+          provider="google"
+          code={CODE}
+          state={STATE}
+        />
+      </div>,
     )
     await expectNoAxeViolations()
     resolveExchange(makePair())

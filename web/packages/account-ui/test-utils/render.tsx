@@ -97,7 +97,18 @@ export function renderWithProviders(
   const result = render(
     <I18nextProvider i18n={instance}>
       <AppThemeProvider i18n={instance}>
-        <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+        <QueryClientProvider client={queryClient}>
+          {/* The account page every account-ui surface lives on: the
+              page's h1 above the section under test. Every axe scan in
+              the suite runs at the end of a behavioural test, and
+              page-has-heading-one is determinate in jsdom now (see
+              test-utils/axe.ts's header) -- a section rendered with no
+              page heading context would fail the scan instead of
+              passing by indeterminacy. The section's own header is a
+              level-2 heading standing in under this h1. */}
+          <h1>Account</h1>
+          {ui}
+        </QueryClientProvider>
       </AppThemeProvider>
     </I18nextProvider>,
   )
