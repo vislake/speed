@@ -25,9 +25,9 @@ const chatCompletionsPath = "/chat/completions"
 const defaultHTTPTimeout = 60 * time.Second
 
 // maxErrorBodyBytes caps how much of a non-2xx response body
-// errorFromResponse reads into the returned error's params, so a vendor
-// that answers an error page with an unbounded body cannot make this
-// package hold it all in memory.
+// errorFromResponse reads for the server-side log, so a vendor that
+// answers an error page with an unbounded body cannot make this package
+// hold it all in memory.
 const maxErrorBodyBytes = 4096
 
 // streamScannerBufferBytes and streamScannerMaxBytes size the
@@ -172,14 +172,27 @@ func (p *OpenAICompatibleProvider) newHTTPRequest(ctx context.Context, body []by
 }
 
 // errorFromResponse builds ErrProviderRequestFailed from a non-2xx HTTP
-// response, reading at most maxErrorBodyBytes of the body so an unbounded
-// vendor error page cannot be held entirely in memory.
-func errorFromResponse(resp *http.Response) error {
+// response. The returned error's params carry ONLY the status code -- the
+// response body the dialed endpoint answered with is read (at most
+// maxErrorBodyBytes) and logged server-side through obs.FromContext(ctx),
+// hence through the observability redaction layer, never put into a
+// client-visible param. That is the response-reflux half of this module's
+// SSRF posture, the body twin of the no-IP-echo rule ErrBaseURLBlocked
+// pins for refusal answers (ssrf.go): an address, or a body, that the
+// server reached on the caller's behalf stays out of the answer handed
+// back to the caller who steered the dial. And unlike the refusal rule it
+// is not confined to blocked destinations: this echo channel is the
+// common error path of every provider call, so it would survive the SSRF
+// guards for any ALLOWED endpoint that answers with an error body --
+// which is why the body lives in the server-side log (where operators
+// troubleshoot vendor failures from) and not in the error's params.
+func errorFromResponse(ctx context.Context, resp *http.Response) error {
 	limited := io.LimitReader(resp.Body, maxErrorBodyBytes)
 	raw, _ := io.ReadAll(limited)
-	return ErrProviderRequestFailed.
-		WithParam("status", resp.StatusCode).
-		WithParam("body", string(raw))
+	obs.FromContext(ctx).Warn("aigateway: provider answered a non-2xx status",
+		"status_code", resp.StatusCode,
+		"response_body", string(raw))
+	return ErrProviderRequestFailed.WithParam("status", resp.StatusCode)
 }
 
 // openaiChatMessageWire is the message shape inside a non-streaming
@@ -228,7 +241,7 @@ func (p *OpenAICompatibleProvider) Chat(ctx context.Context, req ChatRequest) (C
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return ChatResponse{}, errorFromResponse(resp)
+		return ChatResponse{}, errorFromResponse(ctx, resp)
 	}
 
 	var wire openaiChatResponseWire
@@ -286,7 +299,7 @@ func (p *OpenAICompatibleProvider) ChatStream(ctx context.Context, req ChatReque
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer func() { _ = resp.Body.Close() }()
-		return nil, errorFromResponse(resp)
+		return nil, errorFromResponse(ctx, resp)
 	}
 
 	out := make(chan ChatChunk)

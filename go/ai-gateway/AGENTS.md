@@ -350,6 +350,17 @@ rate-limit call sites (the adjudicated P1). See "What round 4 adds".
   GenerateImage hoists its existing tenant requirement
   (`ErrImageRequiresTenant`) into the limiter's own pipeline position, so
   the limiter is only ever reached with a real tenant dimension.
+- **The response-reflux half of the same posture** (`openai_compatible.go`'s
+  `errorFromResponse`, shared by the chat and image providers): the
+  dialed endpoint's non-2xx response body used to be read verbatim into
+  the returned error's `body` param -- the echo family DESIGN point 4
+  (refusal answers must not carry what the server learned from the dial)
+  has a body twin, and unlike the address rule it survives the SSRF
+  guards for ALLOWED destinations, since a non-2xx answer is the common
+  error path of every provider call. The params now carry the status
+  code only; the body (bounded by `maxErrorBodyBytes`) goes to the
+  server-side log through `obs.FromContext` -- the observability
+  redaction layer -- where operators troubleshoot vendor failures from.
 - Product decision, recorded not implemented: the stronger convergence --
   a platform-declared whitelist of base URLs only -- stays future product
   work; the legitimate capability (a tenant pointing its BYOK credential
@@ -363,7 +374,9 @@ rate-limit call sites (the adjudicated P1). See "What round 4 adds".
   `handler_test.go` and the reference app's `ai_gateway_flow_test.go`
   pin the refusals through the service, the HTTP envelope and the
   composed stack; `ratelimit_test.go` pins that tenantless calls never
-  consult the limiter.
+  consult the limiter; `openai_compatible_test.go` and
+  `openai_compatible_image_test.go` pin that a non-2xx error body lands
+  in the server-side log, never in the returned error's params.
 
 ## Reference-app consumer
 

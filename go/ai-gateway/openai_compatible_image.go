@@ -208,7 +208,7 @@ func (p *OpenAICompatibleImageProvider) TextToImage(ctx context.Context, req Tex
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return ImageResult{}, errorFromResponse(resp)
+		return ImageResult{}, errorFromResponse(ctx, resp)
 	}
 
 	var wire openaiImageResponseWire
@@ -354,7 +354,7 @@ func (p *OpenAICompatibleImageProvider) editRequest(ctx context.Context, model, 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return ImageResult{}, errorFromResponse(resp)
+		return ImageResult{}, errorFromResponse(ctx, resp)
 	}
 
 	var wire openaiImageResponseWire

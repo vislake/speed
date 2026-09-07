@@ -1,15 +1,21 @@
 package aigateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	obs "github.com/vislake/speed/go/observability"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // tinyPNG is a minimal, valid 1x1 PNG -- real bytes, not a placeholder --
@@ -120,6 +126,42 @@ func TestOpenAICompatibleImageProvider_TextToImage_NonOKStatus_ProviderRequestFa
 	_, err := p.TextToImage(context.Background(), TextToImageRequest{Model: "dall-e-3", Prompt: "x"})
 	if got, ok := apperrCode(err); !ok || got != ErrProviderRequestFailed.Code {
 		t.Fatalf("TextToImage err = %v, want ErrProviderRequestFailed", err)
+	}
+}
+
+// TestOpenAICompatibleImageProvider_TextToImage_NonOKStatus_ErrorBodyLoggedNotReturned
+// is the image-side mirror of the chat reflux regression
+// (TestOpenAICompatibleProvider_Chat_NonOKStatus_ErrorBodyLoggedNotReturned):
+// the image provider funnels its non-2xx answers through the same
+// errorFromResponse, so the dialed endpoint's response body must stay out
+// of the returned error's params (server-side log only), whichever of the
+// two provider families made the call.
+func TestOpenAICompatibleImageProvider_TextToImage_NonOKStatus_ErrorBodyLoggedNotReturned(t *testing.T) {
+	const leakedBody = `{"error":"image service internal detail: intranet-echo-9b2d1"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(leakedBody))
+	}))
+	defer srv.Close()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	ctx := obs.WithLogger(context.Background(), logger)
+
+	p := NewOpenAICompatibleImageProvider(srv.URL, "sk-test")
+	_, err := p.TextToImage(ctx, TextToImageRequest{Model: "dall-e-3", Prompt: "x"})
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Code != ErrProviderRequestFailed.Code {
+		t.Fatalf("TextToImage err = %v, want ErrProviderRequestFailed", err)
+	}
+	if got, present := appErr.Params["body"]; present {
+		t.Fatalf("error params carry the dialed endpoint's response body %q -- the body must not be handed back to the caller who steered the dial", got)
+	}
+	if appErr.Params["status"] != http.StatusInternalServerError {
+		t.Fatalf("status param = %v, want %d", appErr.Params["status"], http.StatusInternalServerError)
+	}
+	if logged := logBuf.String(); !strings.Contains(logged, "intranet-echo-9b2d1") {
+		t.Fatalf("server-side log does not carry the response body for troubleshooting; log = %q", logged)
 	}
 }
 

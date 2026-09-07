@@ -13,6 +13,7 @@ import (
 	"time"
 
 	obs "github.com/vislake/speed/go/observability"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // --- Chat (non-streaming) --------------------------------------------------
@@ -106,6 +107,49 @@ func TestOpenAICompatibleProvider_Chat_NonOKStatus_ReturnsProviderRequestFailed(
 	})
 	if got, ok := apperrCode(err); !ok || got != ErrProviderRequestFailed.Code {
 		t.Fatalf("Chat err = %v, want ErrProviderRequestFailed", err)
+	}
+}
+
+// TestOpenAICompatibleProvider_Chat_NonOKStatus_ErrorBodyLoggedNotReturned
+// is the response-reflux regression (SSRF ring 4, openai_compatible.go's
+// errorFromResponse): the dialed endpoint's non-2xx response body must
+// never travel back to the caller inside the returned error's params. The
+// caller steered this dial, so a body the server read on its behalf would
+// otherwise be echoed verbatim up to maxErrorBodyBytes -- an intranet
+// banner, an error page carrying internal paths and versions, a metadata
+// endpoint's credential document. The body keeps its troubleshooting value
+// in the server-side log of the ctx the call ran under (through
+// observability's redaction layer) instead, and the params carry the
+// status code only.
+func TestOpenAICompatibleProvider_Chat_NonOKStatus_ErrorBodyLoggedNotReturned(t *testing.T) {
+	const leakedBody = `{"error":{"message":"internal service error","detail":"intranet-echo-7f3c9"}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(leakedBody))
+	}))
+	defer srv.Close()
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	ctx := obs.WithLogger(context.Background(), logger)
+
+	p := NewOpenAICompatibleProvider(srv.URL, "sk-test")
+	_, err := p.Chat(ctx, ChatRequest{
+		Model:    "gpt-4o-mini",
+		Messages: []ChatMessage{{Role: RoleUser, Content: "hi"}},
+	})
+	appErr, ok := apperr.As(err)
+	if !ok || appErr.Code != ErrProviderRequestFailed.Code {
+		t.Fatalf("Chat err = %v, want ErrProviderRequestFailed", err)
+	}
+	if got, present := appErr.Params["body"]; present {
+		t.Fatalf("error params carry the dialed endpoint's response body %q -- the body must not be handed back to the caller who steered the dial", got)
+	}
+	if appErr.Params["status"] != http.StatusInternalServerError {
+		t.Fatalf("status param = %v, want %d", appErr.Params["status"], http.StatusInternalServerError)
+	}
+	if logged := logBuf.String(); !strings.Contains(logged, "intranet-echo-7f3c9") {
+		t.Fatalf("server-side log does not carry the response body for troubleshooting; log = %q", logged)
 	}
 }
 
