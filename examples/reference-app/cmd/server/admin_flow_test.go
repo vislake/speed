@@ -764,11 +764,18 @@ type (
 )
 
 // defineAdminRole calls staffToken's admin:roles_manage-gated POST
-// /api/v1/admin/roles to create a role scoped to tenant carrying exactly
-// permissions, and binds it to userID -- the two-request sequence both
-// new tests below use to build a probe account holding exactly one
-// round-2 permission and nothing else, since registerAndAuthenticate
-// itself grants no rbac role at all (server_test.go's own doc comment).
+// /api/v1/admin/roles to create a role scoped to a CUSTOMER tenant
+// carrying exactly permissions -- the write half of the pair bindAdminRole
+// completes -- the HTTP-shape reachability proof
+// TestAdminFlow_Round2Routes_ReachableForPlatformStaff below drives, since
+// registerAndAuthenticate itself grants no rbac role at all
+// (server_test.go's own doc comment). These helpers never name
+// rbac.SystemDomain: admin's role-management surface refuses the system
+// pseudo-tenant with admin.roles_system_domain_forbidden (go/admin/role.go's
+// checkTenantWritable), so a test that needs system-domain probes seeds
+// them out of band, directly against rbac.Service under a system-tenant
+// context -- the shape TestAdminFlow_AuditExport_RequiresExportPermission's
+// own doc comment records.
 func defineAdminRole(t *testing.T, srv *httptest.Server, staffToken, tenant, key string, permissions []string) adminRole {
 	t.Helper()
 	var role adminRole
@@ -781,6 +788,10 @@ func defineAdminRole(t *testing.T, srv *httptest.Server, staffToken, tenant, key
 	return role
 }
 
+// bindAdminRole binds roleKey to (tenant, userID) through staffToken's
+// admin:roles_manage-gated POST /api/v1/admin/roles/{key}/bindings -- the
+// bind half of defineAdminRole's pair, carrying the same
+// customer-tenant-only restriction that helper's own doc comment records.
 func bindAdminRole(t *testing.T, srv *httptest.Server, staffToken, roleKey, tenant, userID string) {
 	t.Helper()
 	var binding adminRoleBinding
@@ -857,8 +868,27 @@ func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
 // the two permissions under rbac.SystemDomain and nothing else, prove
 // both directions: audit_read alone must NOT reach the export route, and
 // audit_export alone must.
+//
+// The probes' system-domain role scaffolding is seeded directly against
+// rbac.Service under a system-tenant context -- the out-of-band shape
+// seedDemoPlatformStaff sanctions (demo_admin.go) -- rather than through
+// admin's own role-management HTTP surface, which the admin P1-2 fix
+// refuses for rbac.SystemDomain with admin.roles_system_domain_forbidden
+// (go/admin/role.go's checkTenantWritable: no admin:roles_manage-gated
+// permission is fine-grained enough to separate "may manage a customer
+// tenant's roles" from "may delegate platform-operator authority", so
+// hosts seed system-domain grants out of band, directly against
+// rbac.Service). That choice leaves the gate this test exists to prove
+// untouched: the two probes still reach the audit-events surface as real
+// HTTP callers, and every assertion below runs through it.
 func TestAdminFlow_AuditExport_RequiresExportPermission(t *testing.T) {
-	srv, cfg, _ := buildAdminTestServer(t)
+	var rbacService *rbac.Service
+	srv, cfg, _ := buildAdminTestServer(t, func(cfg *serverConfig) {
+		cfg.OnRBACReady = func(svc *rbac.Service) { rbacService = svc }
+	})
+	if rbacService == nil {
+		t.Fatal("cfg.OnRBACReady was never called by buildServer")
+	}
 	staffToken := platformStaffToken(t, srv)
 
 	readOnlyToken := registerAndAuthenticate(t, srv, cfg, rbac.SystemDomain, "flow-audit-read-only-probe")
@@ -866,10 +896,25 @@ func TestAdminFlow_AuditExport_RequiresExportPermission(t *testing.T) {
 	readOnlyID := searchUserID(t, srv, staffToken, "flow-audit-read-only-probe@example.com")
 	exportID := searchUserID(t, srv, staffToken, "flow-audit-export-probe@example.com")
 
-	defineAdminRole(t, srv, staffToken, string(rbac.SystemDomain), "flow-audit-read-only", []string{admin.PermissionAuditRead})
-	defineAdminRole(t, srv, staffToken, string(rbac.SystemDomain), "flow-audit-export-only", []string{admin.PermissionAuditExport})
-	bindAdminRole(t, srv, staffToken, "flow-audit-read-only", string(rbac.SystemDomain), readOnlyID)
-	bindAdminRole(t, srv, staffToken, "flow-audit-export-only", string(rbac.SystemDomain), exportID)
+	// The system-domain role seed itself -- see this test's own doc
+	// comment for why it is out-of-band rbac.Service calls under a
+	// system-tenant context rather than the role-management HTTP surface.
+	systemCtx := pkgcore.WithTenant(t.Context(), rbac.SystemDomain)
+	for _, probe := range []struct {
+		key   string
+		perms []string
+		user  string
+	}{
+		{key: "flow-audit-read-only", perms: []string{admin.PermissionAuditRead}, user: readOnlyID},
+		{key: "flow-audit-export-only", perms: []string{admin.PermissionAuditExport}, user: exportID},
+	} {
+		if _, err := rbacService.DefineRole(systemCtx, rbac.RoleDefinition{Key: probe.key, Permissions: probe.perms}); err != nil {
+			t.Fatalf("seeding role %q: %v", probe.key, err)
+		}
+		if err := rbacService.AssignRole(systemCtx, rbac.Subject{TenantID: rbac.SystemDomain, UserID: probe.user}, probe.key, rbac.Scope{}); err != nil {
+			t.Fatalf("seeding binding of %q to %q: %v", probe.key, probe.user, err)
+		}
+	}
 
 	// The audit_read-only probe reads the audit trail fine...
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/audit-events", readOnlyToken, nil, http.StatusOK, nil, nil)
