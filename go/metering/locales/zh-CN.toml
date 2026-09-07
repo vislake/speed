@@ -21,3 +21,5 @@
 "metering.invalid_period_bucket" = "“{{.bucket}}”不是合法的周期粒度。"
 
 "metering.metadata_encode_failed" = "用量事件的元数据无法编码存储。"
+
+"metering.usage_summaries_unconfigured" = "该聚合器未配置用量汇总仓库,无法回答实时用量计数。"

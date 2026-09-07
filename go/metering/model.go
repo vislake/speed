@@ -73,9 +73,41 @@ type UsageSummary struct {
 	PeriodEnd   time.Time `gorm:"column:period_end;not null"`
 	// Quantity is the sum of every UsageEvent.Quantity folded into this
 	// row so far.
-	Quantity  float64   `gorm:"column:quantity;not null"`
-	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
+	Quantity float64 `gorm:"column:quantity;not null"`
+	// OverageThreshold is the overage threshold that was in force when this
+	// row was last folded -- the resolved effective threshold for the
+	// row's feature at the fold that most recently wrote the row, or nil
+	// when no threshold applied to that fold. Every fold writes it, in the
+	// same database-arbitrated statement as the Quantity arithmetic (see
+	// upsertSummaryTx), so the row's quantity and the threshold it was
+	// accumulated under can never tear apart.
+	//
+	// It exists for the restart reconstruction (see Aggregator's
+	// "Reconstruction after a restart" doc comment): the overage latch is
+	// in-process state, and a fresh process must decide from this row
+	// whether the crossing under the CURRENTLY configured threshold has
+	// already happened. A mere quantity comparison cannot answer that once
+	// the configuration may differ from the one the row was folded under
+	// -- thresholds are construction-time values, so an operator lowering
+	// one does so by restarting, and the old equivalence "quantity >=
+	// threshold means the crossing happened" then latches a crossing that
+	// never fired under the new threshold (P2-metering-B). The rebuild
+	// therefore latches only when the row attests that the current
+	// threshold was in force at its last fold: *OverageThreshold == the
+	// current effective threshold. A row whose last fold ran under a
+	// different threshold -- or under none at all -- attests nothing about
+	// the current configuration, and the first post-restart fold that
+	// reaches the threshold is the crossing event.
+	//
+	// A nil value is therefore also the legacy state: rows written before
+	// migration 0006 added this column carry NULL, exactly like a fold
+	// that ran under no threshold, and the seed treats both identically
+	// (no attestation, latch left open) -- see the migration's own header
+	// comment for the bounded duplicate-fire residual that choice leaves on
+	// the one period straddling an upgrade.
+	OverageThreshold *float64  `gorm:"column:overage_threshold"`
+	CreatedAt        time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt        time.Time `gorm:"column:updated_at;autoUpdateTime"`
 }
 
 // GetTenantID returns s's tenant, satisfying dbkit.TenantScoped.

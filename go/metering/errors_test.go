@@ -8,10 +8,13 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-// TestErrors_AreAllInvalid pins that every error this file declares is an
-// apperr.Invalid (a caller-fixable validation problem) rather than some
-// other apperr kind -- every one of them reports a malformed UsageEvent or
-// configuration value, never a not-found or an internal failure.
+// TestErrors_AreAllInvalid pins that every caller-error var this file
+// declares is an apperr.Invalid (a caller-fixable validation problem)
+// rather than some other apperr kind -- every one of them reports a
+// malformed UsageEvent or configuration value, never a not-found or an
+// internal failure. (The two apperr.Internal vars -- ErrMetadataEncodeFailed
+// and ErrUsageSummariesUnconfigured -- are pinned by their own dedicated
+// tests below, deliberately outside this list.)
 func TestErrors_AreAllInvalid(t *testing.T) {
 	errs := []*apperr.Error{
 		ErrMissingTenantID,
@@ -45,6 +48,22 @@ func TestErrMetadataEncodeFailed_IsInternal(t *testing.T) {
 	}
 	if ErrMetadataEncodeFailed.Code != "metering.metadata_encode_failed" {
 		t.Errorf("ErrMetadataEncodeFailed.Code = %q, want %q", ErrMetadataEncodeFailed.Code, "metering.metadata_encode_failed")
+	}
+}
+
+// TestErrUsageSummariesUnconfigured_IsInternal pins the new error's kind
+// the way TestErrMetadataEncodeFailed_IsInternal pins its own: it reports
+// an unconfigured construction (RealtimeCount over NewAggregator(nil)),
+// never a malformed caller input, so it is deliberately apperr.Internal
+// (500), not apperr.Invalid (400) -- the same judgment go/billing's
+// ErrUsageReaderUnconfigured makes for the same class of inability -- see
+// the var's own doc comment.
+func TestErrUsageSummariesUnconfigured_IsInternal(t *testing.T) {
+	if ErrUsageSummariesUnconfigured.Status != http.StatusInternalServerError {
+		t.Errorf("ErrUsageSummariesUnconfigured.Status = %d, want %d (apperr.Internal)", ErrUsageSummariesUnconfigured.Status, http.StatusInternalServerError)
+	}
+	if ErrUsageSummariesUnconfigured.Code != "metering.usage_summaries_unconfigured" {
+		t.Errorf("ErrUsageSummariesUnconfigured.Code = %q, want %q", ErrUsageSummariesUnconfigured.Code, "metering.usage_summaries_unconfigured")
 	}
 }
 

@@ -10,13 +10,16 @@ import "github.com/vislake/speed/go/pkgcore/apperr"
 // rather than mutating the receiver -- the same convention dbkit, tenancy,
 // org and pki already document.
 //
-// Only the codes this round's own validation paths can actually return are
-// declared here. In particular there is no "metering.unknown_feature":
-// this round has no feature catalog to check an event's Feature against
-// (that belongs to go/billing's Plan/Feature/Entitlement model, per
-// AGENTS.md's Known limitations), so a code for a check nothing performs
-// would be dead catalog weight, not forward compatibility -- the same
-// discipline go/pki's error index documents for its own round boundary.
+// Only the codes this module's own code paths can actually return are
+// declared here: the validation vars below, plus the two apperr.Internal
+// configuration failures (ErrMetadataEncodeFailed and
+// ErrUsageSummariesUnconfigured). In particular there is no
+// "metering.unknown_feature": metering has no feature catalog to check an
+// event's Feature against (that belongs to go/billing's
+// Plan/Feature/Entitlement model, per AGENTS.md), so a code for a check
+// nothing performs would be dead catalog weight, not forward
+// compatibility -- the same discipline go/pki's error index documents for
+// its own round boundary.
 var (
 	// ErrMissingTenantID reports that a UsageEvent's TenantID was empty.
 	// Unlike an HTTP API, this Go-level Recorder/Enqueue surface takes the
@@ -74,6 +77,26 @@ var (
 	// this var block's other members, all of which are validate's own
 	// caller-error codes.
 	ErrMetadataEncodeFailed = apperr.Internal("metering.metadata_encode_failed")
+
+	// ErrUsageSummariesUnconfigured reports that RealtimeCount was asked
+	// to answer a counter miss on an Aggregator built with no summaries
+	// repository (NewAggregator(nil)) -- aggregator.go's RealtimeCount.
+	// A counter miss can only be answered by reconstructing the bucket
+	// from its durable UsageSummary row (ensureSeeded), and an Aggregator
+	// with no repository has no durable state to reconstruct from; the
+	// construction is unconfigured, never a sanctioned nil-supported
+	// variant (module.go's NewModule always passes
+	// NewSummaryRepository(db)'s answer; only a host bypassing NewModule
+	// can assemble it). Answering (0, nil) would be a silent zero -- an
+	// exactly-legal quota answer, since zero usage means certainly within
+	// quota, for a reader that cannot answer at all -- so this is the
+	// coded configuration error instead, aligned with go/billing's own
+	// refusal of the same class of inability (ErrUsageReaderUnconfigured,
+	// billing/entitlements.go's checkQuota: "zero usage would fail OPEN
+	// for an over-quota tenant"). apperr.Internal, mirroring that
+	// sentinel's kind: the failure is a wiring problem, not a caller
+	// input error.
+	ErrUsageSummariesUnconfigured = apperr.Internal("metering.usage_summaries_unconfigured")
 )
 
 // hasCode reports whether err is (or wraps, via apperr.As's Unwrap chain

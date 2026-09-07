@@ -1,0 +1,54 @@
+-- Adds metering_usage_summaries.overage_threshold, the record of which
+-- overage threshold was in force when the row was last folded
+-- (go/metering/model.go's UsageSummary.OverageThreshold).
+--
+-- The reviewer finding this migration closes (P2-metering-B): the restart
+-- reconstruction's equivalence -- "once the durable summary holds a
+-- quantity at or above this bucket's threshold, the crossing has
+-- happened" (aggregator.go's ensureSeeded) -- holds ONLY while the
+-- threshold is unchanged. Thresholds are construction-time values with no
+-- setter, so changing one requires a restart, which is exactly the
+-- operator's routine way of LOWERING one. After that restart, quantity >=
+-- threshold is true not because the crossing was ever published but
+-- because the threshold moved below an already-existing quantity: the
+-- rebuild set the overage latch on the mere quantity match, the crossing
+-- under the new threshold never fired for that period, and "the crossing
+-- has happened" was false in that cell -- the signal go/billing's
+-- OverageModeNotify decision is built on, silently absent.
+--
+-- The column records the resolved effective threshold for the row's
+-- feature at the fold that most recently wrote the row, written by every
+-- fold in the SAME database-arbitrated statement as the quantity
+-- arithmetic (upsertSummaryTx's conflict branch assigns it from
+-- excluded.overage_threshold), so quantity and the threshold it was
+-- accumulated under can never tear apart. The rebuild then latches only
+-- when the row attests that the current threshold was in force at its
+-- last fold -- *overage_threshold == the current effective value -- and a
+-- row whose last fold ran under a different (here: higher) threshold
+-- leaves the latch open, so the first post-restart fold that reaches the
+-- threshold is the crossing event under the new configuration. The same
+-- attestation rule re-arms the edge on any configuration change (a
+-- threshold newly configured where none applied before, one raised), and
+-- preserves the no-double-fire property across a same-configuration
+-- restart, where the recorded value equals the current one.
+--
+-- The column is nullable. A fold that runs under no threshold for its
+-- feature writes NULL (OverageThresholds with no Default and no
+-- PerFeature entry), and rows written before this migration carry NULL
+-- too -- there is no backfill, because the pre-0006 rows' fold-time
+-- configuration is unknowable. The rebuild treats both NULL states
+-- identically: no attestation, latch left open. The bounded residual of
+-- that choice: a summary row whose crossing was genuinely delivered
+-- under the still-current configuration before an upgrade straddles one
+-- period boundary with the new code -- its first post-restart fold fires
+-- the crossing once more (then latches), the duplicate direction of the
+-- error the reconstruction guards against, confined to the single period
+-- the upgrade lands in and to cells the pre-0006 process actually folded
+-- and delivered. The alternative -- treating unattested rows as latched
+-- -- would silently swallow exactly the threshold-lowering signal this
+-- migration exists to deliver, the failure direction this module's own
+-- latch-follows-publish history treats as the worse one.
+--
+-- This is the SQLite copy; the postgres/ sibling carries the full
+-- rationale. The two are schema-identical.
+ALTER TABLE metering_usage_summaries ADD COLUMN overage_threshold REAL;

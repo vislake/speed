@@ -40,8 +40,11 @@ import (
 // key in a process -- a restart, or merely a key no event has hit since
 // the process started -- starts from the summary's quantity rather than
 // from zero, and latches notifiedOverage when that quantity already meets
-// the bucket's threshold. See Aggregator's "Reconstruction after a
-// restart" doc comment for the full argument.
+// the bucket's threshold AND the row attests that the current threshold
+// was the one in force when the row was last folded (the row's
+// OverageThreshold equals the current effective threshold -- see
+// Aggregator's "Reconstruction after a restart" doc comment for why the
+// attestation, not the quantity comparison alone, decides).
 type counterEntry struct {
 	mu              sync.Mutex
 	quantity        float64
@@ -144,6 +147,35 @@ type counterEntry struct {
 // the seed, not by the redelivery: a redelivered event after a restart
 // reconstructs a counter that already holds its fold.
 //
+// The latch half of that reconstruction is qualified by threshold
+// identity (reviewer finding P2-metering-B): the equivalence "quantity >=
+// threshold means the crossing happened" holds only while the threshold
+// is unchanged, and thresholds ARE changeable -- they are
+// construction-time values (WithOverageThresholds mutates the Aggregator
+// before Bootstrap returns), so changing one, an operator lowering a
+// limit being the routine shape, happens exactly across a restart. A
+// post-restart seed that latched on the quantity comparison alone would
+// then treat "the threshold moved below an already-existing quantity" as
+// "the crossing was published", and the crossing under the new threshold
+// would never fire for the period -- a silently absent overage signal,
+// the failure direction this module's latch-follows-publish history
+// treats as the worse one. Every fold therefore records on the summary
+// row the effective threshold that was in force for its feature at that
+// fold (UsageSummary.OverageThreshold, written in the same statement as
+// the quantity -- see upsertSummaryTx), and the seed latches only when
+// the row attests that the CURRENT threshold was in force at its last
+// fold: *recorded == current. An unattested row -- one last folded under
+// a different threshold, under none at all, or before migration 0006 --
+// leaves the latch open, so the first post-restart fold that reaches the
+// threshold is the crossing event under the current configuration, and a
+// RealtimeCount on such a row reconstructs the quantity without latching
+// or publishing anything: a read cannot swallow a signal only an event
+// fold may deliver. Under a same-configuration restart the recorded
+// value equals the current threshold and the P2-metering-12 latch
+// behavior is unchanged. See the 0006 migration's header comment for the
+// bounded duplicate-fire residual the unattested state leaves on the one
+// period straddling an upgrade.
+//
 // # Expired periods are evicted, never resident forever
 //
 // A counterEntry lives per (tenant, feature, period), and periods end:
@@ -180,6 +212,17 @@ type Aggregator struct {
 // configured. Module wires the period bucket and thresholds a host
 // selected via its own Option functions, which mutate the fields below
 // directly (same package, see module.go).
+//
+// summaries is the repository both ingest paths persist through and
+// RealtimeCount reconstructs an uncounted bucket from; the constructor's
+// contract is an Aggregator over summaries, and this documentation never
+// claimed nil support -- it simply never refused it. A nil repository is
+// an unconfigured construction (the module path always passes
+// NewSummaryRepository's answer): RealtimeCount cannot answer a counter
+// miss without durable state to reconstruct from, and answering (0, nil)
+// would be a silent zero, an exactly-legal quota value for a reader that
+// cannot answer at all -- it therefore returns
+// ErrUsageSummariesUnconfigured instead (see that error's doc comment).
 func NewAggregator(summaries *SummaryRepository) *Aggregator {
 	return &Aggregator{
 		summaries: summaries,
@@ -252,7 +295,7 @@ func (a *Aggregator) Ingest(ctx context.Context, event UsageEvent) error {
 	a.mu.Lock()
 	entry, err := a.ensureSeeded(tenantCtx, event.TenantID, event.Feature, start)
 	if err == nil {
-		err = upsertSummaryInto(tenantCtx, a.summaries, event.Feature, start, end, event.Quantity)
+		err = upsertSummaryInto(tenantCtx, a.summaries, event.Feature, start, end, event.Quantity, a.foldThreshold(event.Feature))
 	}
 	a.sweepExpiredCountersLocked(start)
 	a.mu.Unlock()
@@ -309,13 +352,27 @@ func (a *Aggregator) ensureSeeded(tenantCtx context.Context, tenantID, feature s
 	}
 	if err == nil {
 		entry.quantity = existing.Quantity
-		// The overage latch is reconstructed too: once the durable summary
-		// holds a quantity at or above this bucket's threshold, the
-		// crossing has happened -- whether the pre-restart process managed
-		// to publish its event or died between the fold and the publish,
-		// the latch must be set or the first post-restart event would fire
-		// the crossing a second time for one period.
-		if threshold, hasThreshold := a.thresholds.resolve(feature); hasThreshold && entry.quantity >= threshold {
+		// The overage latch is reconstructed too, qualified by threshold
+		// identity (reviewer finding P2-metering-B): the equivalence "a
+		// durable quantity at or above the threshold means the crossing
+		// has happened" holds only while the threshold the row was folded
+		// under IS the threshold now in force -- an attested crossing,
+		// whether the pre-restart process published its event or died
+		// between the fold and the publish, must not fire a second time
+		// for one period. The row records the threshold that was in force
+		// at its last fold (UsageSummary.OverageThreshold), so the latch
+		// is set only when that record equals the current effective
+		// threshold; a row last folded under a different threshold (an
+		// operator lowering one is exactly this restart), under none at
+		// all, or before the recording column existed, attests nothing
+		// about the current configuration, and the first post-restart
+		// fold that finds the bucket at or above the current threshold is
+		// the crossing event under it. Because a read-only touch may not
+		// publish, it must not latch either: this rule leaves an
+		// unattested row open for RealtimeCount's map-miss seed too, so a
+		// pure read can never swallow the lowered threshold's signal.
+		threshold, hasThreshold := a.thresholds.resolve(feature)
+		if hasThreshold && entry.quantity >= threshold && existing.OverageThreshold != nil && *existing.OverageThreshold == threshold {
 			entry.notifiedOverage = true
 		}
 	}
@@ -408,6 +465,15 @@ func (a *Aggregator) deliverOverageCrossing(ctx context.Context, entry *counterE
 // first (ensureSeeded), so a read immediately after a restart reflects
 // the period's history rather than reporting zero until the first new
 // event arrives.
+//
+// A counter miss on an Aggregator built with no summaries repository --
+// NewAggregator(nil), an unconfigured construction the module path never
+// makes -- returns ErrUsageSummariesUnconfigured rather than (0, nil): the
+// miss can only be answered by reconstructing from durable state, and
+// answering zero for a reader that cannot know is a silent zero, an
+// exactly-legal quota answer (zero usage means within quota) for a
+// configuration error (reviewer finding P3-metering-C). See that error's
+// doc comment for the alignment with go/billing's own refusal vocabulary.
 func (a *Aggregator) RealtimeCount(tenantID, feature string, at time.Time) (float64, error) {
 	start, _, err := periodBounds(at, a.bucket)
 	if err != nil {
@@ -417,7 +483,7 @@ func (a *Aggregator) RealtimeCount(tenantID, feature string, at time.Time) (floa
 	v, ok := a.counters.Load(key)
 	if !ok {
 		if a.summaries == nil {
-			return 0, nil
+			return 0, ErrUsageSummariesUnconfigured
 		}
 		tenantCtx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID(tenantID))
 		entry, err := a.ensureSeeded(tenantCtx, tenantID, feature, start)
@@ -481,6 +547,21 @@ func periodFromRealtimeKey(key any) time.Time {
 	return t
 }
 
+// foldThreshold returns the overage threshold in force for feature as the
+// value every summary fold records on its row (see
+// UsageSummary.OverageThreshold), or nil when no threshold applies to the
+// feature. The resolved EFFECTIVE value is the record: an equality between
+// two configurations that resolve to the same value (a threshold moved
+// from PerFeature to Default at the same number, say) is the same
+// configuration for the restart-reconstruction attestation, and one that
+// resolves to a different value is not, whatever the map it came from.
+func (a *Aggregator) foldThreshold(feature string) *float64 {
+	if t, ok := a.thresholds.resolve(feature); ok {
+		return &t
+	}
+	return nil
+}
+
 // upsertSummaryInto folds delta into the summary row for (feature, start)
 // through a.summaries' own connection, in ONE dbkit.WithTenantSession
 // transaction that runs the same atomic upsert statement the billing-grade
@@ -506,10 +587,13 @@ func periodFromRealtimeKey(key any) time.Time {
 // The caller (Ingest) holds a.mu across this call and the ensureSeeded
 // read that precedes it, so each event's seed read stays ordered before
 // its own fold; the summary row itself needs no in-process serialization
-// at all.
-func upsertSummaryInto(tenantCtx context.Context, summaries *SummaryRepository, feature string, start, end time.Time, delta float64) error {
+// at all. threshold is the fold-time in-force threshold (foldThreshold's
+// answer) that travels into the row with the delta -- see
+// UsageSummary.OverageThreshold for why quantity and the threshold it was
+// accumulated under must land in the same statement.
+func upsertSummaryInto(tenantCtx context.Context, summaries *SummaryRepository, feature string, start, end time.Time, delta float64, threshold *float64) error {
 	return dbkit.WithTenantSession(tenantCtx, summaries.db, func(tx *gorm.DB) error {
-		return upsertSummaryTx(tx, feature, start, end, delta)
+		return upsertSummaryTx(tx, feature, start, end, delta, threshold)
 	})
 }
 
@@ -541,6 +625,21 @@ func upsertSummaryInto(tenantCtx context.Context, summaries *SummaryRepository, 
 // delivered and its receipt committed, with no compensation path; see the
 // Aggregator type's "Summary folds are database-arbitrated" doc comment).
 //
+// The statement also carries the fold's context into the row: threshold
+// -- the effective overage threshold in force for feature at this fold
+// (foldThreshold's answer, nil when none applies) -- is written into
+// UsageSummary.OverageThreshold by both branches of the statement, the
+// same way period_end rides along on every fold. The restart
+// reconstruction reads that record to decide whether the crossing under
+// the currently configured threshold has happened (see the Aggregator
+// type's "Reconstruction after a restart" doc comment and the 0006
+// migration's header), so the record must land in the SAME
+// database-arbitrated statement as the quantity arithmetic: a fold that
+// commits a delta under a new configuration but fails to commit the
+// threshold it was folded under would leave the row attesting the old
+// configuration, and a later restart would treat the quantity as
+// unattested history and re-fire a crossing the fold already delivered.
+//
 // tx must be a transaction whose context carries the tenant (a
 // dbkit.WithTenantSession callback's tx): the tenant-scoping plugin every
 // dbkit.Open connection installs forces the tenant_id column on the
@@ -556,7 +655,7 @@ func upsertSummaryInto(tenantCtx context.Context, summaries *SummaryRepository, 
 // the transaction aborted, and this statement never aborts anything on
 // either dialect -- the same non-poisoning property foldIntoSummaryOnce's
 // receipt insert relies on (see that method's doc comment).
-func upsertSummaryTx(tx *gorm.DB, feature string, start, end time.Time, delta float64) error {
+func upsertSummaryTx(tx *gorm.DB, feature string, start, end time.Time, delta float64, threshold *float64) error {
 	id := summaryID(feature, start)
 	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "id"}, {Name: "tenant_id"}},
@@ -569,17 +668,21 @@ func upsertSummaryTx(tx *gorm.DB, feature string, start, end time.Time, delta fl
 			// there (SQLSTATE 42702, the name being in scope against both
 			// the target row and the excluded row) -- and SQLite accepts
 			// the identical qualified form, so one statement serves both
-			// dialects.
-			"quantity":   gorm.Expr(tableUsageSummaries + ".quantity + excluded.quantity"),
-			"period_end": gorm.Expr("excluded.period_end"),
-			"updated_at": gorm.Expr("excluded.updated_at"),
+			// dialects. overage_threshold likewise takes the insert
+			// branch's value (excluded), so every fold -- the row's birth
+			// included -- records the threshold it was folded under.
+			"quantity":          gorm.Expr(tableUsageSummaries + ".quantity + excluded.quantity"),
+			"period_end":        gorm.Expr("excluded.period_end"),
+			"overage_threshold": gorm.Expr("excluded.overage_threshold"),
+			"updated_at":        gorm.Expr("excluded.updated_at"),
 		}),
 	}).Create(&UsageSummary{
-		ID:          id,
-		Feature:     feature,
-		PeriodStart: start,
-		PeriodEnd:   end,
-		Quantity:    delta,
+		ID:               id,
+		Feature:          feature,
+		PeriodStart:      start,
+		PeriodEnd:        end,
+		Quantity:         delta,
+		OverageThreshold: threshold,
 	}).Error
 }
 
@@ -633,7 +736,7 @@ func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) e
 	entry, err := a.ensureSeeded(tenantCtx, event.TenantID, event.Feature, start)
 	var alreadyIngested bool
 	if err == nil {
-		alreadyIngested, err = a.foldIntoSummaryOnce(tenantCtx, event, start, end)
+		alreadyIngested, err = a.foldIntoSummaryOnce(tenantCtx, event, start, end, a.foldThreshold(event.Feature))
 	}
 	a.sweepExpiredCountersLocked(start)
 	a.mu.Unlock()
@@ -681,7 +784,9 @@ func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) e
 // summary in the same transaction -- is the whole answer.
 // Reports (true, nil) when event.IdempotencyKey already has a receipt from
 // an earlier, successful call, in which case the transaction commits
-// having changed nothing.
+// having changed nothing. threshold is the fold-time in-force threshold
+// that travels into the summary row with the delta (see
+// upsertSummaryTx's doc comment), foldThreshold's answer.
 //
 // Callers must hold a.mu, but not to serialize the summary fold -- the
 // fold's atomic upsert statement is serialized by the database itself
@@ -690,7 +795,7 @@ func (a *Aggregator) IngestBillingGrade(ctx context.Context, event UsageEvent) e
 // counter entry is never reconstructed from a summary that already holds
 // this event's delta and then folds it a second time, and it keeps the
 // expired-period sweep from evicting a counter mid-flight.
-func (a *Aggregator) foldIntoSummaryOnce(tenantCtx context.Context, event UsageEvent, start, end time.Time) (alreadyIngested bool, err error) {
+func (a *Aggregator) foldIntoSummaryOnce(tenantCtx context.Context, event UsageEvent, start, end time.Time, threshold *float64) (alreadyIngested bool, err error) {
 	txErr := dbkit.WithTenantSession(tenantCtx, a.summaries.db, func(tx *gorm.DB) error {
 		receipt := &IngestReceipt{ID: event.IdempotencyKey, TenantID: event.TenantID}
 		res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(receipt)
@@ -704,7 +809,7 @@ func (a *Aggregator) foldIntoSummaryOnce(tenantCtx context.Context, event UsageE
 			alreadyIngested = true
 			return nil
 		}
-		return upsertSummaryTx(tx, event.Feature, start, end, event.Quantity)
+		return upsertSummaryTx(tx, event.Feature, start, end, event.Quantity, threshold)
 	})
 	if txErr != nil {
 		return false, txErr

@@ -24,3 +24,5 @@
 "metering.invalid_period_bucket" = "\"{{.bucket}}\" is not a valid period bucket."
 
 "metering.metadata_encode_failed" = "Usage event metadata could not be encoded for storage."
+
+"metering.usage_summaries_unconfigured" = "This aggregator has no usage-summaries repository, so the real-time count cannot be answered."

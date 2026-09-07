@@ -14,6 +14,7 @@ import (
 	"github.com/vislake/speed/go/metering/internal/testutil"
 	"github.com/vislake/speed/go/metering/migrations"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
 // capturedEvents records every pkgcore.Event a subscribed handler sees, the
@@ -648,9 +649,13 @@ func TestUpsertSummaryTx_ConcurrentSameRow_NoLostUpdate(t *testing.T) {
 	}
 	t.Cleanup(func() { sqlDB, _ := dbB.DB(); _ = sqlDB.Close() })
 
+	// No thresholds are configured in this test, so every fold records a
+	// nil OverageThreshold -- the fold-time in-force threshold parameter
+	// rides the same statement as the delta (see upsertSummaryTx's doc
+	// comment) and is not what this race is about.
 	fold := func(db *gorm.DB, delta float64, errs chan<- error) {
 		errs <- dbkit.WithTenantSession(tenantCtx, db, func(tx *gorm.DB) error {
-			return upsertSummaryTx(tx, feature, start, end, delta)
+			return upsertSummaryTx(tx, feature, start, end, delta, nil)
 		})
 	}
 
@@ -852,6 +857,155 @@ func TestAggregator_Restart_ReconstructsOverageLatch_NoDoubleFire(t *testing.T) 
 	}
 	if len(captured.events) != 1 {
 		t.Errorf("published %d overage event(s) across the restart, want exactly 1 (pre-fix the restarted process fired the crossing a second time)", len(captured.events))
+	}
+}
+
+// TestAggregator_Restart_ThresholdLoweredAcrossRestart_CrossingFires is
+// the P2-metering-B regression: the reconstruction equivalence "once the
+// durable summary holds a quantity at or above this bucket's threshold,
+// the crossing has happened" holds ONLY while the threshold is unchanged.
+// The thresholds are a construction-time field (module.go's
+// WithOverageThresholds option mutates the Aggregator before Bootstrap
+// returns), so changing one -- an operator lowering a limit is the
+// routine shape -- requires a restart. After that restart, quantity >=
+// threshold is true not because a crossing was ever published but because
+// the threshold moved below an already-existing quantity: pre-fix the
+// seed latched notifiedOverage on the mere quantity match, the crossing
+// under the new threshold never fired for the period, and "the crossing
+// has happened" was false in that cell. The fix records on the durable
+// summary row the overage threshold that was in force at the row's last
+// fold, so the rebuild latches only when the recorded threshold IS the
+// current one; a row written under a different (here: higher) threshold
+// leaves the latch open and the first post-restart fold that finds the
+// bucket at or above the lowered threshold is the crossing event.
+//
+// The test also pins the read-form amplifier of the same finding: a pure
+// RealtimeCount after the restart must not latch the open crossing away
+// either -- a read reconstructs the quantity but publishes nothing, so
+// it must leave the crossing for the next fold.
+func TestAggregator_Restart_ThresholdLoweredAcrossRestart_CrossingFires(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	bus := pkgcore.NewMemoryEventBus()
+	var captured capturedEvents
+	bus.Subscribe(EventOverageThresholdCrossed, captured.handler)
+
+	// First process, threshold 10: three events of 2 each bring the bucket
+	// to 6, still below the threshold, so no crossing ever fires or is
+	// published -- the summary row holds quantity 6 written under 10.
+	high := 10.0
+	first := NewAggregator(NewSummaryRepository(db))
+	first.thresholds = OverageThresholds{Default: &high}
+	first.bus = bus
+	for i := 0; i < 3; i++ {
+		if err := first.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 2, IdempotencyKey: idem(i), OccurredAt: at}); err != nil {
+			t.Fatalf("Ingest(%d): %v", i, err)
+		}
+	}
+	if len(captured.events) != 0 {
+		t.Fatalf("first process published %d overage event(s) at quantity 6 under threshold 10, want 0", len(captured.events))
+	}
+
+	// The operator lowers the threshold to 5 and restarts: a fresh
+	// Aggregator over the SAME database, whose counters start empty.
+	low := 5.0
+	restarted := NewAggregator(NewSummaryRepository(db))
+	restarted.thresholds = OverageThresholds{Default: &low}
+	restarted.bus = bus
+
+	// The pure read first: it reconstructs the full period history (6) --
+	// and must NOT set the overage latch on the quantity match alone, or
+	// the crossing under the lowered threshold would be swallowed by a read
+	// that published nothing.
+	got, err := restarted.RealtimeCount("tenant-a", "ai.generation", at)
+	if err != nil {
+		t.Fatalf("RealtimeCount after restart: %v", err)
+	}
+	if got != 6 {
+		t.Errorf("RealtimeCount after restart = %v, want 6 (the period history reconstructed from the summary row)", got)
+	}
+	if len(captured.events) != 0 {
+		t.Fatalf("a pure read published %d overage event(s), want 0", len(captured.events))
+	}
+
+	// The first post-restart event: the bucket (6, soon 7) is already at or
+	// above the lowered threshold of 5, and no crossing under 5 has ever
+	// fired. Pre-fix the reconstruction latched on the quantity match
+	// alone -- the event published nothing and the lowered threshold's
+	// signal was gone for the whole period; post-fix the crossing under the
+	// recorded-threshold-discerning rebuild fires exactly once.
+	if err := restarted.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: idem(3), OccurredAt: at}); err != nil {
+		t.Fatalf("Ingest(after restart): %v", err)
+	}
+	if len(captured.events) != 1 {
+		t.Fatalf("published %d overage event(s) across the threshold-lowering restart, want exactly 1 (pre-fix the latch was set on a quantity match alone and the crossing under the lowered threshold never fired)", len(captured.events))
+	}
+	payload, ok := captured.events[0].Payload.(OverageThresholdCrossedEvent)
+	if !ok {
+		t.Fatalf("payload type = %T, want OverageThresholdCrossedEvent", captured.events[0].Payload)
+	}
+	if payload.Threshold != low {
+		t.Errorf("payload.Threshold = %v, want %v (the lowered threshold the crossing fired under)", payload.Threshold, low)
+	}
+	if payload.Quantity != 7 {
+		t.Errorf("payload.Quantity = %v, want 7 (the counter value at the post-restart crossing fold)", payload.Quantity)
+	}
+
+	// Reconciliation: a further fold within the same period must NOT fire a
+	// second crossing -- the post-restart fold above claimed and delivered
+	// it, and its latch now stands.
+	if err := restarted.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: idem(4), OccurredAt: at}); err != nil {
+		t.Fatalf("Ingest(further fold): %v", err)
+	}
+	if len(captured.events) != 1 {
+		t.Errorf("published %d overage event(s) after the crossing fired, want exactly 1 (the edge fires once per period per threshold)", len(captured.events))
+	}
+
+	// A second restart under the SAME (lowered) configuration: the
+	// post-restart fold above recorded 5 on the row, so the rebuild now
+	// attests the current threshold and latches again -- the crossing that
+	// already fired must not fire a third time across the two restarts.
+	again := NewAggregator(NewSummaryRepository(db))
+	again.thresholds = OverageThresholds{Default: &low}
+	again.bus = bus
+	if _, err := again.RealtimeCount("tenant-a", "ai.generation", at); err != nil {
+		t.Fatalf("RealtimeCount after the second restart: %v", err)
+	}
+	if err := again.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: idem(5), OccurredAt: at}); err != nil {
+		t.Fatalf("Ingest(after the second restart): %v", err)
+	}
+	if len(captured.events) != 1 {
+		t.Errorf("published %d overage event(s) across the two restarts, want exactly 1 (a same-configuration restart stays latched once the row attests the current threshold)", len(captured.events))
+	}
+}
+
+// TestAggregator_RealtimeCount_NilSummariesRepository_ReturnsError is the
+// P3-metering-C regression: RealtimeCount answered a counter miss on an
+// Aggregator built with no summaries repository (NewAggregator(nil)) with
+// (0, nil) -- a silent zero -- while zero is a legal, MEANINGFUL answer in
+// a quota context (zero usage means certainly within quota). "Cannot
+// answer" must not be expressed as an exactly-legal value: the read
+// cannot distinguish "this bucket has no row yet" (which zero means)
+// from "there is no durable state to reconstruct from at all", so the
+// miss now returns the coded configuration error
+// (metering.usage_summaries_unconfigured), aligned with the vocabulary of
+// go/billing's own ErrUsageReaderUnconfigured -- the layer that consumes
+// RealtimeCount for quota decisions and refuses the same class of
+// inability with a coded error rather than a guessed allowance.
+func TestAggregator_RealtimeCount_NilSummariesRepository_ReturnsError(t *testing.T) {
+	agg := NewAggregator(nil)
+	got, err := agg.RealtimeCount("tenant-a", "ai.generation", time.Now())
+	if err == nil {
+		t.Fatalf("RealtimeCount over a nil-summaries Aggregator = (%v, nil), want a coded error -- pre-fix the silent zero was an exactly-legal quota answer (zero usage means within quota) for a reader that cannot answer at all", got)
+	}
+	appErr, ok := apperr.As(err)
+	if !ok {
+		t.Fatalf("RealtimeCount error = %v, want an *apperr.Error", err)
+	}
+	if appErr.Code != "metering.usage_summaries_unconfigured" {
+		t.Errorf("RealtimeCount error code = %q, want %q (aligned with billing's usage_reader_unconfigured vocabulary)", appErr.Code, "metering.usage_summaries_unconfigured")
 	}
 }
 
