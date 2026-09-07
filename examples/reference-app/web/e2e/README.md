@@ -392,6 +392,34 @@ that proves invitations work had to reach around the product to set
 itself up. That gap is invisible from the gate's green result, which is
 exactly why it is written here.
 
+## Before a fix round relies on a gate, check the gate
+
+A gate is only good if it fails with **the defect it guards**. Not with a
+timeout, not with a locator complaint, and above all not by passing.
+That is checkable in one command per gate, and it is worth doing before
+somebody starts implementing against one, because whoever does is
+reading the failure as the specification.
+
+Doing it once across three open gates found two of them healthy and one
+broken in both possible ways at the same time. The SMS gate read the
+surface through `getByRole('main')`, which a sign-in page does not have
+-- there is no app frame yet, which is the point of a sign-in page -- so
+it timed out where an implementer needed the defect. Reading from the
+body instead, it PASSED, because the notice it examined was an empty
+live region: `auth-ui` keeps one on every surface so an announcement can
+be placed into it without a container appearing, which is correct for a
+screen reader and satisfies a plain `toBeVisible()` while holding "".
+
+The wrong diagnosis that followed is the part worth remembering. "The
+surface is completely silent after Send code" was alarming, plausible,
+and false: polling shows the notice arrives a beat later, and the real
+defect -- it claims the phone received a code that went to the server
+log -- was one beat away. A round sent to hunt a missing notice would
+have found nothing missing.
+
+So the check is not only "does it fail", it is "does it fail saying the
+thing I would want a stranger to read".
+
 ## How a finding gets recorded wrong
 
 Separate from how a gate is written wrong, and with its own cost: a
