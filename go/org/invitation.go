@@ -250,17 +250,21 @@ const maxEmailLen = 254
 // validateInviteEmail returns the trimmed address, or ErrInvalidEmail.
 //
 // The check is deliberately syntactic and minimal -- one "@", a non-empty
-// local part, a domain with a dot in it, no whitespace or control
-// characters, and a length bound -- rather than an attempt at RFC 5322.
-// Anything stricter rejects addresses that genuinely deliver; anything looser
-// lets org spend a rate-limit slot and a mail attempt on a value that cannot
-// possibly be one.
+// local part, a domain with a dot in it, no whitespace, control or
+// non-ASCII characters, and a length bound -- rather than an attempt at
+// RFC 5322. Anything stricter rejects addresses that genuinely deliver;
+// anything looser lets org spend a rate-limit slot and a mail attempt on a
+// value that cannot possibly be one.
 //
 // It exists because the refusal must be org's own coded ErrInvalidEmail and
 // must land before the address costs a rate-limit slot or a mail attempt.
 // dbkit.NormalizeEmail performs a structural gate of its own when it
 // indexes, so this check is not the only guard on the address -- it is the
-// earliest one, and the one that decides org's coded answer.
+// earliest one, and the one that decides org's coded answer. The refusal
+// set mirrors that gate's exactly, so no address the indexer would refuse
+// can slip past here to be refused downstream instead: an invitation's
+// EmailIndex column is mandatory, and an address without a canonical form
+// is one org cannot store.
 //
 // The address is never echoed into the error: an error's parameters are
 // rendered, logged and traced, and an address is PII.
@@ -280,7 +284,10 @@ func validateInviteEmail(raw string) (string, error) {
 		return "", ErrInvalidEmail
 	}
 	for _, r := range address {
-		if unicode.IsSpace(r) || unicode.IsControl(r) {
+		// Non-ASCII is refused exactly as dbkit.NormalizeEmail refuses it
+		// when it indexes: the canonical form this address is blind-indexed
+		// under serves ASCII mailbox names.
+		if r > unicode.MaxASCII || unicode.IsSpace(r) || unicode.IsControl(r) {
 			return "", ErrInvalidEmail
 		}
 	}

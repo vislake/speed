@@ -247,6 +247,8 @@ func TestValidateInviteEmail(t *testing.T) {
 		{"an inner space", "ada lovelace@example.test", ""},
 		{"a smuggled header break", "ada@example.test\nBcc: victim@example.test", ""},
 		{"a tab", "ada@example\t.test", ""},
+		{"non-ASCII in the local part", "müller@example.test", ""},
+		{"non-ASCII in the domain", "ada@exämple.test", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

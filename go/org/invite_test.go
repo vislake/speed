@@ -283,6 +283,7 @@ func TestInviteService_Invite_RejectedInputs(t *testing.T) {
 	}{
 		{"an unusable address", InviteRequest{Email: "not-an-address", NodeID: f.left.ID}, ErrInvalidEmail.Code},
 		{"a blank address", InviteRequest{Email: "  ", NodeID: f.left.ID}, ErrInvalidEmail.Code},
+		{"a non-ASCII address", InviteRequest{Email: "müller@example.test", NodeID: f.left.ID}, ErrInvalidEmail.Code},
 		{"an unknown node", InviteRequest{Email: "ada@example.test", NodeID: "00000000-0000-4000-8000-000000000000"}, ErrNodeNotFound.Code},
 		{"another tenant's node", InviteRequest{Email: "ada@example.test", NodeID: foreign.ID}, ErrNodeNotFound.Code},
 	}
