@@ -49,9 +49,19 @@ const CLAIM_OF_DELIVERY = 'Code sent to'
  */
 const HONEST_ABOUT_CONSOLE = /server log|console|not configured|development/i
 
+// The defect is closed: the demo deployment declares
+// channels={['password']} (ba061cd), so the sign-in surface offers only
+// the channel it can actually deliver -- no SMS tab, and no claim about a
+// phone that would never receive anything. Verified on the fix branch
+// before it landed, with the surface printed to confirm the pass was the
+// tab being gone rather than this gate's own absent-channel branch
+// short-circuiting.
+//
+// @budget rather than untagged: it drives the sign-in surface and the
+// per-IP pool cannot absorb another visit in the default tier.
 test(
   'the SMS channel is either absent or honest about where the code went',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     await visitSignIn(page)
 

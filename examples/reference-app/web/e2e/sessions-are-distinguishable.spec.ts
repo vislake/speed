@@ -107,9 +107,21 @@ test(
     // same browser can still be told apart. That is the bar this gate
     // holds -- "Chrome · macOS · 2 hours ago" against "Chrome · macOS ·
     // just now" is enough; two genuinely identical descriptions are not.
-    const timeless = descriptions.filter(
-      (text) => !/\d/.test(text) || !/(ago|:|\d{4}|just now)/i.test(text),
-    )
+    //
+    // The check is "does it name a moment", not "does it contain a
+    // digit". The previous form required a digit AND a time word, which
+    // rejected "Chrome on Windows · just now" -- a perfectly reasonable
+    // design with no digit in it at all. This gate's own comment used
+    // "just now" as an example of what should PASS, so it would have
+    // failed the very shape it advertised.
+    //
+    // Found by testing the assertion against plausible fixed rows before
+    // the round fixing the User-Agent rendering ran into it. That round
+    // would have been told its correct work was wrong -- the same false
+    // accusation the disclosure gate made an hour earlier, caught this
+    // time by reading the assertion as though it had already passed.
+    const NAMES_A_MOMENT = /\bago\b|just now|\d{1,2}:\d{2}|\d{4}|yesterday|today/i
+    const timeless = descriptions.filter((text) => !NAMES_A_MOMENT.test(text))
     expect(
       timeless,
       `these rows carry nothing to tell them apart by: ${timeless.join('; ')}`,
