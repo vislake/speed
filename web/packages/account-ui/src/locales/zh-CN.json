@@ -7,6 +7,7 @@
       "refresh_token_invalid": "登录状态已失效，请重新登录。",
       "refresh_token_reused": "检测到异常活动，请重新登录。",
       "rate_limited": "尝试次数过多，请稍后再试。",
+      "channel_disabled": "该登录方式已停用，请选择其他方式绑定。",
       "identity_already_bound": "此社交账号已绑定到你的账户。",
       "identity_requires_binding": "此社交账号已关联其他账户，请先登录对应账户后再绑定。",
       "identity_not_found": "未找到该登录方式，可能已被移除。",

@@ -608,6 +608,49 @@ describe('SocialBindingsSection', () => {
     await expectNoAxeViolations()
   })
 
+  it('render the channel_disabled text when a deployment turned the clicked add-area channel off, never the unknown fallback', async () => {
+    // The add area's authorize request passes the same channel gate a
+    // sign-in authorize does (go/authn identity.go, SocialAuthorizeURL):
+    // a known channel a deployment turned off answers authn.channel_disabled
+    // (ErrChannelDisabled, a 403 Forbidden, named for the flag key)
+    // before any state value is minted or any request reaches the
+    // provider -- a bind by an already-signed-in user included. The
+    // banner must render the honest dedicated text -- the channel is
+    // off for this deployment, nothing the user did -- not the
+    // errors.unknown fallback.
+    const list = [identity({ id: 'github-1', provider: 'github' })]
+    const rig = makeRealClientRig(async (call) => {
+      if (call.method === 'POST' && call.path === LOGIN_PATH) {
+        return jsonResponse(200, makePair())
+      }
+      if (call.method === 'GET' && call.path === IDENTITIES_PATH) {
+        return jsonResponse(200, { identities: list })
+      }
+      if (call.method === 'GET') {
+        return errorResponse(403, 'authn.channel_disabled')
+      }
+      return errorResponse(500, 'internal')
+    })
+    await signInWithPassword(rig)
+    let reported = false
+    renderWithProviders(
+      <SocialBindingsSection
+        session={rig.session}
+        providers={[config('google')]}
+        onAuthorizeUrl={() => {
+          reported = true
+        }}
+      />,
+    )
+    await userEvent.click(await screen.findByRole('button', { name: 'Google' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).not.toBe(zhCN.errors.unknown)
+    expect(alert.textContent).toBe(zhCN.errors.authn.channel_disabled)
+    expect(reported).toBe(false)
+
+    await expectNoAxeViolations()
+  })
+
   it('hide the add area when every configured provider is already bound', async () => {
     const list = [
       identity({ id: 'github-1', provider: 'github' }),

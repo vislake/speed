@@ -6,7 +6,9 @@
  * operations answer with (the session and login-history list being a
  * read of the caller's own sessions answers session-lifecycle codes when
  * one of them dies mid-flight; the binding endpoints answer the
- * identity-domain and OAuth-flow codes; the MFA endpoints answer the
+ * identity-domain and OAuth-flow codes, and the add area's authorize
+ * request answers authn.channel_disabled when a deployment turned the
+ * offered channel off; the MFA endpoints answer the
  * step-up and enrollment codes; and the rate-limiter can answer
  * authn.rate_limited on any of them), plus the transport-level
  * client.network / client.timeout / client.protocol codes of the
@@ -43,10 +45,17 @@ export const ERROR_TEXT_CODES = [
   'authn.refresh_token_reused',
   // authn: shared rate limiter -- any operation behind it.
   'authn.rate_limited',
-  // authn: social bindings -- the bind/unbind endpoints answer these, and
-  // the callback exchange answers identity_requires_binding when the
-  // external identity's verified email already belongs to another account
-  // whose auto-link conditions were not met.
+  // authn: social bindings -- the add area's authorize request passes
+  // the same channel gate a sign-in authorize does: a known channel a
+  // deployment turned off answers authn.channel_disabled before any
+  // state value is minted, and the flag values are public (the pre-auth
+  // features endpoint serves them), so the refusal discloses nothing a
+  // caller could not already read. The bind/unbind endpoints answer the
+  // identity-domain and OAuth-flow codes below, and the callback
+  // exchange answers identity_requires_binding when the external
+  // identity's verified email already belongs to another account whose
+  // auto-link conditions were not met.
+  'authn.channel_disabled',
   'authn.identity_already_bound',
   'authn.identity_requires_binding',
   'authn.identity_not_found',

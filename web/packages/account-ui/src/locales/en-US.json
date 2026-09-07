@@ -7,6 +7,7 @@
       "refresh_token_invalid": "Your sign-in is no longer valid. Please sign in again.",
       "refresh_token_reused": "Suspicious activity was detected. Please sign in again.",
       "rate_limited": "Too many attempts. Please try again later.",
+      "channel_disabled": "This sign-in method is turned off. Choose another one to link.",
       "identity_already_bound": "This social account is already linked to your account.",
       "identity_requires_binding": "This social account is linked to another account. Sign in to that account first to link it.",
       "identity_not_found": "This sign-in method was not found. It may have been removed.",

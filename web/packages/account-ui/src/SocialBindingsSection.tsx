@@ -29,11 +29,15 @@
  * authorization URL -- a pure request reported upward through
  * onAuthorizeUrl, never a navigation the package performs -- and the
  * host completes the flow at its callback route with
- * BindingCallbackHandler. One bind flow at a time: while a channel's
- * URL is being built every provider button is disabled, so a second
- * authorize request -- any channel's -- cannot start before the first
- * answers. When every configured provider is already bound the add
- * area does not render.
+ * BindingCallbackHandler. A refused authorize request renders its code
+ * text above the add area (the same InlineError banner the unbind
+ * refusal uses) -- authn.channel_disabled when a deployment turned the
+ * offered channel off, anything else through the whitelist -- and the
+ * provider button re-arms for another attempt. One bind flow at a
+ * time: while a channel's URL is being built every provider button is
+ * disabled, so a second authorize request -- any channel's -- cannot
+ * start before the first answers. When every configured provider is
+ * already bound the add area does not render.
  *
  * The provider vocabulary is deliberately not imported from @speed/auth-ui
  * (same-layer packages never import each other): SocialProvider and
