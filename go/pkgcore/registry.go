@@ -405,6 +405,27 @@ type SubjectRef struct {
 // own repository type either -- the same "no cross-module struct imports,
 // only ID references and callbacks" shape the rest of this codebase's
 // module-boundary rule already requires.
+//
+// Where the text of a returned error goes is part of every callback's
+// contract, stated here once so a participant author never has to guess.
+// The compliance layer keeps the error text itself only where a platform
+// operator or the calling process can read it: the per-participant Errors
+// map of the returned in-process result on the sweep and erasure paths
+// (compliance.SweepResult.Errors / ErasureResult.Errors), the wrapped
+// cause of the error compliance itself returns where it wraps one, and
+// the structured log at the failure site (behind go/observability's
+// redaction layer). It is never recorded verbatim in the compliance audit
+// record -- whose changes column is effectively permanent, per
+// go/dbkit/audit/emit.go's Diff content contract -- and never serialized
+// into a delivered export manifest: both carry the participant's Name
+// classified to a "failed" marker instead, and the export manifest is the
+// sharper case of the two, because it is delivered to the exporting
+// tenant over an unauthenticated, single-view go/sharing link whose
+// holder is entitled to read the export's data, never platform-internal
+// failure text that can name other subjects, internal object keys or
+// infrastructure details. An author writes the error knowing its text
+// reaches operators' logs and the in-process results, never an export
+// recipient or the audit table.
 type RetentionParticipant struct {
 	// Name identifies the participant for logging, audit records and
 	// duplicate-registration errors -- conventionally the owning module's
@@ -421,6 +442,10 @@ type RetentionParticipant struct {
 	// participant with a nil Sweep is refused with ErrNilRetentionSweep
 	// rather than accepted and silently skipped by the sweep, which would
 	// retain its tenant data forever while the sweep reported success.
+	// The returned error's text follows the type's doc comment's
+	// error-text contract: it reaches the returned SweepResult.Errors and
+	// the failure-site structured log, and the sweep's audit record
+	// classifies it -- never verbatim.
 	Sweep func(ctx context.Context, tenant TenantID, cutoff time.Time) (reaped int, err error)
 
 	// Erase immediately hard-deletes every row belonging to subject,
@@ -447,7 +472,12 @@ type RetentionParticipant struct {
 	// one callback registration leaves optional -- nil when the
 	// participant has not opted into export, a legal, common value, not a
 	// misconfiguration. Its absence costs a missing export, never a false
-	// success.
+	// success. The returned error's text follows the type's doc comment's
+	// error-text contract, and the export path is its sharpest case: the
+	// manifest's Errors entry classifies the failure and is itself
+	// delivered to the exporting tenant over an unauthenticated share
+	// link, so the error text must never reach the manifest -- it goes to
+	// the failure-site structured log instead.
 	Export func(ctx context.Context, tenant TenantID) (data any, err error)
 }
 

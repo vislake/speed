@@ -5,6 +5,9 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"log/slog"
 	"net/http"
@@ -2485,5 +2488,79 @@ func TestBootstrap_EmptyLocaleFilesYieldEmptyCatalog_HandBuiltRegistryStaysNil(t
 	handBuilt := NewRegistry(NewMemoryEventBus(), NewMemoryKVStore(), NewConsoleMailer())
 	if catalog := handBuilt.Locales(); catalog != nil {
 		t.Errorf("hand-built Registry.Locales() = %v, want nil", catalog)
+	}
+}
+
+// TestRetentionParticipant_DocContractTellsAuthorsWhereErrorTextGoes pins
+// the pkgcore half of the compliance error-text finding: RetentionParticipant
+// is the seam a host's own participants register against (reg.Retention.Add
+// is how a consumer project contributes a participant), so its doc comment
+// is the one place a participant author learns where the error their
+// Sweep/Erase/Export callback returns actually goes. It must state that
+// the compliance layer records the text only in its in-process results and
+// structured logs, and classifies it -- never records it verbatim -- in
+// the audit record and (on the export path) the delivered export
+// manifest. The unfixed godoc said nothing about the returned err, so a
+// participant author could not know their error text would be serialized
+// into the export deliverable and the permanent audit table; every
+// assertion below fails against that godoc.
+func TestRetentionParticipant_DocContractTellsAuthorsWhereErrorTextGoes(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "registry.go", nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse registry.go: %v", err)
+	}
+
+	var typeDoc, sweepDoc, exportDoc string
+	ast.Inspect(f, func(n ast.Node) bool {
+		gd, ok := n.(*ast.GenDecl)
+		if !ok || gd.Tok != token.TYPE {
+			return true
+		}
+		for _, spec := range gd.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || ts.Name.Name != "RetentionParticipant" {
+				continue
+			}
+			// A standalone (non-parenthesized) type declaration carries its
+			// doc comment on the GenDecl; a grouped one would carry it on
+			// the TypeSpec. Read whichever the parser attached it to.
+			if gd.Doc != nil {
+				typeDoc = gd.Doc.Text()
+			} else if ts.Doc != nil {
+				typeDoc = ts.Doc.Text()
+			}
+			if st, ok := ts.Type.(*ast.StructType); ok {
+				for _, field := range st.Fields.List {
+					if field.Doc == nil {
+						continue
+					}
+					for _, name := range field.Names {
+						switch name.Name {
+						case "Sweep":
+							sweepDoc = field.Doc.Text()
+						case "Export":
+							exportDoc = field.Doc.Text()
+						}
+					}
+				}
+			}
+			return false
+		}
+		return true
+	})
+
+	for _, want := range []string{"error text", "never", "audit", "export manifest"} {
+		if !strings.Contains(typeDoc, want) {
+			t.Errorf("RetentionParticipant type doc does not state where a callback's error text goes (missing %q)", want)
+		}
+	}
+	for name, doc := range map[string]string{"Sweep": sweepDoc, "Export": exportDoc} {
+		if !strings.Contains(doc, "type's doc comment") {
+			t.Errorf("RetentionParticipant.%s field doc does not point its author at the type-level error-text contract", name)
+		}
+	}
+	if !strings.Contains(exportDoc, "manifest") {
+		t.Errorf("RetentionParticipant.Export field doc does not warn that the error text must never reach the export manifest")
 	}
 }
