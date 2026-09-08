@@ -27,6 +27,7 @@
 "notes.invalid_request_body" = "The request body is not valid JSON."
 "notes.internal_error" = "An internal error occurred. Please try again later."
 "notes.subject_unresolved" = "The request could not be attributed to a user."
+"notes.note_not_found" = "No note of your workspace is in the state that operation needs it in."
 "notes.note.created.in_app.title" = "New note added"
 "notes.note.created.in_app.body" = "A note ({{.note_id}}) was added to your workspace."
 "notes.note.created.email.subject" = "A note was added to your workspace"

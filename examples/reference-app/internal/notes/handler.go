@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/vislake/speed/examples/reference-app/internal/notes/api"
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
 	obs "github.com/vislake/speed/go/observability"
 	"github.com/vislake/speed/go/pkgcore"
@@ -97,6 +98,21 @@ var errInternal = apperr.Internal("notes.internal_error")
 // "notes.subject_unresolved"), never hardcoded here -- see ErrTextRequired's
 // doc comment for the same rule.
 var ErrSubjectUnresolved = apperr.Unauthorized("notes.subject_unresolved")
+
+// ErrNoteNotFound is returned when a delete or restore request names no
+// note of the caller's tenant in the state the operation needs it in: the
+// id is unknown, belongs to another tenant, or (for delete) the note is
+// already deleted / (for restore) the note is not deleted. The three cases
+// collapse into one uniform 404, mirroring the collapse dbkit's own
+// ErrRecordNotFound performs for exactly these cases (and the "the refusal
+// is uniform" property this module's own fragment documents) -- while
+// naming the answer with a module-owned code, never dbkit's, so a client's
+// i18n catalog resolves notes.note_not_found from this module's own
+// Locales() resources (see noteMutationError for the translation). Its
+// localized text lives in this module's Locales() resources
+// (locales/{zh-CN,en-US}.toml, key "notes.note_not_found"), never
+// hardcoded here -- see ErrTextRequired's doc comment for the same rule.
+var ErrNoteNotFound = apperr.NotFound("notes.note_not_found")
 
 // Handler serves notes' HTTP endpoints by implementing the spec-generated
 // api.ServerInterface (see api/notes-server.gen.go, regenerated from this
@@ -469,6 +485,100 @@ func (h *Handler) NotesListNotes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", jsonContentType)
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// NotesDeleteNote implements api.ServerInterface: it handles DELETE
+// /api/v1/notes/{noteId}, mark-deleting the caller's tenant's note --
+// dbkit.Repository[Note].Delete's soft-delete branch (Note implements
+// dbkit.SoftDeletable), which sets deleted_at/deleted_by and hides the row
+// from ordinary queries, leaving it restorable through NotesRestoreNote
+// until a retention sweep physically reaps it (see
+// retention_participant.go). The tenant is read from the request context,
+// never from the request -- the same rule NotesCreateNote documents. The
+// caller is resolved through the SubjectResolver seam and installed as the
+// row's deleted_by actor, mirroring how self-service provisioning
+// attributes its own user-scoped writes (cmd/server/self_service.go): a
+// deleted_by attribution that names the real actor is the point of the
+// column, and an unattributable request is refused with 401 exactly like
+// an unattributable create -- never deleted with an empty attribution.
+func (h *Handler) NotesDeleteNote(w http.ResponseWriter, r *http.Request, noteID string) {
+	ctx := r.Context()
+
+	// The tenant gate, mirroring NotesCreateNote's identical opening: the
+	// repository's own Delete would fail with the same unwrapped
+	// pkgcore.ErrNoTenant one layer down, and refusing here keeps the log
+	// line specific to this handler.
+	if _, err := pkgcore.MustTenantFromContext(ctx); err != nil {
+		writeError(w, errInternal.WithCause(err))
+		return
+	}
+	obs.AnnotateTenant(ctx)
+
+	userID, ok := h.resolveSubject(w, r)
+	if !ok {
+		return
+	}
+	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: userID})
+
+	if err := h.repo.Delete(ctx, noteID); err != nil {
+		writeError(w, noteMutationError(err, noteID))
+		return
+	}
+
+	obs.FromContext(ctx).Info("note deleted", "note_id", noteID, "deleted_by", userID)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// NotesRestoreNote implements api.ServerInterface: it handles POST
+// /api/v1/notes/{noteId}/restore, undoing NotesDeleteNote's mark -- the
+// row's deleted_at/deleted_by are cleared, so the note is visible to the
+// list operation again with its text and creator untouched. Restoring a
+// note that is not currently deleted under the caller's tenant (live,
+// unknown, or another tenant's) answers the same uniform 404 the delete
+// operation's own refusal answers (notes.note_not_found); the caller
+// resolves through the SubjectResolver seam exactly as on the delete path,
+// kept for symmetry of attribution even though restore clears rather than
+// writes an actor.
+func (h *Handler) NotesRestoreNote(w http.ResponseWriter, r *http.Request, noteID string) {
+	ctx := r.Context()
+
+	if _, err := pkgcore.MustTenantFromContext(ctx); err != nil {
+		writeError(w, errInternal.WithCause(err))
+		return
+	}
+	obs.AnnotateTenant(ctx)
+
+	userID, ok := h.resolveSubject(w, r)
+	if !ok {
+		return
+	}
+	ctx = pkgcore.WithActor(ctx, pkgcore.Actor{Type: pkgcore.ActorTypeUser, ID: userID})
+
+	if err := h.repo.Restore(ctx, noteID); err != nil {
+		writeError(w, noteMutationError(err, noteID))
+		return
+	}
+
+	obs.FromContext(ctx).Info("note restored", "note_id", noteID, "restored_by", userID)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// noteMutationError translates the one repository error the two mutation
+// operations above surface into the module's own vocabulary before it
+// reaches the wire: dbkit's ErrRecordNotFound (a "row not found under
+// ctx's tenant in the state the write needs" answer, returned by both
+// Delete's soft-delete branch and Restore for exactly the collapsed cases
+// their fragment entries document) becomes ErrNoteNotFound, carrying the
+// note id the client itself named. Any other error passes through
+// unchanged -- an *apperr.Error already speaks a module code (or fails to
+// decode as one and is folded into notes.internal_error by writeError).
+func noteMutationError(err error, noteID string) error {
+	if appErr, ok := apperr.As(err); ok && appErr.Code == dbkit.ErrRecordNotFound.Code {
+		return ErrNoteNotFound.WithParam("note_id", noteID)
+	}
+	return err
 }
 
 // writeError writes err to w as a JSON {code, params} body -- the

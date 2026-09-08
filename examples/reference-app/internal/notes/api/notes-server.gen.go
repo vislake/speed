@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/oapi-codegen/runtime"
 )
 
 // NotesCreateNoteRequest defines model for NotesCreateNoteRequest.
@@ -49,6 +51,12 @@ type ServerInterface interface {
 	// NotesCreateNote Create a note for the caller's tenant.
 	// (POST /api/v1/notes)
 	NotesCreateNote(w http.ResponseWriter, r *http.Request)
+	// NotesDeleteNote Mark a note as deleted for the caller's tenant.
+	// (DELETE /api/v1/notes/{noteId})
+	NotesDeleteNote(w http.ResponseWriter, r *http.Request, noteID string)
+	// NotesRestoreNote Restore a previously deleted note for the caller's tenant.
+	// (POST /api/v1/notes/{noteId}/restore)
+	NotesRestoreNote(w http.ResponseWriter, r *http.Request, noteID string)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -79,6 +87,58 @@ func (siw *ServerInterfaceWrapper) NotesCreateNote(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.NotesCreateNote(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// NotesDeleteNote operation middleware
+func (siw *ServerInterfaceWrapper) NotesDeleteNote(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "noteId" -------------
+	var noteID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "noteId", r.PathValue("noteId"), &noteID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "noteId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.NotesDeleteNote(w, r, noteID)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// NotesRestoreNote operation middleware
+func (siw *ServerInterfaceWrapper) NotesRestoreNote(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "noteId" -------------
+	var noteID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "noteId", r.PathValue("noteId"), &noteID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "noteId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.NotesRestoreNote(w, r, noteID)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -210,6 +270,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v1/notes", wrapper.NotesListNotes)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/notes", wrapper.NotesCreateNote)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v1/notes/{noteId}", wrapper.NotesDeleteNote)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v1/notes/{noteId}/restore", wrapper.NotesRestoreNote)
 
 	return m
 }
