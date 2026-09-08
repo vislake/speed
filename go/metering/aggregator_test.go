@@ -1066,6 +1066,59 @@ func TestAggregator_RealtimeCount_NilSummariesRepository_ReturnsError(t *testing
 	}
 }
 
+// TestAggregator_NilSummariesRepository_IngestPathsRefuse pins the
+// P3-metering-4 parts-(b)-and-(c) closure of the same nil-summaries root
+// P3-metering-C's own regression above pins for the read path: every
+// operation that needs the summaries repository refuses with the coded
+// ErrUsageSummariesUnconfigured, never half-works. Pre-fix (and
+// pre-closure), the two ingest paths were the crash half of the broken
+// object -- their seed "succeeded" seeding to zero, so the fold ran and
+// died on a bare nil-pointer dereference of the repository's connection
+// (upsertSummaryInto's summaries.db on the Ingest path, foldIntoSummaryOnce's
+// a.summaries.db on the billing-grade one). ensureSeeded now refuses an
+// unconfigured construction BEFORE any counter entry is created, so both
+// folds short-circuit on the seed's error and neither crash point is
+// reachable; and because the refusal happens before the map insert, the
+// failed writes leave nothing behind for a later read to misreport --
+// the same bucket answered after them is refused afresh with the same
+// coded error, never (0, nil) off an unseeded entry.
+func TestAggregator_NilSummariesRepository_IngestPathsRefuse(t *testing.T) {
+	agg := NewAggregator(nil)
+	ctx := context.Background()
+	at := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+
+	event := UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: idem(0), OccurredAt: at}
+	assertNilSummariesRefusal(t, "Ingest", agg.Ingest(ctx, event))
+	assertNilSummariesRefusal(t, "IngestBillingGrade", agg.IngestBillingGrade(ctx, event))
+
+	// The refused writes above must not have left an unseeded counter
+	// entry behind: a read of the same bucket is refused afresh with the
+	// same coded error, never answered (0, nil).
+	got, err := agg.RealtimeCount("tenant-a", "ai.generation", at)
+	if err == nil {
+		t.Fatalf("RealtimeCount after the refused ingests = (%v, nil), want the coded error -- an unseeded entry a failed seed left behind must not surface as a silent zero", got)
+	}
+}
+
+// assertNilSummariesRefusal is the shared assertion both ingest-path
+// refusals above check: a non-nil error that is the coded
+// metering.usage_summaries_unconfigured, never a nil error and never a
+// bare nil-pointer panic (pre-closure the fold crashed on the nil
+// repository's connection field).
+func assertNilSummariesRefusal(t *testing.T, path string, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s over a nil-summaries Aggregator succeeded, want the coded ErrUsageSummariesUnconfigured -- pre-closure the fold crashed on the nil repository with a nil-pointer dereference", path)
+	}
+	appErr, ok := apperr.As(err)
+	if !ok {
+		t.Fatalf("%s over a nil-summaries Aggregator error = %v, want an *apperr.Error", path, err)
+	}
+	if appErr.Code != "metering.usage_summaries_unconfigured" {
+		t.Errorf("%s over a nil-summaries Aggregator error code = %q, want %q", path, appErr.Code, "metering.usage_summaries_unconfigured")
+	}
+}
+
 // TestAggregator_Ingest_ExpiredPeriodEntriesAreEvicted is the
 // P2-metering-13 regression: counter entries live per
 // (tenant, feature, period), and periods end -- without eviction the
