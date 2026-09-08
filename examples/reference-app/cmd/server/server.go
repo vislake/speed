@@ -250,7 +250,8 @@ const (
 	// obs.Init takes no mode, and the exporter set the endpoint selects
 	// works identically in the standalone and distributed topologies this
 	// app boots under (go/observability's Config.OTLPEndpoint doc comment
-	// records the no-example-yet gap this variable closes).
+	// records this variable's wiring as the example that closed its
+	// no-example-yet record).
 	otlpEndpointEnv = "APP_OTLP_ENDPOINT"
 
 	// aiGatewayImageBaseURLEnv and aiGatewayImageAPIKeyEnv name the

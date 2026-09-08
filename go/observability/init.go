@@ -60,19 +60,19 @@ type Config struct {
 	// settings and passes it here via WithOTLPEndpoint. This field is
 	// the seam a real host wires up.
 	//
-	// examples/reference-app does not yet demonstrate that wiring:
-	// cmd/server/server.go's configFromEnv reads the five bootstrap
-	// variables APP_DEPLOYMENT_MODE, PORT, APP_DB_PATH,
-	// APP_CONFIG_KEY and APP_REDIS_ADDR, and cmd/server/main.go's
-	// run calls Init with no WithOTLPEndpoint option, so that example's
-	// observability stays on the local exporters -- not because its
-	// deployment mode requires it, but because no host code resolves an
-	// endpoint to hand over. There is no APP_OTLP_ENDPOINT (or
-	// equivalent) anywhere in this repository today; a host wiring real
-	// production OTLP export follows the shape APP_REDIS_ADDR already
-	// demonstrates (resolve a bootstrap setting in configFromEnv, hand
-	// it over through the matching option) but starts this field's
-	// resolution from scratch rather than copying an existing example.
+	// examples/reference-app demonstrates that wiring since the
+	// OTLP-endpoint round closed this record: cmd/server/server.go's
+	// configFromEnv reads the bootstrap variable APP_OTLP_ENDPOINT
+	// (empty -- the default -- leaves Init on the local exporters),
+	// cmd/server/main.go's observabilityOptions hands a non-empty value
+	// over through WithOTLPEndpoint, and the app's boot blank-imports
+	// exporter/otlp so this field's non-empty path has the registered
+	// factory it needs (without that import, Init fails with
+	// ErrOTLPExporterNotRegistered, which names the import as the fix).
+	// A host wiring real production OTLP export therefore copies that
+	// example -- the APP_REDIS_ADDR shape (resolve a bootstrap setting
+	// in configFromEnv, hand it over through the matching option) --
+	// rather than starting this field's resolution from scratch.
 	OTLPEndpoint string
 
 	// OTLPInsecure disables gRPC transport security for the OTLP
