@@ -226,7 +226,7 @@ func (s *Service) allowRateLimit(ctx context.Context, key string, limit ratelimi
 	if !decision.Allowed {
 		return ErrRateLimited.
 			WithParam("dimension", dimension).
-			WithParam("retry_after_seconds", int(decision.ResetAfter.Seconds()))
+			WithParam("retry_after_seconds", ratelimit.RetryAfterSeconds(decision.ResetAfter))
 	}
 	return nil
 }

@@ -305,3 +305,44 @@ func TestService_Access_WrongPassword_UnaffectedByExhaustedAnonymousBudget(t *te
 	_, accessErr := svc.Access(testCtx(), created.Token, AccessParams{Password: &wrong})
 	assertCode(t, accessErr, ErrNotAccessible.Code)
 }
+
+// TestService_Create_SubSecondWindowTail_RetryAfterRoundsUp pins the
+// retry_after_seconds translation boundary at the shared denial site every
+// dimension funnels through (allowRateLimit): a denial whose window still
+// has a sub-second remainder -- the NORMAL tail of every exhausted window --
+// must carry 1, never the 0 a truncating int(Seconds()) conversion emits
+// (Retry-After: 0 means "retry immediately", inviting an immediate retry
+// against a window that has not reset). A negative remainder (a degenerate
+// canned decision; the real limiter's ResetAfter is always inside (0, Per])
+// must carry 0, never a negative whole-second count.
+func TestService_Create_SubSecondWindowTail_RetryAfterRoundsUp(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+
+	svc.limiter = scriptedLimiter{allowed: false, resetAfter: 900 * time.Millisecond}
+	if _, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r"}); err == nil {
+		t.Fatal("Create succeeded against a denying limiter, want the rate-limit denial")
+	} else {
+		assertRetryAfterSeconds(t, err, 1)
+	}
+
+	svc.limiter = scriptedLimiter{allowed: false, resetAfter: -3 * time.Second}
+	if _, err := svc.Create(testCtx(), CreateParams{ResourceRef: "r"}); err == nil {
+		t.Fatal("Create succeeded against a denying limiter, want the rate-limit denial")
+	} else {
+		assertRetryAfterSeconds(t, err, 0)
+	}
+}
+
+// assertRetryAfterSeconds fails t unless err is the module's rate-limit
+// denial carrying the given retry_after_seconds value.
+func assertRetryAfterSeconds(t *testing.T, err error, want int) {
+	t.Helper()
+	assertCode(t, err, ErrRateLimited.Code)
+	appErr, ok := apperr.As(err)
+	if !ok {
+		t.Fatalf("error %v is not an *apperr.Error", err)
+	}
+	if got := appErr.Params["retry_after_seconds"]; got != want {
+		t.Errorf("retry_after_seconds param = %v, want %d", got, want)
+	}
+}
