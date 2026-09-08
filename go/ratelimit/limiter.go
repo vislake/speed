@@ -112,7 +112,8 @@ type Decision struct {
 	// capped at math.MaxInt rather than converted to int directly.
 	Remaining int
 	// ResetAfter is how long until the current window ends, after which
-	// Remaining recovers as the window slides forward.
+	// Remaining recovers as the window slides forward. Callers that report
+	// the wait as a whole-second count convert it with RetryAfterSeconds.
 	ResetAfter time.Duration
 }
 
@@ -430,6 +431,62 @@ func clampRemaining(remaining float64) int {
 	default:
 		return int(remaining)
 	}
+}
+
+// RetryAfterSeconds converts a remaining wait -- typically a denied
+// Decision's ResetAfter -- to the whole number of seconds a caller reports
+// as the retry wait, the vocabulary RFC 9110 (10.2.3) defines for the
+// Retry-After header and this repository's structured-error envelopes use
+// for their "retry_after_seconds" parameter. The package's Decision stays
+// plain data with no protocol awareness (see its own doc comment); this
+// function is the one vocabulary conversion every consumer of a denied
+// Decision performs, offered here because the conversion's boundary kept
+// drifting apart in per-consumer copies: a round that fixed one module's
+// rounding left another's truncating, and the copies disagreed on the
+// extremes. One function is the family's single written shape.
+//
+// The conversion rounds UP. A sub-second remainder is the ordinary tail of
+// every exhausted window -- a window ends at an arbitrary phase, so the
+// instant a denial lands is uniform within the window's last second -- and
+// truncating it to 0 would report "retry immediately" (the meaning RFC 9110
+// gives Retry-After: 0) up to a second before the window has actually
+// reset, inviting an immediate retry that is still refused. Rounding up
+// errs the other way: the hint says at most one second more than the window
+// needs.
+//
+// The extremes have a stated disposition. A negative remaining duration --
+// the reset instant has already passed -- converts to 0: retry now is the
+// true answer, and a negative count would not merely mislead but be
+// ungrammatical in the delay-seconds vocabulary (1*DIGIT) this conversion
+// feeds. A remaining duration whose whole-second count int cannot represent
+// converts to math.MaxInt instead of being converted directly, the same
+// rule clampRemaining applies to Decision.Remaining: the Go spec
+// (Conversions) leaves the float-to-int conversion of an out-of-range value
+// implementation-defined. No time.Duration input reaches that bound where
+// int is 64 bits -- a duration spans at most about 292 years, roughly 9.2e9
+// seconds -- but a 32-bit int's far smaller max is reachable with a Per
+// near the package's own maxPer ceiling, so the cap is a real guard, not
+// decoration.
+func RetryAfterSeconds(remaining time.Duration) int {
+	return retryAfterSeconds(remaining.Seconds())
+}
+
+// retryAfterSeconds converts a remaining wait already expressed in seconds
+// (RetryAfterSeconds, which this backs, splits the duration) to whole
+// seconds, rounding up and clamping both extremes before the int
+// conversion: below zero to 0, at or beyond int's own ceiling to
+// math.MaxInt. The float form exists so the top clamp is testable with
+// values no time.Duration can carry; the shape it implements is
+// RetryAfterSeconds' shape.
+func retryAfterSeconds(seconds float64) int {
+	seconds = math.Ceil(seconds)
+	if seconds < 0 {
+		return 0
+	}
+	if seconds >= float64(math.MaxInt) {
+		return math.MaxInt
+	}
+	return int(seconds)
 }
 
 // readWindowCount returns the count stored under key, treating an absent key

@@ -121,3 +121,21 @@ func ExampleErrInvalidLimit() {
 	// true
 	// true true
 }
+
+// ExampleRetryAfterSeconds shows the whole-second conversion every consumer
+// of a denied Decision performs: a sub-second window tail -- the ordinary
+// end of an exhausted window -- reports 1, never the 0 a truncating
+// conversion would emit (Retry-After: 0 means "retry immediately"), and a
+// remainder that has already elapsed reports 0, never a negative count.
+func ExampleRetryAfterSeconds() {
+	for _, remaining := range []time.Duration{
+		900 * time.Millisecond,
+		-3 * time.Second,
+	} {
+		fmt.Println(ratelimit.RetryAfterSeconds(remaining))
+	}
+
+	// Output:
+	// 1
+	// 0
+}
