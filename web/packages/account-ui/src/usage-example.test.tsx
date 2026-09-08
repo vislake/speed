@@ -213,6 +213,13 @@ function AccountPage({
 }
 
 describe('the README quick start, exercised over a real api-client', () => {
+  // The journey's real cost outgrew vitest's default 5s per-test budget:
+  // eighteen pinned requests over a real api-client, each flowing through
+  // React renders, plus the axe pass. The body alone measures ~2.3s on a
+  // quiet machine and has repeatedly crossed the default on loaded shared
+  // runners, timing the suite out. The explicit 20s budget covers that
+  // loaded-runner cost with headroom; a genuinely stuck journey (a gate
+  // never released) still fails at this bound.
   it('walks the account page from a social sign-in through sessions, a refused unbind, a step-up-gated factor replacement and a social binding', async () => {
     // The scripted server. Flags hold the server-side story the
     // refetches converge on: the iPad session revoked alone, the other
@@ -668,5 +675,5 @@ describe('the README quick start, exercised over a real api-client', () => {
     expect(calls[15]?.authorization).toBe('Bearer access-2')
 
     await expectNoAxeViolations()
-  })
+  }, 20000)
 })
