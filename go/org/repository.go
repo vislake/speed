@@ -353,10 +353,10 @@ func lockSubtree(tx *gorm.DB, prefix string) ([]OrgNode, error) {
 	}
 }
 
-// assertNameFreeTx is assertNameFree's transaction-bound twin: the same
-// sibling-name pre-check, issued against an already-open tx instead of
-// opening its own dbkit.WithTenantSession, for callers composing it into a
-// larger atomic operation (CreateChild, Move). The database's own
+// assertNameFreeTx is the sibling-name pre-check in its transaction-bound
+// form: it never opens a session of its own, running instead against the
+// caller's already-open tx, which is how callers compose it into a larger
+// atomic operation (CreateChild, Rename, Move). The database's own
 // UNIQUE(tenant_id, parent_id, name) index remains the backstop this
 // pre-check cannot close on its own; mapWriteError translates a lost race
 // against it into the identical ErrDuplicateSiblingName.
