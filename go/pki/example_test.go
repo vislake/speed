@@ -5,22 +5,29 @@ package pki_test
 // executed by `go test`, so a change to pki's public API that breaks the
 // documented usage fails the build rather than only rotting in prose.
 //
-// The examples together are the first of the three compensating obligations
-// docs/internal/22-pki.md places on the X.509 layer for having no real
-// consumer yet, kept in step with the layer's growth (go/pki/AGENTS.md's
-// "X.509 layer: still no real consumer" section records the obligation and
-// what it covers):
+// The examples together discharge the godoc `Example` obligation the X.509
+// layer carried while it had no real consumer, and retain it -- with a
+// narrowed narrative -- now that the layer does (the reference app's
+// AI-output attestation, go/pki/AGENTS.md's "X.509 layer: real consumer,
+// precise residuals" section and its "Real consumer: AI-output
+// attestation" round entry record what the obligation covers today), kept
+// in step with the layer's growth:
 //
 //   - Example covers the layer's full main path -- issue a root CA, an
 //     intermediate signed by the root, and an end-entity certificate
 //     signed by the intermediate, then verify the resulting chain with the
-//     standard library's own crypto/x509.Verify -- so at least this shape
-//     is known to compile and run under an external caller's own import,
-//     even without a real business module driving it.
+//     standard library's own crypto/x509.Verify -- the shape the reference
+//     app's attestation consumer drives for real, kept additionally
+//     compilable-and-runnable under an external caller's own import.
 //   - ExampleCAService_GenerateCRL drives the round-3 revocation path and
 //     CRL generation: revoke an issued certificate, regenerate the issuing
 //     authority's CRL, and read the document back with the standard
 //     library's own parser.
+//   - ExampleCAService_SignCertificate drives the consumer-round signing
+//     path: sign a message with an issued certificate's key
+//     (CAService.SignCertificate), verify the signature with the standard
+//     library against the leaf's public key, and watch the signing call
+//     refuse with ErrCertificateRevoked once the certificate is revoked.
 //   - ExampleCAService_ExportAuthorityChainJWKS exercises the X.509
 //     layer's JWKS export.
 //   - ExampleService_ExportJWKS and ExampleService_RevokeSigningKey cover
@@ -303,6 +310,70 @@ func readCRL(crlPEM string, cert *pki.Certificate, issuer *pki.Authority) (entri
 		}
 	}
 	return len(rl.RevokedCertificateEntries), listed, rl.CheckSignatureFrom(issuerParsed) == nil, nil
+}
+
+// ExampleCAService_SignCertificate drives the signing half of the
+// issue -> sign -> verify loop the X.509 layer's real consumer (the
+// reference app's AI-output attestation) runs: sign a message with an
+// issued certificate's key through CAService.SignCertificate, then check
+// the signature with the standard library against the leaf certificate's
+// own public key -- the same check the app's sharing gate performs before
+// serving an attested output -- and confirm that once the certificate is
+// revoked, the same signing call refuses with the coded
+// ErrCertificateRevoked.
+func ExampleCAService_SignCertificate() {
+	module, keepAlive, err := newExampleModule("pki_example_sign_certificate")
+	if err != nil {
+		fmt.Println("setup:", err)
+		return
+	}
+	defer keepAlive.Close()
+
+	ca := module.CA()
+	ctx := context.Background()
+
+	_, _, cert, err := exampleChain(ca)
+	if err != nil {
+		fmt.Println("issue chain:", err)
+		return
+	}
+
+	tenantCtx := pkgcore.WithTenant(ctx, pkgcore.TenantID("acme-dental"))
+	message := []byte(`{"object_id":"sim-1","content_sha256":"abc","tenant_id":"acme-dental"}`)
+	signature, err := ca.SignCertificate(tenantCtx, cert.ID, message)
+	if err != nil {
+		fmt.Println("sign certificate:", err)
+		return
+	}
+	fmt.Println("signature length:", len(signature))
+
+	leaf, err := parsePEM(cert.CertificatePEM)
+	if err != nil {
+		fmt.Println("parse leaf certificate:", err)
+		return
+	}
+	pub, ok := leaf.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		fmt.Println("leaf public key:", "not ed25519")
+		return
+	}
+	fmt.Println("signature verifies against the certificate:", ed25519.Verify(pub, message, signature))
+
+	if _, err := ca.RevokeCertificate(tenantCtx, cert.ID, "compromised"); err != nil {
+		fmt.Println("revoke certificate:", err)
+		return
+	}
+	_, signErr := ca.SignCertificate(tenantCtx, cert.ID, message)
+	refused := false
+	if coded, ok := apperr.As(signErr); ok && coded.Code == pki.ErrCertificateRevoked.Code {
+		refused = true
+	}
+	fmt.Println("sign refuses a revoked certificate with ErrCertificateRevoked:", refused)
+
+	// Output:
+	// signature length: 64
+	// signature verifies against the certificate: true
+	// sign refuses a revoked certificate with ErrCertificateRevoked: true
 }
 
 // ExampleCAService_ExportAuthorityChainJWKS exports an intermediate

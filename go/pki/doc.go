@@ -18,9 +18,14 @@
 //     the overlap period -- see Service's doc comment.
 //   - The X.509 layer (CAService, pki_authorities, pki_certificates) issues
 //     an internal CA chain and end-entity certificates on top of the
-//     lifecycle layer. It has no real consumer in this repository yet; see
-//     CAService's doc comment and this module's AGENTS.md for the
-//     compensating obligations that come with shipping it anyway.
+//     lifecycle layer. Its real consumer is the reference app's AI-output
+//     attestation (internal/attestation: CA bootstrapping, per-tenant
+//     certificate issuance, output signing via SignCertificate, and
+//     chain-verified gating of public shares on VerifyCertificate) -- see
+//     CAService's doc comment and AGENTS.md's consumer round entry for
+//     what that consumer exercises and what it deliberately still does
+//     not (the JWKS exports, the CRLDP extension, CRL-regeneration
+//     scheduling).
 //
 // # Signer seam, not key extraction
 //

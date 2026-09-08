@@ -89,19 +89,24 @@ func (a signerAdapter) Sign(_ io.Reader, digest []byte, _ crypto.SignerOpts) ([]
 // authorities sign -- the X.509 layer docs/internal/22-pki.md's "two-layer
 // structure" section describes.
 //
-// # No real consumer yet -- read this before treating this type as frozen
+// # Real consumer: the reference app's AI-output attestation
 //
-// reference-app is a dental SaaS; it does not issue certificates. This
-// type ships anyway because the requirements behind it (root CA private
-// keys that never rotate, no revocation, predictable serial numbers) were
-// diagnosed from a real production system, not invented -- see
-// docs/internal/22-pki.md's "requirement source" and "the X.509 layer has
-// no real consumer yet" sections for the full argument and the three
-// compensating obligations that argument imposes. AGENTS.md's Known
-// limitations section carries the
-// same warning: this layer's public API may be broken, without the usual
-// frozen-API discipline, the moment a real consumer's first integration
-// finds a parameter it cannot actually supply.
+// The reference app's internal/attestation package is this type's real
+// consumer (mandatory-first-consumer rule discharged; see AGENTS.md's
+// "Real consumer: AI-output attestation" round entry and
+// examples/reference-app/internal/attestation's package doc): at boot the
+// app calls CreateRootCA + CreateIntermediateCA once per database
+// (EnsureAuthorityChain), and every simulation output a tenant observes
+// is attested through IssueCertificate + SignCertificate under a
+// per-tenant "simulation.attestation" certificate, whose public shares
+// are gated on VerifyCertificate. The integration found exactly one
+// missing capability -- a way to sign with an issued certificate's key
+// (SignCertificate, added by that round) -- and changed nothing else:
+// this type's public API is no longer under the "first consumer may break
+// it freely" exemption, though it is still not held to the same
+// frozen-API standard as the key-lifecycle layer (AGENTS.md's consumer
+// record states what remains unconsumed and what that means for API
+// stability).
 //
 // # One Signer per CAService
 //
