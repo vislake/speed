@@ -3399,7 +3399,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	mux.HandleFunc(http.MethodGet+" "+healthzPath, healthzHandler)
 	mux.HandleFunc(http.MethodGet+" "+metricsPath, metricsHandler)
 	orgGuardDeps := orgRouteGuardDeps{scope: orgModule.Scope(), members: orgModule.Members()}
-	adminHandler, mountErr := mountModuleRoutes(mux, reg, rbacService, orgGuardDeps, cfg.DisableDemoUserHeader)
+	adminHandler, authnHandler, mountErr := mountModuleRoutes(mux, reg, rbacService, orgGuardDeps, cfg.DisableDemoUserHeader)
 	if mountErr != nil {
 		_ = cleanup()
 		return nil, nil, nil, mountErr
@@ -3667,17 +3667,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// (tenant unresolved, because there is no Principal to read a tenant
 	// from) exactly the way an unrecognized Host used to. The routes
 	// listed in the allowlist below are the ONLY ones that work with no
-	// Principal at all: healthz and metrics (their constants' doc comments
-	// above), config's two pre-auth display endpoints (still gated by their
-	// own internal DomainResolver, see configModule's wiring above --
-	// entirely independent of this outer middleware), authn's own pre-auth
-	// operations (register, sign-in, token refresh, social
-	// authorize/callback), which Handler itself (go/authn/handler.go)
-	// additionally decides whether to require a Principal for, operation by
-	// operation -- and the three routes that resolve their own tenant
-	// server-side once this middleware lets them through,
-	// sharing.PathAccess, integrationWhoamiPath and orgAcceptPath, each
-	// with its own entry comment right below.
+	// Principal at all -- this chain never even sees authn's own subtree,
+	// which topMux dispatches straight from authn.Middleware's output the
+	// way it does admin's (authnAPIPath's own doc comment below has the
+	// why): healthz and metrics (their constants' doc comments above),
+	// config's two pre-auth display endpoints (still gated by their own
+	// internal DomainResolver, see configModule's wiring above -- entirely
+	// independent of this outer middleware), and the three routes that
+	// resolve their own tenant server-side once this middleware lets them
+	// through, sharing.PathAccess, integrationWhoamiPath and orgAcceptPath,
+	// each with its own entry comment right below.
 	//
 	// Both GET and HEAD are allowlisted for healthz/metrics, not GET
 	// alone: net/http's ServeMux automatically serves HEAD from a
@@ -3717,8 +3716,31 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// admin's console purely because rbac.BuiltinRoleOwner and the shared
 	// global permission catalog carry no domain partitioning of their
 	// own).
+	//
+	// authn's OWN mounted route is deliberately excluded from this branch
+	// for its own structural reason: authn's whole HTTP surface must never
+	// sit downstream of tenancy.Middleware (its routes resolve the tenant
+	// from the Principal's own claim, per operation; go/authn/AGENTS.md's
+	// "authn's own routes never sit downstream of tenancy.Middleware"
+	// section), and its pre-auth half -- enterprise OIDC's dynamically
+	// named "oidc:<tenant>" login-start path included -- cannot be
+	// expressed by tenancy.WithAllowlist's exact (method, path) matching at
+	// all (see authnAPIPath's own doc comment). topMux therefore dispatches
+	// authnAPIPath straight from authn.Middleware's own output, the same
+	// shape adminRoutePath gets above -- with the deliberate difference
+	// that authn's branch is UNGATED: it sits behind authn.Middleware's
+	// optional verification and nothing else, because authn's Handler
+	// itself is the per-operation authority on who may call what
+	// (requirePrincipal), and any rbac gate ahead of it would refuse the
+	// sign-in flow this app exists to demonstrate. Neither
+	// tenancy.Middleware's tenant resolution nor
+	// admin.ImpersonationMiddleware's identity substitution runs on this
+	// branch: authn operations never read a middleware-injected tenant, and
+	// an impersonation grant must never substitute an authn operation's
+	// caller identity -- authn is the layer that MINTED the identities
+	// impersonation substitutes between.
 	restOfAppChain := admin.ImpersonationMiddleware(adminModule.Impersonation())(
-		tenancy.Middleware(authn.NewPrincipalResolver(), append([]tenancy.MiddlewareOption{
+		tenancy.Middleware(authn.NewPrincipalResolver(), []tenancy.MiddlewareOption{
 			// tenancy.WithTenantStatusResolver is D4's enforcement seam
 			// (docs/internal/23-admin.md, go/tenancy/tenant_status.go):
 			// admin's own tenant ledger (*admin.TenantService, D3)
@@ -3779,12 +3801,14 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			// refuses an unidentifiable acceptor with org.subject_unresolved,
 			// and authn.Middleware still 401s a genuinely invalid bearer.
 			tenancy.WithAllowlist(http.MethodPost, orgAcceptPath),
-		}, authnPreAuthAllowlist()...)...)(mux),
+		}...)(mux),
 	)
 
 	topMux := http.NewServeMux()
 	topMux.Handle(adminRoutePath, adminHandler)
 	topMux.Handle(adminRoutePath+"/", adminHandler)
+	topMux.Handle(authnAPIPath, authnHandler)
+	topMux.Handle(authnAPIPath+"/", authnHandler)
 	topMux.Handle("/", restOfAppChain)
 
 	handler := authn.Middleware(authnModule.Service().Verifier())(topMux)
@@ -3869,101 +3893,86 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 // authnAPIPath is authn's own HTTP mount point -- duplicated from
 // go/authn/module.go's private apiPath constant of the same value, because
-// this app's wiring, not authn's package, is what needs to name individual
-// routes under it: the module owns and mounts the routes, this file owns
-// which of them a caller may reach before proving who they are.
+// this app's wiring, not authn's package, is what names the path: it is
+// the second of the two module subtrees this app dispatches from
+// authn.Middleware's output directly (see mountModuleRoutes' doc comment
+// and buildServer's topMux composition), never through tenancy.Middleware.
+//
+// Why authn sits outside the tenancy chain -- the resolution of the
+// enterprise-OIDC login-start gap this file's earlier revisions recorded
+// as a CONFIRMED GAP under an authnPreAuthAllowlist that no longer exists:
+// authn's own architecture has its routes never downstream of
+// tenancy.Middleware (the tenant comes from the Principal's own claim,
+// resolved per operation by requirePrincipal, never from a tenant a
+// middleware guessed), and the tenancy layer's exact-match allowlist could
+// not express the one pre-auth channel whose path is not enumerable: the
+// enterprise-OIDC channel's provider value is "oidc:<tenant>"
+// (authn.ProviderOIDCPrefix + a tenant id), and tenants are created
+// dynamically through org's own real flow, so no literal allowlist entry
+// could ever cover a given tenant's authorize path -- while the request
+// carries no Principal at all (it is the FIRST step of a sign-in), which
+// tenancy.Middleware's fail-closed default refused with 403
+// tenancy.tenant_unresolved before authn's own OIDC logic (which resolves
+// its tenant from the provider string itself, never from ctx) ever saw it.
+// The alternative fix shape -- a pattern-matching WithAllowlist in
+// go/tenancy -- was rejected as an API addition to a shipped, frozen-API
+// module for a problem this app could solve in its own composition.
+//
+// Composing authn outside the tenancy chain therefore closes the gap for
+// EVERY tenant at once: mountModuleRoutes returns authn's handler here
+// instead of mounting it into the tenancy-guarded mux (its demoRouteGuards
+// entry stays routePublic, so the guard table still names it), topMux
+// serves the whole authnAPIPath subtree from authn.Middleware's own
+// output, and authn's Handler itself remains the per-operation authority
+// on whether a Principal is required (go/authn/handler.go's
+// requirePrincipal answers authn.authentication_required for a protected
+// operation reached anonymously -- the module's own coded answer, instead
+// of tenancy's 403). authn.Middleware still wraps topMux itself, so a
+// genuinely invalid bearer 401s exactly as before, and no authn operation
+// reads a tenancy-injected tenant context -- every one derives what it
+// needs from the verified Principal's own claims, which is what makes the
+// branch safe in the first place.
 const authnAPIPath = "/api/v1/authn"
 
-// authnPreAuthAllowlist lists every (method, path) pair under authnAPIPath
-// that must work with no Principal at all -- registration, every sign-in
-// entry point, token refresh, and the social authorize/callback pair (see
-// go/authn/api/openapi.yaml's own path table for the exact literals, and
-// go/authn/handler.go for which operations skip requirePrincipal).
-//
-// tenancy.WithAllowlist matches (method, path) exactly, with no prefix or
-// wildcard (see its own doc comment), so the social channel's {provider}
-// path parameter cannot be allowlisted generically: every channel this
-// module ships gets its own two entries here, even though none is wired
-// with real credentials in this example today (serverConfig.SocialProviders'
-// own doc comment) -- otherwise enabling one later would silently need a
-// code change here too, exactly the kind of drift this round's frozen plan
-// warns about.
-//
-// CONFIRMED GAP, deliberately left unfixed this round (reference-app-go.md,
-// Finding 4 / P2-3): this "every channel gets two entries" claim genuinely
-// does not hold for authn's enterprise OIDC channel. Its provider value is
-// not one of the five literals enumerated below -- it is "oidc:<tenant>"
-// (authn.ProviderOIDCPrefix + a tenant id), a value this app cannot
-// enumerate ahead of time since tenants are created dynamically through
-// org's own real flow. A GET to /api/v1/authn/social/oidc:<tenant>/authorize
-// carries no Principal (it is the FIRST step of a sign-in, before any token
-// exists), so tenancy.Middleware's allowlist is the only thing that could
-// let it through -- and since no per-tenant literal is ever in this list,
-// every enterprise-OIDC-configured tenant's login-start request is refused
-// with 403 tenancy.tenant_unresolved before authn's own OIDC logic (which
-// resolves its tenant from the provider string itself, never from ctx --
-// see authn's AuthnSocialAuthorize/AuthnSocialCallback handlers) ever sees
-// it. Empirically reproduced against this app's own real composed HTTP
-// stack while investigating this finding.
-//
-// Two fix shapes were identified, both judged too large to risk under this
-// round's own scope (this round's other four findings are otherwise
-// complete, low-risk, and already tested; this fifth would be the one
-// architectural change among them):
-//  1. Give go/tenancy's WithAllowlist a pattern-matching form (a prefix or
-//     predicate variant), so a rule like "any path under
-//     /api/v1/authn/social/oidc:*" can be expressed once. This is a real
-//     API addition to a shipped, frozen-API module every consumer of
-//     tenancy.Middleware depends on -- outside this round's
-//     examples/reference-app-only scope, and warranting its own contract
-//     tests in go/tenancy itself.
-//  2. Restructure this file's own middleware composition so authn's social
-//     endpoints (or all of /api/v1/authn) bypass tenancy.Middleware
-//     entirely, mounted on topMux directly behind authn.Middleware the way
-//     adminRoutePath already is. This stays inside examples/reference-app,
-//     but touches the shared dispatch path this app's authn_e2e_test.go,
-//     org_flow_test.go and admin_flow_test.go all exercise today, and its
-//     correctness would hinge on Go 1.22 ServeMux wildcard-precedence rules
-//     this round did not want to risk getting subtly wrong with no
-//     dedicated test budget to validate it.
-//
-// Either fix needs its own round, with its own tests proving an enterprise-
-// OIDC-configured tenant's login-start request reaches authn's OIDC logic
-// rather than being refused here first.
-func authnPreAuthAllowlist() []tenancy.MiddlewareOption {
-	opts := []tenancy.MiddlewareOption{
-		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/register"),
-		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/login/password"),
-		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/login/sms/request"),
-		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/login/sms"),
-		tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/token/refresh"),
-	}
-	for _, provider := range []string{
-		authn.ProviderGoogle, authn.ProviderGitHub, authn.ProviderWeChat,
-		authn.ProviderDingTalk, authn.ProviderFeishu,
-	} {
-		opts = append(opts,
-			tenancy.WithAllowlist(http.MethodGet, authnAPIPath+"/social/"+provider+"/authorize"),
-			tenancy.WithAllowlist(http.MethodPost, authnAPIPath+"/social/"+provider+"/callback"),
-		)
-	}
-	return opts
-}
-
 // mountModuleRoutes copies every route reg's modules mounted onto mux,
-// with ONE deliberate exception: admin's own mounted route (adminRoutePath)
-// is never added to mux at all. admin's HTTP surface must not sit behind
-// ordinary tenancy.Middleware tenant resolution, and must not sit behind
-// admin.ImpersonationMiddleware's identity substitution either --
-// go/admin/AGENTS.md's wiring-contract section states both explicitly
-// ("admin's OWN routes ... do not sit behind ImpersonationMiddleware --
-// that decorator's effect is on the REST of the application's routes
-// only"; "does NOT go through ordinary tenancy.Middleware tenant
-// resolution"). buildServer therefore composes admin's own gated handler
-// on a separate middleware branch that sits directly behind
-// authn.Middleware and nothing else -- see buildServer's own composition
-// comment -- and mountModuleRoutes returns that handler as its second
-// value instead of mounting it into mux.
+// with TWO deliberate exceptions, each mounted by buildServer on its own
+// topMux branch directly behind authn.Middleware and nothing else -- see
+// buildServer's own composition comment -- and each returned here instead
+// of mounted into mux:
+//
+//   - admin's own mounted route (adminRoutePath): admin's HTTP surface
+//     must not sit behind ordinary tenancy.Middleware tenant resolution,
+//     and must not sit behind admin.ImpersonationMiddleware's identity
+//     substitution either -- go/admin/AGENTS.md's wiring-contract section
+//     states both explicitly ("admin's OWN routes ... do not sit behind
+//     ImpersonationMiddleware -- that decorator's effect is on the REST of
+//     the application's routes only"; "does NOT go through ordinary
+//     tenancy.Middleware tenant resolution").
+//   - authn's own mounted route (authnAPIPath): authn's HTTP surface never
+//     sits downstream of tenancy.Middleware, per the module's own
+//     architecture (go/authn's routes resolve the tenant from the
+//     Principal's own claim, per operation, never from a tenant a
+//     middleware guessed). Composing it that way is also the only shape in
+//     which the enterprise-OIDC login-start path can work at all: its
+//     provider value is the dynamic "oidc:<tenant>" string a per-tenant
+//     literal allowlist entry (tenancy.WithAllowlist's exact-match form)
+//     cannot enumerate, and the path carries no Principal (it is the FIRST
+//     step of a sign-in), so a tenancy.Middleware in front of it refused
+//     every such request with tenancy.tenant_unresolved before authn's own
+//     OIDC logic ever saw it -- the CONFIRMED GAP this composition closes
+//     (see authnAPIPath's own doc comment below). authn.Middleware still
+//     runs outside everything (it wraps topMux itself), so a genuinely
+//     invalid bearer still 401s before this branch is reached; what is
+//     gone is only the tenancy layer, whose fail-closed default had no
+//     business deciding authn's own per-operation pre-auth question --
+//     authn's Handler itself decides, operation by operation, whether a
+//     Principal is required (go/authn/handler.go's requirePrincipal), the
+//     same self-gating demoRouteGuards' routePublic entry for this path
+//     already records. authn's allowlist entries are therefore gone from
+//     the tenancy chain below, and its handlers receive no tenant context
+//     from tenancy.Middleware -- they never read one (every authn
+//     operation derives what it needs from the verified Principal's own
+//     claims).
 //
 // net/http's ServeMux (since Go 1.22) distinguishes an exact-match pattern
 // ("/api/v1/notes") from a subtree pattern ("/api/v1/notes/", matching
@@ -3979,20 +3988,24 @@ func authnPreAuthAllowlist() []tenancy.MiddlewareOption {
 //
 // Every route also passes through guardModuleRoute on the way out, which
 // is where rbac's permission gate is applied -- see demo_subject.go's
-// demoRouteGuards. guardModuleRoute still runs for admin's own path too
-// (dispatching to guardAdminRoute, per demoRouteGuards' adminRouteSentinel
-// entry), so the table's exhaustiveness check keeps covering it; only the
-// DESTINATION of the resulting handler differs. A path the table does not
-// name fails the build here rather than being served.
-func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer, orgDeps orgRouteGuardDeps, demoHeaderDisabled bool) (http.Handler, error) {
-	var adminHandler http.Handler
+// demoRouteGuards. guardModuleRoute still runs for the two excepted paths
+// too (admin's dispatching to guardAdminRoute per its adminRouteSentinel
+// entry, authn's resolving routePublic per its own entry), so the table's
+// exhaustiveness check keeps covering both; only the DESTINATION of the
+// resulting handler differs. A path the table does not name fails the
+// build here rather than being served.
+func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Authorizer, orgDeps orgRouteGuardDeps, demoHeaderDisabled bool) (adminHandler http.Handler, authnHandler http.Handler, err error) {
 	for _, route := range reg.Routes.Routes() {
-		handler, err := guardModuleRoute(az, route.Path, route.Handler, orgDeps, demoHeaderDisabled)
-		if err != nil {
-			return nil, err
+		handler, guardErr := guardModuleRoute(az, route.Path, route.Handler, orgDeps, demoHeaderDisabled)
+		if guardErr != nil {
+			return nil, nil, guardErr
 		}
 		if route.Path == adminRoutePath {
 			adminHandler = handler
+			continue
+		}
+		if route.Path == authnAPIPath {
+			authnHandler = handler
 			continue
 		}
 		mux.Handle(route.Path, handler)
@@ -4001,9 +4014,12 @@ func mountModuleRoutes(mux *http.ServeMux, reg *pkgcore.Registry, az rbac.Author
 		}
 	}
 	if adminHandler == nil {
-		return nil, fmt.Errorf("reference-app: no module mounted %q; admin.Module.Register must run for this app to compose its dedicated middleware branch", adminRoutePath)
+		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; admin.Module.Register must run for this app to compose its dedicated middleware branch", adminRoutePath)
 	}
-	return adminHandler, nil
+	if authnHandler == nil {
+		return nil, nil, fmt.Errorf("reference-app: no module mounted %q; authn.Module.Register must run for this app to compose its dedicated middleware branch", authnAPIPath)
+	}
+	return adminHandler, authnHandler, nil
 }
 
 // healthzHandler always returns 200 with no tenant required. It is
