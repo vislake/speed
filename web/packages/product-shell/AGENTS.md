@@ -181,9 +181,11 @@ layout-kit and tenancy-ui equivalents, and this package's own
   this package's surface requires, so the reviewer's P2-2 cannot
   silently regress.
 - `src/usage-example.test.tsx` — compiles and executes the README's
-  Quick start composition (the four-namespace bootstrap, one attached
-  session, the documented slots — the `userMenu` composing tenancy-ui's
-  `TenantSwitcher` beside `SignOutButton`, fed by `useCurrentTenant`)
+  Quick start composition (the five-namespace bootstrap (`ui-kit`,
+  `layout-kit`, `auth-ui`, `product-shell`'s own and `tenancy-ui`'s),
+  one attached session, the documented slots — the `userMenu`
+  composing tenancy-ui's `TenantSwitcher` beside `SignOutButton`, fed
+  by `useCurrentTenant`)
   and pins the journey's requests in order, bodies included, through
   the switch turn, so the documented usage cannot drift from the API.
 - `src/gated-journey.test.tsx` — the host-side permission-gating

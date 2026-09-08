@@ -269,8 +269,10 @@ uses and stays in lockstep with it by hand.
 
 The view machine's unit suite lives in `src/components/ProductShell.test.tsx`;
 the compiled quick start above lives in `src/usage-example.test.tsx`, which
-renders the four-namespace composition (tenancy-ui's switcher included) and
-drives the signed-in journey through a tenant switch and out again. The
+renders the five-namespace composition — the shell quartet (`ui-kit`,
+`layout-kit`, `auth-ui` and `product-shell`'s own) plus `tenancy-ui`'s,
+whose switcher sits in the userMenu — and drives the signed-in journey
+through a tenant switch and out again. The
 permission-gating composition over the same frame is `src/gated-journey.test.tsx`:
 its fixture host — a view-id mini-router in `children` whose gates are
 layout-kit `RouteGuard`s fed from auth-core's `usePermission` over lists the
