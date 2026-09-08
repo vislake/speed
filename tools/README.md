@@ -12,6 +12,7 @@ for `tomllib`) that back the repository's cross-cutting disciplines and its rele
 | `check_docs_site.py` | Checker | `docs/site/` skeleton structure: required entry files present, internal links resolve inside the tree, offline preview serves (python3 stdlib HTTP server) | 0 clean / 1 violation / 2 error |
 | `check_markdown_examples.py` | Checker | Root `CLAUDE.md` Documentation section: every fenced ```go block in AGENTS.md/README/ADR prose really compiles (a complete block) or at least parses under some throwaway wrapping (a fragment) | 0 clean / 1 a block fails its check / 2 error |
 | `license_scan.py` | Checker | Dependency-license compliance: every direct third-party dependency of the implemented Go modules and web packages is adjudicated and within policy in `dependency-licenses.json`, re-derived from the live tree on every run | 0 clean / 1 violation / 2 usage error |
+| `check_error_code_index_coverage.py` | Checker | Error-code index completeness: every code constructed in Go source (declared or inline, literal argument only) has a row in `docs/error-codes.md`, plus the unindexable classes (non-literal code arguments outside an apperr-constructing helper's body; helper calls with non-literal arguments) — the independent side of `gen_error_code_index.py`'s own drift gate, able to go red on an extractor blind spot the gate cannot see | 0 clean / 1 finding / 2 usage error |
 | `new_module.py` | Generator | Scaffolds the canonical stub of a new Go module under `go/<name>` and prints its registration checklist; never modifies shared repository files | 0 scaffolded / 2 refusal or validation error |
 | `release/lockstep-release.py` | Release verifier | Verifies the lockstep one-version release plan offline — derives the publishable set at runtime (go.work `use` entries under `go/` + `web/packages/*`) and checks version form, no duplicate tag, go.work-to-tree completeness both ways, uniform npm versions, changesets fixed-group coverage (`web/.changeset/config.json`); `--self-test` runs its unittest suite; `--apply` is a hard-gated local-tag mode (real publishing is M4's job) | 0 consistent plan / 1 inconsistent plan or self-test failure / 2 usage / 3 `--apply` refused |
 
@@ -390,24 +391,43 @@ the codes built with it, and no such catalog existed anywhere in the
 repository before this script.
 
 It walks every `*.go` file under `--roots` (default: `go` and `examples`,
-excluding `_test.go` and generated `*.gen.go`/`*_gen.go` files), regex-
-matching two declaration shapes -- `ErrFoo = apperr.Invalid("module.code")`
-and the struct-literal `ErrFoo = &apperr.Error{Code: "module.code",
-Status: http.StatusTooManyRequests}` (the shape go/sharing's,
-go/integration's, go/org's and go/ai-gateway's own `ErrRateLimited` use,
-since none of apperr's five builder functions map to HTTP 429) -- and
-collects, for each: the Go identifier, the code string, the resulting HTTP
-status, the file:line, the contiguous doc comment immediately above the
-declaration (the "triggering condition" column), and the code's own
-`en-US.toml` catalog entry when one exists (go/pkgcore/i18n's own
-message-catalog convention: the TOML key *is* the apperr code) -- a code
-with none is reported as such rather than silently omitted, since it means
-the code is never rendered to an end user (typically a boot-time wiring
-refusal).
+excluding `_test.go` and generated `*.gen.go`/`*_gen.go` files) and
+indexes every construction of an `*apperr.Error` whose code argument is
+a string literal, in three shapes: the named declaration
+`ErrFoo = apperr.Invalid("module.code")`; the struct-literal
+`ErrFoo = &apperr.Error{Code: "module.code", ...}` (the shape
+go/sharing's, go/integration's, go/org's and go/ai-gateway's own
+`ErrRateLimited` use, since none of apperr's six builder statuses is 429);
+and a declaration routed through a module-local helper that builds the
+error from its own string parameter (`ErrFoo = rateLimited("module.code")`,
+go/org's and go/notification's 429-stamping convention). The same three
+shapes are indexed INLINE, with no package-level declaration at all: a
+`panic(apperr.Invalid("module.code"))`, a
+`return nil, apperr.Internal("module.code")` or an assignment carries its
+code into the index exactly as a declaration does -- a code is indexed iff
+it is constructed in Go source with a literal code argument; the absence
+of a declaration never hides a code (this closed the blind spot where 25
+inline codes -- jobs' option-time panics, dbkit's plugin/connect refusals,
+the reference app's request-shape refusals -- were silently invisible).
 
-The result is one Markdown file, one table per module (grouped by the
-code's own dot-prefix, e.g. `notification` from
-`notification.type_not_found`), sorted by module then code.
+For each construction the tool collects: the Go identifier (when the
+construction binds one), the code string, the resulting HTTP status (429
+assumed for the struct-literal and helper shapes, since none of the six
+builder statuses -- 400/401/403/404/409/500 -- is 429), the file:line,
+the "triggering condition" -- for a declaration, the contiguous doc
+comment immediately above it; for an inline construction, the comment
+directly above the construction line, else its enclosing function's doc
+comment -- and the code's own `en-US.toml` catalog entry when one exists
+(go/pkgcore/i18n's own message-catalog convention: the TOML key *is* the
+apperr code) -- a code with none is reported as such rather than silently
+omitted, since it means the code is never rendered to an end user
+(typically a boot-time wiring refusal).
+
+The result is one Markdown file, one row per code, one table per module
+(grouped by the code's own dot-prefix, e.g. `notification` from
+`notification.type_not_found`), sorted by module then code; a code
+constructed more than once collapses to one row, a named declaration's
+row winning over an inline site's.
 
 Usage:
 
@@ -422,6 +442,44 @@ enumeration `examples/reference-app/web/src/codes-alignment.test.ts`
 hand-maintains for its four frontend surfaces: every one of that
 enumeration's backend (non-`client.*`) codes appears in the generated
 index.
+
+The generator's own `--check` compares the committed index against its
+own output, so a construction form it does not index is invisible to that
+gate; the blind spot is closed by
+`tools/check_error_code_index_coverage.py` (next section), which derives
+the expected code set independently from the real tree and turns red on
+any code the index has no row for. The two checkers run side by side in
+the docs-check pipeline.
+
+## check_error_code_index_coverage.py — error-code index coverage checker
+
+The independent-side counterpart of the generator's `--check`: it scans
+the real Go tree with its own implementation of the same coverage domain
+(comment text masked out by a small lexer, code literals matched across a
+bounded multi-line window so a continuation-line literal the generator
+cannot see turns red, helper discovery by body evidence: a function that
+builds an `*apperr.Error` from one of its own parameters) and compares the
+codes it finds against the rows of the committed `docs/error-codes.md` --
+the semgrep_fixture_check shape of comparing a tool's artifact against
+the real tree, so an extractor blind spot shows as a real diff instead of
+silent agreement between the file and the generator. It additionally
+reports the unindexable classes that would otherwise break the index's
+"every code built with a literal argument" claim silently: builder calls
+whose code argument is not a string literal outside an apperr-constructing
+helper's own parameterized body, and calls to such a helper with a
+non-literal argument. The check fails (exit 1) printing every missing
+code with its construction sites, or every unindexable construction, so
+its output is directly comparable against an independent probe of the
+tree. When the tree predates a code's indexing this check goes red first
+and the generator extension (or an index regeneration) makes it green
+again.
+
+Usage:
+
+```
+python3 tools/check_error_code_index_coverage.py                # exit 1 on any missing/unindexable code
+python3 tools/check_error_code_index_coverage.py --roots go examples --index docs/error-codes.md
+```
 
 ## new_module.py — Go module stub generator
 
