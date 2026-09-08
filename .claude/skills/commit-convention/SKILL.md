@@ -113,7 +113,7 @@ docs/upgrade/v1-to-v2.md
 
 The subject and body say why this change was needed and what it decides — for the person who will dig through `git log` later. They do not narrate the process that produced the change.
 
-1. **No internal process references anywhere** — subject, body or footer. No finding IDs (`P3-…`, "reviewer finding …"), no round names ("the X round"), no internal doc-filename citations as authority. The footer's reference genre (`Closes #…`) is for durable external identifiers such as public issue numbers only.
+1. **No internal process references anywhere** — subject, body or footer. No finding IDs (`P3-…`, "reviewer finding …"), no round names ("the X round"), no internal doc-filename citations as authority. Naming a file the commit itself changes is describing the diff, not a citation. The footer's reference genre (`Closes #…`) is for durable external identifiers such as public issue numbers only.
 2. **The body is a concluding why**: the problem, the decision and its cost. No module biography, no process history (review rounds, verification states, follow-up markers). One sentence of "before this change" context is fine.
 3. **Numbers that describe this diff** ("from four to six") are fine — they are checkable against the diff. Numbers describing the current state outside this diff ("N modules now …") are not.
 4. These constraints bind future commits only — history already on `main` is never rewritten.
