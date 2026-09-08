@@ -645,6 +645,7 @@
       "license": "MIT",
       "name": "gorm.io/datatypes",
       "used_by": [
+        "go/admin",
         "go/billing",
         "go/compliance",
         "go/dbkit",
