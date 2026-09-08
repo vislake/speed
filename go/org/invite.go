@@ -610,7 +610,7 @@ func (s *InviteService) checkRateLimits(ctx context.Context, emailIndex string) 
 		if !decision.Allowed {
 			return ErrInvitationRateLimited.
 				WithParam("dimension", d.name).
-				WithParam("retry_after_seconds", int(decision.ResetAfter.Seconds()))
+				WithParam("retry_after_seconds", ratelimit.RetryAfterSeconds(decision.ResetAfter))
 		}
 	}
 	return nil

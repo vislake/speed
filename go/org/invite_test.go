@@ -1253,3 +1253,53 @@ func TestInviteService_Accept_NodeDeletedUnderTheInvitation_SettlesToRevoked(t *
 		}
 	}
 }
+
+// scriptedLimiter is a minimal, in-test ratelimit.Limiter double whose
+// every Allow answers the same fixed Decision, so a test can drive
+// InviteService's rate-limit checks deterministically without waiting out
+// invitesPerTenantWindow/invitesPerEmailWindow's real durations. The
+// limiter field it is injected through exists for exactly this (see
+// InviteService.limiter's own doc comment).
+type scriptedLimiter struct {
+	allowed    bool
+	resetAfter time.Duration
+}
+
+func (s scriptedLimiter) Allow(context.Context, string, ratelimit.Limit) (ratelimit.Decision, error) {
+	return ratelimit.Decision{Allowed: s.allowed, ResetAfter: s.resetAfter}, nil
+}
+
+// TestInviteService_Invite_SubSecondWindowTail_RetryAfterRoundsUp pins the
+// retry_after_seconds translation boundary at the shared denial site both
+// dimensions funnel through (checkRateLimits): a denial whose window still
+// has a sub-second remainder -- the NORMAL tail of every exhausted window --
+// must carry 1, never the 0 a truncating int(Seconds()) conversion emits
+// (Retry-After: 0 means "retry immediately", inviting an immediate retry
+// against a window that has not reset). A negative remainder (a degenerate
+// canned decision; the real limiter's ResetAfter is always inside (0, Per])
+// must carry 0, never a negative whole-second count.
+func TestInviteService_Invite_SubSecondWindowTail_RetryAfterRoundsUp(t *testing.T) {
+	f := newInviteFixture(t)
+
+	f.m.invites.limiter = scriptedLimiter{allowed: false, resetAfter: 900 * time.Millisecond}
+	_, err := f.m.Invitations().Invite(f.ctx, InviteRequest{
+		Email: "ada@example.test", NodeID: f.left.ID, InviterUserID: "u-inviter",
+	})
+	if !hasCode(err, ErrInvitationRateLimited.Code) {
+		t.Fatalf("Invite error = %v, want org.invitation_rate_limited", err)
+	}
+	if got := errParam(t, err, "retry_after_seconds"); got != 1 {
+		t.Errorf("retry_after_seconds param = %v, want 1 -- a 900ms remainder must round up, not truncate to 0", got)
+	}
+
+	f.m.invites.limiter = scriptedLimiter{allowed: false, resetAfter: -3 * time.Second}
+	_, err = f.m.Invitations().Invite(f.ctx, InviteRequest{
+		Email: "ada@example.test", NodeID: f.left.ID, InviterUserID: "u-inviter",
+	})
+	if !hasCode(err, ErrInvitationRateLimited.Code) {
+		t.Fatalf("Invite error = %v, want org.invitation_rate_limited", err)
+	}
+	if got := errParam(t, err, "retry_after_seconds"); got != 0 {
+		t.Errorf("retry_after_seconds param = %v, want 0 -- a negative remainder must floor at zero, never go negative", got)
+	}
+}
