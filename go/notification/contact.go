@@ -1359,7 +1359,7 @@ func normalizeContactAddress(channel, address string) (string, error) {
 // field-level change worth recording in a status flip -- the status is the
 // record), and the type-scoped one names the narrowed type in its After
 // map (contact_type_unsubscribe.go). A known
-// limitation of this round follows from the same shape: an operation that
+// limitation follows from the same shape: an operation that
 // hits the idempotent return path of Unsubscribe (already unsubscribed)
 // emits nothing, which is correct -- the idempotent repeat is not a state
 // change -- and retries of a failed transition after its audit emit failed

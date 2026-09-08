@@ -1,7 +1,7 @@
 package notification
 
 // contact_type_unsubscribe_test.go drives the type-scoped opt-out the
-// consent ledger ships this round: a verified contact narrows its consent
+// consent ledger ships: a verified contact narrows its consent
 // to "everything but this one notification type" (ContactService
 // UnsubscribeType / EnsureDeliverableForType, contact_type_unsubscribe.go),
 // the finer shape the whole-contact unsubscribe of contact.go deliberately

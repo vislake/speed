@@ -24,7 +24,7 @@ import (
 // that does not exist, and both report dbkit's record-not-found code).
 //
 // The methods this type adds below -- the delivery path's FindByDedupeKey
-// probe and the read surface the HTTP round builds on (ListForRecipient,
+// probe and the read surface of the HTTP API (ListForRecipient,
 // UnreadCount, MarkRead, ReadAll) -- are its own query shapes, expressed
 // the same way PreferenceRepository expresses its two (see its doc
 // comment). Every one of them takes the recipient as an explicit argument

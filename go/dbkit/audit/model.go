@@ -311,7 +311,7 @@ type AuditEvent struct {
 	// standing three-question account (who fills each column, when, and
 	// what an unfillable case stores) for every column of this table,
 	// these three included. The migration files' comments were updated
-	// alongside this one in the same round, so all three say the same
+	// alongside this one, so all three say the same
 	// thing.
 	IP        string `gorm:"column:ip;size:64;not null"`
 	UserAgent string `gorm:"column:user_agent;size:500;not null"`

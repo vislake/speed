@@ -33,7 +33,7 @@ package pki_test
 //   - ExampleService_ExportJWKS and ExampleService_RevokeSigningKey cover
 //     the key-lifecycle layer's JWKS export and revocation halves.
 //   - ExampleSignerRegistry resolves a Signer by registered name through
-//     round 4's pki.SignerRegistry and signs with the resolved signer.
+//     pki.SignerRegistry and signs with the resolved signer.
 //   - ExampleBuildSignerRequiring resolves a Signer under a required
 //     capability (BuildSignerRequiring): signer.local refused under a
 //     KeyNeverLeavesBoundary requirement, accepted under none, and used to

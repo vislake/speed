@@ -1,8 +1,8 @@
 -- This migration creates contact_type_unsubscribes, the consent ledger's
 -- type-scoped opt-out table (go/notification/contact_type_unsubscribe.go):
 -- the finer shape AGENTS.md's "Unsubscribe is permanent for the contact as
--- a whole" adjudication records as deliberately deferred until this round.
--- A whole-contact unsubscribe stays a status on the verified_contacts row
+-- a whole" adjudication names: a whole-contact unsubscribe stays a status on
+-- the verified_contacts row
 -- itself; this table carries the narrower facts -- "this verified contact
 -- receives nothing of THIS notification type" -- one row per
 -- (tenant, contact, type), terminal for as long as the contact row lives,
