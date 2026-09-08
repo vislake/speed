@@ -217,6 +217,202 @@ func TestHandler_IntegrationCreateWebhookSubscription_AuditFailure_AnswersCreate
 	}
 }
 
+// TestHandler_WebhookSubscriptionLifecycle_OverHTTP drives the webhook half
+// of this module's fragment through one subscription's full life over the
+// wire: create (the 201 whose body is the one and only place the raw signing
+// secret is shown), list (whose summaries must never re-expose it), a
+// partial PATCH replacing URL and event types while leaving Active alone,
+// the mark-delete (204), the restore (204) and the forced pause every
+// restore lands even when the deleted subscription was active at the moment
+// of deletion -- the property Service.RestoreWebhookSubscription's own doc
+// comment argues about, here proven through the same route a host's HTTP
+// client calls. The Service-level mechanics behind each leg are pinned in
+// webhook_service_test.go; this test's own role is the fragment surface:
+// the statuses and bodies the spec declares, answered by the composed
+// handler exactly as a caller would see them.
+func TestHandler_WebhookSubscriptionLifecycle_OverHTTP(t *testing.T) {
+	// The webhook secret column needs its encrypting serializer registered
+	// before any WebhookSubscription row is written -- newWebhookTestDB's
+	// own requirement, repeated here because newTestHandler opens the plain
+	// newTestDB (registration is a keyed no-op replacement, per that same
+	// comment).
+	cipher, err := dbkit.NewCipher(testWebhookCipherKey)
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	dbkit.RegisterEncryptedSerializer(WebhookSecretSerializerName, cipher)
+
+	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true},
+		WithEventMapping(testMapping), WithWebhookURLValidator(alwaysAllowURL))
+
+	// create: 201 with the raw secret in its normal field.
+	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/webhooks", map[string]any{
+		"url": "https://example.com/hook", "eventTypes": []string{"test.thing.happened"},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	var created api.IntegrationCreatedWebhookSubscription
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.ID == nil || *created.ID == "" {
+		t.Fatal("create response has no id")
+	}
+	if created.Secret == nil || *created.Secret == "" {
+		t.Fatal("create response has no secret -- the create body is the one place the raw signing secret is shown")
+	}
+	if created.Active == nil || !*created.Active {
+		t.Fatal("a freshly created subscription must start active")
+	}
+	if created.CreatedBy == nil || *created.CreatedBy != "user-1" {
+		t.Errorf("createdBy = %v, want %q (from SubjectResolver, never a request field)", created.CreatedBy, "user-1")
+	}
+
+	// list: 200 with exactly that one row, and no secret anywhere on the
+	// wire -- IntegrationWebhookSubscriptionSummary has no Secret field at
+	// all, and a generic map decode is what proves the bytes omit one.
+	rec = doRequest(h, ctxFor(testTenant), http.MethodGet, "/api/v1/integration/webhooks", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	var listRaw map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&listRaw); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	listItems, _ := listRaw["webhookSubscriptions"].([]any)
+	if len(listItems) != 1 {
+		t.Fatalf("len(webhookSubscriptions) = %d, want 1 (body %q)", len(listItems), rec.Body.String())
+	}
+	row, _ := listItems[0].(map[string]any)
+	if _, present := row["secret"]; present {
+		t.Errorf("listed row carries %q, want it absent entirely: %v", "secret", row)
+	}
+	if row["url"] != "https://example.com/hook" || row["active"] != true || row["id"] != *created.ID {
+		t.Errorf("listed row = %v, want the created subscription's id, url and active state", row)
+	}
+
+	// Partial PATCH: URL and event types replaced, Active left alone by the
+	// request's absence (nil means no change) -- still true.
+	rec = doRequest(h, ctxFor(testTenant), http.MethodPatch, "/api/v1/integration/webhooks/"+*created.ID, map[string]any{
+		"url": "https://example.com/hook-v2", "eventTypes": []string{"test.thing.happened"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	var updated map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode update response: %v", err)
+	}
+	if updated["url"] != "https://example.com/hook-v2" {
+		t.Errorf("updated url = %v, want %q", updated["url"], "https://example.com/hook-v2")
+	}
+	if updated["active"] != true {
+		t.Errorf("updated active = %v, want true -- a field absent from a partial PATCH must leave the stored value unchanged", updated["active"])
+	}
+
+	// delete while the subscription is ACTIVE (the url PATCH never paused
+	// it): 204, and the list answers empty afterwards.
+	rec = doRequest(h, ctxFor(testTenant), http.MethodDelete, "/api/v1/integration/webhooks/"+*created.ID, nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("204 response carries a body: %q", rec.Body.String())
+	}
+	rec = doRequest(h, ctxFor(testTenant), http.MethodGet, "/api/v1/integration/webhooks", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list-after-delete status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	var emptyRaw map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&emptyRaw); err != nil {
+		t.Fatalf("decode list-after-delete response: %v", err)
+	}
+	if emptyItems, _ := emptyRaw["webhookSubscriptions"].([]any); len(emptyItems) != 0 {
+		t.Fatalf("len(webhookSubscriptions) after delete = %d, want 0 (body %q)", len(emptyItems), rec.Body.String())
+	}
+
+	// restore: 204, and the subscription is listable again -- paused, never
+	// silently resumed to the URL nobody has looked at since the deletion.
+	rec = doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/webhooks/"+*created.ID+"/restore", nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("restore status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	rec = doRequest(h, ctxFor(testTenant), http.MethodGet, "/api/v1/integration/webhooks", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list-after-restore status = %d, body %q", rec.Code, rec.Body.String())
+	}
+	var restoredRaw map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&restoredRaw); err != nil {
+		t.Fatalf("decode list-after-restore response: %v", err)
+	}
+	restoredItems, _ := restoredRaw["webhookSubscriptions"].([]any)
+	if len(restoredItems) != 1 {
+		t.Fatalf("len(webhookSubscriptions) after restore = %d, want 1 (body %q)", len(restoredItems), rec.Body.String())
+	}
+	restored, _ := restoredItems[0].(map[string]any)
+	if restored["url"] != "https://example.com/hook-v2" {
+		t.Errorf("restored url = %v, want the pre-delete %q intact", restored["url"], "https://example.com/hook-v2")
+	}
+	if restored["active"] != false {
+		t.Errorf("restored active = %v, want false -- a restore must land the subscription paused even though it was active at deletion", restored["active"])
+	}
+}
+
+// TestHandler_WebhookBodies_EmptyAndMalformed_RefusedInvalidRequestBody pins
+// the required-body half of the webhook surface: unlike apikeys' create
+// (whose only optional body decodes through decodeOptionalJSON), the webhook
+// request schemas declare every field required, so an empty body is a
+// malformed request refused with the plain ErrInvalidRequestBody and a body
+// that is not JSON at all is refused with the same code carrying its decode
+// cause -- never a 5xx, and never a half-decoded request reaching Service.
+// The identical guard on update's own body is exercised too.
+func TestHandler_WebhookBodies_EmptyAndMalformed_RefusedInvalidRequestBody(t *testing.T) {
+	cipher, err := dbkit.NewCipher(testWebhookCipherKey)
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	dbkit.RegisterEncryptedSerializer(WebhookSecretSerializerName, cipher)
+	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true},
+		WithEventMapping(testMapping), WithWebhookURLValidator(alwaysAllowURL))
+
+	// Empty create body (io.EOF): refused before any Service call.
+	rec := doRequest(h, ctxFor(testTenant), http.MethodPost, "/api/v1/integration/webhooks", nil)
+	assertErrorCode(t, rec, http.StatusBadRequest, ErrInvalidRequestBody.Code)
+
+	// Create body that is not JSON: the same code, with its decode cause.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/integration/webhooks", bytes.NewBufferString("{not json")).
+		WithContext(ctxFor(testTenant))
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req)
+	assertErrorCode(t, rec2, http.StatusBadRequest, ErrInvalidRequestBody.Code)
+
+	// Empty PATCH body: update's own required-body decode refuses before the
+	// subscription id is even looked up (the id here does not exist, and the
+	// answer must still be the body error, never a not-found).
+	rec = doRequest(h, ctxFor(testTenant), http.MethodPatch, "/api/v1/integration/webhooks/no-such-id", nil)
+	assertErrorCode(t, rec, http.StatusBadRequest, ErrInvalidRequestBody.Code)
+}
+
+// TestHandler_RequestWithoutTenantContext_RefusedInternalError proves the
+// handler never guesses a tenant: a request whose context carries none is
+// refused before any Service call with this module's coded internal error
+// -- the same fail-closed answer tenancy.Middleware would have replaced
+// with its own refusal long before this handler in a composed host (see
+// mustTenant's doc comment for why that path is normally unreachable and
+// still handled rather than assumed away).
+func TestHandler_RequestWithoutTenantContext_RefusedInternalError(t *testing.T) {
+	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
+
+	for _, path := range []string{
+		"/api/v1/integration/apikeys",
+		"/api/v1/integration/webhooks",
+	} {
+		rec := doRequest(h, context.Background(), http.MethodGet, path, nil)
+		assertErrorCode(t, rec, http.StatusInternalServerError, ErrInternal.Code)
+	}
+}
+
 func TestHandler_IntegrationCreateAPIKey_EmptyBody_IssuesScopelessKey(t *testing.T) {
 	h, _ := newTestHandler(t, fixedSubject{userID: "user-1", ok: true})
 
