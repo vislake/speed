@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -319,6 +320,57 @@ func TestPrintRedactsTheSMSGatewayURL(t *testing.T) {
 	}
 	if strings.Contains(stdout, url) {
 		t.Errorf("stdout leaks APP_SMS_GATEWAY_URL's value %q; it must render only the [redacted] marker", url)
+	}
+}
+
+// envNameInProse matches an APP_* bootstrap variable name wherever it
+// appears in the usage text's folded prose.
+var envNameInProse = regexp.MustCompile(`APP_[A-Z0-9_]+`)
+
+// TestPrintRedactedEnvParagraphEnumeratesTheList is the gate tying the
+// print usage text's secret-variable enumeration to print.go's actual
+// redactedEnv declaration -- this used to be three copies of one list
+// (the declaration, a role-by-role list in its doc comment, and the
+// usage paragraph) with nothing comparing them, so a variable added to or
+// dropped from the declaration while a copy stayed stale passed every
+// test. This test reads the actual list -- the redactedEnv map this
+// package compiles from print.go -- and asserts the usage paragraph's
+// parenthesized enumerations name exactly its key set, in both
+// directions: a paragraph that forgets a declared secret, or names a
+// variable the declaration does not redact, fails here. Each member's
+// role gloss lives in the usage text's variable table above the
+// paragraph, the one place a member's role is stated.
+func TestPrintRedactedEnvParagraphEnumeratesTheList(t *testing.T) {
+	// The enumeration region runs from the paragraph's fixed opening to
+	// the colon that closes "are secrets:". Whitespace is folded first so
+	// the region's wrapped lines parse as one list.
+	const opening = "The five key variables (APP_CONFIG_KEY"
+	start := strings.Index(printUsage, opening)
+	if start < 0 {
+		t.Fatalf("printUsage no longer opens the secret enumeration with %q", opening)
+	}
+	region := printUsage[start:]
+	colon := strings.Index(region, ":")
+	if colon < 0 {
+		t.Fatalf("printUsage's secret enumeration never reaches the colon that closes %q", "are secrets:")
+	}
+	flat := strings.Join(strings.Fields(region[:colon]), " ")
+	named := map[string]bool{}
+	for _, name := range envNameInProse.FindAllString(flat, -1) {
+		named[name] = true
+	}
+	for name := range redactedEnv {
+		if !named[name] {
+			t.Errorf("the usage paragraph's secret enumeration omits %s, which redactedEnv (print.go) declares a secret", name)
+		}
+	}
+	for name := range named {
+		if !redactedEnv[name] {
+			t.Errorf("the usage paragraph's secret enumeration names %s, which redactedEnv (print.go) does not declare a secret", name)
+		}
+	}
+	if len(named) != len(redactedEnv) {
+		t.Errorf("the usage paragraph names %d variables, redactedEnv (print.go) holds %d", len(named), len(redactedEnv))
 	}
 }
 
