@@ -246,7 +246,10 @@ type AuditEvent struct {
 	//     two real users of the tag -- org's Invitation.EmailIndex (a
 	//     stable, linkable blind index) and the reference app's Note.Text
 	//     (plaintext PII) -- declare their class on the field itself rather
-	//     than anywhere downstream.
+	//     than anywhere downstream. A module owning dbkit.Auditable models
+	//     must pin that per-field judgment with a per-column classification
+	//     gate of its own, in the shape of go/org/module_test.go's
+	//     TestModule_AuditableModels_CaptureClasses_CoverEveryField.
 	//
 	//   - On a row the declarative audit.Emit path produced, Changes is the
 	//     caller-supplied audit.Diff, marshaled verbatim by this package's
