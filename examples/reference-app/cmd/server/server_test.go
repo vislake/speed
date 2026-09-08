@@ -1085,6 +1085,7 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	t.Setenv("PORT", "")
 	t.Setenv("APP_DB_PATH", "")
 	t.Setenv("APP_REDIS_ADDR", "")
+	t.Setenv("APP_OTLP_ENDPOINT", "")
 	t.Setenv("APP_DEMO_USERS_PASSWORD", "")
 	t.Setenv("APP_OBJECT_STORE_ROOT", "")
 	t.Setenv("APP_DISABLE_DEMO_USER_HEADER", "")
@@ -1110,6 +1111,9 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	}
 	if cfg.RedisAddr != "" {
 		t.Fatalf("RedisAddr = %q, want the empty default (in-process bus)", cfg.RedisAddr)
+	}
+	if cfg.OTLPEndpoint != "" {
+		t.Fatalf("OTLPEndpoint = %q, want the empty default (local exporters)", cfg.OTLPEndpoint)
 	}
 	if cfg.DemoUsersPassword != "" {
 		t.Fatalf("DemoUsersPassword = %q, want the empty default (demo-user seed skipped)", cfg.DemoUsersPassword)
@@ -1208,6 +1212,7 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	t.Setenv("APP_DB_PATH", "/tmp/reference-app-configfromenv-test.db")
 	t.Setenv("APP_CONFIG_KEY", "0f0e0d0c0b0a090807060504030201001f1e1d1c1b1a19181716151413121110")
 	t.Setenv("APP_REDIS_ADDR", "127.0.0.1:6380")
+	t.Setenv("APP_OTLP_ENDPOINT", "collector.example.internal:4317")
 	t.Setenv("APP_DEMO_USERS_PASSWORD", "env demo seed passphrase")
 	t.Setenv("APP_OBJECT_STORE_ROOT", "/var/lib/reference-app/objects")
 	t.Setenv("APP_DISABLE_DEMO_USER_HEADER", "1")
@@ -1230,6 +1235,9 @@ func TestConfigFromEnv_ReadsOverrides(t *testing.T) {
 	}
 	if cfg.RedisAddr != "127.0.0.1:6380" {
 		t.Fatalf("RedisAddr = %q, want %q", cfg.RedisAddr, "127.0.0.1:6380")
+	}
+	if cfg.OTLPEndpoint != "collector.example.internal:4317" {
+		t.Fatalf("OTLPEndpoint = %q, want the APP_OTLP_ENDPOINT value", cfg.OTLPEndpoint)
 	}
 	if cfg.DemoUsersPassword != "env demo seed passphrase" {
 		t.Fatalf("DemoUsersPassword = %q, want the APP_DEMO_USERS_PASSWORD value", cfg.DemoUsersPassword)

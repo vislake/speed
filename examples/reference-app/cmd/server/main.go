@@ -33,14 +33,37 @@ const healthcheckArg = "healthcheck"
 // report unhealthy rather than hang indefinitely.
 const healthcheckTimeout = 3 * time.Second
 
+// observabilityOptions assembles the options run passes to obs.Init from
+// the bootstrap configuration configFromEnv already resolved: the service
+// name always, plus obs.WithOTLPEndpoint exactly when cfg.OTLPEndpoint is
+// non-empty (see otlpEndpointEnv's own doc comment in server.go for what
+// the variable changes). The endpoint option is conditional rather than
+// unconditional because WithOTLPEndpoint("") and its absence are
+// deliberately different in meaning: supplying an explicitly empty option
+// is indistinguishable from an unset one, but the branch also keeps the
+// no-endpoint default free of an option that has nothing to say -- the
+// same shape cfg.RedisAddr's conditional composition follows. It is a
+// separate, package-level function rather than inline in run so
+// main_test.go can pin the conditional without invoking Init (Init with a
+// non-empty endpoint builds real OTLP exporters -- the exporter/otlp
+// blank import in server.go registers the factory -- which is behaviour
+// for a real boot, not a unit test).
+func observabilityOptions(cfg serverConfig) []obs.Option {
+	opts := []obs.Option{obs.WithServiceName("reference-app")}
+	if cfg.OTLPEndpoint != "" {
+		opts = append(opts, obs.WithOTLPEndpoint(cfg.OTLPEndpoint))
+	}
+	return opts
+}
+
 // main is deliberately thin process-lifecycle glue (signal handling,
-// http.Server start/stop) with one independently testable seam beyond
-// buildServer (server.go, covered by server_test.go): runHealthcheck below,
-// covered directly by main_test.go. This file's own end-to-end behavior is
-// additionally proven by literally running it and curling it (see this
-// example's README.md), which is why the ordinary boot path (run) still has
-// no test of its own, matching ordinary Go practice of not unit-testing
-// os.Exit/signal-handling glue.
+// http.Server start/stop) with two independently testable seams beyond
+// buildServer (server.go, covered by server_test.go): observabilityOptions
+// above and runHealthcheck below, both covered directly by main_test.go.
+// This file's own end-to-end behavior is additionally proven by literally
+// running it and curling it (see this example's README.md), which is why
+// the ordinary boot path (run) still has no test of its own, matching
+// ordinary Go practice of not unit-testing os.Exit/signal-handling glue.
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == healthcheckArg {
 		ctx, cancel := context.WithTimeout(context.Background(), healthcheckTimeout)
@@ -147,8 +170,12 @@ func run(baseCtx context.Context) error {
 	// obs.Init's shutdown must run during graceful shutdown so buffered
 	// spans and metrics are flushed rather than dropped when the process
 	// exits -- the same reason srv.Shutdown below is given a bounded
-	// context instead of just letting the process die.
-	obsShutdown, err := obs.Init(ctx, obs.WithServiceName("reference-app"))
+	// context instead of just letting the process die. The option set is
+	// observabilityOptions(cfg): an APP_OTLP_ENDPOINT resolved by
+	// configFromEnv is handed over through obs.WithOTLPEndpoint, the
+	// APP_REDIS_ADDR-shaped wiring that decides between the OTLP exporters
+	// (exporter/otlp blank-imported in server.go) and the local ones.
+	obsShutdown, err := obs.Init(ctx, observabilityOptions(cfg)...)
 	if err != nil {
 		return fmt.Errorf("reference-app: init observability: %w", err)
 	}

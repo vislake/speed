@@ -48,6 +48,16 @@ import (
 	// obs.Init. Without this import, obs.Init still runs (traces and
 	// metrics both go to stdout), but MetricsHandler answers 404.
 	_ "github.com/vislake/speed/go/observability/exporter/prometheus"
+
+	// Blank-imported for its init() side effect: registers the OTLP/gRPC
+	// exporter factory obs.Init consults exactly when a caller supplies a
+	// non-empty WithOTLPEndpoint (go/observability's ErrOTLPExporterNotRegistered
+	// names this import as the fix). Without it, an APP_OTLP_ENDPOINT set
+	// in configFromEnv would fail run()'s Init with that error instead of
+	// wiring the collector push the variable promises. Registration is
+	// inert while the endpoint stays unset: Init stays on the local
+	// exporters, byte-identical to this import never having existed.
+	_ "github.com/vislake/speed/go/observability/exporter/otlp"
 	"github.com/vislake/speed/go/org"
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
@@ -224,6 +234,22 @@ const (
 	// docs/internal/03-deployment-modes.md draws, or into a distributed
 	// deployment mode, where MultiReplicaSafe is required of both seams.
 	redisAddrEnv = "APP_REDIS_ADDR"
+
+	// otlpEndpointEnv names the environment variable holding the OTLP/gRPC
+	// endpoint ("host:port", the syntax go/observability's own
+	// Config.OTLPEndpoint doc comment describes) traces and metrics are
+	// pushed to. Empty -- the default -- leaves obs.Init on the local
+	// exporters (stdout traces/metrics plus the /metrics scrape endpoint),
+	// so zero-setup standalone development keeps working with nothing
+	// running; set it to push both signals at a collector over OTLP. The
+	// shape is APP_REDIS_ADDR's own (resolve a bootstrap setting in
+	// configFromEnv, hand it over through the matching option): it is an
+	// implementation-composition question, never a deployment-mode one --
+	// obs.Init takes no mode, and the exporter set the endpoint selects
+	// works identically in the standalone and distributed topologies this
+	// app boots under (go/observability's Config.OTLPEndpoint doc comment
+	// records the no-example-yet gap this variable closes).
+	otlpEndpointEnv = "APP_OTLP_ENDPOINT"
 
 	// aiGatewayImageBaseURLEnv and aiGatewayImageAPIKeyEnv name the
 	// environment variables that point the smile-simulation pipeline at an
@@ -1108,6 +1134,14 @@ type serverConfig struct {
 	RedisAddr   string
 	HostTenants map[string]pkgcore.TenantID
 
+	// OTLPEndpoint is the "host:port" target this deployment pushes its
+	// traces and metrics to over OTLP/gRPC when non-empty (see
+	// otlpEndpointEnv's own doc comment above for what an empty value
+	// means). configFromEnv fills it from APP_OTLP_ENDPOINT; main.go's run
+	// hands it to obs.Init through obs.WithOTLPEndpoint, exactly the shape
+	// cfg.RedisAddr demonstrates for the Redis-backed seams.
+	OTLPEndpoint string
+
 	// PublicOrigin is this deployment's own public origin (scheme://host,
 	// optional :port, no path), the fallback base URL org's invitation
 	// accept links point at for a tenant that has no branded host in
@@ -1562,6 +1596,12 @@ func configFromEnv() (serverConfig, error) {
 	// default intact.
 	redisAddr := os.Getenv(redisAddrEnv)
 
+	// otlpEndpoint stays empty when unset (or explicitly emptied):
+	// obs.Init then stays on the local exporters, keeping the
+	// zero-setup default intact -- no collector to reach, nothing to
+	// dial, nothing to configure.
+	otlpEndpoint := os.Getenv(otlpEndpointEnv)
+
 	// The root secret: APP_ROOT_KEY when set (a hex-encoded 32-byte key --
 	// see rootKeyEnv's own doc comment), nil otherwise. nil is the signal
 	// resolveKey below reads as "no root key configured" -- every one of
@@ -1731,6 +1771,7 @@ func configFromEnv() (serverConfig, error) {
 		AuthnBlindIndexKey:    authnBlindIndexKey,
 		AuthnPIICipherKey:     authnPIICipherKey,
 		RedisAddr:             redisAddr,
+		OTLPEndpoint:          otlpEndpoint,
 		S3Endpoint:            s3Endpoint,
 		S3Bucket:              s3Bucket,
 		S3AccessKey:           s3AccessKey,
