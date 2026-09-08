@@ -1824,7 +1824,7 @@
       "file": "examples/reference-app/cmd/server/demo_subject.go",
       "ident": "integrationErrInternal",
       "kind": "declared",
-      "line": 715,
+      "line": 731,
       "module": "integration",
       "status": 500
     },
