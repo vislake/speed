@@ -22,11 +22,11 @@ import gen_error_code_index as m  # noqa: E402
 
 
 class ScanGoFileTests(unittest.TestCase):
-    def _scan(self, go_source: str) -> list[m.ErrorEntry]:
+    def _scan(self, go_source: str, helpers: set[str] | None = None) -> list[m.ErrorEntry]:
         with tempfile.TemporaryDirectory() as td:
             path = pathlib.Path(td) / "errors.go"
             path.write_text(go_source, encoding="utf-8")
-            return m._scan_go_file(path, "errors.go")
+            return m._scan_go_file(path, "errors.go", helpers or set())
 
     def test_var_block_declaration(self):
         entries = self._scan(
@@ -43,6 +43,7 @@ class ScanGoFileTests(unittest.TestCase):
         self.assertEqual(e.status, 404)
         self.assertEqual(e.doc, "ErrNotFound reports a missing widget.")
         self.assertEqual(e.source, "errors.go:5")
+        self.assertEqual(e.kind, "declared")
 
     def test_standalone_var_declaration_with_var_keyword(self):
         entries = self._scan(
@@ -89,6 +90,7 @@ class ScanGoFileTests(unittest.TestCase):
     def test_no_preceding_comment_yields_empty_doc(self):
         entries = self._scan('package foo\n\nvar ErrX = apperr.Invalid("foo.x")\n')
         self.assertEqual(entries[0].doc, "")
+        self.assertEqual(entries[0].kind, "declared")
 
     def test_module_property_is_the_code_prefix(self):
         entries = self._scan('package foo\n\nvar ErrX = apperr.Invalid("aigateway.x")\n')
@@ -107,23 +109,31 @@ class ScanGoFileTests(unittest.TestCase):
         self.assertTrue(m._is_excluded(pathlib.Path("foo_gen.go")))
         self.assertFalse(m._is_excluded(pathlib.Path("errors.go")))
 
-    def test_function_body_assignment_is_not_a_declaration(self):
-        # A plain reassignment inside a function body -- the exact text
-        # shape of a normal "handle the failure" line -- must not produce
-        # a phantom index row for a code nobody declared at package
-        # level. Fails before the tightening (the pre-anchored pattern
-        # matched the indented line and invented an entry).
+    def test_function_body_assignment_is_indexed_as_an_inline_construction(self):
+        # A reassignment inside a function body constructs a real code even
+        # though it binds no package-level variable -- "a code is indexed
+        # iff it is constructed in Go source with a literal code argument"
+        # -- so it yields an INLINE entry (ident ""), never a phantom
+        # DECLARED entry: the code is real, the declaration is not. This is
+        # the regression test for the round that closed the inline blind
+        # spot: the pre-fix scanner dropped every such code silently.
         entries = self._scan(
             'package foo\n\n'
             'func handle() error {\n'
             '\tif broken {\n'
-            '\t\terr = apperr.Invalid("foo.phantom")\n'
+            '\t\terr = apperr.Invalid("foo.inline_assignment")\n'
             '\t\treturn err\n'
             '\t}\n'
             '\treturn nil\n'
             '}\n'
         )
-        self.assertEqual(entries, [])
+        self.assertEqual(len(entries), 1)
+        e = entries[0]
+        self.assertEqual(e.code, "foo.inline_assignment")
+        self.assertEqual(e.status, 400)
+        self.assertEqual(e.ident, "")
+        self.assertEqual(e.kind, "inline")
+        self.assertEqual(e.source, "errors.go:5")
 
     def test_multiple_var_blocks_all_contribute(self):
         # Two var (...)-blocks in one file (the gofmt shape when a module
@@ -142,6 +152,217 @@ class ScanGoFileTests(unittest.TestCase):
         )
         self.assertEqual([e.code for e in entries], ["foo.a", "foo.b"])
         self.assertEqual([e.status for e in entries], [404, 400])
+
+    def test_inline_panic_construction_is_indexed_with_enclosing_doc(self):
+        # The jobs pattern this round exists for: a With* option function
+        # refuses an unhonourable value with panic(apperr.Invalid("code")),
+        # and the code's triggering condition is the function's own doc
+        # comment. Fails before the fix (the panic line produced no entry).
+        entries = self._scan(
+            'package foo\n\n'
+            '// WithWorkers sets the worker count. A value below 1 is\n'
+            '// refused at option time with a coded panic: a queue with no\n'
+            '// workers would silently process nothing.\n'
+            'func WithWorkers(n int) {\n'
+            '\tif n < 1 {\n'
+            '\t\tpanic(apperr.Invalid("foo.worker_count_zero"))\n'
+            '\t}\n'
+            '}\n'
+        )
+        self.assertEqual(len(entries), 1)
+        e = entries[0]
+        self.assertEqual(e.code, "foo.worker_count_zero")
+        self.assertEqual(e.status, 400)
+        self.assertEqual(e.kind, "inline")
+        self.assertEqual(e.ident, "")
+        self.assertIn("WithWorkers sets the worker count.", e.doc)
+        self.assertIn("silently process nothing.", e.doc)
+
+    def test_inline_return_with_chained_continuation_is_indexed(self):
+        # The dbkit pattern: "return nil, apperr.Internal("code")." with the
+        # .WithParam/.WithCause chain on the following lines -- the builder
+        # call and its literal code still share one line.
+        entries = self._scan(
+            'package foo\n\n'
+            '// Open opens a connection already wired with safeguards.\n'
+            'func Open() error {\n'
+            '\tif err := use(); err != nil {\n'
+            '\t\treturn nil, apperr.Internal("foo.plugin_failed").\n'
+            '\t\t\tWithParam("dialect", "sqlite").\n'
+            '\t\t\tWithCause(err)\n'
+            '\t}\n'
+            '\treturn nil\n'
+            '}\n'
+        )
+        self.assertEqual(len(entries), 1)
+        e = entries[0]
+        self.assertEqual(e.code, "foo.plugin_failed")
+        self.assertEqual(e.status, 500)
+        self.assertEqual(e.kind, "inline")
+        self.assertEqual(e.doc, "Open opens a connection already wired with safeguards.")
+
+    def test_inline_adjacent_comment_beats_enclosing_doc(self):
+        # A comment directly above the construction is the tightest
+        # triggering-condition evidence; the enclosing function's doc is
+        # only the fallback.
+        entries = self._scan(
+            'package foo\n\n'
+            '// Open opens a connection.\n'
+            'func Open() error {\n'
+            '\t// A plugin install failure leaves the handle unusable.\n'
+            '\treturn apperr.Internal("foo.plugin_failed")\n'
+            '}\n'
+        )
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].doc, "A plugin install failure leaves the handle unusable.")
+
+    def test_inline_construction_without_any_doc_keeps_empty_doc(self):
+        # An undocumented inline code still gets indexed -- an empty
+        # triggering-condition column is never a reason to drop the code
+        # (that would preserve the blind spot in another form).
+        entries = self._scan(
+            'package foo\n\n'
+            'func handle() error {\n'
+            '\treturn apperr.Invalid("foo.bare_inline")\n'
+            '}\n'
+        )
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].code, "foo.bare_inline")
+        self.assertEqual(entries[0].kind, "inline")
+        self.assertEqual(entries[0].doc, "")
+
+    def test_comment_text_never_indexes(self):
+        # A full-line comment quoting a construction, and a trailing
+        # comment carrying one, must not invent codes; the code part of a
+        # line with a trailing comment is still indexed.
+        entries = self._scan(
+            'package foo\n\n'
+            '// Declared here rather than as apperr.Internal("foo.commented")\n'
+            'func handle() error {\n'
+            '\treturn apperr.Invalid("foo.real") // apperr.Invalid("foo.trailing")\n'
+            '}\n'
+        )
+        self.assertEqual([e.code for e in entries], ["foo.real"])
+
+    def test_inline_struct_literal_is_indexed(self):
+        entries = self._scan(
+            'package foo\n\n'
+            'func handle() *apperr.Error {\n'
+            '\treturn &apperr.Error{Code: "foo.structy", Status: http.StatusTooManyRequests}\n'
+            '}\n'
+        )
+        self.assertEqual(len(entries), 1)
+        e = entries[0]
+        self.assertEqual(e.code, "foo.structy")
+        self.assertEqual(e.status, 429)
+        self.assertEqual(e.kind, "inline")
+
+    def test_declaration_line_is_not_double_indexed(self):
+        # The inline scan must not re-index a line the declaration scan
+        # already claimed: one construction, one entry.
+        entries = self._scan(
+            'package foo\n\nvar ErrA = apperr.Invalid("foo.a")\n'
+        )
+        self.assertEqual(len(entries), 1)
+
+    def test_helper_wrapped_declaration_is_indexed_only_for_discovered_helpers(self):
+        source = (
+            'package foo\n\n'
+            'var (\n'
+            '\t// ErrRateLimited reports a 429 refusal.\n'
+            '\tErrRateLimited = rateLimited("foo.rate_limited")\n'
+            ')\n'
+        )
+        # The callee is not a discovered apperr-constructing helper: no
+        # entry -- this is regexp.MustCompile/net.ParseCIDR territory and a
+        # phantom row must never come from it.
+        self.assertEqual(self._scan(source), [])
+        entries = self._scan(source, helpers={"rateLimited"})
+        self.assertEqual(len(entries), 1)
+        e = entries[0]
+        self.assertEqual(e.ident, "ErrRateLimited")
+        self.assertEqual(e.code, "foo.rate_limited")
+        self.assertEqual(e.status, 429)
+        self.assertEqual(e.doc, "ErrRateLimited reports a 429 refusal.")
+        self.assertEqual(e.kind, "declared")
+
+    def test_inline_helper_call_is_indexed_for_discovered_helpers(self):
+        entries = self._scan(
+            'package foo\n\n'
+            'func handle() *apperr.Error {\n'
+            '\treturn rateLimited("foo.rate_inline")\n'
+            '}\n',
+            helpers={"rateLimited"},
+        )
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].code, "foo.rate_inline")
+        self.assertEqual(entries[0].status, 429)
+        self.assertEqual(entries[0].kind, "inline")
+
+
+class DiscoverHelpersTests(unittest.TestCase):
+    def _discover(self, *go_sources: str) -> set[str]:
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            for i, src in enumerate(go_sources):
+                pkg = root / f"pkg{i}"
+                pkg.mkdir()
+                (pkg / "errors.go").write_text(src, encoding="utf-8")
+            return m.discover_apperr_helpers([root], root)
+
+    def test_body_construction_marks_the_function_a_helper(self):
+        helpers = self._discover(
+            'package foo\n\n'
+            '// rateLimited returns an *apperr.Error carrying HTTP 429.\n'
+            'func rateLimited(code string) *apperr.Error {\n'
+            '\terr := apperr.Invalid(code)\n'
+            '\terr.Status = http.StatusTooManyRequests\n'
+            '\treturn err\n'
+            '}\n'
+        )
+        self.assertEqual(helpers, {"rateLimited"})
+
+    def test_comment_mention_alone_is_not_body_evidence(self):
+        helpers = self._discover(
+            'package foo\n\n'
+            '// rateLimited would return an apperr.Error, but this one\n'
+            '// parses CIDRs instead -- apperr.Invalid("never.built") in a\n'
+            '// doc comment is not a construction.\n'
+            'func mustParseCIDRs(cidrs ...string) []string {\n'
+            '\treturn cidrs\n'
+            '}\n'
+        )
+        self.assertEqual(helpers, set())
+
+    def test_no_apperr_in_body_is_not_a_helper(self):
+        helpers = self._discover(
+            'package foo\n\n'
+            'func mustParseCIDRs(cidrs ...string) []string {\n'
+            '\treturn append([]string{}, cidrs...)\n'
+            '}\n'
+        )
+        self.assertEqual(helpers, set())
+
+
+class CollectEntriesTests(unittest.TestCase):
+    def _collect(self, go_sources: dict[str, str]) -> list[m.ErrorEntry]:
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            for rel, src in go_sources.items():
+                path = root / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(src, encoding="utf-8")
+            return m.collect_entries([root], root, set())
+
+    def test_declared_and_inline_entries_across_files(self):
+        entries = self._collect(
+            {
+                "a/errors.go": 'package a\n\nvar ErrA = apperr.NotFound("a.not_found")\n',
+                "b/queue.go": 'package b\n\nfunc With() {\n\tpanic(apperr.Invalid("b.panic"))\n}\n',
+            }
+        )
+        self.assertEqual([e.code for e in entries], ["a.not_found", "b.panic"])
+        self.assertEqual([e.kind for e in entries], ["declared", "inline"])
 
 
 class CollectMessagesTests(unittest.TestCase):
@@ -192,6 +413,29 @@ class RenderMarkdownTests(unittest.TestCase):
         self.assertEqual(rendered.count("`foo.a`"), 1)
         self.assertIn("doc a", rendered)
 
+    def test_declared_row_wins_over_inline_row_for_the_same_code(self):
+        # The same code constructed both as a named declaration and inline
+        # (authn.internal_error is the real-tree shape) renders one row
+        # carrying the declaration's own doc comment.
+        entries = [
+            m.ErrorEntry(ident="ErrInternal", code="foo.internal", status=500, source="z/errors.go:5", doc="declaration doc", kind="declared"),
+            m.ErrorEntry(ident="", code="foo.internal", status=500, source="a/handler.go:9", doc="handler doc", kind="inline"),
+        ]
+        rendered = m.render_markdown(entries)
+        self.assertEqual(rendered.count("`foo.internal`"), 1)
+        self.assertIn("declaration doc", rendered)
+        self.assertNotIn("handler doc", rendered)
+        self.assertIn("`z/errors.go:5`", rendered)
+
+    def test_inline_row_without_doc_gets_the_inline_marker_not_the_undocumented_one(self):
+        entries = [
+            m.ErrorEntry(ident="ErrX", code="foo.x", status=400, source="a.go:1", doc=""),
+            m.ErrorEntry(ident="", code="foo.y", status=400, source="b.go:1", doc="", kind="inline"),
+        ]
+        rendered = m.render_markdown(entries)
+        self.assertIn("_(undocumented)_", rendered)
+        self.assertIn("_(inline construction, no doc comment nearby)_", rendered)
+
     def test_missing_message_gets_the_not_user_facing_marker(self):
         entries = [m.ErrorEntry(ident="ErrA", code="foo.a", status=500, source="a.go:1", doc="d")]
         rendered = m.render_markdown(entries)
@@ -208,21 +452,20 @@ class RenderMarkdownTests(unittest.TestCase):
         self.assertIn("a \\| b", rendered)
         self.assertIn("c \\| d", rendered)
 
-    def test_footer_reports_the_real_dedupe_counts(self):
-        # The footer must state the real numbers -- how many unique codes
-        # the table documents and how many duplicate declarations the
-        # one-row-per-code collapse removed -- not the raw declaration
-        # count with a "before de-duplicating" hedge. Fails before the
-        # fix (no counts were computed or printed).
+    def test_footer_reports_the_real_site_and_dedupe_counts(self):
+        # The footer must state the real numbers -- how many construction
+        # sites (named declarations and inline apperr calls alike) the
+        # table documents, how many unique codes, and how many duplicate
+        # sites the one-row-per-code collapse removed.
         entries = [
             m.ErrorEntry(ident="ErrA", code="foo.a", status=400, source="a.go:1", doc="doc a"),
             m.ErrorEntry(ident="ErrA2", code="foo.a", status=400, source="a2.go:1", doc="doc a again"),
+            m.ErrorEntry(ident="", code="foo.a", status=400, source="queue.go:1", doc="", kind="inline"),
             m.ErrorEntry(ident="ErrB", code="bar.b", status=404, source="b.go:1", doc="doc b"),
         ]
         rendered = m.render_markdown(entries)
-        self.assertIn("3 declaration(s) collapsed to 2 code(s)", rendered)
-        self.assertIn("(1 duplicate declaration(s) removed)", rendered)
-        self.assertNotIn("before de-duplicating", rendered)
+        self.assertIn("4 construction site(s) -- named declarations and inline apperr calls alike -- collapsed to 2 code(s)", rendered)
+        self.assertIn("(2 duplicate site(s) removed)", rendered)
 
     def test_code_counts_helper(self):
         entries = [
