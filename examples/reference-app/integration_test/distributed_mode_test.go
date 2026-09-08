@@ -1020,7 +1020,16 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 			// URL), Redis/S3/SMTP left on the Preset's in-process
 			// defaults -- Kernel.Bootstrap's OWN capability validation is
 			// what fails now, naming the first seam it resolves in its
-			// fixed order: "eventbus".
+			// fixed order: "eventbus". That seam's in-process memory bus
+			// reaches Bootstrap through buildServer's own injection
+			// (WithEventBus, the org audit round's pre-built bus; see
+			// server_test.go's TestBuildServer_DistributedDeploymentMode_
+			// FailsCapabilityValidation comment), never through the Preset,
+			// so the capability error names it as implementation
+			// "<injected>" -- an injected seam has no registry name to
+			// report. The property is unchanged: an incomplete distributed
+			// composition still fails closed, and it is the seam,
+			// capability and mode naming that proves it.
 			name:     "SMS sender present, every kernel seam left on its in-process default",
 			extraEnv: []string{"APP_SMS_GATEWAY_URL=http://127.0.0.1:1/sms"},
 			wantSubstr: []string{
@@ -1035,7 +1044,7 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 				// brittle against that encoding rather than testing
 				// anything about the message itself.
 				"seam implementation does not satisfy the deployment mode's required capability",
-				"eventbus", "eventbus.memory", "MultiReplicaSafe", "distributed",
+				"eventbus", "<injected>", "MultiReplicaSafe", "distributed",
 			},
 		},
 	}
