@@ -693,9 +693,14 @@ on PRs touching documentation, i18n resources, or the two modules
 build against; and the license scanner (`python3 tools/license_scan.py`,
 selftest first, then the real check) runs in the security pipeline's
 license job (`.github/workflows/security.yml`).
-`tools/gen_error_code_index.py --check` is wired into no workflow yet;
-its row lands with a future CI round (docs-check.yml's own DELIBERATELY
-NOT WIRED list is the honest place that gap is recorded today).
+`tools/gen_error_code_index.py --check` runs in the docs-check pipeline
+(`.github/workflows/docs-check.yml`) as a plain-python3 step alongside
+the i18n key-set parity checker -- no setup step -- failing the job when
+docs/error-codes.md is not what the generator renders from the current
+tree. It landed there once the committed index had drifted 271 codes
+behind the 359 the tool rendered (later rounds added codes with no
+regeneration), retiring the row docs-check.yml's own DELIBERATELY NOT
+WIRED list used to carry.
 Locally, run them from the repository root — the default `--root` is the
 current directory, so plain `python3 tools/scan_cjk.py` also works there. All output paths are relative
 to `--root`. `license_scan.py` is the exception: it takes no `--root` at

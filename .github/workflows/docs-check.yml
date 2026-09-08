@@ -46,6 +46,17 @@ name: docs-check
 #     is dependency-free (tools/README.md): plain python3 -- no Go
 #     toolchain, no package install -- so this job needs no setup step.
 #     ubuntu-latest ships the Python >= 3.11 the checker needs (tomllib).
+#   * error-code index drift: python3 tools/gen_error_code_index.py
+#     --check from the repository root, failing when docs/error-codes.md
+#     is not what the generator renders from the current Go tree --
+#     every apperr.* declaration under go/ and examples/ (test and
+#     generated files excluded), each with its own locales/en-US.toml
+#     catalog entry when one exists. The generator's --check mode shipped
+#     with the script but stayed unwired until the committed index had
+#     drifted 271 codes behind the 359 the tool rendered (later rounds
+#     added codes with no regeneration); this is the wiring that closed
+#     that gap. Like the i18n checker above: plain python3, no setup
+#     step.
 #   * docs-site build: python3 tools/check_docs_site.py from the
 #     repository root. docs/site/ is a real Hugo project (theme:
 #     hugo-book, pinned as a git submodule -- docs/site/README.md has
@@ -95,10 +106,6 @@ name: docs-check
 #     docs/-wide check.
 #   * config-reference generation drift: the reference is generated from
 #     the pkgcore/config schema; generation is not in CI.
-#   * error-code index generation drift: tools/gen_error_code_index.py
-#     generates docs/error-codes.md from every apperr.* declaration plus
-#     each module's own locales/en-US.toml; its own --check mode exists
-#     (tools/README.md's own section on it) but is not run here yet.
 #   * per-version release directories for docs/site/ (the site versioned
 #     like the code it documents) -- still a later (M4) milestone item
 #     (docs/site/README.md, docs/internal/13-documentation-standards.md).
@@ -144,6 +151,9 @@ name: docs-check
 #   tools/check_markdown_examples.py       the markdown-example checker
 #   tools/test_check_markdown_examples.py  and its own unit test suite
 #                                (self-test on change)
+#   tools/gen_error_code_index.py      the error-code index generator
+#   tools/test_gen_error_code_index.py and its own unit test suite
+#                                (self-test on change)
 #   .github/actions/setup-hugo-env/**  the pinned Hugo install this job
 #                                needs (self-test on change)
 #   .github/actions/setup-go-env/**    the pinned Go install the markdown-
@@ -170,6 +180,8 @@ on:
       - tools/check_docs_site.py
       - tools/check_markdown_examples.py
       - tools/test_check_markdown_examples.py
+      - tools/gen_error_code_index.py
+      - tools/test_gen_error_code_index.py
       - .github/actions/setup-hugo-env/**
       - .github/actions/setup-go-env/**
       - .github/workflows/docs-check.yml
@@ -199,6 +211,8 @@ jobs:
           submodules: true
       - name: i18n key-set parity (zh-CN vs en-US)
         run: python3 tools/check_i18n_keys.py
+      - name: Error-code index drift check
+        run: python3 tools/gen_error_code_index.py --check
       - name: Install pinned Hugo
         uses: ./.github/actions/setup-hugo-env
       - name: Docs-site build (check_docs_site)
