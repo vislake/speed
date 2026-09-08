@@ -2256,7 +2256,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "errInternal",
       "kind": "declared",
-      "line": 84,
+      "line": 85,
       "module": "notes",
       "status": 500
     },
@@ -2265,16 +2265,25 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "",
       "kind": "inline",
-      "line": 224,
+      "line": 240,
       "module": "notes",
       "status": 400
+    },
+    {
+      "code": "notes.note_not_found",
+      "file": "examples/reference-app/internal/notes/handler.go",
+      "ident": "ErrNoteNotFound",
+      "kind": "declared",
+      "line": 115,
+      "module": "notes",
+      "status": 404
     },
     {
       "code": "notes.subject_unresolved",
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "ErrSubjectUnresolved",
       "kind": "declared",
-      "line": 99,
+      "line": 100,
       "module": "notes",
       "status": 401
     },
@@ -2283,7 +2292,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "ErrTextRequired",
       "kind": "declared",
-      "line": 31,
+      "line": 32,
       "module": "notes",
       "status": 400
     },
@@ -2292,7 +2301,7 @@
       "file": "examples/reference-app/internal/notes/handler.go",
       "ident": "ErrTextTooLong",
       "kind": "declared",
-      "line": 80,
+      "line": 81,
       "module": "notes",
       "status": 400
     },
