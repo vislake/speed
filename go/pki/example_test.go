@@ -27,6 +27,10 @@ package pki_test
 //     the key-lifecycle layer's JWKS export and revocation halves.
 //   - ExampleSignerRegistry resolves a Signer by registered name through
 //     round 4's pki.SignerRegistry and signs with the resolved signer.
+//   - ExampleBuildSignerRequiring resolves a Signer under a required
+//     capability (BuildSignerRequiring): signer.local refused under a
+//     KeyNeverLeavesBoundary requirement, accepted under none, and used to
+//     sign.
 
 import (
 	"bytes"
@@ -559,6 +563,71 @@ func ExampleSignerRegistry() {
 	// signer.local: <nil> true none
 	// unknown registered name refused: true
 	// registry-resolved signer signs and verifies: true
+}
+
+// ExampleBuildSignerRequiring demonstrates the pki-local capability check a
+// host that intends to require pkgcore.KeyNeverLeavesBoundary of the signer
+// it wires resolves its signer through: BuildSignerRequiring behaves exactly
+// like pki.SignerRegistry.Build, and additionally refuses a resolution whose
+// registration's declared capability cannot satisfy the requirement -- the
+// comparison pkgcore.Kernel.Bootstrap performs for its own four built-in
+// seams but has no knowledge of for pki.Signer (signer_registry.go's
+// BuildSignerRequiring doc comment, and go/pki/AGENTS.md's Known
+// limitations, have the full account). "signer.local" does not declare the
+// capability -- LocalSigner decrypts key material into process memory to
+// sign -- so resolving it under a KeyNeverLeavesBoundary requirement is
+// refused with an error naming the signer and the missing capability. The
+// registered names that DO carry the capability are the direct-sign
+// provider names a host blank-imports (go/pki/signer/vault's
+// "signer.vault-direct", go/pki/signer/kmsaws's "signer.aws-kms-direct");
+// resolving one of those under the same requirement succeeds. A zero
+// requirement (the shape a host with no boundary intent passes) accepts any
+// signer, "signer.local" included, and the resolution then signs normally.
+func ExampleBuildSignerRequiring() {
+	module, keepAlive, err := newExampleModule("pki_example_requiring")
+	if err != nil {
+		fmt.Println("setup:", err)
+		return
+	}
+	defer keepAlive.Close()
+
+	ctx := context.Background()
+	cfg := pkgcore.Config{
+		"dialect": string(dbkit.DialectSQLite),
+		"dsn":     "file:pki_example_requiring?mode=memory&cache=shared",
+	}
+
+	signer, err := pki.BuildSignerRequiring("signer.local", cfg, pkgcore.KeyNeverLeavesBoundary)
+	if err == nil {
+		fmt.Println("signer.local under KeyNeverLeavesBoundary refused: false")
+		return
+	}
+	fmt.Println("signer.local under KeyNeverLeavesBoundary refused: true")
+
+	signer, err = pki.BuildSignerRequiring("signer.local", cfg, 0)
+	if err != nil {
+		fmt.Println("signer.local with no requirement:", err)
+		return
+	}
+
+	keyRef, pub, err := signer.GenerateKey(ctx, pki.AlgorithmEd25519)
+	if err != nil {
+		fmt.Println("generate key:", err)
+		return
+	}
+	message := []byte("speed requirement example")
+	sig, err := signer.Sign(ctx, keyRef, message)
+	if err != nil {
+		fmt.Println("sign:", err)
+		return
+	}
+	fmt.Println("requirement-free signer signs and verifies:",
+		ed25519.Verify(pub.(ed25519.PublicKey), message, sig))
+	_ = module
+
+	// Output:
+	// signer.local under KeyNeverLeavesBoundary refused: true
+	// requirement-free signer signs and verifies: true
 }
 
 // parsePEM decodes a single PEM-encoded certificate, the form every

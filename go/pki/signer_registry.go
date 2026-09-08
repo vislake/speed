@@ -150,3 +150,48 @@ func localSignerFromConfig(cfg pkgcore.Config) (Signer, error) {
 	}
 	return NewLocalSigner(db), nil
 }
+
+// BuildSignerRequiring resolves the Signer registered under name exactly as
+// SignerRegistry.Build does, and refuses the resolution when the
+// registration's declared Capability cannot satisfy required -- the
+// pki-local half of the capability comparison pkgcore.Kernel.Bootstrap
+// performs for its own four built-in seams (EventBus, KVStore, Mailer,
+// ObjectStore), which has no knowledge of this registry or of pki.Signer
+// (go/pkgcore/capability.go's KeyNeverLeavesBoundary doc comment records
+// that boundary). The comparison is truthful only here, at the registry
+// resolution: a registration's Capability is fixed at Register time and
+// returned alongside the constructed value, while a Signer injected
+// directly through Module.WithSigner carries no capability declaration at
+// all for this function -- or anything else -- to compare. A host that
+// intends to require pkgcore.KeyNeverLeavesBoundary of the signer it wires
+// (the vault/kmsaws direct-sign names declare it; the envelope names and
+// "signer.local" do not) declares that intent by calling this function
+// instead of SignerRegistry.Build, and a wrong name -- "signer.vault"
+// where "signer.vault-direct" was meant -- fails here with an error naming
+// the signer and the missing capability instead of silently composing a
+// signer that decrypts key material into this process's memory.
+//
+// The resolution is constructed before the capability is compared, exactly
+// like pkgcore.Bootstrap's own resolve-then-validate machinery
+// (go/pkgcore/registry.go's validateSeamCapability): a registration's New
+// is this registry's only outward channel for its declared Capability, so
+// the comparison cannot precede construction through the public API. The
+// constructed value is discarded on refusal -- never returned, never
+// wired, never signed with.
+//
+// The returned error wraps pkgcore.ErrCapabilityUnsatisfied, the identical
+// sentinel Kernel.Bootstrap's own capability refusal wraps, so a caller
+// that already treats that sentinel as "the assembly cannot run as
+// declared" needs no new error vocabulary for the pki tier.
+func BuildSignerRequiring(name string, cfg pkgcore.Config, required pkgcore.Capability) (Signer, error) {
+	signer, caps, err := SignerRegistry.Build(name, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if caps.Has(required) {
+		return signer, nil
+	}
+	missing := required &^ caps
+	return nil, fmt.Errorf("%w: pki signer %q declares %s, which lacks %s required by the caller",
+		pkgcore.ErrCapabilityUnsatisfied, name, caps, missing)
+}
