@@ -157,7 +157,7 @@ services:
       # convention examples/reference-app/integration_test/distributed_mode_test.go
       # already uses for the same reason, spelled out in that file's own
       # comment on this exact value.
-      APP_SMS_GATEWAY_URL: http://127.0.0.1:1/sms
+      APP_SMS_GATEWAY_URL: https://127.0.0.1:1/sms
 
 volumes:
   reference-app-rustfs:
