@@ -226,13 +226,14 @@ func TestAttestationStore_AssertIsolated(t *testing.T) {
 		}
 		aObjects = append(aObjects, objectID)
 	}
-	bObjects := make([]string, 0, 2)
+	// B's rows are written for recency only -- nothing below reads B's ids
+	// back (the tenant-less probe uses aObjects[0]), so no slice accumulates
+	// here; collecting them would be dead code.
 	for n := 1; n <= 2; n++ {
 		objectID := isoObjectID(isoTenantB, n)
 		if err := store.put(ctxB, newTestRecord(objectID, isoCertificateID(isoTenantB, n))); err != nil {
 			t.Fatalf("put(tenant %q, record %d) error = %v", isoTenantB, n, err)
 		}
-		bObjects = append(bObjects, objectID)
 	}
 
 	t.Run("get_by_object_scopes_to_the_calling_tenant", func(t *testing.T) {
