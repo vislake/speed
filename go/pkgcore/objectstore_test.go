@@ -737,9 +737,10 @@ func TestLocalObjectStore_ConcurrentUse_IsRaceFree(t *testing.T) {
 // winner created. A PutObject that instead kept walking from the stale parent
 // stores the loser's object under the wrong key -- the raced prefix segment
 // silently dropped from the path -- while returning nil, and the requested
-// key reads back ErrObjectNotFound afterwards. A fresh prefix per round
-// makes every round re-enter the race, and every object must read back
-// whole under its requested key once that round's writers are done.
+// key reads back ErrObjectNotFound afterwards. A fresh prefix per
+// iteration makes every iteration re-enter the race, and every object must
+// read back whole under its requested key once that iteration's writers are
+// done.
 func TestLocalObjectStore_ConcurrentPut_AllKeysUnderOneFreshPrefix(t *testing.T) {
 	_, store := newRootStore(t)
 	ctx := context.Background()

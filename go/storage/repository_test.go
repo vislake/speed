@@ -531,9 +531,9 @@ func TestObjectRepository_ListPage_FailsClosedWithoutTenant(t *testing.T) {
 }
 
 // TestObjectRepository_Objects_SeedAndFindByID_RoundTrip exercises the
-// promoted Repository surface on a real migrated database: what module_test
-// and the later service round rely on -- a row created under its tenant is
-// found again under that tenant, in ObjectStateUploading.
+// Repository surface on a real migrated database: a row created under its
+// tenant is found again under that tenant, in ObjectStateUploading -- the
+// read path module_test and the service layer's tests build on.
 func TestObjectRepository_Objects_SeedAndFindByID_RoundTrip(t *testing.T) {
 	repo := NewObjectRepository(newTestDB(t))
 	ctx := tenantCtx(pkgcore.TenantID("tenant-a"))

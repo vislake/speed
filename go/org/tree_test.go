@@ -1828,13 +1828,13 @@ func assertNoOrphans(t *testing.T, db *gorm.DB, ctx context.Context, label strin
 // midway through with a hook -- there is no seam in either method's real,
 // shipped code a test could deterministically suspend without adding a
 // test-only instrumentation point to production code, which this test
-// deliberately avoids. This test instead runs many rounds of the two
-// operations racing for real, over a real file-backed SQLite database, and
-// asserts the invariant (assertNoOrphans) after every single round: without
-// lockLiveNode's shared row lock the two outcomes below could BOTH occur in
-// the same round (CreateChild succeeding while Delete also succeeds),
-// landing a live child under a soft-deleted parent; with it, at most one of
-// the two operations can ever win a given round.
+// deliberately avoids. This test instead runs many racing iterations of
+// the two operations for real, over a real file-backed SQLite database, and
+// asserts the invariant (assertNoOrphans) after every single iteration:
+// without lockLiveNode's shared row lock the two outcomes below could BOTH
+// occur in the same iteration (CreateChild succeeding while Delete also
+// succeeds), landing a live child under a soft-deleted parent; with it, at
+// most one of the two operations can ever win a given iteration.
 func TestTreeService_ConcurrentCreateChildAndDelete_NeverOrphansAChild(t *testing.T) {
 	const rounds = 200
 	for round := 0; round < rounds; round++ {

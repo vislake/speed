@@ -252,11 +252,11 @@ func TestBuildSignerRequiring_UnknownNameDelegatesToTheRegistry(t *testing.T) {
 // existing host resolves, whose registration declares no capability because
 // LocalSigner genuinely decrypts key material into process memory to sign --
 // under a KeyNeverLeavesBoundary requirement, and pins that it is refused.
-// This is the end-to-end shape of the wiring mistake the round-4 record
-// described: a host that meant to wire a direct-sign name (signer.vault-
-// direct, signer.aws-kms-direct) but resolved the envelope or local name
-// instead gets an error at the resolution point, not a silently weaker
-// composition.
+// This is the end-to-end shape of the wiring mistake a mixed-up name
+// resolution makes: a host that meant to wire a direct-sign name
+// (signer.vault-direct, signer.aws-kms-direct) but resolved the envelope
+// or local name instead gets an error at the resolution point, not a
+// silently weaker composition.
 func TestBuildSignerRequiring_SignerLocalIsRefusedForKeyNeverLeavesBoundary(t *testing.T) {
 	registerLocalKeySerializer()
 	dsn := "file:signer_registry_requiring_test?mode=memory&cache=shared"

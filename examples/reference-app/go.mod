@@ -46,8 +46,8 @@ replace github.com/vislake/speed/go/jobs => ../../go/jobs
 replace github.com/vislake/speed/go/storage => ../../go/storage
 
 // go/notification is imported directly by this app: buildServer wires
-// the notification module as the round's mandatory-first-consumer proof
-// (see server.go and demo_notification.go). Like every other
+// the module's mandatory-first-consumer proof through it (see server.go
+// and demo_notification.go). Like every other
 // workspace-local module it carries no published version, so this app's
 // own go.mod needs its own replace for it too -- root CLAUDE.md's
 // per-module standalone-build rule (`GOWORK=off go build`) means

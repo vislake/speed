@@ -362,9 +362,9 @@ export default defineConfig({
   // point-in-time reads that `readSettledText` replaced, and a refusal
   // gate locking out its own account across engines. A single retry
   // would have hidden all of them, and the one that mattered most --
-  // the disclosure gate that ACCUSED a round of not doing work it had
-  // done -- would have been hidden intermittently, which is worse than
-  // either outcome.
+  // the disclosure gate reddening on work that had already been done --
+  // would have been hidden intermittently, which is worse than either
+  // outcome.
   //
   // This file's own comments say it twice already: "a false red is not
   // a cheap failure", and "once a gate is known to flake, its red stops

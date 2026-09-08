@@ -23,9 +23,9 @@
 #
 # CGO_ENABLED=0: go/dbkit's SQLite dialect driver
 # (github.com/glebarez/sqlite, wrapping modernc.org/sqlite) is pure Go --
-# no cgo anywhere in that dependency chain (verified directly against this
-# round's pinned versions: no `import "C"` in either module, only
-# incidental hash-listing matches in go.sum) -- so this app's binary is a
+# no cgo anywhere in that dependency chain (verified against the go.mod-
+# pinned versions: no `import "C"` in either module, only incidental
+# hash-listing matches in go.sum) -- so this app's binary is a
 # genuinely static executable. That is what lets the final stage below be
 # gcr.io/distroless/static rather than a full Linux distribution, or even
 # distroless's own glibc-based "base" variant: no libc, no shell, no

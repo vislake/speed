@@ -708,10 +708,10 @@ func TestMemberInvited_CarriesNoAddressOrIndex(t *testing.T) {
 	}
 }
 
-// TestModule_Register_DoesNotDeclareTheAuthnEvent guards the coordination
-// point with the parallel authn round: authn owns authn.user.created and
-// declaring it here too makes a host running both modules fail to bootstrap
-// with ErrDuplicateEventType.
+// TestModule_Register_DoesNotDeclareTheAuthnEvent pins the ownership
+// boundary of authn.user.created: authn declares the event, and a second
+// declaration here would make a host running both modules fail to
+// bootstrap with ErrDuplicateEventType.
 func TestModule_Register_DoesNotDeclareTheAuthnEvent(t *testing.T) {
 	reg := bootstrapTestModule(t)
 	for _, decl := range reg.Events.Published() {
