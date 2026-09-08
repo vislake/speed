@@ -295,7 +295,7 @@ id, err := queue.Enqueue(ctx, jobs.Task{
 }, jobs.WithPriority(jobs.PriorityHigh), jobs.WithMaxRetries(2))
 ```
 
-The distributed deployment mode's equivalent — same `Task`/`EnqueueOption`s, same `Handler`, different construction (per `SPEED_DEPLOYMENT_MODE`, wired once at kernel startup, never branched on in business code — root `CLAUDE.md`'s "Deployment modes" discipline):
+The distributed deployment mode's equivalent — same `Task`/`EnqueueOption`s, same `Handler`, different construction (per `APP_DEPLOYMENT_MODE`, wired once at kernel startup, never branched on in business code — root `CLAUDE.md`'s "Deployment modes" discipline):
 
 ```go
 redisOpt := asynq.RedisClientOpt{Addr: cfg.RedisAddr, Password: cfg.RedisPassword}

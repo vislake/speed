@@ -46,7 +46,7 @@ func kernelEscaper(mode pkgcore.DeploymentMode) bool {
 }
 
 func envReader() string {
-	return os.Getenv("SPEED_DEPLOYMENT_MODE") // fires: env read outside command entry
+	return os.Getenv("APP_DEPLOYMENT_MODE") // fires: env read outside command entry
 }
 
 const (
@@ -55,7 +55,7 @@ const (
 	// literal / env name and fire -- matching is by value, not by
 	// identifier name.
 	modeAliasStandalone = "standalone"
-	modeAliasEnv        = "SPEED_DEPLOYMENT_MODE"
+	modeAliasEnv        = "APP_DEPLOYMENT_MODE"
 )
 
 func constEscaper(mode string) string {

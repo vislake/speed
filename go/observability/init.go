@@ -62,14 +62,14 @@ type Config struct {
 	//
 	// examples/reference-app does not yet demonstrate that wiring:
 	// cmd/server/server.go's configFromEnv reads the five bootstrap
-	// variables SPEED_DEPLOYMENT_MODE, PORT, SPEED_DB_PATH,
-	// SPEED_CONFIG_KEY and SPEED_REDIS_ADDR, and cmd/server/main.go's
+	// variables APP_DEPLOYMENT_MODE, PORT, APP_DB_PATH,
+	// APP_CONFIG_KEY and APP_REDIS_ADDR, and cmd/server/main.go's
 	// run calls Init with no WithOTLPEndpoint option, so that example's
 	// observability stays on the local exporters -- not because its
 	// deployment mode requires it, but because no host code resolves an
-	// endpoint to hand over. There is no SPEED_OTLP_ENDPOINT (or
+	// endpoint to hand over. There is no APP_OTLP_ENDPOINT (or
 	// equivalent) anywhere in this repository today; a host wiring real
-	// production OTLP export follows the shape SPEED_REDIS_ADDR already
+	// production OTLP export follows the shape APP_REDIS_ADDR already
 	// demonstrates (resolve a bootstrap setting in configFromEnv, hand
 	// it over through the matching option) but starts this field's
 	// resolution from scratch rather than copying an existing example.

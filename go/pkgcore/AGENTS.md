@@ -233,7 +233,7 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 Booting a host:
 
 ```go
-mode, err := pkgcore.ParseDeploymentMode(os.Getenv("SPEED_DEPLOYMENT_MODE"))
+mode, err := pkgcore.ParseDeploymentMode(os.Getenv("APP_DEPLOYMENT_MODE"))
 
 // A bare NewKernel() -- no options -- is DeploymentModeStandalone composed
 // with PresetStandalone and needs nothing else. DeploymentModeDistributed

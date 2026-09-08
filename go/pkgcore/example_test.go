@@ -35,7 +35,7 @@ import (
 	_ "github.com/vislake/speed/go/pkgcore/objectstore/s3"
 )
 
-// ExampleParseDeploymentMode shows how a host turns the SPEED_DEPLOYMENT_MODE
+// ExampleParseDeploymentMode shows how a host turns the APP_DEPLOYMENT_MODE
 // configuration value into a DeploymentMode, and how an unknown value is
 // classified.
 func ExampleParseDeploymentMode() {
