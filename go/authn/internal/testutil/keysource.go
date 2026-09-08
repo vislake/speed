@@ -55,8 +55,9 @@ type keySourceEntry struct {
 }
 
 // NewKeySource returns a KeySource with one freshly generated active key
-// under kid.
-func NewKeySource(t *testing.T, kid string) *KeySource {
+// under kid. It accepts any testing.TB so both tests and benchmarks in the
+// module can share it.
+func NewKeySource(t testing.TB, kid string) *KeySource {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -125,7 +126,7 @@ func (k *KeySource) VerificationKeys(context.Context, string) ([]struct {
 // Rotate promotes a freshly generated key under newKID to active, demoting
 // the previous active key to verification-only -- go/pki's own
 // PromoteToActive semantics, mirrored here without depending on go/pki.
-func (k *KeySource) Rotate(t *testing.T, newKID string) {
+func (k *KeySource) Rotate(t testing.TB, newKID string) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
