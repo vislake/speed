@@ -62,15 +62,22 @@ import (
 //
 // A Signer.Sign failure that is not already a coded *apperr.Error is
 // wrapped as ErrSignerUnavailable, the identical treatment GenerateCRL
-// applies to a CRL-signing failure (crl.go): an unrecognized keyRef is
-// ErrKeyNotFound (coded, passed through) from every Signer
-// implementation, while a backend that answers no signature bytes is the
-// same class of infrastructure failure in both places. A KeyRef this
+// applies to a CRL-signing failure (crl.go). Which coded failures can
+// therefore surface depends on the Signer implementation's own answers:
+// an unrecognized keyRef passes through as ErrKeyNotFound only from a
+// Signer whose lookup reports it under that code -- LocalSigner's local
+// keyring miss, and the empty-response shape the vault and kmsaws
+// signers translate into ErrKeyNotFound when their backend reports no
+// such key -- while the same keyRef reaching a vault or kmsaws backend
+// that answers a raw API error is uncoded at the Signer and lands here
+// as ErrSignerUnavailable. A backend that answers no signature bytes is
+// the same class of infrastructure failure in both places. A KeyRef this
 // CAService did not itself issue -- a row whose SignerName names a
-// different Signer than s.signer's -- surfaces as ErrKeyNotFound from the
-// signing side, the same answer VerifyCertificate's parallel
-// certificate-to-key mismatch would get: this CAService signs only what it
-// issued (ca.go's "one Signer per CAService" note).
+// different Signer than s.signer's -- reaches that signer's own lookup
+// and answers by those same rules, coded ErrKeyNotFound or
+// ErrSignerUnavailable depending on the implementation, never a success:
+// this CAService signs only what it issued (ca.go's "one Signer per
+// CAService" note).
 //
 // ErrRecordNotFound (dbkit's own, via CertificateRepository.FindByID) when
 // certificateID does not name a certificate of ctx's tenant; pkgcore's own
