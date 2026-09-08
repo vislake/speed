@@ -116,3 +116,9 @@ description = "reference-app e2e self-registration password (historical): the li
 paths = [
   "examples/reference-app/web/e2e/add-a-colleague.spec.ts",
 ]
+
+[[allowlists]]
+description = "go/billing/gateway/stripe integration-tier webhook-verification fixture: stripe_mock_leg_test.go's testWebhookSecret (whsec_test_secret_0123456789, introduced by commit a286dbec) is the signing secret of the real-HTTP webhook-delivery leg in webhook_delivery_test.go, which signs a genuinely delivered payload with it through the stripe-go SDK's own webhook test helper and verifies the receiving path through Gateway.VerifyWebhook's stripe-go webhook-signature verification -- the integration-tier twin of the identical whsec_-prefixed fixture in the already-allowlisted unit tier (gateway_test.go). The whsec_ prefix is the shape Stripe webhook signing secrets carry and the shape the stripe-go SDK's own webhook fixtures use, so a fixture of that shape is what exercises the verification path the way production receives it; the value itself is an obviously fake test literal that signs and verifies only inside the test's own delivery and corresponds to no real account or endpoint anywhere -- a fixture, never a credential to anything. Scoped by path so generic-api-key keeps firing on genuine secret-shaped values in every other file and in the rest of the commit history"
+paths = [
+  "go/billing/gateway/stripe/integration_test/stripe_mock_leg_test.go",
+]
