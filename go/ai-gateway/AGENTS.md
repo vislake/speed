@@ -528,10 +528,25 @@ proofs.
   `go/metering`'s own `AnalyticsRecorder` fail-open, undeduped stance. This
   applies to the two new image Feature dimensions exactly as it does to
   `"ai.chat_tokens"`.
-- No local/self-hosted inference provider (Ollama/vLLM) yet, for chat or
-  image alike -- both `ChatProvider` and `ImageProvider` are deliberately
-  unaware of whether an implementation is local or remote, so this is
-  purely a future additional registration, not an interface change.
+- No separately named local/self-hosted inference provider (an Ollama/
+  vLLM-style registration) exists, for chat or image -- and none is
+  warranted while such hosts speak the OpenAI protocol, because the
+  OpenAI-compatible built-ins already reach them as a config variant.
+  `OpenAICompatibleProvider`'s own doc comment says it implements the
+  chat-completions schema "shared by OpenAI itself and every
+  OpenAI-compatible host (Azure OpenAI, DeepSeek, many self-hosted/
+  open-weight gateways)" against a fully configurable base URL, and its
+  image twin is built the same way; pointing a credential at a
+  self-hosted host's OpenAI-compatible endpoint is configuration, not
+  code, and a host that ignores the Authorization header accepts any
+  non-empty api_key. A non-public endpoint is a platform-tier credential
+  by design: the SSRF guard validates and dial-guards only the
+  tenant-influenceable tier, and ssrf.go's own file header names "an
+  OpenAI-compatible LLM gateway on the operator's own intranet" as the
+  legitimate platform default the guard must not break. The day a
+  self-hosted host diverges from the OpenAI protocol, or an operator
+  wants a vendor SDK, it becomes one more registration in
+  `ChatProviderRegistry`/`ImageProviderRegistry` -- no interface change.
 - No self-hosted image inference backend either (the design doc's own
   MVP-does-not-build-a-self-hosted-inference-service deferral, restated for
   images) -- out of scope by this round's own task instruction.
