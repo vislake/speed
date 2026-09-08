@@ -1,12 +1,17 @@
 package authn
 
 import (
+	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/vislake/speed/go/authn/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/apperr"
+	"github.com/vislake/speed/go/ratelimit"
 )
 
 // TestRateGuard_CheckLogin_EachDimensionLimitsIndependently proves the
@@ -423,5 +428,80 @@ func TestRateGuard_RecordLoginSuccess_ClearsBothStateKeys(t *testing.T) {
 	}
 	if locked {
 		t.Error("loginLocked() after RecordLoginSuccess = true, want false")
+	}
+}
+
+// cannedLimiter is a ratelimit.Limiter whose every Allow answers one fixed
+// decision, letting a rateGuard test drive a denial (or an allow) carrying
+// a caller-chosen ResetAfter without depending on wall-clock window
+// timing.
+type cannedLimiter struct {
+	decision ratelimit.Decision
+}
+
+func (l cannedLimiter) Allow(context.Context, string, ratelimit.Limit) (ratelimit.Decision, error) {
+	return l.decision, nil
+}
+
+// TestRateGuard_Allow_SubSecondResetAfter_RetryAfterRoundsUp pins the
+// Retry-After translation boundary at the sliding-window denial site --
+// the NORMAL one, reached at the tail of every exhausted window: a denial
+// whose window still has a sub-second remainder must carry 1, never the 0
+// a truncating int(Seconds()) conversion would emit. Retry-After: 0 (RFC
+// 9110, §10.2.3) is legal but means "retry immediately", and an immediate
+// retry against a window that has not reset is refused again -- a mild
+// amplification the header exists to prevent. A 900ms remainder answers 1.
+func TestRateGuard_Allow_SubSecondResetAfter_RetryAfterRoundsUp(t *testing.T) {
+	t.Parallel()
+
+	guard := &rateGuard{
+		limiter: cannedLimiter{decision: ratelimit.Decision{Allowed: false, ResetAfter: 900 * time.Millisecond}},
+		kv:      pkgcore.NewMemoryKVStore(),
+	}
+	err := guard.allow(t.Context(), "authn:test:subsecond-window", limitLoginByAccount)
+	if !hasCode(err, ErrRateLimited.Code) {
+		t.Fatalf("allow() error = %v, want ErrRateLimited", err)
+	}
+	appErr, ok := apperr.As(err)
+	if !ok {
+		t.Fatalf("error %v is not an *apperr.Error", err)
+	}
+	if got := appErr.Params["retry_after_seconds"]; got != 1 {
+		t.Errorf("retry_after_seconds param = %v, want 1 -- a 900ms remainder must round up, not truncate to 0", got)
+	}
+}
+
+// TestRateGuard_CheckLogin_LockoutTail_RetryAfterRoundsUp pins the same
+// boundary at the account-lockout denial site (the edge case: only the
+// last instant of a lockout window carries a sub-second remainder). An
+// account whose lockout still has 900ms to run answers ErrAccountLocked
+// with 1, not 0 -- a 0 would invite an immediate retry while the lockout
+// still holds. The deadline key is seeded directly so the test never
+// waits on the real lockout window.
+func TestRateGuard_CheckLogin_LockoutTail_RetryAfterRoundsUp(t *testing.T) {
+	kv := pkgcore.NewMemoryKVStore()
+	guard := &rateGuard{
+		// The limiter never denies: the seeded lockout alone must refuse
+		// the login, so the assertion isolates the lockout path.
+		limiter: cannedLimiter{decision: ratelimit.Decision{Allowed: true}},
+		kv:      kv,
+	}
+	account := "account-lockout-tail-test"
+	_, deadlineKey := loginLockoutKeys(account)
+	deadline := time.Now().Add(900 * time.Millisecond).UnixMicro()
+	if err := kv.Set(t.Context(), deadlineKey, []byte(strconv.FormatInt(deadline, 10)), loginLockoutStateTTL); err != nil {
+		t.Fatalf("seed the lockout deadline: %v", err)
+	}
+
+	err := guard.CheckLogin(t.Context(), account, "203.0.113.77")
+	if !hasCode(err, ErrAccountLocked.Code) {
+		t.Fatalf("CheckLogin() inside a seeded lockout error = %v, want ErrAccountLocked", err)
+	}
+	appErr, ok := apperr.As(err)
+	if !ok {
+		t.Fatalf("error %v is not an *apperr.Error", err)
+	}
+	if got := appErr.Params["retry_after_seconds"]; got != 1 {
+		t.Errorf("retry_after_seconds param = %v, want 1 -- a 900ms lockout remainder must round up, not truncate to 0", got)
 	}
 }
