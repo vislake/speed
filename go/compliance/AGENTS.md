@@ -1,580 +1,153 @@
 # compliance
 
-go/compliance is the governance layer over retention-window sweeping,
-right-to-erasure orchestration, data-export gathering-and-delivery and
-read-only audit querying. It invents no new deletion mechanism: every
-physical delete it ever causes runs through a business module's own
-`dbkit.Repository[T].HardDelete` (already tenant-bound and
-system-context-gated), and every audit record it produces goes through
-`dbkit/audit.Emit`. This file is the module-level discipline that ships
-with `go/compliance` to consuming projects; the repository-wide rules are
-the root `CLAUDE.md` plus `.claude/skills/backend-coding-standards`.
+go/compliance is speed's governance layer over retention-window sweeping, right-to-erasure orchestration, data-export gathering-and-delivery and read-only audit querying. It invents no new deletion mechanism: every physical delete it ever causes runs through a business module's own `dbkit.Repository[T].HardDelete` (already tenant-bound and system-context-gated, landed in `go/dbkit`), and every audit record it produces goes through `dbkit/audit.Emit` (landed in `go/dbkit/audit`). This file is the module-level discipline that ships with `go/compliance` to consuming projects; the design rationale is `docs/internal/10-compliance-and-audit.md`, and the repository-wide rules are the root `CLAUDE.md` plus `.claude/skills/backend-coding-standards`.
+
+**Status: round 1 (foundation), round 2 (`go/sharing`-based export delivery), the append-only-enforcement/report round, plus the reviewer-compliance round that closed the Erase tenant-scope gate, made `AuditQuery`'s ordering deterministic, preserved participant counts alongside erasure errors, and gave the stored export manifest a retention story (immediate deletion on failed delivery, plus an expiry-reaping sweep participant).** Round 1 shipped `RetentionService` (per-tenant retention-window sweep, a periodic `jobs.Handler`, an optional multi-tenant convenience), `ErasureService` (immediate right-to-erasure), `ExportService` (data-export gathering and storage, stopping short of delivery because `go/sharing` had not yet merged into `main`), `AuditQuery` (read-only, filtered, tenant- or system-context-scoped reads over `dbkit/audit.Repository`'s existing table), and the `pkgcore.Registry.Retention` registrar (`pkgcore.RetentionParticipant`/`pkgcore.RetentionRegistrar`, added to `go/pkgcore/registry.go` as that round's one additive change to a lower module) that lets any business module opt a model into all three orchestrations. Round 2 wired `ExportService.Export` to hand its stored manifest off to a real `go/sharing.Service` (or anything structurally matching the small `SharingCreator` seam), minting a short-lived, single-view share and returning its id and one-time bearer token to the caller instead of stopping at "stored, here is an internal key" -- see "Export: gathering and delivery" below for the full mechanism and the expiry/view-limit design choice. **This round** closes two of the items the previous two left explicitly open: a trigger-based, dual-dialect append-only enforcement mechanism on `dbkit/audit`'s own `audit_events` table (landed in `go/dbkit/audit`, not this module -- see "Append-only enforcement" below for why), and `RenderAuditReport`, a formatted CSV/JSON rendering of an `AuditQuery` result set (`report.go`). It does NOT ship the optional hash chain, time-partitioned audit archival, or an HTTP surface -- see "Deliberately not in scope" below for why each of those three specifically remains out, now that append-only enforcement (archival's own stated prerequisite) has landed. **"No real business-module consumer" is stale as a blanket claim as of `go/admin`'s D7**: `admin.AuditService` is a real, tested consumer of `AuditQuery.Query`/`QueryAcrossTenants`/`Get` (`go/admin/audit.go`), and `admin.ImpersonationService.Start`/`End` is the first real consumer of the `pkgcore.WithActor`/`WithOnBehalfOf` dual-identity pattern the audit records this module reads carry -- see `docs/internal/10-compliance-and-audit.md`'s consumer notes. What remains genuinely unconsumed by any real business module is narrower than the original sentence implied: the `pkgcore.RetentionParticipant` contract (`Sweep`/`Erase`/`Export`) -- see "Known limitations" below, which is scoped correctly to that mechanism alone. **That last unconsumed mechanism is itself closed as of the reference-app notes round**: the reference app's notes module registers `notes.NewRetentionParticipant(notes.NewRepository(db))` onto the kernel's `reg.Retention` seat in `cmd/server/server.go`, and `cmd/server/compliance_flow_test.go` drives all three orchestrations -- `RetentionService.SweepTenant`, `ErasureService.Erase`, `ExportService.Export` -- against real notes rows through the wired `*compliance.Module`; see "Known limitations"'s first item (closed) and `examples/reference-app/internal/notes/retention_participant.go`'s own doc comment for what that registration discharges. Judge what exists by the code, not by this sentence.
 
 ## Scope
 
-- `RetentionService.SweepTenant` (one tenant's retention-window sweep,
-  `retention.go`), `SweepAllTenants` (a host-supplied `TenantLister` seam
-  covering every tenant from one scheduled task), `EnqueueRetentionSweep`
-  plus `retentionSweepHandler` (the `jobs.Queue`/`jobs.Handler` schedule
-  point).
-- `ErasureService.Erase` (`erasure.go`): immediate,
-  retention-window-bypassing erasure for one `pkgcore.SubjectRef`.
-- `ExportService.Export` (`export.go`): gathers every participant's
-  `Export` data into one `ExportManifest`, stores it through
-  `pkgcore.ObjectStore`, and delivers it through a wired `SharingCreator`
-  (typically a real `go/sharing.Service`), returning an `*ExportResult`
-  carrying the object key, the manifest and the minted `ExportDelivery`
-  (share id, one-time token, expiry).
-- `AuditQuery` (`audit_query.go`): `Query` (tenant-scoped),
-  `QueryAcrossTenants` (system-context-gated, caller-named tenant list),
-  `Get` (by id) -- all read-only, filtered in application code by actor,
-  on-behalf-of administrator, resource, action, time-range and result.
-- `RenderAuditReport` (`report.go`): a pure, dependency-free rendering of
-  any `[]audit.AuditEvent` -- typically an `AuditQuery.Query`/
-  `QueryAcrossTenants` result, but the function itself neither imports nor
-  calls `AuditQuery` -- as `ReportFormatCSV` or `ReportFormatJSON`. It
-  does no I/O, no pagination and no tenant-scope enforcement of its own.
-- `pkgcore.Module` wiring (`module.go`): two config items
-  (`ConfigDefaultRetentionWindow`, `ConfigExportDeliveryExpiry`), four
-  permissions, three audit actions, two audited `pkgcore.SystemPurpose`
-  values, the retention-sweep job handler, and the `WithQueue`/
-  `WithConfigService`/`WithTenantLister`/`WithSharing`/
-  `WithExportConfigReader` construction-time options.
-- The trigger-based database-level append-only backstop on `audit_events`
-  lives in `go/dbkit/audit`'s own migrations (`0002_append_only_
-  enforcement.sql`, both dialects), not in this module -- `audit_events`
-  is `dbkit/audit`'s own table, and compliance owns no table to attach a
-  trigger from (see "Why no table").
+**In scope through round 2.** `RetentionService.SweepTenant` (one tenant's retention-window sweep, `retention.go`), `SweepAllTenants` (a host-supplied `TenantLister` seam covering every tenant from one scheduled task), `EnqueueRetentionSweep` plus `retentionSweepHandler` (the `jobs.Queue`/`jobs.Handler` schedule point, mirroring `go/storage`'s `EnqueueExpirySweep`/`expirySweepHandler` shape exactly). `ErasureService.Erase` (`erasure.go`): immediate, retention-window-bypassing erasure for one `pkgcore.SubjectRef`. `ExportService.Export` (`export.go`): gathers every participant's `Export` data into one `ExportManifest`, stores it through `pkgcore.ObjectStore`, and **(round 2)** delivers it through a wired `SharingCreator` (typically a real `go/sharing.Service`), returning an `*ExportResult` carrying the object key, the manifest and the minted `ExportDelivery` (share id, one-time token, expiry). `AuditQuery` (`audit_query.go`): `Query` (tenant-scoped), `QueryAcrossTenants` (system-context-gated, caller-named tenant list), `Get` (by id) -- all read-only, filtered in application code by actor, on-behalf-of administrator, resource, action, time-range and result (the on-behalf-of dimension added by the P2-1 round -- see its section below). `pkgcore.Module` wiring (`module.go`): two config items (`ConfigDefaultRetentionWindow`, and, round 2, `ConfigExportDeliveryExpiry`), four permissions, three audit actions, two audited `pkgcore.SystemPurpose` values, the retention-sweep job handler, plus (round 2) the `WithSharing` construction-time `Option`.
 
-## Deliberately not in scope
+**In scope this round.** `RenderAuditReport(events []audit.AuditEvent, format ReportFormat) ([]byte, error)` (`report.go`): a pure, dependency-free rendering of any `[]audit.AuditEvent` -- typically an `AuditQuery.Query`/`QueryAcrossTenants` result, but the function itself neither imports nor calls `AuditQuery` -- as `ReportFormatCSV` or `ReportFormatJSON`. Also landed this round, but in `go/dbkit/audit`, not here: `migrations/{postgres,sqlite}/0002_append_only_enforcement.sql`, the trigger-based database-level append-only backstop on `audit_events` -- see "Append-only enforcement lives in `go/dbkit/audit`, not here" below for why this module's own `AGENTS.md` still records it.
 
-| Not here | Why |
-|---|---|
-| Optional hash chain over `audit_events` | No consumer asks for it; it carries a real write-cost tradeoff |
-| Time-partitioned archival, cold storage | Not built. Its stated prerequisite (append-only enforcement) is landed, so nothing external blocks it -- it is simply not shipped |
-| An HTTP surface / OpenAPI fragment for compliance itself | compliance is a Go-level API, not a service reached over HTTP. `RenderAuditReport`'s bytes are what an HTTP handler would set as a response body, but no such handler exists. Serving a delivered export's actual bytes over HTTP is a separate `go/sharing`-side gap: sharing's `Access` resolves a share to its row, not to bytes |
-| An erasure-request or sweep-run log table of its own | The mechanism's durable record is `dbkit/audit`'s existing `audit_events` table plus each participant's own already-migrated table (see "Why no table") |
-| A public `ParseAuditReportCSV`/`ParseAuditReportJSON` reader | `report_test.go`'s round-trip parsing exists to verify `RenderAuditReport`'s own correctness; a render direction is the shipped shape, not a full codec. A caller that wants to re-read a report it did not just render would be asking for a new API |
+**Deliberately not in scope through this round:**
+
+| Not here | Where it belongs | Why |
+|---|---|---|
+| Optional hash chain over `audit_events` | A later round | Explicitly optional in the design doc, has a real write-cost tradeoff, and this round still has no consumer asking for it |
+| Time-partitioned archival, cold storage | A later round | Append-only enforcement, the design doc's own named prerequisite for archival ("partition-and-archive is how 'no DELETE, ever' and 'retention cleanup' are reconciled"), has now landed (`go/dbkit/audit`'s trigger pair, this round) -- archival itself is still not built, but it is no longer blocked on anything this codebase has not shipped; it remains a correct, deliberate follow-up round rather than scope this round should have absorbed |
+| An HTTP surface / OpenAPI fragment for compliance itself | A later round | compliance is a Go-level API through this round, not a service reached over HTTP -- the same posture `go/metering`'s round 1 took. `RenderAuditReport`'s bytes are exactly what a future HTTP handler would set as a response body (`text/csv`/`application/json`), but no such handler exists yet. Serving the delivered export's actual bytes over HTTP is a separate, `go/sharing`-side gap -- `go/sharing`'s `Access` does not yet resolve `ResourceRef` into bytes either way (see `go/sharing/AGENTS.md`'s Known limitations) |
+| An erasure-request or sweep-run log table of its own | Not planned -- see "Why no table" below | The mechanism's durable record is `dbkit/audit`'s existing `audit_events` table plus each participant's own already-migrated table |
+| A public `ParseAuditReportCSV`/`ParseAuditReportJSON` reader for `RenderAuditReport`'s own output | Not planned, unless a real consumer asks | `report_test.go`'s own round-trip proof parses the rendered output back to verify correctness, but keeps that parsing logic private to the test file -- a render direction is the smallest real, useful shape this round's own scope asked for, not a full codec; a real caller wanting to re-read a report it did not just render is a new, later ask |
 
 ## Why no table
 
-`Module.Migrations()` returns the zero `embed.FS` -- compliance owns no
-table of its own. This is a deliberate design choice, weighed against
-adding a dedicated erasure-request (or sweep-run) log:
+`Module.Migrations()` returns the zero `embed.FS` -- compliance owns no table of its own. This was a real design choice, not an oversight, weighed against adding a dedicated erasure-request (or sweep-run) log:
 
-- **The durable record already exists.** Every `SweepTenant` and `Erase`
-  call ends in exactly one `dbkit/audit.Emit` call
-  (`AuditActionRetentionSweep`/`AuditActionErasureRequest`), carrying the
-  per-participant reaped/erased breakdown in `Changes` -- and every
-  `Export` call ends in one `AuditActionExportRequest` event of the same
-  shape. A participant error is recorded there as a classification (the
-  participant's name keyed to a "failed" marker --
-  `erasureAuditErrorMarker` on the erasure path, `participantErrorMarker`
-  on the sweep and export paths), never the error text itself (see
-  "Error text classification" below). That is already an append-only,
-  queryable (via `AuditQuery`), tenant-attributed record of every
-  orchestration run -- a second, compliance-owned table would duplicate
-  it.
-- **Retry state does not need its own row.** `pkgcore.RetentionParticipant
-  .Erase`'s own contract requires a participant to return `(0, nil)` for a
-  subject it has already fully erased (see `erasure.go`'s `Erase` doc
-  comment), so re-running `Erase` after a partial failure converges to
-  completion by itself.
-- **`dbkit.MigrationRegistry.Register` documents this as legal, not
-  degraded**: "a module with no subdirectory at all for that dialect is
-  treated as declaring zero migrations for it, not as an error"
-  (`go/dbkit/migrations.go`). `Module.Migrations` returning `embed.FS{}`
-  is the ordinary answer for a module whose whole job is orchestration
-  over other modules' already-migrated tables.
+- **The durable record already exists.** Every `SweepTenant` and `Erase` call ends in exactly one `dbkit/audit.Emit` call (`AuditActionRetentionSweep`/`AuditActionErasureRequest`), carrying the per-participant reaped/erased breakdown in `Changes` -- and every `Export` call ends in one `AuditActionExportRequest` event of the same shape. A participant error is recorded there as a classification (the participant's name keyed to a "failed" marker -- `erasureAuditErrorMarker` on the erasure path, `participantErrorMarker` on the sweep and export paths; the latter two joined the rule in the export-error-text round) -- never the error text itself, which can carry a subject's identifier or other internal details and would be carved into the one column nothing can delete from (see `emitErasureAudit`'s doc comment and the export-error-text round's section below; the text's homes are the returned per-participant `Errors` maps where a result carries one -- `SweepResult.Errors`, `ErasureResult.Errors`, never `ExportManifest.Errors`, whose entry is the classification itself -- and the failure-site structured logs, behind go/observability's redaction layer). That is already an append-only, queryable (via `AuditQuery`), tenant-attributed record of every orchestration run -- a second, compliance-owned table would duplicate it.
+- **Retry state does not need its own row.** `pkgcore.RetentionParticipant.Erase`'s own contract requires a participant to return `(0, nil)` for a subject it has already fully erased (see `erasure.go`'s `Erase` doc comment), so re-running `Erase` after a partial failure converges to completion by itself -- there is no "in-progress erasure request" state machine to persist between calls, because there is no multi-step workflow spanning more than one `Erase` call in the first place.
+- **`dbkit.MigrationRegistry.Register` documents this as legal, not degraded**: "a module with no subdirectory at all for that dialect is treated as declaring zero migrations for it, not as an error" (`go/dbkit/migrations.go`). `Module.Migrations` returning `embed.FS{}` is the ordinary answer for a module whose whole job is orchestration over other modules' already-migrated tables, not a placeholder for a table this round ran out of time to add.
+
+If a later round finds a genuine need for durable, queryable retry-in-progress state (a very large tenant's sweep that must resume across process restarts mid-pass, say), that is new, explicit scope for that round to weigh against this reasoning -- not a gap this round left unconsidered.
 
 ## The `pkgcore.Registry.Retention` registrar
 
-`RetentionParticipant` (declared in `go/pkgcore/registry.go`, alongside
-`RetentionRegistrar` and the `SubjectRef` type `ErasureService.Erase`
-takes) is the one change this module makes to a module below it in the
-dependency graph, following the pattern "the `Registry` struct exists so
-that adding a new cross-cutting mechanism does not change the `Module`
-interface". It mirrors `AuditActionRegistrar`'s shape (a name-uniqueness
-map plus an append-only, registration-ordered slice).
+`RetentionParticipant` (declared in `go/pkgcore/registry.go`, alongside `RetentionRegistrar` and the `SubjectRef` type `ErasureService.Erase` takes) is this round's one change to a module below compliance in the dependency graph, following the precedent root `CLAUDE.md`'s Module Wiring section names: "The `Registry` struct exists so that adding a new cross-cutting mechanism does not change the `Module` interface." It mirrors `AuditActionRegistrar`/`memoryAuditActionRegistrar`'s exact shape (a name-uniqueness map plus an append-only, registration-ordered slice) rather than inventing a new registrar pattern.
 
-A participant is a `Name` plus three callbacks, `Sweep`/`Erase`/`Export`,
-each optional except `Sweep` and `Erase` (a participant with neither is
-legal but useless; `Export` alone is legal, for a participant that wants
-export-gathering but has nothing meaningfully soft-deletable). Every
-callback is expected to call the participant's own `dbkit.Repository[T]`
-methods -- `Sweep`/`Erase` call `HardDelete`, `Export` calls a read method
--- so compliance's own code never imports, and never directly queries, a
-business module's table. `internal/testutil`'s
-`FakeNote`/`FakeRepository`/`NewParticipant` is the unit-tier proof that
-the contract compiles and works end to end; the real business module is
-the reference app's notes participant, registered onto the kernel's
-`reg.Retention` seat in `cmd/server/server.go` and proved by
-`compliance_flow_test.go` there.
+A participant is a `Name` plus three callbacks, `Sweep`/`Erase`/`Export`, each optional except `Sweep` and `Erase` (a participant with neither is legal but useless; `Export` alone is legal, for a participant that wants export-gathering but has nothing meaningfully soft-deletable). Every callback is expected to call the participant's own `dbkit.Repository[T]` methods -- `Sweep`/`Erase` call `HardDelete`, `Export` calls a read method -- so compliance's own code never imports, and never directly queries, a business module's table. `internal/testutil`'s `FakeNote`/`FakeRepository`/`NewParticipant` is this round's own unit-tier proof that the contract compiles and works end to end; the real business module it used to stand in for is the reference app's notes participant, registered onto the kernel's `reg.Retention` seat in `cmd/server/server.go` and proved by `compliance_flow_test.go` there (see "Known limitations"'s first item, which that registration closes).
 
-`Retention` is available on a `Registry` built with `pkgcore.NewRegistry`
-(the three-argument constructor), not only through `Kernel.Bootstrap` --
-unlike `ObjectStore`/`Locales`, which are Bootstrap-only. This is why
-this module's own unit tests build a hand-made `Registry` directly for
-`RetentionService`/`ErasureService`/`AuditQuery` tests, reserving
-`Bootstrap` for `module_test.go`'s own `Register` proofs, where
-`ExportService`'s `ObjectStore` dependency genuinely requires it.
+`Retention` is available on a `Registry` built with `pkgcore.NewRegistry` (the three-argument constructor), not only through `Kernel.Bootstrap` -- unlike `ObjectStore`/`Locales`, which are Bootstrap-only. This is why this module's own unit tests build a hand-made `Registry` directly for `RetentionService`/`ErasureService`/`AuditQuery` tests (no `Kernel.Bootstrap` ceremony needed), reserving `Bootstrap` for `module_test.go`'s own `Register` proofs, where `ExportService`'s `ObjectStore` dependency genuinely requires it.
 
 ## Partial failure across independent transactions
 
-Every one of `SweepTenant`, `Erase` and `Export` calls into N
-independently registered participants, each backed by its own
-`dbkit.Repository[T]` and, deployment-mode permitting, its own physical
-database connection -- there is no way to compose N participants'
-`HardDelete` calls into one cross-module transaction (independently
-released modules cannot share a commit). All three services therefore
-share one policy, applied consistently:
+Every one of `SweepTenant`, `Erase` and `Export` calls into N independently registered participants, each backed by its own `dbkit.Repository[T]` and, deployment-mode permitting, its own physical database connection -- there is no way to compose N participants' `HardDelete` calls into one cross-module transaction (the same reasoning this repository's "no cross-module foreign keys" rule already states: independently released modules cannot share a commit). All three services therefore share one policy, applied consistently:
 
-1. One participant's callback failing never stops the others -- every
-   registered participant runs, regardless of an earlier failure.
-2. The failure is recorded per-participant, keyed by participant `Name`:
-   the raw error in the returned in-process results where one exists
-   (`SweepResult.Errors`, `ErasureResult.Errors`), and the
-   `participantErrorMarker` classification in `ExportManifest.Errors` and
-   in every audit record's `Changes["errors"]` entry -- never the error
-   text on a surface that is permanent or delivered.
-3. The operation still audits itself (`emitSweepAudit`/`emitErasureAudit`/
-   `emitExportAudit`), with the full per-participant breakdown in
-   `Changes`, whether or not any participant failed.
-4. The method returns a non-nil, specifically coded error
-   (`ErrSweepPartialFailure`/`ErrErasurePartialFailure`/
-   `ErrExportPartialFailure`) alongside the full result whenever any
-   participant failed -- never a bare `nil` result and never a silent
-   `nil` error that would let a careless caller mistake a partial pass
-   for a clean one.
-5. Recovery is retry, not rollback: every `Sweep`/`Erase` callback is
-   documented to return `(0, nil)` for work it has already completed, so
-   calling the same operation again converges the remaining participants
-   to completion without re-processing (or re-auditing as a duplicate
-   fact) what already succeeded.
-6. A participant's reported count survives its own error: a callback that
-   failed part-way through has already hard-deleted the rows it reports,
-   and that count is recorded (in the result and the audit record)
-   whenever the callback reports one, error or not -- an irreversible
-   operation's destroyed rows are never understated.
-
-## Error text classification
-
-No error text ever reaches a permanent or delivered surface. The audit
-events' changes column is effectively permanent (`dbkit/audit/emit.go`'s
-Diff contract: "Anything written here is effectively permanent"), and
-participant failure text can carry identifiers and internal details no
-audit reader was ever promised; `ExportManifest.Errors` is serialized
-into the manifest Export stores and delivers over an unauthenticated,
-single-view go/sharing link, whose holder is the export's recipient --
-entitled to the export's data, not platform-internal failure text that can
-name other subjects, internal object keys or infrastructure details (two
-audiences conflated into one). So every `Errors`-family entry this module
-writes carries a classification (`erasureAuditErrorMarker`/
-`participantErrorMarker`, the value `"failed"`), keyed by participant
-name: the record says WHO failed and THAT it failed, never how. The
-error text's legitimate homes are the failure-site structured logs
-(behind go/observability's redaction layer) and the in-process results
-(`SweepResult.Errors`, `ErasureResult.Errors`) and returned errors
-(`ErrExportDeliveryFailed`'s wrapped cause). The contract is written into
-the seam: `pkgcore.RetentionParticipant`'s type doc comment states it in
-full, and the `Sweep` and `Export` field doc comments point participant
-authors at it.
+1. One participant's callback failing never stops the others -- every registered participant runs, regardless of an earlier failure.
+2. The failure is recorded per-participant, keyed by participant `Name`: the raw error in the returned in-process results where one exists (`SweepResult.Errors`, `ErasureResult.Errors`), and the `participantErrorMarker` classification in `ExportManifest.Errors` and in every audit record's `Changes["errors"]` entry -- never the error text on a surface that is permanent or delivered (see the export-error-text round's section below).
+3. The operation still audits itself (`emitSweepAudit`/`emitErasureAudit`/`emitExportAudit`), with the full per-participant breakdown in `Changes`, whether or not any participant failed.
+4. The method returns a non-nil, specifically coded error (`ErrSweepPartialFailure`/`ErrErasurePartialFailure`/`ErrExportPartialFailure`) alongside the full result whenever any participant failed -- never a bare `nil` result and never a silent `nil` error that would let a careless caller mistake a partial pass for a clean one.
+5. Recovery is retry, not rollback: every `Sweep`/`Erase` callback is documented to return `(0, nil)` for work it has already completed, so calling the same operation again converges the remaining participants to completion without re-processing (or re-auditing as a duplicate fact) what already succeeded. `erasure_test.go`'s `TestErasureService_Erase_ParticipantErrorIsPartialFailureAndRetryConverges` proves this end to end: a participant that fails once, then recovers, leaves the whole subject fully erased after a second `Erase` call, with two distinct audit events recorded (one per call, no dedup and no missing record).
 
 ## Export: gathering and delivery
 
-`ExportService.Export` gathers every participant's data into one
-`ExportManifest`, marshals it to JSON and stores it through
-`pkgcore.ObjectStore` under a fresh key, then hands that stored object
-off to `go/sharing` for delivery: it mints a short-lived, single-view
-share and returns its id and one-time token to the caller in
-`ExportResult.Delivery`, rather than stopping at "stored, here is an
-internal key".
+`ExportService.Export` (round 1) gathers every participant's data into one `ExportManifest`, marshals it to JSON and stores it through `pkgcore.ObjectStore` under a fresh key; **(round 2)** it then hands that stored object off to `go/sharing` for delivery: it mints a short-lived, single-view share and returns its id and one-time token to the caller in `ExportResult.Delivery`, rather than stopping at "stored, here is an internal key". `ExportManifest`'s own shape did not need to change for this -- it was already a self-contained, storable, JSON-serializable document; round 2 added `ExportDelivery` and `ExportResult` alongside it, and changed `Export`'s own return shape from a `(string, ExportManifest, error)` triple to `(*ExportResult, error)`, mirroring `sharing.CreateResult`'s own single-struct-return precedent rather than growing a fourth positional return value.
 
-**Dependency choice: a direct `go/sharing` import, not a structurally-
-typed seam.** `go/compliance` sits above `go/sharing` in the module
-dependency graph, so an import edge is architecturally sound. What
-`Export` does declare as a small interface -- `SharingCreator`
-(`export.go`), exactly `sharing.Service.Create`'s own shape -- is not
-about avoiding the import (the package already imports `go/sharing` for
-its parameter and result types, and `module.go` carries the compile-time
-assertion `var _ SharingCreator = (*sharing.Service)(nil)`), but about
-keeping `ExportService`'s own unit tests independent of a real
-`*sharing.Service`'s `gorm.DB`, migrations and registry wiring.
+**Dependency choice: a direct `go/sharing` import, not a structurally-typed seam.** `go/compliance` sits above `go/sharing` in the module graph (root `CLAUDE.md`: `... -> authn/rbac/org/metering -> billing/ai-gateway/sharing/integration -> compliance -> admin`), the identical direction `go/billing`'s own dependency on `go/metering` already establishes and documents (`go/billing/entitlements.go`'s `UsageReader` doc comment). That ruled out the no-import-seam pattern `org.FeatureGate`/`rbac.SubtreeResolver` use -- those exist specifically because their two modules sit at the *same* tier and neither may import the other; compliance and sharing have no such symmetry problem, so an import edge is architecturally sound and simpler than inventing a seam only to avoid an import direction that was never actually forbidden. What round 2 *does* still declare as a small interface -- `SharingCreator` (`export.go`), exactly `sharing.Service.Create`'s own shape -- is not about avoiding the import (the package already imports `go/sharing` for `sharing.CreateParams`/`CreateResult`/`Share` and `module.go`'s own compile-time assertion `var _ SharingCreator = (*sharing.Service)(nil)`), but about keeping `ExportService`'s own unit tests independent of a real `*sharing.Service`'s `gorm.DB`, migrations and registry wiring -- the identical reasoning `UsageReader` gives for not holding a concrete `*metering.Aggregator` field either. `go/compliance/go.mod` requires `go/sharing` directly; measuring the cost was unnecessary here (the "measure what a built-in implementation costs" rule targets `pkgcore` infrastructure-seam implementations added near the dependency floor, not an ordinary business-module Go-API dependency this far up the graph), and in practice `go mod tidy` added zero new indirect dependencies -- `go/sharing`'s own transitive closure (`dbkit`, `jobs`, `observability`, `golang.org/x/crypto`) was already on `go/compliance`'s own dependency list or its existing indirect set.
 
-**Wiring: `Module.WithSharing`, and a call-time refusal.** `SharingCreator`
-is not one of the registry's resolved infrastructure seams; a host wires
-it directly at `Module` construction time through `WithSharing`,
-typically passing a real `sharing.Module`'s own `Service()`. Unlike
-`WithQueue`, whose absence is checked once, at `Register`
-(`ErrQueueRequired`) -- a registered job handler with no queue can never
-run at all -- `WithSharing`'s absence is checked only when `Export` is
-actually called (`ErrSharingRequired`), because `RetentionService` and
-`ErasureService` have nothing to do with export delivery: a host that
-only wants retention sweeping and right-to-erasure, never export, can
-still boot `compliance.Module` with no `SharingCreator` wired at all.
+**Wiring: `Module.WithSharing`, not a `pkgcore.Registry` seam, and a call-time refusal, not a `Register`-time one.** `SharingCreator` is not one of the registry's resolved infrastructure seams (`EventBus`, `ObjectStore`, ...); a host wires it directly at `Module` construction time through the new `WithSharing(SharingCreator)` `Option`, typically passing a real `sharing.Module`'s own `Service()`. Unlike `WithQueue`, whose absence is checked once, at `Register` (`ErrQueueRequired`) -- because a registered job handler with no queue can never run at all -- `WithSharing`'s absence is checked only when `Export` is actually called (`ErrSharingRequired`), because `RetentionService` and `ErasureService` have nothing to do with export delivery: a host that only wants retention sweeping and right-to-erasure, never export, can still boot `compliance.Module` with no `SharingCreator` wired at all. This mirrors `go/sharing`'s own `EnqueueExpirySweep`/`ErrQueueRequiredForSweep`, which is likewise a call-time-only refusal for an optional seam, not a `Register`-time one.
 
-**Expiry, view limit and no password.** An export bundles one tenant's
-*complete* data -- potentially many subjects' records -- into one
-downloadable package, so the delivery link does not default to sharing's
-own general-purpose 30-day `defaultShareExpiry`:
-`defaultExportDeliveryExpiry` is 24 hours -- long enough for a relayed
-delivery link to reach its recipient and be used, without leaving a
-leaked or intercepted link usable for weeks. The declared config item,
-`ConfigExportDeliveryExpiry` (`compliance.export_delivery_expiry`, `Min`
-1 hour, `Max` 72 hours), is tenant-overridable like any config item. A
-tenant's configured value is read live through `ExportDeliveryExpiryReader`
-(`export.go`) -- the same `(d, ok, err)` shape sharing's own
-`TenantConfigReader` uses -- wired through the construction-time
-`Module.WithExportConfigReader` option; without one (the default), `Export`
-falls back to `defaultExportDeliveryExpiry`. A non-positive reader answer
-cannot mint a dead link: `exportDeliveryExpiry` clamps a wired reader's
-`d <= 0` to `defaultExportDeliveryExpiry` (the identical guard
-`RetentionWindow` applies to a configured retention window), and a
-duration longer than sharing's own explicit-expiry ceiling is clamped
-down to that ceiling. This interface exists even though compliance
-already imports go/config directly elsewhere (`RetentionService.cfg`):
-a construction-time Option cannot capture `config.Module.Attach`'s
-`*config.Service`, which is only produced strictly after
-`Kernel.Bootstrap` returns, so a host wires a lazy adapter over a
-later-filled `**config.Service`. The reference app wires such an adapter
-(`server.go`'s `complianceConfigReader`) and proves both the configured
-and the unconfigured tenant's answers end to end. The created share is
-single-view (`MaxViews` = `exportDeliveryMaxViews` = 1) rather than
-password-protected: delivery is a one-time credentialed handoff, not an
-open link -- a 256-bit bearer token already is that credential, and
-`MaxViews=1` means the link is spent the moment it is actually used. A
-password was considered and rejected: it needs its own delivery channel
-(the caller would have to relay the password to the link's recipient
-separately), which is more moving parts than a single-view, high-entropy
-token needs to achieve the same property. Every export share is created
-with `Sensitive: true`, which independently fires sharing's own
-`sharing.share.create_sensitive` audit action -- a second,
-sharing-owned audit trail alongside compliance's own.
+**Expiry, view limit and no password -- `ConfigExportDeliveryExpiry` and `exportDeliveryMaxViews` (`export.go`).** An export bundles one tenant's *complete* data -- potentially many subjects' records -- into one downloadable package, so this round deliberately does not default to `sharing`'s own general-purpose 30-day `defaultShareExpiry`: `defaultExportDeliveryExpiry` is 24 hours -- long enough for a relayed delivery link to reach its recipient and be used (a delivery-notification round is a later round's job; this round only mints the share and returns its token to the caller) without leaving a leaked or intercepted link usable for weeks. The declared config item, `ConfigExportDeliveryExpiry` (`compliance.export_delivery_expiry`, `Min` 1 hour, `Max` 72 hours -- deliberately capped in the hours-to-days range, never weeks, even at its ceiling), makes the value visible and eventually tenant-tunable through `go/config`'s admin console. A tenant's configured value is read live through `ExportDeliveryExpiryReader` (`export.go`) -- `ExportDeliveryExpiry(ctx, tenant) (time.Duration, bool, error)`, the same `(d, ok, err)` shape `go/sharing`'s own `TenantConfigReader` uses for its `ConfigDefaultExpiry` -- wired in through the construction-time `Module.WithExportConfigReader` option; without one (the default), `Export` falls back to `defaultExportDeliveryExpiry`, exactly rule 2's own "N hours if the tenant has not configured one" fallback. **A non-positive reader answer cannot mint a dead link:** `exportDeliveryExpiry` clamps a wired reader's `d <= 0` (zero or negative, with `ok == true`) to `defaultExportDeliveryExpiry` -- the identical `<= 0` guard `RetentionWindow` already applies to a configured retention window. The reader is a host-supplied seam whose answer this module cannot trust to be sensible (a real host resolves it through go/config, but the seam itself is structural), and a zero or negative "lifetime" would hand the link's recipient a share that is already expired -- or long past -- at mint time, so the nonsense must resolve to the honest default, never to an instantly dead link minted silently. `TestExportService_Export_ConfigReaderReportingNonPositive_FallsBackToDefault` pins both a zero and a negative duration to the default window. This interface exists even though `compliance` already imports `go/config` directly elsewhere (`RetentionService.cfg`, a plain `*config.Service` field, previous section's dependency-choice paragraph): a construction-time `Option` cannot capture `config.Module.Attach`'s `*config.Service`, which is only produced strictly after `Kernel.Bootstrap` returns, by which point `compliance.NewModule` has already run -- so a host wires a lazy adapter over a later-filled `**config.Service` instead, exactly the pattern `examples/reference-app/cmd/server/server.go`'s `orgFeatureGate` already establishes for `org.FeatureGate`. **A live adapter is now wired, in the reference app:** `server.go`'s `complianceConfigReader` (a separate type from `sharing`'s own `sharingConfigReader`, since the two seams are different Go interfaces by method name, but sharing one private `readTenantDurationConfig` helper so the "resolve through `config.Service.Get`, report `ok = false` at the schema default" logic is not duplicated). `examples/reference-app/cmd/server/tenant_config_reader_flow_test.go`'s `TestTenantConfigReader_Compliance_ConfiguredTenant_UsesConfiguredExpiry` and `TestTenantConfigReader_Compliance_UnconfiguredTenant_FallsBackToDefault` prove both halves end to end, over a real `config.Service.Set` write and a real `ExportService.Export` call. The created share is also single-view (`MaxViews` = `exportDeliveryMaxViews` = 1) rather than password-protected: `docs/internal/10-compliance-and-audit.md`'s data-export bullet describes asynchronously generating the package and handing it off through `sharing`, which this round reads as a one-time credentialed handoff, not an open link -- a 256-bit bearer token (`sharing/token.go`'s `newShareToken`) already is that credential, and `MaxViews=1` means the link is spent the moment it is actually used, not merely until it expires. A password was considered and rejected for this round: it needs its own delivery channel (the caller would have to relay the password to the link's recipient separately from the link itself, itself a design and implementation this round does not build), which is more moving parts than a single-view, high-entropy token already needs to achieve the same "credentialed, one-time handoff" property. Every export share is also created with `Sensitive: true`, which independently fires `go/sharing`'s own `sharing.share.create_sensitive` audit action (`go/sharing/AGENTS.md`'s "Sensitive-resource confirmation" section) -- a second, `sharing`-owned audit trail alongside compliance's own, described next.
 
-**Delivery is audited as part of the same `AuditActionExportRequest`
-event, not a second compliance-owned action.** Gathering, storing and
-delivering an export are one governance operation from the caller's
-perspective, so `emitExportAudit`'s `Changes` map carries `share_id` and
-`share_expires_at` on a successful delivery (and, on a failed one,
-`Result.Success` flips to false with the classification `"delivery
-failed"` as `FailureReason`).
+**Delivery is audited as part of the same `AuditActionExportRequest` event, not a second compliance-owned action.** Gathering, storing and delivering an export are one governance operation from the caller's perspective -- there is no legal "gather without deliver" path once a `SharingCreator` is wired, so `emitExportAudit`'s existing `Changes` map is simply extended with `share_id` and `share_expires_at` on a successful delivery (and, on a failed one, `Result.Success` flips to false with a delivery-specific `FailureReason`) rather than compliance declaring a redundant second audit action for what is still, from `Export`'s caller's point of view, a single request. Combined with `sharing`'s own independent `sharing.share.create_sensitive` event (previous paragraph), a completed, delivered export leaves two audit trails: compliance's own request-and-delivery record, and sharing's own sensitive-resource-creation record.
 
-**A delivery failure is reported distinctly from a participant gathering
-failure.** `Export` returns `ErrExportDeliveryFailed` (never
-`ErrExportPartialFailure`) when the already-gathered-and-stored manifest
-could not be handed off -- `ExportResult.ObjectKey` and `.Manifest` are
-still populated, but `.Delivery` is the zero value. A delivery failure
-takes precedence over a participant partial failure in the returned error
-code (one `apperr` code cannot represent both at once), but
-`ExportManifest.Errors` is unaffected either way. A manifest that could
-not be delivered is deleted before `Export` returns: an un-shareable copy
-of the tenant's complete data has no legitimate consumer path, and admin
-retries must not accumulate one dump per attempt.
+**A delivery failure is reported distinctly from a participant gathering failure.** `Export` returns `ErrExportDeliveryFailed` (never `ErrExportPartialFailure`) when the already-gathered-and-stored manifest could not be handed off through `go/sharing` -- `ExportResult.ObjectKey` and `.Manifest` are still populated (the gather and store already succeeded and are not rolled back), but `.Delivery` is the zero value, since no share was minted for the export to be retrieved through. A delivery failure takes precedence over a participant partial failure in the returned error code (one `apperr` code cannot represent both at once), but `ExportManifest.Errors` is unaffected either way -- a caller inspecting the returned manifest still learns about a participant failure even when the returned error names the delivery problem instead.
 
-Unlike `SweepTenant`/`Erase`, `Export` never enters a system context:
-every participant's `Export` callback reads the SAME tenant the caller's
-own `ctx` is already scoped to (never bypassing tenant isolation, never
-touching another tenant's rows), so there is no escape hatch to audit the
-entry of. That scoping is enforced, not assumed: `Export` refuses a `ctx`
-carrying no tenant (`pkgcore.ErrNoTenant`) and refuses a `tenant`
-argument naming any other tenant than the `ctx` carries
-(`ErrExportTenantMismatch`), before anything is gathered, stored or
-delivered. The `tenant` argument exists only so a caller that rebuilt
-`ctx` from a stored tenant id -- a `jobs.Handler` whose worker rebuilt it
-from `job.TenantID` -- can pass that same id through; it can never name a
-wider scope.
+Unlike `SweepTenant`/`Erase`, `Export` never enters a system context: every participant's `Export` callback reads the SAME tenant the caller's own `ctx` is already scoped to (never bypassing tenant isolation, never touching another tenant's rows), so there is no escape hatch to audit the entry of. That scoping is enforced, not assumed: `Export` refuses a `ctx` carrying no tenant (`pkgcore.ErrNoTenant`, through `pkgcore.MustTenantFromContext` -- the same no-tenant fail-closed idiom `AuditQuery.Query` uses) and refuses a `tenant` argument naming any other tenant than the `ctx` carries (`ErrExportTenantMismatch`), before anything is gathered, stored or delivered. The `tenant` argument exists only so a caller that rebuilt `ctx` from a stored tenant id -- a `jobs.Handler` whose worker rebuilt it from `job.TenantID`, the shape `go/admin`'s export handler is in -- can pass that same id through; it can never name a wider scope. A bare or mis-scoped `ctx` is therefore never a license to pick any tenant.
 
-**Export scope is one whole tenant, never one data subject.** `Export`
-gathers every participant's data for the tenant `ctx` carries into one
-tenant-level bundle -- a package that may well contain many subjects'
-records, not any single subject's data; a manifest is a tenant-wide
-bundle, never a single subject's rows. A subject-scoped export --
-gathering one subject's data and delivering it to that subject, the
-GDPR-shaped "this is your data" delivery -- is NOT built.
+**Export scope is one whole tenant, never one data subject (P1-C).** `Export(ctx, tenantID)` gathers every participant's data for the tenant `ctx` carries into one tenant-level bundle -- a package that may well contain many subjects' records, not any single subject's data. Earlier prose in this module described the export as one subject's data delivered to that subject; a host reading that could hand a subject everyone else's tenant data, so the module's docs now say what the code does, with `export_cleanup.go`'s own "a manifest is a tenant-wide bundle, never a single subject's rows" framing as the consistent model. A subject-scoped export -- gathering one subject's data and delivering it to that subject, the GDPR-shaped "this is your data" delivery -- is NOT built: it would be a future round's work (the `RetentionParticipant.Export` callback would need a subject dimension of the kind `Erase`'s `SubjectRef` already is) if the product decides it needs that delivery, and until then `Export` keeps its documented tenant scope.
 
-**`Erase` enforces the same tenant boundary.** `Erase` refuses a `ctx`
-carrying no tenant (`pkgcore.ErrNoTenant`) and refuses a `SubjectRef`
-whose `TenantID` differs from the `ctx` tenant
-(`ErrErasureTenantMismatch`), both before any participant is called and
-before any system context is entered: an irreversible, cross-tenant
-destruction must never be reachable from a caller-supplied tenant that
-does not echo the ctx tenant back.
+## Reviewer-compliance round: Erase's tenant gate, deterministic audit ordering, erasure count accounting, and the export manifest's retention story
 
-**A delivered manifest is reaped once its delivery share has expired
-past the tenant's retention window.** `Module.Register` registers the
-module's own `compliance.export_manifests` retention participant
-(`export_cleanup.go`), whose `Sweep` -- running on the module's own
-per-tenant retention sweep -- reaps every stored manifest whose delivery
-share's expiry has fallen past the sweep's cutoff. The `pkgcore.ObjectStore`
-seam has no listing primitive, so the participant finds its objects by
-reading the tenant's own `AuditActionExportRequest` events back from the
-append-only audit trail (`Changes.After` carries `object_key` and
-`share_expires_at`), probing each candidate with `GetObject` before
-deleting so a re-run converges to 0, and confining every deletion to the
-swept tenant's own `compliance/exports/<tenant>/` prefix so a malformed
-event inside one tenant's trail can never reach another tenant's objects.
-The candidate gate is the delivered share's own expiry, deliberately not
-the event's `Result.Success` flag: a PARTIAL export is still gathered,
-stored and delivered, its event records `Success` false while carrying
-the same `object_key` and `share_expires_at` -- it must be reaped the
-same way, or every partial export leaves one stored bundle behind
-forever. A sweep reads the tenant's whole trail per pass, the same
-honest O(rows) cost `AuditQuery` documents.
+Four findings closed in one round, all in this module. Each is a code change plus a regression test proven to fail before and pass after:
+
+- **`Erase` now enforces the same tenant boundary `Export` does (P0-5).** Erase is the one operation this module performs that is irreversible, yet it used to accept a bare `ctx` and re-scope itself to `subject.TenantID` -- so any caller that could name a tenant in the `SubjectRef` could hard-delete that tenant's rows from any context, with a compliant audit record to show for it. It now refuses a `ctx` carrying no tenant (`pkgcore.ErrNoTenant`, through `pkgcore.MustTenantFromContext`) and refuses a `SubjectRef` whose `TenantID` differs from the `ctx` tenant (`ErrErasureTenantMismatch`, mirroring `ErrExportTenantMismatch`'s shape and parameters), both before any participant is called and before any system context is entered; the unconditional `WithTenant(ctx, subject.TenantID)` re-scope is gone, since the gate guarantees the two already agree. `TestErasureService_Erase_NoTenantContext_Refused` and `TestErasureService_Erase_TenantMismatch_RefusedBeforeAnyParticipant` pin both refusals -- the mismatch one with a recorder participant proving zero `Erase` callbacks ran and tenant-b's rows surviving a tenant-a ctx (the pre-fix behavior erased them).
+- **`AuditQuery`'s ordering is now a documented total order (P3).** `filterAndSort` broke same-`OccurredAt` ties arbitrarily: `sort.Slice` is not stable and `dbkit/audit`'s `ListByTenant` orders by `occurred_at` alone, so the order of tied rows was whatever the database's index scan returned. Ties now break on `ID`, descending, making two queries over the same rows return the same order (deterministic pagination); `TestAuditQuery_Query_SameTimestampEventsOrderDeterministically` pins the order and fails against the pre-fix sort.
+- **A participant's reported count survives its own error, on both the erasure and the sweep side (P3).** A participant whose `Erase` callback failed part-way through has already hard-deleted the rows it reports, but `Erase` dropped the count on error, so `TotalErased` and the audit event's `Changes["erased"]` understated what an irreversible operation actually destroyed. The count is now recorded whenever the callback reports one, error or not (matching `ErasureResult.Erased`'s own documented meaning, "how many rows it reported erasing"); `TestErasureService_Erase_ParticipantPartialCountSurvivesError` pins `(2, err)` contributing 2 to both the result and the audit record. The sweep half initially carried the same defect under a then-recorded divergence -- `SweepResult.Reaped`'s doc comment stated that a participant in `Errors` is absent from `Reaped`, so `SweepTenant` dropped a failing participant's reported count and its sweep audit understated rows an irreversible operation genuinely destroyed. A documented shape that records untruths is the thing to fix, not a reason to keep it: `SweepTenant` now records the count whenever the callback reports one, error or not -- the identical semantics the erasure side already applies -- and `SweepResult.Reaped`'s doc comment states the aligned meaning (a participant in `Errors` may still appear in `Reaped`, with the rows it hard-deleted before failing). `TestRetentionService_SweepTenant_ParticipantPartialCountSurvivesError` pins `(2, err)` contributing 2 to both the result and the sweep audit record.
+- **The stored export manifest now has a retention story (P1-6).** Two halves. First, `Export` deletes the manifest it just stored whenever delivery through `go/sharing` fails: an un-shareable copy of a tenant's complete data has no legitimate consumer path, and admin retries used to accumulate one dump per attempt. `ExportResult.ObjectKey` and `.Manifest` are still returned (the gather is not lost), and a `DeleteObject` failure is chained into the reported cause rather than hidden; `TestExportService_Export_DeliveryFailureIsReported` now runs three failing attempts and asserts no object persists after any of them (the pre-fix test asserted the opposite -- that the dump stayed stored). Second, a successfully delivered manifest is reaped once its delivery share has been expired longer than the tenant's retention window, by a participant `compliance.export_manifests` (`export_cleanup.go`) that `Module.Register` registers onto `reg.Retention` itself. The `pkgcore.ObjectStore` seam has no listing primitive, so the participant finds its objects by reading the tenant's own `AuditActionExportRequest` events back from the append-only audit trail (`Changes.After` carries `object_key` and `share_expires_at` -- the durable record this module already keeps), probing each candidate with `GetObject` before deleting so a re-run converges to 0 like every row-based participant, and confining every deletion to the swept tenant's own `compliance/exports/<tenant>/` prefix so a malformed event inside one tenant's trail can never reach another tenant's objects (or any other key in a store other modules share). `TestExportManifestCleanup_SweepReapsOnlyExpiredDeliveries` drives the whole pass through `SweepTenant`'s public surface: exactly the expired live-share manifest is reaped; live shares, other tenants' manifests, out-of-prefix objects and already-reaped ghosts all survive; a second sweep reports 0. The reaping horizon is the retention window by design: an export object past its delivery window is expired data like any other soft-deleted row, governed by the same operator-tunable `ConfigDefaultRetentionWindow`, never a second export-specific schedule (the same reasoning rows are not deleted the moment they are soft-deleted). A manifest whose export event could not be audited (`ErrAuditRecordFailed`) is untracked by the sweep by construction -- that path already surfaces for operator attention. The manifest sweep reads the tenant's whole trail per pass, the same honest O(rows) cost `AuditQuery` documents.
+
+## Audit-exit round: erasure audit records carry error classification, never error text
+
+`emitErasureAudit` used to write each failed participant's `err.Error()` verbatim into the audit event's `Changes["errors"]` map, on the one table nothing can delete from -- and an erasure-path participant error is the sharpest possible case of that class, because it can carry the erased subject's own identifier (a repository error naming the rows it could not delete), permanently carving into the audit trail the very identifier the erasure exists to remove. `Changes["errors"]` now records classification only -- each failed participant's name keyed to the `erasureAuditErrorMarker` constant (`"failed"`) -- and the error text is logged at the failure site in `Erase` through `obs.FromContext` (behind go/observability's redaction layer) and returned to the caller in `ErasureResult.Errors`, its two legitimate homes. The count semantics from the reviewer-compliance round are untouched: a failing participant's reported erased count still survives into `Changes["erased"]`, and `Result.Success`/`FailureReason` still mark the request failed and name the failing participants. `TestErasureService_Erase_ChangesRecordClassificationNeverErrorText` is the regression: a failing participant whose error text embeds the subject id previously landed that text (and the id) in the audit event's `Changes`, failing the new test; the classification-only record passes it. When written, this closure covered the erasure path alone -- `emitSweepAudit` and `emitExportAudit` still wrote participant/transport error text into their own audit `Changes`, recorded then as a standing, adjudicated-open writer of the same class -- and the export-error-text round (next section) has since extended the identical classification rule to those two writers and to the export manifest itself.
+
+## Export-error-text round: participant and transport error text joins the erasure classification rule (2026-09)
+
+This round closes the audit-exit round's standing-open note with the erasure precedent in hand -- and goes one surface beyond it. The finding had two halves. First, `ExportManifest.Errors` is serialized into the manifest `Export` stores and delivers over an unauthenticated, single-view `go/sharing` link, and `Export` filled it with the participant `Export` callback's raw `err.Error()` text: a link holder would read platform-internal failure text that can name other subjects, internal object keys or infrastructure details. Second, the same errors entry had three inconsistent write points: `emitErasureAudit` recorded classification only (the paradigm), while `emitSweepAudit` wrote each failed participant's `err.Error()` verbatim and `emitExportAudit` wrote the whole raw-text map plus a `failureReason` built as `fmt.Sprintf("delivery failed: %s", deliverErr.Error())` -- all into audit rows nothing can delete from.
+
+**The audience argument, not the content argument, is why the manifest text matters.** The export manifest's legitimate audience is the requesting tenant -- the manifest holds that tenant's full export data and the recipient may read it -- but `Errors` is not the recipient's data: it is platform-internal participant failure text that may name OTHER subjects, internal object keys, database details and infrastructure errors. The audience entitled to read the export content is not the audience entitled to read platform-internal error text; two audiences were conflated into one. No enforcement point existed either: `pkgcore.RetentionParticipant.Export`'s godoc said nothing about the returned `err`, and `reg.Retention.Add` is how a host registers its own participants, so participant error text was entirely unconstrained at the seam.
+
+**The manifest-consumer search found no legitimate reader of the raw text.** `export_cleanup.go`'s sweep reads back only `object_key` and `share_expires_at` from export audit rows and ignores the errors entry entirely; `go/admin`'s `auditExportFailureReason` reads only the map's keys (participant names) to name failing participants in its own audit event; the reference app's flow test asserts `Manifest.HasErrors()` only on the happy path; and the report/query surfaces render audit rows without depending on the errors entry's content. The manifest's real reader is the share-link holder -- precisely the audience the finding says must not see the text -- so classifying the values loses nothing downstream. (The one text consumer that matters is the operator diagnosing a partial export, and that reader gets the text through the new failure-site structured logs and, on the sweep/erasure paths, the returned per-participant `Errors` maps.)
+
+**The shape: classification at every write point, logging at every failure site, and the contract written into the seam.** A shared `participantErrorMarker` constant (`"failed"`, `export.go`) is now the value of every `Errors`-family entry the sweep and export paths write: `ExportManifest.Errors` (so the deliverable says WHO failed and THAT it failed, never how), `emitExportAudit`'s `Changes["errors"]`, and `emitSweepAudit`'s `Changes["errors"]` -- the sweep and export halves of `erasureAuditErrorMarker`'s own rule, which this round deliberately leaves untouched as the paradigm. `emitExportAudit`'s delivery-failure `FailureReason` is now the classification `"delivery failed"`; the transport error's text lives in the new failure-site structured log in `Export` and stays reachable in-process as `ErrExportDeliveryFailed`'s wrapped cause (`errors.Is` against the transport error still answers true). Each gather/sweep failure site logs its participant error through `obs.FromContext` (behind go/observability's redaction layer), mirroring `Erase`'s existing failure-site log. And the seam contract is now written: `pkgcore.RetentionParticipant`'s type doc comment states the error-text contract in full (text reaches in-process results and the redacted structured logs -- never the permanent audit record, never a delivered export manifest), and the `Sweep` and `Export` field doc comments point their authors at it -- the criterion-14 step-3 half of the fix, so the next participant author cannot be ignorant the way this finding's author was.
+
+**Regressions (all proven to fail before and pass after, `-count=1`):** `TestExportService_Export_ParticipantErrorClassifiedNeverRawText` (the manifest and the stored object bytes carry the marker, never a carving error text naming an internal object key), `TestExportService_Export_AuditChangesClassifyParticipantErrorNeverText` (the export audit's `Changes["errors"]` and `FailureReason` classify, never carry the text), `TestExportService_Export_DeliveryFailureAuditClassifiesReasonNeverText` (the delivery failure audits as `"delivery failed"` while the transport error survives as the returned error's cause), `TestRetentionService_SweepTenant_ChangesRecordClassificationNeverErrorText` (the sweep audit classifies while `SweepResult.Errors` keeps the raw error for the caller), and `TestRetentionParticipant_DocContractTellsAuthorsWhereErrorTextGoes` in `go/pkgcore` (parses `registry.go` and asserts the type-level and per-field contract text is present).
+
+## P2-1 round: `AuditQuery` gains the on-behalf-of read dimension (2026-09)
+
+- **P2-1: the audit read surface had no way to hold an impersonating administrator accountable.** The dual-identity write side was fully compliant -- every event written during an impersonation session carries the impersonated user as `Actor` and the real administrator as `OnBehalfOf` -- but the hard rule's purpose is a read-side property, and `QueryFilter` stopped at `Actor`: an administrator never appears as `Actor` on an impersonation-era row (the impersonated user does), so a query for that administrator's own actions found nothing, while the rows' `OnBehalfOf` columns sat readable-but-unqueryable. An attribute that can only be written and never queried does not exist for accountability. `QueryFilter` now carries `OnBehalfOf`, matching `AuditEvent.OnBehalfOfID` exactly (a non-empty filter never matches a row carrying no on-behalf-of identity at all -- the ordinary, non-impersonated row), and both `Query` and `QueryAcrossTenants` honour it through the shared `filterAndSort`/`matches`, exactly like every other field. `TestAuditQuery_Query_FiltersByOnBehalfOf` (audit_query_test.go) is the regression: two rows written during admin-1's impersonation sessions, one during admin-2's, and one ordinary row of admin-1's own -- the `OnBehalfOf: "admin-1"` query returns exactly the first two and no others; the pre-fix code could not even express the filter (no such field on `QueryFilter`), and the failure mode the finding describes was a silent one -- a 200-shaped answer that looked complete while never naming the administrator. The admin HTTP shell threads the dimension through its own `onBehalfOf` query parameter -- see `go/admin/AGENTS.md`'s P2-1 record.
 
 ## `AuditQuery`: filtering runs in application code
 
-`AuditQuery` (`audit_query.go`) adds no method to `audit.Repository` --
-it holds only the Repository's existing exported methods
-(`ListByTenant`, `Get`) and filters what they return, in Go, via
-`QueryFilter.matches` and `filterAndSort`. It therefore cannot add an
-Update or a Delete.
+Task 6's own instructions name two legal homes for the audit read API this round adds -- a new `go/compliance`-owned type, or a documented addition to `dbkit/audit` itself -- and this round picks the former, `AuditQuery` (`audit_query.go`), for two reasons: `dbkit/audit.Repository`'s own doc comment already names the "full actor/resource/action/time-range/result query API" as explicitly compliance's (M4) scope, not dbkit's; and this round's own instructions forbid touching `go/dbkit` beyond the additive `pkgcore.Registry` field. `AuditQuery` therefore adds no method to `audit.Repository` -- it holds only `Repository`'s existing exported methods (`ListByTenant`, `Get`) and filters what they return, in Go, via `QueryFilter.matches` and `filterAndSort`.
 
-**This is an honest, not a hidden, limitation.** `Query` and
-`QueryAcrossTenants` fetch every row `ListByTenant` would return for the
-tenant(s) named, then filter in memory -- there is no SQL `WHERE actor_id
-= ?` pushed down, since `Repository` exposes no such method. For a tenant
-with a very large audit trail, this is O(all rows for that tenant) per
-call, not O(matching rows). SQL-level filtering would live either on
-`dbkit/audit.Repository` or in a compliance-owned type holding its own
-`*gorm.DB` -- which `AuditQuery` deliberately does not hold.
+**This is an honest, not a hidden, limitation.** `Query` and `QueryAcrossTenants` fetch every row `ListByTenant` would return for the tenant(s) named, then filter in memory -- there is no SQL `WHERE actor_id = ?` pushed down, since `Repository` exposes no such method and this round does not add one. For a tenant with a very large audit trail, this is O(all rows for that tenant) per call, not O(matching rows). A future round adding real SQL-level filtering to `dbkit/audit.Repository` (or a compliance-owned type holding its own `*gorm.DB`, which `AuditQuery` deliberately does not, per the same restriction) would fix this without changing `AuditQuery`'s own exported signatures.
 
-`QueryAcrossTenants` composes its "every tenant" answer from one
-`ListByTenant` call per caller-named tenant, because `audit.Repository`
-has no single "every tenant, all at once" read. The caller supplies the
-tenant list -- typically every tenant a `TenantLister` returned -- so the
-cost is visible at the call site. The on-behalf-of dimension
-(`QueryFilter.OnBehalfOf`) exists because an administrator never appears
-as `Actor` on an impersonation-era row (the impersonated user does): an
-attribute that can only be written and never queried does not exist for
-accountability.
+`QueryAcrossTenants` composes its "every tenant" answer from one `ListByTenant` call per caller-named tenant, because `dbkit/audit.Repository` has no single "every tenant, all at once" read either (the same reason). The caller supplies the tenant list -- typically every tenant a `TenantLister` returned -- so the cost is visible at the call site rather than hidden inside a method that looks unbounded but isn't really giving the caller a complete answer for "every tenant that has ever existed."
 
-## Formatted audit report export
+## Formatted audit report export -- `RenderAuditReport` (`report.go`)
 
-`RenderAuditReport(events []audit.AuditEvent, format ReportFormat)
-([]byte, error)` (`report.go`) is a pure function taking exactly the
-`[]audit.AuditEvent` an `AuditQuery.Query`/`QueryAcrossTenants` call
-already returns and a `ReportFormat` (`ReportFormatCSV` or
-`ReportFormatJSON`; any other value, including the zero value, is
-`ErrUnsupportedReportFormat`). It does no I/O, no pagination and no
-tenant-scope enforcement of its own -- all three are `AuditQuery`'s job,
-upstream of this call -- so it renders exactly the events it is given, in
-the order given.
+`RenderAuditReport(events []audit.AuditEvent, format ReportFormat) ([]byte, error)` is the smallest real, useful shape this round's own scope asked for: a pure function taking exactly the `[]audit.AuditEvent` an `AuditQuery.Query`/`QueryAcrossTenants` call already returns (or any other slice a caller has in hand -- the function itself does not call, or even import as more than its parameter type's own package, `AuditQuery`) and a `ReportFormat` (`ReportFormatCSV` or `ReportFormatJSON`; any other value, including the zero value, is `ErrUnsupportedReportFormat`). It does no I/O, no pagination and no tenant-scope enforcement of its own -- all three are `AuditQuery`'s job, upstream of this call -- so it renders exactly the events it is given, in the order given.
 
-- **JSON** is a direct `encoding/json.Marshal` of the
-  `[]audit.AuditEvent` slice, in the identical exported-field shape
-  `AuditEvent` already carries everywhere else -- no report-specific
-  struct, no custom `MarshalJSON`.
-- **CSV** carries an explicit `has_on_behalf_of` column, because CSV
-  cannot express nullability on its own: `OnBehalfOf` is a genuinely
-  nullable `*pkgcore.Actor` (NULL means "no impersonation", never an
-  empty-string sentinel), and three blank CSV cells cannot distinguish
-  "no impersonation" from "impersonated by an actor whose three fields
-  happen to be empty". Escaping is delegated to `encoding/csv.Writer`,
-  which quotes per RFC 4180.
-- **CSV cells are protected against spreadsheet formula injection.**
-  Report cells carry content whose provenance is the very subjects and
-  requests the report records, so a cell beginning with a
-  spreadsheet-formula character (=, +, -, @, tab or carriage return:
-  OWASP's CSV-injection list) would execute as a formula when the file is
-  opened in a spreadsheet. `auditEventCSVRow` single-quote-prefixes
-  exactly those cells -- inert text in every mainstream spreadsheet. The
-  protection is uniform across every column rather than whitelisted per
-  "user-influenced" column (a provenance whitelist is a maintenance
-  liability); refusing a hostile cell outright was considered and
-  rejected (one attacker-planted field would fail the whole export --
-  denial of service over a document's content); and the one honest cost
-  is documented: a protected cell does not round-trip byte-identically
-  (a machine reader following this documented convention strips the
-  prefixing quote exactly once).
-- **`OccurredAt` renders as UTC RFC3339Nano** in both formats --
-  nanosecond precision round-trips exactly, and UTC removes the ambiguity
-  a local offset could introduce.
+**JSON needs no field-by-field mapping.** `ReportFormatJSON` is a direct `encoding/json.Marshal` of the `[]audit.AuditEvent` slice, in the identical exported-field shape `AuditEvent` already carries everywhere else in this codebase -- no report-specific struct, no custom `MarshalJSON`. `AuditEvent.Changes` (a `gorm.io/datatypes.JSON`) already implements `json.Marshaler`/`Unmarshaler` by embedding its raw bytes directly rather than base64-encoding them (`gorm.io/datatypes`'s own `JSON.MarshalJSON`), so a JSON report's `changes` field is a real nested JSON value, not an escaped string -- and this is the one place the round-trip test normalizes rather than compares literally: a nil `Changes` marshals to the JSON literal `null` and `UnmarshalJSON` stores those four bytes back verbatim (datatypes.JSON does not special-case `null` back to a nil slice), so `report_test.go`'s `normalizeChanges` treats `""` and `"null"` as the same "no diff recorded" value for comparison purposes -- an honest, documented equivalence, not a silent gap: no real `Changes` value is ever the literal string `"null"`.
+
+**CSV needs an explicit `has_on_behalf_of` column, because CSV cannot express nullability on its own.** `auditReportCSVHeader`'s twenty columns flatten every `AuditEvent` field the same way `AuditEvent`'s own exported columns already are, via `SetActor`/`SetOnBehalfOf`/`SetResource`/`SetResult`'s existing accessors -- except `OnBehalfOf`, which is a genuinely nullable `*pkgcore.Actor` (NULL means "no impersonation", never an empty-string sentinel -- `audit.AuditEvent`'s own doc comment). Three blank CSV cells cannot distinguish "no impersonation" from "impersonated by an actor whose three fields happen to be empty", so `has_on_behalf_of` is a real `"true"`/`"false"` column of its own, checked before the other three are trusted on read-back -- the design choice that keeps the round trip lossless rather than collapsing two distinct states into one. Escaping itself is not hand-rolled: `renderAuditReportCSV` writes through `encoding/csv.Writer`, which already quotes a field containing a comma, a double quote or a newline (and doubles an internal quote) per RFC 4180 -- exactly the case `Changes` and `FailureReason` routinely are, and exactly what `TestRenderAuditReport_CSV_EscapesCommaAndQuote` pins on the raw rendered bytes, not merely on a successful parse-back.
+
+**CSV cells are protected against spreadsheet formula injection.** An audit report's cells carry content whose provenance is the very subjects and requests the report records -- actor and resource display names, failure reasons, user agents -- so a cell beginning with a spreadsheet-formula character (=, +, -, @, tab or carriage return: OWASP's CSV-injection list) would execute as a formula when the file is opened in a spreadsheet application. `auditEventCSVRow` therefore passes every data cell through `protectCSVCell` (`report.go`), which single-quote-prefixes exactly those cells -- a leading single quote is inert text in every mainstream spreadsheet, never a formula -- and `TestRenderAuditReport_CSV_ProtectsFormulaInjectionCells` pins the outcome on cells parsed back exactly as a spreadsheet would see them: no cell of a data row may begin with a formula character, each hostile value survives intact behind exactly one prefixing quote (protection, never mangling or silent dropping of data), and a benign value is never touched. Three decisions are worth recording rather than being "corrected" later. First, protection is uniform across every column rather than whitelisted per "user-influenced" column, because a provenance whitelist is a maintenance liability (the next column added to `auditReportCSVHeader` inherits the guarantee for free) and the prefix costs nothing where no legitimate value of this report begins with a formula character anyway -- ids, timestamps, booleans and the module's own action strings never do. Second, refusing a hostile cell outright was considered and rejected: a report's whole export would then fail over one attacker-planted field, handing the attacker denial of service over a document's content. Third, the one honest cost is documented, not hidden: a protected cell does not round-trip byte-identically -- its true content sits behind the prefixing quote, which a machine reader following this documented convention strips exactly once (the round-trip tests in `report_test.go` exercise values that need no protection, where the round trip stays byte-identical). RFC 4180 validity is untouched throughout: the prefixing quote is an ordinary character `encoding/csv`'s Writer quotes further only as that standard requires.
+
+**`OccurredAt` renders as UTC RFC3339Nano** in both formats (JSON via `time.Time`'s own default `MarshalJSON`, CSV via an explicit `.UTC().Format(time.RFC3339Nano)` call in `auditEventCSVRow`) -- nanosecond precision round-trips exactly, and UTC removes the ambiguity a local offset could introduce, matching `dbkit/audit/module.go`'s own `timeFromWire` convention for the identical reason.
 
 ## Append-only enforcement lives in `go/dbkit/audit`, not here
 
-The database-level backstop refusing any `UPDATE`/`DELETE` against
-`audit_events` is not a `go/compliance` change at all: `audit_events` is
-`dbkit/audit`'s own table, migrated by `dbkit/audit`'s own
-`migrations/{postgres,sqlite}` set, so the new migration
-(`0002_append_only_enforcement.sql`, both dialects) and its proof tests
-live there, exactly where the table's creation migration already does.
-compliance neither owns nor migrates that table and has no mechanism of
-its own to add a trigger to.
+This round's other item -- a database-level backstop refusing any `UPDATE`/`DELETE` against `audit_events` -- is **not** a `go/compliance` change at all: `audit_events` is `dbkit/audit`'s own table, migrated by `dbkit/audit`'s own `migrations/{postgres,sqlite}` set, so the new migration (`0002_append_only_enforcement.sql`, both dialects) and its proof tests (`dbkit/audit/append_only_test.go`, SQLite; `dbkit/audit/integration_test/postgres_append_only_test.go`, a real PostgreSQL container) live there, exactly where `0001_create_audit_events.sql` already does. `go/compliance` neither owns nor migrates that table (see "Why no table" above) and has no mechanism of its own to add a trigger to -- `AuditQuery` is a read-only wrapper with no method beyond the two passthroughs it already has, so there is no compliance-owned write surface this enforcement could even attach to.
 
-The mechanism: a `BEFORE UPDATE`/`BEFORE DELETE`
-trigger pair on `audit_events`, on both dialects, each unconditionally
-raising before a write reaches a row -- `RAISE EXCEPTION` (PostgreSQL,
-via a small `plpgsql` trigger function) / `RAISE(ABORT, ...)` (SQLite,
-inline in the trigger body). A trigger, not a REVOKE-based restricted
-role, is what this codebase can actually guarantee: `dbkit.Open`
-establishes exactly one connection/role per `*gorm.DB`, and provisioning
-a second, more restricted role would mean this codebase starting to own
-role/credential provisioning it has always declined to own even for
-PostgreSQL RLS's own role and policy. A trigger enforces the guarantee
-against *any* role that connects, with no such provisioning prerequisite
--- INSERT is completely unaffected.
+**The mechanism, briefly** (full rationale in `go/dbkit/audit/AGENTS.md`'s own "Append-only enforcement" section): a `BEFORE UPDATE`/`BEFORE DELETE` trigger pair on `audit_events`, on both dialects, each unconditionally raising before a write reaches a row -- `RAISE EXCEPTION` (PostgreSQL, via a small `plpgsql` trigger function) / `RAISE(ABORT, ...)` (SQLite, inline in the trigger body). A trigger, not a REVOKE-based restricted role, is what this codebase can actually guarantee: `dbkit.Open` establishes exactly one connection/role per `*gorm.DB` (the same one every table's traffic already goes through), and provisioning a second, more restricted role for this one table alone would mean this codebase starting to own role/credential provisioning it has always declined to own even for PostgreSQL RLS's own role and policy (`go/dbkit/AGENTS.md`'s "Out of scope": "a deployment-side responsibility this package assumes but does not create"). A trigger enforces the guarantee against *any* role that connects, with no such provisioning prerequisite -- INSERT is completely unaffected, since neither trigger's event matches it. Both dialects' raw-`*sql.DB`-bypassing-`Repository` proof tests pass, including against a real, freshly migrated PostgreSQL container (`go test -tags=integration ./integration_test/...` from `go/dbkit`), and the rest of `go/dbkit`'s and `go/compliance`'s own suites (including `AuditQuery`'s and `ExportService`'s, both of which only ever read or insert through this table) were re-run and pass unchanged.
 
 ## Known limitations
 
-- **`RetentionService.SweepAllTenants` needs a host-supplied
-  `TenantLister`; there is no built-in tenant directory.** compliance
-  sits above every business module including `org` (the module that would
-  normally own "list every tenant"), and importing `org` from compliance
-  would be an upward-pointing dependency. `TenantLister` is a
-  structurally-typed, no-import seam, and a host wires a real
-  implementation (backed by `org`, or by its own tenant table) when it
-  wants `SweepAllTenants`. `EnqueueRetentionSweep`/`SweepTenant` need no
-  lister at all: they operate on one tenant a caller already names.
-- **The retention sweep has no schedule point in the module.** go/
-  compliance runs no timer of its own: soft-deleted rows past their
-  retention window are physically reaped only when a host enqueues a
-  tenant's sweep (`EnqueueRetentionSweep`) or calls `SweepTenant`
-  directly. The reference app schedules one sweep per unique host tenant
-  per tick (`cmd/server/periodic_scheduler.go`), with the same cadence
-  and worker gate as storage's expiry sweep; every other host that wires
-  compliance must add its own schedule point or soft-deleted rows are
-  retained indefinitely. The schedule a host adds is bounded by
-  `EnqueueRetentionSweep`'s window-scoped idempotency key
-  (`retentionSweepIdempotencyKey`, one `retentionSweepWindowSize` window
-  per key): the ticks inside one window merge into the window's one job,
-  the first tick of every later window sweeps again (at most one sweep
-  per tenant per hour), and a dead-lettered sweep poisons only its own
-  window. `retention_sweep_window_test.go` pins all three window
-  properties against a real `jobs.StandaloneQueue`.
-- **One `Erase` run removes exactly the `reg.Retention` participants
-  registered when it runs.** In the current reference-app composition
-  that is the notes module's participant plus this module's own
-  `compliance.export_manifests` cleanup leg (whose callback is the
-  explicit `(0, nil)` non-answer -- nothing subject-shaped lives in a
-  delivered manifest) -- and is therefore never an erasure of a
-  subject's tenant data as a whole. Owners that declare tenant-scoped
-  models yet register no participant include org, rbac, storage,
-  notification, sharing, integration, billing, metering, ai-gateway,
-  authn, pki, and the reference app's own cases and smilesim rows. The
-  enumeration ages as owners register; a host whose obligation reaches a
-  subject's rows in any of those tables must register the participant
-  that erases them. The boundary closes only by a registration, never by
-  this documentation. Recompute the owner list with the key used here:
-  a model file that embeds `dbkit.TenantModel`, declares
-  `GetTenantID()`, or carries a `var _ dbkit.TenantScoped` assertion
-  (`grep` over `go/` and `examples/reference-app` for those shapes,
-  minus `_test.go` files and `go/dbkit`).
-- **`RenderAuditReport` has no real business-module consumer.** `go/admin`'s
-  audit-query shell is a real consumer of `AuditQuery.Query` but serves
-  raw JSON events, never a rendered report, and the reference app wires
-  no report-download endpoint. A genuine consumer would mean an HTTP
-  surface -- not built. The API's usage is pinned by the compiled-and-run
-  `ExampleRenderAuditReport` (`example_test.go`, executed by every
-  `go test` in this module's CI leg).
-- **No HTTP surface / OpenAPI fragment.** `Module.OpenAPISpec` returns
-  `nil` -- compliance is a Go-level API, not a service reached over HTTP.
-- **`ExportService.Export`'s delivery through `go/sharing` has no live
-  consumer proving the actual bytes reach a real subject over HTTP.**
-  `sharing.Service.Access` resolves a token to its `Share` row and does
-  not itself resolve `ResourceRef` into bytes, so no caller can yet
-  retrieve an export's actual content this way.
-- **No PostgreSQL integration tier for `go/compliance` itself.** The
-  whole suite is unit-level, backed by SQLite and an in-memory
-  `pkgcore.EventBus`/`KVStore`. Nothing in the module's own logic is
-  dialect-sensitive (every SQL it issues is composed by participants'
-  own repositories or by `dbkit/audit.Repository`, both already
-  dual-dialect-proven in their own modules), so the value of one would be
-  modest, but it is not shipped. The append-only trigger's own
-  PostgreSQL proof lives in `go/dbkit/audit/integration_test/`, where
-  the migrated table and the trigger actually live.
-- **No hash chain, no partitioned archival** -- see "Deliberately not in
-  scope".
+- **No real business-module consumer -- closed as of the reference-app notes round.** `internal/testutil`'s `FakeNote`/`FakeRepository`/`NewParticipant` proved the `pkgcore.RetentionParticipant` contract compiles and works end to end (retention-window isolation, right-to-erasure cross-tenant non-erasure, export gathering, all against a real `dbkit.Repository[T]`-backed table), standing in for a business module until one opted in -- and the reference app's notes module now has: `examples/reference-app/cmd/server/server.go` registers `notes.NewRetentionParticipant(notes.NewRepository(db))` onto the kernel's `reg.Retention` seat after `Bootstrap` (compliance's own `Register` is what attaches that registrar, so the host's `Add` deliberately runs post-`Bootstrap` -- the registration block's own doc comment has the detail), and `examples/reference-app/cmd/server/compliance_flow_test.go` proves the contract against real notes rows end to end through the wired `*compliance.Module`, with no mock at any layer: its sweep leg reaps exactly the swept tenant's expired soft-deleted note while a live note of the same tenant and an equally-aged note of another tenant survive; its erasure leg removes exactly one creator-subject's live and soft-deleted notes (the soft-deleted one far younger than any retention window, since erasure bypasses the sweep's cutoff), leaves another creator's same-tenant note and the same creator's other-tenant note untouched, and converges to `(0, nil)` on a second `Erase` of the already-erased subject; its export leg gathers exactly the live note -- the soft-deleted one invisible, since `Export` never enters a system context -- and returns a delivered `ExportResult` (object key, manifest, minted share id, one-time token, expiry) through the real `go/sharing` wiring. `example_test.go`'s `Example` remains runnable documentation of the mechanism in one self-contained pass, but neither it nor the fake participant is the standing-in-for-a-real-consumer proof anymore.
+- **The retention sweep has no schedule point in the module, and none existed in any running application until the reference-app scheduling round -- which this round ships.** go/compliance runs no timer of its own: soft-deleted rows past their retention window are physically reaped only when a host enqueues a tenant's sweep (`EnqueueRetentionSweep`, whose `compliance.retention_sweep` task `Module.Register` claims a handler for) or calls `SweepTenant` directly. Until this round no host in any running application did either: the registration half was fully wired -- the reference app registers notes' participant on the kernel's `reg.Retention` seat after `Bootstrap`, and this module's own `Register` adds the `compliance.export_manifests` participant -- but the trigger half was not, so soft-deleted rows past their window (and expired stored export manifests) were kept indefinitely in every deployment. That gap is distinct from the one the "consumer proof closed" bullet above records: the reference app's compliance_flow_test.go proves the sweep's contract against a real consumer by calling `SweepTenant` synchronously; proving that some application *schedules* the sweep is this entry's separate proposition, discharged for the reference app by the scheduling round. The host wiring that round adds: `examples/reference-app/cmd/server/periodic_scheduler.go` now enqueues one retention sweep per unique host tenant on every tick -- the same tick, cadence (`cfg.PeriodicTaskInterval`) and `cfg.DisableQueueWorker` gate as storage's expiry sweep, the schedule shape this module's `EnqueueRetentionSweep` was deliberately aligned with (`go/compliance/retention.go` mirrors go/storage's `EnqueueExpirySweep`: the tenant travels on the task, and a deterministic per-tenant idempotency key collapses concurrent enqueues) -- and `examples/reference-app/cmd/server/periodic_scheduler_flow_test.go`'s `TestBuildServer_PeriodicScheduler_RetentionSweep_ReapsExpiredSoftDeletedNote` proves the deletion through real host wiring with the same two-boot shape as go/storage's own expiry-sweep proof: boot 1 leaves a soft-deleted note backdated 45 days past the 30-day default window with the worker and scheduler disabled, and boot 2's first-ever retention sweep hard-deletes its row. What remains open: this module still ships no schedule of its own, so every other application that wires `compliance` must add its own schedule point (or drive `SweepTenant` from its own trigger) or soft-deleted rows are retained until someone does. The schedule a host does add is bounded by `EnqueueRetentionSweep`'s window-scoped idempotency key (`retentionSweepIdempotencyKey`, one `retentionSweepWindowSize` window per key): on a `StandaloneQueue`, whose resolved keys are permanent (go/jobs), the ticks inside one window merge into the window's one job -- the concurrency protection the key exists for -- while the first tick of every later window resolves a fresh key and sweeps again, at most one sweep per tenant per hour, and a dead-lettered sweep poisons only its own window, never its tenant's later windows (the original once-per-database-file limitation this mirrors from `go/storage/AGENTS.md`'s dated sweep record was closed by the same windowed keying; this module's own `retention_sweep_window_test.go` pins all three window properties against a real `jobs.StandaloneQueue`). A host that wants the whole-tenant-universe convenience additionally needs `WithTenantLister` -- `SweepAllTenants`'s own bullet below.
+- **One `Erase` run removes exactly the `reg.Retention` participants registered when it runs -- in the current reference-app composition the notes module's participant plus this module's own `compliance.export_manifests` cleanup leg -- and is therefore never an erasure of a subject's tenant data as a whole.** This is the family's third proposition, and the one a data-subject erasure request actually depends on: the consumer bullet above records that the `pkgcore.RetentionParticipant` contract has a real consumer, the scheduling bullet records that some application drives the sweep on a schedule, and neither states what one `ErasureService.Erase` call for one `SubjectRef` removes. What it removes is exactly the list `Erase` iterates -- `Participants()` as of the call, nothing else (`erasure.go`) -- each registered participant's own `Erase` callback running against the subject's rows in that participant's table; the `compliance.export_manifests` leg's own callback is the explicit `(0, nil)` non-answer `export_cleanup.go` documents (nothing subject-shaped lives in a delivered manifest), so in the reference-app composition the subject's notes rows are the only tenant-scoped data an erasure physically removes, and every tenant-scoped row of the subject in any other owner's tables survives untouched. A retried `Erase` of the already-erased subject converges to `(0, nil)` over the registered set -- retry completes a partially failed run, and no call ever reaches a row whose owning module has not registered a participant. The owners that declare tenant-scoped models today yet register no participant, enumerated by the `dbkit.TenantScoped` key on 2026-09-08 at main tip `804c4057`, are org (`OrgNode`/`Membership`/`Invitation`), rbac (`Role`/`RolePermission`/`RoleBinding`), storage (`Object`/`ObjectDerivative`), notification (`InboxMessage`/`NotificationPreference`/`VerifiedContact`), sharing (`Share`/`AccessLogEntry`), integration (`APIKey`/`WebhookSubscription`/`WebhookDelivery`), billing (`Subscription`/`Invoice`/`CreditBalance`/`CreditTransaction`/`PaymentEvent`), metering (`UsageSummary`/`IngestReceipt`), ai-gateway (`imageJobRow`), authn (`TenantSSOConfig`), pki (`Certificate`), and the reference app's own cases (`caseRecord`/`casePhotoRecord`) and smilesim (`simulationRecord`) rows. The enumeration key is a model file that embeds `dbkit.TenantModel`, declares `GetTenantID()`, or carries a `var _ dbkit.TenantScoped` assertion -- `grep -rlE '^\tdbkit\.TenantModel$|var _ .*dbkit\.TenantScoped|^func \([^)]*\) GetTenantID\(\) pkgcore\.TenantID' go examples/reference-app --include="*.go"` minus `_test.go` files, `go/dbkit`, `internal/testutil` and `tenancytest`, 24 files, all but one (notes' own `model.go`) in owners without a registered participant -- so this list ages visibly when a listed owner registers a participant or a new tenant-scoped model lands. A host whose obligation reaches a subject's rows in any of those tables must register the participant that erases them; stating that boundary is a coverage statement about today's composition, distinct from the consumer bullet's own (already closed) proposition that the contract has a real consumer, and it is no promise that the listed owners will register -- the boundary closes only by a registration, never by this documentation.
+- **`RenderAuditReport` has no real business-module consumer yet -- closed in form, not in fact, by `ExampleRenderAuditReport`.** The genuine-caller search ran before settling for documentation: `go/admin`'s audit-query shell (`AdminListAuditEvents`, `go/admin/handler.go`) is a real consumer of `AuditQuery.Query` but serves raw JSON events, never a rendered report; `go/admin`'s audit-export leg (`go/admin/export.go`) runs `compliance.ExportService.Export`, which ships a JSON manifest through `go/sharing`, not `RenderAuditReport`'s CSV/JSON report bytes; and the reference app wires no report-download endpoint of its own. A real caller would mean an HTTP surface -- exactly the "Deliberately not in scope" table's own missing row ("`RenderAuditReport`'s bytes are exactly what a future HTTP handler would set as a response body, but no such handler exists yet") -- and wiring a consumer would mean building that surface, which is a later round's scope, not something to half-build here. Per root `CLAUDE.md`'s mandatory-first-consumer rule and the compensating-obligations pattern `go/pki`'s X.509 layer and this module's own earlier rounds already use, the gap is stated plainly here, the API's usage is pinned by the compiled-and-run `ExampleRenderAuditReport` (`example_test.go`, executed by every `go test` in this module's CI leg), and a genuine consumer is the natural scope of the HTTP-surface round rather than a retrofitted half-consumer.
+- **No HTTP surface / OpenAPI fragment.** `Module.OpenAPISpec` returns `nil` -- compliance is a Go-level API through this round, not a service reached over HTTP, the same posture `go/metering`'s round 1 took. See the "Deliberately not in scope" table above for the fuller rationale.
+- **`AuditQuery` filters in application code, not SQL.** See "`AuditQuery`: filtering runs in application code" above.
+- **`RetentionService.SweepAllTenants` needs a host-supplied `TenantLister`; there is no built-in tenant directory.** compliance sits above every business module including `org` (the module that would normally own "list every tenant"), but importing `org` from compliance would be exactly the kind of upward-pointing dependency this codebase's module-boundary rule forbids for a module this high in the graph too -- `TenantLister` is a structurally-typed, no-import seam (mirroring `org`'s own `Scope`/`FeatureGate`), and a host wires a real implementation (backed by `org`, or by its own tenant table) when it wants `SweepAllTenants`. `EnqueueRetentionSweep`/`SweepTenant` need no lister at all: they operate on one tenant a caller already names.
+- **No PostgreSQL integration tier for `go/compliance` itself.** The whole suite through this round is unit-level, backed by SQLite (`dbtest.NewSQLite`) and an in-memory `pkgcore.EventBus`/`KVStore`. No `integration_test/` package exists in this module; nothing in its own logic is dialect-sensitive (every SQL it issues is composed by participants' own repositories or by `dbkit/audit.Repository`, both already dual-dialect-proven in their own modules; `SharingCreator` delivery and `RenderAuditReport` are both pure Go-level calls with no SQL of compliance's own), so the value of one would be modest, but it is not shipped. This is unrelated to the new append-only trigger's own PostgreSQL proof, which lives in `go/dbkit/audit/integration_test/` (see "Append-only enforcement lives in `go/dbkit/audit`, not here" above) since that is where the migrated table and the trigger both actually live.
+- **`ExportService.Export`'s delivery through `go/sharing` has no live consumer proving the actual bytes reach a real subject over HTTP.** `sharing.Service.Access` (which `ExportService` never calls directly) does not itself resolve `ResourceRef` into bytes yet -- see `go/sharing/AGENTS.md`'s own Known limitations -- so even a real HTTP caller of `sharing`'s eventual public endpoint cannot yet retrieve an export's actual content this way. Most of this round's `export_test.go` suite exercises the design choices (`ResourceRef`/expiry/view limit/`Sensitive`, delivery-failure reporting) against the scripted `fakeSharingCreator`, but `TestExportService_Export_DeliversThroughRealSharingService` is the one exception: it wires a real `sharing.NewModule(db)` -- real, versioned migrations applied from zero, attached through the real `Module.Register` -- and proves the minted token round-trips through the real `Service.Access` back to a `Share` whose `ResourceRef` names the export's own stored object key, then reads that key back from the same `ObjectStore` and confirms it is the identical manifest `Export` gathered. What that test still cannot prove is the HTTP leg: `sharing.Service.Access` returning the validated `Share` row is as far as any caller, real or scripted, can get until a later round teaches `Access` to resolve `ResourceRef` into bytes itself.
+- **No hash chain, no partitioned archival.** Both remain `docs/internal/10-compliance-and-audit.md`'s own later-round items -- the hash chain deliberately, having no consumer asking for it yet; archival because its own stated prerequisite (append-only enforcement) only just landed this round (see "Append-only enforcement lives in `go/dbkit/audit`, not here" above), which unblocks it as a follow-up round's scope rather than building it. **Append-only database-level enforcement itself is no longer a limitation of this codebase as of this round** -- it landed in `go/dbkit/audit` (`migrations/{postgres,sqlite}/0002_append_only_enforcement.sql`, a trigger pair proven on both dialects, PostgreSQL included against a real container), not in this module, which is why it is not `go/compliance`'s own Public API or test file list; `AuditQuery` itself still adds no write capability of any kind onto `audit_events` (it has no method beyond the two read passthroughs it wraps), and did not need to, since the new enforcement lives at the table's own migration layer, below both `AuditQuery` and `Repository`.
+- **`RenderAuditReport` renders only what `AuditEvent` already exposes, and ships no parser of its own.** See "Formatted audit report export" above and the "Deliberately not in scope" table's `ParseAuditReportCSV`/`ParseAuditReportJSON` row -- a real consumer wanting a read-back API is new, later scope, not something this round silently under-built.
 
 ## Testing
 
-- **Unit tests**: SQLite only, no Docker required. `internal/testutil`
-  builds migrated fixture databases via `dbtest.NewSQLite` plus a
-  portable, dual-dialect-safe `CREATE TABLE` string; `module_test.go`'s
-  and `example_test.go`'s own `*audit.Repository` setup applies
-  `dbkit/audit`'s real migrations through `dbkit.MigrationRegistry`, so
-  the audit half of every fixture is proven against the module's actual,
-  versioned SQL, not an `AutoMigrate`.
-- `retention_test.go` covers the cutoff itself, the cross-tenant
-  isolation proof, the idempotency proof, partial-participant-failure
-  handling (including the count-survives-error accounting and the
-  classification-only audit record), an empty-registry clean pass,
-  `SweepAllTenants`'s multi-tenant aggregation and its no-lister refusal,
-  `EnqueueRetentionSweep`'s task shape and its no-tenant/no-queue
-  refusals, and `retentionSweepHandler`'s happy path plus its
-  payload-shape refusal.
-- `erasure_test.go` covers erasing a live (never soft-deleted) row -- the
-  property that distinguishes erasure from a sweep -- the cross-tenant
-  non-erasure proof (the SAME subject id in two tenants), the audited
-  proof (asserting the action, resource, result and requester
-  attribution), the empty-`SubjectRef` refusal, the no-tenant and
-  tenant-mismatch refusals (a recorder participant proves zero `Erase`
-  callbacks ran and the other tenant's rows survive), the partial-
-  failure-then-retry-converges proof, the empty-actor fallback
-  attribution, and the partial-count-survives-error accounting.
-- `export_test.go` covers gathering a live row's data and round-tripping
-  the stored object through a real `pkgcore.NewLocalObjectStore`, a
-  participant that opted out contributing nothing,
-  partial-participant-failure handling (and that delivery still happens
-  for what was gathered), and, against a scripted `fakeSharingCreator`:
-  the delivered share's `ResourceRef`/`Sensitive`/`MaxViews`/`Password`/
-  `ExpiresAt`, `ErrSharingRequired` when no `SharingCreator` is wired,
-  and `ErrExportDeliveryFailed` -- with the manifest and object key still
-  returned and the stored object deleted, three failing attempts leaving
-  zero objects behind. The tenant-gate refusals (`pkgcore.ErrNoTenant`,
-  `ErrExportTenantMismatch`) and the error-classification regressions
-  (manifest bytes, audit `Changes["errors"]` and delivery-failure
-  `FailureReason` all classify, never carry text) are pinned here too.
-  `TestExportService_Export_DeliversThroughRealSharingService` is the
-  one test that swaps `fakeSharingCreator` for a real
-  `sharing.NewModule(db)` (real migrations, attached through the real
-  `Module.Register`), proving the minted token round-trips through the
-  real `Service.Access` back to a `Share` naming the export's own stored
-  object key.
-- `export_cleanup_test.go` proves the manifest retention story end to end
-  through `RetentionService.SweepTenant`'s public surface: exactly the
-  swept tenant's expired-live-share manifest is reaped while live-share,
-  other-tenant, out-of-prefix and already-reaped objects all survive and
-  a second pass converges to 0.
-- `audit_query_test.go` covers tenant-scoped `Query` (including the
-  no-tenant-in-context refusal), every `QueryFilter` field independently
-  (the on-behalf-of dimension returns exactly one administrator's
-  impersonation-era rows and excludes a second administrator's and the
-  ordinary non-impersonation rows), newest-first ordering with the
-  same-timestamp ID-descending tiebreak, `QueryAcrossTenants`'s
-  system-context gate and its multi-tenant merge, and `Get`'s not-found
-  passthrough.
-- `module_test.go` covers the queueless-boot refusal, `Register`'s full
-  declared surface (both config items, all four permissions, all three
-  audit actions) bootstrapped through a real `pkgcore.Kernel`, the
-  retention-sweep job handler landing on `reg.Jobs`, the
-  `compliance.export_manifests` participant landing on `reg.Retention`,
-  every service's registry-derived seams being non-nil after `Bootstrap`,
-  and `WithSharing` wiring `ExportService.sharing` directly at
-  construction time, with no `Bootstrap` needed to observe it.
-- `report_test.go` covers `RenderAuditReport`: a JSON round trip and a
-  CSV round trip over the same deliberately awkward fixture set (a plain
-  event, an impersonated one, and one whose Action/FailureReason/Changes
-  all carry commas, double quotes and an embedded newline), an explicit
-  assertion on the raw rendered CSV bytes that quoting/escaping actually
-  happened, the formula-injection protection (cells beginning with =, +,
-  -, @, tab or carriage return come out single-quote-prefixed, asserted
-  cell by cell on the parsed report), the empty-events case for both
-  formats, and `ErrUnsupportedReportFormat`. The CSV-parsing half of the
-  round trip is this test file's own private helper, not a package
-  export.
-- `example_test.go`'s `Example()` is runnable documentation of the whole
-  mechanism in one self-contained pass: it wires `compliance.Module`
-  alongside a fake business module implementing `pkgcore.Module` in full,
-  seeds one expired soft-deleted row, sweeps it, and checks the reaped
-  count via `// Output:`. The same file's `ExampleRenderAuditReport` is
-  the runnable documentation of `RenderAuditReport`. The real-consumer
-  proof lives in the host app's suite: `examples/reference-app/cmd/
-  server/compliance_flow_test.go` drives all three orchestrations against
-  real notes rows through the wired `*compliance.Module`, because that
-  proof exercises host wiring no unit test inside `go/compliance` can
-  reach.
-- **PostgreSQL integration leg**: not applicable to `go/compliance`
-  itself -- see Known limitations.
+- **Unit tests**: SQLite only, no Docker required. `internal/testutil.NewDB` builds a migrated fixture database via `dbtest.NewSQLite` plus a portable, dual-dialect-safe `CREATE TABLE` string (mirroring `go/dbkit/internal/testutil`'s `SoftDeletableWidgetTableSQL` precedent for a test-only table, not a real migration). `module_test.go`'s and `example_test.go`'s own `*audit.Repository` setup applies `dbkit/audit`'s real migrations through `dbkit.MigrationRegistry`, so the audit half of every fixture is proven against the module's actual, versioned SQL, not an `AutoMigrate`.
+- `retention_test.go` covers the cutoff itself (an expired row is reaped, a fresh one survives), the **mandatory** cross-tenant isolation proof (`TestRetentionService_SweepTenant_TenantIsolation`), the **mandatory** idempotency proof (`TestRetentionService_SweepTenant_Idempotent`), partial-participant-failure handling, an empty-registry clean pass, `SweepAllTenants`'s multi-tenant aggregation and its no-lister refusal, `EnqueueRetentionSweep`'s task shape and its no-tenant/no-queue refusals, and `retentionSweepHandler`'s happy path plus its payload-shape refusal.
+- `erasure_test.go` covers erasing a live (never soft-deleted) row -- the property that distinguishes erasure from a sweep -- the **mandatory** cross-tenant non-erasure proof (`TestErasureService_Erase_CrossTenantNonErasure`, using the SAME subject id in two tenants), the **mandatory** audited proof (`TestErasureService_Erase_IsAudited`, asserting the action, resource, result and requester attribution), the empty-`SubjectRef` refusal, the partial-failure-then-retry-converges proof, and (reviewer-compliance round) the no-tenant and tenant-mismatch refusals (`TestErasureService_Erase_NoTenantContext_Refused`, `TestErasureService_Erase_TenantMismatch_RefusedBeforeAnyParticipant` -- a recorder participant proves zero `Erase` callbacks ran and the other tenant's rows survive), the empty-actor fallback attribution (`TestErasureService_Erase_EmptyActorFallsBackToSystemActor` -- the fallback id reaches both the audit event and the actor participants observe on ctx), the partial-count-survives-error accounting (`TestErasureService_Erase_ParticipantPartialCountSurvivesError`), and the classification-only audit record (`TestErasureService_Erase_ChangesRecordClassificationNeverErrorText` -- the audit-exit round's regression).
+- `retention_test.go` additionally covers (export-error-text round) `TestRetentionService_SweepTenant_ChangesRecordClassificationNeverErrorText`: the sweep audit's `Changes["errors"]` entry carries each failed participant's name keyed to `participantErrorMarker`, never the callback's error text -- while `SweepResult.Errors` keeps the raw error for the caller, its in-process home.
+- `export_test.go` covers gathering a live row's data and round-tripping the stored object through a real `pkgcore.NewLocalObjectStore`, a participant that opted out (`Export` left `nil`) contributing nothing, partial-participant-failure handling (and that delivery still happens for what was gathered), and, round 2's own additions against `fakeSharingCreator` (a scripted `SharingCreator`, mirroring `module_test.go`'s `recordingQueue` precedent): the delivered share's `ResourceRef`/`Sensitive`/`MaxViews`/`Password`/`ExpiresAt` match this round's design choices, `ErrSharingRequired` when no `SharingCreator` is wired, and `ErrExportDeliveryFailed` -- with the manifest and object key still returned, and (reviewer-compliance round) the stored object deleted, three failing attempts leaving zero objects behind -- when the wired `SharingCreator` itself fails, plus the two tenant-gate refusals: `pkgcore.ErrNoTenant` for a `ctx` with no tenant, and `ErrExportTenantMismatch` for a `tenant` argument naming a different tenant than the `ctx` carries. `export_cleanup_test.go` (reviewer-compliance round) proves the manifest retention story end to end through `RetentionService.SweepTenant`'s public surface: `TestExportManifestCleanup_SweepReapsOnlyExpiredDeliveries` reaps exactly the swept tenant's expired-live-share manifest while live-share, other-tenant, out-of-prefix and already-reaped objects all survive and a second pass converges to 0. `module_test.go` proves `Register` adds the `compliance.export_manifests` participant (`TestModule_Register_RegistersItsOwnExportManifestCleanupParticipant`). The wired `ExportDeliveryExpiryReader`'s answers are covered across the full answer space: a configured positive duration is honored, `ok == false` falls back to `defaultExportDeliveryExpiry`, a genuine read error reports `ErrExportDeliveryFailed`, and `TestExportService_Export_ConfigReaderReportingNonPositive_FallsBackToDefault` pins a `(0, true, nil)` and a `(-1h, true, nil)` answer to the default window too -- a non-positive "configured" lifetime must never mint an already-expired delivery link (the `<= 0` clamp mirroring `RetentionWindow`'s own guard, see "Export: gathering and delivery" above). `TestExportService_Export_DeliversThroughRealSharingService` is the one test in the file that swaps `fakeSharingCreator` for a real `sharing.NewModule(db)` (real migrations, attached through the real `Module.Register`), proving the minted token round-trips through the real `Service.Access` back to a `Share` naming the export's own stored object key. The export-error-text round adds the classification regressions: `TestExportService_Export_ParticipantErrorClassifiedNeverRawText` (the returned manifest and the stored object bytes carry `participantErrorMarker`, never a carving error text naming an internal object key), `TestExportService_Export_AuditChangesClassifyParticipantErrorNeverText` (the export audit's `Changes["errors"]` entry and `FailureReason` classify and name, never carry the text), and `TestExportService_Export_DeliveryFailureAuditClassifiesReasonNeverText` (a delivery failure audits as `FailureReason` "delivery failed" while the transport error survives as `ErrExportDeliveryFailed`'s wrapped cause, asserted through `errors.Is`).
+- `audit_query_test.go` covers tenant-scoped `Query` (including the no-tenant-in-context refusal), every `QueryFilter` field independently (the P2-1 round added the on-behalf-of administrator dimension: `TestAuditQuery_Query_FiltersByOnBehalfOf` returns exactly one administrator's impersonation-era rows and excludes a second administrator's and the ordinary non-impersonation rows) plus newest-first ordering, `QueryAcrossTenants`'s system-context gate and its multi-tenant merge, `Get`'s not-found passthrough, and (reviewer-compliance round) the same-timestamp ID-descending tiebreak (`TestAuditQuery_Query_SameTimestampEventsOrderDeterministically`, two queries over identical rows returning the identical order).
+- `module_test.go` covers the queueless-boot refusal, `Register`'s full declared surface (both config items, all four permissions, all three audit actions) bootstrapped through a real `pkgcore.Kernel`, the retention-sweep job handler landing on `reg.Jobs`, every service's registry-derived seams being non-nil after `Bootstrap`, the module's simple identity methods, and (round 2) `WithSharing` wiring `ExportService.sharing` directly at construction time, with no `Bootstrap` needed to observe it.
+- `errors_test.go` covers `hasCode`'s match/no-match/wrap-through behavior.
+- `example_test.go`'s `Example()` is runnable documentation of the whole mechanism in one self-contained pass: it wires `compliance.Module` alongside a fake business module implementing `pkgcore.Module` in full, seeds one expired soft-deleted row, sweeps it, and checks the reaped count via `// Output:`. The "no real consumer yet" gap this `Example` used to compensate for is closed by the reference app's notes participant: `examples/reference-app/cmd/server/compliance_flow_test.go` drives all three orchestrations against real notes rows through the wired `*compliance.Module` (see "Known limitations"'s first item). That proof lives in the host app's suite rather than in this module's because it exercises host wiring -- registration onto the kernel's `reg.Retention` seat and notes created over the real composed HTTP stack -- that no unit test inside `go/compliance` can reach. The same file's `ExampleRenderAuditReport` is the runnable documentation of `RenderAuditReport`/`ReportFormat` (a CSV render of one realistic event, output pinned via `// Output:`), carrying the compensating obligations of that API's still-unconsumed status -- see "Known limitations"'s `RenderAuditReport` bullet.
+- `report_test.go` (this round) covers `RenderAuditReport`: a JSON round trip and a CSV round trip over the same deliberately awkward fixture set (a plain event, an impersonated one, and one whose Action/FailureReason/Changes all carry commas, double quotes and an embedded newline), an explicit assertion on the raw rendered CSV bytes that a comma- and quote-bearing field actually comes out quoted/escaped (not merely that a parser happens to read it back correctly), `TestRenderAuditReport_CSV_ProtectsFormulaInjectionCells` (cells beginning with =, +, -, @, tab or carriage return come out single-quote-prefixed -- asserted cell by cell on the parsed report, so no data cell can execute as a formula when the file is opened in a spreadsheet -- with each hostile value surviving intact behind exactly one prefixing quote and benign values untouched), the empty-events case for both formats, and `ErrUnsupportedReportFormat` for an unrecognized `ReportFormat`. The CSV-parsing half of the round trip is written as this test file's own private helper (`parseAuditReportCSV`) rather than a package export -- see "Deliberately not in scope"'s `ParseAuditReportCSV`/`ParseAuditReportJSON` row.
+- **PostgreSQL integration leg**: not applicable to `go/compliance` itself -- see Known limitations. The append-only trigger this round also ships has its own PostgreSQL leg, but it lives in `go/dbkit/audit/integration_test/`, not here (see "Append-only enforcement lives in `go/dbkit/audit`, not here" above).
 
 ## Error index
 
@@ -582,98 +155,41 @@ against *any* role that connects, with no such provisioning prerequisite
 |---|---|---|
 | `compliance.queue_required` | `Internal` | `Module.Register`, when no `jobs.Queue` was wired through `WithQueue` |
 | `compliance.tenant_lister_required` | `Internal` | `RetentionService.SweepAllTenants`, when no `TenantLister` was wired through `WithTenantLister` |
-| `compliance.config_service_required` | `Internal` | Declared for a caller of `RetentionWindow` that wants the error instead of the fallback; `SweepTenant` itself never returns it (see `retention.go`'s `RetentionWindow` doc comment) |
-| `compliance.audit_record_failed` | `Internal` | `SweepTenant`/`Erase`/`Export`, when the operation itself completed but its `dbkit/audit.Emit` call failed -- an audit-write failure must alert, never silently drop |
+| `compliance.config_service_required` | `Internal` | Declared for a future caller of `RetentionWindow` that wants the error instead of the fallback; `SweepTenant` itself never returns it (see `retention.go`'s `RetentionWindow` doc comment) |
+| `compliance.audit_record_failed` | `Internal` | `SweepTenant`/`Erase`/`Export`, when the operation itself completed but its `dbkit/audit.Emit` call failed -- never swallowed, per `docs/internal/10-compliance-and-audit.md`'s "an audit-write failure must alert, never silently drop" rule |
 | `compliance.audit_query_requires_system_context` | `Invalid` | `AuditQuery.QueryAcrossTenants`, when `ctx` carries no system context |
 | `compliance.empty_subject_ref` | `Invalid` | `ErasureService.Erase`, when the given `pkgcore.SubjectRef` has an empty `TenantID` or `SubjectID` |
 | `compliance.sweep_partial_failure` | `Internal` | `RetentionService.SweepTenant`, when at least one participant's `Sweep` callback failed |
 | `compliance.erasure_partial_failure` | `Internal` | `ErasureService.Erase`, when at least one participant's `Erase` callback failed |
 | `compliance.export_partial_failure` | `Internal` | `ExportService.Export`, when at least one participant's `Export` callback failed |
-| `compliance.sharing_required` | `Internal` | `ExportService.Export`, when no `SharingCreator` was wired through `WithSharing` |
-| `compliance.export_delivery_failed` | `Internal` | `ExportService.Export`, when the manifest was gathered and stored but the wired `SharingCreator`'s `Create` call failed |
+| `compliance.sharing_required` | `Internal` | `ExportService.Export`, when no `SharingCreator` was wired through `WithSharing` (round 2) |
+| `compliance.export_delivery_failed` | `Internal` | `ExportService.Export`, when the manifest was gathered and stored but the wired `SharingCreator`'s `Create` call failed (round 2) |
 | `compliance.export_tenant_mismatch` | `Invalid` | `ExportService.Export`, when the `tenant` argument differs from the tenant `ctx` carries -- refused before anything is gathered, stored or delivered |
-| `compliance.erasure_tenant_mismatch` | `Invalid` | `ErasureService.Erase`, when `subject.TenantID` differs from the tenant `ctx` carries -- refused before any participant is called |
-| `compliance.unsupported_report_format` | `Invalid` | `RenderAuditReport`, when `format` is neither `ReportFormatCSV` nor `ReportFormatJSON` |
+| `compliance.erasure_tenant_mismatch` | `Invalid` | `ErasureService.Erase`, when `subject.TenantID` differs from the tenant `ctx` carries -- refused before any participant is called (reviewer-compliance round) |
+| `compliance.unsupported_report_format` | `Invalid` | `RenderAuditReport`, when `format` is neither `ReportFormatCSV` nor `ReportFormatJSON` (this round) |
 
-Every code above has a matching description entry in
-`locales/{zh-CN,en-US}.toml` under the identical id.
+Every code above has a matching description entry in `locales/{zh-CN,en-US}.toml` under the identical id.
 
-## Deliberate design decisions
+## Adjudications a reviewer should not "correct"
 
-These shapes are decisions, not oversights -- a change to any of them is
-a real design change, not a cleanup.
+**compliance owns no table and ships no migrations.** See "Why no table" above -- this is a deliberate, reasoned choice (the durable record is `dbkit/audit`'s existing table plus each participant's own), not an unfinished data model. `Module.Migrations()` returning the zero `embed.FS` is documented as legal by `dbkit.MigrationRegistry.Register` itself, not a workaround.
 
-**compliance owns no table and ships no migrations.** The durable record
-is `dbkit/audit`'s existing table plus each participant's own.
-`Module.Migrations()` returning the zero `embed.FS` is documented as
-legal by `dbkit.MigrationRegistry.Register` itself.
+**`Erase`/`SweepTenant`/`Export` all return a specifically coded partial-failure error even though the underlying work already partly succeeded.** This is intentional: a caller checking only `err != nil` must still learn that something needs attention (a healthy participant's work is real and already committed; a failed one needs a retry), never silently treat a partial, still-important-to-know-about outcome as a clean success. See "Partial failure across independent transactions" above.
 
-**`Erase`/`SweepTenant`/`Export` all return a specifically coded
-partial-failure error even though the underlying work already partly
-succeeded.** A caller checking only `err != nil` must still learn that
-something needs attention, never silently treat a partial, still-
-important-to-know-about outcome as a clean success.
+**`ExportService.Export` now requires a `SharingCreator` to complete at all (`ErrSharingRequired`), even though `RetentionService`/`ErasureService` need no such thing.** This is deliberate, not scope creep leaking into the other two services: an export this module cannot deliver is not a completed export (`docs/internal/10-compliance-and-audit.md`'s data-export capability is gathering *and* delivery), while a sweep or an erasure is already complete the moment the underlying rows are gone, regardless of whether anyone downloads anything afterward. See "Export: gathering and delivery" above, and `WithSharing`'s own doc comment for why this is a call-time check, not a `Register`-time one the way `WithQueue`'s is.
 
-**`ExportService.Export` requires a `SharingCreator` to complete at all
-(`ErrSharingRequired`), while `RetentionService`/`ErasureService` need no
-such thing.** An export this module cannot deliver is not a completed
-export (the capability is gathering *and* delivery), while a sweep or an
-erasure is complete the moment the underlying rows are gone. This is why
-the check is `Export`'s own, call-time responsibility, not a
-`Register`-time one the way `WithQueue`'s is.
+**`go/compliance` imports `go/sharing` directly, rather than through a structurally-typed no-import seam like `org.FeatureGate`.** This is a deliberate reading of the module dependency graph, not an accidental coupling: sharing sits strictly below compliance (root `CLAUDE.md`'s dependency-direction diagram), so an import edge is architecturally legal, the identical direction `go/billing`'s own direct dependency on `go/metering` already establishes. See "Export: gathering and delivery" above for the full reasoning, including why `SharingCreator` is still declared as a small interface (for test isolation, not to avoid the import).
 
-**`go/compliance` imports `go/sharing` directly, rather than through a
-structurally-typed no-import seam.** sharing sits strictly below
-compliance in the module dependency graph, so an import edge is
-architecturally legal. `SharingCreator` is still declared as a small
-interface -- for test isolation, not to avoid the import.
+**`AuditQuery` filters in Go, not SQL.** compliance is forbidden from touching `go/dbkit` beyond the additive `pkgcore.Registry` field, and `dbkit/audit.Repository`'s own doc comment already assigns the rich query API to compliance. See "`AuditQuery`: filtering runs in application code" above for the honest performance tradeoff this implies.
 
-**`AuditQuery` filters in Go, not SQL.** `dbkit/audit.Repository`'s own
-doc comment assigns the rich query API to compliance's read side, and
-compliance adds no method to the Repository. The honest performance
-tradeoff this implies is stated in `AuditQuery`'s own doc comment and
-this file's "AuditQuery" section.
+**`pkgcore.RetentionParticipant`/`RetentionRegistrar`/`SubjectRef` live in `go/pkgcore/registry.go`, not in this module.** This is the sanctioned "9th registrar" root `CLAUDE.md`'s Module Wiring section describes -- genuinely multi-consumer (every business module that wants retention/erasure/export participation registers through it), unlike a single-consumer addition a different module's own design doc rejected for that reason.
 
-**`pkgcore.RetentionParticipant`/`RetentionRegistrar`/`SubjectRef` live
-in `go/pkgcore/registry.go`, not in this module.** The registrar is
-genuinely multi-consumer -- every business module that wants
-retention/erasure/export participation registers through it -- which is
-exactly why the `Registry` gains the seat rather than the mechanism
-living in a single consumer's module.
+**The append-only trigger migration lives in `go/dbkit/audit`, not in `go/compliance`, even though this same round's task named both as `go/compliance` work.** This is deliberate, not a scope dodge: `audit_events` is `dbkit/audit`'s own table, created and versioned by `dbkit/audit`'s own migration set, and `go/compliance` owns no table and ships no migrations at all (see "Why no table" above) -- there is no compliance-owned place a trigger on someone else's table could legally attach. See "Append-only enforcement lives in `go/dbkit/audit`, not here" above for the mechanism and its own cross-reference into `go/dbkit/audit/AGENTS.md`.
 
-**The append-only trigger migration lives in `go/dbkit/audit`, not in
-`go/compliance`.** `audit_events` is `dbkit/audit`'s own table, created
-and versioned by `dbkit/audit`'s own migration set, and compliance owns
-no table at all -- there is no compliance-owned place a trigger on
-someone else's table could legally attach.
+**The append-only mechanism is a trigger pair, not a REVOKE-based restricted database role, even though the design doc's own "tamper-proof" section names the restricted-role-plus-trigger combination as the production answer.** This is a considered choice given how this codebase's connections are actually established, not a partial implementation of the design doc's fuller ask: `dbkit.Open` hands every table's traffic, `audit_events` included, through exactly one connection/role per `*gorm.DB`, and this codebase has always declined to provision a second, more restricted role even for PostgreSQL RLS's own role and policy (`go/dbkit/AGENTS.md`'s "Out of scope"). A trigger enforces the guarantee against any role that ever connects, with no such provisioning step to invent; a REVOKE grant on a role this codebase does not create or name would not bind to anything real. See "Append-only enforcement lives in `go/dbkit/audit`, not here" above.
 
-**The append-only mechanism is a trigger pair, not a REVOKE-based
-restricted database role.** `dbkit.Open` hands every table's traffic
-through exactly one connection/role per `*gorm.DB`, and this codebase
-does not provision a second, more restricted role even for PostgreSQL
-RLS's own role and policy -- role/credential provisioning is a
-deployment-side responsibility the dbkit package assumes but does not
-create. A trigger enforces the guarantee against any role that ever
-connects; a REVOKE grant on a role this codebase does not create or name
-would not bind to anything real.
+**`RenderAuditReport`'s CSV encoding carries an explicit `has_on_behalf_of` boolean column rather than leaving `OnBehalfOf`'s three fields to speak for themselves.** This is deliberate, not an over-normalized schema: `OnBehalfOf` is a genuinely nullable `*pkgcore.Actor` (NULL, never an empty-string sentinel, means "no impersonation" -- `audit.AuditEvent`'s own doc comment), and three blank CSV cells cannot distinguish that from "impersonated by an actor whose fields happen to be empty" on their own. See "Formatted audit report export" above.
 
-**`RenderAuditReport`'s CSV encoding carries an explicit
-`has_on_behalf_of` boolean column rather than leaving `OnBehalfOf`'s
-three fields to speak for themselves.** `OnBehalfOf` is a genuinely
-nullable `*pkgcore.Actor`, and three blank CSV cells cannot distinguish
-"no impersonation" from "impersonated by an actor whose fields happen to
-be empty".
+**`RenderAuditReport` ships no public CSV/JSON parser, even though its own test proves a full round trip.** The round's own scope asked for "the smallest real, useful shape" -- a render direction -- and `report_test.go`'s round-trip parsing exists to verify `RenderAuditReport`'s own correctness, not to establish a second, symmetric read API this round was never asked to design or maintain. See "Deliberately not in scope"'s `ParseAuditReportCSV`/`ParseAuditReportJSON` row above.
 
-**`RenderAuditReport` ships no public CSV/JSON parser, even though its
-own test proves a full round trip.** The shipped shape is a render
-direction; the round-trip parsing exists to verify the renderer's own
-correctness, not to establish a second, symmetric read API nothing has
-asked for.
-
-**`ExportService.Export` keeps its `tenant` argument even though the `ctx`
-tenant is the only tenant it ever reads.** The argument exists for the
-job-handler-shaped caller that rebuilt `ctx` from a stored tenant id
-(`pkgcore.WithTenant(ctx, job.TenantID)`) and hands that same id through.
-The `ctx` tenant is the single enforced data boundary; the argument is
-validated (`ErrExportTenantMismatch`) to echo it back exactly, never to
-widen it.
+**`ExportService.Export` keeps its `tenant` argument even though the `ctx` tenant is the only tenant it ever reads.** This is deliberate, not a leftover of the ungated form: the argument exists for the job-handler-shaped caller that rebuilt `ctx` from a stored tenant id (`pkgcore.WithTenant(ctx, job.TenantID)`) and hands that same id through -- `go/admin`'s export handler is the real production caller in exactly that shape. Removing the parameter would break that caller for no isolation gain, since the `ctx` tenant is already the single enforced data boundary; the argument is validated (`ErrExportTenantMismatch`) to echo the `ctx` tenant back exactly, never to widen it.
