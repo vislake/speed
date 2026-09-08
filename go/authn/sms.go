@@ -54,7 +54,8 @@ type SMS struct {
 // a mode branch inside this package, plus three real carrier adapters under
 // go/authn/sms/ (aliyun, tencent, twilio), each implementing its vendor's
 // own signing and request shape, constructed by the host through the
-// package's own NewSender.type SMSSender interface {
+// package's own NewSender.
+type SMSSender interface {
 	// Send delivers msg. An error means the message was not delivered;
 	// the caller (verification.go) surfaces that as a structured failure
 	// rather than pretending the code went out.
@@ -132,7 +133,8 @@ func WithHTTPSMSSenderClient(client *http.Client) HTTPSMSSenderOption {
 // are a destination an operator, not this codebase, chose -- the endpoint's
 // scheme must be https (checked before every send, see Send) and every
 // connection is dialled through safehttp's guarded client, which refuses a
-// private address at CONNECT time.type httpSMSSender struct {
+// private address at CONNECT time.
+type httpSMSSender struct {
 	endpoint string
 	client   *http.Client
 	guard    *safehttp.Guard
