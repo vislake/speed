@@ -727,19 +727,22 @@ func TestRepository_Delete_NonSoftDeletable_PhysicalDeleteUnchanged(t *testing.T
 	}
 }
 
+// TestRepository_Update_StaleModelAfterSoftDelete_ReturnsNotFoundAndKeepsMark
+// pins the fix for the hazard the earlier
 // TestRepository_Update_StaleModelAfterSoftDelete_SilentlyClearsDeletedAt
-// documents (and pins, so a future change to Update's behavior here is a
-// deliberate decision, not an accident) a real, un-fixed hazard this round
-// explicitly chose not to address: Update's existing "Select(\"*\")"
-// full-record save writes every column, deleted_at/deleted_by included,
-// and is not scoped by deleted_at at all (the auto-scope plugin is
-// query-only, per soft_delete.go's own doc comment). A caller that Delete's
-// a row and then Update's a stale in-memory copy captured before the
-// delete silently "undeletes" it as a side effect -- Update was
-// deliberately left untouched by this round (the brief scoped changes to
-// Delete and Restore only); see AGENTS.md's Known limitations for the
-// documented guidance to future callers.
-func TestRepository_Update_StaleModelAfterSoftDelete_SilentlyClearsDeletedAt(t *testing.T) {
+// used to document (and pin, as deliberately-unfixed) on the opposite side:
+// Update's "Select(\"*\")" full-record save writes every column,
+// deleted_at/deleted_by included, and the soft-delete auto-scope is
+// query-only, so a stale in-memory copy captured before someone else's
+// Delete used to write its zero DeletedAt/DeletedBy back over the row and
+// silently "undelete" it. Update now carries its own deleted_at IS NULL
+// guard for a SoftDeletable T -- the same explicit-WHERE convention
+// softDelete and Restore already follow (repository.go), never a
+// plugin-side scope -- so a soft-deleted row is as unreachable by Update
+// as a hard-deleted or cross-tenant one, and the call collapses to
+// ErrRecordNotFound exactly as those do, leaving the row's mark (and every
+// other column) untouched.
+func TestRepository_Update_StaleModelAfterSoftDelete_ReturnsNotFoundAndKeepsMark(t *testing.T) {
 	repo := newSoftDeletableWidgetRepo(t)
 	ctx := ctxTenantActor("tenant-a", "user-1")
 
@@ -749,8 +752,11 @@ func TestRepository_Update_StaleModelAfterSoftDelete_SilentlyClearsDeletedAt(t *
 	}
 	// stale is a copy of w's state as it was BEFORE the Delete below --
 	// exactly what a caller would be holding if it read the row, then
-	// raced (or simply came later) with someone else's Delete.
+	// raced (or simply came later) with someone else's Delete. The Name
+	// change stands in for the caller's own legitimate later save: the
+	// guard must refuse the write outright, never apply part of it.
 	stale := *w
+	stale.Name = "gadget-v2"
 
 	if err := repo.Delete(ctx, w.ID); err != nil {
 		t.Fatalf("Delete() error = %v", err)
@@ -759,23 +765,53 @@ func TestRepository_Update_StaleModelAfterSoftDelete_SilentlyClearsDeletedAt(t *
 		t.Fatalf("row after Delete(): found=%v deletedAt=%v, want found with a populated deleted_at", found, deletedAt)
 	}
 
-	// Update's contract is unchanged by this round: full-record save, no
-	// deleted_at awareness. Writing the stale copy (DeletedAt == nil,
-	// DeletedBy == "") back over the row clears the very columns Delete
-	// just set.
 	staleCopy := stale
-	if err := repo.Update(ctx, &staleCopy); err != nil {
-		t.Fatalf("Update() with a stale pre-delete model error = %v", err)
+	if err := repo.Update(ctx, &staleCopy); !isRecordNotFound(err) {
+		t.Fatalf("Update() with a stale pre-delete model error = %v, want ErrRecordNotFound (the write must not reach a soft-deleted row)", err)
 	}
 
 	found, deletedAt, deletedBy := rawSoftDeletableWidgetRow(t, repo.db, w.ID)
 	if !found {
-		t.Fatal("row missing after Update(), want it present")
+		t.Fatal("row missing after the refused Update(), want it still present (soft delete never physically removes)")
 	}
-	if deletedAt != nil {
-		t.Errorf("deleted_at after Update() with a stale pre-delete model = %v, want nil -- this is the documented, un-fixed hazard: Update silently 'undeletes' the row", deletedAt)
+	if deletedAt == nil {
+		t.Error("deleted_at after the refused Update() = nil, want the soft-delete mark kept -- the stale model must not resurrect the row")
 	}
-	if deletedBy != "" {
-		t.Errorf("deleted_by after Update() with a stale pre-delete model = %q, want empty -- same documented hazard", deletedBy)
+	if deletedBy != "user-1" {
+		t.Errorf("deleted_by after the refused Update() = %q, want %q -- the mark's attribution must survive untouched", deletedBy, "user-1")
+	}
+}
+
+// TestRepository_Update_SoftDeletable_LiveRowStillUpdates pins the guard's
+// scope: the deleted_at IS NULL condition Update carries for a SoftDeletable
+// T must only refuse writes aimed at soft-deleted rows, never a live row's
+// ordinary full-record save. Without this test, a guard that matched nothing
+// (or matched everything, the pre-fix state) would pass the stale-model test
+// above by accident in one direction or the other.
+func TestRepository_Update_SoftDeletable_LiveRowStillUpdates(t *testing.T) {
+	repo := newSoftDeletableWidgetRepo(t)
+	ctx := ctxTenantActor("tenant-a", "user-1")
+
+	w := &testutil.SoftDeletableWidget{ID: "w1", Name: "gadget"}
+	if err := repo.Create(ctx, w); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	w.Name = "gadget-v2"
+	if err := repo.Update(ctx, w); err != nil {
+		t.Fatalf("Update() of a live SoftDeletable row error = %v", err)
+	}
+
+	got, err := repo.FindByID(ctx, w.ID)
+	if err != nil {
+		t.Fatalf("FindByID() after Update error = %v", err)
+	}
+	if got.Name != "gadget-v2" {
+		t.Errorf("row after Update() = %+v, want Name %q (live-row full-record save must still land)", *got, "gadget-v2")
+	}
+	if got.DeletedAt != nil {
+		t.Errorf("row after Update() has deleted_at = %v, want nil (a live row's save must not invent a soft-delete mark)", got.DeletedAt)
+	}
+	if got.DeletedBy != "" {
+		t.Errorf("row after Update() has deleted_by = %q, want empty", got.DeletedBy)
 	}
 }

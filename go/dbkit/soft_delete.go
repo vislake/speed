@@ -92,12 +92,12 @@ func newSoftDeleteScopePlugin() *softDeleteScopePlugin {
 // processor its finisher executes, never at the finisher name, and without
 // the row registration every scan-shaped read of a SoftDeletable model
 // surfaced soft-deleted rows with a nil error.
-// Repository[T].Delete and Restore build their own explicit
+// Repository[T].Delete, Update and Restore build their own explicit
 // "deleted_at IS NULL" / "deleted_at IS NOT NULL" WHERE clauses instead of
-// relying on this plugin (see repository.go), and Repository[T].Update is
-// deliberately left untouched by this round — see AGENTS.md's Known
-// limitations for the documented, un-fixed hazard that leaves for a caller
-// holding a stale in-memory model.
+// relying on this plugin (see repository.go) — Update's guard being the
+// fix for the stale-model hazard that used to leave a pre-delete in-memory
+// copy free to silently clear the mark (AGENTS.md's Soft deletion section
+// records the closed state).
 //
 // A caller wanting to see soft-deleted rows in a query sets
 // db.Unscoped() — GORM's own general query-scope bypass, reused here

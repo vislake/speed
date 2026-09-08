@@ -79,7 +79,11 @@ const (
 // returns, because doing so — for example by surfacing a permission-style
 // error only when the id turns out to exist — would let a caller in one
 // tenant learn that a given id exists in another tenant at all, which is
-// itself a (smaller, but real) cross-tenant information leak.
+// itself a (smaller, but real) cross-tenant information leak. For a
+// SoftDeletable T's Update it additionally covers a row whose deleted_at is
+// set — a soft-deleted row is as unreachable by Update as a hard-deleted or
+// cross-tenant one, collapsed into the same signal for the same reason; see
+// Update's own doc comment.
 var ErrRecordNotFound = apperr.NotFound("dbkit.record_not_found")
 
 // ErrMissingID is returned by Update when the model it was given has an
@@ -276,9 +280,25 @@ func (r *Repository[T]) FindByID(ctx context.Context, id string) (*T, error) {
 // TestRepository_Update_IDAndTenantIDOnlyModel_DifferentTenant_ReturnsNotFound
 // in repository_test.go.
 //
+// For a T implementing SoftDeletable (soft_delete.go), the WHERE clause
+// additionally requires deleted_at IS NULL — the identical guard softDelete's
+// own write carries. The soft-delete auto-scope plugin is read-side only, so
+// this condition is this method's own, following the same explicit-WHERE
+// convention softDelete and Restore already follow rather than ever relying
+// on a plugin-side scope; it closes the stale-model hazard AGENTS.md's Soft
+// deletion section records: a caller holding a copy captured before someone
+// else's Delete can no longer silently resurrect the row, since Save would
+// otherwise write that stale copy's zero DeletedAt/DeletedBy back over the
+// very columns Delete just set. A soft-deleted row is therefore as
+// unreachable by Update as a hard-deleted or cross-tenant one: the call
+// collapses to ErrRecordNotFound below and the row's mark stays untouched. A
+// live row's ordinary save is unaffected — its deleted_at is already NULL, so
+// the extra condition matches and the save proceeds exactly as before.
+//
 // Update returns ErrRecordNotFound, not a generic gorm error and not a
 // silently-created row, when nothing matches — including when m's id exists
-// under a different tenant.
+// under a different tenant, and, for a SoftDeletable T, when the row m
+// describes has been soft-deleted.
 //
 // When ctx carries no tenant, Update returns pkgcore's error unmodified
 // before the database is touched at all.
@@ -300,11 +320,28 @@ func (r *Repository[T]) Update(ctx context.Context, m *T) error {
 		return err
 	}
 
+	var zero T
+	_, softDeletable := any(&zero).(SoftDeletable)
+
 	var rowsAffected int64
 	if err := WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		res := tx.
+		stmt := tx.
 			Where(idColumn+" = ?", id).
-			Where(tenantIDColumn+" = ?", tenant).
+			Where(tenantIDColumn+" = ?", tenant)
+		if softDeletable {
+			// A soft-deleted row must be unreachable by the full-record save:
+			// m carries the two soft-delete columns like every other column,
+			// and a stale pre-delete copy's zero values would clear the mark
+			// the row's Delete just set (the auto-scope plugin is query-only,
+			// so nothing else guards this write). The condition is the
+			// statement's own WHERE, atomically merged with the id/tenant
+			// scope, so a Delete landing between this call's start and its
+			// commit excludes the row the same way — no separate
+			// check-then-write race window. softDelete's own write carries the
+			// same guard for the same reason (see its doc comment).
+			stmt = stmt.Where(deletedAtColumn + " IS NULL")
+		}
+		res := stmt.
 			Select("*").
 			Save(m)
 		rowsAffected = res.RowsAffected
@@ -480,7 +517,9 @@ func (r *Repository[T]) softDelete(ctx context.Context, id string) error {
 // The .Unscoped() call is a defensive no-op given that the soft-delete
 // auto-scope (soft_delete.go's softDeleteScopePlugin) only touches query
 // callbacks, never update — kept here, self-documenting, in case that scope
-// is ever broadened to cover Update in a later round.
+// is ever broadened to the update processor (the deleted_at guard
+// Repository[T].Update carries is its own WHERE condition in this file, not
+// this plugin's — see Update's doc comment).
 //
 // When ctx carries no tenant, Restore returns pkgcore's error unmodified
 // before the database is touched at all.
