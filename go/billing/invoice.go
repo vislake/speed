@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/vislake/speed/go/dbkit"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // billingInvoicesTable names the shared billing_invoices table.
@@ -111,12 +112,24 @@ type InvoiceRepository struct {
 	// dbkit.WithTenantSession against a TenantScoped destination, never a
 	// raw query of any other shape.
 	db *gorm.DB
+
+	// Metric instruments (metrics.go): billing.invoice.transition and
+	// billing.invoice.open_dwell, registered by NewInvoiceRepository;
+	// nil for a bare struct literal, which the record site guards.
+	transitionMetric metric.Int64Counter
+	openDwellMetric  metric.Float64Histogram
 }
 
 // NewInvoiceRepository returns an InvoiceRepository over db. db is expected
 // to come from dbkit.Open with this module's migrations applied.
 func NewInvoiceRepository(db *gorm.DB) *InvoiceRepository {
-	return &InvoiceRepository{Repository: dbkit.NewRepository[Invoice](db), db: db}
+	transition, openDwell := registerBillingMetrics()
+	return &InvoiceRepository{
+		Repository:       dbkit.NewRepository[Invoice](db),
+		db:               db,
+		transitionMetric: transition,
+		openDwellMetric:  openDwell,
+	}
 }
 
 // ListByTenant returns every invoice for the tenant in ctx, newest
@@ -221,6 +234,12 @@ func (r *InvoiceRepository) setStatus(ctx context.Context, id string, status Inv
 			return nil, err
 		}
 		if applied {
+			// billing.invoice.transition / billing.invoice.open_dwell
+			// (metrics.go): recorded only when the guarded UPDATE
+			// genuinely applied -- a lost race applies nothing and is
+			// not a transition.
+			recordInvoiceTransition(ctx, r.transitionMetric, r.openDwellMetric,
+				from, status, inv.CreatedAt)
 			inv.Status = string(status)
 			return inv, nil
 		}

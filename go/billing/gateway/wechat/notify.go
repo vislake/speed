@@ -117,7 +117,15 @@ func refundStatusSuffix(eventType string) string {
 // AEAD_AES_256_GCM resource ciphertext against the configured APIv3 key --
 // a second, independent integrity check beneath the outer signature (see
 // decryptResource's own doc comment).
-func (g *Gateway) VerifyWebhook(_ context.Context, headers map[string][]string, body []byte) (billing.NormalizedEvent, error) {
+func (g *Gateway) VerifyWebhook(ctx context.Context, headers map[string][]string, body []byte) (ev billing.NormalizedEvent, err error) {
+	// billing.webhook.verify for this channel (billing root's
+	// metrics.go): the outcome is derived from the returned error's
+	// nilness, so a refusal added in a future branch counts itself
+	// without a new record site. The previously unnamed _ context
+	// gains its name here for the recording call.
+	defer func() {
+		billing.RecordWebhookVerify(ctx, g.webhookVerify, "wechat", err)
+	}()
 	sig := firstHeader(headers, "Wechatpay-Signature")
 	timestamp := firstHeader(headers, "Wechatpay-Timestamp")
 	nonce := firstHeader(headers, "Wechatpay-Nonce")

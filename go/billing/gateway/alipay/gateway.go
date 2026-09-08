@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/vislake/speed/go/billing"
 )
 
@@ -39,6 +41,12 @@ type Gateway struct {
 	cfg    Config
 	keys   resolvedKeys
 	client httpDoer
+
+	// webhookVerify carries billing.webhook.verify for this channel
+	// (metrics.go in the billing root), registered by NewGateway; nil
+	// for a gateway built as a bare struct literal, which the record
+	// site guards.
+	webhookVerify metric.Int64Counter
 }
 
 // NewGateway returns a Gateway over cfg, parsing both configured RSA keys
@@ -57,7 +65,12 @@ func NewGateway(cfg Config) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Gateway{cfg: cfg, keys: keys, client: http.DefaultClient}, nil
+	return &Gateway{
+		cfg:           cfg,
+		keys:          keys,
+		client:        http.DefaultClient,
+		webhookVerify: billing.RegisterWebhookVerifyMetric("alipay"),
+	}, nil
 }
 
 // newGatewayWithClient is NewGateway's test-only twin, injecting a scripted
