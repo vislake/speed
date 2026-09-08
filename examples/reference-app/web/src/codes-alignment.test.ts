@@ -1,14 +1,16 @@
 /**
  * codes-alignment.test.ts -- the reference-app shell's reachable-error
- * alignment suite: every server-emittable error code the shell's nine
+ * alignment suite: every server-emittable error code the shell's ten
  * surfaces can be answered with (the auth-ui sign-in/session family, the
  * account-ui signed-in family, the tenancy-ui switch family, the notes
  * create surface, the cases surface, the smile-simulation surface the
  * block-B round added, the two block-C share surfaces: the clinic's
- * share action on the case page and the patient's share page, and the
- * credits surface the block-D round added) is rendered through a
- * reachable-error whitelist, and this suite pins the whitelists to the
- * server codes themselves.
+ * share action on the case page and the patient's share page, the
+ * credits surface the block-D round added, and the team surface the
+ * add-a-colleague round added -- its invite send resolving go/org's
+ * create-operation sentinels through the same whitelist shape) is
+ * rendered through a reachable-error whitelist, and this suite pins the
+ * whitelists to the server codes themselves.
  *
  * The server side of the comparison is GO_PINNED below: a hand-maintained
  * enumeration of the codes the Go side of this app can answer with on
@@ -67,6 +69,7 @@ import {
   SHARE_VIEW_ERROR_TEXT_KEYS,
 } from './share-errors.js'
 import { NOTE_ERROR_TEXT_KEYS } from './views/notes-view.js'
+import { TEAM_ERROR_TEXT_KEYS } from './views/team-view.js'
 import { CREDITS_ERROR_TEXT_KEYS } from './views/credits-view.js'
 import zhCN from './locales/zh-CN.json' with { type: 'json' }
 import enUS from './locales/en-US.json' with { type: 'json' }
@@ -280,6 +283,21 @@ const GO_PINNED: Readonly<Record<string, string>> = {
   'sharing.not_accessible': 'go/sharing/errors.go:60 (ErrNotAccessible)',
   'sharing.resource_unavailable': 'go/sharing/errors.go:111 (ErrResourceUnavailable)',
   'sharing.rate_limited': 'go/sharing/ratelimit.go:79 (ErrRateLimited)',
+  // go/org/errors.go -- the org-module sentinels the team surface's
+  // invite send and its reads can be answered with (the add-a-colleague
+  // round's own addition). org.invalid_email is the create's address
+  // refusal (an address the caller typed), org.node_not_found the
+  // create's answer for a binding target that went stale under the
+  // form, org.invitation_rate_limited and org.invitations_disabled the
+  // two invitation gates, org.internal_error the envelope every
+  // unclassifiable org failure folds into -- and the route-level rbac
+  // answer the surface's reads and its send can draw is the
+  // already-pinned rbac.permission_denied above (go/rbac/errors.go:56).
+  'org.invalid_email': 'go/org/errors.go:222 (ErrInvalidEmail)',
+  'org.invitation_rate_limited': 'go/org/errors.go:215 (ErrInvitationRateLimited)',
+  'org.invitations_disabled': 'go/org/errors.go:226 (ErrInvitationsDisabled)',
+  'org.node_not_found': 'go/org/errors.go:33 (ErrNodeNotFound)',
+  'org.internal_error': 'go/org/errors.go:121 (ErrInternal)',
 }
 
 /**
@@ -334,7 +352,7 @@ function nonClientCodes(codes: readonly string[]): string[] {
   return codes.filter((code) => !code.startsWith('client.'))
 }
 
-/** The nine whitelists by surface, for failure messages that name the
+/** The ten whitelists by surface, for failure messages that name the
  * list a drift was found in. */
 const SURFACE_WHITELISTS: Readonly<Record<string, readonly string[]>> = {
   'auth-ui sign-in/session': AUTH_UI_ERROR_TEXT_CODES,
@@ -346,6 +364,7 @@ const SURFACE_WHITELISTS: Readonly<Record<string, readonly string[]>> = {
   'share action (case detail)': Object.keys(SHARE_ACTION_ERROR_TEXT_KEYS),
   'patient share page': Object.keys(SHARE_VIEW_ERROR_TEXT_KEYS),
   'credits surface': Object.keys(CREDITS_ERROR_TEXT_KEYS),
+  'team invite surface': Object.keys(TEAM_ERROR_TEXT_KEYS),
 }
 
 /** A citation's path, annotated line and sentinel identifier. The
@@ -450,10 +469,18 @@ describe('reachable-error whitelists vs the server code set', () => {
     // two surfaces added (three in go/sharing/errors.go and the
     // creation/access rate-limit sentinel in go/sharing/ratelimit.go) +
     // billing.internal_error, the one handler-level envelope the
-    // block-D round's credits surface can be answered with. The size
-    // guard makes a GO_PINNED edit (in either direction) fail loudly
-    // here rather than silently through the subset assertions below.
-    expect(Object.keys(GO_PINNED)).toHaveLength(73)
+    // block-D round's credits surface can be answered with + the five
+    // org-module sentinels in go/org/errors.go the add-a-colleague
+    // round's team surface added (its invite send can draw the address
+    // refusal, the node gone stale and the two invitation gates, and
+    // its reads and send fold an unclassifiable failure into the
+    // internal envelope; org's other codes, which no operation this
+    // surface calls can answer with, stay out of the enumeration
+    // exactly as billing.invalid_limit does). The
+    // size guard makes a GO_PINNED edit (in either direction) fail
+    // loudly here rather than silently through the subset assertions
+    // below.
+    expect(Object.keys(GO_PINNED)).toHaveLength(78)
   })
 
   it('renders a bilingual text for every reachable smile-simulation code', () => {
@@ -517,6 +544,30 @@ describe('reachable-error whitelists vs the server code set', () => {
     expect(unknownEn).not.toBe('')
     expect(unknownZh).not.toBe('')
     for (const [code, textKey] of Object.entries(SHARE_VIEW_ERROR_TEXT_KEYS)) {
+      if (code.startsWith('client.')) {
+        continue
+      }
+      const en = textOf(enUS, textKey)
+      const zh = textOf(zhCN, textKey)
+      expect(en, `${code} maps to ${textKey}, which is missing or empty in en-US`).not.toBe('')
+      expect(zh, `${code} maps to ${textKey}, which is missing or empty in zh-CN`).not.toBe('')
+      expect(en, `${code} maps to ${textKey}, which resolves to the unknown fallback`).not.toBe(unknownEn)
+      expect(zh, `${code} maps to ${textKey}, which resolves to the unknown fallback`).not.toBe(unknownZh)
+    }
+  })
+
+  it('renders a bilingual text for every reachable team-surface code', () => {
+    // The add-a-colleague round's own leg of the same regression: a
+    // code the team surface's invite send can be answered with must
+    // resolve to HUMAN text in both languages -- the rbac gate's
+    // denial, go/org's create-operation refusals and the internal
+    // envelope included -- never a raw key and never another
+    // language's text.
+    const unknownEn = textOf(enUS, 'team.invite.errors.unknown')
+    const unknownZh = textOf(zhCN, 'team.invite.errors.unknown')
+    expect(unknownEn).not.toBe('')
+    expect(unknownZh).not.toBe('')
+    for (const [code, textKey] of Object.entries(TEAM_ERROR_TEXT_KEYS)) {
       if (code.startsWith('client.')) {
         continue
       }

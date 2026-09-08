@@ -104,7 +104,18 @@
  * simulation jobs append their own deduct rows statefully, and a
  * job's terminal outcome settles the row in place (confirmed on
  * success, refunded when the simulateJobOutcome option scripts a
- * dead_letter generation -- see the two options' docs). The notes
+ * dead_letter generation -- see the two options' docs), plus the team
+ * surface's four org calls mirroring go/org's backend-only fragment
+ * (org-api.ts): GET /api/v1/org/members (200, the tenant's roster --
+ * the configured account's own active row plus the reader's by
+ * default), GET /api/v1/org/invitations (200, the tenant's pending
+ * invitations, newest first, stateful from a create),
+ * GET /api/v1/org/nodes (200, the tenant's single root node, the
+ * invitee's binding target) and POST /api/v1/org/invitations (201,
+ * the created invitation appended to that tenant's list; an address
+ * with no '@' or with whitespace answers the real service's 400
+ * org.invalid_email, and the teamInviteRefusal option scripts the
+ * other create refusals its surface renders). The notes
  * answers mirror the real handler's
  * refusals: a create whose trimmed text is empty answers 400
  * notes.text_required (internal/notes/handler.go), one over the
@@ -297,6 +308,29 @@ export interface DemoServerOptions {
   /** Refuses a note create with the rbac write gate's 403 (the answer a
    * caller without notes:write gets); default false. */
   readonly denyNotesWrite?: boolean
+  /** The GET /api/v1/org/members roster of the default tenant as first
+   * served; defaults to the two seeded demo memberships of the
+   * configured tenant (the owner's own active row and the reader's --
+   * the mirror of the real boot's demo-owner and demo-reader
+   * registrations landing in org's memberships table). */
+  readonly initialTeamMembers?: readonly DemoOrgMembership[]
+  /** The GET /api/v1/org/invitations pending list of the default
+   * tenant as first served; default [] -- a freshly booted server has
+   * none pending. Stateful from there: a create appends the invitation
+   * later list answers of the same tenant carry. */
+  readonly initialTeamInvitations?: readonly DemoOrgInvitation[]
+  /** Answers every org read (members, invitations, nodes) with the rbac
+   * read gate's 403 -- the answer a caller without org:read gets;
+   * default false. */
+  readonly denyTeamRead?: boolean
+  /** Refuses a POST /api/v1/org/invitations with this coded answer -- a
+   * suite scripts the create refusals its surface must render (the
+   * address refusal, the invitation rate limit); default undefined --
+   * every create succeeds. */
+  readonly teamInviteRefusal?: {
+    readonly status: number
+    readonly code: string
+  }
   /** The GET /api/v1/authn/sessions list as first served; defaults to
    * three active demo rows -- the current session on the option's own
    * session id (device 'Demo laptop') plus two others. Stateful from
@@ -595,6 +629,60 @@ const DEMO_CASE_CREATED_AT = DEMO_NOTE_CREATED_AT
  * above. */
 const DEMO_SHARE_EXPIRES_AT = '2026-10-04T00:00:00Z'
 
+/** The org roster answers' wire shapes, mirroring go/org's spec
+ * (OrgMembership, OrgInvitation, OrgNode) -- the demo answers a real
+ * org surface would get from a freshly booted server: membership rows
+ * carry opaque user ids only, invitation rows name no invitee (the
+ * address never crosses the boundary; see org-api.ts). */
+export interface DemoOrgMembership {
+  readonly membershipId: string
+  readonly userId: string
+  readonly nodeId: string
+  readonly status: string
+  readonly createdAt: string
+}
+
+export interface DemoOrgInvitation {
+  readonly id: string
+  readonly nodeId: string
+  readonly status: string
+  readonly expiresAt: string
+  readonly createdAt: string
+}
+
+export interface DemoOrgNode {
+  readonly id: string
+  readonly parentId: string
+  readonly path: string
+  readonly depth: number
+  readonly name: string
+  readonly kind: string
+  readonly createdAt: string
+  readonly updatedAt: string
+}
+
+/** The root node of the demo tenants' organization trees: the single
+ * node an invitation binds an invitee to. The real demo tenants' roots
+ * were named by their own provisioning history, which the app never
+ * renders from this read -- the roster and the invite flow use only the
+ * node's id and depth -- so the fixture names it with a plain
+ * identifier rather than importing clinic copy. */
+const DEMO_TEAM_ROOT_NODE: DemoOrgNode = {
+  id: 'node-root-1',
+  parentId: '',
+  path: '/node-root-1/',
+  depth: 0,
+  name: 'Demo clinic',
+  kind: 'clinic',
+  createdAt: DEMO_NOTE_CREATED_AT,
+  updatedAt: DEMO_NOTE_CREATED_AT,
+}
+
+/** The pending-invitation expiry the demo answers with: far enough
+ * ahead of the fixed demo epoch that no rendered expiry can read as
+ * stale. */
+const DEMO_INVITATION_EXPIRES_AT = '2026-12-31T23:59:00Z'
+
 /** The raw bytes the access route serves for a granted share -- the
  * decoded form of the simulation-result payload above, since the
  * shared object IS the simulation's output. Not a decodable image:
@@ -705,6 +793,10 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     initialNotes = [],
     denyNotesRead = false,
     denyNotesWrite = false,
+    initialTeamMembers,
+    initialTeamInvitations,
+    denyTeamRead = false,
+    teamInviteRefusal,
     initialSessions,
     initialLoginAttempts,
     initialIdentities = [],
@@ -783,6 +875,59 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
   // The object ids the demo's photo-upload answers hand out, counting
   // per responder instance like the note and case ids.
   let nextObjectId = 1
+  // The org roster and pending-invitation state, keyed by tenant like
+  // the notes and case lists: the demo roster mirrors a freshly booted
+  // server's tenant -- the configured account's own active membership
+  // row plus the reader's (the grant-asymmetric demo member, who also
+  // holds a membership row here exactly like the real seed's
+  // demo-reader registration) -- and the invitations start as
+  // option-scripted (empty by default) and grow statefully: a create
+  // appends the row later list answers of the same tenant carry.
+  const membersByTenant = new Map<string, DemoOrgMembership[]>([
+    [
+      tenantId,
+      [
+        ...(initialTeamMembers ?? [
+          {
+            membershipId: 'membership-owner',
+            userId,
+            nodeId: DEMO_TEAM_ROOT_NODE.id,
+            status: 'active',
+            createdAt: DEMO_NOTE_CREATED_AT,
+          },
+          {
+            membershipId: 'membership-reader',
+            userId: DEMO_READER_USER_ID,
+            nodeId: DEMO_TEAM_ROOT_NODE.id,
+            status: 'active',
+            createdAt: DEMO_NOTE_CREATED_AT,
+          },
+        ]),
+      ],
+    ],
+  ])
+  const membersOf = (tenant: string): DemoOrgMembership[] => {
+    const list = membersByTenant.get(tenant)
+    if (list === undefined) {
+      const fresh: DemoOrgMembership[] = []
+      membersByTenant.set(tenant, fresh)
+      return fresh
+    }
+    return list
+  }
+  const invitationsByTenant = new Map<string, DemoOrgInvitation[]>([
+    [tenantId, [...(initialTeamInvitations ?? [])]],
+  ])
+  const invitationsOf = (tenant: string): DemoOrgInvitation[] => {
+    const list = invitationsByTenant.get(tenant)
+    if (list === undefined) {
+      const fresh: DemoOrgInvitation[] = []
+      invitationsByTenant.set(tenant, fresh)
+      return fresh
+    }
+    return list
+  }
+  let nextInvitationId = 1
   // The smile-simulation ledger: every job this responder accepted,
   // keyed by its job id and remembered in creation order. Each job's
   // live status advances deterministically per job-status read --
@@ -1177,6 +1322,72 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         nextNoteId += 1
         notesOf(principal.tenant_id).push(note)
         return jsonResponse(201, note)
+      }
+      case 'GET /api/v1/org/members': {
+        // The org reads share one gate: the rbac layer answers a caller
+        // without org:read with the same 403 on all three, so the deny
+        // switch refuses them together exactly like the real server's
+        // per-operation permission selector would. The bearer is
+        // resolved before the gate answers, mirroring the notes gates.
+        const principal = principalOf(call)
+        if (denyTeamRead) {
+          return errorResponse(403, RBAC_PERMISSION_DENIED_CODE)
+        }
+        return jsonResponse(200, { members: membersOf(principal.tenant_id) })
+      }
+      case 'GET /api/v1/org/invitations': {
+        const principal = principalOf(call)
+        if (denyTeamRead) {
+          return errorResponse(403, RBAC_PERMISSION_DENIED_CODE)
+        }
+        // Newest first, the real list's documented order
+        // (org_listInvitations): creation order reversed.
+        return jsonResponse(200, {
+          invitations: [...invitationsOf(principal.tenant_id)].reverse(),
+        })
+      }
+      case 'GET /api/v1/org/nodes': {
+        // The bearer is resolved (and an anonymous read fails loudly as
+        // the harness bug it is) even though the answer carries no
+        // principal: the tree is a tenant-member read like every other
+        // org call, and the demo's one root serves every tenant.
+        principalOf(call)
+        if (denyTeamRead) {
+          return errorResponse(403, RBAC_PERMISSION_DENIED_CODE)
+        }
+        return jsonResponse(200, { nodes: [DEMO_TEAM_ROOT_NODE] })
+      }
+      case 'POST /api/v1/org/invitations': {
+        // The write gate: the refusal switch a suite scripts (the
+        // address refusal, the rate limit, the disabled gate), and the
+        // bearer resolved before it answers like every other gate.
+        const principal = principalOf(call)
+        if (teamInviteRefusal !== undefined) {
+          return errorResponse(
+            teamInviteRefusal.status,
+            teamInviteRefusal.code,
+          )
+        }
+        // The real service validates the address before anything is
+        // stored (go/org's validateInviteEmail, answered
+        // org.invalid_email); the demo mirrors the refusal for an
+        // address with no '@' or with whitespace, never an empty
+        // create.
+        const body = bodyObject(call)
+        const email = typeof body.email === 'string' ? body.email.trim() : ''
+        if (!/^[^\s@]+@[^\s@]+$/.test(email)) {
+          return errorResponse(400, 'org.invalid_email')
+        }
+        const created: DemoOrgInvitation = {
+          id: `invitation-${nextInvitationId}`,
+          nodeId: DEMO_TEAM_ROOT_NODE.id,
+          status: 'pending',
+          expiresAt: DEMO_INVITATION_EXPIRES_AT,
+          createdAt: DEMO_NOTE_CREATED_AT,
+        }
+        nextInvitationId += 1
+        invitationsOf(principal.tenant_id).push(created)
+        return jsonResponse(201, created)
       }
       case 'GET /api/v1/cases': {
         // The cases surface has no read gate (any member of the tenant

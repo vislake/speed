@@ -611,32 +611,41 @@ const demoOrgUserHeader = "X-Demo-User-Id"
 
 // demoOrgSubjectResolver stands in for the SubjectResolver authn will
 // eventually supply from a verified access token's claims, serving the
-// two modules that declare the same structurally identical seam and keep
-// their caller identity header-only in this app: org's two caller-scoped
-// endpoints (creating and accepting an invitation) and every notification
-// endpoint, which resolves its caller's inbox, contacts and preferences
-// through it. It exists only so this reference app has *some* way to
-// demonstrate those endpoints end to end before authn exists.
+// modules that declare the same structurally identical seam: org's two
+// caller-scoped endpoints (creating and accepting an invitation), every
+// notification endpoint (which resolves its caller's inbox, contacts and
+// preferences through it) and integration's creator reads. It exists only
+// so this reference app has *some* way to demonstrate those endpoints end
+// to end before authn exists.
 //
 // In its default, header-enabled wiring, who a caller is is the
 // X-Demo-User-Id header value, and nothing else: the resolver never falls
 // back to the verified Principal authn.Middleware leaves in the request
-// context. The org-web round's own rule governs -- an endpoint that
-// resolves its caller from an unauthenticated, client-supplied header is
-// scaffold, and a browser whose requests carry no demo header is refused
-// until the resolver reads a real token -- and this app's flows pinned
-// that refusal as the notification surface's identity gate
+// context, and an authenticated caller with no demo header gets the
+// module's own per-operation 401 (notification.subject_unresolved,
+// integration.subject_unresolved, org's sibling), never a fabricated user
+// id. That header-only refusal is pinned behaviour of this app's rig
 // (notification_flow_test.go's subject-less leg; demoRouteGuards names the
-// path routePublic for the same reason): an authenticated caller with no
-// demo header gets the module's own per-operation 401
-// (notification.subject_unresolved and org's sibling), never a fabricated
-// user id. Notes' create handler is the one seam that additionally accepts
-// principals -- it resolves through demoNotesSubjectResolver below, not
-// through this type. The headerDisabled field below is the deliberate
-// exception to the "never falls back to the Principal" rule: an operator
-// who sets APP_DISABLE_DEMO_USER_HEADER has declared this deployment reads
-// no demo header at all, so the only identity left to resolve a caller
-// from is the verified Principal.
+// path routePublic for the same reason) -- for notification's and
+// integration's surfaces it stays exactly that, because no browser-shaped
+// flow reaches them yet.
+//
+// The principalFallback field is the org-web round's deliberate exception
+// for ORG's wiring alone, the same shape demoNotesSubjectResolver's
+// header-then-Principal fallback already gives notes' and cases' creator
+// seams: org's caller-scoped endpoints now serve browser-shaped callers --
+// a signed-in clinic owner whose requests carry a bearer token and no demo
+// header -- so the org module is wired with principalFallback set, and a
+// header-less request with a verified Principal resolves as that
+// Principal's user. The field's zero value (notification's, integration's
+// and every test's instance) reproduces the original header-only resolver
+// exactly, keeping the pinned refusal where it belongs.
+//
+// The headerDisabled field is the other deliberate exception to the
+// "never falls back to the Principal" rule: an operator who sets
+// APP_DISABLE_DEMO_USER_HEADER has declared this deployment reads no demo
+// header at all, so the only identity left to resolve a caller from is the
+// verified Principal.
 //
 // This is a placeholder, not a pattern to copy into a real deployment: a
 // real SubjectResolver must derive the caller from a source the server
@@ -659,6 +668,13 @@ const demoOrgUserHeader = "X-Demo-User-Id"
 // disableDemoUserHeaderEnv's own doc comment for the full contract.
 type demoOrgSubjectResolver struct {
 	headerDisabled bool
+
+	// principalFallback lets ORG's wiring (server.go's org.NewModule
+	// option) resolve a header-less request from the verified Principal
+	// authn.Middleware left in the request context -- the browser-shaped
+	// caller the org-web surface needs. Zero value keeps the original
+	// header-only contract (see the type's own doc comment).
+	principalFallback bool
 }
 
 // Subject implements org.SubjectResolver, notification.SubjectResolver and
@@ -666,15 +682,28 @@ type demoOrgSubjectResolver struct {
 // onto, since all three seams share the identical
 // (r *http.Request) (string, bool) shape with the identical fail-closed
 // contract, and this app already has one instance to hand each of them. It
-// fails closed: no header (and, in the headerDisabled wiring, no verified
-// Principal) reports ("", false), and the module's own per-operation
-// refusal (notification.subject_unresolved,
+// fails closed: no header, no verified Principal in the wiring that reads
+// one, reports ("", false), and the module's own per-operation refusal
+// (notification.subject_unresolved,
 // integration.subject_unresolved, org's sibling) is what a caller then
 // sees.
+//
+// Resolution order in the header-enabled wiring: the X-Demo-User-Id header
+// when present (the pre-auth flows' affordance, unchanged); else, when
+// principalFallback is set (org's wiring only), the verified Principal;
+// else fail closed. In the headerDisabled wiring, the verified Principal
+// alone, exactly as before.
 func (r demoOrgSubjectResolver) Subject(req *http.Request) (string, bool) {
 	if !r.headerDisabled {
-		userID := req.Header.Get(demoOrgUserHeader)
-		return userID, userID != ""
+		if userID := req.Header.Get(demoOrgUserHeader); userID != "" {
+			return userID, true
+		}
+		if r.principalFallback {
+			if principal, ok := authn.PrincipalFromContext(req.Context()); ok && principal.UserID != "" {
+				return principal.UserID, true
+			}
+		}
+		return "", false
 	}
 	principal, ok := authn.PrincipalFromContext(req.Context())
 	if !ok || principal.UserID == "" {
@@ -706,13 +735,15 @@ var (
 // their real user ids -- which resolve to no notification addresses, an
 // ordinary skip (see demo_notification.go's demoUserAddresses).
 //
-// Only notes' creator seam gets this second source. Org's and the
-// notification module's caller-scoped endpoints keep demoOrgSubjectResolver's
-// header-only read -- notification because its subject-less refusal is a
-// pinned behaviour of this app's rig (see demoOrgSubjectResolver's own
-// comment), org because its browser-shaped flows are the org-web round's
-// work -- and a request that reaches those surfaces without the header
-// stays refused rather than acting as the principal's user id.
+// Notes' creator seam is not alone in getting this second source any more:
+// org's caller-scoped endpoints joined it when the org-web round shipped
+// the team surface -- the org module's demoOrgSubjectResolver instance is
+// wired with the type's principalFallback field set, giving org the
+// identical header-then-Principal shape (see demoOrgSubjectResolver's own
+// doc comment). The notification module's caller-scoped endpoints keep the
+// header-only read, because its subject-less refusal is a pinned behaviour
+// of this app's rig -- and a request that reaches those surfaces without
+// the header stays refused rather than acting as the principal's user id.
 //
 // This is a placeholder, not a pattern to copy into a real deployment:
 // the header is exactly as unverifiable here as in demoOrgSubjectResolver,
@@ -2042,7 +2073,20 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	orgModule := org.NewModule(db,
 		org.WithEmailIndexer(orgIndexer),
 		org.WithFeatureGate(orgFeatureGate{service: &configService}),
-		org.WithSubjectResolver(demoOrgSubjectResolver{headerDisabled: cfg.DisableDemoUserHeader}),
+		// principalFallback is the org-web round's wiring: org's two
+		// caller-scoped endpoints now also serve browser-shaped callers --
+		// the team surface's signed-in owner, whose requests carry a bearer
+		// token and no X-Demo-User-Id header -- so the org module's resolver
+		// instance falls back to the verified Principal when no demo header
+		// is present, the same header-then-Principal shape
+		// demoNotesSubjectResolver gives notes' and cases' creator seams.
+		// The notification and integration modules keep the flag unset (see
+		// demoOrgSubjectResolver's own doc comment for why their
+		// header-only refusal stays pinned).
+		org.WithSubjectResolver(demoOrgSubjectResolver{
+			headerDisabled:    cfg.DisableDemoUserHeader,
+			principalFallback: true,
+		}),
 		org.WithMailFrom("invitations@reference-app.example"),
 		org.WithInvitationLinkBuilder(func(ctx context.Context, token string) (string, error) {
 			tenant, tenantErr := pkgcore.MustTenantFromContext(ctx)
@@ -2053,10 +2097,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			if !ok {
 				return "", fmt.Errorf("reference-app: no host configured for tenant %q", tenant)
 			}
-			// This app ships no frontend invitation-acceptance page: its
-			// consumer shell (examples/reference-app/web) carries no org
-			// views, org's accept flow being demoed at the API level. The
-			// link names org's real
+			// This app ships no frontend invitation-acceptance page: the
+			// consumer shell's team surface (examples/reference-app/web's
+			// team-view) is where an invitation is CREATED, while accepting
+			// one stays the API-level flow a fresh invitee drives from the
+			// email link. The link names org's real
 			// POST /api/v1/org/invitations/accept endpoint and carries the
 			// token as a query parameter purely so it is one recognizable
 			// string a person (or, in server_test.go's end-to-end suite, a
@@ -2391,8 +2436,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// on the registry, and the drain loop below moves every handler onto
 	// the queue); and the user-address resolver is the demo directory that
 	// demo_notification.go owns. WithSubjectResolver hands the HTTP surface
-	// the same demo identity layer org's and notes' handlers use, so a
-	// caller is whoever the X-Demo-User-Id header says -- the module
+	// the same demo identity layer type org's handler uses -- its own
+	// instance keeps principalFallback unset, so this surface's caller is
+	// whoever the X-Demo-User-Id header says (see demoOrgSubjectResolver's
+	// own doc comment on why the two wirings differ) -- the module
 	// resolves identity per operation and never reads it from the request
 	// otherwise.
 	notificationModule := notification.NewModule(db,

@@ -14,7 +14,8 @@
  * kinds the app knows. The business surfaces live in views/: home
  * (config/feature-driven), cases (the clinic's case list, the one-page
  * creation flow and one case's detail -- the block-A acceptance
- * surface), notes, credits (the clinic's credit balance and ledger --
+ * surface), notes, team (who works in the clinic and the invite-a-
+ * colleague flow), credits (the clinic's credit balance and ledger --
  * the block-D surface) and account. The
  * binding callback is the account surface's subroute: the fragment
  * /auth/binding/<provider>?code=<code>&state=<state> is what the
@@ -46,6 +47,7 @@ import { CaseDetailView } from './views/case-detail-view.js'
 import { CasesCreateView } from './views/case-create-view.js'
 import { CasesView } from './views/cases-view.js'
 import { NotesView } from './views/notes-view.js'
+import { TeamView } from './views/team-view.js'
 import { CreditsView } from './views/credits-view.js'
 import { AccountView } from './views/account-view.js'
 import { SignInView } from './views/sign-in-view.js'
@@ -58,6 +60,9 @@ export const ROUTE_HOME = '/'
 export const ROUTE_CASES = '/cases'
 /** The notes list fragment. */
 export const ROUTE_NOTES = '/notes'
+/** The team surface fragment: who works in the clinic and who has
+ * been invited (the add-a-colleague surface). */
+export const ROUTE_TEAM = '/team'
 /** The credits surface fragment: the clinic's credit balance and
  * ledger (block D). */
 export const ROUTE_CREDITS = '/credits'
@@ -103,6 +108,7 @@ export type AppFragment =
   | { readonly kind: 'casesCreate' }
   | { readonly kind: 'caseDetail'; readonly caseId: string }
   | { readonly kind: 'notes' }
+  | { readonly kind: 'team' }
   | { readonly kind: 'credits' }
   | { readonly kind: 'account' }
   | { readonly kind: 'binding'; readonly target: BindingTarget }
@@ -162,6 +168,9 @@ export function parseHashFragment(fragment: string): AppFragment {
   if (path === ROUTE_NOTES) {
     return { kind: 'notes' }
   }
+  if (path === ROUTE_TEAM) {
+    return { kind: 'team' }
+  }
   if (path === ROUTE_CREDITS) {
     return { kind: 'credits' }
   }
@@ -215,6 +224,8 @@ function selectedNavId(fragment: AppFragment): string | null {
       return NAV_CASES
     case 'notes':
       return NAV_NOTES
+    case 'team':
+      return NAV_TEAM
     case 'credits':
       return NAV_CREDITS
     case 'account':
@@ -232,6 +243,7 @@ function selectedNavId(fragment: AppFragment): string | null {
 const NAV_HOME = 'nav-home'
 const NAV_CASES = 'nav-cases'
 const NAV_NOTES = 'nav-notes'
+const NAV_TEAM = 'nav-team'
 const NAV_CREDITS = 'nav-credits'
 const NAV_ACCOUNT = 'nav-account'
 
@@ -281,6 +293,12 @@ export function AppView(): ReactElement {
       label: t('nav.notes'),
       href: navHref(ROUTE_NOTES),
       selected: selected === NAV_NOTES,
+    },
+    {
+      id: NAV_TEAM,
+      label: t('nav.team'),
+      href: navHref(ROUTE_TEAM),
+      selected: selected === NAV_TEAM,
     },
     {
       id: NAV_CREDITS,
@@ -338,6 +356,9 @@ export function AppView(): ReactElement {
       break
     case 'notes':
       content = <NotesView />
+      break
+    case 'team':
+      content = <TeamView />
       break
     case 'credits':
       content = <CreditsView />

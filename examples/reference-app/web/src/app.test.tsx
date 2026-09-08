@@ -71,11 +71,12 @@ import { FEATURE_SMILE_PREVIEW } from './views/home-view.js'
 import { clearNotesDraft } from './views/notes-draft.js'
 
 describe('parseHashFragment', () => {
-  it('parses the five routes, with or without a leading slash', () => {
+  it('parses the six routes, with or without a leading slash', () => {
     expect(parseHashFragment('')).toEqual({ kind: 'home' })
     expect(parseHashFragment('/')).toEqual({ kind: 'home' })
     expect(parseHashFragment('/cases')).toEqual({ kind: 'cases' })
     expect(parseHashFragment('/notes')).toEqual({ kind: 'notes' })
+    expect(parseHashFragment('/team')).toEqual({ kind: 'team' })
     expect(parseHashFragment('/credits')).toEqual({ kind: 'credits' })
     expect(parseHashFragment('/account')).toEqual({ kind: 'account' })
   })

@@ -469,3 +469,52 @@ func TestDemoSubjectResolverFor_DefaultIsByteIdenticalToDemoSubjectResolver(t *t
 		})
 	}
 }
+
+// TestDemoOrgSubjectResolver_PrincipalFallback_UsesPrincipalWhenNoHeader
+// pins the org-web round's exception to the header-only contract: org's
+// wiring sets principalFallback (server.go's org.NewModule option), so a
+// header-less request carrying a verified Principal resolves as that
+// Principal's user -- the browser-shaped caller the team surface needs --
+// while the header keeps winning when present (the pre-auth flows'
+// affordance, unchanged), the zero-value resolver stays header-only (the
+// pinned refusal above), and a request with neither source still fails
+// closed.
+func TestDemoOrgSubjectResolver_PrincipalFallback_UsesPrincipalWhenNoHeader(t *testing.T) {
+	const principalUserID = "real-signed-in-owner"
+
+	withFallback := demoOrgSubjectResolver{principalFallback: true}
+
+	// Header-less, Principal-only: the browser shape -- resolved as the
+	// Principal, never refused.
+	principalOnly := withTestPrincipal(requestInTenant(http.MethodGet, "tenant-acme"), principalUserID, "tenant-acme")
+	userID, ok := withFallback.Subject(principalOnly)
+	if !ok || userID != principalUserID {
+		t.Fatalf("principalFallback resolver with no header = (%q, %v), want the principal's %q",
+			userID, ok, principalUserID)
+	}
+
+	// The header still wins when both are present -- the fallback is an
+	// addition for header-less callers, never a demotion of the pre-auth
+	// flows' affordance.
+	withBoth := requestInTenant(http.MethodGet, "tenant-acme")
+	withBoth.Header.Set(demoOrgUserHeader, demoNotesCreatorUserID)
+	withBoth = withTestPrincipal(withBoth, principalUserID, "tenant-acme")
+	userID, ok = withFallback.Subject(withBoth)
+	if !ok || userID != demoNotesCreatorUserID {
+		t.Fatalf("principalFallback resolver with a header = (%q, %v), want the header's %q",
+			userID, ok, demoNotesCreatorUserID)
+	}
+
+	// Neither source: fail closed, exactly like the header-only shape.
+	neither := requestInTenant(http.MethodGet, "tenant-acme")
+	if _, has := withFallback.Subject(neither); has {
+		t.Fatal("the principalFallback resolver resolved a subject from nothing; it must fail closed")
+	}
+
+	// The zero value stays header-only -- the pinned notification and
+	// integration contract untouched by org's exception.
+	zeroValue := demoOrgSubjectResolver{}
+	if _, has := zeroValue.Subject(principalOnly); has {
+		t.Fatal("the zero-value org resolver resolved a subject from the Principal alone; principalFallback must be opt-in")
+	}
+}

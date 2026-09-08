@@ -7,7 +7,8 @@
     "cases": "病例",
     "notes": "记事",
     "account": "账户",
-    "credits": "额度"
+    "credits": "额度",
+    "team": "团队"
   },
   "signIn": {
     "registerPrompt": "还没有账户？",
@@ -223,6 +224,53 @@
       "internalError": "读取额度信息时服务出错，请稍后重试。",
       "client": "无法连接服务器，请检查网络后重试。",
       "unknown": "读取额度信息失败，请稍后重试。"
+    }
+  },
+  "team": {
+    "heading": "团队",
+    "intro": "查看本诊所的在职成员，以及已受邀但尚未加入的同事。",
+    "members": {
+      "heading": "成员",
+      "memberColumn": "成员",
+      "statusColumn": "状态",
+      "joinedColumn": "加入时间",
+      "youRow": "您",
+      "statusActive": "在职",
+      "statusInvited": "受邀",
+      "statusSuspended": "已停用",
+      "emptyTitle": "还没有成员",
+      "emptyDescription": "接受您邀请的同事会显示在这里。"
+    },
+    "invitations": {
+      "heading": "待加入的邀请",
+      "addressColumn": "受邀邮箱",
+      "statusColumn": "状态",
+      "sentColumn": "发出时间",
+      "expiresColumn": "过期时间",
+      "unknownRecipient": "从其他设备发出的邀请",
+      "emptyTitle": "没有待加入的邀请",
+      "emptyDescription": "您发出的邀请在同事加入之前会一直列在这里。"
+    },
+    "status": {
+      "pending": "等待接受"
+    },
+    "invite": {
+      "action": "邀请同事",
+      "emailLabel": "同事的邮箱地址",
+      "emailRequired": "请输入同事的邮箱地址。",
+      "emailInvalid": "这看起来不是有效的邮箱地址。",
+      "send": "发送邀请",
+      "sentNotice": "邀请已发出。同事打开邀请链接后即可加入本诊所。",
+      "errors": {
+        "permissionDenied": "没有邀请成员的权限。如果认为这是误判，请联系管理员。",
+        "invalidEmail": "该邮箱地址无法接收邀请，请检查后重试。",
+        "nodeNotFound": "本诊所尚未准备好接收新成员，请稍后再试。",
+        "rateLimited": "本诊所刚刚发出太多邀请，请稍后再试。",
+        "invitationsDisabled": "本诊所已关闭邀请功能。",
+        "internalError": "发送邀请时出了点问题，请稍后再试。",
+        "client": "无法连接到服务器，请检查网络后重试。",
+        "unknown": "出了点问题，请稍后再试。"
+      }
     }
   }
 }

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/rbac"
 )
 
 // capturingMailer is a test double for pkgcore.Mailer that records every
@@ -377,4 +378,170 @@ func containsUserID(members []orgMembership, userID string) bool {
 		}
 	}
 	return false
+}
+
+// TestOrgInvitation_BrowserShapedInviter_CreateInvitationFromPrincipalAlone
+// pins the org-web round's resolver change end to end: a signed-in owner
+// whose browser requests carry a bearer token and NEITHER demo header --
+// the exact shape the team surface's invite flow produces -- can create an
+// invitation. Before the round, org's caller-scoped endpoints resolved the
+// caller from the X-Demo-User-Id header alone (demoOrgSubjectResolver's
+// header-only contract), so a header-less request was refused with
+// org.subject_unresolved even though the rbac gate ahead of it had already
+// let the same principal through.
+//
+// The caller must genuinely hold the permission its bearer proves: this
+// test grants the registered account the owner role through the live rbac
+// service (the demo seeding grants only the header actors), so the whole
+// composed gate -- rbac's demoSubjectResolver falling back to the verified
+// Principal, then org's own demoOrgSubjectResolver with principalFallback
+// -- is exercised with no demo header anywhere on the wire.
+func TestOrgInvitation_BrowserShapedInviter_CreateInvitationFromPrincipalAlone(t *testing.T) {
+	// The server is built by hand rather than through buildOrgTestServer
+	// because the rbac hook must be armed on the config BEFORE buildServer
+	// runs (the hook fires inside it, right after seedDemoGrants) -- the
+	// same shape TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly
+	// uses. The capturingMailer stands in for the console mailer exactly as
+	// buildOrgTestServer wires it, so the sent invitation can be observed.
+	cfg := testConfig(t)
+	var rbacService *rbac.Service
+	cfg.OnRBACReady = func(svc *rbac.Service) { rbacService = svc }
+	mailer := &capturingMailer{}
+	cfg.Mailer = mailer
+
+	handler, cleanup, _, err := buildServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	t.Cleanup(func() {
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			t.Errorf("cleanup: %v", cleanupErr)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	if rbacService == nil {
+		t.Fatal("cfg.OnRBACReady was never called by buildServer")
+	}
+
+	const tenant = pkgcore.TenantID("tenant-acme")
+	ownerToken := registerAndAuthenticate(t, srv, cfg, tenant, "browser-shaped-owner")
+
+	// The registered account's own user id, read from its own /me answer --
+	// the identity the bearer token proves.
+	meReq, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/authn/me", nil)
+	if err != nil {
+		t.Fatalf("build /me request: %v", err)
+	}
+	meReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	meResp, err := srv.Client().Do(meReq)
+	if err != nil {
+		t.Fatalf("GET /me with bearer: %v", err)
+	}
+	defer meResp.Body.Close()
+	if meResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(meResp.Body)
+		t.Fatalf("GET /me status = %d, want 200; body = %s", meResp.StatusCode, body)
+	}
+	var me struct {
+		UserID string `json:"user_id"`
+	}
+	if decodeErr := json.NewDecoder(meResp.Body).Decode(&me); decodeErr != nil {
+		t.Fatalf("decode /me: %v", decodeErr)
+	}
+	if me.UserID == "" {
+		t.Fatal("/me answered without a user_id")
+	}
+
+	// Grant the account the owner role in the tenant, under the tenant's
+	// own context exactly like seedDemoGrants grants its actors -- the
+	// mirror of the demo seeding that gives the real demo-owner account its
+	// grants in a boot with APP_DEMO_USERS_PASSWORD set.
+	tenantCtx := pkgcore.WithTenant(context.Background(), tenant)
+	ownerSubject := rbac.Subject{TenantID: tenant, UserID: me.UserID}
+	if assignErr := rbacService.AssignRole(tenantCtx, ownerSubject, rbac.BuiltinRoleOwner, rbac.Scope{}); assignErr != nil {
+		t.Fatalf("AssignRole(owner, %q): %v", me.UserID, assignErr)
+	}
+
+	// The tenant's root node, created as the seeded demo owner (the rbac
+	// header actor) -- the setup this suite's other flows use. The invite
+	// below binds the invitee to it.
+	var root orgNode
+	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", ownerToken, "",
+		map[string]string{"name": "Browser Shaped Dental", "kind": "group"}, &root)
+	if root.ID == "" {
+		t.Fatalf("created root = %+v, want a non-empty id", root)
+	}
+
+	// THE browser-shaped call: POST /invitations carrying ONLY the bearer
+	// token -- no X-Demo-User, no X-Demo-User-Id. Both the rbac gate and
+	// org's own SubjectResolver must resolve the caller from the verified
+	// Principal.
+	const inviteeEmail = "browser-invitee@example.com"
+	inviteBody, err := json.Marshal(map[string]string{"email": inviteeEmail, "nodeId": root.ID})
+	if err != nil {
+		t.Fatalf("marshal invite body: %v", err)
+	}
+	inviteReq, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/org/invitations", bytes.NewReader(inviteBody))
+	if err != nil {
+		t.Fatalf("build invite request: %v", err)
+	}
+	inviteReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	inviteReq.Header.Set("Content-Type", "application/json")
+	inviteResp, err := srv.Client().Do(inviteReq)
+	if err != nil {
+		t.Fatalf("POST /api/v1/org/invitations: %v", err)
+	}
+	defer inviteResp.Body.Close()
+	if inviteResp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(inviteResp.Body)
+		t.Fatalf("principal-only invite status = %d, want 201; body = %s", inviteResp.StatusCode, body)
+	}
+	var invitation orgInvitation
+	if decodeErr := json.NewDecoder(inviteResp.Body).Decode(&invitation); decodeErr != nil {
+		t.Fatalf("decode invite response: %v", decodeErr)
+	}
+	if invitation.NodeID != root.ID || invitation.Status != "pending" {
+		t.Fatalf("invitation = %+v, want nodeId %q and status \"pending\"", invitation, root.ID)
+	}
+
+	// The invitation really went out to the address, not just that the
+	// endpoint answered 201.
+	mail := mailer.last(t)
+	if len(mail.To) != 1 || mail.To[0] != inviteeEmail {
+		t.Fatalf("mail.To = %v, want exactly [%q]", mail.To, inviteeEmail)
+	}
+
+	// The pending invitation is listed back -- the roster read a team
+	// surface would make after the invite.
+	listReq, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/org/invitations", nil)
+	if err != nil {
+		t.Fatalf("build invitations list request: %v", err)
+	}
+	listReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	listResp, err := srv.Client().Do(listReq)
+	if err != nil {
+		t.Fatalf("GET /api/v1/org/invitations: %v", err)
+	}
+	defer listResp.Body.Close()
+	if listResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(listResp.Body)
+		t.Fatalf("invitations list status = %d, want 200; body = %s", listResp.StatusCode, body)
+	}
+	var listed struct {
+		Invitations []orgInvitation `json:"invitations"`
+	}
+	if decodeErr := json.NewDecoder(listResp.Body).Decode(&listed); decodeErr != nil {
+		t.Fatalf("decode invitations list: %v", decodeErr)
+	}
+	found := false
+	for _, inv := range listed.Invitations {
+		if inv.ID == invitation.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("invitations list = %+v, want it to include the created invitation %q", listed.Invitations, invitation.ID)
+	}
 }

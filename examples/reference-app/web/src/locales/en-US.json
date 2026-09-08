@@ -7,7 +7,8 @@
     "cases": "Cases",
     "notes": "Notes",
     "account": "Account",
-    "credits": "Credits"
+    "credits": "Credits",
+    "team": "Team"
   },
   "signIn": {
     "registerPrompt": "No account yet?",
@@ -223,6 +224,53 @@
       "internalError": "The server could not read the credit information. Please try again.",
       "client": "Could not reach the server. Please check the connection and try again.",
       "unknown": "The credit information could not be loaded. Please try again."
+    }
+  },
+  "team": {
+    "heading": "Team",
+    "intro": "Who works in this clinic, and who has been invited but has not joined yet.",
+    "members": {
+      "heading": "Members",
+      "memberColumn": "Member",
+      "statusColumn": "Status",
+      "joinedColumn": "Joined",
+      "youRow": "You",
+      "statusActive": "Active",
+      "statusInvited": "Invited",
+      "statusSuspended": "Suspended",
+      "emptyTitle": "No members yet",
+      "emptyDescription": "A colleague who accepts your invitation will appear here."
+    },
+    "invitations": {
+      "heading": "Pending invitations",
+      "addressColumn": "Invited address",
+      "statusColumn": "Status",
+      "sentColumn": "Sent",
+      "expiresColumn": "Expires",
+      "unknownRecipient": "Invited from another device",
+      "emptyTitle": "No pending invitations",
+      "emptyDescription": "Invitations you send stay listed here until your colleague joins."
+    },
+    "status": {
+      "pending": "Pending"
+    },
+    "invite": {
+      "action": "Invite a colleague",
+      "emailLabel": "Colleague's email address",
+      "emailRequired": "Enter the colleague's email address.",
+      "emailInvalid": "That does not look like an email address.",
+      "send": "Send invitation",
+      "sentNotice": "The invitation was sent. Your colleague can join once they open it.",
+      "errors": {
+        "permissionDenied": "You do not have permission to invite members. If you believe this is a mistake, contact an administrator.",
+        "invalidEmail": "That address cannot receive an invitation. Check it and try again.",
+        "nodeNotFound": "This clinic is not ready to receive members yet. Try again later.",
+        "rateLimited": "Too many invitations were sent from this clinic just now. Try again in a moment.",
+        "invitationsDisabled": "Invitations are turned off for this clinic.",
+        "internalError": "Sending the invitation failed. Try again later.",
+        "client": "Could not reach the server. Check your connection and try again.",
+        "unknown": "Something went wrong. Try again later."
+      }
     }
   }
 }
