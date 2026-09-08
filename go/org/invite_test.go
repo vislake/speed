@@ -594,9 +594,13 @@ func TestInviteService_Accept_NoTenantInContext_EmptyUserIsRefused(t *testing.T)
 }
 
 // TestInviteService_Accept_CrossTenantToken_ReturnsInvitationNotFound is the
-// assertion behind "never accept a caller-supplied tenant id": the token is
-// resolved strictly inside the tenant the context already carries, so a token
-// minted elsewhere reveals nothing at all.
+// assertion behind "never accept a caller-supplied tenant id": the token
+// this test accepts was minted in the fixture's own tenant-a, yet Accept is
+// called with a ctx that already carries tenant-b, and on that branch the
+// token is looked up tenant-scoped, so a token minted in another tenant
+// reports org.invitation_not_found and reveals nothing about it (the
+// tenantless branch resolves the tenant from the token itself -- see
+// invite.go's Accept doc comment).
 func TestInviteService_Accept_CrossTenantToken_ReturnsInvitationNotFound(t *testing.T) {
 	f := newInviteFixture(t)
 	result := f.invite(t, "ada@example.test")
