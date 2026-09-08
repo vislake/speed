@@ -76,6 +76,15 @@ const (
 	// records what operation was performed, the event records what
 	// became true as a result -- two different questions that happen to
 	// share a module and entity name.
+	//
+	// It is also the module's only declared audit action, and delete and
+	// restore deliberately emit no audit record of their own: the trail's
+	// collection mechanisms accept only verbs a module declared
+	// (audit.Emit validates against this registrar's own Add list), and no
+	// notes.note.delete / notes.note.restore verb exists here. The notes
+	// audit trail is therefore create-only by design -- recording a note's
+	// deletion or restoration would start with declaring those actions, an
+	// extension this module has deliberately not made.
 	AuditActionNoteCreate = "notes.note.create"
 
 	// Configuration keys, feature flags and their default values below.
