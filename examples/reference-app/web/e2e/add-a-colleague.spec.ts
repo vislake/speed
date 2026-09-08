@@ -328,9 +328,33 @@ const SIGNUP_PASSWORD = 'e2e-invite-population-2026'
  * registration to cover the paying population is the trade this suite
  * has made three times before and not regretted.
  */
+// Closed by d3b4c184, and the root cause is worth keeping because it
+// corrects something this suite got wrong.
+//
+// The invitation mail's accept-link builder had exactly one source of
+// hosts: hostByTenant, the reverse index of cfg.HostTenants. A
+// self-registered clinic's tenant is derived from its registrant's user
+// id, so it can never be in that map -- the link could not be built and
+// invite.go's own ErrInternal came back. The fix is a deployment-level
+// public origin (APP_PUBLIC_ORIGIN, defaulting to localhost:PORT), with
+// the demo tenants' https://host links unchanged byte for byte.
+//
+// THE CORRECTION: when this suite swept cfg.HostTenants' uses after
+// 5873f64 (the periodic scheduler's tenant universe, the same shape),
+// it cleared hostByTenant as "correct by construction -- a Host to
+// tenant map IS the definition of the configured hosts". That was
+// right about resolving an INCOMING request's host and wrong about this
+// direction: asked "which host belongs to this tenant", every tenant
+// needs an answer, not only the configured ones. Two directions, one
+// map, and only one of them is definitionally configured-only. So the
+// sweep that reported "the wrong-population error is in exactly one
+// place" had cleared the source of the next one.
+//
+// @budget rather than untagged: it registers, which the default tier's
+// ten-per-hour register budget cannot absorb.
 test(
   'a self-registered practice can invite a colleague too',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     const email = `e2e-invite-pop-${Date.now()}@example.com`
 
