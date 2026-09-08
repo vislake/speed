@@ -127,6 +127,7 @@ export function CaseDetailView({
                         caseId={caseId}
                         photo={photo}
                         index={position + 1}
+                        patientName={record.patient_name}
                       />
                     </Box>
                   ))}

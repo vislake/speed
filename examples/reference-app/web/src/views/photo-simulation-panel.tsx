@@ -20,6 +20,12 @@
  * job reaches a terminal state. Every refusal on the surface resolves
  * through the smile-simulation reachable-error map
  * (smile-sim-errors.ts) to bilingual text, never a raw code.
+ *
+ * Under a completed comparison the surface offers the clinic its own
+ * copy of the generation: the keep-the-result download control
+ * (simulation-download-action.tsx, which saves the generated image as
+ * a real file named for the patient) beside the block-C patient link
+ * (simulation-share-action.tsx) and the block-D cost line.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -54,6 +60,7 @@ import {
 import { base64ToBytes } from '../base64.js'
 import { useDateFormatter } from '../use-date-formatter.js'
 import { CasePhoto } from './case-photo.js'
+import { SimulationDownloadAction } from './simulation-download-action.js'
 import { SimulationShareAction } from './simulation-share-action.js'
 
 /** The documented smile-style vocabulary, in server order (the ladder
@@ -342,12 +349,16 @@ export function PhotoSimulationPanel({
   caseId,
   photo,
   index,
+  patientName,
 }: {
   readonly caseId: string
   readonly photo: CasesPhoto
   /** The photo's 1-based position on the case, for the original's alt
    * text inside the comparison. */
   readonly index: number
+  /** The patient the case belongs to; the saved simulation file's name
+   * carries it (the keep-the-result control). */
+  readonly patientName: string
 }): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
   // The price the block-D surface renders beside a completed
@@ -714,6 +725,16 @@ export function PhotoSimulationPanel({
           <Typography variant="caption" color="text.secondary">
             {attemptSummary(t, newestSucceeded)}
           </Typography>
+          {/* The keep-the-result control: the practice turns this
+          completed simulation into its own copy -- the generated image
+          saved as a real file named for the patient, mounted under the
+          comparison beside the temporary link it can hand the
+          patient. */}
+          <SimulationDownloadAction
+            simulation={newestSucceeded}
+            photoObjectID={photoObjectID}
+            patientName={patientName}
+          />
           {/* The block-C share action: the practice turns this completed
           simulation into a patient-facing link for the before/after
           pair -- the photo the simulation was generated from and its

@@ -105,6 +105,7 @@
       },
       "strengthPercent": "强度 {{value}}%",
       "simulate": "模拟微笑",
+      "downloadImage": "下载图片",
       "status": {
         "starting": "正在启动微笑模拟…",
         "pending": "微笑模拟已排队，等待开始…",

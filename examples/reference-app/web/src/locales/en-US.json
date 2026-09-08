@@ -105,6 +105,7 @@
       },
       "strengthPercent": "{{value}}% strength",
       "simulate": "Simulate smile",
+      "downloadImage": "Download image",
       "status": {
         "starting": "Starting the smile simulation…",
         "pending": "The smile simulation is queued…",

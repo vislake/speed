@@ -207,9 +207,11 @@ describe('PhotoSimulationPanel', () => {
       // The original appears twice on the page (the photo column and
       // the comparison), so its bytes arrive in two blobs; the
       // automatic preview's result and the chosen-options result each
-      // arrive once (the superseded result's blob is revoked when the
-      // comparison switches, but its materialization is recorded).
-      await waitFor(() => expect(blobDoubles.blobs).toHaveLength(4), {
+      // arrive twice -- once for the comparison's image and once for
+      // its download link (the superseded pair's blobs are revoked
+      // when the comparison switches, but their materialization is
+      // recorded).
+      await waitFor(() => expect(blobDoubles.blobs).toHaveLength(6), {
         timeout: 8000,
       })
       const texts = await Promise.all(
@@ -218,6 +220,8 @@ describe('PhotoSimulationPanel', () => {
       expect(texts.sort()).toEqual([
         'photo-bytes',
         'photo-bytes',
+        'simulation-result-bytes',
+        'simulation-result-bytes',
         'simulation-result-bytes',
         'simulation-result-bytes',
       ])
