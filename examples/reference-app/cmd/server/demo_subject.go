@@ -281,15 +281,28 @@ const billingRoutePath = "/api/v1/billing"
 // enforceOrgNodeScope's own doc comment for the full mechanism and its
 // known gaps).
 //
-// authn's path is routePublic for the same structural reason org's is:
-// authn.Handler resolves and requires its own caller identity per
-// operation through requirePrincipal (server.go's authnPreAuthAllowlist
-// names the pre-auth exceptions), and the operations that must work before
-// anyone has a Principal at all -- registration, every sign-in entry point,
-// token refresh, the social authorize/callback pair -- are a deliberately
-// ungated surface. Gating the whole path on a coarse rbac permission would
-// refuse the sign-in flow this app exists to demonstrate; authn's own
-// per-operation requirePrincipal is where its gate lives.
+// authn's path is routePublic because buildServer composes authn's whole
+// subtree OUTSIDE the chain this table gates: topMux serves every
+// authnAPIPath request from a branch directly behind authn.Middleware's
+// optional verification, never through the tenancy-guarded mux
+// guardModuleRoute returns handlers into -- the same branch shape
+// adminRoutePath gets, with the deliberate difference that authn's branch
+// is UNGATED -- and the only shape in which the enterprise-OIDC
+// login-start path (its provider value the dynamic "oidc:<tenant>" string
+// no exact-match allowlist entry can enumerate) can work at all;
+// server.go's authnAPIPath doc comment has the full composition. The
+// routePublic entry stays so the table's exhaustiveness check keeps
+// naming the path, but no request reaches it through the guard this table
+// drives. authn.Handler itself is the per-operation authority on who may
+// call what (requirePrincipal): the operations that must work before
+// anyone has a Principal at all -- registration, every sign-in entry
+// point, token refresh, the social authorize/callback pair -- are a
+// deliberately ungated surface, while an anonymous request to any other
+// operation is refused with authn's own coded
+// authn.authentication_required. Gating the whole path on a coarse rbac
+// permission would refuse the sign-in flow this app exists to
+// demonstrate; authn's own per-operation requirePrincipal is where its
+// gate lives.
 //
 // storage's path is gated like notes', because storage's handlers perform
 // no identity check of their own: the module declares its permissions and
@@ -342,9 +355,12 @@ var demoRouteGuards = map[string]string{
 	// apiPath; naming it here through the local constant keeps the two in
 	// sync the way the config entries do.
 	notificationRoutePath: routePublic,
-	// authn's path constant lives in server.go, which owns the pre-auth
-	// (method, path) allowlist under it; naming the path here through that
-	// same constant keeps the two in sync the way config's entries do.
+	// authn's path constant lives in server.go, which mounts the whole
+	// authnAPIPath subtree on its own topMux branch -- outside the
+	// tenancy-guarded mux this table gates (see that constant's doc
+	// comment for why authn never sits downstream of tenancy.Middleware);
+	// naming the path here through the same constant keeps the two in
+	// sync the way config's entries do.
 	authnAPIPath: routePublic,
 	// The config module's two pre-auth endpoints, named through its own
 	// exported constants so a rename cannot drift into a silently ungated

@@ -17,19 +17,26 @@ import (
 // account through the app's own register form used to stamp their tenant
 // onto the new account's authn.user.created event.
 //
-// The chain that made it a common case is this host's own composition:
-// authn's pre-auth routes sit inside the authn+tenancy middleware chain
-// (server.go's authnPreAuthAllowlist), and go/tenancy.WithAllowlist only
-// exempts a route from the 403 when tenant RESOLUTION FAILS -- it never
-// skips resolution, so a register request carrying a valid bearer still
-// gets the caller's tenant injected into its context. The api-client
+// The chain that made it a common case was this host's own composition
+// as it stood before authn's subtree moved outside the tenancy chain
+// (server.go's authnAPIPath doc comment records that move): authn's
+// pre-auth routes then sat inside the authn+tenancy middleware chain,
+// under server.go's authnPreAuthAllowlist, and go/tenancy.WithAllowlist
+// only exempted a route from the 403 when tenant RESOLUTION FAILED -- it
+// never skipped resolution, so a register request carrying a valid bearer
+// still got the caller's tenant injected into its context. The api-client
 // attaches the held token to every request by default, so a signed-in
-// caller's register POST reaches authn's handler with their tenant in the
-// context, and (before this round) Service.publish stamped it onto the
-// event. Org's own handleUserCreated (go/org/events.go) then seated the
-// fresh account in the CALLER's tenant, while this host's tenant-less
-// self-service provisioning (self_service.go) skipped it -- the new
-// account got a membership it was never granted and no clinic of its own.
+// caller's register POST reached authn's handler with their tenant in the
+// context, and Service.publish stamped it onto the event. Org's own
+// handleUserCreated (go/org/events.go) then seated the fresh account in
+// the CALLER's tenant, while this host's tenant-less self-service
+// provisioning (self_service.go) skipped it -- the new account got a
+// membership it was never granted and no clinic of its own. Today the
+// composition itself removes the injection path -- authn's branch never
+// passes through tenancy.Middleware, so no register request can arrive
+// with middleware-injected tenant context -- and this test remains the
+// regression pin for that property, driven through the real composed
+// stack.
 //
 // Failing before the fix: the fresh account lands on tenant-acme's org
 // roster and its sign-in resolves into tenant-acme. Passing after: the

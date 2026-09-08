@@ -101,10 +101,12 @@ const (
 	// healthzPath is one of the routes exempted from tenant resolution, not
 	// the only one -- see buildServer's use of tenancy.WithAllowlist. It
 	// shares that list with metricsPath, config's two pre-auth display
-	// endpoints, sharing's and integration's self-resolving routes, org's
-	// accept-invitation route and authn's pre-auth operations, each
-	// exempted for its own reason; buildServer's allowlist comment and
-	// authnPreAuthAllowlist's own doc comment enumerate them all.
+	// endpoints, sharing's and integration's self-resolving routes and
+	// org's accept-invitation route, each exempted for its own reason;
+	// buildServer's allowlist comment enumerates them all. authn's own
+	// subtree is NOT on that list: authnAPIPath never sits downstream of
+	// tenancy.Middleware at all, so no allowlist entry exempts it (see
+	// that constant's own doc comment).
 	healthzPath = "/healthz"
 
 	// metricsPath is the standalone deployment mode's Prometheus scrape
