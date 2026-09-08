@@ -49,14 +49,31 @@ name: docs-check
 #   * error-code index drift: python3 tools/gen_error_code_index.py
 #     --check from the repository root, failing when docs/error-codes.md
 #     is not what the generator renders from the current Go tree --
-#     every apperr.* declaration under go/ and examples/ (test and
-#     generated files excluded), each with its own locales/en-US.toml
-#     catalog entry when one exists. The generator's --check mode shipped
-#     with the script but stayed unwired until the committed index had
-#     drifted 271 codes behind the 359 the tool rendered (later rounds
-#     added codes with no regeneration); this is the wiring that closed
-#     that gap. Like the i18n checker above: plain python3, no setup
-#     step.
+#     every code constructed in Go source under go/ and examples/ with a
+#     literal code argument (test and generated files excluded), named
+#     declaration or inline construction alike, each with its own
+#     locales/en-US.toml catalog entry when one exists. The generator's
+#     --check mode shipped with the script but stayed unwired until the
+#     committed index had drifted 271 codes behind the 359 the tool
+#     rendered (later rounds added codes with no regeneration); this is
+#     the wiring that closed that gap. Like the i18n checker above: plain
+#     python3, no setup step.
+#   * error-code index coverage: python3
+#     tools/check_error_code_index_coverage.py, running next to the
+#     drift check above. The drift check compares the committed index
+#     against the generator's own output -- both sides derive from the
+#     same scanner, so a construction form the generator does not index
+#     is invisible to it (that blind spot once hid 25 inline codes: 13
+#     jobs.* option-time panics, 6 dbkit.* plugin/connect refusals, 4
+#     reference-app request-shape refusals, the two rateLimited-routed
+#     declarations). The coverage check derives the expected code set
+#     independently from the real tree -- its own scanner, multi-line
+#     aware, comment-masked -- and fails printing every code the index
+#     has no row for (plus the unindexable classes: non-literal code
+#     arguments outside an apperr-constructing helper's body, and helper
+#     calls with non-literal arguments), so an extractor blind spot
+#     shows as a real diff instead of silent agreement. Plain python3,
+#     no setup step.
 #   * docs-site build: python3 tools/check_docs_site.py from the
 #     repository root. docs/site/ is a real Hugo project (theme:
 #     hugo-book, pinned as a git submodule -- docs/site/README.md has
@@ -154,6 +171,11 @@ name: docs-check
 #   tools/gen_error_code_index.py      the error-code index generator
 #   tools/test_gen_error_code_index.py and its own unit test suite
 #                                (self-test on change)
+#   tools/check_error_code_index_coverage.py  the error-code index
+#                                coverage checker (the independent side
+#                                of the generator's drift gate)
+#   tools/test_check_error_code_index_coverage.py  and its own unit
+#                                test suite (self-test on change)
 #   .github/actions/setup-hugo-env/**  the pinned Hugo install this job
 #                                needs (self-test on change)
 #   .github/actions/setup-go-env/**    the pinned Go install the markdown-
@@ -182,6 +204,8 @@ on:
       - tools/test_check_markdown_examples.py
       - tools/gen_error_code_index.py
       - tools/test_gen_error_code_index.py
+      - tools/check_error_code_index_coverage.py
+      - tools/test_check_error_code_index_coverage.py
       - .github/actions/setup-hugo-env/**
       - .github/actions/setup-go-env/**
       - .github/workflows/docs-check.yml
@@ -213,6 +237,8 @@ jobs:
         run: python3 tools/check_i18n_keys.py
       - name: Error-code index drift check
         run: python3 tools/gen_error_code_index.py --check
+      - name: Error-code index coverage check
+        run: python3 tools/check_error_code_index_coverage.py
       - name: Install pinned Hugo
         uses: ./.github/actions/setup-hugo-env
       - name: Docs-site build (check_docs_site)
