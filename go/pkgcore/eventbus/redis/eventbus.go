@@ -134,7 +134,11 @@ const (
 //     never silently swallowed -- so that one buggy handler cannot take down
 //     a replica. (On the publishing replica, handlers run synchronously on
 //     the caller's goroutine and behave exactly as they do on the in-memory
-//     bus, errors included.)
+//     bus, errors included -- a panic included: recovered and logged, never
+//     unwound through the publishing caller's stack, so a buggy subscriber
+//     cannot turn a publisher's already-committed success into a crash or a
+//     failed request, and the panicked handler's siblings still run. See
+//     runLocalHandler.)
 //   - A replica that subscribes late does not catch up: the consumer group
 //     starts at the live end of the stream. And a replica whose reader
 //     stays disconnected while its stream fills past its trim window loses
@@ -362,11 +366,50 @@ func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 	}
 	failures := make([]error, 0, len(handlers))
 	for i, h := range handlers {
-		if err := h(ctx, evt); err != nil {
+		err, panicked := runLocalHandler(ctx, evt, i, h)
+		if panicked {
+			// Recovered, logged and dropped -- exactly as on the in-memory
+			// bus, where a panicked handler is not a handler failure a
+			// caller could act on (see pkgcore's runMemoryBusHandler doc
+			// comment for the full rationale); the handler's siblings
+			// still run, and this publish stays a success.
+			continue
+		}
+		if err != nil {
 			failures = append(failures, fmt.Errorf("pkgcore/eventbus/redis: handler %d for event %q failed: %w", i, evt.Type, err))
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// runLocalHandler invokes one locally-subscribed handler on the publishing
+// goroutine with the containment Publish promises. A panic raised by the
+// handler is recovered here rather than let to unwind through the
+// publisher: the local fan-out runs on the CALLER's goroutine -- frequently
+// a background goroutine with no recover of its own (a jobs handler, a
+// subscription chain, a periodic scheduler), exactly the caller pkgcore's
+// in-memory bus names as the reason runMemoryBusHandler exists -- and this
+// bus's own reader machinery, whose per-handler recovery (runRemoteHandler)
+// protects handlers on OTHER replicas, is not on this stack. The recovered
+// panic is reported through log/slog (pkgcore is the dependency floor and
+// cannot import go/observability, the same reason runMemoryBusHandler
+// reaches for slog.Default()) with the handler index, the event type and
+// the panic value, and is DROPPED, never returned as an error: like the
+// in-memory bus's recover block it is not a handler failure a caller could
+// act on, and the handler's siblings still run.
+func runLocalHandler(ctx context.Context, evt pkgcore.Event, i int, h pkgcore.EventHandler) (err error, panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+			slog.Default().Error("pkgcore/eventbus/redis: local handler panicked; recovered so the publishing caller is unaffected and the event's remaining handlers still run",
+				"event_type", evt.Type,
+				"handler", i,
+				"panic", fmt.Sprintf("%v", r),
+			)
+		}
+	}()
+	err = h(ctx, evt)
+	return err, false
 }
 
 // isClosed reports whether Close has been called.

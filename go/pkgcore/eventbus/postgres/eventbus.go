@@ -184,8 +184,10 @@ const (
 //     named in the in-flight set rather than re-running handlers that
 //     are already running, and its advance cannot stay behind one row
 //     while delivering later ones) is never fetched again, so a crash
-//     -- or a panic, which also skips the mark -- landing in that
-//     delivery after the pass is not redelivered on restart. Rows whose
+//     landing in that delivery after the pass is not redelivered on
+//     restart (a panicked local handler no longer has this hole: it is
+//     contained and the row is marked like any other -- see Publish's
+//     defer comment). Rows whose
 //     local delivery is not in progress keep the argument in full.
 //     This is the same trade
 //     eventbus/redis documents for its own cross-process path
@@ -235,9 +237,14 @@ const (
 //     redelivery by the mechanism that drives it: this one's retry pass is
 //     self-driven by the scan, so it needed its own attempt budget, while
 //     the broker-backed twins' redeliveries are bounded broker- and
-//     ledger-side. A row whose LOCAL delivery panics (Publish does not
-//     recover) is left unmarked for the catch-up scan, which then gives it
-//     exactly this treatment.
+//     ledger-side. This whole treatment belongs to deliveries that run
+//     OUTSIDE any publisher's stack -- the catch-up path here, the reader
+//     goroutines of the twins. A row whose LOCAL delivery panics gets the
+//     in-memory bus's treatment instead: Publish contains the panic
+//     (runLocalHandler recovers and logs it, the row is marked delivered
+//     like any other), so a buggy subscriber can never unwind the
+//     publishing caller -- the same containment the twins' local fan-out
+//     now applies and pkgcore's own in-memory bus always had.
 //   - Unlike eventbus/redis, THIS implementation genuinely survives a
 //     replica's own restart without losing events published while it was
 //     down, provided the restarting process is built with the SAME
@@ -557,13 +564,17 @@ func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 	// Type, and a row committed in that window is never fetched before its
 	// local delivery is recorded (see deliverMu's own doc comment). The
 	// defer makes sure neither the count nor a recorded id outlives this
-	// call on ANY path out of it -- including a handler panic, which also
-	// skips the mark below, so the panicked row is left for the poller to
-	// deliver once, its still-panicking handlers then retried on the
-	// bounded budget deliverPendingForType's doc comment describes, rather
-	// than the panicked local path silently swallowing it (unless the
-	// poller has already advanced past the row while it was in flight --
-	// the trade deliverPendingForType's doc comment describes).
+	// call on ANY path out of it; a panicked local handler cannot unwind
+	// this function at all, because the loop below invokes every handler
+	// through runLocalHandler's recover, which contains and logs the
+	// panic the way the in-memory bus contains a subscriber's panic (see
+	// runLocalHandler's own doc comment for why the escape this code
+	// predates was a hole). The catch-up poller's own per-row delivery
+	// still recovers panicking handlers and bounded-retries the still-
+	// panicking VALUES (deliverOutboxRow/retryPanickedRows): that path
+	// runs outside any publisher's stack, which is where such a retry
+	// belongs -- the local path's recovered-and-dropped panic is exactly
+	// the treatment pkgcore's in-memory bus gives the same situation.
 	// What the defer does NOT buy is immunity from a handler that never
 	// returns: the count spans the synchronous handler loop below, so a
 	// wedged handler keeps this call's count and recorded id up for as
@@ -628,7 +639,18 @@ func (b *EventBus) Publish(ctx context.Context, evt pkgcore.Event) error {
 	}
 	failures := make([]error, 0, len(handlers))
 	for i, h := range handlers {
-		if err := h(ctx, evt); err != nil {
+		err, panicked := b.runLocalHandler(ctx, evt, i, h)
+		if panicked {
+			// Recovered, logged and dropped -- exactly as on the in-memory
+			// bus, where a panicked handler is not a handler failure a
+			// caller could act on (see pkgcore's runMemoryBusHandler doc
+			// comment for the full rationale); the handler's siblings
+			// still run, this publish stays a success, and the row's
+			// local delivery is still marked below exactly as if the
+			// panicked handler had never been subscribed.
+			continue
+		}
+		if err != nil {
 			failures = append(failures, fmt.Errorf("pkgcore/eventbus/postgres: handler %d for event %q failed: %w", i, evt.Type, err))
 		}
 	}
@@ -944,15 +966,18 @@ func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) 
 			// about to run, on the publishing goroutine and will mark it),
 			// already completed and marked (skip it: running its handlers
 			// again would duplicate the delivery), or completed WITHOUT
-			// marking -- which only a handler panic leaves behind, since
-			// the mark precedes the in-flight drop. Such a row is delivered
-			// here, once: a panic must not be acked-as-delivered, but it
-			// must not wedge the type either, so the delivery's panicked
-			// handlers are recorded below (once this row's cursor advance
-			// has succeeded) for retryPanickedRows' bounded, in-process
-			// retry -- the redelivery Publish's doc comment promises for a
-			// panic, delivered without re-running the row's healthy
-			// siblings.
+			// marking -- the crash-in-the-gap case of the at-least-once
+			// argument above (a process that died between its local
+			// handlers completing and the mark, or whose in-process mark
+			// was lost to a restart; Publish's own panicked local handlers
+			// no longer land here, since runLocalHandler contains them and
+			// the mark still lands -- see Publish's defer comment). Such a
+			// row is delivered here, once: a delivery that never completed
+			// must not be silently skipped, but it must not wedge the type
+			// either, so the delivery's panicked handlers are recorded
+			// below (once this row's cursor advance has succeeded) for
+			// retryPanickedRows' bounded, in-process retry -- delivered
+			// without re-running the row's healthy siblings.
 			b.deliverMu.Lock()
 			_, alreadyLocal := b.locallyDelivered[eventType][row.id]
 			_, localDeliveryInFlight := b.inFlightRows[eventType][row.id]
@@ -1071,6 +1096,42 @@ func (b *EventBus) deliverOutboxRow(ctx context.Context, row outboxRow) (pkgcore
 // pkgcore is the dependency floor of the workspace and cannot import
 // go/observability, so this reaches for log/slog directly, the same
 // precedent warnIfNotDurable sets in pkgcore's own root package.
+// runLocalHandler invokes one locally-subscribed handler on the publishing
+// goroutine with the containment Publish promises. A panic raised by the
+// handler is recovered here rather than let to unwind through the
+// publisher: the local fan-out runs on the CALLER's goroutine -- frequently
+// a background goroutine with no recover of its own (a jobs handler, a
+// subscription chain, a periodic scheduler), exactly the caller pkgcore's
+// in-memory bus names as the reason runMemoryBusHandler exists -- and this
+// bus's own reader machinery, whose per-handler recovery
+// (runHandlerRecovered) protects handlers on the catch-up path, is not on
+// this stack. The recovered panic is reported through log/slog (pkgcore is
+// the dependency floor and cannot import go/observability, the same reason
+// runMemoryBusHandler reaches for slog.Default()) with the handler index,
+// the event type and the panic value, and is DROPPED, never returned as an
+// error: like the in-memory bus's recover block it is not a handler failure
+// a caller could act on, and the handler's siblings still run. This is the
+// containment that lets Publish's local delivery -- a row whose handlers
+// ran synchronously -- be marked delivered exactly like a panic-free one;
+// a permanently panicking handler is a programming bug the logged panic
+// names for an operator, and retrying its delivery is the catch-up
+// machinery's job only when a handler panics on THAT path (outside any
+// publisher's stack), never this one.
+func (b *EventBus) runLocalHandler(ctx context.Context, evt pkgcore.Event, i int, h pkgcore.EventHandler) (err error, panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+			slog.Default().Error("pkgcore/eventbus/postgres: local handler panicked; recovered so the publishing caller is unaffected and the event's remaining handlers still run",
+				"event_type", evt.Type,
+				"handler", i,
+				"panic", fmt.Sprintf("%v", r),
+			)
+		}
+	}()
+	err = h(ctx, evt)
+	return err, false
+}
+
 func (b *EventBus) runHandlerRecovered(ctx context.Context, evt pkgcore.Event, h pkgcore.EventHandler) (panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
