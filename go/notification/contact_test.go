@@ -335,8 +335,9 @@ func assertRateLimited(t *testing.T, err error, wantDimension string) {
 	if got := appErr.Params["dimension"]; got != wantDimension {
 		t.Errorf("dimension param = %v, want %q", got, wantDimension)
 	}
-	if _, ok := appErr.Params["retry_after_seconds"]; !ok {
-		t.Errorf("denial carries no retry_after_seconds param: %v", appErr.Params)
+	if _, ok := appErr.Params["retry_after_seconds"].(int); !ok {
+		t.Errorf("retry_after_seconds param = %v (%T), want an int -- the type is load-bearing: authn's retryAfterSeconds reads it with a .(int) type assertion and skips the Retry-After header silently when the assertion fails",
+			appErr.Params["retry_after_seconds"], appErr.Params["retry_after_seconds"])
 	}
 }
 

@@ -1218,7 +1218,7 @@ func (s *ContactService) checkLimits(ctx context.Context, limits []contactRateLi
 		}
 		if !decision.Allowed {
 			return ErrContactRateLimited.WithParam("dimension", l.name).
-				WithParam("retry_after_seconds", fmt.Sprintf("%d", int(decision.ResetAfter.Seconds())))
+				WithParam("retry_after_seconds", int(decision.ResetAfter.Seconds()))
 		}
 	}
 	return nil
