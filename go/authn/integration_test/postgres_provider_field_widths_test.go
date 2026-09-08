@@ -226,7 +226,7 @@ func TestSocialSignIn_GrownProviderProfile_Postgres(t *testing.T) {
 	}
 	members.Add(user.ID, pkgcore.TenantID("tenant-a"))
 
-	if _, err := socialCallback(t, svc, provider, pkgcore.TenantID("tenant-a")); err != nil {
+	if _, err = socialCallback(t, svc, provider, pkgcore.TenantID("tenant-a")); err != nil {
 		t.Fatalf("first SocialCallback() error = %v", err)
 	}
 
@@ -234,7 +234,7 @@ func TestSocialSignIn_GrownProviderProfile_Postgres(t *testing.T) {
 	provider.identity.Name = pgOverWidthName
 	provider.identity.Avatar = pgOverWidthAvatar
 
-	if _, err := socialCallback(t, svc, provider, pkgcore.TenantID("tenant-a")); err != nil {
+	if _, err = socialCallback(t, svc, provider, pkgcore.TenantID("tenant-a")); err != nil {
 		t.Fatalf("second SocialCallback() error = %v (the grown profile must not break an existing identity's login)", err)
 	}
 
@@ -353,7 +353,7 @@ func TestSSOSignIn_OverWidthClaims_Postgres(t *testing.T) {
 		Enabled:      true,
 	}
 	config.SetAllowedDomains([]string{"example.com"})
-	if err := svc.SSO().Configs().Create(ctx, config); err != nil {
+	if err = svc.SSO().Configs().Create(ctx, config); err != nil {
 		t.Fatalf("write the tenant sso config: %v", err)
 	}
 

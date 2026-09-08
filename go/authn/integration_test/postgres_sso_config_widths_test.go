@@ -225,7 +225,7 @@ func TestSSOIdentityProviderBoundary_Postgres(t *testing.T) {
 		DisplayName: "Boundary Member",
 		AvatarURL:   "https://cdn.example.com/boundary.png",
 	}
-	if err := repo.Create(t.Context(), identity); err != nil {
+	if err = repo.Create(t.Context(), identity); err != nil {
 		t.Fatalf("identity insert under the 64-rune provider name error = %v, want success on real PostgreSQL", err)
 	}
 
