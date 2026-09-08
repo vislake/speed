@@ -491,7 +491,7 @@ func toAccessLogEntryResponse(e *AccessLogEntry) api.SharingAccessLogEntry {
 // unauthenticated route is exactly the shape a caller can freely spoof
 // such a header against, and this IP feeds both the access log
 // (AccessLogEntry.IP) and this module's own rate-limit key
-// (ratelimit.go's checkAccessRateLimit) -- trusting a spoofable header for
+// (ratelimit.go's checkAccessIPLimit) -- trusting a spoofable header for
 // either would let an attacker rotate around their own rate limit for
 // free. A host that terminates TLS behind a trusted reverse proxy and
 // wants the proxy's forwarded address instead is expected to normalize

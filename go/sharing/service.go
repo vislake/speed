@@ -524,7 +524,32 @@ func (s *Service) emitSensitiveAudit(ctx context.Context, share *Share) error {
 // the row Access hands back always reflects the view that was actually
 // counted and logged.
 func (s *Service) Access(ctx context.Context, token string, p AccessParams) (*Share, error) {
-	share, err := s.authorizeAttempt(ctx, token, p)
+	// Access's own callers are the host's in-process code -- authenticated,
+	// authorized and tenant-resolved by layers above this module before the
+	// call ever lands here -- never the genuinely unauthenticated surface
+	// this module's rate limits exist for, so their wrong-credential
+	// attempts are deliberately not charged to the per-token wrong-guess
+	// budget (chargeTokenBudget false; see accessAuthorized's doc comment
+	// and ratelimit.go's checkAccessTokenWrongGuess).
+	return s.accessAuthorized(ctx, token, p, false)
+}
+
+// accessAuthorized carries Access's own implementation, shared with the
+// genuinely anonymous AccessPublic: authorize the attempt, then record the
+// granted view immediately (for a caller of this Service-level surface the
+// authorization IS the grant -- the module's own HTTP access route is the
+// one caller for whom that is NOT true, which is why it uses the
+// authorize-without-recording path authorizePublicAccess instead;
+// settleGranted's own doc comment has the full reasoning). Access passes
+// chargeTokenBudget false; AccessPublic passes true, so that only the
+// anonymous surface's wrong-credential refusals pay the per-token budget
+// consumed inside authorizeAttempt -- the external attacker the budget
+// exists to throttle can reach only that surface, and the host's own
+// in-process Access calls must not start answering ErrRateLimited where
+// they never did (see Access's own doc comment for the rate limiting that
+// does and does not exist on each surface).
+func (s *Service) accessAuthorized(ctx context.Context, token string, p AccessParams, chargeTokenBudget bool) (*Share, error) {
+	share, err := s.authorizeAttempt(ctx, token, p, chargeTokenBudget)
 	if err != nil {
 		// Every refusal (or store failure) is already settled by the time it
 		// is returned -- one denied log row and one denied event on every
@@ -563,20 +588,33 @@ func (s *Service) Access(ctx context.Context, token string, p AccessParams) (*Sh
 // It does exactly two things and nothing more: resolve tenant via
 // repository.go's tenantForTokenHash (the narrow, deliberately
 // non-tenant-scoped lookup that method's own doc comment justifies in
-// full), then re-enter the ordinary, unchanged Service.Access with that
-// tenant attached to ctx via pkgcore.WithTenant -- every one of Access's
-// own guarantees (rule 3's immediate revocation, rule 4's access logging,
-// rule 5's outward-identical answers, the constant-time password check)
-// therefore holds for an anonymous caller exactly as they already hold for
-// an authenticated one, because this method does not reimplement any of
-// them.
+// full), then re-enter Access's own implementation (accessAuthorized) with
+// that tenant attached to ctx via pkgcore.WithTenant -- every one of
+// Access's own guarantees (rule 3's immediate revocation, rule 4's access
+// logging, rule 5's outward-identical answers, the constant-time password
+// check) therefore holds for an anonymous caller exactly as they already
+// hold for an authenticated one, because this method does not reimplement
+// any of them.
 //
-// Before Access is ever reached, this method checks the caller's rate-limit
-// budget (ratelimit.go's checkAccessRateLimit, keyed on p.IP and the
-// hashed token, ErrRateLimited on denial) and resolves the tenant. An
+// Before Access is ever reached, this method checks the anonymous surface's
+// per-IP rate-limit budget (ratelimit.go's checkAccessIPLimit, checked
+// unconditionally, ErrRateLimited on denial) and resolves the tenant. An
 // unrecognized token hash at this stage answers ErrNotAccessible
 // immediately, without ever calling Access -- there is no tenant to attach
 // and nothing downstream could do with one anyway.
+//
+// The surface's per-token wrong-guess budget is deliberately NOT checked
+// here, ahead of the password comparison: the rate-limit-timing correction
+// (ratelimit.go's checkAccessTokenWrongGuess, its own doc comment) moved
+// that dimension's consumption into authorizeAttempt, after a presented
+// credential has been judged wrong, so a leaked-link holder who exhausts
+// the budget with wrong guesses can never hold the legitimate
+// password-holder's correct attempt hostage -- that attempt is never judged
+// wrong, never pays, and is never refused. Because the judgment runs in the
+// shared authorizeAttempt, whose other callers are the host's own
+// authenticated Access calls, AccessPublic marks its re-entry with
+// chargeTokenBudget true (accessAuthorized) so that only the genuinely
+// unauthenticated surface's wrong guesses pay the per-token budget.
 //
 // The unrecognized-token refusal is deliberately CHEAP: it pays only the
 // rate-limit check and the token-index lookup, never the argon2id burn the
@@ -606,20 +644,30 @@ func (s *Service) AccessPublic(ctx context.Context, token string, p AccessParams
 	if err != nil {
 		return nil, err
 	}
-	return s.Access(pkgcore.WithTenant(ctx, tenant), token, p)
+	return s.accessAuthorized(pkgcore.WithTenant(ctx, tenant), token, p, true)
 }
 
-// accessPublicPrelude runs the two checks that come before a token is
+// accessPublicPrelude runs the checks that come before a token is
 // recognized at all on the genuinely unauthenticated surface: the caller's
-// access rate limit (ratelimit.go's checkAccessRateLimit, keyed on p.IP and
-// the hashed token, ErrRateLimited on denial) and the token-to-tenant
+// per-IP access rate limit (ratelimit.go's checkAccessIPLimit, unconditional
+// -- an address that exhausts its own budget refuses only itself, so it
+// stays up front where it can also keep the unrecognized-token path cheap)
+// and the token-to-tenant
 // resolution (ShareRepository.tenantForTokenHash, whose unrecognized-hash
 // answer is ErrNotAccessible and whose store failures log an Error and
 // surface as internal errors, never as a refusal). AccessPublic and
 // authorizePublicAccess both start here, so both anonymous entry points
 // refuse exactly alike.
+//
+// The surface's per-token wrong-guess budget deliberately has NO presence
+// here: consumption moved after the credential judgment that happens later,
+// inside authorizeAttempt (ratelimit.go's checkAccessTokenWrongGuess and
+// AccessPublic's own doc comment have the full argument -- a budget spent
+// before the password comparison would let a leaked-link holder deny the
+// legitimate password-holder's correct attempt with 429s, the defect the
+// after-judgment shape removes).
 func (s *Service) accessPublicPrelude(ctx context.Context, token string, p AccessParams) (pkgcore.TenantID, error) {
-	if err := s.checkAccessRateLimit(ctx, p.IP, hashShareToken(token)); err != nil {
+	if err := s.checkAccessIPLimit(ctx, p.IP); err != nil {
 		return "", err
 	}
 	tenant, err := s.shares.tenantForTokenHash(ctx, hashShareToken(token))
@@ -640,7 +688,10 @@ func (s *Service) accessPublicPrelude(ctx context.Context, token string, p Acces
 // authorizePublicAccess is the access route's authorize-without-recording
 // phase (Handler.SharingAccessShare): the genuinely unauthenticated entry
 // point that runs accessPublicPrelude and then every one of Access's refusal
-// checks (authorizeAttempt), settling any refusal as one denied log row and
+// checks (authorizeAttempt, with chargeTokenBudget true -- the same
+// anonymous-surface per-token wrong-guess charge AccessPublic applies, for
+// the same reason: this is one of the two surfaces an external attacker can
+// actually reach), settling any refusal as one denied log row and
 // one denied event exactly as AccessPublic does, but recording NO view and
 // NO granted row on success. The route records the view only once the
 // share's content was actually delivered (settleAccessGranted) and settles
@@ -652,7 +703,7 @@ func (s *Service) authorizePublicAccess(ctx context.Context, token string, p Acc
 	if err != nil {
 		return nil, err
 	}
-	return s.authorizeAttempt(pkgcore.WithTenant(ctx, tenant), token, p)
+	return s.authorizeAttempt(pkgcore.WithTenant(ctx, tenant), token, p, true)
 }
 
 // authorizeAttempt is the no-record half of an access decision: every one of
@@ -667,6 +718,24 @@ func (s *Service) authorizePublicAccess(ctx context.Context, token string, p Acc
 // error rule 4 demands rather than a refusal that leaves no trail. An
 // unrecognized token is the one refusal with no settle at all -- there is no
 // Share row to attribute an entry to (Access's own doc comment).
+//
+// chargeTokenBudget is the genuinely unauthenticated surface's own flag,
+// passed true only by AccessPublic and authorizePublicAccess -- the two
+// entries an external attacker can reach -- and false by Access's own
+// in-process host callers (see Access's own doc comment for why). On a
+// wrong-credential refusal of a password-protected share, a true flag
+// additionally charges the share token's per-token wrong-guess budget
+// (ratelimit.go's checkAccessTokenWrongGuess), settling the refusal first
+// -- one denied row and one denied event, exactly as rule 4 demands of
+// every recognized-token refusal -- and then answering ErrRateLimited
+// instead of ErrNotAccessible once the budget is spent. Charging at this
+// point, after the credential comparison judged the attempt wrong rather
+// than before it ran, is what makes the budget unable to hold the
+// legitimate password-holder's correct attempt hostage: that attempt is
+// never judged wrong, never reaches the charge, and is never refused by it
+// (the rate-limit-timing correction; checkAccessTokenWrongGuess's own doc
+// comment has the full argument, the same one go/authn already applied to
+// its own per-target wrong-guess dimension).
 //
 // On success NOTHING is recorded: no view, no granted row. Recording is the
 // caller's own next step, and the two callers differ deliberately in WHEN
@@ -688,14 +757,15 @@ func (s *Service) authorizePublicAccess(ctx context.Context, token string, p Acc
 //     budget and the log both tell the truth: a MaxViews=1 share survives a
 //     serve that fails at the resolver or dies mid-stream, for a genuine
 //     retry.
-func (s *Service) authorizeAttempt(ctx context.Context, token string, p AccessParams) (*Share, error) {
+func (s *Service) authorizeAttempt(ctx context.Context, token string, p AccessParams, chargeTokenBudget bool) (*Share, error) {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	now := s.now()
+	tokenHash := hashShareToken(token)
 
-	share, err := s.shares.byTokenHash(ctx, hashShareToken(token))
+	share, err := s.shares.byTokenHash(ctx, tokenHash)
 	if err != nil {
 		// A store failure is not a refusal reason: log it and surface
 		// the internal error, never the outward 404 a genuine refusal
@@ -733,6 +803,19 @@ func (s *Service) authorizeAttempt(ctx context.Context, token string, p AccessPa
 	if !passwordOK {
 		if err := s.settleDenied(ctx, tenant, share, p); err != nil {
 			return nil, err
+		}
+		// The per-token wrong-guess budget is charged HERE, after this
+		// attempt has been judged wrong -- never before the comparison,
+		// and only when the attempt arrived through the genuinely
+		// unauthenticated surface (see this method's own doc comment and
+		// ratelimit.go's checkAccessTokenWrongGuess). A wrong guess that
+		// spends the last of the window's budget is answered 429; every
+		// wrong guess is still settled as one denied row first, so no
+		// recognized-token refusal ever skips its trail.
+		if chargeTokenBudget {
+			if err := s.checkAccessTokenWrongGuess(ctx, tokenHash); err != nil {
+				return nil, err
+			}
 		}
 		return nil, ErrNotAccessible
 	}

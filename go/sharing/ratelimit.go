@@ -14,11 +14,15 @@ import (
 // both call sites this module's abuse surface
 // actually has -- Service.Create (share-creation abuse, one dimension) and
 // Service.AccessPublic (token-guessing and password-guessing abuse, two
-// dimensions) -- composed the same way go/org's InviteService.checkRateLimits
-// composes its own two dimensions and the same way go/integration's
-// LayeredLimiter composes three: one ratelimit.Limiter.Allow call per
-// dimension, any single denial denying the whole request, with the
-// underlying Limiter built lazily over the host's KVStore (rateLimiter,
+// dimensions enforced at two deliberately different points in the access
+// flow: the caller-IP dimension unconditionally, in accessPublicPrelude
+// before the presented token is even resolved, and the per-token dimension
+// only after a presented credential has been judged wrong, inside
+// authorizeAttempt -- see checkAccessIPLimit and checkAccessTokenWrongGuess
+// for why each dimension's consumption sits where it does). Every check is
+// one ratelimit.Limiter.Allow call on the dimension's own key, built on the
+// shared allowRateLimit helper, with the underlying Limiter built lazily
+// over the host's KVStore (rateLimiter,
 // below) so it always reads whichever implementation the running deployment
 // mode actually resolved, never one captured before Bootstrap ran.
 //
@@ -52,27 +56,43 @@ const (
 	// make per accessPerIPWindow, across every token it tries -- the
 	// dimension that catches broad token-guessing: an attacker scanning
 	// many possible tokens from one address trips this before exhausting
-	// any single share's own budget.
+	// any single share's own wrong-guess budget. Unconditional by design:
+	// the party an IP budget protects (the platform against that address's
+	// request volume) and the party that consumes it (the address itself)
+	// are the same caller, so no attempt of anyone else's can ever be held
+	// hostage by it (checkAccessIPLimit's own doc comment).
 	accessPerIPRate   = 60
 	accessPerIPWindow = time.Minute
 
-	// accessPerTokenRate bounds how many access attempts one specific
-	// token hash may receive per accessPerTokenWindow, regardless of which
-	// IP presents them -- the dimension that catches password-guessing
-	// against one known-valid share: an attacker distributing guesses
-	// across many source addresses still trips this, because it is keyed
-	// on the token, not the caller.
+	// accessPerTokenRate bounds how many WRONG-CREDENTIAL attempts one
+	// specific token hash may make per accessPerTokenWindow, regardless of
+	// which IP presents them -- the dimension that catches password-guessing
+	// against one known-valid, password-protected share: an attacker
+	// distributing guesses across many source addresses still trips this,
+	// because it is keyed on the token, not the caller. The budget is
+	// deliberately consumed only after an attempt has been judged wrong
+	// (checkAccessTokenWrongGuess's own doc comment), which is also what
+	// the budget deliberately does NOT bound any more: a fully legitimate
+	// attempt -- a correct password, or any attempt on a passwordless
+	// share -- never pays it, so per-token volume of legitimate access is
+	// no longer capped across IPs the way the pre-fix, pre-judgment check
+	// incidentally capped it. That cap was the very mechanism that let one
+	// link holder deny every other holder of the same share, the defect
+	// the after-judgment shape exists to remove; volume abuse of a share
+	// whose credentials are fully known is left to the per-IP dimension
+	// and the share's own MaxViews ceiling.
 	accessPerTokenRate   = 20
 	accessPerTokenWindow = time.Minute
 )
 
-// ErrRateLimited reports that Service.Create or Service.AccessPublic denied
-// a request under this module's rate-limit budget. Status is 429, not one
+// ErrRateLimited reports that Service.Create, Service.AccessPublic or the
+// public access route's authorizePublicAccess denied a request under this
+// module's rate-limit budget. Status is 429, not one
 // of apperr's five builder shapes, matching go/org's ErrInvitationRateLimited
 // and go/integration's identical ErrRateLimited -- a struct literal rather
 // than apperr.Forbidden or apperr.Invalid, since neither status fits a
 // rate-limit refusal. WithParam("dimension", ...) records which dimension
-// tripped (never which token or tenant -- see checkAccessRateLimit's own
+// tripped (never which token or tenant -- see allowRateLimit's own
 // doc comment for why a caller-visible dimension name is safe here but a
 // caller-visible key is not) and WithParam("retry_after_seconds", ...)
 // records how long until the tripped window recovers.
@@ -106,71 +126,107 @@ func (s *Service) rateLimiter() (ratelimit.Limiter, error) {
 // rate limiter that cannot answer must never be treated as "allow" (the
 // same fail-closed rule go/ratelimit.Limiter's own doc comment states).
 func (s *Service) checkCreateRateLimit(ctx context.Context, tenant string) error {
+	return s.allowRateLimit(ctx, "sharing:create:tenant:"+tenant, ratelimit.Limit{
+		Rate: createPerTenantRate, Per: createPerTenantWindow,
+	}, "tenant")
+}
+
+// checkAccessIPLimit refuses an access attempt from ip when the caller's own
+// per-IP budget is spent. This dimension is checked UNCONDITIONALLY, in
+// accessPublicPrelude before the presented token is even resolved, and that
+// placement is deliberate: an IP budget's protected party (the platform,
+// against one address's request volume across every token it tries) and its
+// consuming party (the address itself) are the same caller, so an address
+// that exhausts its own budget refuses only itself -- no attempt of a
+// different caller, however legitimate, can ever be held hostage by it the
+// way a shared per-target budget can (checkAccessTokenWrongGuess's own doc
+// comment argues that dimension's opposite placement). Refusing an
+// over-budget address up front, before the token lookup, is also what keeps
+// the unrecognized-token path cheap: a scanner spraying random tokens pays
+// one rate-limit hit plus one token-index lookup per guess, never an
+// argon2id burn (AccessPublic's own doc comment has the full
+// anti-amplification argument).
+//
+// The key is used as given by the caller (AccessParams.IP, exactly as
+// recorded on the access log -- see that field's own doc comment for why
+// this module neither parses nor validates it). An empty ip (a caller that
+// supplied none) shares one counter with every other empty-IP caller,
+// exactly as go/integration's Extractor doc comment records for its own
+// optional dimensions -- a caller-visible consequence of supplying no
+// better identifier, not a special case this method handles.
+func (s *Service) checkAccessIPLimit(ctx context.Context, ip string) error {
+	return s.allowRateLimit(ctx, "sharing:access:ip:"+ip, ratelimit.Limit{Rate: accessPerIPRate, Per: accessPerIPWindow}, "ip")
+}
+
+// checkAccessTokenWrongGuess records one wrong-credential attempt against a
+// password-protected share's token and refuses further guessing once the
+// per-token budget is spent.
+//
+// This is deliberately consulted -- and its budget deliberately consumed --
+// ONLY after the attempt has already been judged illegitimate, from
+// authorizeAttempt's wrong-credential branch, its one caller; never
+// unconditionally before the password comparison, which is what this
+// dimension's previous shape did (it ran in accessPublicPrelude, ahead of
+// everything). A shared per-target budget consumed on every attempt
+// regardless of outcome can be exhausted by an attacker who holds the link
+// but not the password -- and the entire point of protecting a share with a
+// password is that the link may leak -- permanently denying the legitimate
+// password-holder's own correct attempt for the rest of the window, because
+// that attempt is refused by the budget check before it ever reaches the
+// comparison that would have told the two apart. Gating the budget on "the
+// presented credential was just judged wrong" instead means a correct
+// attempt is NEVER refused for budget reasons: it is never judged wrong, so
+// it never reaches this check at all, no matter how many wrong guesses from
+// however many sources already exhausted the budget. This is the identical
+// reasoning, and the identical fix shape, go/authn already applied to its
+// own per-target wrong-guess dimension (go/authn/ratelimit.go's
+// CheckSMSVerifyWrongGuess and its doc comment, argued against the same
+// hostage property).
+//
+// This does not weaken brute-force resistance: every wrong guess still pays
+// its full argon2id comparison before the budget is touched (rule 5's
+// constant-time equalization; the comparison must run to judge the guess
+// wrong), the per-IP dimension still caps how fast any one source can
+// present guesses, and once the budget is spent the guesser's further
+// wrong guesses are refused with ErrRateLimited rather than the 404-shaped
+// refusal an under-budget wrong guess answers with. The one cost of the
+// after-judgment shape is recorded on accessPerTokenRate's own comment: a
+// fully legitimate attempt never pays the per-token budget, so per-token
+// volume of legitimate access is no longer capped across IPs -- the price
+// of no longer letting one holder deny another.
+//
+// The key is the ALREADY-HASHED value AccessPublic and Access both key
+// their own repository lookups on, never the raw token -- a rate-limit key
+// lives in the KV store and tends to appear in diagnostics, and this
+// module's own established rule (repository.go's byTokenHash doc comment)
+// is that the raw bearer credential never travels anywhere past the caller
+// who presented it.
+func (s *Service) checkAccessTokenWrongGuess(ctx context.Context, tokenHash string) error {
+	return s.allowRateLimit(ctx, "sharing:access:token:"+tokenHash, ratelimit.Limit{Rate: accessPerTokenRate, Per: accessPerTokenWindow}, "token")
+}
+
+// allowRateLimit is the shared check every dimension above is built from:
+// one ratelimit.Limiter.Allow call on key under limit, decorating a denial
+// as ErrRateLimited with the dimension named (never the key itself -- a
+// caller-visible dimension name is safe here but a caller-visible key is
+// not, see ErrRateLimited's own doc comment) and the window's recovery time
+// recorded, and an unavailable limiter or store failure as ErrInternal:
+// fail closed, never "allow" (the rule go/ratelimit.Limiter's own doc
+// comment leaves each call site to choose, and every endpoint this module
+// guards is abuse-facing enough that the choice is always closed).
+func (s *Service) allowRateLimit(ctx context.Context, key string, limit ratelimit.Limit, dimension string) error {
 	limiter, err := s.rateLimiter()
 	if err != nil {
 		return ErrInternal.WithCause(err)
 	}
-	decision, err := limiter.Allow(ctx, "sharing:create:tenant:"+tenant, ratelimit.Limit{
-		Rate: createPerTenantRate, Per: createPerTenantWindow,
-	})
+	decision, err := limiter.Allow(ctx, key, limit)
 	if err != nil {
 		return ErrInternal.WithCause(err)
 	}
 	if !decision.Allowed {
 		return ErrRateLimited.
-			WithParam("dimension", "tenant").
+			WithParam("dimension", dimension).
 			WithParam("retry_after_seconds", int(decision.ResetAfter.Seconds()))
-	}
-	return nil
-}
-
-// checkAccessRateLimit guards Service.AccessPublic's two dimensions -- the
-// caller's IP address and the token hash being presented -- evaluated in
-// that order, any single denial denying the whole call before the other
-// dimension is even touched (the identical short-circuit rationale
-// go/integration's LayeredLimiter.Allow documents: a request already known
-// to be denied should not spend more of the narrower dimension's own
-// quota).
-//
-// The IP key is used as given by the caller (AccessParams.IP, exactly as
-// recorded on the access log -- see that field's own doc comment for why
-// this module neither parses nor validates it); the token key is the
-// ALREADY-HASHED value AccessPublic and Access both key their own
-// repository lookups on, never the raw token -- a rate-limit key lives in
-// the KV store and tends to appear in diagnostics, and this module's own
-// established rule (repository.go's byTokenHash doc comment) is that the
-// raw bearer credential never travels anywhere past the caller who
-// presented it.
-//
-// An empty ip (a caller that supplied none) shares one counter with every
-// other empty-IP caller, exactly as go/integration's Extractor doc comment
-// records for its own optional dimensions -- a caller-visible consequence
-// of supplying no better identifier, not a special case this method
-// handles.
-func (s *Service) checkAccessRateLimit(ctx context.Context, ip, tokenHash string) error {
-	limiter, err := s.rateLimiter()
-	if err != nil {
-		return ErrInternal.WithCause(err)
-	}
-
-	dimensions := []struct {
-		name  string
-		key   string
-		limit ratelimit.Limit
-	}{
-		{"ip", "sharing:access:ip:" + ip, ratelimit.Limit{Rate: accessPerIPRate, Per: accessPerIPWindow}},
-		{"token", "sharing:access:token:" + tokenHash, ratelimit.Limit{Rate: accessPerTokenRate, Per: accessPerTokenWindow}},
-	}
-	for _, d := range dimensions {
-		decision, err := limiter.Allow(ctx, d.key, d.limit)
-		if err != nil {
-			return ErrInternal.WithCause(err)
-		}
-		if !decision.Allowed {
-			return ErrRateLimited.
-				WithParam("dimension", d.name).
-				WithParam("retry_after_seconds", int(decision.ResetAfter.Seconds()))
-		}
 	}
 	return nil
 }
