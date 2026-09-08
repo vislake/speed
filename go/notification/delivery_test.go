@@ -1847,7 +1847,7 @@ func TestDelivery_ResendAfterALocaleChange_DeliversInTheNewLocale(t *testing.T) 
 // pins the send-record PII rule in its ordinary shape: a transport error
 // that quotes the recipient's address (an SMTP 5xx names the mailbox it
 // rejected) is what a delivery failure returns, and the send_records.error
-// column -- the text the D10 operator search reads back -- must never
+// column -- the text the operator send-record search reads back -- must never
 // store it. The module stores no transport text at all: the failed attempt
 // carries the bounded classification, and not even the exact form of the
 // address the module handed the transport appears anywhere (the
@@ -1880,7 +1880,7 @@ func TestDelivery_GatewayEchoingTheRecipientAddress_NeverReachesTheStoredRecord(
 // is the external-contact half of the PII rule: a permanent gateway refusal
 // quoting the contact's address settles a failed record (and marks the
 // contact bounced), and neither the record's own error text nor the rows
-// the D10 operator search (ListByFilter) returns may contain the address
+// the operator search (ListByFilter) returns may contain the address
 // -- the record carries only the bounded permanent-transport
 // classification, whatever form the gateway's echo took.
 func TestDelivery_ContactBounceCarryingTheAddress_StoredRecordAndReadbackNeverCarryIt(t *testing.T) {
@@ -2283,7 +2283,7 @@ func TestDelivery_StalePayloadParams_NarrowedBeforeRowAndKey(t *testing.T) {
 	}
 	for _, forbidden := range []string{"reason", "admin_user_id"} {
 		if _, ok := got[forbidden]; ok {
-			t.Errorf("inbox row params carry %q, want it narrowed out of the recipient-visible row (the P1 leak channel)", forbidden)
+			t.Errorf("inbox row params carry %q, want it narrowed out of the recipient-visible row (the leak channel)", forbidden)
 		}
 	}
 	for _, declared := range []string{"patient_name", "appointment_time"} {

@@ -115,7 +115,7 @@ func assertTenantHoldsActiveDemoSubscription(t *testing.T, cfg serverConfig, ten
 // clinic's own principal (no demo header, so the rbac gate decides
 // against the clinic's owner grant), simulate through smilesim's own
 // route, job polled to success, the fake image provider genuinely reached
-// exactly once -- the whole block-D journey a browser would run.
+// exactly once -- the whole journey a browser would run.
 //
 // The un-granted shape this test guards: a clinic whose provisioning
 // granted no subscription answers 403 with

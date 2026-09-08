@@ -232,7 +232,7 @@ func TestCasesFlow_CrossTenant_Invisible(t *testing.T) {
 	assertCasesError(t, detailResp, http.StatusNotFound, "cases.not_found", "GET detail of another tenant's case")
 }
 
-// TestCasesFlow_ListIsClinicWide pins the block-A list semantic through
+// TestCasesFlow_ListIsClinicWide pins the clinic-wide list semantic through
 // the composed stack: two creators in ONE tenant each see BOTH cases --
 // a case one colleague opened is visible to another, the property the
 // product's acceptance chain names -- whatever creator header the

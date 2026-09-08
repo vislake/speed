@@ -26,9 +26,9 @@ import (
 // (TestMiddleware_InvalidUTF8Request_SpanNameAndAttributesCarryNoRawByte).
 // That test proves, at span-formation time, that the exported span's name
 // and attributes never carry the raw byte a request's %FF path (or
-// invalid-byte header) delivers; this test proves the consequence that made
-// the class a P1 rather than a cosmetic defect: the batch really encodes
-// and really arrives at a collector.
+// invalid-byte header) delivers; this test proves the consequence that makes
+// the class a real defect rather than a cosmetic one: the batch really
+// encodes and really arrives at a collector.
 //
 // The mechanism this guards: net/http percent-decodes a request target
 // byte-wise, so a %FF in the path reaches the middleware as a raw invalid

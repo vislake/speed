@@ -11,13 +11,12 @@
  * client bound into the runtime seam exactly as a host composes it:
  * the journeys sign in through the real session operation, run a
  * simulation through the generated smilesim operations (the same
- * reserve/confirm/refund journey the block-B surface drives, only
+ * reserve/confirm/refund journey the credits surface drives, only
  * here the job's terminal outcome is observed directly through the
  * job-status operation), and then mount the view against the SAME
  * responder -- whose billing ledger settled the job the way the real
  * server's settleCredit would: a succeeded generation reads back as
- * the balance reduced by its confirmed deduct row (regression (a) of
- * the block-D round), a dead_letter generation as its deduct row's
+ * the balance reduced by its confirmed deduct row (regression (a)), a dead_letter generation as its deduct row's
  * refunded state with the balance restored (regression (b)) -- so a
  * consumption and a refund that happened before the view opened are
  * what the view renders, never scripted rows hand-placed under it.

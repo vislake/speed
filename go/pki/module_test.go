@@ -20,7 +20,7 @@ func TestModule_Identity(t *testing.T) {
 		t.Errorf("DependsOn() = %v, want nil -- pki depends on no other pkgcore.Module in the bootstrap set", got)
 	}
 	if got := m.OpenAPISpec(); len(got) == 0 {
-		t.Errorf("OpenAPISpec() = %v, want the embedded api/openapi.yaml bytes -- round 3 gives pki an HTTP surface", got)
+		t.Errorf("OpenAPISpec() = %v, want the embedded api/openapi.yaml bytes -- the module's HTTP surface", got)
 	}
 }
 

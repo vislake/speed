@@ -540,8 +540,7 @@ func TestSendRecordRepository_SaveGuarded_ConcurrentSettleRaceConvergesSucceeded
 	}
 }
 
-// TestSendRecordRepository_ListByFilter_NoTenant_Refused pins D10's one
-// error: a filter with no TenantID is refused before any query runs, the
+// TestSendRecordRepository_ListByFilter_NoTenant_Refused pins the no-tenant refusal: a filter with no TenantID is refused before any query runs, the
 // same forgotten-tenant-filter refusal ByTenantAndKey's own hand-written
 // WHERE clause exists to make impossible to skip by accident.
 func TestSendRecordRepository_ListByFilter_NoTenant_Refused(t *testing.T) {
@@ -555,8 +554,7 @@ func TestSendRecordRepository_ListByFilter_NoTenant_Refused(t *testing.T) {
 	}
 }
 
-// TestSendRecordRepository_ListByFilter_IsScopedPerTenant pins D10's
-// cross-tenant read discipline: a filter naming one tenant never returns
+// TestSendRecordRepository_ListByFilter_IsScopedPerTenant pins the cross-tenant read discipline: a filter naming one tenant never returns
 // another tenant's records, even with every other field left at its zero
 // value.
 func TestSendRecordRepository_ListByFilter_IsScopedPerTenant(t *testing.T) {
@@ -575,8 +573,7 @@ func TestSendRecordRepository_ListByFilter_IsScopedPerTenant(t *testing.T) {
 	}
 }
 
-// TestSendRecordRepository_ListByFilter_ChannelAndStatus_Match pins D10's
-// second and third filter dimensions: a channel or status filter narrows
+// TestSendRecordRepository_ListByFilter_ChannelAndStatus_Match pins the channel and status filter dimensions: a channel or status filter narrows
 // the result to exactly the matching rows, and combining both is an AND,
 // not an OR.
 func TestSendRecordRepository_ListByFilter_ChannelAndStatus_Match(t *testing.T) {
@@ -613,7 +610,7 @@ func TestSendRecordRepository_ListByFilter_ChannelAndStatus_Match(t *testing.T) 
 }
 
 // TestSendRecordRepository_ListByFilter_TimeRange_ExcludesOutsideRecords
-// pins D10's fourth filter dimension: From/To bound created_at, excluding
+// pins the From/To time-range dimension: From/To bound created_at, excluding
 // a record on either side of the window while keeping one inside it.
 func TestSendRecordRepository_ListByFilter_TimeRange_ExcludesOutsideRecords(t *testing.T) {
 	db := newTestDB(t)
@@ -650,8 +647,7 @@ func TestSendRecordRepository_ListByFilter_TimeRange_ExcludesOutsideRecords(t *t
 	}
 }
 
-// TestSendRecordRepository_ListByFilter_NewestFirstWithLimitAndOffset pins
-// D10's paging contract: results are ordered created_at DESC, id DESC
+// TestSendRecordRepository_ListByFilter_NewestFirstWithLimitAndOffset pins the paging contract: results are ordered created_at DESC, id DESC
 // (ListForRecipient's identical stable-paging tiebreak), and Limit/Offset
 // page through them exactly as given, with no clamping inside the
 // repository.
@@ -696,7 +692,7 @@ func TestSendRecordRepository_ListByFilter_NewestFirstWithLimitAndOffset(t *test
 // Select("*") would then write that zero into the row's created_at column --
 // collapsing the delivery's creation instant to year 1 -- and the record
 // would silently vanish from the time-bounded operator search ListByFilter's
-// From/To ranges implement (its doc names D10's "did this delivery actually
+// From/To ranges implement (its doc names the "did this delivery actually
 // go out" query). The guarded write must never touch the create-only
 // created_at column.
 func TestSendRecordRepository_SaveGuarded_PreservesCreatedAt(t *testing.T) {
