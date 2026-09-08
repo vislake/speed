@@ -31,12 +31,13 @@ name: full-check
 #     under -race, a workspace-context build and a GOWORK=off standalone
 #     build) -- the full matrix runs the unit tier too. Per 18-cicd's
 #     reusable-workflow design rule, this file adds one matrix row per
-#     module and copies no legs. go/sharing, go/billing, go/compliance,
-#     go/admin and go/pki ship no Docker-backed integration_test/ tier, so
-#     they are deliberately absent from the integration-tiers matrix below,
-#     the same absence go/metering's own round recorded for itself until
-#     this round landed its PostgreSQL tier (see go/metering/AGENTS.md's
-#     Testing section and Known limitations).
+#     module and copies no legs. go/sharing, go/billing, go/compliance and
+#     go/admin ship no Docker-backed integration_test/ tier, so they are
+#     deliberately absent from the integration-tiers matrix below, the same
+#     absence go/metering's own round recorded for itself until that round
+#     landed its PostgreSQL tier (see go/metering/AGENTS.md's Testing
+#     section and Known limitations); go/pki's own tier joined the matrix
+#     the same way, in the round after its migration-dedupe leg shipped.
 #   * integration-tiers job: the Docker-backed integration tiers
 #     (-tags=integration), one matrix row per module that ships a tier, run
 #     from inside the module: go test -race -tags=integration ./... -- the
@@ -130,6 +131,17 @@ name: full-check
 #                     full reserve/confirm/refund lifecycle and the
 #                     concurrent over-balance single-winner proof
 #                     re-run against the real server
+#       go/pki       PostgreSQL -- its integration_test/ applies the
+#                    migration-dedupe round's regression against a real
+#                    server (postgres_migration_dedupe_test.go: a database
+#                    stranded at migration 0008 with duplicate
+#                    certificate-revocation ledger rows upgrades through
+#                    the registry to exactly one row per certificate).
+#                    Narrower than the module's eventual tier (dual-dialect
+#                    migrations from zero plus the isolation suites, still
+#                    future rounds' work per go/pki/AGENTS.md), but it is
+#                    the one regression whose second dialect no SQLite
+#                    proof can rule out
 #   * reference-app job: examples/reference-app's golangci-lint leg, unit
 #     suite under -race, and its Docker-backed integration tier
 #     (-tags=integration -- testcontainers Redis, RustFS and a Mailpit SMTP
@@ -273,6 +285,7 @@ jobs:
           - go/integration
           - go/metering
           - go/billing
+          - go/pki
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
