@@ -192,13 +192,27 @@ func markOutboxAttemptFailed(ctx context.Context, db *gorm.DB, id string, cause 
 //
 // Each row's two deletes run in one dbkit.WithTenantSession transaction
 // under the row's own tenant -- the outbox delete by row id plus a
-// status guard (a row that stopped being delivered between the read and
-// the delete, e.g. a concurrent Enqueue conflict path, is left alone and
-// its receipt with it), the receipt delete keyed by the row's
+// status guard (the delete is refused when the row is no longer
+// delivered the moment it runs), the receipt delete keyed by the row's
 // (tenant, idempotency_key), with the tenant-scoping plugin scoping it
 // to the session's tenant exactly as it scopes every other write in this
-// module. Rows are selected oldest-delivered first so the same rows are
-// not re-read across calls.
+// module.
+//
+// The status guard is defensive redundancy, not the defense of a
+// reachable race: no path in this module can stop a delivered row being
+// delivered between the read and the delete. Delivery is one-way --
+// markOutboxDelivered moves pending -> delivered and its own WHERE
+// refuses every other state, markOutboxAttemptFailed never writes Status
+// at all, and the Enqueue conflict path an earlier revision of this
+// comment named as the example only reads the existing row back, never
+// writes it -- so a row the sweep read as delivered is still delivered
+// when the delete runs, in the shipped single-Dispatcher composition or
+// under any writer this module owns. The guard stays because it costs
+// one status predicate on the delete and keeps the delete honest should
+// a future writer ever change that: a row that no longer matches is
+// left alone, and its receipt with it, which is the conservative
+// direction in every case. Rows are selected oldest-delivered first so
+// the same rows are not re-read across calls.
 //
 // Returns how many rows were retired (both deletes committed). On a
 // per-row error it stops and surfaces the error -- the rows that were
@@ -230,9 +244,13 @@ func retireDeliveredOutboxRecords(ctx context.Context, db *gorm.DB, olderThan ti
 				return res.Error
 			}
 			if res.RowsAffected == 0 {
-				// The row stopped being delivered between the read and
-				// this delete (nothing in this module does that, but the
-				// guard costs nothing) -- leave its receipt alone too.
+				// The row is no longer delivered at delete time --
+				// defensive redundancy only, per the method doc's writer
+				// trace. If it ever tripped, leaving the receipt is the
+				// conservative direction either way: a row deleted
+				// concurrently has its receipt deleted with it, and a row
+				// that merely stopped being delivered still needs its
+				// receipt as the dedup guard for a future delivery.
 				return nil
 			}
 			txRetired = true
