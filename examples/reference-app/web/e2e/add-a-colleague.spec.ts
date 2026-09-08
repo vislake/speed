@@ -126,9 +126,31 @@ async function reachThePractisesPeople(page: Page): Promise<void> {
   ).toBeVisible({ timeout: 15_000 })
 }
 
+// Closed by eeaabdff: a Team surface of its own in the frame's
+// navigation (#/team, reachable through the drawer on a narrow
+// viewport), NOT a section of the account page -- so the trap this
+// gate's own note warns about was avoided rather than argued around.
+//
+// Verified on all three engines, and then by hand, because this gate's
+// entire reason for existing is that a working mechanism is not the
+// same as a dentist being able to reach it:
+//   - "Team" is its own nav entry beside Cases, Notes, Credits and
+//     Account;
+//   - the surface says what it is for ("Who works in this clinic, and
+//     who has been invited but has not joined yet");
+//   - inviting dr.lin@clinic.example answered "The invitation was sent.
+//     Your colleague can join once they open it." -- a sentence written
+//     for a person, not a code;
+//   - the invitation then listed as its own row: the address, Pending,
+//     when it was sent, and when it expires. A reader can tell an
+//     invited colleague from one who has joined, which is what this
+//     gate asks, and can also see how long the invitation is good for,
+//     which it does not ask and which is the better answer.
+//
+// @budget rather than untagged: it signs in.
 test(
   'an owner can invite a colleague into the clinic by clicking',
-  { tag: '@pending' },
+  { tag: '@budget' },
   async ({ page }) => {
     await signInAs(page, DEMO_OWNER)
     await expectSignedIn(page)
@@ -164,5 +186,78 @@ test(
       page.getByRole('main'),
       'the invitation is listed but nothing says it is still outstanding, so an owner cannot tell an invited colleague from one who has joined',
     ).toContainText(OUTSTANDING)
+  },
+)
+
+/**
+ * A raw user id in the members list, which only ever appears in one.
+ *
+ * The Team surface's own sentence says what it is for: "Who works in
+ * this clinic, and who has been invited but has not joined yet." Opened
+ * by hand as a person, the members table answers the first half with
+ * two rows reading `04c09f52-f6b7-4555-ba8b-5fe23f57b8d9` and
+ * `89b5819d-9066-421e-9788-779b0f83d8e5`, plus one reading "You".
+ *
+ * A dentist cannot tell which colleague is which, cannot decide whom to
+ * remove, and cannot recognise a stranger -- which is the whole question
+ * the surface exists to answer. It is the third instance of one shape
+ * this suite has now found: machine text in a list a person reads to
+ * make a decision (the sessions list's raw User-Agent, closed by
+ * 6d56d71; the credits ledger's billing reason, closed by 48d54e9).
+ *
+ * WHY IT IS NOT AN IMPLEMENTATION OVERSIGHT
+ *
+ * The data is not there to render. `go/org`'s member object carries
+ * `userId` and nothing else, and its own spec says why: "An id in
+ * authn's users table, carried as an opaque string -- org stores no
+ * other identity data about the user (root CLAUDE.md's module-boundary
+ * rule)." So the name has to come from somewhere else -- an authn-side
+ * lookup the app composes, or a seam org would have to grow -- and
+ * that is a design decision rather than a missing line in a view.
+ *
+ * The invitation half needs nothing: an invited row already shows the
+ * ADDRESS, because org holds the address it was asked to invite. It is
+ * only a member, once joined, who becomes an id.
+ *
+ * WHY THE GATE ABOVE PASSES ANYWAY
+ *
+ * It asks whether an owner can invite by clicking, and that works. This
+ * is a different question about the same surface, so it is a different
+ * gate -- the one-gate-per-finding rule this suite keeps, and the reason
+ * the sessions and credits findings could each be reported, fixed and
+ * retired on their own.
+ *
+ * WHAT IT ASSERTS, AND WHAT IT LEAVES OPEN
+ *
+ * Only that no member row identifies a person by a raw id. A display
+ * name, an email address, "You" for oneself, an invited-by line, even a
+ * short stable label would each pass. What fails is a UUID where a
+ * colleague's identity belongs.
+ */
+const RAW_USER_ID =
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i
+
+test(
+  'the members list names people, not user ids',
+  { tag: '@pending' },
+  async ({ page }) => {
+    await signInAs(page, DEMO_OWNER)
+    await expectSignedIn(page)
+    await reachThePractisesPeople(page)
+
+    // The members table specifically, not the whole surface: an
+    // invitation row legitimately carries an address, and a pending
+    // invitation's own id is nobody's identity.
+    const members = page.getByRole('main').getByRole('table').first()
+    await expect(members, 'the team surface shows no members table').toBeVisible({
+      timeout: 30_000,
+    })
+
+    const shown = await members.innerText()
+    const ids = shown.match(new RegExp(RAW_USER_ID, 'gi')) ?? []
+    expect(
+      ids,
+      `the members list identifies people by raw user id (${ids.join(' , ')}) on the surface whose own sentence promises to say who works in this clinic -- a reader cannot tell which colleague is which, whom to remove, or whether a row is a stranger. go/org carries only userId by module-boundary rule, so the name has to come from an authn-side lookup the app composes: a product decision, not a missing line in the view.`,
+    ).toEqual([])
   },
 )

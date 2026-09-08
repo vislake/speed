@@ -652,7 +652,16 @@ lives.
 
 | Gate | Waiting on | Kind |
 |---|---|---|
-| add-a-colleague | no surface for a practice's people, so a colleague can only be invited through the API | unbuilt surface |
+| add-a-colleague (members list) | the Team surface identifies members by raw user id, on the surface whose own sentence promises to say who works in this clinic | defect |
+
+**Every unbuilt surface the brief names and this suite gated is now
+built.** `add-a-colleague` closed with `eeaabdff` -- a Team surface of
+its own in the navigation, not a section of the account page -- and
+`keep-the-result` with `6d4e895d`. Walking the new one by hand then
+found the defect above, which is why the row is still there: the
+invitation half is right (an invited row shows the ADDRESS, Pending,
+when it was sent and when it expires), and the members half answers
+"who works here" with two UUIDs and one "You".
 
 `keep-the-result` closed (`6d4e895d`): a real `<a download>` over the
 Blob URL of the bytes the result image already fetched. Verified three
