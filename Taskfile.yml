@@ -477,22 +477,42 @@ tasks:
       - hugo server --minify --source docs/site
 
   seed:
-    desc: Not implemented -- no demo-data seeding path exists in the reference app yet.
+    desc: >-
+      Not implemented as a standalone loader -- the reference app's demo-data seeding is a
+      deliberate boot-time mechanism (see the comment below), so this task stays a stub that
+      prints how to trigger it.
+    # The demo-data seeding this task's planned form once promised is real today, but it is
+    # deliberately NOT a separate offline loader: the reference app seeds its demo accounts
+    # (demo_users.go's three real accounts registered through the composed authn register
+    # route, demo_admin.go's platform-staff account, plus the boot-time grant/credit/
+    # entitlement seeds of server.go) at BOOT, gated on the APP_DEMO_USERS_PASSWORD /
+    # APP_DEMO_PLATFORM_STAFF_PASSWORD environment variables and idempotent per database.
+    # The doc comments on seedDemoUsers argue why registration goes through the real HTTP
+    # register route in-process rather than through a second, parallel account-creation
+    # path that could drift from the handler, the password policy and the rate limiter --
+    # which is exactly what a standalone `task seed` loader would be. A one-command
+    # "materialize demo data before boot" loader therefore does not exist, by recorded
+    # design, not by gap; a separate demo-tenant + org-tree loader would still land with
+    # the modules it needs (see examples/reference-app/README.md's demo section).
     cmds:
       - |
-        echo "seed: not implemented yet."
+        echo "seed: no standalone demo-data loader exists -- seeding is a boot-time"
+        echo "mechanism, and this is deliberate (cmd/server/demo_users.go's seedDemoUsers"
+        echo "doc comment: registration goes through the real composed register route"
+        echo "in-process, never through a parallel loader that could drift from it)."
         echo
-        echo "docs/internal/19-dev-workflow.md plans 'task seed' to generate demo data"
-        echo "(two tenants, a multi-level org tree, users and roles, sample plans and"
-        echo "subscriptions) that reference-app demos and local debugging depend on."
-        echo "The reference app has no seeding path today: cmd/server/server.go only"
-        echo "hard-codes two demo Host-to-tenant mappings (acme/globex), and every"
-        echo "table starts empty at boot. A real demo-data loader lands with the"
-        echo "modules it needs (authn, org, billing -- see examples/reference-app/"
-        echo "README.md and docs/internal/14-reference-app.md)."
+        echo "To get the seeded demo data, boot the reference-app server with the seed"
+        echo "variables set -- every boot re-asserts the seed idempotently:"
         echo
-        echo "For a manual demo today, run the server and drive it with curl, exactly"
-        echo "as examples/reference-app/README.md's 'Try it' section shows."
+        echo "    APP_DEMO_USERS_PASSWORD='a demo passphrase' \\"
+        echo "    APP_DEMO_PLATFORM_STAFF_PASSWORD='an admin demo passphrase' \\"
+        echo "    go run ./cmd/server     (from examples/reference-app)"
+        echo
+        echo "APP_DEMO_USERS_PASSWORD seeds the three real demo accounts (demo-owner@,"
+        echo "demo-reader@, demo-acme-only@example.com) with their memberships and rbac"
+        echo "grants; APP_DEMO_PLATFORM_STAFF_PASSWORD seeds the platform-staff account"
+        echo "demo-platform-staff@example.com under rbac.SystemDomain. Credit balances and"
+        echo "subscription/entitlement seeds run at the same boot."
         exit 1
     silent: true
 
