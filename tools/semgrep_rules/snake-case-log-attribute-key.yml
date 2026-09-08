@@ -1,0 +1,81 @@
+# Log attribute keys must be snake_case literals
+#
+# Discipline row: docs/internal/18-cicd.md architecture-discipline
+# table, "log field names" row (semgrep: attribute keys must be
+# snake_case literals), and the root CLAUDE.md "Logging" bullet:
+# attribute keys are snake_case and shared across the stack
+# (tenant_id, user_id, job_id, trace_id, duration_ms).
+#
+# What fires: a key-value argument pair of the four structured-logger
+# methods (Info / Warn / Error / Debug -- the same receiver set the
+# non-constant-log-message rule targets) whose KEY is a string literal
+# that is not snake_case: any uppercase letter, hyphen, whitespace or
+# other character outside [a-z0-9_.] (dotted keys such as
+# "billing.stripe_secret_key" keep the snake_case form per segment and
+# are the config-style exception the redaction layer documents).
+# A key must be a literal; an identifier argument in key position
+# (a key-name constant) is not matched by the literal patterns.
+#
+# The value position is deliberately excluded from the literal
+# requirement: values are dynamic (identifiers, calls). To keep a
+# string literal sitting in VALUE position from being misread as a
+# key, the rule requires the argument AFTER the candidate key not to
+# be a string literal either -- a log line that passes a literal
+# string value followed by another argument is the one shape a
+# non-snake value could still bind (none exists in the real tree
+# today; code review owns the residue, recorded here like every rule's
+# residual gap).
+#
+# Residual gaps, deliberately accepted:
+#   * Only the variadic key-value shape is matched. A key passed as an
+#     identifier (a package-level constant), a key built dynamically,
+#     or a slog.Attr literal constructed before the call is not
+#     caught -- the redaction layer still masks by key name at the
+#     sink, and code review owns the evasion, the identical residual
+#     the non-constant-log-message and handwritten-tenant-id-filter
+#     rules document.
+rules:
+  - id: non-snake-log-attribute-key
+    message: >-
+      structured-logger attribute key is not a snake_case literal.
+      Attribute keys are snake_case and shared across the stack
+      (tenant_id, user_id, job_id, trace_id, duration_ms): an
+      uppercase letter, hyphen or space in a key breaks the shared
+      vocabulary the redaction layer keys on. See the rule header.
+    languages:
+      - go
+    severity: WARNING
+    patterns:
+      # "$KEY" in argument position binds the literal's CONTENT (no
+      # quote characters) and can only match a string literal, so $KEY
+      # is exactly a literal key and the regex below sees its content.
+      - pattern-either:
+          - pattern: $RECV.$M($MSG, ..., "$KEY", $VAL, ...)
+          - pattern: $RECV.$M($MSG, "$KEY", $VAL)
+      - metavariable-regex:
+          metavariable: $M
+          regex: "^(Info|Warn|Error|Debug)$"
+      - metavariable-regex:
+          metavariable: $KEY
+          # Matches iff the literal is NOT snake_case: a lowercase
+          # first segment of [a-z0-9_], further dot-separated segments
+          # of [a-z0-9_] -- anything else (uppercase, hyphen, space,
+          # other punctuation) violates.
+          regex: '^(?!([a-z][a-z0-9_]*)(\.[a-z0-9_]+)*$).*$'
+      # The value must not itself be a string literal, so a literal in
+      # value position cannot bind the key position of a later pair
+      # (see header).
+      - metavariable-pattern:
+          metavariable: $VAL
+          patterns:
+            - pattern-not: '"$ANY2"'
+      # net/http stdlib helper, not the structured logger: its
+      # (writer, message, status) shape collides with the logger-call
+      # syntax ($M=Error, message argument followed by a literal
+      # argument) and it is not the structured logger -- the identical
+      # filter the non-constant-log-message rule applies.
+      - pattern-not: http.Error(...)
+    paths:
+      exclude:
+        - "**/*_test.go"
+        - "**/integration_test/**"
