@@ -52,22 +52,30 @@ go/pki
 
 X.509 层建立在密钥生命周期层之上：一张证书就是"一把有生命周期的密钥"外加"一份由 CA 签名的身份声明"。
 
-### X.509 层暂时没有真实消费者，这是一处明确破例
+### X.509 层已有真实消费者（2026-09-08 关闭破例），残留面精确记录在案
 
-[15 里程碑](15-roadmap.md) 与仓库根 CLAUDE.md 都把「`examples/reference-app` 真实接入」列为模块完成的强制条件——模块 API 没有被真实消费者用起来，不算完成。**本模块的两层里，只有下面一层满足这条。**
+[15 里程碑](15-roadmap.md) 与仓库根 CLAUDE.md 都把「`examples/reference-app` 真实接入」列为模块完成的强制条件——模块 API 没有被真实消费者用起来，不算完成。**本模块的两层现在都满足这条。**
 
 - **密钥生命周期层有消费者**：`authn` 通过 `KeySource` 消费它，而 reference-app 装配 `authn`，因此是它的间接真实消费者。这条链是完整的。
-- **X.509 层没有**：reference-app 是牙科 SaaS，不签发证书；催生本模块的那套 DBaaS 系统是 Java 的，只作需求镜子，不会成为 speed 的消费者（见"需求来源"）。
+- **X.509 层有消费者（2026-09-08 的消费者轮关闭破例）**：reference-app 新增 `internal/attestation`（AI 输出真实性签章层，包文档有完整产品叙事）。参考应用是牙科 AI SaaS，本身仍然"不签发证书"给诊所——但它真实地签发自产 AI 输出并对其做链验证门控，这正是"平台代持密钥、私钥永不出模块"形态下唯一真正成立的消费形状。逐项消费面：启动时 `EnsureAuthorityChain` 经 `CreateRootCA` + `CreateIntermediateCA` 每库建一次应用 CA 链（固定 subject 名幂等寻回，重启不重复建链）；每个租户观察到的成功仿真输出经 `IssueCertificate`（purpose `simulation.attestation`，365 天）签发租户证书、`SignCertificate` 签名、落应用侧签章行；对外分享经 `VerifyCertificate` 链验证 + 叶公钥验签 + 实时摘要比对门控。`cmd/server/attestation_flow_test.go` 把吊销（`pki_revokeCertificate` HTTP 操作，首次真实驱动）与 CRL 拉取（`pki_getAuthorityCrl` HTTP 操作，首次真实驱动）也真实走通。
 
-**仍然实现它，理由是这些需求已经被真实系统验证过。** 诊断出的问题——零轮转、根 CA 私钥常年在线、无吊销、序列号可预测——是一套已上线系统的真实状态，不是设想出来的。等到 speed 生态里出现第一个需要内部 CA 的项目再从头做，等于让那个项目自己踩一遍同样的坑，而"不让每个项目重造这些轮子"正是 speed 存在的理由。
+**首次集成只发现一处真实 API 缺口**：签发出来的证书密钥无法被用于任何签名——"issue -> use -> verify"的 use 在模块层不存在。本轮以**纯增量**方式补上 `CAService.SignCertificate`（sign.go；守卫全部复用模块既有形态：`ErrCertificateRevoked` 走 `walkAuthorityChain` 同一条链遍历、有效窗外拒绝沿用"expiry 不编码"惯例、Signer 失败包装同 `GenerateCRL`），未破坏任何既有签名。
 
-**破例的代价必须说清楚：没有真实使用验证过的 API 形状很可能是错的。** 单元测试只能证明代码按自己的设想工作，证明不了这个设想对不对；缺的是那种"接进去才发现这个参数根本拿不到"的反馈。因此本层附带三条约束：
+**曾有的三条补偿义务按实际收窄如下：**
 
-1. **必须有 godoc `Example` 函数**，覆盖签发一条完整证书链的主路径。CI 在每个模块的单元套件里编译并运行 `Example`，所以它至少保证这套 API 在**外部调用者的视角下**能编译、能跑通——这是无真实消费者时能拿到的最强保证。
-2. **在 `go/pki/AGENTS.md` 的 Known limitations 里如实标注"X.509 层未经真实消费验证"**，不写成已完成。
-3. **第一个真实消费者接入时，允许对这一层做破坏性调整**，不受"公开 API 视为冻结"的约束。speed 尚未发布，这条本来就成立；写在这里是为了让将来的人知道这个调整是**预期之内**的，不是设计失误。
+1. **godoc `Example` 义务保留、叙述收窄**——编译即运行的 `Example` 仍是本层最便宜的常真消费者证明；`example_test.go` 本轮新增 `ExampleCAService_SignCertificate`（签发→签名→叶公钥验签→吊销后签名拒绝）。
+2. **"未经真实消费验证"标注义务关闭**——消费者已落地，模块的 Known limitations 相应改写为"已有真实消费者、残留面精确记录"。
+3. **"首个消费者可破坏性调整"豁免按实际收窄**——真实接入只做了一处增量扩展；豁免现在只覆盖下面"精确残留"列出的面，其余 X.509 API 已按真实消费者形状稳定下来（不过仍未达到密钥生命周期层的冻结标准）。
 
-密钥生命周期层不适用这三条——它有真实消费者，按正常标准要求。
+**残留面精确记录**（每条即未来仍可自由调整之处，及不消费的理由，与 `go/pki/AGENTS.md`"X.509 layer: real consumer, precise residuals"一节同源）：
+
+- **两个 JWKS 导出**（`ExportAuthorityChainJWKS` 与 HTTP `pki_getAuthorityJwks`/`pki_getKeyJwks`）仍无调用方：本应用的外部验证者直接拿原始证书与 CRL 文档，不需要 JWKS。
+- **CRLDP 扩展嵌入路径**：应用权威不带 `CRLDistributionPoint`（应用没有可声明的公开 origin），`RootCAParams`/`IntermediateCAParams.CRLDistributionPoint` 的真实证书嵌入未被走到。
+- **`EnqueueCRLRegenerate` 周期性调度仍不接线**：应用的验证路径是行状态 + 链验证，CRL 流程内按需 Go API 生成 + HTTP 拉取；周期性刷新依旧没有读者在等。
+- **`pki_authorities`/`pki_certificates` 的到期驱动生命周期仍未建**：现在可点名等待对象——签章证书有真实的 365 天有效期，过期即分享拒发，续期/告警机制的受益者有名有实。
+- **`AuthorityStatusRevoked` 仍无写入方法**：链拒绝路径经由模块自身直接播种的测试驱动，与应用无关。
+
+密钥生命周期层不适用上述历史豁免——它有真实消费者，按正常标准要求；本条收窄同样不触及它。
 
 
 **`authn` 不得 import X.509 层的任何符号**。JWT 验签只需要公钥和 kid，证书链对它毫无价值，反而引入证书解析与链校验的攻击面。这条由 semgrep 规则钉住，不靠自律。

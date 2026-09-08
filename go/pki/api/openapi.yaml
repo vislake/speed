@@ -27,10 +27,13 @@ info:
     Merging this fragment into the application-wide build/openapi/speed.yaml
     stays future work, the identical deferral org's and storage's own
     fragments already record (docs/internal/21-api-contract.md's
-    implementation-status note): pki has no in-workspace web consumer yet
-    (root CLAUDE.md's "no real consumer yet" note on the X.509 layer, which
-    this fragment's revoke-certificate/authority operations belong to, and
-    the key-lifecycle revoke/JWKS operations have none either).
+    implementation-status note): as of the X.509-consumer round pki has an
+    in-workspace consumer for the revoke-certificate and CRL-fetch
+    operations (the reference app's AI-output attestation flow,
+    attestation_flow_test.go, drives both over the wire; the signing-key
+    revoke is driven by pki_revoke_gate_flow_test.go), while the two JWKS
+    read operations -- key-lifecycle and authority-chain -- still have no
+    HTTP caller.
   version: 0.0.0
 paths:
   /api/v1/pki/signing-keys/{kid}/revoke:
