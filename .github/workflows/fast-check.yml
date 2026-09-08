@@ -98,11 +98,24 @@ name: fast-check
 #         exempt a module from the comparison the go-module-ci coverage
 #         leg (reusable-go-module-ci.yml leg 3b) runs on every module
 #         job.
+#       - tools/check_spec_request_tenant_id.py -- the API-spec lint for
+#         the 18-cicd discipline row "the API layer must not accept an
+#         externally supplied tenant_id": every backend fragment's
+#         requests (requestBody schemas and parameters) are scanned for
+#         a tenant_id declaration, with authn's four pre-auth
+#         tenant-naming request schemas the one recorded exception.
+#       - tools/check_migration_cross_module_fks.py -- the migration
+#         lint for the 18-cicd discipline row "no cross-module database
+#         foreign keys": a REFERENCES target in a module's migration
+#         files must belong to that module, measured by where the
+#         target is CREATEd. The tree ships no REFERENCES today; the
+#         rule's planted fixtures are its teeth.
 #       - tools/semgrep_rules/ -- the architecture-discipline semgrep
-#         ruleset: six rules, each mapping to an 18-cicd discipline-table
+#         ruleset: seven rules, each mapping to an 18-cicd discipline-table
 #         row (deployment-mode branching outside kernel wiring,
 #         non-constant log messages, raw-GORM bypasses, AutoMigrate,
-#         tenant_id metric labels, hand-written tenant filters), each with
+#         tenant_id metric labels, hand-written tenant filters,
+#         non-snake_case log attribute keys), each with
 #         planted-violation fixtures under tools/semgrep_rules/testdata/.
 #         The step below pip-installs semgrep into a throwaway venv and
 #         scans go/ examples/ tools/ with the fixture subtree excluded at
@@ -315,6 +328,22 @@ jobs:
       # module from the "coverage must not decline" rule.
       - name: Coverage-baseline file self-check
         run: python3 tools/check_coverage_baseline.py --selfcheck
+      # API-spec lint for the discipline-table row "the API layer must
+      # not accept an externally supplied tenant_id": every fragment's
+      # requests are scanned for a requestBody property or parameter
+      # named tenant_id, with authn's four pre-auth tenant-naming
+      # schemas the one recorded exception (its spec header argues the
+      # "request, never a grant" shape). Pure python, like the
+      # isolation check above.
+      - name: API-spec caller-tenant_id check
+        run: python3 tools/check_spec_request_tenant_id.py
+      # Migration lint for the discipline-table row "no cross-module
+      # database foreign keys": a REFERENCES target inside a module's
+      # migration files must belong to that module (measured by where
+      # the target is CREATEd). Pure python; the tree ships no
+      # REFERENCES today, so the planted fixtures are the teeth.
+      - name: Cross-module foreign-key check (migration lint)
+        run: python3 tools/check_migration_cross_module_fks.py
       # Semgrep into a throwaway venv: the runner has no pinned semgrep
       # and this job's toolchain setup is the Go/Node actions only. The
       # pip install is the deliberately-unpinned piece -- see the COVERAGE
