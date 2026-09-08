@@ -12,6 +12,8 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+
+	"github.com/vislake/speed/go/compliance/internal/testutil"
 )
 
 // newManifestCleanupHarness returns a RetentionService wired directly over
@@ -24,6 +26,17 @@ import (
 // system-context and audit machinery.
 func newManifestCleanupHarness(t *testing.T) (*RetentionService, *audit.Repository, pkgcore.ObjectStore) {
 	t.Helper()
+	return newManifestCleanupHarnessSeamed(t, audit.NewRepository(newTestAuditDB(t)), pkgcore.NewLocalObjectStore(t.TempDir()))
+}
+
+// newManifestCleanupHarnessSeamed is newManifestCleanupHarness over
+// injected repo and store seams: a test substitutes a repository whose
+// underlying database is closed, or a scripted store whose operations
+// fail, to drive the sweep's failure branches -- a genuinely broken read
+// or store must be reported as the participant's error, never silently
+// skipped.
+func newManifestCleanupHarnessSeamed(t *testing.T, auditRepo *audit.Repository, store pkgcore.ObjectStore) (*RetentionService, *audit.Repository, pkgcore.ObjectStore) {
+	t.Helper()
 	bus := pkgcore.NewMemoryEventBus()
 	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
 	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
@@ -31,8 +44,6 @@ func newManifestCleanupHarness(t *testing.T) (*RetentionService, *audit.Reposito
 	}
 	pkgcore.RegisterSystemPurpose(SystemPurposeRetentionSweep)
 
-	auditRepo := audit.NewRepository(newTestAuditDB(t))
-	store := pkgcore.NewLocalObjectStore(t.TempDir())
 	if err := reg.Retention.Add(exportManifestsParticipant(auditRepo, store)); err != nil {
 		t.Fatalf("register export-manifests participant: %v", err)
 	}
@@ -257,5 +268,194 @@ func TestExportManifestCleanup_SweepReapsExpiredPartialFailureExport(t *testing.
 	}
 	if got := again.Reaped[exportManifestsParticipantName]; got != 0 {
 		t.Fatalf("second SweepTenant reaped %s = %d, want 0 -- already-reaped partial manifests must not be recounted", exportManifestsParticipantName, got)
+	}
+}
+
+// insertForeignActionAuditRow inserts one audit row for tenant whose
+// Action is not AuditActionExportRequest but whose Changes carry the exact
+// export-delivery shape (object_key, share_expires_at past) -- the row the
+// sweep must skip on its action check, so an expired object it names must
+// survive even though a same-shaped export row would have had it reaped.
+func insertForeignActionAuditRow(t *testing.T, repo *audit.Repository, tenant pkgcore.TenantID, id, action, key string, shareExpiresAt time.Time) {
+	t.Helper()
+	changes, err := json.Marshal(audit.Diff{After: map[string]any{
+		"object_key":       key,
+		"share_id":         "share-" + id,
+		"share_expires_at": shareExpiresAt,
+		"participants":     []string{},
+	}})
+	if err != nil {
+		t.Fatalf("marshal audit changes: %v", err)
+	}
+	evt := &audit.AuditEvent{
+		ID:         "evt-" + id,
+		TenantID:   string(tenant),
+		Action:     action,
+		OccurredAt: time.Now().Add(-time.Hour),
+		Changes:    datatypes.JSON(changes),
+	}
+	evt.SetActor(pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: "compliance.export", DisplayName: "compliance.export"})
+	evt.SetResource(audit.Resource{Type: "compliance.tenant", ID: string(tenant), DisplayName: string(tenant)})
+	evt.SetResult(audit.Result{Success: true})
+	if err := repo.Insert(context.Background(), evt); err != nil {
+		t.Fatalf("insert foreign-action audit event: %v", err)
+	}
+}
+
+// insertUnreadableExportRow inserts one AuditActionExportRequest row whose
+// Changes cannot be decoded -- the malformed record a sweep must skip
+// rather than fail the whole tenant over.
+func insertUnreadableExportRow(t *testing.T, repo *audit.Repository, tenant pkgcore.TenantID, id string) {
+	t.Helper()
+	evt := &audit.AuditEvent{
+		ID:         "evt-" + id,
+		TenantID:   string(tenant),
+		Action:     AuditActionExportRequest,
+		OccurredAt: time.Now().Add(-time.Hour),
+		Changes:    datatypes.JSON([]byte(`{not valid json`)),
+	}
+	evt.SetActor(pkgcore.Actor{Type: pkgcore.ActorTypeSystem, ID: "compliance.export", DisplayName: "compliance.export"})
+	evt.SetResource(audit.Resource{Type: "compliance.tenant", ID: string(tenant), DisplayName: string(tenant)})
+	evt.SetResult(audit.Result{Success: true})
+	if err := repo.Insert(context.Background(), evt); err != nil {
+		t.Fatalf("insert unreadable export event: %v", err)
+	}
+}
+
+// TestExportManifestCleanup_SweepSkipsForeignActionAndUnreadableRecords
+// proves the sweep's row-level resilience: a row of some other action and
+// a row whose Changes cannot be read are each skipped rather than reaped
+// or fatal -- the one skips an expired object that must survive (the
+// action check comes before any object is touched), the other names no
+// re-claimable object at all, and neither may fail the whole tenant's
+// sweep over one foreign or corrupt record in its own trail.
+func TestExportManifestCleanup_SweepSkipsForeignActionAndUnreadableRecords(t *testing.T) {
+	svc, auditRepo, store := newManifestCleanupHarness(t)
+
+	goodKey := seedExportDelivery(t, auditRepo, store, "tenant-a", "good", time.Now().Add(-40*24*time.Hour))
+	foreignKey := "compliance/exports/tenant-a/foreign.json"
+	if err := store.PutObject(context.Background(), foreignKey, bytes.NewReader([]byte(`{"foreign":true}`))); err != nil {
+		t.Fatalf("store foreign-action object: %v", err)
+	}
+	insertForeignActionAuditRow(t, auditRepo, "tenant-a", "foreign", "compliance.erasure.request", foreignKey, time.Now().Add(-40*24*time.Hour))
+	insertUnreadableExportRow(t, auditRepo, "tenant-a", "unreadable")
+
+	result, err := svc.SweepTenant(context.Background(), "tenant-a")
+	if err != nil {
+		t.Fatalf("SweepTenant: %v", err)
+	}
+	if result.HasErrors() {
+		t.Fatalf("SweepTenant errors = %v, want none -- a foreign or unreadable row must not fail the sweep", result.Errors)
+	}
+	if got := result.Reaped[exportManifestsParticipantName]; got != 1 {
+		t.Fatalf("SweepTenant reaped %s = %d, want exactly 1 (only the genuine expired export)", exportManifestsParticipantName, got)
+	}
+	if manifestObjectExists(t, store, goodKey) {
+		t.Error("the genuine expired manifest should have been reaped")
+	}
+	if !manifestObjectExists(t, store, foreignKey) {
+		t.Error("the expired object named only by a foreign-action row must survive -- the action check never reaches it")
+	}
+}
+
+// TestExportManifestCleanup_SweepStoreFailuresReportedNotSkipped proves
+// the sweep never treats a broken store as an empty one: a probe read that
+// fails, a probe reader whose Close fails, and a delete that fails are all
+// reported as the participant's error (and thus as the sweep's partial
+// failure), with the object left in place -- an object whose reaping could
+// not be verified or completed must not be counted as reaped, and the
+// operator must hear about the broken store rather than watch the sweep
+// report success over garbage it could not remove.
+func TestExportManifestCleanup_SweepStoreFailuresReportedNotSkipped(t *testing.T) {
+	cases := []struct {
+		name   string
+		script func(*scriptedStore)
+	}{
+		{"GetObject", func(s *scriptedStore) { s.failGet = errScriptedStoreRefusal }},
+		{"ProbeClose", func(s *scriptedStore) { s.closeErr = errScriptedStoreRefusal }},
+		{"DeleteObject", func(s *scriptedStore) { s.failDelete = errScriptedStoreRefusal }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := pkgcore.NewLocalObjectStore(t.TempDir())
+			store := &scriptedStore{ObjectStore: base}
+			svc, auditRepo, _ := newManifestCleanupHarnessSeamed(t, audit.NewRepository(newTestAuditDB(t)), store)
+			key := seedExportDelivery(t, auditRepo, store, "tenant-a", "expired", time.Now().Add(-40*24*time.Hour))
+			tc.script(store)
+
+			result, err := svc.SweepTenant(context.Background(), "tenant-a")
+			if !hasCode(err, ErrSweepPartialFailure.Code) {
+				t.Fatalf("SweepTenant error = %v, want %s -- the store failure must be reported", err, ErrSweepPartialFailure.Code)
+			}
+			got := result.Errors[exportManifestsParticipantName]
+			if got == nil {
+				t.Fatalf("SweepResult.Errors = %v, want %q to carry the store failure", result.Errors, exportManifestsParticipantName)
+			}
+			if !errors.Is(got, errScriptedStoreRefusal) {
+				t.Errorf("Errors[%q] = %v, want the store's own error preserved", exportManifestsParticipantName, got)
+			}
+			if !manifestObjectExists(t, base, key) {
+				t.Error("the manifest must survive: the store failure left it un-reaped, and nothing may claim otherwise")
+			}
+		})
+	}
+}
+
+// TestExportManifestCleanup_SweepListFailureReportedAsParticipantError
+// proves a sweep whose audit-trail read itself fails reports that as the
+// participant's error rather than silently reaping nothing: with the
+// repository's database closed, the participant cannot even enumerate its
+// candidates, and the sweep must say so -- a cleanup that cannot read its
+// own ledger must not masquerade as a clean pass.
+func TestExportManifestCleanup_SweepListFailureReportedAsParticipantError(t *testing.T) {
+	db := newTestAuditDB(t)
+	auditRepo := audit.NewRepository(db)
+	svc, _, _ := newManifestCleanupHarnessSeamed(t, auditRepo, pkgcore.NewLocalObjectStore(t.TempDir()))
+
+	sqlDB, dbErr := db.DB()
+	if dbErr != nil {
+		t.Fatalf("get sql.DB: %v", dbErr)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close sql.DB: %v", err)
+	}
+
+	result, err := svc.SweepTenant(context.Background(), "tenant-a")
+	if !hasCode(err, ErrSweepPartialFailure.Code) {
+		t.Fatalf("SweepTenant error = %v, want %s -- the unreadable audit trail must be reported", err, ErrSweepPartialFailure.Code)
+	}
+	if result.Errors[exportManifestsParticipantName] == nil {
+		t.Errorf("SweepResult.Errors = %v, want %q to carry the read failure", result.Errors, exportManifestsParticipantName)
+	}
+}
+
+// TestExportManifestCleanup_EraseAnswersNothingToErase proves the module's
+// own declared erasure answer: a stored export manifest is a tenant-wide
+// bundle, never a single subject's rows, so a right-to-erasure request for
+// one subject must leave every manifest untouched and report exactly that
+// -- an explicit (0, nil), never a silent skip and never a claim that the
+// subject's data was erased.
+func TestExportManifestCleanup_EraseAnswersNothingToErase(t *testing.T) {
+	repo := testutil.NewFakeRepository(testutil.NewDB(t))
+	auditRepo := audit.NewRepository(newTestAuditDB(t))
+	store := pkgcore.NewLocalObjectStore(t.TempDir())
+	svc, _ := newErasureServiceOn(t, pkgcore.NewMemoryEventBus(),
+		exportManifestsParticipant(auditRepo, store), testutil.NewParticipant("testutil.fake_note", repo))
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	ctx := pkgcore.WithTenant(context.Background(), tenant)
+	result, err := svc.Erase(ctx, pkgcore.SubjectRef{TenantID: tenant, SubjectID: "subject-1"}, testErasureActor)
+	if err != nil {
+		t.Fatalf("Erase: %v", err)
+	}
+	if result.HasErrors() {
+		t.Fatalf("Erase errors = %v, want none", result.Errors)
+	}
+	if got := result.Erased[exportManifestsParticipantName]; got != 0 {
+		t.Errorf("Erased[%q] = %d, want 0 -- a manifest is tenant-wide, never a subject's data to erase", exportManifestsParticipantName, got)
+	}
+	if got := result.Erased["testutil.fake_note"]; got != 1 {
+		t.Errorf("Erased[testutil.fake_note] = %d, want the subject's own rows erased alongside", got)
 	}
 }

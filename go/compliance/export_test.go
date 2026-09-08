@@ -69,7 +69,23 @@ func newExportHarness(t *testing.T) (*ExportService, *testutil.FakeRepository, p
 // erasure_test.go's newErasureServiceWith provides for the erasure path.
 func newExportHarnessWith(t *testing.T, extra ...pkgcore.RetentionParticipant) (*ExportService, *testutil.FakeRepository, pkgcore.ObjectStore, *fakeSharingCreator, *[]audit.RecordedEvent) {
 	t.Helper()
-	bus := pkgcore.NewMemoryEventBus()
+	return newExportHarnessSeamed(t, nil, nil, extra...)
+}
+
+// newExportHarnessSeamed is newExportHarnessWith over injected seams: a
+// nil bus or store means the ordinary defaults (a fresh memory bus, a
+// local store at a fresh temp dir); an injected scripted bus or store lets
+// a test drive the failure branches a healthy memory bus and local store
+// can never reach -- the audit publish failing, the store refusing to
+// store or delete the manifest object.
+func newExportHarnessSeamed(t *testing.T, bus pkgcore.EventBus, store pkgcore.ObjectStore, extra ...pkgcore.RetentionParticipant) (*ExportService, *testutil.FakeRepository, pkgcore.ObjectStore, *fakeSharingCreator, *[]audit.RecordedEvent) {
+	t.Helper()
+	if bus == nil {
+		bus = pkgcore.NewMemoryEventBus()
+	}
+	if store == nil {
+		store = pkgcore.NewLocalObjectStore(t.TempDir())
+	}
 	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
 	if err := reg.AuditActions.Add(AuditActionExportRequest); err != nil {
 		t.Fatalf("declare audit action: %v", err)
@@ -92,7 +108,6 @@ func newExportHarnessWith(t *testing.T, extra ...pkgcore.RetentionParticipant) (
 		t.Fatalf("register extra participants: %v", err)
 	}
 
-	store := pkgcore.NewLocalObjectStore(t.TempDir())
 	fakeSharing := &fakeSharingCreator{}
 	svc := newExportService()
 	svc.retention = reg.Retention
@@ -858,5 +873,192 @@ func TestExportService_Export_DeliveryFailureAuditClassifiesReasonNeverText(t *t
 	}
 	if strings.Contains(string(raw), transport.Error()) {
 		t.Errorf("the transport error text %q was carved into the audit event: %s", transport.Error(), raw)
+	}
+}
+
+// scriptedStore is a pkgcore.ObjectStore delegating to a real local store
+// whose three operations can each be scripted to fail. It stands in for a
+// store backend that genuinely refuses an operation (a full disk, a
+// broken bucket), which a healthy local store cannot produce; closeErr
+// additionally scripts the probe reader Export's cleanup sweep closes, so
+// a close failure on the probe can be driven too.
+type scriptedStore struct {
+	pkgcore.ObjectStore
+	failPut     error
+	failGet     error
+	failDelete  error
+	closeErr    error
+	deleteCalls int
+}
+
+func (s *scriptedStore) PutObject(ctx context.Context, key string, r io.Reader) error {
+	if s.failPut != nil {
+		return s.failPut
+	}
+	return s.ObjectStore.PutObject(ctx, key, r)
+}
+
+func (s *scriptedStore) GetObject(ctx context.Context, key string) (io.ReadCloser, error) {
+	if s.failGet != nil {
+		return nil, s.failGet
+	}
+	rc, err := s.ObjectStore.GetObject(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if s.closeErr != nil {
+		return &failingReadCloser{ReadCloser: rc, err: s.closeErr}, nil
+	}
+	return rc, nil
+}
+
+func (s *scriptedStore) DeleteObject(ctx context.Context, key string) error {
+	s.deleteCalls++
+	if s.failDelete != nil {
+		return s.failDelete
+	}
+	return s.ObjectStore.DeleteObject(ctx, key)
+}
+
+var _ pkgcore.ObjectStore = (*scriptedStore)(nil)
+
+// failingReadCloser wraps a real reader whose Close fails -- the probe
+// reader shape a store can legitimately return when its close path errors.
+type failingReadCloser struct {
+	io.ReadCloser
+	err error
+}
+
+func (f *failingReadCloser) Close() error { return f.err }
+
+// errScriptedStoreRefusal is the one error every scripted store failure
+// returns, so assertions can tell a scripted refusal apart from any other
+// failure the code under test might produce.
+var errScriptedStoreRefusal = errors.New("scripted store refuses")
+
+// TestExportService_Export_UnmarshalableParticipantValueFailsClosedBeforeStoring
+// proves the manifest-marshal gate: a participant whose Export callback
+// returns a value JSON cannot represent (a channel -- a misbehaving
+// participant, since the participant contract promises a JSON-serializable
+// value) fails the whole export before anything is stored or delivered.
+// An un-marshalable manifest must never become a half-written object with
+// no delivery to reference it.
+func TestExportService_Export_UnmarshalableParticipantValueFailsClosedBeforeStoring(t *testing.T) {
+	bad := pkgcore.RetentionParticipant{
+		Name:   "testutil.unmarshalable",
+		Sweep:  testutil.NoopSweep,
+		Erase:  testutil.NoopErase,
+		Export: func(context.Context, pkgcore.TenantID) (any, error) { return make(chan int), nil },
+	}
+	svc, repo, _, fakeSharing, _ := newExportHarnessWith(t, bad)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
+	if err == nil {
+		t.Fatal("Export = nil error, want the manifest marshal failure")
+	}
+	if !strings.Contains(err.Error(), "marshal export manifest") {
+		t.Errorf("Export error = %q, want the marshal failure named", err)
+	}
+	if result != nil {
+		t.Errorf("Export result = %+v, want nil -- nothing was stored or delivered", result)
+	}
+	if len(fakeSharing.calls) != 0 {
+		t.Errorf("sharing.Create calls = %d, want 0 -- delivery must never be attempted for an un-marshalable manifest", len(fakeSharing.calls))
+	}
+}
+
+// TestExportService_Export_StorePutFailureFailsClosedBeforeDelivery proves
+// the store gate: when the object store refuses the manifest, Export
+// reports the failure and never attempts delivery -- a manifest that was
+// never durably stored must not be handed to go/sharing as if it had
+// been.
+func TestExportService_Export_StorePutFailureFailsClosedBeforeDelivery(t *testing.T) {
+	store := &scriptedStore{ObjectStore: pkgcore.NewLocalObjectStore(t.TempDir()), failPut: errScriptedStoreRefusal}
+	svc, repo, _, fakeSharing, _ := newExportHarnessSeamed(t, nil, store)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
+	if err == nil {
+		t.Fatal("Export = nil error, want the store failure")
+	}
+	if !strings.Contains(err.Error(), "store export manifest") {
+		t.Errorf("Export error = %q, want the store failure named", err)
+	}
+	if result != nil {
+		t.Errorf("Export result = %+v, want nil -- nothing was stored or delivered", result)
+	}
+	if len(fakeSharing.calls) != 0 {
+		t.Errorf("sharing.Create calls = %d, want 0 -- delivery must never be attempted for an unstored manifest", len(fakeSharing.calls))
+	}
+}
+
+// TestExportService_Export_AuditRecordFailureAfterSuccessfulDeliverySurfaces
+// proves the export path's audit-record contract on a fully successful
+// run: gather, store and delivery all completed, but the one
+// AuditActionExportRequest event recording it could not be published --
+// Export returns the completed result (the stored object and the minted
+// share stay valid, since the export itself is done) alongside
+// ErrAuditRecordFailed, never erasing what already happened.
+func TestExportService_Export_AuditRecordFailureAfterSuccessfulDeliverySurfaces(t *testing.T) {
+	bus := &scriptedBus{EventBus: pkgcore.NewMemoryEventBus(), failFrom: 1, failErr: errors.New("scripted bus refuses")}
+	svc, repo, store, _, _ := newExportHarnessSeamed(t, bus, nil)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
+	if !hasCode(err, ErrAuditRecordFailed.Code) {
+		t.Fatalf("Export error = %v, want %s", err, ErrAuditRecordFailed.Code)
+	}
+	if result == nil {
+		t.Fatal("Export should return a non-nil result even when its audit record fails")
+	}
+	if result.ObjectKey == "" || result.Delivery.ShareID == "" || result.Delivery.Token == "" {
+		t.Fatalf("result = %+v, want the stored object key and the minted share populated", result)
+	}
+	if _, err := store.GetObject(context.Background(), result.ObjectKey); err != nil {
+		t.Errorf("GetObject(%q) after the audit failure = %v, want the stored manifest to survive", result.ObjectKey, err)
+	}
+}
+
+// TestExportService_Export_DeliveryCleanupAndAuditFailuresSurface proves
+// the compound-failure shape of the delivery-failed path: delivery
+// refused, the cleanup delete of the un-shareable manifest also refused,
+// and the audit record of it all refused -- Export reports the audit
+// failure (ErrAuditRecordFailed) while returning the result with the
+// stored object key still populated, and the store really was asked to
+// delete the undeliverable object (the manifest is still there only
+// because the store itself is broken). Every leg of the failure is
+// surfaced rather than assumed away.
+func TestExportService_Export_DeliveryCleanupAndAuditFailuresSurface(t *testing.T) {
+	store := &scriptedStore{ObjectStore: pkgcore.NewLocalObjectStore(t.TempDir()), failDelete: errScriptedStoreRefusal}
+	bus := &scriptedBus{EventBus: pkgcore.NewMemoryEventBus(), failFrom: 1, failErr: errors.New("scripted bus refuses")}
+	svc, repo, _, fakeSharing, _ := newExportHarnessSeamed(t, bus, store)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+	fakeSharing.failWith = errors.New("sharing unavailable")
+
+	result, err := svc.Export(pkgcore.WithTenant(context.Background(), tenant), tenant)
+	if !hasCode(err, ErrAuditRecordFailed.Code) {
+		t.Fatalf("Export error = %v, want %s (the audit failure takes the returned error)", err, ErrAuditRecordFailed.Code)
+	}
+	if result == nil {
+		t.Fatal("Export should return a non-nil result even when delivery failed")
+	}
+	if result.ObjectKey == "" {
+		t.Error("ObjectKey should still be populated: the manifest was stored before delivery was attempted")
+	}
+	if result.Delivery != (ExportDelivery{}) {
+		t.Errorf("Delivery = %+v, want the zero value", result.Delivery)
+	}
+	if store.deleteCalls != 1 {
+		t.Errorf("store.DeleteObject calls = %d, want 1 -- the undeliverable manifest's cleanup must be attempted", store.deleteCalls)
+	}
+	// The delete was refused, so the un-shareable dump is still stored --
+	// and the returned error must let the operator know that possibility.
+	if _, err := store.ObjectStore.GetObject(context.Background(), result.ObjectKey); err != nil {
+		t.Errorf("GetObject(%q) = %v, want the refused delete to have left the manifest stored", result.ObjectKey, err)
 	}
 }

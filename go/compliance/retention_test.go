@@ -2,15 +2,21 @@ package compliance
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/vislake/speed/go/config"
+	configmigrations "github.com/vislake/speed/go/config/migrations"
+	"github.com/vislake/speed/go/dbkit"
 	"github.com/vislake/speed/go/dbkit/audit"
+	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/tenancy"
 
 	"github.com/vislake/speed/go/compliance/internal/testutil"
 )
@@ -30,7 +36,16 @@ var errFakeParticipant = errors.New("testutil: fake participant refuses")
 // carrying a test-only window-override seam.
 func newRetentionHarness(t *testing.T) (*RetentionService, *testutil.FakeRepository) {
 	t.Helper()
-	bus := pkgcore.NewMemoryEventBus()
+	return newRetentionHarnessOn(t, pkgcore.NewMemoryEventBus())
+}
+
+// newRetentionHarnessOn is newRetentionHarness over an injected bus: the
+// service is wired exactly the same way, but bus is the one the test
+// provides, so a test can substitute a scripted bus whose Publish fails
+// and drive the fail-closed branches (WithSystemContext's audit publish,
+// the sweep's own audit emit) that a healthy memory bus can never reach.
+func newRetentionHarnessOn(t *testing.T, bus pkgcore.EventBus) (*RetentionService, *testutil.FakeRepository) {
+	t.Helper()
 	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
 	if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
 		t.Fatalf("declare audit action: %v", err)
@@ -49,6 +64,35 @@ func newRetentionHarness(t *testing.T) (*RetentionService, *testutil.FakeReposit
 	svc.actions = reg.AuditActions
 	return svc, repo
 }
+
+// scriptedBus is an EventBus that starts refusing Publish once its own
+// publish count reaches failFrom: every publish at or after that one
+// returns failErr without reaching the wrapped bus. It stands in for a
+// broker-backed bus whose publish path genuinely fails (a closed
+// connection, an append error), which the in-memory bus cannot produce --
+// tenancy.WithSystemContext and dbkit/audit.Emit both fail closed on a
+// Publish error, and those refusals are exactly the branches these tests
+// drive. The count is publish invocations, not successful deliveries, so
+// failFrom is deterministic however many subscribers an event has: a
+// retention sweep publishes exactly twice (the system-context-entered
+// event, then the sweep's own audit event), an erasure the same, an
+// export once.
+type scriptedBus struct {
+	pkgcore.EventBus
+	failFrom int
+	failErr  error
+	calls    int
+}
+
+func (b *scriptedBus) Publish(ctx context.Context, evt pkgcore.Event) error {
+	b.calls++
+	if b.calls >= b.failFrom {
+		return b.failErr
+	}
+	return b.EventBus.Publish(ctx, evt)
+}
+
+var _ pkgcore.EventBus = (*scriptedBus)(nil)
 
 // wellPastDefaultWindow and withinDefaultWindow are two points in time on
 // either side of defaultRetentionWindow (30 days), for seeding rows that
@@ -521,5 +565,280 @@ func TestRetentionService_SweepTenant_ChangesRecordClassificationNeverErrorText(
 	}
 	if events[0].Result.Success {
 		t.Error("audit Result.Success = true, want false -- the participant error must still mark the pass failed")
+	}
+}
+
+// configModuleStub feeds go/config's own embedded migrations to
+// dbkit.MigrationRegistry, mirroring module_test.go's fakeAuditModule for
+// dbkit/audit's (a module's own migrations are not exported through the
+// module type, so a test that wants the configs table migrated applies the
+// migrations directly) -- only Name and Migrations are ever read by
+// MigrationRegistry.Apply here.
+type configModuleStub struct{}
+
+func (configModuleStub) Name() string                     { return "config" }
+func (configModuleStub) DependsOn() []string              { return nil }
+func (configModuleStub) Migrations() embed.FS             { return configmigrations.FS }
+func (configModuleStub) Locales() embed.FS                { return embed.FS{} }
+func (configModuleStub) OpenAPISpec() []byte              { return nil }
+func (configModuleStub) Register(*pkgcore.Registry) error { return nil }
+
+var _ pkgcore.Module = configModuleStub{}
+
+// newRetentionConfigService returns a live *config.Service over a freshly
+// migrated configs table, attached the way a host attaches one: a real
+// config.Module registered on a real pkgcore.Registry, its schema frozen
+// by Attach. withComplianceItems controls whether compliance's own
+// Register ran on that registry first -- the schema then carries
+// ConfigDefaultRetentionWindow (the shape of every real host, which
+// bootstraps the module) or does not (the shape of a config service whose
+// schema was frozen before compliance ever registered, which is the one
+// live way RetentionWindow's config read can error). A test wires the
+// returned service onto a RetentionService with svc.cfg = <it>, exactly
+// what Module.WithConfigService does.
+func newRetentionConfigService(t *testing.T, withComplianceItems bool) *config.Service {
+	t.Helper()
+	db := dbtest.NewSQLite(t)
+	registry := dbkit.NewMigrationRegistry()
+	if err := registry.Register(configModuleStub{}); err != nil {
+		t.Fatalf("register config migrations: %v", err)
+	}
+	if err := registry.Apply(context.Background(), db, dbkit.DialectSQLite); err != nil {
+		t.Fatalf("apply config migrations: %v", err)
+	}
+
+	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+	cfgModule := config.NewModule(db)
+	if err := cfgModule.Register(reg); err != nil {
+		t.Fatalf("config.Module.Register: %v", err)
+	}
+	if withComplianceItems {
+		m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
+		if err := m.Register(reg); err != nil {
+			t.Fatalf("compliance.Module.Register: %v", err)
+		}
+	}
+	svc, err := cfgModule.Attach(reg)
+	if err != nil {
+		t.Fatalf("config.Module.Attach: %v", err)
+	}
+	t.Cleanup(func() { _ = svc.Close() })
+	return svc
+}
+
+// TestRetentionService_SweepTenant_ConfigWiredOverrideDrivesTheCutoff
+// proves the reason WithConfigService exists: with a *config.Service wired
+// and a tenant-level override of ConfigDefaultRetentionWindow set, the
+// sweep's cutoff follows the override, not the module's own 30-day
+// default. A soft-deleted row inside the override window but far outside
+// the default window is reaped only because the configured value shrank
+// the window -- without the wiring the same rows would survive every sweep
+// until the operator's override took effect.
+func TestRetentionService_SweepTenant_ConfigWiredOverrideDrivesTheCutoff(t *testing.T) {
+	svc, repo := newRetentionHarness(t)
+	svc.cfg = newRetentionConfigService(t, true)
+
+	tenant := pkgcore.TenantID("tenant-a")
+	override := 5 * 24 * time.Hour
+	ctx := pkgcore.WithTenant(context.Background(), tenant)
+	if err := svc.cfg.Set(ctx, config.ScopeTenant, ConfigDefaultRetentionWindow,
+		config.Value{Data: override}, config.Actor("compliance-test-admin")); err != nil {
+		t.Fatalf("set tenant retention window override: %v", err)
+	}
+
+	window, err := svc.RetentionWindow(ctx, tenant)
+	if err != nil {
+		t.Fatalf("RetentionWindow: %v", err)
+	}
+	if window != override {
+		t.Fatalf("RetentionWindow = %v, want the tenant override %v", window, override)
+	}
+
+	seedFakeNote(t, repo, tenant, "past-override", "subject-1", time.Now().Add(-10*24*time.Hour))
+	seedFakeNote(t, repo, tenant, "within-override", "subject-1", time.Now().Add(-24*time.Hour))
+
+	result, err := svc.SweepTenant(context.Background(), tenant)
+	if err != nil {
+		t.Fatalf("SweepTenant: %v", err)
+	}
+	if result.TotalReaped() != 1 {
+		t.Fatalf("TotalReaped() = %d, want exactly 1 -- only the row past the 5-day override window", result.TotalReaped())
+	}
+	if fakeNoteExists(t, repo, tenant, "past-override") {
+		t.Error("the row soft-deleted 10 days ago should have been reaped under the 5-day override")
+	}
+	if !fakeNoteExists(t, repo, tenant, "within-override") {
+		t.Error("the row soft-deleted a day ago must survive -- it is inside the override window")
+	}
+}
+
+// TestRetentionService_SweepTenant_ConfigReadErrorFailsClosedBeforeAnyParticipant
+// proves the sweep never guesses a window when its wired config service
+// cannot answer: RetentionWindow's read of ConfigDefaultRetentionWindow
+// errors when the service's frozen schema predates compliance's own
+// registration (the key is not declared), and SweepTenant propagates that
+// error before any participant runs -- a mis-wired or stale config service
+// must fail the sweep loudly rather than silently sweeping under an
+// unvalidated default.
+func TestRetentionService_SweepTenant_ConfigReadErrorFailsClosedBeforeAnyParticipant(t *testing.T) {
+	svc, repo := newRetentionHarness(t)
+	svc.cfg = newRetentionConfigService(t, false)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedFakeNote(t, repo, tenant, "expired-1", "subject-1", wellPastDefaultWindow())
+
+	ctx := pkgcore.WithTenant(context.Background(), tenant)
+	if _, err := svc.RetentionWindow(ctx, tenant); err == nil {
+		t.Error("RetentionWindow over a schema without ConfigDefaultRetentionWindow = nil error, want one")
+	}
+
+	result, err := svc.SweepTenant(context.Background(), tenant)
+	if err == nil {
+		t.Fatal("SweepTenant = nil error, want the config read error propagated")
+	}
+	if result.Tenant != "" || !result.Cutoff.IsZero() || result.Reaped != nil || result.Errors != nil {
+		t.Errorf("SweepTenant result = %+v, want the zero result -- no participant may run when the window cannot be resolved", result)
+	}
+	if !fakeNoteExists(t, repo, tenant, "expired-1") {
+		t.Error("the expired row must survive: the sweep failed before any participant ran")
+	}
+}
+
+// TestRetentionService_SweepTenant_SystemContextAuditPublishFailure_FailsClosed
+// proves the system-context grant fails closed when its own audit record
+// cannot be published: tenancy.WithSystemContext publishes
+// EventSystemContextEntered and refuses the elevation on a publish error,
+// so SweepTenant must return that error and call no participant -- an
+// elevated sweep with no audit trail is exactly the gap the audited
+// wrapper exists to close.
+func TestRetentionService_SweepTenant_SystemContextAuditPublishFailure_FailsClosed(t *testing.T) {
+	bus := &scriptedBus{EventBus: pkgcore.NewMemoryEventBus(), failFrom: 1, failErr: errors.New("scripted bus refuses")}
+	svc, repo := newRetentionHarnessOn(t, bus)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedFakeNote(t, repo, tenant, "expired-1", "subject-1", wellPastDefaultWindow())
+
+	result, err := svc.SweepTenant(context.Background(), tenant)
+	if !hasCode(err, tenancy.ErrAuditPublishFailed.Code) {
+		t.Fatalf("SweepTenant error = %v, want %s", err, tenancy.ErrAuditPublishFailed.Code)
+	}
+	if result.Tenant != "" || !result.Cutoff.IsZero() || result.Reaped != nil || result.Errors != nil {
+		t.Errorf("SweepTenant result = %+v, want the zero result", result)
+	}
+	if !fakeNoteExists(t, repo, tenant, "expired-1") {
+		t.Error("the expired row must survive: the sweep was refused before any participant ran")
+	}
+}
+
+// TestRetentionService_SweepTenant_SweepAuditRecordFailure_SurfacesWithResult
+// proves the audit-record failure contract of the sweep path: the pass
+// itself ran (rows are genuinely and irreversibly gone) but the one audit
+// event recording it could not be published, so SweepTenant returns the
+// completed SweepResult alongside ErrAuditRecordFailed -- the operator is
+// told the sweep happened AND that its record is missing, never one at the
+// expense of the other.
+func TestRetentionService_SweepTenant_SweepAuditRecordFailure_SurfacesWithResult(t *testing.T) {
+	bus := &scriptedBus{EventBus: pkgcore.NewMemoryEventBus(), failFrom: 2, failErr: errors.New("scripted bus refuses")}
+	svc, repo := newRetentionHarnessOn(t, bus)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedFakeNote(t, repo, tenant, "expired-1", "subject-1", wellPastDefaultWindow())
+
+	result, err := svc.SweepTenant(context.Background(), tenant)
+	if !hasCode(err, ErrAuditRecordFailed.Code) {
+		t.Fatalf("SweepTenant error = %v, want %s", err, ErrAuditRecordFailed.Code)
+	}
+	if result.TotalReaped() != 1 {
+		t.Errorf("TotalReaped() = %d, want 1 -- the sweep ran before its audit publish failed", result.TotalReaped())
+	}
+	if fakeNoteExists(t, repo, tenant, "expired-1") {
+		t.Error("expired-1 should have been reaped: the participant ran before the audit publish failed")
+	}
+}
+
+// TestRetentionService_SweepAllTenants_ListerFailureFailsClosed proves the
+// whole-tenant sweep answers a failing lister with that error and no
+// results -- it never sweeps a guessed subset when the enumeration itself
+// failed.
+func TestRetentionService_SweepAllTenants_ListerFailureFailsClosed(t *testing.T) {
+	svc, repo := newRetentionHarness(t)
+	svc.lister = testutil.FakeTenantLister{Err: errors.New("tenant directory unavailable")}
+	seedFakeNote(t, repo, "tenant-a", "expired-1", "s", wellPastDefaultWindow())
+
+	results, err := svc.SweepAllTenants(context.Background())
+	if err == nil {
+		t.Fatal("SweepAllTenants with a failing lister = nil error, want the lister error")
+	}
+	if results != nil {
+		t.Errorf("results = %v, want nil -- nothing was swept", results)
+	}
+	if !fakeNoteExists(t, repo, "tenant-a", "expired-1") {
+		t.Error("no tenant may be swept when the lister itself failed")
+	}
+}
+
+// TestRetentionService_SweepAllTenants_OneTenantsFailureDoesNotBlockOthers
+// proves the per-tenant isolation SweepAllTenants exists to deliver at the
+// whole-call level: tenant-a's sweep completes and reaps its rows even
+// though tenant-b's own sweep fails its system-context audit publish, and
+// the aggregate error names exactly the tenant that failed -- a caller
+// checking only the top-level error still learns something needs
+// attention, while the results map still holds tenant-a's completed
+// outcome.
+func TestRetentionService_SweepAllTenants_OneTenantsFailureDoesNotBlockOthers(t *testing.T) {
+	bus := &scriptedBus{EventBus: pkgcore.NewMemoryEventBus(), failFrom: 3, failErr: errors.New("scripted bus refuses")}
+	svc, repo := newRetentionHarnessOn(t, bus)
+	seedFakeNote(t, repo, "tenant-a", "a-expired", "s", wellPastDefaultWindow())
+	seedFakeNote(t, repo, "tenant-b", "b-expired", "s", wellPastDefaultWindow())
+	svc.lister = testutil.FakeTenantLister{Tenants: []pkgcore.TenantID{"tenant-a", "tenant-b"}}
+
+	results, err := svc.SweepAllTenants(context.Background())
+	if err == nil {
+		t.Fatal("SweepAllTenants = nil error, want the aggregate error naming tenant-b")
+	}
+	if !strings.Contains(err.Error(), "tenant-b") {
+		t.Errorf("aggregate error = %q, want it to name tenant-b", err)
+	}
+	if strings.Contains(err.Error(), "tenant-a") {
+		t.Errorf("aggregate error = %q, must not name tenant-a -- its sweep succeeded", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %d tenants, want 2 -- every listed tenant has an entry", len(results))
+	}
+	if results["tenant-a"].TotalReaped() != 1 {
+		t.Errorf("results[tenant-a] = %+v, want its own 1 reaped row", results["tenant-a"])
+	}
+	if fakeNoteExists(t, repo, "tenant-a", "a-expired") {
+		t.Error("tenant-a's expired row should have been reaped despite tenant-b's failure")
+	}
+	if !fakeNoteExists(t, repo, "tenant-b", "b-expired") {
+		t.Error("tenant-b's expired row must survive: its sweep never ran")
+	}
+}
+
+// TestRetentionSweepHandler_TypeAndFailedSweep pins the two remaining
+// halves of the jobs.Handler wrapper: Type names the exact task type the
+// handler was claimed under (Register claims taskTypeRetentionSweep, and
+// the queue dispatches by Type, so a drift between the two would silently
+// strand every enqueued sweep), and a failed sweep is returned as the
+// Handle error rather than swallowed -- a worker reports it for retry or
+// dead-lettering instead of logging success.
+func TestRetentionSweepHandler_TypeAndFailedSweep(t *testing.T) {
+	bus := &scriptedBus{EventBus: pkgcore.NewMemoryEventBus(), failFrom: 1, failErr: errors.New("scripted bus refuses")}
+	svc, repo := newRetentionHarnessOn(t, bus)
+	seedFakeNote(t, repo, "tenant-a", "expired-1", "s", wellPastDefaultWindow())
+
+	h := retentionSweepHandler{svc: svc}
+	if h.Type() != taskTypeRetentionSweep {
+		t.Errorf("Type() = %q, want %q", h.Type(), taskTypeRetentionSweep)
+	}
+
+	job := &jobs.Job{Type: taskTypeRetentionSweep, TenantID: "tenant-a"}
+	result, err := h.Handle(context.Background(), job, nil)
+	if err == nil {
+		t.Fatal("Handle over a failed sweep = nil error, want the sweep's error propagated")
+	}
+	if result.Data != nil {
+		t.Errorf("Handle result = %+v, want the zero result", result)
+	}
+	if !fakeNoteExists(t, repo, "tenant-a", "expired-1") {
+		t.Error("the expired row must survive: the failed sweep never reached the participant")
 	}
 }

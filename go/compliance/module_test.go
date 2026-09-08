@@ -3,7 +3,10 @@ package compliance
 import (
 	"context"
 	"embed"
+	"errors"
+	"io/fs"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -13,6 +16,8 @@ import (
 	"github.com/vislake/speed/go/dbkit/dbtest"
 	"github.com/vislake/speed/go/jobs"
 	"github.com/vislake/speed/go/pkgcore"
+
+	"github.com/vislake/speed/go/compliance/internal/testutil"
 )
 
 // fakeAuditModule feeds dbkit/audit's own embedded migrations to
@@ -217,6 +222,83 @@ func TestModule_NameAndOpenAPISpec(t *testing.T) {
 	if m.OpenAPISpec() != nil {
 		t.Errorf("OpenAPISpec() = %v, want nil -- no HTTP surface this round", m.OpenAPISpec())
 	}
+	entries, err := fs.ReadDir(m.Migrations(), ".")
+	if err != nil {
+		t.Fatalf("ReadDir(Migrations()): %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("Migrations() = %v entries, want none -- compliance owns no table of its own", entries)
+	}
+	if m.AuditQuery() == nil {
+		t.Fatal("AuditQuery() = nil, want the module's read-only query layer")
+	}
+	if m.AuditQuery().repo != m.auditRepo {
+		t.Error("AuditQuery() should read through the same repository NewModule was built with")
+	}
+}
+
+// TestModule_Register_DuplicateDeclarationsArePropagated proves Register's
+// failure contract: a registry that already holds one of compliance's
+// declared config keys, permissions, audit actions or the module's own
+// reserved retention-participant name makes Register fail with that
+// registrar's duplicate error -- two modules owning one declaration is a
+// bug rather than a silent last-write-wins merge, and the host must hear
+// which declaration collided.
+func TestModule_Register_DuplicateDeclarationsArePropagated(t *testing.T) {
+	cases := []struct {
+		name      string
+		preseed   func(t *testing.T, reg *pkgcore.Registry)
+		wantError error
+	}{
+		{
+			name: "config item",
+			preseed: func(t *testing.T, reg *pkgcore.Registry) {
+				if err := reg.Config.Add(configItemDecls[0]); err != nil {
+					t.Fatalf("preseed config item: %v", err)
+				}
+			},
+			wantError: pkgcore.ErrDuplicateConfigKey,
+		},
+		{
+			name: "permission",
+			preseed: func(t *testing.T, reg *pkgcore.Registry) {
+				if err := reg.Permissions.Add(PermissionAuditRead); err != nil {
+					t.Fatalf("preseed permission: %v", err)
+				}
+			},
+			wantError: pkgcore.ErrDuplicatePermission,
+		},
+		{
+			name: "audit action",
+			preseed: func(t *testing.T, reg *pkgcore.Registry) {
+				if err := reg.AuditActions.Add(AuditActionRetentionSweep); err != nil {
+					t.Fatalf("preseed audit action: %v", err)
+				}
+			},
+			wantError: pkgcore.ErrDuplicateAuditAction,
+		},
+		{
+			name: "reserved retention participant name",
+			preseed: func(t *testing.T, reg *pkgcore.Registry) {
+				p := pkgcore.RetentionParticipant{Name: exportManifestsParticipantName, Sweep: testutil.NoopSweep, Erase: testutil.NoopErase}
+				if err := reg.Retention.Add(p); err != nil {
+					t.Fatalf("preseed retention participant: %v", err)
+				}
+			},
+			wantError: pkgcore.ErrDuplicateRetentionParticipant,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
+			tc.preseed(t, reg)
+			m := NewModule(newTestAuditRepo(t), WithQueue(&recordingQueue{}))
+			err := m.Register(reg)
+			if !errors.Is(err, tc.wantError) {
+				t.Fatalf("Register over a preseeded registry error = %v, want %v", err, tc.wantError)
+			}
+		})
+	}
 }
 
 func containsString(list []string, want string) bool {
@@ -226,4 +308,48 @@ func containsString(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// fakeExpiryReader is a comparable ExportDeliveryExpiryReader answering
+// "no tenant-configured value", for the WithExportConfigReader wiring
+// test.
+type fakeExpiryReader struct{}
+
+func (fakeExpiryReader) ExportDeliveryExpiry(context.Context, pkgcore.TenantID) (time.Duration, bool, error) {
+	return 0, false, nil
+}
+
+var _ ExportDeliveryExpiryReader = fakeExpiryReader{}
+
+// TestModule_WithOptions_WireTheirSeams proves the three remaining Module
+// construction options attach what their docs promise -- WithConfigService
+// gives RetentionService its live config reader, WithTenantLister makes
+// SweepAllTenants enumerate (an unwired service answers
+// ErrTenantListerRequired instead), and WithExportConfigReader gives
+// ExportService its expiry reader -- the same wiring proof
+// TestModule_WithSharing_WiresExportServiceSharing gives WithSharing.
+func TestModule_WithOptions_WireTheirSeams(t *testing.T) {
+	cfg := newRetentionConfigService(t, true)
+	lister := testutil.FakeTenantLister{}
+	reader := fakeExpiryReader{}
+	m := NewModule(newTestAuditRepo(t),
+		WithQueue(&recordingQueue{}),
+		WithConfigService(cfg),
+		WithTenantLister(lister),
+		WithExportConfigReader(reader),
+	)
+
+	if m.Retention().cfg != cfg {
+		t.Error("WithConfigService should wire RetentionService.cfg to the given *config.Service")
+	}
+	results, err := m.Retention().SweepAllTenants(context.Background())
+	if err != nil {
+		t.Errorf("SweepAllTenants with a wired lister error = %v, want the empty list swept cleanly", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("SweepAllTenants results = %v, want none -- the test lister returns no tenants", results)
+	}
+	if m.Export().cfg != ExportDeliveryExpiryReader(reader) {
+		t.Error("WithExportConfigReader should wire ExportService.cfg to the given ExportDeliveryExpiryReader")
+	}
 }

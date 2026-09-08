@@ -9,6 +9,7 @@ import (
 
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/tenancy"
 
 	"github.com/vislake/speed/go/compliance/internal/testutil"
 )
@@ -23,7 +24,16 @@ import (
 // custom set (the refusal and attribution tests below).
 func newErasureServiceWith(t *testing.T, participants ...pkgcore.RetentionParticipant) (*ErasureService, *[]audit.RecordedEvent) {
 	t.Helper()
-	bus := pkgcore.NewMemoryEventBus()
+	return newErasureServiceOn(t, pkgcore.NewMemoryEventBus(), participants...)
+}
+
+// newErasureServiceOn is newErasureServiceWith over an injected bus: the
+// service is wired exactly the same way, but bus is the one the test
+// provides, so a test can substitute a scripted bus whose Publish fails
+// and drive the fail-closed branches (the system-context audit publish,
+// the erasure's own audit emit) that a healthy memory bus can never reach.
+func newErasureServiceOn(t *testing.T, bus pkgcore.EventBus, participants ...pkgcore.RetentionParticipant) (*ErasureService, *[]audit.RecordedEvent) {
+	t.Helper()
 	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
 	if err := reg.AuditActions.Add(AuditActionErasureRequest); err != nil {
 		t.Fatalf("declare audit action: %v", err)
@@ -455,5 +465,60 @@ func TestErasureService_Erase_ChangesRecordClassificationNeverErrorText(t *testi
 	}
 	if strings.Contains(string(raw), "subject-1") {
 		t.Errorf("the erased subject's identifier leaked into the audit trail Changes through the participant error: %s", raw)
+	}
+}
+
+// TestErasureService_Erase_SystemContextAuditPublishFailure_FailsClosed
+// proves the erasure path carries the same fail-closed grant SweepTenant
+// does: when the system-context audit record itself cannot be published,
+// Erase refuses before any participant runs -- an elevated erasure with no
+// audit trail would be an irreversible, unattributed deletion, exactly the
+// gap the audited wrapper exists to close.
+func TestErasureService_Erase_SystemContextAuditPublishFailure_FailsClosed(t *testing.T) {
+	bus := &scriptedBus{EventBus: pkgcore.NewMemoryEventBus(), failFrom: 1, failErr: errors.New("scripted bus refuses")}
+	repo := testutil.NewFakeRepository(testutil.NewDB(t))
+	participant := testutil.NewParticipant("testutil.fake_note", repo)
+	svc, _ := newErasureServiceOn(t, bus, participant)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	ctx := pkgcore.WithTenant(context.Background(), tenant)
+	result, err := svc.Erase(ctx, pkgcore.SubjectRef{TenantID: tenant, SubjectID: "subject-1"}, testErasureActor)
+	if !hasCode(err, tenancy.ErrAuditPublishFailed.Code) {
+		t.Fatalf("Erase error = %v, want %s", err, tenancy.ErrAuditPublishFailed.Code)
+	}
+	if result.Subject != (pkgcore.SubjectRef{}) || result.Erased != nil || result.Errors != nil {
+		t.Errorf("Erase result = %+v, want the zero result -- no participant ran", result)
+	}
+	if !fakeNoteExists(t, repo, tenant, "note-1") {
+		t.Error("the note must survive: the erasure was refused before any participant ran")
+	}
+}
+
+// TestErasureService_Erase_AuditRecordFailure_SurfacesWithResult proves
+// the audit-record failure contract of the erasure path: the erasure
+// itself ran (rows are genuinely and irreversibly gone) but the one audit
+// event recording it could not be published, so Erase returns the
+// completed ErasureResult alongside ErrAuditRecordFailed -- the operator
+// is told the erasure happened AND that its record is missing, never one
+// at the expense of the other.
+func TestErasureService_Erase_AuditRecordFailure_SurfacesWithResult(t *testing.T) {
+	bus := &scriptedBus{EventBus: pkgcore.NewMemoryEventBus(), failFrom: 2, failErr: errors.New("scripted bus refuses")}
+	repo := testutil.NewFakeRepository(testutil.NewDB(t))
+	participant := testutil.NewParticipant("testutil.fake_note", repo)
+	svc, _ := newErasureServiceOn(t, bus, participant)
+	tenant := pkgcore.TenantID("tenant-a")
+	seedLiveFakeNote(t, repo, tenant, "note-1", "subject-1")
+
+	ctx := pkgcore.WithTenant(context.Background(), tenant)
+	result, err := svc.Erase(ctx, pkgcore.SubjectRef{TenantID: tenant, SubjectID: "subject-1"}, testErasureActor)
+	if !hasCode(err, ErrAuditRecordFailed.Code) {
+		t.Fatalf("Erase error = %v, want %s", err, ErrAuditRecordFailed.Code)
+	}
+	if result.Erased["testutil.fake_note"] != 1 {
+		t.Errorf("Erased = %v, want the participant's 1 erased row -- the erasure ran before its audit publish failed", result.Erased)
+	}
+	if fakeNoteExists(t, repo, tenant, "note-1") {
+		t.Error("note-1 should have been erased: the participant ran before the audit publish failed")
 	}
 }

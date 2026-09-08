@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/vislake/speed/go/dbkit/audit"
 	"github.com/vislake/speed/go/pkgcore"
 )
@@ -302,5 +304,88 @@ func TestAuditQuery_Get_ReturnsNilForAMissingID(t *testing.T) {
 	}
 	if evt != nil {
 		t.Errorf("Get(missing) = %+v, want nil", evt)
+	}
+}
+
+// TestAuditQuery_Query_FromToWindowExcludesOutsideEvents proves the time
+// window's two exclusion bounds together: an event before From and an
+// event after To both fall out of the filter, leaving exactly the event
+// inside the window -- the boundary semantics a compliance report over a
+// date range depends on (an audit report for one day must never include
+// the day before or after it).
+func TestAuditQuery_Query_FromToWindowExcludesOutsideEvents(t *testing.T) {
+	repo := audit.NewRepository(newTestAuditDB(t))
+	q := NewAuditQuery(repo)
+	now := time.Now()
+	insertAuditEvent(t, repo, "tenant-a", "user-1", "note", "notes.note.create", now.Add(-time.Hour), true)
+	insertAuditEvent(t, repo, "tenant-a", "user-2", "note", "notes.note.create", now, true)
+	insertAuditEvent(t, repo, "tenant-a", "user-3", "note", "notes.note.create", now.Add(time.Hour), true)
+
+	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+	events, err := q.Query(ctx, QueryFilter{
+		From: now.Add(-30 * time.Minute),
+		To:   now.Add(30 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("Query within the window = %d events, want exactly 1 (the middle one)", len(events))
+	}
+	if events[0].ActorID != "user-2" {
+		t.Errorf("Query returned %q's event, want user-2's -- the events outside From..To must be excluded", events[0].ActorID)
+	}
+}
+
+// TestAuditQuery_RepositoryReadFailure_FailsClosed proves both read paths
+// propagate a failing repository read rather than pretending an empty
+// result: with the underlying database closed, Query and
+// QueryAcrossTenants each return the read error -- a caller must never
+// mistake a broken audit store for "no events match".
+func TestAuditQuery_RepositoryReadFailure_FailsClosed(t *testing.T) {
+	const purpose pkgcore.SystemPurpose = "compliance_test.audit_query_failure"
+	pkgcore.RegisterSystemPurpose(purpose)
+
+	t.Run("Query", func(t *testing.T) {
+		db := newTestAuditDB(t)
+		repo := audit.NewRepository(db)
+		q := NewAuditQuery(repo)
+		insertAuditEvent(t, repo, "tenant-a", "user-1", "note", "notes.note.create", time.Now(), true)
+		closeTestAuditDB(t, db)
+
+		ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
+		if _, err := q.Query(ctx, QueryFilter{}); err == nil {
+			t.Error("Query over a closed database = nil error, want the read failure")
+		}
+	})
+
+	t.Run("QueryAcrossTenants", func(t *testing.T) {
+		db := newTestAuditDB(t)
+		repo := audit.NewRepository(db)
+		q := NewAuditQuery(repo)
+		insertAuditEvent(t, repo, "tenant-a", "user-1", "note", "notes.note.create", time.Now(), true)
+		closeTestAuditDB(t, db)
+
+		sysCtx, err := pkgcore.WithSystemContext(context.Background(), pkgcore.SystemReason{Actor: "platform-admin", Purpose: purpose})
+		if err != nil {
+			t.Fatalf("WithSystemContext: %v", err)
+		}
+		if _, err := q.QueryAcrossTenants(sysCtx, []string{"tenant-a"}, QueryFilter{}); err == nil {
+			t.Error("QueryAcrossTenants over a closed database = nil error, want the read failure")
+		}
+	})
+}
+
+// closeTestAuditDB closes db's underlying connection pool, so the next
+// query through it fails -- the read-failure shape a broken or
+// shut-down database produces.
+func closeTestAuditDB(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	sqlDB, dbErr := db.DB()
+	if dbErr != nil {
+		t.Fatalf("get sql.DB: %v", dbErr)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close sql.DB: %v", err)
 	}
 }
