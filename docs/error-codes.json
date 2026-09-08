@@ -2013,7 +2013,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 293,
+      "line": 309,
       "module": "jobs",
       "status": 400
     },
@@ -2022,7 +2022,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 278,
+      "line": 294,
       "module": "jobs",
       "status": 400
     },
@@ -2031,7 +2031,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 373,
+      "line": 389,
       "module": "jobs",
       "status": 400
     },
@@ -2076,7 +2076,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 261,
+      "line": 277,
       "module": "jobs",
       "status": 400
     },
@@ -2094,7 +2094,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 231,
+      "line": 247,
       "module": "jobs",
       "status": 400
     },
@@ -2112,7 +2112,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 329,
+      "line": 345,
       "module": "jobs",
       "status": 400
     },
@@ -2139,7 +2139,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 350,
+      "line": 366,
       "module": "jobs",
       "status": 400
     },
@@ -2148,7 +2148,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 209,
+      "line": 225,
       "module": "jobs",
       "status": 400
     },
@@ -2157,7 +2157,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 305,
+      "line": 321,
       "module": "jobs",
       "status": 400
     },
@@ -2166,7 +2166,7 @@
       "file": "go/jobs/queue/asynq/queue.go",
       "ident": "",
       "kind": "inline",
-      "line": 194,
+      "line": 210,
       "module": "jobs",
       "status": 400
     },
