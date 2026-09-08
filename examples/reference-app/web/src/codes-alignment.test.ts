@@ -14,15 +14,45 @@
  *
  * The server side of the comparison is GO_PINNED below: a hand-maintained
  * enumeration of the codes the Go side of this app can answer with on
- * these six surfaces, each entry carrying the source citation of the
- * sentinel that defines it (go/authn/errors.go for the authn codes, the
- * go/rbac and notes-module sentinels for the others). The shell side is
- * derived, never copied: the auth-ui / account-ui / tenancy-ui
- * whitelists are deep-imported from the packages' own error-text modules
- * (never from package entry points -- each package's whitelist is its
- * own, and this app-level suite reads them where they live), and the
- * notes whitelist from this app's own notes-view. The two directions are
- * asserted separately so a drift names its side:
+ * these ten surfaces. "Can answer with" is the reachability criterion
+ * the enumeration is audited against, judged from the surfaces' own
+ * flows rather than from the Go side's full answerable vocabulary: a
+ * code earns an entry when some request one of the ten surfaces' flows
+ * genuinely makes is answered with it on the composed stack -- the
+ * operations the surface invokes, the request shapes its code sends
+ * through the typed generated client, and this app's own middleware
+ * chain all decide what is reachable. A code no such request can draw
+ * stays out, and the boundary rulings are recorded where they fall:
+ * request shapes a flow cannot produce (the notes create form submits
+ * typed client output whose text is capped well inside the notes
+ * handler's body bound, so the malformed-body answer
+ * notes.invalid_request_body has no requesting flow on that surface);
+ * parameters a surface never sends (the credits view never sends a
+ * limit, so billing.invalid_limit has no answering request -- see its
+ * entry below); operations and requests no listed surface produces
+ * (the consult route is invoked by none of the ten surfaces, and
+ * reference_app.method_not_allowed answers a request whose method a
+ * hand-mounted route does not serve, which the typed operations of
+ * these surfaces never send); and answers a preceding layer preempts
+ * on the only request that could reach them
+ * (authn.authentication_required loses to this app's tenancy gate on
+ * the anonymous switch route -- verified on the composed stack, the
+ * reasoning recorded in its exemption entry below). Each entry
+ * carries the source citation of the sentinel that defines it:
+ * go/authn/errors.go for the authn codes, every other entry's own
+ * citation naming its file and sentinel. The shell side is derived,
+ * never copied: the auth-ui / account-ui / tenancy-ui whitelists are
+ * deep-imported from the packages' own error-text modules (never from
+ * package entry points -- each package's whitelist is its own, and
+ * this app-level suite reads them where they live), and the remaining
+ * seven surfaces' whitelists come from the app's own modules:
+ * notes-view for the notes create surface, cases-errors for the cases
+ * one, smile-sim-errors for the smile-simulation one, share-errors
+ * for both block-C share surfaces, team-view for the team one and
+ * credits-view for the credits one. Ten per-surface whitelists drawn
+ * from nine source modules; the imports below are the complete set.
+ * The two directions are asserted separately so a drift names its
+ * side:
  *
  *   - every GO_PINNED code is whitelisted by at least one surface -- a
  *     server code with no surface text would render a raw key (a code
@@ -51,7 +81,7 @@
  * machine-extracted server-side code census (walking the Go sources and
  * the generated spec for every answerable code of every route this app
  * mounts) is DEFERRED: no such extractor ships in this round, the app's
- * four surfaces are small and their reachable codes are enumerated here
+ * ten surfaces are small and their reachable codes are enumerated here
  * with citations for audit, and the suite's two directions keep the
  * manual list honest -- a code the server gains and the whitelists do
  * not cover, or a whitelist entry with no citation, both fail here.
