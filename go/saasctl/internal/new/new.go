@@ -545,15 +545,48 @@ func rollbackTarget(absTarget string, written []string) {
 }
 
 // replaceTokens substitutes the two materialization tokens everywhere a
-// template carries them: TokenAppName (the module path, from the target
+// template carries them -- TokenAppName (the module path, from the target
 // directory's base name, used in the go.mod module line and in the
 // generated server's error prefixes and dev key IDs) and TokenSpeedRoot
-// (the resolved speed checkout, used by the go.mod replace directives).
-// The materialized-tree tests assert no token survives, so a future
-// template edit that introduces a third token fails there until this
-// function learns it.
+// (the resolved speed checkout, used by the go.mod replace directives) --
+// in ONE left-to-right scan: each token is replaced as the scan reaches
+// it, and the replacement values are written to the output and never
+// re-scanned, so an application name or speed-root path whose own text
+// carries a token-shaped substring survives byte-identical. Two sequential
+// ReplaceAll passes would re-scan the first pass's output and substitute
+// the second token into the first pass's own replacement values, corrupting
+// the app name whenever it contains the speed-root token's text; the
+// single-pass property is pinned byte-exact by the hand-pinned goldens in
+// new_test.go (TestReplaceTokensSinglePassByteExactGoldens), whose
+// expected bytes are committed literals, and end to end by
+// TestRunAppNameContainingTokenTextMaterializesByteIdentical. The
+// materialized-tree tests pin materialize's wiring -- every asset stripped
+// and substituted once, nothing else written -- with their expectations
+// substituted independently of this function (wantContent), so they cannot
+// by themselves vouch for this function's behavior.
 func replaceTokens(content []byte, appName, speedRoot string) []byte {
-	s := strings.ReplaceAll(string(content), template.TokenAppName, appName)
-	s = strings.ReplaceAll(s, template.TokenSpeedRoot, speedRoot)
-	return []byte(s)
+	rest := string(content)
+	var out strings.Builder
+	out.Grow(len(rest) + len(appName) + len(speedRoot))
+	for rest != "" {
+		appAt := strings.Index(rest, template.TokenAppName)
+		rootAt := strings.Index(rest, template.TokenSpeedRoot)
+		// The two tokens can never match at the same position (their bytes
+		// diverge at the third character), so when both are present the
+		// earlier occurrence is unambiguous.
+		switch {
+		case appAt < 0 && rootAt < 0:
+			out.WriteString(rest)
+			return []byte(out.String())
+		case rootAt < 0 || (appAt >= 0 && appAt < rootAt):
+			out.WriteString(rest[:appAt])
+			out.WriteString(appName)
+			rest = rest[appAt+len(template.TokenAppName):]
+		default:
+			out.WriteString(rest[:rootAt])
+			out.WriteString(speedRoot)
+			rest = rest[rootAt+len(template.TokenSpeedRoot):]
+		}
+	}
+	return []byte(out.String())
 }

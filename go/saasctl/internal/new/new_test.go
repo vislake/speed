@@ -85,6 +85,18 @@ func assetPath(key, rel string) string {
 // Regenerating the five goldens through the real tidy procedure whenever
 // a speed module's dependency set changes is the only check that exists
 // (go/saasctl/AGENTS.md's Testing section).
+//
+// The substitution on THIS side is strings.NewReplacer applied over the
+// same two tokens -- stdlib machinery with the same single-pass semantics
+// replaceTokens implements by hand (a replacement value is written out and
+// never re-scanned) -- and never a call to replaceTokens itself: an
+// expectation rendered by the function under test could not detect a
+// defect inside that function (the byte comparison would be constant-true
+// against it), so the expected side carries its own substitution of the
+// same two tokens. replaceTokens' own byte-exact behavior is pinned
+// independently by the hand-pinned goldens in
+// TestReplaceTokensSinglePassByteExactGoldens below, whose expected bytes
+// are committed literals rather than that function's output.
 func wantContent(t *testing.T, key, rel, appName, speedRoot string) []byte {
 	t.Helper()
 	path := template.ProjectRoot + "/" + assetPath(key, rel)
@@ -99,7 +111,8 @@ func wantContent(t *testing.T, key, rel, appName, speedRoot string) []byte {
 		}
 		content = stripped
 	}
-	return []byte(replaceTokens(content, appName, speedRoot))
+	replacer := strings.NewReplacer(template.TokenAppName, appName, template.TokenSpeedRoot, speedRoot)
+	return []byte(replacer.Replace(string(content)))
 }
 
 // TestRunMaterializesEverySelection drives the real command (Run, with
@@ -200,6 +213,114 @@ func TestRunMaterializesEverySelection(t *testing.T) {
 				t.Errorf("go.mod module line is not %q", "module "+appName)
 			}
 		})
+	}
+}
+
+// TestReplaceTokensSinglePassByteExactGoldens pins replaceTokens' output
+// byte for byte against hand-pinned expected documents -- committed
+// literals, never bytes the function itself computed, so a defect inside
+// replaceTokens cannot hide behind a self-computed expectation. The goldens
+// cover both tokens, repeated and adjacent occurrences, token-free
+// passthrough, and the single-pass property that replacement values are
+// never re-scanned: an application name or speed-root path whose own text
+// carries a token-shaped substring must survive byte-identical. The
+// token-shaped-values case is the P3-saasctl-A regression: a two-pass
+// substitution (app-name pass, then a speed-root pass over the first
+// pass's output) re-substitutes the app name's embedded speed-root text
+// and corrupts the module line into a spliced path; the single-pass
+// substitution this golden pins leaves the app name intact.
+func TestReplaceTokensSinglePassByteExactGoldens(t *testing.T) {
+	cases := []struct {
+		name      string
+		content   string
+		appName   string
+		speedRoot string
+		want      string
+	}{
+		{
+			name: "both tokens, repeated occurrences in one document",
+			content: "module __APP_NAME__\n\n" +
+				"require github.com/vislake/speed/go/pkgcore v0.0.0\n\n" +
+				"replace github.com/vislake/speed/go/pkgcore => __SPEED_ROOT__/go/pkgcore\n\n" +
+				"replace github.com/vislake/speed/go/dbkit => __SPEED_ROOT__/go/dbkit\n",
+			appName:   "smileapp",
+			speedRoot: "/home/dev/speed",
+			want: "module smileapp\n\n" +
+				"require github.com/vislake/speed/go/pkgcore v0.0.0\n\n" +
+				"replace github.com/vislake/speed/go/pkgcore => /home/dev/speed/go/pkgcore\n\n" +
+				"replace github.com/vislake/speed/go/dbkit => /home/dev/speed/go/dbkit\n",
+		},
+		{
+			name:      "token-free content passes through byte-identical",
+			content:   "module example.com/plain\n\ngo 1.25.0\n",
+			appName:   "smileapp",
+			speedRoot: "/home/dev/speed",
+			want:      "module example.com/plain\n\ngo 1.25.0\n",
+		},
+		{
+			name:      "adjacent occurrences of both tokens",
+			content:   "__APP_NAME____SPEED_ROOT__ x __SPEED_ROOT____APP_NAME__",
+			appName:   "app",
+			speedRoot: "/r",
+			want:      "app/r x /rapp",
+		},
+		{
+			name: "replacement values containing token-shaped text survive byte-identical",
+			content: "module __APP_NAME__\n\n" +
+				"replace github.com/vislake/speed/go/pkgcore => __SPEED_ROOT__/go/pkgcore\n",
+			appName:   "smile__SPEED_ROOT__app",
+			speedRoot: "/work/__APP_NAME__/speed",
+			want: "module smile__SPEED_ROOT__app\n\n" +
+				"replace github.com/vislake/speed/go/pkgcore => /work/__APP_NAME__/speed/go/pkgcore\n",
+		},
+		{
+			name:      "app name containing the app-name token's own text",
+			content:   "module __APP_NAME__\n",
+			appName:   "probe__APP_NAME__x",
+			speedRoot: "/r",
+			want:      "module probe__APP_NAME__x\n",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := string(replaceTokens([]byte(c.content), c.appName, c.speedRoot)); got != c.want {
+				t.Errorf("replaceTokens output = %q, want the hand-pinned bytes %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestRunAppNameContainingTokenTextMaterializesByteIdentical drives the
+// P3-saasctl-A regression through the real command end to end: a target
+// directory whose base name -- and therefore the app name every token
+// occurrence is substituted with -- contains the speed-root token's own
+// text. The materialized go.mod's module line and the generated server's
+// error prefixes must carry that name byte-identical: a two-pass
+// substitution re-substitutes the embedded speed-root text on its second
+// pass and corrupts both. Deterministic: the assertions compare fixed
+// literals, never anything derived from temp paths.
+func TestRunAppNameContainingTokenTextMaterializesByteIdentical(t *testing.T) {
+	t.Setenv(speedRootEnv, "")
+	root := testSpeedRoot(t)
+	const appName = "probe__SPEED_ROOT__app"
+	target := filepath.Join(t.TempDir(), appName)
+	code, _, stderr := runNew(t, testRunArgs(root, target, "authn+rbac"))
+	if code != 0 {
+		t.Fatalf("Run = %d, want 0; stderr:\n%s", code, stderr)
+	}
+	mod, err := os.ReadFile(filepath.Join(target, "go.mod"))
+	if err != nil {
+		t.Fatalf("read materialized go.mod: %v", err)
+	}
+	if want := "module " + appName + "\n"; !strings.HasPrefix(string(mod), want) {
+		t.Errorf("go.mod module line = %q..., want %q: the app name must survive substitution byte-identical", mod, want)
+	}
+	server, err := os.ReadFile(filepath.Join(target, "cmd/server/server.go"))
+	if err != nil {
+		t.Fatalf("read materialized server.go: %v", err)
+	}
+	if !strings.Contains(string(server), `"`+appName+": open database:") {
+		t.Errorf("server.go's app-name error prefix was re-substituted; %q does not survive byte-identical", appName)
 	}
 }
 
