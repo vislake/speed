@@ -349,15 +349,44 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
+// The sharing_listShares page-size bound, the same 1-200 window
+// go/storage's own listing serves -- see ErrInvalidLimit.
+const (
+	minListLimit = 1
+	maxListLimit = 200
+)
+
 // SharingListShares implements api.ServerInterface: GET
-// /api/v1/sharing/shares. A thin translation of Service.List: every share
-// of the tenant tenancy.Middleware already resolved into the request
-// context, newest first. See PathShares' own doc comment for this route's
-// gating contract -- Handler performs no authorization decision here at
-// all; a host's own permission gate is what gets a request this far.
-func (h *Handler) SharingListShares(w http.ResponseWriter, r *http.Request) {
+// /api/v1/sharing/shares. A thin translation of Service.List: up to limit
+// shares (default 50) of the tenant tenancy.Middleware already resolved
+// into the request context, newest first, or the page of older shares
+// after the row named by beforeId when the cursor is present. An explicit
+// limit outside the 1-200 bound answers sharing.invalid_limit before
+// Service is reached, exactly as storage_listObjects' own handler checks
+// its limit; a beforeId naming no share of the tenant answers
+// sharing.share_not_found (Service.List's mapping), indistinguishable from
+// a cursor that never existed. See PathShares' own doc comment for this
+// route's gating contract -- Handler performs no authorization decision
+// here at all; a host's own permission gate is what gets a request this
+// far.
+func (h *Handler) SharingListShares(w http.ResponseWriter, r *http.Request, params api.SharingListSharesParams) {
 	ctx := r.Context()
-	shares, err := h.svc.List(ctx)
+	limit := defaultListPageSize
+	if params.Limit != nil {
+		limit = *params.Limit
+		if limit < minListLimit || limit > maxListLimit {
+			writeError(w, ErrInvalidLimit.
+				WithParam("limit", limit).
+				WithParam("min", minListLimit).
+				WithParam("max", maxListLimit))
+			return
+		}
+	}
+	beforeID := ""
+	if params.BeforeID != nil {
+		beforeID = *params.BeforeID
+	}
+	shares, err := h.svc.List(ctx, limit, beforeID)
 	if err != nil {
 		writeError(w, err)
 		return

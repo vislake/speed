@@ -241,18 +241,39 @@ paths:
                 $ref: '#/components/schemas/SharingError'
     get:
       operationId: sharing_listShares
-      summary: List every share of the caller's tenant, newest first.
+      summary: List the caller's tenant's shares, newest first.
       description: >-
         Metadata only, exactly like storage_listObjects' own listing
         promise: no access log, no token (a share's token is returned
         exactly once, by sharing_createShare, and is never derivable from
-        any stored value this surface could serve). Unlike
-        storage_listObjects this operation is not keyset-paginated -- a
-        tenant's own share count is expected to stay small relative to its
-        business data, and this round's Service.List (service.go) is a
-        deliberately minimal addition backing exactly this operation, per
-        this module's own "no new business logic beyond a thin HTTP
-        translation" scope for this round.
+        any stored value this surface could serve).
+
+        Keyset-paginated, following storage_listObjects' own keyset-cursor
+        shape: the page returns up to limit shares (1-200, default 50)
+        ordered newest first, and the caller echoes the last row's id as
+        the next page's beforeId. A row inserted between two fetches shifts
+        nothing. A beforeId naming no share of the caller's tenant -- a
+        cursor that never existed, or another tenant's share -- reports
+        404, indistinguishable on purpose (a share has no deletion path,
+        so a cursor names a row or nothing at all). Revoked and expired
+        shares stay listed: an owner-facing listing must still show what
+        happened to a share that is gone.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: The page size, from 1 through 200. Defaults to 50.
+          schema:
+            type: integer
+            default: 50
+        - name: beforeId
+          in: query
+          required: false
+          description: >-
+            Return only shares ordered before the one with this id (the
+            keyset cursor); the last page's final row id.
+          schema:
+            type: string
       responses:
         '200':
           description: The caller tenant's shares, newest first.
@@ -260,6 +281,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SharingListSharesResponse'
+        '400':
+          description: limit is outside the 1-200 bound.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingError'
+        '404':
+          description: >-
+            beforeId does not name a share of the caller's tenant. code is
+            always sharing.share_not_found, the same safe-to-disclose code
+            sharing_getShare answers for an unknown id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharingError'
   /api/v1/sharing/shares/{shareId}:
     get:
       operationId: sharing_getShare

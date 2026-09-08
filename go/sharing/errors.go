@@ -48,6 +48,16 @@ var (
 	// ceiling.
 	ErrInvalidMaxViews = apperr.Invalid("sharing.invalid_max_views")
 
+	// ErrInvalidLimit reports that sharing_listShares' caller asked for a
+	// page size outside the 1-200 bound the operation serves -- the mirror
+	// of go/storage's own ErrInvalidLimit for storage_listObjects, the
+	// operation this listing follows (a negative limit is not a page size
+	// and a page of 201 rows would defeat the listing's own cost bound).
+	// The refusal names the offending value and the bound in its
+	// "limit"/"min"/"max" parameters; the handler checks it before the
+	// Service call, exactly as storage's does.
+	ErrInvalidLimit = apperr.Invalid("sharing.invalid_limit")
+
 	// ErrNotAccessible is Service.Access's single outward answer for every
 	// reason an access attempt may be refused: an unrecognized token, a
 	// revoked, expired or view-exhausted share, or a missing or wrong

@@ -125,6 +125,15 @@ type SharingAccessShareParams struct {
 	XSharingPassword *string `json:"X-Sharing-Password,omitempty"`
 }
 
+// SharingListSharesParams defines parameters for SharingListShares.
+type SharingListSharesParams struct {
+	// Limit The page size, from 1 through 200. Defaults to 50.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// BeforeID Return only shares ordered before the one with this id (the keyset cursor); the last page's final row id.
+	BeforeID *string `form:"beforeId,omitempty" json:"beforeId,omitempty"`
+}
+
 // SharingCreateShareJSONRequestBody defines body for SharingCreateShare for application/json ContentType.
 type SharingCreateShareJSONRequestBody = SharingCreateShareRequest
 
@@ -133,9 +142,9 @@ type ServerInterface interface {
 	// SharingAccessShare Access a share's content by bearer token.
 	// (GET /api/v1/sharing/access)
 	SharingAccessShare(w http.ResponseWriter, r *http.Request, params SharingAccessShareParams)
-	// SharingListShares List every share of the caller's tenant, newest first.
+	// SharingListShares List the caller's tenant's shares, newest first.
 	// (GET /api/v1/sharing/shares)
-	SharingListShares(w http.ResponseWriter, r *http.Request)
+	SharingListShares(w http.ResponseWriter, r *http.Request, params SharingListSharesParams)
 	// SharingCreateShare Create a new share link in the caller's tenant.
 	// (POST /api/v1/sharing/shares)
 	SharingCreateShare(w http.ResponseWriter, r *http.Request)
@@ -216,8 +225,40 @@ func (siw *ServerInterfaceWrapper) SharingAccessShare(w http.ResponseWriter, r *
 // SharingListShares operation middleware
 func (siw *ServerInterfaceWrapper) SharingListShares(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SharingListSharesParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "beforeId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "beforeId", r.URL.Query(), &params.BeforeID, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "beforeId"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "beforeId", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.SharingListShares(w, r)
+		siw.Handler.SharingListShares(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {

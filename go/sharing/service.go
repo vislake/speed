@@ -1383,20 +1383,41 @@ func (s *Service) Get(ctx context.Context, shareID string) (*Share, error) {
 	return share, nil
 }
 
-// List returns every share of the caller's tenant (read from ctx), newest
-// first -- the round-3 owner-facing HTTP surface's sharing_listShares
-// operation is a thin translation of this method and nothing more.
+// defaultListPageSize is the page size Service.List serves a caller that
+// asks for no page size (limit zero or negative) -- the mirror of
+// go/storage's own defaultListPageSize, with which the owner-facing
+// sharing_listShares operation's "defaults to 50" promise stays in step.
+const defaultListPageSize = 50
+
+// List returns shares of the caller's tenant (read from ctx), newest first
+// (ties broken by id, so the order is total and stable across engines), in
+// pages of at most limit rows -- defaultListPageSize when limit is zero or
+// negative. Pass an empty beforeID for the first page and the last page's
+// final row's id as the next page's beforeID: the cursor is a keyset, not
+// an offset, so rows created between two fetches shift nothing. The shape
+// follows go/storage's ObjectService.List exactly -- the owner-facing
+// sharing_listShares operation is a thin translation of this method and
+// nothing more.
 //
-// This is a deliberately minimal addition: it is not a new business rule,
-// only a tenant-scoped read over the repository surface Create, Revoke, Get
-// and ListAccessLog already use (repository.go's listByTenant), added
-// because no existing Service method served "every share of this tenant" --
-// Get and ListAccessLog both require a caller-known shareID. Unlike
-// Service.Get, an entry here is never filtered by liveness: a revoked or
-// expired share still belongs to its tenant, and RevokedAt on the returned
-// row is exactly how a caller learns it is gone.
-func (s *Service) List(ctx context.Context) ([]Share, error) {
-	return s.shares.listByTenant(ctx)
+// A beforeID naming a share that does not exist in the caller's tenant --
+// a cursor that never existed, or another tenant's share -- reports
+// ErrShareNotFound with the cursor in its "id" parameter, never a page
+// silently resumed from the wrong place. Unlike Service.Get, an entry here
+// is never filtered by liveness: a revoked or expired share still belongs
+// to its tenant, and RevokedAt on the returned row is exactly how a caller
+// learns it is gone.
+func (s *Service) List(ctx context.Context, limit int, beforeID string) ([]Share, error) {
+	if limit <= 0 {
+		limit = defaultListPageSize
+	}
+	rows, err := s.shares.listPage(ctx, limit, beforeID)
+	if err != nil {
+		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+			return nil, ErrShareNotFound.WithParam("id", beforeID)
+		}
+		return nil, err
+	}
+	return rows, nil
 }
 
 // ListAccessLog returns every recorded access attempt against the caller

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -496,6 +497,131 @@ func TestHandler_SharingListShares_EmptyTenant_AnswersEmptyArrayNeverNull(t *tes
 	}
 	if strings.Contains(rec.Body.String(), `"shares":null`) {
 		t.Errorf("body = %s, want an empty array, never null", rec.Body.String())
+	}
+}
+
+// listSharesIDs performs one sharing_listShares GET and returns the page's
+// share ids in server order, failing t on any non-200 answer.
+func listSharesIDs(t *testing.T, h *Handler, tenant pkgcore.TenantID, query string) []string {
+	t.Helper()
+	path := PathShares
+	if query != "" {
+		path += "?" + query
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, sharesRequest(http.MethodGet, path, tenant, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp api.SharingListSharesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var ids []string
+	for _, s := range *resp.Shares {
+		ids = append(ids, *s.ID)
+	}
+	return ids
+}
+
+// TestHandler_SharingListShares_PagesWithLimitAndBeforeId drives the
+// keyset-paginated listing over real HTTP: a page of limit shares, then the
+// next page fetched with the last row's id as beforeId. The walk never
+// asserts the clock-dependent exact order, only the shape the keyset
+// guarantees: page 1 holds exactly limit rows, page 2 holds the rest, and
+// the two pages never overlap -- a row created between the two fetches
+// shifts nothing.
+func TestHandler_SharingListShares_PagesWithLimitAndBeforeId(t *testing.T) {
+	h := newTestHandler(t, nil)
+	created := make(map[string]bool, 3)
+	for i := 0; i < 3; i++ {
+		resp := createShare(t, h, "tenant-a", `{"resourceRef":"ref-`+strconv.Itoa(i)+`"}`)
+		created[*resp.Share.ID] = true
+	}
+
+	page1 := listSharesIDs(t, h, "tenant-a", "limit=2")
+	if len(page1) != 2 {
+		t.Fatalf("page 1 returned %d shares, want exactly limit=2", len(page1))
+	}
+	for _, id := range page1 {
+		if !created[id] {
+			t.Errorf("page 1 carries unknown share id %q", id)
+		}
+	}
+
+	// The keyset cursor: the caller echoes the page's final row id.
+	cursor := page1[len(page1)-1]
+	page2 := listSharesIDs(t, h, "tenant-a", "limit=2&beforeId="+url.QueryEscape(cursor))
+	if len(page2) != 1 {
+		t.Fatalf("page 2 returned %d shares, want the remaining 1", len(page2))
+	}
+	all := append(append([]string{}, page1...), page2...)
+	if len(all) != 3 {
+		t.Fatalf("the two pages together hold %d rows, want the 3 created", len(all))
+	}
+	seen := make(map[string]bool, 3)
+	for _, id := range all {
+		if seen[id] {
+			t.Errorf("share %q appears on both pages -- pages must never overlap", id)
+		}
+		if !created[id] {
+			t.Errorf("the walk returned unknown share id %q", id)
+		}
+		seen[id] = true
+	}
+}
+
+// TestHandler_SharingListShares_InvalidLimit_Answers400 pins the page-size
+// bound on the wire: an explicit limit outside the 1-200 window answers 400
+// sharing.invalid_limit before Service is reached, the same bound
+// storage_listObjects' own handler enforces.
+func TestHandler_SharingListShares_InvalidLimit_Answers400(t *testing.T) {
+	h := newTestHandler(t, nil)
+	for _, limit := range []string{"0", "-1", "201"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, sharesRequest(http.MethodGet, PathShares+"?limit="+limit, "tenant-a", nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("limit=%s: status = %d, body = %s, want 400", limit, rec.Code, rec.Body.String())
+		}
+		var envelope api.SharingError
+		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if envelope.Code != ErrInvalidLimit.Code {
+			t.Errorf("limit=%s: code = %q, want %q", limit, envelope.Code, ErrInvalidLimit.Code)
+		}
+	}
+}
+
+// TestHandler_SharingListShares_UnknownBeforeID_AnswersShareNotFound pins
+// the cursor's not-found answer on the wire: a beforeId naming no share of
+// the caller's tenant -- one that never existed, or another tenant's share
+// -- answers 404 sharing.share_not_found, indistinguishable on purpose.
+func TestHandler_SharingListShares_UnknownBeforeID_AnswersShareNotFound(t *testing.T) {
+	h := newTestHandler(t, nil)
+	foreign := createShare(t, h, "tenant-b", `{"resourceRef":"ref-b"}`)
+
+	for _, tc := range []struct {
+		name string
+		curl string
+	}{
+		{"a cursor that never existed", "beforeId=no-such-share"},
+		{"another tenant's share id", "beforeId=" + url.QueryEscape(*foreign.Share.ID)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, sharesRequest(http.MethodGet, PathShares+"?"+tc.curl, "tenant-a", nil))
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, body = %s, want 404", rec.Code, rec.Body.String())
+			}
+			var envelope api.SharingError
+			if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if envelope.Code != ErrShareNotFound.Code {
+				t.Errorf("code = %q, want %q", envelope.Code, ErrShareNotFound.Code)
+			}
+		})
 	}
 }
 

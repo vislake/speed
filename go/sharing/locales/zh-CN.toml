@@ -14,6 +14,8 @@
 
 "sharing.invalid_max_views" = "访问次数上限 {{.max_views}} 无效,必须是正数。"
 
+"sharing.invalid_limit" = "页大小 {{.limit}} 无效,必须在 {{.min}} 到 {{.max}} 之间。"
+
 "sharing.invalid_request" = "无法识别该请求,请检查分享链接后重试。"
 
 "sharing.not_accessible" = "该分享链接当前不可访问。"

@@ -3,6 +3,7 @@ package sharing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1202,7 +1203,7 @@ func TestService_List_ReturnsTenantSharesIncludingRevoked(t *testing.T) {
 		t.Fatalf("Revoke: %v", revokeErr)
 	}
 
-	got, err := svc.List(testCtx())
+	got, err := svc.List(testCtx(), 200, "")
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1214,6 +1215,53 @@ func TestService_List_ReturnsTenantSharesIncludingRevoked(t *testing.T) {
 	}
 	if got[0].RevokedAt == nil {
 		t.Errorf("List()[0].RevokedAt is nil, want the revoked share's RevokedAt to still be visible")
+	}
+}
+
+// TestService_List_ZeroLimitServesTheDefaultPage pins Service.List's page
+// default: a limit of zero or less is a caller that did not ask, and the
+// service answers with the same page it serves for the documented default
+// (defaultListPageSize) -- the mirror of go/storage's ObjectService.List
+// contract, which this method follows.
+func TestService_List_ZeroLimitServesTheDefaultPage(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	for i := 0; i < 3; i++ {
+		if _, err := svc.Create(testCtx(), CreateParams{ResourceRef: fmt.Sprintf("ref-%d", i)}); err != nil {
+			t.Fatalf("Create(%d): %v", i, err)
+		}
+	}
+
+	got, err := svc.List(testCtx(), 0, "")
+	if err != nil {
+		t.Fatalf("List(limit 0): %v", err)
+	}
+	byDefault, err := svc.List(testCtx(), defaultListPageSize, "")
+	if err != nil {
+		t.Fatalf("List(default): %v", err)
+	}
+	if len(got) != len(byDefault) || len(got) != 3 {
+		t.Errorf("List(limit 0) returned %d shares, List(default) %d -- both want the 3 created", len(got), len(byDefault))
+	}
+}
+
+// TestService_List_UnknownCursor_AnswersShareNotFound pins Service.List's
+// cursor mapping: a beforeID naming no share of the caller's tenant (one
+// that never existed, or another tenant's share) is translated from
+// dbkit's not-found into the module's own ErrShareNotFound with the cursor
+// named in its "id" parameter -- the safe-to-disclose code every other
+// owner-facing lookup answers -- never a page silently resumed from the
+// wrong place.
+func TestService_List_UnknownCursor_AnswersShareNotFound(t *testing.T) {
+	svc, _ := newTestService(t, nil)
+	if _, err := svc.Create(testCtx(), CreateParams{ResourceRef: "ref-a"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	_, err := svc.List(testCtx(), 10, "no-such-share")
+	assertCode(t, err, ErrShareNotFound.Code)
+	appErr, _ := apperr.As(err)
+	if id, _ := appErr.Params["id"].(string); id != "no-such-share" {
+		t.Errorf("refusal id param = %v, want %q", appErr.Params["id"], "no-such-share")
 	}
 }
 
@@ -1229,7 +1277,7 @@ func TestService_List_NeverCrossesTenants(t *testing.T) {
 		t.Fatalf("Create(tenant-a): %v", err)
 	}
 
-	got, err := svc.List(ctxB)
+	got, err := svc.List(ctxB, 200, "")
 	if err != nil {
 		t.Fatalf("List(tenant-b): %v", err)
 	}

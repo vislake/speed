@@ -3,6 +3,8 @@ package sharing
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -881,14 +883,15 @@ func TestShareRepository_ListExpiredOrExhausted(t *testing.T) {
 	}
 }
 
-// TestShareRepository_ListByTenant_NewestFirstAndTenantScoped is
-// listByTenant's own proof (Service.List's backing method, the round-3
-// owner-facing HTTP surface's sharing_listShares operation): it returns
-// every share of the caller tenant, newest first, revoked and live alike --
+// TestShareRepository_ListPage_NewestFirstAndTenantScoped is
+// listPage's own proof (Service.List's backing method, the owner-facing
+// sharing_listShares operation): it returns the caller tenant's shares,
+// newest first, revoked and live alike --
 // unlike listExpiredOrExhausted above, an owner-facing listing must still
 // show a share that is gone, since RevokedAt on the returned row is exactly
-// how the owner learns that.
-func TestShareRepository_ListByTenant_NewestFirstAndTenantScoped(t *testing.T) {
+// how the owner learns that. The page is big enough to hold everything, so
+// this is the whole-tenancy read.
+func TestShareRepository_ListPage_NewestFirstAndTenantScoped(t *testing.T) {
 	repo := NewShareRepository(newTestDB(t))
 	now := time.Now().UTC()
 	ctxA := pkgcore.WithTenant(context.Background(), "tenant-a")
@@ -922,9 +925,9 @@ func TestShareRepository_ListByTenant_NewestFirstAndTenantScoped(t *testing.T) {
 		t.Fatalf("Create(otherTenant): %v", err)
 	}
 
-	got, err := repo.listByTenant(ctxA)
+	got, err := repo.listPage(ctxA, 200, "")
 	if err != nil {
-		t.Fatalf("listByTenant: %v", err)
+		t.Fatalf("listPage: %v", err)
 	}
 	var ids []string
 	for _, s := range got {
@@ -932,12 +935,120 @@ func TestShareRepository_ListByTenant_NewestFirstAndTenantScoped(t *testing.T) {
 	}
 	want := []string{"newest", "revoked", "oldest"}
 	if len(ids) != len(want) {
-		t.Fatalf("listByTenant returned %v, want %v (other-tenant's share must never appear)", ids, want)
+		t.Fatalf("listPage returned %v, want %v (other-tenant's share must never appear)", ids, want)
 	}
 	for i, id := range want {
 		if ids[i] != id {
-			t.Errorf("listByTenant[%d] = %q, want %q -- ordering must be newest first", i, ids[i], id)
+			t.Errorf("listPage[%d] = %q, want %q -- ordering must be newest first", i, ids[i], id)
 		}
+	}
+}
+
+// TestShareRepository_ListPage_PagesByKeysetCursor drives listPage's keyset
+// mechanics: a page of limit rows, the next page starting after the last
+// row's id, and a row inserted between two fetches shifting nothing -- the
+// property an offset-based listing does not have. The order across pages
+// is the total (created_at DESC, id DESC) order, and pages never overlap.
+func TestShareRepository_ListPage_PagesByKeysetCursor(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	ctxA := pkgcore.WithTenant(context.Background(), "tenant-a")
+	now := time.Now().UTC()
+
+	// Five shares with distinct CreatedAt values: s1 oldest ... s5 newest.
+	// Row ids are created so the id tie-break direction never matters here.
+	for i := 1; i <= 5; i++ {
+		share := newTestShare(fmt.Sprintf("s%d", i), now)
+		share.CreatedAt = now.Add(time.Duration(i-6) * time.Hour)
+		if err := repo.Create(ctxA, share); err != nil {
+			t.Fatalf("Create(s%d): %v", i, err)
+		}
+	}
+
+	ids := func(rows []Share) []string {
+		var out []string
+		for _, s := range rows {
+			out = append(out, s.ID)
+		}
+		return out
+	}
+
+	// Page 1 of 2: newest first, exactly limit rows.
+	page1, err := repo.listPage(ctxA, 2, "")
+	if err != nil {
+		t.Fatalf("listPage(page 1): %v", err)
+	}
+	want1 := []string{"s5", "s4"}
+	if got := ids(page1); !slices.Equal(got, want1) {
+		t.Fatalf("page 1 = %v, want %v", got, want1)
+	}
+
+	// Page 2 continues strictly after page 1's last row: no overlap, no gap.
+	page2, err := repo.listPage(ctxA, 2, page1[len(page1)-1].ID)
+	if err != nil {
+		t.Fatalf("listPage(page 2): %v", err)
+	}
+	if got := ids(page2); !slices.Equal(got, []string{"s3", "s2"}) {
+		t.Fatalf("page 2 = %v, want [s3 s2]", got)
+	}
+
+	// A share created between the two fetches -- newest of all, so it joins
+	// page 1's front if page 1 were re-fetched -- must not shift page 2:
+	// the keyset cursor names a position, not an offset.
+	late := newTestShare("s6", now)
+	late.CreatedAt = now.Add(time.Hour)
+	if createErr := repo.Create(ctxA, late); createErr != nil {
+		t.Fatalf("Create(s6, between pages): %v", createErr)
+	}
+	page2Again, err := repo.listPage(ctxA, 2, page1[len(page1)-1].ID)
+	if err != nil {
+		t.Fatalf("listPage(page 2 after an insert): %v", err)
+	}
+	if got := ids(page2Again); !slices.Equal(got, []string{"s3", "s2"}) {
+		t.Fatalf("page 2 after an insert = %v, want [s3 s2] -- the keyset must shift nothing", got)
+	}
+
+	// The final page: the cursor walks to the end and the last page may be
+	// short.
+	page3, err := repo.listPage(ctxA, 2, page2[len(page2)-1].ID)
+	if err != nil {
+		t.Fatalf("listPage(page 3): %v", err)
+	}
+	if got := ids(page3); !slices.Equal(got, []string{"s1"}) {
+		t.Fatalf("page 3 = %v, want [s1]", got)
+	}
+}
+
+// TestShareRepository_ListPage_UnknownCursor_ReportsRecordNotFound pins the
+// cursor probe's not-found answer: a beforeID naming no share of the caller
+// tenant -- one that never existed, or one that exists under another tenant
+// -- reports dbkit.ErrRecordNotFound with the id named, indistinguishable on
+// purpose (a share has no deletion path, so "not in this tenant" and "never
+// existed" are the same fact). Service.List maps that answer onto
+// sharing.share_not_found for the HTTP surface.
+func TestShareRepository_ListPage_UnknownCursor_ReportsRecordNotFound(t *testing.T) {
+	repo := NewShareRepository(newTestDB(t))
+	ctxA := pkgcore.WithTenant(context.Background(), "tenant-a")
+	ctxB := pkgcore.WithTenant(context.Background(), "tenant-b")
+	now := time.Now().UTC()
+
+	foreign := newTestShare("foreign", now)
+	if err := repo.Create(ctxB, foreign); err != nil {
+		t.Fatalf("Create(foreign): %v", err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		beforeID string
+	}{
+		{"a cursor that never existed", "no-such-share"},
+		{"another tenant's share id", foreign.ID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := repo.listPage(ctxA, 10, tc.beforeID)
+			if !hasCode(err, dbkit.ErrRecordNotFound.Code) {
+				t.Fatalf("listPage(beforeID %q) error = %v, want dbkit's not-found code", tc.beforeID, err)
+			}
+		})
 	}
 }
 

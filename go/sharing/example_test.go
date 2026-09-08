@@ -161,9 +161,11 @@ func ExampleService_List() {
 		return
 	}
 
-	// List returns every share of the tenant, newest first -- a revoked one
-	// included, since RevokedAt is exactly how an owner learns it is gone.
-	shares, err := module.Service().List(tenantCtx)
+	// List returns a page of the tenant's shares, newest first -- a revoked
+	// one included, since RevokedAt is exactly how an owner learns it is
+	// gone. The page holds up to limit rows (a limit of 50 here; a caller
+	// pages on by echoing the last row's id as the next call's beforeId).
+	shares, err := module.Service().List(tenantCtx, 50, "")
 	if err != nil {
 		fmt.Println("list:", err)
 		return

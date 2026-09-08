@@ -586,22 +586,69 @@ func (r *ShareRepository) tenantForTokenHash(ctx context.Context, hash string) (
 	return pkgcore.TenantID(idx.TenantID), nil
 }
 
-// listByTenant returns every share of the caller tenant, newest first and
-// then by id so the order is total and stable -- the listing
-// Service.List (the round-3 owner-facing HTTP surface's sharing_listShares
-// operation) serves to a resource owner. Unlike listExpiredOrExhausted this
+// listPage returns up to limit shares of the caller's tenant ordered by
+// (created_at DESC, id DESC) -- newest first, ties broken by id so the
+// order is total and stable across engines -- starting after the row named
+// by beforeID. Pass an empty beforeID for the first page. This is the
+// listing Service.List (the owner-facing sharing_listShares operation)
+// serves to a resource owner, and it deliberately follows
+// go/storage's ObjectRepository.listPage shape byte for byte in its
+// mechanics: the same keyset cursor, the same cursor probe, the same
+// not-found answer.
+//
+// The page is a keyset cursor, not an offset: the caller echoes the last
+// row's id as the next page's beforeID, so a row inserted between two
+// fetches shifts nothing. Cross-tenant cursor semantics are inherited from
+// the promoted FindByID the before-row lookup runs through: a beforeID that
+// names no share of the caller's tenant -- including one that exists under
+// another tenant -- reports dbkit.ErrRecordNotFound, indistinguishable from
+// a cursor that never existed, so a caller can never learn that an id it
+// does not own exists at all. Unlike listExpiredOrExhausted this listing
 // is not filtered by liveness: a revoked or expired share still belongs to
-// its tenant and an owner-facing listing must still be able to show it (its
-// RevokedAt is exactly how the owner learns it is gone).
-func (r *ShareRepository) listByTenant(ctx context.Context) ([]Share, error) {
+// its tenant and an owner-facing listing must still be able to show it
+// (its RevokedAt is exactly how the owner learns it is gone), so the only
+// way a cursor row can have "left the listing" is never having been a
+// share of the tenant at all.
+func (r *ShareRepository) listPage(ctx context.Context, limit int, beforeID string) ([]Share, error) {
 	var out []Share
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.Order("created_at DESC, id").Find(&out).Error
+		query := tx.Order("created_at DESC, id DESC").Limit(limit)
+		if beforeID != "" {
+			before, err := r.findByIDIn(tx, beforeID)
+			if err != nil {
+				return err
+			}
+			query = query.Where(
+				"(created_at < ?) OR (created_at = ? AND id < ?)",
+				before.CreatedAt, before.CreatedAt, before.ID,
+			)
+		}
+		return query.Find(&out).Error
 	})
 	if err != nil {
+		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
+			return nil, err
+		}
 		return nil, ErrInternal.WithCause(err)
 	}
 	return out, nil
+}
+
+// findByIDIn resolves one share of the caller's tenant inside the
+// transaction tx. It is the promoted FindByID's WHERE shape -- tenant_id is
+// supplied by the isolation plugin from the context, never written here --
+// returning dbkit.ErrRecordNotFound for a row that does not exist or
+// belongs to another tenant.
+func (r *ShareRepository) findByIDIn(tx *gorm.DB, id string) (*Share, error) {
+	var share Share
+	err := tx.Where("id = ?", id).First(&share).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, dbkit.ErrRecordNotFound.WithParam("id", id)
+	}
+	if err != nil {
+		return nil, ErrInternal.WithCause(err)
+	}
+	return &share, nil
 }
 
 // listExpiredOrExhausted returns every live (not yet revoked) row of the
