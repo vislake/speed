@@ -110,3 +110,9 @@ description = "saasctl appconfig S3-secret-key identifier references: go/saasctl
 regexes = [
   '''cfg\.S3SecretKey(?:FromEnv)?''',
 ]
+
+[[allowlists]]
+description = "reference-app e2e self-registration password (historical): the literal 'e2e-invite-population-2026' is the password e2e/add-a-colleague.spec.ts's self-registration gate submits when it signs a NEW practice up -- a value the suite's own self-registration test creates for an account that exists nowhere else, submitted to an endpoint that accepts any new account the policy permits, never a credential to anything pre-existing. It entered the tree in commit 00bc02ff and now lives in that commit's history, which the daily secret-leakage scan covers, so it cannot be retired by editing the current tree alone; the current tree carries the lower-entropy 'e2e-invite-pass-2026' instead, and the allowlist is scoped by path so generic-api-key keeps firing on genuine secret-shaped values anywhere else"
+paths = [
+  "examples/reference-app/web/e2e/add-a-colleague.spec.ts",
+]
