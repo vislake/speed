@@ -35,7 +35,13 @@
 //     OTLP/gRPC exporters instead: both signals are pushed to that
 //     collector (see Init's doc comment for why this package does not read
 //     the endpoint from the environment itself), and MetricsHandler
-//     reports 404, since there is no local registry to scrape.
+//     reports 404, since there is no local registry to scrape. The OTLP
+//     connection is TLS by default and nothing falls back: an endpoint
+//     that does not speak TLS fails the handshake and the pushed batches
+//     are dropped -- telemetry goes nowhere and never quietly re-routes to
+//     the local exporters. That is the deliberate minimal configuration;
+//     the one plaintext path is the explicit WithOTLPInsecure opt-in,
+//     never inferred from the endpoint.
 //
 // # The three seams
 //
