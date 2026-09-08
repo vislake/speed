@@ -35,7 +35,7 @@ type SharingAccessLogEntry struct {
 
 // SharingCreateShareRequest defines model for SharingCreateShareRequest.
 type SharingCreateShareRequest struct {
-	// ExpiresAt An explicit expiry, which must lie strictly in the future and no more than 30 days from now -- the platform's maximum share lifetime (rule 2's ceiling); anything else is refused with sharing.expiry_out_of_range. Omit to use the tenant's configured default (falling back to a fixed default when none is configured).
+	// ExpiresAt An explicit expiry, which must lie strictly in the future and no more than 30 days from now -- the platform's maximum share lifetime (the explicit-expiry ceiling); anything else is refused with sharing.expiry_out_of_range. Omit to use the tenant's configured default (falling back to a fixed default when none is configured).
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 
 	// Forever Requests a share that never expires. Always refused with sharing.expiry_required -- there is no way to make this surface create a never-expiring share; the field exists so a deliberate attempt to do so fails loudly and specifically.
@@ -50,7 +50,7 @@ type SharingCreateShareRequest struct {
 	// ResourceRef The opaque reference to the resource being shared, typically another module's own key scheme (e.g. a go/storage object id). Never interpreted by this module.
 	ResourceRef string `json:"resourceRef"`
 
-	// Sensitive Marks the shared resource as carrying sensitive personal information (rule 4). A true value fires this module's one audit action.
+	// Sensitive Marks the shared resource as carrying sensitive personal information. A true value fires this module's one audit action.
 	Sensitive *bool `json:"sensitive,omitempty"`
 }
 
@@ -65,7 +65,7 @@ type SharingCreateShareResponse struct {
 
 // SharingError defines model for SharingError.
 type SharingError struct {
-	// Code The structured error code, one of this module's error index entries (AGENTS.md).
+	// Code The structured error code, one of this module's error index entries.
 	Code string `json:"code"`
 
 	// Params Structured parameters for the code, when any apply.
@@ -88,7 +88,7 @@ type SharingListSharesResponse struct {
 type SharingShare struct {
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 
-	// ExpiresAt When this share stops being accessible. Never absent -- rule 2 forbids a share with no expiry.
+	// ExpiresAt When this share stops being accessible. Never absent -- every share carries an expiry.
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 
 	// ID Application-generated UUID.
@@ -106,7 +106,7 @@ type SharingShare struct {
 	// RevokedAt When this share was revoked; absent for a live share.
 	RevokedAt *time.Time `json:"revokedAt,omitempty"`
 
-	// Sensitive Whether this share was created against a resource carrying sensitive personal information (rule 4's sensitive-resource confirmation).
+	// Sensitive Whether this share was created against a resource carrying sensitive personal information (the sensitive-resource confirmation).
 	Sensitive *bool `json:"sensitive,omitempty"`
 
 	// ViewCount How many accesses have been granted so far.
@@ -118,10 +118,10 @@ type ShareID = string
 
 // SharingAccessShareParams defines parameters for SharingAccessShare.
 type SharingAccessShareParams struct {
-	// Token The share's bearer token, exactly as returned once by the owner-facing Service.Create call. Never the share's own id, and never accepted from anywhere but this query parameter (root CLAUDE.md's multi-tenant isolation rule's spirit extended to this module's own bearer credential: there is exactly one legitimate source for it).
+	// Token The share's bearer token, exactly as returned once by the owner-facing Service.Create call. Never the share's own id, and never accepted from anywhere but this query parameter (the multi-tenant isolation rule's spirit extended to this module's own bearer credential: there is exactly one legitimate source for it).
 	Token string `form:"token" json:"token"`
 
-	// XSharingPassword The share's access password, presented only when the share requires one (Share.PasswordHash set). Carried as a header, deliberately not a second query parameter: a query parameter routinely lands in server access logs and in a subsequently loaded page's Referer header, and this module's own established rule (repository.go's byTokenHash doc comment) is that a credential this module verifies never travels anywhere past the caller who presented it. The bearer token itself is this module's one already-accepted exception to that rule -- it is the URL itself, by round-1's own design (Share's doc comment) -- so putting the SECOND credential a share may require in the URL too would be a strictly weaker property than what this module already ships, not merely an equally weak one.
+	// XSharingPassword The share's access password, presented only when the share requires one (Share.PasswordHash set). Carried as a header, deliberately not a second query parameter: a query parameter routinely lands in server access logs and in a subsequently loaded page's Referer header, and this module's own established rule (repository.go's byTokenHash doc comment) is that a credential this module verifies never travels anywhere past the caller who presented it. The bearer token itself is this module's one already-accepted exception to that rule -- it is the URL itself, by the module's own design (Share's doc comment) -- so putting the SECOND credential a share may require in the URL too would be a strictly weaker property than what this module already ships, not merely an equally weak one.
 	XSharingPassword *string `json:"X-Sharing-Password,omitempty"`
 }
 

@@ -471,7 +471,7 @@ components:
           type: boolean
           description: >-
             Marks the shared resource as carrying sensitive personal
-            information). A true value fires this module's one
+            information. A true value fires this module's one
             audit action.
     SharingCreateShareResponse:
       type: object

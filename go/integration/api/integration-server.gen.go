@@ -71,7 +71,7 @@ type IntegrationCreatedAPIKey struct {
 	Scopes *[]string `json:"scopes,omitempty"`
 }
 
-// IntegrationCreatedWebhookSubscription Service.CreateWebhookSubscription's result: the one and only place the raw signing secret is ever available, mirroring round 1's IntegrationCreatedAPIKey "shown once" contract. secret is never logged and never returned again by any other operation.
+// IntegrationCreatedWebhookSubscription Service.CreateWebhookSubscription's result: the one and only place the raw signing secret is ever available, mirroring IntegrationCreatedAPIKey's own "shown once" contract. secret is never logged and never returned again by any other operation.
 type IntegrationCreatedWebhookSubscription struct {
 	Active *bool `json:"active,omitempty"`
 
@@ -89,7 +89,7 @@ type IntegrationCreatedWebhookSubscription struct {
 	URL    *string `json:"url,omitempty"`
 }
 
-// IntegrationError The structured {code, params} error envelope every speed API returns instead of localized text (backend coding standard §6.2; docs/internal/11-cross-cutting.md) -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in AGENTS.md's error index.
+// IntegrationError The structured {code, params} error envelope every speed API returns instead of localized text -- a client resolves code through its own i18n catalog, populated from this module's Locales() resources for the codes documented in its error index.
 type IntegrationError struct {
 	// Code Example: integration.key_not_found
 	Code   *string                 `json:"code,omitempty"`
