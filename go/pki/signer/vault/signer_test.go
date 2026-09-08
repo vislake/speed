@@ -1,12 +1,15 @@
 package vault
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 
 	vaultapi "github.com/hashicorp/vault/api"
@@ -136,11 +139,12 @@ func TestSigner_DirectMode_Sign_DecodesVaultSignatureEnvelope(t *testing.T) {
 	realSig := ed25519.Sign(priv, message)
 
 	var signedPath string
-	var gotInput string
+	var gotInput, gotKeyVersion any
 	fake := &fakeTransitClient{
 		write: func(_ context.Context, path string, data map[string]interface{}) (*vaultapi.Secret, error) {
 			signedPath = path
 			gotInput, _ = data["input"].(string)
+			gotKeyVersion = data["key_version"]
 			return &vaultapi.Secret{Data: map[string]interface{}{
 				"signature": "vault:v1:" + base64.StdEncoding.EncodeToString(realSig),
 			}}, nil
@@ -162,6 +166,90 @@ func TestSigner_DirectMode_Sign_DecodesVaultSignatureEnvelope(t *testing.T) {
 	if gotInput != wantInput {
 		t.Errorf("sign input = %q, want %q", gotInput, wantInput)
 	}
+	if gotKeyVersion != strconv.Itoa(directSignPinnedKeyVersion) {
+		t.Errorf("sign request key_version = %v, want %d (the request must pin the version this package issued the key at, never default to Vault's latest)", gotKeyVersion, directSignPinnedKeyVersion)
+	}
+}
+
+// TestSigner_DirectMode_Sign_EnvelopeVersionBeyondThePin_IsRefused pins the
+// response half of the pin: when a sign answer's envelope names a Transit
+// key version other than directSignPinnedKeyVersion, the signature must be
+// refused, never returned -- an in-place rotation that actually changed
+// which version signed (or a Vault build that ignored the request's
+// key_version parameter) must surface as a loud error, not as a signature
+// no exported key verifies. Before the pin landed, signDirect accepted any
+// well-formed envelope version and returned the signature; this test
+// failed on the unpinned code with error = <nil>.
+func TestSigner_DirectMode_Sign_EnvelopeVersionBeyondThePin_IsRefused(t *testing.T) {
+	message := []byte("pin mismatch probe")
+	fake := &fakeTransitClient{
+		write: func(context.Context, string, map[string]interface{}) (*vaultapi.Secret, error) {
+			return &vaultapi.Secret{Data: map[string]interface{}{
+				// v2: a signature the key's SECOND version produced. The
+				// request pinned version 1, so this answer can only mean the
+				// pin did not govern which version signed.
+				"signature": "vault:v2:" + base64.StdEncoding.EncodeToString(make([]byte, 64)),
+			}}, nil
+		},
+	}
+	s := &signer{logical: fake, mountPath: "transit", mode: ModeDirectSign}
+	sig, err := s.Sign(context.Background(), "my-key", message)
+	if err == nil {
+		t.Fatalf("Sign(pinned v1, answered v2) = (%d bytes, nil), want an error naming the version mismatch", len(sig))
+	}
+	for _, want := range []string{"key version 2", "pins version 1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Sign(pinned v1, answered v2) error = %q, want it to name %q", err, want)
+		}
+	}
+}
+
+// TestSigner_DirectMode_Public_ServesThePinnedVersionNotTheLatest pins the
+// public-key half of the pin: readPublicKey must answer the version
+// directSignPinnedKeyVersion's key -- the version the module issued and
+// exported -- not the Transit key's latest_version, so an in-place
+// rotation cannot make the advertised key diverge from the pinned
+// signatures. The fixture carries both versions (Vault keeps every
+// version's entry in the keys map) with latest_version = 2, exactly the
+// state a rotated key presents. Before the pin landed, Public served the
+// latest version's key; this test failed on the unpinned code with the
+// rotated key returned.
+func TestSigner_DirectMode_Public_ServesThePinnedVersionNotTheLatest(t *testing.T) {
+	pinnedPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey: %v", err)
+	}
+	rotatedPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey: %v", err)
+	}
+
+	fake := &fakeTransitClient{
+		read: func(context.Context, string) (*vaultapi.Secret, error) {
+			return &vaultapi.Secret{Data: map[string]interface{}{
+				"latest_version": float64(2),
+				"keys": map[string]interface{}{
+					"1": map[string]interface{}{
+						"public_key": base64.StdEncoding.EncodeToString(pinnedPub),
+					},
+					"2": map[string]interface{}{
+						"public_key": base64.StdEncoding.EncodeToString(rotatedPub),
+					},
+				},
+			}}, nil
+		},
+	}
+	s := &signer{logical: fake, mountPath: "transit", mode: ModeDirectSign}
+	pub, err := s.Public(context.Background(), "my-key")
+	if err != nil {
+		t.Fatalf("Public: %v", err)
+	}
+	if !pub.(ed25519.PublicKey).Equal(pinnedPub) {
+		t.Errorf("Public() = %x, want the pinned version's key %x (a rotated key's latest version must never be served as this keyRef's key)", pub, pinnedPub)
+	}
+	if pub.(ed25519.PublicKey).Equal(rotatedPub) {
+		t.Error("Public() returned the rotated key's latest-version key, want the pinned version's key")
+	}
 }
 
 func TestSigner_DirectMode_Sign_UnknownKeyRef(t *testing.T) {
@@ -177,14 +265,14 @@ func TestSigner_DirectMode_Sign_UnknownKeyRef(t *testing.T) {
 	}
 }
 
-// TestDecodeVaultSignature_RejectsMalformedVersion pins the version field
-// of Vault's "vault:v<N>:" envelope being parsed and validated rather than
-// dropped unread. Before this test was written decodeVaultSignature
-// checked only parts[0] == "vault", so "vault:abc:<valid base64>" decoded
-// to a signature as though the version were meaningless -- the parsed-and-
-// dropped shape the doc comment now explains is "needed but not connected"
-// (rotation coherence with the module's lifecycle), never "unnecessary".
-func TestDecodeVaultSignature_RejectsMalformedVersion(t *testing.T) {
+// TestParseVaultSignatureEnvelope_RejectsMalformedVersion pins the version
+// field of Vault's "vault:v<N>:" envelope being parsed and validated rather
+// than dropped unread: "vault:abc:<valid base64>" (and the other malformed
+// shapes below) must fail to parse, because the version is the pin's
+// verification signal -- signDirect compares it against
+// directSignPinnedKeyVersion -- and a version it cannot read is a signature
+// it cannot attribute to the key it exported.
+func TestParseVaultSignatureEnvelope_RejectsMalformedVersion(t *testing.T) {
 	payload := base64.StdEncoding.EncodeToString(make([]byte, 64))
 	for _, envelope := range []string{
 		"vault:abc:" + payload,
@@ -192,21 +280,42 @@ func TestDecodeVaultSignature_RejectsMalformedVersion(t *testing.T) {
 		"vault:v0:" + payload,
 		"vault:v-3:" + payload,
 	} {
-		if _, err := decodeVaultSignature(envelope); err == nil {
-			t.Errorf("decodeVaultSignature(%q) error = nil, want one (the version must match Vault's own \"v<N>\" spelling with N a positive integer)", envelope)
+		if _, _, err := parseVaultSignatureEnvelope(envelope); err == nil {
+			t.Errorf("parseVaultSignatureEnvelope(%q) error = nil, want one (the version must match Vault's own \"v<N>\" spelling with N a positive integer)", envelope)
 		}
 	}
 }
 
-// TestDecodeVaultSignature_RejectsEmptySignature pins the empty-signature-
-// is-never-success half of the seam's failure semantics on this side of the
-// twin: a well-formed envelope with nothing after the version
-// ("vault:v1:") base64-decodes to zero bytes, and that empty answer must
-// be an error -- the vault twin answers the same shape the kmsaws twin's
-// own regression test covers (an empty Signature field there).
-func TestDecodeVaultSignature_RejectsEmptySignature(t *testing.T) {
-	if _, err := decodeVaultSignature("vault:v1:"); err == nil {
-		t.Error("decodeVaultSignature(\"vault:v1:\") error = nil, want one (an empty signature must never decode to success)")
+// TestParseVaultSignatureEnvelope_RejectsEmptySignature pins the
+// empty-signature-is-never-success half of the seam's failure semantics on
+// this side of the twin: a well-formed envelope with nothing after the
+// version ("vault:v1:") base64-decodes to zero bytes, and that empty answer
+// must be an error -- the vault twin answers the same shape the kmsaws
+// twin's own regression test covers (an empty Signature field there).
+func TestParseVaultSignatureEnvelope_RejectsEmptySignature(t *testing.T) {
+	if _, _, err := parseVaultSignatureEnvelope("vault:v1:"); err == nil {
+		t.Error("parseVaultSignatureEnvelope(\"vault:v1:\") error = nil, want one (an empty signature must never decode to success)")
+	}
+}
+
+// TestParseVaultSignatureEnvelope_ReturnsTheVersionAndSignature pins the
+// parse function's full contract now that the version is load-bearing: a
+// well-formed envelope yields both the version it names and the decoded
+// signature bytes.
+func TestParseVaultSignatureEnvelope_ReturnsTheVersionAndSignature(t *testing.T) {
+	raw := make([]byte, 64)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+	version, sig, err := parseVaultSignatureEnvelope("vault:v3:" + base64.StdEncoding.EncodeToString(raw))
+	if err != nil {
+		t.Fatalf("parseVaultSignatureEnvelope: %v", err)
+	}
+	if version != 3 {
+		t.Errorf("version = %d, want 3", version)
+	}
+	if !bytes.Equal(sig, raw) {
+		t.Error("signature bytes differ from the encoded payload")
 	}
 }
 

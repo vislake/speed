@@ -42,42 +42,54 @@
 // # In-place Transit key rotation is not governed by this module's
 // # lifecycle state machine -- read this before choosing a direct-sign name
 //
-// WARNING, standing until the fix below lands: Vault-side rotation of a
-// Transit key is NOT governed by the pki module's key-lifecycle state
-// machine (pending -> active -> retiring -> retired). That state machine
-// exists precisely so rotation is coordinated -- a purpose's successor key
-// is staged as pending, promoted only after the propagation window, and
-// the retiring key stays verifiable during the overlap -- but it rotates
-// by creating NEW Transit key names (each generateKeyDirect call makes a
-// fresh "pki-<uuid>" key); it never rotates a Transit key in place. If an
-// operator rotates the Transit key behind a name this package manages
-// through Vault's own rotate endpoint instead (the one way the same name
-// can acquire a new version), that rotation enters and leaves the pki
-// module's protocol with nothing noticing: this package's signDirect pins
-// no key_version, so Vault signs with the key's NEW latest version the
-// moment the flip lands, while the public-key read this package performs
-// and the module's JWKS export serve the LATEST version too -- the two
-// agree at one moment and diverge across time. A verifier holding a JWKS
-// exported before the flip can no longer verify signatures made after it,
-// and a JWKS exported after it cannot verify signatures made before it;
-// there is no pending/retiring overlap window, no JWKS rotation
-// coordination, and no error anywhere. The envelope-mode names are not
-// exposed to this hazard: an envelope keyRef is a ciphertext the caller
-// holds, and rotating WrappingKeyName merely makes OLD ciphertexts
-// undecryptable (an encrypt/decrypt failure, loud and visible), never a
-// silent signature/verification divergence.
+// The pki module's key-lifecycle state machine (pending -> active ->
+// retiring -> retired) exists precisely so rotation is coordinated -- a
+// purpose's successor key is staged as pending, promoted only after the
+// propagation window, and the retiring key stays verifiable during the
+// overlap -- but it rotates by creating NEW Transit key names (each
+// generateKeyDirect call makes a fresh "pki-<uuid>" key); it never rotates
+// a Transit key in place. Vault's own rotate endpoint is the one way a
+// managed name can acquire a version other than the one this package
+// created it at, and an operator rotating through it bypasses the module's
+// state machine entirely. What this package does about that is the
+// key_version pin (landed with the sign-request pin; see
+// directSignPinnedKeyVersion in signer.go):
 //
-// The closure is planned in two tiers. Tier 1, the real fix: pin the
-// version in the signing request -- Vault Transit's sign endpoint accepts
-// key_version -- to the version the module issued and exported with, and
-// reconcile it with the lifecycle state; that is how an external in-place
-// rotation would enter this module's protocol instead of bypassing it.
-// Tier 2, what this round ships until tier 1 lands: the standing warning
-// on the signer.vault-direct registration (register.go), the
-// needed-but-not-connected accounting on decodeVaultSignature
-// (signer.go) -- which now parses and validates the version Vault's
-// "vault:v<N>:" envelope carries even though nothing can act on it yet,
-// so the field never reads like a decided irrelevance -- and this section.
+//   - Every direct-sign request pins the key to
+//     directSignPinnedKeyVersion -- the version a freshly created Transit
+//     key starts at, and therefore the version every keyRef this
+//     package's ModeDirectSign GenerateKey issues was created at: the
+//     version "the module issued and exported with". Vault's sign
+//     endpoint accepts the key_version parameter and defaults to the
+//     latest version without it, so an unpinned request would sign with
+//     whatever version an in-place rotation had made latest.
+//   - Public-key reads (readPublicKey, and with them every answer this
+//     package gives about a keyRef's public key) serve the same pinned
+//     version, never the key's latest_version.
+//   - A sign answer whose "vault:v<N>:" envelope names any version other
+//     than the pin is refused outright (signDirect's comparison after
+//     parseVaultSignatureEnvelope), so a rotation that actually changed
+//     which version signed -- or a Vault build that ignored the request's
+//     key_version parameter -- surfaces as a loud error, never as a
+//     signature no exported key verifies.
+//
+// The pin makes an in-place rotation unable to silently move either half
+// of the sign/verify pair: signatures stay on the created version, and so
+// does the advertised key, so they can never diverge across the flip. What
+// the pin deliberately does NOT do is adopt the rotated version: the new
+// version is inert until the host rotates through the module's own
+// lifecycle, which creates a new name per stage (and a new keyRef) the
+// ordinary way. The pin's behaviour is proven against stubbed clients only
+// -- this package has no real-Vault integration leg (go/pki/AGENTS.md's
+// Known limitations records why) -- so the interaction details of a real
+// Vault's rotation policy (min_decryption_version handling above all, the
+// one Vault-side setting that can make a pinned sign request itself be
+// refused) remain to be verified against a real server by a future
+// integration tier. The envelope-mode names are not exposed to this hazard
+// at all: an envelope keyRef is a ciphertext the caller holds, and
+// rotating WrappingKeyName merely makes OLD ciphertexts undecryptable (an
+// encrypt/decrypt failure, loud and visible), never a silent
+// signature/verification divergence.
 //
 // # No offline-runnable Example against a real Transit engine
 //

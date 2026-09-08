@@ -23,17 +23,24 @@ func init() {
 		Capabilities: 0,
 		New:          envelopeSignerFromConfig,
 	})
-	// WARNING, standing until the pin described in doc.go's "in-place
-	// Transit key rotation" section lands: this name governs the Transit
-	// key's LIFECYCLE only insofar as the pki module's own state machine
-	// does -- Vault-side rotation of a Transit key in place (Vault's own
-	// rotate endpoint) is NOT governed by that state machine (pending ->
-	// active -> retiring -> retired). Nothing here pins key_version on the
-	// sign request or reconciles versions with the module's lifecycle, so
-	// an in-place rotation silently diverges every later signature from the
-	// public key the module exports. A host choosing "signer.vault-direct"
-	// must read doc.go's section before relying on this name under any
-	// rotation regime other than the module's own create-new-key rotation.
+	// NOTE, current state of the pin doc.go's "in-place Transit key
+	// rotation" section describes: this name governs the Transit key's
+	// LIFECYCLE through the pki module's own state machine (pending ->
+	// active -> retiring -> retired), which rotates by creating NEW Transit
+	// key names and never rotates one in place. Since the key_version pin
+	// landed, an in-place rotation of the key through Vault's own rotate
+	// endpoint (the one way a managed name acquires a version other than
+	// the one this package created it at) can no longer silently change
+	// which version signs or which public key is served: sign requests pin
+	// key_version to the created version, public-key reads serve that same
+	// version, and a sign answer naming any other version is refused. What
+	// the pin does NOT do is make the in-place-rotated version usable:
+	// signatures and exports stay on the created version forever, and a
+	// host that wants a NEW key version live must rotate through the pki
+	// module's own lifecycle (a new name per stage). The pin's behaviour is
+	// proven against stubbed clients only -- no real-Vault integration leg
+	// exists (go/pki/AGENTS.md's Known limitations) -- so a host choosing
+	// "signer.vault-direct" should still read doc.go's section.
 	mustRegister(pkgcore.Registration[pki.Signer]{
 		Name:         "signer.vault-direct",
 		Capabilities: pkgcore.KeyNeverLeavesBoundary,

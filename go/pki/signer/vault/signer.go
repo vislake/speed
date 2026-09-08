@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -22,6 +21,24 @@ import (
 // defaultMountPath is Vault's own default Transit secrets engine mount
 // point, used when Config.MountPath is empty.
 const defaultMountPath = "transit"
+
+// directSignPinnedKeyVersion is the Transit key version this package pins
+// its direct-sign requests and public-key reads to: the version every keyRef
+// ModeDirectSign's GenerateKey issues was created at. Vault numbers a newly
+// created Transit key's first version 1 (its create response's
+// "latest_version"), and this package is the only creator of the keyRefs its
+// direct-sign mode ever receives -- generateKeyDirect always creates a fresh
+// "pki-<uuid>" name, and the pki module's rotation protocol never reuses a
+// name, creating a new one per lifecycle stage instead (doc.go's
+// "in-place Transit key rotation" section). Version 1 is therefore "the
+// version the module issued and exported with" for every key this package
+// manages, and pinning sign requests (Vault Transit's sign endpoint accepts
+// a key_version parameter and defaults to the latest version without one)
+// and public-key reads to it is what makes an in-place rotation of the
+// Transit key through Vault's own rotate endpoint -- the one way a managed
+// name can acquire a version other than 1 -- unable to change which version
+// signs or which public key this package answers, silently or otherwise.
+const directSignPinnedKeyVersion = 1
 
 // transitClient is the subset of *vaultapi.Logical this package calls,
 // declared as its own interface so unit tests can inject a scripted fake
@@ -179,9 +196,25 @@ func (s *signer) Sign(ctx context.Context, keyRef string, input []byte) ([]byte,
 // The private key never leaves Vault for this call -- it is a single API
 // round trip, exactly the direct-sign contract docs/internal/22-pki.md's
 // Signer section describes.
+//
+// The request pins the signing key to directSignPinnedKeyVersion -- the
+// version this package created the key at, which is the version the pki
+// module's lifecycle state machine issued and exported -- rather than
+// letting Vault default to the key's latest version. An operator who
+// rotates the Transit key in place through Vault's own rotate endpoint
+// therefore cannot silently move the signatures this keyRef produces onto
+// a version nobody exported: the pinned request keeps signing with the
+// issued version, the pinned public-key read (readPublicKey) keeps serving
+// that same version's key, and an envelope version that disagrees with the
+// pin (a Vault that ignored the parameter, or signed with another version
+// for any other reason) is refused below rather than returned as a
+// signature no exported key verifies. See directSignPinnedKeyVersion's own
+// doc comment and doc.go's "in-place Transit key rotation" section for the
+// full argument.
 func (s *signer) signDirect(ctx context.Context, keyRef string, input []byte) ([]byte, error) {
 	secret, err := s.logical.WriteWithContext(ctx, s.mountPath+"/sign/"+keyRef, map[string]interface{}{
-		"input": base64.StdEncoding.EncodeToString(input),
+		"input":       base64.StdEncoding.EncodeToString(input),
+		"key_version": strconv.Itoa(directSignPinnedKeyVersion),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pki/signer/vault: sign with %q: %w", keyRef, err)
@@ -193,7 +226,16 @@ func (s *signer) signDirect(ctx context.Context, keyRef string, input []byte) ([
 	if !ok {
 		return nil, fmt.Errorf("pki/signer/vault: sign response for %q has no \"signature\" field", keyRef)
 	}
-	return decodeVaultSignature(encoded)
+	version, sig, err := parseVaultSignatureEnvelope(encoded)
+	if err != nil {
+		return nil, err
+	}
+	if version != directSignPinnedKeyVersion {
+		return nil, fmt.Errorf(
+			"pki/signer/vault: sign with %q answered with key version %d; this signer pins version %d (an in-place Transit key rotation changed which version signs; rotate through the pki module's key lifecycle instead)",
+			keyRef, version, directSignPinnedKeyVersion)
+	}
+	return sig, nil
 }
 
 // signEnvelope decrypts keyRef back into a private key for the duration of
@@ -244,7 +286,19 @@ func (s *signer) Destroy(ctx context.Context, keyRef string) error {
 	return nil
 }
 
-// readPublicKey reads Transit key name's current public key.
+// readPublicKey reads Transit key name's public key at
+// directSignPinnedKeyVersion -- the version this package created the key
+// at, never the key's latest version. Serving the pinned version is the
+// public-key half of the pin signDirect applies to its signing requests:
+// after an in-place rotation of the Transit key through Vault's own rotate
+// endpoint, this read keeps answering the same public key the module
+// exported at issuance and the pinned signatures verify against, so the
+// exported key and the signatures can never diverge across the rotation
+// (see directSignPinnedKeyVersion's own doc comment and doc.go's
+// "in-place Transit key rotation" section). Vault keeps every version's
+// public-key entry in the keys map of a key's read response -- versions are
+// never dropped from it while the key exists -- so the pinned version's
+// entry is present for as long as this keyRef is valid at all.
 func (s *signer) readPublicKey(ctx context.Context, name string) (ed25519.PublicKey, error) {
 	secret, err := s.logical.ReadWithContext(ctx, s.mountPath+"/keys/"+name)
 	if err != nil {
@@ -253,7 +307,7 @@ func (s *signer) readPublicKey(ctx context.Context, name string) (ed25519.Public
 	if secret == nil {
 		return nil, pki.ErrKeyNotFound
 	}
-	pub, err := parseTransitPublicKey(secret.Data)
+	pub, err := parseTransitPublicKey(secret.Data, directSignPinnedKeyVersion)
 	if err != nil {
 		return nil, fmt.Errorf("pki/signer/vault: parse public key for %q: %w", name, err)
 	}
@@ -310,84 +364,78 @@ func (s *signer) decryptPrivateKey(ctx context.Context, keyRef string) (ed25519.
 	return edPriv, nil
 }
 
-// decodeVaultSignature strips Vault Transit's "vault:v<version>:" envelope
-// off a sign response's signature field and base64-decodes the remainder
-// into the raw signature bytes crypto/ed25519.Verify expects. The version
-// is parsed and validated (Vault's own "v<N>" spelling, N a positive
-// integer), and the decoded signature must be non-empty: an empty
-// signature is never success, the failure-semantics half of the Signer
-// seam contract go/pki/signer.go's Sign doc comment states, a contract
-// this implementation and the kmsaws twin (signer.go's signDirect there)
-// share.
+// parseVaultSignatureEnvelope strips Vault Transit's
+// "vault:v<version>:" envelope off a sign response's signature field,
+// returning the version it names and the base64-decoded raw signature
+// bytes crypto/ed25519.Verify expects. The version is parsed and validated
+// (Vault's own "v<N>" spelling, N a positive integer), and the decoded
+// signature must be non-empty: an empty signature is never success, the
+// failure-semantics half of the Signer seam contract go/pki/signer.go's
+// Sign doc comment states, a contract this implementation and the kmsaws
+// twin (signer.go's signDirect there) share.
 //
-// The version itself is deliberately NOT used beyond that validation, and
-// it is important to read that as an unfinished wiring, not a considered
-// decision: the version names WHICH generation of the Transit key produced
-// the signature, and nothing in this package can act on that yet. This
-// package's own sign request (signDirect above) pins no key_version, so
-// Vault signs with the key's latest version, and the public-key read this
-// package performs (readPublicKey/parseTransitPublicKey) -- like the pki
-// module's JWKS export -- serves the LATEST version. The two therefore
-// agree at one moment and diverge if someone rotates the Transit key in
-// place through Vault's own rotate endpoint, which bypasses the pki
-// module's key-lifecycle state machine (pending -> active -> retiring ->
-// retired) entirely and leaves nothing coordinating the flip -- doc.go's
-// "in-place Transit key rotation" section states the standing warning, and
-// the signer.vault-direct registration (register.go) carries it too.
-// Closing the gap is recorded there as a two-step plan: the sign request
-// must pin the version the module issued and exported with (Vault
-// Transit's sign endpoint accepts key_version) and reconcile it with the
-// lifecycle state, and until that pin lands the parse-and-validate here
-// keeps the field from reading like a decided irrelevance.
-func decodeVaultSignature(encoded string) ([]byte, error) {
+// The returned version is the pin's verification half: signDirect pins its
+// request to directSignPinnedKeyVersion, and this function's caller
+// compares the version Vault actually signed with against that pin,
+// refusing a signature produced by any other version. The version is
+// therefore no longer merely parsed-and-validated; it is the signal that
+// tells the caller an in-place Transit key rotation -- or a Vault that
+// ignored the request's key_version parameter -- changed which version
+// signs, so the divergence doc.go's "in-place Transit key rotation"
+// section warns about fails loudly instead of shipping a signature no
+// exported key verifies.
+func parseVaultSignatureEnvelope(encoded string) (version int, sig []byte, err error) {
 	parts := strings.SplitN(encoded, ":", 3)
 	if len(parts) != 3 || parts[0] != "vault" {
-		return nil, fmt.Errorf("pki/signer/vault: unexpected signature format %q", encoded)
+		return 0, nil, fmt.Errorf("pki/signer/vault: unexpected signature format %q", encoded)
 	}
 	// Vault's own envelope spells the version "v1", "v2", ... -- the "v"
 	// prefix is part of the field, not part of the value.
 	versionText := parts[1]
 	if len(versionText) < 2 || versionText[0] != 'v' {
-		return nil, fmt.Errorf("pki/signer/vault: unexpected signature version %q in %q", parts[1], encoded)
+		return 0, nil, fmt.Errorf("pki/signer/vault: unexpected signature version %q in %q", parts[1], encoded)
 	}
-	if version, err := strconv.Atoi(versionText[1:]); err != nil || version < 1 {
-		return nil, fmt.Errorf("pki/signer/vault: unexpected signature version %q in %q", parts[1], encoded)
+	version, err = strconv.Atoi(versionText[1:])
+	if err != nil || version < 1 {
+		return 0, nil, fmt.Errorf("pki/signer/vault: unexpected signature version %q in %q", parts[1], encoded)
 	}
-	sig, err := base64.StdEncoding.DecodeString(parts[2])
+	sig, err = base64.StdEncoding.DecodeString(parts[2])
 	if err != nil {
-		return nil, fmt.Errorf("pki/signer/vault: decode signature: %w", err)
+		return 0, nil, fmt.Errorf("pki/signer/vault: decode signature: %w", err)
 	}
 	if len(sig) == 0 {
-		return nil, fmt.Errorf("pki/signer/vault: signature in %q is empty", encoded)
+		return 0, nil, fmt.Errorf("pki/signer/vault: signature in %q is empty", encoded)
 	}
-	return sig, nil
+	return version, sig, nil
 }
 
-// parseTransitPublicKey extracts the latest version's public key from a
+// parseTransitPublicKey extracts version's public key from a
 // `GET transit/keys/<name>` response's Data. Vault's own JSON shape is
-// {"latest_version": <number>, "keys": {"<version>": {"public_key": "<base64>", ...}}}.
-func parseTransitPublicKey(data map[string]interface{}) (ed25519.PublicKey, error) {
+// {"latest_version": <number>, "keys": {"<version>": {"public_key": "<base64>", ...}}},
+// with every version's entry kept in the keys map for as long as the key
+// exists -- the pinned read below relies on that, and the lookup keys on
+// the pinned version rather than the response's own "latest_version" for
+// exactly the reason readPublicKey's doc comment gives: the version this
+// package created the key at is the only one it ever exports or signs
+// with, whatever the key's latest version has since become.
+func parseTransitPublicKey(data map[string]interface{}, version int) (ed25519.PublicKey, error) {
 	keys, ok := data["keys"].(map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("response has no \"keys\" field")
 	}
 
-	latest, err := latestVersionString(data["latest_version"])
-	if err != nil {
-		return nil, err
-	}
-
-	versionRaw, ok := keys[latest]
+	versionKey := strconv.Itoa(version)
+	versionRaw, ok := keys[versionKey]
 	if !ok {
-		return nil, fmt.Errorf("no key data for version %q", latest)
+		return nil, fmt.Errorf("no key data for version %q", versionKey)
 	}
 	versionData, ok := versionRaw.(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("unexpected key version shape for %q", latest)
+		return nil, fmt.Errorf("unexpected key version shape for %q", versionKey)
 	}
 	encoded, ok := versionData["public_key"].(string)
 	if !ok {
-		return nil, fmt.Errorf("no \"public_key\" field for version %q", latest)
+		return nil, fmt.Errorf("no \"public_key\" field for version %q", versionKey)
 	}
 
 	raw, err := base64.StdEncoding.DecodeString(encoded)
@@ -398,23 +446,6 @@ func parseTransitPublicKey(data map[string]interface{}) (ed25519.PublicKey, erro
 		return nil, fmt.Errorf("public key is %d bytes, want %d", len(raw), ed25519.PublicKeySize)
 	}
 	return ed25519.PublicKey(raw), nil
-}
-
-// latestVersionString normalizes Vault's "latest_version" field -- decoded
-// by encoding/json as a float64 in the ordinary case, but handled for
-// json.Number and string too so this does not silently misbehave if a
-// future client version or a test fixture decodes it differently.
-func latestVersionString(v interface{}) (string, error) {
-	switch value := v.(type) {
-	case float64:
-		return strconv.FormatFloat(value, 'f', -1, 64), nil
-	case json.Number:
-		return value.String(), nil
-	case string:
-		return value, nil
-	default:
-		return "", fmt.Errorf("unexpected type for \"latest_version\": %T", v)
-	}
 }
 
 // compile-time check that *signer satisfies pki.Signer.
