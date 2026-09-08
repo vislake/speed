@@ -110,27 +110,6 @@ func (r *Repository) findRoot(ctx context.Context) (*OrgNode, error) {
 	return &node, nil
 }
 
-// bySiblingName returns the child of parentID named name, or
-// ErrNodeNotFound when there is none. It is the pre-check behind
-// ErrDuplicateSiblingName; the database's UNIQUE(tenant_id, parent_id, name)
-// index is the backstop for the race this pre-check cannot close.
-func (r *Repository) bySiblingName(ctx context.Context, parentID, name string) (*OrgNode, error) {
-	var node OrgNode
-	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.
-			Where("parent_id = ?", parentID).
-			Where("name = ?", name).
-			First(&node).Error
-	})
-	switch {
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		return nil, ErrNodeNotFound
-	case err != nil:
-		return nil, ErrInternal.WithCause(err)
-	}
-	return &node, nil
-}
-
 // byIDs returns the nodes with the given ids, ordered by depth so an
 // ancestor chain comes back root-first. It is the ancestor query: the ids
 // come from splitting a node's own materialized path, so no recursion and no

@@ -364,35 +364,15 @@ func (r *MembershipRepository) removeIfNotLastActive(ctx context.Context, member
 	return nil
 }
 
-// anyInNodes reports whether any membership of the caller's tenant is bound
-// to one of nodeIDs. It reads at most one row: the question is "is anybody
-// there", not "how many". It opens its own transaction, which is exactly
-// what TreeService.Delete's own doc comment explains this package no longer
-// calls into directly -- see anyInNodesTx, TreeService's actual
-// nodeMemberGuard method, for why the check needs to run inside the SAME
-// transaction as the delete it guards rather than a separate one of its own.
-func (r *MembershipRepository) anyInNodes(ctx context.Context, nodeIDs []string) (bool, error) {
-	var found bool
-	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
-		var innerErr error
-		found, innerErr = r.anyInNodesTx(tx, nodeIDs)
-		return innerErr
-	})
-	if err != nil {
-		return false, ErrInternal.WithCause(err)
-	}
-	return found, nil
-}
-
-// anyInNodesTx is anyInNodes's transaction-bound twin, run against an
-// already-open transaction instead of opening its own. It is TreeService's
-// nodeMemberGuard: Delete locks the subtree first (touchLockByID, this
-// method's own transaction's first statement) and calls this INSIDE that
-// same transaction, right after the lock succeeds and before the bulk
-// mark-delete statement runs -- see tree.go's Delete doc comment for why a
-// separate, ctx-bound call (opening its own transaction, the shape
-// anyInNodes above still offers for its own direct callers) would leave the
-// exact TOCTOU window this round's fix closes.
+// anyInNodesTx reports whether any membership of the caller's tenant is
+// bound to one of nodeIDs, run against an already-open transaction instead
+// of opening its own. It reads at most one row: the question is "is anybody
+// there", not "how many". It is TreeService's nodeMemberGuard: the delete
+// locks the subtree first and calls this INSIDE that same transaction, right
+// after the lock succeeds and before the bulk mark-delete statement runs --
+// see tree.go's Delete doc comment for why a separate, ctx-bound call
+// opening its own transaction would leave the exact TOCTOU window the
+// concurrency-hardening round's fix closes.
 func (r *MembershipRepository) anyInNodesTx(tx *gorm.DB, nodeIDs []string) (bool, error) {
 	if len(nodeIDs) == 0 {
 		return false, nil

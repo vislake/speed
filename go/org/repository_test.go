@@ -212,43 +212,6 @@ func TestRepository_findRoot(t *testing.T) {
 	})
 }
 
-func TestRepository_bySiblingName(t *testing.T) {
-	repo := NewRepository(newTestDB(t))
-	ctx := tenantCtx("tenant-a")
-
-	seedNode(t, repo, ctx, OrgNode{ID: "r", Path: "/r/", Depth: 0, Name: "root"})
-	seedNode(t, repo, ctx, OrgNode{ID: "a", ParentID: "r", Path: "/r/a/", Depth: 1, Name: "North"})
-	seedNode(t, repo, ctx, OrgNode{ID: "b", ParentID: "a", Path: "/r/a/b/", Depth: 2, Name: "North"})
-
-	t.Run("finds a sibling by exact name", func(t *testing.T) {
-		node, err := repo.bySiblingName(ctx, "r", "North")
-		if err != nil {
-			t.Fatalf("bySiblingName: %v", err)
-		}
-		if node.ID != "a" {
-			t.Errorf("bySiblingName = %q, want a", node.ID)
-		}
-	})
-
-	t.Run("the same name under a different parent is a different node", func(t *testing.T) {
-		node, err := repo.bySiblingName(ctx, "a", "North")
-		if err != nil {
-			t.Fatalf("bySiblingName: %v", err)
-		}
-		if node.ID != "b" {
-			t.Errorf("bySiblingName = %q, want b", node.ID)
-		}
-	})
-
-	t.Run("an unused name reports node_not_found", func(t *testing.T) {
-		_, err := repo.bySiblingName(ctx, "r", "South")
-		if err == nil {
-			t.Fatal("bySiblingName for an unused name returned no error")
-		}
-		assertCode(t, err, ErrNodeNotFound.Code)
-	})
-}
-
 func TestRepository_byIDs(t *testing.T) {
 	repo := NewRepository(newTestDB(t))
 	ctxA := tenantCtx("tenant-a")

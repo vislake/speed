@@ -176,42 +176,6 @@ func TestMembershipRepository_activeSample(t *testing.T) {
 	}
 }
 
-func TestMembershipRepository_anyInNodes(t *testing.T) {
-	repo := NewMembershipRepository(newTestDB(t))
-	ctx := tenantCtx("tenant-a")
-	seedMembership(t, repo, ctx, Membership{ID: "m-1", UserID: "u-1", NodeID: "n-1", Status: MembershipStatusActive})
-
-	for _, tc := range []struct {
-		name  string
-		nodes []string
-		want  bool
-	}{
-		{"occupied node", []string{"n-1"}, true},
-		{"empty node", []string{"n-2"}, false},
-		{"one occupied among several", []string{"n-2", "n-1"}, true},
-		{"no nodes at all", nil, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := repo.anyInNodes(ctx, tc.nodes)
-			if err != nil {
-				t.Fatalf("anyInNodes: %v", err)
-			}
-			if got != tc.want {
-				t.Errorf("anyInNodes(%v) = %t, want %t", tc.nodes, got, tc.want)
-			}
-		})
-	}
-
-	// Another tenant's membership does not make a node look occupied.
-	got, err := repo.anyInNodes(tenantCtx("tenant-b"), []string{"n-1"})
-	if err != nil {
-		t.Fatalf("anyInNodes(other tenant): %v", err)
-	}
-	if got {
-		t.Error("anyInNodes saw another tenant's membership")
-	}
-}
-
 func TestMemberService_Add(t *testing.T) {
 	m, _ := newTestModule(t)
 	ctx := tenantCtx("tenant-a")
