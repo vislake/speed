@@ -17,6 +17,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 	"github.com/vislake/speed/go/pkgcore/apperr"
 	"github.com/vislake/speed/go/pkgcore/i18n"
+	"github.com/vislake/speed/go/ratelimit"
 	"github.com/vislake/speed/go/tenancy/tenancytest"
 
 	"gorm.io/gorm"
@@ -1577,4 +1578,69 @@ func TestContact_CodeSendFailure_CarriesOnlyTheBoundedClassification(t *testing.
 			_ = smsCodeAt(t, env.smsBuf, 0)
 		}
 	})
+}
+
+// scriptedLimiter is a minimal, in-test ratelimit.Limiter double whose
+// every Allow answers the same fixed Decision, so a test can drive
+// ContactService's rate-limit checks deterministically without waiting out
+// contactRateLimitDay/contactRateLimitWindow's real durations. The limiter
+// field it is injected through exists for exactly this (see
+// ContactService.limiter's own doc comment).
+type scriptedLimiter struct {
+	allowed    bool
+	resetAfter time.Duration
+}
+
+func (s scriptedLimiter) Allow(context.Context, string, ratelimit.Limit) (ratelimit.Decision, error) {
+	return ratelimit.Decision{Allowed: s.allowed, ResetAfter: s.resetAfter}, nil
+}
+
+// TestContact_ResendCode_SubSecondWindowTail_RetryAfterRoundsUp pins the
+// retry_after_seconds translation boundary at the shared denial site both
+// dimensions funnel through (checkLimits): a denial whose window still has
+// a sub-second remainder -- the NORMAL tail of every exhausted window --
+// must carry 1, never the 0 a truncating int(Seconds()) conversion emits
+// (Retry-After: 0 means "retry immediately", inviting an immediate retry
+// against a window that has not reset). A negative remainder (a degenerate
+// canned decision; the real limiter's ResetAfter is always inside (0, Per])
+// must carry 0, never a negative whole-second count.
+func TestContact_ResendCode_SubSecondWindowTail_RetryAfterRoundsUp(t *testing.T) {
+	env := newContactEnv(t)
+	ctx := tenantCtx("tenant-acme")
+	const address = "window-tail@example.com"
+
+	contact, err := env.svc.CreateContact(ctx, ContactCreateInput{Channel: ChannelEmail, Address: address})
+	if err != nil {
+		t.Fatalf("CreateContact: %v", err)
+	}
+
+	env.svc.limiter = scriptedLimiter{allowed: false, resetAfter: 900 * time.Millisecond}
+	if err := env.svc.ResendCode(ctx, ResendCodeInput{ContactID: contact.ID}); err == nil {
+		t.Fatal("ResendCode succeeded against a denying limiter, want the rate-limit denial")
+	} else {
+		assertRetryAfterSecondsValue(t, err, 1)
+	}
+
+	env.svc.limiter = scriptedLimiter{allowed: false, resetAfter: -3 * time.Second}
+	if err := env.svc.ResendCode(ctx, ResendCodeInput{ContactID: contact.ID}); err == nil {
+		t.Fatal("ResendCode succeeded against a denying limiter, want the rate-limit denial")
+	} else {
+		assertRetryAfterSecondsValue(t, err, 0)
+	}
+}
+
+// assertRetryAfterSecondsValue fails t unless err is the module's
+// contact_rate_limited denial carrying the given retry_after_seconds value.
+func assertRetryAfterSecondsValue(t *testing.T, err error, want int) {
+	t.Helper()
+	appErr, ok := apperr.As(err)
+	if !ok {
+		t.Fatalf("error %v is not an *apperr.Error, want the contact_rate_limited denial", err)
+	}
+	if appErr.Code != ErrContactRateLimited.Code {
+		t.Fatalf("error code = %s, want %s", appErr.Code, ErrContactRateLimited.Code)
+	}
+	if got := appErr.Params["retry_after_seconds"]; got != want {
+		t.Errorf("retry_after_seconds param = %v, want %d", got, want)
+	}
 }

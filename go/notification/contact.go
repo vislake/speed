@@ -337,6 +337,11 @@ type ContactService struct {
 	host         contactHost
 	audit        pkgcore.AuditActionRegistrar
 	now          func() time.Time
+
+	// limiter counts the two rate-limit dimensions. Nil means "build one
+	// from the host's KVStore on use", which is what production does;
+	// tests inject their own to drive a denial deterministically.
+	limiter ratelimit.Limiter
 }
 
 // contactHost is the structural subset of pkgcore.Registry this service
@@ -1200,17 +1205,21 @@ func tenantIDString(ctx context.Context) string {
 }
 
 // checkLimits runs one two-dimensional budget: every dimension must allow
-// the attempt, and the limiter is built lazily from the host's KV store at
-// call time (the org pattern), so a nil store -- a host that never attached
-// one -- fails the call closed with ErrInternal rather than allowing it. A
-// denial answers ErrContactRateLimited with the dimension's name and the
+// the attempt, and the limiter is the test-injected override when one is
+// set, otherwise built lazily from the host's KV store at call time (the
+// org pattern), so a nil store -- a host that never attached one -- fails
+// the call closed with ErrInternal rather than allowing it. A denial
+// answers ErrContactRateLimited with the dimension's name and the
 // retry-after seconds; a limiter that itself errors answers ErrInternal --
 // fail closed, never allow-on-error.
 func (s *ContactService) checkLimits(ctx context.Context, limits []contactRateLimit) error {
-	if s.host.KVStore() == nil {
-		return errInternal(errors.New("notification: contact rate limiting called with no KV store"))
+	limiter := s.limiter
+	if limiter == nil {
+		if s.host.KVStore() == nil {
+			return errInternal(errors.New("notification: contact rate limiting called with no KV store"))
+		}
+		limiter = ratelimit.New(s.host.KVStore())
 	}
-	limiter := ratelimit.New(s.host.KVStore())
 	for _, l := range limits {
 		decision, err := limiter.Allow(ctx, l.key, ratelimit.Limit{Rate: l.rate, Per: l.per})
 		if err != nil {
@@ -1218,7 +1227,7 @@ func (s *ContactService) checkLimits(ctx context.Context, limits []contactRateLi
 		}
 		if !decision.Allowed {
 			return ErrContactRateLimited.WithParam("dimension", l.name).
-				WithParam("retry_after_seconds", int(decision.ResetAfter.Seconds()))
+				WithParam("retry_after_seconds", ratelimit.RetryAfterSeconds(decision.ResetAfter))
 		}
 	}
 	return nil
