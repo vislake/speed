@@ -102,9 +102,40 @@ docs/upgrade/v1-to-v2.md
 3. **No generic messages.** "fix bug", "update code", "misc" are rejected.
 4. **Breaking changes** get `BREAKING CHANGE:` in the footer and a `!` after the scope.
    This repository ships libraries consumed via `go get` / `npm install`, so **any change to an exported signature is breaking**, even when the internal behaviour is unchanged.
-5. **Lockstep versioning.** Never tag a single module by hand. Releases tag every module with the same version through the release pipeline — see `docs/internal/02-repo-and-release.md`.
+5. **Lockstep versioning.** Never tag a single module by hand. Releases tag every module with the same version through the release pipeline.
 6. **API changes commit the spec and the implementation together.** Editing `api/openapi.yaml` means committing the regenerated backend interface and frontend sdk in the same commit; CI regenerates and diffs. Use the `api` type.
 7. **New user-facing text is bilingual in the same commit** — zh-CN and en-US both, CI checks the key sets match.
 8. **Every bug fix carries a test that reproduces the bug** (failing before the fix, passing after). If a test genuinely cannot be added, say so in the body with the reason and the follow-up plan.
 9. **Rebase before merging; fast-forward merges only.** Branch protection on `main` rejects merge commits, keeping history linear.
 10. **Test helper directories are not scopes.** When touching `testutil` or `testdata`, use the domain scope they serve, e.g. `test(billing): ...`.
+
+## Content constraints
+
+The subject and body say why this change was needed and what it decides — for the person who will dig through `git log` later. They do not narrate the process that produced the change.
+
+1. **No internal process references anywhere** — subject, body or footer. No finding IDs (`P3-…`, "reviewer finding …"), no round names ("the X round"), no internal doc-filename citations as authority. The footer's reference genre (`Closes #…`) is for durable external identifiers such as public issue numbers only.
+2. **The body is a concluding why**: the problem, the decision and its cost. No module biography, no process history (review rounds, verification states, follow-up markers). One sentence of "before this change" context is fine.
+3. **Numbers that describe this diff** ("from four to six") are fine — they are checkable against the diff. Numbers describing the current state outside this diff ("N modules now …") are not.
+4. These constraints bind future commits only — history already on `main` is never rewritten.
+
+Good body (concluding why):
+
+```
+fix(integration): refuse a negative Rate on a layered limit
+
+Rate 0 means a disabled layer; a negative Rate is a value gone wrong, and
+the previous check silently folded it into the disabled case, removing a
+layer's throttle with no error anywhere. Allow now refuses a negative
+Rate up front with an error naming the layer.
+```
+
+Bad body (process narration and artifacts):
+
+```
+fix(integration): address reviewer finding P3-ratelimit-C
+
+The verify round flagged that the disabled-layer check used <= 0 (the
+P3 finding, from the rate-limit-hardening round's review), and after a
+NEEDS_FOLLOWUP discussion the impl decided to refuse negatives up front,
+closing the finding per the agreed disposition in the review ledger.
+```

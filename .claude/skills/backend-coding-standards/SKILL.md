@@ -30,14 +30,14 @@ This is the single authoritative standard for the Go side. Design rationale live
 
 ## 1. Module Boundaries
 
-Independent Go modules, each with its own `go.mod`, developed together through `go.work`. The dependency graph lives in `docs/internal/01-architecture.md` and **only flows bottom-up**.
+Independent Go modules, each with its own `go.mod`, developed together through `go.work`. The dependency graph **only flows bottom-up**.
 
 **Required:**
 - Module path is `github.com/<org>/speed/go/<module>`.
 - **Package name derives from the directory by stripping hyphens**, since `-` is not a legal character in a Go identifier: `ai-gateway` → package `aigateway`. (A subpackage takes its own directory name: `go/billing/gateway` is package `gateway`.) Lowercase, no separator — do not substitute an underscore or camelCase. Every module generator (including the future `task new:module`) must apply this rule consistently rather than leaving it to individual judgement.
 - Every module carries: `api/openapi.yaml`, `migrations/{postgres,sqlite}/`, `locales/{zh-CN,en-US}.toml`, `docs/`, `AGENTS.md`.
 - Public API stays in the module root package; implementation details go under `internal/` so consumers cannot import them.
-- Create new modules with the scaffolder, `python3 tools/new_module.py` — the planned `task new:module` Taskfile wrapper will call it once wired (see `docs/internal/19-dev-workflow.md`). The script scaffolds the canonical stub and prints a registration checklist — the go.work `use` entry, the CI matrix row, the lockstep release list — the entries hand-rolling a module always misses; it never edits those shared files itself.
+- Create new modules with the scaffolder, `python3 tools/new_module.py` — the planned `task new:module` Taskfile wrapper will call it once wired. The script scaffolds the canonical stub and prints a registration checklist — the go.work `use` entry, the CI matrix row, the lockstep release list — the entries hand-rolling a module always misses; it never edits those shared files itself.
 
 **Prohibited:**
 - **DO NOT** let `rbac` depend on `authn`. Authorization only knows `Subject{TenantID, UserID}`; whoever authenticates assembles the Subject and calls authorization.
@@ -100,7 +100,7 @@ db.Raw("SELECT ...").Scan(&subs)           // same
 
 ### 3.3 Data domains
 
-Before creating a table, decide which domain it belongs to (see `docs/internal/04-data-and-tenancy.md`):
+Before creating a table, decide which domain it belongs to:
 
 | Domain | `TenantScoped`? | Test suite |
 |---|---|---|
@@ -277,7 +277,7 @@ log.Info("subscription activated",
 - Log levels: `Debug` for developer detail (off in production), `Info` for state changes worth auditing operationally, `Warn` for recovered anomalies, `Error` for failures needing human attention. **DO NOT** log an error and also return it — pick one, otherwise every failure appears three times up the stack.
 - **DO NOT** log plaintext PII, secrets, tokens or full prompts. Redaction is on by default; do not defeat it.
 - **DO NOT** use `tenant_id` as a Prometheus metric label — high cardinality will take Prometheus down. It belongs in span attributes and log fields.
-- Every module must emit the key metrics listed in `docs/internal/09-observability.md`.
+- Every module must emit the key metrics of its domain: HTTP surfaces emit request volume, latency percentiles and error rates; queues emit backlog depth, execution duration, failure and dead-letter counts; metering emits ingest rate and outbox backlog; delivery channels emit per-channel success, latency and bounce rates; payment and provider-facing code emits callback and call success rates. All metric labels are low cardinality (never `tenant_id`).
 
 ## 12. Internationalization
 
@@ -323,7 +323,8 @@ This is a hard convention, not a preference, because it is what makes `go test .
 - **DO NOT** use `any` / `interface{}` when a concrete type exists.
 - `context.Context` is always the first parameter. **DO NOT** store it in a struct field.
 - Exported types and functions need doc comments **in English**, starting with the identifier name.
-- All code comments are **English** — see the language rule in `docs/internal/13-documentation-standards.md`.
+- All code comments are **English**.
+- Comments describe the code's **current state only**: no history or change records, no implementation-round or finding references, no internal doc-filename citations as authority, no TODO or future promises, no restating what the code says, no counts that go stale as the code evolves. External normative references (RFC, Go spec, W3C) and cross-references to code itself (a function's own doc comment, the test pinning an invariant) are allowed.
 - Format with `gofumpt`; lint with `golangci-lint` using the repository-root config (no per-module overrides).
 
 ## 15. Pre-Commit Checklist

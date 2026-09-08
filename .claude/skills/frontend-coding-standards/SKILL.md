@@ -22,7 +22,7 @@ globs:
 
 # speed Frontend Coding Standards
 
-This is the single authoritative standard for the frontend. Design rationale lives in `docs/internal/12-frontend.md` (Chinese, internal design discussion); the discipline list lives in the root `CLAUDE.md`. **This document tells you how to write the code.**
+This is the single authoritative standard for the frontend. Design rationale lives in the repository's internal design documents (Chinese, internal design discussion); the discipline list lives in the root `CLAUDE.md`. **This document tells you how to write the code.**
 
 **The premise that overrides everything else**: these packages are installed into business projects via `npm install` — they are not an application. A component's props are public API, and changing a required prop breaks every delivered project. Every dependency bundled here ends up in someone else's build output.
 
@@ -30,7 +30,7 @@ This is the single authoritative standard for the frontend. Design rationale liv
 
 ## 1. Package Boundaries and Layering
 
-Independent npm packages, each with its own `package.json`, developed together through the `web/` workspace. The dependency graph lives in `docs/internal/12-frontend.md` and **only flows bottom-up**:
+Independent npm packages, each with its own `package.json`, developed together through the `web/` workspace. The dependency graph **only flows bottom-up**:
 
 ```
 tokens / i18n -> ui-kit -> (auth|billing|notification)-core -> *-ui -> layout-kit -> shells
@@ -66,7 +66,7 @@ const myRequest = (url) => fetch(...)     // a homegrown wrapper is equally wron
 - **DO NOT** hand-write any backend call. `fetch` / `axios` are permitted only inside `@speed/api-client`, enforced by an ESLint rule.
 - **DO NOT** hand-write endpoint paths or response types — they come from `api/openapi.yaml` through `task api:gen`.
 - **DO NOT** edit any file in `@speed/api-sdk` — it is generated and overwritten wholesale on every release.
-- When an endpoint does not fit your need, change the spec, not the frontend. The sequence is in `docs/internal/21-api-contract.md`.
+- When an endpoint does not fit your need, change the spec, not the frontend. The order is fixed: edit the spec first, regenerate, fix whatever the regenerated interfaces break, then consume — never the reverse.
 
 **Exceptions** (not expressible in OpenAPI, and each must be confined to exactly one place): the in-app-message SSE connection lives in `notification-core`; uploads need no exception — they are server-relayed through spec-described endpoints (`go/storage/api/openapi.yaml`), and ui-kit's `FileUploader` renders the queue the host owns as `rows` props while the upload transport — an api-sdk storage operation once the merged document gains the storage fragment (deferred alongside org's, `go/storage/AGENTS.md`) — is the host's own code.
 
@@ -216,7 +216,9 @@ console.log('checkout failed for plan ' + planId);
 
 ## 13. Language
 
-All code comments, TSDoc, package `README`s and Storybook descriptions are written in **English**. Only `docs/internal/` is in Chinese. See the language rule in `docs/internal/13-documentation-standards.md`.
+All code comments, TSDoc, package `README`s and Storybook descriptions are written in **English**. Only `docs/internal/` is in Chinese.
+
+Comments and TSDoc describe the code's **current state only**: no history or change records, no implementation-round or finding references, no internal doc-filename citations as authority, no TODO or future promises, no restating what the code says, no counts that go stale as the code evolves. External normative references (RFC, W3C, language specs) and cross-references to code itself are allowed.
 
 ## 14. Pre-Commit Checklist
 
