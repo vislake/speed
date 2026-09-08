@@ -54,10 +54,10 @@ class CheckFixturesTests(unittest.TestCase):
             shutil.rmtree(repo_root)
 
     def test_inline_codes_missing_from_the_index_are_reported(self):
-        # The round's core fixture: inline constructions -- a panic, a
-        # chained return, a struct literal -- exist in the tree while the
-        # index has no rows for them. Fails as a finding set on any index
-        # that predates their coverage.
+        # Core fixture: inline constructions -- a panic, a chained return,
+        # a struct literal -- exist in the tree while the index has no
+        # rows for them; an index lacking those rows must fail as a
+        # finding set.
         files = {
             "jobs/queue.go": (
                 "package jobs\n\n"

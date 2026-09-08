@@ -12,8 +12,8 @@ refresh for free -- an expired-token 401 on any request runs one refresh,
 and the retried request carries the fresh token.
 
 No UI and no storage writes. The access token lives in the
-caller-supplied store (in memory by design -- see the access-token rules
-in the workspace standards); the refresh token lives only inside the
+caller-supplied store (in memory by design -- no storage API exists
+here; see Known limitations); the refresh token lives only inside the
 session closure and is never written anywhere; there is no `restore`
 (see Known limitations). React hooks (`useAuthState`,
 `useCurrentTenant`, `usePermission`) read one session the host attaches
@@ -229,8 +229,7 @@ under.
   anonymous. The authn API returns the refresh token in the login
   response body and sets no refresh cookie, so nothing outside the
   session closure outlives the page -- a reload cannot re-establish
-  the session, and the user signs in again. A persistence/restore
-  layer is planned for a later round, layered on top of this API.
+  the session, and the user signs in again.
 - **The refresh token is JavaScript-visible in memory.** The authn API
   sets no refresh cookie to hide it in, so the session must hold the
   token its refresh endpoint takes in the request body. The access

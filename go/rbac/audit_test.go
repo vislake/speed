@@ -13,14 +13,11 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// This file pins the audit side of this round (P1-rbac-audit): the four
+// This file pins the audit side of role management: the four
 // role-management write paths emit an audit row through go/dbkit/audit's
 // declarative Emit mechanism, the rows carry a real Actor (and the
 // dual-identity shape when the context carries one), and the module's
 // declared audit vocabulary and its emission sites cannot drift apart.
-// Before the fix every test in this file failed: the three audit actions
-// were registered and never emitted, so no EventRecorded ever reached the
-// bus and the register-vs-emit reconciliation had nothing to reconcile.
 
 // recordAuditEvents subscribes an eventRecorder to every EventRecorded the
 // module's audit emissions publish. The in-memory bus delivers
@@ -46,8 +43,8 @@ func recordedAuditRows(rec *eventRecorder) []audit.RecordedEvent {
 	return rows
 }
 
-// operatorCtx is the context shape go/admin's D8 console hands every
-// role-management write: a rbac.Subject naming the operating staff member
+// operatorCtx is the context shape of an administrative role-management
+// write: a rbac.Subject in SystemDomain naming the operating staff member
 // on the context, plus the managed tenant's own tenant context. rbac's
 // audit emission derives the row's Actor from that Subject (audit.go).
 func operatorCtx(operatorID string, tenant pkgcore.TenantID) context.Context {
@@ -84,9 +81,8 @@ func assertSingleAuditRow(t *testing.T, rec *eventRecorder, action, tenant, role
 }
 
 func TestService_AssignRole_EmitsAnAuditedRowWithTheActingOperator(t *testing.T) {
-	// P1-rbac-audit's core regression: an AssignRole through the service
-	// produces an audit row with a non-empty actor. Before the fix no row
-	// existed at all -- the action was registered, never emitted.
+	// An AssignRole through the service produces an audit row with a
+	// non-empty actor naming the operator.
 	svc, reg := newTestServiceWithRegistry(t)
 
 	ctx := tenantCtx("tenant-a")
@@ -140,8 +136,8 @@ func TestService_AssignRole_EmitsForTenantSubjectsAsUserActors(t *testing.T) {
 }
 
 func TestService_RevokeRole_EmitsAnAuditedRowWithTheActingOperator(t *testing.T) {
-	// P1-rbac-audit's regression for the revoke leg: a RevokeRole through
-	// the service produces an audit row with a non-empty actor.
+	// A RevokeRole through the service produces an audit row with a
+	// non-empty actor naming the operator.
 	svc, reg := newTestServiceWithRegistry(t)
 
 	ctx := tenantCtx("tenant-a")
@@ -168,7 +164,7 @@ func TestService_RevokeRole_EmitsAnAuditedRowWithTheActingOperator(t *testing.T)
 }
 
 func TestService_RestoreRole_EmitsAnAuditedRowForTheRestoredGrant(t *testing.T) {
-	// P1-rbac-audit's regression for the restore leg. RestoreRole makes a
+	// RestoreRole makes a
 	// grant exist again -- AssignRole's own semantics -- so its row records
 	// under the assign action (the vocabulary has no restore verb), naming
 	// the role and the grantee tuple.
@@ -198,7 +194,7 @@ func TestService_RestoreRole_EmitsAnAuditedRowForTheRestoredGrant(t *testing.T) 
 }
 
 func TestService_DefineRole_EmitsAnAuditedRow(t *testing.T) {
-	// The role-definition leg of the same regression: a role created
+	// A role created
 	// through DefineRole -- or through the built-in seeding that runs
 	// through the same defineRole -- records rbac.role.define.
 	svc, reg := newTestServiceWithRegistry(t)
@@ -224,15 +220,14 @@ func TestService_DefineRole_EmitsAnAuditedRow(t *testing.T) {
 }
 
 func TestService_RoleWrite_RecordsTheContextActorWithOnBehalfOfUnchanged(t *testing.T) {
-	// The impersonation hard rule (root CLAUDE.md: audit records produced
-	// during impersonation must carry both the impersonated user as Actor
-	// and the real administrator as OnBehalfOf): a role write whose context
+	// The impersonation hard rule: audit records produced during
+	// impersonation must carry both the impersonated user as Actor
+	// and the real administrator as OnBehalfOf. A role write whose context
 	// an impersonation middleware already populated -- go/admin's
 	// ImpersonationMiddleware layers WithActor(target) and
 	// WithOnBehalfOf(admin) -- must land both identities on the row, with
 	// rbac's own subject-derivation never overwriting the middleware's
-	// Actor. Before the fix no row existed for the impersonation-era grant
-	// at all.
+	// Actor.
 	svc, reg := newTestServiceWithRegistry(t)
 
 	ctx := tenantCtx("tenant-a")
@@ -304,11 +299,10 @@ func TestService_NoopWrites_EmitNoAuditRow(t *testing.T) {
 }
 
 // TestAuditActions_DeclaredAndEmittedSetsAgree is the register-vs-emit
-// reconciliation P1-rbac-audit demands: a declared-but-never-emitted audit
+// reconciliation: a declared-but-never-emitted audit
 // action is a mechanically checkable state, and this test checks it
 // mechanically -- in both directions -- over this module's own non-test
-// source, rather than relying on a reviewer to notice the vocabulary
-// drifting from the emission sites.
+// source.
 //
 // The check parses every non-test .go file of this package and:
 //
@@ -323,12 +317,12 @@ func TestService_NoopWrites_EmitNoAuditRow(t *testing.T) {
 //
 // The second direction is doubly enforced -- audit.Emit itself refuses an
 // unregistered action with ErrActionNotRegistered at every call -- but the
-// test pins it statically too, so a typo in a future site fails in this
+// test pins it statically too, so a typo in any new site fails in this
 // module's own suite before any host runs it. The check is deliberately
 // source-shape-bound (an Input literal sitting directly in an emitAudit
-// call, the shape every site in this module has today); a future site that
-// builds its Input through a variable would need this test extended, which
-// the test's own failure would announce loudly.
+// call, the shape every site in this module has); an emit site that
+// builds its Input through a variable is invisible to this walk and must
+// extend the test when it lands.
 func TestAuditActions_DeclaredAndEmittedSetsAgree(t *testing.T) {
 	moduleDir, err := os.Getwd()
 	if err != nil {

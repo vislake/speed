@@ -13,8 +13,8 @@
 -- email_index is the HMAC-SHA256 blind index of the normalized address
 -- (dbkit.NewBlindIndexer over dbkit.NormalizeEmail), and it is the ONLY way
 -- this table can be searched by address: an encrypted column cannot be
--- queried, which is the trap the root CLAUDE.md warns about by name. It is a
--- keyed digest, safe to index and safe to log; the address is neither.
+-- queried, so the blind index carries that lookup. It is a keyed digest,
+-- safe to index and safe to log; the address is neither.
 --
 -- token_hash is the hex SHA-256 of the invitation token. THE TOKEN ITSELF IS
 -- NEVER STORED: it is handed to the caller once and lives only in the message

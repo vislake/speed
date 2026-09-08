@@ -406,8 +406,8 @@ func (c *countingKeySource) EnsurePurpose(ctx context.Context, purpose, algorith
 
 var _ KeySource = (*countingKeySource)(nil)
 
-// TestSigner_EnsurePurposeFailureIsRetriedAfterTheRetryWindow is the P1-16
-// regression: Signer.Issue is a lazy, first-request bootstrap, so a
+// TestSigner_EnsurePurposeFailureIsRetriedAfterTheRetryWindow pins the
+// retry shape: Signer.Issue is a lazy, first-request bootstrap, so a
 // KeySource that fails the very first EnsurePurpose -- a key-lifecycle
 // store that is still starting up -- must not disable token issuance for
 // the process's whole lifetime. The failure stays loud while it is recent,
@@ -463,14 +463,15 @@ func TestSigner_EnsurePurposeFailureIsRetriedAfterTheRetryWindow(t *testing.T) {
 	}
 }
 
-// TestVerify_VerificationKeysFailureIsACannotAnswerNotARejectedToken is the
-// P2-17 regression: when the verification keys themselves cannot be loaded,
-// Verify must answer the cannot-answer internal error -- the same
-// classification ErrRevocationCheckFailed carries -- never authn.token_invalid.
-// A 401 is the client's refresh signal, and a pki/store hiccup masquerading
-// as one would sign sessions out over an infrastructure failure (the
-// refresh it triggers eventually fails and the session ends); a 500 keeps
-// the session where it is until the keys answer again.
+// TestVerify_VerificationKeysFailureIsACannotAnswerNotARejectedToken pins
+// the cannot-answer classification: when the verification keys themselves
+// cannot be loaded, Verify must answer the cannot-answer internal error --
+// the same classification ErrRevocationCheckFailed carries -- never
+// authn.token_invalid. A 401 is the client's refresh signal, and a
+// pki/store hiccup masquerading as one would sign sessions out over an
+// infrastructure failure (the refresh it triggers eventually fails and the
+// session ends); a 500 keeps the session where it is until the keys answer
+// again.
 func TestVerify_VerificationKeysFailureIsACannotAnswerNotARejectedToken(t *testing.T) {
 	t.Parallel()
 

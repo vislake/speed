@@ -205,10 +205,9 @@ func TestRateGuard_CheckSMSSend_EachDimensionLimitsIndependently(t *testing.T) {
 
 // TestRateGuard_CheckSMSVerifyWrongGuess_TargetDimensionSaturates mirrors
 // TestRateGuard_CheckSMSSend_EachDimensionLimitsIndependently for the
-// code-verify endpoint's per-target wrong-guess dimension -- the two guard
-// methods (CheckSMSVerifyWrongGuess, CheckSMSVerifyIP below) replaced the
-// single CheckSMSVerify this test used to exercise; see ratelimit.go's own
-// doc comments for why they were split.
+// code-verify endpoint's per-target wrong-guess dimension. The code-verify
+// surface is two guard methods (CheckSMSVerifyWrongGuess, CheckSMSVerifyIP
+// below); see ratelimit.go's own doc comments for why they are split.
 func TestRateGuard_CheckSMSVerifyWrongGuess_TargetDimensionSaturates(t *testing.T) {
 	t.Parallel()
 
@@ -348,12 +347,13 @@ func TestLoginLockoutDelay_DoublesPerFailureThenSaturates(t *testing.T) {
 	}
 }
 
-// TestRateGuard_RecordLoginFailure_ConcurrentFailures_NoneLost is the
-// regression for the audit finding that RecordLoginFailure was a
-// non-atomic read-modify-write over one JSON state value: five concurrent
-// failures measured landing as two, and since the progressive delay doubles
-// per recorded failure, the lost ones are exactly what keeps the lockout
-// from escalating under a burst. The recording must be built from the
+// TestRateGuard_RecordLoginFailure_ConcurrentFailures_NoneLost pins the
+// recording shape: RecordLoginFailure must not be a non-atomic
+// read-modify-write over one JSON state value, where concurrent failures
+// can land as fewer than were recorded (a burst of five concurrent
+// failures once measured landing as two) -- since the progressive delay
+// doubles per recorded failure, the lost ones are exactly what keeps the
+// lockout from escalating under a burst. The recording is built from the
 // KVStore's atomic primitives, so N concurrent failures against one account
 // end with a failure count of exactly N and a lockout deadline that has
 // converged on the burst.

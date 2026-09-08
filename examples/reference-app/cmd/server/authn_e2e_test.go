@@ -1,6 +1,6 @@
 package main
 
-// authn_e2e_test.go is this round's M1 exit condition: it drives the
+// authn_e2e_test.go drives the
 // reference app's real, composed HTTP server (buildServer's actual output,
 // exactly like server_test.go and public_config_test.go do) through all
 // three sign-in entry points authn ships -- password, social (against a
@@ -12,12 +12,11 @@ package main
 // one device, and prove that device's refresh token now fails while
 // another device's still works. The revoke leg also proves the immediate
 // half: the revoked device's own unexpired access token is refused on its
-// very next request (this app runs in immediate revocation mode), the P1
-// regression that closes here.
+// very next request (this app runs in immediate revocation mode), the
+// property the revoke leg exists to prove.
 //
-// A second test below is the regression proof that closes the reference-app
-// wiring gap the authn channel-flag round recorded (go/authn/AGENTS.md's
-// "one known wiring gap"): buildServer passes authn.WithFeatureGate the
+// A second test below is the regression proof for the wiring gap:
+// buildServer passes authn.WithFeatureGate the
 // same lazy *config.Service adapter org's gate uses, so the module's eight
 // declared flags are enforced in THIS app, not just inside go/authn. The
 // test disables authn.password_login through the real config surface and
@@ -27,15 +26,14 @@ package main
 // Every one of the three channels authenticates the SAME demo account
 // (registered once, with both an email and a phone number), which is what
 // lets the social step exercise the auto-link rule
-// (go/authn/identity.go's resolveSocialAccount) rather than the still-
-// deferred brand-new-JIT-account path (go/authn/AGENTS.md's Known
-// limitations: a brand-new account from an unmatched external identity
-// cannot start a session until something grants it tenant membership,
-// which this app's sign-in membership store never does automatically --
-// org rows and explicit grants are the only memberships there are, see
-// sign_in_memberships.go's own doc comment). Registering first and
-// granting membership by hand sidesteps exactly that limitation, honestly,
-// rather than working around it.
+// (go/authn/identity.go's resolveSocialAccount) rather than the
+// brand-new-JIT-account path: a brand-new account from an unmatched
+// external identity cannot start a session until something grants it
+// tenant membership,
+// and this app's sign-in membership store never does that automatically --
+// org rows and explicit grants are the only memberships there are
+// (sign_in_memberships.go's own doc comment). Registering first and
+// granting membership by hand sidesteps exactly that limitation.
 
 import (
 	"bytes"
@@ -251,8 +249,8 @@ type tokenPairResponse struct {
 // this matches the digits alone rather than the sentence around them.
 var smsCodePattern = regexp.MustCompile(`\b(\d{6})\b`)
 
-// TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement is this round's
-// M1 exit condition in full: password, social and phone+SMS sign-in each
+// TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement is the
+// the full sign-in surface: password, social and phone+SMS sign-in each
 // produce a working session against the real composed server, and the
 // self-service session surface (list, history, revoke) behaves correctly
 // across them.
@@ -447,10 +445,11 @@ func TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement(t *testing.T) {
 	// authn.WithRevocationMode(authn.RevocationModeImmediate)), and the
 	// session manager is the revocation source Middleware consults by
 	// default, so an unexpired token issued moments ago must stop working
-	// at the revoke. This is the P1 regression: before the fix no
-	// revocation checker was wired anywhere in the composed app -- the
-	// authn.Middleware call carried no WithRevocationChecker -- so the
-	// check never ran and this request succeeded.
+	// at the revoke. The assertion exists because the composed app wires
+	// no WithRevocationChecker of its own -- the session manager is the
+	// revocation source authn.Middleware consults by default -- so this
+	// request must fail through that default, not through a host-side
+	// addition.
 	var revokedAccess struct {
 		Code string `json:"code"`
 	}
@@ -484,8 +483,7 @@ func TestAuthnE2E_ThreeLoginEntryPoints_AndSessionManagement(t *testing.T) {
 }
 
 // TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen
-// is the regression proof for the wiring gap this round closes
-// (go/authn/AGENTS.md's "one known wiring gap"): buildServer passes
+// is the regression proof for the wiring gap: buildServer passes
 // authn.WithFeatureGate the same lazy *config.Service adapter org's gate
 // uses, so authn's eight declared feature flags are enforced at request
 // time in THIS app -- a deployment that disables authn.password_login must
@@ -664,17 +662,15 @@ func TestAuthnE2E_PasswordChannelDisabled_RefusedWhileOtherChannelsStayOpen(t *t
 	}
 }
 
-// TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress is
-// the host-wiring regression for the Fly.io acceptance finding this round
-// closes: with the deployment's two-part declaration in place
+// TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress
+// pins the host wiring for a trusted-proxy declaration: with the
+// deployment's two-part declaration in place
 // (serverConfig.TrustedProxies from APP_TRUSTED_PROXIES, and the
 // per-header vendor opt-in serverConfig.ReadFlyClientIP from
 // APP_READ_FLY_CLIENT_IP), the session and login-history rows a sign-in
 // writes must carry the REAL client address recovered from the
-// platform-injected forwarding header -- where the finding's deployment
-// recorded the proxy's own internal address (172.16.45.218). The P0
-// header-selection follow-up then re-aimed the legs at the host-declared
-// shape: the proxy declaration ALONE authorizes X-Forwarded-For (the
+// platform-injected forwarding header. The proxy declaration ALONE
+// authorizes X-Forwarded-For (the
 // chain walk's own protection), never the single-hop Fly-Client-IP header
 // -- that needs the opt-in declaring the proxy is Fly's -- so a declared
 // proxy WITHOUT the opt-in must not record a client-chosen Fly-Client-IP,
@@ -825,13 +821,11 @@ func TestAuthnE2E_TrustedProxyDeclaration_RecordsTheForwardedClientAddress(t *te
 	})
 
 	t.Run("declared proxy WITHOUT the opt-in: a client-chosen fly client ip changes nothing", func(t *testing.T) {
-		// The P0-authn-14 host cell: this deployment declared its GENERIC
+		// This deployment declared its GENERIC
 		// reverse proxy -- one that forwards a client-chosen Fly-Client-IP
 		// verbatim -- so authn must never read that single-hop vendor
 		// header, even though the peer is trusted. The client-chosen value
-		// is not recorded; the connection address is. (Pre-fix, this leg
-		// recorded 198.51.100.7: the vendor header was read for any
-		// declared proxy.)
+		// is not recorded; the connection address is.
 		srv, cfg, _, _ := buildAuthnE2EServer(t, func(cfg *serverConfig) {
 			cfg.TrustedProxies = []string{"127.0.0.0/8"}
 		})

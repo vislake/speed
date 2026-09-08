@@ -9,10 +9,10 @@ status). Both are fully controlled and props-driven, carry no
 business or tenant semantics, and — the property that matters most for
 this package — carry no opinion about *how* a host authenticates or
 authorizes a user. `product-shell` (shipped, this package's first
-consumer) and `admin-shell` (a later round) share this exact package
-while wiring in two different authorization sources; that only stays
-true if nothing here
-ever imports a concrete one. Built-in user-facing strings live in the
+consumer) and the platform-staff `admin-shell` (not shipped) share
+this exact package while wiring in two different authorization
+sources; that only stays true if nothing here ever imports a concrete
+one. Built-in user-facing strings live in the
 bilingual `layout-kit` namespace; the repo's text discipline (both
 languages, identical key sets, nothing inline) is enforced over this
 package's `src` by the workspace's own `speed/no-literal-text` ESLint
@@ -43,17 +43,16 @@ rule. The public surface is `src/index.ts`; everything under
   with all of them identically.
 - **Narrow-viewport protection is never a new host-facing
   behavior.** The mobile drawer's paper width cap (a CSS `min()`) and
-  the AppBar Toolbar/`headerActions` `flexWrap: 'wrap'`
-  (responsive-design-hardening round) are purely additive styling with
-  no prop added or changed; the later measured-header-spacer round
-  added the one non-CSS piece -- a ResizeObserver on the banner whose
-  measurement feeds the offset placeholders that keep content clear of
-  the fixed (and now wrap-capable) AppBar -- still internal-only, no
-  prop and no host-visible behavior. Do not "fix" a future narrow-viewport
-  complaint by inventing an auto-collapsing overflow menu or similar
-  new behavior here — AppShell renders only what the host gives it,
-  and a genuine need for host-computed overflow behavior belongs to
-  the host composing this package, not to AppShell itself.
+  the AppBar Toolbar/`headerActions` `flexWrap: 'wrap'` are purely
+  additive styling with no prop added or changed. The one non-CSS
+  piece is a ResizeObserver on the banner whose measurement feeds the
+  offset placeholders that keep content clear of the fixed
+  (wrap-capable) AppBar -- internal-only, no prop and no host-visible
+  behavior. Do not "fix" a narrow-viewport complaint by inventing an
+  auto-collapsing overflow menu or similar new behavior here —
+  AppShell renders only what the host gives it, and a genuine need
+  for host-computed overflow behavior belongs to the host composing
+  this package, not to AppShell itself.
 - **This package makes zero HTTP calls.** There is no scope in which
   it legitimately needs to — if a change wants to fetch anything, that
   is a sign scope has drifted; stop and re-read the package README's
@@ -161,8 +160,8 @@ and executes the README's Quick start composition, so the documented
 usage cannot drift from the API; when that composition changes, this
 file changes with it.
 
-**Responsive sx assertions (responsive-design-hardening round)**: a
-plain, non-breakpoint-gated sx value (`flexWrap: 'wrap'` on the
+**Responsive sx assertions**: a plain, non-breakpoint-gated sx value
+(`flexWrap: 'wrap'` on the
 Toolbar and `headerActions` group) computes fine through jsdom's
 `getComputedStyle`, so those stay ordinary `toHaveStyle` assertions.
 The mobile drawer's `width: min(sidebarWidth, 85vw)` is not
@@ -173,22 +172,20 @@ generated CSS text, read across every `<style>` tag in the document.
 Both forms are property/snapshot proofs that the intended declaration
 was wired into the render; neither proves the layout looks correct at
 a real narrow viewport, which this package's jsdom suite cannot render
-at all (same standing gap as the Storybook / browser-side visual
-verification deferral below).
+at all (see the Storybook deferral below).
 
 ## Deferrals (recorded, do not re-open silently)
 
-- **`auth-core` wiring**: no real authorization source exists yet (a
-  later, undispatched round); the Quick start's `status` stub is
-  deliberate and needs no change to this package once one lands.
-- **`admin-shell`**: out of scope; this package ships only the shared
-  chrome the platform-staff shell will later assemble. The tenant-facing
-  half of that row is closed: `product-shell` is this package's first
-  consumer, composing `AppShell` as its authenticated frame while
-  leaving `RouteGuard` to hosts -- its gated-journey suite composes the
-  gate inside the shell's children, fed a status the fixture host
-  computes from the role lists it attached, the exact host-injected
-  shape this package's non-negotiable rules require.
+- **`auth-core` wiring**: no auth package is imported here by design
+  (see the non-negotiable rules); the Quick start's `status` stub is
+  deliberate, and the host-injected `status` value is the only wire.
+- **`admin-shell`**: not shipped; this package ships the shared chrome
+  the platform-staff shell would compose. `product-shell` is this
+  package's first consumer, composing `AppShell` as its authenticated
+  frame while leaving `RouteGuard` to hosts -- its gated-journey suite
+  composes the gate inside the shell's children, fed a status the
+  fixture host computes from the role lists it attached, the exact
+  host-injected shape this package's non-negotiable rules require.
 - **Reference-app consumer**: consumed by the reference app's consumer
   shell (`examples/reference-app/web`) in host composition --
   product-shell's `ProductShell` renders `AppShell` as its
@@ -197,11 +194,11 @@ verification deferral below).
   server's rbac layer answers a caller without `notes:read` with 403,
   failing the gate closed to `denied`), the exact host-injected shape
   this package's rules require. The package-level proof
-  (`src/usage-example.test.tsx`) remains the in-form leg; the browser
-  page leg is M4's html-runner/e2e work.
-- **Storybook**: no preview-harness round exists yet; components are
-  covered by jsdom tests + axe, and color-contrast verification awaits
-  a browser-side visual round, same as `ui-kit`.
+  (`src/usage-example.test.tsx`) is the in-form leg; a browser driving
+  the real server is not shipped.
+- **Storybook**: no preview harness exists; components are covered by
+  jsdom tests + axe, and color-contrast verification is not
+  implemented, same as `ui-kit`.
 - **The `no-literal-text` rule** catches the direct literal routes but
   not indirect ones (ternary branches, literals crossing component
   boundaries) — documented partial enforcement; hosts own their

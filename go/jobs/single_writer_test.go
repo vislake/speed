@@ -18,23 +18,23 @@ import (
 // live StandaloneQueue on the same jobs table must be refused at Start
 // (ErrQueueWriterActive), never allowed to reset and re-claim the first
 // queue's mid-Handle rows into a double execution. Named for the behaviour
-// it verifies, per the backend coding standard's test-naming rule, since
-// it exercises StandaloneQueue.Start, store.go's queue_writers
-// registration and worker.go's claim together.
+// it verifies, since it exercises StandaloneQueue.Start, store.go's
+// queue_writers registration and worker.go's claim together.
 
 // TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle
-// is the deterministic end-to-end regression for the unscoped
-// resetInterruptedRecords defect: two StandaloneQueue instances over ONE
-// jobs table, the first mid-Handle on a Job, the second starting up. Before
-// the fix the second Start reset the first's StatusRunning row to Pending
-// (no ownership concept existed) and claimed it for itself, so the same Job
-// ran Handle twice -- on the money path, that is a double charge. After the
-// fix the second Start must refuse (ErrQueueWriterActive, coded) because
+// is the deterministic end-to-end regression for the double-execution
+// shape the single-writer gate must prevent: two StandaloneQueue instances
+// over ONE jobs table, the first mid-Handle on a Job, the second starting
+// up. Without the ownership gate, the second Start would reset the first's
+// StatusRunning row to Pending and claim it for itself, so the same Job
+// would run Handle twice -- on the money path, a double charge. With the
+// gate, the second Start must refuse (ErrQueueWriterActive, coded) because
 // the first queue's writer registration is live, and Handle must run
 // exactly once. Deterministic orchestration: the first queue's single
 // worker is blocked inside Handle (entered/release channels) for the whole
-// second Start, so the second queue's refusal -- or, pre-fix, its claim of
-// the mid-Handle row -- happens while the row is provably mid-Handle.
+// second Start, so the second queue's refusal -- or the claim of the
+// mid-Handle row a gated-less second Start would attempt -- happens while
+// the row is provably mid-Handle.
 func TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle(t *testing.T) {
 	db := dbtest.NewSQLite(t)
 	if err := ensureJobsSchema(context.Background(), db); err != nil {
@@ -83,8 +83,9 @@ func TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle
 		t.Fatal("timed out waiting for q1's worker to enter Handle -- the mid-Handle window never opened")
 	}
 
-	// The second queue over the SAME database: pre-fix this Starts cleanly,
-	// resets q1's mid-Handle row and runs Handle a second time.
+	// The second queue over the SAME database: without the gate this would
+	// Start cleanly, reset q1's mid-Handle row and run Handle a second
+	// time.
 	q2 := NewStandaloneQueue(db, opts...)
 	if err := q2.RegisterHandler(handler); err != nil {
 		t.Fatalf("q2 RegisterHandler() error = %v", err)
@@ -117,18 +118,16 @@ func TestStandaloneQueue_SecondLiveWriterOnSameDatabase_IsRefused_NoDoubleHandle
 }
 
 // TestStandaloneQueue_Close_WithoutStart_SkipsTheWriterRelease is the
-// regression for Close's release path firing on a queue whose Start never
-// ran: Close without a prior Start used to issue the release DELETE anyway
-// -- against a queue_writers table Start (the schema creator) never
-// created -- so the DELETE errored and a "jobs: releasing writer
-// registration failed" warning was printed on a correct, documented
-// usage (Close's own contract: "safe to call ... without a prior Start").
-// A warning that is guaranteed on a correct path is a false warning, so
-// the release is now skipped entirely when no Start ever ran: there is no
-// registration to release and no heartbeat keeper to stop, and the
-// warning keeps its meaning (whenever it fires, a registration this queue
-// held may genuinely be stuck). Fails on the pre-fix code, where the
-// warning is printed.
+// regression for Close's release path on a queue whose Start never ran:
+// issuing the release DELETE without a prior Start hits a queue_writers
+// table Start (the schema creator) never created -- the DELETE errors and
+// a "jobs: releasing writer registration failed" warning prints on a
+// correct, documented usage (Close's own contract: "safe to call ...
+// without a prior Start"). A warning guaranteed on a correct path is a
+// false warning, so the release is skipped entirely when no Start ever
+// ran: there is no registration to release and no heartbeat keeper to
+// stop, and the warning keeps its meaning (whenever it fires, a
+// registration this queue held may genuinely be stuck).
 func TestStandaloneQueue_Close_WithoutStart_SkipsTheWriterRelease(t *testing.T) {
 	// Deliberately NO ensureJobsSchema: the fresh database is exactly the
 	// never-started state -- the queue_writers table does not exist.

@@ -13,16 +13,16 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// This file pins the queue-backed reaping (P1-rbac-reap): with a jobs
+// This file pins the queue-backed reaping: with a jobs
 // queue wired through Module.WithQueue, an org.member.removed or
 // org.node.deleted event is ENQUEUED as a reap task instead of being run
 // synchronously inside the event delivery, and the task -- retried by the
-// queue when it fails -- is what actually withdraws the bindings. Before
-// this round the reaping lived entirely inside the event handler with no
-// retry home at all (neither published bus redelivers), so a removal whose
-// reap hit a transient failure left the removed member's bindings live
-// forever, and a member who re-joined through a fresh membership silently
-// kept a role the removal should have ended.
+// queue when it fails -- is what actually withdraws the bindings. The
+// queue is the retry home the reaps need: neither published bus
+// redelivers, so a removal whose
+// reap hits a transient failure would leave the removed member's bindings
+// live forever, and a member who re-joins through a fresh membership
+// would silently keep a role the removal should have ended.
 //
 // The worker-based tests below start a real jobs.StandaloneQueue over the
 // same SQLite file the Service's own tables live in -- the queue's Start
@@ -80,8 +80,7 @@ import (
 // bus never redelivers and the subscribers must still return nil), so an
 // Enqueue failure falls back to the synchronous reaping. The two
 // EnqueueFailure tests below wire a queue whose Enqueue always fails and
-// assert the bindings are still reaped; pre-fix, the subscribers' only
-// answer to a failed enqueue was a Warn that left the bindings live.
+// assert the bindings are still reaped.
 
 // waitFor polls cond until it reports true or deadline passes. A bounded
 // deadline loop is the deterministic core of every worker test here: the
@@ -396,7 +395,7 @@ func TestMemberReapTask_TransientFailureFailsTheAttempt_AndARetryConverges(t *te
 }
 
 func TestService_MemberRemovalReap_TransientFailureNearTheEnqueue_Converges(t *testing.T) {
-	// The P1-rbac-reap harm shape end to end: a transient database failure
+	// The transient-failure harm shape end to end: a transient database failure
 	// at the moment of the removal -- the binding table momentarily
 	// unavailable -- and the reaping still completes. The removal event
 	// arrives while the bindings table is hidden; the table is restored
@@ -405,11 +404,7 @@ func TestService_MemberRemovalReap_TransientFailureNearTheEnqueue_Converges(t *t
 	// every run rather than whenever a worker poll happened to land in
 	// the hidden window; the queue retries the task until one attempt
 	// lands after the table is back, and the revoke the removal demands
-	// converges. Pre-this-round, the same sequence -- synchronous
-	// best-effort reaping inside the delivery, no queue to retry -- left
-	// the binding live forever, and a member who re-joined through a
-	// fresh membership silently kept the role (the recorded pre-fix run
-	// of this scenario is in the round's notes).
+	// converges.
 	db := newRBACTestDB(t)
 	svc, reg, q := newQueueTestService(t, db)
 	startQueue(t, q)
@@ -532,11 +527,9 @@ func TestService_OnMemberRemoved_EnqueueFailure_FallsBackToTheSynchronousReap(t 
 	// the jobs store is a database like any other, and this is the same
 	// transient-failure class the queue's retries exist to converge, only
 	// with no retry to converge it, since a task that never landed cannot
-	// be retried -- and the removed member's bindings are still reaped.
-	// Pre-fix, the subscriber's only answer to the failed enqueue was a
-	// Warn: the handler returned nil, the bus never redelivered, and the
-	// removal's bindings stayed live forever -- the P1 end state the
-	// queue-backed round closed, narrowed to the enqueue window. The
+	// be retried. Without a fallback the failed enqueue would end the
+	// reaping: the handler must return nil, the bus never redelivers, and
+	// the removed member's bindings would stay live forever. The
 	// subscriber falls back to the synchronous reaping instead.
 	db := newRBACTestDB(t)
 	q := &failingQueue{err: errors.New("jobs store unavailable")}

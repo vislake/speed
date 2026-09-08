@@ -1,42 +1,32 @@
 name: docker-build
-
-# Reusable multi-architecture container-image build. Genuinely runnable as
-# of the reference-app-docker-image round (docs/internal/18-cicd.md's own
-# implementation-status note has the detail): examples/reference-app now
-# ships a real multi-stage Dockerfile, and this workflow builds it for
-# linux/amd64 and linux/arm64.
+# Reusable multi-architecture container-image build, genuinely runnable:
+# examples/reference-app ships a real multi-stage Dockerfile, and this
+# workflow builds it for linux/amd64 and linux/arm64.
 #
-# WHAT THIS ROUND SHIPS (chore/docker-build-native-arm -- replaces the
-# reference-app-docker-image round's single-runner QEMU-emulated approach):
+# HOW IT BUILDS:
 #   * TWO NATIVE BUILDER JOBS running IN PARALLEL, one per architecture,
-#     each on a GitHub-hosted runner whose own CPU genuinely matches the
-#     platform it builds -- ubuntu-latest (amd64) and ubuntu-24.04-arm
-#     (arm64, GitHub's real, publicly-available, GA hosted Arm runner,
-#     Cobalt-100-based, 4 vCPU -- see
+#     each on a GitHub-hosted runner whose own CPU matches the platform
+#     it builds -- ubuntu-latest (amd64) and ubuntu-24.04-arm (arm64,
+#     GitHub's GA hosted Arm runner, Cobalt-100-based, 4 vCPU -- see
 #     https://github.blog/changelog/2025-08-07-arm64-hosted-runners-for-public-repositories-are-now-generally-available/).
-#     Neither job's `docker buildx build` ever names a `--platform`
-#     outside its own runner's native architecture, so QEMU is gone
-#     entirely: no `docker/setup-qemu-action` step exists anywhere in this
-#     file any more, and none is needed -- every layer that gets built is
-#     built by a CPU that actually executes that instruction set, not one
-#     emulating it.
-#   * Each builder job's image is genuinely smoke-tested natively -- a
-#     property the old QEMU approach could only give the amd64 leg,
-#     since an emulated arm64 container was never actually booted, only
-#     proven to build. Now both architectures boot for real: each job
-#     builds twice against the same local Docker layer cache (a
+#     Neither job's `docker buildx build` names a `--platform` outside
+#     its own runner's native architecture: every layer is built by a
+#     CPU that actually executes that instruction set, so no QEMU
+#     emulation is involved anywhere in this file.
+#   * Each builder job's image is genuinely smoke-tested natively: each
+#     job builds twice against the same local Docker layer cache (a
 #     `--load` build that stays local for the boot-and-curl smoke test,
-#     then a `--push` build -- itself a near-total cache hit off the load
+#     then a `--push` build -- a near-total cache hit off the load
 #     build's own layers, so the second build costs seconds, not a full
 #     rebuild) and pushes its own single-architecture image to this
-#     repository's own GHCR namespace, tagged with an architecture suffix
-#     (`<tag>-amd64` / `<tag>-arm64`).
+#     repository's own GHCR namespace, tagged with an architecture
+#     suffix (`<tag>-amd64` / `<tag>-arm64`).
 #   * A third job, `manifest`, depends on both builder jobs and runs
 #     `docker buildx imagetools create` to combine the two
 #     already-pushed, already-verified single-architecture images into
-#     one real multi-arch manifest list under the plain tag (no
-#     architecture suffix) -- the standard, documented mechanism buildx
-#     itself expects for handing two separate jobs' (necessarily separate
+#     one multi-arch manifest list under the plain tag (no architecture
+#     suffix) -- the standard, documented mechanism buildx itself
+#     expects for handing two separate jobs' (necessarily separate
 #     Docker daemons') images to a combining step: `imagetools create`
 #     reads existing manifests from a registry, it does not reach across
 #     two disconnected local daemons, which is exactly why each builder
@@ -53,49 +43,27 @@ name: docker-build
 #     plus the runner OS plus the architecture (each architecture's
 #     layers are cached separately -- they are not interchangeable).
 #
-# NOT YET (this round's own stated boundary, not an oversight):
+# NOT YET:
 #   * The registry namespace used here (this repository's own
 #     `ghcr.io/<owner>/...` package) is a real, standard, zero-additional-
 #     setup GitHub Actions capability -- a repository's built-in
 #     `GITHUB_TOKEN` pushing to its OWN GHCR namespace under
-#     `permissions: packages: write` is not "inventing a credential" (root
-#     CLAUDE.md's Security rules; confirmed live for this repository:
+#     `permissions: packages: write` is not "inventing a credential"
+#     (confirmed live for this repository:
 #     `default_workflow_permissions` is `write`). It is NOT the release
-#     pipeline's eventual public-facing registry publication -- these
-#     images carry architecture-suffixed and run-scoped tags for CI proof
-#     purposes only, nothing here is a versioned release artifact, and
-#     real, versioned release publishing under the lockstep lifecycle
-#     stays M4 work (release.yml's own header).
+#     pipeline's eventual public-facing registry publication: these
+#     images carry architecture-suffixed and run-scoped tags for CI
+#     proof purposes only, nothing here is a versioned release artifact,
+#     and versioned release publishing under the lockstep lifecycle is
+#     not wired (release.yml's own header).
 #   * No caller wires this into e2e/release/nightly yet -- those three
 #     stay gated stubs in their own right (see each file's own header).
-#     The only live caller today is docker-image-ci.yml, workflow_dispatch-
+#     The only live caller is docker-image-ci.yml, workflow_dispatch-
 #     only, proving this reusable genuinely works end to end.
 #   * trivy image scanning (security.yml's own DEFERRED note) still has
 #     nothing to scan from a live per-PR pipeline -- this workflow builds
-#     an image on manual dispatch only, not on every PR, so it does not by
-#     itself give trivy a standing target.
-#
-# INPUTS
-#   image_name  -- image name to tag (no registry prefix -- this workflow
-#                  derives the full reference itself, as
-#                  ghcr.io/<repository_owner>/<image_name>).
-#   image_tag   -- tag for the built image (caller's choice -- a commit SHA,
-#                  a run id, or a fixed string for a smoke build). The two
-#                  architecture-suffixed images land at
-#                  `<image_tag>-amd64` / `<image_tag>-arm64`; the combined
-#                  manifest lands at the plain `<image_tag>`. Free text by
-#                  schema, so both jobs validate it against the OCI tag
-#                  grammar in their first step and interpolate it only
-#                  through the exported IMAGE_TAG environment variable
-#                  (see the validate step below).
-#   context     -- build context path, relative to the repository root.
-#   dockerfile  -- Dockerfile path, relative to the repository root.
-#   healthcheck_path -- HTTP path each architecture's own smoke leg curls
-#                  after booting its natively-loaded image (default
-#                  /healthz, matching examples/reference-app's own route).
-#   healthcheck_port -- container port each smoke leg publishes and curls
-#                  (default 8080, examples/reference-app's own default
-#                  PORT).
+#     an image on manual dispatch only, not on every PR, so it does not
+#     by itself give trivy a standing target.
 
 on:
   workflow_call:

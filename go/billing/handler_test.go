@@ -5,7 +5,7 @@ package billing
 // (balance, recent transactions) and the invoice pair (list, get) -- over
 // a real migrated SQLite database, with the tenant injected into the
 // request context the way tenancy.Middleware would have resolved it in a
-// composed host. It is the unit half of this round's proof; the
+// composed host. It is the unit half of the proof; the
 // composed-stack half lives in
 // examples/reference-app/cmd/server/billing_http_flow_test.go.
 //
@@ -313,7 +313,7 @@ func TestHandler_ListCreditTransactions_EnforcesTheLimitBound(t *testing.T) {
 }
 
 // TestHandler_ListCreditTransactions_MalformedLimit_AnswersTheCodedEnvelope
-// is the malformed-query half of this round's "never a raw error"
+// is the malformed-query half of the "never a raw error"
 // contract: a limit that is not an integer is refused by the
 // spec-generated parameter binder BEFORE the handler runs, and the
 // bindingErrorHandler NewHandler installs must answer the module's own

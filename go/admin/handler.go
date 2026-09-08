@@ -20,8 +20,7 @@ const jsonContentType = "application/json; charset=utf-8"
 
 // errInternal is written when an error reaching writeError is not an
 // *apperr.Error at all -- an unexpected internal failure this module
-// never classified, matching every other handler's identical fallback
-// (see notes/handler.go's errInternal).
+// never classified, matching every other handler's identical fallback.
 var errInternal = apperr.Internal("admin.internal")
 
 // Handler serves admin's HTTP endpoints by implementing the
@@ -34,8 +33,7 @@ var errInternal = apperr.Internal("admin.internal")
 // authn.PrincipalFromContext, never from a request parameter, header or
 // body -- exactly like every other module's handler. Authorization (which
 // rbac.SystemDomain permission gates which operation) is NOT this
-// Handler's job: per docs/internal/23-admin.md section 6 and this round's
-// scope, every admin route is gated externally, the same way the
+// Handler's job: every admin route is gated externally, the same way the
 // reference app gates notes and storage, by wrapping the mounted route in
 // rbac.RequirePermission before it ever reaches here.
 type Handler struct {
@@ -54,8 +52,7 @@ type Handler struct {
 //
 // The returned Handler's routing is registered by the generated
 // api.HandlerFromMux helper, mirroring every other module's identical
-// handler-construction pattern (see notes/handler.go's NewHandler for the
-// full rationale).
+// handler-construction pattern.
 func NewHandler(tenants *TenantService, impersonation *ImpersonationService, search *SearchService, auditSvc *AuditService, exportSvc *ExportService, roles *RoleService, usage *UsageService, sendRecords *SendRecordSearchService) *Handler {
 	h := &Handler{
 		tenants:       tenants,
@@ -88,7 +85,7 @@ func callerUserID(r *http.Request) (string, error) {
 	return principal.UserID, nil
 }
 
-// --- D3: tenant ledger ---------------------------------------------------
+// --- tenant ledger ---------------------------------------------------
 
 // AdminListTenants implements api.ServerInterface.
 func (h *Handler) AdminListTenants(w http.ResponseWriter, r *http.Request, params api.AdminListTenantsParams) {
@@ -165,11 +162,10 @@ func (h *Handler) AdminUpdateTenant(w http.ResponseWriter, r *http.Request, id s
 	}
 	patch := TenantPatch{DisplayName: req.DisplayName, Notes: req.Notes, SuspendedReason: req.SuspendedReason}
 	if req.Status != nil {
-		// P2-5's fix: the wire value is validated against the generated
-		// enum's own Valid() before it is ever persisted. tenancy's
-		// TenantStatusResolver gate (the "landed tenancy default-refuse
-		// gate", tenant_status.go: only TenantStatusActive is servable)
-		// refuses ANY stored status other than "active", so an
+		// The wire value is validated against the generated enum's own
+		// Valid() before it is ever persisted. tenancy's
+		// TenantStatusResolver gate refuses any stored status other than
+		// "active" (only tenancy.TenantStatusActive is servable), so an
 		// out-of-vocabulary string ("suspended-tomorrow", a typo) written
 		// verbatim into admin_tenants.status would silently take the
 		// tenant offline for every request until an operator noticed --
@@ -184,11 +180,11 @@ func (h *Handler) AdminUpdateTenant(w http.ResponseWriter, r *http.Request, id s
 		status := tenancy.TenantStatus(*req.Status)
 		patch.Status = &status
 	}
-	// P2-pkgcore-actor-1: DisplayName is intentionally not resolved here --
-	// a Principal carries no display name (go/authn/token.go), and the
-	// record's actor is resolved against the users table at record time by
-	// TenantService.recordAudit instead (see its own doc comment), the one
-	// place every tenant-ledger edit funnels through.
+	// DisplayName is intentionally not resolved here: a Principal carries
+	// no display name, and the record's actor is resolved against the
+	// users table at record time by TenantService.recordAudit instead (see
+	// its own doc comment), the one place every tenant-ledger edit funnels
+	// through.
 	actor := pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: callerID}
 	t, err := h.tenants.SetStatus(r.Context(), id, patch, actor)
 	if err != nil {
@@ -214,18 +210,17 @@ func toAdminTenant(t Tenant) api.AdminTenant {
 	return out
 }
 
-// --- D6: cross-tenant user search -----------------------------------------
+// --- cross-tenant user search -----------------------------------------
 
 // AdminSearchUsers implements api.ServerInterface.
 //
 // callerUserID is resolved first, exactly like every other admin read of
 // another module's data (AdminListUserMemberships, AdminListAuditEvents,
-// AdminGetUsageSummary, AdminListSendRecords): D6's search half answers
+// AdminGetUsageSummary, AdminListSendRecords): the search half answers
 // with plaintext email and phone from identity data, and the operator
 // identified here is the Actor of the audited system-context record
-// SearchService.Users takes out for the search -- on unfixed main this
-// handler never read the caller at all, and a search left no
-// attributable trace (see search.go's Users doc comment).
+// SearchService.Users takes out for the search -- without it a search
+// would leave no attributable trace (see search.go's Users doc comment).
 func (h *Handler) AdminSearchUsers(w http.ResponseWriter, r *http.Request, params api.AdminSearchUsersParams) {
 	callerID, err := callerUserID(r)
 	if err != nil {
@@ -284,7 +279,7 @@ func (h *Handler) AdminListUserMemberships(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// --- D5: impersonation -----------------------------------------------------
+// --- impersonation -----------------------------------------------------
 
 // AdminStartImpersonation implements api.ServerInterface.
 func (h *Handler) AdminStartImpersonation(w http.ResponseWriter, r *http.Request) {
@@ -362,7 +357,7 @@ func toAdminGrant(g ImpersonationGrant) api.AdminImpersonationGrant {
 	return out
 }
 
-// --- D7: audit query -------------------------------------------------------
+// --- audit query -------------------------------------------------------
 
 // AdminListAuditEvents implements api.ServerInterface.
 func (h *Handler) AdminListAuditEvents(w http.ResponseWriter, r *http.Request, params api.AdminListAuditEventsParams) {
@@ -403,12 +398,12 @@ func (h *Handler) AdminListAuditEvents(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 
-	// Pagination is admin's own HTTP-layer translation (D7: an HTTP shell
-	// plus pagination-parameter translation) over compliance.AuditQuery's already-filtered,
-	// already-sorted (newest first) result -- compliance itself does no
-	// pagination (its own known limitation, inherited here rather than
-	// re-solved), so this is a plain slice operation, never a second SQL
-	// query.
+	// Pagination is admin's own HTTP-layer translation (an HTTP shell plus
+	// pagination-parameter translation) over compliance.AuditQuery's
+	// already-filtered, already-sorted (newest first) result -- compliance
+	// itself does no pagination (its own known limitation, inherited here
+	// rather than re-solved), so this is a plain slice operation, never a
+	// second SQL query.
 	offset := 0
 	if params.Offset != nil && *params.Offset > 0 {
 		offset = *params.Offset
@@ -431,21 +426,20 @@ func (h *Handler) AdminListAuditEvents(w http.ResponseWriter, r *http.Request, p
 // the slice's length, which returns an empty (never a panicking) result.
 //
 // The clamp bounds limit by the remaining tail BEFORE the offset+limit
-// addition (P2-4's fix): the previous implementation computed
-// end := offset + limit first and only then compared it against
-// len(events), so an extreme caller-supplied limit (math.MaxInt, say) made
+// addition: an extreme caller-supplied limit (math.MaxInt, say) would make
 // that addition overflow int on a slice of any non-trivial length, wrap
-// end negative, sail through both clamp conditions, and slice
+// the end negative, sail through both clamp conditions, and slice
 // events[offset:negative] -- a panic reachable from an HTTP query string
-// (an audit page with offset=1&limit=9223372036854775807 crashed the
-// handler). With limit pre-clamped to at most len(events)-offset, the
-// addition is bounded by len(events) and can never overflow.
+// (an audit page with offset=1&limit=9223372036854775807). With limit
+// pre-clamped to at most len(events)-offset, the addition is bounded by
+// len(events) and can never overflow.
 func paginate(events []audit.AuditEvent, offset, limit int) []audit.AuditEvent {
 	if offset < 0 {
 		offset = 0
 	}
-	// A negative limit means "no upper bound", this function's pre-existing
-	// contract (the old implementation clamped end to len(events) for it).
+	// A negative limit means "no upper bound" (the caller passed none);
+	// clamp it to the slice length so the offset-relative bound below
+	// applies.
 	if limit < 0 {
 		limit = len(events)
 	}
@@ -490,7 +484,6 @@ func toAdminAuditEvent(e audit.AuditEvent) api.AdminAuditEvent {
 		// capitalized keys dbkit/audit's persister writes ("Before" /
 		// "After" -- audit.Diff has no json tags); the shell serves the
 		// same diff under the wire shape's camelCase keys. Changes is the
-		// sixth element of the audit shape docs/internal/10 names, and the
 		// element an operator searches the trail for: an impersonation
 		// start's after names the operator's own mandatory reason, so
 		// serving it back is what makes the reason reachable by the
@@ -519,15 +512,15 @@ func toAdminAuditEvent(e audit.AuditEvent) api.AdminAuditEvent {
 	return out
 }
 
-// --- D7: audit export -------------------------------------------------------
+// --- audit export -------------------------------------------------------
 
 // AdminExportAuditEvents implements api.ServerInterface.
 //
 // callerUserID is resolved first, exactly like every other admin write
 // path (AdminCreateTenant, AdminUpdateTenant, AdminStartImpersonation,
-// AdminEndImpersonation) -- this was the one admin HTTP write path that
-// never did (P1-2's finding), leaving an export of a tenant's complete
-// audit history with no attributable operator anywhere in the flow.
+// AdminEndImpersonation): an export of a tenant's complete audit history
+// must name the operator who asked for it somewhere in the flow --
+// Enqueue refuses an empty one with ErrExportOperatorRequired.
 func (h *Handler) AdminExportAuditEvents(w http.ResponseWriter, r *http.Request) {
 	callerID, err := callerUserID(r)
 	if err != nil {
@@ -547,20 +540,20 @@ func (h *Handler) AdminExportAuditEvents(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusAccepted, api.AdminExportAuditEventsResponse{JobID: string(jobID)})
 }
 
-// --- D8: role management -----------------------------------------------------
+// --- role management -----------------------------------------------------
 
 // roleManagementContext resolves the calling operator from the request's
 // verified Principal and installs them as the rbac Subject on the ctx
-// handed to RoleService's write paths (P2-6's fix). rbac's own
-// role-binding and role-changed events carry the actor from exactly this
-// context carrier -- publishBindingChanged/publishRoleChanged read
+// handed to RoleService's write paths. rbac's own role-binding and
+// role-changed events carry the actor from exactly this context carrier
+// -- publishBindingChanged/publishRoleChanged read
 // rbac.SubjectFromContext through actorFrom (go/rbac/assign.go) -- and a
-// role-management request whose handler never installed one produced
-// events whose ActorUserID was empty: an unattributed role-management
-// write no audit trail could ever answer "who did this" for.
+// role-management request without it would produce events whose
+// ActorUserID is empty: an unattributed role-management write no audit
+// trail could ever answer "who did this" for.
 //
 // The subject's tenant is rbac.SystemDomain, the pseudo-tenant every
-// admin:* permission is evaluated in (D1) -- the domain the operator was
+// admin:* permission is evaluated in -- the domain the operator was
 // admitted to the admin console through -- never the managed tenant the
 // write itself targets, which stays pkgcore.WithTenant's business inside
 // RoleService.
@@ -640,7 +633,7 @@ func (h *Handler) AdminCreateRoleBinding(w http.ResponseWriter, r *http.Request,
 	writeJSON(w, http.StatusCreated, out)
 }
 
-// --- D9: usage/billing dashboard ---------------------------------------------
+// --- usage/billing dashboard ---------------------------------------------
 
 // AdminGetUsageSummary implements api.ServerInterface.
 func (h *Handler) AdminGetUsageSummary(w http.ResponseWriter, r *http.Request) {
@@ -692,11 +685,11 @@ func toAdminUsageSummaryRow(row UsageSummaryRow) api.AdminUsageSummaryRow {
 	return out
 }
 
-// --- D10: notification send-record search ------------------------------------
+// --- notification send-record search ------------------------------------
 
-// defaultSendRecordSearchLimit/maxSendRecordSearchLimit resolve D10's own
-// limit before SendRecordRepository.ListByFilter is ever called: that
-// method never clamps (its own doc comment: the caller resolves the
+// defaultSendRecordSearchLimit/maxSendRecordSearchLimit resolve the
+// search's limit before SendRecordRepository.ListByFilter is ever called:
+// that method never clamps (its own doc comment: the caller resolves the
 // default and cap first), and gorm's Limit(0) means "zero rows", not "no
 // limit" -- an unresolved zero limit here would silently return an empty
 // result for a caller that simply omitted the parameter.

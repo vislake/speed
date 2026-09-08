@@ -15,14 +15,14 @@ const tableOrgNodes = "org_nodes"
 //
 // # Data domain
 //
-// Tenant data (docs/internal/04-data-and-tenancy.md). A node is meaningless
+// Tenant data. A node is meaningless
 // outside its tenant and must never be visible across one, so it implements
 // dbkit.TenantScoped, is reached only through Repository (which embeds
 // dbkit.Repository[OrgNode]), and its isolation is proven by
 // tenancytest.AssertIsolated.
 //
 // It embeds dbkit.TenantModel for the tenant_id column and the promoted
-// GetTenantID method, the pattern dbkit's AGENTS.md documents for a
+// GetTenantID method, the pattern for a
 // tenant-scoped model that does not need tenant_id inside its primary key:
 // ID is an application-generated UUID, already globally unique on its own,
 // so a plain tenant_id column with its own index is enough. Do NOT redeclare
@@ -38,8 +38,8 @@ const tableOrgNodes = "org_nodes"
 // chain is a corrupt row, not a supported state.
 type OrgNode struct {
 	// ID is an application-generated UUID (uuid.NewString), never a
-	// database-generated one: the backend coding standard forbids
-	// gen_random_uuid(), which SQLite has no equivalent for. Its lowercase
+	// database-generated one: gen_random_uuid() has no SQLite equivalent.
+	// Its lowercase
 	// alphabet is load-bearing -- see path.go's dialect-identity proof.
 	ID string `gorm:"column:id;primaryKey;size:36"`
 
@@ -55,8 +55,6 @@ type OrgNode struct {
 	// distinct from itself in a unique index on both engines, so two roots
 	// with the same name could coexist under NULL. The empty-string
 	// sentinel collapses them into the single row the constraint promises.
-	// go/config's configs table solved the identical problem the identical
-	// way on its tenant_id column; the migrations cite it.
 	ParentID string `gorm:"column:parent_id;size:36;not null;default:''"`
 
 	// Path is the materialized path from the tenant root down to and
@@ -100,8 +98,7 @@ type OrgNode struct {
 	// comments.
 	//
 	// Accidental deletion of a sub-org, cascade included, is exactly the
-	// "oops, get it back" scenario mark-delete exists for -- see
-	// go/org/AGENTS.md's "Soft deletion" section for the full round.
+	// "oops, get it back" scenario mark-delete exists for.
 	// uq_org_nodes_sibling_name became a partial index scoped
 	// WHERE deleted_at IS NULL in the same migration that adds these two
 	// columns (migrations/{postgres,sqlite}/0004_add_soft_delete.sql), so a
@@ -134,8 +131,7 @@ func (n OrgNode) GetDeletedAt() *time.Time { return n.DeletedAt }
 // the labels there). Writes against this model are captured only when a
 // host wires dbkit.Options.AuditBus on the connection org writes through
 // AND sets that connection's Options.AuditModels scope from
-// org.AuditableModels() -- go/org's own AGENTS.md "The audit trail"
-// section has the full wiring contract, and the reference app is the first
+// org.AuditableModels() -- the reference app is the first
 // host fulfilling it. The
 // label is also why the lock-touch UPDATE statements org's write paths
 // issue (touchLockByID and its callers) are recorded too: they are genuine

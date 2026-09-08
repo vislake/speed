@@ -156,15 +156,14 @@ func normalizeNotify(params map[string]string, rawBody []byte) (billing.Normaliz
 			// refund_fee/gmt_refund included (see notifyCarriesRefund's own
 			// doc comment). Mapping it to the same
 			// NormalizedEventChargeSucceeded/EventID the original payment
-			// produced -- what this function did before this round -- would
-			// hand the payment_events insert-first-dedup ledger a byte-
-			// identical duplicate of the payment, silently swallowing the
-			// refund signal. This package's own posture therefore mirrors
-			// the refusal go/billing/gateway/wechat applies to the refund
-			// signals ITS vocabulary cannot represent (REFUND.ABNORMAL/
-			// REFUND.CLOSED -- see that leg's decode and the gateway
-			// AGENTS.md's refund-decode record): refused loudly as
-			// ErrWebhookPayloadUnrecognized, never guessed at -- the
+			// produced would hand the payment_events insert-first-dedup
+			// ledger a byte-identical duplicate of the payment, silently
+			// swallowing the refund signal. This package's own posture
+			// therefore mirrors the refusal go/billing/gateway/wechat
+			// applies to the refund signals ITS vocabulary cannot represent
+			// (REFUND.ABNORMAL/REFUND.CLOSED -- see that leg's decode and
+			// the gateway AGENTS.md's refund-decode record): refused loudly
+			// as ErrWebhookPayloadUnrecognized, never guessed at -- the
 			// trade-notify vocabulary carries no per-refund-occurrence
 			// identifier to build a dedup-safe NormalizedEventRefunded
 			// EventID from, the occurrence identity (out_refund_no) that
@@ -239,8 +238,8 @@ func normalizeNotify(params map[string]string, rawBody []byte) (billing.Normaliz
 		// trade_status) pair itself: Alipay redelivers the identical
 		// status transition verbatim until acknowledged, so this
 		// synthesized id collapses every redelivery of one event into the
-		// one dedup row docs/internal/06-billing-and-metering.md's rule
-		// requires. A full-refund TRADE_CLOSED and an unpaid-timeout
+		// one dedup row the insert-first-dedup rule requires. A full-refund
+		// TRADE_CLOSED and an unpaid-timeout
 		// TRADE_CLOSED are DIFFERENT events about the same trade and
 		// therefore share this id space only with redeliveries of
 		// themselves (see the TRADE_CLOSED branch above for why the two

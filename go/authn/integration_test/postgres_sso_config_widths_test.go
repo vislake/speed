@@ -29,13 +29,13 @@ func assertSSOErrorCode(t *testing.T, err error, wantCode string) {
 	}
 }
 
-// The two authn batch-2 width findings this file closes are the truncation
-// round's siblings (postgres_provider_field_widths_test.go): the same
-// dual-dialect write divergence, on the two remaining surfaces where the
-// right semantic is REFUSE rather than cut. The unit tier (oidc_test.go,
-// package authn) pins the named refusals on SQLite; these legs re-run them
-// against real PostgreSQL, where the pre-fix behaviour of each surface was a
-// refused write -- SQLSTATE 22001 -- that SQLite never reproduced:
+// The two SSO width surfaces this file pins are the siblings of the
+// provider-field truncation legs (postgres_provider_field_widths_test.go):
+// the same dual-dialect write divergence, on the two remaining surfaces
+// where the right semantic is REFUSE rather than cut. The unit tier
+// (oidc_test.go, package authn) pins the named refusals on SQLite; these
+// legs re-run them against real PostgreSQL, where an unguarded write would
+// be refused -- SQLSTATE 22001 -- in a way SQLite never reproduces:
 //
 //   - A tenant id of 60 runes makes the synthetic "oidc:<tenant>" provider
 //     name overflow user_identities.provider (VARCHAR(64), migration 0005)

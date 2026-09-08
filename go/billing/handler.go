@@ -35,9 +35,9 @@ const jsonContentType = "application/json; charset=utf-8"
 // the spec fragment's four read operations: GET /api/v1/billing/credits/
 // balance and GET /api/v1/billing/credits/transactions over CreditService,
 // and GET /api/v1/billing/invoices and GET /api/v1/billing/invoices/{id}
-// over InvoiceRepository (the invoice list/detail pair added by the round
-// that shipped them for a tenant-facing invoice page). It is the module's
-// whole HTTP surface, and it is read-only by design (see
+// over InvoiceRepository (the invoice list/detail pair served for a
+// tenant-facing invoice page). It is the module's whole HTTP surface, and
+// it is read-only by design (see
 // api/openapi.yaml's own header for the decision and its consequence):
 // every operation below answers from the module's own services and
 // repositories -- never a credit or invoice mutation of any kind -- and
@@ -71,7 +71,7 @@ type Handler struct {
 // (bindingErrorHandler below): oapi-codegen's default would answer a
 // request the spec-generated parameter binder itself rejects -- a limit
 // query value that is not an integer at all -- with a plain http.Error
-// text body, and this round's own contract (see api/openapi.yaml's 400
+// text body, and this surface's contract (see api/openapi.yaml's 400
 // description) promises a caller a mapped billing code instead, the same
 // "never a raw error" promise go/sharing's handler.go makes for its own
 // binder failures via the identical mechanism.
@@ -91,7 +91,7 @@ func NewHandler(credits *CreditService, invoices *InvoiceRepository) *Handler {
 // method is ever called. It answers the same BillingError JSON envelope
 // every other refusal on this surface produces, with ErrInvalidRequest
 // carrying the parameter the binder named as a structured param -- the
-// malformed-query half of this round's "a refused or malformed query
+// malformed-query half of this surface's "a refused or malformed query
 // answers a mapped bilingual code, never a raw error" contract. Only the
 // two binder error shapes this surface's single bindable parameter can
 // actually produce are mapped; anything else (an error shape a future
@@ -168,11 +168,10 @@ func (h *Handler) BillingGetCreditBalance(w http.ResponseWriter, r *http.Request
 // out in api/openapi.yaml's own operation description).
 //
 // The narrowing happens after the service's full listing rather than as a
-// SQL LIMIT: CreditService.Transactions returns the whole ledger, and
-// this round serves the recent window by truncating it. That is a memory
-// trade-off, never a correctness one -- and it is recorded as such in
-// AGENTS.md's Known limitations, with the keyset-paginated service read a
-// real ledger-sized history would need left as the named follow-up.
+// SQL LIMIT: CreditService.Transactions returns the whole ledger, and the
+// recent window is served by truncating it. That is a memory trade-off,
+// never a correctness one; a keyset-paginated service read is what a real
+// ledger-sized history would need (see the module's Known limitations).
 func (h *Handler) BillingListCreditTransactions(w http.ResponseWriter, r *http.Request, params api.BillingListCreditTransactionsParams) {
 	if _, ok := mustTenant(w, r); !ok {
 		return
@@ -238,11 +237,10 @@ func toTransactionResponse(tx *CreditTransaction) api.BillingCreditTransaction {
 // The narrowing happens after the repository's full listing rather than
 // as a SQL LIMIT, the identical trade-off the transactions route
 // documents for its own recent window (see
-// BillingListCreditTransactions): it is a memory trade-off, never a
-// correctness one, and it is recorded as such in AGENTS.md's Known
-// limitations alongside the credits one -- with the keyset-paginated
-// service read a real history-sized invoice set would need left as the
-// same named follow-up.
+// BillingListCreditTransactions): a memory trade-off, never a
+// correctness one; a keyset-paginated service read is what a real
+// history-sized invoice set would need (see the module's Known
+// limitations).
 func (h *Handler) BillingListInvoices(w http.ResponseWriter, r *http.Request, params api.BillingListInvoicesParams) {
 	if _, ok := mustTenant(w, r); !ok {
 		return

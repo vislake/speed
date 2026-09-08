@@ -17,9 +17,8 @@ import (
 // billing_credit_transactions table.
 const billingCreditTransactionsTable = "billing_credit_transactions"
 
-// CreditTransactionType is one credit_transaction row's kind, per
-// docs/internal/06-billing-and-metering.md's grant/deduct/refund/expire
-// vocabulary.
+// CreditTransactionType is one credit_transaction row's kind: grant,
+// deduct, refund or expire.
 type CreditTransactionType string
 
 const (
@@ -39,11 +38,11 @@ const (
 	// CreditTransactionExpire is a single-phase deduction driven by an
 	// expiry policy rather than a business operation: credits removed
 	// from Available directly, confirmed immediately (see
-	// CreditService.Expire). See AGENTS.md's Known limitations for what
-	// is still NOT shipped: a scheduler that calls Expire on its own
-	// initiative. The row's ID is a fresh UUID for an unkeyed Expire or
-	// the caller's own IdempotencyKey for a keyed one --
-	// CreditService.Expire's doc comment has that contract.
+	// CreditService.Expire). A scheduler that calls Expire on its own
+	// initiative is not shipped -- Expire is the at-most-once write such
+	// a scheduler needs, not the schedule. The row's ID is a fresh UUID
+	// for an unkeyed Expire or the caller's own IdempotencyKey for a
+	// keyed one -- CreditService.Expire's doc comment has that contract.
 	CreditTransactionExpire CreditTransactionType = "expire"
 )
 
@@ -68,10 +67,10 @@ const (
 
 // CreditTransaction is one append-only entry in a tenant's credit ledger.
 // The ledger, and only the ledger, is the authority on a tenant's credit
-// history: docs/internal/06-billing-and-metering.md requires it be
-// reconstructable/auditable from the transaction log alone,
-// mirroring the append-only rigor go/dbkit/audit's AuditEvent already
-// establishes for this codebase's other financial/compliance ledger.
+// history: it must be reconstructable/auditable from the transaction log
+// alone, mirroring the append-only rigor go/dbkit/audit's AuditEvent
+// already establishes for this codebase's other financial/compliance
+// ledger.
 //
 // Unlike AuditEvent, CreditTransaction genuinely IS tenant data (every row
 // belongs to exactly one tenant, with no cross-tenant reader the way
@@ -223,11 +222,11 @@ func (r *CreditTransactionRepository) insert(ctx context.Context, session *gorm.
 // this method's own read-back of the existing row nor anything else in the
 // transaction could run another statement on it (SQLSTATE 25P02, and a
 // COMMIT would be turned into a ROLLBACK). SQLite tolerates a failed
-// statement inside an open transaction, which is exactly why this shape's
-// original error-catch-then-read-back worked on the unit tier and broke on
-// PostgreSQL -- the identical poisoned-transaction defect go/metering's
-// outbox.go documents and fixed the same way (see that file's own
-// insertOutboxRecord doc comment).
+// statement inside an open transaction; PostgreSQL does not, which is
+// exactly why the insert must never raise a unique-violation error there
+// -- the identical poisoned-transaction hazard go/metering's outbox.go
+// documents and closes the same way (see that file's own insertOutboxRecord
+// doc comment).
 func (r *CreditTransactionRepository) insertIdempotent(ctx context.Context, session *gorm.DB, tx *CreditTransaction) (inserted bool, err error) {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
@@ -269,11 +268,10 @@ func (r *CreditTransactionRepository) Get(ctx context.Context, id string) (*Cred
 }
 
 // ListByTenant returns every credit transaction for the tenant in ctx,
-// newest first -- the read surface a later round's account/billing-history
-// UI would call, and the reconstruction path
-// docs/internal/06-billing-and-metering.md's reconstructable/auditable
-// requirement names. Like Get, the tenant filter is the isolation plugin's
-// own automatic injection, never hand-written here.
+// newest first -- the read surface an account/billing-history UI calls,
+// and the reconstruction path the reconstructable/auditable requirement
+// names. Like Get, the tenant filter is the isolation plugin's own
+// automatic injection, never hand-written here.
 func (r *CreditTransactionRepository) ListByTenant(ctx context.Context) ([]CreditTransaction, error) {
 	var out []CreditTransaction
 	err := dbkit.WithTenantSession(ctx, r.db, func(session *gorm.DB) error {

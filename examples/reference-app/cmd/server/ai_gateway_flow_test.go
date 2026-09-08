@@ -8,7 +8,7 @@ package main
 // temp-file SQLite database carrying ai-gateway's real migrations, and the
 // real rbac gate deciding the requests against seedDemoGrants' demo roles.
 //
-// Three legs cover the round's acceptance shape:
+// Three legs cover the surface's acceptance shape:
 //
 //   - the two-tier permission gate is real on the composed stack: a
 //     tenant-scoped actor (demoAIGatewayTenantWriterUserID, whose custom
@@ -16,24 +16,17 @@ package main
 //     aigateway:manage_platform) writes its own tenant's BYOK credential
 //     and reads which scope answers, but is refused the platform-wide
 //     write, while demoOwnerUserID (BuiltinRoleOwner) is not.
-//   - the round-4 SSRF guard is real on the composed stack: a tenant BYOK
+//   - the SSRF guard is real on the composed stack: a tenant BYOK
 //     write whose baseUrl names a loopback endpoint (the second fake
 //     OpenAI-compatible server standing in for the platform's intranet) is
 //     refused at creation time with aigateway.base_url_blocked and never
 //     stored -- the subsequent real chat calls and image jobs keep
 //     answering through the boot-time platform credential, and the refused
-//     endpoint never receives a single request. This deliberately replaces
-//     the round-3 redirect legs, which wrote a tenant credential pointing
-//     at a loopback fake and asserted the next real call reached it
-//     presenting the tenant key: that test confirmed the exact primitive
-//     the P0 fix closes (a tenant writes an address, the server dials it
-//     from the platform's network), so the guard is what the composed
-//     stack pins now. A write naming a PUBLIC-shaped endpoint still lands,
-//     and the read surface -- the same CredentialService.Resolve the call
-//     path uses -- answers with the tenant's own row, preserving the
-//     legitimate arbitrary-public-vendor capability (the coordinator's
-//     product decision; a platform-declared whitelist stays recorded, not
-//     implemented, per go/ai-gateway/AGENTS.md).
+//     endpoint never receives a single request. A write naming a
+//     PUBLIC-shaped endpoint still lands, and the read surface -- the same
+//     CredentialService.Resolve the call path uses -- answers with the
+//     tenant's own row, preserving the legitimate arbitrary-public-vendor
+//     capability (a platform-declared whitelist stays unbuilt).
 //
 // None of the legs needs a live vendor API key: the fake OpenAI-compatible
 // endpoints stand in for the real ones exactly as consult_flow_test.go and
@@ -111,8 +104,8 @@ func assertAIGatewayCredentialAnswer(t *testing.T, resp *http.Response, what, pr
 	}
 }
 
-// TestAIGatewayCredentialWrites_TwoTierGateOnTheComposedStack is this
-// round's permission-gating proof, run through the real composed stack: the
+// TestAIGatewayCredentialWrites_TwoTierGateOnTheComposedStack is the
+// permission-gating proof, run through the real composed stack: the
 // platform-scoped write (PUT .../platform) is gated on
 // aigateway.PermissionManagePlatform, a materially more privileged
 // permission than the tenant-scoped write (PUT .../tenant) and read (GET)
@@ -170,13 +163,11 @@ func TestAIGatewayCredentialWrites_TwoTierGateOnTheComposedStack(t *testing.T) {
 }
 
 // TestAIGatewayCredential_TenantBYOKWrite_InternalBaseURLRefusedBySSRFGuard
-// is the round-4 SSRF guard's chat-provider proof on the composed stack.
-// Its predecessor (round 3's
-// TestAIGatewayCredential_TenantBYOKWriteRedirectsRealChatCalls) wrote a
-// tenant BYOK credential naming a loopback fake endpoint and asserted the
-// next real consult call reached it presenting the tenant key -- the very
-// primitive the P0 fix closes. This test turns that primitive into a
-// guard: the loopback write is refused at creation time and stored
+// is the SSRF guard's chat-provider proof on the composed stack: a tenant
+// BYOK credential naming a loopback fake endpoint would let the next real
+// consult call reach that endpoint presenting the tenant key -- a tenant
+// writes an address, the server dials it from the platform's network. The
+// guard refuses the loopback write at creation time and stores it
 // nowhere, so subsequent real calls keep answering through the boot-time
 // platform credential and the refused endpoint never sees a request; a
 // write naming a public-shaped endpoint still lands, and the read surface
@@ -312,10 +303,8 @@ func assertAIGatewayCredentialRefused(t *testing.T, resp *http.Response, what st
 // (the next job still reaches the boot-time fakePlatform presenting the
 // platform key, and the refused endpoint never sees a request), while a
 // write naming a public-shaped endpoint still lands and the read surface
-// answers with the tenant's row. Its predecessor (round 3's
-// TestAIGatewayCredential_TenantBYOKWriteRedirectsRealImageCalls) pinned
-// the redirect-to-loopback primitive this round's P0 fix closes -- see the
-// chat-side test's own doc comment.
+// answers with the tenant's row -- the image-side twin of the chat-side
+// test above.
 func TestAIGatewayCredential_TenantBYOKWrite_InternalImageBaseURLRefusedBySSRFGuard(t *testing.T) {
 	fakePlatform := newFakeOpenAIImageServer(t)
 	fakeTenant := newFakeOpenAIImageServer(t)

@@ -28,9 +28,8 @@ const InstrumentationName = "github.com/vislake/speed/go/authn"
 
 // Metric instrument names registerAuthMetrics wires under
 // InstrumentationName -- the sign-in failure rate, MFA challenge volume,
-// and token refresh failure rate row docs/internal/09-observability.md's
-// must-instrument table requires for the authentication domain. One
-// counter and one histogram cover all three: each is sliced by its
+// and token refresh failure rate the authentication domain must report.
+// One counter and one histogram cover all three: each is sliced by its
 // "operation" attribute (authOpLogin/authOpSMSCodeLogin/authOpRefresh/
 // authOpMFAChallenge) and "outcome" attribute (authOutcomeSucceeded/
 // authOutcomeFailed), so "password sign-in failure rate" is
@@ -39,7 +38,7 @@ const InstrumentationName = "github.com/vislake/speed/go/authn"
 // under operation=login_sms, and "MFA challenge volume" is the sum of
 // authCountMetricName{operation=mfa_challenge,*} -- the identical
 // slice-by-status-attribute shape go/jobs' jobAttemptsMetricName and
-// go/notification's deliveryCountMetricName both already use.
+// go/notification's deliveryCountMetricName both use.
 //
 // The operation values are per channel and deliberately do not cover every
 // sign-in channel: the social and enterprise-SSO channels carry no counts
@@ -60,9 +59,7 @@ const (
 // exactly one per instrumented Service method below.
 const (
 	// authOpLogin is Service.Login, the email-or-phone plus password
-	// channel -- the channel credential stuffing targets, and the one
-	// operation the metric set's original vocabulary covered for
-	// sign-ins.
+	// channel -- the channel credential stuffing targets.
 	authOpLogin = "login"
 	// authOpSMSCodeLogin is Service.LoginWithSMSCode, the phone-plus-code
 	// channel: a six-digit code behind a per-target wrong-guess budget is
@@ -286,9 +283,8 @@ type Service struct {
 	// addresses and CIDR prefixes of the reverse proxies this deployment
 	// receives requests through. Handler.clientIP reads a request's
 	// forwarding headers only when its direct connection address is within
-	// one of them; empty keeps the module's original behavior, every
-	// request recording its direct connection address. See that option's
-	// doc comment.
+	// one of them; empty keeps every request recording its direct
+	// connection address. See that option's doc comment.
 	trustedProxies []netip.Prefix
 
 	// vendorClientIPHeaders is WithVendorClientIPHeaders' validated value:
@@ -411,12 +407,7 @@ func NewService(db *gorm.DB, bus pkgcore.EventBus, kv pkgcore.KVStore, opts ...O
 	// required. A natural-mode manager answers false without touching the
 	// store, so the attachment costs nothing under the module's own
 	// default mode. Middleware's WithRevocationChecker option replaces
-	// this source with an explicit one for hosts that want it. This was
-	// the P1 wiring hole: the checker used to be an optional
-	// MiddlewareOption that nothing in the shipped composition passed, so
-	// immediate-mode revocations were recorded on the list and never
-	// consulted -- a revoked session's unexpired access token kept working
-	// to its natural expiry.
+	// this source with an explicit one for hosts that want it.
 	verifier.revocation = manager
 
 	authCount, authDuration := registerAuthMetrics()
@@ -499,12 +490,12 @@ func (s *Service) Verifier() *Verifier { return s.verifier }
 // tenant, when a composition left one there, plays no part in anything this
 // method does.
 //
-// Known limitation, stated rather than hidden: a duplicate identifier is
-// reported as a conflict, which makes registration an account-enumeration
-// oracle in a way sign-in deliberately is not. Closing it means answering
-// every registration with "check your inbox" and moving the conflict into an
-// email, which needs the delivery and verification flows; until those land,
-// the honest position is that the conflict is visible here.
+// Known limitation: a duplicate identifier is reported as a conflict, which
+// makes registration an account-enumeration oracle in a way sign-in
+// deliberately is not. Removing the oracle means answering every
+// registration with "check your inbox" and moving the conflict into an
+// email, which requires delivery and verification flows this module does
+// not ship; the honest position is that the conflict is visible here.
 func (s *Service) Register(ctx context.Context, in RegisterInput) (*User, error) {
 	if err := s.guard.CheckRegister(ctx, in.IP); err != nil {
 		return nil, err
@@ -654,14 +645,13 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 //
 // A nil gate allows every channel: this deployment has no feature-flag
 // module, so there is nowhere an operator could have disabled anything, and
-// the channels the host wired are the channels that exist -- the behavior
-// this module had before the seam existed. With a gate wired, a channel
-// whose flag is off refuses with ErrChannelDisabled, and a gate that cannot
-// be read refuses too: failing CLOSED on "cannot answer whether the channel
-// is on" is the same policy CheckLogin and the revocation check apply to
-// their own unanswerable questions, and the alternative -- letting a config
-// outage quietly re-enable every channel an operator disabled -- is exactly
-// the bypass this seam exists to close.
+// the channels the host wired are the channels that exist. With a gate
+// wired, a channel whose flag is off refuses with ErrChannelDisabled, and a
+// gate that cannot be read refuses too: failing CLOSED on "cannot answer
+// whether the channel is on" is the same policy CheckLogin and the
+// revocation check apply to their own unanswerable questions, and the
+// alternative -- letting a config outage quietly re-enable every channel an
+// operator disabled -- is exactly the bypass this seam exists to close.
 func (s *Service) channelEnabled(ctx context.Context, key string) error {
 	if s.features == nil {
 		return nil
@@ -779,11 +769,11 @@ func (s *Service) login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 		// certify the password to an anonymous caller, the single fact every
 		// failure above this line refuses to state. The reachable surface is
 		// not an edge case: a generated project whose membership seam is not
-		// wired yet (nil reader, resolveTenant's first branch) answers this
-		// way for every correct password, every attempt, until its owner
-		// wires a membership store. Nothing is lost by the uniform answer:
-		// recordFailure below writes the real cause into the login history,
-		// which is where the reason belongs (see Login's doc comment).
+		// wired (nil reader, resolveTenant's first branch) answers this way
+		// for every correct password, every attempt. Nothing is lost by the
+		// uniform answer: recordFailure below writes the real cause into the
+		// login history, which is where the reason belongs (see Login's doc
+		// comment).
 		//
 		// The uniform answer is also the whole of this path's effect on
 		// the login guard, deliberately: recordFailure below is called,
@@ -867,23 +857,22 @@ func (s *Service) login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 // no longer belong to until the session itself expired, which is weeks.
 //
 // That re-verification deliberately runs BEFORE the presented token is
-// rotated (consumed), not after. It used to run after: Rotate would consume
-// the token and mint its replacement, and only then would refresh check
-// membership and user status -- so a failure there left the presented token
-// permanently spent with the caller never having received its replacement.
-// The client's own, entirely legitimate retry with that same token then hit
-// Rotate's replay detector, which cannot tell that retry apart from an actual
-// stolen token, and paid the actual-theft price for it: the whole
-// refresh-token family and the session revoked, a "suspected theft" event
-// fired -- over what was really a transient MembershipReader outage or a
-// passing user-status flap. Resolving the token and its session first,
-// running every re-verification a caller needs, and only then committing the
+// rotated (consumed), not after. Rotating first would leave a
+// re-verification failure with the presented token permanently spent and
+// the caller never having received its replacement; the client's own,
+// entirely legitimate retry with that same token would then hit the replay
+// detector, which cannot tell that retry apart from an actually stolen
+// token, and pay the actual-theft price for it: the whole refresh-token
+// family and the session revoked, a "suspected theft" event fired -- over
+// what is really a transient MembershipReader outage or a passing
+// user-status flap. Resolving the token and its session first, running
+// every re-verification a caller needs, and only then committing the
 // rotation keeps a re-verification failure from ever touching the token at
 // all: the client's retry, once whatever failed clears, presents the exact
 // same still-active token and succeeds normally. An ACTUALLY replayed token
 // -- one really already rotated by a prior, successful call -- is untouched
-// by this reordering: resolveRotation still catches it at the same first
-// step Rotate always checked it at, before any re-verification runs.
+// by this ordering: resolveRotation catches it at the same first step,
+// before any re-verification runs.
 func (s *Service) Refresh(ctx context.Context, presented string) (*TokenPair, error) {
 	start := time.Now()
 	pair, err := s.refresh(ctx, presented)
@@ -1257,7 +1246,7 @@ func (s *Service) record(ctx context.Context, attempt *LoginAttempt) {
 // of the context it is published in, when one is present. The handlers of
 // protected operations layer the acting principal's own TenantID onto the
 // ctx they hand the service (pkgcore.WithTenant, principalCtx -- the same
-// layering recordAudit uses for audit rows, P1-4), so the security-relevant
+// layering recordAudit uses for audit rows), so the security-relevant
 // facts those operations announce -- identity unbound, MFA enrolled,
 // recovery codes regenerated -- carry the same tenant their audit rows do.
 // A site that knows its event's tenant sets TenantID explicitly (the
@@ -1292,7 +1281,7 @@ func (s *Service) publish(ctx context.Context, evt pkgcore.Event) {
 // event carries none -- so a registration event that picked up the
 // caller's context tenant would hand the caller's tenant a membership it
 // was never granted AND deny the new account the workspace its
-// registration was supposed to create (P1-authn-15).
+// registration creates.
 //
 // A site that needs its event to carry a tenant declares it explicitly
 // through publish with evt.TenantID set (the enterprise-SSO mint does, from

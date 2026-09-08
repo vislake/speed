@@ -8,7 +8,7 @@
  * AppThemeProvider tree and a QueryClientProvider (the account surfaces
  * read their data through the @tanstack/react-query hooks generated into
  * @speed/api-sdk -- the one provider this package's harness carries that
- * auth-ui's, the template for this file, does not), and the host's own
+ * the auth-ui harness does not), and the host's own
  * account page composing the four sections under a signed-in session.
  *
  * Why a real client: the component suites of this package drive each

@@ -94,10 +94,9 @@ func waitTerminal(t *testing.T, q *StandaloneQueue, ctx context.Context, id JobI
 // stale_at = last beat + this window). Both numbers are what keep a live
 // queue's authored stale moment always beyond its next beat (window >= ten
 // beats, beats arrive every poll interval), so no taker, whatever its own
-// cadence, can ever find a live incumbent stale. The function had no direct
-// tests before the cadence-mismatch round; its two boundary shapes are the
-// floor (any cadence whose tenfold stays under two seconds) and the ratio
-// (any cadence whose tenfold exceeds it).
+// cadence, can ever find a live incumbent stale. The two boundary shapes
+// are the floor (any cadence whose tenfold stays under two seconds) and
+// the ratio (any cadence whose tenfold exceeds it).
 func TestWriterStaleAfter_OwnWindowFromOwnPollInterval(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -164,15 +163,11 @@ func TestEnqueue_InvalidTask_ReturnsError(t *testing.T) {
 }
 
 // TestEnqueue_Get_HappyPath, TestGet_TenantIsolation and
-// TestCancel_TenantIsolation_And_Idempotency used to live here, hand-testing
-// exactly what queue_conformance_test.go's
-// TestStandaloneQueue_ConformsToQueueContract now proves through the
-// shared go/jobs/queuetest.AssertConforms suite (its own
-// "enqueue_get_happy_path", "get_tenant_isolation" and
-// "cancel_tenant_isolation_and_idempotency" subtests) -- see that file for
-// the rationale (docs/internal/16-verification.md §2's claim that Queue
-// deserves the identical shared-conformance-suite treatment the other four
-// seams already have, made real).
+// TestCancel_TenantIsolation_And_Idempotency live in queue_conformance_test.go's
+// TestStandaloneQueue_ConformsToQueueContract, which drives the shared
+// go/jobs/queuetest.AssertConforms suite (its own "enqueue_get_happy_path",
+// "get_tenant_isolation" and "cancel_tenant_isolation_and_idempotency"
+// subtests) -- the same suite every Queue implementation must pass.
 
 func TestPriorityOrdering(t *testing.T) {
 	q := newTestQueue(t, WithWorkerCount(1))
@@ -274,17 +269,16 @@ func (h *flakyHandler) OnFailure(context.Context, *Job, error) {
 }
 
 // TestRetry_SucceedsAfterTransientFailures and
-// TestDeadLetter_ExhaustsRetries_And_InvokesFailureHook used to live here,
-// hand-testing exactly what queue_conformance_test.go's
-// TestStandaloneQueue_ConformsToQueueContract now proves through the
-// shared go/jobs/queuetest.AssertConforms suite (its own
+// TestDeadLetter_ExhaustsRetries_And_InvokesFailureHook live in
+// queue_conformance_test.go's TestStandaloneQueue_ConformsToQueueContract,
+// which drives the shared go/jobs/queuetest.AssertConforms suite (its own
 // "retry_succeeds_after_transient_failures" and
-// "dead_letter_exhausts_retries_and_invokes_failure_hook" subtests) -- see
-// that file's own doc comment for the rationale. flakyHandler and
-// countingFailureHandler stay defined below/above: both are still used by
+// "dead_letter_exhausts_retries_and_invokes_failure_hook" subtests).
+// flakyHandler and countingFailureHandler stay defined below/above: both
+// are still used by
 // TestStandaloneQueue_JobMetrics_RecordsDurationAttemptsAndDeadLetter,
 // which proves this package's own metrics instrumentation rather than the
-// portable Queue contract queuetest now owns.
+// portable Queue contract queuetest owns.
 
 // countingFailureHandler always fails, and records every OnFailure call it
 // receives on onFailureCh.
@@ -470,7 +464,7 @@ const createWidgetFixtureTableSQL = `CREATE TABLE widget_fixtures (
 )`
 
 // TestStandaloneQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant is this
-// package's end-to-end proof of AGENTS.md's central guarantee, exercised
+// package's end-to-end proof of the tenant-rebuild guarantee, exercised
 // through the REAL worker pool (contrast worker_test.go's
 // TestJobContext_* pair, which proves the same mechanism at the unit
 // level against jobContext directly, with no database involved): a
@@ -561,10 +555,9 @@ func TestRegisterQueueDepthGauge_Smoke(t *testing.T) {
 // read lock across its stopped-check and its query, and Close holds the
 // write lock while signaling stopCh, so once Close returns no callback is
 // mid-query and any later callback sees the stopped queue. See
-// registerQueueDepthGauge's doc comment for the full lifecycle contract.
-//
-// Before the fix, the second Collect returned an error from the still-armed
-// callback querying q.db after the host had closed it.
+// registerQueueDepthGauge's doc comment for the full lifecycle contract: a
+// still-armed callback querying q.db after the host closed it would make
+// the second Collect return an error, which fails this test.
 func TestStandaloneQueue_DepthGauge_StopsQueryingAfterClose(t *testing.T) {
 	db := dbtest.NewSQLite(t)
 	if err := ensureJobsSchema(context.Background(), db); err != nil {
@@ -618,18 +611,16 @@ func TestStandaloneQueue_DepthGauge_StopsQueryingAfterClose(t *testing.T) {
 	}
 }
 
-// TestEnqueue_LogsSingleCorrectTenantID_EvenWhenCtxTenantDiffers is the
-// regression proof for the "job enqueued" log line carrying two
-// conflicting tenant_id attributes whenever Enqueue's caller context
-// carries a different tenant than Task.TenantID -- AGENTS.md's own
-// "platform-level scheduler enqueuing one cleanup Task per tenant in a
-// loop" example is exactly this shape (see "Why Task carries its own
-// TenantID instead of Enqueue resolving it from ctx"). Before the fix,
-// obs.FromContext(ctx) auto-attached ctx's own ambient tenant AND Enqueue
-// additionally logged an explicit "tenant_id" kv for task.TenantID, so
-// the rendered line carried the ctx tenant (wrong for this log line) and
-// the Job's own tenant (right) side by side -- slog.TextHandler does not
-// deduplicate repeated attribute keys, so both survived verbatim.
+// TestEnqueue_LogsSingleCorrectTenantID_EvenWhenCtxTenantDiffers pins the
+// "job enqueued" log line to ONE tenant_id attribute when Enqueue's caller
+// context carries a different tenant than Task.TenantID -- the
+// platform-level-scheduler shape (a caller enqueuing one cleanup Task per
+// tenant in a loop, where no single ambient tenant exists). The logger's
+// context is rebuilt from task.TenantID, never from ctx's ambient tenant:
+// letting obs.FromContext(ctx) auto-attach the ctx tenant AND logging an
+// explicit "tenant_id" kv for task.TenantID would render both side by
+// side -- slog.TextHandler does not deduplicate repeated attribute keys,
+// and the line would attribute the job to the wrong tenant.
 func TestEnqueue_LogsSingleCorrectTenantID_EvenWhenCtxTenantDiffers(t *testing.T) {
 	q := newTestQueue(t)
 
@@ -779,17 +770,14 @@ func histogramCount(t *testing.T, m metricdata.Metrics, jobType, status string) 
 	return 0
 }
 
-// TestStandaloneQueue_JobMetrics_RecordsDurationAttemptsAndDeadLetter is the
-// regression proof that StandaloneQueue actually emits the four
-// docs/internal/09-observability.md must-instrument rows beyond queue
-// backlog depth -- execution duration percentiles, failure rate, retry
-// count and dead-letter count -- rather than only the "jobs.queue.depth"
-// gauge. Before registerJobMetrics/recordJobMetrics/recordDeadLetter
-// existed, none of the three assertions below had any instrument to read
-// back at all: collectMetric itself would fail with "metric ... not
-// found", which is the negative control this test relies on (there is no
-// separate "before" build to run it against, since the instruments
-// literally did not exist).
+// TestStandaloneQueue_JobMetrics_RecordsDurationAttemptsAndDeadLetter
+// proves that StandaloneQueue emits the four must-instrument rows beyond
+// queue backlog depth -- execution duration percentiles, failure rate,
+// retry count and dead-letter count -- rather than only the
+// "jobs.queue.depth" gauge. The negative control is built in: were
+// registerJobMetrics/recordJobMetrics/recordDeadLetter not wiring these
+// instruments, collectMetric would fail with "metric ... not found" and
+// no assertion below would have an instrument to read.
 //
 // One flaky-then-succeeds Job and one always-fails Job together exercise
 // all three Status outcomes execute (worker.go) can reach:
@@ -912,8 +900,8 @@ var (
 // StatusDeadLetter. Deterministic without wall-clock sleeps: a single
 // worker runs execute serially, and a sentinel Job's completion can only
 // be observed after the cancelled Job's execute (dead-letter decision
-// included) has fully returned. Fails on the pre-fix code, where the
-// worker runs OnFailure for the cancelled Job.
+// included) has fully returned. Running OnFailure for the cancelled Job
+// would fail this test.
 func TestStandaloneQueue_CancelBeatsFinalFailure_NoOnFailure_DeadLetterNeverPersisted(t *testing.T) {
 	q := newTestQueue(t, WithWorkerCount(1))
 	failer := &controlledFailureHandler{

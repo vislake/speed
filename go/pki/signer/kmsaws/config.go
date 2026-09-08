@@ -1,7 +1,6 @@
 package kmsaws
 
-// Mode selects which of the two protection strategies
-// docs/internal/22-pki.md's Signer section describes a KMS-backed Signer
+// Mode selects which of the two protection strategies a KMS-backed Signer
 // runs under. Both are correct implementations of pki.Signer; they differ
 // only in where the private key material actually lives. See
 // go/pki/signer/vault's identical Mode type for the same distinction
@@ -65,7 +64,6 @@ type Config struct {
 	// when Mode is ModeEnvelope; unused (and need not be set) under
 	// ModeDirectSign. The key must already exist -- provisioning it is
 	// deployment/operations work this package does not perform on the
-	// caller's behalf, the same "no implicit fallback path" discipline
-	// docs/internal/22-pki.md's "no second path" section requires.
+	// caller's behalf: this seam has no implicit fallback path.
 	WrappingKeyID string
 }

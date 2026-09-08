@@ -20,9 +20,8 @@ import (
 //
 // The shape mirrors go/compliance's own internal/testutil
 // NewParticipant fixture exactly, standing in the same three callbacks
-// over this module's real Repository -- which is what makes this file the
-// mechanism's first real business-module consumer (see
-// go/compliance/AGENTS.md's "Known limitations" for what that discharges):
+// over this module's real Repository -- the mechanism's real
+// business-module consumer:
 // every write below is a promoted dbkit.Repository[Note].HardDelete call,
 // one row at a time, never a hand-written DELETE and never a bulk
 // statement, running under the system-context-carrying, tenant-carrying

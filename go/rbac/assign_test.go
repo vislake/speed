@@ -136,7 +136,8 @@ func TestService_DefineRole_DuplicateKey_IsRejected(t *testing.T) {
 }
 
 func TestService_DefineRole_ConcurrentIdenticalDefine_LoserConvergesOnTheDocumentedDuplicate(t *testing.T) {
-	// The review finding on defineRole: the existence check (ByKey) and the
+	// The check-then-create shape of defineRole: the existence check
+	// (ByKey) and the
 	// create are not atomic, so two concurrent identical DefineRole calls
 	// can both pass ByKey before either has written its row. Reproduced
 	// deterministically via the beforeRoleCreate test hook, the same
@@ -291,7 +292,8 @@ func TestService_AssignRole_IsIdempotent(t *testing.T) {
 }
 
 func TestService_AssignRole_ConcurrentIdenticalAssign_IsANoOp(t *testing.T) {
-	// The LOW review finding on AssignRole: the existence check (Find) and
+	// The check-then-create shape of AssignRole: the existence check
+	// (Find) and
 	// the insert (Create) are not atomic, so two concurrent identical
 	// AssignRole calls can both pass Find before either has written its
 	// row. Reproduced deterministically via the beforeBindingCreate test
@@ -430,9 +432,9 @@ func TestService_RevokeRole_NothingToRevoke_IsReported(t *testing.T) {
 }
 
 func TestService_RevokeRole_ConcurrentIdenticalRevoke_ReportsBindingNotFound(t *testing.T) {
-	// The LOW review finding on RevokeRole: Find and Delete are not atomic
-	// either, so two concurrent identical RevokeRole calls can both pass
-	// Find before either has deleted the row. Reproduced deterministically
+	// The find-then-delete shape of RevokeRole: Find and Delete are not
+	// atomic either, so two concurrent identical RevokeRole calls can both
+	// pass Find before either has deleted the row. Reproduced deterministically
 	// via the beforeBindingDelete test hook, firing after THIS call's own
 	// Find already succeeded but before its Delete runs: inside it, a
 	// second call's Find-then-Delete is simulated, removing the row first.
@@ -518,15 +520,13 @@ func TestService_RevokeRole_IncompleteSubject_IsRejected(t *testing.T) {
 	}
 }
 
-// TestService_RevokeRole_ThenAssignRole_SameScope_Succeeds is this round's
-// own proof that uq_rbac_role_bindings_tenant_user_role_node's partial
-// index (WHERE deleted_at IS NULL) actually narrows what counts, mirroring
-// go/org/tree_test.go's TestTreeService_Delete_ThenCreateChild_
-// SameSiblingName_Succeeds and membership_test.go's equivalent. Before this
-// round's migration the second AssignRole would have hit the FULL unique
-// index -- occupied forever by the revoked row -- and failed; a partial
-// index frees the (tenant, user, role, node) tuple the instant the row
-// becomes mark-deleted.
+// TestService_RevokeRole_ThenAssignRole_SameScope_Succeeds proves that
+// uq_rbac_role_bindings_tenant_user_role_node's partial index
+// (WHERE deleted_at IS NULL) actually narrows what counts: the
+// (tenant, user, role, node) tuple is freed the instant the row becomes
+// mark-deleted, so a revoked-then-reassigned scope is reusable. A full
+// unique index would keep the tuple occupied forever by the revoked row
+// and fail the second AssignRole.
 func TestService_RevokeRole_ThenAssignRole_SameScope_Succeeds(t *testing.T) {
 	svc := newTestService(t)
 	ctx := tenantCtx("tenant-a")
@@ -552,7 +552,7 @@ func TestService_RevokeRole_ThenAssignRole_SameScope_Succeeds(t *testing.T) {
 	}
 }
 
-// TestService_RestoreRole_UndoesTheRevokeAndAnnouncesIt is the round's core
+// TestService_RestoreRole_UndoesTheRevokeAndAnnouncesIt is the
 // mark-delete/restore lifecycle proof: revoke, verify the grant is gone
 // from the DECISION path (not merely from a raw repository read), restore,
 // then verify the grant is back with its original data intact and a

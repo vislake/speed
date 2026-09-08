@@ -309,11 +309,11 @@ describe('switchLanguage', () => {
 
 describe('profile-language tier under late resolution', () => {
   it('applies a late-resolved profile without persisting, so a later profile change still wins on the next visit', async () => {
-    // The documented M1 shape: the host resolves the profile locale only
-    // after creation (it comes from /me), so it applies it through
-    // switchLanguage -- and must use the non-persisting form, because the
-    // persisted slot is the manual-choice tier, which outranks the profile
-    // tier on every later visit.
+    // The host resolves the profile locale only after creation (it comes
+    // from /me), so it applies it through switchLanguage -- and must use
+    // the non-persisting form, because the persisted slot is the
+    // manual-choice tier, which outranks the profile tier on every later
+    // visit.
     const storage = new MemoryStorage()
     const visitOne = createI18n({ storage, navigatorLanguages: [] })
     expect(visitOne.language).toBe('zh-CN')

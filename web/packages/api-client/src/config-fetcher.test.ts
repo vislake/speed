@@ -91,8 +91,8 @@ describe('fetchPublicConfig', () => {
     // 503s, then an empty 200): the client.protocol refusal is raised
     // inside the exchange, so it must carry that truth (attempts 3,
     // status 200) instead of the hardcoded 1/0 a wrapper-level error
-    // used to synthesize -- which misreported a retried exchange as a
-    // single attempt that never reached a response.
+    // would synthesize -- which would misreport a retried exchange as
+    // a single attempt that never reached a response.
     const standin = scriptedStandin(
       textResponse(503, 'Service Unavailable'),
       textResponse(503, 'Service Unavailable'),

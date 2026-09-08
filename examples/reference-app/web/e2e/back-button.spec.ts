@@ -28,48 +28,29 @@
  *     than anything a failed save can do (the offline case's
  *     guarantee, kept here for the navigation case too).
  *
- * HOW THE FINDING CLOSED -- AND NOT BY THE ROUND THAT WAS AIMED AT IT
- *
- * The acceptance finding behind gates one and two reported a full page
- * load on Back -- "the content came up blank, and they were signed
- * out". Gates one and two were verified passing against the deployment
- * on all three engines (chromium, webkit and the iPad project) while
- * the round written for hash navigation and session survival had not
- * landed at all, which made the closing an attribution lesson rather
- * than a quiet one: the likeliest cause was the web-host UI round's
- * config render guard. The AppBar's brand name read a Public-config
- * answer without null guards and threw a TypeError mid-render, which
- * white-screens the page and takes the in-memory session down with the
- * unmount -- a symptom attributed to one layer was produced by
- * another, so the fix that closed it was not the fix anyone planned,
- * and nothing about it needed the router to be at fault.
- *
- * The hash-navigation round then landed, and its subject is gates two
- * and three here. The round's own acceptance drive could not
- * reproduce a full page load on any shape it ran -- dev server,
- * Go-served dist or live deployment alike: hash routing makes every
- * one of these moves a same-document event, zero document requests --
- * but a reload remains the one thing that would discard the in-memory
- * session, which is exactly why gate two asserts its absence directly
- * rather than relying on the diagnosis, and why it now covers the
- * bare JS hash assignment alongside the app's own navigation. Gate
- * three is the round's own property: a half-typed note lives in a
- * view-level store (src/views/notes-draft.ts) that survives the
- * unmount a hash navigation causes, so a trip away and back comes
- * home to the text the clinician left.
+ * Hash routing makes every one of these moves a same-document event
+ * with zero document requests, so a full page load would mean something
+ * went wrong elsewhere -- yet a reload remains the one thing that
+ * discards the in-memory session, which is why gate two asserts its
+ * absence directly rather than trusting a diagnosis of where one could
+ * come from: it marks the live document before any move and requires
+ * the marker to survive both the app's own navigation and a bare JS
+ * hash assignment. Gate three pins the session-independent half: a
+ * half-typed note lives in a view-level store (src/views/notes-draft.ts)
+ * that survives the unmount a hash navigation causes, so a trip away
+ * and back comes home to the text the clinician left.
  *
  * Every gate signs in once, and the file is tagged @budget as well as
- * @deployment. @budget means VERIFIED PASSING but out of the default
- * local run, whose sign-ins already sit at the edge of the server's
- * per-account login budget (five per account per minute, go/authn's
- * ratelimit.go -- every attempt counts, successful or refused), and
- * a file's worth more would tip a neighbouring gate into 429 noise;
- * a separate invocation boots its own server with the counters at
- * zero, which is what pnpm test:e2e:budget is (see e2e/README.md).
- * @deployment is the one-sign-in-per-test shape the deployment run
- * asks for -- in both places the property under test, a served,
- * hash-routed page whose own navigation never signs a person out or
- * loses their half-typed work, is exactly the property that only
+ * @deployment. @budget marks verified passing but out of the default
+ * local run, whose sign-ins sit at the edge of the server's per-account
+ * login budget (go/authn's ratelimit.go -- every attempt counts,
+ * successful or refused), and a file's worth more would tip a
+ * neighbouring gate into 429 noise; the @budget invocation boots its
+ * own server with the counters at zero (pnpm test:e2e:budget, see
+ * e2e/README.md). @deployment is the one-sign-in-per-test shape the
+ * deployment run asks for -- in both places the property under test, a
+ * served, hash-routed page whose own navigation never signs a person
+ * out or loses their half-typed work, is exactly the property that only
  * exists where the real page runs.
  */
 import { expect, test } from '@playwright/test'
@@ -123,8 +104,8 @@ test(
 
     await page.goBack()
 
-    // Still signed in. This is the half that broke: the frame vanished
-    // and the sign-in form came back.
+    // Still signed in: a reload would have discarded the memory-only
+    // session and put the sign-in form back in the frame.
     await expect(
       signOutButton(page),
       'pressing Back signed the person out, losing anything they were part-way through',
@@ -203,9 +184,8 @@ test(
     const input = page.getByRole('textbox', { name: APP_TEXT.notesTextLabel })
     await input.fill(noteText)
 
-    // Leave the surface mid-note and come back -- the journey the
-    // reported loss happened on. The page never reloaded, so the
-    // half-typed text must still be in the field.
+    // Leave the surface mid-note and come back. The page never
+    // reloaded, so the half-typed text must still be in the field.
     await openSurface(page, APP_TEXT.navAccount)
     await expectOnSurface(page, APP_TEXT.accountHeading)
     await page.goBack()

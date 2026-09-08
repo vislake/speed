@@ -22,16 +22,16 @@ import (
 // its own "jobs.queue.depth" gauge under the SAME instrumentation scope
 // StandaloneQueue uses (see that subpackage's own Start) — the two
 // implementations share one metric namespace by design, differing only in
-// their label sets (AGENTS.md's Observability section).
+// their label sets.
 const InstrumentationName = "github.com/vislake/speed/go/jobs"
 
 // Metric instrument names StandaloneQueue registers under InstrumentationName,
 // beyond "jobs.queue.depth" (registerQueueDepthGauge's own literal, kept
 // inline there since it has no other reference site): the execution-
 // duration-percentiles, failure-rate/retry-count and dead-letter-count
-// rows docs/internal/09-observability.md's must-instrument table requires
-// for the task-queue domain, on top of the queue-backlog-depth row that
-// gauge already covers. See registerJobMetrics for how these are wired,
+// rows the must-instrument observability contract requires for the
+// task-queue domain, on top of the queue-backlog-depth row that gauge
+// already covers. See registerJobMetrics for how these are wired,
 // and worker.go's recordJobMetrics/recordDeadLetter for where they are
 // recorded -- mirroring observability.Middleware's own named-constants-
 // plus-Counter/Histogram pattern for the HTTP row of the same table
@@ -43,8 +43,8 @@ const (
 )
 
 // Defaults for StandaloneQueue's construction Options, applied when the
-// corresponding With* option is not given. Named package-level constants
-// per the backend coding standard §10. Unlike dbkit's connection-pool
+// corresponding With* option is not given. Named package-level constants.
+// Unlike dbkit's connection-pool
 // limits (deliberately fixed, "so there is exactly one place to
 // reconsider them"), worker-pool sizing and per-tenant concurrency really
 // are deployment-dependent — a small standalone deployment and a beefier
@@ -99,11 +99,10 @@ var ErrDuplicateHandlerType = apperr.Invalid("jobs.duplicate_handler_type")
 // (Queue, the distributed deployment mode's implementation in
 // go/jobs/queue/asynq, takes this same refuse-at-option-time strategy for
 // its own construction options -- its Option type doc comment states the
-// identical rule for that side, with each option's own code and threshold.
-// The two implementations of one seam validate alike by declaration, not
-// coincidence: this sentence and that one exist on purpose, so a future
-// one-sided relaxation of either side's rule cannot pass as a local
-// change.)
+// identical rule, with each option's own code and threshold. The two
+// implementations of one seam validate alike by declaration: a one-sided
+// relaxation on either side would make the two deployments of one Queue
+// contract diverge.)
 type Option func(*StandaloneQueue)
 
 // WithWorkerCount sets how many Jobs StandaloneQueue executes concurrently
@@ -121,7 +120,7 @@ func WithWorkerCount(n int) Option {
 
 // WithTenantConcurrencyLimit caps how many Jobs belonging to any one
 // tenant may be StatusRunning at once, so one tenant's backlog cannot
-// starve every worker (docs/internal/07-platform-services.md). Defaults to
+// starve every worker. Defaults to
 // DefaultTenantConcurrencyLimit. A value below 1 is refused at option time
 // with a coded panic: a limit of zero would refuse every tenant admission
 // forever, silently processing nothing.
@@ -190,18 +189,17 @@ func WithBackoff(base, max time.Duration) Option {
 	return func(q *StandaloneQueue) { q.backoffBase, q.backoffMax = base, max }
 }
 
-// StandaloneQueue is the standalone deployment mode's Queue implementation: an
-// in-process worker pool backed by a SQLite-persisted task table (survives a
-// process restart, per docs/internal/07-platform-services.md — task loss
-// matters more than a briefly miscounted quota). See AGENTS.md for the full
-// design and its documented known limitations.
+// StandaloneQueue is the standalone deployment mode's Queue implementation:
+// an in-process worker pool backed by a SQLite-persisted task table that
+// survives a process restart -- task loss matters more than a briefly
+// miscounted quota.
 //
 // StandaloneQueue is returned as its own concrete exported type, not the
 // narrower Queue interface (compare pkgcore.NewMemoryKVStore, which
 // returns KVStore): a caller needs RegisterHandler, Start and Close to
 // actually configure and run it, and none of those belong on Queue's
 // portable surface — the distributed deployment mode's Redis/asynq-backed
-// implementation is expected to need a different setup shape of its own.
+// implementation (queue/asynq) has a different setup shape of its own.
 // Code that only needs the portable surface should still depend on the Queue interface,
 // not this type; see the compile-time assertion below.
 type StandaloneQueue struct {
@@ -272,13 +270,12 @@ type StandaloneQueue struct {
 	writerStaleAfter time.Duration
 
 	// startMu serializes Start, and started records whether a Start has
-	// ever fully succeeded (dispatcher and workers launched). Together they
-	// replace the old sync.Once gate: a Start that FAILED (schema error,
-	// writer registration conflict, interrupted-row recovery) leaves
-	// started false, so a later Start -- after the host fixed the cause --
-	// genuinely re-runs the whole startup sequence instead of silently
-	// returning nil with nothing running. A Start after started is a no-op
-	// returning nil, exactly the pre-existing contract.
+	// ever fully succeeded (dispatcher and workers launched). A Start that
+	// FAILED (schema error, writer registration conflict, interrupted-row
+	// recovery) leaves started false, so a later Start -- after the host
+	// fixed the cause -- genuinely re-runs the whole startup sequence
+	// instead of silently returning nil with nothing running. A Start after
+	// started is a no-op returning nil.
 	startMu sync.Mutex
 	started bool
 
@@ -292,12 +289,12 @@ type StandaloneQueue struct {
 	depthGaugeMu sync.RWMutex
 }
 
-// NewStandaloneQueue returns a StandaloneQueue backed by db, which must come from
-// dbkit.Open (directly, or through dbkit/dbtest) — see AGENTS.md for why a
-// bare gorm.Open connection is not sufficient (Enqueue's idempotency check
+// NewStandaloneQueue returns a StandaloneQueue backed by db, which must
+// come from dbkit.Open (directly, or through dbkit/dbtest): a bare
+// gorm.Open connection is not sufficient -- Enqueue's idempotency check
 // relies on dbkit.Open's TranslateError:true, and dbkit.Open's
 // tenant-scoping plugin, though a no-op for jobRecord specifically, is the
-// only sanctioned way to obtain a *gorm.DB anywhere in this codebase).
+// only sanctioned way to obtain a *gorm.DB anywhere in this codebase.
 // NewStandaloneQueue performs no I/O; Start does.
 func NewStandaloneQueue(db *gorm.DB, opts ...Option) *StandaloneQueue {
 	q := &StandaloneQueue{
@@ -385,9 +382,9 @@ func (q *StandaloneQueue) handler(jobType string) Handler {
 // A Start that FAILED — a schema error, a writer-registration conflict, an
 // interrupted-row recovery failure — may be retried by calling Start again:
 // the whole sequence genuinely re-runs once the cause is fixed. A Start
-// after a successful one is a no-op returning nil, as it always was — a
-// Start after Close included: this queue is one-shot, and Close (below)
-// has ended it for good.
+// after a successful one is a no-op returning nil — a Start after Close
+// included: this queue is one-shot, and Close (below) has ended it for
+// good.
 func (q *StandaloneQueue) Start(ctx context.Context) error {
 	q.startMu.Lock()
 	defer q.startMu.Unlock()
@@ -491,12 +488,10 @@ func (q *StandaloneQueue) Close(ctx context.Context) error {
 		// (started, read under startMu): only a successful Start acquires
 		// the registration and launches the keeper, so only then is there
 		// anything to stop or release. With no prior Start the release would
-		// be a DELETE against a queue_writers table Start never created --
-		// an error that used to surface as the "releasing writer
-		// registration failed" warning on a correct, documented Close --
-		// so it is skipped instead, which also keeps that warning
-		// meaningful: whenever it does fire, a registration this queue held
-		// may genuinely be stuck.
+		// be a DELETE against a queue_writers table Start never created,
+		// so it is skipped instead -- which keeps the release warning
+		// meaningful: whenever it does fire, a registration this queue
+		// held may genuinely be stuck.
 		q.startMu.Lock()
 		started := q.started
 		q.startMu.Unlock()
@@ -537,9 +532,9 @@ func (q *StandaloneQueue) Enqueue(ctx context.Context, task Task, opts ...Enqueu
 	// owning tenant -- rather than adding an explicit "tenant_id" kv on
 	// top of whatever obs.FromContext(ctx) would already auto-attach from
 	// ctx's own ambient tenant. Enqueue is legitimately called from
-	// contexts whose ambient tenant differs from task.TenantID (see
-	// AGENTS.md's "platform-level scheduler enqueuing one cleanup Task
-	// per tenant in a loop" example) or carries none at all; either way,
+	// contexts whose ambient tenant differs from task.TenantID (a
+	// platform-level scheduler enqueuing one cleanup Task per tenant in a
+	// loop, for example) or carries none at all; either way,
 	// a caller-supplied literal here would either duplicate ctx's own
 	// value or silently disagree with it, and it is task.TenantID -- not
 	// ctx's ambient tenant -- that this log line must attribute the job
@@ -598,11 +593,10 @@ func (q *StandaloneQueue) DeadLetterJobs(ctx context.Context) ([]*Job, error) {
 // ctx carries owner as its tenant, or ctx carries a system context
 // (pkgcore.WithSystemContext) — the same two legitimate paths
 // dbkit.Repository[T] and the tenant-scoping plugin recognize elsewhere in
-// this codebase (docs/internal/04-data-and-tenancy.md names jobs' own
-// system tasks as one of the whitelisted WithSystemContext callers).
-// Exported so the queue/asynq subpackage's Queue.Get/Cancel/DeadLetterJobs
-// share this exact access rule with StandaloneQueue's own -- see AGENTS.md's
-// "The persistence model is platform data, not tenant data" section.
+// this codebase, whose whitelisted WithSystemContext callers include jobs'
+// own system tasks. Exported so the queue/asynq subpackage's
+// Queue.Get/Cancel/DeadLetterJobs share this exact access rule with
+// StandaloneQueue's own.
 func CallerMayAccess(ctx context.Context, owner pkgcore.TenantID) bool {
 	if _, ok := pkgcore.SystemReasonFromContext(ctx); ok {
 		return true
@@ -612,13 +606,12 @@ func CallerMayAccess(ctx context.Context, owner pkgcore.TenantID) bool {
 }
 
 // registerQueueDepthGauge wires the "jobs.queue.depth" ObservableGauge
-// docs/internal/09-observability.md's must-instrument table names for
-// jobs: current backlog size, labeled by job_type and status only —
-// deliberately NEVER tenant_id, which root CLAUDE.md's logging discipline
-// forbids as a Prometheus label on cardinality grounds. Correlating a
-// specific tenant's backlog is a job for structured logs and trace
-// attributes instead (see execute's own log lines, which do carry
-// tenant_id via obs.FromContext), exactly mirroring
+// for the task-queue domain: current backlog size, labeled by job_type
+// and status only — deliberately NEVER tenant_id, which must never become
+// a Prometheus label: per-tenant cardinality would take the metrics
+// system down, so a specific tenant's backlog is a job for structured
+// logs and trace attributes instead (see execute's own log lines, which
+// do carry tenant_id via obs.FromContext), exactly mirroring
 // observability.Middleware's own documented split between metric labels
 // and span/log attributes.
 //
@@ -662,10 +655,9 @@ func (q *StandaloneQueue) registerQueueDepthGauge(meter metric.Meter) error {
 }
 
 // registerJobMetrics wires the "jobs.job.duration" Histogram and
-// "jobs.job.attempts"/"jobs.job.dead_letter" Counters
-// docs/internal/09-observability.md's must-instrument table requires for
-// the task-queue domain beyond queue backlog depth: execution-duration
-// percentiles ("jobs.job.duration"), and failure rate and retry count
+// "jobs.job.attempts"/"jobs.job.dead_letter" Counters for the task-queue
+// domain beyond queue backlog depth: execution-duration percentiles
+// ("jobs.job.duration"), and failure rate and retry count
 // (both derivable from "jobs.job.attempts", sliced by its "status"
 // attribute -- one of StatusSucceeded/StatusRetrying/StatusDeadLetter,
 // the exact three outcomes execute (worker.go) can reach) and

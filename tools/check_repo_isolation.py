@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """Tenant-isolation test coverage checker for the repository's Repositories.
 
-docs/internal/18-cicd.md's architecture-discipline table carries the row
-"every Repository must run the isolation test suite", marked there as a
-self-written script ("self-written" distinguishes it from the rows that
-reuse ready-made Go tooling): the enforcing script scans Repository
-implementations and compares them against a test-coverage inventory. This
-script is that check's local-run counterpart (the row is marked
-self-written like the CJK and i18n-key rows that tools/scan_cjk.py and
-tools/check_i18n_keys.py already implement).
+The architecture-discipline row "every Repository must run the isolation
+test suite" is discharged by a self-written check, in the same category
+as the CJK and i18n-key checks tools/scan_cjk.py and
+tools/check_i18n_keys.py implement ("self-written" distinguishes these
+rows from the ones that reuse ready-made Go tooling). The check scans
+Repository implementations and compares them against a test-coverage
+inventory.
 
-What is checked. Root CLAUDE.md's multi-tenant isolation rules require every
+What is checked. The multi-tenant isolation rules require every
 tenant-data / link-data repository to embed the mandatory generic base
 `dbkit.Repository[T]` instead of holding a raw connection, and the tenancytest
 suite (go/tenancy/tenancytest, whose doc comment names the same obligation --
@@ -58,23 +57,22 @@ textual scanner, not a Go type checker):
     and runs).
   * Coverage tests are the package's _test.go files in the package
     directory plus the _test.go files under its physically separated
-    integration_test/ directory (root CLAUDE.md testing rule: integration
-    tests live in their own directory so a plain `go test` never touches
-    them). Build tags are ignored: the check is textual, so tagged-in and
-    tagged-out files are both counted.
+    integration_test/ directory (integration tests live in their own
+    directory so a plain `go test` never touches them). Build tags are
+    ignored: the check is textual, so tagged-in and tagged-out files are
+    both counted.
 
 What is NOT a candidate, beyond _test.go files (see "What is deliberately
 NOT required" below):
 
-  * Types declared under a package's internal/testutil tree. Root
-    CLAUDE.md's Testing rule makes internal/testutil the repo-mandated
-    home of shared test helpers, and the test doubles that live there
-    (go/compliance/internal/testutil's FakeRepository, say) embed
-    dbkit.Repository[T] precisely so OTHER packages' tests exercise the
-    real generic base. The fake itself is a fixture, not a shipped
-    repository implementation, and no tenancytest.AssertIsolated call
-    belongs beside it -- requiring one would false-positive on the very
-    shape root CLAUDE.md's Testing rule mandates.
+  * Types declared under a package's internal/testutil tree. internal/
+    testutil is the repo-mandated home of shared test helpers, and the
+    test doubles that live there (go/compliance/internal/testutil's
+    FakeRepository, say) embed dbkit.Repository[T] precisely so OTHER
+    packages' tests exercise the real generic base. The fake itself is a
+    fixture, not a shipped repository implementation, and no
+    tenancytest.AssertIsolated call belongs beside it -- requiring one
+    would false-positive on that very role.
 
 What is deliberately NOT required, and why:
 
@@ -106,7 +104,7 @@ is not seen (the alias is not an embedding of the base itself); in a grouped
 entry declaring several names for one struct (A, B struct { ... }) only the
 first name is attributed; comments are skipped wholesale, so a field
 boundary hidden inside a multi-line block comment is not seen. None of
-these shapes occur in the repository today; the tenancytest doc comment
+these shapes occur in the repository; the tenancytest doc comment
 above each of these choices is the authority when one appears.
 
 Usage:
@@ -671,9 +669,8 @@ def package_key_of_test_file(test_rel: str) -> str:
     """Directory whose package a _test.go file tests.
 
     Files under an integration_test/ subtree test the package that subtree
-    lives in (the physically separated integration tier per root
-    CLAUDE.md's testing rule); every other test file tests its own
-    directory's package.
+    lives in (the physically separated integration tier); every other
+    test file tests its own directory's package.
     """
     parts = test_rel.split("/")
     if TEST_DIR_NAME in parts:
@@ -688,9 +685,9 @@ def equivalent_suite_name(type_name: str) -> str:
     queries the "id" column, so a Repository-embedding type whose record
     deliberately deviates from that convention (a Create-only embedding
     over a differently-keyed primary key) cannot run the mandatory suite;
-    root CLAUDE.md's discipline is then discharged by an in-package
-    store-level isolation suite named exactly Test<TypeName>_AssertIsolated
-    (see the module docstring's coverage heuristics).
+    the discipline is then discharged by an in-package store-level
+    isolation suite named exactly Test<TypeName>_AssertIsolated (see the
+    module docstring's coverage heuristics).
     """
     return f"Test{type_name}_AssertIsolated"
 
@@ -753,7 +750,7 @@ def scan_module(
         if (os.path.basename(dirpath) == "testutil"
                 and os.path.basename(os.path.dirname(dirpath)) == "internal"):
             # internal/testutil: the repo-mandated home of shared test
-            # helpers (root CLAUDE.md's Testing rule). The test doubles
+            # helpers. The test doubles
             # there embed dbkit.Repository[T] so OTHER packages' tests can
             # exercise the real base; the fakes themselves are fixtures,
             # never shipped repositories, and no tenancytest call belongs

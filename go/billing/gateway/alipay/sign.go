@@ -133,8 +133,7 @@ func signParams(params map[string]string, priv *rsa.PrivateKey) (string, error) 
 // signature) against Alipay's canonical string built from every OTHER
 // param, using pub -- Alipay's own public key, never the merchant's. It
 // performs no network call and no I/O of any kind, matching every other
-// provider package's VerifyWebhook's own offline-verification contract in
-// this round.
+// provider package's VerifyWebhook's own offline-verification contract.
 func VerifySignature(params map[string]string, pub *rsa.PublicKey) error {
 	sigB64 := params["sign"]
 	if sigB64 == "" {

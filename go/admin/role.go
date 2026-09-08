@@ -7,12 +7,12 @@ import (
 	"github.com/vislake/speed/go/rbac"
 )
 
-// RoleService is D8's runtime: a thin wrapper over rbac.Service's
-// already-real role-management writes (DefineRole/AssignRole/RevokeRole/
-// RestoreRole/EnsureBuiltinRoles) plus the new DeclaredPermissions read,
-// giving go/admin an HTTP surface for role management -- rbac itself
-// mounts no HTTP routes by design (go/rbac/AGENTS.md: role management is
-// the operations console's own surface, not rbac's).
+// RoleService is the role-management runtime: a thin wrapper over
+// rbac.Service's already-real role-management writes
+// (DefineRole/AssignRole/RevokeRole/RestoreRole/EnsureBuiltinRoles) plus
+// the DeclaredPermissions read, giving go/admin an HTTP surface for role
+// management -- rbac itself mounts no HTTP routes by design: role
+// management is the operations console's own surface, not rbac's.
 //
 // # Why this is NOT a WithXxx(*rbac.Module) construction-time option
 //
@@ -72,16 +72,16 @@ func (s *RoleService) require() (*rbac.Service, error) {
 // checkTenantWritable is the up-front validation every tenant-naming write
 // runs before rbac.Service is reached: an empty tenantID is refused with
 // ErrTenantIDRequired, and rbac.SystemDomain -- the platform-operations
-// pseudo-tenant every admin:* permission is evaluated in (D1) -- is refused
+// pseudo-tenant every admin:* permission is evaluated in -- is refused
 // with ErrRolesSystemDomainForbidden. The system tenant is the platform's
 // internal domain, NOT a tenant any admin:roles_manage-gated surface may
 // write roles or bindings into: the role catalog is single and global with
 // no domain partitioning, so accepting it as an ordinary request tenant
 // would let a roles_manage-only caller define a role carrying
 // admin:impersonate (or any other admin:*) inside the system domain and
-// bind it to themselves, collapsing the nine admin permission boundaries
-// into one (the granting-side twin of ErrImpersonationTargetForbidden's
-// own subject-side refusal -- see that sentinel's doc comment). Hosts seed
+// bind it to themselves, collapsing the admin permission boundaries into
+// one (the granting-side twin of ErrImpersonationTargetForbidden's own
+// subject-side refusal -- see that sentinel's doc comment). Hosts seed
 // and revoke system-domain grants out of band, directly against
 // rbac.Service under a system-tenant context (the shape the reference
 // app's seedDemoPlatformStaff takes), which this refusal leaves untouched.
@@ -112,11 +112,10 @@ func (s *RoleService) DeclaredPermissions() ([]string, error) {
 // DefineRole creates or updates a role inside tenantID, delegating to
 // rbac.Service.DefineRole. tenantID comes from the request body -- an
 // admin:roles_manage-gated operator names which tenant's role catalog to
-// edit -- rather than from a caller's own token, exactly like D5's
-// impersonation TargetTenantID: admin's own routes deliberately do not
-// sit downstream of tenancy.Middleware (AGENTS.md's HTTP surface
-// section), since these are platform operations ABOUT a tenant, not
-// scoped to the caller's own one.
+// edit -- rather than from a caller's own token, exactly like the
+// impersonation pipeline's TargetTenantID: admin's own routes deliberately
+// do not sit downstream of tenancy.Middleware, since these are platform
+// operations ABOUT a tenant, not scoped to the caller's own one.
 //
 // tenantID must name a real tenant's catalog: rbac.SystemDomain is
 // refused with ErrRolesSystemDomainForbidden (checkTenantWritable), the
@@ -157,13 +156,11 @@ func (s *RoleService) AssignRole(ctx context.Context, tenantID, userID, role, no
 // rbac.Service.RevokeRole. tenantID is validated by the same
 // checkTenantWritable guard every other write here runs -- empty is
 // ErrTenantIDRequired, rbac.SystemDomain is ErrRolesSystemDomainForbidden.
-// admin declares no admin.role.revoked audit
-// action of its own -- RevokeRole already publishes its own domain event
-// (go/admin/AGENTS.md's round-1 note, carried forward unchanged this
-// round), so this call site is exactly where that division of
-// responsibility is honored: rbac's own event carries the Actor this
-// call's ctx supplies, never a second, redundant admin-owned record of
-// the same fact.
+// admin declares no admin.role.revoked audit action of its own
+// (module.go's audit-action block): RevokeRole already publishes its own
+// domain event, and that event carries the Actor this call's ctx
+// supplies, never a second, redundant admin-owned record of the same
+// fact.
 func (s *RoleService) RevokeRole(ctx context.Context, tenantID, userID, role, nodeID string) error {
 	svc, err := s.require()
 	if err != nil {
@@ -179,14 +176,14 @@ func (s *RoleService) RevokeRole(ctx context.Context, tenantID, userID, role, no
 
 // RestoreRole undoes the most recently revoked matching binding,
 // delegating to rbac.Service.RestoreRole -- wrapped here because it fits
-// the identical shape as AssignRole/RevokeRole and rbac's own soft-delete
-// round already ships it as a real, tested method. tenantID is validated
-// by the same checkTenantWritable guard every other write here runs, so
-// even a Service-level caller cannot use this to re-land a system-domain
-// binding the surface never created. admin exposes no HTTP
-// route for it this round (docs/internal/23-admin.md's D8 HTTP table
-// names only three routes), so it is reachable at the Service level
-// only, exactly like org's own TreeService.Restore.
+// the identical shape as AssignRole/RevokeRole and rbac ships it as a
+// real, tested method. tenantID is validated by the same
+// checkTenantWritable guard every other write here runs, so even a
+// Service-level caller cannot use this to re-land a system-domain binding
+// the surface never created. No HTTP route exposes it -- the
+// role-management fragment carries only role CRUD and binding routes -- so
+// it is reachable at the Service level only, exactly like org's own
+// TreeService.Restore.
 func (s *RoleService) RestoreRole(ctx context.Context, tenantID, userID, role, nodeID string) error {
 	svc, err := s.require()
 	if err != nil {

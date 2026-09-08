@@ -7,7 +7,7 @@
  * Generated operation functions and hooks (src/index.ts) call the
  * configured mutator -- `speedRequest`, or the credential-less
  * `speedRequestCredentialless` where web/orval.config.ts overrides it
- * per operation (the session-refresh operation today) -- with one
+ * per operation (the session-refresh operation) -- with one
  * axios-shaped options object. The mutator adapts that call to the
  * @speed/api-client request-function shape and forwards it to the
  * function a host bound once at bootstrap with
@@ -23,8 +23,8 @@
  * package cannot run host bootstrap code at import time.
  *
  * Nothing here may be edited by regeneration: orval's output paths
- * cover only src/index.ts, never this file. M1 consumer shells bind
- * their client via `@speed/api-sdk/runtime`.
+ * cover only src/index.ts, never this file. Consumer shells bind their
+ * client via `@speed/api-sdk/runtime`.
  */
 
 import type {

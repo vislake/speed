@@ -45,8 +45,7 @@ const orphanRefundJobIDPrefix = "smilesim-orphan:"
 // modules would be disproportionate. The statement is written to be
 // portable across both dbkit dialects anyway (VARCHAR/TIMESTAMP,
 // application-generated ids, no PostgreSQL- or SQLite-specific syntax),
-// matching the backend coding standard's dual-dialect rule, even though
-// only SQLite is exercised by this app today.
+// even though only SQLite is exercised by this app today.
 const createCreditReservationsTableSQL = `CREATE TABLE IF NOT EXISTS ` + creditReservationsTable + ` (
 	job_id     VARCHAR(64) NOT NULL PRIMARY KEY,
 	tenant_id  VARCHAR(64) NOT NULL,
@@ -59,9 +58,8 @@ const createCreditReservationsTableSQL = `CREATE TABLE IF NOT EXISTS ` + creditR
 // nor the reconciliation sweep (reconcile.go) has yet settled -- see this
 // package's doc comment's "Credit accounting" section.
 //
-// It is platform data, like go/jobs' own jobRecord and go/config's row
-// (root CLAUDE.md's data-domain census entries for both): it carries a
-// real, unenforced tenant_id column rather than implementing
+// It is platform data, like go/jobs' own jobRecord and go/config's row:
+// it carries a real, unenforced tenant_id column rather than implementing
 // dbkit.TenantScoped, because Service.ReconcileOutstandingCredits must
 // list every tenant's outstanding rows in one query -- an access pattern
 // dbkit.Repository[T]'s tenant-injecting plugin cannot serve, since it
@@ -70,7 +68,7 @@ const createCreditReservationsTableSQL = `CREATE TABLE IF NOT EXISTS ` + creditR
 // place (the identical reasoning jobRecord's own doc comment gives for
 // its cross-tenant dispatch query).
 //
-// A row's mere existence IS "not yet settled": save inserts it the moment
+// A row's mere existence IS "not settled": save inserts it the moment
 // Simulate's PreDeduct and the resulting enqueue both succeed, and delete
 // removes it the moment settleCredit's Confirm/Refund succeeds --
 // whichever of NotifyOnCompletion's poll-driven call or the reconciliation
@@ -112,10 +110,10 @@ func (creditReservation) TableName() string { return creditReservationsTable }
 // ReservationStore is smilesim's own tiny, plain-gorm data-access type for
 // creditReservation -- deliberately NOT a dbkit.Repository[T], whose
 // generic constraint requires TenantScoped, exactly what creditReservation
-// must NOT implement (see its own doc comment). This follows root
-// CLAUDE.md's documented exception for platform data: "[platform data]
-// can't use [Repository[T]] ... so they use dbkit.Open()'s plain *gorm.DB
-// directly."
+// must NOT implement (see its own doc comment). This follows the
+// documented exception for platform data: platform rows cannot use
+// dbkit.Repository[T] (its constraint requires TenantScoped), so they
+// use dbkit.Open()'s plain *gorm.DB directly.
 //
 // The zero value is not ready to use; construct one with
 // NewReservationStore.

@@ -1,9 +1,8 @@
 //go:build integration
 
 // This file is the reference app's distributed-mode integration tier: the
-// positive and negative halves of the property root CLAUDE.md's Repository
-// Status names as the one M0 exit condition CI enforces "not at all" --
-// "no Kernel.Bootstrap has ever run under the distributed mode itself." It
+// positive and negative halves of a real Kernel.Bootstrap under the
+// distributed deployment mode. It
 // lives in package referenceapp_test alongside
 // redis_eventbus_composition_test.go (same build tag, same
 // "go test -tags=integration ./..." invocation, no skip-on-missing-Docker
@@ -19,29 +18,23 @@
 // real SMTP catcher, and -- necessarily, see the deviation note below --
 // the SAME SQLite file.
 //
-// # Why the earlier version of this file's positive proof did not prove what
-// # it claimed, and what changed
+// # How the positive proof crosses a process boundary
 //
-// An earlier version of this test created a note on replica A and read the
-// resulting notification back through replica B's REST endpoint, and
-// claimed that crossing proved the "eventbus" and "kv" seams were genuinely
-// shared over Redis. That claim did not hold up: cmd/server/server.go wires
+// A note created on replica A must not be observable on replica B through
+// the shared SQLite file alone. cmd/server/server.go wires
 // jobs.NewStandaloneQueue(db) UNCONDITIONALLY, regardless of deployment
 // mode -- there is no Redis-backed jobs queue anywhere in this app -- and
 // both replicas share one SQLite file (see the deviation note below for
 // why). notification.DeliveryService.Dispatch only ENQUEUES a job; the
 // actual in_app_messages row write happens later, inside WHICHEVER
 // replica's StandaloneQueue worker polls and claims that row from the
-// shared jobs table. So the old chain -- replica A creates a note, note-
-// created fires Dispatch (wherever its subscription happened to land), a
-// job row lands in the shared SQLite jobs table, EITHER replica's worker
-// claims and executes it, writing the inbox row into the SAME shared
-// SQLite database, and replica B's GET reads that row straight off disk --
-// never actually required the EventBus or KVStore to cross a process
-// boundary at all. Two fully isolated, unconnected per-replica Redis
-// instances would not have made that old test fail.
+// shared jobs table. A proof that created a note on A and read the inbox
+// row through B's REST endpoint would therefore never require the
+// EventBus or KVStore to cross a process boundary at all -- two fully
+// isolated, unconnected per-replica Redis instances would not make such
+// a test fail.
 //
-// This version closes that gap by making replica B's own worker
+// This file closes that gap by making replica B's own worker
 // STRUCTURALLY incapable of ever processing a job: replica B boots with
 // APP_DISABLE_QUEUE_WORKER=true (server.go's cfg.DisableQueueWorker),
 // which skips standaloneQueue.Start entirely on that replica -- no
@@ -64,11 +57,8 @@
 // payload itself (message_id/tenant_id/recipient_user_id/type_key), never
 // a database read.
 //
-// The "kv" seam gets its own, independent proof for the identical reason:
-// the old file's doc comment claimed authn's login rate limiter exercised
-// it "on every login attempt", but the test never actually drove more than
-// one login, on replica A alone, so it could not have detected a KVStore
-// that failed to synchronize. This version drives two wrong-password
+// The "kv" seam gets its own, independent proof: the file drives two
+// wrong-password
 // login attempts deliberately: one against replica A (which records a
 // failure and opens authn's own 30-second progressive-lockout window,
 // go/authn/ratelimit.go's RecordLoginFailure/loginLockoutBase -- state
@@ -83,20 +73,17 @@
 //
 // # A recorded deviation from a real Postgres container
 //
-// This round's brief suggested a genuine PostgreSQL container as the two
-// replicas' shared database. That is not what this file does, and the
-// reason is a fact about the LIVE tree, not a shortcut: cmd/server/server.go
+// The two replicas do not share a real PostgreSQL container; both use one
+// SQLite file at APP_DB_PATH. The reason is a fact about the live tree,
+// not a shortcut: cmd/server/server.go
 // hard-codes dbkit.DialectSQLite (its own blank import of
 // go/dbkit/dialect/sqlite is the only dialect driver this app links), with
 // no environment variable or option anywhere in this app's wiring that
-// selects a different dialect. Adding one would be exactly the
-// second-dialect-axis redesign this round's own brief says is out of
-// scope ("do not attempt the second-dialect axis in this round... this
-// round's job is not to redesign that"), so this file does not add it.
-// Both replicas therefore share one SQLite file at APP_DB_PATH instead --
-// the two axes this round closes (deployment mode x infrastructure seam
-// composition) are orthogonal to which SQL dialect the app's OWN database
-// uses, and proving them needs no dialect change at all. SQLite tolerates
+// selects a different dialect. Adding one would be a second-dialect-axis
+// redesign this app deliberately does not attempt, so this file does not
+// add it. The axes this file proves (deployment mode x infrastructure
+// seam composition) are orthogonal to which SQL dialect the app's own
+// database uses, and proving them needs no dialect change at all. SQLite tolerates
 // more than one process holding the same file open (unlike, say, an
 // exclusive advisory lock would), serializing writers rather than refusing
 // a second opener, so two processes against one file is not itself broken
@@ -108,14 +95,14 @@
 // topology needs that a real distributed database would not. This is also
 // exactly why the positive proof above cannot rely on the shared file for
 // its EventBus/KVStore claims -- the same sharing that makes the topology
-// workable at all is what made the earlier version of this test's claim
-// false, and APP_DISABLE_QUEUE_WORKER plus the SSE/lockout assertions are
-// what closes that gap without touching the SQLite topology itself.
+// workable at all is why APP_DISABLE_QUEUE_WORKER plus the SSE/lockout
+// assertions exist: they make the crossing visible without touching the
+// SQLite topology itself.
 //
 // # A recorded fact about the demo identity layer under two replicas
 //
 // A demo account's membership is org's own memberships row -- the
-// membership-reality round's signInMemberships (cmd/server/sign_in_memberships.go),
+// signInMemberships store (cmd/server/sign_in_memberships.go),
 // which authn's WithMembershipReader reads to decide "does this user
 // belong to this tenant", answers customer-tenant questions from that
 // table, live -- and org's rows live in the SHARED database, so an
@@ -124,9 +111,7 @@
 // OWN, separate reader instance too: a fresh, successful login against
 // replica B for that account would resolve its membership from the same
 // rows A's seed wrote. This file's scenario is nevertheless shaped the
-// way it is, and the reason is no longer the membership store's
-// per-process blindness (that was the pre-round in-process roster, closed
-// by the same round):
+// way it is for the two reasons below:
 //
 //   - The one SUCCESSFUL, token-minting login happens exactly once,
 //     against replica A, and that one access token is reused against
@@ -166,8 +151,8 @@
 // (objectstore/s3.NewObjectStore and pkgcore.NewSMTPMailer both dial
 // nothing at construction -- their own doc comments say so). This file
 // uses REAL RustFS and a REAL SMTP catcher anyway, deliberately: declaring
-// a capability this app never actually exercises would be a weaker proof
-// than this round's own brief asks for, and the note-created notification
+// a capability this app never actually exercises would be a weaker proof,
+// and the note-created notification
 // type's DefaultChannels ("in_app", "email", "sms" --
 // examples/reference-app/internal/notes/module.go) means the SAME note
 // creation that drives the "eventbus"/"kv" proof ALSO drives a real
@@ -467,9 +452,8 @@ func (r *replica) logs() string {
 // subprocess still writing to its captured stdout on os/exec's own
 // background copy goroutine, while this test's own goroutine concurrently
 // calls replica.logs (String) in a polling loop before the child has
-// exited. Before syncBuffer replaced the plain *bytes.Buffer this type
-// used to wrap, `go test -race` failed this test with "DATA RACE" every
-// run; with syncBuffer in place it passes.
+// exited. syncBuffer exists because a plain *bytes.Buffer made `go test
+// -race` fail this test with "DATA RACE" on every run.
 func TestReplicaLogs_ConcurrentWriteAndRead_NoRace(t *testing.T) {
 	cmd := exec.Command("sh", "-c", "i=0; while [ $i -lt 200 ]; do echo \"line $i\"; i=$((i+1)); done")
 	r := &replica{
@@ -714,10 +698,10 @@ func openInboxStream(t *testing.T, baseURL, accessToken, userIDHeader string) *s
 }
 
 // TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructure
-// is this round's positive proof: two real reference-app server processes,
+// is the positive proof: two real reference-app server processes,
 // both booted under APP_DEPLOYMENT_MODE=distributed against the SAME
 // real Redis, the SAME real RustFS bucket and the SAME real SMTP catcher --
-// exactly the composition this round's server.go changes make possible,
+// the composition cmd/server/server.go builds,
 // declaring MultiReplicaSafe|SurvivesRestart on every one of the four
 // stateful seams Kernel.Bootstrap validates. Replica B additionally boots
 // with APP_DISABLE_QUEUE_WORKER=true, so it can never itself execute the
@@ -799,10 +783,9 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 
 	// One real, SUCCESSFUL login, against replica A only -- see this
 	// file's package doc comment on why the proof keeps to one
-	// token-minting login (single-writer topology, and the membership
-	// store's per-process blindness that used to make a second one fail
-	// against replica B is closed by the membership-reality round
-	// anyway): every subsequent request, including the ones against
+	// token-minting login (single-writer topology, and a second login's
+	// membership answer is not what this file exercises): every
+	// subsequent request, including the ones against
 	// replica B below, reuses this ONE token, and its verification on
 	// replica B is itself a real cross-replica proof (the shared go/pki
 	// signing key material, read from the shared database).
@@ -896,8 +879,8 @@ func TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructur
 	// notification.inbox.created announcement must arrive on REPLICA B's
 	// own SSE stream. Replica B's queue worker is disabled, so it cannot
 	// have produced this announcement itself -- the only path is a real
-	// cross-process delivery over the "eventbus" seam this round's
-	// server.go wiring composes over Redis.
+	// cross-process delivery over the "eventbus" seam server.go's wiring
+	// composes over Redis.
 	var gotFrame bool
 	deadline := time.After(20 * time.Second)
 	for !gotFrame {
@@ -983,8 +966,8 @@ type bootFailureCase struct {
 	wantSubstr []string
 }
 
-// TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot is this
-// round's negative proof, run through the REAL BINARY rather than an
+// TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot is the
+// negative proof, run through the REAL BINARY rather than an
 // in-process buildServer call (server_test.go's own
 // TestBuildServer_DistributedDeploymentMode_* tests already cover that
 // in-process form) -- proving that an operator who requests the
@@ -1019,15 +1002,15 @@ func TestServer_DistributedMode_IncompleteComposition_FailsClosedAtBoot(t *testi
 			// The SMS seam alone satisfied (a fake, never-dialed gateway
 			// URL), Redis/S3/SMTP left on the Preset's in-process
 			// defaults -- Kernel.Bootstrap's OWN capability validation is
-			// what fails now, naming the first seam it resolves in its
+			// what fails, naming the first seam it resolves in its
 			// fixed order: "eventbus". That seam's in-process memory bus
 			// reaches Bootstrap through buildServer's own injection
-			// (WithEventBus, the org audit round's pre-built bus; see
+			// (WithEventBus, the pre-built bus; see
 			// server_test.go's TestBuildServer_DistributedDeploymentMode_
 			// FailsCapabilityValidation comment), never through the Preset,
 			// so the capability error names it as implementation
 			// "<injected>" -- an injected seam has no registry name to
-			// report. The property is unchanged: an incomplete distributed
+			// report. The property is the same either way: an incomplete distributed
 			// composition still fails closed, and it is the seam,
 			// capability and mode naming that proves it.
 			name:     "SMS sender present, every kernel seam left on its in-process default",

@@ -34,8 +34,8 @@ const (
 const SystemPurposeSystemWrite pkgcore.SystemPurpose = "config.system_write"
 
 // Module implements pkgcore.Module for go/config: the dynamic
-// configuration and feature-flag runtime (docs/internal/11-cross-cutting.
-// md's config section). Unlike a business module, it contributes no
+// configuration and feature-flag runtime. Unlike a business module, it
+// contributes no
 // tenant-scoped behavior of its own -- its configs table is platform data,
 // and its endpoints serve unauthenticated display decisions -- so its
 // Register declares only the schema-less surfaces: the two endpoints, its
@@ -169,17 +169,16 @@ func (m *Module) DependsOn() []string { return nil }
 func (m *Module) Migrations() embed.FS { return migrations.FS }
 
 // Locales implements pkgcore.Module: config ships no user-facing messages
-// in this milestone (its endpoints return structured codes, and the future
-// admin console's copy will live in whichever module owns that UI), so it
-// contributes an empty file set. A module with no locale files at all
+// (its endpoints return structured codes, and the copy of any admin console
+// that renders its items would live in whichever module owns that UI), so
+// it contributes an empty file set. A module with no locale files at all
 // contributes nothing to the catalog and is not an error (go/pkgcore/i18n
 // catalog.go's AddModule doc comment).
 func (m *Module) Locales() embed.FS { return embed.FS{} }
 
-// OpenAPISpec implements pkgcore.Module: nil. The two endpoints this
-// module mounts are pre-auth display surfaces whose OpenAPI fragment is
-// deferred to the authn round (recorded in go/config/AGENTS.md's known
-// limitations), so there is no spec to embed yet.
+// OpenAPISpec implements pkgcore.Module: nil. The two pre-auth endpoints
+// this module mounts have no OpenAPI fragment -- their contract lives in
+// http.go's doc comments -- so there is nothing to embed.
 func (m *Module) OpenAPISpec() []byte { return nil }
 
 // Register implements pkgcore.Module. Per the interface's own contract

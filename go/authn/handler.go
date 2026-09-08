@@ -78,7 +78,7 @@ type Handler struct {
 // see notes' identical NewHandler doc comment for the mechanism.
 //
 // bus and auditActions back this Handler's own audit.Emit calls (see
-// recordAudit) for the 9 audit actions module.go's Register declares --
+// recordAudit) for the audit actions module.go's Register declares --
 // notes.NewHandler's identical two parameters are the established
 // convention this mirrors. bus may be nil, in which case every operation
 // still succeeds but records no audit event, exactly as notes.Handler's
@@ -102,9 +102,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // requirePrincipal reads the authenticated Principal Middleware put in ctx,
 // writing authn.authentication_required and reporting false when there is
 // none. Every protected operation below calls this first; it is this
-// module's per-route enforcement (root CLAUDE.md's "authn.Middleware is
-// optional-auth; RequireAuthenticated is per-route, not global" -- see
-// middleware.go), applied at the operation level because this one Handler
+// module's per-route enforcement -- authn.Middleware authenticates
+// optionally, and RequireAuthenticated is per-route, not global (see
+// middleware.go) -- applied at the operation level because this one Handler
 // serves both public and protected paths.
 func (h *Handler) requirePrincipal(w http.ResponseWriter, r *http.Request) (Principal, bool) {
 	principal, ok := PrincipalFromContext(r.Context())
@@ -127,8 +127,8 @@ const maxRequestBodyBytes = 1 << 16
 
 // decodeJSON decodes r's body into v, translating a decode failure into
 // ErrInvalidRequestBody (errors.go) -- the structured invalid-request-body
-// error every operation below reports it as, now catalogued and
-// bilingually rendered like every other error this module returns (see
+// error every operation below reports it as, catalogued and bilingually
+// rendered like every other error this module returns (see
 // ErrInvalidRequestBody's own doc comment).
 //
 // The body is bounded by maxRequestBodyBytes BEFORE decoding: a body that
@@ -145,7 +145,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	return nil
 }
 
-// recordAudit emits an AuditEvent for one of the 9 audit actions module.go's
+// recordAudit emits an AuditEvent for one of the audit actions module.go's
 // Register declares, through audit.Emit -- the declarative collection
 // mechanism go/dbkit/audit documents, exactly as notes.Handler's own
 // recordNoteCreatedAudit uses it (see that method's doc comment for the
@@ -189,12 +189,11 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 // protected operation below -- logout,
 // identity unbind, MFA changes, tenant switch, session revoke -- carries
 // its principal's tenant, and every sign-in success this Handler records
-// (password, SMS, social) carries the tenant the new session resolved
-// (enterprise SSO sign-ins still have no recordAudit site: the SSO service
-// has no mounted HTTP surface, and AuditActionSSOConfigure's own emission
-// -- oidc.go's emitConfigSavedAudit -- records configuration writes from
-// the service layer, not sign-ins; the remainder is AGENTS.md's
-// known-limitation table's business). AuthnSwitchTenant
+// (password, SMS, social) carries the tenant the new session resolved.
+// Enterprise SSO sign-ins have no recordAudit site: the SSO service has no
+// mounted HTTP surface, and AuditActionSSOConfigure's own emission --
+// oidc.go's emitConfigSavedAudit -- records configuration writes from the
+// service layer, not sign-ins. AuthnSwitchTenant
 // records the PRINCIPAL'S tenant (the tenant the session acted in before
 // the switch): the row answers "a member of which tenant performed this
 // action", and the switch's own destination is the request's business,
@@ -211,11 +210,11 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 // attempt, for instance), in which case ctx is left exactly as given and
 // Emit falls back to its own "no actor set" zero value.
 //
-// P2-pkgcore-actor-1: when an actor IS known, its display name is
-// resolved from the users table at record time (h.svc.Users().FindByID)
-// and carried on the Actor, so the audit record stays readable after the
-// account is renamed or deleted -- the purpose pkgcore.Actor.DisplayName
-// documents for itself. The resolution is deliberately inside this one
+// When an actor IS known, its display name is resolved from the users
+// table at record time (h.svc.Users().FindByID) and carried on the Actor,
+// so the audit record stays readable after the account is renamed or
+// deleted -- the purpose pkgcore.Actor.DisplayName documents for itself.
+// The resolution is deliberately inside this one
 // funnel rather than at its call sites: every site's actor is an authn
 // user id it knows only as an id (a Principal carries no display name,
 // see token.go), and the users table is the single honest source for the
@@ -233,7 +232,7 @@ func (h *Handler) recordAudit(ctx context.Context, tenantID pkgcore.TenantID, ac
 	if h.bus == nil {
 		// The PERMANENT no-bus failure must not be quieter than the
 		// transient one below (an Emit failure logs at Error): a Handler
-		// built without a bus never records any of the 9 declared actions,
+		// built without a bus never records any of the declared actions,
 		// for its whole life, and that state is announced once at Error --
 		// see nilBusWarned's own doc comment for why once rather than per
 		// operation.
@@ -330,10 +329,9 @@ const (
 // host-declared trusted-proxy list Service carries (WithTrustedProxies):
 // the forwarding headers are read ONLY when the request's direct
 // connection address (RemoteAddr) is one of the declared proxies, and
-// every other request records its direct connection address, exactly as
-// this method always did. A direct client can never mint a recorded
-// address by setting a header: it is not a declared proxy, so its headers
-// are never read.
+// every other request records its direct connection address. A direct
+// client can never mint a recorded address by setting a header: it is not
+// a declared proxy, so its headers are never read.
 //
 // Two different header kinds are read under that gate, on two different
 // footings:
@@ -380,11 +378,11 @@ func (h *Handler) clientIP(r *http.Request) string {
 }
 
 // remoteAddrHost extracts the host part of a RemoteAddr -- "host:port" or
-// a bracketed "[::1]:port". net.SplitHostPort does the splitting, which is
-// what also leaves a BARE address -- one carrying no port at all, a shape
-// the manual last-colon split this replaced could not handle: a bare IPv6
-// like "::1" lost everything after its first colon and came back as the
-// garbage ":".
+// a bracketed "[::1]:port". net.SplitHostPort does the splitting, and its
+// refusal of a BARE address -- one carrying no port at all -- is exactly
+// why it is used: a manual last-colon split of a bare IPv6 like "::1"
+// would take everything after its first colon as the port and come back
+// with the garbage ":".
 func remoteAddrHost(remoteAddr string) string {
 	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
 		// SplitHostPort returns the host unbracketed: "[::1]:443" gives
@@ -918,9 +916,9 @@ func (h *Handler) AuthnConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 //
 // Unlike AuthnEnrollTOTP, this operation only ever acts on an ALREADY
 // ACTIVE factor (RegenerateRecoveryCodes' own precondition), so there is no
-// first-time-setup case to carve out: every call is "changing MFA
-// settings" (docs/internal/05 line 127) and RequireStepUp's unconditional
-// gate applies directly, exactly as wired.
+// first-time-setup case to carve out: every call changes existing MFA
+// settings, and RequireStepUp's unconditional gate applies directly,
+// exactly as wired.
 func (h *Handler) AuthnRegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
 	RequireStepUp(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := h.requirePrincipal(w, r)
@@ -1229,8 +1227,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // compile-time check that *Handler implements the api.ServerInterface
-// generated from this module's api/openapi.yaml -- the enforcement half of
-// the spec-first flow (docs/internal/21-api-contract.md): add an operation
-// to the fragment, regenerate, and this assertion stops compiling until
-// Handler implements it.
+// generated from this module's api/openapi.yaml: add an operation to the
+// fragment, regenerate, and this assertion stops compiling until Handler
+// implements it.
 var _ api.ServerInterface = (*Handler)(nil)

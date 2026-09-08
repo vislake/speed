@@ -403,8 +403,8 @@ export function FileUploader({
   // row the current `rows` prop still carries. A departed row's
   // announcement is retired by the diff effect on the commit that drops
   // it; this derivation is the render-time half of the same rule, so the
-  // region can never display a row the queue no longer holds — not even
-  // for the render between that commit and its effect.
+  // region can never display a row the queue has dropped — not even for
+  // the render between that commit and its effect.
   const liveAnnouncement =
     announcement !== null &&
     rows.some((row) => row.id === announcement.rowId)

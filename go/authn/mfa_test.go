@@ -79,7 +79,8 @@ func TestEnrollTOTP_ReplacesAnyExistingFactor(t *testing.T) {
 // unelevated session cannot replace an already ACTIVE TOTP factor: without
 // this check, a stolen access token could silently seize an account's
 // second factor by deleting it and enrolling an attacker-known secret in
-// its place (docs/internal/05 line 127's "changing MFA settings" case).
+// its place -- replacing an existing factor is a "changing MFA settings"
+// operation.
 func TestEnrollTOTP_ReplacingActiveFactor_RequiresStepUp(t *testing.T) {
 	t.Parallel()
 
@@ -119,26 +120,21 @@ func TestEnrollTOTP_ReplacingActiveFactor_RequiresStepUp(t *testing.T) {
 	}
 }
 
-// TestEnrollTOTP_AbandonedReplacement_OldFactorStaysFunctional is the
-// regression for the go/authn audit's CONFIRMED P1-1 finding
-// (account-ui.md): EnrollTOTP used to delete the existing ACTIVE factor
-// immediately, at enroll time -- BEFORE the replacement was ever confirmed
-// -- so a step-up-gated replacement wizard that was started and then
-// cancelled or abandoned (account-ui's MfaSection.tsx closeWizard, a pure
-// local reset with no server call at all) left the account with NO working
-// second factor and NO working recovery codes, with nothing about the
-// cancel path telling the user that had happened, even though the wizard's
-// own replacingNotice copy says the replacement only takes effect on
-// confirm.
+// TestEnrollTOTP_AbandonedReplacement_OldFactorStaysFunctional pins the
+// two-phase replacement shape: EnrollTOTP must not delete an existing
+// ACTIVE factor at enroll time, before the replacement was ever confirmed.
+// A step-up-gated replacement wizard that is started and then cancelled or
+// abandoned (account-ui's MfaSection.tsx closeWizard, a pure local reset
+// with no server call at all) must leave the account with its working
+// second factor and working recovery codes intact -- the wizard's own
+// replacingNotice copy says the replacement only takes effect on confirm,
+// so nothing less may happen.
 //
-// PRE-FIX this test failed: VerifyStepUp(original secret) answered
-// ErrMFANotEnrolled, VerifyStepUp(original recovery code) answered
-// ErrMFAInvalidCode, and RegenerateRecoveryCodes answered ErrMFANotEnrolled
-// -- the exact dead-end the audit names, with no path back to a working
-// account short of a fresh, real enroll+confirm cycle. POST-FIX, the
-// abandoned replacement leaves the original factor and its recovery codes
-// exactly as they were, and RegenerateRecoveryCodes keeps working against
-// them.
+// The assertions prove the abandonment is harmless: VerifyStepUp with the
+// original secret and with an original recovery code both still succeed,
+// and RegenerateRecoveryCodes keeps working against the still-active
+// original factor -- an abandoned replacement leaves the original factor
+// and its recovery codes exactly as they were.
 func TestEnrollTOTP_AbandonedReplacement_OldFactorStaysFunctional(t *testing.T) {
 	t.Parallel()
 
@@ -172,19 +168,19 @@ func TestEnrollTOTP_AbandonedReplacement_OldFactorStaysFunctional(t *testing.T) 
 		t.Fatalf("VerifyStepUp(original recovery code after abandoned replacement) error = %v, want success", err)
 	}
 
-	// The specific dead-end the audit names: regenerating recovery codes
-	// must keep working against the still-active original factor, not
-	// answer ErrMFANotEnrolled.
+	// The specific dead end the two-phase shape guards against:
+	// regenerating recovery codes must keep working against the
+	// still-active original factor, not answer ErrMFANotEnrolled.
 	if _, err := f.svc.RegenerateRecoveryCodes(t.Context(), user.ID); err != nil {
 		t.Fatalf("RegenerateRecoveryCodes(after abandoned replacement) error = %v, want success", err)
 	}
 }
 
 // TestConfirmTOTP_Replacement_RetiresOldFactorAndCodes proves the OTHER
-// half of the two-phase fix above: a replacement enrollment that IS
+// half of the two-phase replacement above: a replacement enrollment that IS
 // actually confirmed still retires the old factor and its recovery codes,
-// exactly as the account-ui replacingNotice copy promises -- the
-// replacement takes effect, just deferred from enroll time to confirm time.
+// exactly as the replacingNotice copy promises -- the replacement takes
+// effect, just deferred from enroll time to confirm time.
 func TestConfirmTOTP_Replacement_RetiresOldFactorAndCodes(t *testing.T) {
 	t.Parallel()
 
@@ -328,18 +324,16 @@ func TestRecoveryCodes_AreStoredHashed(t *testing.T) {
 	}
 }
 
-// TestRecoveryCode_ConsumedCode_AnswersUsedNotInvalid is regression (c)
-// of the honest-step-up-error round: a recovery code satisfies exactly one
-// step-up, and the second presentation of the SAME code -- the shape a
-// superseded-race loser or a double submit leaves -- must still be REFUSED
-// (the code is single-use; the refusal is unchanged), but it must answer
+// TestRecoveryCode_ConsumedCode_AnswersUsedNotInvalid pins the spent-code
+// classification: a recovery code satisfies exactly one step-up, and the
+// second presentation of the SAME code -- the shape a superseded-race loser
+// or a double submit leaves -- must still be REFUSED (the code is
+// single-use; the refusal is unchanged), but it must answer
 // authn.mfa_code_used rather than the authn.mfa_invalid_code a never-
 // issued code answers: the code was real and is gone, which is the truth
 // a step-up surface needs to stop telling its user the code is wrong and
 // retryable. The code strings are literals rather than sentinel .Code
-// references so this test compiles and FAILS against the pre-fix module
-// (whose replay answer was authn.mfa_invalid_code) -- the fail-before
-// half of the regression.
+// references, so the test does not depend on the very sentinel it pins.
 func TestRecoveryCode_ConsumedCode_AnswersUsedNotInvalid(t *testing.T) {
 	t.Parallel()
 
@@ -396,8 +390,8 @@ func TestVerifyStepUp_TOTPCode_EnrichesAMR(t *testing.T) {
 	}
 }
 
-// TestVerifyStepUp_ConsumedTOTPCode_AnswersUsedNotInvalid is regression
-// (a) of the honest-step-up-error round: a TOTP code accepted once by
+// TestVerifyStepUp_ConsumedTOTPCode_AnswersUsedNotInvalid pins the
+// spent-code classification on the TOTP path: a TOTP code accepted once by
 // VerifyStepUp -- the winner of a step-up, or the loser of a superseded
 // race whose code still verified server-side -- cannot immediately be
 // reused, and the re-submission of that SAME code must still be REFUSED
@@ -406,9 +400,8 @@ func TestVerifyStepUp_TOTPCode_EnrichesAMR(t *testing.T) {
 // authn.mfa_invalid_code a never-valid code answers: the code is spent,
 // and the caller must be told so instead of being asked to retry a code
 // that can never verify again. The code strings are literals rather than
-// sentinel .Code references so this test compiles and FAILS against the
-// pre-fix module (whose replay answer was authn.mfa_invalid_code) -- the
-// fail-before half of the regression.
+// sentinel .Code references, so the test does not depend on the very
+// sentinel it pins.
 func TestVerifyStepUp_ConsumedTOTPCode_AnswersUsedNotInvalid(t *testing.T) {
 	t.Parallel()
 
@@ -469,13 +462,11 @@ func TestVerifyStepUp_AnotherUsersRecoveryCode_AnswersInvalidCode(t *testing.T) 
 	}
 }
 
-// TestVerifyStepUp_RefusesAnExpiredSession is the regression for the
-// go/authn audit's confirmed finding: VerifyStepUp checked session.Status
-// but never session.ExpiresAt -- the one check Refresh already performs --
-// so a session past its own configured TTL, whose Status row nothing here
-// ever proactively flips away from active, could still complete a step-up
-// challenge and mint a fresh access token for as long as the caller's
-// currently-held access token remained valid.
+// TestVerifyStepUp_RefusesAnExpiredSession pins the expiry half of
+// VerifyStepUp's session check: a session past its own configured TTL --
+// whose Status row nothing here ever proactively flips away from active --
+// must not complete a step-up challenge and mint a fresh access token,
+// whatever the caller's currently-held access token still says.
 func TestVerifyStepUp_RefusesAnExpiredSession(t *testing.T) {
 	t.Parallel()
 
@@ -497,9 +488,9 @@ func TestVerifyStepUp_RefusesAnExpiredSession(t *testing.T) {
 	}
 }
 
-// TestVerifyStepUp_StillValidSessionSucceeds guards the fix above against
+// TestVerifyStepUp_StillValidSessionSucceeds guards against
 // over-refusing: a session that has not yet reached its own ExpiresAt must
-// keep completing step-up exactly as before.
+// keep completing step-up.
 func TestVerifyStepUp_StillValidSessionSucceeds(t *testing.T) {
 	t.Parallel()
 
@@ -642,8 +633,8 @@ func TestRegenerateRecoveryCodes_WithoutActiveFactor_Refused(t *testing.T) {
 }
 
 // TestMFAModels_AreNotTenantScoped is the mandatory isolation assertion for
-// this round's two identity-domain tables: MFA belongs to the person, not
-// to a tenant they act inside.
+// the module's two identity-domain MFA tables: MFA belongs to the person,
+// not to a tenant they act inside.
 func TestMFAModels_AreNotTenantScoped(t *testing.T) {
 	t.Parallel()
 
@@ -711,14 +702,13 @@ func loginPrincipal(t *testing.T, f *serviceFixture, user *User, tenant pkgcore.
 	return pair.Principal
 }
 
-// TestMFAFactorRepository_Confirm_SecondConfirmOfAnActivatedFactorLoses is
-// the deterministic half of the P2-7 regression: the loser of a confirm
+// TestMFAFactorRepository_Confirm_SecondConfirmOfAnActivatedFactorLoses
+// pins the deterministic half of the confirm race: the loser of a confirm
 // race is a Confirm whose elevation UPDATE matches no row -- the factor is
 // no longer pending, because a concurrent confirm already activated it. The
 // repository must report that loss, so the service layer can refuse BEFORE
-// it regenerates the recovery-code batch the winner just displayed. Before
-// the fix, Confirm dropped RowsAffected and a second confirm of the same
-// pending id returned nil -- indistinguishable from winning.
+// it regenerates the recovery-code batch the winner just displayed. A
+// second confirm of the same pending id must never look like a win.
 func TestMFAFactorRepository_Confirm_SecondConfirmOfAnActivatedFactorLoses(t *testing.T) {
 	t.Parallel()
 
@@ -762,23 +752,23 @@ func TestMFAFactorRepository_Confirm_SecondConfirmOfAnActivatedFactorLoses(t *te
 	}
 }
 
-// TestConfirmTOTP_ConcurrentConfirmsOfOnePendingFactor_HaveOneWinner is the
-// service-level P2-7 regression: several simultaneous ConfirmTOTP calls
+// TestConfirmTOTP_ConcurrentConfirmsOfOnePendingFactor_HaveOneWinner pins
+// the service-level confirm race: several simultaneous ConfirmTOTP calls
 // with the same valid code race over one pending factor. Exactly one may
 // win the elevation, regenerate the recovery-code batch and announce the
 // enrollment. Every loser must be refused with the already-active answer
-// BEFORE it touches the recovery-code batch -- before the fix, a loser
-// whose pending-factor read landed before the winner's commit ran Confirm
-// to a silent no-op and then regenerated the batch the winner had just
-// displayed, replacing the codes the winner's screen was showing, and
-// announced a second enrollment over one code.
+// BEFORE it touches the recovery-code batch: a loser whose pending-factor
+// read landed before the winner's commit would otherwise run Confirm to a
+// no-op and then regenerate the batch the winner had just displayed,
+// replacing the codes the winner's screen was showing, and announce a
+// second enrollment over one code.
 //
 // Deliberately not t.Parallel() and run over several fresh fixtures: the
 // losers' reads only beat the winner's commit under genuine concurrency,
 // and a single round of a wall-clock race can come out the safe way even
-// on the broken code. Under the fix every round is deterministic -- the
-// database arbitrates exactly one winner -- so the loop only costs the
-// broken code its luck.
+// on a shape that lets losers regenerate. The loop exists because every
+// round must be deterministic -- the database arbitrates exactly one
+// winner.
 func TestConfirmTOTP_ConcurrentConfirmsOfOnePendingFactor_HaveOneWinner(t *testing.T) {
 	const (
 		rounds = 5
@@ -867,9 +857,9 @@ func failRecoveryCodeCreatesWhile(t *testing.T, db *gorm.DB, fail *bool) {
 	})
 }
 
-// TestConfirmTOTP_RegenerationFailure_KeepsThePreviousBatch is the P3-23
-// regression on the confirm side: ConfirmTOTP activates the pending factor
-// (atomically retiring the one it replaces) and then regenerates the
+// TestConfirmTOTP_RegenerationFailure_KeepsThePreviousBatch pins the
+// confirm side of the batch replacement: ConfirmTOTP activates the pending
+// factor (atomically retiring the one it replaces) and then regenerates the
 // recovery-code batch. A regeneration that failed between deleting the old
 // batch and inserting the new one would leave the account on a fresh ACTIVE
 // factor with ZERO backup codes -- nothing left to get back in with when
@@ -911,10 +901,10 @@ func TestConfirmTOTP_RegenerationFailure_KeepsThePreviousBatch(t *testing.T) {
 	}
 }
 
-// TestRegenerateRecoveryCodes_WriteFailure_KeepsThePreviousBatch is the
-// P3-23 regression on the plain regenerate path: RegenerateRecoveryCodes
-// must never land the account on its active factor with zero backup codes
-// either, so its replacement of the batch is the same single transaction.
+// TestRegenerateRecoveryCodes_WriteFailure_KeepsThePreviousBatch pins the
+// plain regenerate path: RegenerateRecoveryCodes must never land the
+// account on its active factor with zero backup codes either, so its
+// replacement of the batch is the same single transaction.
 func TestRegenerateRecoveryCodes_WriteFailure_KeepsThePreviousBatch(t *testing.T) {
 	t.Parallel()
 
@@ -938,15 +928,14 @@ func TestRegenerateRecoveryCodes_WriteFailure_KeepsThePreviousBatch(t *testing.T
 	}
 }
 
-// TestMFAFactorRepository_SecondPendingRowForOneUserIsRefused is the
-// deterministic half of the P3-22 regression: the database itself must
+// TestMFAFactorRepository_SecondPendingRowForOneUserIsRefused pins the
+// deterministic half of the pending-row race: the database itself must
 // refuse a second PENDING row for one (user, type), under the partial
 // unique index migration 0011 (idx_user_mfa_factors_user_type_pending). The
-// service-level race test below reproduces how two such rows used to come
-// into being; this test pins the schema that now makes that state
-// unrepresentable -- before the fix nothing refused the second insert, and
-// ConfirmTOTP's pending lookup could take whichever row happened to come
-// first.
+// service-level race test below exercises the concurrent path; this test
+// pins the schema that makes two pending rows unrepresentable -- without
+// it, nothing would refuse the second insert and ConfirmTOTP's pending
+// lookup could take whichever row happened to come first.
 func TestMFAFactorRepository_SecondPendingRowForOneUserIsRefused(t *testing.T) {
 	t.Parallel()
 
@@ -991,17 +980,15 @@ func TestMFAFactorRepository_SecondPendingRowForOneUserIsRefused(t *testing.T) {
 	}
 }
 
-// TestEnrollTOTP_ConcurrentEnrollsLeaveExactlyOnePendingRow is the P3-22
-// regression: racing enroll requests for one user must leave exactly one
-// PENDING row -- the one whose secret the user was most recently shown --
-// and never two rows for a confirm to take the wrong one. Before the fix
-// each enroll deleted and created in two separate statements, so racing
-// requests could interleave (del, del, insert, insert) and leave two
-// pending rows; ConfirmTOTP then confirms whichever the database returns
-// first, which need not be the enrollment the user scanned. The fix makes
-// each enrollment one transaction serialized on the user's own row, so
-// every round below is deterministic -- the loop only costs the broken code
-// its luck.
+// TestEnrollTOTP_ConcurrentEnrollsLeaveExactlyOnePendingRow pins the
+// pending-row race: racing enroll requests for one user must leave exactly
+// one PENDING row -- the one whose secret the user was most recently shown
+// -- and never two rows for a confirm to take the wrong one. Each
+// enrollment is one replace transaction (MFAFactorRepository.ReplacePending)
+// whose losing insert the database refuses under migration 0011's partial
+// index, so every round below is deterministic: exactly one row survives
+// and it is the last enrollment to commit, the one the user was most
+// recently shown.
 func TestEnrollTOTP_ConcurrentEnrollsLeaveExactlyOnePendingRow(t *testing.T) {
 	const (
 		rounds = 12

@@ -16,26 +16,25 @@ import (
 const billingPaymentEventsTable = "billing_payment_events"
 
 // PaymentEvent is one durable, deduplicated record of an inbound webhook
-// delivery, the storage half of
-// docs/internal/06-billing-and-metering.md's mandatory rule: use the
+// delivery, the storage half of the insert-first-to-dedup rule: use the
 // channel's own event id as the unique key into the payment_events table,
 // inserting FIRST to dedup, before any processing runs. A row's (Channel, ProviderEventID) pair is unique
 // (uq_billing_payment_events_channel_event, applied in the migration) --
 // PaymentEventRepository.InsertIfNew is the sanctioned way to observe that
 // constraint: a caller that gets inserted=false back knows this exact event
 // was already recorded by an earlier delivery attempt (the same event
-// redelivered after a network retry or a provider timeout, per the design
-// doc's own rationale) and must not repeat whatever side effect processing
-// it the first time would have caused.
+// redelivered after a network retry or a provider timeout) and must not
+// repeat whatever side effect processing it the first time would have
+// caused.
 //
 // # This table is genuinely per-tenant, unlike Plan's dual-domain shape
 //
 // Plan (plan.go) is deliberately NOT tenant-scoped because a platform-wide
 // row must be visible to every tenant's lookup -- there is no such
 // platform-wide face to a payment event. Every row here belongs to exactly
-// one tenant's payment history (docs/internal/04-data-and-tenancy.md's
-// tenant-data domain), decoded from the channel-side object's own metadata
-// at verification time (NormalizedEvent.TenantID's own doc comment), so
+// one tenant's payment history (tenant data), decoded from the
+// channel-side object's own metadata at verification time
+// (NormalizedEvent.TenantID's own doc comment), so
 // PaymentEvent implements dbkit.TenantScoped and is reached through
 // dbkit.Repository[PaymentEvent] -- the ordinary shape every other genuinely
 // tenant-owned table in this module (Subscription, Invoice, CreditBalance)
@@ -63,7 +62,7 @@ type PaymentEvent struct {
 	dbkit.TenantModel
 
 	// Channel names which provider produced this event -- "stripe",
-	// "alipay" or "wechat" this round -- matching NormalizedEvent.Channel.
+	// "alipay" or "wechat" -- matching NormalizedEvent.Channel.
 	Channel string `gorm:"column:channel;size:32;not null"`
 
 	// ProviderEventID is the channel's own event id. Together with
@@ -98,19 +97,18 @@ type PaymentEvent struct {
 	OccurredAt time.Time `gorm:"column:occurred_at;not null"`
 
 	// RawPayload is the exact, already signature-verified webhook body --
-	// the audit trail docs/internal/06-billing-and-metering.md's own
-	// callbacks-cannot-be-trusted section implies is necessary: if a later
-	// dispute needs to
-	// know exactly what a channel sent, this is the record, independent of
-	// however this row's own typed columns interpreted it.
+	// the audit trail: a channel's callbacks cannot be trusted, so if a
+	// later dispute needs to know exactly what a channel sent, this is the
+	// record, independent of however this row's own typed columns
+	// interpreted it.
 	RawPayload []byte `gorm:"column:raw_payload;not null"`
 
-	// ProcessedAt is nil until whatever later round drives Subscription/
-	// Invoice transitions from this row marks it processed. This round
-	// never sets it -- see AGENTS.md's Known limitations: this round ships
-	// the insert-first-dedup half of the rule and the audit row, not the
-	// processing loop that would consume it (no HTTP surface exists yet to
-	// receive a live webhook in the first place).
+	// ProcessedAt stays nil: no processing loop exists yet that would
+	// consume this row -- no HTTP surface exists yet to receive a live
+	// webhook in the first place -- so the module ships the
+	// insert-first-dedup half of the rule and the audit row, not the loop
+	// that would drive Subscription/Invoice transitions from it and mark
+	// it processed.
 	ProcessedAt *time.Time `gorm:"column:processed_at"`
 
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime;not null"`
@@ -153,10 +151,10 @@ func NewPaymentEventRepository(db *gorm.DB) *PaymentEventRepository {
 }
 
 // Get returns the PaymentEvent with the given id, for the tenant in ctx --
-// the read surface a later round's payment-history or admin surface calls,
-// translating dbkit's own not-found sentinel into ErrPaymentEventNotFound
-// exactly like Subscription.Get and InvoiceRepository.setStatus already do
-// for their own tables.
+// the read surface a payment-history or admin surface calls, translating
+// dbkit's own not-found sentinel into ErrPaymentEventNotFound exactly like
+// Subscription.Get and InvoiceRepository.setStatus already do for their
+// own tables.
 func (r *PaymentEventRepository) Get(ctx context.Context, id string) (*PaymentEvent, error) {
 	evt, err := r.FindByID(ctx, id)
 	if err != nil {
@@ -191,9 +189,8 @@ func (r *PaymentEventRepository) listPending(ctx context.Context, before time.Ti
 // amount, for the caller's tenant. Used by the polling fallback to record
 // what QueryStatus found -- see PollingService.Poll's own doc comment for
 // why this is the row's own Status the poll updates, never Subscription or
-// Invoice directly (this round's own scope boundary: no processing loop
-// exists yet that would drive those transitions from a PaymentEvent row --
-// see AGENTS.md's Known limitations).
+// Invoice directly (no processing loop exists yet that would drive those
+// transitions from a PaymentEvent row).
 //
 // The UPDATE is GUARDED, never keyed on the row id alone: its WHERE carries
 // the row's own current Status (ChannelStatusPending) as well, so a mark
@@ -277,30 +274,26 @@ func (r *PaymentEventRepository) markStatus(ctx context.Context, id string, stat
 // exists for evt's (Channel, ProviderEventID) pair -- the unique index the
 // migration applies -- in which case it reports (false, nil) and leaves the
 // existing row untouched. evt.ID is generated when left empty. It is the
-// row-level half of docs/internal/06-billing-and-metering.md's
-// insert-first-to-dedup rule, proven on its own: every channel redelivers
-// the same event on retry or timeout, and this is the guard that keeps one
-// event's row in the ledger exactly once.
+// row-level half of the insert-first-to-dedup rule, proven on its own:
+// every channel redelivers the same event on retry or timeout, and this is
+// the guard that keeps one event's row in the ledger exactly once.
 //
 // What this method deliberately does NOT prescribe is the shape of the
-// processing that follows an inserted=true answer -- an earlier revision
-// of this comment prescribed an insert-then-run-side-effects recipe (the
-// side effects a fresh event implies: driving a Subscription/Invoice
-// transition, granting credits), which cannot be made atomic on top of
-// this method as written: the row commits in its own short transaction
-// (Repository Create), and dbkit refuses nested sessions, so the effects
-// would necessarily run in a second transaction, with a crash in between
-// leaving a recorded-but-never-processed event whose redelivery dedups
-// against the row and never runs the effects either. Whether the chain
-// settles on that shape with an out-of-band compensation, or on a
-// different one -- effects inside the same transaction as an
-// idempotent-insert of the event row -- is to be determined when the
-// webhook-processing chain is actually connected: the round that builds
-// the live HTTP surface, the loop that drives Subscription/Invoice
-// transitions from this row and marks ProcessedAt (AGENTS.md's own Scope
-// table), none of which exists yet. This method ships no caller outside
-// tests (VerifyWebhook and InsertIfNew alike), so no recipe is left
-// waiting for the first person to follow it.
+// processing that follows an inserted=true answer. The natural recipe --
+// insert, then run the side effects a fresh event implies (driving a
+// Subscription/Invoice transition, granting credits) -- cannot be made
+// atomic on top of this method as written: the row commits in its own
+// short transaction (Repository Create), and dbkit refuses nested
+// sessions, so the effects would necessarily run in a second transaction,
+// with a crash in between leaving a recorded-but-never-processed event
+// whose redelivery dedups against the row and never runs the effects
+// either. Whether the chain settles on that shape with an out-of-band
+// compensation, or on effects inside the same transaction as an
+// idempotent insert of the event row, is undetermined while no live
+// webhook-processing chain exists (no HTTP surface receives webhooks
+// yet). The method ships no caller outside tests (VerifyWebhook and
+// InsertIfNew alike), so no recipe is left waiting for the first person
+// to follow it.
 //
 // ctx must carry the tenant NormalizedEvent.TenantID decoded to (see that
 // field's own doc comment) -- dbkit.Repository[T].Create resolves and

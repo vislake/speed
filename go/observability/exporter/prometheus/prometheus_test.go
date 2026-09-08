@@ -111,12 +111,12 @@ func TestBuildReader_MetricsHandlerIsIsolatedAcrossCalls(t *testing.T) {
 }
 
 // TestBuildReader_InvalidUTF8Path_NeverVoidsTheScrape is the regression
-// for a live, unauthenticated denial-of-service class
-// go/observability/Middleware's route label used to leave open: net/http
-// percent-decodes a request target before this package ever sees it, and
-// percent-decoding is byte-oriented -- "%FF%FE" in a path yields two bytes
-// that are not valid UTF-8, with no error anywhere in parsing. Recorded
-// verbatim as the http.route metric label (as Middleware used to), such a
+// for a live, unauthenticated denial-of-service class in
+// go/observability/Middleware's route label: net/http percent-decodes a
+// request target before this package ever sees it, and percent-decoding is
+// byte-oriented -- "%FF%FE" in a path yields two bytes that are not valid
+// UTF-8, with no error anywhere in parsing. Recorded verbatim as the
+// http.route metric label, such a
 // value makes the Prometheus exporter's per-series validation fail on
 // every Gather: the /metrics endpoint answers 500 with ZERO metrics -- not
 // just the HTTP instruments, but every metric from every module, for the
@@ -129,12 +129,11 @@ func TestBuildReader_MetricsHandlerIsIsolatedAcrossCalls(t *testing.T) {
 // The fix sanitizes non-UTF-8 path bytes (to the Unicode replacement rune)
 // before a label value is formed, so an invalid path is still counted --
 // under a sanitized, exporter-safe label -- and never reaches the
-// registry. This test drives the reviewer's baseline shape: one normal
-// request (200), then one GET with %FF in its path, then a scrape that
-// must still answer 200 with the normal request's series present and no
-// invalid byte anywhere in the payload. Fails before the fix (verified):
-// the scrape answers 500 with an error naming the invalid label value and
-// an empty metric body.
+// registry. The baseline shape: one normal request (200), then one GET
+// with %FF in its path, then a scrape that must still answer 200 with the
+// normal request's series present and no invalid byte anywhere in the
+// payload. Without the sanitization the scrape answers 500 with an error
+// naming the invalid label value and an empty metric body.
 func TestBuildReader_InvalidUTF8Path_NeverVoidsTheScrape(t *testing.T) {
 	ctx := context.Background()
 	shutdown, err := obs.Init(ctx)

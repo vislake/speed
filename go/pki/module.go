@@ -24,61 +24,55 @@ const moduleName = "pki"
 // # The evaluation domain is part of each permission's meaning
 //
 // rbac evaluates every permission inside SOME tenant's scope
-// (Subject{TenantID, UserID}), and pki's tables span two data domains
-// (docs/internal/04-data-and-tenancy.md): pki_signing_keys and
-// pki_authorities are platform data with no tenant at all, while
-// pki_certificates is tenant data. A host's gate must therefore evaluate
-// the signing-key permission under the PLATFORM domain (rbac.SystemDomain
-// -- the domain admin's own admin:* permissions are evaluated in, per
-// go/admin's wiring), NEVER under the request's tenant domain: a single
-// tenant's grant of a platform-level permission would otherwise stop token
-// issuance for the whole deployment at once. The certificate permission
-// is evaluated in the request's own tenant domain, like every
-// tenant-scoped permission. This module itself performs no permission
-// check (rbac's job, per this file's own doc comment); the obligation is
-// recorded here and in go/pki/AGENTS.md's HTTP-surface section so a host
-// gate cannot improvise a wrong domain.
+// (Subject{TenantID, UserID}), and pki's tables span two data domains:
+// pki_signing_keys and pki_authorities are platform data with no tenant at
+// all, while pki_certificates is tenant data. A host's gate must therefore
+// evaluate the signing-key permission under the PLATFORM domain
+// (rbac.SystemDomain -- the domain go/admin's own admin:* permissions are
+// evaluated in, per that module's wiring), NEVER under the request's
+// tenant domain: a single tenant's grant of a platform-level permission
+// would otherwise stop token issuance for the whole deployment at once.
+// The certificate permission is evaluated in the request's own tenant
+// domain, like every tenant-scoped permission. This module itself performs
+// no permission check (rbac's job, per this file's own doc comment); the
+// obligation is recorded here so a host gate cannot improvise a wrong
+// domain.
 //
-// Round 3 declared ONE permission for both revoke operations
-// (PermissionRevoke, "pki:revoke", covering "a signing key or a
-// certificate"). The platform-domain finding split it -- one name
-// spanning two data domains is wrong in whichever single domain it is
-// evaluated in -- and the old name is now declared by no one, so rbac's
-// attach-time catalog freeze refuses a grant of it rather than half
-// meaning something. PermissionRead and PermissionIssue's declared
-// coverage similarly spans the module's two domains where no HTTP
-// operation exists yet: pki:read's HTTP surface today is platform
-// material only (see its own comment), and pki:issue has NO HTTP
-// operation at all -- a future HTTP issuance surface must split it the
-// same way before it lands, never add a "pki:issue" operation on one
-// domain or the other.
+// PermissionRevokeSigningKey and PermissionRevokeCertificate exist as two
+// names, not one: a single name spanning the module's two data domains
+// would be wrong in whichever single domain it were evaluated in, and the
+// permission catalog freezes on the names declared, so no spanning name
+// survives to half mean something. PermissionRead and PermissionIssue's
+// declared coverage similarly spans the module's two domains where no HTTP
+// operation exists yet: pki:read's HTTP surface is platform material only
+// (see its own comment), and pki:issue has NO HTTP operation at all -- an
+// HTTP issuance surface must split it into a platform and a tenant
+// permission before it lands, never add an operation on one domain or the
+// other under this name.
 const (
 	// PermissionRead covers the read operations of this module's HTTP
 	// surface: the key-lifecycle JWKS export, an authority-chain JWKS
 	// export and an authority's CRL fetch (handler.go). All three serve
 	// platform material -- pki_signing_keys / pki_authorities public keys
 	// and CRL documents, the material the deployment intends external
-	// verifiers to fetch -- and none of them reads pki_certificates
-	// (certificate reads have no HTTP operation today). A future HTTP
-	// surface that reads tenant certificates must declare its own
-	// tenant-domain permission rather than reusing this one.
+	// verifiers to fetch -- and none of them reads pki_certificates:
+	// certificate reads have no HTTP operation, and this permission does
+	// not cover one that might be added -- a tenant-certificate read
+	// surface must declare its own tenant-domain permission.
 	PermissionRead = "pki:read"
 	// PermissionIssue covers creating CAs and issuing certificates. It has
-	// no HTTP operation behind it today (issuance stays Go-only), so no
-	// gate evaluates it yet -- see this const block's own doc comment for
-	// why a future HTTP issuance surface must split it into a platform CA
-	// permission and a tenant certificate permission before it lands,
-	// rather than mounting either operation under this two-domain name.
+	// no HTTP operation behind it (issuance stays Go-only), so no gate
+	// evaluates it yet -- see this const block's own doc comment for why
+	// an HTTP issuance surface must split it into a platform CA permission
+	// and a tenant certificate permission before it lands, rather than
+	// mounting either operation under this two-domain name.
 	PermissionIssue = "pki:issue"
 	// PermissionRevokeSigningKey gates PkiRevokeSigningKey (handler.go):
 	// revoking one row of pki_signing_keys, platform data -- a platform
 	// operation whose permission MUST be evaluated in the platform domain
 	// (rbac.SystemDomain), never in the request tenant's domain: a key
 	// this deployment signs every tenant's tokens with must not be
-	// revocable by a grant a single tenant's administrator holds. Splitting
-	// this half out of round 3's two-domain PermissionRevoke is what makes
-	// the platform domain enforceable at all: as long as one name covered
-	// both revokes, any single domain left half of it wrong.
+	// revocable by a grant a single tenant's administrator holds.
 	PermissionRevokeSigningKey = "pki:revoke_signing_key"
 	// PermissionRevokeCertificate gates PkiRevokeCertificate (handler.go):
 	// revoking one row of pki_certificates, tenant data -- a tenant-level
@@ -94,13 +88,12 @@ const (
 )
 
 // The audit actions pki contributes. pki.key.rotate and
-// pki.private_key.deliver stay undeclared -- rotation is a system-driven
-// background process with no single human "who did this" the audit trail's
-// Actor/Resource shape is built to answer (round 2 deliberately left it
-// out for the identical reason, and PromoteNow's manual trigger above is
-// still an operator overriding a system process, not a new kind of
-// action), and key delivery is not this round's scope. pki.key.revoke and
-// pki.certificate.revoke ARE round 3's job -- see AuditActionKeyRevoke/
+// pki.private_key.deliver stay undeclared: rotation is a system-driven
+// background process with no single human "who did this" for the audit
+// trail's Actor/Resource shape to answer -- Service.PromoteNow's manual
+// trigger is an operator overriding a system process, not a new kind of
+// action -- and no private-key delivery path exists to record. The two
+// revoke actions ARE declared -- see AuditActionKeyRevoke/
 // AuditActionCertificateRevoke below.
 const (
 	// AuditActionAuthorityCreate covers CreateRootCA and CreateIntermediateCA.
@@ -121,37 +114,29 @@ const (
 
 // The configuration keys pki contributes.
 //
-// ConfigCRLDistributionPoint and ConfigCRLValidity are round 3's additions,
-// completing docs/internal/22-pki.md's module-contract configuration list
-// (this file's own doc comment already covered every other item on it).
-// Neither is read by this round's own code, the identical declare-but-do-
-// not-read discipline every config item in this file already follows (see
-// this const block's own doc comment on that pattern) --
-// ConfigCRLDistributionPoint's own value is never consulted anywhere: a
-// caller passes CRLDistributionPoint directly on RootCAParams/
-// IntermediateCAParams (ca.go), so this item exists purely as the
-// declared, admin-visible schema entry docs/internal/22-pki.md's
-// configuration-item list requires, for a host that wants to show or
+// ConfigCRLDistributionPoint and ConfigCRLValidity follow the identical
+// declare-but-do-not-read discipline every config item in this file
+// follows: ConfigCRLDistributionPoint's own value is never consulted
+// anywhere -- a caller passes CRLDistributionPoint directly on
+// RootCAParams/IntermediateCAParams (ca.go), so this item exists purely as
+// a declared, admin-visible schema entry, for a host that wants to show or
 // validate the value before passing it through its own wiring.
 // ConfigCRLValidity's real default lives as DefaultCRLValidity (crl.go),
 // which GenerateCRL actually falls back to; a caller wanting the config
 // value honored passes it through GenerateCRL's own validity parameter,
 // exactly as ConfigPropagationWindow/ConfigRenewalLeadTime's callers pass
-// through WithPropagationWindow/WithRenewalLeadTime rather than pki reading
-// config itself.
+// through WithPropagationWindow/WithRenewalLeadTime rather than pki
+// reading config itself.
 //
-// ConfigPropagationWindow and ConfigRenewalLeadTime are round 2's additions.
-// Neither duplicates the retiring overlap period: docs/internal/22-pki.md's
-// section on why the retiring overlap period's length is declared by the
-// consumer is explicit that pki does not know a credential's maximum
-// lifetime -- the consumer declares it, once,
-// through EnsurePurpose's maxCredentialLifetime parameter, and it is
-// recorded per-key (SigningKey.RetiringOverlap), never as a global setting.
-// The propagation window and the rotation lead time are the opposite case
-// -- docs/internal/22-pki.md's own words describe the rotation cadence as
-// something the consumer has no way to know, that belongs to pki's own
-// configuration -- genuinely pki's own settings, with no consumer
-// that could supply them.
+// ConfigPropagationWindow and ConfigRenewalLeadTime duplicate neither the
+// retiring overlap period: the module does not know a credential's maximum
+// lifetime -- the consumer declares it, once, through EnsurePurpose's
+// maxCredentialLifetime parameter, and it is recorded per-key
+// (SigningKey.RetiringOverlap), never as a global setting. The propagation
+// window and the rotation lead time are the opposite case: the rotation
+// cadence is something the consumer has no way to know, that belongs to
+// pki's own configuration -- genuinely pki's own settings, with no
+// consumer that could supply them.
 const (
 	// ConfigCADefaultValidity is how long a CA certificate (root or
 	// intermediate) is valid for when a caller does not specify one.
@@ -175,7 +160,7 @@ const (
 	// ConfigCRLDistributionPoint is the default CRL distribution point URL
 	// a host may want to show or validate before passing it through
 	// RootCAParams/IntermediateCAParams.CRLDistributionPoint -- see this
-	// const block's own doc comment for why this round's code never reads
+	// const block's own doc comment for why the module's code never reads
 	// it directly.
 	ConfigCRLDistributionPoint = "pki.crl_distribution_point"
 	// ConfigCRLValidity is how long a generated CRL claims to be current --
@@ -184,14 +169,13 @@ const (
 )
 
 // Default validity periods backing the CA/certificate config items above.
-// None of this round's issuance methods (CreateRootCA, CreateIntermediateCA,
-// IssueCertificate) reads these through the config schema yet -- Register
-// only declares the schema, per pkgcore.Module.Register's own "must not
-// perform I/O; it only declares" contract, and pki carries no config.Service
-// dependency to read a live value with. A caller of this round's Go API
-// passes NotAfter directly (see RootCAParams/IntermediateCAParams/
-// CertificateParams); wiring these declared config keys into that decision
-// is left to the host, or to a later round.
+// No issuance method (CreateRootCA, CreateIntermediateCA, IssueCertificate)
+// reads these through the config schema: Register only declares the schema,
+// per pkgcore.Module.Register's own "must not perform I/O; it only
+// declares" contract, and pki carries no config.Service dependency to read
+// a live value with. A caller passes NotAfter directly (see
+// RootCAParams/IntermediateCAParams/CertificateParams); wiring the declared
+// config keys into that decision is the host's job.
 //
 // ConfigPropagationWindow and ConfigRenewalLeadTime follow the identical
 // declare-but-do-not-read discipline: their defaults are
@@ -199,7 +183,7 @@ const (
 // by NewModule (via WithPropagationWindow/WithRenewalLeadTime, or those
 // package defaults when the host passes neither) rather than through a live
 // config lookup, for the same reason -- no config.Service dependency exists
-// this round to read one with.
+// to read one with.
 const (
 	defaultCADefaultValidity          = 10 * 365 * 24 * time.Hour
 	defaultCAMaxValidity              = 15 * 365 * 24 * time.Hour
@@ -279,12 +263,11 @@ var configItemDecls = []pkgcore.ConfigItem{
 //
 // # Default Signer
 //
-// Without WithSigner, NewModule wires LocalSigner over db -- the zero-
-// external-dependency signer this round ships, which is also what "task
-// dev" runs. A future round's vault/kmsaws provider subpackages (round 4)
-// slot in through the same WithSigner option; this round builds no
-// self-registering SignerRegistry for them to register into (see AGENTS.md's
-// Known limitations for why that is explicitly deferred, not an oversight).
+// Without WithSigner, NewModule wires LocalSigner over db -- the
+// zero-external-dependency signer, which is also what "task dev" runs.
+// KMS-backed implementations (vault/kmsaws) reach the module either through
+// the same WithSigner option or through pki.SignerRegistry's registered
+// names (signer_registry.go).
 type Module struct {
 	db *gorm.DB
 
@@ -310,14 +293,14 @@ type Module struct {
 	authorities  *AuthorityRepository
 	certificates *CertificateRepository
 	localKeys    *LocalKeyRepository
-	// revocations is round 3's revocation-ledger repository -- see
+	// revocations is the revocation-ledger repository -- see
 	// CertificateRevocation's own model.go doc comment.
 	revocations *CertificateRevocationRepository
 
 	service *Service
 	ca      *CAService
 
-	// handler is round 3's HTTP surface, built and mounted in Register (not
+	// handler is the HTTP surface, built and mounted in Register (not
 	// NewModule) so it serves the service/repository instances every
 	// Option has already configured by the time Register runs -- the same
 	// "build the handler in Register" reasoning storage.Module.Register's
@@ -330,8 +313,8 @@ type Option func(*Module)
 
 // WithSigner overrides the default LocalSigner with signer, recorded on
 // every issued row under name. A host wiring a KMS-backed implementation
-// (round 4) uses this to swap it in without touching any other part of the
-// module's wiring.
+// uses this to swap it in without touching any other part of the module's
+// wiring.
 func WithSigner(name string, signer Signer) Option {
 	return func(m *Module) {
 		m.signerName = name
@@ -418,10 +401,9 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 	return m
 }
 
-// Close releases the module's background resources -- today, exactly the
-// key-set cache's janitor goroutine (Service.Close). Idempotent, and the
-// module stays correct, if slower to reclaim memory, if a host never calls
-// it.
+// Close releases the module's background resources -- exactly the key-set
+// cache's janitor goroutine (Service.Close). Idempotent, and the module
+// stays correct, if slower to reclaim memory, if a host never calls it.
 func (m *Module) Close() error {
 	return m.service.Close()
 }
@@ -439,9 +421,9 @@ func (m *Module) Signer() Signer { return m.signer }
 func (m *Module) Name() string { return moduleName }
 
 // DependsOn implements pkgcore.Module: nothing. pki sits above dbkit and
-// tenancy in docs/internal/01-architecture.md's graph, but neither is a
-// pkgcore.Module -- they are libraries the host wires, and DependsOn
-// enumerates only modules in the bootstrap set.
+// tenancy in the module dependency graph, but neither is a pkgcore.Module
+// -- they are libraries the host wires, and DependsOn enumerates only
+// modules in the bootstrap set.
 func (m *Module) DependsOn() []string { return nil }
 
 // Migrations implements pkgcore.Module.
@@ -461,45 +443,41 @@ const apiPath = "/api/v1/pki"
 
 // openAPISpecYAML is pki's OpenAPI fragment, embedded from api/ so the spec
 // -- and the generated ServerInterface and types derived from it -- travels
-// inside the module binary. Round 3's addition: the sixth module fragment
-// overall, after notes, org, authn, storage and notification.
+// inside the module binary.
 //
 //go:embed api/openapi.yaml
 var openAPISpecYAML []byte
 
 // OpenAPISpec implements pkgcore.Module: pki's own OpenAPI fragment,
-// embedded from api/openapi.yaml. Round 3's addition -- the fragment is the
-// single source of this module's HTTP surface, and Handler implements the
-// api package's generated ServerInterface (see handler.go), per
-// docs/internal/21-api-contract.md's spec-first decision.
+// embedded from api/openapi.yaml -- the single source of this module's HTTP
+// surface, with Handler implementing the api package's generated
+// ServerInterface (see handler.go) so the spec and its implementation
+// cannot drift.
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
 // Register implements pkgcore.Module. Per the interface's own contract it
 // only declares and wires -- no database call, no outbound call, nothing
 // that touches m.db.
 //
-// It declares pki's permissions (round 3 adding PermissionRevoke and
-// PermissionRotate to round 1's PermissionRead/PermissionIssue; the
-// platform-domain round replacing PermissionRevoke with the split
-// PermissionRevokeSigningKey and PermissionRevokeCertificate -- see that
-// const block's own doc comment for why no one permission may span the
-// module's two data domains), its audit vocabulary (round 3 adding
-// AuditActionKeyRevoke/AuditActionCertificateRevoke) and its
-// configuration schema, and declares
-// the five signing-key/certificate lifecycle events (events.go). It hands
-// the registry's EventBus to both Service and CAService (attachBus) so the
+// It declares pki's permissions (PermissionRevokeSigningKey,
+// PermissionRevokeCertificate and PermissionRotate alongside
+// PermissionRead and PermissionIssue -- see that const block's own doc
+// comment for why no one permission may span the module's two data
+// domains), its audit vocabulary (the create/issue pair and the two revoke
+// actions) and its configuration schema, and declares the five
+// signing-key/certificate lifecycle events (events.go). It hands the
+// registry's EventBus to both Service and CAService (attachBus) so the
 // key-set cache can invalidate itself on its own published events and
 // CAService can publish pki.certificate.* ones, and, when the host wired a
 // queue via WithQueue, hands both the same queue too and claims BOTH the
-// expiry-scan (job.go) and, round 3's addition, the CRL-regenerate (crl.go)
-// task handlers, so a host draining reg.Jobs.Handlers() onto its
-// jobs.Queue gets workers for both. It also builds and mounts pki's HTTP
-// surface, round 3's addition: Handler is built here, not in NewModule, so
-// it serves the service and repository instances every Option has already
-// configured by the time Register runs (Bootstrap calls Register only
-// after NewModule has returned) -- the same reasoning storage.Module's
-// identical placement documents. Routes.Mount is a plain registration, no
-// I/O, so Register's no-I/O contract stands.
+// expiry-scan (job.go) and the CRL-regenerate (crl.go) task handlers, so a
+// host draining reg.Jobs.Handlers() onto its jobs.Queue gets workers for
+// both. It also builds and mounts pki's HTTP surface: Handler is built
+// here, not in NewModule, so it serves the service and repository
+// instances every Option has already configured by the time Register runs
+// (Bootstrap calls Register only after NewModule has returned) -- the same
+// reasoning storage.Module's identical placement documents. Routes.Mount
+// is a plain registration, no I/O, so Register's no-I/O contract stands.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.Permissions.Add(
 		PermissionRead,

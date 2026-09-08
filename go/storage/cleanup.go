@@ -36,9 +36,9 @@ package storage
 // whose upload window closed (their bytes, if any, are never becoming
 // readable) and completed rows whose retention deadline passed. Reclaiming
 // an upload is safe against a completion racing it only because the upload
-// window is enforced at the finalize write itself -- a completion that
-// straddles its own window end cannot commit after it (repository.go's
-// finalizeUpload, the fix this round's earlier commit shipped) -- so a row
+// window is enforced at the finalize write itself -- repository.go's
+// finalizeUpload refuses a completion that straddles its own window end --
+// so a row
 // this sweep listed can never complete behind its back: either the
 // completion committed before the window closed, in which case the row is
 // completed and no longer matches the reclaim listing, or the write is
@@ -393,7 +393,7 @@ func (s *LifecycleService) Sweep(ctx context.Context) error {
 // objects, this reclaim would delete a completed object's family -- its
 // original bytes, its derivative rows and their bytes -- with no delete
 // protocol and no EventObjectDeleted for the subscribers that watched that
-// object complete, and that hazard (the reviewer's P2-4) becomes live.
+// object complete, and that hazard becomes live.
 func (s *LifecycleService) reclaimUpload(ctx context.Context, row Object) error {
 	st, err := s.requireStore()
 	if err != nil {

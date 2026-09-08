@@ -47,9 +47,9 @@ func (r *eventRecorder) typesOf() []string {
 // --- PromoteDuePending ------------------------------------------------------
 
 // TestService_PromoteDuePending_WaitsForThePropagationWindow proves the
-// core reason the pending state exists at all (docs/internal/22-pki.md's
-// section on why pending exists: a distributed race): a pending key
-// created less than propagationWindow ago is left untouched.
+// core reason the pending state exists at all (a distributed race across
+// replicas' caches): a pending key created less than propagationWindow ago
+// is left untouched.
 func TestService_PromoteDuePending_WaitsForThePropagationWindow(t *testing.T) {
 	svc, rec := newTestServiceWithClock(t)
 	ctx := context.Background()
@@ -165,8 +165,9 @@ func TestService_PromoteDuePending_FirstActivationForAPurpose_HasNoPrevious(t *t
 // TestService_RetireDueRetiring_WaitsForTheOverlapPeriod proves a retiring
 // key whose overlap period has not yet elapsed is left untouched --
 // retiring it early would fail verification for credentials still in
-// flight (docs/internal/22-pki.md's section on why the retiring overlap
-// period's length is declared by the consumer, not pki itself).
+// flight. The overlap period's length is declared by the consumer, not by
+// pki itself (SigningKey.RetiringOverlap's doc comment explains where it
+// comes from).
 func TestService_RetireDueRetiring_WaitsForTheOverlapPeriod(t *testing.T) {
 	svc, rec := newTestServiceWithClock(t)
 	ctx := context.Background()
@@ -259,9 +260,8 @@ func TestService_RetireDueRetiring_SkipsARowWithNoRetiringAt(t *testing.T) {
 // --- StageDueRotations -------------------------------------------------------
 
 // TestService_StageDueRotations_StagesAheadOfExpiry proves rotation is
-// generated ahead of a hard cutoff (docs/internal/22-pki.md's "rotation"
-// section), copying the active key's purpose, algorithm and
-// RetiringOverlap onto the new pending row.
+// generated ahead of a hard cutoff, copying the active key's purpose,
+// algorithm and RetiringOverlap onto the new pending row.
 func TestService_StageDueRotations_StagesAheadOfExpiry(t *testing.T) {
 	svc, rec := newTestServiceWithClock(t)
 	ctx := context.Background()
@@ -453,7 +453,7 @@ func TestService_ScanExpiry_FallsBackToServiceDefaults(t *testing.T) {
 	}
 }
 
-// --- PromoteNow (round 3) ----------------------------------------------
+// --- PromoteNow ---------------------------------------------------------
 
 // TestService_PromoteNow_PropagationWindowNotElapsed proves PromoteNow
 // honors the identical safety window PromoteDuePending itself waits out,

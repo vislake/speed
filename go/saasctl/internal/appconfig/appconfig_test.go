@@ -269,8 +269,7 @@ func TestLoadSetButEmptyCountsAsUnset(t *testing.T) {
 // every infrastructure group -- Redis, the full S3 group and its optional
 // refinements, the SMTP pair and its optional refinements, and the SMS
 // gateway URL -- Load resolves every field and records it as from-env,
-// mirroring TestLoadReadsSetVariables above for the twelve variables the
-// twin did not cover before this fix.
+// the infrastructure counterpart of TestLoadReadsSetVariables above.
 func TestLoadReadsInfrastructureVariables(t *testing.T) {
 	cfg, err := Load("cli-app", envFromMap(map[string]string{
 		RedisAddrEnv:     "redis.internal:6379",
@@ -316,9 +315,8 @@ func TestLoadReadsInfrastructureVariables(t *testing.T) {
 // empty strings, S3UseSSL false, SMTPPort 0 -- leaving every seam on its
 // Preset default, and no field is recorded as from-env: the same "empty
 // counts as unset" contract the original five variables already carry.
-// Before this fix, appconfig did not read these variables at all, so this
-// case held trivially for the wrong reason; TestLoadReadsInfrastructureVariables
-// above is what actually proves they are now wired.
+// TestLoadReadsInfrastructureVariables above is what proves the wired
+// reading of the same fields.
 func TestLoadInfrastructureVariablesDefaultToUnwired(t *testing.T) {
 	cfg, err := Load("cli-app", envFromMap(nil))
 	if err != nil {
@@ -339,10 +337,9 @@ func TestLoadInfrastructureVariablesDefaultToUnwired(t *testing.T) {
 // TestLoadRefusesIncompleteS3Group: an S3 group missing two of its four
 // required members fails with the template's own completeness error
 // naming exactly which variables are missing -- the unit-level pin behind
-// config.TestPrintRefusesIncompleteS3Group's command-level proof. Before
-// this fix Load ignored these variables entirely, so this environment
-// resolved successfully and silently -- exactly the misdiagnosis the
-// audit finding names.
+// config.TestPrintRefusesIncompleteS3Group's command-level proof. Load
+// must never accept a partial infrastructure group and resolve it
+// silently.
 func TestLoadRefusesIncompleteS3Group(t *testing.T) {
 	_, err := Load("cli-app", envFromMap(map[string]string{
 		S3EndpointEnv: "s3.internal:9000",
@@ -425,19 +422,15 @@ func extractEnvVarNames(src string) map[string]bool {
 }
 
 // TestAppConfigEnvSetMatchesTheTemplateExactly is the drift-proof set
-// equality the P2-2 fix requires: it extracts every "...Env = "VALUE""
+// equality between the two sides: it extracts every "...Env = "VALUE""
 // declaration from the embedded template's own config.go source text --
 // never a hand-maintained list this test could silently fall behind, so a
-// future template edit is caught even before anyone updates this file --
-// and asserts the twin's own exported Env constants cover exactly that
-// set, in both directions. The twin's own side is built from the actual
-// exported Go constants (not from copied string literals), so renaming or
-// removing one of them fails this file to even compile, a second,
-// stronger drift signal than the runtime check below.
-//
-// Before this fix, the template declared seventeen such variables while
-// the twin supported five: this test fails on that state (RED), listing
-// the twelve variables the template parses that the twin ignores.
+// template edit is caught even before anyone updates this file -- and
+// asserts the twin's own exported Env constants cover exactly that set, in
+// both directions. The twin's own side is built from the actual exported
+// Go constants (not from copied string literals), so renaming or removing
+// one of them fails this file to even compile, a second, stronger drift
+// signal than the runtime check below.
 func TestAppConfigEnvSetMatchesTheTemplateExactly(t *testing.T) {
 	content, err := template.Project.ReadFile("project/cmd/server/config.go")
 	if err != nil {

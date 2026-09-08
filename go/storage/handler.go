@@ -44,9 +44,9 @@ const (
 // It must run downstream of tenancy.Middleware on a non-allowlisted path:
 // every method reads the tenant tenancy.Middleware already resolved into the
 // request context -- via pkgcore.MustTenantFromContext -- and never from a
-// request parameter, header or body, per root CLAUDE.md's multi-tenant
-// isolation rule. There is no tenant_id anywhere on this surface, exactly as
-// the spec's own header records.
+// request parameter, header or body, per the multi-tenant isolation rule.
+// There is no tenant_id anywhere on this surface, exactly as the spec's own
+// header records.
 //
 // Handler performs no data access of its own: it drives the same services
 // and repositories Module.Register attached to the host's registry --
@@ -474,7 +474,6 @@ func writeError(w http.ResponseWriter, err error) {
 
 // compile-time check that *Handler implements the api.ServerInterface
 // generated from this module's api/openapi.yaml -- the enforcement half of
-// the spec-first flow (docs/internal/21-api-contract.md): add an operation
-// to the fragment, regenerate, and this assertion stops compiling until
-// Handler implements it.
+// the spec-first flow: add an operation to the fragment, regenerate, and
+// this assertion stops compiling until Handler implements it.
 var _ api.ServerInterface = (*Handler)(nil)

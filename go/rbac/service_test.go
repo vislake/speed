@@ -143,10 +143,10 @@ func TestService_Close_LeavesDecisionsCorrect(t *testing.T) {
 }
 
 func TestService_Can_SecondCall_IsServedFromTheCache(t *testing.T) {
-	// The cache's whole purpose: docs/internal/05-identity-and-access.md
-	// requires decisions to be served from a policy cache rather than
-	// loaded in full on every request. Proven here by deleting the binding
-	// rows behind the Service's back -- a read-through would now deny.
+	// The cache's whole purpose: decisions are served from a policy cache
+	// rather than loaded in full on every request. Proven here by deleting
+	// the binding rows behind the Service's back -- a read-through would
+	// now deny.
 	svc := newTestService(t)
 	sub := Subject{TenantID: "tenant-a", UserID: "user-1"}
 	grant(t, svc, sub, "reader", Scope{}, "notes:read")
@@ -216,11 +216,11 @@ func TestService_RevokeRole_InvalidatesTheCacheImmediately(t *testing.T) {
 }
 
 func TestService_RevokeDuringInFlightLoad_DoesNotResurrectStaleGrant(t *testing.T) {
-	// The HIGH review finding on grantsFor: a database load and a
+	// The race grantsFor's fence closes: a database load and a
 	// concurrent revoke race on the read-then-write path into the cache.
 	// Reproduced deterministically, without relying on goroutine
 	// scheduling, via the afterLoadGrants test hook -- it runs at exactly
-	// the point the finding's concrete scenario needs: after loadGrants
+	// the point the race's concrete scenario needs: after loadGrants
 	// has already observed the still-present binding, but before that
 	// result would be written to the cache. From inside that window a
 	// concurrent RevokeRole deletes the binding, commits, and invalidates

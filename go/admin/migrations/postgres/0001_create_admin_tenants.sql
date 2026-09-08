@@ -1,5 +1,4 @@
--- admin_tenants is admin's operator-facing tenant ledger (go/admin/model.go,
--- D3): platform data -- it does NOT carry a tenant_id column scoping it to
+-- admin_tenants is admin's operator-facing tenant ledger (go/admin/model.go): platform data -- it does NOT carry a tenant_id column scoping it to
 -- one tenant, since it describes every tenant the platform knows about. Its
 -- isolation is proven by tenancytest.AssertNotTenantScoped, never
 -- AssertIsolated.

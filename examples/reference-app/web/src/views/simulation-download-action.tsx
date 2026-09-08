@@ -13,8 +13,8 @@
  * into a blob URL of the media type the probe assigned, and offered as
  * a real download link: an anchor whose download attribute carries the
  * filename and whose href is the blob URL, so pressing it starts the
- * browser's own download (the event, the name and the bytes the
- * acceptance gate observes) rather than a navigation that opens the
+ * browser's own download (the event, the name and the bytes the e2e
+ * download gate observes) rather than a navigation that opens the
  * image in a tab. The blob URL is revoked when the bytes are replaced
  * or the control leaves the page, the same ownership discipline as
  * every other URL this page creates.

@@ -3,8 +3,7 @@ package pki
 // Regression suite for migration 0009 (both dialects), which widens the
 // key_ref columns of pki_signing_keys, pki_authorities and pki_certificates
 // from VARCHAR(255) to VARCHAR(4096) -- see
-// migrations/{postgres,sqlite}/0009_widen_key_ref_columns.sql for the
-// finding this closes (go/pki/AGENTS.md's P1-2 record) and the width
+// migrations/{postgres,sqlite}/0009_widen_key_ref_columns.sql for the width
 // rationale. What each test below is and is not proof of is stated on the
 // test itself, per the codebase's honesty rule about verification limits.
 
@@ -23,11 +22,11 @@ import (
 // envelopeKeyRef returns a keyRef of the exact shape
 // go/pki/signer/kmsaws's envelope mode stores (signer.go): base64 of the
 // whole KMS Encrypt CiphertextBlob. The blob is 2048 bytes -- the top of
-// the 0.5-2KB window go/pki/AGENTS.md's P1-2 record cites for a real KMS
-// symmetric ciphertext wrapping an ~80-byte PKCS8 ed25519 key -- which
-// base64s to 2732 characters (4*ceil(2048/3)), far beyond the pre-0009
-// width of 255. The exact length is arithmetic, asserted here so the
-// fixture fails loudly if it ever stops representing the finding.
+// the 0.5-2KB window a real KMS symmetric ciphertext occupies when
+// wrapping an ~80-byte PKCS8 ed25519 key -- which base64s to 2732
+// characters (4*ceil(2048/3)), far beyond the pre-0009 width of 255. The
+// exact length is arithmetic, asserted here so the fixture fails loudly if
+// it ever stops representing that shape.
 func envelopeKeyRef() string {
 	keyRef := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xAB}, 2048))
 	if len(keyRef) != 2732 {
@@ -44,12 +43,10 @@ func envelopeKeyRef() string {
 //
 // What this test is NOT is stated honestly: it cannot fail against the
 // pre-0009 schema on SQLite, because SQLite does not enforce VARCHAR length
-// -- which is the whole reason the bug escaped every unit suite until the
-// PostgreSQL-only failure mode was reasoned out (AGENTS.md's P1-2 record).
-// The true fail-before proof of an over-length write refusal lives on
-// PostgreSQL, and this module has no PostgreSQL integration tier. This test
-// pins the other half: the migrated schema must admit and preserve the
-// real envelope keyRef shape without truncation or error.
+// -- an over-length write refusal is a PostgreSQL-only failure mode, and
+// this module has no PostgreSQL integration tier. This test pins the other
+// half: the migrated schema must admit and preserve the real envelope
+// keyRef shape without truncation or error.
 func TestKeyRefColumns_RoundTripEnvelopeLengthKeyRefs(t *testing.T) {
 	db := newTestDB(t)
 	keyRef := envelopeKeyRef()

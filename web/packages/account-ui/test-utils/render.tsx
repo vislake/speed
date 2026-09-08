@@ -6,8 +6,8 @@
  * around AppThemeProvider (theme + MUI locale linkage + CssBaseline),
  * around QueryClientProvider -- account-ui surfaces read their data
  * through the @tanstack/react-query hooks generated into @speed/api-sdk,
- * so every rendered unit needs a query client, the one provider auth-ui's
- * own harness (the template for this file) does not carry. The client is
+ * so every rendered unit needs a query client, the one provider the
+ * auth-ui harness does not carry. The client is
  * fresh per call and retries nothing: an operation the test scripts to
  * fail must surface its error on the first attempt, not after react-query
  * default retries, and a mutation must not outlive its test.

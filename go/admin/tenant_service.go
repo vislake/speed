@@ -13,10 +13,10 @@ import (
 	"github.com/vislake/speed/go/tenancy"
 )
 
-// TenantService is D3's runtime: the operator-facing tenant ledger, kept
-// current by two independent paths -- the event-driven lazy population
-// subscriber below, and the manual CRUD operators drive through admin's own
-// HTTP surface.
+// TenantService is the tenant ledger's runtime: the operator-facing
+// tenant ledger, kept current by two independent paths -- the event-driven
+// lazy population subscriber below, and the manual CRUD operators drive
+// through admin's own HTTP surface.
 type TenantService struct {
 	repo *TenantRepository
 
@@ -33,8 +33,7 @@ type TenantService struct {
 	// records at record time (see recordAudit and resolveActorName). Nil
 	// until Module.Register calls attachAudit; WithAuthn is a mandatory
 	// production option, so this is never nil in a correctly wired
-	// Bootstrap, and a nil-seam unit fixture records id-only actors
-	// exactly as before.
+	// Bootstrap, and a nil-seam unit fixture records id-only actors.
 	authnSvc *authn.Service
 }
 
@@ -55,9 +54,8 @@ func (s *TenantService) attachAudit(bus pkgcore.EventBus, actions pkgcore.AuditA
 	s.authnSvc = authnSvc
 }
 
-// Create is D3's manual-registration path: an operator registers a tenant
-// before any business write has happened (docs/internal/23-admin.md
-// section 3, D3's second bullet).
+// Create is the manual-registration path: an operator registers a tenant
+// before any business write has happened.
 func (s *TenantService) Create(ctx context.Context, t *Tenant) error {
 	return s.repo.Create(ctx, t)
 }
@@ -76,11 +74,11 @@ func (s *TenantService) List(ctx context.Context, filter TenantFilter) ([]Tenant
 // TenantRepository.List's own Cursor mechanism rather than issuing a
 // single call capped at maxTenantListLimit.
 //
-// This exists because D6's MembershipsOf and D7's cross-tenant
+// This exists because MembershipsOf and the cross-tenant
 // AuditService.Query both need "every tenant the platform knows about" as
 // their candidate list, and a single List(ctx, TenantFilter{Limit:
-// maxTenantListLimit}) call silently drops every ledger row past the
-// 500th once the platform has grown beyond that -- an omission neither
+// maxTenantListLimit}) call silently drops every ledger row past that
+// limit once the platform has grown beyond it -- an omission neither
 // caller's own contract allows (MembershipsOf's doc comment: a failure
 // aborts the call rather than silently omitting a tenant; the same
 // no-silent-omission expectation applies to an audit search meant to
@@ -112,8 +110,10 @@ func (s *TenantService) ListAllIDs(ctx context.Context) ([]string, error) {
 // SetStatus applies patch (rename, suspend/resume, notes) to tenantID's
 // ledger row and, when the write succeeds, records an explicit
 // admin.tenant.status_changed audit event carrying actor as the Actor --
-// this is round 1's audit trail for a tenant-ledger edit; D4's enforcement
-// of a suspended status against real traffic is round 2's work.
+// every ledger edit an operator makes lands on the audit trail. The
+// enforcement of a suspended status against real traffic happens
+// separately, through tenancy's TenantStatusResolver seam (Status's own
+// doc comment).
 //
 // A failure to publish the audit event is logged and swallowed, never
 // returned: the ledger write already committed by the time this runs, so
@@ -132,12 +132,11 @@ func (s *TenantService) SetStatus(ctx context.Context, tenantID string, patch Te
 // recordAudit emits admin.tenant.status_changed. It is a no-op (not an
 // error) when the host has not attached a bus yet.
 //
-// P2-pkgcore-actor-1: the caller-supplied actor (built by handler.go from
-// the operator's verified Principal user id alone -- see callerUserID) is
-// resolved against the users table here, at record time, so the row
-// carries the operator's display name rather than an id-only actor --
-// resolveActorName's own doc comment has the full policy, including what
-// stays id-only and why.
+// The caller-supplied actor (built by handler.go's callerUserID from the
+// operator's verified Principal user id alone) is resolved against the
+// users table here, at record time, so the row carries the operator's
+// display name rather than an id-only actor -- resolveActorName's own doc
+// comment has the full policy, including what stays id-only and why.
 func (s *TenantService) recordAudit(ctx context.Context, actor pkgcore.Actor, tenantID string, patch TenantPatch) {
 	if s.bus == nil {
 		return
@@ -167,33 +166,30 @@ func (s *TenantService) recordAudit(ctx context.Context, actor pkgcore.Actor, te
 	}
 }
 
-// Status implements tenancy.TenantStatusResolver (D4): the ledger row's
-// stored status is what gives "suspend a tenant" real teeth, once a host
-// wires tenancy.WithTenantStatusResolver(adminModule.Tenants()) into its
-// own tenancy.Middleware call.
+// Status implements tenancy.TenantStatusResolver: the ledger row's stored
+// status is what gives "suspend a tenant" real teeth, once a host wires
+// tenancy.WithTenantStatusResolver(adminModule.Tenants()) into its own
+// tenancy.Middleware call.
 //
 // A tenant absent from the ledger entirely -- one whose event-driven lazy
-// registration (D3) has not landed yet, or one nobody has bothered to
-// record here at all -- is reported TenantStatusActive, never suspended:
-// the ledger is an operator CONVENIENCE (this file's own TenantService
-// doc comment), never the authoritative source of tenant existence, so
-// its own absence must never itself become a reason to refuse a request
-// -- that would turn "the ledger has not caught up yet" into an outage for
-// a perfectly legitimate, brand-new tenant. Any other repository failure
-// (a genuine database error) is propagated unchanged, so
-// tenancy.Middleware fails the request closed with
-// ErrTenantStatusUnavailable rather than assuming the tenant is active on
-// an unreachable ledger.
+// registration has not landed yet, or one nobody has bothered to record
+// here at all -- is reported TenantStatusActive, never suspended: the
+// ledger is an operator CONVENIENCE (this file's own TenantService doc
+// comment), never the authoritative source of tenant existence, so its
+// own absence must never itself become a reason to refuse a request --
+// that would turn "the ledger has not caught up yet" into an outage for a
+// perfectly legitimate, brand-new tenant. Any other repository failure (a
+// genuine database error) is propagated unchanged, so tenancy.Middleware
+// fails the request closed with ErrTenantStatusUnavailable rather than
+// assuming the tenant is active on an unreachable ledger.
 //
 // A present row's stored status is returned as-is, with no translation:
-// the ledger's Status column is typed with tenancy.TenantStatus itself
-// (P3-4's consolidation removed the admin-local duplicate vocabulary that
-// used to translate "anything not suspended" to TenantStatusActive here).
-// The seam's own gate refuses any status other than tenancy.TenantStatusActive
-// by default, so a future third ledger state a tenant must not be served
-// under is refused automatically, and the pre-consolidation silent
-// fail-open -- a new state nobody remembered to translate reading as
-// "assume active" -- cannot recur.
+// the ledger's Status column is typed with tenancy.TenantStatus itself,
+// so there is no admin-local vocabulary that could misread a stored value.
+// The seam's own gate refuses any status other than
+// tenancy.TenantStatusActive by default, so a future third ledger state a
+// tenant must not be served under is refused automatically rather than
+// silently read as "assume active".
 func (s *TenantService) Status(ctx context.Context, tenant pkgcore.TenantID) (tenancy.TenantStatus, error) {
 	t, err := s.repo.Get(ctx, string(tenant))
 	if err != nil {
@@ -218,17 +214,13 @@ func isTenantNotFound(err error) bool {
 // tenancy.TenantStatusResolver.
 var _ tenancy.TenantStatusResolver = (*TenantService)(nil)
 
-// handleOrgNodeCreated is D3's event-driven lazy population subscriber: it
+// handleOrgNodeCreated is the event-driven lazy population subscriber: it
 // listens for org's real org.node.created event and, when the created node
 // is a tenant's ROOT node -- org.OrgNode.IsRoot()'s own discriminator,
-// ParentID == "" (NOT node depth, which docs/internal/23-admin.md's own
-// draft assumed before this round verified the real field against
-// go/org/model.go -- see this round's final report for the correction) --
-// lazily creates an active, blank-display-name ledger row for the event's
-// tenant if none exists yet.
+// ParentID == "" (never node depth) -- lazily creates an active,
+// blank-display-name ledger row for the event's tenant if none exists yet.
 //
-// Like org's own handleUserCreated (go/org/events.go), this subscriber is
-// resilient by construction:
+// The subscriber is resilient by construction:
 //
 //  1. Nobody publishes the event -- the subscription simply never fires.
 //  2. The payload is not a shape this handler recognizes -- logged at Warn,
@@ -237,7 +229,7 @@ var _ tenancy.TenantStatusResolver = (*TenantService)(nil)
 //     payload must never fail org's own node-creation write).
 //  3. The event carries no tenant (evt.TenantID == "") -- skipped; there is
 //     nothing to register a ledger row for.
-//  4. The created node is not a root node -- skipped; D3's ledger only
+//  4. The created node is not a root node -- skipped; the ledger only
 //     cares about a tenant's first node, the closest thing to a
 //     "tenant was created" signal the platform has.
 //  5. The created node IS a root node -- EnsureExists lazily creates the
@@ -245,14 +237,14 @@ var _ tenancy.TenantStatusResolver = (*TenantService)(nil)
 //     registered manually, never fails and never overwrites an operator's
 //     own edits.
 //
-// admin is explicitly permitted to import org's own package directly (root
-// CLAUDE.md's admin-sits-at-the-top rule, and docs/internal/23-admin.md
-// section 1's identical statement), so this decodes directly into org's
-// own org.NodeCreated struct rather than probing a JSON map by hand the
-// way org's own cross-module subscriber must for authn's event -- but it
-// still round-trips through JSON rather than a direct type assertion,
-// because a cross-replica delivery over pkgcore's Redis EventBus arrives
-// as a map[string]any, never as the publisher's own struct.
+// admin sits at the top of the module dependency graph and is the one
+// module permitted to import the concrete packages below it directly, so
+// this decodes directly into org's own org.NodeCreated struct rather than
+// probing a JSON map by hand the way org's own cross-module subscriber
+// must for authn's event -- but it still round-trips through JSON
+// rather than a direct type assertion, because a cross-replica delivery
+// over pkgcore's Redis EventBus arrives as a map[string]any, never as the
+// publisher's own struct.
 func (s *TenantService) handleOrgNodeCreated(ctx context.Context, evt pkgcore.Event) error {
 	log := obs.FromContext(ctx)
 
@@ -269,7 +261,7 @@ func (s *TenantService) handleOrgNodeCreated(ctx context.Context, evt pkgcore.Ev
 		return nil
 	}
 	if payload.ParentID != "" {
-		// Not a root node: D3's ledger only lazily-registers on a
+		// Not a root node: the ledger only lazily-registers on a
 		// tenant's first (root) node.
 		return nil
 	}
@@ -284,9 +276,7 @@ func (s *TenantService) handleOrgNodeCreated(ctx context.Context, evt pkgcore.Ev
 // decodeEventPayload round-trips payload through JSON into out, which
 // works uniformly whether payload arrived as the publisher's own struct
 // (a same-replica, in-process delivery) or as a map[string]any (a
-// cross-replica delivery over pkgcore's Redis EventBus) -- mirroring
-// org.userIDFromPayload's identical technique, generalized to decode a
-// whole struct rather than probe one field.
+// cross-replica delivery over pkgcore's Redis EventBus).
 func decodeEventPayload(payload any, out any) error {
 	encoded, err := json.Marshal(payload)
 	if err != nil {

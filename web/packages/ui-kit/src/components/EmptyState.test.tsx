@@ -116,39 +116,34 @@ describe('EmptyState', () => {
   })
 
   it('fails the axe scan when the document has no page heading instead of passing by indeterminacy', async () => {
-    // The mechanism the variants scan above works around by supplying
-    // the h1 itself. A component rendered with no h1 anywhere in the
-    // scan's document used to pass: page-has-heading-one reported
-    // "incomplete" under jsdom (its modal probe needs document APIs
-    // jsdom lacks) and the axe helper checked only violations. The
-    // helper now restores determinacy, so the isolated render FAILS
-    // the scan with the rule's real answer instead of silently passing.
+    // The variants scan above works around the axe helper's
+    // heading-order handling by supplying the h1 itself.
+    // page-has-heading-one reports "incomplete" under jsdom (its modal
+    // probe needs document APIs jsdom lacks) and the axe helper checks
+    // only violations, so a component rendered with no h1 anywhere in
+    // the scan's document would pass by indeterminacy. The helper's
+    // modal-probe handling restores determinacy (see test-utils/axe.ts),
+    // so the isolated render FAILS the scan with the rule's real answer
+    // instead of silently passing.
     renderWithProviders(<EmptyState headingLevel="h2" />)
     await expect(expectNoAxeViolations()).rejects.toThrow(/page-has-heading-one/)
   })
 
-  // Regression for the account-ui audit's CONFIRMED P2-1 finding: the
-  // title used to render unconditionally as Typography variant="h6" with
-  // no component override, which is a REAL <h6> DOM element regardless of
-  // its visual style. A real page renders EmptyState under real
-  // heading ancestors (an h1 page title, an h2 section header a hidden-
-  // header empty/error branch stands in for -- see account-ui's
-  // SessionsSection/LoginHistorySection/SocialBindingsSection), so that
-  // fixed h6 skipped straight from h1/h2 to h6, a genuine axe
-  // heading-order violation the package's own component-level axe run
-  // above can never see: it renders EmptyState in total isolation, with
-  // no ancestor heading at all, so the very defect this test targets
-  // produces zero violations there. This test supplies the ancestor
-  // itself so the skip is actually reachable.
+  // The title defaults to Typography variant="h6" -- a REAL <h6> DOM
+  // element whatever its visual style -- unless the caller passes
+  // headingLevel. Real pages render EmptyState under real heading
+  // ancestors (an h1 page title, an h2 section header a hidden-header
+  // empty/error branch stands in for), so the default h6 skips from
+  // h1/h2 straight to h6: a genuine axe heading-order violation the
+  // package's own component-level axe run above can never see, since it
+  // renders EmptyState in total isolation with no ancestor heading at
+  // all. This test supplies the ancestor itself so the skip is actually
+  // reachable.
   it('does not skip a heading level under a real h1/h2 ancestor', async () => {
-    // PRE-FIX: EmptyState always rendered an <h6>, so a page whose most
-    // recent heading is h1 (as here) jumped straight to h6 -- a genuine
-    // heading-order skip axe's heading-order rule flags. POST-FIX: the
-    // default is UNCHANGED (still h6) precisely so an un-migrated caller
-    // keeps its exact old behaviour -- so a caller that does not pass
-    // headingLevel still skips here, and only supplying the correct
-    // level (as account-ui's own call sites now do) fixes it. Both halves
-    // are asserted below.
+    // The default is h6 -- an un-migrated caller that does not pass
+    // headingLevel still skips from h1 straight to h6 here, the
+    // heading-order skip axe's heading-order rule flags. Supplying the
+    // correct level is the fix. Both halves are asserted below.
     renderWithProviders(
       <div>
         <h1>Page title</h1>

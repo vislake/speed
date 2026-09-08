@@ -1,7 +1,7 @@
--- The settle-after-serve round adds the access route's in-flight view
--- reservation to sharing_shares (go/sharing/model.go's ViewsReserved and
--- ViewsReservedAt fields; the reserve/confirm/refund shape's full
--- reasoning is in AGENTS.md's "Serving an access" section):
+-- The access route's in-flight view reservation columns on sharing_shares
+-- (go/sharing/model.go's ViewsReserved and ViewsReservedAt fields; the
+-- reserve/confirm/refund shape's full reasoning is in service.go's and
+-- handler.go's own doc comments):
 --
 --   * views_reserved: 1 while the route is serving one viewer of a
 --     MaxViews-limited share, 0 otherwise. The reservation is taken

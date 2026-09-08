@@ -233,9 +233,8 @@ func TestRedisBus_RevokeOnOneReplica_ConvergesTheOther(t *testing.T) {
 // TestRedisBus_RevokeOnOneReplica_ConvergesTheOther's counterpart for
 // EventRoleBindingRestored: replica B has cached the revoked (denied)
 // decision, replica A restores the grant, and B must start granting it
-// again without waiting out its cache lifetime. Item 5 of this round's own
-// design record calls this a correctness requirement, not a nice-to-have --
-// a restore that only invalidated the writer's own local cache would leave
+// again without waiting out its cache lifetime. A
+// restore that only invalidated the writer's own local cache would leave
 // every other replica silently serving a stale "revoked" decision forever
 // (an hour, here), which is exactly the security failure this leg's sibling
 // test proves the revoke direction avoids.

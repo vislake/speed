@@ -1,7 +1,7 @@
 // Package testutil holds the sharing module's own test helpers: the
-// dual-dialect migrated-database constructors backend-coding-standards §13
-// asks every module to provide, so this module's tests never duplicate the
-// dbkit.MigrationRegistry wiring inline.
+// dual-dialect migrated-database constructors every module provides, so
+// this module's tests never duplicate the dbkit.MigrationRegistry wiring
+// inline.
 package testutil
 
 import (
@@ -35,11 +35,8 @@ func NewSQLite(t *testing.T, moduleName string, fs embed.FS) *gorm.DB {
 // NewPostgres returns a migrated PostgreSQL *gorm.DB, backed by a real
 // server started with testcontainers. It skips the test when no Docker
 // daemon is reachable, so callers need no availability check of their own.
-//
-// This round ships no integration_test/ package that calls it -- see
-// AGENTS.md's Known limitations -- but the helper is included now, mirroring
-// go/pki's identical round-1 choice, so a later round's PostgreSQL leg needs
-// no db.go of its own.
+// It backs the module's PostgreSQL leg
+// (integration_test/postgres_mutex_scope_test.go).
 func NewPostgres(t *testing.T, moduleName string, fs embed.FS) *gorm.DB {
 	t.Helper()
 	db := dbtest.NewPostgres(t)

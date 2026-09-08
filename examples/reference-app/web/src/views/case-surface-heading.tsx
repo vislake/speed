@@ -4,14 +4,14 @@
  * name reaches the title level wherever a person works cases.
  *
  * The clinic is the work context the cases pages answer to, and the
- * acceptance chain's current-clinic gate names it inside the main
- * landmark: the heading composes the clinic's display name (the same
- * name the tenant switcher shows -- useCurrentTenantName: demo copy
- * for the boot-configured tenants, the fetched org root name for a
- * clinic that did not exist at boot) with the page's own title, e.g.
- * "Acme Dental · Cases", and falls back to the bare title only while
- * the current tenant's name is unknown (never an identifier invented
- * to fill the slot).
+ * current-clinic gate (e2e/current-clinic-is-visible.spec.ts) requires
+ * its name inside the main landmark: the heading composes the clinic's
+ * display name (the same name the tenant switcher shows --
+ * useCurrentTenantName: demo copy for the boot-configured tenants, the
+ * fetched org root name for a clinic that did not exist at boot) with
+ * the page's own title, e.g. "Acme Dental · Cases", and falls back to
+ * the bare title only while the current tenant's name is unknown
+ * (never an identifier invented to fill the slot).
  */
 
 import type { ReactElement } from 'react'

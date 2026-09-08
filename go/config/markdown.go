@@ -6,11 +6,10 @@ import (
 )
 
 // RenderMarkdown renders items -- typically a *Service.Describe() call's
-// return value -- into one Markdown table: the short script
-// docs/internal/13-documentation-standards.md's must-have doc list asks
-// for alongside the full configuration item listing itself, "generated
-// from the config schema, never hand-written." It is an ordinary exported
-// function rather than a separate command-line tool: unlike
+// return value -- into one Markdown table: the configuration reference,
+// which must be generated from the live config schema, never hand-written.
+// It is an ordinary exported function rather than a separate command-line
+// tool: unlike
 // tools/gen_error_code_index.py's error-code index (statically greppable
 // from Go source alone), a live configuration schema only exists after a
 // real host has run Kernel.Bootstrap and Module.Attach -- there is no

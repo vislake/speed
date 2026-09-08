@@ -62,18 +62,18 @@ func TestImpersonationMiddleware_NoHeader_PassesThroughUnmodified(t *testing.T) 
 	}
 }
 
-// TestImpersonationMiddleware_ValidGrant_SubstitutesIdentity is properties
-// (b) and (d): the target user's identity is what downstream reads, and
+// TestImpersonationMiddleware_ValidGrant_SubstitutesIdentity pins the
+// substitution: the target user's identity is what downstream reads, and
 // both Actor (target) and OnBehalfOf (admin) are set for audit capture.
 //
-// It also pins P1-2's and P1-3's fixes: the substituted principal must NOT
-// inherit the administrator's SessionID or AMR -- authn's session lifecycle
-// keys on a session id alone, so an inherited one would let an impersonated
-// request sign the administrator out of their own console session, and an
-// inherited AMR would let the administrator's own second factor satisfy an
-// MFA gate as the target. The impersonation's own session identity is the
-// grant (SessionID = grant id), and no authentication method was ever
-// established for the target (AMR empty).
+// It also pins the boundaries the substituted principal must NOT cross:
+// no inherited SessionID and no inherited AMR -- authn's session lifecycle
+// keys on a session id alone, so an inherited one would let an
+// impersonated request sign the administrator out of their own console
+// session, and an inherited AMR would let the administrator's own second
+// factor satisfy an MFA gate as the target. The impersonation's own
+// session identity is the grant (SessionID = grant id), and no
+// authentication method was ever established for the target (AMR empty).
 func TestImpersonationMiddleware_ValidGrant_SubstitutesIdentity(t *testing.T) {
 	var gotPrincipal authn.Principal
 	var gotPrincipalOK bool
@@ -103,18 +103,17 @@ func TestImpersonationMiddleware_ValidGrant_SubstitutesIdentity(t *testing.T) {
 	if !gotPrincipalOK || gotPrincipal.UserID != "user-1" || gotPrincipal.TenantID != "tenant-1" {
 		t.Fatalf("Principal = %+v, ok=%v, want the TARGET user's substituted identity", gotPrincipal, gotPrincipalOK)
 	}
-	// P1-3: the session identity during impersonation is the GRANT's, never
-	// the administrator's real session id -- a session-scoped operation as
-	// the target must pair (target user, grant), not (target user, admin
+	// The session identity during impersonation is the GRANT's, never the
+	// administrator's real session id -- a session-scoped operation as the
+	// target must pair (target user, grant), not (target user, admin
 	// session), and authn's logout must never be able to revoke the
 	// administrator's own session through this principal.
 	if gotPrincipal.SessionID != "grant-1" {
 		t.Fatalf("SessionID = %q, want the grant's own id grant-1 (the impersonated session), never the admin's sess-1", gotPrincipal.SessionID)
 	}
-	// P1-2: no administrator authentication method survives the
-	// substitution -- an empty AMR cannot satisfy any "requires a second
-	// factor" policy, so an admin with TOTP cannot cross an MFA gate as the
-	// target.
+	// No administrator authentication method survives the substitution --
+	// an empty AMR cannot satisfy any "requires a second factor" policy,
+	// so an admin with TOTP cannot cross an MFA gate as the target.
 	if len(gotPrincipal.AMR) != 0 {
 		t.Fatalf("AMR = %v, want empty (the target proved no authentication method; the admin's %v must not cross over)", gotPrincipal.AMR, adminPrincipal.AMR)
 	}
@@ -127,15 +126,14 @@ func TestImpersonationMiddleware_ValidGrant_SubstitutesIdentity(t *testing.T) {
 }
 
 // TestImpersonationMiddleware_LogoutUnderImpersonation_DoesNotKillAdminsSession
-// is P1-3's regression at the real-authn boundary: the administrator holds
-// a REAL session row (authn's own SessionRepository), and a logout issued
-// from inside the impersonated context -- authn's Service.Logout, the very
-// call its logout handler makes with the calling principal's SessionID --
-// must not revoke that row. On unfixed main the substituted principal
-// carried the administrator's session id, so this logout revoked the
-// administrator's real session (Logout keys on the session id alone); with
-// the substituted SessionID naming the grant instead, the same call finds
-// no such session and the administrator's own row stays active.
+// pins the grant-as-session boundary at the real-authn edge: the
+// administrator holds a REAL session row (authn's own SessionRepository),
+// and a logout issued from inside the impersonated context -- authn's
+// Service.Logout, the very call its logout handler makes with the calling
+// principal's SessionID -- must not revoke that row. Logout keys on the
+// session id alone, so a substituted SessionID naming the grant instead of
+// the administrator's real session id is what keeps the administrator's
+// own row active.
 func TestImpersonationMiddleware_LogoutUnderImpersonation_DoesNotKillAdminsSession(t *testing.T) {
 	env := buildTestAdminModule(t)
 
@@ -192,9 +190,10 @@ func TestImpersonationMiddleware_LogoutUnderImpersonation_DoesNotKillAdminsSessi
 	}
 }
 
-// TestImpersonationMiddleware_ExpiredGrant_FallsBackToAdmin is property
-// (c): an expired grant id must NEVER impersonate -- it must fall back to
-// the administrator's own real identity, not fail the request either.
+// TestImpersonationMiddleware_ExpiredGrant_FallsBackToAdmin pins the
+// fail-closed rule: an expired grant id must NEVER impersonate -- it must
+// fall back to the administrator's own real identity, not fail the
+// request either.
 func TestImpersonationMiddleware_ExpiredGrant_FallsBackToAdmin(t *testing.T) {
 	var gotPrincipal authn.Principal
 	var gotPrincipalOK bool
@@ -226,8 +225,8 @@ func TestImpersonationMiddleware_ExpiredGrant_FallsBackToAdmin(t *testing.T) {
 	}
 }
 
-// TestImpersonationMiddleware_UnknownGrantID_FallsBackToAdmin is property
-// (c) again, for a grant id that never existed at all.
+// TestImpersonationMiddleware_UnknownGrantID_FallsBackToAdmin pins the
+// same fail-closed rule for a grant id that never existed at all.
 func TestImpersonationMiddleware_UnknownGrantID_FallsBackToAdmin(t *testing.T) {
 	var gotPrincipal authn.Principal
 	var gotPrincipalOK bool
@@ -278,10 +277,10 @@ func TestImpersonationMiddleware_GrantBelongsToDifferentAdmin_FallsBack(t *testi
 	}
 }
 
-// TestImpersonationMiddleware_NoVerifiedPrincipal_PassesThrough is
-// property (a) from the other direction: with no verified admin identity
-// at all, the header is simply ignored -- there is no administrator to
-// substitute FOR.
+// TestImpersonationMiddleware_NoVerifiedPrincipal_PassesThrough pins the
+// unchanged-credential rule from the other direction: with no verified
+// admin identity at all, the header is simply ignored -- there is no
+// administrator to substitute FOR.
 func TestImpersonationMiddleware_NoVerifiedPrincipal_PassesThrough(t *testing.T) {
 	var gotPrincipal authn.Principal
 	var gotPrincipalOK bool

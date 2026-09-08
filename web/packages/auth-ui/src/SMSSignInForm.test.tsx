@@ -99,23 +99,20 @@ describe('SMSSignInForm', () => {
   })
 
   it('announce the sent notice through a live region that stood empty from the phone step (mount-with-text regression)', async () => {
-    // PRE-FIX: the sent notice's role="status" region rendered only
-    // inside the code step, so the region mounted in the same commit as
-    // its text the moment an accepted code request opened the step. A
-    // live region announces content changes that follow its own
-    // existence, never text that mounts together with it, so the
-    // accepted request was silent. POST-FIX: the region stands mounted
-    // (empty, visually silent) for the whole life of the form and the
-    // accepted request fills the text into a region the screen reader
-    // already knows. The same DOM node must survive the transition,
-    // which is what makes the later text change an announcement rather
-    // than another mount.
+    // The sent notice's role="status" region stands mounted (empty,
+    // visually silent) for the whole life of the form, because a live
+    // region announces content changes that follow its own existence,
+    // never text that mounts together with it -- a region born in the
+    // same commit as the accepted code request's step flip would be
+    // silent. The accepted request fills the text into a region the
+    // screen reader already knows. The same DOM node must survive the
+    // transition, which is what makes the later text change an
+    // announcement rather than another mount.
     const harness = makeHarness({
       [REQUEST_SMS_CODE]: () => undefined,
     })
     renderWithProviders(<SMSSignInForm session={harness.session} />)
-    // The standing region exists, empty, while nothing has been sent:
-    // pre-fix no status region exists at all on the phone step.
+    // The standing region exists, empty, while nothing has been sent.
     const status = screen.getByRole('status')
     expect(status).toHaveTextContent('')
     await requestCode(PHONE)
@@ -449,9 +446,8 @@ describe('SMSSignInForm', () => {
     // onSignedIn (the winning call fired its own exactly once) and
     // must not present the spent code as intact and retryable (a
     // re-submit of it would draw the server's collapsed invalid-code
-    // refusal forever -- the bug this regression pins): it renders the
-    // used-code notice and clears the field, so only a fresh code can
-    // sign in.
+    // refusal forever): it renders the used-code notice and clears the
+    // field, so only a fresh code can sign in.
     let releaseSms!: (value: unknown) => void
     const smsGate = new Promise((resolve) => {
       releaseSms = resolve
@@ -508,15 +504,13 @@ describe('SMSSignInForm', () => {
     // must never ride into a second submission. The harness answers a
     // second LOGIN_SMS carrying that code the way the server would:
     // the single-use guard already spent it on the first submit's
-    // own 2xx, so the re-submission is refused with the collapsed
-    // invalid-code answer authn deliberately gives every dead code.
-    // Pre-fix the form kept the spent code in the field and answered
-    // the second submit with that refusal forever -- the endless
-    // retry of a dead code this regression pins. The form now knows
-    // the exact string its superseded answer proved spent: the
-    // re-submission is answered locally with the used-code notice and
-    // never reaches the network, and the recovery path is a fresh
-    // code -- resend, then the new code signs in for real.
+    // own 2xx, so the re-submission would be refused with the
+    // collapsed invalid-code answer authn deliberately gives every
+    // dead code. The form knows the exact string its superseded
+    // answer proved spent: the re-submission is answered locally with
+    // the used-code notice and never reaches the network, and the
+    // recovery path is a fresh code -- resend, then the new code
+    // signs in for real.
     let loginAttempts = 0
     let releaseSms!: () => void
     const smsGate = new Promise<void>((resolve) => {
@@ -569,7 +563,8 @@ describe('SMSSignInForm', () => {
       ).toBeEnabled(),
     )
     // The same code is typed and submitted again -- the retry the
-    // pre-fix form advertised with the spent code still in the field.
+    // spent-code memory exists to refuse: the exact string a previous
+    // submit proved spent is re-submitted verbatim.
     await user.clear(codeInput)
     await user.type(codeInput, CODE)
     await user.click(
@@ -622,10 +617,10 @@ describe('SMSSignInForm', () => {
     // spent-code memory the superseded answer left behind must survive
     // it: the rate-limited resend (the likeliest refusal -- the send
     // policy just answered one request) does not make the exhausted
-    // code resubmittable. Pre-fix the memory cleared as the resend
-    // STARTED rather than when a fresh code actually arrived, so this
-    // re-submission rode into the server's collapsed invalid-code
-    // refusal -- the dead-code round-trip this regression pins shut.
+    // code resubmittable. The memory clears only when a fresh code
+    // actually arrives, never when a resend merely starts -- a
+    // start-time clear would send this re-submission of the exhausted
+    // code into the server's collapsed invalid-code refusal.
     let requestCount = 0
     let loginAttempts = 0
     let releaseSms!: () => void
@@ -727,10 +722,8 @@ describe('SMSSignInForm', () => {
     // whose boundary is the memory's stated reach -- the spent code
     // clears with the session, the old code is no longer refused
     // locally (it rides to the server's collapsed answer once more),
-    // and the fresh code verifies normally. This leg passes by
-    // accident of the pre-fix timing too (the memory cleared at request
-    // start); it pins the success path so the corrected clear cannot
-    // regress it.
+    // and the fresh code verifies normally. This leg pins the success
+    // path: the clear happens only once a fresh code actually arrived.
     let loginAttempts = 0
     let releaseSms!: () => void
     const smsGate = new Promise<void>((resolve) => {

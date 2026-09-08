@@ -6,9 +6,7 @@ import (
 )
 
 // This file is the seam Handler's public access route (handler.go) reads a
-// share's ResourceRef through to turn it into actual bytes -- the round-2
-// answer to AGENTS.md's former "Access never resolves ResourceRef into
-// actual bytes" known limitation.
+// share's ResourceRef through to turn it into actual bytes.
 //
 // It is a structurally-typed, no-import-edge interface, the same shape
 // org.FeatureGate and org.Scope use to reach go/config-shaped or
@@ -20,11 +18,9 @@ import (
 // module itself, so sharing does not import go/storage (or any other
 // resource-owning module) to satisfy this interface -- a host's own
 // adapter over *storage.ObjectService (or whatever module actually owns
-// the resource) satisfies it structurally instead. This keeps the module
-// dependency direction exactly as round 1 left it (go/sharing/AGENTS.md's
-// "Cross-module references" reasoning on Share.ResourceRef, restated in
-// model.go), even though this round finally does something with the bytes
-// behind that reference.
+// the resource) satisfies it structurally instead, and the module's
+// dependency direction stays one-way no matter whose bytes a granted
+// share serves.
 
 // ResourceContent is what a ResourceResolver reports about the bytes
 // behind a Share's ResourceRef -- the minimum an HTTP response needs to

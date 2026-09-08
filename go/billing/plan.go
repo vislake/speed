@@ -30,10 +30,9 @@ const platformScopeSentinel = ""
 //
 // # Tenant-custom Plans, and why TenantID is a plain string, not a *string
 //
-// docs/internal/06-billing-and-metering.md's own sketch spells this field
-// as "TenantID *string // nil = platform-wide; set = tenant-custom" --
-// illustrative Go, not this module's literal storage shape. Plan is a dual-
-// domain table (docs/internal/04-data-and-tenancy.md): a platform-wide row
+// One sketch of this field reads "TenantID *string // nil = platform-wide;
+// set = tenant-custom" -- illustrative, not this module's literal storage
+// shape. Plan is a dual-domain table: a platform-wide row
 // is genuinely platform data, visible to any tenant's lookup, while a
 // tenant-custom row is genuinely that one tenant's private data -- and no
 // single dbkit data-domain capability spans both faces of the same table
@@ -46,10 +45,9 @@ const platformScopeSentinel = ""
 // platform-wide row, reached through a plain *gorm.DB (PlanStore below,
 // never dbkit.Repository[T] -- Repository[T]'s generic constraint requires
 // TenantScoped, which this table must NOT implement), isolation proven with
-// tenancytest.AssertNotTenantScoped rather than AssertIsolated -- see
-// AGENTS.md's "Design choice: Plan's tenant-scoping duality" section for
-// the full write-up, including why this is not a gap against the "every
-// tenant table must run AssertIsolated" rule.
+// tenancytest.AssertNotTenantScoped rather than AssertIsolated: the table
+// spans both data domains, so the one-domain isolation suites cannot apply
+// to it wholesale.
 //
 // # Lookup precedence
 //
@@ -286,12 +284,12 @@ func (s *PlanStore) getByIDAndScope(ctx context.Context, id, scope string) (*Pla
 	return &out, nil
 }
 
-// Resolve is the tenant-custom Plan lookup precedence:
-// docs/internal/06-billing-and-metering.md's rationale that negotiating a
-// custom deal with one enterprise customer is routine in on-premise
-// delivery, realized as one rule -- a tenant-custom Plan for (tenantID,
-// key) is used when one exists; otherwise the platform-wide Plan for key is
-// used; otherwise ErrPlanNotFound. tenantID may be platformScopeSentinel
+// Resolve is the tenant-custom Plan lookup precedence, realized as one
+// rule: a tenant-custom Plan for (tenantID, key) is used when one exists;
+// otherwise the platform-wide Plan for key is used; otherwise
+// ErrPlanNotFound. The tenant-custom row exists so an individually
+// negotiated deal -- routine in on-premise delivery -- can override the
+// shared catalog without forking it. tenantID may be platformScopeSentinel
 // (""), in which case only the platform-wide lookup runs (there is no
 // narrower scope to prefer).
 //
@@ -343,9 +341,9 @@ func (s *PlanStore) findByScopeAndKey(ctx context.Context, tenantID, key string)
 }
 
 // PlanService is the write-side wrapper over PlanStore that publishes
-// EventPlanChanged after every mutation, per
-// docs/internal/06-billing-and-metering.md's rule that entitlement changes
-// take effect immediately, broadcast over the event bus. PlanStore itself
+// EventPlanChanged after every mutation, so entitlement changes take
+// effect immediately across consumers, broadcast over the event bus.
+// PlanStore itself
 // stays a plain, event-free row accessor
 // (used directly by EntitlementsService's read path, which needs no
 // event); PlanService is the seam anything that WRITES a Plan should go

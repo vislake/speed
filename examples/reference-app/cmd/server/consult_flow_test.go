@@ -6,10 +6,9 @@ package main
 // hand-written consult route (cmd/server/consult.go) -- against a fake
 // OpenAI-compatible endpoint (fakeOpenAICompatibleServer below), standing in
 // for the real vendor: no live API key is available or needed, since the
-// OpenAI-compatible chat-completions schema is fully testable this way (see
-// go/ai-gateway/AGENTS.md's own reference-app-consumer section).
+// OpenAI-compatible chat-completions schema is fully testable this way.
 //
-// Three legs cover the round's acceptance shape:
+// Three legs cover the surface's acceptance shape:
 //
 //   - the happy path: a note created under one tenant's own token gets a
 //     consultation suggestion back, and the fake server actually received
@@ -128,7 +127,7 @@ func consultSuggestRequest(t *testing.T, srv *httptest.Server, token, noteID str
 	return resp
 }
 
-// TestConsultSuggest_ReturnsGatewaySuggestion is this round's mandatory
+// TestConsultSuggest_ReturnsGatewaySuggestion is the mandatory
 // end-to-end proof: a note's text really travels through
 // internal/consult.Service, through go/ai-gateway's Gateway.Chat pipeline
 // (credential resolution, model routing, the OpenAICompatibleProvider's

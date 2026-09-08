@@ -3,8 +3,8 @@
  *
  * Field naming mirrors the MUI theme palette surface on purpose (semantic
  * roles carry main/light/dark/contrastText, neutrals use the grey-style
- * numeric steps), so the future ui-kit theme adapter maps tokens onto the
- * MUI theme shape key by key. The hex values are the speed brand defaults;
+ * numeric steps), so the ui-kit theme adapter maps tokens onto the MUI
+ * theme shape key by key. The hex values are the speed brand defaults;
  * projects override them through deepMerge (see README.md).
  */
 

@@ -49,7 +49,8 @@ func (notificationMigrationModule) OpenAPISpec() []byte              { return ni
 func (notificationMigrationModule) Register(*pkgcore.Registry) error { return nil }
 
 // rbacMigrationModule mirrors orgMigrationModule for rbac's own migration
-// files -- D8's tests need a real, migrated rbac.Module to Attach.
+// files -- the role-management tests need a real, migrated rbac.Module to
+// Attach.
 type rbacMigrationModule struct{}
 
 func (rbacMigrationModule) Name() string                     { return "rbac" }
@@ -60,7 +61,7 @@ func (rbacMigrationModule) OpenAPISpec() []byte              { return nil }
 func (rbacMigrationModule) Register(*pkgcore.Registry) error { return nil }
 
 // sharingMigrationModule mirrors orgMigrationModule for sharing's own
-// migration files -- D7's export-leg tests need a real sharing.Module for
+// migration files -- the export-leg tests need a real sharing.Module for
 // compliance.WithSharing to deliver through.
 type sharingMigrationModule struct{}
 
@@ -72,7 +73,7 @@ func (sharingMigrationModule) OpenAPISpec() []byte              { return nil }
 func (sharingMigrationModule) Register(*pkgcore.Registry) error { return nil }
 
 // meteringMigrationModule mirrors orgMigrationModule for metering's own
-// migration files -- D9's usage-dashboard tests need a real
+// migration files -- the usage-dashboard tests need a real
 // metering.Module.
 type meteringMigrationModule struct{}
 
@@ -84,8 +85,7 @@ func (meteringMigrationModule) OpenAPISpec() []byte              { return nil }
 func (meteringMigrationModule) Register(*pkgcore.Registry) error { return nil }
 
 // billingMigrationModule mirrors orgMigrationModule for billing's own
-// migration files -- D9's usage-dashboard tests need a real
-// billing.Module.
+// migration files -- the usage-dashboard tests need a real billing.Module.
 type billingMigrationModule struct{}
 
 func (billingMigrationModule) Name() string                     { return "billing" }
@@ -96,10 +96,10 @@ func (billingMigrationModule) OpenAPISpec() []byte              { return nil }
 func (billingMigrationModule) Register(*pkgcore.Registry) error { return nil }
 
 // testAdminEnv is buildTestAdminModule's full return value: every handle
-// a round-2 test (D7/D8/D9/D10) might need alongside round-1's own
-// registry/admin/org/queue tuple, gathered into one struct so adding a
-// module here does not force every existing two-call-site destructuring
-// assignment to grow another blank identifier.
+// a test might need alongside the registry/admin/org/queue tuple,
+// gathered into one struct so adding a module here does not force every
+// existing two-call-site destructuring assignment to grow another blank
+// identifier.
 type testAdminEnv struct {
 	Registry *pkgcore.Registry
 	Admin    *Module
@@ -122,23 +122,23 @@ type testAdminEnv struct {
 	// its full business pipeline.
 	DB *gorm.DB
 
-	// RBAC is the real, Attach()-ed *rbac.Service D8's tests wire onto
-	// adminModule.AttachRBAC -- nil until buildTestAdminModule's caller
-	// does so; buildTestAdminModule itself does not call AttachRBAC,
-	// since round-1 tests must keep observing RoleService's fail-closed
-	// ErrRBACServiceRequired contract exactly as before.
+	// RBAC is the real, Attach()-ed *rbac.Service the role-management and
+	// impersonation tests wire onto adminModule.AttachRBAC -- nil until
+	// buildTestAdminModule's caller does so; buildTestAdminModule itself
+	// does not call AttachRBAC, so tests keep observing RoleService's
+	// fail-closed ErrRBACServiceRequired contract.
 	RBAC *rbac.Service
 
 	// Sharing is the real *sharing.Module compliance.WithSharing delivers
-	// D7's exports through.
+	// the audit exports through.
 	Sharing *sharing.Module
 
 	// Metering and Billing are real modules, NOT wired into adminModule
-	// by default (D9's WithMetering/WithBilling are optional -- see
-	// Module's own doc comments): a D9 test wires either or both itself
-	// via a second admin.NewModule call over the same db, mirroring how
-	// D8's tests call AttachRBAC themselves rather than having this
-	// builder do it for them.
+	// by default (WithMetering/WithBilling are optional -- see Module's
+	// own doc comments): a usage test wires either or both itself via a
+	// second admin.NewModule call over the same db, mirroring how the
+	// role-management tests call AttachRBAC themselves rather than having
+	// this builder do it for them.
 	Metering *metering.Module
 	Billing  *billing.Module
 }
@@ -152,7 +152,7 @@ type testAdminEnv struct {
 // subscription) succeeds together. It additionally constructs (but does
 // not always wire into adminModule -- see testAdminEnv's own field
 // comments) real rbac, sharing, metering and billing modules over the
-// SAME database, for round 2's D7/D8/D9 tests to build on without each
+// SAME database, for the tests that need them to build on without each
 // standing up its own parallel module graph.
 func buildTestAdminModule(t *testing.T) testAdminEnv {
 	t.Helper()
@@ -210,9 +210,9 @@ func buildTestAdminModule(t *testing.T) testAdminEnv {
 		// same Cleanup's dbkit connection closes right after -- observed
 		// as a spurious "persisting success failed: sql: database is
 		// closed" ERROR log with no effect on any test's own assertions,
-		// but noise the Testing warnings policy (root CLAUDE.md) still
-		// requires fixing rather than ignoring. A real, freshly-derived
-		// timeout context gives Close something to actually wait on.
+		// but noise a warnings-as-issues policy requires fixing rather
+		// than ignoring. A real, freshly-derived timeout context gives
+		// Close something to actually wait on.
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = queue.Close(closeCtx)
@@ -313,14 +313,12 @@ func TestModule_Register_DeclaresPermissionsAuditActionsAndNotificationType(t *t
 	for _, nt := range reg.Notifications.Types() {
 		if nt.Key == NotificationTypeImpersonationStarted {
 			foundType = true
-			// P1-1's fix: pkgcore.NotificationType.Unsubscribable reports
-			// whether recipients MAY OPT OUT (pkgcore/registry.go's own
-			// field doc), so D5's mandatory security notification must
-			// declare false -- the value that makes an empty preference
-			// selection refused (notification.ErrPreferenceOptoutNotAllowed)
-			// rather than stored as a full opt-out. The earlier assertion
-			// demanded Unsubscribable true, reading the field backwards
-			// and pinning the very defect it claimed to prevent.
+			// pkgcore.NotificationType.Unsubscribable reports whether
+			// recipients MAY OPT OUT (pkgcore/registry.go's own field
+			// doc), so the mandatory security notification must declare
+			// false -- the value that makes an empty preference selection
+			// refused (notification.ErrPreferenceOptoutNotAllowed) rather
+			// than stored as a full opt-out.
 			if nt.Unsubscribable {
 				t.Error("NotificationTypeImpersonationStarted is Unsubscribable, want a mandatory type recipients cannot opt out of (Unsubscribable false)")
 			}
@@ -328,11 +326,10 @@ func TestModule_Register_DeclaresPermissionsAuditActionsAndNotificationType(t *t
 			// recipient-visible params (an empty list, never nil -- nil is
 			// the legacy "no restriction" value): the notice's copy is
 			// static, so nothing may ride its dispatch's params channel to
-			// the target. Before this declaration the dispatch handed the
-			// impersonated user the operator's reason and the
-			// administrator's user id verbatim through that channel (the
-			// P1 finding); notification enforces the declared list, so the
-			// leak cannot return unless this declaration is widened on
+			// the target -- the impersonated user must never receive the
+			// operator's reason or the administrator's user id that way.
+			// notification enforces the declared list, so nothing reaches
+			// the recipient unless this declaration is widened on
 			// purpose.
 			if nt.RecipientVisibleParams == nil || len(nt.RecipientVisibleParams) != 0 {
 				t.Errorf("NotificationTypeImpersonationStarted RecipientVisibleParams = %v, want the empty list -- the static-copy notice may carry no recipient-visible parameters", nt.RecipientVisibleParams)
@@ -348,17 +345,16 @@ func TestModule_Register_DeclaresPermissionsAuditActionsAndNotificationType(t *t
 	}
 }
 
-// TestModule_Register_ImpersonationNotification_CannotBeOptedOutOf is
-// P1-1's regression test at the semantic boundary that matters: the D5
+// TestModule_Register_ImpersonationNotification_CannotBeOptedOutOf pins
+// the mandatory notification at the semantic boundary that matters: the
 // impersonation-started notification must be UNDECLINABLE in the real
-// notification preference matrix. On unfixed main the type was declared
-// Unsubscribable: true (the field's plain-English sense, inverted from its
-// actual semantics -- pkgcore/registry.go: "reports whether recipients may
-// opt out"), so an empty channel selection was stored as a full opt-out and
-// the target could switch off the one notification whose whole purpose is
-// telling them an administrator is inside their account. With
-// Unsubscribable: false the same write is refused with
-// notification.ErrPreferenceOptoutNotAllowed.
+// notification preference matrix. Its type declares Unsubscribable false
+// (pkgcore/registry.go: "reports whether recipients may opt out"), so an
+// empty channel selection is refused with
+// notification.ErrPreferenceOptoutNotAllowed rather than stored as a full
+// opt-out -- the target cannot switch off the one notification whose
+// whole purpose is telling them an administrator is inside their
+// account.
 func TestModule_Register_ImpersonationNotification_CannotBeOptedOutOf(t *testing.T) {
 	env := buildTestAdminModule(t)
 

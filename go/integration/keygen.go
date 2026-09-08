@@ -11,12 +11,11 @@ import (
 // apiKeyLiteralPrefix is the fixed literal every raw key starts with, so a
 // value found in a log line, a config file or a git diff is recognizable as
 // a speed API key on sight -- the same reasoning stripe and github use for
-// their own "sk_"/"ghp_" prefixes. Round 1 issues one kind of key and draws
-// no live/test distinction (the design doc's own "sk_live_a1b2" is an
-// illustration of the shape, not a requirement to model two environments
-// this round does not have); a later round that adds one can grow this
-// into a parameter without changing the storage shape, since Prefix always
-// stores whatever newAPIKeyToken actually produced.
+// their own "sk_"/"ghp_" prefixes. The module issues one kind of key and
+// draws no live/test distinction (the "sk_live_a1b2" shape is an
+// illustration, not a requirement to model two environments); Prefix
+// always stores whatever newAPIKeyToken actually produced, so the storage
+// shape would not change if a live/test distinction were ever added.
 const apiKeyLiteralPrefix = "sk_"
 
 // apiKeyTokenBytes is the entropy of a raw key: 32 bytes from crypto/rand,
@@ -27,9 +26,9 @@ const apiKeyTokenBytes = 32
 
 // apiKeyDisplayPrefixRunes is how many characters of the encoded random
 // portion (beyond the literal prefix) are kept in Prefix for display -- the
-// design doc's own example, "sk_live_a1b2", shows four; this round keeps
-// eight for a lower collision rate between two keys' display prefixes in a
-// tenant with many keys, while still leaving the rest of the value entirely
+// example shape "sk_live_a1b2" shows four; the module keeps eight for a
+// lower collision rate between two keys' display prefixes in a tenant with
+// many keys, while still leaving the rest of the value entirely
 // unguessable (32 bytes of entropy minus eight base64url characters is
 // still far beyond brute-force range).
 const apiKeyDisplayPrefixRunes = 8
@@ -43,9 +42,9 @@ const apiKeyDisplayPrefixRunes = 8
 // and returns as part of CreatedAPIKey -- apiKeyLiteralPrefix plus the
 // first apiKeyDisplayPrefixRunes characters of the encoded random value.
 // Storing it separately from computing it on read means a display prefix
-// survives unchanged even if apiKeyDisplayPrefixRunes is ever tuned in a
-// later release: an already-issued row keeps exactly the prefix it showed
-// its caller once, not a value recomputed under new constants.
+// survives unchanged if apiKeyDisplayPrefixRunes is ever retuned: an
+// already-issued row keeps exactly the prefix it showed its caller once,
+// not a value recomputed under new constants.
 //
 // A crypto/rand failure is fatal to the operation and is reported, never
 // worked around with a weaker source -- the same posture org.
@@ -74,27 +73,23 @@ func newAPIKeyToken() (raw, prefix, hash string, err error) {
 // randomness, not a human-chosen secret, so there is no dictionary an
 // attacker could use to make a slow hash worth paying for.
 //
-// CodeQL's go/weak-sensitive-data-hashing alert on this function: reviewed
-// and confirmed a false positive, on the identical precedent as
-// org.hashInvitationToken -- reviewed a SECOND time in round 6, which is the
-// round this doc comment's own former "if a future round adds key
-// verification, re-check this reasoning still holds" note asked for. The
-// reasoning still holds, unchanged: hashAPIKeyToken's call sites are
-// newAPIKeyToken above (immediately after rand.Read fills the raw 32-byte
-// key) and, as of round 6, authenticate.go's Service.Authenticate, called
-// with whatever raw string a caller presents as a bearer credential. That
-// second call site DOES now feed this function a caller- or
-// attacker-supplied string -- but the low-entropy-dictionary concern
-// go/weak-sensitive-data-hashing exists for is about the INPUT's own
-// entropy, not about who supplies it: a wrong guess here is still exactly as
-// implausible to land on a real 32-byte value as it was at issuance, because
-// Authenticate does not reward a near-miss with any observable difference
-// from a wildly-wrong one -- there is no timing or error-message oracle a
-// guesser could use to learn "closer" from "further", the identical
-// no-enumeration property errors.go's ErrAuthenticationFailed documents. A
-// slow hash defends against an attacker who can test many GUESSES cheaply
-// against a low-entropy space; it does nothing for an attacker who must
-// still produce the exact 32 bytes to begin with.
+// CodeQL's go/weak-sensitive-data-hashing alert fires on this function and
+// is a confirmed false positive, on the identical precedent as
+// org.hashInvitationToken. The call sites are newAPIKeyToken above
+// (immediately after rand.Read fills the raw 32-byte key) and
+// authenticate.go's Service.Authenticate, called with whatever raw string
+// a caller presents as a bearer credential. That second, caller-supplied
+// input does not change the reasoning: the weak-hashing concern is about
+// the INPUT's own entropy, not about who supplies it -- a wrong guess is
+// exactly as implausible to land on a real 32-byte value as it was at
+// issuance, because Authenticate does not reward a near-miss with any
+// observable difference from a wildly-wrong one -- there is no timing or
+// error-message oracle a guesser could use to learn "closer" from
+// "further", the identical no-enumeration property errors.go's
+// ErrAuthenticationFailed documents. A slow hash defends against an
+// attacker who can test many GUESSES cheaply against a low-entropy space;
+// it does nothing for an attacker who must still produce the exact 32
+// bytes to begin with.
 func hashAPIKeyToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
@@ -124,9 +119,10 @@ const webhookSecretBytes = 32
 // because every delivery attempt must read it back in plaintext to compute
 // that attempt's HMAC signature. newWebhookSecret itself has no opinion on
 // that -- it only generates the value -- but its doc comment records the
-// contrast because a reviewer used to round 1's "never store the raw value"
-// API key rule should not "fix" webhook_model.go's Secret column into a
-// hash by analogy.
+// contrast because the API key rule "never store the raw value"
+// (hashAPIKeyToken) must not be applied by analogy to webhook_model.go's
+// Secret column: the two secrets play different roles, and hashing this
+// one would make signing impossible.
 //
 // A crypto/rand failure is fatal to the operation and is reported, never
 // worked around with a weaker source, matching newAPIKeyToken's identical

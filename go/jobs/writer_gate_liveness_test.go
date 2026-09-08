@@ -28,39 +28,35 @@ import (
 // dispatch handoff and through Close's drain of in-flight Handles -- so a
 // concurrent Start on the same database stays refused (ErrQueueWriterActive)
 // for as long as any Handle of the incumbent queue may still be running.
-// Named for the behaviour it verifies, per the backend coding standard's
-// test-naming rule, since it exercises StandaloneQueue.Start/Close,
-// store.go's queue_writers registration and worker.go's heartbeat keeper
-// together; sibling of single_writer_test.go, which pins the gate itself.
+// Named for the behaviour it verifies, since it exercises
+// StandaloneQueue.Start/Close, store.go's queue_writers registration and
+// worker.go's heartbeat keeper together; sibling of single_writer_test.go,
+// which pins the gate itself.
 //
-// Before the heartbeat was decoupled from the dispatcher poll tick, the
-// registration lapsed in exactly two places: the dispatcher blocks on the
-// worker handoff while every worker is busy (trigger 1) and it exits on
+// The registration lapses in exactly two places unless the heartbeat is
+// decoupled from the dispatcher poll tick: the dispatcher blocks on the
+// worker handoff while every worker is busy (trigger 1), and it exits on
 // stopCh while Close waits for workers to finish their current Handle
-// (trigger 2). A lapse past the stale window lets a second Start steal the
-// registration, resetInterruptedRecords flips the first queue's mid-Handle
-// row back to pending, and the second queue claims and executes it a second
-// time. Every test here shrinks the stale window on the INCUMBENT
-// (q.writerStaleAfter, the window the queue authors into its own
-// registration) so a lapse -- or a takeover, in the fourth test -- is
+// (trigger 2). A lapse past the stale window would let a second Start steal
+// the registration, resetInterruptedRecords would flip the first queue's
+// mid-Handle row back to pending, and the second queue would claim and
+// execute it a second time. Every test here shrinks the stale window on
+// the INCUMBENT (q.writerStaleAfter, the window the queue authors into its
+// own registration) so a lapse -- or a takeover, in the fourth test -- is
 // reached in milliseconds instead of the production two-second floor; the
 // heartbeat cadence stays the poll interval, an order of magnitude below
-// the shrunken window, so a live queue can never look stale in the fixed
-// code.
+// the shrunken window, so a live queue can never look stale.
 //
 // The fourth regression arms the two sides DIFFERENTLY -- the incumbent
-// beating at a cadence slower than the TAKER's own stale window -- the
-// asymmetry the writer gate's judgment itself used to get wrong: before
-// registrations carried their own stale moment (store.go's stale_at,
-// authored by the owner from its own window), the taker judged the
-// incumbent by the taker's OWN window, so an incumbent beating slower than
-// that window looked crashed between beats and a second Start stole a live
-// writer's mid-Handle row into a double execution. The three liveness
-// tests below all set both sides to the same 150ms -- a construction that
-// could never expose the asymmetry, and whose inline comments used to
-// bless it ("the acquiring side judges staleness against its own window");
-// the overrides on the acquiring side are gone, because that judgment no
-// longer exists.
+// beating at a cadence slower than the TAKER's own stale window. Because
+// registrations carry their own stale moment (store.go's stale_at, authored
+// by the owner from its own window), the taker judges the incumbent only
+// by that authored moment -- never by the taker's OWN window, which would
+// make an incumbent beating slower than it look crashed between beats and
+// let a second Start steal a live writer's mid-Handle row into a double
+// execution. The three liveness tests below all set both sides to the same
+// 150ms, a construction that cannot expose that asymmetry; the fourth arms
+// the sides differently on purpose.
 
 // twoPoolSQLite opens two independent connection pools over one private
 // temp-file SQLite database -- the shape of two processes sharing one jobs
@@ -146,17 +142,16 @@ func (c *executionCounter) count(id string) int32 {
 }
 
 // TestStandaloneQueue_SecondStart_DispatcherBlockedOnHandoff_StillRefused is
-// trigger 1 of the writer-gate staleness defect: workerCount 1 and
+// trigger 1 of the writer-gate staleness hazard: workerCount 1 and
 // tenantConcurrency 2, two jobs of one tenant. The worker enters job1's long
 // Handle; the dispatcher claims job2 and blocks at the worker handoff; while
-// blocked it never returns to its tick branch, so the registration heartbeat
-// (which rode that tick) stopped. After the stale window a second
-// StandaloneQueue.Start on the same database must STILL be refused: the
-// heartbeat must not depend on the dispatcher being able to reach its tick.
-// Fails on the pre-fix code, where the second Start succeeds, its
-// resetInterruptedRecords flips the first queue's mid-Handle row back to
-// pending, and the second queue's Handle on the same job enters while the
-// first one is still in flight (the executionCounter proves the double run).
+// blocked it never returns to its tick branch, so any heartbeat riding that
+// tick would stop. After the stale window a second StandaloneQueue.Start on
+// the same database must STILL be refused: the heartbeat must not depend on
+// the dispatcher being able to reach its tick. A second Start that
+// succeeded would reset the first queue's mid-Handle row back to pending and
+// run its Handle on the same job while the first is still in flight (the
+// executionCounter proves the double run).
 func TestStandaloneQueue_SecondStart_DispatcherBlockedOnHandoff_StillRefused(t *testing.T) {
 	db1, db2 := twoPoolSQLite(t)
 
@@ -212,7 +207,8 @@ func TestStandaloneQueue_SecondStart_DispatcherBlockedOnHandoff_StillRefused(t *
 	// the dispatcher claims it -- and then blocks handing it over, because the
 	// one worker is still inside job1's Handle. The claimed row is the
 	// deterministic marker that the dispatcher reached that block: it never
-	// returns to its tick (and pre-fix, never heartbeats again) from here.
+	// returns to its tick, and a heartbeat riding that tick would never
+	// reach the database again from here.
 	id2, err := q1.Enqueue(context.Background(), Task{Type: "writer-gate.blocked-handoff", TenantID: "tenant-a"})
 	if err != nil {
 		t.Fatalf("Enqueue(job2) error = %v", err)
@@ -275,15 +271,15 @@ func TestStandaloneQueue_SecondStart_DispatcherBlockedOnHandoff_StillRefused(t *
 }
 
 // TestStandaloneQueue_SecondStart_DuringCloseDrain_StillRefused is trigger 2
-// of the writer-gate staleness defect: Close closes stopCh, the dispatcher
+// of the writer-gate staleness hazard: Close closes stopCh, the dispatcher
 // exits immediately, and Close's wg.Wait then waits for the worker to finish
-// its current Handle. Any graceful shutdown whose in-flight Handle outlives
-// the stale window used to open the gate mid-drain -- rolling restarts hit
+// its current Handle. A graceful shutdown whose in-flight Handle outlives
+// the stale window would open the gate mid-drain -- rolling restarts hit
 // it. The registration heartbeat must keep beating through the drain, until
 // every worker has finished, and only then stop (the registration itself is
-// released after). Fails on the pre-fix code: a second Start during the
-// drain steals the stale registration and its Handle on the same job enters
-// while the first queue's worker is still mid-Handle.
+// released after). A second Start during the drain that stole the stale
+// registration would run its Handle on the same job while the first queue's
+// worker is still mid-Handle.
 func TestStandaloneQueue_SecondStart_DuringCloseDrain_StillRefused(t *testing.T) {
 	db1, db2 := twoPoolSQLite(t)
 
@@ -339,8 +335,8 @@ func TestStandaloneQueue_SecondStart_DuringCloseDrain_StillRefused(t *testing.T)
 		closeDone <- q1.Close(ctx)
 	}()
 
-	// The dispatcher exits when stopCh closes; from that moment pre-fix no
-	// heartbeat reaches the database. Poll for the real close so the stale
+	// The dispatcher exits when stopCh closes; a heartbeat riding its tick
+	// would stop from that moment. Poll for the real close so the stale
 	// window below is measured from it, not from Close's call.
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -408,13 +404,13 @@ dispatcherGone:
 }
 
 // TestStandaloneQueue_SecondStart_IdleQueuePastStaleWindow_StillRefused is
-// the reviewer-baseline control the two triggers above must not disturb: an
-// idle first queue -- no jobs at all, dispatcher walking its clock with
-// nothing to do -- whose registration has outlived the stale window must
-// still refuse a second Start. Before and after the fix the idle queue's own
-// beats keep the registration fresh; this test pins that a future heartbeat
-// change (say, one tied to worker activity instead of queue liveness) cannot
-// quietly reopen the gate on the quietest possible queue.
+// the baseline control the two triggers above must not disturb: an idle
+// first queue -- no jobs at all, dispatcher walking its clock with nothing
+// to do -- whose registration has outlived the stale window must still
+// refuse a second Start. The idle queue's own beats keep the registration
+// fresh; this test pins that a heartbeat tied to worker activity instead of
+// queue liveness would quietly reopen the gate on the quietest possible
+// queue.
 func TestStandaloneQueue_SecondStart_IdleQueuePastStaleWindow_StillRefused(t *testing.T) {
 	db1, db2 := twoPoolSQLite(t)
 
@@ -458,33 +454,31 @@ func TestStandaloneQueue_SecondStart_IdleQueuePastStaleWindow_StillRefused(t *te
 }
 
 // TestStandaloneQueue_SecondStart_IncumbentCadenceSlowerThanTakersWindow_StillRefused
-// is the cadence-asymmetry regression the writer gate's judgment itself
-// used to get wrong. The incumbent here beats at a cadence SLOWER than the
-// taking side's stale window -- the two queues configured with different
-// poll intervals -- the shape the three tests above could never expose
-// (they overwrite both sides to the same 150ms, and their old inline
-// comment blessed the asymmetry as construction guidance). Pre-fix, the
-// taker judged the incumbent's registration by the TAKER's own stale
-// window, so an incumbent whose beats arrive slower than that window
-// looked crashed between beats: a second Start on the same database stole
-// the live incumbent's registration, resetInterruptedRecords flipped its
-// mid-Handle row back to pending, and the second queue's Handle on the
-// same job entered while the first was still in flight -- the double
-// execution this file's whole subject exists to prevent. Post-fix the
-// registration row carries the stale moment its OWNER authored (its own
-// window applied to its own beats), and the taker judges only that moment:
-// the same second Start, at the same instant, is refused.
+// is the cadence-asymmetry regression: the incumbent beats at a cadence
+// SLOWER than the taking side's stale window -- the two queues configured
+// with different poll intervals -- the shape the three tests above cannot
+// expose (they overwrite both sides to the same 150ms). The taker must
+// judge the incumbent's registration only by the stale moment the
+// registration's OWNER authored (its own window applied to its own beats):
+// judging by the TAKER's own stale window would make an incumbent whose
+// beats arrive slower than that window look crashed between beats, so a
+// second Start on the same database would steal the live incumbent's
+// registration, resetInterruptedRecords would flip its mid-Handle row back
+// to pending, and the second queue's Handle on the same job would enter
+// while the first was still in flight -- the double execution this file's
+// whole subject exists to prevent. The same second Start, at the same
+// instant, is refused under the authored-moment judgment.
 //
 // The cadences are the production shape scaled to milliseconds: the
 // incumbent polls once per second (beating every second, an order of
 // magnitude inside its own ten-second window -- a live queue can never
-// look stale under the fixed judgment), while the taker polls every ten
-// milliseconds with its stale window shrunk to 150ms -- standing in for
-// the default-configuration taker whose two-second floor sits below an
-// incumbent configured at a multi-second poll interval. 300ms after one
-// observed beat of the incumbent (150ms past the taker's window, 700ms
-// before the incumbent's next beat) is the deterministic moment at which
-// the pre-fix judgment steals and the fixed judgment refuses.
+// look stale), while the taker polls every ten milliseconds with its stale
+// window shrunk to 150ms -- standing in for the default-configuration
+// taker whose two-second floor sits below an incumbent configured at a
+// multi-second poll interval. 300ms after one observed beat of the
+// incumbent (150ms past the taker's window, 700ms before the incumbent's
+// next beat) is the deterministic moment at which a taker-window judgment
+// would steal and the authored-moment judgment refuses.
 func TestStandaloneQueue_SecondStart_IncumbentCadenceSlowerThanTakersWindow_StillRefused(t *testing.T) {
 	db1, db2 := twoPoolSQLite(t)
 
@@ -560,18 +554,17 @@ func TestStandaloneQueue_SecondStart_IncumbentCadenceSlowerThanTakersWindow_Stil
 	}
 
 	// Sleep to 300ms after that beat: 150ms past the taking side's shrunken
-	// stale window below (the moment the pre-fix judgment calls the
+	// stale window below (the moment a taker-window judgment would call the
 	// incumbent crashed), 700ms short of the incumbent's next beat (so the
 	// live beat this test judges cannot be refreshed away mid-Start).
 	time.Sleep(300 * time.Millisecond)
 
 	// The taker runs at the OTHER cadence -- ten milliseconds -- and its
 	// stale window is shrunk to 150ms: a window below the incumbent's
-	// one-second beat cadence, the exact ratio at which the pre-fix
-	// taker-judges-the-incumbent defect stole a live writer. Under the
-	// fixed judgment this number authors only the taker's OWN registration
-	// (which never lands -- the taker is refused), and plays no part in
-	// judging the incumbent's authored stale moment.
+	// one-second beat cadence, the exact ratio at which a taker-window
+	// judgment would steal a live writer. This number authors only the
+	// taker's OWN registration (which never lands -- the taker is refused),
+	// and plays no part in judging the incumbent's authored stale moment.
 	fastOpts := []Option{
 		WithPollInterval(10 * time.Millisecond),
 		WithWorkerCount(1),

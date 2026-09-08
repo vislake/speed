@@ -1,6 +1,6 @@
 # 文档规范
 
-> 本规范对所有模块生效，是设计意图与评审基准；实际由 CI 强制执行的只是其中一部分——见本文档下方各条的"实施状态注记"，以及根 `CLAUDE.md` Repository Status 一节对 `docs-check.yml`/`api-contract.yml` 真实跑了什么的完整记录。目前被 CI 真正强制的只有两项：`docs/internal/` 之外出现 CJK 字符（`tools/scan_cjk.py`，每个 PR）与 i18n key-parity（`tools/check_i18n_keys.py`，触碰文档或 i18n 资源的 PR）；本节下面列出的其余条目——npm 包 `files` 携带 `docs/`、前端示例进 Storybook、配置项清单自动生成一致性、错误码索引存在性、`AGENTS.md` 存在性检查等——均未接入任何 CI 工作流，目前只能靠 code review 把关。
+> 本规范对所有模块生效，是设计意图与评审基准；实际由 CI 强制执行的只是其中一部分——以根 `CLAUDE.md` Repository Status 一节对 `docs-check.yml`/`api-contract.yml` 真实所跑内容的记录为权威（该节随 CI 工作流演进，不在此处复述一份会老化的清单）；本节下方各条逐一注明自己的实施状态，凡未接入 CI 工作流的条目靠 code review 把关。
 
 文档是交付物的一部分，不是收尾工作。业务方接入脚手架时，**人和 AI Agent 都是一等读者**——实际情况是业务方开发者大概率在用 AI 编码工具接入，文档能否被 Agent 正确理解，直接决定接入成本。
 
@@ -21,13 +21,13 @@
 
 这条规则由 CI 检查：`docs/internal/` 之外的 `.md` 文件与代码注释中出现 CJK 字符即失败（i18n 资源文件除外；`docs/site/` 整个子树也除外——`tools/scan_cjk.py` 的 `CARVED_SUBTREES` 对这个目录是整体豁免，不以某个特定的本地化目录命名方式为条件，所以这条豁免不会因为 `docs/site/` 内部的目录结构变化而失效）。
 
-**实施状态注记（本轮核实）：** `docs/site/` 的机制决策已经落地——本轮采用 [Hugo](https://gohugo.io) 加 [hugo-book](https://github.com/alex-shpak/hugo-book) 主题，把本节此前一直推迟到 M4 的"构建步骤 / 静态站点生成器"决策提前完成，是应用户明确要求提前排期，与本仓库 `storage`/`notification` 两个模块此前"提前落地"的先例同一种模式。在 hugo-book 和另一个候选 Docsy 之间选择前者，是对照两个主题各自当前真实的安装文档核实过的：Docsy 需要较新的 extended Hugo（其官方前置条件页面写明 0.160.1 以上）外加 Node.js/npm（用于拉取 Bootstrap 与 Font Awesome 资源）和一个 Dart Sass 编译器，会重新引入这个目录此前一直刻意回避的 Node 依赖；hugo-book 只需要 Hugo 这一个二进制本身（extended 版本，仅为了主题自己的资源构建，内容本身不需要），现行版本（v0.15.0）甚至已经去掉了更早版本的 Sass 依赖。中英双语支持靠的是 **Hugo 自身的多语言机制**，不是主题的功能——两个候选主题本可以同样好地满足这条需求，真正拉开差距的只有依赖体积这一项。文档以 Hugo 的"按内容目录分语言"约定组织（`content.en/` 与 `content.zh-cn/`，与主题自己文档化的结构一致），每一页都有真实撰写、非机器翻译的中文译文，每一页页眉都有可用的语言切换（为此特意不对首页使用主题的 `landing` 布局——该布局会连带隐藏掉左侧栏，切换器也在其中）。构建产物根部保留一份真实、唯一（不按语言拆分）的 `llms.txt`。让构建产物保持诚实的结构检查 `tools/check_docs_site.py` 现在会先跑一次真正的 `hugo --minify` 构建，再对照 `docs/site/public/`（已加入 `.gitignore`，从不提交）校验同一组属性。
+**实施状态注记：** `docs/site/` 的机制决策已经落地——文档站用 [Hugo](https://gohugo.io) 加 [hugo-book](https://github.com/alex-shpak/hugo-book) 主题构建。在 hugo-book 和另一个候选 Docsy 之间选择前者，是对照两个主题各自的安装文档核实过的：Docsy 需要较新的 extended Hugo 外加 Node.js/npm（用于拉取 Bootstrap 与 Font Awesome 资源）和一个 Dart Sass 编译器，会重新引入这个目录刻意回避的 Node 依赖；hugo-book 只需要 Hugo 这一个二进制本身（extended 版本，仅为了主题自己的资源构建，内容本身不需要），且现行版本不依赖 Sass。中英双语支持靠的是 **Hugo 自身的多语言机制**，不是主题的功能——两个候选主题本可以同样好地满足这条需求，真正拉开差距的只有依赖体积这一项。文档以 Hugo 的"按内容目录分语言"约定组织（`content.en/` 与 `content.zh-cn/`，与主题自己文档化的结构一致），每一页都有真实撰写、非机器翻译的中文译文，每一页页眉都有可用的语言切换（为此特意不对首页使用主题的 `landing` 布局——该布局会连带隐藏掉左侧栏，切换器也在其中）。构建产物根部保留一份真实、唯一（不按语言拆分）的 `llms.txt`。让构建产物保持诚实的结构检查 `tools/check_docs_site.py` 会先跑一次真正的 `hugo --minify` 构建，再对照 `docs/site/public/`（已加入 `.gitignore`，从不提交）校验同一组属性。
 
 ## 文档随代码发布
 
 - 文档源文件与代码同仓、同 PR、同版本号发布。Go module 通过仓库文件直接可读；npm 包在 `files` 字段中包含 `docs/`，`npm install` 后本地就有对应版本的文档。
 
-  **实施状态注记（本轮核实）：** 后半句尚未落地——已发布的全部 11 个 `web/packages/*` 包，`package.json` 的 `files` 字段清一色固定为 `["dist", "README.md", "AGENTS.md"]`，没有一个包含 `docs/`（这与"每个模块目录内自带 `docs/`"这条本身也一致——实查没有一个 Go 模块或 npm 包真的建立过 `docs/` 子目录，模块文档目前就是它的 `AGENTS.md` 加 `README.md`）。
+  **实施状态注记：** 后半句尚未落地——仓库中的 `web/packages/*` 包，`package.json` 的 `files` 字段清一色固定为 `["dist", "README.md", "AGENTS.md"]`，没有一个包含 `docs/`（这与"每个模块目录内自带 `docs/`"这条本身也一致——没有一个 Go 模块或 npm 包建立过 `docs/` 子目录，模块文档目前就是它的 `AGENTS.md` 加 `README.md`）。
 - **禁止外链到"最新版"文档站作为唯一来源**——业务方用的是 v1.2，看到 v2.0 的文档只会被误导。文档站按版本分目录。
 - 每个模块目录内自带 `docs/`，不集中到一个中心化目录。模块被独立引用时文档跟着走。
 
@@ -45,12 +45,12 @@
 
 1. **每个模块根目录一个 `AGENTS.md`**：给 Agent 的模块速览——职责边界、公开 API 清单、典型接入代码、**明确的禁止事项**（如"不要直接持有 \*gorm.DB，必须组合 Repository[T]"、"不要 import 其他业务模块的 struct"）。架构纪律必须写成 Agent 能直接遵守的祈使句，而不是散落在设计文档的叙述里。
 2. **仓库根目录 `CLAUDE.md`**：架构大局 + 完整纪律清单 + 指向 skills 与设计文档的入口，是 Agent 进入本仓库的第一份上下文。
-   > `llms.txt` 是给**公开网站**用的标准（放在站点根域名下供抓取方读取），在私有仓库里与文档导航表重复且用错场景，因此不在仓库根提供。等 `docs/site/` 作为公开文档站上线时，在**站点根部**提供 `llms.txt` 才是它的正确用法。
+   > `llms.txt` 是给**公开网站**用的标准（放在站点根域名下供抓取方读取），在私有仓库里与文档导航表重复且用错场景，因此不在仓库根提供。它的正确用法是在文档站的**站点根部**提供——已随 `docs/site/` 的构建产物落地（见上方实施状态注记）。
 3. **机器可读的接口契约**：OpenAPI 规范是接口的单一真源，前后端代码由它生成（见 [21 API 契约](21-api-contract.md)）。Agent 消费结构化契约的准确率远高于阅读散文，因此规范本身就是最重要的一份"文档"。
 4. **结构优先于叙述**：统一模板，多用表格、清单、代码块；每个公开接口给出签名 + 最小可运行示例。避免大段背景铺陈——那属于设计文档。
 5. **示例必须可编译、可运行**：Go 用 `Example` 测试，前端示例走各包自己的 `src/usage-example.test.tsx`（真实机制，见下方实施状态注记）。**CI 强制跑通两者**——这是"文档随代码不腐化"唯一真正有效的保证，其他都是靠自觉。
 
-   **实施状态注记（本轮核实）：** 仓库里没有 Storybook——没有任何 `.stories.*` 文件、没有 Storybook 配置或依赖，前端从未采用这条路线。真实机制是每个有运行时行为要证明的包在 `src/` 下自带一个 `usage-example.test.tsx`（`account-ui`、`auth-ui`、`tenancy-ui`、`api-client` 均已落地），编译并执行 README 里写的那套用法，跑在包自己的单元测试套件里，由 `pnpm -r test` 覆盖——不是独立的可视化组件浏览器，但满足的是同一条"示例不能腐化"的约束。Go 侧的 `Example` 测试如实描述：每个已实现模块至少一个，编译并执行，由各模块单元测试套件覆盖；`AGENTS.md`/README 等 markdown 散文里嵌的示例仍然没有编译保证，是 `docs-check.yml` 自己头部记录的已知缺口。
+   **实施状态注记：** 仓库里没有 Storybook——没有任何 `.stories.*` 文件、没有 Storybook 配置或依赖，前端从未采用这条路线。真实机制是每个有运行时行为要证明的包在 `src/` 下自带一个 `usage-example.test.tsx`，编译并执行 README 里写的那套用法，跑在包自己的单元测试套件里，由 `pnpm -r test` 覆盖——不是独立的可视化组件浏览器，但满足的是同一条"示例不能腐化"的约束。Go 侧的 `Example` 测试如实描述：每个已实现模块至少一个，编译并执行，由各模块单元测试套件覆盖；markdown 散文里嵌的 Go 示例由 `tools/check_markdown_examples.py` 编译或语法校验（对带 `package` 声明的完整代码块做真实 `go build`+`go vet`，对不完整片段做 gofmt 语法检查），随 `docs-check.yml` 在每个文档 PR 上运行。
 6. **错误信息可检索**：每个错误码在文档中有独立条目（含触发条件与处理建议），Agent 拿到 `billing.quota_exceeded` 能直接查到该怎么办。
 
 ## 必备文档清单

@@ -8,9 +8,8 @@ import (
 // PermissionLister lists every permission a subject currently holds, inside
 // one tenant. Service.Create calls it exactly once per request, to validate
 // that the Scopes a new key is being issued with are a genuine subset of
-// its creator's own permissions right now, per
-// docs/internal/07-platform-services.md's rule that a key's permission
-// scope is a subset of its creator's own permissions.
+// its creator's own permissions right now -- the design rule that a key's
+// permission scope is a subset of its creator's own permissions.
 //
 // # Why this is a seam rather than an import of go/rbac
 //
@@ -20,8 +19,7 @@ import (
 // already-shipped API this interface mirrors structurally: same
 // (ctx, tenant, user) -> ([]string, error) shape, with rbac.Subject's two
 // string fields spread into plain parameters so this package needs no
-// rbac.Subject value to call it. No new rbac method was invented for this
-// round.
+// rbac.Subject value to call it.
 //
 // This module still does not import go/rbac for it, for the same reason
 // org.FeatureGate and rbac.SubtreeResolver are structurally-typed seams
@@ -32,10 +30,10 @@ import (
 // one interface's shape. A host that has rbac wires the real thing with a
 // one-line closure (see WithPermissionLister); a host built around a
 // different authorization system wires that instead, and this module never
-// notices the difference. This mirrors the root CLAUDE.md's own module-
-// boundary rule ("do not import another business module's structs") a
-// half-step further: not just avoiding a struct, but avoiding the import
-// edge entirely for a capability the caller can supply structurally.
+// notices the difference. This extends the module-boundary rule ("do not
+// import another business module's structs") a half-step further: not just
+// avoiding a struct, but avoiding the import edge entirely for a capability
+// the caller can supply structurally.
 //
 // A host wires the real rbac.Service like this:
 //
@@ -82,11 +80,11 @@ func (f PermissionListerFunc) ListPermissions(ctx context.Context, tenantID, use
 //
 // Membership is owned by whichever module actually tracks who belongs to a
 // tenant -- go/org's roster in this codebase, but nothing requires that:
-// docs/internal/07's own text only ever says "creator has left", never
-// naming org or authn as the source of truth. go/integration must not
-// import go/authn or go/org directly to find out (root CLAUDE.md's module-
-// boundary rule -- a business module reaches a sibling by id and event,
-// never by importing its structs), so, exactly like org.FeatureGate and
+// the design text only ever says "creator has left", never naming org or
+// authn as the source of truth. go/integration must not import go/authn or
+// go/org directly to find out (the module-boundary rule -- a business
+// module reaches a sibling by id and event, never by importing its
+// structs), so, exactly like org.FeatureGate and
 // rbac.SubtreeResolver, this is a structurally-typed interface a host
 // implements with whatever module actually knows: a real deployment wires
 // a closure over org's *org.MemberService (or, in a deployment with no org
@@ -118,8 +116,8 @@ func (f MembershipCheckerFunc) IsActiveMember(ctx context.Context, tenantID, use
 
 // SubjectResolver reports the user id of the request's authenticated
 // caller, for the two request-body operations that need one: Handler's
-// integration_createAPIKey (round 5) and integration_createWebhookSubscription
-// (round 7, handler.go), which pass it on as their input's CreatedBy. Every
+// integration_createAPIKey and integration_createWebhookSubscription
+// (handler.go), which pass it on as their input's CreatedBy. Every
 // other operation this fragment mounts needs no caller identity at all:
 // List reads only the tenant; Rotate/Revoke resolve CreatedBy from the
 // EXISTING key row (Service.Rotate carries the predecessor's own CreatedBy
@@ -134,8 +132,8 @@ func (f MembershipCheckerFunc) IsActiveMember(ctx context.Context, tenantID, use
 // examples/reference-app/cmd/server/server.go's demoOrgSubjectResolver) can
 // hand the identical value to WithSubjectResolver here with no adapter code
 // at all. go/integration still does not import go/authn to get this: the
-// seam is the mandatory injection point (root CLAUDE.md's module-boundary
-// rule), structurally satisfied by whatever the host's authenticating layer
+// seam is the mandatory injection point (the module-boundary rule),
+// structurally satisfied by whatever the host's authenticating layer
 // actually is.
 //
 // A nil resolver, or one that reports ok=false, makes integration_createAPIKey

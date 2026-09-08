@@ -7,10 +7,10 @@ import "strings"
 // operation as a bounded retry loop should retry rather than surface as a
 // real failure: on SQLite, a write that could not proceed because another
 // connection holds the file's write lock right now (SQLITE_BUSY, "database
-// is locked" -- including the read-then-write lock-upgrade refusal
-// AGENTS.md's "SQLite busy timeout" section documents, which the ordinary
-// busy_timeout wait never resolves); on PostgreSQL, a detected deadlock or a
-// serialization failure surfaced by concurrent row-level locking. Both are
+// is locked" -- including the read-then-write lock-upgrade refusal, which
+// the ordinary busy_timeout wait never resolves); on PostgreSQL, a detected
+// deadlock or a serialization failure surfaced by concurrent row-level
+// locking. Both are
 // the database correctly refusing to let two overlapping writers proceed at
 // once rather than a real bug, and the correct response on both dialects is
 // the same: retry the whole transaction from a fresh read, since the
@@ -47,17 +47,16 @@ import "strings"
 // without importing the concrete driver package whose error type carries the
 // answer (github.com/glebarez/sqlite / modernc.org/sqlite, or
 // gorm.io/driver/postgres / github.com/jackc/pgx) -- which is exactly the
-// "do not import concrete infrastructure implementations in business code"
-// rule the root CLAUDE.md states, one level up: business code may depend on
-// dbkit, never on the SQL driver dbkit itself resolves per dialect.
+// boundary business code respects: it may depend on dbkit, never on the SQL
+// driver dbkit itself resolves per dialect.
 //
 // dbkit could satisfy that by asserting against both drivers' own error
 // types instead of matching strings, but doing so from this package's own
 // root would reintroduce, for every dbkit consumer regardless of which
 // single dialect they actually use, the exact dependency this package's
-// dialect/sqlite and dialect/postgres split was built to avoid (AGENTS.md's
-// "One dependency, and why there is only one" section) -- a PostgreSQL-only
-// consumer would gain a transitive import of modernc.org/sqlite (and vice
+// dialect/sqlite and dialect/postgres split exists to avoid -- a
+// PostgreSQL-only consumer would gain a transitive import of
+// modernc.org/sqlite (and vice
 // versa) purely so this one predicate could do a type assertion. A substring
 // match against err.Error() needs neither import and keeps that split
 // intact.

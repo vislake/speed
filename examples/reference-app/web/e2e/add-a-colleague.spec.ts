@@ -1,56 +1,34 @@
 /**
  * That a practice can add a colleague without an engineer.
  *
- * This is the gap that green results hide best, and the reason is worth
- * stating plainly: the invitation machinery WORKS. go/org mints the
- * token, hashes it, encrypts and blind-indexes the address, rate-limits
- * the send on two dimensions and renders the mail in the recipient's
- * locale; org-invitation-sign-in.spec.ts proves the whole cycle end to
- * end and passes. What none of that proves is that a dentist can do it.
- * That spec drives the API directly -- it has to, because there is no
- * surface -- so its green says the backend is sound and says nothing
- * about whether the product is usable.
+ * The invitation machinery -- go/org mints the token, hashes it,
+ * encrypts and blind-indexes the address, rate-limits the send on two
+ * dimensions and renders the mail in the recipient's locale -- is proven
+ * end to end by org-invitation-sign-in.spec.ts. This spec asks the
+ * question that spec cannot: can a dentist reach the surface and act on
+ * it? Every assertion goes through the browser; nothing is read from the
+ * server's output, and no request here can make the gate pass by API
+ * call.
  *
- * A dental practice is not one person. The brief's whole premise is a
- * multi-level organization: a receptionist opens cases, a dentist runs
- * the simulations, an owner pays for them. A product that can only ever
- * hold the person who registered it is a single-user tool wearing a
- * multi-tenant backend, and the practice's second employee is where that
- * stops being a design opinion and becomes the thing blocking the sale.
+ * A dental practice is not one person: the product's premise is a
+ * multi-level organization -- a receptionist opens cases, a dentist runs
+ * the simulations, an owner pays for them. So the question is asked of
+ * both populations the product serves: an owner of a boot-seeded demo
+ * clinic, and a practice that registered itself, whose tenant derives
+ * from its registrant rather than from host configuration. Three tests
+ * cover it: the invite goes out and stays visible as outstanding, the
+ * members list names people rather than raw user ids, and the
+ * self-registered practice can invite too. The last question spends a
+ * registration, which is why these tests carry the @budget tag.
  *
- * WHY THIS GATE EXISTS SEPARATELY FROM org-invitation-sign-in
- *
- * Same feature, two different questions, and this suite has learned to
- * keep them apart: "does the mechanism work" and "can a person reach
- * it". The invitation spec answers the first through the API. This one
- * answers the second through the browser only -- no request it makes
- * itself, nothing read from the server's output. If it can be made to
- * pass by an API call, it is not asking its question.
- *
- * WHAT IT ASSERTS, AND WHAT IT LEAVES OPEN
- *
- * That an owner signed into a clinic can reach a surface listing who is
- * in that clinic, invite an address from it, and see that the invitation
- * happened. It does not prescribe where that surface lives (a nav entry,
- * the account page, a clinic settings area), what it is called, whether
- * the invitee picks a role at invite time, or how the pending state is
- * shown. It deliberately stops before the invitee accepts: that half is
- * already proven, and requiring it here would spend a registration
- * against a ten-per-hour budget to re-prove something org's own gate
- * covers.
- *
- * @pending in the tag's second sense -- the surface does not exist yet
- * rather than being broken. The app's own en-US bundle carries no invite
- * or member-management copy at all, and the frame's navigation offers
- * Home, Cases, Notes, Account and Credits. The gate is written ahead of
- * the work, the way the core-journey blocks were, so the acceptance
- * criterion exists before the round rather than being argued after it.
- *
- * Tagged @pending ALONE, not also @budget: @budget is this suite's word
- * for "verified passing", and a red gate in that tier would cost it the
- * one thing it is for. The sign-ins this gate spends are covered by the
- * @pending tier being its own invocation against its own freshly booted
- * server, which is the same mechanism that makes @budget a real tier.
+ * The spec deliberately does not prescribe where the people-management
+ * surface lives (a nav entry, the account page, a clinic settings area),
+ * what it is called, whether the invitee picks a role at invite time, or
+ * how the pending state is shown; each test reaches the surface through
+ * the nav first and, failing that, through the account page, so an
+ * implementation is never told where the feature must live. Acceptance
+ * stops before the invitee accepts -- org-invitation-sign-in.spec.ts
+ * covers that half.
  */
 import { expect, test, type Page } from '@playwright/test'
 import { DEMO_OWNER } from './test-utils/accounts.js'
@@ -69,12 +47,11 @@ import {
  * Where the practice's people are managed. Expectations of accessible
  * names, not decrees.
  *
- * Deliberately NOT matching "Account": that surface exists today and is
- * about the signed-in person's own sessions, bindings and MFA -- not
- * about who else is in the clinic. A pattern loose enough to reach a
- * team surface that might live there is loose enough to land on the
- * personal one and pass, which is the exact mistake block D's nav
- * pattern made once already.
+ * Deliberately NOT matching "Account": that surface is about the
+ * signed-in person's own sessions, bindings and MFA -- not about who
+ * else is in the clinic. A pattern loose enough to reach a team surface
+ * that might live there is loose enough to land on the personal one and
+ * pass.
  */
 const TEAM_UI = {
   /** The surface listing who is in this clinic. */
@@ -92,21 +69,15 @@ const OUTSTANDING = /pending|invited|awaiting|not yet accepted|sent/i
 
 /**
  * Gets to wherever the practice's people are managed, trying both places
- * this gate said it would allow.
+ * the spec permits.
  *
- * The first version of this called openSurface and nothing else, which
- * made the code contradict the header directly above it: the header
- * promises not to prescribe where the surface lives -- "a nav entry, the
- * account page, a clinic settings area" -- while openSurface accepts
- * only a nav entry. An implementation that put member management on the
- * account page, exactly as permitted, would have been told the practice
- * has nowhere to manage its people.
- *
- * That is the same mistake the org-invitation gate made once already,
- * asserting a landing rather than reachability, and it is worth catching
- * before the round that will be judged by it rather than after: a gate
- * whose comment and whose code disagree will be believed on the comment
- * and enforced on the code.
+ * The header above promises not to prescribe where the surface lives --
+ * "a nav entry, the account page, a clinic settings area" -- so this
+ * helper must not accept only a nav entry: an implementation that put
+ * member management on the account page, exactly as permitted, would
+ * otherwise be told the practice has nowhere to manage its people. A
+ * reachability gate asserts that a person can reach the capability, not
+ * that it landed in a particular place.
  */
 async function reachThePractisesPeople(page: Page): Promise<void> {
   // A surface of its own, reached the way any surface is -- which also
@@ -129,26 +100,9 @@ async function reachThePractisesPeople(page: Page): Promise<void> {
   ).toBeVisible({ timeout: 15_000 })
 }
 
-// Closed by eeaabdff: a Team surface of its own in the frame's
-// navigation (#/team, reachable through the drawer on a narrow
-// viewport), NOT a section of the account page -- so the trap this
-// gate's own note warns about was avoided rather than argued around.
-//
-// Verified on all three engines, and then by hand, because this gate's
-// entire reason for existing is that a working mechanism is not the
-// same as a dentist being able to reach it:
-//   - "Team" is its own nav entry beside Cases, Notes, Credits and
-//     Account;
-//   - the surface says what it is for ("Who works in this clinic, and
-//     who has been invited but has not joined yet");
-//   - inviting dr.lin@clinic.example answered "The invitation was sent.
-//     Your colleague can join once they open it." -- a sentence written
-//     for a person, not a code;
-//   - the invitation then listed as its own row: the address, Pending,
-//     when it was sent, and when it expires. A reader can tell an
-//     invited colleague from one who has joined, which is what this
-//     gate asks, and can also see how long the invitation is good for,
-//     which it does not ask and which is the better answer.
+// The team surface is "Team", its own nav entry beside Cases, Notes,
+// Credits and Account, and lists an invitation as its own row: the
+// address, the pending state, when it was sent and when it expires.
 //
 // @budget rather than untagged: it signs in.
 test(
@@ -159,15 +113,14 @@ test(
     await expectSignedIn(page)
 
     // Which clinic this is about, read from the frame rather than
-    // assumed: an account's landing tenant comes from a Go map's
-    // iteration order and is randomized per boot (journeys.ts's
-    // documented finding), so a gate that named a clinic would be
-    // asserting a coin toss.
+    // assumed: the clinic an account lands in is the first row of its
+    // own membership enumeration, a fact about the account and the
+    // seeding rather than a contract a gate should name.
     const clinic = await readCurrentTenant(page)
 
     // REACHABLE, asserted first and on its own. A failure here says the
     // practice has nowhere to manage its people, which is a different
-    // finding from an invite form that does not work -- and the second
+    // failure from an invite form that does not work -- and the second
     // message would be wrong about the first.
     await reachThePractisesPeople(page)
 
@@ -196,39 +149,22 @@ test(
  * A raw user id in the members list, which only ever appears in one.
  *
  * The Team surface's own sentence says what it is for: "Who works in
- * this clinic, and who has been invited but has not joined yet." Opened
- * by hand as a person, the members table answers the first half with
- * two rows reading `04c09f52-f6b7-4555-ba8b-5fe23f57b8d9` and
- * `89b5819d-9066-421e-9788-779b0f83d8e5`, plus one reading "You".
+ * this clinic, and who has been invited but has not joined yet." The
+ * members table answers the first half with rows that are the app's own
+ * render of go/org members. A dentist who saw raw ids there could not
+ * tell which colleague is which, could not decide whom to remove, and
+ * could not recognise a stranger -- the whole question the surface
+ * exists to answer.
  *
- * A dentist cannot tell which colleague is which, cannot decide whom to
- * remove, and cannot recognise a stranger -- which is the whole question
- * the surface exists to answer. It is the third instance of one shape
- * this suite has now found: machine text in a list a person reads to
- * make a decision (the sessions list's raw User-Agent, closed by
- * 6d56d71; the credits ledger's billing reason, closed by 48d54e9).
+ * WHY A NAME IS NOT SIMPLY MISSING FROM THE VIEW
  *
- * WHY IT IS NOT AN IMPLEMENTATION OVERSIGHT
- *
- * The data is not there to render. `go/org`'s member object carries
- * `userId` and nothing else, and its own spec says why: "An id in
- * authn's users table, carried as an opaque string -- org stores no
- * other identity data about the user (root CLAUDE.md's module-boundary
- * rule)." So the name has to come from somewhere else -- an authn-side
- * lookup the app composes, or a seam org would have to grow -- and
- * that is a design decision rather than a missing line in a view.
- *
+ * The data is not there to render. go/org's member object carries a
+ * userId and no other identity data (a module-boundary rule: org stores
+ * no authn identity), so the name has to come from an authn-side lookup
+ * the app composes -- a design decision, not a missing line in a view.
  * The invitation half needs nothing: an invited row already shows the
- * ADDRESS, because org holds the address it was asked to invite. It is
+ * address, because org holds the address it was asked to invite. It is
  * only a member, once joined, who becomes an id.
- *
- * WHY THE GATE ABOVE PASSES ANYWAY
- *
- * It asks whether an owner can invite by clicking, and that works. This
- * is a different question about the same surface, so it is a different
- * gate -- the one-gate-per-finding rule this suite keeps, and the reason
- * the sessions and credits findings could each be reported, fixed and
- * retired on their own.
  *
  * WHAT IT ASSERTS, AND WHAT IT LEAVES OPEN
  *
@@ -240,23 +176,11 @@ test(
 const RAW_USER_ID =
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i
 
-// Closed by 42a14614, and by the route this gate hoped for rather than
-// the cheap one: the app composes an authn lookup of its own
-// (GET /api/reference-app/team-members) and enriches every row from the
-// users table, so the naming holds for EVERY member -- team_members.go
-// says so in as many words, and says it never knows which members the
-// boot seeded and which joined through an invitation. There is no
-// demo-layer-only leg, which is why this gate did not need widening to
-// the self-registered population after all.
-//
-// The naming ladder is You -> display name -> email -> a bilingual
-// "unknown member" fallback, and a raw id is never rendered as a name.
-//
-// Verified on three engines, then by hand: the roster reads
-// demo-acme-only@example.com / You / demo-reader@example.com. A dentist
-// can tell which colleague is which and decide whom to remove, which is
-// the question the surface exists to answer and the one the UUIDs left
-// unanswered.
+// The app composes an authn lookup of its own
+// (GET /api/reference-app/team-members) and enriches every member row
+// from the users table; the naming ladder is You -> display name ->
+// email -> a bilingual "unknown member" fallback, and a raw id is never
+// rendered as a name.
 //
 // @budget rather than untagged: it signs in.
 test(
@@ -290,68 +214,19 @@ const SIGNUP_PASSWORD = 'e2e-invite-pass-2026'
 /**
  * That a practice which signed ITSELF up can invite a colleague too.
  *
- * The gate above asks the same question of a SEEDED demo account, and
- * passes. This one asks it of the population that actually buys the
- * product, and it is here because that difference was a real defect:
- * a self-registered clinic pressing "Send invitation" was answered
- * "Sending the invitation failed. Try again later." while the identical
- * click in a boot-configured demo tenant succeeded.
+ * The tests above ask the same questions of boot-seeded demo accounts.
+ * This one covers the population that actually buys the product: a
+ * self-registered clinic's tenant is derived from its registrant's user
+ * id and can never appear in the configured host list, so invitation
+ * delivery takes a different origin than a boot-configured demo
+ * tenant's. Seeded-account coverage alone cannot see a failure confined
+ * to that path.
  *
- * Narrowed by hand before it was reported, because a symptom is not a
- * finding: the browser's own span showed POST /api/v1/org/invitations
- * answering 500 for the self-registered tenant and 200 for tenant-acme;
- * called directly it answered `org.node_not_found` with an EMPTY
- * node_id; the surface was then cleared of suspicion (team-view.tsx
- * picks the root by `depth === 0` and sends its id, which is correct);
- * and with the correct node id supplied the answer became
- * `org.internal_error` -- a server-side failure, not a UI one. The
- * control experiment is what made it a finding rather than a guess: the
- * same call, same shape, new address, against the seeded tenant, minted
- * a pending invitation.
- *
- * WHY THE GATE ABOVE COULD NOT HAVE CAUGHT IT
- *
- * Population. It signs in as a seeded account, and this failed only for
- * a self-registered one -- the fourth time this suite has met that
- * shape (the clinic-naming gate asked only about boot-configured
- * clinics; the four core-journey gates only about seeded accounts; the
- * periodic scheduler's tenant universe was the configured list alone,
- * fixed in 5873f64). Every time the question was right and the
- * population was not.
- *
- * WHAT IT COSTS, AND WHY IT IS WORTH IT
- *
- * One registration, against `limitRegisterByIP`'s ten per hour -- which
- * is why it is @pending-and-then-@budget rather than in the default
- * tier, and why the suite asks for one engine per invocation
- * (e2e/README.md's budget table). A gate that spends a real
- * registration to cover the paying population is the trade this suite
- * has made three times before and not regretted.
+ * Registration is rate-limited per IP (go/authn's limitRegisterByIP,
+ * ten per hour), and this test spends one real registration per run --
+ * which is why it carries the @budget tag, and why the suite asks for
+ * one engine per invocation (e2e/README.md's budget table).
  */
-// Closed by d3b4c184, and the root cause is worth keeping because it
-// corrects something this suite got wrong.
-//
-// The invitation mail's accept-link builder had exactly one source of
-// hosts: hostByTenant, the reverse index of cfg.HostTenants. A
-// self-registered clinic's tenant is derived from its registrant's user
-// id, so it can never be in that map -- the link could not be built and
-// invite.go's own ErrInternal came back. The fix is a deployment-level
-// public origin (APP_PUBLIC_ORIGIN, defaulting to localhost:PORT), with
-// the demo tenants' https://host links unchanged byte for byte.
-//
-// THE CORRECTION: when this suite swept cfg.HostTenants' uses after
-// 5873f64 (the periodic scheduler's tenant universe, the same shape),
-// it cleared hostByTenant as "correct by construction -- a Host to
-// tenant map IS the definition of the configured hosts". That was
-// right about resolving an INCOMING request's host and wrong about this
-// direction: asked "which host belongs to this tenant", every tenant
-// needs an answer, not only the configured ones. Two directions, one
-// map, and only one of them is definitionally configured-only. So the
-// sweep that reported "the wrong-population error is in exactly one
-// place" had cleared the source of the next one.
-//
-// @budget rather than untagged: it registers, which the default tier's
-// ten-per-hour register budget cannot absorb.
 test(
   'a self-registered practice can invite a colleague too',
   { tag: '@budget' },

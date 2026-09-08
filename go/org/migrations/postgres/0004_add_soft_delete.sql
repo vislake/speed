@@ -1,23 +1,17 @@
 -- Adds OrgNode's and Membership's dbkit.SoftDeletable pair (deleted_at/
 -- deleted_by) to org_nodes and memberships, following dbkit's own
--- soft-delete design (docs/internal/04-data-and-tenancy.md, delete-semantics
--- section): a mark-delete is a plain UPDATE setting these two columns, never
+-- soft-delete design: a mark-delete is a plain UPDATE setting these two
+-- columns, never
 -- a physical DELETE, and both columns stay dialect-portable (kept identical
 -- to the sqlite/ copy of this file) -- no PostgreSQL-only type, no
 -- gen_random_uuid(), no NOW().
 --
 -- Accidental deletion of a sub-org (cascade included) or of a membership is
--- exactly the "oops, get it back" scenario mark-delete exists for -- see
--- go/org/AGENTS.md's "Soft deletion" section for the full round.
+-- exactly the "oops, get it back" scenario mark-delete exists for.
 --
 -- Unlike examples/reference-app/internal/notes' identically-purposed
 -- migration, org_nodes and memberships both carry a real unique-index
--- interaction the design doc names by name
--- (docs/internal/04-data-and-tenancy.md, delete-semantics section, §4; see
--- also go/dbkit/AGENTS.md's "Soft deletion" section and
--- go/pki/migrations/{sqlite,postgres}/0001_create_pki_signing_keys.sql's
--- uq_pki_signing_keys_active_purpose for the identical technique used there
--- for a different reason): a soft-deleted row still occupies whatever
+-- interaction: a soft-deleted row still occupies whatever
 -- unique constraint it held while live, so without a change here a
 -- soft-deleted sibling name or a soft-deleted membership's seat would stay
 -- permanently unavailable -- a real functional regression, not merely a
@@ -28,9 +22,9 @@
 -- change. This is standard SQL, not a PostgreSQL-specific feature -- the
 -- identical DDL string runs on SQLite too (see the sqlite/ sibling).
 --
--- This migration deliberately does not touch org_invitations -- see this
--- round's own scope note in go/org/AGENTS.md's "Soft deletion" section for
--- why invitations were left out.
+-- This migration deliberately does not touch org_invitations: an
+-- invitation is already single-use and expiring, a lifecycle shape
+-- mark-delete does not improve.
 ALTER TABLE org_nodes ADD COLUMN deleted_at TIMESTAMP NULL;
 ALTER TABLE org_nodes ADD COLUMN deleted_by VARCHAR(64) NOT NULL DEFAULT '';
 

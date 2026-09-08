@@ -33,12 +33,12 @@ func decodedErrorCode(t *testing.T, w *httptest.ResponseRecorder) string {
 	return body.Code
 }
 
-// TestHandler_MalformedRequestBody_ReportsRequestBodyInvalid is Finding
-// P3-5's regression test: a genuinely malformed JSON body against
-// AdminUpdateTenant (one of the five sites that used to wrap a decode
-// failure in the semantically wrong ErrTenantIDRequired) must now be
-// reported as admin.request_body_invalid, never admin.tenant_id_required
-// -- proven against the real composed HTTP handler, not a bare service call.
+// TestHandler_MalformedRequestBody_ReportsRequestBodyInvalid pins the
+// decode-failure error code: a genuinely malformed JSON body against
+// AdminUpdateTenant must be reported as admin.request_body_invalid, never
+// admin.tenant_id_required -- a caller who sent syntactically broken JSON
+// was not "missing the tenant id". Proven against the real composed HTTP
+// handler, not a bare service call.
 func TestHandler_MalformedRequestBody_ReportsRequestBodyInvalid(t *testing.T) {
 	env := buildTestAdminModule(t)
 
@@ -61,10 +61,10 @@ func TestHandler_MalformedRequestBody_ReportsRequestBodyInvalid(t *testing.T) {
 }
 
 // TestHandler_StartImpersonation_MalformedBody_ReportsRequestBodyInvalid
-// covers the sixth site, which wrapped its decode failure in
-// ErrImpersonationTargetRequired rather than ErrTenantIDRequired -- a
-// different wrong code, but the identical defect (a decode failure
-// reported as a semantically unrelated validation refusal).
+// pins the same code on the impersonation surface: the start-impersonation
+// decode failure must be reported as admin.request_body_invalid, never
+// admin.impersonation_target_required (a decode failure is not "you
+// forgot the target").
 func TestHandler_StartImpersonation_MalformedBody_ReportsRequestBodyInvalid(t *testing.T) {
 	env := buildTestAdminModule(t)
 
@@ -81,13 +81,14 @@ func TestHandler_StartImpersonation_MalformedBody_ReportsRequestBodyInvalid(t *t
 	}
 }
 
-// TestPaginate_ExtremeOffsetAndLimit_DoesNotPanic is P2-4's regression
-// test: an extreme caller-supplied limit (math.MaxInt, as an HTTP query
-// string could carry) combined with a small in-range offset used to
-// overflow the offset+limit addition inside paginate, wrap the computed
-// end negative, sail through both clamp conditions, and panic slicing
-// events[offset:negative]. The clamp must bound the limit by the remaining
-// tail BEFORE the addition so the addition itself can never overflow.
+// TestPaginate_ExtremeOffsetAndLimit_DoesNotPanic pins the overflow-proof
+// clamp: an extreme caller-supplied limit (math.MaxInt, as an HTTP query
+// string could carry) combined with a small in-range offset would
+// otherwise overflow the offset+limit addition inside paginate, wrap the
+// computed end negative, sail through both clamp conditions, and panic
+// slicing events[offset:negative]. The clamp must bound the limit by the
+// remaining tail BEFORE the addition so the addition itself can never
+// overflow.
 func TestPaginate_ExtremeOffsetAndLimit_DoesNotPanic(t *testing.T) {
 	events := []audit.AuditEvent{
 		{ID: "evt-0"},
@@ -101,14 +102,12 @@ func TestPaginate_ExtremeOffsetAndLimit_DoesNotPanic(t *testing.T) {
 	}
 }
 
-// TestHandler_UpdateTenant_InvalidStatus_RefusedAndNotPersisted is P2-5's
-// regression test: a status string outside the API enum's closed
-// vocabulary must be refused at the handler boundary (400,
-// admin.tenant_status_invalid), never persisted. On unfixed main the wire
-// value was written verbatim into admin_tenants.status -- and tenancy's
-// status gate (tenant_status.go: only TenantStatusActive is servable, an
-// out-of-vocabulary answer refused with ErrTenantSuspended) would then
-// refuse every request for that tenant, silently taking it offline until an
+// TestHandler_UpdateTenant_InvalidStatus_RefusedAndNotPersisted pins the
+// status vocabulary boundary: a status string outside the API enum's
+// closed vocabulary must be refused at the handler boundary (400,
+// admin.tenant_status_invalid), never persisted -- tenancy's status gate
+// (only tenancy.TenantStatusActive is servable) would otherwise refuse
+// every request for that tenant, silently taking it offline until an
 // operator noticed.
 func TestHandler_UpdateTenant_InvalidStatus_RefusedAndNotPersisted(t *testing.T) {
 	env := buildTestAdminModule(t)
@@ -140,15 +139,13 @@ func TestHandler_UpdateTenant_InvalidStatus_RefusedAndNotPersisted(t *testing.T)
 	}
 }
 
-// TestHandler_RoleWritePaths_BindingAndRoleEventsCarryActor is P2-6's
-// regression test, at the real event boundary: both role-management write
-// paths (POST /api/v1/admin/roles and POST
-// /api/v1/admin/roles/{id}/bindings) must resolve the calling operator and
-// install them as the rbac Subject on the ctx they hand to RoleService, so
-// rbac's own role-binding and role-changed events carry ActorUserID. On
-// unfixed main neither handler resolved the caller at all, so every event
-// those writes published carried an empty ActorUserID -- a role-management
-// write no audit trail could ever attribute.
+// TestHandler_RoleWritePaths_BindingAndRoleEventsCarryActor pins the
+// actor at the real event boundary: both role-management write paths
+// (POST /api/v1/admin/roles and POST /api/v1/admin/roles/{id}/bindings)
+// must resolve the calling operator and install them as the rbac Subject
+// on the ctx they hand to RoleService, so rbac's own role-binding and
+// role-changed events carry ActorUserID -- without it a role-management
+// write would publish events no audit trail could ever attribute.
 func TestHandler_RoleWritePaths_BindingAndRoleEventsCarryActor(t *testing.T) {
 	env := buildTestAdminModule(t)
 	env.Admin.AttachRBAC(env.RBAC)
@@ -202,18 +199,16 @@ func TestHandler_RoleWritePaths_BindingAndRoleEventsCarryActor(t *testing.T) {
 	}
 }
 
-// TestHandler_AdminSearchUsers_LeavesAuditedTrailNamingOperator is the
-// D6-search P1's regression test, at the real composed-HTTP boundary: a
+// TestHandler_AdminSearchUsers_LeavesAuditedTrailNamingOperator pins the
+// search's audited trail at the real composed-HTTP boundary: a
 // cross-tenant user search (GET /api/v1/admin/users) must resolve the
 // calling operator from the verified Principal and leave exactly one
 // tenancy.system_context.entered audit record naming that operator as
-// Actor under SystemPurposeAdminCrossTenant -- identically to the D6
-// second half (AdminListUserMemberships/MembershipsOf) and to every other
-// D2 audited read. On unfixed main AdminSearchUsers never read the
-// caller's Principal and SearchService.Users was a wrapper-less
-// passthrough to authn.Service.SearchUsers, so a search that returns
-// plaintext email and phone from identity data (encrypted at rest) left no
-// audit trace of which operator searched the user directory at all.
+// Actor under SystemPurposeAdminCrossTenant -- identically to the
+// membership half (AdminListUserMemberships/MembershipsOf) and to every
+// other audited cross-tenant read. Without it, a search that returns
+// plaintext email and phone from identity data (encrypted at rest) would
+// leave no trace of which operator searched the user directory.
 func TestHandler_AdminSearchUsers_LeavesAuditedTrailNamingOperator(t *testing.T) {
 	env := buildTestAdminModule(t)
 	ctx := context.Background()
@@ -260,16 +255,16 @@ func TestHandler_AdminSearchUsers_LeavesAuditedTrailNamingOperator(t *testing.T)
 	}
 }
 
-// TestHandler_AdminListAuditEvents_FiltersByOnBehalfOf is P2-1's
-// end-to-end regression test: an investigator asking "what did THIS
-// administrator do during their impersonation sessions?" must get exactly
-// the audit rows written while that administrator impersonated a user --
-// and no others. Pre-fix the endpoint had no on_behalf_of dimension at
-// all: the request below answered 200 with every row in the tenant (the
-// silent-failure signature this finding is about -- a plausible-looking
-// list with no error), because the on_behalf_of fields the response
-// already carried could be read but never queried, and an administrator
-// never appears as actor on an impersonation-era row.
+// TestHandler_AdminListAuditEvents_FiltersByOnBehalfOf pins the
+// on-behalf-of read dimension end to end: an investigator asking "what did
+// THIS administrator do during their impersonation sessions?" must get
+// exactly the audit rows written while that administrator impersonated a
+// user -- and no others. The endpoint's onBehalfOf query parameter exists
+// because an attribute that can only be written and never queried does not
+// exist for accountability: an administrator never appears as actor on an
+// impersonation-era row, so without the filter the answer would look
+// complete (200, no error) while silently omitting everything asked
+// for.
 func TestHandler_AdminListAuditEvents_FiltersByOnBehalfOf(t *testing.T) {
 	env := buildTestAdminModule(t)
 	auditRepo := audit.NewRepository(env.DB)

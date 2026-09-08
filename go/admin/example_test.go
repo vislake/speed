@@ -1,22 +1,18 @@
 package admin_test
 
-// Runnable documentation for admin's public API, mirroring
-// go/pki/example_test.go's convention: this example is compiled AND
-// executed by `go test`, so a change to admin's public API that breaks the
-// documented usage fails the build rather than only rotting in prose.
+// Runnable documentation for admin's public API: the examples below are
+// compiled AND executed by `go test`, so a change to admin's public API
+// that breaks the documented usage fails the build rather than only
+// rotting in prose.
 //
-// It demonstrates D5's impersonation pipeline failing closed at its
+// Example() demonstrates the impersonation pipeline failing closed at its
 // construction boundary: Module.Impersonation().Start refuses with
 // ErrImpersonationNotWired until Module.Register has attached the
-// service's mandatory host seams (P2-4's fix). Driving Start through the
-// exported surface exactly as a consumer would -- admin.NewModule plus
-// Module.Impersonation, with no Register -- used to start a grant
-// silently, with target-existence and membership validation and the
-// mandatory security notification all skipped (the shape the exported
-// half-built constructor handed out); it now fails closed with a named
-// error before anything is written.
+// service's mandatory host seams. A service in that state cannot run the
+// mandatory validate-and-notify pass, so the refusal fires before
+// anything is written.
 //
-// Behind that first gate sits P2-3's second one, guarding what the
+// Behind that gate sits the post-Bootstrap one, guarding what the
 // Register-time seams cannot: Module.AttachRBAC is host-performed and
 // strictly post-Bootstrap (its own doc comment, and rbacSvc's field doc,
 // give the full reasoning), and until it has attached a real
@@ -25,18 +21,16 @@ package admin_test
 // (onRoleBindingRevoked / onRoleChanged) that must be able to stop it is
 // unattached. That second refusal is reachable only once attach has run,
 // a state no exported surface reaches without Register, which in turn
-// needs real authn, org, compliance and notification modules wired in
-// (see AGENTS.md's wiring section and examples/reference-app/cmd/server
-// for the full composition) -- so it, and the whole start/lookup/end
-// lifecycle with validation, notification and audit wired for real, are
-// pinned by the module's own in-package suites
-// (impersonation_service_test.go's
+// needs real authn, org, compliance and notification modules wired in --
+// so it, and the whole start/lookup/end lifecycle with validation,
+// notification and audit wired for real, are pinned by the module's own
+// in-package suites (impersonation_service_test.go's
 // TestImpersonationService_Start_BeforeAttachRBAC_Refused, plus the
 // impersonation_service_locale_test.go and module_test.go lifecycles)
 // rather than reconstructed here, exactly as ExampleNewExportService
 // defers its real path to export_test.go. ExampleModule_AttachRBAC below
-// demonstrates the same post-Bootstrap AttachRBAC seam from D8's side,
-// where the exported surface can reach it.
+// demonstrates the same post-Bootstrap AttachRBAC seam from the role
+// surface's side, where the exported surface can reach it.
 
 import (
 	"context"
@@ -70,9 +64,9 @@ func Example() {
 	// Before Module.Register has attached the service's mandatory host
 	// seams -- the state every consumer sees until Bootstrap runs -- Start
 	// fails closed with a named error instead of starting a grant whose
-	// target was never validated and who was never notified (P2-4's fix).
-	// P2-3's ErrRBACServiceRequired gate sits behind this one, guarding
-	// the post-Bootstrap AttachRBAC seam that no Register-time attach can
+	// target was never validated and who was never notified. The
+	// ErrRBACServiceRequired gate sits behind this one, guarding the
+	// post-Bootstrap AttachRBAC seam that no Register-time attach can
 	// carry (Start's own doc comment; the header above explains why only
 	// the in-package suites can reach that second refusal).
 	_, err = module.Impersonation().Start(ctx, admin.StartInput{
@@ -87,11 +81,10 @@ func Example() {
 	// start: admin.impersonation_not_wired
 }
 
-// ExampleModule_AttachRBAC demonstrates D8's role-management surface
+// ExampleModule_AttachRBAC demonstrates the role-management surface
 // (RoleService): a real rbac.Service, bootstrapped and Attach-ed
-// independently, exactly the way go/rbac/example_test.go's own Example
-// does it, then wired onto an admin.Module through AttachRBAC -- the
-// distinct, post-Bootstrap call this file's own Module.AttachRBAC doc
+// independently, then wired onto an admin.Module through AttachRBAC --
+// the distinct, post-Bootstrap call this file's own Module.AttachRBAC doc
 // comment explains is required because rbac.Module.Attach must run after
 // every module's own Register, a moment admin's own Register runs before.
 func ExampleModule_AttachRBAC() {
@@ -153,17 +146,15 @@ func ExampleModule_AttachRBAC() {
 	// assigned to user-1
 }
 
-// ExampleNewExportService demonstrates D7's export leg (ExportService)'s
-// up-front validation: an empty tenantID is refused before the call ever
-// reaches the wrapped compliance.ExportService or jobs.Queue (both nil
-// here, since neither is touched on this path) -- exactly the guard
-// AssignRole/DefineRole/AssignRole above share with every other admin
-// service taking a caller-named tenantID. Enqueue's real success path --
-// a genuine job landing on a real jobs.Queue and a real
-// compliance.ExportService.Export run against a real go/sharing.Service
-// -- is proven end to end in export_test.go instead, which needs a full
-// org+compliance+sharing+queue fixture this doc example deliberately
-// does not reconstruct.
+// ExampleNewExportService demonstrates the audit-export leg
+// (ExportService)'s up-front validation: an empty tenantID is refused
+// before the call ever reaches the wrapped compliance.ExportService or
+// jobs.Queue (both nil here, since neither is touched on this path).
+// Enqueue's real success path -- a genuine job landing on a real
+// jobs.Queue and a real compliance.ExportService.Export run against a
+// real go/sharing.Service -- is proven end to end in export_test.go
+// instead, which needs a full org+compliance+sharing+queue fixture this
+// doc example deliberately does not reconstruct.
 func ExampleNewExportService() {
 	exportSvc := admin.NewExportService(nil, nil)
 
@@ -174,13 +165,12 @@ func ExampleNewExportService() {
 	// admin.tenant_id_required
 }
 
-// ExampleNewUsageService demonstrates D9's cross-tenant usage/billing
-// dashboard (UsageService)'s deliberate fail-closed contract: with
-// neither go/metering nor go/billing wired (both are optional --
+// ExampleNewUsageService demonstrates the cross-tenant usage/billing
+// dashboard (UsageService)'s fail-closed contract: with neither
+// go/metering nor go/billing wired (both are optional --
 // Module.WithMetering/WithBilling's own doc comments), Summary refuses
 // outright with ErrUsageModulesNotWired before ever touching admin's own
-// tenant ledger, exactly as go/admin/AGENTS.md's Known limitations
-// records this app's own reference deployment currently exercises it.
+// tenant ledger.
 func ExampleNewUsageService() {
 	usageSvc := admin.NewUsageService(nil, nil, nil)
 

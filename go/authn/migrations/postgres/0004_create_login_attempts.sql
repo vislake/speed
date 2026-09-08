@@ -1,8 +1,6 @@
--- Every login ATTEMPT, successful or not, lands here
--- (docs/internal/05-identity-and-access.md's login-history section). It feeds three
--- things: the user's own security page, the progressive-delay and lockout
--- logic layered on go/ratelimit, and the anomalous-login detection that lands
--- with the notification module.
+-- Every login ATTEMPT, successful or not, lands here. It feeds two things:
+-- the user's own security page, and the progressive-delay and lockout logic
+-- layered on go/ratelimit.
 --
 -- identifier_index, not the identifier itself. An attempt against an address
 -- that matches no account still has to be countable per account -- that is

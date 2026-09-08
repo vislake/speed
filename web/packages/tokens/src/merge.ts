@@ -4,9 +4,9 @@
  * Home decision (why merge lives here, not in a factory package): the merge
  * is defined over SpeedTokens itself -- its type argument is DeepPartial of
  * the token tree, it never mutates, and it treats objects as the only
- * mergeable unit. A future theme factory consumes the *merged result* and
- * must not depend on a merging mechanism, so the merge ships with the tree
- * it merges.
+ * mergeable unit. The theme factory consumes the *merged result* and must
+ * not depend on a merging mechanism, so the merge ships with the tree it
+ * merges.
  */
 
 import type { DeepPartial } from './types.js'

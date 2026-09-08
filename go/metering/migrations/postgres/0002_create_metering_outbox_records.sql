@@ -12,8 +12,7 @@
 -- it is simply not database-enforced, because Dispatcher must be able to
 -- scan pending rows across every tenant at once to retry them, the exact
 -- shape go/jobs' own jobRecord is platform data for. See model.go's
--- OutboxRecord doc comment and AGENTS.md's "Outbox table: platform data,
--- not tenant-scoped" section for the full argument.
+-- OutboxRecord doc comment for the full argument.
 --
 -- This is the PostgreSQL copy; see the sqlite/ sibling for the identical
 -- schema on that dialect. Kept portable on purpose: no dialect-specific
@@ -25,9 +24,9 @@
 -- key returns the existing row instead of creating a duplicate.
 --
 -- status is outboxStatusPending or outboxStatusDelivered -- there is no
--- "processing" transitional state this round, since exactly one
--- in-process Dispatcher runs against this table (see Dispatcher's own doc
--- comment). attempts and last_error record delivery-failure history
+-- "processing" transitional state, since exactly one in-process
+-- Dispatcher runs against this table (see Dispatcher's own doc comment).
+-- attempts and last_error record delivery-failure history
 -- without ever causing a row to stop being retried: billing-grade
 -- delivery retries indefinitely, it does not dead-letter.
 CREATE TABLE metering_outbox_records (

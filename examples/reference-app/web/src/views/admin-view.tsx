@@ -28,10 +28,10 @@
  * can honestly answer -- and never the tenant id. The ledger's
  * auto-registered rows carry an empty displayName by go/admin design
  * (tenant_service.go's lazily created rows record no name), so a row
- * rendered as stored would list `tenant-64307885-...` -- the identical
- * raw-identifier defect the team roster shipped with and closed, where
- * a roster answered "who works here" with opaque ids. The naming
- * ladder is therefore: the display name an operator recorded on the
+ * rendered as stored would show a raw tenant id -- the raw-identifier
+ * shape a naming ladder exists to prevent, exactly as on the team
+ * roster. The naming ladder is therefore: the display name an operator
+ * recorded on the
  * row itself (the manual-CRUD rows carry one, and it is the server's
  * own word for the tenant); else, for a tenant this app's demo roster
  * knows, the roster copy's name (demo-tenants.ts names the two
@@ -157,8 +157,7 @@ export function AdminView(): ReactElement {
           // naming section): the operator's recorded display name
           // first, then the demo roster's copy for a tenant the app
           // knows, then the unnamed fallback. The raw tenant id is
-          // never a name -- the exact defect this surface's trap was
-          // written about.
+          // never rendered as a name.
           if (row.displayName.trim() !== '') {
             return row.displayName
           }

@@ -18,9 +18,9 @@ import (
 // sprocket is a minimal tenant-scoped fixture used only to prove
 // AssertIsolated works end to end against a real dbkit.Repository[T].
 // dbkit's own tenant-scoped fixture (internal/testutil.Widget) lives in an
-// unexported package reachable only from within the dbkit module itself
-// (see dbkit/AGENTS.md), so every module that needs one of its own,
-// including this package's own tests, defines a small fixture directly —
+// unexported package reachable only from within the dbkit module itself,
+// so every module that needs a fixture of its own, including this
+// package's own tests, defines a small one directly —
 // exactly as this package's own doc comment on AssertIsolated tells callers
 // to do. It follows the same exported "ID"/"TenantID" string-field
 // convention dbkit.Repository[T] requires of every T (see idFieldName and
@@ -80,14 +80,13 @@ func newSprocket(tenant pkgcore.TenantID) *sprocket {
 // a small tenant-scoped fixture of this package's own (see sprocket's doc
 // comment for why it can't reuse dbkit's own Widget fixture).
 //
-// SQLite only, deliberately: this file carries no build tag, so per the
-// backend coding standard's testing layout rule (§13) it must stay fast and
-// hermetic under a plain "go test ./...". testutil.Dialects()'s postgres
-// entry (index 1) starts a real, disposable PostgreSQL container via
-// testcontainers-go on every call, which is exactly the cost that rule
-// requires to live behind a package-level integration_test/ directory
-// guarded by //go:build integration instead -- see dialects.go's own doc
-// comment. The postgres leg of this same scenario runs from
+// SQLite only, deliberately: this file carries no build tag, so it must
+// stay fast and hermetic under a plain "go test ./...". testutil.Dialects()'s
+// postgres entry (index 1) starts a real, disposable PostgreSQL container
+// via testcontainers-go on every call, which is exactly the cost that
+// belongs behind a package-level integration_test/ directory guarded by
+// //go:build integration instead -- see dialects.go's own doc comment. The
+// postgres leg of this same scenario runs from
 // tenancytest/integration_test/postgres_assert_isolated_test.go, behind
 // that tag, mirroring dbkit's own integration_test/ precedent one module
 // over.
@@ -218,50 +217,6 @@ func TestAssertIsolated_DetectsBrokenGetTenantID(t *testing.T) {
 	}
 }
 
-// This file used to document an upstream dbkit.Repository[T].Update defect
-// that independent testing of THIS package surfaced: AssertIsolated, run
-// against a TenantScoped model whose ONLY fields are its "ID"/"TenantID"
-// primary key (no other column at all), used to correctly report a failure
-// -- but the failure was dbkit's, not AssertIsolated's, own.
-//
-// Root cause, confirmed by tracing gorm.io/gorm v1.31.2's own
-// callbacks/update.go: Repository[T].Update issues
-// tx.Where(id...).Where(tenant_id...).Select("*").Save(m). GORM's Update
-// callback builds the statement's SET clause from ConvertToAssignments(stmt)
-// -- which considers only NON-primary-key columns, since primary-key
-// columns belong in the WHERE clause, not SET -- and when that came back
-// empty, the callback took an early return (see callbacks/update.go's
-// Update func) that built and executed no SQL at all, leaving
-// RowsAffected at 0. dbkit.Repository[T] treated rowsAffected == 0 as "no
-// such row for this tenant" and returned ErrRecordNotFound (see
-// repository.go's Update), even though the row genuinely existed and was
-// genuinely owned by the calling tenant.
-//
-// dbkit.Repository[T].Update has since closed this gap: when gorm reports
-// that no SQL was built at all (not merely that RowsAffected == 0), Update
-// now falls back to an explicit, still id-and-tenant-scoped existence
-// check inside the same transaction before deciding between success and
-// ErrRecordNotFound -- see Update's own doc comment in
-// go/dbkit/repository.go, and TestRepository_Update_IDAndTenantIDOnlyModel_SucceedsAsNoOp
-// / _DifferentTenant_ReturnsNotFound / _NoSuchID_ReturnsNotFound in
-// go/dbkit/repository_test.go for dbkit's own fix and its regression
-// coverage (including proof the fallback stays tenant-isolated: a
-// cross-tenant Update attempt against this exact model shape still
-// collapses to ErrRecordNotFound, never a false-positive success).
-//
-// What stays in THIS package, now that the dbkit gap itself is fixed at
-// its source, is proof that AssertIsolated correctly PASSES bareTenantWidget
-// -- the narrowest legal TenantScoped shape, a "pure marker" link/tenant
-// table whose entire content IS its identity and tenant (a plausible,
-// spec-legal shape for the tenant/link data domain, backend coding
-// standard §3.3) -- rather than this package silently losing coverage of
-// that shape now that dbkit no longer trips on it.
-// TestAssertIsolated_MinimalTenantScopedModel is now a forward-looking
-// regression guard, not a defect report: if dbkit's Update fallback above
-// is ever weakened or removed, this is the test that notices, by failing
-// on the same same_tenant_update_succeeds check that used to fail before
-// the dbkit fix.
-
 // bareTenantWidget is deliberately the narrowest possible TenantScoped
 // model: nothing beyond the "ID"/"TenantID" pair dbkit.Repository[T]
 // itself requires. Every OTHER fixture in this package (sprocket,
@@ -294,24 +249,27 @@ func newBareTenantWidget(tenant pkgcore.TenantID) *bareTenantWidget {
 
 // TestAssertIsolated_MinimalTenantScopedModel proves AssertIsolated works
 // end to end against the narrowest legal TenantScoped shape: a model with
-// no column beyond ID/TenantID. See this file's doc comment for the
-// dbkit.Repository[T].Update gap this test used to expose (fixed in
-// go/dbkit/repository.go) and why this test's job, now that the fix is in
-// place, is to guard against it ever regressing rather than to document
-// the defect itself -- a plain, direct assertion that AssertIsolated
-// passes, exactly like TestAssertIsolated_Sprocket in assert_isolated_test.go,
-// rather than the subprocess-based "expect a failure" machinery this test
-// used before the dbkit fix landed (that machinery is still the right tool
-// for a genuinely-expected failure; see
-// TestAssertIsolated_DetectsBrokenGetTenantID in assert_isolated_test.go
-// for that pattern and why it exists).
+// no column beyond the ID/TenantID pair (bareTenantWidget above). This
+// shape exercises Repository[T].Update's empty-SET path: GORM's Update
+// callback builds its SET clause from non-primary-key columns only, so for
+// it no SQL would be built at all and RowsAffected stays 0, and dbkit's
+// Update answers a "no SQL was built" report with an explicit,
+// id-and-tenant-scoped existence check inside the same transaction before
+// deciding between success and ErrRecordNotFound (see Update's own doc
+// comment in go/dbkit/repository.go). This test is the regression guard
+// for that path: if the existence-check fallback were weakened or removed,
+// the same same_tenant_update_succeeds check fails here. It is a plain,
+// direct assertion that AssertIsolated passes, exactly like
+// TestAssertIsolated_Sprocket, not the subprocess-based "expect a failure"
+// machinery (which remains the right tool for a genuinely-expected
+// failure; see TestAssertIsolated_DetectsBrokenGetTenantID for that
+// pattern and why it exists).
 //
-// SQLite only, deliberately, mirroring TestAssertIsolated_Sprocket in
-// assert_isolated_test.go: this file carries no build tag, so per the
-// backend coding standard's testing layout rule (§13) it must stay fast and
-// hermetic under a plain "go test ./...". testutil.Dialects()[0] is always
-// SQLite; see that function's own doc comment for why a plain _test.go file
-// must never reach index 1 (PostgreSQL, via a real disposable container).
+// SQLite only, deliberately, mirroring TestAssertIsolated_Sprocket: this
+// file carries no build tag, so it must stay fast and hermetic under a
+// plain "go test ./...". testutil.Dialects()[0] is always SQLite; see
+// that function's own doc comment for why a plain _test.go file must never
+// reach index 1 (PostgreSQL, via a real disposable container).
 func TestAssertIsolated_MinimalTenantScopedModel(t *testing.T) {
 	db := testutil.Dialects()[0].NewDB(t) // sqlite: see doc comment above for why postgres has no place in this file
 	if err := db.Exec(createBareTenantWidgetsTableSQL).Error; err != nil {
@@ -349,11 +307,11 @@ func TestAssertIsolated_MinimalTenantScopedModel(t *testing.T) {
 //
 // This means the combination the question asks about does not really
 // "make sense" as a way to grant a Repository[T] elevated privileges: there
-// is no such thing as an "elevated Repository[T]" today, only individual
+// is no such thing as an "elevated Repository[T]" -- only individual
 // elevated CONTEXT VALUES passed to individual method calls (and, as the
 // parent tenancy package's own WithSystemContext-against-Repository[T]
 // tests separately establish, even those have no effect on Repository[T]
-// yet either). A caller trying to build a "privileged repository" by
+// either). A caller trying to build a "privileged repository" by
 // pre-elevating db is relying on behavior that silently does nothing,
 // which is a plausible real mistake -- exactly the kind AssertIsolated
 // ought to remain correct in the presence of, which is what this file
@@ -464,26 +422,19 @@ func TestAssertIsolated_SystemCtxElevatedDB(t *testing.T) {
 	}
 }
 
-// This file is a regression test for a bug independent testing found in
-// isolationTenants (assert_isolated.go): it built every tenant id as
-// "tenancytest-" + sanitizeForTenantID(t.Name()) + "-a"/"-b" with no length
-// bound at all. This project's own testing convention explicitly asks for
-// descriptive case/test names (backend-coding-standards §13), and a
-// sufficiently descriptive t.Name() -- entirely plausible, not a contrived
-// edge case -- produced a tenant id longer than the VARCHAR(64) tenant_id
-// column every fixture in this package (and the backend coding standard's
-// own Subscription example) uses. SQLite silently accepts a value of any
-// length, so this was completely invisible there; PostgreSQL enforces
-// VARCHAR(n) strictly and rejected it with "value too long for type
-// character varying(64)" (SQLSTATE 22001) -- a failure that reads as
-// unrelated to the isolation property actually under test, discovered only
-// once such a test happened to run against Postgres.
-//
-// The fix bounds the derived name segment to isolationNameBudget, replacing
-// an overflowing name's tail with a short deterministic hash of the FULL
-// original name (see boundedTenantIDSegment) rather than truncating alone,
-// so two long names sharing a common prefix still cannot collide once
-// shortened.
+// This file pins the length bound every tenant id isolationTenants
+// (assert_isolated.go) derives from a test name: the derived name segment
+// is bounded to isolationNameBudget, replacing an overflowing name's tail
+// with a short deterministic hash of the FULL original name (see
+// boundedTenantIDSegment) rather than truncating alone, so two long names
+// sharing a common prefix still cannot collide once shortened. The bound
+// matters because descriptive case/test names -- which the project's
+// testing convention asks for -- can exceed what a VARCHAR(64) tenant_id
+// column allows: SQLite silently accepts a value of any length, while
+// PostgreSQL enforces VARCHAR(n) strictly and rejects an overlong id with
+// "value too long for type character varying(64)" (SQLSTATE 22001), a
+// failure that reads as unrelated to the isolation property actually under
+// test.
 
 // TestBoundedTenantIDSegment_ShortNamePassesThroughUnchanged proves the fix
 // is fully backward compatible: any test name that already fits within

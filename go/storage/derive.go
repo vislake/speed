@@ -303,9 +303,9 @@ func (s *DeriveService) DeriveThumbnail(ctx context.Context, objectID string) er
 	// insertDerivativeIfAbsent (repository.go) answers with either a refusal
 	// or a real error. The refusal is the object-state gate speaking, in the
 	// same transaction as the insert -- the object's own row is gone or no
-	// longer completed, refused with an atomicity no re-read this service
-	// used to perform after its byte write could give, so no interleaving
-	// can slip a row past a completed deletion anymore. A real error is the
+	// longer completed, refused with an atomicity a post-write re-read by
+	// this service could never give, so no interleaving can slip a row past
+	// a completed deletion. A real error is the
 	// database itself failing the row write. Both answers leave the bytes
 	// this run just wrote with no row that can reference them -- the refused
 	// insert because the object is gone or doomed, the errored one because

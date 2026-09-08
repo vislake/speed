@@ -498,7 +498,7 @@ func TestBuildServer_StoragePermissionGate_EnforcesTheStoragePermissions(t *test
 	// A request with a resolvable tenant and no identity is refused as
 	// well. (This example's gate cannot tell anonymous from
 	// authenticated-but-grantless, so both answer rbac.permission_denied
-	// -- a known demo-identity limitation recorded in the storage round's
+	// -- a known demo-identity limitation of this app's demo actors, not a
 	// final report, not a claim about what authn will one day return.)
 	resp = storageRequest(t, srv, http.MethodPost, "/api/v1/storage/objects",
 		acmeToken, "", "application/json",

@@ -45,22 +45,19 @@ type ReclaimReport struct {
 // The expiry scan's last transition leaves keys at retired with their
 // private-key material still in place: LocalSigner's encrypted
 // pki_local_keys rows accumulate forever, and the vault/kmsaws direct-sign
-// providers' keys stay live in the provider. That is deliberate -- this
-// module's AGENTS.md records the census finding P2-2 as assessed and
-// deferred precisely because destruction is a lifecycle-policy decision,
-// not a wiring detail, for three reasons this method turns into its
-// contract:
+// providers' keys stay live in the provider. That is deliberate --
+// destruction is a lifecycle-policy decision, not a wiring detail, for
+// three reasons this method turns into its contract:
 //
 //  1. Destroy under the direct-sign modes is REAL provider-side deletion
 //     (Vault deletes the Transit key outright; AWS KMS schedules deletion
 //     behind its enforced minimum 7-day pending window). The expiry scan
 //     must never do that by itself: ScanExpiry's own doc comment draws the
 //     module's boundary as "advances the state machine and publishes
-//     events, and NEVER pushes a key to any external system" -- the same
-//     "the module manages the state machine, the host owns every push"
-//     division docs/internal/22-pki.md's rotation section draws. Destroy
-//     on a direct-sign key IS a push to an external system, so it lives
-//     here, behind an explicit host call, not inside the jobs-driven scan.
+//     events, and NEVER pushes a key to any external system" -- the module
+//     manages the state machine and the host owns every push. Destroy on a
+//     direct-sign key IS a push to an external system, so it lives here,
+//     behind an explicit host call, not inside the jobs-driven scan.
 //  2. Whether, and how eagerly, retired material may be destroyed is a
 //     per-deployment policy. ReclaimRetired leaves that policy to the
 //     host: a deployment "enables reclamation" by calling this method on
@@ -76,26 +73,26 @@ type ReclaimReport struct {
 //     under this key is still offered for verification" -- by the time a
 //     key is retired, the module has no remaining use for its private
 //     material. No new post-retired state is needed for a host that
-//     reclaims deliberately; whether automatic destruction needs one is a
-//     question this round records rather than answers (see AGENTS.md's
-//     round entry).
+//     reclaims deliberately; whether automatic destruction needs one is an
+//     open question the module leaves unanswered.
 //
 // # What Destroy means per implementation
 //
 // This method cannot know what an implementation's Destroy does -- that is
 // the Signer seam's own business, and each implementation's Destroy doc
 // comment says it plainly: LocalSigner physically deletes the encrypted
-// pki_local_keys row (real reclamation of the accumulating rows P2-2
-// measured); vault/kmsaws in ModeDirectSign ask the provider to remove the
-// key; vault/kmsaws in ModeEnvelope validate that the keyRef (which IS the
-// ciphertext, held in this table's own key_ref column) still decrypts and
-// otherwise no-op, because dropping the caller-held row is what actually
-// destroys an envelope-mode key. Reclaiming an envelope-mode deployment
-// therefore reclaims nothing -- by the module's own recorded boundary, the
-// ciphertext row's retention is a row-history decision for the host, not a
-// destroy this module can perform for it. The report's Destroyed list must
-// be read through that lens: it reports "Destroy answered nil", and what
-// nil means is the implementation's documented Destroy semantics.
+// pki_local_keys row (real reclamation of the rows that accumulate under a
+// retire-only lifecycle); vault/kmsaws in ModeDirectSign ask the provider
+// to remove the key; vault/kmsaws in ModeEnvelope validate that the keyRef
+// (which IS the ciphertext, held in this table's own key_ref column) still
+// decrypts and otherwise no-op, because dropping the caller-held row is
+// what actually destroys an envelope-mode key. Reclaiming an
+// envelope-mode deployment therefore reclaims nothing -- by the module's
+// own recorded boundary, the ciphertext row's retention is a row-history
+// decision for the host, not a destroy this module can perform for it. The
+// report's Destroyed list must be read through that lens: it reports
+// "Destroy answered nil", and what nil means is the implementation's
+// documented Destroy semantics.
 //
 // # What this method guarantees
 //
@@ -126,9 +123,7 @@ type ReclaimReport struct {
 //     against an already-destroyed provider key may answer with the
 //     provider's own error instead -- that lands in Failed, and the log
 //     names the kid so an operator can reconcile it against the provider's
-//     console. Providers that want the silent-convergence answer may adopt
-//     ErrKeyNotFound in a future edit, exactly as errors.go already notes
-//     for other codes).
+//     console).
 //   - A failed Destroy never aborts the walk: the failure is logged and
 //     reported in Failed, and the remaining keys are still processed. The
 //     failed key stays retired with its material in place, so the next

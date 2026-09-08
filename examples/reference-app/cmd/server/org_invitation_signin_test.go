@@ -12,24 +12,19 @@ import (
 )
 
 // org_invitation_signin_test.go is the end-to-end regression for the
-// invited-user half of the sign-in membership defect the membership round
-// fixed, kept honest by the tenantless-accept round that closed the STOP
-// item the earlier shape left behind: org invitation acceptance creates a
+// invited-user sign-in path: org invitation acceptance creates a
 // real, persistent org Membership row, and sign-in must keep honoring that
 // row -- in the process that accepted it and in every later process booted
-// against the same database. Before the membership round, authn's
-// membership answers came from an in-process roster that a real accepted
-// invitation was only mirrored into by an event subscription owned by the
-// accepting process (the sync-glue the org-backed sign_in_memberships.go
-// store replaced), so an invited user whose row predated the current
-// process -- the row survived every restart, the roster did not -- could
-// never sign in to the invited tenant: 403 authn.tenant_membership_required
+// against the same database. The membership answers come from org's own
+// rows, read live through the org-backed sign_in_memberships.go store; an
+// in-process roster alone would lose an accepted invitation's membership
+// when the accepting process exited, leaving the invited user unable to
+// sign in to the invited tenant: 403 authn.tenant_membership_required
 // forever, exactly the failure a real invited user hits on a deployed
 // instance that stopped and came back between their acceptance and their
 // first sign-in.
 //
-// The shape mirrors the same-boot regression the removed sync glue carried
-// (the deleted demo_org_membership_sync_test.go): the invitee is
+// The shape: the invitee is
 // registered through authn's real register route and NEVER granted a
 // membership by hand -- its only path to a membership in the INVITING
 // tenant is really accepting the invitation below. (Its registration does
@@ -43,21 +38,14 @@ import (
 // the accept request carries NO bearer token at all (the invitee holds no
 // token for the inviting tenant -- sign-in into it is impossible until
 // the acceptance below creates one) and names the REAL registered invitee
-// as the acting subject through the demo identity header. That used to be
-// impossible: org's accept handler resolved the invitation strictly inside
-// the tenant the caller's bearer token named, so a memberless invitee
-// could never accept, and this test had to borrow the inviter's
-// target-tenant token for the accept call (the accept flow's
-// memberless-caller limitation, recorded as a STOP item by the membership
-// round). Since the tenantless-accept round, org_acceptInvitation resolves
-// the invitation's own tenant from the token, server-side, and this app's
-// tenancy allowlist lets the accept path through unresolved -- the accept
-// below is the round's journey regression: it failed with 403
-// tenancy.tenant_unresolved before the round, and grants the invitee a
-// real sign-in-able membership after it. Boot one proves the accept
+// as the acting subject through the demo identity header.
+// org_acceptInvitation resolves the invitation's own tenant from the
+// token, server-side, and this app's tenancy allowlist lets the accept
+// path through unresolved -- a memberless invitee can therefore accept
+// with no bearer of its own, and the acceptance grants a real
+// sign-in-able membership. Boot one proves the accept
 // grants sign-in in process; the server shuts down completely, and boot
-// two against the same database proves the sign-in survives the restart
-// that used to kill it.
+// two against the same database proves the sign-in survives the restart.
 
 // registerOnlyRealAccount registers email through authn's real register
 // route and returns the user id authn assigned, WITHOUT ever granting the
@@ -167,8 +155,7 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// tenant the invitation will open. The refusal is the unified 401
 	// authn.invalid_credentials answer a wrong password also gets -- the
 	// account is real and the password right, but the login endpoint must
-	// not say so (this control used to pin the distinguishable 403
-	// authn.tenant_membership_required; the specific reason now lives in
+	// not say so (the specific reason lives in
 	// the login history, never the response). The account's reality is
 	// proven from both sides: the clinic sign-in above, and the same
 	// credentials answering 200 below, once the acceptance creates the
@@ -207,11 +194,10 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 	// authn's own sign-in into it refused the account above (the control
 	// leg), so the only credential the invitee holds for this tenant is the
 	// invitation token itself, and org's tenantless accept resolves the
-	// inviting tenant from it.
-	// This call used to borrow the inviter's target-tenant bearer instead
-	// (the STOP item the tenantless-accept round closes); on that pre-round
-	// code it fails with 403 tenancy.tenant_unresolved before org's handler
-	// is even reached. The membership this call creates is org's own real
+	// inviting tenant from it -- borrowing the inviter's target-tenant
+	// bearer would be impossible for a real memberless invitee, since
+	// org's accept path is what creates the membership that makes sign-in
+	// possible at all. The membership this call creates is org's own real
 	// row, and whether that row reaches authn's sign-in path is exactly
 	// what this test measures.
 	var membership orgMembership
@@ -248,8 +234,8 @@ func TestInvitationAccept_SignInSurvivesTheAcceptingProcess(t *testing.T) {
 
 	// THE property this regression exists to protect: the invited user's
 	// sign-in survives the process that accepted the invitation. The org
-	// row is real and persistent; before this round, the in-process roster
-	// authn actually read was empty on boot two, and this login answered
+	// row is real and persistent; an in-process roster would be empty on
+	// boot two, and this login would answer
 	// 403 authn.tenant_membership_required forever.
 	status, code, _ = demoLogin(t, srv2, inviteeEmail, inviteePassword, "tenant-acme")
 	if status != http.StatusOK {

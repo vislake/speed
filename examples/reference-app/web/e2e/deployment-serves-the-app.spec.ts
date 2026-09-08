@@ -3,16 +3,16 @@
  *
  * This is the acceptance gate for the plainest possible expectation a
  * person has of a deployed application: they type the address, and the
- * application appears. The reference app failed it -- the deployed image
- * carries the Go server alone, so the root path fell through to the API
- * middleware chain and answered a bare
- * `{"code":"tenancy.tenant_unresolved"}` with HTTP 403. Nothing else the
- * product does was reachable, because nothing rendered.
+ * application appears. Whether that holds depends on what the image
+ * serves at the root path -- an HTML document, not a fall-through to
+ * the API middleware chain answering `{"code":
+ * "tenancy.tenant_unresolved"}` with HTTP 403, which is all nothing
+ * else the product does is reachable through.
  *
  * The spec is written to run against a REAL DEPLOYMENT, not against the
- * dev server the rest of the suite boots: the defect it guards lives in
- * what the image ships, and a dev server that serves index.html from
- * source can never see it. Point it at a deployment and it checks that
+ * dev server the rest of the suite boots: what the image ships is
+ * exactly what a dev server that serves index.html from source can
+ * never see. Point it at a deployment and it checks that
  * deployment:
  *
  *   E2E_BASE_URL=https://speed-reference-app.fly.dev pnpm test:e2e \

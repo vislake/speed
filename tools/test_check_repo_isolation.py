@@ -7,16 +7,16 @@ executables with no third-party dependencies" convention (tools/README.md's
 
     python3 tools/test_check_repo_isolation.py
 
-Regression coverage for the round that exempted internal/testutil and
-added the equivalent-suite rule:
+Regression coverage for the internal/testutil exemption and the
+equivalent-suite rule:
 
-  * internal/testutil is the repo-mandated home of shared test helpers
-    (root CLAUDE.md's Testing rule); test doubles there embed
-    dbkit.Repository[T] so OTHER packages' tests can exercise the real
-    base, and the checker must not demand a tenancytest.AssertIsolated
-    call beside them. test_internal_testutil_fakes_are_not_candidates
-    fails before the exemption (exit 1 on a module whose only embedding
-    lives under internal/testutil).
+  * internal/testutil is the repo-mandated home of shared test helpers;
+    test doubles there embed dbkit.Repository[T] so OTHER packages'
+    tests can exercise the real base, and the checker must not demand a
+    tenancytest.AssertIsolated call beside them.
+    test_internal_testutil_fakes_are_not_candidates fails before the
+    exemption (exit 1 on a module whose only embedding lives under
+    internal/testutil).
   * A repository embedding whose record cannot satisfy tenancytest's ID
     convention is covered by the in-package equivalent suite named
     Test<TypeName>_AssertIsolated (the smilesim shape).
@@ -130,10 +130,10 @@ class RunTests(unittest.TestCase):
 
     def test_internal_testutil_fakes_are_not_candidates(self):
         # The module's ONLY Repository embedding lives under
-        # internal/testutil (the shared-test-helpers home root CLAUDE.md's
-        # Testing rule mandates): nothing may be required of it, so the
-        # module passes with no test file at all. Fails before the
-        # internal/testutil exemption (the fake was reported uncovered).
+        # internal/testutil (the repo-mandated shared-test-helpers home):
+        # nothing may be required of it, so the module passes with no
+        # test file at all. Fails before the internal/testutil exemption
+        # -- without it, the fake is reported uncovered.
         root = self._root_with(self._module_files({
             "alpha/internal/testutil/fake.go": _FAKE_GO,
         }))

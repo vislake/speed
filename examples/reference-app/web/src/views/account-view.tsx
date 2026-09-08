@@ -23,16 +23,14 @@
  * convention the account-ui usage example's host uses, with the origin
  * read from the running page (window.location.origin) so a channel
  * whose callback lives on this app never points at a host that does
- * not resolve where the app runs. A real
- * deployment serves that route (its SPA fallback delivering index.html
- * and the code/state exchange routing into the binding fragment); this
- * round's shell serves no such route, so the bridge from a callback
- * path to the binding fragment stays the recorded follow-up, and the
- * browser journeys never click an add-area button (the unit journeys
- * do, with window.location stubbed -- see account-view.test.tsx). The
- * view's one navigation duty is the authorize click itself: the
- * section reports the channel's URL upward and the view performs
- * window.location.assign --
+ * not resolve where the app runs. The path-to-fragment bridge such a
+ * route would need -- the code/state exchange arriving at
+ * /callback/social/<provider> being routed into the binding fragment
+ * -- does not exist in this app, so the browser journeys never click
+ * an add-area button (the unit journeys do, with window.location
+ * stubbed -- see account-view.test.tsx). The view's one navigation
+ * duty is the authorize click itself: the section reports the
+ * channel's URL upward and the view performs window.location.assign --
  * the host's own act, never one the package performs -- after refusing
  * any URL whose protocol is not http(s) with the surface's coded error
  * text (see handleAuthorizeUrl).
@@ -68,9 +66,9 @@ import { REFERENCE_APP_NAMESPACE } from '../resources.js'
  * callback route lives on this app (its SPA fallback delivers the
  * binding fragment), so a channel whose redirect target points at some
  * other host is a channel whose authorization no one would ever land
- * back from. An earlier constant (https://app.example.test) named a
- * host that does not resolve anywhere the app runs; window.location.
- * origin is the one host that is guaranteed to be this page's own.
+ * back from. A hard-coded host would name a host that does not resolve
+ * anywhere the app runs; window.location.origin is the one host that
+ * is guaranteed to be this page's own.
  */
 const DEMO_APP_ORIGIN = window.location.origin
 

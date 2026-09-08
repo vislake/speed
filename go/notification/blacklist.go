@@ -18,14 +18,12 @@ const tablePlatformBlacklist = "platform_blacklist"
 // The two reasons mirror the two ways an address proves it cannot receive
 // messages: a recipient who marks a message as spam (complaint), and a
 // transport that reports the address is permanently undeliverable
-// (hard_bounce). The writers that produce these records -- the complaint
-// webhook and the delivery job's hard-failure leg -- belong to later rounds
-// (the delivery job of this round marks the tenant's own contact bounced
-// without touching the platform list; see contact.go's MarkBounced), under
-// AGENTS.md's "Platform-blacklist writers and bounce remediation"
-// deferral. In this round the table exists so the
-// platform-level record of a bad address has a home and an isolation proof
-// before any writer needs it.
+// (hard_bounce). The writers that would produce these records -- a
+// complaint webhook and the delivery job's hard-failure leg -- are not
+// implemented; the delivery job marks the tenant's own contact bounced
+// without touching the platform list (see contact.go's MarkBounced). The
+// table exists so the platform-level record of a bad address has a home
+// and an isolation proof before any writer needs it.
 const (
 	BlacklistReasonComplaint  = "complaint"
 	BlacklistReasonHardBounce = "hard_bounce"
@@ -36,10 +34,9 @@ const (
 //
 // # Data domain
 //
-// Platform data (docs/internal/04-data-and-tenancy.md's data-domain table):
-// an address that spams or hard-bounces is bad for every tenant of the
-// platform, not just the tenant that sent to it, so the record must be
-// visible to a query that scans across tenants (the future writer and the
+// Platform data: an address that spams or hard-bounces is bad for every
+// tenant of the platform, not just the tenant that sent to it, so the
+// record must be visible to a query that scans across tenants (the
 // deliverability checks that read it). PlatformBlacklist therefore
 // deliberately does NOT implement dbkit.TenantScoped -- no GetTenantID, no
 // embedded dbkit.TenantModel -- exactly as jobs' jobRecord and dbkit/audit's
@@ -48,13 +45,13 @@ const (
 // into every query, which is precisely the filter this domain must never
 // have). Its isolation is proven by tenancytest.AssertNotTenantScoped.
 //
-// TenantID is nevertheless a real column, written by the future writers
-// with the tenant whose send produced the record, and unenforced: it exists
-// so an operator can see where a blacklisted address was last encountered,
-// the same treatment jobs and audit give their own real tenant columns.
-// The schema defaults it to the empty-string sentinel (the audit
-// convention -- platform-level rows are never NULL); reads never filter on
-// it.
+// TenantID is nevertheless a real column -- written, when a writer exists,
+// with the tenant whose send produced the record -- and unenforced: it
+// exists so an operator can see where a blacklisted address was last
+// encountered, the same treatment jobs and audit give their own real
+// tenant columns. The schema defaults it to the empty-string sentinel (the
+// audit convention -- platform-level rows are never NULL); reads never
+// filter on it.
 //
 // # Shape
 //
@@ -99,8 +96,8 @@ func (PlatformBlacklist) TableName() string { return tablePlatformBlacklist }
 // against PlatformBlacklist even by accident -- the compile-time guarantee
 // that this platform-domain table never acquires tenant scoping. It queries
 // the plain *gorm.DB dbkit.Open returns directly, the documented pattern
-// for identity and platform data (see go/dbkit/AGENTS.md's "Known
-// limitations"), and never reaches for db.Table, db.Model or db.Raw.
+// for identity and platform data, and never reaches for db.Table, db.Model
+// or db.Raw.
 type PlatformBlacklistRepository struct {
 	db *gorm.DB
 }

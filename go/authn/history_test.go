@@ -102,7 +102,7 @@ func TestService_RevokeSession_OwnDevice_Succeeds(t *testing.T) {
 }
 
 // TestService_RevokeSession_SomebodyElsesSession_ReturnsSessionNotFound is
-// the round's no-existence-disclosure test: revoking a session id that is
+// the no-existence-disclosure test: revoking a session id that is
 // real, but belongs to a different account, must answer exactly like
 // revoking one that does not exist at all -- see ErrSessionNotFound's own
 // doc comment. A caller must never be able to learn that a session id is
@@ -178,7 +178,7 @@ func TestService_RevokeOtherSessions_KeepsCurrentRevokesRest(t *testing.T) {
 // other operation through to the wrapped store -- so registration, login
 // and the rate limiter keep working on it while the per-session
 // revocation-list write the manager performs fails, which is the precise
-// mid-way failure this file's P3-24 test needs.
+// mid-way failure the revoke-others batch test below needs.
 type failingRevocationSetKV struct {
 	pkgcore.KVStore
 }
@@ -192,15 +192,15 @@ func (k failingRevocationSetKV) Set(ctx context.Context, key string, value []byt
 }
 
 // TestService_RevokeOtherSessions_MidwayFailureStillReportsTheAccurateCount
-// is the P3-24 regression: a revoke-others batch whose revocation-list
+// pins the batch failure shape: a revoke-others batch whose revocation-list
 // writes fail must still report how many sessions were ACTUALLY revoked,
 // and must not abandon the sessions it had not reached yet. The fixture
 // runs in immediate mode against a key-value store that refuses every
 // revocation-list write, so each session's row flip and refresh-token
-// invalidation succeed and the list entry fails -- before the fix, the very
-// first failure aborted the loop and the service answered (0, err) although
-// the row had already been revoked, losing the count and leaving the rest
-// of the batch unreached.
+// invalidation succeed and the list entry fails. A batch that aborted on
+// the very first failure would answer (0, err) although the row had already
+// been revoked -- losing the count and leaving the rest of the batch
+// unreached.
 func TestService_RevokeOtherSessions_MidwayFailureStillReportsTheAccurateCount(t *testing.T) {
 	t.Parallel()
 

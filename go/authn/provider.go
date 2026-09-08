@@ -55,8 +55,7 @@ const (
 )
 
 // ExternalIdentity is what a provider reports about the person who just
-// authorized. It is the shape docs/internal/05-identity-and-access.md pins,
-// and every field of it is UNTRUSTED input from a third party.
+// authorized. Every field of it is UNTRUSTED input from a third party.
 //
 // EmailVerified is the field the whole account-linking rule turns on, and it
 // means one specific thing: "the provider asserts it checked that this person
@@ -69,7 +68,8 @@ type ExternalIdentity struct {
 
 	// ExternalID is the provider's stable unique identifier for the
 	// person. It must be stable across logins and across applications --
-	// see the WeChat unionid rule in this module's AGENTS.md.
+	// for WeChat that means the unionid, never the app-scoped openid
+	// (provider_wechat.go).
 	ExternalID string
 
 	// Email is the address the provider reported, or empty.
@@ -108,9 +108,7 @@ type ExternalIdentity struct {
 // the one used at the authorization endpoint, and this module allows a
 // deployment to configure SEVERAL (a web origin and a mobile scheme, say),
 // checked against RedirectAllowlist. A provider that captured a single
-// redirect URI at construction could not serve both. This is the one place
-// the interface deviates from the sketch in
-// docs/internal/05-identity-and-access.md, which predates the allowlist rule.
+// redirect URI at construction could not serve both.
 type SocialProvider interface {
 	// Name returns the channel's Provider* constant.
 	Name() string

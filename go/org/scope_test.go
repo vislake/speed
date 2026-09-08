@@ -367,10 +367,10 @@ func TestScopeService_MemberNodeIDs_AfterAMove_FollowsTheSubtree(t *testing.T) {
 }
 
 // TestScopeService_MemberNodeIDs_AfterRestoreOfMovedAncestor_ResolvesUnderTheRealParent
-// is the consumer-visible half of the P1-org-restore-path proof: after the
-// four-step sequence (cascade-delete hub's subtree, restore hub, move hub
-// onto a new branch, restore hub's descendant), the descendant used to come
-// back LIVE under a stale Path naming hub's old location. rbac-shaped scope
+// is the consumer-visible half of the restore-path proof: the four-step
+// sequence (cascade-delete hub's subtree, restore hub, move hub onto a new
+// branch, restore hub's descendant) must not leave the descendant LIVE
+// under a stale Path naming hub's old location. rbac-shaped scope
 // resolution reads the tree through those very paths -- MemberNodeIDs is the
 // prefix scan a subtree grant is decided against -- so a membership anchored
 // at hub's REAL (new) position could not see the restored descendant, while

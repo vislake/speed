@@ -2,10 +2,10 @@
 // minimal SoftDeletable/TenantScoped model, its dbkit.Repository[T]-backed
 // FakeRepository, and NewParticipant, which wraps a FakeRepository into a
 // real pkgcore.RetentionParticipant -- the fake business-module
-// participant this round's own test suite registers to prove the
-// retention-sweep, right-to-erasure and export-gathering orchestration
-// end to end, without modifying any real business module (that is each
-// owning module's own, later decision).
+// participant the test suite registers to prove the retention-sweep,
+// right-to-erasure and export-gathering orchestration end to end, without
+// modifying any real business module (opting in is each owning module's
+// own decision).
 //
 // FakeNote mirrors go/dbkit/internal/testutil's SoftDeletableWidget
 // fixture as closely as a different-module package can: a tenant-scoped,

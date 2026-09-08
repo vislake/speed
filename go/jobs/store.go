@@ -21,10 +21,9 @@ const jobsTable = "jobs"
 
 // jobRecord is StandaloneQueue's persisted row shape. It deliberately does NOT
 // implement dbkit.TenantScoped — no GetTenantID method, and no embedded
-// dbkit.TenantModel, which would add one by promotion. Per
-// docs/internal/04-data-and-tenancy.md's data-domain table and
-// dbkit/AGENTS.md's "Known limitations", jobRecord is platform data, not
-// tenant data: a worker's dispatch query scans eligible Jobs across every
+// dbkit.TenantModel, which would add one by promotion. jobRecord is
+// platform data, not tenant data: a worker's dispatch query scans eligible
+// Jobs across every
 // tenant at once, in priority order, to enforce per-tenant concurrency
 // limits — an access pattern dbkit's tenant-scoping plugin and
 // Repository[T] (which filter every query to exactly one tenant, resolved
@@ -37,8 +36,7 @@ const jobsTable = "jobs"
 // TestJobRecord_NotTenantScoped (tenancytest.AssertNotTenantScoped) for the
 // standing proof of this property.
 //
-// This is queried through the plain *gorm.DB dbkit.Open returns, per
-// dbkit/AGENTS.md's documented pattern for identity/platform data, never
+// This is queried through the plain *gorm.DB dbkit.Open returns, never
 // through dbkit.Repository[T] (whose generic constraint requires
 // TenantScoped and could not compile against this type even by accident).
 type jobRecord struct {
@@ -97,9 +95,8 @@ func (jobRecord) TableName() string { return jobsTable }
 // the payload and result columns hold arbitrary bytes, whose column type
 // differs between the two dialects — BLOB on SQLite, BYTEA on PostgreSQL,
 // which has no BLOB type at all (a BLOB-typed CREATE TABLE fails on
-// PostgreSQL with `type "blob" does not exist`, the same column-type bug
-// class go/integration's webhook-secret and go/org's invitation-email
-// fixes already established). ensureJobsSchema therefore selects the
+// PostgreSQL with `type "blob" does not exist`; byte columns must be
+// typed per dialect). ensureJobsSchema therefore selects the
 // dialect's own statement at Start time (createJobsTableSQL, below), the
 // same db.Name() branch ensureJobsClaimedByColumn already uses. Every
 // other type in the two statements — VARCHAR/INTEGER/BIGINT/TIMESTAMP —
@@ -108,9 +105,8 @@ func (jobRecord) TableName() string { return jobsTable }
 // statements so they cannot drift apart. The claim that this schema runs
 // on both dialects is proven, not assumed, by the module's PostgreSQL
 // integration leg (integration_test/postgres_schema_test.go), which boots
-// a real StandaloneQueue over a real PostgreSQL: the earlier per-column
-// bug survived precisely because SQLite-only coverage never executes the
-// DDL on the dialect that rejects it.
+// a real StandaloneQueue over a real PostgreSQL: SQLite-only coverage
+// alone would never execute the DDL on the dialect that rejects it.
 func createJobsTableSQL(dbName string) string {
 	if dbName == "sqlite" {
 		return createJobsTableSQLSQLite
@@ -231,8 +227,8 @@ const createJobsIdempotencySQL = `CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_ten
 // judges the incumbent's liveness by a number the INCUMBENT wrote, never by
 // a number derived from the taker's own configuration: two queues
 // configured with different poll intervals can no longer mistake each
-// other's live registrations for crashed ones (see AGENTS.md's Known
-// limitations). A row whose stale_at is NULL was written by a release that
+// other's live registrations for crashed ones. A row whose stale_at is
+// NULL was written by a release that
 // predates the column; such a row's owner cadence is unknowable, so
 // acquireWriterRegistration judges it by a deliberately conservative fixed
 // window over last_heartbeat (legacyRegistrationStaleAfter) instead.
@@ -385,11 +381,11 @@ func releaseWriterRegistration(ctx context.Context, db *gorm.DB, owner string) e
 func newWriterOwner() string { return uuid.NewString() }
 
 // ensureJobsSchema creates the jobs table and its indexes if they do not
-// already exist, adds the claimed_by column to a jobs table a pre-fix
+// already exist, adds the claimed_by column to a jobs table an older
 // release created without it, creates the queue_writers single-writer
-// table, and adds the stale_at column to a queue_writers table a release
-// predating it created (ensureQueueWritersStaleAtColumn). Safe to call
-// every time Start runs. The CREATE TABLE statement is chosen by dialect
+// table, and adds the stale_at column to a queue_writers table an older
+// release created without it (ensureQueueWritersStaleAtColumn). Safe to
+// call every time Start runs. The CREATE TABLE statement is chosen by dialect
 // (createJobsTableSQL): the byte columns' type differs between SQLite
 // (BLOB) and PostgreSQL (BYTEA), so there is no single-statement spelling
 // of the table.
@@ -587,21 +583,18 @@ func findByID(ctx context.Context, db *gorm.DB, id JobID) (*jobRecord, error) {
 // rank-1 (highest-priority, oldest) row before ANY tenant contributes a
 // second one, its rank-2 before any third, and so on -- exactly the
 // "round-robin, then Priority within a tenant's own share" fairness
-// dispatchOnce's own comment already claimed for the whole dispatch tick,
-// now actually true at the SELECT itself rather than only at the
-// concurrency-admission step downstream of it. Priority does not order
-// across tenants: within one wave position (equal tenant_rank), the outer
-// query's two remaining keys -- priority DESC, then scheduled_at ASC --
-// decide which tenant's head-of-line row leads, but a tenant's rank-2 row
-// never overtakes another tenant's rank-1 one whatever the two priorities
-// (pinned by store_test.go's
+// dispatchOnce describes for the whole dispatch tick, enforced at the
+// SELECT itself rather than only at the downstream concurrency-admission
+// step. Priority does not order across tenants: within one wave position
+// (equal tenant_rank), the outer query's two remaining keys -- priority
+// DESC, then scheduled_at ASC -- decide which tenant's head-of-line row
+// leads, but a tenant's rank-2 row never overtakes another tenant's
+// rank-1 one whatever the two priorities (pinned by store_test.go's
 // TestClaimCandidates_FairShareRotationAcrossTenants_PriorityWithinTenantShare).
-// ROW_NUMBER() OVER (...) is
-// standard SQL, supported identically by both dbkit dialects (SQLite 3.25+
-// and PostgreSQL) — the "portable across both dialects" discipline
-// createJobsTableSQL's own doc comment already applies to this table's
-// schema applies here too, even though only SQLite is exercised in the
-// standalone deployment mode today.
+// ROW_NUMBER() OVER (...) is standard SQL, supported identically by both
+// dbkit dialects (SQLite 3.25+ and PostgreSQL), so the query stays within
+// the portable-across-both-dialects discipline the schema statements
+// follow; only SQLite is exercised in the standalone deployment mode.
 const claimCandidatesSQL = `
 	SELECT id, type, tenant_id, payload, idempotency_key, status, priority,
 	       progress_pct, progress_msg, result, error_message, attempts,
@@ -627,15 +620,15 @@ const claimCandidatesSQL = `
 // than every other tenant's own eligible rows, would fill the ENTIRE
 // candidate window every tick, so a different tenant's eligible-and-older
 // row would never be selected at all — not merely delayed — for as long as
-// the flooding tenant's backlog stays at or above limit. This was a real,
-// reproduced gap (see candidate_window_fairness_test.go's
+// the flooding tenant's backlog stays at or above limit. The selection gap
+// is distinct from the per-tenant CONCURRENCY-admission fairness the
+// concurrency test (TestPerTenantConcurrencyLimiting) proves: that test
+// only ever exercises backlogs far smaller than claimBatchSize, so it
+// could never catch a candidate-SELECTION starvation gap. The selection
+// gap itself is pinned by candidate_window_fairness_test.go's
 // TestDispatchOnce_CandidateWindowDoesNotStarveOtherTenants, which fails
-// against the naive "ORDER BY priority DESC, scheduled_at ASC LIMIT limit"
-// query this replaced), distinct from — and previously masked by
-// proximity to — the per-tenant CONCURRENCY-admission fairness
-// TestPerTenantConcurrencyLimiting already proved: that test only ever
-// exercises backlogs far smaller than claimBatchSize, so it could never
-// have caught a candidate-SELECTION starvation gap this shallow.
+// against the naive "ORDER BY priority DESC, scheduled_at ASC LIMIT
+// limit" query.
 func claimCandidates(ctx context.Context, db *gorm.DB, now time.Time, limit int) ([]jobRecord, error) {
 	var recs []jobRecord
 	err := db.WithContext(ctx).
@@ -784,8 +777,8 @@ func fitDescriptiveText(ctx context.Context, jobID, column string, v string, max
 // stale "I am working" stamp on a Job that is visibly cancelled or finished
 // -- and a write from an attempt whose row another writer took over must
 // not land on the new owner's row either. updateProgress reports no
-// RowsAffected to its caller, exactly as before: the no-op is the write's
-// answer, not an error.
+// RowsAffected to its caller: the no-op is the write's answer, not an
+// error.
 func updateProgress(ctx context.Context, db *gorm.DB, owner string, id string, pct int, msg string) error {
 	msg = fitDescriptiveText(ctx, id, "progress_msg", msg, progressMsgColumnRunes)
 	return db.WithContext(ctx).Model(&jobRecord{}).
@@ -914,9 +907,9 @@ func markCancelled(ctx context.Context, db *gorm.DB, id string, now time.Time) e
 
 // resetInterruptedRecords recovers from an unclean process exit: any row
 // still StatusRunning at Start time cannot actually be running (this
-// process just started), so it is moved back to StatusPending —
-// re-attempted, exactly as docs/internal/07-platform-services.md requires:
-// a restarted process must recover in-flight work, not lose it. Attempts
+// process just started), so it is moved back to StatusPending and
+// re-attempted: a restarted process must recover in-flight work, not lose
+// it. Attempts
 // and StartedAt are left as-is: only an attempt the worker handoff actually
 // started (markAttemptStarted) ever incremented them, so this recovery
 // never grants an extra attempt beyond MaxRetries and never counts an

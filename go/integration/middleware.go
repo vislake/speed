@@ -62,12 +62,11 @@ func AuthenticatedAPIKeyFromContext(ctx context.Context) (*AuthenticatedAPIKey, 
 // HeaderAPIKey, authenticates it, and on success attaches both the resolved
 // tenant (pkgcore.WithTenant) and the full *AuthenticatedAPIKey (retrievable
 // via AuthenticatedAPIKeyFromContext) to the request context before calling
-// next -- exactly the shape docs/internal/07-platform-services.md's design
-// implies for "authenticating an inbound request with an API key" (the gap
-// this round closes; see AGENTS.md's "In scope round 6" section).
+// next -- exactly the shape the design implies for "authenticating an
+// inbound request with an API key".
 //
 // It holds a *Module, not a *Service, for the identical reason Handler does
-// (handler.go's own "Round-1-only, and built differently" doc comment):
+// (handler.go's own doc comment):
 // go/integration's own Service is built in Module.Attach, strictly after
 // Bootstrap's Register phase -- too late for a middleware a host may want to
 // construct and wire during Register, alongside every other module's own

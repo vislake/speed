@@ -17,9 +17,9 @@ import (
 const errorContentType = "application/json"
 
 // Header names HTTPGuard.Middleware sets on a denied (429) response, on top
-// of the standard Retry-After. docs/internal/07-platform-services.md asks
-// for quota response headers without naming them, so this module picks the
-// conventional X-RateLimit-* trio -- Remaining and Reset mirroring GitHub's
+// of the standard Retry-After. The module picks the conventional
+// X-RateLimit-* trio for the quota-response-header requirement --
+// Remaining and Reset mirroring GitHub's
 // own widely-copied semantics for both names (X-RateLimit-Remaining counts
 // down, X-RateLimit-Reset names the instant the window resets as a Unix
 // epoch timestamp in seconds, NOT a seconds-until-reset countdown -- the
@@ -48,14 +48,13 @@ const (
 // fixed strings) without HTTPGuard importing anything about either.
 type Extractor func(r *http.Request) (tenantKey, apiKeyID string)
 
-// HTTPGuard is the HTTP-specific translation layer
-// docs/internal/07-platform-services.md's own text assigns to this module:
-// go/ratelimit's Decision is protocol-agnostic pure data, and translating a
-// denied Decision into a 429 response is integration's own handler-layer
-// job. go/ratelimit.Decision itself carries no notion of headers or status
-// codes (see that type's own doc comment), so this is deliberately the one
-// place in this module that knows what a Decision means as an HTTP
-// response.
+// HTTPGuard is the HTTP-specific translation layer of this module's
+// rate-limiting composition: go/ratelimit's Decision is protocol-agnostic
+// pure data, and translating a denied Decision into a 429 response is
+// integration's own handler-layer job. go/ratelimit.Decision itself
+// carries no notion of headers or status codes (see that type's own doc
+// comment), so this is deliberately the one place in this module that
+// knows what a Decision means as an HTTP response.
 type HTTPGuard struct {
 	limiter   *LayeredLimiter
 	globalKey string

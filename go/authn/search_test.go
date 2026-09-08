@@ -89,10 +89,10 @@ func TestUserRepository_Search_DisplayNamePrefix_CaseInsensitive(t *testing.T) {
 }
 
 // TestUserRepository_Search_DisplayNamePrefix_EscapesLikeMetacharacters is
-// the regression test for the bug a naive db.Where("... LIKE ?", prefix+"%")
+// the regression test for the shape a naive db.Where("... LIKE ?", prefix+"%")
 // would have: a display name containing a literal '%' or '_' would let
 // those characters act as SQL wildcards instead of being matched literally,
-// so a search for "50% off" would (before the fix) also match completely
+// so a search for "50% off" would also match completely
 // unrelated names like "50X off". It fails on the unescaped implementation
 // and passes once escapeLikePattern is applied.
 func TestUserRepository_Search_DisplayNamePrefix_EscapesLikeMetacharacters(t *testing.T) {

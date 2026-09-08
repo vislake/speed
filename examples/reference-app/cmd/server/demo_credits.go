@@ -1,20 +1,18 @@
 // The reference app's demo glue for go/billing's CreditService: a
 // boot-time seed that grants each demo tenant a starting credit balance,
-// standing in for docs/internal/15-roadmap.md's M2 exit condition's own
-// buy-a-credit-pack leg -- a real Stripe/Alipay/WeChat sandbox charge --
-// WITHOUT actually performing one.
+// standing in for a real buy-a-credit-pack leg -- a real
+// Stripe/Alipay/WeChat sandbox charge -- WITHOUT actually performing one.
 //
-// This is deliberately, explicitly NOT a real payment: go/billing/gateway/
-// AGENTS.md records that no live credentials exist for any of the three
-// providers in this environment, so a genuine "purchase a credit pack"
+// This is deliberately, explicitly NOT a real payment: no live
+// credentials exist for any of the three providers in this environment,
+// so a genuine "purchase a credit pack"
 // flow cannot be built here without fabricating one. What this file ships
 // instead is the mechanism's OTHER end -- a tenant that already holds
 // credits, exactly the state a successful purchase would have left behind
 // -- so internal/smilesim's real reserve/confirm/refund wiring
 // (internal/smilesim/service.go's own "Credit accounting" section) has
 // something real to reserve against. The credit-pack-purchase leg itself
-// stays a named, tracked gap: see go/billing/AGENTS.md's own Scope table
-// and this round's PR description.
+// stays unwired: a real charge is out of this demo's scope.
 package main
 
 import (
@@ -38,7 +36,7 @@ const demoSimulationCreditGrant int64 = 1000
 // issues -- the boot-time demo seed's (seedDemoCredits) and the
 // self-service clinic provisioning path's (self_service.go's provision)
 // alike -- so a read of the ledger (CreditService.Balance's own
-// transaction history, or a later round's billing-history UI) can tell
+// transaction history, or a billing-history UI) can tell
 // this app's seed grant apart from a real purchase or an in-app spend at
 // a glance.
 const demoCreditGrantReason = "demo:seed"

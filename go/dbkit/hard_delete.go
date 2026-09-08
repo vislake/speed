@@ -30,19 +30,22 @@ var ErrHardDeleteRequiresSystemContext = apperr.Invalid("dbkit.hard_delete_requi
 // update or delete — so a soft-deleted row is just as deletable
 // as a live one, and this method never consults SoftDeletable at all — a
 // soft-deleted row is not a security boundary, and HardDelete is the
-// repository path that actually erases it (docs/internal/04-data-and-tenancy.md's
-// delete-semantics section, §3). It returns ErrRecordNotFound, not a
+// repository path that actually erases it. It returns ErrRecordNotFound,
+// not a
 // generic gorm error and not a silent no-op success, when nothing matches —
 // including when id exists under a different tenant. No migration is
 // involved: HardDelete issues the same physical DELETE Delete always issued
 // for a non-SoftDeletable T, so it changes no DDL and no table structure.
 //
 // HardDelete is the restricted, irreversible half of the delete semantics,
-// the sequential-next phase after the mark-delete round. Its two intended
-// callers are retention-expiry cleanup and compliance right-to-erasure
-// (the M4 compliance module), both acting through a whitelisted module;
-// it exists for rows that must actually be gone — rows whose SoftDeletable
-// mark alone is not enough.
+// the compliance-erasure counterpart to the mark-delete. Its two intended
+// callers are retention-expiry cleanup and compliance right-to-erasure,
+// both acting through a whitelisted module; it exists for rows that must
+// actually be gone — rows whose SoftDeletable mark alone is not enough.
+// The orchestration around it — retention-window configuration, the
+// cleanup schedule, right-to-erasure intake — does not exist yet; until
+// then the method serves hosts that need a row actually gone behind the
+// gate.
 //
 // The system-context gate is a necessary condition, never a sufficient
 // one, and dbkit checks only the presence of a system context, never who

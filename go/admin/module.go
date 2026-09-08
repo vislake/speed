@@ -31,86 +31,86 @@ const moduleName = "admin"
 const apiPath = "/api/v1/admin"
 
 // The resource:action permissions admin contributes to the platform's
-// permission catalog, all evaluated in rbac.SystemDomain -- "who may enter
-// the admin console" is a permission like any other (D1), so enforcement is rbac's job (the
-// reference app's own reg.Routes gate, mirroring how it gates notes and
-// storage) and never this module's.
+// permission catalog, the vocabulary admin's own routes are evaluated
+// against in rbac.SystemDomain -- "who may enter the admin console" is a
+// permission like any other, so enforcement is rbac's job (the host's own
+// reg.Routes gate, mirroring how it gates notes and storage) and never
+// this module's.
 const (
-	// PermissionAccess gates reading the tenant ledger (D3) -- the coarse
+	// PermissionAccess gates reading the tenant ledger -- the coarse
 	// "may this person use the admin console at all" permission every
 	// other admin operation is layered above.
 	PermissionAccess = "admin:access"
 
 	// PermissionTenantsManage gates PATCH /api/v1/admin/tenants/{id} --
-	// renaming, suspending or resuming a ledger row (D3 + D4's
-	// record-only half).
+	// renaming, suspending or resuming a ledger row.
 	PermissionTenantsManage = "admin:tenants_manage"
 
-	// PermissionSearchUsers gates D6's cross-tenant user search and
+	// PermissionSearchUsers gates the cross-tenant user search and
 	// membership composition.
 	PermissionSearchUsers = "admin:search_users"
 
-	// PermissionImpersonate gates D5's whole impersonation pipeline: start,
-	// end and list.
+	// PermissionImpersonate gates the whole impersonation pipeline:
+	// start, end and list.
 	PermissionImpersonate = "admin:impersonate"
 
-	// PermissionAuditRead gates D7's audit-query HTTP shell.
+	// PermissionAuditRead gates the audit-query HTTP surface.
 	PermissionAuditRead = "admin:audit_read"
 
-	// PermissionAuditExport gates D7's export leg (POST
+	// PermissionAuditExport gates the export leg (POST
 	// /api/v1/admin/audit-events/export) -- kept distinct from
 	// PermissionAuditRead since exporting a tenant's complete audit
 	// trail as a downloadable package is a materially stronger action
 	// than merely reading it through the paginated query surface.
 	PermissionAuditExport = "admin:audit_export"
 
-	// PermissionRolesManage gates D8's whole role-management surface:
+	// PermissionRolesManage gates the whole role-management surface:
 	// listing the declared-permission catalog, defining a role and
 	// binding it to a user.
 	PermissionRolesManage = "admin:roles_manage"
 
-	// PermissionUsageRead gates D9's cross-tenant usage/billing dashboard.
+	// PermissionUsageRead gates the cross-tenant usage/billing dashboard.
 	PermissionUsageRead = "admin:usage_read"
 
-	// PermissionNotificationsRead gates D10's cross-tenant notification
+	// PermissionNotificationsRead gates the cross-tenant notification
 	// send-record search.
 	PermissionNotificationsRead = "admin:notifications_read"
 )
 
-// The audit actions admin contributes to the audit vocabulary --
-// docs/internal/23-admin.md section 5's three round-1 actions.
-// admin.role.assigned/revoked are deliberately NOT declared here: D8 (role
-// management) is round 2's work, per this file's own Register doc comment.
+// The audit actions admin contributes to the audit vocabulary.
+// admin.role.assigned/revoked are deliberately NOT declared here: role
+// management wraps rbac.Service, whose own AssignRole/RevokeRole publish
+// rbac.role_binding.assigned/revoked (this file's own Register doc
+// comment).
 const (
 	AuditActionTenantStatusChanged  = "admin.tenant.status_changed"
 	AuditActionImpersonationStarted = "admin.impersonation.started"
 	AuditActionImpersonationEnded   = "admin.impersonation.ended"
 
 	// AuditActionAuditExport is emitted by ExportService once a tenant's
-	// audit-event export actually completes (P1-2's fix): exporting a
-	// tenant's full audit history is itself a security-relevant action,
-	// and without this the export left no trace of "who exported which
-	// tenant, when" anywhere in the audit trail.
+	// audit-event export actually completes: exporting a tenant's full
+	// audit history is itself a security-relevant action, and without this
+	// the export would leave no trace of "who exported which tenant, when"
+	// anywhere in the audit trail.
 	AuditActionAuditExport = "admin.audit_export"
 )
 
 // SystemPurposeAdminCrossTenant is the pkgcore.SystemPurpose admin
-// registers for every cross-tenant operation it performs under D2's
-// mechanism: D6's user search AND membership composition (both halves of
-// D6 take the audited wrapper -- see search.go), D7's cross-tenant audit
-// query, D5's cross-tenant notification dispatch to an impersonation
-// target, D9's per-tenant usage dashboard and D10's cross-tenant
-// send-record search. One purpose covers all of them, since they are all
-// instances of the same underlying operation D2 describes -- "admin
-// acting across the tenant boundary it does not itself belong to" -- and
-// docs/internal/23-admin.md's D2 section registers exactly one purpose
-// for this module.
+// registers for every cross-tenant operation it performs under the
+// audited system-context wrapper: the user search and its membership
+// composition (both halves take the audited wrapper -- see search.go),
+// the cross-tenant audit query, the cross-tenant notification dispatch to
+// an impersonation target, the per-tenant usage dashboard and the
+// cross-tenant send-record search. One purpose covers all of them, since
+// they are all instances of the same underlying operation -- "admin
+// acting across the tenant boundary it does not itself belong to".
 const SystemPurposeAdminCrossTenant pkgcore.SystemPurpose = "admin.cross_tenant"
 
-// NotificationTypeImpersonationStarted is the notification type D5
-// registers: the mandatory, non-unsubscribable security notification sent
-// to the target user the moment an impersonation grant is started -- see
-// Register's own reg.Notifications.Add call below for the registration and
+// NotificationTypeImpersonationStarted is the notification type the
+// impersonation pipeline registers: the mandatory, non-unsubscribable
+// security notification sent to the target user the moment an
+// impersonation grant is started -- see Register's own
+// reg.Notifications.Add call below for the registration and
 // locales/{zh-CN,en-US}.toml for its bilingual templates (there is no
 // separate notifications.go file; both live here and in the locale
 // bundles).
@@ -123,17 +123,17 @@ const NotificationTypeImpersonationStarted = "admin.impersonation_started"
 // Unsubscribable field, false here (see Register's Add call).
 const notificationGroupSecurity = "security"
 
-// Module implements pkgcore.Module for go/admin: the operations-console
-// backend docs/internal/23-admin.md designs -- D3's tenant ledger, D5's
-// impersonation pipeline, D6's cross-tenant user search and D7's
-// audit-query HTTP shell, this round's four in-scope decisions.
+// Module implements pkgcore.Module for go/admin, the operations-console
+// backend: the tenant ledger, the impersonation pipeline, cross-tenant
+// user search, the audit-query HTTP surface with its asynchronous export
+// leg, role management, the usage/billing dashboard and notification
+// send-record search.
 //
-// admin sits at the top of the module dependency graph (root CLAUDE.md's
-// own diagram: "... -> compliance -> admin"), so unlike most business
-// modules it is explicitly permitted to import the concrete packages of
-// every module below it directly, rather than through a structurally-typed,
-// no-import seam -- see this file's own Register doc comment and this
-// round's final report for exactly which imports that covers.
+// admin sits at the top of the module dependency graph, so unlike most
+// business modules it is explicitly permitted to import the concrete
+// packages of every module below it directly, rather than through a
+// structurally-typed, no-import seam -- see this file's own Register doc
+// comment for exactly which imports that covers.
 type Module struct {
 	db *gorm.DB
 
@@ -152,9 +152,9 @@ type Module struct {
 	orgModule          *org.Module
 	complianceModule   *compliance.Module
 	notificationModule *notification.Module
-	meteringModule     *metering.Module // optional, D9 -- see WithMetering
-	billingModule      *billing.Module  // optional, D9 -- see WithBilling
-	queue              jobs.Queue       // mandatory, D7's export leg -- see WithQueue
+	meteringModule     *metering.Module // optional -- see WithMetering
+	billingModule      *billing.Module  // optional -- see WithBilling
+	queue              jobs.Queue       // mandatory -- see WithQueue
 
 	handler *Handler
 }
@@ -162,7 +162,7 @@ type Module struct {
 // Option configures a Module at construction time.
 type Option func(*Module)
 
-// WithAuthn wires the *authn.Module D6's cross-tenant user search reads
+// WithAuthn wires the *authn.Module the cross-tenant user search reads
 // through. Without it, Register returns ErrAuthnServiceRequired.
 //
 // This takes the *authn.Module, NOT its *authn.Service directly, and
@@ -179,52 +179,52 @@ func WithAuthn(authnModule *authn.Module) Option {
 	return func(m *Module) { m.authnModule = authnModule }
 }
 
-// WithOrg wires the *org.Module D6's membership composition (D2's
-// per-tenant loop over org.MemberService.Get) reads through. Without it,
-// Register returns ErrOrgModuleRequired.
+// WithOrg wires the *org.Module the search path's membership composition
+// (the per-tenant loop over org.MemberService.Get) reads through. Without
+// it, Register returns ErrOrgModuleRequired.
 func WithOrg(orgModule *org.Module) Option {
 	return func(m *Module) { m.orgModule = orgModule }
 }
 
-// WithCompliance wires the *compliance.Module D7's audit-query HTTP shell
-// reads through (compliance.Module.AuditQuery()). Without it, Register
-// returns ErrComplianceModuleRequired.
+// WithCompliance wires the *compliance.Module the audit-query HTTP
+// surface reads through (compliance.Module.AuditQuery()). Without it,
+// Register returns ErrComplianceModuleRequired.
 func WithCompliance(complianceModule *compliance.Module) Option {
 	return func(m *Module) { m.complianceModule = complianceModule }
 }
 
-// WithNotification wires the *notification.Module D5's mandatory
+// WithNotification wires the *notification.Module the mandatory
 // impersonation-started security notification dispatches through. Without
 // it, Register returns ErrNotificationModuleRequired.
 func WithNotification(notificationModule *notification.Module) Option {
 	return func(m *Module) { m.notificationModule = notificationModule }
 }
 
-// WithQueue wires the jobs.Queue D7's export leg (POST
+// WithQueue wires the jobs.Queue the audit-export leg (POST
 // /api/v1/admin/audit-events/export) enqueues onto -- mandatory, like the
-// four options above: without it, Register returns ErrQueueRequired.
+// options above: without it, Register returns ErrQueueRequired.
 // compliance.ExportService.Export gathers, stores and delivers a tenant's
 // complete audit export in one call, which does not belong inside an HTTP
-// request's own timeout budget (root CLAUDE.md's asynchronous-work
-// discipline), so this module needs a queue exactly as go/storage's and
-// go/notification's own WithQueue/WithDeliveryQueue options do.
+// request's own timeout budget (long-running work never runs synchronously
+// inside a request), so this module needs a queue exactly as go/storage's
+// and go/notification's own WithQueue/WithDeliveryQueue options do.
 func WithQueue(queue jobs.Queue) Option {
 	return func(m *Module) { m.queue = queue }
 }
 
-// WithMetering wires the *metering.Module D9's usage dashboard reads
+// WithMetering wires the *metering.Module the usage dashboard reads
 // go/metering's per-tenant UsageSummary rows through
-// (metering.Module.Summaries().List). OPTIONAL, unlike the five options
-// above: a host that never calls this simply gets no metering dimension
-// in D9's response rows (nil MeteringSummaries on every row) rather than
-// failing Bootstrap -- see UsageService's own doc comment for why
+// (metering.Module.Summaries().List). OPTIONAL, unlike the options above:
+// a host that never calls this simply gets no metering dimension in the
+// dashboard's response rows (nil MeteringSummaries on every row) rather
+// than failing Bootstrap -- see UsageService's own doc comment for why
 // go/metering and go/billing are each independently optional rather than
 // both mandatory the way authn/org/compliance/notification are.
 func WithMetering(meteringModule *metering.Module) Option {
 	return func(m *Module) { m.meteringModule = meteringModule }
 }
 
-// WithBilling wires the *billing.Module D9's usage dashboard reads
+// WithBilling wires the *billing.Module the usage dashboard reads
 // go/billing's per-tenant CreditBalance and active Subscription through
 // (billing.Module.Credits().Balance, billing.Module.Subscriptions().Active).
 // OPTIONAL, mirroring WithMetering's own doc comment exactly, the other
@@ -255,34 +255,32 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 	return m
 }
 
-// Tenants returns the module's TenantService (D3). It also implements
-// tenancy.TenantStatusResolver (D4) -- a host wires
+// Tenants returns the module's TenantService. It also implements
+// tenancy.TenantStatusResolver -- a host wires
 // tenancy.WithTenantStatusResolver(adminModule.Tenants()) into its own
 // tenancy.Middleware call to give tenant suspension real teeth.
 func (m *Module) Tenants() *TenantService { return m.tenants }
 
-// Impersonation returns the module's ImpersonationService (D5).
+// Impersonation returns the module's ImpersonationService.
 func (m *Module) Impersonation() *ImpersonationService { return m.impersonation }
 
-// Search returns the module's SearchService (D6). Nil until Register has
-// run.
+// Search returns the module's SearchService. Nil until Register has run.
 func (m *Module) Search() *SearchService { return m.search }
 
-// Roles returns the module's RoleService (D8). Every method on it fails
-// closed with ErrRBACServiceRequired until the host calls AttachRBAC --
-// see that method's own doc comment for when to call it.
+// Roles returns the module's RoleService. Every method on it fails closed
+// with ErrRBACServiceRequired until the host calls AttachRBAC -- see that
+// method's own doc comment for when to call it.
 func (m *Module) Roles() *RoleService { return m.roles }
 
-// Usage returns the module's UsageService (D9). Nil until Register has
-// run.
+// Usage returns the module's UsageService. Nil until Register has run.
 func (m *Module) Usage() *UsageService { return m.usage }
 
-// Export returns the module's ExportService (D7's export leg). Nil until
-// Register has run.
+// Export returns the module's ExportService (the audit-export leg). Nil
+// until Register has run.
 func (m *Module) Export() *ExportService { return m.exportSvc }
 
-// AttachRBAC gives the module's RoleService (D8) the *rbac.Service every
-// one of its methods delegates to. The host calls this exactly once,
+// AttachRBAC gives the module's RoleService the *rbac.Service every one
+// of its methods delegates to. The host calls this exactly once,
 // immediately after its own rbacModule.Attach(registry) succeeds -- a
 // call that, by rbac's own documented contract, must run strictly AFTER
 // pkgcore.Kernel.Bootstrap returns (Attach freezes the snapshot of every
@@ -301,21 +299,21 @@ func (m *Module) Export() *ExportService { return m.exportSvc }
 // RoleService method failing closed with ErrRBACServiceRequired rather
 // than panicking on a nil service.
 //
-// It also gives the impersonation pipeline (D5) the same *rbac.Service,
-// P2-3's fix: ImpersonationService.attachRBAC lets Start's live grants be
-// automatically ended when the administrator's own admin:impersonate
-// permission is later revoked (see impersonation_service.go's
-// endIfNoLongerPermitted for the mechanism) -- the identical
-// post-Bootstrap-only timing constraint applies, since the check calls
-// rbac.Service.Can. And because that automatic end is the only thing
-// standing between a revoked administrator and a still-live grant,
-// ImpersonationService.Start refuses with ErrRBACServiceRequired until
-// this call has run (impersonation_service.go's own rbacSvc doc comment)
-// -- the same fail-closed gate every RoleService method above applies, on
-// the very same seam. Calling this before Bootstrap, or not at all, thus
-// leaves D8's whole surface AND impersonation grant-starting failing
-// closed rather than a nil-service panic or a grant the module could
-// never automatically end.
+// It also gives the impersonation pipeline the same *rbac.Service:
+// ImpersonationService.attachRBAC lets a live grant be automatically
+// ended when the administrator's own admin:impersonate permission is
+// later revoked (see impersonation_service.go's endIfNoLongerPermitted
+// for the mechanism) -- the identical post-Bootstrap-only timing
+// constraint applies, since the check calls rbac.Service.Can. And because
+// that automatic end is the only thing standing between a revoked
+// administrator and a still-live grant, ImpersonationService.Start
+// refuses with ErrRBACServiceRequired until this call has run
+// (impersonation_service.go's own rbacSvc doc comment) -- the same
+// fail-closed gate every RoleService method above applies, on the very
+// same seam. Calling this before Bootstrap, or not at all, thus leaves
+// the whole role-management surface AND impersonation grant-starting
+// failing closed rather than a nil-service panic or a grant the module
+// could never automatically end.
 func (m *Module) AttachRBAC(svc *rbac.Service) {
 	m.roles.attach(svc)
 	m.impersonation.attachRBAC(svc)
@@ -352,8 +350,8 @@ func (m *Module) Migrations() embed.FS { return migrations.FS }
 // both supported languages with identical id sets.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module: admin's own OpenAPI fragment, the
-// sixth after notes, org, authn, storage and notification.
+// OpenAPISpec implements pkgcore.Module: admin's own OpenAPI fragment
+// (api/openapi.yaml).
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
 // Register implements pkgcore.Module. Per the interface's contract it only
@@ -363,21 +361,18 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // It refuses to proceed (before declaring anything) when a mandatory
 // With* option was never applied -- ErrAuthnServiceRequired,
 // ErrOrgModuleRequired, ErrComplianceModuleRequired,
-// ErrNotificationModuleRequired -- the same "fail Bootstrap with a named
-// missing seam" shape org's ErrEmailIndexerRequired and config's
-// ErrCipherRequired already use.
+// ErrNotificationModuleRequired or ErrQueueRequired, each naming the
+// option the host forgot.
 //
-// It declares the full round 1 + round 2 surface docs/internal/23-admin.md
-// and AGENTS.md's "Status: round 2 of 2 landed" both describe: all nine
-// permissions (PermissionAccess through PermissionNotificationsRead), all
-// four audit actions, D3/D5/D6/D7's read side, D7's export leg (the
-// jobTypeAuditExport job handler registered on reg.Jobs.Handle), D9's usage
-// dashboard and D10's send-record search wiring. admin.role.assigned/
-// admin.role.revoked (D8) remain the one deliberate exception: rbac's own
-// AssignRole/RevokeRole already publish rbac.role_binding.assigned/revoked,
-// and RoleService's wrapper calls them exactly as any other caller would,
-// so admin declares no audit action of its own for either -- an unchanged
-// round-1 decision, not an omission this round left unfinished.
+// It declares the module's full surface: the permission catalog
+// (PermissionAccess through PermissionNotificationsRead), the audit
+// actions, the jobTypeAuditExport job handler on reg.Jobs.Handle, the
+// usage dashboard and the send-record search wiring.
+// admin.role.assigned/admin.role.revoked are the one deliberate
+// exception: rbac's own AssignRole/RevokeRole already publish
+// rbac.role_binding.assigned/revoked, and RoleService's wrapper calls
+// them exactly as any other caller would, so admin declares no audit
+// action of its own for either.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if m.authnModule == nil {
 		return ErrAuthnServiceRequired
@@ -433,32 +428,27 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 		// declaration, never "unset") marks the boundary the impersonation
 		// notice must hold: its copy is static, so nothing about a start is
 		// parameterized and NOTHING may ride the dispatch's params channel
-		// to the recipient. Before this declaration existed the dispatch
-		// stuffed the operator's free-text reason and the administrator's
-		// user id into Params, and notification persisted them verbatim
-		// into the impersonated user's own inbox row and inbox API -- the
-		// P1 leak: the mandatory security notice handed the impersonated
-		// user the operator's "why am I looking at this account"
-		// justification and one party's identity data. notification
-		// enforces the declaration (ErrDispatchParamsNotAllowed at
-		// Dispatch, narrowing at delivery), so a future edit that wants to
-		// say anything per-start must extend this list consciously.
+		// to the recipient. An impersonation reason's mandatory semantics
+		// are exactly "why am I looking at this account", and the target is
+		// precisely the party an investigation must not brief, so the
+		// operator's free-text justification and either party's identity
+		// data must never land in the impersonated user's own inbox row or
+		// inbox API. notification enforces the declaration
+		// (ErrDispatchParamsNotAllowed at Dispatch, narrowing at delivery),
+		// so any per-start copy has to extend this list consciously.
 		RecipientVisibleParams: []string{},
-		// Unsubscribable: false is what makes D5's "mandatory,
-		// non-unsubscribable security notification" requirement REAL (P1-1's
-		// fix): pkgcore.NotificationType.Unsubscribable reports whether
-		// recipients may opt out (pkgcore/registry.go's own field doc), so a
-		// mandatory type must declare false -- the preference matrix then
-		// refuses an empty selection with notification.ErrPreferenceOptoutNotAllowed
-		// (the recipient may narrow channels but never switch the notification
-		// off entirely; go/notification/preference_service.go's Set, case 4).
-		// The earlier Unsubscribable: true read the field's plain-English
-		// sense instead of its actual semantics and silently let the target
-		// opt out of the one notification whose whole purpose is telling them
-		// an administrator is inside their account -- mirroring the wrong
-		// fixture (clinic's opt-out-able appointment reminder) rather than
-		// notification's own security-group types (preference_service_test.go's
-		// fixtureTypeSecurity, Unsubscribable: false).
+		// Unsubscribable: false is what makes the "mandatory,
+		// non-unsubscribable security notification" requirement REAL:
+		// pkgcore.NotificationType.Unsubscribable reports whether recipients
+		// may opt out (pkgcore/registry.go's own field doc), so a mandatory
+		// type must declare false -- the preference matrix then refuses an
+		// empty selection with notification.ErrPreferenceOptoutNotAllowed
+		// (the recipient may narrow channels but never switch the
+		// notification off entirely; go/notification/preference_service.go's
+		// Set, case 4). Reading the field's plain-English sense instead of
+		// its actual semantics would let the target opt out of the one
+		// notification whose whole purpose is telling them an administrator
+		// is inside their account.
 		Unsubscribable: false,
 	}); err != nil {
 		return err
@@ -489,11 +479,11 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	sendRecords.attach(bus)
 
 	reg.Events.Subscribe(org.EventNodeCreated, m.tenants.handleOrgNodeCreated)
-	// P2-3's fix: a live impersonation grant must not outlive its
-	// administrator's own admin:impersonate permission -- see
-	// impersonation_service.go's onRoleBindingRevoked/onRoleChanged for the
-	// mechanism, which only takes effect once Module.AttachRBAC has given
-	// it a real *rbac.Service to re-check against.
+	// A live impersonation grant must not outlive its administrator's own
+	// admin:impersonate permission -- see impersonation_service.go's
+	// onRoleBindingRevoked/onRoleChanged for the mechanism, which only
+	// takes effect once Module.AttachRBAC has given it a real *rbac.Service
+	// to re-check against.
 	reg.Events.Subscribe(rbac.EventRoleBindingRevoked, m.impersonation.onRoleBindingRevoked)
 	reg.Events.Subscribe(rbac.EventRoleChanged, m.impersonation.onRoleChanged)
 

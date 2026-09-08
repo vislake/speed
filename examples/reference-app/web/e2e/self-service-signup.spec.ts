@@ -1,25 +1,14 @@
 /**
  * That a practice which signs itself up can actually get in.
  *
- * The sign-in surface offers "No account yet? Register", the form works,
- * and the product then says "Account created. Sign in with the
- * credentials you just registered." Doing exactly that is answered with
- * "Your account is not a member of this organization", and the screen
- * offers nothing further: no way to create a practice, no way to ask for
- * an invitation, no explanation. The product invites a person in, tells
- * them what to do next, and then refuses them for doing it.
- *
- * That is worse than a missing feature. A missing feature is understood;
- * this reads as a broken product, and every prospect who takes the
- * offered path leaves with that impression.
- *
- * The gate below encodes the direction chosen for it: registration is
- * self-service, and registering creates the practice its registrant owns.
- * A person completes the journey the surface offers -- register, sign in,
- * work -- without an administrator anywhere in it. The two halves are
- * asserted separately on purpose: that they get IN (a tenant, a frame),
- * and that they get in as someone who can DO something (the owner of a
- * new practice, not a spectator in someone else's).
+ * Registration is self-service: registering creates the practice its
+ * registrant owns, and the journey the surface offers -- register, sign
+ * in, work -- has no administrator anywhere in it. The journey the
+ * advertised copy describes must end in work, never in a refusal the
+ * screen offers no way past. The two halves are asserted separately on
+ * purpose: that they get IN (a tenant, a frame), and that they get in as
+ * someone who can DO something (the owner of a new practice, not a
+ * spectator in someone else's).
  *
  * Invitation remains a second entrance, gated by
  * org-invitation-sign-in.spec.ts. Nothing here says it should not exist;
@@ -40,13 +29,13 @@ import {
 /** A password that satisfies authn's real policy (12 characters minimum). */
 const SIGNUP_PASSWORD = 'e2e-new-clinic-2026'
 
-// @budget, not untagged: these two tests are VERIFIED (the defect a real
-// user hit is closed -- registration provisions the registrant's own
-// clinic and the sign-in reaches it), and they are out of the default run
-// only because their three sign-in attempts would take that tier to
-// exactly go/authn's per-IP ceiling of twenty per minute, where it
-// already spends seventeen. `pnpm test:e2e:budget` gives them a fresh
-// budget of their own; see e2e/README.md.
+// @budget, not untagged: these two tests are VERIFIED -- registration
+// provisions the registrant's own clinic and the sign-in reaches it --
+// and they are out of the default run only because their sign-in
+// attempts would push that tier against go/authn's per-account and
+// per-IP ceilings, which the default run already spends.
+// `pnpm test:e2e:budget` gives them a fresh budget of their own; see
+// e2e/README.md.
 test.describe('a practice signing itself up', { tag: '@budget' }, () => {
   test('registers, signs in, and lands in its own practice', async ({ page }) => {
     const email = `e2e-clinic-${Date.now()}@example.com`
@@ -66,21 +55,17 @@ test.describe('a practice signing itself up', { tag: '@budget' }, () => {
     await page.getByRole('button', { name: APP_TEXT.registerBackToSignIn }).click()
     await submitPasswordSignIn(page, email, SIGNUP_PASSWORD)
 
-    // In: a frame, and a practice of their own. The tenant is NOT one of
-    // the demo practices -- a new registrant landing in someone else's
-    // clinic would be a far worse defect than being locked out.
-    // The frame, by the one control present at every screen size -- a
-    // nav link is not in the DOM at all below the md breakpoint, which
-    // is what made this assertion fail on the iPad project while the
-    // registrant was signed in perfectly well.
+    // In: a frame -- asserted by the sign-out control, the one control
+    // present at every screen size, since a nav link is not in the DOM
+    // at all below the md breakpoint -- and in a practice of their own.
+    // The two halves are asserted in order: a tenant is named at all,
+    // and it is not one of the demo practices. An assertion of only the
+    // second would pass whenever the read THREW (an unloaded frame, an
+    // unrendered switcher, a bug in the helper), so it could not tell
+    // "landed in its own clinic" from "shows no tenant at all" -- and a
+    // new registrant landing in someone else's clinic would be a far
+    // worse defect than being locked out.
     await expectSignedIn(page)
-    // And a practice of their own. Both halves are asserted, in order:
-    // a tenant is named at all, and it is not one of the demo
-    // practices. `readCurrentTenant(...).catch(() => '')` used to stand
-    // in for the second half alone and passed whenever the read THREW,
-    // so it could not tell "landed in its own clinic" from "shows no
-    // tenant at all" -- and a new registrant landing in someone else's
-    // clinic would be a far worse defect than being locked out.
     await expectOutsideDemoOrganizations(page)
   })
 
@@ -106,9 +91,9 @@ test.describe('a practice signing itself up', { tag: '@budget' }, () => {
     await submitPasswordSignIn(page, email, SIGNUP_PASSWORD)
 
     // Owning the practice means being able to write in it. The notes
-    // surface stands in for that here because it is the write path this
-    // app has today; when the case surface lands (block A), this is the
-    // assertion that moves to it.
+    // surface carries the assertion here as this app's tenant-scoped
+    // write path; the case write path is block A's journey in
+    // core-journey.pending.spec.ts.
     await openSurface(page, APP_TEXT.navNotes)
     const text = `first note in a self-registered practice ${Date.now()}`
     await page.getByRole('textbox', { name: APP_TEXT.notesTextLabel }).fill(text)

@@ -37,7 +37,7 @@ const (
 	// ChannelInApp is the in-app inbox: per-tenant rows in in_app_messages
 	// that a user reads inside the product. It has zero external
 	// dependencies, so it works in every deployment composition, and it is
-	// the channel this round builds end to end.
+	// the channel the module builds end to end.
 	ChannelInApp = "in_app"
 
 	// ChannelEmail is delivery to the recipient's email address. The
@@ -50,7 +50,7 @@ const (
 	// is the host's SMS seam (authn ships console and HTTP senders, see
 	// go/authn/sms.go); for users of a tenant the number is identity data
 	// too. Messaging an external contact on either channel is governed by
-	// the consent ledger, a later block of this round.
+	// the consent ledger.
 	ChannelSMS = "sms"
 )
 

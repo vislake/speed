@@ -101,15 +101,15 @@ func TestEntitlementsService_Check_Unlimited(t *testing.T) {
 	}
 }
 
-// TestEntitlementsService_Check_NonSentinelStringGrantValue_FailsClosed is
-// P1-5's regression: a string-typed Grant.Value that is NOT the
+// TestEntitlementsService_Check_NonSentinelStringGrantValue_FailsClosed
+// pins the string-value refusal: a string-typed Grant.Value that is NOT the
 // GrantValueUnlimited sentinel -- a quota limit encoded as "1000" by a
 // config/import error, a typo'd "unlimted" -- must never be read as
-// FeatureKindUnlimited. On pre-fix code grantKind classified every string
-// as Unlimited, so such a grant let every request through with
+// FeatureKindUnlimited. grantKind must not classify every string
+// as Unlimited, or such a grant would let every request through with
 // Remaining=unbounded -- exactly the fail-open a malformed grant must not
-// produce. Check now fails closed with the same feature_disabled answer
-// checkQuota's own "Value is not a usable integer" branch already gives
+// produce. Check fails closed with the same feature_disabled answer
+// checkQuota's own "Value is not a usable integer" branch gives
 // for a malformed Quota grant: the feature is treated as disabled, never
 // as unlimited.
 func TestEntitlementsService_Check_NonSentinelStringGrantValue_FailsClosed(t *testing.T) {
@@ -206,8 +206,8 @@ func TestEntitlementsService_Check_Quota_UsesRealTimeCounter_NeverASummaryTable(
 	}
 }
 
-// TestEntitlementsService_Check_NilUsageReader_FailsClosed is P2-17's
-// regression: a Quota Check on a service built without a UsageReader (nil)
+// TestEntitlementsService_Check_NilUsageReader_FailsClosed pins the
+// refusal: a Quota Check on a service built without a UsageReader (nil)
 // must fail closed with the coded configuration error on the very first
 // call -- never a panic on the nil interface call, and never a guessed
 // allowance (a zero-usage guess would fail OPEN for an over-quota tenant).
@@ -224,7 +224,7 @@ func TestEntitlementsService_Check_NilUsageReader_FailsClosed(t *testing.T) {
 }
 
 // TestEntitlementsService_Check_Quota_FractionalUsage_RoundsUpNotDown is
-// P2-18's regression: usage counters are float64, and truncating the used
+// pins the rounding direction: usage counters are float64, and truncating the used
 // count toward zero at the decision point lets 99.9 used + 1 requested
 // pass a limit of 100 -- 99.9 + 1 is already over. The decision must round
 // in the tenant-hostile direction (up), refusing this request.
@@ -246,13 +246,13 @@ func TestEntitlementsService_Check_Quota_FractionalUsage_RoundsUpNotDown(t *test
 }
 
 // TestEntitlementsService_Check_UnboundedDecision_SurfacesTheMarkerNotMinusOne
-// is P2-19's regression: an unbounded decision -- Unlimited or Boolean
+// pins the unbounded marker: an unbounded decision -- Unlimited or Boolean
 // features, and the feature_disabled / no_subscription answers -- must
 // surface the unbounded state as Decision.Remaining's nil marker, never as
 // a -1 the answer's numeric slot would leak to a UI-shaped consumer as a
 // real remaining count (indistinguishable from the genuine -1 raw headroom
 // a bounded overage decision legitimately reports -- the collision the
-// pre-fix sentinel had: both "unlimited" and "one unit over" read as -1).
+// bare -1 sentinel would make both "unlimited" and "one unit over" read as -1).
 func TestEntitlementsService_Check_UnboundedDecision_SurfacesTheMarkerNotMinusOne(t *testing.T) {
 	svc, ctx := newEntitlementsFixture(t, []Grant{
 		{FeatureKey: "storage", Value: GrantValueUnlimited},

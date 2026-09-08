@@ -11,9 +11,9 @@ import (
 )
 
 // AuditFilter is Query's input, the admin HTTP shell's translation of its
-// request query parameters into compliance.QueryFilter -- see D7's own
-// doc comment: admin's audit-search page does only an HTTP shell plus
-// pagination-parameter translation.
+// request query parameters into compliance.QueryFilter -- admin's
+// audit-search surface does only an HTTP shell plus pagination-parameter
+// translation.
 type AuditFilter struct {
 	// TenantID narrows to one tenant when non-empty; empty means "every
 	// tenant this operator is entitled to see", the cross-tenant path.
@@ -22,7 +22,7 @@ type AuditFilter struct {
 	// OnBehalfOf narrows to rows written during an impersonation session
 	// whose real administrator (the row's on-behalf-of identity, never its
 	// actor -- the impersonated user is the actor on such a row) is this
-	// operator id: the impersonation-accountability read dimension (P2-1).
+	// operator id: the impersonation-accountability read dimension.
 	OnBehalfOf string
 	Resource   string
 	Action     string
@@ -31,12 +31,12 @@ type AuditFilter struct {
 	Success    *bool
 }
 
-// AuditService is D7's whole contribution: a thin HTTP-facing wrapper over
-// compliance.AuditQuery, which already implements the entire read side
+// AuditService is a thin HTTP-facing wrapper over compliance.AuditQuery,
+// which already implements the entire read side
 // (Query/QueryAcrossTenants/Get). admin adds no filtering or storage logic
 // of its own -- it only decides which of AuditQuery's two read paths to
 // call, and supplies the tenant list for the cross-tenant path from its
-// own D3 ledger.
+// own tenant ledger.
 type AuditService struct {
 	query   *compliance.AuditQuery
 	tenants *TenantService
@@ -59,12 +59,12 @@ func (s *AuditService) attach(bus pkgcore.EventBus) { s.bus = bus }
 // platform operator making the request, for pkgcore.SystemReason.Actor.
 //
 // When filter.TenantID is set, this is a single-tenant read: it enters a
-// system context scoped to that one tenant and calls AuditQuery.Query --
-// exactly D2's mechanism, a per-tenant call under tenancy.WithSystemContext. When it
-// is empty, this is the cross-tenant read: it lists every tenant admin's
-// own ledger (D3) knows about, plus the empty-string platform-level
-// pseudo-tenant AuditQuery.QueryAcrossTenants' own convention names, and
-// calls QueryAcrossTenants with that full list under one system context.
+// system context scoped to that one tenant and calls AuditQuery.Query, a
+// per-tenant call under tenancy.WithSystemContext. When it is empty, this
+// is the cross-tenant read: it lists every tenant admin's own ledger knows
+// about, plus the empty-string platform-level pseudo-tenant
+// AuditQuery.QueryAcrossTenants' own convention names, and calls
+// QueryAcrossTenants with that full list under one system context.
 func (s *AuditService) Query(ctx context.Context, actorUserID string, filter AuditFilter) ([]audit.AuditEvent, error) {
 	qf := compliance.QueryFilter{
 		Actor:      filter.Actor,
@@ -94,8 +94,8 @@ func (s *AuditService) Query(ctx context.Context, actorUserID string, filter Aud
 
 	// ListAllIDs pages through the FULL ledger rather than one call capped
 	// at maxTenantListLimit -- a cross-tenant audit search is meant to
-	// cover "every tenant admin knows about", and a ledger past 500 rows
-	// must not make that silently partial.
+	// cover "every tenant admin knows about", and a ledger larger than one
+	// List page must not make that silently partial.
 	ledger, err := s.tenants.ListAllIDs(ctx)
 	if err != nil {
 		return nil, err

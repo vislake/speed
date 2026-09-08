@@ -17,15 +17,14 @@ const tableInAppMessages = "in_app_messages"
 //
 // # Data domain
 //
-// Tenant data (docs/internal/04-data-and-tenancy.md). A message is
-// meaningful only inside the tenant that produced it, so InboxMessage
-// implements dbkit.TenantScoped, is reached only through Repository (which
-// embeds dbkit.Repository[InboxMessage]), and its isolation is proven by
-// tenancytest.AssertIsolated.
+// Tenant data. A message is meaningful only inside the tenant that
+// produced it, so InboxMessage implements dbkit.TenantScoped, is reached
+// only through Repository (which embeds dbkit.Repository[InboxMessage]),
+// and its isolation is proven by tenancytest.AssertIsolated.
 //
 // It embeds dbkit.TenantModel for the tenant_id column and the promoted
-// GetTenantID method, the pattern dbkit's AGENTS.md documents for a
-// tenant-scoped model that does not need tenant_id inside its primary key:
+// GetTenantID method, the pattern dbkit's tenant-scoped models follow when
+// tenant_id does not belong inside the primary key:
 // ID is an application-generated UUID, already globally unique on its own,
 // so a plain tenant_id column backed by a composite listing index is
 // enough. Do NOT redeclare a same-named TenantID field here to add a
@@ -38,9 +37,8 @@ const tableInAppMessages = "in_app_messages"
 // RecipientUserID names a user of the tenant, by the same opaque-id rule
 // every cross-module reference in this codebase follows: the column
 // deliberately stores no foreign key (cross-module foreign keys are
-// forbidden, docs/internal/04-data-and-tenancy.md rule 4), because authn's
-// users table and notification's inbox are independently released
-// migrations. The width mirrors the user_id column org's memberships table
+// forbidden), because authn's users table and notification's inbox are
+// independently released migrations. The width mirrors the user_id column org's memberships table
 // uses for the identical reference. A person who belongs to several
 // tenants simply has one row set per tenant -- the tenant_id column, not
 // the recipient, is what scopes a row.
@@ -79,8 +77,7 @@ const tableInAppMessages = "in_app_messages"
 // invents one.
 type InboxMessage struct {
 	// ID is an application-generated UUID, never a database-generated one:
-	// the backend coding standard forbids gen_random_uuid(), which SQLite
-	// has no equivalent for.
+	// gen_random_uuid() is PostgreSQL-only, with no SQLite equivalent.
 	ID string `gorm:"column:id;primaryKey;size:36"`
 
 	// TenantModel promotes the tenant_id column and the GetTenantID method

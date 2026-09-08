@@ -7,16 +7,14 @@
  * route switch in app.tsx), and a clinician who leaves a half-typed
  * patient note to check another surface -- and comes back with the
  * browser's Back button, the most reflexive action there is -- must
- * find the text where they left it. That was the second half of the
- * acceptance finding this store closes: navigation (which never
- * reloads the document) was reported as losing in-progress input the
- * way only a reload could, and it turned out a plain surface switch
- * already did, because the form's state unmounted with the view. The
- * page's own memory is the right level for the draft for the same
- * reason the session is memory-only: nothing here writes storage, so
- * a reload starts over -- but a reload is not what a hash navigation
- * is, and within the life of one document the half-typed record now
- * survives every surface switch.
+ * find the text where they left it. A hash navigation never reloads
+ * the document, so the half-typed text is expected to survive it; the
+ * form's own state cannot, unmounting with the view, so the store
+ * carries it across mounts. The page's own memory is the right level
+ * for the draft for the same reason the session is memory-only:
+ * nothing here writes storage, so a reload starts over -- but a reload
+ * is not what a hash navigation is, and within the life of one
+ * document the half-typed record survives every surface switch.
  *
  * The store is deliberately dumb: a module-scoped string with three
  * functions, read at form mount (useForm's defaultValues), written on

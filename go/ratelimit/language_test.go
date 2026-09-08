@@ -11,32 +11,21 @@ import (
 	"unicode"
 )
 
-// TestModuleFiles_ContainNoCJKCharacters is a regression guard for the root
-// CLAUDE.md Language Rule ("read this first"): "docs/internal/** is written
-// in Chinese... Everything else is English: code comments, godoc/TSDoc,
-// module docs, per-module AGENTS.md files, ..." and "CI fails on CJK
-// characters found outside docs/internal/". No such check is wired into CI
-// yet -- .golangci.yml is staged but, per its own header comment, not yet
-// invoked by Taskfile.yml's lint task -- so until it is, this module checks
-// itself.
+// TestModuleFiles_ContainNoCJKCharacters is a regression guard for the
+// repository's Language Rule: docs/internal/** is written in Chinese, and
+// everything else -- code comments, godoc/TSDoc, module docs, per-module
+// AGENTS.md files -- is English, with CI failing on CJK characters found
+// outside docs/internal/. This module enforces that rule on itself by
+// walking every .go file's comments (via go/parser, never string literals
+// or other tokens) and every Markdown file's full text under this module's
+// own directory. English commentary paraphrases a referenced section; it
+// never quotes the source heading's own Chinese characters.
 //
-// It previously failed: doc.go's package comment and a comment in
-// limiter.go both quoted a docs/internal/11-cross-cutting.md heading
-// verbatim in Chinese instead of paraphrasing it in English the way every
-// other real module's doc.go does (e.g. go/observability/doc.go's
-// "must-instrument-metrics table" or go/tenancy/AGENTS.md's "data-domain
-// table" -- an English description of the section, never the source
-// heading's own characters), and AGENTS.md repeated the same pattern six
-// more times.
-//
-// This walks every .go file's *comments* (via go/parser, never string
-// literals or other tokens) and every Markdown file's full text under this
-// module's own directory. Comments-only for Go files mirrors the scope
-// go/dbkit's own TestCipher_EncryptDecrypt_RoundTrip documents for its
-// intentional CJK test fixture ("string literals/test data are exempt from
-// this repo's comments-and-docs-only CJK-language rule"); ratelimit has no
-// such fixture to exempt today, but a future one would need the same
-// carve-out added here rather than a blanket loosening of this test.
+// Comments-only for Go files mirrors the carve-out dbkit's own CJK test
+// fixture documents: string literals and test data are exempt from the
+// comments-and-docs-only CJK-language rule. A fixture needing that
+// exemption here would require the same carve-out added to this test
+// rather than a blanket loosening of it.
 func TestModuleFiles_ContainNoCJKCharacters(t *testing.T) {
 	walkErr := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

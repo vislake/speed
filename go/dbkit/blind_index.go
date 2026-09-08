@@ -66,10 +66,9 @@ func BlindIndex(key []byte, normalized string) string {
 
 // NormalizeFunc canonicalizes raw, caller-supplied input into the exact
 // string that is blind-indexed, the "normalize" in the design contract
-// HMAC(secret, normalize(plaintext)): docs/internal/10-compliance-and-audit.md
-// requires that an index only ever be computed over a normalized value, or
-// one value would produce two different indexes and equality lookups would
-// silently stop matching.
+// HMAC(secret, normalize(plaintext)): an index must only ever be computed
+// over a normalized value, or one value would produce two different
+// indexes and equality lookups would silently stop matching.
 //
 // A NormalizeFunc must be deterministic and idempotent —
 // normalize(normalize(x)) must equal normalize(x) — and must return an error

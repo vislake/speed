@@ -10,27 +10,25 @@ import (
 )
 
 // This file holds the Start-retryability regression: a Start that FAILED
-// (here: a schema error injected by a pre-existing, wrongly-shaped jobs
-// table) must be genuinely retryable -- a second Start after the cause is
-// fixed must actually start the queue, not return nil with nothing running,
-// which would leave every enqueued Job pending forever. Named for the
-// behaviour it verifies, per the backend coding standard's test-naming
-// rule.
+// (here: a schema error injected by a wrongly-shaped jobs table) must be
+// genuinely retryable -- a second Start after the cause is fixed must
+// actually start the queue, not return nil with nothing running, which
+// would leave every enqueued Job pending forever. Named for the behaviour
+// it verifies.
 
-// TestStandaloneQueue_Start_IsRetryableAfterFailure is the regression for
-// the sync.Once-burned Start defect: the first Start consumed the once and
-// recorded its failure in a local variable, so the second Start -- after
-// the host fixed whatever broke the first -- returned nil (the local error
-// variable was never set again) WITHOUT launching the dispatcher or any
-// worker. Jobs enqueued after that nil-returning second Start sat Pending
+// TestStandaloneQueue_Start_IsRetryableAfterFailure is the regression
+// pinning that a FAILED Start must not permanently consume the Start gate:
+// a Start that fails records no "started" state, so the second Start --
+// after the host fixed whatever broke the first -- genuinely launches the
+// dispatcher and workers. A second Start that returned nil without
+// launching anything would leave every Job enqueued after it Pending
 // forever, with no error anywhere telling the host why. Deterministic
 // orchestration: Start #1 fails against a sabotaged table (a "jobs" table
 // with the right name but none of the columns the dispatch index needs --
 // CREATE TABLE IF NOT EXISTS no-ops and the index statement errors), the
 // test drops the sabotage, and Start #2 must genuinely start the queue:
-// the probe Job enqueued after it must reach StatusSucceeded. Fails on the
-// pre-fix code, where Start #2 returns nil and the probe Job times out
-// still Pending.
+// the probe Job enqueued after it must reach StatusSucceeded -- a
+// nil-returning second Start leaves the probe Pending and times out.
 func TestStandaloneQueue_Start_IsRetryableAfterFailure(t *testing.T) {
 	db := dbtest.NewSQLite(t)
 	if err := db.Exec(`CREATE TABLE ` + jobsTable + ` (id VARCHAR(36) NOT NULL PRIMARY KEY)`).Error; err != nil {

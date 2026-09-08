@@ -2,19 +2,19 @@ package main
 
 // self_service_entitlements_test.go closes the entitlement half of the
 // self-service clinic story with real runs: the provisioning chain
-// self_service.go drives created (before the fixing round) a clinic whose
-// org, membership and owner grant were complete -- but whose subscription
-// and credit balance were not. The demo seeding (demo_entitlements.go's
-// seedDemoEntitlements, demo_credits.go's seedDemoCredits) granted only
+// self_service.go drives must leave a newly provisioned clinic with a
+// subscription and a credit balance, not just org, membership and owner
+// grant. The demo seeding (demo_entitlements.go's
+// seedDemoEntitlements, demo_credits.go's seedDemoCredits) grants only
 // the boot-configured demo tenants (cfg.HostTenants); a clinic a
-// self-service registration provisioned was never granted either, so its
-// owner's very first smile simulation was refused at internal/smilesim's
-// entitlement pre-flight (aigateway.entitlement_denied, on a zero
-// balance) -- the browser-verified dead end this file's siblings close.
+// self-service registration provisions must be granted by provision
+// itself, or its owner's very first smile simulation is refused at
+// internal/smilesim's entitlement pre-flight (aigateway.entitlement_denied,
+// on a zero balance).
 //
-// The fixing round makes provision subscribe the new clinic to the demo
-// Plan and seed its credit balance through the SAME shared per-tenant
-// helpers the boot-time demo seeding itself now calls
+// Provision subscribes the new clinic to the demo Plan and seeds its
+// credit balance through the SAME shared per-tenant helpers the
+// boot-time demo seeding itself calls
 // (ensureDemoSubscription and grantDemoCredits), so the two paths cannot
 // drift apart; the demo tenants keep exactly what they had. Each test
 // below drives the REAL composed HTTP stack (buildServer behind
@@ -24,22 +24,20 @@ package main
 //
 //   - TestSelfServiceSignup_ClinicOwner_RunsASmileSimulationToCompletion
 //     is regression (a): a freshly self-registered clinic's owner can run
-//     a smile simulation to completion through the real stack. Failing
-//     before the fix, the simulate request answered 403
-//     aigateway.entitlement_denied -- the defect's browser-visible face.
+//     a smile simulation to completion through the real stack -- without
+//     provision's grants the simulate request answers 403
+//     aigateway.entitlement_denied.
 //   - TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance
 //     is regression (b): the same clinic's provisioning granted an Active
 //     subscription to the demo Plan and a demoSimulationCreditGrant
-//     balance. Failing before the fix: no subscription row existed and
-//     the balance read exactly zero.
+//     balance -- no subscription row and a zero balance is the
+//     un-granted shape.
 //   - TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsToo
 //     is regression (d): the failure-injection/retry shape
 //     self_service_test.go's own suite pins must converge the NEW steps
 //     too -- a clinic whose synchronous provisioning attempt was injected
 //     to fail gains its subscription and credits from the retry job,
-//     exactly as it gains its org membership. Failing before the fix: the
-//     retry converged the org rows and nothing else, and the balance
-//     stayed zero.
+//     exactly as it gains its org membership.
 //   - TestSelfServiceSignup_DemoTenants_KeepTheirBootSeededSubscriptionAndBalance
 //     is regression (c): after the shared-helper extraction the demo
 //     tenants' boot seeding is unchanged -- one Active demo subscription
@@ -118,7 +116,7 @@ func assertTenantHoldsActiveDemoSubscription(t *testing.T, cfg serverConfig, ten
 // route, job polled to success, the fake image provider genuinely reached
 // exactly once -- the whole block-D journey a browser would run.
 //
-// Failing before the fix: the clinic's provisioning granted no
+// Without the provisioning grants the clinic held no
 // subscription, so the simulate request answered 403 with
 // aigateway.entitlement_denied (the entitlement pre-flight,
 // internal/smilesim/service.go) before any job existed -- the exact
@@ -158,8 +156,8 @@ func TestSelfServiceSignup_ClinicOwner_RunsASmileSimulationToCompletion(t *testi
 
 	// The simulate request: 202 carrying a job id means the clinic's
 	// subscription passed the entitlement pre-flight and its seeded
-	// balance covered the reservation -- both missing before the fix. A
-	// refusal is decoded and named in the failure so a pre-fix run fails
+	// balance covered the reservation -- both absent without the grants. A
+	// refusal is decoded and named in the failure so a missing-grant run fails
 	// with the defect's own code.
 	simulateBody, err := json.Marshal(map[string]string{"photo_object_id": completed.ID})
 	if err != nil {
@@ -217,7 +215,7 @@ func TestSelfServiceSignup_ClinicOwner_RunsASmileSimulationToCompletion(t *testi
 // the assertion is on the database's own rows, never on what the server
 // process happens to hold in memory.
 //
-// Failing before the fix: the provisioning granted neither, so the
+// Without the provisioning grants, the
 // subscription read found nothing and the balance read exactly zero --
 // the numbers this test's assertions name in their failure output.
 func TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance(t *testing.T) {
@@ -245,11 +243,11 @@ func TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance(t 
 // TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsToo
 // is regression (d): the failure-injection/retry shape self_service_test.go's
 // own suite pins (an injected synchronous failure, recovered by the retry
-// job the queue runs) must converge the fixing round's NEW steps as
+// job the queue runs) must converge the provisioning's NEW steps as
 // faithfully as it converges the org ones -- the retry is the clinic's
 // only recovery, so a subscription or credit step that only the
 // synchronous attempt could have landed would strand the clinic's paid
-// halves the same way a missing membership used to strand its sign-in.
+// halves the same way a missing membership strands its sign-in.
 //
 // The shape mirrors TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists
 // exactly (the same failOnceProvisioning hook armed through
@@ -258,7 +256,7 @@ func TestSelfServiceSignup_ClinicOwner_HoldsTheDemoSubscriptionAndSeedBalance(t 
 // seeded balance must follow from the SAME retried provision -- polled
 // through second connections rather than assumed synchronous.
 //
-// Failing before the fix: the retry converged the org rows and nothing
+// Without the retry's grants, the retry converged the org rows and nothing
 // else, so the balance poll below timed out on a permanent zero.
 func TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsToo(t *testing.T) {
 	inject := &failOnceProvisioning{}
@@ -315,7 +313,7 @@ func TestSelfServiceSignup_ClinicProvisioningRetry_GrantsSubscriptionAndCreditsT
 }
 
 // TestSelfServiceSignup_DemoTenants_KeepTheirBootSeededSubscriptionAndBalance
-// is regression (c): after the fixing round extracted the demo seeding's
+// is regression (c): after provision started sharing the demo seeding's
 // per-tenant grant logic into the shared helpers the clinic provisioning
 // path now calls, the demo tenants keep exactly what they had -- each
 // cfg.HostTenants tenant holds one Active subscription to the demo Plan

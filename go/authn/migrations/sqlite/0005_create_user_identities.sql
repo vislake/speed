@@ -1,10 +1,9 @@
 -- authn's external identity bindings: one row per (social account or
 -- enterprise single sign-on subject) attached to a user.
 --
--- IDENTITY-domain data, like users and sessions (see
--- docs/internal/04-data-and-tenancy.md). No tenant_id column: the person is
--- the same person in every tenant they belong to, and a per-tenant copy of
--- their GitHub account would be meaningless. The AssertNotTenantScoped suite
+-- IDENTITY-domain data, like users and sessions. No tenant_id column: the
+-- person is the same person in every tenant they belong to, and a per-tenant
+-- copy of their GitHub account would be meaningless. The AssertNotTenantScoped suite
 -- in identity_test.go fails if the Go model ever starts claiming otherwise.
 --
 -- The UNIQUE index on (provider, external_id) is a security control, not an
@@ -27,9 +26,9 @@
 -- is never used to find an account. Looking an account up by a third party's
 -- email address is exactly the takeover this module refuses.
 --
--- Dual-dialect constraints (root CLAUDE.md): application-generated UUIDs, no
--- gen_random_uuid(), no NOW(), no native arrays, no JSONB filtering. The only
--- difference from the sqlite/ copy of this file is the ciphertext column type.
+-- Dual-dialect constraints: application-generated UUIDs, no gen_random_uuid(),
+-- no NOW(), no native arrays, no JSONB filtering. The only cross-dialect
+-- difference in this file is the ciphertext column type.
 CREATE TABLE user_identities (
     id            VARCHAR(36)  NOT NULL,
     user_id       VARCHAR(36)  NOT NULL,

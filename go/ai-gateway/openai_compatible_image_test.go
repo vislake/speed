@@ -270,9 +270,10 @@ func TestOpenAICompatibleImageProvider_TextToImage_RequestsB64JSONEncoding(t *te
 	if err != nil {
 		t.Fatalf("TextToImage: %v", err)
 	}
-	// The literal "b64_json" is asserted, not the source constant, so this
-	// test genuinely runs -- and fails -- against a pre-fix provider whose
-	// request carries no response_format at all.
+	// The literal "b64_json" is asserted, not the source constant, so the
+	// same test body also runs against a provider whose request carries no
+	// response_format at all -- and fails there, proving the explicit
+	// request is what makes it pass.
 	const wantEncoding = "b64_json"
 	if got, _ := gotBody["response_format"].(string); got != wantEncoding {
 		t.Fatalf("wire response_format = %v, want %q -- the provider must request b64_json explicitly, and a Params entry must not override it", gotBody["response_format"], wantEncoding)
@@ -305,8 +306,8 @@ func TestOpenAICompatibleImageProvider_ImageEdit_RequestsB64JSONEncoding(t *test
 	if err != nil {
 		t.Fatalf("ImageToImage: %v", err)
 	}
-	// The literal "b64_json", for the same pre-fix-runnable reason the JSON
-	// path's twin test states.
+	// The literal "b64_json", for the same cross-version-runnable reason the
+	// JSON path's twin test states.
 	const wantEncoding = "b64_json"
 	if got := gotForm.Value["response_format"]; len(got) != 1 || got[0] != wantEncoding {
 		t.Fatalf("wire response_format fields = %v, want exactly one naming %q -- a Params response_format entry must never reach the wire", got, wantEncoding)
@@ -348,8 +349,8 @@ func TestOpenAICompatibleImageProvider_TextToImage_EmptyImageData_Refused(t *tes
 // TestImageResultFromWire_EmptyB64JSON_Refused pins the same empty-result
 // refusal at the decode level, where both endpoints (generation and edit)
 // converge: an entry whose b64_json is the empty string decodes to zero
-// bytes with a nil error -- the exact shape the old code let through as a
-// successful zero-byte image.
+// bytes with a nil error -- the exact shape of a would-be successful
+// zero-byte image.
 func TestImageResultFromWire_EmptyB64JSON_Refused(t *testing.T) {
 	_, err := imageResultFromWire(openaiImageResponseWire{
 		Data: []openaiImageDataWire{{B64JSON: ""}},

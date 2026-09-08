@@ -9,8 +9,9 @@ import (
 	"github.com/vislake/speed/go/dbkit"
 )
 
-// tableWebhookSubscriptions and tableWebhookDeliveries are round 2's two new
-// table names, following round 1's tableAPIKeys convention.
+// tableWebhookSubscriptions and tableWebhookDeliveries are the webhook
+// surface's two table names, following the module's tableAPIKeys
+// convention.
 const (
 	tableWebhookSubscriptions = "integration_webhook_subscriptions"
 	tableWebhookDeliveries    = "integration_webhook_deliveries"
@@ -27,14 +28,14 @@ const (
 //	dbkit.RegisterEncryptedSerializer(integration.WebhookSecretSerializerName, cipher)
 //
 // -- with a cipher key that is a different secret from any blind-index key
-// this module might grow later (dbkit.NewCipher and dbkit.NewBlindIndexer's
-// own doc comments both explain why an encryption key and an HMAC index key
-// must never be the same bytes). Unlike an encrypted address, the secret
-// this column stores is never queried by value -- there is no lookup "find
-// the subscription with this secret" -- so no blind index accompanies it.
+// (dbkit.NewCipher and dbkit.NewBlindIndexer's own doc comments both
+// explain why an encryption key and an HMAC index key must never be the
+// same bytes). Unlike an encrypted address, the secret this column stores
+// is never queried by value -- there is no lookup "find the subscription
+// with this secret" -- so no blind index accompanies it.
 //
-// Round 1's APIKey.Hash deliberately does NOT use this mechanism (see that
-// field's own doc comment): a raw API key is full-entropy randomness, so its
+// APIKey.Hash deliberately does NOT use this mechanism (see that field's
+// own doc comment): a raw API key is full-entropy randomness, so its
 // SHA-256 needs no reversible encryption. A webhook secret is different in
 // kind -- it must be read back in plaintext on every delivery attempt to
 // compute that attempt's HMAC signature (see webhook_signature.go), so it is
@@ -44,23 +45,22 @@ const WebhookSecretSerializerName = "integration_webhook_secret_enc"
 
 // WebhookSubscription is a tenant's standing configuration for one outbound
 // webhook: which public event types it wants delivered, and to which URL,
-// per docs/internal/07-platform-services.md's outbound-webhook section.
+// per the design's outbound-webhook shape.
 //
 // # Data domain
 //
-// Tenant data (docs/internal/04-data-and-tenancy.md), isolation proven by
-// tenancytest.AssertIsolated (webhook_repository_test.go) -- a subscription
-// belongs to exactly one tenant and must never be visible from, or
-// deliverable to, another, following round 1's APIKey precedent: the
-// primary key is (id) alone (an application-generated UUID, globally
-// unique on its own), tenant_id riding along as a plain column promoted by
-// the embedded TenantModel.
+// Tenant data, isolation proven by tenancytest.AssertIsolated
+// (webhook_repository_test.go) -- a subscription belongs to exactly one
+// tenant and must never be visible from, or deliverable to, another,
+// following the module's APIKey precedent: the primary key is (id) alone
+// (an application-generated UUID, globally unique on its own), tenant_id
+// riding along as a plain column promoted by the embedded TenantModel.
 //
 // # EventTypes names PUBLIC event types, never internal ones
 //
-// EventTypes is the set of PUBLIC event type strings
-// (docs/internal/07-platform-services.md's "event.type", for example
-// "org.member.joined") the tenant wants delivered -- never an internal
+// EventTypes is the set of PUBLIC event type strings (the public
+// "event.type", for example "org.member.joined") the tenant wants
+// delivered -- never an internal
 // pkgcore.Event.Type. The two vocabularies are related but distinct: a
 // business module's Register call may map several internal event types onto
 // one public type-and-version (or vice versa), and a subscription is
@@ -106,9 +106,9 @@ type WebhookSubscription struct {
 	// encrypted Invitation.Email: the stored value is CIPHERTEXT, whose
 	// column type is BYTEA on PostgreSQL and VARCHAR(512) on SQLite (see
 	// migrations/postgres/0005_fix_webhook_secret_column_type.sql for why
-	// the two dialects diverge here -- a bug that migration's own doc
-	// comment records in full, found and fixed by this round's own new
-	// PostgreSQL integration tier), so no single size hint describes both.
+	// the two dialects diverge here -- that migration's own doc comment
+	// records the divergence in full), so no single size hint describes
+	// both.
 	// AutoMigrate is never used in this codebase, so this Go struct tag
 	// never drives the actual column type either way; the versioned SQL
 	// migrations are the only source of truth for it.
@@ -117,13 +117,12 @@ type WebhookSubscription struct {
 	// Active gates delivery: an event matching a subscription whose Active
 	// is false is never fanned out to it (webhook_delivery.go's
 	// matchingSubscriptions). Service.UpdateWebhookSubscription is the only
-	// way to flip it; there is no separate "pause" operation this round.
+	// way to flip it; there is no separate "pause" operation.
 	Active bool `gorm:"column:active;not null"`
 
 	// CreatedBy is the authn user id of whoever configured this
-	// subscription -- an id reference only, per the root CLAUDE.md's
-	// module-boundary rule, following APIKey.CreatedBy's identical
-	// reasoning.
+	// subscription -- an id reference only, per the module-boundary rule,
+	// following APIKey.CreatedBy's identical reasoning.
 	CreatedBy string `gorm:"column:created_by;size:64;not null"`
 
 	// CreatedAt and UpdatedAt are written by gorm's autoCreateTime /
@@ -142,21 +141,20 @@ type WebhookSubscription struct {
 	// both writes go through dbkit's own reflection-based field access,
 	// exactly as TenantID does.
 	//
-	// WebhookSubscription is this module's only model to adopt
+	// WebhookSubscription is this module's only model implementing
 	// dbkit.SoftDeletable: it is the only one with a real delete-shaped
-	// operation to retrofit (DeleteWebhookSubscription's
-	// webhookRepo.Delete(ctx, id) call) -- APIKey already has its own
-	// domain-specific Revoke/RevokedAt mark, so it never called Delete at
-	// all, and WebhookDelivery is a transient, append-only attempt log with
-	// no Delete operation of its own. See go/integration/AGENTS.md's "Soft
-	// deletion" section for the full round, including the deliberate
-	// Restore-time decision to always land a restored subscription paused
-	// (Active = false) rather than reusing whatever Active held at the
-	// moment of deletion.
+	// operation (Service.DeleteWebhookSubscription's
+	// webhookRepo.Delete(ctx, id) call) -- APIKey has its own
+	// domain-specific Revoke/RevokedAt mark and never calls Delete, and
+	// WebhookDelivery is a transient, append-only attempt log with no
+	// Delete operation of its own. A restored subscription always lands
+	// paused (Active = false), never reusing whatever Active held at the
+	// moment of deletion (Service.RestoreWebhookSubscription's own doc
+	// comment has the reasoning).
 	//
-	// This table carries no unique index beyond its primary key, so unlike
-	// go/org's and go/rbac's identical adoptions, this round's migration
-	// needs no partial-index conversion alongside these two columns.
+	// This table carries no unique index beyond its primary key, so the
+	// adoption needs no partial-index conversion alongside these two
+	// columns.
 	DeletedAt *time.Time `gorm:"column:deleted_at"`
 	DeletedBy string     `gorm:"column:deleted_by;not null;default:''"`
 }
@@ -204,8 +202,8 @@ func parseEventTypes(stored datatypes.JSON) ([]string, error) {
 }
 
 // The WebhookDelivery.Status vocabulary -- a closed set kept in Go rather
-// than a database enum, per the backend coding standard's dual-dialect rule
-// (PostgreSQL has enum types, SQLite does not).
+// than a database enum, per the dual-dialect rule (PostgreSQL has enum
+// types, SQLite does not).
 //
 //	pending ---(attempt fails, retries remain)---> failed ---(retry)---> pending/failed
 //	pending ---(attempt succeeds)----------------> delivered   [terminal]
@@ -216,12 +214,11 @@ func parseEventTypes(stored datatypes.JSON) ([]string, error) {
 // actually distinguishes "never tried" from "tried once and about to retry"
 // (failed is set for the interval the row is not currently pending-for-retry
 // -- see webhook_delivery.go's Handle for exactly when each transition
-// happens). Manual redelivery (docs/internal/07's own name for it) acts on
-// this machine at exactly the dead_letter state: Service.
-// RedeliverWebhookDelivery (webhook_delivery.go) re-enqueues a
-// dead-lettered row for a fresh attempt cycle and flips it back to pending,
-// after which the transitions above apply to the new cycle's own attempts
-// exactly as they did to the old one's.
+// happens). Manual redelivery acts on this machine at exactly the
+// dead_letter state: Service.RedeliverWebhookDelivery (webhook_delivery.go)
+// re-enqueues a dead-lettered row for a fresh attempt cycle and flips it
+// back to pending, after which the transitions above apply to the new
+// cycle's own attempts exactly as they did to the old one's.
 const (
 	DeliveryStatusPending    = "pending"
 	DeliveryStatusFailed     = "failed"
@@ -230,10 +227,9 @@ const (
 )
 
 // WebhookDelivery is one attempted (or about-to-be-attempted) delivery of
-// one public event to one subscription -- the delivery log
-// docs/internal/07-platform-services.md requires: which subscription, which
-// event, its outcome, and enough detail for a later round's manual
-// redelivery to act on.
+// one public event to one subscription -- the delivery log the design
+// requires: which subscription, which event, its outcome, and enough
+// detail for a manual-redelivery feature to act on.
 //
 // # Data domain
 //
@@ -266,19 +262,18 @@ type WebhookDelivery struct {
 
 	// SubscriptionID names the WebhookSubscription this delivery was fanned
 	// out from. Deliberately an id reference, never a GORM association or
-	// foreign key -- the root CLAUDE.md's "no cross-module foreign keys"
-	// rule applies to this module's own two tables exactly as it does
-	// across module boundaries, since dbkit.Repository[T] offers no
-	// cascading-delete machinery either way; a subscription's own delete
-	// leaves its past delivery rows in place as history (see
+	// foreign key -- the "no cross-module foreign keys" rule applies to
+	// this module's own two tables exactly as it does across module
+	// boundaries, since dbkit.Repository[T] offers no cascading-delete
+	// machinery either way; a subscription's own delete leaves its past
+	// delivery rows in place as history (see
 	// Service.DeleteWebhookSubscription's doc comment).
 	SubscriptionID string `gorm:"column:subscription_id;size:36;not null"`
 
-	// EventType and EventVersion are the public event's own identity
-	// (docs/internal/07's "event.type" + "event.version"), copied from the
-	// EventMapping that produced this delivery -- never the internal
-	// pkgcore.Event.Type, matching WebhookSubscription.EventTypes' own
-	// public-only vocabulary.
+	// EventType and EventVersion are the public event's own identity (the
+	// public "event.type" + "event.version"), copied from the EventMapping
+	// that produced this delivery -- never the internal pkgcore.Event.Type,
+	// matching WebhookSubscription.EventTypes' own public-only vocabulary.
 	EventType    string `gorm:"column:event_type;size:128;not null"`
 	EventVersion string `gorm:"column:event_version;size:16;not null"`
 
@@ -305,7 +300,7 @@ type WebhookDelivery struct {
 	// mid-flight, and storing the payload up front is what makes every
 	// attempt of one delivery byte-for-byte identical, which HMAC signing
 	// requires in the first place (a signature covers exactly these bytes).
-	// It is also what manual redelivery needs -- Service.
+	// It is also what manual redelivery needs: Service.
 	// RedeliverWebhookDelivery (webhook_delivery.go) re-enqueues exactly
 	// these bytes -- the original body, on hand, with no dependency on the
 	// source event still being reconstructable.

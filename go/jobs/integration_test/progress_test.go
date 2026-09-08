@@ -32,14 +32,14 @@ func (h *progressHandler) Handle(_ context.Context, _ *jobs.Job, progress jobs.P
 // TestRedisQueue_ProgressReporting proves ProgressFn calls made from inside
 // a Handler running under a real asynq.Server reach a caller polling Get()
 // against real Redis -- this package's mapping of progress reporting onto
-// asynq.Task.ResultWriter (AGENTS.md's "Progress reporting" section), the
-// distributed deployment mode's counterpart of standalone_queue_test.go's
-// TestProgressReporting. Unlike that unit-tier-adjacent test (StandaloneQueue's
-// dispatcher is in-process), this proves the write actually round-trips
-// through Redis: ResultWriter.Write on one goroutine (asynq's worker) and
+// asynq.Task.ResultWriter, the distributed deployment mode's counterpart of
+// standalone_queue_test.go's TestProgressReporting. Unlike that
+// unit-tier-adjacent test (StandaloneQueue's dispatcher is in-process),
+// this proves the write actually round-trips through Redis:
+// ResultWriter.Write on one goroutine (asynq's worker) and
 // Inspector.GetTaskInfo on another (this test's own polling), the real
-// shape a production caller (an HTTP handler backing useJob(jobId), per
-// docs/internal/07-platform-services.md) would see.
+// shape a production caller (an HTTP handler backing a per-job poll)
+// would see.
 func TestRedisQueue_ProgressReporting(t *testing.T) {
 	ctx := context.Background()
 	q := startTestAsynqQueue(t, ctx)

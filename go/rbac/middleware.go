@@ -10,7 +10,7 @@ import (
 
 // permissionSeparator is the single character that divides a permission
 // string's two halves, "<resource>:<action>" -- the naming convention
-// docs/internal/05-identity-and-access.md fixes and Permission composes.
+// Permission composes.
 const permissionSeparator = ":"
 
 // authzErrorContentType is the Content-Type the middleware sets on every
@@ -50,9 +50,9 @@ func subjectFromRequestContext(r *http.Request) (Subject, bool) {
 // fn must fail closed: returning ok == false denies the request. It must
 // never derive the tenant from anything the caller controls (a header, a
 // query parameter, a body field) -- the tenant belongs to the verified
-// access token's claims, per root CLAUDE.md's multi-tenant isolation rule.
-// A nil fn is ignored, so a caller that passes one by accident keeps the
-// context-reading default rather than a middleware that denies everything.
+// access token's claims. A nil fn is ignored, so a caller that passes one
+// by accident keeps the context-reading default rather than a middleware
+// that denies everything.
 func WithSubjectResolver(fn func(*http.Request) (Subject, bool)) MiddlewareOption {
 	return func(c *middlewareConfig) {
 		if fn != nil {
@@ -65,10 +65,10 @@ func WithSubjectResolver(fn func(*http.Request) (Subject, bool)) MiddlewareOptio
 // through only when its Subject holds permission, given as the composed
 // "<resource>:<action>" string Permission produces.
 //
-// It is rbac's whole contribution to the HTTP layer -- the gate the fixed
-// middleware chain in docs/internal/01-architecture.md names after
-// authentication -- and deliberately not a route: this module mounts no
-// endpoints of its own (see Module.OpenAPISpec).
+// It is rbac's whole contribution to the HTTP layer -- the permission
+// gate the fixed middleware chain names after authentication -- and
+// deliberately not a route: this module mounts no endpoints of its own
+// (see Module.OpenAPISpec).
 //
 // Everything about it fails closed. A request with no usable Subject, a
 // permission string that does not parse, and a subject that simply lacks
@@ -169,14 +169,9 @@ func RequirePermissionFunc(az Authorizer, permissionFor func(*http.Request) stri
 				// The cause is deliberately dropped rather than written to
 				// the body: it may carry SQL fragments or internal
 				// identifiers, and internal detail must never reach an API
-				// response (backend coding standard §6.2). rbac does not
-				// log it either -- the module depends on pkgcore, dbkit and
-				// tenancy only, exactly as go/tenancy and go/config do, and
-				// pulling the OpenTelemetry graph into every consumer's
-				// go.sum for one log line is not a trade this module gets
-				// to make on their behalf. The host's own observability
-				// middleware records the 5xx this writes; see AGENTS.md's
-				// known limitations for the deferral.
+				// response. rbac does not log it either: the 5xx this
+				// writes is recorded by the host's own observability
+				// middleware.
 				writeAuthzError(w, ErrStorage)
 				return
 			}
@@ -220,8 +215,8 @@ func splitPermission(permission string) (resource, action string, ok bool) {
 }
 
 // authzErrorBody is the JSON shape the middleware writes, the {code,
-// params} structured-error convention of docs/internal/11-cross-cutting.md
-// and the same body go/tenancy's Middleware produces.
+// params} structured-error convention and the same body go/tenancy's
+// Middleware produces.
 type authzErrorBody struct {
 	Code   string         `json:"code"`
 	Params map[string]any `json:"params,omitempty"`
@@ -230,7 +225,7 @@ type authzErrorBody struct {
 // writeAuthzError writes appErr to w as that JSON body, at the status its
 // apperr constructor pre-filled. The localized prose is never written:
 // the API returns a code plus parameters and the client resolves it
-// against locales/{zh-CN,en-US}.toml (backend coding standard §6.2).
+// against locales/{zh-CN,en-US}.toml.
 func writeAuthzError(w http.ResponseWriter, appErr *apperr.Error) {
 	w.Header().Set("Content-Type", authzErrorContentType)
 	w.WriteHeader(appErr.Status)

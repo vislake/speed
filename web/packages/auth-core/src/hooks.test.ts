@@ -104,12 +104,11 @@ describe('attached to a scripted session', () => {
   })
 
   it('keeps one referentially stable tenant object for the whole stay in a tenant', async () => {
-    // P3-12: useCurrentTenant used to mint a fresh { tenantId }
-    // object on every render, so a consumer embedding the result in a
-    // memoized query key or an effect dependency saw a new identity on
-    // every re-render -- the referential instability that silently
-    // defeated a host's tenant-namespaced cache keys. The object
-    // identity now changes only when the tenant_id itself changes.
+    // The returned object is referentially stable for a tenant: it
+    // changes identity only when the tenant_id itself changes, never
+    // on re-renders. A host builds its tenant-namespaced cache keys
+    // from this identity, so a fresh object per render would defeat
+    // the memoization silently.
     const harness = makeHarness({
       [LOGIN_PASSWORD]: () => makePair(),
       [REFRESH]: () => makePair({ access_token: 'access-3' }),
@@ -127,7 +126,7 @@ describe('attached to a scripted session', () => {
     const first = result.current
     expect(first).toEqual({ tenantId: 'tenant-1' })
     // A same-tenant re-login and a silent refresh -- transitions that
-    // used to hand every re-render a fresh object -- keep the identity.
+    // keep the tenant -- hand back the same object.
     await act(async () => {
       await harness.session.loginWithPassword(credentials)
     })
@@ -338,14 +337,13 @@ describe('server rendering', () => {
   }
 
   it('renders the anonymous snapshot on the server, even with an authenticated session attached', async () => {
-    // P3-13: useAuthState used to call useSyncExternalStore without a
-    // getServerSnapshot. Server rendering has no session -- attachSession
-    // runs in browser bootstrap code -- so the server answer must be the
-    // stable anonymous snapshot, never the attached session's. To prove
-    // the getServerSnapshot path really is the one used, this renders
-    // with an authenticated session attached (the state a client-side
-    // only implementation would have served) and asserts the server
-    // still renders anonymous, without a React warning.
+    // Server rendering has no session -- attachSession runs in browser
+    // bootstrap code -- so the server answer must be the stable
+    // anonymous snapshot, never the attached session's (the
+    // getServerSnapshot useSyncExternalStore asks for). To prove the
+    // server path really is the one used, this renders with an
+    // authenticated session attached and asserts the server still
+    // renders anonymous, without a React warning.
     const harness = makeHarness({
       [LOGIN_PASSWORD]: () => makePair(),
     })

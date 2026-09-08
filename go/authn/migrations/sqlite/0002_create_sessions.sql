@@ -1,6 +1,5 @@
--- One row per login. A session belongs to a USER, not to a tenant
--- (docs/internal/05-identity-and-access.md's section on how sessions relate to tenants): within one
--- session the user switches tenants freely, and each switch issues a new
+-- One row per login. A session belongs to a USER, not to a tenant: within
+-- one session the user switches tenants freely, and each switch issues a new
 -- access token carrying the new tenant while the session and its refresh
 -- token stay the same. Revoking a session therefore signs the device out of
 -- every tenant at once, which is exactly the intended meaning of "sign this
@@ -12,11 +11,9 @@
 -- array (banned: PostgreSQL-only) or a JSON document that would then have to
 -- be filtered with JSONB operators (also banned).
 --
--- ip_region ships empty on purpose. Resolving an IP to a region needs a local
--- GeoIP database whose licence has to clear the licence scanner before
--- commercial delivery (docs/internal/05-identity-and-access.md says so
--- explicitly), so the column exists now -- no later table migration -- and
--- the resolver that fills it lands with that decision.
+-- ip_region ships empty: resolving an IP to a region needs a local GeoIP
+-- database whose licence has to clear the licence scanner, and no resolver
+-- is wired. The column exists so the row shape already carries the field.
 --
 -- current_tenant_id is NOT a tenant-scoping column and this table stays
 -- identity-domain data. It records which tenant this session's access tokens

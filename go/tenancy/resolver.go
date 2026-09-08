@@ -13,17 +13,15 @@ import (
 // source the server itself controls -- never from anything the client
 // supplied on the request being resolved. For an authenticated request that
 // source is the access token's claims; for an unauthenticated request it is
-// DomainResolver's Host-based lookup. See
-// docs/internal/04-data-and-tenancy.md for the full trust-boundary
-// rationale.
+// DomainResolver's Host-based lookup.
 //
 // This module does not implement a Resolver for authenticated requests:
 // verifying a token's signature, managing keys and validating claims is
 // authn's responsibility. The module dependency graph runs authn ->
-// tenancy, not the other way around, so putting that logic here would force
-// a cycle once authn exists. Once it does, authn will supply its own type
-// implementing this interface, reading the tenant from the already-verified
-// token claims.
+// tenancy, not the other way around, so an authenticated-request Resolver
+// would force an import cycle if it lived here; authn supplies its own,
+// reading the tenant from the already-verified token claims and composing
+// with this package through tenancy.Middleware.
 //
 // Resolve returns a non-nil error when the tenant cannot be determined. An
 // implementation must never invent or default to a tenant just to avoid
@@ -54,9 +52,8 @@ type DomainResolver struct {
 // tenant by calling lookup with (*http.Request).Host. Whenever lookup
 // reports no match -- including when lookup is nil, or when it reports a
 // match with an empty TenantID -- Resolve falls back to defaultTenant
-// rather than failing the request: per
-// docs/internal/04-data-and-tenancy.md, a request that cannot be matched to
-// a brand must still be able to render a login page.
+// rather than failing the request: a request that cannot be matched to a
+// brand must still be able to render a login page.
 func NewDomainResolver(lookup func(host string) (pkgcore.TenantID, bool), defaultTenant pkgcore.TenantID) *DomainResolver {
 	return &DomainResolver{lookup: lookup, defaultTenant: defaultTenant}
 }

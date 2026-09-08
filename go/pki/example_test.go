@@ -8,10 +8,9 @@ package pki_test
 // The examples together discharge the godoc `Example` obligation the X.509
 // layer carried while it had no real consumer, and retain it -- with a
 // narrowed narrative -- now that the layer does (the reference app's
-// AI-output attestation, go/pki/AGENTS.md's "X.509 layer: real consumer,
-// precise residuals" section and its "Real consumer: AI-output
-// attestation" round entry record what the obligation covers today), kept
-// in step with the layer's growth:
+// AI-output attestation; go/pki/AGENTS.md's "X.509 layer: real consumer,
+// precise residuals" section records what the obligation covers today),
+// kept in step with the layer's growth:
 //
 //   - Example covers the layer's full main path -- issue a root CA, an
 //     intermediate signed by the root, and an end-entity certificate
@@ -19,7 +18,7 @@ package pki_test
 //     standard library's own crypto/x509.Verify -- the shape the reference
 //     app's attestation consumer drives for real, kept additionally
 //     compilable-and-runnable under an external caller's own import.
-//   - ExampleCAService_GenerateCRL drives the round-3 revocation path and
+//   - ExampleCAService_GenerateCRL drives the revocation path and
 //     CRL generation: revoke an issued certificate, regenerate the issuing
 //     authority's CRL, and read the document back with the standard
 //     library's own parser.
@@ -211,14 +210,14 @@ func Example() {
 	// end-entity subject: acme.speed.internal
 }
 
-// ExampleCAService_GenerateCRL walks the round-3 revocation path an
-// external caller drives: revoke an end-entity certificate, regenerate the
-// issuing authority's CRL so the revocation is published, then read the
-// generated document back with the standard library's own parser -- the
-// way an independent verifier would -- and confirm the revoked
-// certificate's serial is listed and the document carries the authority's
-// signature. It ends by confirming the module's own chain verification
-// now refuses the revoked certificate with the coded ErrCertificateRevoked.
+// ExampleCAService_GenerateCRL walks the revocation path an external
+// caller drives: revoke an end-entity certificate, regenerate the issuing
+// authority's CRL so the revocation is published, then read the generated
+// document back with the standard library's own parser -- the way an
+// independent verifier would -- and confirm the revoked certificate's
+// serial is listed and the document carries the authority's signature. It
+// ends by confirming the module's own chain verification refuses the
+// revoked certificate with the coded ErrCertificateRevoked.
 func ExampleCAService_GenerateCRL() {
 	module, keepAlive, err := newExampleModule("pki_example_crl")
 	if err != nil {
@@ -386,10 +385,9 @@ func ExampleCAService_SignCertificate() {
 // One corner of this method cannot be shown from an example: a chain
 // containing a revoked authority (the intermediate itself or any ancestor)
 // is refused wholesale with ErrCertificateRevoked, but no public method
-// writes AuthorityStatusRevoked -- AGENTS.md's Known limitations and
-// model.go's own AuthorityStatus doc comment record that -- so the refusal
-// is driven only by this module's own unit suite, which seeds the row
-// directly (revocation_test.go).
+// writes AuthorityStatusRevoked -- model.go's own AuthorityStatus doc
+// comment records that -- so the refusal is driven only by this module's
+// own unit suite, which seeds the row directly (revocation_test.go).
 func ExampleCAService_ExportAuthorityChainJWKS() {
 	module, keepAlive, err := newExampleModule("pki_example_chain_jwks")
 	if err != nil {
@@ -563,12 +561,12 @@ func ExampleService_RevokeSigningKey() {
 }
 
 // ExampleSignerRegistry shows resolving a Signer by registered name through
-// pki.SignerRegistry -- the database/sql-style driver pattern round 4
-// established -- with the module's own zero-external-dependency
-// "signer.local" registration, which builds an offline-runnable LocalSigner
-// from a flat pkgcore.Config naming a database. The resolved signer then
-// generates a key and signs with it for real; an unknown name is refused
-// with pkgcore.ErrUnknownImplementation.
+// pki.SignerRegistry -- the database/sql-style driver pattern -- with the
+// module's own zero-external-dependency "signer.local" registration, which
+// builds an offline-runnable LocalSigner from a flat pkgcore.Config naming
+// a database. The resolved signer then generates a key and signs with it
+// for real; an unknown name is refused with
+// pkgcore.ErrUnknownImplementation.
 //
 // The vault and kmsaws provider names ("signer.vault",
 // "signer.vault-direct", "signer.aws-kms", "signer.aws-kms-direct")

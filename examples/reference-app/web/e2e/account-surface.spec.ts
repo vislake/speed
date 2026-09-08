@@ -10,16 +10,17 @@
  * component test against a scripted list. It asserts the sections
  * render with the member's own data -- the current session marked as
  * such, the sign-in that just happened present in the history -- and
- * stops there: revoking sessions, unbinding identities and enrolling a
- * factor all mutate state other specs depend on, and belong in their own
- * journeys once the product grows a reason to exercise them here.
+ * stops at reading: revoking sessions, unbinding identities and
+ * enrolling a factor each mutate state other specs depend on, so driving
+ * them here would couple this spec to their order, and the browser suite
+ * exercises no account mutation.
  *
  * One sign-in covers every section, as the read-only member: sign-in is
- * rate-limited per account (go/authn's ratelimit.go: five per account per
- * minute), so the suite spends one sign-in per spec file where it can and
- * spreads the files across the three seeded accounts. The account surface
- * needs no write permission at all, which makes the reader the honest
- * account for it.
+ * rate-limited per account (the limits live in go/authn's ratelimit.go),
+ * so the suite spends one sign-in per spec file where it can and spreads
+ * the files across the three seeded accounts. The account surface needs
+ * no write permission at all, which makes the reader the honest account
+ * for it.
  */
 import { expect, test } from '@playwright/test'
 import { DEMO_READER } from './test-utils/accounts.js'

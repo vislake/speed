@@ -580,7 +580,7 @@ class SandboxProofTest(unittest.TestCase):
             if os.path.isfile(src):
                 os.makedirs(os.path.join(sb, "go", d), exist_ok=True)
                 shutil.copy2(src, os.path.join(sb, "go", d, "go.mod"))
-        # Consumer modules (today: examples/reference-app) come along too:
+        # Consumer modules (examples/reference-app) come along too:
         # the coordinator validates their go.mod presence, and the sandbox
         # must mirror the live tree completely.
         with open(os.path.join(LIVE_ROOT, "go.work"), encoding="utf-8") as fh:

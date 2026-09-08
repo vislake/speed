@@ -214,7 +214,7 @@ func TestHandler_PkiGetAuthorityJwks_NotFound(t *testing.T) {
 
 // TestHandler_PkiGetAuthorityJwks_RevokedAuthorityInChain_Refused drives the
 // revoked-chain refusal through the HTTP surface -- the reachable endpoint
-// this finding names: a data plane refreshing GET
+// the refusal protects: a data plane refreshing GET
 // /api/v1/pki/authorities/{authorityId}/jwks must never be handed a revoked
 // authority's public key. The fetch answers 409 Conflict carrying the coded
 // envelope (pki.certificate_revoked), the same coded answer

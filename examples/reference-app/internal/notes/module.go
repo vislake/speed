@@ -22,7 +22,7 @@ const (
 	// apiPath is the path this module's single route is mounted at (see
 	// Register below). It must agree with the path declared in this
 	// module's own OpenAPI fragment (api/openapi.yaml), which is the
-	// module-asset convention of docs/internal/21-api-contract.md: the
+	// module-asset convention: the
 	// fragment's "paths:" keys are what oapi-codegen turns into the
 	// method+path patterns of the generated registration helpers (see
 	// api/notes-server.gen.go's HandlerWithOptions) and into the
@@ -36,7 +36,7 @@ const (
 	apiPath = "/api/v1/notes"
 
 	// PermissionRead and PermissionWrite are notes' resource:action
-	// permission strings (backend coding standard §2's Register example).
+	// permission strings.
 	//
 	// They are really enforced. Declaring them here is what puts them in
 	// the permission catalog go/rbac freezes after Bootstrap, and cmd/server
@@ -49,7 +49,7 @@ const (
 	// Nothing in THIS package checks them, and that is the design rather
 	// than a gap: a business module declares its permission vocabulary and
 	// the authorization engine enforces it at the edge, so notes needs no
-	// dependency on rbac at all. What notes does not yet do is row-level
+	// dependency on rbac at all. What notes does not do is row-level
 	// filtering by organization subtree (rbac.Service.DataScope), which
 	// needs an organization tree this app has none of.
 	PermissionRead  = "notes:read"
@@ -57,20 +57,20 @@ const (
 
 	// EventNoteCreated is the domain event type published whenever a note
 	// is created, following the "<module>.<entity>.<action>" convention
-	// (backend coding standard §8; go/pkgcore/registry.go's
+	// (see go/pkgcore/registry.go's
 	// EventDecl.Type doc comment). Handler.NotesCreateNote is the one
 	// place that actually calls EventBus.Publish for it -- see handler.go.
 	EventNoteCreated = "notes.note.created"
 
 	// eventNoteCreatedPayloadType names NoteCreatedPayload for
-	// EventDecl.PayloadType, so a subscriber (and the future event
-	// catalog) knows what concrete type to expect in Event.Payload
+	// EventDecl.PayloadType, so a subscriber
+	// knows what concrete type to expect in Event.Payload
 	// without importing this package just to read a string.
 	eventNoteCreatedPayloadType = "notes.NoteCreatedPayload"
 
 	// AuditActionNoteCreate is notes' audit action string. It uses the
-	// present-tense verb form docs/internal/10-compliance-and-audit.md's
-	// own AuditEvent.Action examples use ("org.member.remove",
+	// present-tense verb form the audit trail's own AuditEvent.Action
+	// examples use ("org.member.remove",
 	// "billing.plan.change"), deliberately distinct from
 	// EventNoteCreated's past-tense fact ("created"): the audit trail
 	// records what operation was performed, the event records what
@@ -81,19 +81,16 @@ const (
 	// Configuration keys, feature flags and their default values below.
 	//
 	// A word on ownership before the declarations: notes is this app's
-	// only business module so far, yet the items it registers here are
+	// only business module, yet the items it registers here are
 	// platform-grade keys (the brand, the support address, the AI
-	// feature toggles). That is a deliberate placeholder arrangement, not
-	// the shape a finished app ships: root CLAUDE.md's "The reference app
-	// is the mandatory first consumer of every module" rule means SOME
-	// module must be the first consumer of the config module's schema
-	// registration, and notes is the only candidate -- so it registers
-	// the keys this app's own frontend and support flows need, and
-	// documents the temporary custody in this comment. When the real
-	// owner modules land (branding in a platform/tenant module, the
-	// support address in notification, the AI toggles in ai-gateway),
-	// these registrations move with their keys, and the notes module
-	// shrinks back to its own CRUD schema.
+	// feature toggles). This is deliberate custody, not the keys' final
+	// home: some module must be the first consumer of the config module's
+	// schema registration, and notes is the only candidate -- so it
+	// registers the keys this app's own frontend and support flows need.
+	// The keys' real owners are the modules that give their meaning a
+	// home (branding, the support address in a notification context, the
+	// AI toggles); until such modules exist, notes holds the
+	// registrations.
 	//
 	// The values and validation shape follow pkgcore.ConfigItem's and
 	// pkgcore.FeatureFlag's doc comments; config's Attach folds them into
@@ -103,8 +100,7 @@ const (
 )
 
 // ConfigKeyBrandSiteName is the public, tenant-overridable display name a
-// tenant's own frontend shows (the "brand" of the white-label rule in
-// docs/internal/11-cross-cutting.md's dynamic-config section). It is
+// tenant's own frontend shows (the white-label brand). It is
 // Public so the unauthenticated /api/config/public endpoint may serve it,
 // and it defaults to the app's own name.
 const ConfigKeyBrandSiteName = "brand.site_name"
@@ -153,8 +149,7 @@ type NoteCreatedPayload struct {
 
 // Module implements pkgcore.Module for notes, examples/reference-app's
 // placeholder tenant-scoped business resource (see this package's doc.go).
-// It is deliberately generic, non-dental business content, standing in for
-// the real modules that land in later milestones.
+// It is deliberately generic, non-dental business content.
 type Module struct {
 	repo    *Repository
 	handler *Handler
@@ -192,7 +187,7 @@ func WithSubjectResolver(r SubjectResolver) Option {
 // ("in_app", "email", "sms" -- notification.ChannelInApp and siblings):
 // notes deliberately does not import notification -- business modules
 // publish domain facts, notification subscribes, and the dependency never
-// points the other way (backend coding standard §8) -- so the vocabulary
+// points the other way -- so the vocabulary
 // is written out here against that module's contract, exactly as org
 // writes out authn's event name rather than importing authn. notification
 // ships the channel constants and pins them in its own tests; a rename
@@ -224,9 +219,8 @@ func NewModule(db *gorm.DB, opts ...Option) *Module {
 func (m *Module) Name() string { return moduleName }
 
 // DependsOn implements pkgcore.Module. notes depends on infrastructure
-// (dbkit, tenancy) only, never on another business module -- and there is
-// no other business module yet for it to depend on (root CLAUDE.md's M0
-// status) -- so this is genuinely empty, not an aspirational placeholder.
+// (dbkit, tenancy) only, never on another business module -- so this is
+// genuinely empty, not an aspirational placeholder.
 func (m *Module) DependsOn() []string { return nil }
 
 // Migrations implements pkgcore.Module.
@@ -240,8 +234,7 @@ func (m *Module) Locales() embed.FS { return locales.FS }
 // single source of this module's API surface -- the api package's
 // generated types and ServerInterface (api/notes-server.gen.go, regenerated
 // by task api:gen) derive from it, and Handler implements that interface
-// (see handler.go) -- per docs/internal/21-api-contract.md's spec-first
-// decision.
+// (see handler.go) -- the spec-first decision.
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
 // Register implements pkgcore.Module. Per the interface's own doc comment

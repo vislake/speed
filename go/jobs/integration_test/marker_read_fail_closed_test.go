@@ -104,10 +104,10 @@ func TestRedisQueue_UnreadableCancellationMarker_RefusesToRunUntilReadableAgain(
 
 	// The Job becomes dispatchable at +800ms; every dispatch's marker read
 	// fails and the attempt is refused, bouncing the Job into asynq's Retry
-	// state -- with zero Handle invocations. Pre-fix (before this file's
-	// own execution-side round), the first dispatch ran Handle and the Job
-	// succeeded, so this poll times out (red) or the calls assertion below
-	// fails. The bounce is observed through asynq's own Inspector, not the
+	// state -- with zero Handle invocations. A dispatch path that ran
+	// Handle despite the unreadable marker would let the Job succeed, so
+	// this poll would time out (red) or the calls assertion below would
+	// fail. The bounce is observed through asynq's own Inspector, not the
 	// queue's Get: Get fails closed while the marker is unreadable (the
 	// reporting-side rule the two tests below pin), so it can no longer be
 	// the mid-outage probe -- which the very next assertion checks.
@@ -221,10 +221,11 @@ func TestRedisQueue_Get_UnreadableCancellationMarker_NeverReportsSucceeded(t *te
 		t.Fatalf("sabotage (list marker): %v", err)
 	}
 
-	// The regression: pre-fix, Get logged the read failure and reported the
-	// underlying Completed record's natural state -- StatusSucceeded with
-	// an empty Result. Post-fix it fails closed, returning the error for
-	// the caller to retry.
+	// The regression: Get must fail closed on the unreadable marker --
+	// reporting the underlying Completed record's natural state
+	// (StatusSucceeded with an empty Result) after only logging the read
+	// failure would serve a caller a success that never happened; the
+	// error is returned instead, for the caller to retry.
 	if job, err := q.Get(tenantCtx(tenant), id); err == nil {
 		t.Fatalf("Get() = Status %v with an empty Result after a marker-read failure, want an error: a possibly-cancelled Job must never be reported as succeeded (job: %+v)", job.Status, job)
 	}
@@ -257,8 +258,8 @@ func TestRedisQueue_Get_UnreadableCancellationMarker_NeverReportsSucceeded(t *te
 // asynq's own dispatch loop archives the task regardless, and
 // DeadLetterJobs' overlay would then report StatusCancelled -- so a
 // listing whose marker read fails must error rather than report such a
-// Job as its natural StatusDeadLetter. Pre-fix, DeadLetterJobs swallowed
-// the read failure without even the Warn Get emitted.
+// Job as its natural StatusDeadLetter. Swallowing the read failure --
+// without even the Warn Get emits -- would fail this test.
 func TestRedisQueue_DeadLetterJobs_UnreadableCancellationMarker_FailsClosed(t *testing.T) {
 	ctx := context.Background()
 	connOpt := startRedisContainer(t, ctx)
@@ -309,9 +310,9 @@ func TestRedisQueue_DeadLetterJobs_UnreadableCancellationMarker_FailsClosed(t *t
 		t.Fatalf("sabotage (list marker): %v", err)
 	}
 
-	// The regression: pre-fix, DeadLetterJobs reported the archived Job as
-	// its natural StatusDeadLetter. Post-fix the whole listing fails
-	// closed.
+	// The regression: the whole listing fails closed on the unreadable
+	// marker -- reporting the archived Job as its natural StatusDeadLetter
+	// would fail this test.
 	if got, err := q.DeadLetterJobs(tenantCtx(tenant)); err == nil {
 		t.Fatalf("DeadLetterJobs() returned %d job(s) after a marker-read failure, want an error: an archived Job a concurrent Cancel may have settled as StatusCancelled must never be reported as StatusDeadLetter while its cancellation state cannot be read", len(got))
 	}

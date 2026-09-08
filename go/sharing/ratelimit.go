@@ -9,20 +9,18 @@ import (
 	"github.com/vislake/speed/go/ratelimit"
 )
 
-// This file closes the round-1 known limitation AGENTS.md recorded --
-// "Create or Access has no rate limiting" -- by applying go/ratelimit to
-// both call sites this module's abuse surface
-// actually has -- Service.Create (share-creation abuse, one dimension) and
-// Service.AccessPublic (token-guessing and password-guessing abuse, two
-// dimensions enforced at two deliberately different points in the access
-// flow: the caller-IP dimension unconditionally, in accessPublicPrelude
-// before the presented token is even resolved, and the per-token dimension
-// only after a presented credential has been judged wrong, inside
-// authorizeAttempt -- see checkAccessIPLimit and checkAccessTokenWrongGuess
-// for why each dimension's consumption sits where it does). Every check is
-// one ratelimit.Limiter.Allow call on the dimension's own key, built on the
-// shared allowRateLimit helper, with the underlying Limiter built lazily
-// over the host's KVStore (rateLimiter,
+// This file applies go/ratelimit to both call sites this module's abuse
+// surface actually has -- Service.Create (share-creation abuse, one
+// dimension) and Service.AccessPublic (token-guessing and password-guessing
+// abuse, two dimensions enforced at two deliberately different points in the
+// access flow: the caller-IP dimension unconditionally, in
+// accessPublicPrelude before the presented token is even resolved, and the
+// per-token dimension only after a presented credential has been judged
+// wrong, inside authorizeAttempt -- see checkAccessIPLimit and
+// checkAccessTokenWrongGuess for why each dimension's consumption sits
+// where it does). Every check is one ratelimit.Limiter.Allow call on the
+// dimension's own key, built on the shared allowRateLimit helper, with the
+// underlying Limiter built lazily over the host's KVStore (rateLimiter,
 // below) so it always reads whichever implementation the running deployment
 // mode actually resolved, never one captured before Bootstrap ran.
 //
@@ -41,9 +39,9 @@ import (
 
 // The rate-limit budget this module applies. Package constants, not dynamic
 // configuration: sharing cannot read a live go/config value without adding
-// that dependency (the same reasoning go/org/AGENTS.md records for its own
-// invite rate limits), and a declared config schema this module would then
-// ignore would be a lying schema, worse than a constant.
+// that dependency (the same reasoning org applies to its own invite rate
+// limits), and a declared config schema this module would then ignore
+// would be a lying schema, worse than a constant.
 const (
 	// createPerTenantRate bounds how many shares one tenant may create per
 	// createPerTenantWindow -- the blast radius of a compromised or
@@ -71,16 +69,16 @@ const (
 	// distributing guesses across many source addresses still trips this,
 	// because it is keyed on the token, not the caller. The budget is
 	// deliberately consumed only after an attempt has been judged wrong
-	// (checkAccessTokenWrongGuess's own doc comment), which is also what
-	// the budget deliberately does NOT bound any more: a fully legitimate
+	// (checkAccessTokenWrongGuess's own doc comment): a fully legitimate
 	// attempt -- a correct password, or any attempt on a passwordless
 	// share -- never pays it, so per-token volume of legitimate access is
-	// no longer capped across IPs the way the pre-fix, pre-judgment check
-	// incidentally capped it. That cap was the very mechanism that let one
-	// link holder deny every other holder of the same share, the defect
-	// the after-judgment shape exists to remove; volume abuse of a share
-	// whose credentials are fully known is left to the per-IP dimension
-	// and the share's own MaxViews ceiling.
+	// not capped across IPs. Capping every attempt regardless of outcome
+	// would let one link holder who lacks the password exhaust the budget
+	// and deny the legitimate password-holder's correct attempt, the
+	// hostage property checkAccessTokenWrongGuess's doc comment argues
+	// against in full; volume abuse of a share whose credentials are fully
+	// known is left to the per-IP dimension and the share's own MaxViews
+	// ceiling.
 	accessPerTokenRate   = 20
 	accessPerTokenWindow = time.Minute
 )
@@ -167,28 +165,27 @@ func (s *Service) checkAccessIPLimit(ctx context.Context, ip string) error {
 // This is deliberately consulted -- and its budget deliberately consumed --
 // ONLY after the attempt has already been judged illegitimate, from
 // authorizeAttempt's wrong-credential branch, its one caller; never
-// unconditionally before the password comparison, which is what this
-// dimension's previous shape did (it ran in accessPublicPrelude, ahead of
-// everything). A shared per-target budget consumed on every attempt
-// regardless of outcome can be exhausted by an attacker who holds the link
-// but not the password -- and the entire point of protecting a share with a
-// password is that the link may leak -- permanently denying the legitimate
-// password-holder's own correct attempt for the rest of the window, because
-// that attempt is refused by the budget check before it ever reaches the
-// comparison that would have told the two apart. Gating the budget on "the
-// presented credential was just judged wrong" instead means a correct
-// attempt is NEVER refused for budget reasons: it is never judged wrong, so
-// it never reaches this check at all, no matter how many wrong guesses from
-// however many sources already exhausted the budget. This is the identical
-// reasoning, and the identical fix shape, go/authn already applied to its
-// own per-target wrong-guess dimension (go/authn/ratelimit.go's
+// unconditionally before the password comparison. A shared per-target
+// budget consumed on every attempt regardless of outcome can be exhausted
+// by an attacker who holds the link but not the password -- and the entire
+// point of protecting a share with a password is that the link may leak --
+// permanently denying the legitimate password-holder's own correct attempt
+// for the rest of the window, because that attempt is refused by the budget
+// check before it ever reaches the comparison that would have told the two
+// apart. Gating the budget on "the presented credential was just judged
+// wrong" instead means a correct attempt is NEVER refused for budget
+// reasons: it is never judged wrong, so it never reaches this check at all,
+// no matter how many wrong guesses from however many sources already
+// exhausted the budget. This is the identical reasoning go/authn applies to
+// its own per-target wrong-guess dimension (go/authn/ratelimit.go's
 // CheckSMSVerifyWrongGuess and its doc comment, argued against the same
 // hostage property).
 //
 // This does not weaken brute-force resistance: every wrong guess still pays
-// its full argon2id comparison before the budget is touched (rule 5's
-// constant-time equalization; the comparison must run to judge the guess
-// wrong), the per-IP dimension still caps how fast any one source can
+// its full argon2id comparison before the budget is touched (the module's
+// constant-time equalization, see burnSharePasswordCheck's doc comment; the
+// comparison must run to judge the guess wrong), the per-IP dimension still
+// caps how fast any one source can
 // present guesses, and once the budget is spent the guesser's further
 // wrong guesses are refused with ErrRateLimited rather than the 404-shaped
 // refusal an under-budget wrong guess answers with. The one cost of the

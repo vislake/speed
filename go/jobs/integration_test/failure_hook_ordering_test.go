@@ -46,28 +46,25 @@ func (h *onFailureOrderingHandler) OnFailure(ctx context.Context, job *jobs.Job,
 	h.observed <- got.Status
 }
 
-// TestAsynqQueue_OnFailure_ObservesTaskNotYetArchived is Finding P2-1's
-// regression: it proves go/jobs/queue/asynq's Queue does NOT satisfy
-// handler.go's FailureHook.OnFailure doc comment's literal claim the way
-// StandaloneQueue does -- a FailureHook that reads its own job back through
-// Get() from inside OnFailure observes StatusRunning, never
-// StatusDeadLetter, because asynq's own archival write (broker.Archive,
-// processor.go's handleFailedMessage) has not happened yet at the point
+// TestAsynqQueue_OnFailure_ObservesTaskNotYetArchived pins the ordering
+// divergence the FailureHook contract documents: go/jobs/queue/asynq's
+// Queue does NOT satisfy handler.go's literal claim the way StandaloneQueue
+// does -- a FailureHook that reads its own job back through Get() from
+// inside OnFailure observes StatusRunning, never StatusDeadLetter, because
+// asynq's own archival write (broker.Archive, processor.go's
+// handleFailedMessage) has not happened yet at the point
 // OnFailure runs: handleFailedMessage invokes the registered ErrorHandler
 // (this package's handleError -> handleErrorAttempt -> OnFailure)
 // unconditionally BEFORE the switch statement that decides retry-vs-archive,
 // and asynq offers no separate post-archive hook anywhere in the library
 // (confirmed against the pinned github.com/hibiken/asynq@v0.26.0 source,
-// not assumed) -- see go/jobs/AGENTS.md's "FailureHook has no direct asynq
-// equivalent" section for the same finding in prose.
+// not assumed).
 //
 // This is a documentation-conformance test, not a classic bug-fix
-// regression: no production behavior changed to make it pass (the ordering
-// it pins was already asynq's real, pre-existing behavior; only
-// handler.go's doc comment overclaimed a uniform guarantee across both
-// deployment modes). It exists to keep that now-corrected, honest, weaker
-// distributed-mode contract from silently drifting back out of sync with
-// what the code actually does.
+// regression: it pins the honest, weaker distributed-mode contract (the
+// ordering is asynq's own, with no post-archive hook to move the call
+// after) so it cannot silently drift back out of sync with what the code
+// actually does.
 func TestAsynqQueue_OnFailure_ObservesTaskNotYetArchived(t *testing.T) {
 	ctx := context.Background()
 	q := startTestAsynqQueue(t, ctx)

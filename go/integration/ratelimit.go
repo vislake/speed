@@ -17,11 +17,11 @@ const (
 )
 
 // layerOrder is the fixed evaluation sequence LayeredLimiter.Allow follows:
-// global first, then tenant, then key, matching
-// docs/internal/07-platform-services.md's own layering -- each layer maps
-// to one go/ratelimit.Allow call, and integration itself composes the
-// three -- and go/ratelimit.Limiter's own doc comment, which names this
-// exact three-layer composition as its motivating multi-dimension example.
+// global first, then tenant, then key, matching the design's own layering
+// -- each layer maps to one go/ratelimit.Allow call, and integration itself
+// composes the three -- and go/ratelimit.Limiter's own doc comment, which
+// names this exact three-layer composition as its motivating
+// multi-dimension example.
 // Evaluating global first means a
 // platform-wide incident denies every tenant and key uniformly before either
 // of the narrower counters is even touched -- the cheapest layer to exhaust
@@ -58,8 +58,8 @@ var layerOrder = [...]string{LayerGlobal, LayerTenant, LayerKey}
 // Per it is paired with, that limiter cannot honour "once per Per": the
 // weighted sliding-window formula would admit a key's very first hit and
 // deny every later window's hits forever, each window's own hit keeping
-// count against the next one (see go/ratelimit/AGENTS.md's Known
-// limitations). "A layer that lets one request through per interval" must
+// count against the next one (see go/ratelimit's own Limit-validation
+// comments). "A layer that lets one request through per interval" must
 // therefore not be spelled Rate: 1; it will surface as an
 // ErrRateOneUnsupported-wrapped error on every Allow of that layer. A host
 // with roughly that goal should use Rate: 2 with the interval as Per: at
@@ -103,11 +103,11 @@ type LayeredDecision struct {
 }
 
 // LayeredLimiter composes three independent go/ratelimit.Limiter.Allow
-// calls -- global, tenant, key -- into the one three-layer decision
-// docs/internal/07-platform-services.md's rate-limiting section describes,
-// entirely from go/ratelimit's existing public API: this package never
-// modifies go/ratelimit itself, and holds no state of its own beyond the
-// Limiter and LayeredLimits it was built with.
+// calls -- global, tenant, key -- into the one three-layer decision the
+// module's rate-limiting design describes, entirely from go/ratelimit's
+// existing public API: this package never modifies go/ratelimit itself,
+// and holds no state of its own beyond the Limiter and LayeredLimits it
+// was built with.
 type LayeredLimiter struct {
 	limiter ratelimit.Limiter
 	limits  LayeredLimits

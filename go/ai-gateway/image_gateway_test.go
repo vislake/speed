@@ -139,8 +139,7 @@ func newTestStorageObjectServiceWithStore(t *testing.T, store pkgcore.ObjectStor
 	// capabilities 0: the identical value pkgcore's own "objectstore.local"
 	// builtin registers (builtin_implementations.go) -- irrelevant here
 	// regardless, since these tests never set WithDeploymentMode and a
-	// single-process deployment excludes no implementation (root CLAUDE.md's
-	// Deployment mode section).
+	// single-process deployment excludes no implementation.
 	if _, err := pkgcore.NewKernel(pkgcore.WithObjectStore(store, 0)).Bootstrap(context.Background(), storageModule); err != nil {
 		t.Fatalf("bootstrap storage module: %v", err)
 	}
@@ -150,13 +149,12 @@ func newTestStorageObjectServiceWithStore(t *testing.T, store pkgcore.ObjectStor
 // failNPutObjectStore wraps a real pkgcore.ObjectStore, failing exactly the
 // first n calls to PutObject (storage.ObjectService.Upload's own seam call)
 // and delegating every other call, and every other method, unchanged. It
-// exists to let a test deterministically reproduce "the vendor call
-// succeeded, then the storage write failed" -- the audited bug this round
-// fixes -- without a wall-clock sleep or real SQLITE_BUSY contention: any
-// go/storage write failure after a successful vendor call is the same bug
-// from imageGenerateHandler.Handle's point of view, and PutObject is the
-// natural, minimal seam to inject one at (root CLAUDE.md's bug-fix test
-// policy).
+// lets a test deterministically reproduce "the vendor call succeeded, then
+// the storage write failed" -- the failure imageGenerateHandler.Handle's
+// idempotency invariant exists for -- without a wall-clock sleep or real
+// SQLITE_BUSY contention: any go/storage write failure after a successful
+// vendor call is the same failure from Handle's point of view, and
+// PutObject is the natural, minimal seam to inject one at.
 type failNPutObjectStore struct {
 	inner pkgcore.ObjectStore
 	n     int
@@ -578,22 +576,21 @@ func TestImageGenerateHandler_ProviderError_Refused(t *testing.T) {
 }
 
 // --- Job idempotency: a retry must never re-bill the vendor or double-
-// record usage (this round's fix for the audited P1-1 bug) ---------------
+// record usage ----------------------------------------------
 
 // TestImageGenerateHandler_RetryAfterVendorSuccess_DoesNotRecallVendorOrDoubleRecordUsage
-// is THE regression test for the audited bug: it reproduces "the vendor
-// call succeeds, then the storage write fails" (via failNPutObjectStore,
-// the same shape of failure go/ai-gateway/AGENTS.md's SQLITE_BUSY entry
-// records as a real, observed scenario), drives the queue's own retry by
-// calling Handle a second time for the SAME *jobs.Job (job.ID never
-// changes between attempts -- jobs.Job.ID's own doc comment), and asserts
-// the vendor was invoked exactly once and usage was recorded exactly once
-// across both attempts.
+// pins the job-idempotency invariant: it reproduces "the vendor call
+// succeeds, then the storage write fails" (via failNPutObjectStore, the
+// same failure shape the marker table exists for), drives the queue's own
+// retry by calling Handle a second time for the SAME *jobs.Job (job.ID
+// never changes between attempts -- jobs.Job.ID's own doc comment), and
+// asserts the vendor was invoked exactly once and usage was recorded
+// exactly once across both attempts.
 //
-// This test FAILS on pre-fix code: with no job-idempotency marker at all,
-// the second Handle call unconditionally re-resolves the route and calls
-// ImageProvider.TextToImage again, so provider.textToImageCalls is 2 after
-// both attempts (this test wants 1).
+// The assertion is load-bearing: without the job-idempotency marker, the
+// second Handle call would unconditionally re-resolve the route and call
+// ImageProvider.TextToImage again, making provider.textToImageCalls 2
+// after both attempts (this test wants 1).
 func TestImageGenerateHandler_RetryAfterVendorSuccess_DoesNotRecallVendorOrDoubleRecordUsage(t *testing.T) {
 	provider := &fakeImageProvider{result: ImageResult{
 		Image: ImageBytes{Content: tinyPNG, MIME: "image/png"},
@@ -644,7 +641,7 @@ func TestImageGenerateHandler_RetryAfterVendorSuccess_DoesNotRecallVendorOrDoubl
 		t.Fatalf("retry attempt: %v", err)
 	}
 
-	// THE invariant this round ships.
+	// The invariant itself.
 	if provider.textToImageCalls != 1 {
 		t.Fatalf("provider called %d times across both attempts, want exactly 1 -- a retry after a successful vendor call must never call the vendor again", provider.textToImageCalls)
 	}
@@ -759,20 +756,18 @@ func TestImageUsageIdempotencyKey_StablePerJobAndFeature(t *testing.T) {
 // TestImageGenerateHandler_ClaimInsertFails_RetryCallsVendorExactlyOnce
 // reproduces an ordinary, non-crash transient failure of the FIRST write
 // this package's idempotency mechanism makes -- claimPending's own INSERT
-// -- standing in for real SQLITE_BUSY-class contention (this module's
-// AGENTS.md documents the shared-file scenario that hits this in
-// practice), via a SQLite trigger that aborts every INSERT into
-// ai_gateway_image_jobs for the whole duration of the first attempt.
+// -- standing in for real SQLITE_BUSY-class contention, via a SQLite
+// trigger that aborts every INSERT into ai_gateway_image_jobs for the
+// whole duration of the first attempt.
 //
-// Because claimPending runs BEFORE ImageProvider is ever called
-// (image_job_store.go's own doc comment), a blocked claim means the FIRST
-// attempt fails before reaching the vendor at all -- unlike an earlier
-// version of this mechanism, which wrote its marker only after a
-// successful vendor call and so let a transient failure of that write
-// reopen the double-vendor-call window this test targets. The invariant
-// this test actually cares about is the one stated in root CLAUDE.md's bug-
-// fix test policy and this file's own doc comment: across every attempt
-// for one job, the vendor is called AT MOST once.
+// The claim-before-vendor-call ordering (image_job_store.go's own doc
+// comment) is what makes a blocked claim a clean first-attempt failure:
+// claimPending runs BEFORE ImageProvider is ever called, so the FIRST
+// attempt fails before reaching the vendor at all -- a marker written only
+// after a successful vendor call would let a transient failure of that
+// write reopen the double-vendor-call window. The invariant this test
+// cares about: across every attempt for one job, the vendor is called AT
+// MOST once.
 func TestImageGenerateHandler_ClaimInsertFails_RetryCallsVendorExactlyOnce(t *testing.T) {
 	provider := &fakeImageProvider{result: ImageResult{
 		Image: ImageBytes{Content: tinyPNG, MIME: "image/png"},
@@ -865,12 +860,11 @@ var _ ImageProvider = (*concurrentImageProvider)(nil)
 // reproduces two overlapping Handle calls for the SAME job.ID -- the
 // redelivery shape a lease-based distributed queue can produce (a worker's
 // visibility timeout expiring while a slow vendor call is still in flight,
-// or two workers racing a poll), which image_job_store.go's own doc
-// comment explains the claim-before-vendor-call ordering closes: only one
+// or two workers racing a poll). The claim-before-vendor-call ordering
+// image_job_store.go's own doc comment explains closes it: only one
 // caller's claimPending INSERT can ever commit for one job id, so the
-// loser must refuse to call the vendor at all rather than raced through an
-// unlocked "no marker yet" read the way an earlier version of this
-// mechanism was.
+// loser must refuse to call the vendor at all -- there is no unlocked "no
+// marker yet" read to race through.
 func TestImageGenerateHandler_ConcurrentHandleForSameJob_OnlyOneVendorCall(t *testing.T) {
 	provider := &concurrentImageProvider{release: make(chan struct{})}
 	g, _, _ := imageGatewayTestFixture(t, &fakeImageProvider{}, WithImageProviderRegistry(newFakeImageRegistry(t, provider)))
@@ -977,11 +971,9 @@ var _ pkgcore.ObjectStore = (*stagedPutObjectStore)(nil)
 // the two through. The losing attempt must answer from the marker's own
 // completed object id -- the winner's -- never its own freshly minted (and
 // now orphaned) one, so any two Handle runs for one job agree on the id the
-// caller reads out of Job.Result.
-//
-// This test FAILS on pre-fix code: the losing attempt returns the orphan
-// object id it just wrote, so the two results disagree and one names an
-// object the completed marker row never recorded.
+// caller reads out of Job.Result. A losing attempt that returned the orphan
+// object id it just wrote would make the two results disagree, one naming
+// an object the completed marker row never recorded.
 func TestImageGenerateHandler_ConcurrentRedelivery_AgreesOnOneOutputObjectID(t *testing.T) {
 	provider := &fakeImageProvider{}
 	var recordedEvents []UsageEvent

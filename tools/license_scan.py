@@ -12,16 +12,15 @@ not external dependencies and carry no entry.
 examples/reference-app/go.mod is deliberately out of scope: the reference
 app is a consumer example, not a shipped library, so its own dependencies
 are not part of the repository's dependency-delivery list (its direct
-third-party requires are all permissive today). The M4 release-prep
-expansion -- transitive coverage and the reference app's own deps -- is
-noted in tools/README.md.
+third-party requires are all permissive). What is not checked: transitive
+(non-direct) dependencies, and the reference app's own dependencies.
 
-Policy, mirroring docs/internal/20-quality-and-security.md:
+Policy:
   * strong copyleft (GPL family, AGPL)           -> FAIL
   * weak copyleft (MPL, LGPL)                     -> FAIL unless the entry
         carries an "adr" field naming a file under docs/ that exists and
-        records the adjudication (one entry today, github.com/hashicorp/
-        vault/api, adjudicated by
+        records the adjudication (github.com/hashicorp/vault/api,
+        adjudicated by
         docs/adr/0003-accept-mpl2-for-pki-signer-vault.md)
   * any other unrecognized license string         -> FAIL with an
         adjudication message: identify the license from the dependency's
@@ -87,7 +86,7 @@ STRONG_COPYLEFT = {
 
 # Weak copyleft: pass only with a recorded adjudication (an "adr" field on
 # the manifest entry naming an existing file under docs/). One real entry
-# carries this today -- github.com/hashicorp/vault/api, adjudicated by
+# carries this -- github.com/hashicorp/vault/api, adjudicated by
 # docs/adr/0003-accept-mpl2-for-pki-signer-vault.md; the fixture suite
 # proves both branches (adjudicated and un-adjudicated) independently of
 # that real entry.

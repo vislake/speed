@@ -1,21 +1,17 @@
 -- Narrows uq_org_nodes_single_root -- the one-root-per-tenant index 0007
--- shipped -- to LIVE rows only, closing the P1-org-11 finding: 0007's
--- predicate (parent_id = '') admitted every root-shaped row, soft-deleted
--- ones included, so a mark-deleted root kept occupying its tenant's single
--- root slot. CreateRoot's insert then collided with an invisible row on
+-- adds -- to LIVE rows only: 0007's
+-- predicate (parent_id = '') admits every root-shaped row, soft-deleted
+-- ones included, so a mark-deleted root keeps occupying its tenant's single
+-- root slot. CreateRoot's insert then collides with an invisible row on
 -- every attempt -- translated into org.root_already_exists -- and a tenant
--- whose root had been removed (through the exported Repository surface;
+-- whose root has been removed (through the exported Repository surface;
 -- TreeService.Delete itself refuses the root, so no org-level path can
--- restore the slot) had no way back to a tree: unrecoverable tenant state.
+-- restore the slot) has no way back to a tree: unrecoverable tenant state.
 --
--- 0004_add_soft_delete.sql narrowed this module's two pre-existing unique
--- indexes to WHERE deleted_at IS NULL in the same migration that added the
--- soft-delete columns, and both go/org's own conventions
--- (docs/internal/04-data-and-tenancy.md, delete-semantics section) and the
--- sibling 0004/0005 migrations' precedent require every unique index over a
--- soft-deletable row to count live rows only. 0007 shipped after that round
--- and its own predicate should have carried the same deleted_at IS NULL
--- clause -- the oversight this file repairs. The index is dropped and
+-- Every unique index over a soft-deletable row counts live rows only, the
+-- convention this module's other migrations already follow: 0004's
+-- uq_org_nodes_sibling_name and uq_memberships_tenant_user are both scoped
+-- WHERE deleted_at IS NULL. The index is dropped and
 -- re-created under the SAME name, exactly as 0004 did, so every other
 -- reference to the name (error mapping via gorm.ErrDuplicatedKey, this
 -- module's own tests and Restore's slot-reuse handling in tree.go) needs no
@@ -28,10 +24,10 @@
 -- slot-reuse collision -- the root-slot reuse tree.go's Restore doc comment
 -- already promises, and which 0007 as shipped could not deliver.
 --
--- A database that already carries two live root rows for one tenant (the
--- pre-0007 race's own output) fails this CREATE INDEX loudly rather than
--- being silently repaired; such a database could not have applied 0007
--- either, which fails on the identical condition.
+-- A database that already carries two live root rows for one tenant fails
+-- this CREATE INDEX loudly rather than being silently repaired; such a
+-- database could not have applied 0007 either, which fails on the identical
+-- condition.
 --
 -- This is the sqlite/ copy; the postgres/ sibling carries the full
 -- rationale. The two are byte-identical -- partial unique indexes with an

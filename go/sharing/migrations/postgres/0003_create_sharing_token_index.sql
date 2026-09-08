@@ -1,10 +1,10 @@
 -- sharing_token_index holds the narrow, deliberately non-tenant-scoped
 -- token_hash -> tenant_id mapping go/sharing/model.go's shareTokenIndex
--- documents in full -- the round-2 mechanism that resolves a bearer
--- token's owning tenant before any tenant is known at all, so a genuinely
--- unauthenticated visitor (holding no tenant claim) can still reach the
--- ordinary tenant-scoped Service.Access path (AGENTS.md's "Tenant
--- resolution for an unauthenticated viewer" section).
+-- documents in full: the mechanism that resolves a bearer token's owning
+-- tenant before any tenant is known at all, so a genuinely unauthenticated
+-- visitor (holding no tenant claim) can still reach the ordinary
+-- tenant-scoped Service.Access path (service.go's AccessPublic doc
+-- comment).
 --
 -- This is platform data, deliberately never dbkit.TenantScoped -- the
 -- identical treatment go/authn's users table, go/jobs's jobRecord and

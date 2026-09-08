@@ -63,14 +63,11 @@ function contrastRatio(a: string, b: string): number {
 
 describe('SignOutButton', () => {
   it('default the button to an inheriting color, never the primary palette color', async () => {
-    // Regression for the acceptance measurement that named the sign-out
-    // control at 1:1: a button defaulting to the primary palette color
-    // vanishes on the very surface it usually sits on -- an AppBar
-    // whose background IS the primary color (the reference-app header
-    // measured rgb(37,99,235) text on an rgb(37,99,235) background).
-    // color="inherit" makes the text follow the ambient color: the
-    // AppBar's own contrastText there, the surrounding text color on a
-    // plain surface.
+    // A button defaulting to the primary palette color vanishes on the
+    // very surface it usually sits on -- an AppBar whose background IS
+    // the primary color. color="inherit" makes the text follow the
+    // ambient color: the AppBar's own contrastText there, the
+    // surrounding text color on a plain surface.
     const harness = makeHarness({ [LOGIN_PASSWORD]: () => makePair() })
     await signIn(harness)
     renderWithProviders(<SignOutButton session={harness.session} />)

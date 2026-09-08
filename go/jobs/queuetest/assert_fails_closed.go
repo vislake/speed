@@ -17,18 +17,18 @@ import (
 // structurally blind to how an implementation behaves when a read it makes
 // fails — and failure-direction divergence between implementations of one
 // seam is exactly the class such a suite cannot see, no matter how complete
-// its healthy-path checks are. The jobs seam has a proven instance: commit
-// c26b058b (fix(jobs): fail closed when Get's cancellation-marker read
-// fails) corrected go/jobs/queue/asynq's Queue, whose Get and DeadLetterJobs
-// swallowed a failure of the cancellation-marker read and reported the
-// Job's natural asynq state — a cancelled Job whose skipped run asynq
-// recorded as Completed read back as StatusSucceeded with an empty Result,
-// the answer the documented ai-gateway poll pattern fails to unmarshal —
-// while StandaloneQueue, whose every state read is the one row read with no
-// second source to swallow through, failed closed all along. The
-// healthy-path AssertConforms suite above ran fully green through that
-// divergence: nothing in it can make an underlying state read fail, so the
-// failure direction was unmeasured until a real-world report surfaced it.
+// its healthy-path checks are. The jobs seam has a real instance of that
+// class: go/jobs/queue/asynq's Get and DeadLetterJobs must overlay
+// StatusCancelled from a separate Redis marker whose read can fail while
+// the rest of Redis keeps working, and a swallowed failure of that read
+// would report a cancelled Job's natural asynq state — a cancelled Job
+// whose skipped run asynq recorded as Completed would read back as
+// StatusSucceeded with an empty Result, the answer the documented
+// ai-gateway poll pattern fails to unmarshal. StandaloneQueue, whose every
+// state read is the one row read with no second source to swallow through,
+// has no such direction by construction. The healthy-path AssertConforms
+// suite above is blind to this divergence: nothing in it can make an
+// underlying state read fail.
 //
 // This tier closes that blind spot the way eventbustest's injections close
 // the panic-isolation one: AssertFailsClosedOnUnreadableCancellationState
@@ -42,8 +42,8 @@ import (
 // Redis cancellation marker into a LIST, WRONGTYPE on every read), so what
 // the tier measures is the implementations' genuine behaviour under a real
 // read failure, never a simulation inside this package. StandaloneQueue's
-// already-established fail-closed direction is the baseline both checks
-// verify; asynq's post-c26b058b direction is what they measure.
+// fail-closed direction is the baseline both checks verify; asynq's
+// fail-closed direction is what they measure.
 //
 // # The three-part shape, after eventbustest
 //
@@ -51,7 +51,7 @@ import (
 // below return errors instead of failing a test directly, so this package's
 // own tests can drive them against a deliberately defective implementation
 // — a queue that SWALLOWS the injected read failure and reports its jobs'
-// natural state, the exact historical asynq shape — and require rejection.
+// natural state — and require rejection.
 // A rejection tier nobody has proven can fail is a constant-true harness
 // (a passing test that cannot fail does not count), which is why
 // assert_fails_closed_rejects_swallowing_queues_test.go exists; and
@@ -62,8 +62,8 @@ import (
 //
 // # What the tier does NOT assert
 //
-// The checks cover the two REPORTING surfaces of the c26b058b class: Get on
-// a possibly-cancelled Job, and a DeadLetterJobs listing. They deliberately
+// The checks cover the two REPORTING surfaces of the fail-closed class: Get
+// on a possibly-cancelled Job, and a DeadLetterJobs listing. They deliberately
 // do not assert about Cancel (not a reporting surface — asynq's marker read
 // there is an idempotency short-circuit whose failure leaves the marker
 // WRITE to answer), and they do not assert the dispatch-refusal direction,
@@ -176,11 +176,11 @@ const (
 // cancellation-state read is sabotaged, be answered with an ERROR — never
 // with its natural state reported as if the read had succeeded — and must
 // answer StatusCancelled again once the sabotage is repaired. The natural
-// state under the sabotage is the dangerous answer: asynq's Get, before
-// c26b058b, reported a skipped-run Cancelled Job's underlying Completed
-// record as StatusSucceeded with an empty Result when the marker read
-// failed, and this check fails any implementation that does the same in
-// whatever shape its own natural state takes.
+// state under the sabotage is the dangerous answer: an implementation that
+// reported a skipped-run Cancelled Job's underlying Completed record as
+// StatusSucceeded with an empty Result when the marker read failed would
+// serve exactly that, and this check fails any implementation that does
+// the same in whatever shape its own natural state takes.
 func checkGetFailsClosedOnUnreadableCancellationState(fc FaultRunnable) error {
 	ctx := context.Background()
 	if err := fc.RegisterHandler(jobs.NewHandlerFunc(faultTierGetType, func(context.Context, *jobs.Job, jobs.ProgressFn) (jobs.Result, error) {

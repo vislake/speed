@@ -1,8 +1,8 @@
--- integration_webhook_deliveries is go/integration's round-2 delivery log
--- (go/integration/webhook_model.go): one row per (subscription, event)
--- delivery attempted or about to be attempted -- the delivery log
--- docs/internal/07-platform-services.md requires. Tenant data,
--- isolation proven by tenancytest.AssertIsolated.
+-- integration_webhook_deliveries is go/integration's delivery log
+-- (go/integration/webhook_model.go): one row per (subscription, observed
+-- occurrence) delivery attempted or about to be attempted -- the delivery
+-- log the design requires. Tenant data, isolation proven by
+-- tenancytest.AssertIsolated.
 --
 -- The primary key is (id) alone, matching this module's other two tables.
 --

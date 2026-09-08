@@ -142,18 +142,18 @@ func manifestObjectExists(t *testing.T, store pkgcore.ObjectStore, key string) b
 	return true
 }
 
-// TestExportManifestCleanup_SweepReapsOnlyExpiredDeliveries is finding
-// P1-6's cleanup-half regression: a stored export manifest whose delivery
-// share has expired past the tenant's retention-window cutoff is reaped by
-// the module's own retention sweep (the export-manifests participant),
-// while a manifest whose share is still live, an expired manifest of
-// another tenant, an object a tampered event names outside the swept
-// tenant's own compliance/exports/ prefix, and an expired event whose
-// object an earlier pass already reaped all survive untouched -- and a
-// second sweep over the same rows converges to 0, the documented retry
-// contract. The behavior this test pins against had no cleanup mechanism
-// at all: every successfully delivered manifest stayed in the object store
-// forever, accumulating unbounded.
+// TestExportManifestCleanup_SweepReapsOnlyExpiredDeliveries is the
+// cleanup-half regression for the manifest retention story: a stored
+// export manifest whose delivery share has expired past the tenant's
+// retention-window cutoff is reaped by the module's own retention sweep
+// (the export-manifests participant), while a manifest whose share is
+// still live, an expired manifest of another tenant, an object a tampered
+// event names outside the swept tenant's own compliance/exports/ prefix,
+// and an expired event whose object an earlier pass already reaped all
+// survive untouched -- and a second sweep over the same rows converges to
+// 0, the documented retry contract. Without the cleanup mechanism, every
+// successfully delivered manifest would stay in the object store forever,
+// accumulating unbounded.
 func TestExportManifestCleanup_SweepReapsOnlyExpiredDeliveries(t *testing.T) {
 	svc, auditRepo, store := newManifestCleanupHarness(t)
 
@@ -215,20 +215,19 @@ func TestExportManifestCleanup_SweepReapsOnlyExpiredDeliveries(t *testing.T) {
 }
 
 // TestExportManifestCleanup_SweepReapsExpiredPartialFailureExport is
-// P2-4's cleanup-half regression: a PARTIAL export -- one participant's
-// Export callback failed while others contributed -- is still gathered,
-// stored and delivered, and its audit event records that as Success
-// false (emitExportAudit's `success := !manifest.HasErrors()`), while
-// still carrying the same object_key and share_expires_at a full
-// export's event does. The sweep used to gate its candidates on
-// Result.Success true -- judging "is there something to reap" by "did the
-// operation succeed" -- so a partial export's stored manifest was never a
-// candidate and stayed in the object store forever, one stored bundle per
-// partial export. The honest gate is the delivery share's own expiry: a
-// partial export's manifest whose share expired past the retention
-// cutoff is reaped exactly like a full export's, one whose share is still
-// live survives untouched, and a re-run over the same rows converges to
-// 0.
+// the partial-export half of the same regression: a PARTIAL export -- one
+// participant's Export callback failed while others contributed -- is
+// still gathered, stored and delivered, and its audit event records that
+// as Success false (emitExportAudit's `success := !manifest.HasErrors()`),
+// while still carrying the same object_key and share_expires_at a full
+// export's event does. A candidate gate on Result.Success true --
+// judging "is there something to reap" by "did the operation succeed" --
+// would leave a partial export's stored manifest forever un-reaped, one
+// stored bundle per partial export. The honest gate is the delivery
+// share's own expiry: a partial export's manifest whose share expired
+// past the retention cutoff is reaped exactly like a full export's, one
+// whose share is still live survives untouched, and a re-run over the
+// same rows converges to 0.
 func TestExportManifestCleanup_SweepReapsExpiredPartialFailureExport(t *testing.T) {
 	svc, auditRepo, store := newManifestCleanupHarness(t)
 

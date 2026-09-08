@@ -192,10 +192,10 @@ show-once recovery codes; and a WeChat binding that walks the
 authorize URL to the host's callback route and back, the remounted
 page's refetches converging on the bound row. A final `switchLanguage`
 leg re-renders the same page in the other supported language. The
-whole exchange -- eighteen requests -- is pinned in order at the end,
-with each request's authorization header asserted (turn zero
-credential-less, `access-1` until the step-up rotates it to
-`access-2`). The documented usage cannot drift from the API.
+whole exchange is pinned in order at the end, with each request's
+authorization header asserted (turn zero credential-less, `access-1`
+until the step-up rotates it to `access-2`). The documented usage
+cannot drift from the API.
 
 ## SessionsSection
 
@@ -304,7 +304,7 @@ The provider vocabulary is deliberately not imported from
 identically to auth-ui's own definitions, and must be kept in sync with
 them -- the authn spec is the shared source of truth for the provider
 set, and a social channel added to the spec lands in both packages'
-copies in the same round.
+copies together.
 
 ```ts
 export type SocialProvider =
@@ -452,9 +452,8 @@ never verify again.
 ## Text and i18n
 
 All built-in strings live in the bilingual `account-ui` namespace
-(`src/locales/zh-CN.json` and `en-US.json`, 107 keys each with
-identical leaf key sets, enforced by registration and by
-`tools/check_i18n_keys.py` in CI):
+(`src/locales/zh-CN.json` and `en-US.json`, identical leaf key sets,
+enforced by registration and by `tools/check_i18n_keys.py` in CI):
 
 | Section | Purpose |
 |---|---|
@@ -577,8 +576,8 @@ carrying one provider auth-ui's harness does not: the
   harness (auth-ui's other half) has a counterpart here.
 
 `src/usage-example.test.tsx` compiles and executes the Quick start
-composition above end to end over the rig (eighteen requests in a
-pinned order, authorization headers asserted per request), and every
+composition above end to end over the rig (the exchange pinned in
+order, authorization headers asserted per request), and every
 component test asserts axe (`expectNoAxeViolations`) and the bilingual
 text of its states -- importing the shipped locale files, never
 inlining a language literal.
@@ -590,7 +589,7 @@ inlining a language literal.
 | `react`, `react-dom` | peer (required, ^18 or ^19) | the host owns the React tree |
 | `@mui/material` | peer (required, ^9) | the `Button`/`Chip`/`TextField`/`Dialog` primitives and the ambient theme |
 | `@emotion/react`, `@emotion/styled` | peer (required, ^11) | MUI's own runtime requirements |
-| `@tanstack/react-query` | peer (required, ^5) | every read is a generated hook over the host's QueryClient -- the shared-QueryClient contract of docs/internal/21, the same peer `@speed/api-sdk` declares |
+| `@tanstack/react-query` | peer (required, ^5) | every read is a generated hook over the host's QueryClient -- the same peer `@speed/api-sdk` declares |
 | `@speed/api-sdk` | dependency | the generated hooks every surface reads through, the exported query-key builders the invalidations use, and `authnSocialCallback`, the plain generated call the binding handler drives -- a runtime dependency, unlike auth-ui's type-only one |
 | `@speed/auth-core` | dependency | the `AuthSession` type two public prop tables reference (`SocialBindingsSectionProps`, `MfaSectionProps`), so a consumer resolving the published `.d.ts` needs the specifier declared as a dependency, never a dev one -- the same rule auth-ui applies to the packages its public types reference |
 | `@speed/i18n` | dependency | the namespace registration and translation hook every surface renders through |
@@ -617,10 +616,10 @@ absent from the rule's one whitelist, `packages/api-client`); the
   here can make future sign-ins require verification.
 - **No change-password surface, and no profile fields.** The authn
   spec ships no change-password operation, so the password-change
-  cascade (revoking the other sessions) remains missing end to end,
-  and email/phone/display-name editing belongs to the profile round.
+  cascade (revoking the other sessions) is missing end to end, and
+  email/phone/display-name editing is absent too.
   The account page this family composes is the security section of a
-  larger host page; the rest of it is host content or later packages.
+  larger host page; the rest of it is host content.
 - **Enrollment is manual-entry.** The package ships no QR rendering
   and no clipboard mechanism, so the wizard shows the secret and the
   provisioning URI as text; a viewer with a camera-equipped phone
@@ -643,13 +642,12 @@ absent from the rule's one whitelist, `packages/api-client`); the
   values render as-is (opaque method references, deliberately
   untranslated), and the login history's method and failure-reason
   tokens render only when they are on the known-token lists; a future
-  channel or reason renders its generic other label until the round
-  that adds the token ships both bundle keys.
+  channel or reason renders its generic other label.
 - **The provider vocabulary is copied, not imported.** `SocialProvider`
   and `SocialProviderConfig` are this package's own definitions, kept
   in sync with `@speed/auth-ui`'s by hand (same-layer packages never
   import each other); the authn spec is the shared source of truth,
-  and both copies change in the same round as the spec.
+  and a spec change lands in both copies together.
 - **Session state does not survive a page load, and step-up elevation
   is single-token.** The memory-only session and refresh token are
   auth-core's known limitations, inherited by any host of this family.
@@ -669,27 +667,28 @@ absent from the rule's one whitelist, `packages/api-client`); the
   package-level proof remains the in-form leg --
   `src/usage-example.test.tsx` drives the composed family over a real
   `@speed/api-client` bound through the same seam a host binds, with a
-  scripted fetch answering genuine `Response` objects. The remaining
-  leg, a browser driving a real server, is M4's html-runner/e2e work;
-  the M4 e2e pipeline covers the full stack.
+  scripted fetch answering genuine `Response` objects. A browser
+  driving the real server is not wired; the in-form leg and the
+  consumer shell's composed-tree suites are the shipped evidence.
 - **Reads deliberately go through generated react-query hooks, not
   session operations.** The account surfaces read lists (sessions,
   history, identities) that are cacheable shared state and invalidate
   after their own mutations -- the generated-hooks tier of the
-  api-sdk contract (docs/internal/21), the tier auth-ui's components
-  deliberately do not consume because a sign-in form's answers are
-  one-shot, not a cache. This package is the second consumer of the
-  generated surface, after auth-core.
+  api-sdk contract, the tier auth-ui's components deliberately do not
+  consume because a sign-in form's answers are one-shot, not a cache.
+  This package is the second consumer of the generated surface,
+  after auth-core.
 - **`auth-ui` stays unimported.** Same-layer packages never import
   each other: the provider vocabulary is copied (see Known
   limitations), the callback endpoints are per-provider path segments
   in the authn spec rather than an auth-ui type, and a host composes
   both families over one session without either package knowing the
   other exists.
-- **Storybook / browser-side visual verification**: no preview-harness
-  round exists yet, same deferral `ui-kit`, `layout-kit` and `auth-ui`
-  carry; `color-contrast` stays axe-disabled for the same jsdom reason
-  and is verified browser-side in a later round.
+- **Storybook / browser-side visual verification**: no preview harness
+  exists (the same deferral `ui-kit`, `layout-kit` and `auth-ui`
+  carry); `color-contrast` stays axe-disabled for the same jsdom
+  reason, and contrast is asserted at the theme-value level in the
+  component suites of this package and its siblings.
 
 ## Development
 

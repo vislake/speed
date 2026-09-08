@@ -54,11 +54,10 @@ type UserSearchQuery struct {
 // person can belong to several tenants), only a platform-wide search makes
 // sense here in the first place.
 //
-// It is a pure, additive method: no existing signature in this module
+// It is an additive entry point: no existing signature in this module
 // changes. authn.Service has no opinion on who may call it -- that is an
-// authorization decision, and this module never imports rbac (root
-// CLAUDE.md's module-boundary rule). The caller (go/admin's HTTP handler,
-// in this round) is responsible for gating the operation on a platform
+// authorization decision left to the caller. The caller (go/admin's HTTP
+// handler) is responsible for gating the operation on a platform
 // permission such as admin:search_users before it ever reaches here.
 //
 // It returns ErrSearchCriteriaRequired when q names none of its three

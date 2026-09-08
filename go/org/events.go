@@ -18,8 +18,8 @@ import (
 // or a host running both modules fails to bootstrap with
 // ErrDuplicateEventType. org only subscribes.
 //
-// org does not -- and may not -- import authn's payload type. The root
-// CLAUDE.md's canonical module-boundary example is this exact pair ("authn
+// org does not -- and may not -- import authn's payload type: the
+// canonical module-boundary example is this exact pair ("authn
 // publishes UserCreated, org subscribes to create the default workspace;
 // org never imports authn.User"), and the payload's shape is not even
 // stable across deployment modes: pkgcore's Redis bus documents that a
@@ -32,10 +32,10 @@ const EventUserCreated = "authn.user.created"
 // The domain events org publishes about its roster. Names follow
 // pkgcore.EventDecl's <module>.<entity>.<action> convention.
 const (
-	// EventMemberInvited announces a pending invitation. The M2 notification
-	// module is its intended subscriber: once it exists, it delivers the
-	// invitation and org's own mail leg is switched off with the
-	// org.invitation_email flag.
+	// EventMemberInvited announces a pending invitation, for delivery
+	// through whichever channel the host wired: org's own mail leg runs
+	// unless the org.invitation_email flag switches it off, and a
+	// notification module may subscribe and take delivery over instead.
 	EventMemberInvited = "org.member.invited"
 
 	// EventMemberJoined announces an accepted invitation, or any other path
@@ -43,9 +43,9 @@ const (
 	EventMemberJoined = "org.member.joined"
 
 	// EventMemberRemoved announces a membership that no longer exists. authn
-	// is its most important subscriber: docs/internal/05-identity-and-access
-	// .md requires the removed user's tokens for that tenant to be revoked,
-	// and the session state those tokens live in is authn's, never org's.
+	// is its most important subscriber: a removed member's tokens for that
+	// tenant must be revoked, and the session state those tokens live in is
+	// authn's, never org's.
 	EventMemberRemoved = "org.member.removed"
 
 	// EventMemberRestored announces a mark-deleted membership made visible
@@ -282,7 +282,7 @@ func publishEvent(ctx context.Context, host hostSeams, eventType string, payload
 //     surface inside authn as a failed user creation.
 //
 //  3. The event carries no tenant. A self-registering user genuinely has no
-//     tenant yet -- docs/internal/04 notes that at the moment a social login
+//     tenant yet -- at the moment a social login
 //     succeeds there is no tenant at all -- so there is no workspace to
 //     create. Logged at Debug and skipped; the tenant-creating path is the
 //     explicit CreateTenantRoot call a host makes when a tenant is born.

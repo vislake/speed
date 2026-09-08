@@ -2,11 +2,11 @@
 -- overage threshold was in force when the row was last folded
 -- (go/metering/model.go's UsageSummary.OverageThreshold).
 --
--- The reviewer finding this migration closes (P2-metering-B): the restart
--- reconstruction's equivalence -- "once the durable summary holds a
--- quantity at or above this bucket's threshold, the crossing has
--- happened" (aggregator.go's ensureSeeded) -- holds ONLY while the
--- threshold is unchanged. Thresholds are construction-time values with no
+-- The defect this migration closes sits in the restart reconstruction's
+-- equivalence -- "once the durable summary holds a quantity at or above
+-- this bucket's threshold, the crossing has happened" (aggregator.go's
+-- ensureSeeded) -- which holds ONLY while the threshold is unchanged.
+-- Thresholds are construction-time values with no
 -- setter, so changing one requires a restart, which is exactly the
 -- operator's routine way of LOWERING one. After that restart, quantity >=
 -- threshold is true not because the crossing was ever published but
@@ -46,8 +46,9 @@
 -- the upgrade lands in and to cells the pre-0006 process actually folded
 -- and delivered. The alternative -- treating unattested rows as latched
 -- -- would silently swallow exactly the threshold-lowering signal this
--- migration exists to deliver, the failure direction this module's own
--- latch-follows-publish history treats as the worse one.
+-- migration exists to deliver -- the failure direction treated as the
+-- worse one here: a duplicated crossing is bounded, a silently absent
+-- signal is not.
 --
 -- This is the SQLite copy; the postgres/ sibling carries the full
 -- rationale. The two are schema-identical.

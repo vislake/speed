@@ -9,8 +9,7 @@ package vault_test
 // on why no offline-runnable Example against a live Transit engine exists
 // in this package (Docker-backed testcontainers, unavailable in the plain
 // unit-test tier godoc Examples run under). Both demonstrate construction
-// and pki.SignerRegistry usage only -- exactly what the round asked these
-// Examples to show.
+// and pki.SignerRegistry usage only.
 
 import (
 	"fmt"

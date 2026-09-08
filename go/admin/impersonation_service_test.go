@@ -44,8 +44,8 @@ func (f *fakeNotifier) Dispatch(ctx context.Context, d notification.Dispatch) (j
 // database and a real in-process EventBus/AuditActionRegistrar, with the
 // given notifier (nil is legal for these in-package tests: attach has run,
 // so Start proceeds with its validate-and-notify pass skipped -- a shape
-// only in-package wiring can produce since P2-4, when Start began refusing
-// services attach never ran on outright; see
+// only in-package wiring can produce, since Start refuses outright any
+// service attach never ran on; see
 // TestImpersonationService_Start_UnwiredService_Refused).
 func newTestImpersonationService(t *testing.T, notifier Notifier) (*ImpersonationService, *pkgcore.Registry) {
 	t.Helper()
@@ -73,9 +73,8 @@ func newTestImpersonationService(t *testing.T, notifier Notifier) (*Impersonatio
 	// impersonation_service_locale_test.go.
 	svc.attach(reg.EventBus(), reg.AuditActions, notifier, nil, nil)
 	// rbacSvc is deliberately NOT left nil the way authnSvc and members
-	// are: Start refuses while it is nil (its own doc comment -- the
-	// P2-3 follow-up's gate), and nearly every test in this file calls
-	// Start. Attach a real, Attach()-ed *rbac.Service over the same db,
+	// are: Start refuses while it is nil (its own doc comment), and nearly
+	// every test in this file calls Start. Attach a real, Attach()-ed *rbac.Service over the same db,
 	// exactly as a wired host's post-Bootstrap Module.AttachRBAC would;
 	// the pre-attach refusal itself is pinned separately, by
 	// TestImpersonationService_Start_BeforeAttachRBAC_Refused.
@@ -113,10 +112,9 @@ func newAttachedRBAC(t *testing.T, db *gorm.DB) *rbac.Service {
 	return svc
 }
 
-// startTestGrant starts a grant with an explicit Locale -- "a request WITH
-// a locale keeps working exactly as today" (P1-1's second, unchanged
-// leg) -- so every test in this file that does not care about locale
-// resolution itself never needs a real *authn.Service wired.
+// startTestGrant starts a grant with an explicit Locale, so every test in
+// this file that does not care about locale resolution itself never needs
+// a real *authn.Service wired.
 func startTestGrant(t *testing.T, svc *ImpersonationService) *ImpersonationGrant {
 	t.Helper()
 	grant, err := svc.Start(context.Background(), StartInput{
@@ -132,26 +130,25 @@ func startTestGrant(t *testing.T, svc *ImpersonationService) *ImpersonationGrant
 	return grant
 }
 
-// --- P2-3 follow-up: fail-closed while the rbac service is unattached ---
+// --- fail-closed while the rbac service is unattached ---
 
-// TestImpersonationService_Start_BeforeAttachRBAC_Refused is the P2-3
-// follow-up's regression test: on the unfixed code, Start with a nil
-// rbacSvc silently returned a grant -- the "impersonation grant must not
-// outlive its administrator's admin:impersonate permission" guarantee
-// (the endIfNoLongerPermitted machinery, onRoleBindingRevoked and
-// onRoleChanged) switched off with no error and no log, so a host that
-// never called Module.AttachRBAC issued grants the module could never
-// automatically end. Start must now refuse with ErrRBACServiceRequired --
-// the same named error RoleService.require answers on the identical seam
-// -- and write no grant.
+// TestImpersonationService_Start_BeforeAttachRBAC_Refused pins the
+// fail-closed gate behind grant birth: Start with a nil rbacSvc must
+// refuse with ErrRBACServiceRequired -- the same named error
+// RoleService.require answers on the identical seam -- and write no grant,
+// because the "impersonation grant must not outlive its administrator's
+// admin:impersonate permission" guarantee (the endIfNoLongerPermitted
+// machinery, onRoleBindingRevoked and onRoleChanged) runs only once
+// Module.AttachRBAC has attached a real *rbac.Service, and a host that
+// never called it would issue grants the module could never automatically
+// end.
 //
 // The service is built through the in-package constructor and run through
-// attach first -- the Module.Register path that flips the attached flag
-// (P2-4's fix) -- with AttachRBAC deliberately NOT called, so Start
-// passes the ErrImpersonationNotWired gate and reaches the rbac gate this
-// test exists for. (An unattached service is refused by the earlier gate
-// with a different code, pinned by
-// TestImpersonationService_Start_UnwiredService_Refused.)
+// attach first -- the Module.Register path that flips the attached flag --
+// with AttachRBAC deliberately NOT called, so Start passes the
+// ErrImpersonationNotWired gate and reaches the rbac gate this test
+// exists for. (An unattached service is refused by the earlier gate with
+// a different code, pinned by TestImpersonationService_Start_UnwiredService_Refused.)
 func TestImpersonationService_Start_BeforeAttachRBAC_Refused(t *testing.T) {
 	db := testutil.NewDB(t)
 	svc := newImpersonationService(NewImpersonationRepository(db))
@@ -181,12 +178,10 @@ func TestImpersonationService_Start_BeforeAttachRBAC_Refused(t *testing.T) {
 
 // TestImpersonationService_RoleRevokedBeforeAttachRBAC_Warns pins the
 // event-side half of the same closure: a rbac revocation event delivered
-// while rbacSvc is still nil must not be dropped without a trace -- on
-// the unfixed code both review paths returned silently, so a grant born
-// under older code in a host that never wired AttachRBAC would outlive
-// its administrator's revoked permission with nothing logged at all.
-// Each review path now Warns, naming the cause (the rbac service is not
-// attached) for the operator who can fix the wiring.
+// while rbacSvc is still nil must not be dropped without a trace. Each
+// review path Warns, naming the cause (the rbac service is not attached)
+// for the operator who can fix the wiring -- without the Warn, an unwired
+// host would lose the automatic-end guarantee with nothing logged at all.
 //
 // The service is built through the in-package constructor and run through
 // attach first, exactly like the Start-refusal test above: the shape that
@@ -260,15 +255,14 @@ func TestImpersonationService_Start_SelfTarget_Refused(t *testing.T) {
 	}
 }
 
-// TestImpersonationService_Start_SystemDomainTarget_Refused reproduces the
-// privilege-escalation bug Start() used to have with no target validation
-// at all: an operator holding only admin:impersonate could name
-// rbac.SystemDomain ("system") as TargetTenantID against another
-// platform-staff account's user id, and the substituted Principal
-// ImpersonationMiddleware installs would then be evaluated against every
-// admin:* permission THAT account holds -- not merely whatever an
-// ordinary impersonation target should ever grant. This must be refused
-// before any grant row is ever written.
+// TestImpersonationService_Start_SystemDomainTarget_Refused pins the
+// privilege-escalation refusal: an operator holding only
+// admin:impersonate could name rbac.SystemDomain ("system") as
+// TargetTenantID against another platform-staff account's user id, and
+// the substituted Principal ImpersonationMiddleware installs would then
+// be evaluated against every admin:* permission THAT account holds -- not
+// merely whatever an ordinary impersonation target should ever grant.
+// This must be refused before any grant row is ever written.
 func TestImpersonationService_Start_SystemDomainTarget_Refused(t *testing.T) {
 	svc, _ := newTestImpersonationService(t, nil)
 	_, err := svc.Start(context.Background(), StartInput{
@@ -290,7 +284,7 @@ func TestImpersonationService_Start_SystemDomainTarget_Refused(t *testing.T) {
 	}
 }
 
-// --- Property (d): dual-identity audit on start and end -----------------
+// --- dual-identity audit on start and end -----------------
 
 func TestImpersonationService_Start_RecordsDualIdentityAuditEvent(t *testing.T) {
 	svc, reg := newTestImpersonationService(t, &fakeNotifier{})
@@ -311,8 +305,8 @@ func TestImpersonationService_Start_RecordsDualIdentityAuditEvent(t *testing.T) 
 	if evt.Action != AuditActionImpersonationStarted {
 		t.Fatalf("Action = %q, want %q", evt.Action, AuditActionImpersonationStarted)
 	}
-	// Property (d): Actor is the impersonated (target) user, OnBehalfOf is
-	// the real administrator -- never the other way around.
+	// Actor is the impersonated (target) user, OnBehalfOf is the real
+	// administrator -- never the other way around.
 	if evt.Actor.Type != pkgcore.ActorTypeUser || evt.Actor.ID != "user-1" {
 		t.Fatalf("Actor = %+v, want {Type: user, ID: user-1}", evt.Actor)
 	}
@@ -324,16 +318,14 @@ func TestImpersonationService_Start_RecordsDualIdentityAuditEvent(t *testing.T) 
 	}
 }
 
-// TestImpersonationService_Start_AuditChanges_CarryTheReason is P2-2's
-// regression at the audit-emission site: the mandatory reason an operator
-// must write to start an impersonation grant (docs/internal/23-admin.md
-// section 4.1 -- the reason itself is part of the audit) must arrive on
-// the started event's after map, next to the grant's shape, so the
-// dual-identity audit trail is where the justification outlives the grant.
-// On unfixed code the started event's after carried target_tenant_id and
-// expires_at alone -- the reason lived only on the grant row, readable
-// while the grant was active and nowhere once it ended: a write-time
-// formality.
+// TestImpersonationService_Start_AuditChanges_CarryTheReason pins the
+// reason's place on the audit record: the mandatory reason an operator
+// must write to start an impersonation grant -- the reason itself is part
+// of the audit -- must arrive on the started event's after map, next to
+// the grant's shape, so the dual-identity audit trail is where the
+// justification outlives the grant. Without it the reason would live only
+// on the grant row, readable while the grant is active and nowhere once
+// it ended.
 func TestImpersonationService_Start_AuditChanges_CarryTheReason(t *testing.T) {
 	svc, reg := newTestImpersonationService(t, &fakeNotifier{})
 	var recorded []audit.RecordedEvent
@@ -409,7 +401,7 @@ func TestImpersonationService_End_RecordsDualIdentityAuditEvent(t *testing.T) {
 	}
 }
 
-// --- Property (e): mandatory notification on Start -----------------------
+// --- mandatory notification on Start -----------------------
 
 func TestImpersonationService_Start_DispatchesMandatoryNotification(t *testing.T) {
 	notifier := &fakeNotifier{}
@@ -427,9 +419,9 @@ func TestImpersonationService_Start_DispatchesMandatoryNotification(t *testing.T
 	if d.Recipient.Class != notification.RecipientClassUser || d.Recipient.UserID != "user-1" {
 		t.Fatalf("Recipient = %+v, want the target user", d.Recipient)
 	}
-	// The dispatch must run under the TARGET tenant's context (D2's
-	// mechanism: a system context scoped to the target tenant), never the
-	// administrator's own ambient tenant.
+	// The dispatch must run under the TARGET tenant's context (a system
+	// context scoped to the target tenant), never the administrator's own
+	// ambient tenant.
 	tenant, ok := pkgcore.TenantFromContext(notifier.contexts[0])
 	if !ok || tenant != "tenant-1" {
 		t.Fatalf("dispatch tenant = %q, ok=%v, want tenant-1", tenant, ok)
@@ -437,21 +429,20 @@ func TestImpersonationService_Start_DispatchesMandatoryNotification(t *testing.T
 }
 
 // TestImpersonationService_Start_NotificationParams_CarryNoInternalFields
-// is the P1 finding's regression at the dispatch's own construction site:
-// on unfixed main the mandatory security notice's Params carried the
-// platform operator's free-text reason and the administrator's user id
-// verbatim -- and every downstream surface (the persistent tenant-data
-// inbox row, the inbox API) serves Params as received, so the impersonated
-// user themselves read the operator's "why am I looking at this account"
-// justification and one party's identity data. The dispatch must now carry
-// NO parameters at all: the type's copy is static, its declaration marks
-// zero recipient-visible params (module.go's reg.Notifications.Add call),
-// so there is nothing legitimate for Params to carry. And because nothing
-// but Params used to distinguish one start's notice from the next in the
-// delivery key, each start now names its own fresh OccurrenceID -- the
-// first-class per-delivery marker notification provides -- so the
-// mandatory notice still arrives once per simulated login, never deduped
-// into the previous start's row.
+// pins the dispatch's construction-site boundary: the mandatory security
+// notice's Params must never carry the platform operator's free-text
+// reason or the administrator's user id -- every downstream surface (the
+// persistent tenant-data inbox row, the inbox API) serves Params as
+// received, so the impersonated user themselves would read the operator's
+// "why am I looking at this account" justification and one party's
+// identity data. The dispatch therefore carries NO parameters at all: the
+// type's copy is static, its declaration marks zero recipient-visible
+// params (module.go's reg.Notifications.Add call), so there is nothing
+// legitimate for Params to carry. And because the delivery key would
+// otherwise dedupe identical notices into the previous start's row, each
+// start names its own fresh OccurrenceID -- the first-class per-delivery
+// marker notification provides -- so the mandatory notice still arrives
+// once per start, never deduped.
 func TestImpersonationService_Start_NotificationParams_CarryNoInternalFields(t *testing.T) {
 	notifier := &fakeNotifier{}
 	svc, _ := newTestImpersonationService(t, notifier)
@@ -501,12 +492,11 @@ func TestImpersonationService_Start_NotificationParams_CarryNoInternalFields(t *
 	}
 }
 
-// TestImpersonationService_Start_NotifierFailure_RefusesStart pins P1-1's
-// corrected contract: a synchronous dispatch failure (the notification
-// could not even be enqueued) now refuses the whole Start call, and no
-// grant is ever written -- the exact opposite of this module's pre-fix
-// behaviour (a 201 with the failure only Warn-logged and swallowed behind
-// it, P1-1's own finding).
+// TestImpersonationService_Start_NotifierFailure_RefusesStart pins the
+// dispatch-or-refuse contract: a synchronous dispatch failure (the
+// notification could not even be enqueued) refuses the whole Start call,
+// and no grant is ever written -- a "mandatory" notification that fails
+// after the grant already succeeded could never be un-sent.
 func TestImpersonationService_Start_NotifierFailure_RefusesStart(t *testing.T) {
 	notifier := &fakeNotifier{failWith: context.DeadlineExceeded}
 	svc, _ := newTestImpersonationService(t, notifier)
@@ -536,7 +526,7 @@ func TestImpersonationService_Start_NilNotifier_StillSucceeds(t *testing.T) {
 	}
 }
 
-// --- Property (c): fail-closed on invalid/expired/ended grants -----------
+// --- fail-closed on invalid/expired/ended grants -----------
 
 func TestImpersonationService_Lookup_ValidActiveGrant_Found(t *testing.T) {
 	svc, _ := newTestImpersonationService(t, nil)
@@ -617,12 +607,12 @@ func TestImpersonationService_End_UnknownID_ReportsNotFound(t *testing.T) {
 	}
 }
 
-// TestImpersonationService_End_ConcurrentEnd_OnlyOneSucceeds is Finding
-// P3-3's regression test (half 2): two concurrent End calls on the SAME
-// grant id -- an operator's own DELETE racing another operator's DELETE,
-// or racing the automatic permission-revocation end below -- must not both
-// silently succeed and both emit an admin.impersonation.ended audit event
-// for one logical end.
+// TestImpersonationService_End_ConcurrentEnd_OnlyOneSucceeds pins the
+// guarded end: two concurrent End calls on the SAME grant id -- an
+// operator's own DELETE racing another operator's DELETE, or racing the
+// automatic permission-revocation end below -- must not both silently
+// succeed and both emit an admin.impersonation.ended audit event for one
+// logical end.
 //
 // The race is forced deterministically: both goroutines are handed their
 // own copy of the SAME grant, read once via Start's own return value
@@ -735,22 +725,19 @@ func TestImpersonationService_ListActive_ExcludesExpired(t *testing.T) {
 	}
 }
 
-// TestImpersonationService_Start_UnwiredService_Refused is P2-4's regression
-// test: an ImpersonationService reached before Module.Register's attach has
-// wired its mandatory host seams must refuse Start with the named
-// ErrImpersonationNotWired, never start a grant silently with the whole
-// validate-and-notify pass skipped -- the exact behaviour of the half-built
-// service the exported NewImpersonationService constructor used to hand out
-// on a library surface (no target-existence/locale resolution, no
-// target-membership validation, no mandatory security notification: the
-// seam gate below all three nil simply fell through). The only public path
-// to such a service is Module.Impersonation() before Register has run, so
-// the regression drives that path; the second leg drives the unexported
-// constructor directly, the deepest degraded shape, which stays reachable
-// in-package only. Pre-fix, both Start calls succeeded silently and wrote
-// grant rows.
+// TestImpersonationService_Start_UnwiredService_Refused pins the
+// pre-attach refusal: an ImpersonationService reached before Module.Register's
+// attach has wired its mandatory host seams must refuse Start with the
+// named ErrImpersonationNotWired, never start a grant silently with the
+// whole validate-and-notify pass skipped (no target-existence/locale
+// resolution, no target-membership validation, no mandatory security
+// notification). The only public path to such a service is
+// Module.Impersonation() before Register has run, so the test drives that
+// path; the second leg drives the unexported repo-only constructor
+// directly, the deepest degraded shape, which stays reachable in-package
+// only.
 func TestImpersonationService_Start_UnwiredService_Refused(t *testing.T) {
-	// Leg 1: the one remaining public path to an unattached service --
+	// Leg 1: the one public path to an unattached service --
 	// Module.Impersonation() before Register has ever run.
 	svc := NewModule(testutil.NewDB(t)).Impersonation()
 	_, err := svc.Start(context.Background(), StartInput{
@@ -770,8 +757,8 @@ func TestImpersonationService_Start_UnwiredService_Refused(t *testing.T) {
 		t.Fatalf("ListActive() = %+v, want no grant row: a refused Start must not write a grant", active)
 	}
 
-	// Leg 2: the bare repo-only constructor shape the finding named --
-	// reachable in-package only now that the constructor is unexported.
+	// Leg 2: the bare repo-only constructor -- reachable in-package only,
+	// since the constructor is unexported.
 	bare := newImpersonationService(NewImpersonationRepository(testutil.NewDB(t)))
 	_, err = bare.Start(context.Background(), StartInput{
 		AdminUserID:    "admin-1",

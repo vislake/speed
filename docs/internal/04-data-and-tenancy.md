@@ -30,7 +30,7 @@
 | **平台数据** | 全局共享，租户只读 | 否 | 平台级 Plan 定义、社交登录渠道配置、系统级配置、模块注册表 |
 | **关联数据** | 连接身份与租户的桥梁 | 是（按 tenant_id） | `memberships`（user_id × tenant_id × 角色） |
 
-> **实现状态注记（2026-09-03，M1 审计基础设施轮；2026-09 补充第四例）**：`go/dbkit/audit` 的 `audit_events` 表是第三个"带真实 `tenant_id` 列、但不实现 `TenantScoped`"的平台数据表，与 `go/jobs` 的 `jobRecord`、`go/config` 的 `row` 同一模式——平台级事件用空字符串 sentinel 而非 NULL 表示"无租户"，租户级事件则写入真实 tenant_id；两者共存于同一张表，靠应用层区分，不靠 GORM 插件过滤。这正是本节开头"审计日志既有租户级也有平台级"的落地方式：该表既不能整体划入"租户数据"（会拒绝平台级记录），也不能整体划入"平台数据"（会丢失按租户检索的能力），所以采用"平台数据 + 真实 tenant_id 列"这一组合，用 `TestAuditEvent_DoesNotImplementTenantScoped` 类测试断言"不实现 `TenantScoped`"这一半，用 `ListByTenant` 的真实查询断言"tenant_id 列真实可用"这一半。`go/ai-gateway` 的 `credentialRow`（`ai_gateway_credentials` 表）是第四例：主键 `(provider, scope, tenant_id)`，`tenant_id` 同样 `NOT NULL`、系统级行用空字符串 sentinel、租户级行写真实 tenant_id，同一组合、同一理由。
+> `go/dbkit/audit` 的 `audit_events` 表是第三个"带真实 `tenant_id` 列、但不实现 `TenantScoped`"的平台数据表，与 `go/jobs` 的 `jobRecord`、`go/config` 的 `row` 同一模式——平台级事件用空字符串 sentinel 而非 NULL 表示"无租户"，租户级事件则写入真实 tenant_id；两者共存于同一张表，靠应用层区分，不靠 GORM 插件过滤。这正是本节开头"审计日志既有租户级也有平台级"的落地方式：该表既不能整体划入"租户数据"（会拒绝平台级记录），也不能整体划入"平台数据"（会丢失按租户检索的能力），所以采用"平台数据 + 真实 tenant_id 列"这一组合，用 `TestAuditEvent_DoesNotImplementTenantScoped` 类测试断言"不实现 `TenantScoped`"这一半，用 `ListByTenant` 的真实查询断言"tenant_id 列真实可用"这一半。`go/ai-gateway` 的 `credentialRow`（`ai_gateway_credentials` 表）是第四例：主键 `(provider, scope, tenant_id)`，`tenant_id` 同样 `NOT NULL`、系统级行用空字符串 sentinel、租户级行写真实 tenant_id，同一组合、同一理由。
 
 **由此推导出的硬性规则：**
 
@@ -66,7 +66,7 @@ type Resolver interface {
 ## 多租户隔离：三重防护
 单靠开发者自觉必然出事，"忘记加 tenant_id 过滤"是 SaaS 最常见的严重漏洞。
 
-> **实现落地更正**（Round 1 实现 `pkgcore` 时确认）：本节下面的 `tenancy.FromContext`/`tenancy.WithSystemContext` 等函数，其**原语实际落在 `pkgcore` 包**，而不是 `tenancy` 模块——因为 `dbkit`（本节的 GORM 插件与 Repository 都在这里）需要直接调用它们，而 `dbkit` 不能 import `tenancy`（`tenancy` 本身依赖 `dbkit` 做 GORM 插件，反向 import 会成环）。`tenancy` 模块建成后，会在这些原语之上包一层面向业务代码的、带审计发布的便捷封装（`tenancy.WithSystemContext` 到时会调用 `pkgcore.WithSystemContext` 再发一条审计事件），但 `dbkit` 内部、以及任何不想引入 `tenancy` 依赖的底层代码，一律直接用 `pkgcore` 版本。下面的代码示例按 `pkgcore` 现状书写。
+> **实现落地位置**：本节下面的 `tenancy.FromContext`/`tenancy.WithSystemContext` 等函数，其**原语实际落在 `pkgcore` 包**，而不是 `tenancy` 模块——因为 `dbkit`（本节的 GORM 插件与 Repository 都在这里）需要直接调用它们，而 `dbkit` 不能 import `tenancy`（`tenancy` 本身依赖 `dbkit` 做 GORM 插件，反向 import 会成环）。`tenancy` 在这些原语之上提供面向业务代码的、带审计发布的便捷封装（`tenancy.WithSystemContext` 调用 `pkgcore.WithSystemContext` 后发一条审计事件）；`dbkit` 内部、以及任何不想引入 `tenancy` 依赖的底层代码，直接用 `pkgcore` 版本。下面的代码示例按 `pkgcore` 现状书写。
 
 1. **GORM 插件自动注入**：对实现 `TenantScoped` 标记接口的 model，在 query/update/delete 回调自动拼 `WHERE tenant_id = ?`，值取自 `pkgcore.TenantFromContext(ctx)`。
 2. **强制泛型 Repository 基类**（核心手段）：业务模块的仓储一律**组合** `dbkit.Repository[T]` 而不是直接持有 `*gorm.DB`。`Create` 自动回填 tenant_id（调用方无法伪造），读取时拿不到 tenant 直接 fail-closed 报错。CI 加静态检查，禁止业务模块内出现绕过 Repository 的 `db.Table/db.Model/db.Raw`。
@@ -88,7 +88,7 @@ type Resolver interface {
 
 ```go
 // 唯一合法的绕过方式，函数名刻意冗长且醒目
-// pkgcore 提供的是原语（无审计发布）；tenancy 建成后，业务代码应优先用
+// pkgcore 提供的是原语（无审计发布）；业务代码应优先用 tenancy 的审计封装
 // tenancy.WithSystemContext（同签名，内部多发一条审计事件后委托给这个原语）。
 ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
     Actor:   actor,            // 谁发起的：平台管理员 / 具名的系统任务
@@ -99,7 +99,7 @@ ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 
 约束：
 
-1. **只能由白名单模块调用**：`admin`、`compliance`、`jobs` 的系统任务、`authn` 的注册登录路径，以及 `tenancy` 模块自身的审计封装 `tenancy.WithSystemContext`（业务代码应调用它而非直接调用这个原语）。白名单由 code review 加 `pkgcore.WithSystemContext`/`tenancy.WithSystemContext` 两个函数自身的文档注释把关，**不是** depguard——仓库里没有任何 CODEOWNERS 文件（`go/pkgcore`、`go/tenancy` 均无），这是一处已知的真实实现缺口，不是静态检查手段之一——depguard 只能按整个 import path 粒度放行/拒绝文件，做不到只挡 `WithSystemContext` 这一个符号：`pkgcore` 根包同时还装着 `TenantID`/`WithTenant`/`apperr`，`go/dbkit`（真实代码、不在白名单上）合法地 import 它们，把「仅白名单可 import `pkgcore`」接成 depguard 规则会连带拦下 dbkit 23 处无关导入，草稿规则因此未合入（完整推演见 `.golangci.yml` 的 depguard 注释；要让这条纪律可静态检查，需要先把 `WithSystemContext` 迁到独立子包，那是公开 API 决策，不属于 lint 配置的副作用）。
+1. **只能由白名单模块调用**：`admin`、`compliance`、`jobs` 的系统任务、`authn` 的注册登录路径，以及 `tenancy` 模块自身的审计封装 `tenancy.WithSystemContext`（业务代码应调用它而非直接调用这个原语）。白名单由 code review 加 `pkgcore.WithSystemContext`/`tenancy.WithSystemContext` 两个函数自身的文档注释把关，**不是** depguard——仓库里没有任何 CODEOWNERS 文件（`go/pkgcore`、`go/tenancy` 均无），这是一处已知的真实实现缺口，不是静态检查手段之一——depguard 只能按整个 import path 粒度放行/拒绝文件，做不到只挡 `WithSystemContext` 这一个符号：`pkgcore` 根包同时还装着 `TenantID`/`WithTenant`/`apperr`，`go/dbkit`（真实代码、不在白名单上）合法地 import 它们，把「仅白名单可 import `pkgcore`」接成 depguard 规则会连带拦下 dbkit 的无关导入，草稿规则因此未合入（完整推演见 `.golangci.yml` 的 depguard 注释；要让这条纪律可静态检查，需要先把 `WithSystemContext` 迁到独立子包，那是公开 API 决策，不属于 lint 配置的副作用）。
 2. **必须携带原因**：`Purpose` 是必填枚举，不接受自由文本，防止"随便填一个"。
 3. **每次使用都是审计事件**：进入系统上下文本身就要落审计，含 Actor、Purpose、影响的记录数。
 4. **系统上下文下的查询依然受 RBAC 约束**：绕过的是租户过滤，不是权限判定。平台管理员没有 `tenant:read_any` 权限一样不能查。
@@ -108,7 +108,7 @@ ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 
 ## 删除语义：标记删除（可恢复）与彻底删除（合规擦除）
 
-> **现状（2026-09-03，dbkit 硬删除轮次）**：本节的两半都已落地为代码。标记删除（软删除）半部分随软删除轮次落地——`dbkit.SoftDeletable` 标记接口、`Repository[T].Delete` 按模型能力分流、`Repository[T].Restore`，以及查询回调专用的自动 scope 插件，均在 `go/dbkit`（`soft_delete.go`、`repository.go`）实现并测试。彻底删除（`HardDelete`）半部分于本轮（2026-09-03）在 `go/dbkit/hard_delete.go` 落地：真正物理 `DELETE`，对 `SoftDeletable` 模型同样适用（软删除行与存活行一样可擦除，自动 scope 只作用于查询）；门禁是**只查存在性**的系统上下文——普通租户上下文在触碰数据库之前即被拒绝（`ErrHardDeleteRequiresSystemContext`，`dbkit.hard_delete_requires_system_context`，机制级调用方错误、刻意不是 `Forbidden`，靠 `apperr.As` 的 Code 匹配，见设计要点 3 与 `go/dbkit/AGENTS.md` 的"Hard deletion"小节）；门禁通过后租户仍然强制且绑定——系统上下文绝不顶替租户（无租户照样 `pkgcore.ErrNoTenant` fail-closed），也绝不越出 ctx 租户自己的行，跨租户不可擦除性质由单测（`TestRepository_HardDelete_CrossTenant_SystemContextDoesNotEscapeTenantScope`）与 `go/dbkit/integration_test/postgres_hard_delete_rls_test.go`（真实受限角色 + RLS 策略）双边钉死。`HardDelete` 不涉及任何迁移或 DDL（物理 DELETE 本就是模式一直允许的）；谁有权持有系统上下文本身是调用侧白名单（`admin`/`compliance`/`jobs`/`authn`，生产授予走 tenancy 的审计封装 `tenancy.WithSystemContext`），不在 dbkit 内。参考应用的 notes 模块（`examples/reference-app/internal/notes`）是两半共同的第一个真实消费者，消费证明是服务级的（无 HTTP delete/restore 端点）。**保留期配置、`jobs` 定时清理与"被遗忘权"编排已经落地，不再是 M4 未建设想**——`go/compliance`（round 1 + round 2）的 `RetentionService.SweepTenant`/`SweepAllTenants`（按租户可配置的保留窗口，读 `RetentionService.RetentionWindow` 对 `config` 模块的租户级覆盖，未覆盖时退回默认值）、`EnqueueRetentionSweep` 的 `jobs` 定时任务、`ErasureService.Erase`（跳过保留窗口、按主体立即彻底删除的"被遗忘权"路径）都是真实、经测试的代码，均落在参与者注册表 `pkgcore.RetentionParticipant` 之上的应用层编排，最终调用的正是本节定义的 `dbkit.Repository[T].HardDelete`。仍然真正未建的，是 `go/compliance/AGENTS.md` 自己"Known limitations"记录的那几项：数据库角色/触发器层面的仅追加强制、可选哈希链、按分区归档，以及格式化的（CSV/JSON）审计报表导出——这几项，以及导出投递的跨模块级联清理由哪个业务模块自己负责等，才是本节"边界"与 [10 合规与审计](10-compliance-and-audit.md) 里仍要交给后续轮次的部分。本节下方的设计要点、交互清单与边界描述现在是已落地机制的权威说明，而不仅是设计意图；`go/dbkit/AGENTS.md` 的"Soft deletion"与"Hard deletion"两个小节是面向消费方的对应文档。
+> 本节的两半均已落地为代码。标记删除（软删除）：`dbkit.SoftDeletable` 标记接口、`Repository[T].Delete` 按模型能力分流、`Repository[T].Restore`，以及查询回调专用的自动 scope 插件，在 `go/dbkit`（`soft_delete.go`、`repository.go`）。彻底删除（`HardDelete`）：`go/dbkit/hard_delete.go`——真正物理 `DELETE`，对 `SoftDeletable` 模型同样适用（软删除行与存活行一样可擦除，自动 scope 只作用于查询）；门禁是**只查存在性**的系统上下文——普通租户上下文在触碰数据库之前即被拒绝（`ErrHardDeleteRequiresSystemContext`，`dbkit.hard_delete_requires_system_context`，机制级调用方错误、刻意不是 `Forbidden`，靠 `apperr.As` 的 Code 匹配，见设计要点 3 与 `go/dbkit/AGENTS.md` 的"Hard deletion"小节）；门禁通过后租户仍然强制且绑定——系统上下文绝不顶替租户（无租户照样 `pkgcore.ErrNoTenant` fail-closed），也绝不越出 ctx 租户自己的行，跨租户不可擦除性质由单测（`TestRepository_HardDelete_CrossTenant_SystemContextDoesNotEscapeTenantScope`）与 `go/dbkit/integration_test/postgres_hard_delete_rls_test.go`（真实受限角色 + RLS 策略）双边钉死。`HardDelete` 不涉及任何迁移或 DDL（物理 DELETE 本就是模式一直允许的）；谁有权持有系统上下文本身是调用侧白名单（`admin`/`compliance`/`jobs`/`authn`，生产授予走 tenancy 的审计封装 `tenancy.WithSystemContext`），不在 dbkit 内。参考应用的 notes 模块（`examples/reference-app/internal/notes`）是两半共同的第一个真实消费者，消费证明是服务级的（无 HTTP delete/restore 端点）。保留期配置、`jobs` 定时清理与"被遗忘权"编排在 `go/compliance`：`RetentionService.SweepTenant`/`SweepAllTenants`（按租户可配置的保留窗口，读 `RetentionService.RetentionWindow` 对 `config` 模块的租户级覆盖，未覆盖时退回默认值）、`EnqueueRetentionSweep` 的 `jobs` 定时任务、`ErasureService.Erase`（跳过保留窗口、按主体立即彻底删除的"被遗忘权"路径），均落在参与者注册表 `pkgcore.RetentionParticipant` 之上的应用层编排，最终调用的是本节定义的 `dbkit.Repository[T].HardDelete`。尚未落地的是 `go/compliance/AGENTS.md` 自己"Known limitations"记录的那几项：可选哈希链、按分区归档，以及导出投递的跨模块级联清理由哪个业务模块自己负责等编排细节（见 [10 合规与审计](10-compliance-and-audit.md)）。本节下方的设计要点、交互清单与边界描述是已落地机制的说明；`go/dbkit/AGENTS.md` 的"Soft deletion"与"Hard deletion"两个小节是面向消费方的对应文档。
 
 这里要分开的是两个都成立、但互相冲突的真实需求：终端用户手滑删错数据后要能自己找回；合规要求某些删除必须是不可逆的物理擦除，"删了但其实还在"不能算数。这不是同一个操作的两个开关，而是**同一份数据生命周期里两个先后发生、职责不同的阶段**——用一个 `Delete` 方法同时承担两种语义只会两头不讨好：默认物理删除，用户误删无法挽回；默认软删除，合规意义上的"已删除"又变得不可信。
 
@@ -123,18 +123,18 @@ ctx, err = pkgcore.WithSystemContext(ctx, pkgcore.SystemReason{
 
 **设计要点：**
 
-1. **软删除是按模型显式声明的可选能力，不是 `TenantScoped` 之外新增的隐式默认行为。** 新增标记接口 `dbkit.SoftDeletable`（要求模型携带 `DeletedAt *time.Time`、`DeletedBy string`），模型实现它才进入软删除路径；未实现的模型走今天既有的物理删除，行为不变、向后兼容。不是所有租户数据都该软删除——例如高频写入的用量流水表软删除没有意义，逐表决定，不做成全局开关。
+1. **软删除是按模型显式声明的可选能力，不是 `TenantScoped` 之外新增的隐式默认行为。** 新增标记接口 `dbkit.SoftDeletable`（要求模型携带 `DeletedAt *time.Time`、`DeletedBy string`），模型实现它才进入软删除路径；未实现的模型走既有的物理删除，行为不变、向后兼容。不是所有租户数据都该软删除——例如高频写入的用量流水表软删除没有意义，逐表决定，不做成全局开关。
 
-2. **`Repository[T].Delete` 按模型能力分流，不新增参数改变既有签名的含义**：目标类型实现 `SoftDeletable` 时落地为一次 `UPDATE ... SET deleted_at = ?, deleted_by = ?`；未实现时保持今天的物理 `DELETE` 不变。新增 `Repository[T].Restore(ctx, id)`，在保留窗口内把 `deleted_at` 清空。GORM 插件对实现了 `SoftDeletable` 的模型自动在查询回调追加 `deleted_at IS NULL`，与 `TenantScoped` 的 `tenant_id = ?` 是两个独立正交的 scope、同时生效；未显式要求"含已删除"的调用方看不到软删除的行。不直接复用 GORM 内建的 `gorm.DeletedAt`，因为内建类型没有 `deleted_by`，也没有跟 `tenant_id` scope 的编排顺序做过约定。
+2. **`Repository[T].Delete` 按模型能力分流，不新增参数改变既有签名的含义**：目标类型实现 `SoftDeletable` 时落地为一次 `UPDATE ... SET deleted_at = ?, deleted_by = ?`；未实现时保持既有的物理 `DELETE` 不变。新增 `Repository[T].Restore(ctx, id)`，在保留窗口内把 `deleted_at` 清空。GORM 插件对实现了 `SoftDeletable` 的模型自动在查询回调追加 `deleted_at IS NULL`，与 `TenantScoped` 的 `tenant_id = ?` 是两个独立正交的 scope、同时生效；未显式要求"含已删除"的调用方看不到软删除的行。不直接复用 GORM 内建的 `gorm.DeletedAt`，因为内建类型没有 `deleted_by`，也没有跟 `tenant_id` scope 的编排顺序做过约定。
 
-3. **彻底删除是一条独立、受限的入口，不是给 `Delete` 加个参数。** 新增 `Repository[T].HardDelete(ctx, id)`（命名刻意冗长醒目，呼应 `WithSystemContext` 的命名原则），语义等同今天的物理 `DELETE`，但要求调用方已处于系统上下文——对普通租户上下文直接拒绝，防止业务代码手滑把"删除"接成"彻底删除"。两个使用方：
+3. **彻底删除是一条独立、受限的入口，不是给 `Delete` 加个参数。** 新增 `Repository[T].HardDelete(ctx, id)`（命名刻意冗长醒目，呼应 `WithSystemContext` 的命名原则），语义等同既有的物理 `DELETE`，但要求调用方已处于系统上下文——对普通租户上下文直接拒绝，防止业务代码手滑把"删除"接成"彻底删除"。两个使用方：
    - **保留期到期清理**：`jobs` 定时任务扫描 `deleted_at` 早于租户保留期配置的行，调用 `HardDelete`，与 [10 合规与审计](10-compliance-and-audit.md) 的"数据保留与删除"策略是同一件事的两半——保留期配置从此有了明确含义：**软删除行在保留窗口内可恢复，窗口一过自动彻底删除**。
    - **"被遗忘权"请求**：按主体立即彻底删除，跳过保留窗口等待，级联清理关联媒体与派生资源；这条路径本就需要 `compliance` 在系统上下文下操作，见上节白名单。
 
-4. **与已有机制的交互，设计阶段先记下来，免得实现时踩坑：**
+4. **与已有机制的交互：**
    - **审计采集**：`audit_capture.go` 的自动写捕获插件按 GORM 的 Create/Update/Delete 回调分类；软删除底层是一次 `UPDATE`，天然捕获成 Update 语义的 diff（`deleted_at: nil → <time>`），不会被误记成 Delete 事件——该期望行为已由 `audit_capture_test.go` 的 `TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff` 显式断言钉死，避免被写成"在 `Delete` 里手动再发一条 Delete 审计事件"跟自动采集重复；`HardDelete` 是真正的物理 `DELETE`，走自动采集的 Delete 分支（`After` 为 nil、成功只发一个事件、调用方不得再手动补发），由 `TestAuditCapturePlugin_HardDelete_ClassifiesAsDelete` 与 `TestAuditCapturePlugin_HardDelete_NoMatchingRow_PublishesNothing` 钉死。**署名义务是调用方的，不是门禁的**：捕获插件从写入 context 读 `pkgcore.ActorFromContext`，而系统上下文本身不携带 Actor——`pkgcore.WithSystemContext` 只存 `SystemReason`（其 `Actor` 是无结构字符串，命名授权给谁，从不提升进结构化的 Actor 载体），tenancy 的审计封装返回的也正是这个 context——所以在系统上下文下执行 `HardDelete` 的调用方必须先叠加 `pkgcore.WithActor`（模拟操作下再加 `pkgcore.WithOnBehalfOf`，见双身份规则），否则擦除记录——主体行即将不复存在的那一条审计记录——将以零 Actor 落库。该行为由 `TestAuditCapturePlugin_HardDelete_SystemContextAlone_DoesNotAttribute` 显式钉死；`hard_delete.go` 的文档注释与 `go/dbkit/AGENTS.md` 的"Hard deletion"小节均明示该义务，参考应用 notes 消费方（`TestRepository_HardDelete_SoftDeletedNote_PhysicallyRemoved`）演示的就是合规形态（先在租户 context 上叠加 `pkgcore.WithActor` 再授予系统上下文）。
    - **唯一索引**：软删除行仍是一行真实数据，会继续占用唯一约束——例如 `go/org` 的 `UNIQUE(tenant_id, parent_id, name)`，删除一个节点后在保留窗口内用同名重建会被挡住。落地时需要在"把 `deleted_at` 并入唯一索引做局部索引（`WHERE deleted_at IS NULL`，PostgreSQL 与 SQLite 均支持，不违反双方言约束）"与"接受名字要等清理/彻底删除后才能复用"之间选一个，具体由模块决定，本节只要求不能被遗漏。**已有实践收敛成一条经验规则**：`go/org`、`go/rbac` 都选了前者——把已存在的完整唯一索引原地改写成局部索引；`go/integration` 的 `WebhookSubscription` 迁移则是第三种、本节未列出的真实情况——这张表压根没有会被软删除行占用的唯一索引（只有一个非唯一索引），迁移因此只加两列、不改任何索引。三个真实采用方目前是同一条规则："已有唯一索引就原地改成局部索引；没有就什么也不用做"，尚未出现真正采用"等清理后才能复用"这条被否决分支的模块。
    - **RLS**：软删除行对 PostgreSQL RLS 而言就是普通行，`tenant_id` 过滤照常生效；`HardDelete` 用的物理 `DELETE` 同样过 RLS，不需要额外设计。
    - **软删除只是隐藏，不是安全边界，更不是合规意义上的"已删除"**：软删除行仍是数据库里明文存在（加密字段除外）的一行，SQLite（standalone 模式默认方言）没有 RLS，隐藏能力完全靠 Go 层的 GORM scope 承担；不能把"用户在界面上删除了"等同于"数据已经不在了"。只有 `HardDelete` 之后，数据才算真正从库里消失——这正是合规场景要求彻底删除、软删除不能充数的原因。
 
-**边界**：本节只定义 `dbkit.Repository[T]` 这一层两条删除入口的职责边界；保留期的按租户可配置值、"被遗忘权"请求的受理与导出编排本身，是 `compliance` 模块的治理层职责，且已经落地（见上方状态注记）；仍未落地、真正留给后续轮次的是 `go/compliance/AGENTS.md` 记录的"Known limitations"——仅追加强制、哈希链、分区归档、格式化报表导出——以及跨业务模块的媒体/派生资源级联清理各自由哪个业务模块自己负责这类编排细节，见 [10 合规与审计](10-compliance-and-audit.md)。
+**边界**：本节只定义 `dbkit.Repository[T]` 这一层两条删除入口的职责边界；保留期的按租户可配置值、"被遗忘权"请求的受理与导出编排本身，是 `compliance` 模块的治理层职责（见上）。尚未落地的是 `go/compliance/AGENTS.md` 记录的"Known limitations"——哈希链、按分区归档——以及跨业务模块的媒体/派生资源级联清理各自由哪个业务模块自己负责这类编排细节，见 [10 合规与审计](10-compliance-and-audit.md)。

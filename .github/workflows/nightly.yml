@@ -1,46 +1,29 @@
 name: nightly
-
 # STUB -- not implemented. Triggered runs fail loudly at the guard step
 # below; nothing in this pipeline can pass silently.
 #
-# PIPELINE (docs/internal/18-cicd.md pipeline table, nightly row): the full
-# matrix plus performance-benchmark regression detection and flaky-test
-# detection, unbounded duration. Runs daily.
+# PURPOSE: the full matrix plus performance-benchmark regression
+# detection and flaky-test detection, run daily, unbounded duration.
 #
-# DESIGN-TABLE TRIGGER: a daily schedule; enabled by the implementing round
-# (a scheduled stub would only produce daily noise).
+# WHAT IS MISSING:
+#   * the full matrix -- would inherit everything full-check runs
+#     (full-check is live, so this leg is unblocked but unwired);
+#   * benchmark regression -- the module-owned suites exist (go/jobs:
+#     StandaloneQueue enqueue and round-trip latency; go/notification:
+#     delivery-key derivation and per-delivery preference resolution;
+#     go/authn: argon2id hash/verify at the cost floor and access-token
+#     issue/verify; go/rbac: cached and post-invalidation decisions);
+#     the regression leg itself still needs baseline capture and
+#     threshold wiring, which nothing in the tree does yet;
+#   * flaky detection -- nightly reruns mark unstable tests and
+#     auto-open tracking issues; the auto-issue mechanism needs a token
+#     with issues: write.
 #
-# CONTENT PLANNED:
-#   * the full matrix -- inherits everything full-check runs, so nightly could
-#     not be meaningfully implemented before full-check existed; full-check is
-#     live now, so this half is unblocked;
-#   * benchmark regression: docs/internal/20-quality-and-security.md names
-#     the planned hotspots (tenant-filtered repository queries,
-#     authorization decisions, dynamic-config reads, session validation
-#     under immediate-invalidation, metering throughput) -- the first
-#     module-owned suites now exist, landed with the modules that own the
-#     hotspots as the roadmap M1-M3 plan records: go/jobs (StandaloneQueue
-#     enqueue and round-trip latency), go/notification (delivery-key
-#     derivation and per-delivery preference resolution), go/authn
-#     (argon2id hash/verify at the cost floor, access-token issue/verify)
-#     and go/rbac (cached and post-invalidation decisions; grep "func
-#     Benchmark" over go/ and examples/ returns matches today). What the
-#     regression leg still needs is the baseline capture and threshold
-#     wiring, which lands with this pipeline's implementing round;
-#   * flaky detection: nightly reruns mark unstable tests and auto-open
-#     tracking issues (20-quality-and-security.md flaky-test governance);
-#     the auto-issue mechanism needs a token with issues: write, reviewed
-#     when the round lands.
-#
-# GATE: the flaky-detection token -- a token with issues: write, reviewed
-# when the implementing round lands. The benchmark half of this pipeline's
-# content is no longer missing: module-owned benchmark suites exist in the
-# tree now (go/jobs, go/notification, go/authn and go/rbac; see the
-# benchmark-regression bullet above and docs/internal/20-quality-and-
-# security.md's performance section for what each reports), and the
-# full-matrix half went live with full-check in the M0 CI round. What still
-# blocks the pipeline as a whole is the flaky-test auto-issue mechanism,
-# whose token requirement is external to this repository.
+# GATE: the flaky-detection token -- a token with issues: write, which no
+# credential wired anywhere in this repository can satisfy. The benchmark
+# half of the content is no longer missing: module-owned suites exist in
+# the tree now (go/jobs, go/notification, go/authn and go/rbac), and the
+# full-matrix half is live with full-check.
 
 on:
   workflow_dispatch:

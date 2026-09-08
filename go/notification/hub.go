@@ -18,9 +18,10 @@ const hubConnBuffer = 64
 // an inbox row and publishes EventInboxCreated on the platform bus, and
 // every replica's Hub -- subscribed to that event during Register -- pushes
 // the row's announcement to the connections that replica holds. Each
-// replica owns exactly one Hub (constructed in NewModule), and the
-// platform-staff shell that pushes these announcements to a browser or
-// device is a later round's consumer of the connections Subscribe returns.
+// replica owns exactly one Hub (constructed in NewModule), and no
+// platform-staff push consumer exists to carry announcements to a browser
+// or device -- the connections Subscribe returns serve the inbox stream
+// and tests.
 //
 // A Hub is deliberately NOT a delivery channel for the row itself: the row
 // is committed to the database before the event goes out, so an
@@ -82,10 +83,10 @@ func NewHub() *Hub {
 }
 
 // Subscribe registers a new UNscoped connection and returns it: the
-// connection takes every announcement the hub fans out -- the shape the
-// platform-staff push consumer of a later round (and this package's hub
-// tests) subscribe with, and the shape the inbox stream deliberately does
-// NOT use (it subscribes through SubscribeFor, scoped to the caller). The
+// connection takes every announcement the hub fans out -- the shape this
+// package's hub tests subscribe with, and the shape the inbox stream
+// deliberately does NOT use (it subscribes through SubscribeFor, scoped to
+// the caller). The
 // connection is live from the moment Subscribe returns: a Publish racing
 // Subscribe may already have delivered to it.
 func (h *Hub) Subscribe() *HubConn {
@@ -220,9 +221,8 @@ func (h *Hub) HandleEvent(_ context.Context, evt pkgcore.Event) error {
 
 // HubConn is one consumer's connection to a Hub, returned by Hub.Subscribe
 // or Hub.SubscribeFor. It is the whole consumer surface: read Messages,
-// and Close when done. The platform-staff shell of a later round owns one
-// per open browser or device connection; the inbox stream owns one per
-// open SSE connection, scoped through SubscribeFor; tests own them here.
+// and Close when done. The inbox stream owns one per open SSE connection,
+// scoped through SubscribeFor; tests own them here.
 type HubConn struct {
 	hub *Hub
 

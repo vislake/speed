@@ -56,7 +56,7 @@ func newMigratedRepositoryWithDB(t *testing.T) (*Repository, *gorm.DB) {
 // semantics, under which every Auditable model written through the
 // connection is captured. That is the host shape Note's plaintext
 // protection must survive -- a consumer wiring AuditBus without an
-// AuditModels restriction, or a future edit relaxing this app's own scope
+// AuditModels restriction, or an edit relaxing this app's own scope
 // list (see model.go's AuditResourceType doc comment, and the regression
 // test that drives this harness).
 //
@@ -143,14 +143,10 @@ func isRecordNotFound(err error) bool {
 	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
 }
 
-// TestRepository_AssertIsolated runs the mandatory tenant-isolation suite
-// (root CLAUDE.md's multi-tenant isolation rule; backend coding standard
-// §3.3/§13; go/dbkit/AGENTS.md's "Known limitations" section, which named
-// this exact obligation before tenancytest existed to fulfill it) against
-// notes' real dbkit.Repository[Note] usage -- this is that suite's first
-// real caller anywhere in the repository. Note is tenant data, not
-// identity or platform data (docs/internal/04-data-and-tenancy.md's
-// data-domain table), so AssertIsolated is the correct half of the
+// TestRepository_AssertIsolated runs the mandatory tenant-isolation
+// suite (the multi-tenant isolation discipline) against
+// notes' real dbkit.Repository[Note] usage. Note is tenant data, not
+// identity or platform data, so AssertIsolated is the correct half of the
 // AssertIsolated/AssertNotTenantScoped pair, never both.
 func TestRepository_AssertIsolated(t *testing.T) {
 	repo := newMigratedRepository(t)
@@ -165,8 +161,8 @@ func TestRepository_AssertIsolated(t *testing.T) {
 }
 
 // TestRepository_DeleteThenRestoreThenDelete_HiddenFromNormalQueriesThroughoutLifecycle
-// is dbkit's mark-delete round's reference-app consumer proof
-// (docs/internal/04-data-and-tenancy.md's delete-semantics section): Note implements
+// is dbkit's mark-delete mechanism's reference-app consumer proof
+// : Note implements
 // dbkit.SoftDeletable (model.go), and this drives the full lifecycle
 // straight through notes' real, migrated Repository -- promoted unchanged
 // from dbkit.Repository[Note], with no new code in repository.go itself --
@@ -235,8 +231,7 @@ func TestRepository_DeleteThenRestoreThenDelete_HiddenFromNormalQueriesThroughou
 
 // TestRepository_HardDelete_SoftDeletedNote_PhysicallyRemoved is the
 // hard-delete half of dbkit's delete semantics'
-// reference-app consumer proof (docs/internal/04-data-and-tenancy.md's
-// delete-semantics section, §3; the mark-delete half is
+// reference-app consumer proof (the mark-delete half is
 // TestRepository_DeleteThenRestoreThenDelete_HiddenFromNormalQueriesThroughoutLifecycle
 // above): dbkit.Repository[Note].HardDelete -- promoted unchanged from the
 // embedded base, exactly like Delete and Restore, with no new code in this

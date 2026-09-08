@@ -169,11 +169,11 @@ func TestSigningKeyRepository_ListVerifiableByPurpose_ExcludesRevoked(t *testing
 }
 
 // TestSigningKeyRepository_ListByPurposeAndStatuses_FiltersByExactStatusSet
-// proves round 3's ExportJWKS query: given active/retiring/pending/revoked
-// rows for the same purpose, asking for exactly {active, retiring} returns
-// those two and excludes both pending and revoked -- the JWKS-export
-// statement set is narrower than ListVerifiableByPurpose's own (which
-// includes pending), per this method's own doc comment.
+// proves the ExportJWKS query: given active/retiring/pending/revoked rows
+// for the same purpose, asking for exactly {active, retiring} returns those
+// two and excludes both pending and revoked -- the JWKS-export statement
+// set is narrower than ListVerifiableByPurpose's own (which includes
+// pending), per this method's own doc comment.
 func TestSigningKeyRepository_ListByPurposeAndStatuses_FiltersByExactStatusSet(t *testing.T) {
 	repo := NewSigningKeyRepository(newTestDB(t))
 	ctx := context.Background()
@@ -207,8 +207,7 @@ func TestSigningKeyRepository_ListByPurposeAndStatuses_FiltersByExactStatusSet(t
 
 // TestSigningKeyRepository_PromoteToActive_ConcurrentCalls_ExactlyOneWinner
 // is the state-arbitration pin behind the expiry scan's concurrency-safety
-// claim (P1-1's arbitration check, recorded in go/pki/AGENTS.md's round
-// entry): the pending -> active + active -> retiring transitions are two
+// claim: the pending -> active + active -> retiring transitions are two
 // guarded single-statement UPDATEs inside one transaction -- each matching
 // only a row still in the status the caller read -- NOT a Go-level
 // read-modify-write of a row the caller would blindly save. Whatever the
@@ -289,9 +288,8 @@ func TestSigningKeyRepository_PromoteToActive_ConcurrentCalls_ExactlyOneWinner(t
 }
 
 // TestSigningKeyRepository_AssertNotTenantScoped proves pki_signing_keys is
-// platform data (docs/internal/04-data-and-tenancy.md): the tenant-scoping
-// plugin must never filter it, and a row is visible regardless of which (or
-// no) tenant is current.
+// platform data: the tenant-scoping plugin must never filter it, and a row
+// is visible regardless of which (or no) tenant is current.
 func TestSigningKeyRepository_AssertNotTenantScoped(t *testing.T) {
 	db := newTestDB(t)
 	n := 0
@@ -369,7 +367,7 @@ func TestAuthorityRepository_AssertNotTenantScoped(t *testing.T) {
 	tenancytest.AssertNotTenantScoped(t, db, Authority{}, createFn, findFn)
 }
 
-// TestAuthorityRepository_Update_PersistsCRLFields proves round 3's
+// TestAuthorityRepository_Update_PersistsCRLFields proves the
 // GenerateCRL persistence path: a full-Save Update round-trips the CRL*
 // fields FindByID loaded and GenerateCRL would mutate.
 func TestAuthorityRepository_Update_PersistsCRLFields(t *testing.T) {
@@ -472,7 +470,7 @@ func TestAuthorityRepository_UpdateCRLIfCurrent_GuardedTransition(t *testing.T) 
 	}
 }
 
-// TestAuthorityRepository_ListAll_ReturnsEveryAuthority proves round 3's
+// TestAuthorityRepository_ListAll_ReturnsEveryAuthority proves the
 // RegenerateAllCRLs query: every authority, regardless of type.
 func TestAuthorityRepository_ListAll_ReturnsEveryAuthority(t *testing.T) {
 	repo := NewAuthorityRepository(newTestDB(t))
@@ -558,11 +556,10 @@ func TestLocalKeyRepository_AssertNotTenantScoped(t *testing.T) {
 // --- CertificateRepository --------------------------------------------------
 
 // TestCertificateRepository_AssertIsolated runs the mandatory tenant-
-// isolation suite against pki_certificates. Certificate is tenant data
-// (docs/internal/04-data-and-tenancy.md), so AssertIsolated -- not
-// AssertNotTenantScoped -- is the correct half of the pair: a certificate
-// issued for one tenant must never be readable, updatable or deletable from
-// another one.
+// isolation suite against pki_certificates. Certificate is tenant data, so
+// AssertIsolated -- not AssertNotTenantScoped -- is the correct half of the
+// pair: a certificate issued for one tenant must never be readable,
+// updatable or deletable from another one.
 func TestCertificateRepository_AssertIsolated(t *testing.T) {
 	repo := NewCertificateRepository(newTestDB(t))
 

@@ -62,7 +62,7 @@ import (
 // an invitation's address already travels among -- and an unnamed roster
 // is the exact defect this route exists to fix.
 //
-// The gate mirrors the org module route the web's roster used to read:
+// The gate mirrors the org module route the web's roster reads:
 // GET /api/v1/org/members answers org:read (guardOrgRoute,
 // demo_subject.go), so this answer requires the same permission through
 // the same rbac gate and the same demo subject resolver, and adds the
@@ -173,7 +173,7 @@ type teamMembersDeps struct {
 
 // teamMembersPermissionFor selects the permission a teamMembersPath
 // request must hold: org's own read permission, the same permission the
-// org module route the web's roster used to read gates its node-less
+// org module route the web's roster reads gates its node-less
 // member listing on (orgPermissionFor, demo_subject.go). Only reads
 // exist on this answer, so any other method answers "" -- and an empty
 // selector is refused by RequirePermissionFunc before the handler runs,

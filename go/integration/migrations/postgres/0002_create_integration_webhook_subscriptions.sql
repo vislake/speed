@@ -1,15 +1,14 @@
--- integration_webhook_subscriptions is go/integration's round-2 table
+-- integration_webhook_subscriptions is go/integration's webhook table
 -- (go/integration/webhook_model.go): one row per outbound webhook a tenant
 -- has configured -- which public event types it wants delivered, and to
--- which URL. Tenant data (docs/internal/04-data-and-tenancy.md), isolation
--- proven by tenancytest.AssertIsolated, never AssertNotTenantScoped, and
--- (per that same doc's distributed-mode rule) will carry a PostgreSQL RLS
--- policy in the distributed deployment mode once one is wired for this
--- module, the same way every other tenant-scoped table's does.
+-- which URL. Tenant data, isolation proven by tenancytest.AssertIsolated,
+-- never AssertNotTenantScoped; in the distributed deployment mode it will
+-- carry a PostgreSQL RLS policy once one is wired for this module, the
+-- same way every other tenant-scoped table's does.
 --
--- The primary key is (id) alone, matching round 1's integration_api_keys
--- precedent: id is an application-generated UUID, globally unique on its
--- own, so tenant_id rides along as a plain, non-key column.
+-- The primary key is (id) alone, matching integration_api_keys' precedent:
+-- id is an application-generated UUID, globally unique on its own, so
+-- tenant_id rides along as a plain, non-key column.
 --
 -- This is the PostgreSQL copy; see the sqlite/ sibling for the identical
 -- schema on that dialect. Kept portable on purpose: no dialect-specific
@@ -27,17 +26,16 @@
 -- source wider than its target. That is deliberate and handled at the
 -- audit write path (go/dbkit/audit's Repository.Insert cuts
 -- caller-supplied content to its columns, recording each cut in a
--- structured warning; see go/dbkit/audit/AGENTS.md's "Column bounds"
--- section), so a legal long URL is stored cut, never refused after this
--- subscription's mutation has committed.
+-- structured warning), so a legal long URL is stored cut, never refused
+-- after this subscription's mutation has committed.
 --
 -- event_types is a JSON array of PUBLIC event type strings
 -- (webhook_model.go's own doc comment spells out why this is never the
 -- internal pkgcore.Event.Type vocabulary), stored as TEXT rather than a
--- native array or JSONB column with operator filtering, per the backend
--- coding standard's dual-dialect rule -- this module only ever reads the
--- column back whole and filters in application code (see
--- webhook_delivery.go's matchingSubscriptions).
+-- native array or JSONB column with operator filtering, per the
+-- dual-dialect rule -- this module only ever reads the column back whole
+-- and filters in application code (see webhook_delivery.go's
+-- matchingSubscriptions).
 --
 -- secret is encrypted at rest under WebhookSecretSerializerName -- see that
 -- constant's own doc comment in webhook_model.go for why this column is

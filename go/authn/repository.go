@@ -5,13 +5,13 @@
 // dbkit.Repository[T] is constrained to T: dbkit.TenantScoped, and identity
 // data must NOT implement that interface: a person can belong to several
 // tenants, so a users row scoped to one tenant makes the multi-tenant case
-// unrepresentable. go/dbkit/AGENTS.md's "Known limitations" section covers
-// exactly this: the identity and platform domains use dbkit.Open()'s plain
-// *gorm.DB, and the compensating control is that every one of these models is
-// pinned by tenancytest.AssertNotTenantScoped in model_test.go -- which fails
-// loudly if any of them ever starts implementing TenantScoped, and equally
-// loudly if a query here ever starts behaving differently depending on what
-// tenant happens to be in the context.
+// unrepresentable. The identity and platform domains therefore use
+// dbkit.Open()'s plain *gorm.DB. The compensating control is that every one
+// of these models is pinned by tenancytest.AssertNotTenantScoped in
+// model_test.go -- which fails loudly if any of them ever starts
+// implementing TenantScoped, and equally loudly if a query here ever starts
+// behaving differently depending on what tenant happens to be in the
+// context.
 //
 // Two rules therefore apply to this file specifically:
 //
@@ -24,8 +24,7 @@
 //     model was put in the wrong data domain.
 //
 // The one table this module owns that IS tenant data -- the per-tenant SSO
-// configuration -- does embed dbkit.Repository[T], and lands with the
-// federation work.
+// configuration -- does embed dbkit.Repository[T] (oidc.go).
 
 package authn
 
@@ -174,15 +173,15 @@ func (r *UserRepository) Save(ctx context.Context, u *User) error {
 // index of the very phone number whose ownership the caller just proved.
 //
 // The single-column, guarded scope is the whole point. The alternative --
-// a full-row Save of the freshly read user, which is what
-// Service.LoginWithSMSCode used to do -- writes every column of that read's
-// snapshot back, silently undoing any column a concurrent caller committed
-// between the read and the write (a password rehash from a concurrent
-// sign-in, say). A write whose SET clause names only phone_verified cannot
-// undo anything else, whichever way the race resolves; and the phone_index
-// guard in the WHERE keeps the flag honest on top of that: a row whose
-// phone moved on since the read (or that no longer exists) is left
-// unverified rather than blessing the new occupant of the address.
+// a full-row Save of the freshly read user -- would write every column of
+// that read's snapshot back, silently undoing any column a concurrent
+// caller committed between the read and the write (a password rehash from
+// a concurrent sign-in, say). A write whose SET clause names only
+// phone_verified cannot undo anything else, whichever way the race
+// resolves; and the phone_index guard in the WHERE keeps the flag honest
+// on top of that: a row whose phone moved on since the read (or that no
+// longer exists) is left unverified rather than blessing the new occupant
+// of the address.
 //
 // Reports whether the write landed:
 //   - (true, nil): the flag was set on a row still carrying phoneIndex.
@@ -205,16 +204,16 @@ func (r *UserRepository) MarkPhoneVerified(ctx context.Context, userID, phoneInd
 // expectedHash, the hash the caller's own flow actually verified.
 //
 // The single-column, guarded scope is the whole point. The alternative --
-// a full-row Save of the sign-in's user snapshot, which is what
-// Service.upgradePasswordHash used to do -- writes every column of that
-// pre-verification read back, silently undoing any column a concurrent
-// caller committed between the read and the write (a phone-verified flag
-// from a concurrent SMS sign-in, say); and the password_hash guard keeps
-// even the hash itself honest: a hash a concurrent caller replaced since
-// this sign-in read the row (a password change, or a racing rehash that
-// already won) is never overwritten with this call's stale-derived value.
-// A write whose SET clause names only password_hash cannot undo anything
-// else, whichever way the race resolves.
+// a full-row Save of the sign-in's user snapshot -- would write every
+// column of that pre-verification read back, silently undoing any column a
+// concurrent caller committed between the read and the write (a
+// phone-verified flag from a concurrent SMS sign-in, say); and the
+// password_hash guard keeps even the hash itself honest: a hash a
+// concurrent caller replaced since this sign-in read the row (a password
+// change, or a racing rehash that already won) is never overwritten with
+// this call's stale-derived value. A write whose SET clause names only
+// password_hash cannot undo anything else, whichever way the race
+// resolves.
 //
 // Reports whether the write landed:
 //   - (true, nil): newHash is now stored, on a row whose stored hash was

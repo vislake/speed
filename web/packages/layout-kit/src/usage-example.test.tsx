@@ -3,8 +3,9 @@
  *
  * The README's Quick start composes an AppShell around a
  * RouteGuard-wrapped content region, backed by a local `useState`
- * standing in for the authorization source no `auth-core` round has
- * shipped yet (see the package AGENTS.md Deferrals). This file renders
+ * standing in for the authorization source a real host wires itself
+ * (layout-kit depends on no auth package; the gate status is host
+ * territory by contract). This file renders
  * that exact composition through the same host tree
  * (renderWithProviders) and asserts what it shows, so the documented
  * usage cannot drift from the API -- the package suite compiles and
@@ -99,8 +100,8 @@ describe('README usage example', () => {
     expect(utils.queryByText('Protected screen content')).not.toBeInTheDocument()
     // The example host keeps its own page h1 while the gate's default
     // denied composition continues the page's order at the forwarded
-    // h2 -- pre-fix no headingLevel reached the fallback and its stock
-    // h6 fell out of the page's h1.
+    // h2 -- without the forwarding, the fallback's stock h6 would fall
+    // out of the page's h1.
     expect(
       utils.getByRole('heading', {
         level: 2,

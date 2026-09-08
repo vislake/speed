@@ -1,23 +1,21 @@
 package observability
 
-// This file implements the PII/secret log-redaction item of the M0
-// data-protection milestone described in docs/internal/15-roadmap.md. The
-// mandate comes from docs/internal/09-observability.md: plaintext PII,
-// secrets, tokens and full prompts never enter logs or traces; redaction
-// is on by default and must not be disableable. Coverage against that
-// mandate is partial class by class -- credential keys and tokens are
-// covered here, plaintext PII and full prompts are caller-declared (see
-// the "Coverage against the data-protection mandate" section below), so
-// the mandate sentence is not an implementation claim on its own.
-// docs/internal/10-compliance-and-audit.md places the mechanism in this
-// module's logging layer -- safe by default rather than leaking by default
-// -- and defers audit-log redaction to the M1+ compliance milestone.
+// This file implements PII/secret log redaction: plaintext PII, secrets,
+// tokens and full prompts never enter logs or traces; redaction is on by
+// default and must not be disableable. Coverage against that mandate is
+// partial class by class -- credential keys and tokens are covered here,
+// plaintext PII and full prompts are caller-declared (see the "Coverage
+// against the data-protection mandate" section below), so the mandate
+// sentence is not an implementation claim on its own. The mechanism lives
+// in this module's logging layer -- safe by default rather than leaking by
+// default -- and audit-log redaction is not implemented (a known
+// limitation; audit records are the compliance module's surface).
 //
 // The mechanism is a slog.Handler wrapper, redactHandler, that wraps the
 // sink handler underneath every *slog.Logger FromContext returns. It
 // redacts attributes by key name and by value shape before the record ever
 // reaches the sink, so the guarantee holds uniformly for every sink a host
-// plugs in -- a console handler, a JSON handler feeding Loki, or a future
+// plugs in -- a console handler, a JSON handler feeding Loki, or a
 // slog-to-OTel bridge -- with no per-sink code.
 //
 // # Why key naming, not a registry marker
@@ -27,8 +25,8 @@ package observability
 // Registry, which is a host-wiring object assembled at startup and not
 // reachable from a log call; the logger must also redact correctly for a
 // record emitted before any module registered, and for keys no module ever
-// declared. Key naming aligns with this repository's logging discipline
-// (root CLAUDE.md: attribute keys are shared, snake_case names), so
+// declared. Key naming aligns with this repository's logging discipline --
+// attribute keys are shared, snake_case names -- so
 // "an attribute whose name says it is a secret is redacted" needs no
 // registry lookup. ConfigItem.Sensitive continues to mark config items for
 // the generated configuration reference and the admin console; the two
@@ -49,8 +47,8 @@ package observability
 //     API; this module's own rules confine that construction site -- the
 //     documented escape, not a per-call flag -- to process startup and the
 //     other genuinely context-less special cases WithLogger's doc comment
-//     names (root CLAUDE.md and backend-coding-standards.md only require
-//     the context logger where a context exists).
+//     names: the context logger is only required where a context
+//     exists.
 //  2. Value-shaped, as a fallback net for secrets logged under an
 //     unsuspicious key: attribute string values and error texts are scanned
 //     for the canonical shapes secrets take -- Authorization-header
@@ -84,10 +82,10 @@ package observability
 //
 // # Coverage against the data-protection mandate
 //
-// docs/internal/09-observability.md's mandatory clause lists four classes
-// that never enter logs or traces -- plaintext PII, keys and secrets,
-// tokens, and full prompts -- with redaction on by default and not
-// disableable. This package's coverage against that clause is deliberately
+// The data-protection mandate names four classes that never enter logs or
+// traces -- plaintext PII, keys and secrets, tokens, and full prompts --
+// with redaction on by default and not disableable. This package's
+// coverage against that clause is deliberately
 // partial, and the partiality is stated class by class so the gaps stay
 // visible in the doc instead of being inferable only from what is absent:
 //
@@ -101,8 +99,8 @@ package observability
 //     secret-named attributes wholesale, with the same value-shape net as
 //     the backstop. This is the class the stem list above is exhaustive
 //     over: the stems are the credential and token naming vocabularies,
-//     and a future sensitive-named key in this class is a code-review
-//     point in redact.go, not a config question.
+//     and a new sensitive-named key in this class is a code-review point
+//     in redact.go, not a config question.
 //   - plaintext PII (email addresses, phone numbers, and the rest): not
 //     covered -- a class-level gap recorded here, not an omission from
 //     the key list. The PII key-name space is large and grows with
@@ -110,23 +108,23 @@ package observability
 //     address line, a customer's display name), so key-name matching is
 //     inherently incomplete against it, and no value shape exists that
 //     separates PII from ordinary identifiers; the caller declares what
-//     is PII instead. The declaration mechanism is the explicit
-//     sensitive-parameter shape the pkgcore round's apperr work is
-//     building (its WithSensitiveParam twin); until that mechanism
-//     lands, PII-shaped log content is the logging call site's
-//     responsibility, and this layer stays the backstop for the
-//     credential classes above, never the main line for PII.
+//     is PII instead. The declaration mechanism -- a sensitive-parameter
+//     marker on structured errors (an apperr WithSensitiveParam twin) --
+//     is not implemented; until it exists, PII-shaped log content is the
+//     logging call site's responsibility, and this layer stays the
+//     backstop for the credential classes above, never the main line for
+//     PII.
 //   - full prompts: not covered, for the same reason and through the same
 //     mechanism: an LLM request body can carry anything, so no key-name
 //     or shape rule can enumerate it -- prompt text is content-sensitive
 //     by the caller's own declaration, with the same dependency on the
-//     pkgcore round's declaration mechanism stated above.
+//     declaration mechanism stated above.
 //
 // The same clause's other exits are covered elsewhere, not here: this
 // package's own span attributes are kept free of secret-shaped and
 // id-bearing material by construction (see middleware.go), API-response
-// redaction belongs to the API layer (apperr), and audit records are the
-// M1+ compliance work (docs/internal/10-compliance-and-audit.md).
+// redaction belongs to the API layer (apperr), and audit-log redaction is
+// not implemented (a known limitation).
 //
 // # Deliberate boundaries
 //
@@ -157,30 +155,27 @@ package observability
 //     of this net's reach, which is why the key-based rule is the primary
 //     defense.
 //   - API responses and audit logs are out of scope here: response
-//     redaction belongs to the API layer, and audit-log redaction is the
-//     M1+ compliance work (docs/internal/10-compliance-and-audit.md); this
-//     package guards the ops-logging and span-attribute channel only.
+//     redaction belongs to the API layer, and audit-log redaction is not
+//     implemented (a known limitation); this package guards the
+//     ops-logging and span-attribute channel only.
 //
 // # No redaction-decision trace, by deliberate choice
 //
 // Redaction here is silent: nothing records which attribute keys were
-// redacted, by which stem, on which record. That silence is exactly what
-// let the "token" stem's substring match swallow ai-gateway's
-// prompt_tokens/completion_tokens fields for a full round with no signal
-// anywhere that redaction had even run (the fix: see sensitiveStems' own
-// doc comment). Adding a debug-level trace of redaction decisions was
-// considered for this same round and deliberately deferred rather than
-// built: Handle is on the hot path of every FromContext call site in the
+// redacted, by which stem, on which record. That silence is a deliberate
+// trade: Handle is on the hot path of every FromContext call site in the
 // codebase, and redactHandler.Handle's zero-allocation forwarding of an
 // unchanged record (see below) is a documented, tested property this
-// package guards deliberately -- a trace call on every redacted attribute,
-// gated correctly behind Enabled(LevelDebug) or not, is a real design
-// surface (recursive-logging risk if the trace itself goes through
-// FromContext, an allocation cost on a path this file measures explicitly)
-// that deserves its own round rather than riding in on a stem-matching
-// bugfix. Until then, the mitigation is what this round actually shipped:
-// narrowing "token" so the false-positive class the silence hid is gone,
-// rather than merely making it audible.
+// package guards -- a trace call on every redacted attribute, gated
+// correctly behind Enabled(LevelDebug) or not, is a real design surface
+// (recursive-logging risk if the trace itself goes through FromContext, an
+// allocation cost on a path this file measures explicitly) that is not
+// built. The cost of the silence is mitigated in the one place it ever
+// bit -- the "token" stem's false-positive class, which over-redacted
+// prompt-token count fields with no signal that redaction had run: the
+// stem now matches on word boundaries (see sensitiveStems' own doc
+// comment), so the class the silence could hide is gone rather than merely
+// made audible.
 
 import (
 	"context"
@@ -214,13 +209,10 @@ const RedactedValue = "[REDACTED]"
 //
 // "token" is the stem that cannot use a bare substring match: "token"
 // is also a substring of "tokens", the ordinary plural for an LLM/usage
-// count (ai-gateway's PromptTokens/CompletionTokens), which the naive
-// substring rule swallowed with no warning. The paper trail for that
-// episode is go/ai-gateway/AGENTS.md's own round log, not a comment on
-// gateway.go: the counts were once logged as prompt_units/
-// completion_units to dodge this rule, and reverted to the natural
-// prompt_tokens/completion_tokens names once the word-boundary match
-// below made them safe. stemMatches therefore checks "token" with a
+// count (ai-gateway's PromptTokens/CompletionTokens), which a naive
+// substring rule would swallow whole. The counts are logged under the
+// natural prompt_tokens/completion_tokens names, so the match must keep
+// them clear. stemMatches therefore checks "token" with a
 // word-boundary rule
 // (foldContainsWordASCII) instead: a match counts only when a word
 // boundary flanks it on both sides -- the segment's own start/end, a
@@ -304,7 +296,7 @@ func stemMatches(stem, seg string) bool {
 // sensitiveStems' doc comment): a bare substring rule would keep redacting
 // words that merely contain the letters as an interior fragment
 // ("keyboard", "keycloak" -- and, through the same permissiveness that
-// once swallowed "tokens", this repository's own correlation fields),
+// swallowed "tokens", this repository's own correlation fields),
 // while the secret-shaped key names that exist in practice -- api_key,
 // x_api_key, private_key, signing_key, secret_key, dotted config segments
 // like "stripe_secret_key", run-together "apikey", camelCase "apiKey", and
@@ -366,13 +358,12 @@ func keyStemMatches(seg string) bool {
 	return true
 }
 
-// neverRedactKeys are the correlation field names
-// docs/internal/09-observability.md's logging rule fixes as shared and
-// queryable: they must survive redaction verbatim so a log line stays
-// joinable to its trace and tenant. None of them can match sensitiveStems
-// today, but they are exempted explicitly -- not by luck -- so a future
-// stem addition or an adversarial id value (tenant names are user-chosen
-// strings) can never start mangling correlation fields. Exemption means
+// neverRedactKeys are the correlation field names every module shares and
+// must survive redaction verbatim so a log line stays joinable to its
+// trace and tenant. None of them matches sensitiveStems, but they are
+// exempted explicitly -- not by luck -- so a stem addition or an
+// adversarial id value (tenant names are user-chosen strings) can never
+// start mangling correlation fields. Exemption means
 // the whole attribute is passed through untouched: no key rule, no
 // value-shape scan. What the value contains is the logging call site's
 // responsibility, not this map's: on the asynq-backed queue the job_id
@@ -424,9 +415,9 @@ func redactAttr(groups []string, a slog.Attr) (slog.Attr, bool) {
 	// input the branch already holds, and a sensitive logger-level group
 	// (WithGroup("credentials")) redacts every attribute logged under it
 	// wholesale, whatever the attribute's own key -- an empty-key scalar
-	// under that group used to slip past the group-name rule to the value
-	// rules alone and render verbatim when its value had no recognizable
-	// secret shape (pinned by
+	// under that group would otherwise slip past the group-name rule to
+	// the value rules alone and render verbatim when its value had no
+	// recognizable secret shape (pinned by
 	// TestRedact_EmptyKeyScalarUnderSensitiveGroupPath_RedactedWholesale).
 	// The empty key contributes nothing to the path; the segments already
 	// in groups contribute everything, so the check runs before the value
@@ -540,8 +531,8 @@ func redactAttrValue(a slog.Attr, groups, keySegments []string) (slog.Attr, bool
 
 // safeRedactAttr is the recover-guarded entry point for caller-supplied
 // values: a LogValuer whose LogValue panics, or an error whose Error panics,
-// must never take down the logging path (root CLAUDE.md: logging must never
-// take down a request). Where the underlying slog sink would propagate such
+// must never take down the logging path: logging must never take down a
+// request. Where the underlying slog sink would propagate such
 // a panic, this layer converts it into a wholesale redaction of the
 // attribute, which is also the safe direction.
 func safeRedactAttr(groups []string, a slog.Attr) (out slog.Attr, changed bool) {
@@ -782,8 +773,8 @@ var secretShapePatterns = []secretShapePattern{
 // (token, access_token) at the two anchors that decide through this list
 // -- heading a bare query string, and mid-string after a '&' in a bare
 // form body -- so a name forgotten on either side of the pair fails the
-// row that spells it. The drift this round fixed (clientsecret and
-// sessionkey missing here while the alternation kept matching them)
+// row that spells it. The concrete drift this table guards (clientsecret
+// and sessionkey missing here while the alternation kept matching them)
 // failed exactly those head-anchor rows, which is how the backstop is
 // meant to work. Names not rowed at an anchor stay covered on URL-shaped
 // text through the gate's '://' and '?' branches, which open without

@@ -2,23 +2,23 @@
  * That a practice can keep the simulation it paid for.
  *
  * A generated simulation is a thing the clinic bought: credits left the
- * ledger for it. Today it lives only inside the product -- it can be
- * looked at, and it can be turned into a link for the patient -- and
- * there is no way to save the image itself. That is the gap this gate
- * names, and it is the smallest of the brief's five unbuilt surfaces,
- * which is why it is first.
+ * ledger for it. The result downloads as a real file -- `<a download>`
+ * over a Blob URL of the bytes the result image already fetched (no
+ * second request), revoked when those bytes change or the panel
+ * unmounts, and absent entirely when the data has not arrived or was
+ * refused -- so there is never a control that hands over nothing.
  *
  * WHY A LINK IS NOT THE SAME THING
  *
- * Sharing (block C) and keeping are different needs, and the product
- * already meets only one of them. A share link is deliberately temporary
- * -- go/sharing forces a default expiry and offers no never-expiring
- * option, by design -- and revocable on the very next access check. That
- * is right for something handed to a patient. It is wrong for the
- * clinic's own record: a dentist who wants the before-and-after in the
- * patient's chart, in a treatment plan, or in a message to a lab needs
- * the file, not a URL that stops working. A practice told "you already
- * have a link" has been answered a question it did not ask.
+ * Sharing and keeping are different needs. A share link is deliberately
+ * temporary -- go/sharing forces a default expiry and offers no
+ * never-expiring option, by design -- and revocable on the very next
+ * access check. That is right for something handed to a patient. It is
+ * wrong for the clinic's own record: a dentist who wants the
+ * before-and-after in the patient's chart, in a treatment plan, or in a
+ * message to a lab needs the file, not a URL that stops working. A
+ * practice told "you already have a link" has been answered a question
+ * it did not ask.
  *
  * WHAT IT ASSERTS, AND WHAT IT LEAVES OPEN
  *
@@ -26,43 +26,12 @@
  * browser actually receives -- a real download event, with a name,
  * whose first bytes are an image (or an archive of them). It does not
  * prescribe the format, the filename, one button or two (the original
- * and the result are both plausibly worth saving), a zip, or whether the
- * bytes come from go/storage directly or through a fresh render. Any of
- * those passes. What does not pass is a surface where the only way out
- * is a screenshot.
+ * and the result are both plausibly worth saving), a zip, or whether
+ * the bytes come from go/storage directly or through a fresh render.
+ * Any of those passes. What does not pass is a surface where the only
+ * way out is a screenshot.
  *
- * @pending, in the tag's second sense: not "this is broken" but "this
- * surface does not exist yet". The app's own en-US bundle contains no
- * download or save copy at all, so there is nothing here to be wrong --
- * the gate is written ahead of the work, the way the core-journey blocks
- * were, so that the acceptance criterion exists before the round does
- * rather than being argued about after it.
- *
- * Tagged @pending ALONE, not also @budget: @budget is this suite's word
- * for "verified passing", and a red gate in that tier would cost it the
- * one thing it is for. The sign-ins this gate spends are covered by the
- * @pending tier being its own invocation against its own freshly booted
- * server, which is the same mechanism that makes @budget a real tier.
- *
- * WOULD IT PASS ON A CORRECT IMPLEMENTATION?
- *
- * That is the question a @pending gate can normally never answer about
- * itself, and it is the one that matters: a gate written before the
- * surface exists is only as good as its own untested machinery. This
- * one's machinery was tested separately, against a working download.
- *
- * A throwaway page serving a real `<a download>` to a PNG was driven on
- * chromium and webkit: the click fired the download event, the file
- * arrived named smile.png, `download.path()` returned a path rather than
- * null (so `acceptDownloads` is on by default in this config -- had it
- * been off, this gate would have failed a correct implementation for a
- * reason belonging to the harness), and the saved bytes passed the magic
- * check. The file was SIXTY-NINE bytes: the exact size the byte
- * threshold this gate used to carry would have rejected, measured on a
- * download that was in every way correct.
- *
- * So what remains untested here is only whether the product grows the
- * control -- not whether this gate can recognise it when it does.
+ * @budget rather than untagged: it signs in and generates.
  */
 import { expect, test } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
@@ -74,12 +43,10 @@ import { openCaseWithSimulation } from './test-utils/cases.js'
  * The control that hands the file over. An expectation of an accessible
  * name, not a decree -- see test-utils/cases.ts's own note.
  *
- * Deliberately not matching "share": a share control exists today and
- * would make this gate pass on the very thing it says is not enough.
- * The trap is worth naming, because the loose pattern that reaches the
- * control you want is the one that also reaches the control you have --
- * which is exactly how block D's nav pattern once landed on the wrong
- * page and passed.
+ * Deliberately not matching "share": a share control exists and would
+ * make this gate pass on the very thing it says is not enough. The trap
+ * is worth naming, because the loose pattern that reaches the control
+ * you want is the one that also reaches the control you already have.
  */
 const KEEP_IT = /download|save (the )?(image|result|simulation|photo)|export/i
 
@@ -87,24 +54,14 @@ const KEEP_IT = /download|save (the )?(image|result|simulation|photo)|export/i
  * What a real image file starts with. PNG, JPEG, RIFF (WebP), and PK for
  * an archive of several, since the gate allows a zip of the pair.
  *
- * IDENTITY, NOT SIZE, and this replaced a byte threshold that would have
- * falsely accused a correct implementation. The threshold was 200 bytes
- * on the reasoning that anything smaller is an error page -- but the
- * simulation this suite generates comes from its own fake vendor and is
- * a 1x1 PNG of SIXTY-NINE bytes (the patient photo is seventy), so a
- * gate demanding 200 would have reported "an error page saves just as
- * successfully as a simulation does" about a download that was perfectly
- * correct, and reported it to the very round that implemented the
- * feature.
- *
- * It is the third threshold in this suite to be wrong in the same
- * structural way -- the sessions gate once compared character counts,
- * and the rule it produced applies here unchanged: a threshold loose
- * enough to accept the good case is loose enough to accept the bad one,
- * and one tight enough to catch the bad case catches the good one too.
- * The magic number answers the question the threshold was groping for --
- * "is this actually an image" -- exactly, and it accepts a legitimately
- * tiny one.
+ * IDENTITY, NOT SIZE: a byte threshold cannot separate an image from an
+ * error page -- one loose enough to accept the good case is loose enough
+ * to accept the bad one, and one tight enough to catch the bad case
+ * catches the good one too. The simulation this suite generates comes
+ * from its own fake vendor as a genuinely tiny real PNG, so a size floor
+ * would reject the legitimate output. The magic number answers the
+ * question a threshold would be groping for -- "is this actually an
+ * image" -- exactly, and accepts a legitimately tiny one.
  */
 const IMAGE_OR_ARCHIVE_MAGIC: readonly (readonly number[])[] = [
   [0x89, 0x50, 0x4e, 0x47], // PNG
@@ -122,24 +79,11 @@ const IMAGE_OR_ARCHIVE_MAGIC: readonly (readonly number[])[] = [
  */
 const OVERFLOW = /more|actions|options|menu/i
 
-// Closed by 6d4e895d, and closed as a real anchor rather than a
-// script-driven save: `<a download>` over a Blob URL of the bytes the
-// result image already fetched (no second request), revoked when those
-// bytes change or the panel unmounts, and absent entirely when the data
-// has not arrived or was refused -- so there is never a control that
-// hands over nothing.
-//
-// Verified three ways, because a gate's own green is the weakest of
-// them:
-//   - this gate, on all three engines;
-//   - the bytes: 69 of them, first four 137 80 78 71, a real PNG --
-//     the exact size the byte threshold this gate used to carry would
-//     have rejected, measured this time on the shipped implementation;
-//   - by hand, as a person: a case named "Chen Wei (VIP)" downloads
-//     "Chen Wei (VIP) smile simulation.png". The patient's name, what
-//     the image is, and an extension -- a name a dentist can still
-//     recognise in a downloads folder a week later, which is the actual
-//     point of keeping the file at all.
+// The download names itself after the case ("<case name> smile
+// simulation.png"): the patient's name, what the image is, and an
+// extension -- a name a dentist can still recognise in a downloads
+// folder a week later, which is the actual point of keeping the file
+// at all.
 //
 // @budget rather than untagged: it signs in and generates.
 test(
@@ -159,9 +103,9 @@ test(
       .or(page.getByRole('menuitem', { name: KEEP_IT }))
 
     // Looked for behind an overflow menu too, before concluding there is
-    // nowhere to save from. Not doing so would have made this gate
-    // accuse a correct implementation of having no control at all,
-    // purely because it put it where a secondary action usually goes.
+    // nowhere to save from. Not doing so would make this gate accuse a
+    // correct implementation of having no control at all, purely because
+    // it put the control where a secondary action usually goes.
     if (!(await control.first().isVisible().catch(() => false))) {
       const overflow = page.getByRole('button', { name: OVERFLOW })
       if (await overflow.first().isVisible().catch(() => false)) {

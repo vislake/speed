@@ -75,9 +75,8 @@ func (membershipTenantRow) TableName() string { return tableMemberships }
 // scope a statement to ONE tenant, and this statement is scoped to none by
 // design. A production PostgreSQL deployment whose RLS policies admit only
 // per-tenant reads must give the platform role its own admission for
-// system-context reads of the memberships table -- recorded in
-// go/org/AGENTS.md's "TenantsOf" section, since no distributed-mode
-// deployment exists yet to prove the policy shape.
+// system-context reads of the memberships table -- a policy shape no
+// distributed-mode deployment exists yet to prove.
 func (r *MembershipRepository) tenantsOfUser(ctx context.Context, userID string) ([]pkgcore.TenantID, error) {
 	if userID == "" {
 		// An empty user id belongs to no tenants. Asked of the database the

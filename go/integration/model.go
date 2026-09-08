@@ -13,15 +13,14 @@ import (
 const tableAPIKeys = "integration_api_keys"
 
 // APIKey is a credential a tenant issued for programmatic access to its own
-// data, following docs/internal/07-platform-services.md's field list.
+// data, following the design's field list.
 //
 // # Data domain
 //
-// Tenant data (docs/internal/04-data-and-tenancy.md): a key belongs to
-// exactly one tenant and must never be visible from another, so the model
-// implements dbkit.TenantScoped, is reached only through APIKeyRepository,
-// and its isolation is proven by tenancytest.AssertIsolated
-// (repository_test.go).
+// Tenant data: a key belongs to exactly one tenant and must never be
+// visible from another, so the model implements dbkit.TenantScoped, is
+// reached only through APIKeyRepository, and its isolation is proven by
+// tenancytest.AssertIsolated (repository_test.go).
 //
 // # The key material is never stored
 //
@@ -49,16 +48,16 @@ const tableAPIKeys = "integration_api_keys"
 // seam, see seams.go). It is stored, not re-derived: a later change to the
 // creator's own permissions -- promoted, demoted, or removed from the
 // tenant entirely -- never widens or shrinks an already-issued key, per
-// the design doc's explicit rule that a key's scope does not change along
-// with its creator's later permission changes. Changing what a key may do
-// means issuing a new one; nothing in this module ever rewrites Scopes
-// after Create.
+// the design rule that a key's scope does not change along with its
+// creator's later permission changes. Changing what a key may do means
+// issuing a new one; nothing in this module ever rewrites Scopes after
+// Create.
 //
 // # The creator leaving does not revoke the key
 //
 // CreatedBy is the responsible party on record, not an ownership tie: the
-// design doc is explicit that it is unacceptable for an integration to
-// break just because someone left the tenant. What the doc does ask for is
+// design is explicit that it is unacceptable for an integration to break
+// just because someone left the tenant. What the design asks for is
 // visibility -- APIKeySummary.CreatorLeft, computed at List time through
 // the optional MembershipChecker seam -- so a tenant administrator notices
 // a key needs a new owner of record, without the key itself being touched.
@@ -95,22 +94,21 @@ type APIKey struct {
 	Scopes datatypes.JSON `gorm:"column:scopes;not null"`
 
 	// CreatedBy is the authn user id of whoever issued this key -- an id
-	// reference only, per the root CLAUDE.md's "no cross-module struct
-	// imports" rule. It never changes after Create, even if the key is
-	// later rotated (Rotate carries it forward from the predecessor).
+	// reference only, per the "no cross-module struct imports" rule. It
+	// never changes after Create, even if the key is later rotated (Rotate
+	// carries it forward from the predecessor).
 	CreatedBy string `gorm:"column:created_by;size:64;not null"`
 
 	// ExpiresAt is when this key stops authenticating anything, enforced by
 	// Service.Create (capped at the Service's configured lifetime --
 	// WithMaxAPIKeyLifetime's value when the host set one, MaxAPIKeyLifetime
-	// otherwise) and by whatever authenticates a request with it.
+	// otherwise) and by Service.Authenticate when a request is presented
+	// with the key (authenticate.go).
 	ExpiresAt time.Time `gorm:"column:expires_at;not null"`
 
 	// LastUsedAt is when this key last authenticated a request. Nil until
-	// first use. Round 1 never writes it: no code path here authenticates a
-	// request with a key (see the type's own Deferred note); the column
-	// exists now so the migration that adds it later is not a breaking
-	// schema change for an already-shipped table.
+	// first use; Service.Authenticate's recordLastUsed refreshes it on
+	// every successful authentication (authenticate.go).
 	LastUsedAt *time.Time `gorm:"column:last_used_at"`
 
 	// RevokedAt is when this key was revoked, nil while it is live. A
@@ -167,55 +165,41 @@ const tableAPIKeyHashIndex = "integration_api_key_hash_index"
 
 // apiKeyHashIndex is the narrow, deliberately non-tenant-scoped row that
 // resolves a presented API key's owning tenant before any tenant is known at
-// all -- this round's answer to the gap keygen.go's own hashAPIKeyToken doc
-// comment named ("go/integration ships no Authenticate/Verify method yet ...
-// there is no lookup path today that could ever feed this function
-// attacker-influenced input"). Service.Authenticate is that lookup path, and
-// this is how it resolves a tenant from a raw key alone -- mirroring
-// go/sharing's shareTokenIndex (go/sharing/model.go) almost exactly, for the
-// identical reason: an inbound API-key-authenticated request, like an
-// anonymous share-link visitor, carries no separate tenant claim of its
-// own -- the bearer credential IS the only thing identifying both who is
-// calling and which tenant issued it, the same "sk_..." convention Stripe
-// and GitHub use (keygen.go's own doc comment already cites them for the
-// prefix choice alone; this round extends the analogy to how such a key is
-// actually verified).
+// all -- the lookup Service.Authenticate (authenticate.go) needs: an
+// inbound API-key-authenticated request, like an anonymous share-link
+// visitor, carries no separate tenant claim of its own -- the bearer
+// credential IS the only thing identifying both who is calling and which
+// tenant issued it, the same "sk_..." convention Stripe and GitHub use.
+// It mirrors go/sharing's shareTokenIndex (go/sharing/model.go) almost
+// exactly, for the identical reason.
 //
 // # Why this needed a new table rather than the existing (tenant_id, hash)
 // # unique index
 //
-// migrations/{sqlite,postgres}/0001_create_integration_api_keys.sql's own
-// comment on uq_integration_api_keys_tenant_hash assumed a future
-// authentication lookup would already know its tenant ("scoped by tenant
-// first since every lookup this module ever performs already knows its
-// tenant from request context") -- a reasonable guess at the time, since no
-// round had built the lookup yet to test it against a real caller. It did
-// not hold: dbkit's tenant-scope GORM plugin fails a TenantScoped model's
-// query closed the moment its context carries no tenant
+// uq_integration_api_keys_tenant_hash (migration 0001) keys APIKey rows by
+// (tenant_id, hash), so a lookup through it must already know its tenant.
+// dbkit's tenant-scope GORM plugin fails a TenantScoped model's query
+// closed the moment its context carries no tenant
 // (go/dbkit/tenant_scope.go's tenantScopeBeforeQuery), and there is no
 // legitimate way for go/integration to run a raw, tenant-less query against
-// APIKey itself -- that model implements dbkit.TenantScoped, so a `db.Table`/
-// `db.Model`/`db.Raw` workaround would be exactly the bypass root
-// CLAUDE.md's "Do not use db.Table/db.Model/db.Raw to work around the
-// Repository" rule forbids, and go/integration holds no
-// pkgcore.WithSystemContext grant (that escape hatch is restricted to
-// admin/compliance/jobs/authn). A second, genuinely non-tenant-scoped table
-// mapping hash -> tenant, exactly like sharing's shareTokenIndex, is the
-// only path the existing architecture leaves open for "resolve a tenant from
-// a credential alone" -- so this round adds one, without touching
-// uq_integration_api_keys_tenant_hash, Hash's stored format, or any existing
-// Service method's signature. migrations/postgres/0001's own comment is left
-// as-is (an honest historical record of round 1's assumption); this type's
-// migration (0006) records the correction in its own comment instead of
-// editing an already-shipped file.
+// APIKey itself -- that model implements dbkit.TenantScoped, so a
+// `db.Table`/`db.Model`/`db.Raw` workaround would be exactly the bypass
+// the "do not work around the Repository" rule forbids, and go/integration
+// holds no pkgcore.WithSystemContext grant (that escape hatch is
+// restricted to admin/compliance/jobs/authn). A second, genuinely
+// non-tenant-scoped table mapping hash -> tenant, exactly like sharing's
+// shareTokenIndex, is the only path the architecture leaves open for
+// "resolve a tenant from a credential alone" -- so the module has one
+// (migration 0006), without touching uq_integration_api_keys_tenant_hash,
+// Hash's stored format, or any Service method's signature.
 //
 // # Data domain
 //
-// Platform data (docs/internal/04-data-and-tenancy.md), NOT tenant data, and
-// deliberately so -- see shareTokenIndex's own doc comment for the identical
-// reasoning applied here: implements no dbkit.TenantScoped, reached only
-// through dbkit.Open()'s plain *gorm.DB (APIKeyRepository.tenantForHash),
-// never dbkit.Repository[T], and its isolation suite is
+// Platform data, NOT tenant data, and deliberately so -- see
+// shareTokenIndex's own doc comment for the identical reasoning applied
+// here: implements no dbkit.TenantScoped, reached only through
+// dbkit.Open()'s plain *gorm.DB (APIKeyRepository.tenantForHash), never
+// dbkit.Repository[T], and its isolation suite is
 // tenancytest.AssertNotTenantScoped, not AssertIsolated.
 //
 // # Deliberately narrow, and never updated after Create

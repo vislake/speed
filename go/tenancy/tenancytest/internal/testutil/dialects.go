@@ -1,7 +1,7 @@
 // Package testutil holds test-only helpers shared across tenancytest's own
-// _test.go files (backend coding standard §13: a helper shared by more than
-// one _test.go file belongs in a dedicated internal/testutil package, never
-// duplicated across files or defined inline in one that another needs).
+// _test.go files: a helper shared by more than one _test.go file belongs
+// in a dedicated internal/testutil package, never duplicated across files
+// or defined inline in one that another needs.
 //
 // It is unexported to every module outside tenancy itself. Callers writing
 // their own module's tests never import this package — they use
@@ -29,10 +29,10 @@ type Dialect struct {
 	NewDB func(t *testing.T) *gorm.DB
 }
 
-// Dialects returns the dual-dialect matrix (backend coding standard §13):
-// index 0 is always SQLite, index 1 is always PostgreSQL. Order is part of
-// this function's contract -- every caller in this package addresses an
-// entry positionally rather than by name.
+// Dialects returns the dual-dialect matrix: index 0 is always SQLite,
+// index 1 is always PostgreSQL. Order is part of this function's contract
+// -- every caller in this package addresses an entry positionally rather
+// than by name.
 //
 // Do NOT range over the full result, or otherwise reach index 1, from a
 // plain (non-integration-tagged) _test.go file. Index 1's NewDB is

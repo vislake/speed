@@ -17,8 +17,7 @@ import (
 )
 
 // productCodeFaceToFace is Alipay's product_code for the Native (QR-code)
-// payment product -- the domestic-leg one-time-order shape
-// docs/internal/06-billing-and-metering.md names.
+// payment product -- the domestic-leg one-time-order shape.
 const productCodeFaceToFace = "FACE_TO_FACE_PAYMENT"
 
 const alipayTimeFormat = "2006-01-02 15:04:05"
@@ -101,10 +100,10 @@ func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (
 	if req.Amount.Cents <= 0 {
 		// Alipay's total_amount must be a strictly positive decimal yuan
 		// amount; a zero or negative request is refused at the boundary
-		// before formatAmount ever renders it -- pre-fix, -2950 cents
-		// reached Alipay as the garbage string "-29.-50" and 0 as "0.00",
-		// both of which Alipay's own gateway rejects anyway, after the
-		// merchant had already signed and sent them.
+		// before formatAmount ever renders it: -2950 cents would otherwise
+		// reach Alipay as the garbage string "-29.-50" and 0 as "0.00",
+		// both of which Alipay's own gateway rejects only after the
+		// merchant has already signed and sent them.
 		return billing.ChargeHandle{}, billing.ErrInvalidAmount.WithParam("amount", req.Amount.Cents)
 	}
 
@@ -194,10 +193,9 @@ func outTradeNoFor(req billing.ChargeRequest) string {
 // here are always positive. A negative input -- reachable only by a
 // hypothetical future direct call, never by this package's own flow -- is
 // rendered SIGN-CORRECTLY ("-29.50") rather than as the garbage "-29.-50"
-// an earlier revision produced (its "%02d" of the negative remainder -50
-// fabricated a literal "-50" after the decimal point) or with the sign
-// dropped; no code path in this package can ever send such a string to
-// Alipay.
+// (a "%02d" of the negative remainder -50 would fabricate a literal "-50"
+// after the decimal point) or with the sign dropped; no code path in this
+// package can ever send such a string to Alipay.
 func formatAmount(cents int64) string {
 	negative := cents < 0
 	if negative {
@@ -212,10 +210,9 @@ func formatAmount(cents int64) string {
 
 // requireCNY refuses currency at the CreateCharge boundary unless it names
 // CNY (case-insensitively) -- Alipay's Native (QR-code) product only ever
-// settles in CNY (docs/internal/06-billing-and-metering.md's
-// domestic-plus-international dual payment mode; go/billing/gateway/AGENTS.md's
-// own domestic-leg trade-off section), so a request naming any other
-// currency must be refused here rather than silently collected as CNY --
+// settles in CNY (the domestic-leg trade-off), so a request naming any
+// other currency must be refused here rather than silently collected as
+// CNY --
 // formatAmount's own cents-to-yuan conversion has no unit conversion of its
 // own, so a caller-supplied USD/EUR/etc amount would otherwise be sent to
 // Alipay, and collected from the payer, as if it were the same number of
@@ -249,10 +246,9 @@ func encodePassback(req billing.ChargeRequest) (string, error) {
 // QueryStatus implements billing.PaymentGateway: calls alipay.trade.query
 // for ref (the out_trade_no CreateCharge created the order under) and maps
 // its trade_status to a billing.ChannelStatus -- the authoritative re-query
-// docs/internal/06-billing-and-metering.md's callbacks-cannot-be-trusted
-// rule requires. The response envelope's own signature is verified against
-// the configured Alipay public key before anything in it is trusted,
-// exactly like an inbound notification.
+// the never-trust-the-callback-body rule requires. The response envelope's
+// own signature is verified against the configured Alipay public key
+// before anything in it is trusted, exactly like an inbound notification.
 func (g *Gateway) QueryStatus(ctx context.Context, ref billing.ChannelReference) (billing.ChannelStatus, billing.Money, error) {
 	bizContent, err := json.Marshal(map[string]string{"out_trade_no": string(ref)})
 	if err != nil {
@@ -306,10 +302,10 @@ func (g *Gateway) QueryStatus(ctx context.Context, ref billing.ChannelReference)
 // integer cents. A negative string is refused outright -- amounts Alipay
 // actually sends (a query's total_amount, a notify's total_amount and
 // refund_fee) are never negative, so a leading minus is a protocol anomaly
-// this parser refuses rather than guessing at: the pre-fix parser returned
-// 50 for "-0.50" (the sign silently dropped, turning a negative value into
-// a small positive one) and -2850 for "-29.50" (the sign's arithmetic
-// corrupted).
+// this parser refuses rather than guessing at: parsing "-0.50" as 50 would
+// silently drop the sign, turning a negative value into a small positive
+// one, and parsing "-29.50" as -2850 would let the sign's arithmetic
+// corrupt the value.
 func parseAmount(s string) (int64, error) {
 	if strings.HasPrefix(s, "-") {
 		return 0, fmt.Errorf("billing/gateway/alipay: parse amount %q: negative amount", s)
@@ -357,7 +353,7 @@ func carriesRefund(refundFee string) bool {
 // refundFee is the payload's own "refund_fee" parameter (the refunded
 // amount, a decimal yuan string) -- an empty string when the payload
 // carries no such field. TRADE_CLOSED covers two distinct fates, exactly
-// as the notify path's normalizeNotify already distinguishes (P1-4): an
+// as the notify path's normalizeNotify already distinguishes: an
 // unpaid trade closed by timeout, and a PAID trade closed by a FULL refund
 // -- the alipay.trade.query response's own trade_status definition says so
 // (closed by timeout unpaid, or fully refunded after payment), and the refund marker
@@ -391,9 +387,9 @@ func tradeStatusToChannelStatus(status, refundFee string) billing.ChannelStatus 
 // TIME ZONE, never the host's: Alipay's gateway interprets the parameter
 // (and its gmt_* fields generally, despite the misleading prefix -- see
 // response.go's own alipayLocation note) as China Standard Time, UTC+8.
-// An earlier revision formatted time.Now() in the host's local zone, so a
-// host outside UTC+8 signed and sent a timestamp whose wall clock was off
-// by the host's whole UTC offset -- a skew Alipay's gateway refuses.
+// Formatting time.Now() in the host's local zone would make a host outside
+// UTC+8 sign and send a timestamp whose wall clock is off by the host's
+// whole UTC offset -- a skew Alipay's gateway refuses.
 func (g *Gateway) call(ctx context.Context, method, bizContent, passback, responseField string, out any) error {
 	params := map[string]string{
 		"app_id":      g.cfg.AppID,

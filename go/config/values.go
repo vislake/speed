@@ -12,10 +12,9 @@ import (
 // so the audit trail and the configs row's updated_by column carry exactly
 // the same value the caller handed over -- no wrapping, no reformatting. A
 // real deployment fills it from the authenticated principal (a user or
-// system identifier); authn does not exist yet, so this milestone's
-// callers pass whatever identifier their own context provides. An empty
-// Actor is rejected by Set (ErrActorRequired): every write must be
-// attributable to someone.
+// system identifier); a host without an authentication module passes
+// whatever identifier its own context provides. An empty Actor is rejected
+// by Set (ErrActorRequired): every write must be attributable to someone.
 type Actor string
 
 // Value is what a read of a configuration key returns and what a write

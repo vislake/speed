@@ -322,19 +322,19 @@ describe('logout', () => {
   })
 
   it('converges to signed-out when a same-session switch pre-empts the logout', async () => {
-    // The reviewer finding, the mirror on this path of the api-client
-    // refresh-flight finding: the logout request revokes the session
-    // server-side (immediate revocation in the shipped composition),
-    // but a concurrent switchTenant whose response lands first commits
-    // under the pre-logout generation -- and a switch keeps the held
-    // refresh token, so it continues the very session the logout's
-    // revocation ends. The pre-empted logout used to return silently,
-    // leaving the user who clicked sign-out signed in locally on a
-    // session the server has ended, until the next 401 converged it.
-    // A pre-empted logout must not silently no-op: the operation it
-    // started was a logout and its server-side revocation succeeded,
-    // so the local state converges to signed-out -- the pre-empting
-    // operation's own committed state must not swallow it.
+    // A pre-empted logout must not silently no-op. The logout request
+    // revokes the session server-side (immediate revocation in the
+    // shipped composition); a concurrent switchTenant whose response
+    // lands first commits under the pre-logout generation -- and a
+    // switch keeps the held refresh token, so it continues the very
+    // session the logout's revocation ends. Left in place, the
+    // winner's committed state would keep the user who clicked
+    // sign-out signed in locally on a session the server has ended,
+    // until the next 401 converged it. The local state converges to
+    // signed-out instead: the operation this call started was a
+    // logout and its server-side revocation succeeded, so the
+    // pre-empting operation's own committed state must not swallow
+    // it.
     let releaseSwitch!: (pair: unknown) => void
     const switchGate = new Promise((resolve) => {
       releaseSwitch = resolve
@@ -461,14 +461,13 @@ describe('switch tenant', () => {
 })
 
 describe('operation supersession', () => {
-  // Regression for web-auth-api.md P2-1: settleIssued used to answer a
-  // superseded token-issuing operation by silently returning the
-  // CURRENT (winner's) snapshot -- resolving, not rejecting, with no
-  // notify. A caller had no way to tell "my own request committed" from
-  // "I lost the race and someone else's operation is now the truth",
-  // which is exactly what TenantSwitcher's onSwitched contract needs:
-  // "fired exactly once after a switch commits" was false for a
-  // superseded caller, since it fired for the loser too.
+  // A superseded token-issuing operation rejects instead of resolving
+  // with the winner's snapshot: a silent resolve with no notify would
+  // give the caller no way to tell "my own request committed" from "I
+  // lost the race and someone else's operation is now the truth" --
+  // exactly what TenantSwitcher's onSwitched contract ("fired exactly
+  // once after a switch commits") depends on, since a resolving loser
+  // would fire it too.
 
   it('rejects OperationSupersededError for the switchTenant call that loses the generation race, never resolving with the winner\'s tenant', async () => {
     let releaseTenant2!: (pair: unknown) => void
@@ -838,13 +837,13 @@ describe('refresh', () => {
   })
 
   it('keeps the token store populated while the refresh is in flight', async () => {
-    // Regression: the refresh request used to travel credential-less
-    // by clearing the store first, which momentarily stripped the
-    // token from every concurrent request -- under api-client's
-    // bearer-only rule their 401s would then surface as spurious auth
-    // failures. The generated refresh operation now declares
-    // omitAccessToken instead, so the store must hold the current
-    // token throughout the refresh.
+    // The store must hold the current token throughout the refresh:
+    // the request travels credential-less by declaration (the
+    // generated refresh operation carries omitAccessToken), never by
+    // clearing the store -- clearing would momentarily strip the
+    // token from every concurrent request, and under api-client's
+    // bearer-only rule their 401s would surface as spurious auth
+    // failures.
     let releaseRefresh!: () => void
     const refreshGate = new Promise<void>((resolve) => {
       releaseRefresh = resolve
@@ -993,20 +992,19 @@ describe('refresh', () => {
   })
 
   it('adopts the rotated token when a tenant switch wins the race, resolving false so the refused request never replays under the new tenant', async () => {
-    // Regression: a refresh in flight when a tenant switch commits
-    // used to lose the race wholesale -- including the rotated refresh
-    // token the server issued for the one it consumed. The session
-    // kept presenting the consumed token, so its next refresh read as
-    // a replay, was refused, and signed the session out. The switch's
-    // own access token and principal must stand; only the rotated
-    // refresh token is adopted onto them. The second regression this
-    // test pins is the resolution's meaning: a switch changed the
-    // principal, so the refresh must resolve false -- the api-client
-    // silent-401 hook reads true as "retry the refused request with
-    // the store's token", and a retry under the new tenant's token
-    // could answer with new-tenant data cached under the old tenant's
-    // key. (A step-up -- same principal -- keeps resolving true; see
-    // the test below.)
+    // When a tenant switch commits while a refresh is in flight, the
+    // switch's own access token and principal stand and only the
+    // rotated refresh token is adopted onto them: the refresh's
+    // success consumed the held token server-side, and dropping the
+    // rotated one would leave the session presenting a consumed token
+    // -- its next refresh would read as a replay, be refused, and
+    // sign the session out. The resolution's meaning is pinned here
+    // too: a switch changed the principal, so the refresh must
+    // resolve false -- the api-client silent-401 hook reads true as
+    // "retry the refused request with the store's token", and a retry
+    // under the new tenant's token could answer with new-tenant data
+    // cached under the old tenant's key. (A step-up -- same principal
+    // -- keeps resolving true; see the test below.)
     let releaseRefresh!: () => void
     const refreshGate = new Promise<void>((resolve) => {
       releaseRefresh = resolve
@@ -1122,14 +1120,14 @@ describe('refresh', () => {
   })
 
   it('shares the switch-race request with a refresh started after the switch', async () => {
-    // Regression: the single-flight refresh used to be keyed on the
-    // generation. A tenant switch bumps the generation but keeps the
-    // held token, so a refresh started after the switch fired a second
-    // request presenting the same token while the first was still in
-    // flight -- two parallel presentations of one token, which the
-    // authn server reads as theft and answers by rotating the whole
-    // family out from under the session. Keyed on the held token, the
-    // later refresh shares the in-flight request instead.
+    // The single-flight slot is keyed on the held token, never the
+    // generation: a tenant switch bumps the generation but keeps the
+    // held token, so a refresh started after the switch must not fire
+    // a second request presenting the same token while the first is
+    // still in flight -- two parallel presentations of one token,
+    // which the authn server reads as theft and answers by rotating
+    // the whole family out from under the session. Keyed on the held
+    // token, the later refresh shares the in-flight request instead.
     let releaseRefresh!: () => void
     const refreshGate = new Promise<void>((resolve) => {
       releaseRefresh = resolve
@@ -1223,13 +1221,13 @@ describe('refresh', () => {
 
 describe('subscriber notification isolation', () => {
   it('contains a throwing subscriber: the other listeners still hear the commit and the operation still resolves', async () => {
-    // P1-9: notify() used to run listeners bare, so a host listener
-    // that throws -- registered first, Set order runs it before the
-    // hooks bridge -- froze the bridge (the React tree keeps the stale
-    // snapshot) and let the exception escape settleIssued: a login
-    // whose commit succeeded rejected with the listener's non-ApiError
-    // throw, surfacing as an unknown failure while onSignedIn never
-    // fired. Each listener is isolated: the commit it was told about
+    // notify() isolates each listener: a host listener that throws --
+    // registered first, Set order runs it before the hooks bridge --
+    // must not freeze the bridge (the React tree would keep the stale
+    // snapshot) nor let the exception escape settleIssued (a login
+    // whose commit succeeded would reject with the listener's
+    // non-ApiError throw, surfacing as an unknown failure while
+    // onSignedIn never fired). The commit the listener was told about
     // stands, the other listeners hear it, and the throwing listener
     // is the host's bug to find, not the session's to surface.
     const harness = makeHarness({
@@ -1814,13 +1812,13 @@ describe('with the real api-client', () => {
   })
 
   it('keeps concurrent requests presenting their token through a refresh', async () => {
-    // Regression: the refresh request used to clear the store to make
-    // itself credential-less. A request starting in that window went
-    // out without a token, and its 401 -- a credential-less one -- was
-    // terminal under the bearer-only rule: a spurious auth failure.
-    // The store must hold the current token throughout, so a request
-    // that starts mid-refresh presents it, shares the in-flight
-    // refresh on its 401, and retries with the fresh token.
+    // The store must hold the current token throughout the refresh:
+    // the request travels credential-less by declaration (the
+    // generated operation carries omitAccessToken), never by clearing
+    // the store. A request starting mid-refresh presents the token it
+    // holds, shares the in-flight refresh on its 401, and retries
+    // with the fresh token -- a credential-less 401 would be terminal
+    // under the bearer-only rule: a spurious auth failure.
     const store = createMemoryAccessTokenStore()
     const session = createAuthSession(store)
     const fetchCalls: Array<{
@@ -1911,16 +1909,16 @@ describe('with the real api-client', () => {
   })
 
   it('never replays a refused request under a tenant that won the refresh race', async () => {
-    // P1-8: a tenant switch committing while the silent-401 refresh is
-    // in flight used to make the refresh resolve true -- the store now
-    // holds the switched tenant's token, so the client retried the
-    // refused request with it. The server answered with the new
-    // tenant's data, and a host that keys its cache by tenant (['tenant',
-    // tenantId, ...]) cached that answer under the OLD tenant's key:
-    // the replay lands after a removeQueries eviction, so eviction
-    // cannot cover it. The safe contract: a refresh that lost the race
-    // to a principal change resolves false, and the original request
-    // fails instead of replaying under a principal it never asked.
+    // A tenant switch committing while the silent-401 refresh is in
+    // flight leaves the store holding the switched tenant's token;
+    // resolving true would make the client retry the refused request
+    // with it. The server would answer with the new tenant's data, and
+    // a host that keys its cache by tenant (['tenant', tenantId, ...])
+    // would cache that answer under the OLD tenant's key -- the replay
+    // lands after a removeQueries eviction, so eviction cannot cover
+    // it. The safe contract: a refresh that lost the race to a
+    // principal change resolves false, and the original request fails
+    // instead of replaying under a principal it never asked.
     const store = createMemoryAccessTokenStore()
     const session = createAuthSession(store)
     const fetchCalls: Array<{
@@ -1956,7 +1954,7 @@ describe('with the real api-client', () => {
         }
         // The shape a replay would produce: the request retried under
         // the switched tenant's token, answered with tenant-2 data --
-        // the very cache pollution under the tenant-1 key the fix
+        // the very cache pollution under the tenant-1 key this guard
         // exists to prevent. A passing test must never see this call.
         return jsonResponse(200, [])
       }
@@ -2017,10 +2015,9 @@ describe('with the real api-client', () => {
       // resolves with tenant-2's data.
       expect(error.auth).toBe(true)
     }
-    // Exactly one notes request was ever sent: no replay under the
+    // Exactly one notes request was sent: no replay under the
     // switched tenant's token, so no tenant-2 answer could land under
-    // a tenant-1 cache key. (Before the fix the refresh resolved true
-    // and this assertion failed on the replayed second call.)
+    // a tenant-1 cache key.
     expect(notesAttempts).toBe(1)
     expect(
       fetchCalls.filter((call) => call.path === '/api/v1/notes'),
@@ -2042,19 +2039,19 @@ describe('with the real api-client', () => {
   })
 
   it('refuses an empty 2xx on a token-issuing login as client.protocol', async () => {
-    // Regression: the generated seam declares no document-existence
-    // expectation -- it never sets RequestOptions.requireJsonBody, for
-    // any operation (see the @speed/api-sdk runtime.ts seam doc) -- so
-    // an operation whose spec declares a response body but that
-    // actually answers an empty 2xx resolved as undefined through the
-    // real transport. parseIssued's first property access then threw a
-    // native TypeError, which is not an ApiError: isApiError(error) is
-    // false, so the rejection bypassed the ApiError contract every
-    // surface resolves through (the reachable-code whitelists with an
-    // unknown fallback) and escaped as an unhandled exception. The
-    // body-existence guard refuses the bodyless success as
-    // client.protocol, the same answer every other contract-violating
-    // token-issuing 2xx gets.
+    // The generated seam declares no document-existence expectation --
+    // it never sets RequestOptions.requireJsonBody, for any operation
+    // (see the @speed/api-sdk runtime.ts seam doc) -- so an operation
+    // whose spec declares a response body but that actually answers an
+    // empty 2xx resolves as undefined through the real transport.
+    // parseIssued's first property access on undefined would throw a
+    // native TypeError, which is not an ApiError: isApiError(error)
+    // would be false, so the rejection would bypass the ApiError
+    // contract every surface resolves through (the reachable-code
+    // whitelists with an unknown fallback) and escape as an unhandled
+    // exception. The body-existence guard refuses the bodyless success
+    // as client.protocol, the same answer every other
+    // contract-violating token-issuing 2xx gets.
     const store = createMemoryAccessTokenStore()
     const session = createAuthSession(store)
     const fetcher: typeof fetch = async (input) => {
@@ -2093,11 +2090,11 @@ describe('with the real api-client', () => {
   })
 
   it('refuses an empty 2xx authorize answer as client.protocol', async () => {
-    // The same missed cell as the token-issuing guard, on the
-    // authorize endpoint whose whole 2xx answer is the URL document:
-    // an empty 2xx used to escape as a native TypeError on the first
-    // property access -- never an ApiError -- before the missing-field
-    // check could refuse it.
+    // The same document-existence guard, on the authorize endpoint
+    // whose whole 2xx answer is the URL document: an empty 2xx
+    // resolves as undefined and the property access would throw a
+    // native TypeError -- never an ApiError -- before the
+    // missing-field check could refuse it.
     const store = createMemoryAccessTokenStore()
     const session = createAuthSession(store)
     const fetcher: typeof fetch = async (input) => {
@@ -2133,8 +2130,9 @@ describe('with the real api-client', () => {
   it('refuses an empty 2xx callback answer as client.protocol', async () => {
     // The social callback's own document-dereferencing cell
     // (response.tokens): an empty 2xx resolves as undefined through
-    // the transport and used to escape as a native TypeError before
-    // the binding-shaped-response check could refuse it.
+    // the transport, and the property access must refuse it as
+    // client.protocol rather than throw a native TypeError before the
+    // binding-shaped-response check could run.
     const store = createMemoryAccessTokenStore()
     const session = createAuthSession(store)
     const fetcher: typeof fetch = async (input) => {

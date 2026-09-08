@@ -11,13 +11,11 @@ import (
 const ProviderOpenAICompatible = "chat.openai-compatible"
 
 // ChatProviderRegistry is the package-level pkgcore.SeamRegistry[ChatProvider]
-// every host resolves a named ChatProvider implementation through,
-// mirroring the database/sql driver-registration pattern go/pki's
-// SignerRegistry follows (go/pki/signer_registry.go) for the identical
-// reason: a future vendor-SDK-backed provider (a hypothetical
-// go/ai-gateway/provider/anthropic subpackage using a real SDK) self-
-// registers into this same registry from its own init(), without touching
-// this round's code, and a host that never imports that subpackage never
+// every host resolves a named ChatProvider implementation through, after
+// the database/sql driver-registration pattern: an additional vendor-SDK-
+// backed provider (a hypothetical go/ai-gateway/provider/anthropic
+// subpackage using a real SDK) self-registers into this same registry from
+// its own init(), and a host that never imports that subpackage never
 // resolves its name -- resolving an unimported one at Gateway.Chat time
 // fails with an error wrapping pkgcore.ErrUnknownImplementation naming it,
 // the same "unknown driver" cost database/sql's own drivers accept.
@@ -35,9 +33,7 @@ const ProviderOpenAICompatible = "chat.openai-compatible"
 // ProviderOpenAICompatible is registered below, in this package's own
 // init(), rather than through a subpackage: OpenAICompatibleProvider
 // already lives in go/ai-gateway's root package -- it is this module's
-// zero-external-dependency default, not an optional add-on, exactly the
-// reasoning go/pki/signer_registry.go's own doc comment gives for keeping
-// "signer.local" un-split.
+// zero-external-dependency default, not an optional add-on.
 var ChatProviderRegistry = pkgcore.NewSeamRegistry[ChatProvider]()
 
 func init() {
@@ -46,10 +42,10 @@ func init() {
 		// OpenAICompatibleProvider holds no connection and no process-local
 		// state of its own -- every call is an independent HTTP request --
 		// so it genuinely satisfies all three capability bits, though
-		// nothing in this round's Gateway validates them the way
-		// Kernel.Bootstrap validates the four kernel seams: this registry
-		// is ai-gateway's own private mechanism, not one of pkgcore's four
-		// deployment-mode-validated seams.
+		// nothing validates them the way Kernel.Bootstrap validates the
+		// four kernel seams: this registry is ai-gateway's own private
+		// mechanism, not one of pkgcore's four deployment-mode-validated
+		// seams.
 		Capabilities: pkgcore.MultiReplicaSafe | pkgcore.SurvivesRestart | pkgcore.Stateless,
 		New:          openaiCompatibleFromConfig,
 	})
@@ -59,8 +55,7 @@ func init() {
 // that fails. It is only ever called here, against the one name this file
 // controls, so a failure -- a duplicate name -- is a programming error in
 // this file, not a condition a caller could hit or would want to recover
-// from, mirroring pkgcore's own unexported mustRegister helper and
-// go/pki/signer_registry.go's identical copy.
+// from.
 func mustRegisterChatProvider(r pkgcore.Registration[ChatProvider]) {
 	if err := ChatProviderRegistry.Register(r); err != nil {
 		panic(fmt.Sprintf("aigateway: builtin implementation registration failed: %v", err))
@@ -71,10 +66,8 @@ func mustRegisterChatProvider(r pkgcore.Registration[ChatProvider]) {
 // NewOpenAICompatibleProvider: Gateway.resolve calls
 // ChatProviderRegistry.Build(route.Provider, pkgcore.Config{"base_url":
 // cred.BaseURL, "api_key": cred.APIKey}) with the credential it just
-// resolved for the current call, so this constructor -- unlike
-// go/pki/signer_registry.go's localSignerFromConfig, which opens a real
-// database connection -- performs no I/O at all; it only validates and
-// assigns fields.
+// resolved for the current call, so this constructor performs no I/O at
+// all; it only validates and assigns fields.
 //
 // The refusal of a config without base_url (or api_key) is this
 // constructor's own declaration that OpenAICompatibleProvider has no

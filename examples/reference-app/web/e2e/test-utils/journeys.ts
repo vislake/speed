@@ -36,11 +36,11 @@ export const AUTH_ERROR_TEXT = {
   tenantMembershipRequired: 'Your account is not a member of this organization.',
   /**
    * The whitelist's own fallback. No assertion should ever WANT this
-   * text: it is what a code outside the reachable-error whitelist -- or,
-   * before f23079d, every real backend answer -- degrades to. The specs
-   * assert its ABSENCE next to each specific error, which is what makes
-   * them a regression gate for the envelope-contract defect rather than
-   * a check that some error appeared.
+   * text: it is what a code outside the reachable-error whitelist
+   * degrades to, and if a real backend answer's code never arrived the
+   * fallback is what would stand in for it. The specs assert its ABSENCE
+   * next to each specific error, which is what pins the envelope
+   * contract rather than merely checking that some error appeared.
    */
   genericFallback: 'Something went wrong. Please try again later.',
 } as const
@@ -140,15 +140,15 @@ function writeLedger(ledger: LoginLedger): void {
 /**
  * Whether go/ratelimit would allow one more hit on `stamps` at `at`.
  *
- * A faithful replica of slidingWindowLimiter.Allow, because every
- * approximation of it was wrong in a way that cost a run. It is a
- * sliding-window COUNTER over two fixed windows, not a rolling log:
+ * A faithful replica of slidingWindowLimiter.Allow: any approximation
+ * that drifts from the server's own decision costs a run, so the
+ * replica is exact. It is a sliding-window COUNTER over two fixed
+ * windows, not a rolling log:
  *
  *   weighted = thisWindow + previousWindow * (1 - elapsedFraction)
  *   allowed  = weighted <= Rate
  *
- * Three consequences the obvious model gets wrong, each of which this
- * suite hit:
+ * Three consequences an approximation gets wrong:
  *
  *   - The windows are aligned to the epoch, not to the first attempt.
  *     "Sixty seconds since the oldest" is not the boundary; where the
@@ -178,32 +178,29 @@ function wouldAllow(stamps: readonly number[], rate: number, at: number): boolea
  * shaped this way. It waits BEFORE an attempt so the attempt is legal; it
  * never re-submits one the server refused. A helper that retried past a
  * refusal would destroy this suite's ability to tell a real regression
- * from its own impatience -- the rule provisioning-recovery.spec.ts's
- * header states, and which the budget refusal below still enforces.
+ * from its own impatience, which is also why the budget refusal below is
+ * still thrown rather than waited out.
  *
  * WHY IT IS NEEDED AT ALL
  *
- * The @budget tier signs demo-owner in seven times and runs in about
- * thirty seconds, so all seven land in one sixty-second window against a
- * five-per-minute limit. The tier was not passing because it fit the
- * budget; it was passing on the runs slow enough to spread the attempts
- * out, and failing on the fast ones -- as one just did, naming
- * visible-controls.spec.ts, which is not the gate that overspent. A
- * suite whose result depends on how fast it happens to run is reporting
- * its own timing, not the product.
+ * The @budget tier signs demo-owner in several times within a single
+ * sixty-second window against the five-per-minute limit, and a tier that
+ * only passed on the runs slow enough to spread the attempts out would
+ * be reporting its own timing, not the product -- so pacing is built in
+ * rather than left to run speed.
  *
  * WHAT IT CANNOT SEE
  *
  * The ledger is this RUN's own -- a file, because a Playwright worker
  * serves one project and restarts at every engine boundary, so an
- * in-memory one reset three times per run while the server counted once
- * (playwright.config.ts's LOGIN_LEDGER_PATH note). It matches the
- * server's view only because a local run boots a server of its own whose
- * rate limiter is an in-memory KVStore nothing else talks to. Against a
- * long-lived deployment (E2E_BASE_URL) another client's sign-ins are
- * invisible here, so the pacing reduces self-inflicted refusals rather
- * than guaranteeing none -- which is why signInAs still names the refusal
- * when it comes.
+ * in-memory one would reset several times per run while the server
+ * counted once (playwright.config.ts's LOGIN_LEDGER_PATH note). It
+ * matches the server's view only because a local run boots a server of
+ * its own whose rate limiter is an in-memory KVStore nothing else talks
+ * to. Against a long-lived deployment (E2E_BASE_URL) another client's
+ * sign-ins are invisible here, so the pacing reduces self-inflicted
+ * refusals rather than guaranteeing none -- which is why signInAs still
+ * names the refusal when it comes.
  *
  * Read-modify-write with no lock, which is sound only because this
  * config runs workers: 1 and fullyParallel: false: one attempt is in
@@ -284,9 +281,9 @@ export async function signInAs(page: Page, account: DemoAccount): Promise<void> 
   //
   // The frame is identified by the sign-out control rather than a nav
   // link, because below the md breakpoint AppShell collapses its
-  // navigation behind the menu button and no nav link is in the DOM until
-  // a person opens the drawer -- which quietly made this helper
-  // desktop-only until a spec that resizes to a phone found out.
+  // navigation behind the menu button and no nav link is in the DOM
+  // until a person opens the drawer -- a nav-based check would work only
+  // on wide screens.
   const frame = page.getByRole('button', { name: SESSION_TEXT.signOut })
   const refusal = page
     .getByRole('alert')
@@ -326,15 +323,14 @@ export async function signInAs(page: Page, account: DemoAccount): Promise<void> 
 
 /**
  * The tenant display names this host configures, in its own
- * `reference-app` bundle. Which of them an account lands in when it signs
- * in with no tenant named is NOT fixed: authn resolves the account's
- * first tenant from the host's MembershipReader, and this host's demo
- * seeding grants tenants while iterating a Go map, whose order is
- * randomized per boot and per account. So a spec must never assume a
- * tenant -- it reads the one the frame actually landed in and switches
- * deliberately when it needs the other. (Reported as a finding: a
- * returning member of a multi-location practice should land somewhere
- * predictable, which is a host-side ordering decision, not an authn one.)
+ * `reference-app` bundle. Which tenant an account lands in when it signs
+ * in with no tenant named is the first row of its membership
+ * enumeration, which org orders by tenant id (go/org's
+ * MemberService.TenantsOf); which of those rows comes first is a fact
+ * about the account's own memberships and the app's seeding, not a
+ * contract a spec should assume. So a spec never names a tenant -- it
+ * reads the one the frame actually landed in and switches deliberately
+ * when it needs the other.
  */
 export const TENANT_NAMES = [APP_TEXT.tenantAcme, APP_TEXT.tenantGlobex] as const
 
@@ -344,10 +340,9 @@ export async function readCurrentTenant(page: Page): Promise<string> {
   if ((TENANT_NAMES as readonly string[]).includes(label)) {
     return label
   }
-  // Naming what it actually saw, because the previous form could not:
-  // it probed for each demo name in turn and threw "no known tenant"
-  // either way, so a frame scoped to a self-service clinic and a frame
-  // showing no switcher at all produced the same message.
+  // Naming what it actually saw: a frame scoped to a self-service
+  // clinic and a frame showing no switcher at all must not produce the
+  // same message.
   throw new Error(
     `e2e: the frame's switcher shows "${label}", which is not one of the demo practices`,
   )
@@ -369,15 +364,12 @@ export function otherTenant(current: string): string {
  * readCurrentTenant only recognises the two demo practices, so it cannot
  * describe a frame scoped to any other tenant -- and self-service
  * registration creates exactly that, a clinic of the registrant's own
- * whose trigger shows a tenant id no helper knows by name.
- *
- * It exists because the alternative was being used and was unsound:
- * `TENANT_NAMES.not.toContain(await readCurrentTenant(page).catch(() => ''))`
- * passes whenever readCurrentTenant THROWS -- an unloaded frame, an
+ * whose switcher shows a tenant id no helper knows by name. An
+ * assertion about where a person landed needs to name where they
+ * landed: an expression of the form "not one of TENANT_NAMES" would
+ * pass whenever readCurrentTenant THROWS -- an unloaded frame, an
  * unrendered switcher, a bug in the helper itself -- so it cannot tell
- * "landed in its own clinic" from "shows no tenant at all", and the
- * direction it fails in is the one where it says yes. An assertion about
- * where a person landed needs to name where they landed.
+ * "landed in its own clinic" from "shows no tenant at all".
  *
  * Read from the chrome's own buttons rather than by an accessible name,
  * because the name is the answer being looked for. The chrome's other
@@ -385,18 +377,16 @@ export function otherTenant(current: string): string {
  * returned as itself rather than treated as absence, since "signed in
  * with no organization" is a real state and worth being able to assert.
  *
- * textContent, NOT innerText, and this is the mirror image of the choice
- * the session-address gate had to make in the other direction. innerText
- * returns text as RENDERED, and MUI's Button applies
- * `text-transform: uppercase` -- so the switcher reads back "ACME
- * DENTAL" while the tenant is named "Acme Dental", and every comparison
- * against a configured name fails. textContent is the DOM's own text,
- * which is what the accessible name is computed from and what a screen
- * reader announces, so it is the identity. (Its own hazard --
- * concatenating adjacent elements with no separator -- does not apply to
- * one button's label, which is why the two gates land on opposite
- * answers: ask "what does this render as" and innerText is right; ask
- * "which tenant is this" and only the untransformed text is.)
+ * textContent, NOT innerText: innerText returns text as RENDERED, and
+ * MUI's Button applies `text-transform: uppercase` -- so the switcher
+ * reads back "ACME DENTAL" while the tenant is named "Acme Dental",
+ * and every comparison against a configured name fails. textContent is
+ * the DOM's own text, which is what the accessible name is computed
+ * from and what a screen reader announces, so it is the identity. (Its
+ * own hazard -- concatenating adjacent elements with no separator --
+ * does not apply to one button's label: ask "what does this render as"
+ * and innerText is right; ask "which tenant is this" and only the
+ * untransformed text is.)
  */
 export async function readTenantLabel(page: Page): Promise<string> {
   const chromeControls = [SESSION_TEXT.signOut, SHELL_TEXT.openNav] as const
@@ -436,14 +426,12 @@ export async function expectOutsideDemoOrganizations(page: Page): Promise<void> 
 /**
  * The clinics this person can work in, read from the switcher's own menu.
  *
- * The list, not the landing. Which tenant a sign-in with no tenant named
- * lands in is NOT fixed -- authn takes the first the host's membership
- * answer returns, and that order is not guaranteed -- so an assertion
- * about where someone landed is an assertion about ordering. Since
+ * The list, not the landing: the frame opens on the membership answer's
+ * first row (ordered by tenant id), so "did the invitation work" cannot
+ * be answered by looking at which tenant the frame opened on. Since
  * self-service registration gives every registrant a clinic of their
- * own, anyone who was also invited somewhere has two, and "did the
- * invitation work" cannot be answered by looking at which one the frame
- * opened on.
+ * own, anyone who was also invited somewhere has two, and the question
+ * is whether the inviting organization is among them.
  *
  * Leaves the menu closed, so a caller can keep driving the page.
  */
@@ -474,24 +462,18 @@ export async function switchTenant(page: Page, target: string): Promise<void> {
 /**
  * The text a surface shows once it has stopped changing.
  *
- * Exists because this suite read a point-in-time sample as a settled
- * state SIX times, in an assertion, a wait, a helper, a balance read, a
- * notice read and a disclosure read. Every one produced an answer that
- * was not about the product: five let a defect through, and the sixth
- * accused a round that had done its work correctly.
+ * A point-in-time sample of a surface that is still settling -- a query
+ * that has not answered, a navigation in flight, an announcement a beat
+ * behind its trigger -- is an answer that is not about the product, and
+ * a bare `await locator.innerText()` is one call and always available,
+ * so it is what gets written. This makes waiting the equally short
+ * option.
  *
- * Recording that as a lesson did not stop it -- the README has carried
- * the failure class for most of a day and it happened twice more since.
- * What was missing was not the knowledge but the convenient path: a bare
- * `await locator.innerText()` is one call and always available, so it is
- * what gets written. This makes waiting the equally short option.
- *
- * "Settled" is two identical reads a beat apart, which is enough for the
- * shapes that actually bit: a query that has not answered, a navigation
- * still in flight, an announcement a beat behind its trigger. It is not
- * a guarantee against a surface that changes forever -- nothing is --
- * and it deliberately does not assert anything about the content, so a
- * caller's own assertion still says what the text must contain.
+ * "Settled" is two identical reads a beat apart, which is enough for
+ * those shapes. It is not a guarantee against a surface that changes
+ * forever -- nothing is -- and it deliberately does not assert anything
+ * about the content, so a caller's own assertion still says what the
+ * text must contain.
  */
 export async function readSettledText(
   locator: import('@playwright/test').Locator,
@@ -514,11 +496,10 @@ export async function readSettledText(
  * Asserts a person is signed in, by the one control that is present on
  * every screen size when they are: the sign-out button.
  *
- * NOT a nav link, which is what four specs used and what made them
- * desktop-only -- below the md breakpoint AppShell collapses the
+ * NOT a nav link: below the md breakpoint AppShell collapses the
  * navigation behind the menu button, so no nav link is in the DOM at
- * all. The failures read as "element(s) not found" on the iPad project
- * while the person was signed in perfectly well.
+ * all, and a nav-based check would fail on the iPad project while the
+ * person is signed in perfectly well.
  */
 export async function expectSignedIn(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: SESSION_TEXT.signOut })).toBeVisible()
@@ -527,19 +508,15 @@ export async function expectSignedIn(page: Page): Promise<void> {
 /**
  * Asserts a person is NOT signed in.
  *
- * This one matters more than its twin above, because the assertion it
- * replaces was not merely desktop-only -- it was VACUOUS on a phone or
- * a tablet. "The frame is gone" was written as "no nav link is on the
- * page", and below the md breakpoint no nav link is on the page whether
- * someone is signed in or not. So the check passed on the iPad project
- * for the wrong reason, and would have kept passing if signing out had
- * stopped working entirely.
- *
- * That is the same failure this suite already learned once: an indirect
- * measure standing in for the real property fails silently in BOTH
- * directions, and the direction that costs you is the one where it says
- * yes. The sign-out button is the real property -- it exists when there
- * is a session to end and not otherwise, on every screen size.
+ * "The frame is gone" must not be written as "no nav link is on the
+ * page": below the md breakpoint no nav link is on the page whether
+ * someone is signed in or not, so that check would pass on the iPad
+ * project for the wrong reason, and keep passing if signing out stopped
+ * working entirely. An indirect measure standing in for the real
+ * property fails silently in BOTH directions, and the direction that
+ * costs you is the one where it says yes. The sign-out button is the
+ * real property -- it exists when there is a session to end and not
+ * otherwise, on every screen size.
  */
 export async function expectSignedOut(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: SESSION_TEXT.signOut })).toHaveCount(0)
@@ -568,33 +545,23 @@ export async function expectOnSurface(page: Page, heading: string): Promise<void
  *
  * Below the md breakpoint AppShell collapses its navigation behind the
  * menu button and no nav link is in the DOM until someone opens the
- * drawer -- so a helper that clicks the link directly is desktop-only,
- * and silently so: it timed out on the iPad project with "locator.click:
- * Test timeout", which reads like a broken product rather than a helper
- * that does not know how to walk this screen. That matters more here
- * than in most products, because the iPad IS the device a dentist shows
- * a patient their simulation on. `signInAs` above had the same bug and
- * the same symptom; this is the other half of it.
- *
- * Opening the drawer first is what a person does, not a workaround: on a
- * narrow screen the menu button is the navigation.
+ * drawer, so a helper that clicks the link directly works only on wide
+ * screens -- and this matters more here than in most products, because
+ * the iPad IS the device a dentist shows a patient their simulation on.
+ * Opening the drawer first is what a person does, not a workaround: on
+ * a narrow screen the menu button is the navigation.
  */
 export async function openSurface(page: Page, name: string | RegExp): Promise<void> {
   const link = page.getByRole('link', { name })
   const menu = page.getByRole('button', { name: SHELL_TEXT.openNav })
 
   // Wait for whichever entrance THIS viewport offers, rather than asking
-  // whether one is there right now.
-  //
-  // `isVisible()` is a point-in-time question with no waiting in it, and
-  // asking it first made this helper race the frame's own render: a
-  // journey that signs in and navigates immediately -- no signInAs to
-  // settle the frame first -- found neither the link nor the menu and
-  // failed with "no way to reach Notes" while both were about to appear.
-  // The direct `.click()` this helper replaced never had that problem,
-  // because a click auto-waits; the fix is to keep the waiting, not to
-  // sleep. `.or()` waits for either and settles as soon as one is
-  // visible, so a wide viewport does not pay for the narrow one's menu.
+  // whether one is there right now. `.or()` waits for either and settles
+  // as soon as one is visible, so a wide viewport does not pay for the
+  // narrow one's menu -- while an `isVisible()`-first check would race
+  // the frame's own render: a journey that signs in and navigates
+  // immediately, with no signInAs to settle the frame first, would find
+  // neither the link nor the menu while both are about to appear.
   await expect(
     link.or(menu).first(),
     `no way to reach ${String(name)}: the frame offers neither that nav entry nor the menu button that would hold it`,
@@ -616,11 +583,10 @@ export async function openSurface(page: Page, name: string | RegExp): Promise<vo
   // from the accessibility tree. The controls are all still in the DOM,
   // so this does not look like a hidden element: it looks like the app
   // bar's buttons losing their accessible NAMES, because a name is not
-  // computed for an element that is not in the tree. `readCurrentTenant`
-  // then reported "the frame shows no known tenant in its switcher"
-  // while a screenshot showed the switcher plainly, on the iPad project
-  // only -- a gate accusing the product of losing its tenant switcher
-  // when the truth was that this helper returned half a step early.
+  // computed for an element that is not in the tree. Returning half a
+  // step early would make a caller's `readCurrentTenant` report that
+  // the frame shows no tenant switcher while a screenshot shows the
+  // switcher plainly.
   await link.waitFor({ state: 'hidden' })
 }
 
@@ -628,8 +594,8 @@ export async function openSurface(page: Page, name: string | RegExp): Promise<vo
  * Asserts the page shows exactly the specific error text, and NOT the
  * whitelist's generic fallback. Both halves matter: the first says the
  * server's answer arrived, the second says it arrived as a code the UI
- * could resolve -- the property the envelope-contract defect broke while
- * every mocked suite still passed.
+ * could resolve -- the property a scripted-fetch suite cannot pin,
+ * because its doubles answer envelopes their own authors shaped.
  */
 export async function expectSpecificError(page: Page, text: string): Promise<void> {
   await expect(page.getByRole('alert')).toContainText(text)

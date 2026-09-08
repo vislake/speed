@@ -1,12 +1,12 @@
 package integration_test
 
-// Runnable documentation for round 4's new public API: Handler, NewHandler,
-// SubjectResolver and WithSubjectResolver. Mirrors example_test.go's own
-// convention -- compiled AND executed by `go test`, so a change to this
-// module's public HTTP surface that breaks the documented usage fails the
-// build rather than only rotting in prose.
+// Runnable documentation for the module's HTTP public API: Handler,
+// NewHandler, SubjectResolver and WithSubjectResolver. Mirrors
+// example_test.go's own convention -- compiled AND executed by `go test`,
+// so a change to this module's public HTTP surface that breaks the
+// documented usage fails the build rather than only rotting in prose.
 //
-// It drives round 1's full API-key lifecycle through a real, composed
+// It drives the full API-key lifecycle through a real, composed
 // net/http.Handler -- no mock standing in for api.ServerInterface itself --
 // covering create (the raw key is available exactly once, right in the
 // response body), list (the raw key never reappears), rotate (the

@@ -19,7 +19,7 @@ import (
 // at a GPS IFD) and an ICC APP2 profile onto decodable images -- and every
 // "kept the pixels" assertion is a full decode-and-compare of the output
 // against the pristine base, so a strip that removed data along with
-// metadata would fail here rather than only in the service round.
+// metadata would fail here rather than only at the service layer.
 
 // exifPayload returns the bytes of an APP1 EXIF payload: the "Exif\0\0"
 // signature followed by a little-endian TIFF whose IFD0 entry 0x8825 points

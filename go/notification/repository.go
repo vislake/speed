@@ -60,9 +60,8 @@ func NewRepository(db *gorm.DB) *Repository {
 // UNIQUE index on dedupe_key would refuse -- into the "already delivered"
 // answer that lets the retry converge without a second send.
 //
-// The tenant comes from ctx, and the query is written the way
-// go/dbkit/AGENTS.md's "Known limitations" prescribes: built on the same
-// *gorm.DB the embedded Repository was built on, against a TenantScoped
+// The tenant comes from ctx, and the query is built on the same *gorm.DB
+// the embedded Repository was built on, against a TenantScoped
 // destination, so the GORM isolation plugin still injects WHERE tenant_id
 // even though Repository[T]'s own re-verification does not run for the
 // call -- and run inside dbkit.WithTenantSession, so the PostgreSQL RLS
@@ -122,18 +121,16 @@ func (r *Repository) ListForRecipient(ctx context.Context, recipientUserID, grou
 //
 // The count is a real COUNT query -- one statement the database answers
 // with the number, never a materialization of the recipient's unread rows
-// -- built the way go/dbkit/AGENTS.md's "Known limitations" prescribes for
-// a query shape Repository[T]'s minimal surface does not grow: on the same
-// *gorm.DB, against a TenantScoped model, inside dbkit.WithTenantSession
-// so the PostgreSQL RLS session variable is set for it too. GORM's Count
-// finisher can only anchor to a table through a Model destination, and the
-// Model is exactly what carries the type to the isolation plugin -- the
-// plugin injects WHERE tenant_id for a statement whose Model implements
-// TenantScoped, so this method's one .Model call is what makes the count
-// tenant-scoped rather than a bypass of the guard (the module's sole
-// raw-gorm-bypass allowlist entry: tools/semgrep_rules/raw-gorm-bypass.yml,
-// which records the same reasoning). Counting must not load every unread
-// row's bytes onto the worker just to answer with their number.
+// -- for a query shape Repository[T]'s minimal surface does not grow: on
+// the same *gorm.DB, against a TenantScoped model, inside
+// dbkit.WithTenantSession so the PostgreSQL RLS session variable is set for
+// it too. GORM's Count finisher can only anchor to a table through a Model
+// destination, and the Model is exactly what carries the type to the
+// isolation plugin -- the plugin injects WHERE tenant_id for a statement
+// whose Model implements TenantScoped, so this method's one .Model call is
+// what makes the count tenant-scoped rather than a bypass of the guard.
+// Counting must not load every unread row's bytes onto the worker just to
+// answer with their number.
 func (r *Repository) UnreadCount(ctx context.Context, recipientUserID string) (int, error) {
 	var count int64
 	now := time.Now().UTC()
@@ -207,8 +204,8 @@ func (r *Repository) MarkRead(ctx context.Context, recipientUserID, messageID st
 // update can never reach another tenant's rows. RowsAffected is the answer:
 // how many rows the predicate actually matched at write time -- a row
 // another replica removed between the caller's last read and this write
-// simply does not match, which is the row-vanished case the old per-row
-// loop used to skip one write at a time.
+// simply does not match, the row-vanished case a single-statement update
+// must tolerate.
 func (r *Repository) ReadAll(ctx context.Context, recipientUserID string) (int, error) {
 	now := time.Now().UTC()
 	var flipped int64

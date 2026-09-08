@@ -196,8 +196,8 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	})
 
 	t.Run("no permissions are declared", func(t *testing.T) {
-		// This round has no HTTP surface for rbac to gate -- see
-		// AGENTS.md's Known limitations.
+		// metering has no HTTP surface for rbac to gate and no operation
+		// privileged enough to warrant an audit action.
 		if got := reg.Permissions.Permissions(); len(got) != 0 {
 			t.Errorf("Register declared %d permission(s), want 0 this round", len(got))
 		}

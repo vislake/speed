@@ -1,9 +1,10 @@
 //go:build integration
 
 // Package billing_test holds go/billing's PostgreSQL integration tier,
-// added in the round that fixed PreDeduct's poisoned-transaction recovery
-// (P1-1). It is physically separate from go/billing's unit tests (which
-// live in package billing, one file per source file, per the backend
+// the tier that exists because PreDeduct's poisoned-transaction recovery
+// is a PostgreSQL-only defect class. It is physically separate from
+// go/billing's unit tests (which live in package billing, one file per
+// source file, per the backend
 // coding standard's testing layout rule) and carries the "integration"
 // build tag: a plain "go test ./..." never compiles or runs anything in
 // this directory; it is invoked explicitly with
@@ -37,8 +38,7 @@
 //     then reads the pre-existing row back on the still-healthy
 //     transaction (postgres_credit_transactions_test.go's
 //     TestPostgres_PreDeduct_IdempotentRetry_ReturnsTheSameReservation,
-//     which fails against the pre-fix code on real PostgreSQL and passes
-//     after).
+//     which only real PostgreSQL can make fail).
 //
 //   - the whole credit reserve -> confirm -> refund family runs on the
 //     real server: the full lifecycle with both idempotent-retry legs,
@@ -49,7 +49,7 @@
 //     models' mandatory tenancytest.AssertIsolated suites re-run against
 //     real PostgreSQL, the same re-run go/org, go/rbac, go/storage,
 //     go/notification and go/metering integration tiers make for their own
-//     tenant-scoped repositories (docs/internal/04-data-and-tenancy.md).
+//     tenant-scoped repositories.
 package billing_test
 
 import (
@@ -85,7 +85,7 @@ func tenantCtx(tenant pkgcore.TenantID) context.Context {
 // TestCreditBalanceRepository_AssertIsolated_Postgres re-runs go/billing's
 // own TestCreditBalanceRepository suite's isolation proof against a real
 // PostgreSQL server. billing_credit_balances is tenant data
-// (docs/internal/04-data-and-tenancy.md); AssertIsolated is the mandatory
+// AssertIsolated is the mandatory
 // suite for it.
 func TestCreditBalanceRepository_AssertIsolated_Postgres(t *testing.T) {
 	repo := billing.NewCreditBalanceRepository(newPostgres(t))

@@ -27,28 +27,21 @@ const moduleName = "audit"
 // requires go/dbkit (tenancy sits above dbkit in the module dependency
 // graph -- pkgcore -> dbkit -> tenancy -> config/jobs -> ...), and this
 // package is a subpackage of dbkit itself, so importing tenancy from here
-// would make dbkit depend on tenancy -- inverting the direction root
-// CLAUDE.md's "Dependencies flow strictly bottom-up" rule requires and
-// reintroducing exactly the module cycle that rule exists to prevent. This
-// is the same conflict model_test.go already documents for
-// tenancytest.AssertNotTenantScoped; this round's scope-freeze report left
-// the exact subscription wiring open for the implementing round (§3's
-// adjudication on whether tenancy gains its own Register()), and this is
-// that round's resolution: subscribe by the bare string, and decode the
-// payload structurally (decodeSystemContextEntered, below) instead of by
-// importing tenancy.SystemContextEnteredEvent's concrete type.
-//
-// A future round giving tenancy its own pkgcore.Module (still open per the
-// scope-freeze report) can replace this constant with a genuine import
-// once dbkit is no longer a dependency tenancy sits above -- or, more
-// likely, never needs to, since the event's wire shape is unlikely to
-// change independently of this constant.
+// would make dbkit depend on tenancy -- inverting the bottom-up
+// dependency direction and reintroducing exactly the module cycle the
+// graph exists to prevent (the same conflict model_test.go documents for
+// tenancytest.AssertNotTenantScoped). Subscribing by the bare string keeps
+// the cycle out, and decodeSystemContextEntered, below, reads the payload
+// structurally instead of importing tenancy.SystemContextEnteredEvent's
+// concrete type. Whether tenancy ever gains its own pkgcore.Module --
+// which would let it declare the action on its own behalf -- does not
+// change this package's shape.
 const tenancySystemContextEnteredEventType = "tenancy.system_context.entered"
 
 // AuditActionSystemContextEntered is registered on the host's
 // AuditActionRegistrar by Register, on tenancy's behalf, since go/tenancy
-// has no pkgcore.Module of its own (see AGENTS.md's "Module home" and its
-// own doc comment) to declare its audit-action vocabulary. It names the
+// has no pkgcore.Module of its own to declare its audit-action
+// vocabulary. It names the
 // same string tenancySystemContextEnteredEventType does; the two are kept
 // as separate constants because they answer different questions (an audit
 // action vs. an event type) that happen to share one string value here,
@@ -58,9 +51,8 @@ const AuditActionSystemContextEntered = tenancySystemContextEnteredEventType
 
 // Module implements pkgcore.Module: the persister that subscribes to both
 // collection mechanisms' published events (dbkit.EventWriteCaptured,
-// EventRecorded) plus tenancy's already-shipped
-// EventSystemContextEntered, normalizes each into an AuditEvent, and
-// stores it through Repository.Insert.
+// EventRecorded) plus tenancy's EventSystemContextEntered, normalizes
+// each into an AuditEvent, and stores it through Repository.Insert.
 //
 // Unlike a business module, Module owns no HTTP surface and declares no
 // configuration schema or feature flags -- its whole contribution is the
@@ -107,12 +99,10 @@ func (m *Module) DependsOn() []string { return nil }
 func (m *Module) Migrations() embed.FS { return migrations.FS }
 
 // Locales implements pkgcore.Module: Module ships no user-facing messages
-// in this milestone (there is no query/report API yet -- that is M4,
-// go/compliance), so it contributes an empty file set.
+// (no query/report API exists), so it contributes an empty file set.
 func (m *Module) Locales() embed.FS { return embed.FS{} }
 
-// OpenAPISpec implements pkgcore.Module: nil. Module mounts no HTTP route
-// in this milestone.
+// OpenAPISpec implements pkgcore.Module: nil. Module mounts no HTTP route.
 func (m *Module) OpenAPISpec() []byte { return nil }
 
 // Register implements pkgcore.Module. Per the interface's contract ("It
@@ -244,9 +234,9 @@ func (m *Module) onWriteCaptured(ctx context.Context, evt pkgcore.Event) error {
 // mirroring auditPublishFailed's alert-not-fail idiom and its reason for
 // reaching for slog rather than obs.FromContext: this package is a
 // subpackage of dbkit, which sits at the same depth as go/observability in
-// the module dependency graph and cannot import it (see go/dbkit/AGENTS.md's
-// "One dependency, and why there is only one"). The message is a constant
-// string; every variable goes into snake_case key-value attributes shared
+// the module dependency graph and cannot import it. The message is a
+// constant string; every variable goes into snake_case key-value
+// attributes shared
 // with the rest of the codebase's logging convention (the same attribute
 // names auditPublishFailed uses, plus the refused action itself), so an
 // operator reading this line has every field needed to declare the missing
@@ -295,14 +285,12 @@ func (m *Module) onRecorded(ctx context.Context, evt pkgcore.Event) error {
 	return m.repo.InsertIdempotent(ctx, row)
 }
 
-// onSystemContextEntered normalizes tenancy's already-shipped
-// EventSystemContextEntered into an AuditEvent and persists it -- closing
-// docs/internal/10-compliance-and-audit.md's requirement that every use of
-// the system context is itself an audit event, for a mechanism that
-// already exists in production, at the cost of only this one subscriber.
-// See decodeSystemContextEntered's doc comment for why the payload is
-// decoded structurally rather than by importing tenancy's concrete event
-// type.
+// onSystemContextEntered normalizes tenancy's EventSystemContextEntered
+// into an AuditEvent and persists it -- every use of the system context is
+// itself an audit event, for a mechanism that exists in production, at the
+// cost of only this one subscriber. See decodeSystemContextEntered's doc
+// comment for why the payload is decoded structurally rather than by
+// importing tenancy's concrete event type.
 func (m *Module) onSystemContextEntered(ctx context.Context, evt pkgcore.Event) error {
 	actor, purpose, ticket, enteredAt, ok := decodeSystemContextEntered(evt.Payload)
 	if !ok {

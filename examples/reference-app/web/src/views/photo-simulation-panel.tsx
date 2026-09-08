@@ -1,15 +1,14 @@
 /**
- * photo-simulation-panel.tsx -- the block-B surface: one case photo's
- * smile-simulation workbench, rendered beneath the photo on the case
- * detail page. A clinic user picks an option set from the documented
- * vocabulary (three smile styles, three tooth shades, an adjustable
- * strength -- the same words the backend validates against; option
- * values travel verbatim into the simulate operation), starts the async
- * generation, watches an honest in-progress status, and once the job
- * completes sees the before/after comparison: the generated image
- * fetched through the simulation-content operation and rendered beside
- * the original photo, both over the blob-URL pattern the case page
- * uses.
+ * photo-simulation-panel.tsx -- one case photo's smile-simulation
+ * workbench, rendered beneath the photo on the case detail page. A
+ * clinic user picks an option set from the documented vocabulary (three
+ * smile styles, three tooth shades, an adjustable strength -- the same
+ * words the backend validates against; option values travel verbatim
+ * into the simulate operation), starts the async generation, watches an
+ * honest in-progress status, and once the job completes sees the
+ * before/after comparison: the generated image fetched through the
+ * simulation-content operation and rendered beside the original photo,
+ * both over the blob-URL pattern the case page uses.
  *
  * The surface's reads and writes go through the generated smilesim
  * operations over tenant-namespaced query keys, the same discipline as
@@ -22,10 +21,10 @@
  * (smile-sim-errors.ts) to bilingual text, never a raw code.
  *
  * Under a completed comparison the surface offers the clinic its own
- * copy of the generation: the keep-the-result download control
+ * copy of the generation: the download control
  * (simulation-download-action.tsx, which saves the generated image as
- * a real file named for the patient) beside the block-C patient link
- * (simulation-share-action.tsx) and the block-D cost line.
+ * a real file named for the patient) beside the patient-link control
+ * (simulation-share-action.tsx) and the cost line.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -120,17 +119,17 @@ const STATUS_TEXT_KEY: Readonly<Record<string, string>> = {
 /**
  * The credit cost of one smile simulation, mirrored from the service
  * that charges it (internal/smilesim/service.go's CreditsPerSimulation,
- * the flat cost Simulate reserves for one generation). The block-D
- * surface shows this number next to a completed generation -- a
- * generation must say what it cost -- and the mirror is pinned to the
- * Go source by simulation-cost-lockstep.test.ts, so the displayed price
- * cannot drift from the reserved amount without a failing test.
+ * the flat cost Simulate reserves for one generation). The surface
+ * shows this number next to a completed generation -- a generation
+ * must say what it cost -- and the mirror is pinned to the Go source
+ * by simulation-cost-lockstep.test.ts, so the displayed price cannot
+ * drift from the reserved amount without a failing test.
  */
 export const SIMULATION_CREDIT_COST = 10
 
 /** One of the option dimensions, rendered as native radio rows: each
  * option is a visible radio input whose label text is its accessible
- * name -- the block-B gate addresses every offered option by that
+ * name -- the e2e option gates address every offered option by that
  * name. */
 function OptionGroup({
   legendKey,
@@ -361,9 +360,9 @@ export function PhotoSimulationPanel({
   readonly patientName: string
 }): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
-  // The price the block-D surface renders beside a completed
-  // generation, formatted in the surface language like every other
-  // number on this page.
+  // The price the case page renders beside a completed generation,
+  // formatted in the surface language like every other number on this
+  // page.
   const formatCost = useMemo(() => {
     const formatter = new Intl.NumberFormat(i18n.language)
     return (value: number): string => formatter.format(value)
@@ -438,8 +437,8 @@ export function PhotoSimulationPanel({
   // documented default options the moment this panel can act. The case
   // page opens on a photo with nothing but the pickers and a blank
   // promise otherwise; the practice's first look at a new patient
-  // photo is the comparison this auto-run produces, and the block-C
-  // gate's own journey opens a case this way. Any existing attempt --
+  // photo is the comparison this auto-run produces, and the e2e case
+  // journeys open a case this way. Any existing attempt --
   // queued, running, succeeded or failed -- leaves the panel hands-off,
   // and a person clicking Simulate is never doubled up: the button is
   // disabled while the auto-run is in flight, and the run's own
@@ -597,13 +596,12 @@ export function PhotoSimulationPanel({
     <Box sx={{ marginTop: 2, maxWidth: 720 }}>
       <Typography variant="h6">{t('cases.sim.title')}</Typography>
 
-      {/* The cost disclosure of the automatic first preview (the
-      product-disclosure gate): the panel is about to generate this
-      photo's first preview by itself, and the surface says so and
-      prices it before the run fires -- the person opening the case
-      learns what the automatic preview spends before it spends it,
-      not only from the after-the-fact cost line under a completed
-      comparison. */}
+      {/* The cost disclosure of the automatic first preview: the panel
+      is about to generate this photo's first preview by itself, and
+      the surface says so and prices it before the run fires -- the
+      person opening the case learns what the automatic preview spends
+      before it spends it, not only from the after-the-fact cost line
+      under a completed comparison. */}
       {showAutoPreviewCostNotice && (
         <Typography
           variant="body2"
@@ -735,7 +733,7 @@ export function PhotoSimulationPanel({
             photoObjectID={photoObjectID}
             patientName={patientName}
           />
-          {/* The block-C share action: the practice turns this completed
+          {/* The share action: the practice turns this completed
           simulation into a patient-facing link for the before/after
           pair -- the photo the simulation was generated from and its
           output object. Mounted under the comparison with a key of the
@@ -746,9 +744,9 @@ export function PhotoSimulationPanel({
             simulation={newestSucceeded}
             photoObjectId={photoObjectID}
           />
-          {/* What this generation cost, where the generation happened
-              (the block-D acceptance): the charge reads from the same
-              mirror the service's reservation pins. */}
+          {/* What this generation cost, where the generation happened:
+              the charge reads from the same mirror the service's
+              reservation pins. */}
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
             {t('cases.sim.cost', {
               count: SIMULATION_CREDIT_COST,

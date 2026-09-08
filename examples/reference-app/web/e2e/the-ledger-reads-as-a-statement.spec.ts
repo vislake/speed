@@ -2,39 +2,26 @@
  * That the credits ledger reads like a statement a clinic owner can
  * check, not like a log line.
  *
- * Found by walking the journey as a person: each ledger row carries a
- * translated label ("Simulation", "Top-up") and, under it, the raw
- * annotation the server stored -- `smilesim:simulate`, `demo:seed`.
- * A dentist reading their own billing history is shown text that was
- * never written for them.
- *
- * WHY THIS IS NOT AN AESTHETIC COMPLAINT
- *
- * `go/billing` says what that field is, in its own words, and it is not
- * display text. The audit-exit round (221d959) closed `Reason` to prose
- * and declared it "machine-readable annotation with a declared shape,
- * never free text" -- ASCII letters and digits joined by ":" "_" "-",
- * its documented vocabulary being `ai_generation:job_123`,
- * `plan:pro:monthly_included`, `expiry:2026-09-policy`. The reason it
- * was closed is the point: the same text is copied verbatim into the
- * audit trail's Changes column, where `go/dbkit/audit`'s content
- * contract forbids anything a caller could slip PII into. The field was
- * narrowed precisely so it would NOT carry writing meant for people.
- *
- * So this is a module's field used by a consumer for the one purpose its
- * owner ruled out, and `credits-view.tsx`'s own comment had gone stale
- * saying so ("the server's own free text, displayed verbatim").
- *
- * It is the same shape as the sessions list rendering raw User-Agent
- * strings, closed by 6d56d71: machine text in a list a person reads to
- * make a decision. And the token adds nothing here -- the row already
- * says "Simulation" in the reader's own language, so `smilesim:simulate`
- * is the same fact in machine form.
+ * Each ledger row names what happened in the reader's own language
+ * ("Simulation", "Top-up"). The annotation go/billing stores alongside
+ * it is not display text: the field is declared "machine-readable
+ * annotation with a declared shape, never free text" -- ASCII letters
+ * and digits joined by ":" "_" "-", its documented vocabulary being
+ * `ai_generation:job_123`, `plan:pro:monthly_included`,
+ * `expiry:2026-09-policy` -- and narrowed precisely so it does NOT
+ * carry writing meant for people: the same text is copied verbatim into
+ * the audit trail's Changes column, where the content contract forbids
+ * anything a caller could slip PII into. A billing statement is where a
+ * person reads what happened to their money, so rendering the raw
+ * annotation there shows machine text in a list a person reads to make
+ * a decision -- and the token adds nothing, being the same fact in
+ * machine form. The reason never enters the rendering; the meta line
+ * carries the date alone.
  *
  * THE COUNTER-CASE, WHICH IS REAL
  *
  * `@speed/account-ui` renders session `amr` values deliberately as
- * opaque references, untranslated, and that was accepted. Showing a
+ * opaque references, untranslated, and that is accepted. Showing a
  * machine token is therefore not wrong everywhere. The distinction drawn
  * here -- an audit reference in a security list read by a technical
  * reader, versus a billing statement read by a clinic owner, where the
@@ -71,26 +58,21 @@ import { CASE_UI } from './test-utils/cases.js'
  * `Top-up`, `Simulation refunded`, `-10`, `+1,000` and the zh-CN labels
  * do not -- checked against all of them before this gate was committed.
  *
- * That check is not ceremony. Three assertions in this suite have failed
- * in exactly the opposite direction -- a threshold or pattern loose
- * enough to catch the bad case caught the good one too -- and the last
- * one would have told the round that implemented downloading that its
- * correct download was an error page.
+ * That check is not ceremony. Thresholds and patterns in this suite
+ * have failed in exactly the opposite direction -- one loose enough to
+ * catch the bad case caught the good one too, accusing a correct
+ * download of being an error page.
  */
 const BILLING_REASON_SHAPE = /\b[A-Za-z][A-Za-z0-9]*[:_][A-Za-z0-9][A-Za-z0-9:_-]*/
 
-// Closed by 48d54e9, and by the strongest of the three options this
-// gate left open: the reason never enters the rendering at all. Not a
-// label-mapping table -- that would go stale the moment a consumer names
-// a tag nobody mapped -- and not a translation, but absence, which is
-// robust against the whole family rather than the two tokens this app
-// happens to produce today. The meta line carries the date alone, the
-// rowMeta key is gone from both locale bundles, the stale comment about
-// "free text" is corrected, and an inline sentence records the contract
-// so a later well-meaning round does not put it back.
+// The reason never enters the rendering at all: not a label-mapping
+// table (that would go stale the moment a consumer names a tag nobody
+// mapped) and not a translation, but absence, which is robust against
+// the whole family rather than the two tokens this app happens to
+// produce. The meta line carries the date alone. The gate keeps
+// asserting the SHAPE, so a reason reaching the screen under any name
+// fails here.
 //
-// Verified on all three engines. The gate stays and keeps asserting the
-// SHAPE, so a reason reaching the screen under any name fails here.
 // @budget rather than untagged: it spends a sign-in and the default
 // tier has none of demo-owner's allowance left.
 test(
@@ -101,8 +83,8 @@ test(
     await openSurface(page, CASE_UI.navCredits)
 
     // On the credits surface, asserted rather than assumed: a gate that
-    // read "the ledger" while standing on another page is a false pass
-    // this suite has already given once.
+    // read "the ledger" while standing on another page would be a false
+    // pass.
     await expect(
       page.getByRole('heading', { level: 1 }),
       'the gate never reached the credits surface, so whatever it read next was not the ledger',

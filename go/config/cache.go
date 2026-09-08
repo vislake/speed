@@ -32,10 +32,9 @@ type cacheEntry struct {
 	missing   bool
 }
 
-// valueCache is the process-local, read-through cache of configs rows,
-// implementing the design's dynamic-config rule (docs/internal/11-cross-
-// cutting.md) that hot-path reads go through a process-local cache
-// invalidated on change, never a per-read database query. The cache holds
+// valueCache is the process-local, read-through cache of configs rows:
+// hot-path reads go through it and are invalidated on change, never a
+// per-read database query. The cache holds
 // two shapes for one exact (key, scope, tenant) triple: the row itself when
 // one exists, and an absence sentinel (cacheEntry.missing) when a store
 // read confirmed that no row exists there. Absence is cached because an

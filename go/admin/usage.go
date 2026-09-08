@@ -10,7 +10,7 @@ import (
 	"github.com/vislake/speed/go/tenancy"
 )
 
-// UsageSummaryRow is one tenant's row of D9's cross-tenant usage/billing
+// UsageSummaryRow is one tenant's row of the cross-tenant usage/billing
 // dashboard: whatever go/metering's and go/billing's own per-tenant query
 // methods can currently answer for that tenant, stitched into one row --
 // no new aggregate of admin's own.
@@ -48,10 +48,9 @@ type UsageSummaryRow struct {
 	ActiveSubscription *billing.Subscription
 }
 
-// UsageService is D9's runtime: admin's own tenant-by-tenant stitching of
-// go/metering's and go/billing's ALREADY-REAL, per-tenant query methods --
-// no new database table, no new aggregate of admin's own, exactly D9's own
-// design (docs/internal/23-admin.md).
+// UsageService is the dashboard's runtime: admin's own tenant-by-tenant
+// stitching of go/metering's and go/billing's ALREADY-REAL, per-tenant
+// query methods -- no new database table, no new aggregate of admin's own.
 //
 // The surface is read-only against go/metering's own tables and admin's
 // own ledger, but deliberately NOT against go/billing's credits ledger:
@@ -64,24 +63,23 @@ type UsageSummaryRow struct {
 // performs exactly one kind of write: one zero-valued
 // billing_credit_balances row per ledger tenant lacking a row, nothing for
 // a tenant that already has one, nothing on any other table, and nothing
-// further when the same tenant is summarized again. The claim and the call
-// agree because this doc says so: it is not a read-only surface, and that
-// materialization is the whole of what it writes.
+// further when the same tenant is summarized again. The surface is
+// therefore not strictly read-only; that materialization is the whole of
+// what it writes.
 type UsageService struct {
 	metering *metering.Module // nil when WithMetering was never applied
 	billing  *billing.Module  // nil when WithBilling was never applied
 	tenants  *TenantService
 
 	// bus backs the tenancy.WithSystemContext grant Summary takes out per
-	// candidate tenant (D2's mechanism). Nil until Module.Register calls
-	// attach.
+	// candidate tenant. Nil until Module.Register calls attach.
 	bus pkgcore.EventBus
 }
 
 // NewUsageService returns a UsageService reading metering/billing data
 // through meteringModule/billingModule (either or both may be nil -- see
 // their own doc comments on Module's WithMetering/WithBilling), with
-// candidate tenants drawn from tenants (admin's own D3 ledger).
+// candidate tenants drawn from tenants (admin's own ledger).
 func NewUsageService(meteringModule *metering.Module, billingModule *billing.Module, tenants *TenantService) *UsageService {
 	return &UsageService{metering: meteringModule, billing: billingModule, tenants: tenants}
 }
@@ -89,10 +87,9 @@ func NewUsageService(meteringModule *metering.Module, billingModule *billing.Mod
 // attach gives the service the bus it needs for tenancy.WithSystemContext.
 func (s *UsageService) attach(bus pkgcore.EventBus) { s.bus = bus }
 
-// Summary returns D9's row for every tenant in admin's own ledger (D3),
-// under D2's mechanism -- looping tenancy.WithSystemContext per tenant,
-// exactly like SearchService.MembershipsOf and AuditService's cross-
-// tenant path.
+// Summary returns a row for every tenant in admin's own ledger, looping
+// tenancy.WithSystemContext per tenant, exactly like
+// SearchService.MembershipsOf and AuditService's cross-tenant path.
 //
 // Writes: none against admin's own tables, go/metering's tables, or any
 // subscription or credit-transaction table; exactly one zero-valued

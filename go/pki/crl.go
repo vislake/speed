@@ -19,14 +19,12 @@ import (
 // DefaultCRLValidity is how long a generated CRL claims to be current
 // (NextUpdate - ThisUpdate) when GenerateCRL's own validity argument is
 // zero. A named package-level constant, not a config item read at call
-// time -- matching DefaultPropagationWindow/DefaultRenewalLeadTime's
-// identical "declared as a config item for host visibility, resolved as a
-// Go constant this round" split (module.go's ConfigCRLValidity item
-// documents why). Seven days is a deliberately short refresh cadence for an
-// internal CA -- docs/internal/22-pki.md's "revocation" section frames
-// short validity plus CRL as the whole point of skipping an OCSP
-// responder, and a week keeps a verifier that caches its last fetch from
-// trusting a month-stale revocation list.
+// time -- the module declares the validity period as a config item for
+// host visibility and resolves its default as this Go constant (module.go's
+// ConfigCRLValidity item documents why). Seven days is a deliberately short
+// refresh cadence for an internal CA that serves revocation through CRL
+// rather than an OCSP responder: a week keeps a verifier that caches its
+// last fetch from trusting a month-stale revocation list.
 const DefaultCRLValidity = 7 * 24 * time.Hour
 
 // maxGenerateCRLAttempts is how many read-sign-persist rounds GenerateCRL
@@ -50,8 +48,7 @@ func encodeCRLPEM(der []byte) string {
 // Revocation List listing every certificate CertificateRevocationRepository
 // records as revoked under that authority, signed by the authority's own
 // key, and persists it onto the Authority row (CRLPEM/CRLNumber/
-// CRLIssuedAt/CRLNextUpdate) -- round 3's addition, docs/internal/22-pki.md's
-// "revocation" section: "generate a CRL, not an OCSP responder".
+// CRLIssuedAt/CRLNextUpdate).
 //
 // validity controls NextUpdate - ThisUpdate; a value <=0 falls back to
 // DefaultCRLValidity. CRLNumber (RFC 5280 §5.2.3) increases by exactly one
@@ -86,8 +83,8 @@ func encodeCRLPEM(der []byte) string {
 //
 // ErrAuthorityNotFound if authorityID does not exist. A Signer.Sign failure
 // that is not already a coded *apperr.Error is wrapped as
-// ErrSignerUnavailable -- see errors.go's own doc comment for why this is
-// this error code's first real trigger.
+// ErrSignerUnavailable -- see errors.go's own doc comment for the code's
+// full accounting.
 func (s *CAService) GenerateCRL(ctx context.Context, authorityID string, validity time.Duration) (*Authority, error) {
 	if validity <= 0 {
 		validity = DefaultCRLValidity
@@ -227,10 +224,8 @@ const taskTypeCRLRegenerate = "pki.crl_regenerate"
 // days) would outlive its NextUpdate with no scheduled refresh at all.
 //
 // The window must be significantly larger than the host's scheduler
-// interval, or every tick lands in a fresh window and the dedup is void --
-// the reference host's 1-minute cadence against this one-hour default is a
-// 60:1 ratio (the expiry-scan window's own doc comment makes the same
-// point).
+// interval, or every tick lands in a fresh window and the dedup is void
+// (the expiry-scan window's own doc comment makes the same point).
 const DefaultCRLRegenerateWindow = time.Hour
 
 // crlRegenerateWindowStart is the CRL-regeneration window the enqueue at
@@ -265,12 +260,12 @@ func crlRegenerateIdempotencyKey(windowStart time.Time) string {
 const platformCRLRegenerateTenantID = pkgcore.TenantID("_pki_platform_crl")
 
 // EnqueueCRLRegenerate schedules one run of RegenerateAllCRLs onto the
-// queue Module was wired with (WithQueue) -- round 3's on-demand/periodic
-// trigger for CRL generation, the HTTP-independent counterpart of the
-// module's `crl:current` fetch operation (handler.go serves whatever
-// GenerateCRL last wrote; it never generates on the read path itself).
-// Carries no payload, mirroring Service.EnqueueExpiryScan's identical "read
-// everything at run time" shape.
+// queue Module was wired with (WithQueue) -- the on-demand/periodic trigger
+// for CRL generation, the HTTP-independent counterpart of the module's
+// `crl:current` fetch operation (handler.go serves whatever GenerateCRL
+// last wrote; it never generates on the read path itself). Carries no
+// payload, mirroring Service.EnqueueExpiryScan's identical "read everything
+// at run time" shape.
 //
 // The task carries a window-scoped idempotency key
 // (crlRegenerateIdempotencyKey, DefaultCRLRegenerateWindow): the enqueues
@@ -288,8 +283,7 @@ const platformCRLRegenerateTenantID = pkgcore.TenantID("_pki_platform_crl")
 // (repository.go's UpdateCRLIfCurrent), so two jobs of DIFFERENT windows
 // overlapping in execution converge on sequential numbers, each landing its
 // own document, instead of collapsing into a last-writer-wins overwrite of
-// one number (the pre-arbitration bug this comment once claimed was
-// impossible) -- the windowed key only removes the same-window duplicates.
+// one number -- the windowed key only removes the same-window duplicates.
 //
 // A nil queue (Module constructed without WithQueue) reports a plain error,
 // the identical "no queue wired" answer Service.EnqueueExpiryScan gives.

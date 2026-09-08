@@ -17,10 +17,11 @@ import (
 // dbkit.MigrationRegistry.Register builds its dependency graph on.
 const moduleName = "metering"
 
-// The configuration keys metering contributes. See AGENTS.md's "Overage
-// thresholds: declared config schema, Go-level values" section for why
-// ConfigDefaultOverageThreshold is declared here but not read live by any
-// of this round's code paths.
+// The configuration keys metering contributes.
+// ConfigDefaultOverageThreshold is declared here for schema completeness
+// but read live by no code path: thresholds reach Aggregator as
+// construction-time Go values (WithOverageThresholds), never through
+// config.Service (see overage.go's OverageThresholds doc comment).
 const (
 	// ConfigPeriodBucketSize is the calendar bucket real-time counters and
 	// usage-summary rows reset on: PeriodBucketDaily or
@@ -230,13 +231,11 @@ func (m *Module) Stop() {
 // Name implements pkgcore.Module.
 func (m *Module) Name() string { return moduleName }
 
-// DependsOn implements pkgcore.Module: nothing. metering sits above
-// authn/rbac/org in docs/internal/01-architecture.md's graph, but this
-// round wires no cross-module event subscription and no consumer of any
-// other module's declarations, so DependsOn -- which enumerates only
-// modules in the bootstrap set metering itself requires -- returns nil,
-// the same answer go/pki's identical-shaped Module gives for the same
-// reason.
+// DependsOn implements pkgcore.Module: nothing. metering wires no
+// cross-module event subscription and no consumer of any other module's
+// declarations, so DependsOn -- which enumerates only modules in the
+// bootstrap set metering itself requires -- returns nil, the same answer
+// go/pki's identical-shaped Module gives for the same reason.
 func (m *Module) DependsOn() []string { return nil }
 
 // Migrations implements pkgcore.Module.
@@ -246,23 +245,21 @@ func (m *Module) Migrations() embed.FS { return migrations.FS }
 // codes, in both supported languages with identical id sets.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module. metering has no HTTP surface this
-// round -- it is a Go-level Recorder/Enqueue API business modules call
-// in-process, not a service other code reaches over HTTP -- so this
-// returns nil, the same "no fragment yet" answer go/config's and go/pki's
-// Module give.
+// OpenAPISpec implements pkgcore.Module. metering has no HTTP surface --
+// it is a Go-level Recorder/Enqueue API business modules call in-process,
+// not a service other code reaches over HTTP -- so this returns nil, the
+// same answer go/config's and go/pki's Module give.
 func (m *Module) OpenAPISpec() []byte { return nil }
 
 // Register implements pkgcore.Module. Per the interface's own contract it
 // only declares and wires -- no database call, no outbound call, nothing
-// that touches m.db. It declares metering's round-1 configuration schema
-// and its one published event, and attaches the registry's EventBus onto
+// that touches m.db. It declares metering's configuration schema and its
+// one published event, and attaches the registry's EventBus onto
 // Aggregator so a later Ingest call can publish
 // EventOverageThresholdCrossed. It declares no permission and no audit
-// action: this round has no HTTP surface for rbac to gate, and no
-// operation privileged enough to warrant an audit trail entry -- see
-// AGENTS.md's Known limitations rather than inventing either
-// speculatively.
+// action: metering has no HTTP surface for rbac to gate, and no operation
+// privileged enough to warrant an audit trail entry -- declaring either
+// speculatively would be dead catalog weight.
 func (m *Module) Register(reg *pkgcore.Registry) error {
 	if err := reg.Config.Add(configItemDecls...); err != nil {
 		return err

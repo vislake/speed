@@ -513,7 +513,7 @@ describe('StepUpChallenge', () => {
     // elevation that does not exist would only draw a fresh 403) and
     // must not tell the caller the code is intact and retryable (a
     // re-submit of the same code would draw the server's used-code
-    // refusal forever -- the bug this regression pins). It renders the
+    // refusal forever). It renders the
     // used-code answer, clears the field, and only a FRESH code can
     // verify.
     let releaseVerify: () => void = () => undefined
@@ -612,9 +612,10 @@ describe('StepUpChallenge', () => {
   })
 
   it('answer a consumed code with the used-code banner, clearing the field and never calling it invalid', async () => {
-    // Regression (a)'s UI half: a code the server's single-use guard
-    // already consumed (the code verified once and is re-submitted) is
-    // refused with authn.mfa_code_used. The dialog must render that
+    // The consumed-code answer at the dialog's surface: a code the
+    // server's single-use guard already consumed (the code verified
+    // once and is re-submitted) is refused with authn.mfa_code_used.
+    // The dialog must render that
     // distinct answer as its own text -- the code is used, enter a
     // fresh one -- never the invalid-code text and never a retryable
     // claim over the spent code.

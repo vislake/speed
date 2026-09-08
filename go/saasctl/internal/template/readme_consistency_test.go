@@ -8,12 +8,12 @@ import (
 )
 
 // This file pins the generated project README against the template it
-// ships beside -- the P3-6 audit finding's whole point: the golden/embed
-// tests elsewhere in this package check the template tree's structure, but
-// nothing before this file checked that the README's own PROSE agrees with
-// the template's own source. Each test here extracts ground truth directly
-// from the template source text (never a hand-copied literal this file
-// could itself fall behind) and compares it against the README.
+// ships beside: the golden/embed tests elsewhere in this package check the
+// template tree's structure, and this file checks that the README's own
+// PROSE agrees with the template's own source. Each test here extracts
+// ground truth directly from the template source text (never a
+// hand-copied literal this file could itself fall behind) and compares it
+// against the README.
 
 // readmeContent reads the embedded, shared project README once per test.
 func readmeContent(t *testing.T) string {
@@ -96,16 +96,13 @@ func readEnvVarNamesFromConfigGo(t *testing.T) map[string]bool {
 	return names
 }
 
-// TestReadmeEnvTableMatchesConfigGoExactly is the P3-6 fix's env-var
-// consistency test: every environment variable the template's config.go
-// actually parses must be documented in the README (this README is the
-// consumer's first-run manual, so an undocumented variable is itself a
-// finding), and every backtick-quoted, all-caps token the README's
-// Bootstrap Environment section presents as a variable must be one
-// config.go genuinely parses -- never a stale or invented name. Before
-// this fix, the README named only 5 of the 17 variables config.go parses;
-// this test fails on that state (RED), listing the twelve config.go
-// parses that the README does not document.
+// TestReadmeEnvTableMatchesConfigGoExactly is the env-var consistency
+// test: every environment variable the template's config.go actually
+// parses must be documented in the README (this README is the consumer's
+// first-run manual, so an undocumented variable is a gap), and every
+// backtick-quoted, all-caps token the README's Bootstrap Environment
+// section presents as a variable must be one config.go genuinely parses
+// -- never a stale or invented name.
 func TestReadmeEnvTableMatchesConfigGoExactly(t *testing.T) {
 	configVars := readEnvVarNamesFromConfigGo(t)
 	readme := readmeContent(t)
@@ -139,17 +136,13 @@ var devKeyBacktickPattern = regexp.MustCompile("`(dev[A-Za-z0-9]+)`")
 // block with no per-line "var" keyword (each selection's server.go).
 var devKeyDeclPattern = regexp.MustCompile(`(?m)^\s*(?:var\s+)?(dev[A-Za-z0-9]+)\s*=`)
 
-// TestReadmeNamesOnlyRealDevKeyIdentifiers is the P3-6 fix's stale-name
-// guard: it collects every "dev*" identifier actually declared across the
-// shared config.go and every selection's own server.go, then asserts the
-// README's own "dev*" references are a subset of that real set -- a
-// named-identifier check, not a single-string grep, so it catches any
-// future stale name the same way it catches devSigningKeySeed today.
-// Before this fix, the README named devSigningKeySeed, an identifier
-// deleted from every generated server long ago (the pki-integration round
-// replaced it with the devBlindIndexKey/devPIICipherKey/
-// devPKILocalKeyCipherKey trio -- see go/pki/AGENTS.md's round-2 entry);
-// this test fails on that state (RED), naming the orphaned identifier.
+// TestReadmeNamesOnlyRealDevKeyIdentifiers is the stale-name guard: it
+// collects every "dev*" identifier actually declared across the shared
+// config.go and every selection's own server.go, then asserts the README's
+// own "dev*" references are a subset of that real set -- a
+// named-identifier check, not a single-string grep, so any identifier the
+// README names that no generated file declares (a deleted one such as
+// devSigningKeySeed, say) fails the test, naming the orphan.
 func TestReadmeNamesOnlyRealDevKeyIdentifiers(t *testing.T) {
 	real := map[string]bool{}
 	collect := func(path string) {

@@ -67,9 +67,8 @@
  *      anything is sent.
  *
  * The tenant never appears here: no tenant header exists anywhere in
- * the package (docs/internal/12-frontend.md) -- tenant context travels
- * in the access token, and nothing in this file reads or stores data
- * beyond the current request.
+ * the package -- tenant context travels in the access token, and
+ * nothing in this file reads or stores data beyond the current request.
  */
 
 import {
@@ -255,8 +254,7 @@ export interface ClientOptions {
   /** Transient-retry budget and timing; defaults to
    * DEFAULT_RETRY_POLICY. */
   retryPolicy?: RetryPolicy
-  /** Structured diagnostics sink; defaults to createConsoleReporter()
-   * until the M1 round wires the real pipeline. */
+  /** Structured diagnostics sink; defaults to createConsoleReporter(). */
   reporter?: Reporter
 }
 
@@ -673,15 +671,15 @@ export function createClient(options: ClientOptions): RequestFn {
       'createClient requires a non-empty baseUrl (host + optional prefix; see the README).',
     )
   }
-  // CodeQL's js/polynomial-redos alert on this line: reviewed and confirmed
-  // a false positive. /\/+$/ is a single anchored character-class
-  // repetition (one quantifier, no nesting, no alternation) matching a run
-  // of trailing slashes at the end of the string -- there is exactly one
+  // CodeQL's js/polynomial-redos alert on this line is a false
+  // positive. /\/+$/ is a single anchored character-class repetition
+  // (one quantifier, no nesting, no alternation) matching a run of
+  // trailing slashes at the end of the string -- there is exactly one
   // way to decompose a match, so this runs in O(n) even under a naive
   // backtracking engine; it has none of the nested/overlapping-quantifier
-  // shape catastrophic backtracking needs. options.baseUrl reaches this line
-  // directly from the caller with no intervening transformation, and no
-  // other regex in this file is a plausible alternate target for the alert.
+  // shape catastrophic backtracking needs. options.baseUrl reaches this
+  // line directly from the caller with no intervening transformation,
+  // and no other regex in this file is a plausible alternate target.
   const baseUrl = options.baseUrl.replace(/\/+$/, '')
   const fetchFn =
     options.fetch ??

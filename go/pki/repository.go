@@ -65,12 +65,11 @@ func (r *SigningKeyRepository) FindActiveByPurpose(ctx context.Context, purpose 
 // SigningKeyStatusPending, SigningKeyStatusActive or
 // SigningKeyStatusRetiring, in no particular order. This is the query
 // Service.VerificationKeys reads: "all still-verifiable keys". A pending
-// key's public key is included per docs/internal/22-pki.md's "pending
-// exists for the distributed race" section -- it is safe to publish for
-// verification before it ever signs anything -- while a retired (or
-// revoked) key is excluded: the whole point of the retiring overlap period
-// is that it ends, and a key past it must stop being offered for
-// verification, not merely stop being selected as ActiveSigner.
+// key's public key is included -- it is safe to publish for verification
+// before it ever signs anything -- while a retired (or revoked) key is
+// excluded: the whole point of the retiring overlap period is that it
+// ends, and a key past it must stop being offered for verification, not
+// merely stop being selected as ActiveSigner.
 func (r *SigningKeyRepository) ListVerifiableByPurpose(ctx context.Context, purpose string) ([]SigningKey, error) {
 	var keys []SigningKey
 	err := r.db.WithContext(ctx).
@@ -96,11 +95,10 @@ func (r *SigningKeyRepository) Update(ctx context.Context, key *SigningKey) erro
 // SigningKeyStatusActive and, when previousActiveID is non-empty, demotes
 // that other row from SigningKeyStatusActive to SigningKeyStatusRetiring in
 // the SAME transaction -- the pending->active and active->retiring
-// transitions docs/internal/22-pki.md's lifecycle diagram draws as one
-// arrow (a new key's activation causing the old one's demotion into
-// retiring), which is also why this
-// module publishes no separate ".retiring" event: EventSigningKeyActivated
-// communicates both halves of this one atomic write.
+// transitions form one arrow (a new key's activation causing the old one's
+// demotion into retiring), which is also why this module publishes no
+// separate ".retiring" event: EventSigningKeyActivated communicates both
+// halves of this one atomic write.
 //
 // The demotion runs FIRST, deliberately: uq_pki_signing_keys_active_purpose
 // (migration 0001) is a partial unique index checked at each statement, not
@@ -121,8 +119,7 @@ func (r *SigningKeyRepository) PromoteToActive(ctx context.Context, pendingID st
 			// call: GORM infers the table from the struct type and, since
 			// every other field is left at its zero value, writes only
 			// Status and RetiringAt -- the same partial-update shape the
-			// map form gave, without the raw-GORM-bypass entry point
-			// (tools/semgrep_rules/raw-gorm-bypass.yml).
+			// map form gave.
 			if err := tx.Where("id = ? AND status = ?", previousActiveID, SigningKeyStatusActive).
 				Updates(&SigningKey{
 					Status:     SigningKeyStatusRetiring,
@@ -227,8 +224,8 @@ func (r *SigningKeyRepository) Revoke(ctx context.Context, id, reason string, no
 func (r *SigningKeyRepository) ExistsByPurposeAndStatus(ctx context.Context, purpose, status string) (bool, error) {
 	// Count needs .Model() to know the table when nothing else in the chain
 	// carries a struct type; a bounded Find into a typed slice gets the same
-	// existence answer -- at most one row is ever fetched -- without the
-	// raw-GORM-bypass entry point (tools/semgrep_rules/raw-gorm-bypass.yml).
+	// existence answer -- at most one row is ever fetched -- without routing
+	// through db.Model().
 	var keys []SigningKey
 	err := r.db.WithContext(ctx).
 		Where("purpose = ? AND status = ?", purpose, status).
@@ -242,18 +239,16 @@ func (r *SigningKeyRepository) ExistsByPurposeAndStatus(ctx context.Context, pur
 }
 
 // ListByPurposeAndStatuses returns every row for purpose whose Status is one
-// of statuses, in no particular order. Round 3's addition, for
-// Service.ExportJWKS (jwks.go): the key-lifecycle layer's JWKS export
-// deliberately carries only SigningKeyStatusActive and
-// SigningKeyStatusRetiring keys, per docs/internal/22-pki.md's own
-// distinction -- NOT SigningKeyStatusPending, unlike
-// ListVerifiableByPurpose's internal-verification query above. A pending
-// key's public key is safe to trust for THIS process's own verification
-// path before the propagation window elapses (ListVerifiableByPurpose's own
-// doc comment explains why), but an external verifier pulling a JWKS
-// document has no such relationship to the propagation window at all -- it
-// simply should not be told about a key this deployment has not started
-// using yet.
+// of statuses, in no particular order. Service.ExportJWKS (jwks.go) reads
+// it: the key-lifecycle layer's JWKS export deliberately carries only
+// SigningKeyStatusActive and SigningKeyStatusRetiring keys -- NOT
+// SigningKeyStatusPending, unlike ListVerifiableByPurpose's
+// internal-verification query above. A pending key's public key is safe to
+// trust for THIS process's own verification path before the propagation
+// window elapses (ListVerifiableByPurpose's own doc comment explains why),
+// but an external verifier pulling a JWKS document has no such relationship
+// to the propagation window at all -- it simply should not be told about a
+// key this deployment has not started using yet.
 func (r *SigningKeyRepository) ListByPurposeAndStatuses(ctx context.Context, purpose string, statuses ...string) ([]SigningKey, error) {
 	var keys []SigningKey
 	err := r.db.WithContext(ctx).
@@ -293,14 +288,13 @@ func (r *AuthorityRepository) FindByID(ctx context.Context, id string) (*Authori
 }
 
 // Update persists every field of authority -- the same full-Save shape
-// SigningKeyRepository.Update documents. Round 3's addition; GenerateCRL
-// wrote refreshed CRLs through it until the CRL-arbitration round replaced
-// that write with UpdateCRLIfCurrent's guarded form below -- a full-row
+// SigningKeyRepository.Update documents, reserved for callers that own the
+// row exclusively. CRL refreshes deliberately do not use it: a full-row
 // Save from a stale snapshot could clobber a concurrent writer's committed
-// row (a second generator's CRL, or a future round's Status transition).
-// What remains: callers that own the row exclusively. The module's own
-// tests seed revoked-authority rows through it (revocation_test.go,
-// ca_test.go), the one precedent that exists today.
+// row (a second generator's CRL, or a status transition by another caller,
+// say), which is why GenerateCRL persists through UpdateCRLIfCurrent's
+// guarded form below. The module's own tests seed revoked-authority rows
+// through this method (revocation_test.go, ca_test.go).
 func (r *AuthorityRepository) Update(ctx context.Context, authority *Authority) error {
 	return r.db.WithContext(ctx).Save(authority).Error
 }
@@ -341,8 +335,7 @@ func (r *AuthorityRepository) UpdateCRLIfCurrent(ctx context.Context, id string,
 	// A struct (not a map) as the Updates argument, with no .Model() call:
 	// GORM infers the table from the struct type and writes only the four
 	// non-zero CRL fields -- the same partial-update shape PromoteToActive
-	// documents, clear of the raw-GORM-bypass entry point
-	// (tools/semgrep_rules/raw-gorm-bypass.yml).
+	// documents.
 	res := r.db.WithContext(ctx).
 		Where("id = ? AND crl_number = ?", id, expectedNumber).
 		Updates(&Authority{
@@ -357,10 +350,10 @@ func (r *AuthorityRepository) UpdateCRLIfCurrent(ctx context.Context, id string,
 	return res.RowsAffected > 0, nil
 }
 
-// ListAll returns every authority, in no particular order. Round 3's
-// addition, for CAService.RegenerateAllCRLs (crl.go): the periodic CRL
-// job has no per-tenant or per-purpose scope to iterate -- pki_authorities
-// is platform data, and every authority's CRL is refreshed on the same
+// ListAll returns every authority, in no particular order.
+// CAService.RegenerateAllCRLs (crl.go) reads it: the periodic CRL job has
+// no per-tenant or per-purpose scope to iterate -- pki_authorities is
+// platform data, and every authority's CRL is refreshed on the same
 // schedule -- so it needs the full set rather than a filtered query.
 func (r *AuthorityRepository) ListAll(ctx context.Context) ([]Authority, error) {
 	var authorities []Authority
@@ -417,9 +410,8 @@ func NewCertificateRepository(db *gorm.DB) *CertificateRepository {
 // UPDATE matches zero rows has lost the certificate-row arbitration to a
 // concurrent caller, and writing its own reason and timestamp over the
 // winner's committed row would be exactly the blind-save disagreement the
-// round's follow-up review found (see go/pki/AGENTS.md's round entry).
-// RowsAffected == 0 sends RevokeCertificate into its re-read-and-supplement
-// path instead.
+// guarded form exists to prevent. RowsAffected == 0 sends RevokeCertificate
+// into its re-read-and-supplement path instead.
 //
 // The statement runs inside dbkit.WithTenantSession, like every
 // dbkit.Repository[T] method, so the PostgreSQL RLS session variable is
@@ -460,7 +452,7 @@ func (r *CertificateRepository) RevokeIfActive(ctx context.Context, id, reason s
 // for pki_certificate_revocations. CertificateRevocation is platform data
 // (see its own model.go doc comment for the full "why this table exists at
 // all" argument), so this wraps a bare *gorm.DB, the identical shape
-// SigningKeyRepository and AuthorityRepository use. Round 3's addition.
+// SigningKeyRepository and AuthorityRepository use.
 type CertificateRevocationRepository struct {
 	db *gorm.DB
 }

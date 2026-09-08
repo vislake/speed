@@ -26,10 +26,10 @@
  * palette color: mounted inside a colored header (the common host
  * placement, an AppBar whose background is the primary color), an
  * inherited color resolves to the surface's own contrastText and stays
- * legible where a primary-on-primary default would vanish (reference-
- * app acceptance: the sign-out control once measured 1:1 against its
- * own AppBar). On a plain surface the same inheritance resolves to the
- * surrounding text color, which is equally safe.
+ * legible where a primary-on-primary default would vanish (pinned by
+ * this package's colour-inheritance test). On a plain surface the same
+ * inheritance resolves to the surrounding text color, which is equally
+ * safe.
  */
 
 import { useState } from 'react'
@@ -68,9 +68,8 @@ export function SignOutButton({ session }: SignOutButtonProps) {
     <>
       {/* Inherit the ambient text color: hosts mount this control inside
           a colored AppBar whose own text is its contrastText -- the
-          default primary palette color reads primary-on-primary there
-          (the acceptance measurement that named the sign-out control at
-          1:1). See the file header for the full rationale. */}
+          default primary palette color reads primary-on-primary on that
+          surface. See the file header for the full rationale. */}
       <Button
         type="button"
         color="inherit"

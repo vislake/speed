@@ -18,8 +18,7 @@ import (
 // and accepts org's implementation structurally. Go's structural interface
 // satisfaction does the rest.
 //
-// The result is that org never imports rbac (docs/internal/01-architecture
-// .md's graph has no such edge) and rbac never imports org (it must not learn
+// The result is that org never imports rbac and rbac never imports org (it must not learn
 // what an OrgNode is, nor inherit org's dependencies). The host wires the two
 // together at bootstrap, and that host is the only place both names appear.
 // A method that returned []OrgNode -- however convenient -- would destroy the
@@ -108,8 +107,7 @@ func (s *ScopeService) DescendantIDs(ctx context.Context, nodeID string) ([]stri
 // mark-deleted, with no table written behind org's back anywhere in the
 // sequence. This method's fail-closed reading is what keeps that reachable
 // state safe rather than a hole -- see membership.go's Restore doc comment
-// for the full trace and go/org/AGENTS.md's "Soft deletion" section for the
-// recorded limitation.
+// for the full trace.
 func (s *ScopeService) MemberNodeIDs(ctx context.Context, userID string) ([]string, error) {
 	membership, err := s.members.byUser(ctx, userID)
 	switch {

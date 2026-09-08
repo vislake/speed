@@ -22,14 +22,10 @@ const jsonContentType = "application/json; charset=utf-8"
 // resolves callers only as far as rbac's router-level permission gate --
 // which never imports authn and carries no user id of its own -- so there
 // is no richer identity available here to attribute the reason to without
-// this module importing authn, which its own dependency-boundary
-// discipline (go/ai-gateway/AGENTS.md; root CLAUDE.md's module-boundary
-// rule) does not permit. It mirrors the identical fixed-Actor shape the
-// reference app's own boot-time platform-credential write already uses
-// ("reference-app-boot" in cmd/server/server.go) for the same reason: the
-// audit value that matters here is WHICH PATH performed the write, not a
-// per-request caller identity a system context was never designed to
-// carry (pkgcore.SystemReason.Actor's own doc comment).
+// this module importing authn, which its own dependency boundary does not
+// permit. The audit value that matters here is WHICH PATH performed the
+// write, not a per-request caller identity a system context was never
+// designed to carry (pkgcore.SystemReason.Actor's own doc comment).
 const handlerSystemActor = "ai-gateway-http"
 
 // Handler serves ai-gateway's HTTP endpoints by implementing the
@@ -45,32 +41,26 @@ const handlerSystemActor = "ai-gateway-http"
 //
 // It performs no business logic of its own beyond decoding the request and
 // encoding the response: every operation is answered entirely by the
-// EXISTING CredentialService methods (Resolve / SetTenantCredential /
-// SetPlatformCredential) this module's earlier rounds already shipped and
-// tested. The one exception -- and it is translation, not a new decision
-// -- is aiGateway_setPlatformCredential building the audited system-context
-// reason SetPlatformCredential's own contract requires
-// (tenancy.WithSystemContext, the audited wrapper, under
-// SystemPurposeCredentialWrite): nothing
-// upstream of this HTTP handler is positioned to build it, since the
-// module's own SystemPurpose is what the reason must carry and rbac's
-// router-level permission gate (which the host wires, never this package)
-// is what actually decides whether the caller may reach this operation at
-// all -- the gate and the system-context reason answer two different
-// questions, exactly as go/config's identical ScopeSystem write rule and
-// this module's own SetPlatformCredential doc comment already document.
+// CredentialService methods it delegates to (Resolve / SetTenantCredential
+// / SetPlatformCredential). The one exception -- and it is translation,
+// not a new decision -- is aiGateway_setPlatformCredential building the
+// audited system-context reason SetPlatformCredential's own contract
+// requires (tenancy.WithSystemContext, the audited wrapper, under
+// SystemPurposeCredentialWrite): nothing upstream of this HTTP handler is
+// positioned to build it, since the module's own SystemPurpose is what the
+// reason must carry and rbac's router-level permission gate (which the
+// host wires, never this package) is what actually decides whether the
+// caller may reach this operation at all -- the gate and the
+// system-context reason answer two different questions.
 //
-// The two write operations never echo the API key back on any response --
-// see the spec fragment's own header for the write-only rule this
-// module's AGENTS.md and root CLAUDE.md's Security rules require.
+// The two write operations never echo the API key back on any response:
+// no operation of this surface returns key material.
 //
-// It must run downstream of tenancy.Middleware on a non-allowlisted path,
-// exactly like storage's identical handler: aiGateway_setTenantCredential
-// and aiGateway_getCredential resolve the caller's tenant from whatever
-// context CredentialService's own methods read it from (never from a
-// request parameter, header or body, per root CLAUDE.md's multi-tenant
-// isolation rule) -- there is no tenant_id anywhere on this surface,
-// exactly as the spec's own header records.
+// It must run downstream of tenancy.Middleware on a non-allowlisted path:
+// aiGateway_setTenantCredential and aiGateway_getCredential resolve the
+// caller's tenant from whatever context CredentialService's own methods
+// read it from (never from a request parameter, header or body) -- there
+// is no tenant_id anywhere on this surface.
 type Handler struct {
 	credentials *CredentialService
 
@@ -196,10 +186,8 @@ func (h *Handler) AiGatewaySetTenantCredential(w http.ResponseWriter, r *http.Re
 // permission check on PermissionManagePlatform, a distinct and more
 // restrictive permission than aiGateway_setTenantCredential's
 // PermissionWrite (see module.go's own doc comment on both constants) --
-// this handler itself performs no permission check, exactly like every
-// other module's handler in this codebase (storage's and org's own
-// doc comments make the identical point: enforcement is the host's router
-// gate, never the handler).
+// this handler itself performs no permission check: enforcement is the
+// host's router gate, never the handler.
 func (h *Handler) AiGatewaySetPlatformCredential(w http.ResponseWriter, r *http.Request, provider api.Provider) {
 	ctx := r.Context()
 	observability.AnnotateTenant(ctx)
@@ -214,9 +202,7 @@ func (h *Handler) AiGatewaySetPlatformCredential(w http.ResponseWriter, r *http.
 		// (Module.Register passes the registry's resolved bus), but a host
 		// wiring the handler by hand could get it wrong, and an escape
 		// hatch granted with its audit publish about to panic is exactly
-		// the unrecorded-grant gap this path exists to close -- the same
-		// nil-bus refusal the reference app's signInMemberships store makes
-		// for its own audited system-context grant.
+		// the unrecorded-grant gap this path exists to close.
 		writeError(w, ErrInternal.WithParam("reason", "handler has no event bus for its audited system-context grant"))
 		return
 	}
@@ -273,7 +259,6 @@ func writeError(w http.ResponseWriter, err error) {
 
 // compile-time check that *Handler implements the api.ServerInterface
 // generated from this module's api/openapi.yaml -- the enforcement half of
-// the spec-first flow (docs/internal/21-api-contract.md): add an operation
-// to the fragment, regenerate, and this assertion stops compiling until
-// Handler implements it.
+// the spec-first flow: add an operation to the fragment, regenerate, and
+// this assertion stops compiling until Handler implements it.
 var _ api.ServerInterface = (*Handler)(nil)

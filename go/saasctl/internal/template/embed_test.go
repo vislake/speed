@@ -163,7 +163,8 @@ func TestProjectReadmeNamesTheShippedMaintenanceCommands(t *testing.T) {
 	// The stale wording this pins against presented upgrade, db and config
 	// as "later rounds" and claimed config inspects its dynamic
 	// configuration; config print renders the bootstrap environment only,
-	// and dynamic-configuration print is genuinely still later work.
+	// and dynamic-configuration print is a separate, unimplemented
+	// surface.
 	for _, stale := range []string{"inspects its dynamic configuration", "`saasctl db` runs", "`saasctl config` inspects"} {
 		if strings.Contains(body, stale) {
 			t.Errorf("%s section still carries the stale claim %q", section, stale)
@@ -416,20 +417,20 @@ func firstLine(s string) string {
 }
 
 // TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig pins the
-// P1-2 fix's server side: every authn-wiring selection's server.go must
-// build the blind index, the PII cipher and the pki local-key cipher from
-// the cfg fields config.go resolves (APP_AUTHN_BLIND_INDEX_KEY /
-// APP_AUTHN_PII_CIPHER_KEY / APP_PKI_LOCAL_KEY_CIPHER_KEY, each with its
-// dev fallback), never from bare dev constants used unconditionally -- the
-// state in which an operator who set all the APP_* key variables was still
-// running on the committed public key bytes. The harm-amplifier sentence
-// that used to call that state "the same documented trade-off as
-// config.go's devConfigKey" (false: devConfigKey is a fallback behind an
-// env override, those constants had no override at all) must be gone from
-// every selection too. The "none" selection wires no authn, so it must
-// carry none of the three usages. The config.go half of the fix (the env
-// declarations, the parse blocks and the dev fallbacks) is pinned by
-// appconfig's own twin tests, which re-read that file.
+// server side of the key-material contract: every authn-wiring selection's
+// server.go must build the blind index, the PII cipher and the pki
+// local-key cipher from the cfg fields config.go resolves
+// (APP_AUTHN_BLIND_INDEX_KEY / APP_AUTHN_PII_CIPHER_KEY /
+// APP_PKI_LOCAL_KEY_CIPHER_KEY, each with its dev fallback), never from
+// bare dev constants used unconditionally -- an operator who sets all the
+// APP_* key variables must not still be running on committed public key
+// bytes. No selection may carry the harm-amplifying claim that such a
+// constant is "the same documented trade-off as config.go's devConfigKey"
+// (false: devConfigKey is a fallback behind an env override, a bare
+// constant has no override at all). The "none" selection wires no authn,
+// so it must carry none of the three usages. The config.go half of the
+// contract (the env declarations, the parse blocks and the dev fallbacks)
+// is pinned by appconfig's own twin tests, which re-read that file.
 func TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig(t *testing.T) {
 	authnKeys := []string{
 		"dbkit.NewCipher(cfg.AuthnPIICipherKey)",

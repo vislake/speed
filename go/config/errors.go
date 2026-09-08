@@ -35,9 +35,8 @@ var (
 	ErrInvalidScope = apperr.Invalid("config.invalid_scope")
 
 	// ErrUserScopeUnavailable reports a Set for ScopeUser. The tier is
-	// reserved by the design and deliberately unimplemented in this
-	// milestone; the error names the reservation rather than pretending the
-	// scope was mistyped.
+	// reserved and deliberately unimplemented; the error names the
+	// reservation rather than pretending the scope was mistyped.
 	ErrUserScopeUnavailable = apperr.Invalid("config.user_scope_unavailable")
 
 	// ErrTenantScopeRequiresTenant reports a Set for ScopeTenant on a

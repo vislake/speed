@@ -7,13 +7,13 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-// This file carries the parameterization this package gained in the P2a
-// round: the option vocabulary one Simulate call may ask for (SimulationOptions
+// This file carries the parameterization of a smile simulation: the option
+// vocabulary one Simulate call may ask for (SimulationOptions
 // and its three dimensions below), the validation that rejects an option
 // outside the vocabulary or range with a coded error, the defaults a caller
 // that names no options gets, and the functional-option helpers
 // (SimulateOption/WithSmileStyle/WithToothShade/WithStrength) Simulate's own
-// signature accepts so an existing two-argument call keeps meaning "the
+// signature accepts so a bare two-argument call keeps meaning "the
 // defaults". The provider prompt itself renders from a resolved option set
 // in prompt.go.
 
@@ -62,8 +62,8 @@ const (
 	ToothShadeUltraWhite ToothShade = "ultra-white"
 )
 
-// Strength bounds, documented together because the range's shape is the
-// decision this round records: an out-of-range Strength is REJECTED with a
+// Strength bounds, documented together because the range's shape is a
+// deliberate decision: an out-of-range Strength is REJECTED with a
 // coded error, never silently clamped, because the durable per-photo record
 // (simulation_store.go) stores the exact option set that produced an image
 // and the prompt (prompt.go) renders the exact strength value -- a clamped
@@ -115,8 +115,8 @@ type SimulationOptions struct {
 // no options gets: SmileStyleNatural, ToothShadeNatural, full Strength. The
 // natural/natural pair is this package's documented default because it is
 // the most conservative middle of both ladders for a patient-facing feature;
-// full strength preserves this service's pre-parameterization behavior,
-// whose single unhedged prompt asked for the complete smile.
+// full strength is the setting the package's prompt was written for (the
+// complete-smile outcome).
 func DefaultSimulationOptions() SimulationOptions {
 	return SimulationOptions{
 		SmileStyle: SmileStyleNatural,
@@ -144,10 +144,8 @@ var validToothShades = map[ToothShade]bool{
 // The option-validation sentinels, named as package-level declarations so
 // the app's error-mapping audits (the codes-alignment suite of the web
 // host, which cites every reachable code to the declaration that defines
-// it) can cite stable sites -- the block-B round made these codes
-// reachable text on the smile-simulation surface's error mapping for the
-// first time. Each carries the offending value in params; the three are
-// HTTP 400 once they cross a route.
+// it) can cite stable sites. Each carries the offending value in params;
+// the three are HTTP 400 once they cross a route.
 var (
 	// ErrUnsupportedSmileStyle refuses a SmileStyle outside the
 	// vocabulary (smilesim.unsupported_smile_style).

@@ -2,13 +2,11 @@
 // directly on RFC 4226's HOTP over the standard library's own crypto/hmac
 // and crypto/sha1 -- no third-party dependency.
 //
-// The root CLAUDE.md is explicit that every dependency added to a speed
-// module lands in every consuming project's go.sum, and RFC 6238 is roughly
-// a hundred lines on top of an HMAC that is already in the standard
-// library. Pulling in a whole TOTP library for that would cost every
-// consumer of authn a dependency to save this package a page of code, so it
-// is not pulled in; see this module's AGENTS.md for the fuller reasoning
-// and the specific library that was weighed and rejected.
+// Every dependency added to a speed module lands in every consuming
+// project's go.sum, and RFC 6238 is roughly a hundred lines on top of an
+// HMAC that is already in the standard library. Pulling in a whole TOTP
+// library for that would cost every consumer of authn a dependency to save
+// this package a page of code, so none is pulled in.
 //
 // This package deliberately implements ONE convention -- SHA-1, 6 digits,
 // a 30-second step -- because that is what every mainstream authenticator
@@ -26,9 +24,9 @@
 // No QR image is rendered here. ProvisioningURI builds the otpauth:// URI
 // an authenticator app scans; turning that URI into a QR code image is
 // display logic that belongs on the frontend, which already owns every
-// other rendering decision in this codebase (see this module's AGENTS.md
-// Known limitations for the dependency that was weighed and rejected for
-// server-side QR generation).
+// other rendering decision in this codebase. A server-side QR dependency
+// was weighed and rejected for the same reason any dependency here is: it
+// would land in every consumer's build.
 package totp
 
 import (

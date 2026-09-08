@@ -1,6 +1,6 @@
-// Package testutil holds test helpers shared across this module's own test
-// files, per the backend coding standard's "put shared test helpers in a
-// dedicated internal/testutil package, never duplicated" rule. It sits at
+// Package testutil holds the test helpers shared across this module's own
+// test files, in one dedicated home rather than duplicated across files.
+// It sits at
 // go/jobs/internal/testutil so both the root jobs package's own tests and
 // the queue/asynq subpackage's tests may import it (Go's internal-package
 // visibility rule allows any package rooted under go/jobs to import

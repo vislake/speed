@@ -131,12 +131,12 @@ func TestGateway_CreateCharge_SendsExpectedRequest(t *testing.T) {
 	if backend.calls[0].idempotencyKey != "idem-1" {
 		t.Errorf("idempotencyKey = %q, want idem-1", backend.calls[0].idempotencyKey)
 	}
-	// P1-2: the correlation identifiers must ride in subscription_data's
-	// own metadata, not only the session's. The session-level metadata is
-	// read back by the checkout.session.* events this package recognizes,
-	// but it is NOT copied onto the Subscription Stripe creates when the
-	// session completes -- only subscription_data.metadata is applied to
-	// that Subscription (the Create Session API's own subscription_data
+	// The correlation identifiers must ride in subscription_data's own
+	// metadata, not only the session's. The session-level metadata is read
+	// back by the checkout.session.* events this package recognizes, but it
+	// is NOT copied onto the Subscription Stripe creates when the session
+	// completes -- only subscription_data.metadata is applied to that
+	// Subscription (the Create Session API's own subscription_data
 	// description: "A subset of parameters to be passed to subscription
 	// creation"). Without it, every later lifecycle object -- the
 	// subscription itself, and each renewal invoice's parent snapshot --
@@ -230,18 +230,18 @@ func TestGateway_QueryStatus_RequestsSubscriptionExpand(t *testing.T) {
 	}
 }
 
-// TestGateway_QueryStatus_CompleteUnpaidTerminalSubscription_ReportsFailed is
-// the blocker regression test: a Stripe Checkout Session that completed via
-// redirect before its async payment method later, definitively failed can
-// never revert its own Status/PaymentStatus to anything expressing failure
-// (sessionStatus's own doc comment) -- so a bare Complete/Unpaid session,
-// re-queried at any later time, answered ChannelStatusPending FOREVER on
-// pre-fix code, permanently stranding the PaymentEvent row
+// TestGateway_QueryStatus_CompleteUnpaidTerminalSubscription_ReportsFailed
+// pins the terminal-subscription resolution: a Stripe Checkout Session that
+// completed via redirect before its async payment method later, definitively
+// failed can never revert its own Status/PaymentStatus to anything
+// expressing failure (sessionStatus's own doc comment) -- so a bare
+// Complete/Unpaid session, re-queried at any later time, must not answer
+// ChannelStatusPending forever, permanently stranding the PaymentEvent row
 // PollingService.Poll is supposed to eventually resolve. Once the
 // underlying Subscription reaches its own terminal "incomplete_expired"
 // state -- Stripe's real outcome once the first invoice's 23-hour
 // collection window closes with no successful payment -- QueryStatus must
-// now report ChannelStatusFailed instead, finally converging with what a
+// report ChannelStatusFailed instead, converging with what a
 // checkout.session.async_payment_failed webhook already recorded for the
 // identical session.
 func TestGateway_QueryStatus_CompleteUnpaidTerminalSubscription_ReportsFailed(t *testing.T) {
@@ -367,17 +367,15 @@ func TestGateway_VerifyWebhook_ValidSignature(t *testing.T) {
 	}
 }
 
-// TestGateway_VerifyWebhook_CompletedButUnpaid_AgreesWithQueryStatus is
-// P1-1's regression test: under delayed settlement (or a manually-unsettled
-// completed session), a checkout.session.completed webhook whose
-// payment_status is "unpaid" must NOT be recorded as
-// NormalizedEventChargeSucceeded/ChannelStatusSucceeded -- the exact
-// disagreement that let the webhook path report "money arrived" while
-// QueryStatus, re-querying the SAME session, reports it has not. This test
-// fails on the pre-fix code (which reported ChannelStatusSucceeded
-// unconditionally for checkout.session.completed) and asserts the fixed
-// webhook path's Status agrees with what QueryStatus.sessionStatus would
-// report for the identical session shape.
+// TestGateway_VerifyWebhook_CompletedButUnpaid_AgreesWithQueryStatus pins
+// the webhook/query agreement: under delayed settlement (or a
+// manually-unsettled completed session), a checkout.session.completed
+// webhook whose payment_status is "unpaid" must NOT be recorded as
+// NormalizedEventChargeSucceeded/ChannelStatusSucceeded -- the
+// disagreement that would let the webhook path report "money arrived"
+// while QueryStatus, re-querying the SAME session, reports it has not. The
+// webhook path's Status must agree with what QueryStatus.sessionStatus
+// would report for the identical session shape.
 func TestGateway_VerifyWebhook_CompletedButUnpaid_AgreesWithQueryStatus(t *testing.T) {
 	payload := checkoutSessionCompletedUnpaidPayload(t, "evt_unpaid_1", "cs_unpaid_1", "tenant-a", "sub-1", "inv-1", 2900, "usd")
 	signed := webhook.GenerateTestSignedPayload(&webhook.UnsignedPayload{
@@ -394,7 +392,7 @@ func TestGateway_VerifyWebhook_CompletedButUnpaid_AgreesWithQueryStatus(t *testi
 		t.Fatalf("VerifyWebhook: %v", err)
 	}
 
-	// The invariant P1-1 pins: whichever channel reports it, one session in
+	// The agreement invariant: whichever channel reports it, one session in
 	// one state produces one module-side status. QueryStatus's own
 	// sessionStatus (gateway.go) maps Status=Complete/PaymentStatus=Unpaid
 	// to ChannelStatusPending -- the webhook path must land on the exact
@@ -420,11 +418,10 @@ func TestGateway_VerifyWebhook_CompletedButUnpaid_AgreesWithQueryStatus(t *testi
 	}
 }
 
-// TestGateway_VerifyWebhook_CompletedAndPaid_StillSucceeds is P1-1's second
-// leg: an ordinary completed-and-paid session must keep reporting success
-// exactly as before the fix -- the regression this leg guards against is
-// P1-1's own fix becoming overzealous and treating every completed session
-// as merely pending.
+// TestGateway_VerifyWebhook_CompletedAndPaid_StillSucceeds pins the second
+// half of the agreement: an ordinary completed-and-paid session must keep
+// reporting success -- the completed-but-unpaid handling must not become
+// overzealous and treat every completed session as merely pending.
 func TestGateway_VerifyWebhook_CompletedAndPaid_StillSucceeds(t *testing.T) {
 	payload := checkoutSessionCompletedPayload(t, "evt_paid_1", "cs_paid_1", "tenant-a", "sub-1", "inv-1", 2900, "usd")
 	signed := webhook.GenerateTestSignedPayload(&webhook.UnsignedPayload{
@@ -515,16 +512,15 @@ func TestGateway_VerifyWebhook_MissingMetadata(t *testing.T) {
 	}
 }
 
-// TestGateway_VerifyWebhook_EventWithoutData_RefusedNotCrashed is P3-11's
-// regression test: stripe-go's Event.Data is a POINTER (nil when a
-// delivery's JSON carries no "data" object), and normalizeEvent's
-// dispatch functions dereferenced it unconditionally -- a signed,
-// recognized event type whose payload lacked data crashed the process with
-// a nil-pointer panic instead of refusing the delivery. The fix guards
-// normalizeEvent up front: an event with no data object (or an empty one)
-// is ErrWebhookPayloadUnrecognized like any other undecodable payload. On
-// pre-fix code this delivery panics (nil dereference), so the test fails
-// before the fix and passes after.
+// TestGateway_VerifyWebhook_EventWithoutData_RefusedNotCrashed pins the
+// nil-data guard: stripe-go's Event.Data is a POINTER (nil when a
+// delivery's JSON carries no "data" object), and normalizeEvent's dispatch
+// functions must not dereference it unconditionally -- a signed, recognized
+// event type whose payload lacks data would otherwise crash the process
+// with a nil-pointer panic instead of refusing the delivery. normalizeEvent
+// guards up front: an event with no data object (or an empty one) is
+// ErrWebhookPayloadUnrecognized like any other undecodable payload, never
+// a crash.
 func TestGateway_VerifyWebhook_EventWithoutData_RefusedNotCrashed(t *testing.T) {
 	payload, err := json.Marshal(map[string]any{
 		"id":      "evt_no_data_1",
@@ -558,9 +554,9 @@ func TestNewGateway_RequiresConfig(t *testing.T) {
 
 // checkoutSessionCompletedPayload builds a minimal, realistic
 // checkout.session.completed event body with payment_status "paid" -- the
-// shape event.go's normalizeEvent parses. checkoutSessionCompletedUnpaidPayload
-// is the sibling fixture for the completed-but-unpaid case P1-1's own
-// regression test drives.
+// shape event.go's normalizeEvent parses.
+// checkoutSessionCompletedUnpaidPayload is the sibling fixture for the
+// completed-but-unpaid case the webhook/query agreement test drives.
 func checkoutSessionCompletedPayload(t *testing.T, eventID, sessionID, tenantID, subID, invoiceID string, amountCents int64, currency string) []byte {
 	t.Helper()
 	return checkoutSessionPayload(t, eventID, sessionID, tenantID, subID, invoiceID, amountCents, currency, "paid")
@@ -623,11 +619,10 @@ func hasCode(err error, code string) bool {
 // finalization (stripe-go v82.5.1's own field comment on
 // InvoiceParentSubscriptionDetails.Metadata: "defined as subscription
 // metadata when an invoice is created. Becomes an immutable snapshot of the
-// subscription metadata at the time of invoice finalization"). The earlier
-// revision of this fixture hand-seeded the keys onto the invoice's own
-// metadata field -- a shape real Stripe deliveries do not have, which is
-// exactly why the code reading that field could not see the identifiers on
-// real events (P1-3).
+// subscription metadata at the time of invoice finalization"). A fixture
+// that hand-seeds the keys onto the invoice's own metadata field models a
+// shape real Stripe deliveries do not have -- which is exactly why code
+// reading that field cannot see the identifiers on real events.
 func invoiceEventPayload(t *testing.T, eventType, eventID, invoiceID, tenantID, subID, origInvoiceID string, amountCents int64, currency string) []byte {
 	t.Helper()
 	var amountField string
@@ -747,17 +742,16 @@ func signAndVerify(t *testing.T, payload []byte) (billing.NormalizedEvent, error
 	}, signed.Payload)
 }
 
-// TestGateway_VerifyWebhook_InvoicePaid_RecognizedAsChargeSucceeded is the
-// P1-3 regression for the renewal-succeeded leg: invoice.paid is the event
-// that actually announces a Stripe-native subscription's later billing
-// cycles (gateway.go's CreateCharge is called exactly once, at first
-// activation). Its fixture carries the identifiers where real Stripe
-// deliveries carry them -- parent.subscription_details.metadata, the
-// immutable snapshot of the subscription's metadata at finalization -- and
-// never on the invoice's own metadata field. On pre-fix code, which read
-// inv.Metadata, this fixture's identifiers were invisible and the event was
-// refused as ErrWebhookPayloadUnrecognized, silently dropping a real
-// renewal.
+// TestGateway_VerifyWebhook_InvoicePaid_RecognizedAsChargeSucceeded pins
+// the renewal-succeeded leg: invoice.paid is the event that actually
+// announces a Stripe-native subscription's later billing cycles (gateway.go's
+// CreateCharge is called exactly once, at first activation). Its fixture
+// carries the identifiers where real Stripe deliveries carry them --
+// parent.subscription_details.metadata, the immutable snapshot of the
+// subscription's metadata at finalization -- and never on the invoice's own
+// metadata field. Reading inv.Metadata instead would make this fixture's
+// identifiers invisible and refuse the event as
+// ErrWebhookPayloadUnrecognized, silently dropping a real renewal.
 func TestGateway_VerifyWebhook_InvoicePaid_RecognizedAsChargeSucceeded(t *testing.T) {
 	payload := invoiceEventPayload(t, "invoice.paid", "evt_inv_paid_1", "in_1", "tenant-a", "sub-1", "inv-1", 2900, "usd")
 	event, err := signAndVerify(t, payload)
@@ -781,13 +775,12 @@ func TestGateway_VerifyWebhook_InvoicePaid_RecognizedAsChargeSucceeded(t *testin
 	}
 }
 
-// TestGateway_VerifyWebhook_InvoicePaymentFailed_RecognizedAsChargeFailed is
-// the P1-3 regression for the renewal-failed leg: invoice.payment_failed is
-// what should turn a subscription past_due -- on pre-fix code, which read
-// the identifiers off the invoice's own (really empty) metadata field, this
-// event was likewise refused as ErrWebhookPayloadUnrecognized, the exact
-// "renewal payment failure is completely silent to the platform" gap the
-// audit named.
+// TestGateway_VerifyWebhook_InvoicePaymentFailed_RecognizedAsChargeFailed
+// pins the renewal-failed leg: invoice.payment_failed is what should turn a
+// subscription past_due. Reading the identifiers off the invoice's own
+// (really empty) metadata field would refuse this event as
+// ErrWebhookPayloadUnrecognized too -- the exact "renewal payment failure
+// is completely silent to the platform" gap.
 func TestGateway_VerifyWebhook_InvoicePaymentFailed_RecognizedAsChargeFailed(t *testing.T) {
 	payload := invoiceEventPayload(t, "invoice.payment_failed", "evt_inv_failed_1", "in_2", "tenant-a", "sub-1", "inv-1", 2900, "usd")
 	event, err := signAndVerify(t, payload)
@@ -806,17 +799,15 @@ func TestGateway_VerifyWebhook_InvoicePaymentFailed_RecognizedAsChargeFailed(t *
 }
 
 // TestGateway_VerifyWebhook_InvoicePaid_InvoiceLevelMetadataOnly_StillUnrecognized
-// pins the P1-3 fix's direction: normalizeInvoice reads the correlation
-// identifiers from the invoice's parent snapshot
-// (parent.subscription_details.metadata), never from the Invoice object's
-// own metadata field. An invoice.paid delivery whose identifiers sit only
-// on inv.Metadata -- the hand-seeded fixture shape the earlier revision
-// used, which real Stripe subscription-invoice deliveries do not produce --
-// stays ErrWebhookPayloadUnrecognized, exactly like any other event this
-// package cannot correlate. On pre-fix code, which read inv.Metadata, this
-// fixture WAS recognized -- the wrong source, and precisely why real
-// deliveries (whose identifiers live in the parent snapshot instead) were
-// not.
+// pins the correlation source: normalizeInvoice reads the identifiers from
+// the invoice's parent snapshot (parent.subscription_details.metadata),
+// never from the Invoice object's own metadata field. An invoice.paid
+// delivery whose identifiers sit only on inv.Metadata -- the hand-seeded
+// fixture shape real Stripe subscription-invoice deliveries do not produce
+// -- stays ErrWebhookPayloadUnrecognized, exactly like any other event
+// this package cannot correlate: reading inv.Metadata would recognize the
+// wrong source, which is precisely why real deliveries (whose identifiers
+// live in the parent snapshot instead) must not be expected there.
 func TestGateway_VerifyWebhook_InvoicePaid_InvoiceLevelMetadataOnly_StillUnrecognized(t *testing.T) {
 	payload := invoiceEventPayloadWithInvoiceLevelMetadata(t, "evt_inv_invmeta_1", "in_3", "tenant-a", "sub-1", "inv-1", 2900, "usd")
 	_, err := signAndVerify(t, payload)
@@ -826,10 +817,11 @@ func TestGateway_VerifyWebhook_InvoicePaid_InvoiceLevelMetadataOnly_StillUnrecog
 }
 
 // TestGateway_VerifyWebhook_SubscriptionUpdatedCanceled_RecognizedAsSubscriptionCanceled
-// is P1-2's regression test for the "even cancelled" leg the audit named:
-// customer.subscription.updated with status "canceled" -- on pre-fix code
-// refused as ErrWebhookPayloadUnrecognized -- must now recognize and map
-// onto NormalizedEventSubscriptionCanceled/ChannelStatusCanceled.
+// pins the "even cancelled" leg: customer.subscription.updated with status
+// "canceled" must be recognized and mapped onto
+// NormalizedEventSubscriptionCanceled/ChannelStatusCanceled -- never
+// refused as ErrWebhookPayloadUnrecognized, which would drop the
+// cancellation signal entirely.
 func TestGateway_VerifyWebhook_SubscriptionUpdatedCanceled_RecognizedAsSubscriptionCanceled(t *testing.T) {
 	payload := subscriptionUpdatedPayload(t, "evt_sub_canceled_1", "sub_stripe_1", "tenant-a", "sub-1", "inv-1", "canceled")
 	event, err := signAndVerify(t, payload)

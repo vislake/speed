@@ -165,8 +165,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// the migration order above -- see buildServer's doc comment.
 	// WithDeploymentMode declares the topology the assembled composition is
 	// validated against; it never selects an implementation (the deployment
-	// mode and the implementation composition are orthogonal axes --
-	// docs/internal/03-deployment-modes.md), and the validation refuses a
+	// mode and the implementation composition are orthogonal axes, and the validation refuses a
 	// composition the declared mode cannot run, naming the seam, the
 	// implementation and the missing capability.
 	//

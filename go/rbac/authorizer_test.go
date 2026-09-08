@@ -37,8 +37,8 @@ func TestService_Can_GrantedPermission_IsAllowed(t *testing.T) {
 }
 
 func TestService_Can_MatchIsExact_NotPrefixOrWildcard(t *testing.T) {
-	// No wildcard grammar exists in this milestone (a grammar is a
-	// security surface that needs a design decision, not an
+	// No wildcard grammar exists (a grammar is a security surface that
+	// needs a design decision, not an
 	// implementation guess). "notes:read" must therefore not imply
 	// "notes:write", and a resource that merely shares a prefix must not
 	// match either.
@@ -420,7 +420,7 @@ func TestService_ListPermissions_NoBindings_IsEmptyNotNilError(t *testing.T) {
 }
 
 // TestService_DeclaredPermissions_IsTheFrozenCatalogNotOneSubjectsGrants
-// distinguishes DeclaredPermissions (D8: what the platform knows how to
+// distinguishes DeclaredPermissions (what the platform knows how to
 // grant at all) from ListPermissions (what one Subject was actually
 // granted): a Subject with no bindings at all still sees every permission
 // any module declared, including rbac's own PermissionRead/PermissionManage.

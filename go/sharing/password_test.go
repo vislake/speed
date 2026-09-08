@@ -169,19 +169,21 @@ func TestVerifySharePassword_RefusesParamsArgon2CannotRunWith(t *testing.T) {
 }
 
 // TestVerifySharePassword_RefusesAbsurdCostParams pins the upper half of
-// the reading-side parameter guard (finding P3-sharing-6) through the
-// verification entry point: a stored PHC string whose cost parameters
-// parse but are absurdly large is refused as ErrInvalidSharePasswordHash
-// BEFORE any argon2.IDKey call, mirroring the maxPHCFieldBytes discipline
-// the salt and digest already carry. The parameters travel in the stored
-// value by design, so a corrupt or hostile row could carry anything up to
-// the parse's own uint32 ceiling -- m=4294967295 would make argon2.IDKey
-// attempt a ~4 TiB allocation on the request goroutine. Each case here
-// uses a memory cost just past the cap (the smallest over-cap value is
-// 1 GiB, so the pre-fix code's allocation attempt stays survivable under
-// an address-space limit -- the m=4294967295 marquee case is pinned at
-// the decode level in TestDecodeSharePasswordPHC_RefusesAbsurdCostParams
-// instead, because pre-fix it is the ~4 TiB attempt itself). The digest
+// the reading-side parameter guard (see maxSharePasswordMemoryKiB's own
+// doc comment, password.go) through the verification entry point: a
+// stored PHC string whose cost parameters parse but are absurdly large is
+// refused as ErrInvalidSharePasswordHash BEFORE any argon2.IDKey call,
+// mirroring the maxPHCFieldBytes discipline the salt and digest already
+// carry. The parameters travel in the stored value by design, so a
+// corrupt or hostile row could carry anything up to the parse's own
+// uint32 ceiling -- m=4294967295 would make argon2.IDKey attempt a ~4 TiB
+// allocation on the request goroutine. Each case here uses a memory cost
+// just past the cap (the smallest over-cap value is 1 GiB, so a reader
+// without this guard's allocation attempt stays survivable under an
+// address-space limit -- the m=4294967295 marquee case is pinned at the
+// decode level in TestDecodeSharePasswordPHC_RefusesAbsurdCostParams
+// instead, where the unguarded attempt is the ~4 TiB allocation itself).
+// The digest
 // bytes are those of a real argon2 derivation under the sane m=4096
 // parameters, so the only thing wrong with these values is the cost field.
 func TestVerifySharePassword_RefusesAbsurdCostParams(t *testing.T) {
@@ -203,10 +205,11 @@ func TestVerifySharePassword_RefusesAbsurdCostParams(t *testing.T) {
 
 // TestDecodeSharePasswordPHC_RefusesAbsurdCostParams pins the refusal at
 // the decode layer itself, where it actually happens -- and where every
-// hostile case can be exercised without the pre-fix code ever reaching
-// argon2.IDKey (decode never allocates), so the fail-before run is the
-// clean assertion failure "the parser accepted m=4294967295", not a ~4 TiB
-// allocation attempt. That attempt is real on the pre-fix code: m at the
+// hostile case can be exercised without argon2.IDKey ever being reached
+// (decode never allocates), so the fail-before run is the clean assertion
+// failure "the parser accepted m=4294967295", not a ~4 TiB allocation
+// attempt. That attempt is what a reader without this guard would
+// attempt: m at the
 // uint32 ceiling makes argon2.IDKey allocate roughly 4 TiB, and t at the
 // ceiling would loop effectively forever -- both are exactly what these
 // refusals exist to keep from ever starting.

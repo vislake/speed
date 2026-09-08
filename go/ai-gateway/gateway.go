@@ -17,9 +17,8 @@ import (
 	"github.com/vislake/speed/go/storage"
 )
 
-// usageFeatureChatTokens is the Feature dimension Gateway reports for every
-// successful chat call -- the token-count dimension the design doc names
-// as the default AI metering case.
+// usageFeatureChatTokens is the token-count Feature dimension Gateway
+// reports for every successful chat call.
 const usageFeatureChatTokens = "ai.chat_tokens"
 
 // Gateway is the facade business code calls: gateway.Chat and
@@ -27,9 +26,9 @@ const usageFeatureChatTokens = "ai.chat_tokens"
 // never a ChatProvider directly. See this package's own doc comment for
 // the full six-step pipeline every call runs.
 //
-// Round 2 adds Gateway.GenerateImage, the async-only counterpart for image
-// generation -- see image_gateway.go for its own pipeline and the
-// ImageProvider/storage boundary it documents.
+// Gateway.GenerateImage, the async-only image-generation counterpart of the
+// chat pipeline, is documented in image_gateway.go together with the
+// ImageProvider/storage boundary it draws.
 //
 // The zero value is not ready to use; construct one with NewGateway.
 type Gateway struct {
@@ -286,8 +285,8 @@ func (g *Gateway) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	// calls legal) has no tenant dimension for it, so the check is skipped
 	// rather than silently keyed on the empty string and shared with every
 	// other tenantless caller -- see checkRateLimit's own doc comment. The
-	// entitlement and resolve legs below run for tenantless callers exactly
-	// as they always did.
+	// entitlement and resolve legs below are unaffected: they run for
+	// tenantless callers exactly as for tenant-carrying ones.
 	if tenant, ok := pkgcore.TenantFromContext(ctx); ok {
 		if err := g.checkRateLimit(ctx, string(tenant)); err != nil {
 			return ChatResponse{}, err
@@ -378,9 +377,9 @@ func (g *Gateway) ChatStream(ctx context.Context, req ChatRequest) (<-chan ChatC
 
 // relayStream forwards every chunk from upstream to out unchanged,
 // intercepting the terminal success chunk (Usage != nil) to log completion
-// and report usage before forwarding it -- the "only after the final chunk
-// carries real usage" rule the design doc states explicitly. It closes out
-// exactly once, whenever upstream closes or ctx is done.
+// and report usage before forwarding it -- usage lands only after the final
+// chunk carries real usage, never speculatively at stream start. It closes
+// out exactly once, whenever upstream closes or ctx is done.
 //
 // Usage is reported at most once per response, whatever upstream sends:
 // ChatChunk's own doc contract promises Usage is non-nil only on the

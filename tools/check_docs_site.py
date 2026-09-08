@@ -3,7 +3,7 @@
 
 docs/site/ is a real Hugo project (theme: hugo-book, pinned as a git
 submodule under docs/site/themes/hugo-book -- docs/site/README.md has
-the machinery-decision rationale) as of the Hugo migration round. This
+the machinery-decision rationale). This
 script keeps the BUILT output honest in CI (the docs-check pipeline,
 .github/workflows/docs-check.yml, on every PR touching docs/) by:
 
@@ -37,13 +37,11 @@ script keeps the BUILT output honest in CI (the docs-check pipeline,
   build itself is correct -- the link-resolution check above already
   covers "would these hrefs resolve once mounted at the real baseURL").
 
-What changed from this script's earlier form: it used to check a
-hand-written HTML source tree directly (docs/site/index.html and
-friends, no build step). The docs/site/ directory now holds Hugo
-*source* (content.en/, content.zh-cn/, hugo.toml, the theme submodule)
-and the checked artifact is docs/site/public/, Hugo's build output --
-gitignored, never committed, and rebuilt here rather than assumed
-fresh. Exit-code contract is unchanged: 0 = clean; 1 = a structural
+The docs/site/ directory holds Hugo *source* (content.en/,
+content.zh-cn/, hugo.toml, the theme submodule) and the checked
+artifact is docs/site/public/, Hugo's build output -- gitignored, never
+committed, and rebuilt here rather than assumed fresh. Exit-code
+contract: 0 = clean; 1 = a structural
 violation (missing required page, unresolvable internal link, llms.txt
 missing or duplicated, offline preview not serving); 2 = infrastructure
 error (docs/site/ missing, hugo not on PATH, the build itself failing
@@ -65,9 +63,9 @@ from pathlib import Path
 
 # Pages every language's build must produce, relative to that
 # language's own root in the built tree (en: docs/site/public/<page>;
-# zh-cn: docs/site/public/zh-cn/<page>) -- one entry per page this
-# round's migration ships, matching hugo.toml's BookSection='docs'
-# layout (home page outside docs/, the five reference pages under it).
+# zh-cn: docs/site/public/zh-cn/<page>) -- one entry per page the site
+# ships, matching hugo.toml's BookSection='docs' layout (home page
+# outside docs/, the five reference pages under it).
 REQUIRED_PAGES_PER_LANGUAGE = [
     "index.html",
     "docs/index.html",
@@ -154,11 +152,9 @@ def _run_hugo_build(site_dir: Path) -> list[str]:
             f"hugo build failed (exit {proc.returncode}): "
             f"\n{proc.stdout}{proc.stderr}".rstrip()
         )
-    # Hugo prints build warnings to stdout, not a failing exit code --
-    # the docs/site round's own warnings policy (root CLAUDE.md's global
-    # instructions) treats a build warning as a first-class issue, so a
-    # WARN line is a content violation here even though hugo itself
-    # exits 0.
+    # Hugo prints build warnings to stdout, not a failing exit code.
+    # A build warning is a first-class issue here, so a WARN line is a
+    # content violation even though hugo itself exits 0.
     warnings = [
         line.strip()
         for line in proc.stdout.splitlines()

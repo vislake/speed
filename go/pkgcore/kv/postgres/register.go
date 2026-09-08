@@ -70,9 +70,8 @@ func (s *closableKVStore) Close() error {
 // mustRegister adds r to registry and panics if that fails, mirroring
 // kv/redis/register.go's and eventbus/postgres/register.go's identical
 // unexported helper -- this package cannot call either of theirs (both are
-// unexported outside their own package), so it carries its own copy, per
-// go/pkgcore/AGENTS.md's packaging rule the same duplication those two
-// files' own doc comments already cite.
+// unexported outside their own package), so it carries its own copy -- the
+// same deliberate duplication those two files' own helpers record.
 func mustRegister[T any](registry *pkgcore.SeamRegistry[T], r pkgcore.Registration[T]) {
 	if err := registry.Register(r); err != nil {
 		panic(fmt.Sprintf("pkgcore/kv/postgres: builtin implementation registration failed: %v", err))

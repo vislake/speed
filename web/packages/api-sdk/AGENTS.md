@@ -3,8 +3,7 @@
 Guidance for AI tooling working in or against this package. The public
 surface, generation mechanics and deferred items are documented in the
 package `README.md`; this file records the invariants that keep the
-package safe, mirroring the repo rules in `CLAUDE.md` and
-`docs/internal/21-api-contract.md`.
+package safe.
 
 ## What this module is
 
@@ -39,8 +38,8 @@ and `src/` must keep passing it on every regeneration.
   with `bindRequestFn(createClient(...))`, attaching the bearer token
   from the host's api-client store. `speedRequestCredentialless` is
   the second mutator, selected per operation by `web/orval.config.ts`
-  for requests that must go out without a bearer token (today only the
-  authn session-refresh operation, which authenticates with the refresh
+  for requests that must go out without a bearer token (the authn
+  session-refresh operation, which authenticates with the refresh
   token in its body and whose 401 must stay terminal -- see
   `@speed/api-client`'s bearer-only rule): it forwards the call with
   `omitAccessToken` declared and never sets the plain mutator's shape.
@@ -58,7 +57,7 @@ and `src/` must keep passing it on every regeneration.
   body field. The fragment documents those fields as claims or
   server-verified requests, never as a data scope; every other
   fragment's types carry no `tenant_id` at all. Tenant query-key
-  namespacing is an M1 consumer-shell discipline, recorded in
+  namespacing is a consumer-shell discipline, recorded in
   `web/orval.config.ts` and the README.
 - **orval stays out of the lockfile.** Every runner -- the Taskfile
   `api:gen` frontend leg and the `api-contract.yml` regen step --
@@ -71,15 +70,15 @@ and `src/` must keep passing it on every regeneration.
   English strings.
 - **The peer family is the QueryClient contract.** `react` and
   `@tanstack/react-query` v5 are peers so hosts share one
-  QueryClient/Provider (`docs/internal/21-api-contract.md`); the
-  package never constructs one. Its own hooks are exercised in tests
-  with a `QueryClientProvider` around `renderHook`.
+  QueryClient/Provider; the package never constructs one. Its own
+  hooks are exercised in tests with a `QueryClientProvider` around
+  `renderHook`.
 
-## In this round vs. deferred
+## What ships vs. what is deferred
 
-Landed: the generated surface over the merged document (`src/index.ts`
--- orval input is `build/openapi/speed.yaml`, the redocly `join` of
-the notes and authn fragments), the runtime seam, the regeneration
+The generated surface over the merged document (`src/index.ts` --
+orval input is `build/openapi/speed.yaml`, the redocly `join` of the
+frontend-feeding fragments), the runtime seam, the regeneration
 tooling (config + fixup script) and the CI wiring that regenerates and
 diffs the artifact. `@speed/auth-core` compile-consumes the authn
 surface in-workspace: its unit suite binds a scripted request function
@@ -89,16 +88,17 @@ fails that package's typecheck.
 
 Deferred with reasons:
 
-- The oasdiff breaking-change gate -- waits for the first release
-  baseline, M4 (recorded mechanism decision, not a fake gate).
-- Real UI consumers (reference-app shells) and tenant query-key
-  namespacing -- M1. Compile consumption is live (`@speed/auth-core`
-  above); runtime end-to-end consumption -- shells driving real
-  logins against a real server -- is not, and the package's own unit
-  tests still bind a fake request function and never touch a network.
+- The oasdiff breaking-change gate -- not implemented: a
+  breaking-change gate needs a release baseline to diff against, and
+  no release baseline exists yet.
+- Browser automation over the server-served page (a browser driving
+  the real server) -- not shipped. The consumer shell drives the
+  composed operations through the real client over a scripted
+  server double; the package's own unit tests bind a fake request
+  function and never touch a network. Tenant query-key namespacing
+  stays a consumer-shell discipline by contract.
 - Release-time packaging of the merged spec into the published SDK --
-  M4 machinery with release-foundation (`docs/internal/18-cicd.md`);
-  do not claim it lives here.
+  not implemented (release machinery); do not claim it lives here.
 
 ## Public surface
 

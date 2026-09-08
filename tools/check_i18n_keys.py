@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """zh-CN / en-US locale message-key set consistency checker.
 
-Root CLAUDE.md's internationalization rule: every user-facing text ships in
-both zh-CN and en-US resources, and CI checks that the two key sets match
-("New text must ship with both zh-CN and en-US resources; CI checks the key
-sets match"). docs/internal/18-cicd.md schedules this as a self-written
-discipline check diffing the key sets of the two resources; this script is
-its local-run counterpart.
+Every user-facing text ships in both zh-CN and en-US resources, and the
+two resources of a locale directory must declare the same message-id
+set. This script is the discipline check that diffs the two key sets;
+CI runs the same check.
 
 What it does: for every locale directory under --root, it parses the zh-CN
 and en-US pair members it finds and reports every id present in one file
@@ -336,7 +334,7 @@ def check_locale_dir(dir_path: str, rel_dir: str) -> tuple[list[str], list[str]]
 def load_ids_for(pair: tuple[str, str]) -> Callable[[str], tuple[set[str], list[str]]]:
     """The right loader for a pair: tomllib for TOML, json for JSON."""
     if pair == TOML_PAIR:
-        # load_toml_ids now returns the problems list directly: the
+        # load_toml_ids returns the problems list directly: the
         # duplicate-leaf-id defensive rule (a leaf defined under two
         # different paths is an error, never compared) is part of its
         # per-file contract, like a parse failure.

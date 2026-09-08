@@ -54,8 +54,8 @@ var errTaskMissingTenant = apperr.Internal("jobs.asynq_task_missing_tenant")
 // ErrorHandler returns. handleErrorAttempt therefore fires the terminal
 // attempt's FailureHook for such an archive-bound bounce too -- a
 // dead-letter must never skip its compensation because its last attempt
-// happened to bounce (see that function's doc comment and AGENTS.md's
-// "Per-tenant concurrency limiting" section). errCancelMarkerUnreadable
+// happened to bounce (see that function's doc comment).
+// errCancelMarkerUnreadable
 // (below) is the bounce-class sibling this same machinery treats
 // identically.
 var errTenantAtCapacity = errors.New("jobs: tenant is at its concurrency limit")
@@ -65,7 +65,7 @@ var errTenantAtCapacity = errors.New("jobs: tenant is at its concurrency limit")
 // attempt failed -- Redis answered an error, never "no marker". It is the
 // fail-closed answer to an unverifiable cancellation state: a Job whose
 // marker cannot be read might be cancelled, so it must not run; the
-// attempt is refused instead (P2-8). It is bounce-class, exactly like
+// attempt is refused instead. It is bounce-class, exactly like
 // errTenantAtCapacity: isFailure reports false for it, so the refusal
 // never burns a retry -- the task redelivers on the short throttle delay
 // and, once the marker read works again, either finds the marker (skips,
@@ -170,12 +170,11 @@ func (q *Queue) recordFailedAttempt(jobType string, status jobs.Status, err erro
 // tryReserveTenantSlot/releaseTenantSlot (jobs' own worker.go), but
 // deliberately a separate, independent copy rather than a shared helper
 // type: extracting one would mean touching StandaloneQueue's own
-// fields/methods, and this task's own instructions require the standalone
-// deployment mode's implementation and its tests to come out completely
-// unaffected. See AGENTS.md for why WHERE this gate applies differs from
-// StandaloneQueue's (a fast bounce-and-redeliver inside the Handler call,
-// not a pre-dequeue skip -- asynq gives us no way to peek at a task's
-// tenant before dequeuing it off Redis).
+// fields/methods, and the standalone implementation stays untouched by
+// design. WHERE this gate applies differs from StandaloneQueue's: here it
+// is a fast bounce-and-redeliver inside the Handler call, not a
+// pre-dequeue skip, because asynq gives us no way to peek at a task's
+// tenant before dequeuing it off Redis.
 func (q *Queue) tryReserveTenantSlot(tenant pkgcore.TenantID) bool {
 	q.tenantMu.Lock()
 	defer q.tenantMu.Unlock()
@@ -235,8 +234,7 @@ func isFailure(err error) bool {
 // Handler itself could read via asynqlib.GetRetryCount/GetMaxRetry, purely
 // to decide whether THIS is the terminal attempt; it schedules or persists
 // nothing itself, so this is reading asynq's documented MaxRetry contract,
-// not reimplementing its retry machinery. See AGENTS.md's dead-letter
-// mapping section.
+// not reimplementing its retry machinery.
 //
 // Because handleFailedMessage calls this BEFORE its own switch statement's
 // archive branch (p.archive, which is what makes a Job's Get() answer
@@ -334,7 +332,7 @@ func (q *Queue) handleErrorAttempt(t *asynqlib.Task, err error, retried, maxRetr
 		// this Job as StatusCancelled while this final attempt was
 		// executing, so the cancellation wins over the attempt's failure
 		// outcome, exactly mirroring StandaloneQueue's completeDeadLetter
-		// no-transition guard (jobs' own worker.go, 91a929a): the
+		// no-transition guard (jobs' own worker.go): the
 		// failure's compensation -- FailureHook.OnFailure, whose contract
 		// (jobs' handler.go) requires the Job to actually dead-letter first
 		// -- must NOT run for a cancelled Job. Nothing here flips or
@@ -356,15 +354,13 @@ func (q *Queue) handleErrorAttempt(t *asynqlib.Task, err error, retried, maxRetr
 	// confirmed against the pinned v0.26.0 source. That archive is the
 	// money event: FailureHook.OnFailure is the dead-letter's compensation,
 	// and an archive that skips it silently strands whatever the Job was
-	// paying for. The one archive path this package used to exempt --
-	// bounce-class terminal attempts (errTenantAtCapacity,
-	// errCancelMarkerUnreadable), which short-circuited here before this
-	// check -- is therefore NOT exempt any more: a bounce on the final
-	// attempt still archives microseconds after this hook returns, so its
-	// OnFailure fires too, with the bounce itself as the recorded cause
-	// (the task's LastErr will carry the same bounce message -- see
-	// AGENTS.md's "Approximation accepted" note). Only the marker check
-	// above can silence the hook, exactly as for a genuine terminal
+	// paying for. Bounce-class terminal attempts (errTenantAtCapacity,
+	// errCancelMarkerUnreadable) are not exempt from the hook: a bounce on
+	// the final attempt still archives microseconds after this hook
+	// returns, so its OnFailure fires too, with the bounce itself as the
+	// recorded cause (the task's LastErr will carry the same bounce
+	// message -- the approximation this mapping accepts). Only the marker
+	// check above can silence the hook, exactly as for a genuine terminal
 	// failure.
 	if errors.Is(err, errTenantAtCapacity) || errors.Is(err, errCancelMarkerUnreadable) {
 		log.Error("job's final attempt was bounced and will be archived; firing failure hook",
@@ -461,7 +457,7 @@ func invokeOnFailure(ctx context.Context, hook jobs.FailureHook, job *jobs.Job, 
 // does for StandaloneQueue (pkgcore.WithTenant from the Job's own stored
 // tenant -- here read back from Task.Headers, never from any ambient
 // context), and implements per-tenant concurrency gating, progress
-// reporting, and the StartedAt bookkeeping AGENTS.md documents. See
+// reporting, and the StartedAt bookkeeping this package documents. See
 // queue.go's Start for how this gets wired in place of an asynqlib.ServeMux.
 func (q *Queue) processTask(ctx context.Context, t *asynqlib.Task) error {
 	taskID, _ := asynqlib.GetTaskID(ctx)
@@ -572,9 +568,9 @@ func (q *Queue) processTaskUncancelled(ctx context.Context, t *asynqlib.Task, ta
 	// back by Get() as StartedAt, exactly mirroring StandaloneQueue's
 	// claimOne setting started_at at claim time. Progress starts at zero
 	// for this attempt rather than carrying forward a previous attempt's
-	// stale value; see AGENTS.md for why this is a deliberate, documented,
-	// low-stakes difference from StandaloneQueue (which does carry it
-	// forward, simply because nothing ever resets it).
+	// stale value -- a deliberate, low-stakes difference from
+	// StandaloneQueue (which does carry it forward, simply because nothing
+	// ever resets it).
 	writeEnvelope(resultEnvelope{})
 
 	retried, _ := asynqlib.GetRetryCount(ctx)
@@ -608,9 +604,8 @@ func (q *Queue) processTaskUncancelled(ctx context.Context, t *asynqlib.Task, ta
 	// Enqueue doc comment: that context is long gone by the time a worker
 	// picks this up). It is built ON TOP of ctx (asynq's own per-task
 	// context), not a fresh context.Background() the way StandaloneQueue's
-	// jobContext is -- see AGENTS.md's "The tenant context trap, asynq
-	// edition" for why adopting asynq's own ctx here (rather than
-	// discarding it) is the correct choice, not a shortcut: it is what
+	// jobContext is: adopting asynq's own ctx here rather than discarding
+	// it is the correct choice, not a shortcut -- it is what
 	// makes asynq's own Timeout/Deadline task options actually bound this
 	// call, and what makes Inspector.CancelProcessing (queue.go's Cancel)
 	// able to interrupt an in-flight attempt at all.

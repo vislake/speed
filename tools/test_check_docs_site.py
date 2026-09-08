@@ -71,8 +71,8 @@ class CheckLinksTests(unittest.TestCase):
         self.assertEqual(violations, [])
 
     def test_quoted_broken_link_is_still_a_violation(self):
-        # The pre-fix quoted-only regex already caught this shape; keep it
-        # covered so the fix does not regress the quoted case.
+        # A quoted href is a violation exactly like an unquoted one; the
+        # quoted shape must stay covered alongside it.
         violations = self._run(
             '<html><body>'
             '<a href="/speed/nonexistent-page/">broken</a>'
@@ -115,12 +115,12 @@ class CheckLinksTests(unittest.TestCase):
 class ExitCodeTests(unittest.TestCase):
     """The exit-code contract of main(): infra errors exit 2, content 1.
 
-    Regression coverage for the contract fix: a missing input file
-    (docs/site/hugo.toml), an unavailable tool ('hugo' not on PATH) and a
-    failing build are infrastructure errors per the module docstring and
-    must exit 2, while missing required pages / unresolvable links stay
-    content violations exiting 1. The infra paths used to raise
-    sys.exit("error: ..."), which exits 1 like a content violation.
+    A missing input file (docs/site/hugo.toml), an unavailable tool
+    ('hugo' not on PATH) and a failing build are infrastructure errors
+    per the module docstring and must exit 2, while missing required
+    pages / unresolvable links stay content violations exiting 1. An
+    infra path must not fall through sys.exit("error: ..."), which
+    exits 1 like a content violation.
     """
 
     def _tmp(self) -> pathlib.Path:
@@ -155,8 +155,8 @@ class ExitCodeTests(unittest.TestCase):
 
     def test_missing_hugo_config_input_file_exits_2(self):
         # hugo.toml is an input file of the check: its absence is an
-        # infrastructure error (exit 2). Fails before the fix -- the
-        # reader raised sys.exit("error: ..."), exiting 1.
+        # infrastructure error (exit 2), so the reader must not fall
+        # through sys.exit("error: ..."), which exits 1.
         root = self._tmp()
         self._write_site(root, {"index.html": "<html></html>"})
         (root / "docs" / "site" / "hugo.toml").unlink()

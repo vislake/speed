@@ -24,17 +24,16 @@ import (
 // restored membership, a node id that gets reused) to become real.
 // org.member.removed closes that hazard for a binding scoped to a user who
 // left the tenant; org.node.deleted closes it for a binding scoped to a
-// node the tree no longer has -- org-rbac.md's P1-2 finding: rbac never
-// consults org's tree at decision time (only a host-injected
-// SubtreeResolver does, and only when one is wired), and before that
-// round nothing reaped a binding left dangling on a deleted node at all.
-// org's own TreeService.Delete already refuses to delete a subtree that
-// still has members bound to it (memberGuardFor, go/org's tree.go) -- that
-// refusal is real and stays exactly as it is -- but a node can carry an
-// rbac binding with no org member ever having existed there, or a member
-// removed independently of any binding cleanup, and deleting THAT node
-// sails straight through org's own guard. This file's onNodeDeleted is
-// the separate, additional safety net for exactly that case, never a
+// node the tree no longer has: rbac never consults org's tree at decision
+// time (only a host-injected SubtreeResolver does, and only when one is
+// wired), so nothing else withdraws a binding left dangling on a deleted
+// node. org's own TreeService.Delete refuses to delete a subtree that
+// still has members bound to it (memberGuardFor, go/org's tree.go). That
+// refusal does not cover an rbac binding: a node can carry a binding with
+// no org member ever having existed there, or a member removed
+// independently of any binding cleanup, and deleting that node sails
+// straight through org's own guard. This file's onNodeDeleted is the
+// separate, additional safety net for exactly that case, never a
 // replacement for org's own member-refusal.
 //
 // The second pair is the restore side of the same two facts: org's
@@ -49,13 +48,12 @@ import (
 // be a one-way door: a restored member or node would come back with every
 // grant the reap withdrew still revoked, silently, forever.
 //
-// The re-instatement is precise to the row, never to the scope, because a
-// revoked row now carries the revoke-origin marker this file's
-// D14-resolution adds (migrations/{postgres,sqlite}/0003_add_revoke_origin
-// .sql, model.go's RevokeOrigin field): every mark-delete records which
-// writer performed it -- the deliberate Service.RevokeRole path, the
-// member-removal reap, or the node-deletion reap -- and the restore side
-// scopes by that marker. onMemberRestored restores only rows carrying the
+// The re-instatement is precise to the row, never to the scope: every
+// revoked row carries a revoke-origin marker (migrations/{postgres,sqlite}/
+// 0003_add_revoke_origin.sql, model.go's RevokeOrigin field) naming which
+// writer performed the mark-delete -- the deliberate Service.RevokeRole
+// path, the member-removal reap, or the node-deletion reap -- and the
+// restore side scopes by that marker. onMemberRestored restores only rows carrying the
 // member-removal origin, so a deliberate revocation that predates the
 // removal is never silently undone; onNodeRestored restores only rows
 // carrying the node-deletion origin, so a row the node-deletion reap wrote
@@ -78,8 +76,8 @@ import (
 // shape of the code below is dictated by what the boundary permits:
 //
 //   - rbac never imports org. org is a peer module released on its own
-//     schedule, and importing it would invert the dependency direction
-//     (docs/internal/01-architecture.md). rbac knows org by two facts per
+//     schedule, and importing it would invert the dependency direction.
+//     rbac knows org by two facts per
 //     event alone: the event's string name, spelled out as the unexported
 //     constants below, and a JSON-shaped payload probe
 //     (memberUserIDFromPayload, nodeDeletedIDsFromPayload,
@@ -316,8 +314,7 @@ func (s *Service) onMemberRemoved(ctx context.Context, evt pkgcore.Event) error 
 			// transient-failure class the queue's own retries exist for;
 			// the synchronous reaping below -- the no-queue host's path,
 			// directly callable here -- runs instead, and only a failure
-			// of the reaping itself is left logged (reap_jobs.go's header
-			// comment records the premise).
+			// of the reaping itself is left to the logs.
 			observability.FromContext(ctx).Warn("rbac could not enqueue a removed member's reaping; reaping synchronously instead",
 				"event_type", evt.Type, "user_id", userID, "error", err)
 		}
@@ -326,9 +323,8 @@ func (s *Service) onMemberRemoved(ctx context.Context, evt pkgcore.Event) error 
 		// The synchronous fallback for a host that wired no queue -- or,
 		// falling through from above, for a queue-backed host whose enqueue
 		// just failed: one aggregate log line for whatever the reap could
-		// not complete, instead of the per-binding lines the pass used to
-		// emit. Nothing retries it -- that is exactly what wiring a queue
-		// buys (see reap_jobs.go's header comment).
+		// not complete. Nothing retries it -- that is exactly what wiring
+		// a queue buys (see reap_jobs.go's header comment).
 		observability.FromContext(ctx).Warn("rbac could not fully reap a removed member's role bindings",
 			"event_type", evt.Type, "user_id", userID, "error", err)
 	}
@@ -350,8 +346,7 @@ func (s *Service) onMemberRemoved(ctx context.Context, evt pkgcore.Event) error 
 // who is no longer a member. Without the claim, the row set the node
 // deletion reaped and the row set this removal revokes would disagree
 // exactly when the two reaps' events interleave, and the node restore
-// would rebuild a grant the removal had in fact ended (this file's
-// D14-resolution, P0-rbac-8).
+// would rebuild a grant the removal had in fact ended.
 //
 // The second effect is the revoke itself, delegated to revokeReapedBindings
 // -- which both reaps share, and which this reap drives with the
@@ -368,10 +363,9 @@ func (s *Service) onMemberRemoved(ctx context.Context, evt pkgcore.Event) error 
 // for the CALLER to handle, never silently dropped. The caller is either
 // onMemberRemoved's synchronous fallback -- the no-queue host's path, and
 // the enqueue-failure fall-through's own, which logs the joined error at
-// Warn and moves on (the pre-queue behavior) -- or the queue-backed reap
-// task (memberReapTask, which returns it so the queue retries the reap --
-// the retry home the old design's redelivery backstop never was; see
-// reap_jobs.go's header comment). The claim's own UPDATE is idempotent, so
+// Warn and moves on -- or the queue-backed reap
+// task (memberReapTask, which returns it so the queue retries the reap;
+// see reap_jobs.go's header comment). The claim's own UPDATE is idempotent, so
 // a retry that reaches it again rewrites nothing.
 func (s *Service) reapRoleBindings(ctx context.Context, evt pkgcore.Event, userID string) error {
 	var errs []error
@@ -594,8 +588,8 @@ func (s *Service) reapRoleBindingsForNodes(ctx context.Context, evt pkgcore.Even
 // revoke's writer -- and is the per-binding revoke step the two reaps
 // share: reapRoleBindings drives it with revokeOriginMemberRemoval,
 // reapRoleBindingsForNodes with revokeOriginNodeDeletion. origin is the
-// marker the restore side scopes by (see the file header's D14-resolution
-// and model.go's RevokeOrigin field comment): it is written into the same
+// marker the restore side scopes by (model.go's RevokeOrigin field
+// comment): it is written into the same
 // mark-delete UPDATE that soft-deletes the row, atomically, so no revoked
 // row can exist whose writer this reap does not name.
 //
@@ -761,10 +755,10 @@ func (s *Service) onMemberRestored(ctx context.Context, evt pkgcore.Event) error
 // deliberately: a deliberate RevokeRole revocation (origin empty) is an
 // operator decision no org event may undo, and a row still carrying the
 // node-deletion origin belongs to a node restore, not a member restore.
-// That precision is what deferral D14 promised and what this round's
-// marker migration (0003_add_revoke_origin.sql) delivers; the pre-marker
-// rows the backfill left on the empty origin are treated exactly like
-// deliberate revocations -- never resurrected by an org event, restored
+// That precision is carried by the revoke-origin marker migration
+// (0003_add_revoke_origin.sql): rows with an empty origin -- the
+// deliberate RevokeRole path's own marker value -- are treated exactly
+// like deliberate revocations, never resurrected by an org event, restored
 // the explicit way if an operator wants them back.
 //
 // Each matching row is un-marked BY ID through
@@ -775,8 +769,8 @@ func (s *Service) onMemberRestored(ctx context.Context, evt pkgcore.Event) error
 // a tuple whose newest revoked row is a later deliberate revocation (or a
 // later regrant's node-deletion reap) must keep THAT row revoked while the
 // older, genuinely-reaped row comes back, and only an id-addressed restore
-// can tell the two apart. Row-level precision also makes the tuple
-// de-duplication the pre-marker loop needed unnecessary: if two
+// can tell the two apart. Row-level precision also makes tuple
+// de-duplication unnecessary: if two
 // member-removal rows ever share one tuple (a removal cycle per row), the
 // first restore makes the tuple live and the second collides with the
 // partial unique index -- a classified skip, never an error or a second
@@ -785,7 +779,7 @@ func (s *Service) onMemberRestored(ctx context.Context, evt pkgcore.Event) error
 // publishBindingChanged), so every replica converges exactly as it does on
 // a manual restore.
 //
-// # The structural-precondition gate (P1-rbac-reinstate-node)
+// # The structural-precondition gate
 //
 // The org.member.restored event asserts ONE of the two facts a revoked
 // member-removal row's grant depends on -- the membership is visible
@@ -795,11 +789,11 @@ func (s *Service) onMemberRestored(ctx context.Context, evt pkgcore.Event) error
 // her node was deleted (or whose node was deleted while she was gone)
 // must not regain a grant at a node org still hides. Can -- the coarse
 // gate this module's HTTP surface answers -- never consults node liveness
-// at decision time (scope.go), so the reap discipline is the entire
-// protection of that gate, and a re-instatement that skipped the check
-// re-opened it: the three-step sequence (delete the node -> remove the
-// member -> restore the member) made the binding on the deleted node live
-// again and Can answered allowed. Every member-removal row scoped to a
+// at decision time (scope.go), so this gate is the whole protection of
+// that property: without it, the three-step sequence (delete the node ->
+// remove the member -> restore the member) would make the binding on the
+// deleted node live again and Can would answer allowed. Every
+// member-removal row scoped to a
 // node therefore passes through bindingNodeLivesAtMemberRestore before any
 // role resolution; a row whose node cannot be verified stays revoked (see
 // that method for the two dispositions). The node-restored path has no
@@ -972,8 +966,8 @@ func (s *Service) onNodeRestored(ctx context.Context, evt pkgcore.Event) error {
 // a removed member's node-deletion rows to the member-removal the moment
 // she leaves) belongs to that member's own restore, not to the node's: if
 // it came back here, a user removed from the tenant would regain live
-// authorization on the node's mere return, with no membership behind it --
-// the P0-rbac-8 escalation this round closes. A node-reaped row whose
+// authorization on the node's mere return, with no membership behind it.
+// A node-reaped row whose
 // holder was never removed carries the origin and comes back, which is the
 // mechanism's intended case.
 //
@@ -1088,8 +1082,8 @@ func (s *Service) reinstateReapedBindings(ctx context.Context, evt pkgcore.Event
 }
 
 // bindingNodeLivesAtMemberRestore is the member-restored re-instatement's
-// structural-precondition gate, the fix for the P1-rbac-reinstate-node
-// finding: a revoked row that the member-removal reap wrote or claimed is
+// structural-precondition gate: a revoked row that the member-removal reap
+// wrote or claimed is
 // un-marked by the member's own org.member.restored event only when the
 // OTHER fact the row's grant depends on -- the node it is scoped to --
 // still exists in the org tree, re-verified here through the host's
@@ -1098,8 +1092,8 @@ func (s *Service) reinstateReapedBindings(ctx context.Context, evt pkgcore.Event
 // about the node, and Can, the coarse gate, never consults node liveness
 // at decision time (only DataScope's row-level narrowing does, and a
 // reinstated row must not rely on that: the deny-then-narrow layering
-// only tolerates a dangling LIVE binding; a re-instatement that re-opened
-// a revoked one at a dead node would hand Can an allowed answer for the
+// only tolerates a dangling LIVE binding, while re-opening a revoked one
+// at a dead node would hand Can an allowed answer for the
 // full node-deleted window). Every member-removal row scoped to a node
 // passes through here before any role resolution in
 // reinstateReapedBindings; the node-restored path needs no equivalent

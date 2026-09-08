@@ -63,9 +63,9 @@ const (
 //
 // # Data domain
 //
-// Platform data (docs/internal/04-data-and-tenancy.md's data-domain table):
-// the log exists so that delivery outcomes can be replayed and audited
-// across the platform -- the same row that proves to a retry that a
+// Platform data: the log exists so that delivery outcomes can be replayed
+// and audited across the platform -- the same row that proves to a retry
+// that a
 // delivery already succeeded must be readable by the worker whatever
 // tenant context the retry carries, and a platform-level deliverability
 // report reads across tenants. SendRecord therefore deliberately does NOT
@@ -98,8 +98,8 @@ const (
 // IdempotencyKey is the derived delivery key (delivery.go's
 // deriveDeliveryKey) that makes the whole record a replay-checkable unit.
 // ProviderReceiptID is reserved for the transport provider's own message
-// id (SES's message id, say), which no transport in this round returns;
-// the column exists so a later transport round does not migrate.
+// id (SES's message id, say); no shipped transport returns one, and the
+// column exists so a transport that does needs no migration.
 type SendRecord struct {
 	// ID is an application-generated UUID, never a database-generated one.
 	ID string `gorm:"column:id;primaryKey;size:36"`
@@ -176,8 +176,8 @@ func (SendRecord) TableName() string { return tableSendRecords }
 // against SendRecord even by accident -- the compile-time guarantee that
 // this platform-domain table never acquires tenant scoping. It queries the
 // plain *gorm.DB dbkit.Open returns directly, the documented pattern for
-// identity and platform data (see go/dbkit/AGENTS.md's "Known
-// limitations"), and never reaches for db.Table, db.Model or db.Raw.
+// identity and platform data, and never reaches for db.Table, db.Model or
+// db.Raw.
 type SendRecordRepository struct {
 	db *gorm.DB
 }
@@ -279,13 +279,12 @@ func (r *SendRecordRepository) Save(ctx context.Context, rec *SendRecord) error 
 // real PostgreSQL server (integration_test/postgres_leg_test.go's
 // TestPostgres_SendRecordSaveGuarded_GuardStatementRunsAgainstARealServer)
 // for exactly that reason -- the guarded write's dialect shape is
-// second-dialect behaviour no SQLite run exercises, and the module had
-// never executed this path on PostgreSQL until that leg existed. The
-// guard's comparison of this write's status against the succeeded sentinel
-// used to bind BOTH sides as parameters: a value-vs-value expression whose
-// type only PostgreSQL's implicit text-typing of unknown parameters
-// resolves (SQLite's dynamic typing accepts it by different means), which
-// makes the statement's meaning depend on an inference the caller never
+// second-dialect behaviour no SQLite run exercises. The guard's comparison
+// of this write's status against the succeeded sentinel binds the sentinel
+// as a SQL literal rather than a parameter: a value-vs-value expression
+// whose type only PostgreSQL's implicit text-typing of unknown parameters
+// resolves (SQLite's dynamic typing accepts it by different means) would
+// make the statement's meaning depend on an inference the caller never
 // asked for -- a status value of any other type would surface as 42P18
 // (could not determine data type of parameter) on PostgreSQL, invisible to
 // every SQLite run. The sentinel is therefore bound as a SQL literal,
@@ -361,8 +360,8 @@ type SendRecordFilter struct {
 // matching filter, newest first (created_at DESC with id DESC as the
 // tiebreak -- ListForRecipient's identical stable-paging convention, so
 // two records written in the same instant still page deterministically).
-// This is D10's operator-facing search (docs/internal/23-admin.md):
-// "did this delivery actually go out, and what happened".
+// This is the operator-facing search behind "did this delivery actually
+// go out, and what happened".
 //
 // Limit and Offset are validated before the query runs: a non-positive
 // Limit or a negative Offset is refused with ErrSendRecordFilterInvalid
@@ -384,7 +383,7 @@ func (r *SendRecordRepository) ListByFilter(ctx context.Context, filter SendReco
 	// served silently -- and a negative Offset is a page nothing can mean.
 	// The filter's doc comment promises Limit positive and Offset
 	// non-negative; the promise is enforced here, coded, never trusted to
-	// every future caller (go/admin's D10 search included).
+	// any caller (go/admin's cross-tenant send-record search included).
 	if filter.Limit <= 0 || filter.Offset < 0 {
 		field, value := "limit", filter.Limit
 		if filter.Limit > 0 {

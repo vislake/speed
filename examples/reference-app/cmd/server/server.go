@@ -1,8 +1,7 @@
-// Package main is examples/reference-app's minimal starter skeleton --
-// exactly the kind of "minimal starter skeleton...freely editable by
-// consumers" root CLAUDE.md's "Shape" section describes, not a business
-// module. It never goes through pkgcore.Module.Register itself; its whole
-// job is wiring one together (see buildServer below) and running it.
+// Package main is examples/reference-app's minimal starter skeleton -- a
+// minimal, freely editable example rather than a business module. It never
+// goes through pkgcore.Module.Register itself; its whole job is wiring one
+// together (see buildServer below) and running it.
 package main
 
 import (
@@ -83,9 +82,9 @@ const (
 	defaultPort = "8080"
 
 	// defaultSQLitePath is used when APP_DB_PATH is unset. It is a
-	// relative path so `go run ./cmd/server` works with zero setup, per
-	// root CLAUDE.md's "task dev must work in standalone deployment
-	// mode" rule applied to this example's own entry point.
+	// relative path so `go run ./cmd/server` works with zero setup -- the
+	// example's own entry point must stay runnable with nothing
+	// configured.
 	defaultSQLitePath = "reference-app.db"
 
 	// shutdownTimeout bounds how long graceful shutdown waits for
@@ -111,9 +110,8 @@ const (
 
 	// metricsPath is the standalone deployment mode's Prometheus scrape
 	// endpoint, exempted from tenant resolution for exactly the same
-	// reason healthzPath is: a scraper (or a human's browser, per
-	// docs/internal/09-observability.md's own description of the standalone
-	// deployment mode) has no demo Host to send and must not depend on one.
+	// reason healthzPath is: a scraper (or a human's browser) has no demo
+	// Host to send and must not depend on one.
 	metricsPath = "/metrics"
 
 	// configKeyEnv names the environment variable holding the hex-encoded
@@ -161,37 +159,34 @@ const (
 
 	// pkiLocalKeyCipherKeyEnv names the environment variable holding the
 	// hex-encoded 32-byte AES key that seals go/pki's LocalSigner private-key
-	// column (pki_local_keys, via pki.RegisterLocalKeySerializer). Before
-	// this round it had NO override path at all -- only the hardcoded
-	// devPKILocalKeyCipherKey development default existed -- so a real
-	// deployment that set none of this file's other keys was silently
-	// running its signing-key storage on a key committed to this
-	// repository's own source. It is a SEPARATE bootstrap secret from every
-	// other key in this file: dbkit's key-separation rule applies across
-	// modules, not only within one (devPKILocalKeyCipherKey's own doc
-	// comment).
+	// column (pki_local_keys, via pki.RegisterLocalKeySerializer). Without
+	// it, a deployment that sets none of this file's other keys would
+	// silently run its signing-key storage on a key committed to this
+	// repository's own source (the devPKILocalKeyCipherKey development
+	// default). It is a SEPARATE bootstrap secret from every other key in
+	// this file: dbkit's key-separation rule applies across modules, not
+	// only within one (devPKILocalKeyCipherKey's own doc comment).
 	pkiLocalKeyCipherKeyEnv = "APP_PKI_LOCAL_KEY_CIPHER_KEY"
 
 	// authnBlindIndexKeyEnv names the environment variable holding the
 	// hex-encoded 32-byte HMAC key authn.WithBlindIndexKey indexes its
 	// users.email_index/phone_index columns with (dbkit.NewBlindIndexer).
-	// Like pkiLocalKeyCipherKeyEnv above, this had NO override path before
-	// this round -- only the hardcoded devBlindIndexKey development default
-	// existed. This key must stay IDENTICAL across restarts (devBlindIndexKey's
+	// Like pkiLocalKeyCipherKeyEnv above, it is the environment override
+	// for the hardcoded devBlindIndexKey development default. This key must
+	// stay IDENTICAL across restarts (devBlindIndexKey's
 	// own doc comment) or every already-stored email/phone blind index
 	// becomes unfindable, so setting this env var (or APP_ROOT_KEY, which
 	// derives it) and then changing it has the same operational
-	// consequences a real key rotation always has -- see "Key derivation"
-	// in go/dbkit/AGENTS.md for the rotation-granularity trade-off.
+	// consequences a real key rotation always has.
 	authnBlindIndexKeyEnv = "APP_AUTHN_BLIND_INDEX_KEY"
 
 	// authnPIICipherKeyEnv names the environment variable holding the
 	// hex-encoded 32-byte AES key that seals authn's encrypted PII columns
 	// (email, phone, TOTP secrets) via authn.RegisterPIISerializer. Like
-	// its two siblings above, this had NO override path before this round --
-	// only the hardcoded devPIICipherKey development default existed --
-	// deliberately a SEPARATE secret from every other key in this file,
-	// including pkiLocalKeyCipherKeyEnv (devPIICipherKey's own doc comment).
+	// its two siblings above, it is the environment override for the
+	// hardcoded devPIICipherKey development default -- deliberately a
+	// SEPARATE secret from every other key in this file, including
+	// pkiLocalKeyCipherKeyEnv (devPIICipherKey's own doc comment).
 	authnPIICipherKeyEnv = "APP_AUTHN_PII_CIPHER_KEY"
 
 	// rootKeyEnv names the environment variable holding a single
@@ -203,8 +198,7 @@ const (
 	// (see the rootKeyPurpose* constants below) -- so a deployer can set
 	// ONE secret instead of six and still end up with six independent
 	// derived keys, none of them reused across two differently-designed
-	// constructions (go/dbkit/AGENTS.md's "Key derivation" section has the
-	// full rationale and the honest trade-off: a leaked root key
+	// constructions (the trade-off: a leaked root key
 	// compromises every derived key at once, and rotating the root
 	// rotates all six simultaneously).
 	//
@@ -216,10 +210,8 @@ const (
 	// real deployment (examples/reference-app/DEPLOY.md documents this),
 	// while a deployment that wants fine-grained, independent rotation for
 	// one specific key keeps setting that key's own variable instead, and
-	// the two compose freely. Leaving APP_ROOT_KEY unset changes nothing
-	// about this file's behavior before this round existed -- every one of
-	// the six keys still falls back to its own hardcoded development
-	// default exactly as before.
+	// the two compose freely. Leaving APP_ROOT_KEY unset leaves every one
+	// of the six keys on its own hardcoded development default.
 	rootKeyEnv = "APP_ROOT_KEY"
 
 	// redisAddrEnv names the environment variable holding the Redis server
@@ -231,10 +223,10 @@ const (
 	// default -- leaves both seams on the in-process implementations the
 	// Preset resolves, so zero-setup standalone development keeps working
 	// with nothing else running; set it to compose real Redis-backed
-	// implementations into the SAME standalone deployment mode, which is
-	// the deployment-mode / implementation-composition orthogonality
-	// docs/internal/03-deployment-modes.md draws, or into a distributed
-	// deployment mode, where MultiReplicaSafe is required of both seams.
+	// implementations into the SAME standalone deployment mode (a
+	// deployment mode constrains which implementations may compose, never
+	// selects one), or into a distributed deployment mode, where
+	// MultiReplicaSafe is required of both seams.
 	redisAddrEnv = "APP_REDIS_ADDR"
 
 	// otlpEndpointEnv names the environment variable holding the OTLP/gRPC
@@ -260,10 +252,10 @@ const (
 	// set, configFromEnv fills cfg.AIGatewayImageBaseURL/APIKey, and
 	// buildServer writes the platform-wide image-generation credential at
 	// boot (see those fields' own doc comment). Both unset -- the default
-	// -- preserves the pre-block-B zero-setup posture exactly: the image
-	// credential row is never written and a simulate request dead-letters
+	// -- keeps the zero-setup posture exactly: the image credential row is
+	// never written and a simulate request dead-letters
 	// with the gateway's coded credential refusal until an operator names
-	// a provider. The pair exists because the block-B journey must be
+	// a provider. The pair exists because the image journey must be
 	// runnable against a real booted server without editing Go code: the
 	// browser end-to-end suite boots `go run ./cmd/server` and points the
 	// pair at its own throwaway provider (playwright.config.ts), the same
@@ -334,9 +326,9 @@ const (
 	// smsGatewayURLEnv names the environment variable holding the endpoint
 	// authn's real SMS transport (authn.NewHTTPSMSSender) posts delivery
 	// requests to. Empty under the standalone deployment mode leaves
-	// authn's "SMS sender" seam on its console default, unchanged from
-	// before this round; empty under the distributed deployment mode
-	// leaves that seam deliberately UNWIRED, so authn's own wiring-time
+	// authn's "SMS sender" seam on its console default; empty under the
+	// distributed deployment mode leaves that seam deliberately UNWIRED, so
+	// authn's own wiring-time
 	// validation fails closed with authn.ErrMissingDistributedSMSSender
 	// rather than this app silently keeping a console sender nobody in a
 	// distributed replica pool is reading -- see buildServer's authn
@@ -383,9 +375,8 @@ const (
 	// never executed anything itself" into a genuine, deterministic
 	// cross-process EventBus proof rather than a coincidence a shared
 	// SQLite jobs table could also explain (see that file's own doc
-	// comment for the finding this env var exists to address). Left unset
-	// (the default), buildServer's behavior is exactly what it was before
-	// this variable existed.
+	// comment). Left unset (the default), buildServer starts the queue
+	// worker normally.
 	disableQueueWorkerEnv = "APP_DISABLE_QUEUE_WORKER"
 
 	// disableDemoUserHeaderEnv names the environment variable that, when set
@@ -405,20 +396,18 @@ const (
 	//     acting user from the verified authn Principal alone.
 	//
 	// This is the kill switch demoUserHeader's own doc comment describes for
-	// the rbac header's remaining privilege-escalation hole -- an
+	// the rbac header's privilege-escalation hole -- an
 	// unauthenticated header that still outranks a proven identity when both
 	// are present, so a caller holding nothing more than a low-privilege
 	// session could set the header to a higher-privileged demo actor's id
 	// and have rbac decide against that actor's grants instead of the
-	// caller's own -- extended, since the original switch only ever reached
-	// demoUserHeader, to the attribution header too: X-Demo-User-Id let the
-	// same class of caller act as (or read the data of) any user id on the
-	// org/notification/cases/notes surfaces even with the original switch
-	// set. Left unset (the default), this variable changes nothing -- every
-	// existing demo journey and every test built around the headers winning
-	// keeps behaving exactly as it did before this variable existed, which
-	// is deliberate: flipping the default would break every one of them at
-	// once (demo_subject_test.go, notesRequestAs and friends in
+	// caller's own -- extended to the attribution header too:
+	// X-Demo-User-Id would let the same class of caller act as (or read the
+	// data of) any user id on the org/notification/cases/notes surfaces
+	// while demoUserHeader alone stays disabled. Left unset (the default),
+	// every demo journey and every test keeps driving demo actors through
+	// the headers, which is deliberate: flipping the default would break
+	// them at once (demo_subject_test.go, notesRequestAs and friends in
 	// server_test.go, and the flow tests across this package that drive a
 	// demo actor through a header). An operator deploying this reference
 	// app somewhere a real, non-demo user might reach it is the one case
@@ -433,16 +422,13 @@ const (
 	// authn.WithTrustedProxies (see serverConfig.TrustedProxies). This is
 	// the deployment declaration that lets authn's session/login-history
 	// records carry the REAL client address instead of the proxy's: on
-	// Fly.io, the address recorded before this variable existed was the
-	// platform's own (172.16.45.218 on the acceptance deployment), and
-	// declaring the Fly proxy ranges in fly.toml's [env] block is what
-	// recovers the client from the Fly-Client-IP header Fly's proxy
-	// overwrites on every request. Left unset (the default), this variable
-	// changes nothing -- every request keeps recording its direct
-	// connection address, which is the correct fail-closed shape for a
-	// host not behind a proxy, since a host that reads forwarding headers
-	// from an undeclared peer would let any direct client mint its own
-	// recorded address.
+	// Fly.io, declaring the Fly proxy ranges in fly.toml's [env] block is
+	// what recovers the client from the Fly-Client-IP header Fly's proxy
+	// overwrites on every request. Left unset (the default), every request
+	// keeps recording its direct connection address, which is the correct
+	// fail-closed shape for a host not behind a proxy, since a host that
+	// reads forwarding headers from an undeclared peer would let any
+	// direct client mint its own recorded address.
 	trustedProxiesEnv = "APP_TRUSTED_PROXIES"
 
 	// readFlyClientIPEnv names the environment variable holding this
@@ -455,8 +441,9 @@ const (
 	// proxy (nginx, ALB, Envoy, Cloudflare) forwards a client-chosen
 	// Fly-Client-IP verbatim, so reading the header for every declared
 	// proxy would let a client mint its own recorded AND rate-limited
-	// address -- the P0 finding this variable's existence closes. It is a
-	// strict bool ('true'/'false'), parsed at boot; unset is false. It only
+	// address -- the smuggling hole this declaration pair exists to close.
+	// It is a strict bool ('true'/'false'), parsed at boot; unset is
+	// false. It only
 	// takes effect alongside APP_TRUSTED_PROXIES: configFromEnv refuses
 	// 'true' with an empty proxy list, since that combination would
 	// silently keep recording the proxy itself -- the very defect the
@@ -468,8 +455,7 @@ const (
 	// provisioning chain (self_service.go). It is a TEST-AND-E2E-ONLY
 	// switch -- a real deployment must never set it -- with a strictly
 	// disabled default: absent, or "0", leaves cfg.failSelfServiceProvision
-	// nil and every boot byte-identical to the variable never having
-	// existed (newProvisionFailureInjector(0) answers nil).
+	// nil (newProvisionFailureInjector(0) answers nil).
 	//
 	// Set to a positive integer N, the server fails the first N
 	// provisioning attempts of EACH self-registered account -- the
@@ -495,7 +481,7 @@ const (
 	// one per key material rootKeyEnv's doc comment above lists, in the
 	// same order. Each is distinct (so no two ever derive the same bytes)
 	// and versioned (a trailing ".v1", per DeriveKey's own doc comment on
-	// why: a deliberate future re-derivation bumps the suffix rather than
+	// why: any re-derivation bumps the suffix rather than
 	// editing a string already used in production, which would silently
 	// re-derive a different key for whatever it named). Never rename or
 	// reuse one of these strings once APP_ROOT_KEY ships to a real
@@ -547,23 +533,18 @@ var devOrgIndexKey = []byte{
 // (and pki's) own committed-key placeholders, the same documented trade-off
 // as devConfigKey immediately above -- a real deployment must replace every
 // one of them with real secret-manager material, never commit real keys the
-// way this demo commits these. Each now has a real override path
+// way this demo commits these. Each has a real override path
 // (pkiLocalKeyCipherKeyEnv / authnBlindIndexKeyEnv / authnPIICipherKeyEnv,
 // or APP_ROOT_KEY deriving all three at once -- see rootKeyEnv's own doc
-// comment); these three vars are consulted only as resolveKey's devDefault
-// fallback in configFromEnv now, never referenced directly by buildServer
-// any more.
+// comment); configFromEnv consults these three vars as resolveKey's
+// devDefault fallback, never directly from buildServer.
 //
 // Each protects something different and each MUST stay stable across
 // restarts for a different reason: devPKILocalKeyCipherKey seals go/pki's
 // LocalSigner private-key column (pki_local_keys, via
-// pki.RegisterLocalKeySerializer) -- authn's signing key itself needs no
-// separate dev-seed derivation the way the deleted authn.KeySet default
-// once did (this var occupies the byte range devSigningKeySeed used to,
-// freed by that deletion): it is generated once by pki.Service.EnsurePurpose
-// (this file's authn.WithKeySource wiring below) and PERSISTS in
-// cfg.SQLitePath across restarts, exactly the durability
-// docs/internal/22-pki.md's post-integration column describes; authn.WithBlindIndexKey's
+// pki.RegisterLocalKeySerializer) -- the signing key itself is generated
+// once by pki.Service.EnsurePurpose (this file's authn.WithKeySource wiring
+// below) and PERSISTS in cfg.SQLitePath across restarts; authn.WithBlindIndexKey's
 // key must stay IDENTICAL across restarts or every already-stored
 // email/phone blind index becomes unfindable; and devPIICipherKey seals
 // authn's encrypted PII columns (email, phone, TOTP secrets) via
@@ -611,9 +592,8 @@ var devNotificationIndexKey = []byte{
 // demoHostTenants is a hard-coded, obviously-temporary Host -> TenantID
 // lookup. It exists only so this reference app has *some* way to render a
 // tenant-specific brand on the config module's pre-auth display endpoints
-// (configModule's tenancy.NewDomainResolver wiring in buildServer below,
-// go/tenancy/AGENTS.md's "Why there is no JWTResolver here") without a real
-// custom-domain table.
+// (configModule's tenancy.NewDomainResolver wiring in buildServer below)
+// without a real custom-domain table.
 //
 // This is a placeholder, not a pattern to copy into a real deployment: a
 // real Resolver must derive the tenant from a source the server itself
@@ -628,8 +608,7 @@ var devNotificationIndexKey = []byte{
 // below) -- an unauthenticated caller cannot choose a tenant just by
 // setting Host, which a Host-keyed lookup like this one would otherwise
 // allow. See buildServer's middleware-chain doc comment for the full
-// reasoning and go/authn/AGENTS.md's "The middleware chain is authn, then tenancy" section for
-// why the chain runs authn.Middleware before tenancy.Middleware at all.
+// reasoning.
 var demoHostTenants = map[string]pkgcore.TenantID{
 	"acme.demo.localhost":   "tenant-acme",
 	"globex.demo.localhost": "tenant-globex",
@@ -639,12 +618,11 @@ var demoHostTenants = map[string]pkgcore.TenantID{
 // customer-tenant answers read org's own memberships table live -- lives
 // in sign_in_memberships.go with its full rationale. The short version of
 // why host glue must exist here at all is structural: authn never imports
-// org (root CLAUDE.md's own module-boundary rule -- authn and org sit at
-// the same dependency tier, peers, neither importing the other), so
-// whatever answers authn's two membership questions must be supplied by
-// the assembling application, exactly like demoNotesSubjectResolver and
-// orgSubtreeResolver below are. The app's membership store starts empty,
-// and who fills it depends on the boot:
+// org -- the two sit at the same dependency tier, peers, neither importing
+// the other -- so whatever answers authn's two membership questions must
+// be supplied by the assembling application, exactly like
+// demoNotesSubjectResolver and orgSubtreeResolver below are. The app's
+// membership store starts empty, and who fills it depends on the boot:
 //
 //   - Every boot seeds the fixed demo header actors' rbac grants
 //     (seedDemoGrants) but NO memberships: those actors have no database
@@ -663,22 +641,21 @@ var demoHostTenants = map[string]pkgcore.TenantID{
 //     store buildServer itself wires.
 
 // demoOrgUserHeader is the header demoOrgSubjectResolver reads to identify the
-// HTTP caller: a placeholder for the verified access-token claims authn
-// will eventually supply, in exactly the spirit of demoHostTenants' own
-// disclaimer above. A caller sets it to whatever user id it wants to act
-// as, with no verification whatsoever -- which is fine for this reference
-// app's own demonstration purposes and would be a critical vulnerability
-// in any real deployment.
+// HTTP caller: the stand-in for the verified access-token claims a real
+// deployment's resolver would read, in exactly the spirit of
+// demoHostTenants' own disclaimer above. A caller sets it to whatever user
+// id it wants to act as, with no verification whatsoever -- which is fine
+// for this reference app's own demonstration purposes and would be a
+// critical vulnerability in any real deployment.
 const demoOrgUserHeader = "X-Demo-User-Id"
 
-// demoOrgSubjectResolver stands in for the SubjectResolver authn will
-// eventually supply from a verified access token's claims, serving the
-// modules that declare the same structurally identical seam: org's two
+// demoOrgSubjectResolver supplies the caller identity to every module that
+// declares the same structurally identical SubjectResolver seam: org's two
 // caller-scoped endpoints (creating and accepting an invitation), every
 // notification endpoint (which resolves its caller's inbox, contacts and
 // preferences through it) and integration's creator reads. It exists only
 // so this reference app has *some* way to demonstrate those endpoints end
-// to end before authn exists.
+// to end through a caller-chosen identity.
 //
 // In its default, header-enabled wiring, who a caller is is the
 // X-Demo-User-Id header value, and nothing else: the resolver never falls
@@ -690,18 +667,18 @@ const demoOrgUserHeader = "X-Demo-User-Id"
 // (notification_flow_test.go's subject-less leg; demoRouteGuards names the
 // path routePublic for the same reason) -- for notification's and
 // integration's surfaces it stays exactly that, because no browser-shaped
-// flow reaches them yet.
+// flow reaches them.
 //
-// The principalFallback field is the org-web round's deliberate exception
-// for ORG's wiring alone, the same shape demoNotesSubjectResolver's
-// header-then-Principal fallback already gives notes' and cases' creator
-// seams: org's caller-scoped endpoints now serve browser-shaped callers --
+// The principalFallback field is a deliberate exception for ORG's wiring
+// alone, the same shape demoNotesSubjectResolver's
+// header-then-Principal fallback gives notes' and cases' creator
+// seams: org's caller-scoped endpoints also serve browser-shaped callers --
 // a signed-in clinic owner whose requests carry a bearer token and no demo
 // header -- so the org module is wired with principalFallback set, and a
 // header-less request with a verified Principal resolves as that
 // Principal's user. The field's zero value (notification's, integration's
-// and every test's instance) reproduces the original header-only resolver
-// exactly, keeping the pinned refusal where it belongs.
+// and every test's instance) keeps the header-only resolver,
+// preserving the pinned refusal where it belongs.
 //
 // The headerDisabled field is the other deliberate exception to the
 // "never falls back to the Principal" rule: an operator who sets
@@ -718,12 +695,13 @@ const demoOrgUserHeader = "X-Demo-User-Id"
 //
 // headerDisabled carries the value of cfg.DisableDemoUserHeader
 // (APP_DISABLE_DEMO_USER_HEADER) buildServer wired this resolver with. The
-// zero value reproduces the original header-only resolver exactly; the
-// disabled wiring is what an operator setting the kill switch gets, and it
-// is the point of this field: before it existed the kill switch only ever
-// reached demoUserHeader in the rbac gate, leaving this resolver (and the
-// org, notification and integration surfaces it serves) honoring
-// X-Demo-User-Id unconditionally. With headerDisabled set, Subject reads
+// zero value keeps the header-only resolver; the disabled wiring is what
+// an operator setting the kill switch gets, and it
+// is the point of this field: it is what extends the kill switch -- which
+// alone would only reach demoUserHeader in the rbac gate -- to this
+// resolver (and the org, notification and integration surfaces it serves),
+// which would otherwise honor X-Demo-User-Id unconditionally. With
+// headerDisabled set, Subject reads
 // no header at all and resolves the caller from the verified authn
 // Principal alone -- the identity authn.Middleware proved -- failing
 // closed exactly like the header-only shape when no Principal exists. See
@@ -734,14 +712,14 @@ type demoOrgSubjectResolver struct {
 	// principalFallback lets ORG's wiring (server.go's org.NewModule
 	// option) resolve a header-less request from the verified Principal
 	// authn.Middleware left in the request context -- the browser-shaped
-	// caller the org-web surface needs. Zero value keeps the original
+	// caller org's team surface needs. Zero value keeps the
 	// header-only contract (see the type's own doc comment).
 	principalFallback bool
 }
 
 // Subject implements org.SubjectResolver, notification.SubjectResolver and
-// integration.SubjectResolver -- the third round-4 wired this same type
-// onto, since all three seams share the identical
+// integration.SubjectResolver -- the three modules that declare the
+// identical seam, since all three share the identical
 // (r *http.Request) (string, bool) shape with the identical fail-closed
 // contract, and this app already has one instance to hand each of them. It
 // fails closed: no header, no verified Principal in the wiring that reads
@@ -751,10 +729,10 @@ type demoOrgSubjectResolver struct {
 // sees.
 //
 // Resolution order in the header-enabled wiring: the X-Demo-User-Id header
-// when present (the pre-auth flows' affordance, unchanged); else, when
+// when present (the pre-auth flows' affordance); else, when
 // principalFallback is set (org's wiring only), the verified Principal;
 // else fail closed. In the headerDisabled wiring, the verified Principal
-// alone, exactly as before.
+// alone.
 func (r demoOrgSubjectResolver) Subject(req *http.Request) (string, bool) {
 	if !r.headerDisabled {
 		if userID := req.Header.Get(demoOrgUserHeader); userID != "" {
@@ -797,10 +775,10 @@ var (
 // their real user ids -- which resolve to no notification addresses, an
 // ordinary skip (see demo_notification.go's demoUserAddresses).
 //
-// Notes' creator seam is not alone in getting this second source any more:
-// org's caller-scoped endpoints joined it when the org-web round shipped
-// the team surface -- the org module's demoOrgSubjectResolver instance is
-// wired with the type's principalFallback field set, giving org the
+// Notes' creator seam is not alone in having this second source:
+// org's caller-scoped endpoints share it -- the org module's
+// demoOrgSubjectResolver instance is wired with the type's
+// principalFallback field set, giving org the
 // identical header-then-Principal shape (see demoOrgSubjectResolver's own
 // doc comment). The notification module's caller-scoped endpoints keep the
 // header-only read, because its subject-less refusal is a pinned behaviour
@@ -815,11 +793,11 @@ var (
 // headerDisabled carries the value of cfg.DisableDemoUserHeader
 // (APP_DISABLE_DEMO_USER_HEADER) buildServer wired this resolver with --
 // the sibling of demoOrgSubjectResolver's own field of the same name, and
-// the same finding in this app: the original kill switch never reached
-// this resolver either, so with the switch ON a caller could still name
-// any creator through X-Demo-User-Id on notes' and cases' surfaces. The
-// zero value reproduces the original header-then-Principal resolver
-// exactly; with headerDisabled set, Subject skips the header read entirely
+// what extends the kill switch to this resolver: without it, a caller
+// could still name any creator through X-Demo-User-Id on notes' and
+// cases' surfaces while the rbac header alone was disabled. The
+// zero value keeps the header-then-Principal resolver;
+// with headerDisabled set, Subject skips the header read entirely
 // and resolves the caller from the verified authn Principal alone, failing
 // closed exactly like the default shape when no Principal exists.
 type demoNotesSubjectResolver struct {
@@ -874,12 +852,11 @@ type orgFeatureGate struct{ service **config.Service }
 
 // IsEnabled implements org.FeatureGate -- and, identically,
 // authn.FeatureGate, which is the same declaration under a different
-// module: go/authn's copy of the seam (go/authn/module.go) was written to
-// org's shape exactly, and the two modules never import each other. One
+// module: go/authn's copy of the seam (go/authn/module.go) mirrors org's
+// shape exactly, and the two modules never import each other. One
 // adapter therefore serves both gates, and buildServer passes the same
-// orgFeatureGate value to org.WithFeatureGate and, since the authn
-// channel-flag wiring round, to authn.WithFeatureGate (see the authn
-// wiring below).
+// orgFeatureGate value to org.WithFeatureGate and to authn.WithFeatureGate
+// (see the authn wiring below).
 func (g orgFeatureGate) IsEnabled(ctx context.Context, key string) (bool, error) {
 	svc := *g.service
 	if svc == nil {
@@ -943,11 +920,10 @@ func socialChannelFlagKey(name string) string {
 // own Register declares during Bootstrap, and the schema the write
 // validates against is frozen by configModule.Attach. Running here, before
 // any route can serve, makes the page/API agreement hold from the very
-// first request -- the mirror image of the wiring gap this round closes
-// (go/authn/AGENTS.md's "one known wiring gap"): without the gate wired,
-// config rows could hide a channel on the page while its endpoint kept
-// issuing tokens; without this step, the wired gate would refuse a channel
-// this host genuinely configured.
+// first request: without the gate wired into authn, config rows could hide
+// a channel on the page while its endpoint kept issuing tokens; without
+// this step, the wired gate would refuse a channel this host genuinely
+// configured.
 //
 // No providers assembled means no rows are written at all, and the schema
 // defaults alone keep password and SMS sign-in open. The writes are
@@ -1121,10 +1097,10 @@ type serverConfig struct {
 	NotificationIndexKey []byte
 
 	// PKILocalKeyCipherKey, AuthnBlindIndexKey and AuthnPIICipherKey are
-	// the three key materials that had NO environment-variable override
-	// path at all before this round -- see pkiLocalKeyCipherKeyEnv's,
-	// authnBlindIndexKeyEnv's and authnPIICipherKeyEnv's own doc comments
-	// above for what each protects and why each is a separate secret.
+	// the three key materials whose environment overrides arrive through
+	// pkiLocalKeyCipherKeyEnv, authnBlindIndexKeyEnv and
+	// authnPIICipherKeyEnv -- see those doc comments above for what each
+	// protects and why each is a separate secret.
 	// configFromEnv resolves all six key fields on this struct (these
 	// three plus ConfigKey/OrgIndexKey/NotificationIndexKey above) through
 	// the same three-tier precedence: an explicitly-set individual
@@ -1154,7 +1130,7 @@ type serverConfig struct {
 	// full population split). configFromEnv fills it from APP_PUBLIC_ORIGIN,
 	// defaulting to "http://localhost:" + the resolved PORT so a
 	// zero-setup local demo renders working links with no configuration;
-	// the field's zero value keeps the pre-field fail-loud behavior for a
+	// the field's zero value keeps the fail-loud behavior for a
 	// host that sets neither a branded host nor an origin, and the error
 	// such a link build produces names this variable.
 	PublicOrigin string
@@ -1206,8 +1182,8 @@ type serverConfig struct {
 	// DisableQueueWorker, when true, makes buildServer skip
 	// standaloneQueue.Start -- see disableQueueWorkerEnv's own doc comment
 	// above for why this exists and what it changes. configFromEnv sets it
-	// from APP_DISABLE_QUEUE_WORKER; false (the default) is byte-identical
-	// to this field never having existed.
+	// from APP_DISABLE_QUEUE_WORKER; false (the default) starts the queue
+	// worker normally.
 	DisableQueueWorker bool
 
 	// failSelfServiceProvision is the failure-injection hook for the
@@ -1217,9 +1193,8 @@ type serverConfig struct {
 	// be placed on the synchronous delivery of a registration's event and
 	// the retry job watched converging the same clinic. It has two
 	// writers: configFromEnv arms it from APP_FAIL_SELF_SERVICE_PROVISION
-	// (absent or "0" leaves it nil -- the production default, byte-
-	// identical to the hook never having existed -- and N arms a hook
-	// failing the first N attempts of each account;
+	// (absent or "0" leaves it nil -- the production default -- and N
+	// arms a hook failing the first N attempts of each account;
 	// failSelfServiceProvisionEnv's own doc comment has the contract),
 	// and the reference-app suites arm it on their own serverConfig
 	// before buildServer captures it into the provisioner it builds
@@ -1234,26 +1209,24 @@ type serverConfig struct {
 	// demoOrgSubjectResolver/demoNotesSubjectResolver instances -- see
 	// disableDemoUserHeaderEnv's own doc comment above for why this exists
 	// and exactly what it changes. configFromEnv sets it from
-	// APP_DISABLE_DEMO_USER_HEADER; false (the default) is byte-identical to
-	// this field never having existed, matching DisableQueueWorker's own
-	// contract just above.
+	// APP_DISABLE_DEMO_USER_HEADER; false (the default) keeps every demo
+	// identity source on its header-enabled wiring, matching
+	// DisableQueueWorker's own contract just above.
 	DisableDemoUserHeader bool
 
 	// TrustedProxies is the authn.WithTrustedProxies declaration: the IP
 	// addresses and CIDR prefixes of the reverse proxies this deployment
 	// receives requests through, so authn's session/login-history records
 	// carry the real client address (recovered from the X-Forwarded-For
-	// chain those proxies append) instead of the proxy's address -- the
-	// Fly.io acceptance finding this round closes, where every recorded
-	// address was the proxy's internal 172.16.45.218. configFromEnv fills
-	// it from APP_TRUSTED_PROXIES, a comma-separated list (see
-	// trustedProxiesEnv); the empty default -- the zero-external-
-	// dependency `go run ./cmd/server` experience, and every test's
-	// config -- keeps authn's fail-closed behavior, every request
-	// recording its direct connection address, byte-identical to this
-	// field never having existed. A value whose entries are not IP
-	// addresses or CIDR prefixes refuses boot: authn.WithTrustedProxies
-	// validates its input at module construction (go/authn's newOptions).
+	// chain those proxies append) instead of the proxy's address.
+	// configFromEnv fills it from APP_TRUSTED_PROXIES, a comma-separated
+	// list (see trustedProxiesEnv); the empty default -- the
+	// zero-external-dependency `go run ./cmd/server` experience, and every
+	// test's config -- keeps authn's fail-closed behavior of recording
+	// every request's direct connection address. A value whose entries are
+	// not IP addresses or CIDR prefixes refuses boot:
+	// authn.WithTrustedProxies validates its input at module construction
+	// (go/authn's newOptions).
 	// A deployment behind a proxy declares the proxy here or its records
 	// stay proxy-addressed; it must never declare an untrusted range, and
 	// the declared proxy must overwrite or strip the X-Forwarded-For it
@@ -1285,8 +1258,7 @@ type serverConfig struct {
 	// own package doc comment for the full serving design. configFromEnv
 	// sets it from APP_WEB_DIST; the empty default (the zero-external-
 	// dependency `go run ./cmd/server` experience, and every test's
-	// config) leaves the composed handler exactly as it was before the
-	// frontend-serving round: no static interception at all.
+	// config) leaves the composed handler serving no static files at all.
 	WebDistDir string
 
 	// PeriodicTaskInterval is the cadence of this host's periodic-task
@@ -1305,16 +1277,14 @@ type serverConfig struct {
 	// pki.WithRenewalLeadTime and pki.WithExpiryScanWindow only for values
 	// above zero, so the zero default (what configFromEnv always leaves
 	// them at) keeps the module's own DefaultPropagationWindow /
-	// DefaultRenewalLeadTime / DefaultExpiryScanWindow in force,
-	// byte-identical to the fields never having existed. The pki flow test
+	// DefaultRenewalLeadTime / DefaultExpiryScanWindow in force. The pki
+	// flow test
 	// injects a renewal lead time past a signing key's validity so the very
 	// next expiry scan stages its replacement within test time, and a scan
-	// window below its own one-second tick cadence so every test tick lands
-	// in a fresh window and each tick really runs a scan (the production
-	// default window is an hour against this app's one-minute scheduler
-	// tick -- one scan per hour, the cadence the rotation design needs --
-	// which would stall the test's stage-then-promote proof across window
-	// boundaries no test time can wait out).
+	// window below the scheduler's own tick cadence so every test tick
+	// lands in a fresh window and each tick really runs a scan (the
+	// production defaults would stall the test's stage-then-promote proof
+	// across window boundaries no test time can wait out).
 	PKIPropagationWindow time.Duration
 	PKIRenewalLeadTime   time.Duration
 	PKIExpiryScanWindow  time.Duration
@@ -1328,18 +1298,16 @@ type serverConfig struct {
 	// invitation token rather than parsing it out of console output.
 	// buildServer injects Mailer with MailerCapabilities below, defaulting
 	// to pkgcore.Stateless when that field is left at its zero value --
-	// the honest capability for a throwaway test double, and the same
-	// declaration this field carried before this round.
+	// the honest capability for a throwaway test double.
 	Mailer pkgcore.Mailer
 
 	// MailerCapabilities declares the capability bits buildServer wires
 	// Mailer with, when Mailer is non-empty. configFromEnv sets it to
 	// pkgcore.MultiReplicaSafe|pkgcore.SurvivesRestart -- the capabilities
 	// the "mailer.smtp" builtin registration itself declares -- alongside
-	// its real SMTP Mailer; every other caller (every existing test's
-	// in-process double) leaves it at the zero value, which buildServer
-	// treats as pkgcore.Stateless, preserving this field's behavior from
-	// before this round.
+	// its real SMTP Mailer; every other caller (every test's in-process
+	// double) leaves it at the zero value, which buildServer treats as
+	// pkgcore.Stateless.
 	MailerCapabilities pkgcore.Capability
 
 	// Memberships is the seam authn asks tenant-membership questions
@@ -1383,10 +1351,11 @@ type serverConfig struct {
 
 	// SocialProviders, RedirectAllowlist and TrustedProviders wire authn's
 	// social sign-in channels. All three default to empty/zero, the safe
-	// nothing-enabled state this app ships with today: no real OAuth app
-	// credentials are configured for this example (dynamic-config
-	// read-through for the per-provider credential items authn registers
-	// is a documented deferral -- go/authn/AGENTS.md). authn_e2e_test.go
+	// nothing-enabled state this app ships with: no real OAuth app
+	// credentials are configured for this example, and the per-provider
+	// credential items authn registers are never read through dynamic
+	// configuration (that read-through is unimplemented), so credentials
+	// reach authn only through this field. authn_e2e_test.go
 	// supplies a channel pointed at a local httptest server here, to prove
 	// the social sign-in flow end to end without a live provider.
 	SocialProviders   []authn.SocialProvider
@@ -1418,15 +1387,14 @@ type serverConfig struct {
 	// aigateway.ProviderOpenAICompatibleImage at boot, so the smilesim
 	// module's routes (cmd/server/smilesim.go) can actually reach an image
 	// provider. The two credentials are deliberately independent rows of
-	// the SAME ai_gateway_credentials table (keyed by provider name) --
-	// see go/ai-gateway/AGENTS.md's round-2 section on why chat and image
-	// credentials need no schema change to coexist. configFromEnv fills
+	// the SAME ai_gateway_credentials table (keyed by provider name), so
+	// chat and image credentials coexist with no schema change.
+	// configFromEnv fills
 	// both from aiGatewayImageBaseURLEnv/aiGatewayImageAPIKeyEnv when the
 	// API key variable is set (their doc comment carries the reasoning
-	// and the non-secret shape of the e2e value); when both are unset, the
-	// zero-setup posture of the chat pair above applies unchanged -- no
-	// credential row is written, and smilesim_flow_test.go is the other
-	// caller that sets both.
+	// and the non-secret shape of the e2e value); when both are unset, no
+	// credential row is written, exactly like the chat pair above, and
+	// smilesim_flow_test.go is the other caller that sets both.
 	AIGatewayImageBaseURL string
 	AIGatewayImageAPIKey  string
 
@@ -1454,8 +1422,8 @@ type serverConfig struct {
 	// attaches, immediately after seedDemoGrants seeds every configured
 	// tenant's built-in roles and demo grants. It exists purely for a test
 	// that needs to grant a role scoped to an organization node CREATED
-	// AFTER the server starts serving HTTP -- the org-route-guards round's
-	// subtree-scoped grant test (org_route_guards_test.go), which cannot
+	// AFTER the server starts serving HTTP -- the subtree-scoped grant
+	// test (org_route_guards_test.go), which cannot
 	// know a node's id at boot time, since org builds its tree through real
 	// HTTP calls the test itself drives once the server is up. Nil in every
 	// production boot and every other test is a complete no-op, mirroring
@@ -1467,8 +1435,8 @@ type serverConfig struct {
 	// buildServer attaches, immediately after openConfiguredAuthnChannels
 	// opens the assembled social channels' system-tier flag rows. It exists
 	// purely for a test that must write a configuration row through the
-	// module's real Set path -- the authn channel-flag wiring regression
-	// (authn_e2e_test.go's TestAuthnE2E_PasswordChannelDisabled...), which
+	// module's real Set path (authn_e2e_test.go's
+	// TestAuthnE2E_PasswordChannelDisabled...), which
 	// disables authn.password_login through the same system-tier write an
 	// operator's admin-console write would land (under
 	// config.SystemPurposeSystemWrite) and proves the composed stack then
@@ -1504,12 +1472,11 @@ func parseHexKeyEnv(envName, encoded string) ([]byte, error) {
 // explicitly-set individualEnv always wins, over a rootKey-derived value
 // (dbkit.DeriveKey(rootKey, purpose), computed only when rootKey is
 // non-nil -- i.e. APP_ROOT_KEY was set), which in turn always wins over
-// devDefault, the hardcoded development fallback that existed before this
-// round and still applies unchanged when neither rootKey nor individualEnv
-// is set. This precedence lets a deployment set one root secret and still
-// override any single derived key independently, for a fine-grained
-// rotation cadence that key alone needs (go/dbkit/AGENTS.md's "Key
-// derivation" section has the full rationale).
+// devDefault, the hardcoded development fallback applied when neither
+// rootKey nor individualEnv is set. This precedence lets a deployment set
+// one root secret and still override any single derived key
+// independently, for a fine-grained rotation cadence that key alone
+// needs.
 func resolveKey(rootKey []byte, purpose, individualEnv string, devDefault []byte) ([]byte, error) {
 	key := devDefault
 	if rootKey != nil {
@@ -1609,7 +1576,7 @@ func configFromEnv() (serverConfig, error) {
 	// see rootKeyEnv's own doc comment), nil otherwise. nil is the signal
 	// resolveKey below reads as "no root key configured" -- every one of
 	// the six key materials then falls back to its own hardcoded
-	// development default exactly as if this round had never landed.
+	// development default.
 	var rootKey []byte
 	if encoded := os.Getenv(rootKeyEnv); encoded != "" {
 		decoded, decodeErr := parseHexKeyEnv(rootKeyEnv, encoded)
@@ -1810,9 +1777,9 @@ func configFromEnv() (serverConfig, error) {
 		AIGatewayImageBaseURL: os.Getenv(aiGatewayImageBaseURLEnv),
 		AIGatewayImageAPIKey:  os.Getenv(aiGatewayImageAPIKeyEnv),
 		// newProvisionFailureInjector(0) answers nil, so the default --
-		// absent or "0" -- keeps the field exactly as nil as it always
-		// was; a positive count arms the injection the e2e rig drives
-		// (failSelfServiceProvisionEnv's own doc comment).
+		// absent or "0" -- keeps the field nil; a positive count arms the
+		// injection the e2e rig drives (failSelfServiceProvisionEnv's own
+		// doc comment).
 		failSelfServiceProvision: newProvisionFailureInjector(failProvisionCount),
 	}
 	if smtpHost != "" {
@@ -1853,24 +1820,24 @@ func configFromEnv() (serverConfig, error) {
 // since buildServer exposes no module itself otherwise. The caller must
 // call cleanup once done with the handler.
 //
-// The deployment mode no longer refuses anything here: the Kernel it
+// The deployment mode itself refuses nothing here: the Kernel it
 // bootstraps is what validates the assembled composition against
 // cfg.DeploymentMode, failing startup with pkgcore's own capability error
 // (ErrCapabilityUnsatisfied) when the resolved composition cannot run in
 // the declared mode. Every stateful seam this app knows about -- eventbus,
-// kv, mailer, objectstore, plus authn's own "SMS sender" seam -- can now be
+// kv, mailer, objectstore, plus authn's own "SMS sender" seam -- can be
 // pointed at a real, MultiReplicaSafe-capable implementation through the
 // environment variables configFromEnv reads (redisAddrEnv, s3EndpointEnv
 // and friends, objectStoreRootEnv, smtpHostEnv and friends,
 // smsGatewayURLEnv); every one of
 // them defaults to the standalone Preset's in-process implementation when
-// unset, so a plain `go run ./cmd/server` is unaffected by this round. With
-// none of them set, the distributed deployment mode still always fails
+// unset, so a plain `go run ./cmd/server` needs nothing else running. With
+// none of them set, the distributed deployment mode always fails
 // capability validation, naming the first unsatisfied seam in resolution
 // order ("eventbus" first, per Kernel.Bootstrap's fixed order); with all of
 // them set to a genuinely MultiReplicaSafe composition (real Redis, real
 // S3-compatible storage, real SMTP, and authn's real HTTP SMS transport),
-// the distributed deployment mode now genuinely BOOTS, which is the
+// the distributed deployment mode genuinely BOOTS, which is the
 // property this file's own TestBuildServer_DistributedDeploymentMode_*
 // tests pin the positive half of, and
 // examples/reference-app/integration_test/distributed_mode_test.go proves
@@ -1878,28 +1845,22 @@ func configFromEnv() (serverConfig, error) {
 func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() error, *compliance.Module, error) {
 	// dbkit.Options.AuditBus is wired here (and notes.Note does implement
 	// dbkit.Auditable -- see its model.go), for org: org's OrgNode,
-	// Membership and Invitation models opt into dbkit.Auditable, and doc
-	// 10's "automatic first, declaration second" rule says their writes
-	// are auto-captured by dbkit's GORM callbacks rather than recorded by
-	// hand-written audit.Emit calls at each write path. The automatic
-	// mechanism's same-SQLite-file self-deadlock history does not stand in
-	// the way: the plugin USED TO publish synchronously *inside* the
-	// still-open WithTenantSession transaction, so a persister
-	// (audit.Module, below) writing into this SAME SQLite file collided
-	// with the write lock its own goroutine held (SQLITE_BUSY), confirmed
-	// empirically while wiring this app. A later dbkit round removed that
-	// hazard for exactly this Repository[T] shape -- the plugin buffers
-	// its captured events on the write's own context and WithTenantSession
-	// publishes them only once its own transaction has genuinely
-	// committed, reproduced and proven closed against two real connections
-	// to one real SQLite file in go/dbkit/audit_capture_test.go's
-	// TestAuditCapturePlugin_WithTenantSession_SameFileSynchronousPersister_NoLongerDeadlocks
-	// (full write-up in go/dbkit/AGENTS.md's "Audit trail collection"
-	// section).
+	// Membership and Invitation models opt into dbkit.Auditable, so their
+	// writes are auto-captured by dbkit's GORM callbacks rather than
+	// recorded by hand-written audit.Emit calls at each write path.
+	// Pointing the capture plugin's publish target at a persister on this
+	// SAME SQLite file is safe: the plugin buffers its captured events on
+	// the write's own context and WithTenantSession publishes them only
+	// once its own transaction has genuinely committed -- publishing
+	// synchronously inside the still-open transaction would collide with
+	// the write lock the transaction itself holds (SQLITE_BUSY). The
+	// shape is proven against two real connections to one real SQLite
+	// file in go/dbkit/audit_capture_test.go's
+	// TestAuditCapturePlugin_WithTenantSession_SameFileSynchronousPersister_NoLongerDeadlocks.
 	//
 	// Org's models are captured, and notes' are not, through
 	// Options.AuditModels -- the per-model capture scope dbkit's Options
-	// gained for exactly this composition: the scope is org's own
+	// carries: the scope is org's own
 	// declaration, org.AuditableModels(), consumed verbatim, so this app
 	// never keeps a hand-written list of org's Auditable models that could
 	// drift from org's (see that function's doc comment for the marker-
@@ -1918,8 +1879,6 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// alert. The scope list is this app's explicit answer to "which
 	// Auditable models on this connection does the automatic mechanism
 	// own": the ones org itself declares capturable, nothing else.
-	// go/org/AGENTS.md's "The audit trail" section and
-	// go/dbkit/AGENTS.md's audit section carry the full contract;
 	// cmd/server/org_p1_audit_test.go pins the composed outcome (member
 	// removal and node delete during an impersonation session each leaving
 	// a dual-identity row, and an invitation create leaving a row whose
@@ -1940,8 +1899,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// authn's own PII columns (email, phone, TOTP secrets) must have their
 	// serializer registered BEFORE dbkit.Open: GORM resolves a model's
 	// serializer while it parses the schema, and this module's registry is
-	// process-global (authn.RegisterPIISerializer's own doc comment; trap
-	// #9 of this round's frozen plan).
+	// process-global (authn.RegisterPIISerializer's own doc comment).
 	piiCipher, err := dbkit.NewCipher(cfg.AuthnPIICipherKey)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("reference-app: build authn's PII cipher: %w", err)
@@ -2129,10 +2087,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// The column argument below is org's exported EmailIndexColumn rather
 	// than a hand-typed literal for the reason the notification block just
 	// below documents: dbkit.NewBlindIndexer refuses an EMPTY column name
-	// but has no guard for a non-empty wrong one. The literal happens to
-	// match the real column today, so nothing would fail until org's
-	// schema drifted or someone called Equal on the indexer -- the dormant
-	// shape this app's notification wiring originally fell into. The
+	// but has no guard for a non-empty wrong one -- a hand-typed literal
+	// that drifted from the real column would fail only when someone
+	// called Equal on the indexer. The
 	// exported constant travels from the package that owns the schema,
 	// pinned by org's own suite (go/org/email_index_column_test.go).
 	orgIndexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn, cfg.OrgIndexKey, dbkit.NormalizeEmail)
@@ -2152,10 +2109,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// both index the SAME column (verified_contacts.address_index), and the
 	// column argument below is notification's exported AddressIndexColumn
 	// rather than a hand-typed string because dbkit.NewBlindIndexer refuses
-	// an EMPTY column name but has no guard for a non-empty wrong one -- the
-	// failure shape this app's original wiring (hand-typed
-	// "contact_email_index"/"contact_phone_index" literals) fell into, with
-	// nothing failing until someone called Equal on the indexers. The
+	// an EMPTY column name but has no guard for a non-empty wrong one -- a
+	// hand-typed literal that drifted from the real column would fail only
+	// when someone called Equal on the indexers. The
 	// per-indexer error text below still names which of the two failed.
 	dbkit.RegisterEncryptedSerializer(notification.ContactAddressSerializerName, cipher)
 	contactEmailIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn, cfg.NotificationIndexKey, dbkit.NormalizeEmail)
@@ -2183,10 +2139,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// integration's WebhookSubscription.Secret column is encrypted at rest
 	// under this same config cipher, registered here for the identical
 	// "before anything touches the model" reason as every registration
-	// above. Like a webhook secret must be READ BACK IN PLAINTEXT to sign
-	// every delivery attempt (go/integration/AGENTS.md's "Round 2's two
-	// tables" section), never merely compared, so no separate HMAC blind
-	// index is needed here either -- the identical reasoning
+	// above. A webhook secret must be READ BACK IN PLAINTEXT to sign
+	// every delivery attempt, never merely compared, so no separate HMAC
+	// blind index is needed here either -- the identical reasoning
 	// aigateway.CredentialAPIKeySerializerName's own registration comment
 	// gives.
 	dbkit.RegisterEncryptedSerializer(integration.WebhookSecretSerializerName, cipher)
@@ -2223,9 +2178,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	orgModule := org.NewModule(db,
 		org.WithEmailIndexer(orgIndexer),
 		org.WithFeatureGate(orgFeatureGate{service: &configService}),
-		// principalFallback is the org-web round's wiring: org's two
-		// caller-scoped endpoints now also serve browser-shaped callers --
-		// the team surface's signed-in owner, whose requests carry a bearer
+		// principalFallback serves org's browser-shaped callers:
+		// org's two caller-scoped endpoints also serve the team surface's
+		// signed-in owner, whose requests carry a bearer
 		// token and no X-Demo-User-Id header -- so the org module's resolver
 		// instance falls back to the verified Principal when no demo header
 		// is present, the same header-then-Principal shape
@@ -2259,10 +2214,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 			// POST /api/v1/org/invitations/accept endpoint and carries the
 			// token as a query parameter purely so it is one recognizable
 			// string a person (or, in server_test.go's end-to-end suite, a
-			// test) can extract the token back out of -- a real frontend
-			// would render its own page at this URL and POST the token
-			// from there, as the spec's org_acceptInvitation operation
-			// requires.
+			// test) can extract the token back out of.
 			return fmt.Sprintf("%s/api/v1/org/invitations/accept?token=%s", linkBase, url.QueryEscape(token)), nil
 		}),
 	)
@@ -2286,12 +2238,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// zero-external-dependency default) generates and stores the key in
 	// cfg.SQLitePath, so it persists across restarts with no dev-seed
 	// derivation required -- see devPKILocalKeyCipherKey's own doc comment.
-	// pki is not part of saasctl's --with selection set
-	// (docs/internal/22-pki.md's section on where pki sits in saasctl's
-	// module selection set),
-	// but the reference app assembles authn directly rather than through
+	// The reference app assembles authn directly rather than through
 	// saasctl, so it wires pki here exactly as any authn-containing
-	// generated project's own server.go now does.
+	// generated project's own server.go does.
 	//
 	// The queue is part of that wiring too: WithQueue hands pki the
 	// standaloneQueue constructed above, which is what makes Register
@@ -2300,6 +2249,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// task (pki.expiry_scan), which this host's periodic-task scheduler
 	// enqueues on its tick, and the CRL-regenerate task, declared and
 	// drained like every other registered handler but never scheduled:
+ HEAD
 	// the app's X.509 consumer (internal/attestation) verifies against
 	// row state and chains and generates CRLs on demand, so a scheduled
 	// refresh still has no reader (periodic_scheduler.go's doc comment
@@ -2308,8 +2258,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// PKIPropagationWindow, PKIRenewalLeadTime or PKIExpiryScanWindow
 	// (what configFromEnv always leaves them at) keeps pki's own
 	// DefaultPropagationWindow / DefaultRenewalLeadTime /
-	// DefaultExpiryScanWindow in force, byte-identical to this app's
-	// pre-round rotation behavior.
+	// DefaultExpiryScanWindow in force.
 	pkiOpts := []pki.Option{pki.WithQueue(standaloneQueue)}
 	if cfg.PKIPropagationWindow > 0 {
 		pkiOpts = append(pkiOpts, pki.WithPropagationWindow(cfg.PKIPropagationWindow))
@@ -2354,9 +2303,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		// no WithRevocationChecker of its own -- so this single selection
 		// is the whole wiring, and the plain
 		// authn.Middleware(authnModule.Service().Verifier()) every consumer
-		// skeleton copies is exactly the enforced composition (this was the
-		// P1 hole: no checker was wired anywhere, and immediate revocation
-		// was a stored list nobody consulted). The cost is one key-value
+		// skeleton copies is exactly the enforced composition (with no
+		// selection, immediate revocation would be a stored list nothing
+		// consults). The cost is one key-value
 		// read per authenticated request, the documented price of immediate
 		// mode, against the in-process store in standalone boots and Redis
 		// in the distributed composition; a deployment that prefers
@@ -2365,8 +2314,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		// The trusted-proxy declaration (trustedProxiesEnv): the proxy
 		// addresses whose requests may carry the forwarding headers authn
 		// reads, so this app's session and login-history records carry the
-		// real client address behind the proxy instead of the proxy's own
-		// (the finding fly.toml's APP_TRUSTED_PROXIES declaration closes).
+		// real client address behind the proxy instead of the proxy's own.
 		// Empty -- every local boot and every test -- is authn's fail-closed
 		// default, and a declaration with an entry that is neither an IP
 		// address nor a CIDR prefix refuses this NewModule call below.
@@ -2380,9 +2328,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		// runs after Bootstrap returns (orgFeatureGate's doc comment).
 		// Without it this app's flags would be declarations with no
 		// enforcement: a row disabling authn.password_login would hide the
-		// login form while the password endpoint kept issuing tokens -- the
-		// wiring gap the authn channel-flag round recorded
-		// (go/authn/AGENTS.md). The channels this host assembles through
+		// login form while the password endpoint kept issuing tokens.
+		// The channels this host assembles through
 		// cfg.SocialProviders are opened at the system tier after Attach by
 		// openConfiguredAuthnChannels, since their flags default OFF.
 		authn.WithFeatureGate(orgFeatureGate{service: &configService}),
@@ -2406,14 +2353,14 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// as every other seam this file wires: a configured gateway URL always
 	// wins, under either deployment mode, and composes authn's real HTTP
 	// transport (authn.NewHTTPSMSSender); absent that, the standalone
-	// deployment mode falls back to the console transport exactly as this
-	// app did before this round, while the distributed deployment mode is
-	// left deliberately UNWIRED -- authn.NewModule's own newOptions then
+	// deployment mode falls back to the console transport, while the
+	// distributed deployment mode is left deliberately UNWIRED --
+	// authn.NewModule's own newOptions then
 	// fails closed with authn.ErrMissingDistributedSMSSender rather than
 	// this app silently keeping a console sender nobody in a distributed
 	// replica pool is reading (see smsGatewayURLEnv's doc comment, and
 	// TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed
-	// for the regression proof).
+	// for the proof).
 	switch {
 	case cfg.SMSGatewayURL != "":
 		authnOpts = append(authnOpts, authn.WithSMSSender(authn.NewHTTPSMSSender(cfg.SMSGatewayURL)))
@@ -2461,9 +2408,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// doc comment blesses with unmatched-host leniency; an empty default
 	// tenant maps that leniency onto the endpoint's own "platform
 	// defaults" tier (a host that resolves to no tenant reads system-scope
-	// rows, never an error), which is exactly the login-page rule of
-	// docs/internal/11-cross-cutting.md's dynamic-config section applied
-	// to this app's brand snapshot. config's own internal resolver runs
+	// rows, never an error) -- a pre-auth display endpoint must render
+	// before any sign-in, so an unmatched host can never error the page.
+	// config's own internal resolver runs
 	// entirely independently of the outer tenancy.Middleware wired at the
 	// bottom of this function -- see this function's own middleware-chain
 	// comment below for why both coexist.
@@ -2484,7 +2431,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// orgModule's own Scope (orgSubtreeResolver below, an adapter over the
 	// two seams' slightly different signatures -- see its own doc comment):
 	// this app's organization tree is real (org_flow_test.go's multi-level
-	// DSO tree; the org-route-guards round's own subtree-scoped grant test),
+	// DSO tree, and the subtree-scoped grant test),
 	// so a node-scoped rbac binding must actually resolve against it rather
 	// than deny for want of a resolver. Every demo grant seedDemoGrants
 	// makes is still tenant-wide (rbac.Scope{}) -- the wiring below is what
@@ -2496,9 +2443,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// org-event subscriber ENQUEUES the reap of that member's or node's
 	// role bindings as a task on this same queue every other module's
 	// asynchronous work runs on, instead of running the reap
-	// synchronously inside the event delivery with no retry home -- the
-	// P1-rbac-reap fix this app is the mandatory consumer of. The task
-	// handlers land on reg.Jobs in rbac's own Attach, like every other
+	// synchronously inside the event delivery with no retry home. The
+	// task handlers land on reg.Jobs in rbac's own Attach, like every
+	// other
 	// module's declarations, by the time the drain loop below moves them
 	// onto the queue; the queue's retries are what converge a reap that
 	// hit a transient database failure.
@@ -2540,9 +2487,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	)
 
 	// sharingModule is the reference app's first real consumer of
-	// go/sharing end to end (sharing_flow_test.go), the round-2 mandatory
-	// first-consumer proof AGENTS.md's "No real consumer yet" section named
-	// as the compensating obligation round 1 carried. Its one public route
+	// go/sharing end to end (sharing_flow_test.go): the host that wires a
+	// real ResourceResolver behind the module's public access surface. Its
+	// one public route
 	// resolves a Share's ResourceRef through storageSharingResolver
 	// (sharing_resolver.go), the structurally-typed adapter over
 	// storageModule's own ObjectService -- sharing never imports go/storage
@@ -2561,10 +2508,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	)
 
 	// integrationModule is the reference app's mandatory first consumer of
-	// go/integration's round-2 outbound-webhook surface (go/integration/
-	// AGENTS.md's "No reference-app consumer yet" section named this the
-	// compensating obligation the round carried until a real host wired
-	// it). orgMemberJoinedWebhookMapping (webhooks.go) is this app's own
+	// go/integration's outbound-webhook surface.
+	// orgMemberJoinedWebhookMapping (webhooks.go) is this app's own
 	// EventMapping -- a Module construction-time Option, per
 	// integration.WithEventMapping's own doc comment, since the mapping's
 	// Transform closes over org's own MemberJoined payload shape, which
@@ -2573,17 +2518,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// on. WebhookURLValidator/WebhookHTTPClient are test-only overrides
 	// (see their own doc comments on serverConfig above): nil in every
 	// production boot, which leaves go/integration's SSRF protection
-	// exactly as strict as it has always been. WithSubjectResolver is
-	// round 5's own addition, over the identical demoOrgSubjectResolver
+	// exactly as strict as its default. WithSubjectResolver wires the
+	// identical demoOrgSubjectResolver
 	// instance org's and notification's own wiring already share -- it is
 	// what lets the module's spec-generated HTTP surface (mounted below
-	// through the generic mountModuleRoutes loop) resolve a creator at
-	// all: round 5's integration_createAPIKey and round 7's
-	// integration_createWebhookSubscription both read it for their
-	// request's CreatedBy, the input those two create operations need and
-	// every other operation this surface mounts does not (round 1's and
-	// round 2's Service-level APIs, exercised directly by this module's
-	// own tests, never needed one).
+	// through the generic mountModuleRoutes loop) resolve a creator for
+	// the two create operations that record one
+	// (integration_createAPIKey, integration_createWebhookSubscription),
+	// the input those operations need and every other operation this
+	// surface mounts does not (the Service-level APIs, exercised directly
+	// by this module's own tests, never need one).
 	integrationOpts := []integration.Option{
 		integration.WithEventMapping(orgMemberJoinedWebhookMapping),
 		integration.WithWebhookQueue(standaloneQueue),
@@ -2598,8 +2542,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	integrationModule := integration.NewModule(db, integrationOpts...)
 
 	// notificationModule is the reference app's first consumer of
-	// go/notification, wired as the round's mandatory-first-consumer proof
-	// (see cmd/server/demo_notification.go for the host-side glue that
+	// go/notification, wired end to end as the module's mandatory
+	// first-consumer proof (see cmd/server/demo_notification.go for the
+	// host-side glue that
 	// drives it -- the note-created subscription and the demo
 	// patient-message route -- and notification_flow_test.go for the
 	// end-to-end legs). Its six required seams are all host-supplied here:
@@ -2642,11 +2587,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	demoModule := demo.NewModule()
 
 	// billingModule is the reference app's mandatory first consumer of
-	// go/billing (root CLAUDE.md's Reference App section: "a module API
-	// that it does not actually use is not considered done") -- both of the
-	// module's judgment halves, at that: the credits ledger
-	// (docs/internal/15-roadmap.md's M2 exit condition's
-	// credit-pack/reserve/refund/usage-display leg) through Credits(), and
+	// go/billing -- a module API this app genuinely uses, both judgment
+	// halves of the module: the credits ledger
+	// through Credits(), and
 	// the subscription-derived entitlement path through Entitlements(),
 	// which aiGatewayModule's own construction right below wires onto
 	// go/ai-gateway's optional Entitlements seam. It shares this app's own
@@ -2667,16 +2610,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// grants need go/billing's real-time usage counter through that reader,
 	// and this app still wires no usage reader into billing -- which is why
 	// demo_entitlements.go's seed grants are Boolean, never Quota (see that
-	// file's own doc comment). The app does run a real go/metering module
-	// (meteringModule below), feeding admin's D9 dashboard and recording
-	// ai-gateway usage, but billing's UsageReader seam stays unwired: quota
-	// judging against live usage counts is a deliberate later step, not an
-	// accident this comment once implied metering's absence explained. No
-	// WithQueue either: this round wires no payment-channel gateway, so
-	// PollingService's active-polling fallback has nothing to poll -- see
-	// go/billing/AGENTS.md's own scope table for why an actual
-	// payment-gateway integration (a real Stripe/Alipay/WeChat sandbox
-	// charge) stays explicitly deferred, untouched by this round.
+	// file's own doc comment). No WithQueue either: no payment-channel
+	// gateway is wired, so PollingService's active-polling fallback has
+	// nothing to poll -- an actual payment-gateway integration (a real
+	// Stripe/Alipay/WeChat sandbox charge) stays out of this app's
+	// scope.
 	billingModule := billing.NewModule(db, nil)
 
 	// meteringModule is go/metering's seat in this app: admin's D9 usage
@@ -2695,7 +2633,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	meteringModule = metering.NewModule(db)
 
 	// aiGatewayModule is the reference app's mandatory first consumer of
-	// go/ai-gateway (root CLAUDE.md's "Reference App" section): the
+	// go/ai-gateway: the
 	// internal/consult service (wired below, after Bootstrap) calls its
 	// Gateway.Chat under consult.LogicalModel ("chat:default"), which
 	// WithModelRoute routes to the module's own zero-external-dependency
@@ -2706,7 +2644,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// deployment, an httptest.Server in consult_flow_test.go) -- and never
 	// seen by consult's own code, per aigateway.ChatRequest.Model's own
 	// doc comment on why business code never hardcodes a vendor model id.
-	// aiGatewayModule additionally wires round 2's image-generation
+	// aiGatewayModule additionally wires the image-generation
 	// pipeline: the internal/smilesim service (wired below, after
 	// Bootstrap) calls Gateway.GenerateImage under smilesim.LogicalModel
 	// ("image:smile-simulation"), routed to the module's own
@@ -2720,7 +2658,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// patient photo and writes the generated simulation back through the
 	// very same storage this app's other consumers use.
 	//
-	// WithEntitlements is this round's addition: it wires
+	// WithEntitlements wires
 	// billingModule.Entitlements() -- the real billing.EntitlementsService
 	// constructed above -- onto go/ai-gateway's optional, structurally-
 	// typed Entitlements seam, so BOTH halves of this one Gateway instance
@@ -2803,7 +2741,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	)
 
 	// complianceModule is the reference app's first consumer of
-	// go/compliance: admin's D7 audit-query HTTP shell reads through
+	// go/compliance: admin's audit-query HTTP shell reads through
 	// complianceModule.AuditQuery(), which itself is a read-only wrapper
 	// over the SAME audit.Repository (over this same database connection)
 	// auditModule's own write-capture persister already writes into --
@@ -2814,9 +2752,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// without one (ErrQueueRequired) regardless of whether a caller
 	// happens to use that half of the module. WithSharing wires the
 	// already-constructed sharingModule's own Service() as
-	// compliance.SharingCreator -- go/compliance/AGENTS.md's round-2 notes
-	// this seam as deliberately unwired "until an owning module opts in";
-	// go/admin's D7 export leg (docs/internal/23-admin.md) is that
+	// compliance.SharingCreator -- the seam an owning module opts into;
+	// go/admin's audit-query export leg is that
 	// module, so this is where compliance.ExportService.Export gains its
 	// first genuine delivery path (a real, single-view go/sharing link)
 	// rather than refusing every call with ErrSharingRequired.
@@ -2834,18 +2771,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	)
 
 	// adminModule is the reference app's mandatory first consumer of
-	// go/admin's round 1 AND round 2 (docs/internal/23-admin.md): D3's
-	// tenant ledger, D5's impersonation pipeline, D6's cross-tenant user
-	// search, D7's audit-query shell and export leg, D8's role management
-	// and D9's usage dashboard. D9's go/metering/go/billing wiring is the
-	// one round-2 surface that landed without this app as its consumer --
-	// go/admin/AGENTS.md's Known limitations carried the same no-consumer
-	// record go/pki's X.509 layer and go/billing/go/metering themselves
-	// used for their own unwired surfaces -- until this round's wiring
-	// closed it: WithMetering hands it the meteringModule constructed
-	// above (whose metering_usage_summaries rows the ai-gateway
-	// UsageRecorder bridge, also above, feeds for real on every
-	// consult/smilesim AI call), and WithBilling hands it the same
+	// go/admin's operator-facing surface: the tenant ledger, the
+	// impersonation pipeline, the cross-tenant user search, the
+	// audit-query shell and export leg, role management and the
+	// usage/billing dashboard. WithMetering hands it the meteringModule
+	// constructed above (whose metering_usage_summaries rows the
+	// ai-gateway UsageRecorder bridge, also above, feeds for real on
+	// every consult/smilesim AI call), and WithBilling hands it the same
 	// billingModule every other consumer in this file already uses (its
 	// credit balances seeded by seedDemoCredits and subscriptions by
 	// seedDemoEntitlements below). Both options are optional by
@@ -2855,11 +2787,11 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// wires both, so GET /api/v1/admin/usage-summary answers 200 with the
 	// real per-tenant dashboard -- see usage_summary_flow_test.go.
 	// WithAuthn takes the *authn.Module itself, not its
-	// Service() -- see go/admin/AGENTS.md's wiring-contract section for
-	// why, and admin.Module.DependsOn()'s own doc comment for the
+	// Service() -- see admin.Module.DependsOn()'s own doc comment for the
 	// resulting "authn" dependency Kernel.Bootstrap's sort honors below.
 	// WithQueue is the same standaloneQueue every other module's
-	// asynchronous work already shares -- D7's export leg enqueues onto
+	// asynchronous work already shares -- the audit-query export leg
+	// enqueues onto
 	// it rather than running compliance.ExportService.Export synchronously
 	// inside the request.
 	adminModule := admin.NewModule(db,
@@ -2998,9 +2930,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// admin.Module.DependsOn() names "authn", so Bootstrap's own dependency
 	// sort (sortModulesByDependency) runs authn's Register before admin's
 	// regardless of argument order, which is what makes
-	// authnModule.Service() non-nil by the time admin's Register reads it
-	// (go/admin/AGENTS.md's wiring-contract section has the detail). audit
-	// last is not load-bearing order -- its Module.DependsOn
+	// authnModule.Service() non-nil by the time admin's Register reads it.
+	// audit last is not load-bearing order -- its Module.DependsOn
 	// is nil, and its subscriptions are valid to install before or after
 	// any publisher registers (see audit's Module.DependsOn doc comment)
 	// -- it simply reads naturally as "the business-facing modules, then
@@ -3021,16 +2952,16 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	//
 	// WithDeploymentMode(cfg.DeploymentMode) declares the topology the
 	// composition is validated against; it never selects an implementation
-	// (docs/internal/03-deployment-modes.md's orthogonality rule). Every
-	// stateful seam below except the eventbus seam follows the conditional-
-	// injection shape APP_REDIS_ADDR originally established for the
-	// "eventbus" seam alone: an unset env var leaves THAT seam on the
-	// Preset's in-process default (so a plain `go run ./cmd/server` is
-	// byte-for-byte unaffected by this round), and a configured one
+	// (a deployment mode constrains which implementations may compose,
+	// never selects one). Every
+	// stateful seam below except the eventbus seam follows the same
+	// conditional-injection shape: an unset env var leaves THAT seam on
+	// the Preset's in-process default (so a plain `go run ./cmd/server`
+	// needs nothing else running), and a configured one
 	// injects a real implementation with the capability bits that
 	// implementation genuinely carries. The eventbus seam is the one
 	// deliberate exception -- it is injected in BOTH branches, memory or
-	// Redis, because the org audit round moved its construction before
+	// Redis, because its construction happens before
 	// dbkit.Open (see the Open call's own comment) and Kernel.Bootstrap
 	// must resolve to that same pre-built bus.
 	//
@@ -3045,8 +2976,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// Redis integration leg, which shares one client across two bus
 	// instances. This is not merely a convenience -- a distributed
 	// deployment mode requires MultiReplicaSafe of every seam that carries
-	// shared state (docs/internal/03-deployment-modes.md's capability
-	// table), so wiring the "eventbus" seam alone can never let a
+	// shared state, so wiring the "eventbus" seam alone can never let a
 	// distributed composition succeed: the very next seam Kernel.Bootstrap
 	// resolves and validates, "kv", would still fail on the Preset's
 	// in-process default.
@@ -3075,8 +3005,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// SurvivesRestart for the real SMTP composition, matching the
 	// "mailer.smtp" builtin's own declaration) and pkgcore.Stateless
 	// otherwise -- the honest capability for a throwaway in-process test
-	// double, and the same declaration this override carried before this
-	// round.
+	// double.
 	//
 	// Nothing about the rest of this wiring changes when any of these are
 	// injected: audit.Emit still publishes on reg.EventBus() (the injected
@@ -3155,12 +3084,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// wiring once every module's Register call has returned (module.go's
 	// own Attach doc comment). Unlike config's and rbac's Attach calls, its
 	// ordering relative to them is not load-bearing -- nothing here reads a
-	// permission or configuration snapshot. Its return value was once the
-	// *integration.Service webhooks.go's wireIntegrationWebhooks mounted its
-	// demo route from; round 7 retired that hand-mounted route (every
-	// spec-generated surface the module mounts reads the Service at call
-	// time through Handler's own Register-time forwarding wrapper instead),
-	// so the value is discarded here.
+	// permission or configuration snapshot. Its return value is discarded:
+	// every spec-generated surface the module mounts reads the Service at
+	// call time through Handler's own Register-time forwarding wrapper, so
+	// nothing here needs the *integration.Service itself.
 	if _, attachErr := integrationModule.Attach(reg); attachErr != nil {
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: attach the integration module: %w", attachErr)
@@ -3208,10 +3135,10 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	if cfg.OnRBACReady != nil {
 		cfg.OnRBACReady(rbacService)
 	}
-	// seedDemoCredits is the demo, NOT-a-real-payment stand-in for
-	// docs/internal/15-roadmap.md's M2 exit condition's buy-a-credit-pack
-	// leg -- see that function's own doc comment for exactly why a real
-	// Stripe/Alipay/WeChat sandbox charge stays out of scope here. It runs
+	// seedDemoCredits is the demo, NOT-a-real-payment stand-in for a real
+	// buy-a-credit-pack flow -- see that function's own doc comment for
+	// exactly why a real Stripe/Alipay/WeChat sandbox charge stays out of
+	// scope here. It runs
 	// unconditionally, like seedDemoGrants just above,
 	// regardless of cfg.DemoUsersPassword: internal/smilesim's own tests
 	// (smilesim_flow_test.go) need a real, non-zero starting balance on
@@ -3225,7 +3152,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 
 	// seedDemoEntitlements is the demo, NOT-a-real-purchase stand-in for
 	// the "tenant buys a subscription, the payment channel confirms it"
-	// leg of docs/internal/06-billing-and-metering.md's full flow -- see
+	// leg of a real billing flow -- see
 	// that function's own doc comment for exactly why a real
 	// Stripe/Alipay/WeChat sandbox charge stays out of scope here. It runs
 	// unconditionally, like seedDemoCredits just above: since the gateway
@@ -3257,7 +3184,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		return nil, nil, nil, fmt.Errorf("reference-app: register notes retention participant: %w", err)
 	}
 
-	// admin's D8 role-management surface needs the real *rbac.Service --
+	// admin's role-management surface needs the real *rbac.Service --
 	// which, like config's and rbac's own Attach calls above, exists only
 	// after Bootstrap has returned. This is why go/admin's RoleService is
 	// wired through a distinct, post-Bootstrap Module.AttachRBAC call
@@ -3365,7 +3292,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		// sweep over the scheduler's tenant universe, plus pki's
 		// signing-key expiry scan -- only starts once the queue worker
 		// did. The universe is the configured host tenants joined with
-		// go/admin's D3 tenant ledger (periodic_scheduler.go's
+		// go/admin's tenant ledger (periodic_scheduler.go's
 		// periodicTenantUniverse), so a self-registered clinic -- a tenant
 		// this app's own registration flow provisions at runtime, never a
 		// cfg.HostTenants value -- is swept from the tick after its org
@@ -3468,8 +3395,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	consultService := consult.NewService(notes.NewRepository(db), aiGatewayModule.Gateway())
 	wireConsult(mux, consultService)
 
-	// wireSmileSim mounts go/ai-gateway round 2's mandatory-first-consumer
-	// routes (cmd/server/smilesim.go): smileSimService asks
+	// wireSmileSim mounts the image-generation half of go/ai-gateway's
+	// mandatory-first-consumer routes (cmd/server/smilesim.go):
+	// smileSimService asks
 	// aiGatewayModule's own Gateway -- the same instance
 	// aiGatewayModule.Register validated -- to run an async smile
 	// simulation over a patient photo already uploaded through
@@ -3502,13 +3430,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		_ = cleanup()
 		return nil, nil, nil, fmt.Errorf("reference-app: ensure smilesim credit reservation schema: %w", err)
 	}
-	// smileSimulationStore is the P2a round's per-photo result index (see
+	// smileSimulationStore is the per-photo result index (see
 	// internal/smilesim's package doc comment's "Per-photo result index"
 	// section): each generation request's photo, effective options and job
 	// id land in this app's own SQLite the moment its enqueue succeeds,
 	// surviving a restart exactly like the job row they point at, so the
-	// per-photo enumeration route (cmd/server/smilesim.go) and the P3
-	// gallery that will read it have their data source. Same
+	// per-photo enumeration route (cmd/server/smilesim.go) has its data
+	// source. Same
 	// EnsureSchema-before-first-use shape as the reservation store above.
 	smileSimulationStore := smilesim.NewSimulationStore(db)
 	if err := smileSimulationStore.EnsureSchema(ctx); err != nil {
@@ -3585,9 +3513,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 		headerDisabled: cfg.DisableDemoUserHeader,
 	})
 
-	// wireCasesRoutes mounts product round P2b's case domain
+	// wireCasesRoutes mounts the case domain
 	// (internal/cases, mounted in cmd/server/cases.go): the tenant-scoped
-	// Case records the P3 web UI will sit on, each grouping a patient
+	// Case records a web UI renders from, each grouping a patient
 	// (the clinic-given name/reference, embedded in the row) with the
 	// photos of the case. caseRepository shares this app's own db
 	// connection (like every store above) and gets its two tiny tables
@@ -3597,9 +3525,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// discipline" section gives the same reasons for not joining
 	// migrationRegistry). The service it backs is deliberately free of
 	// the simulation layer: a case detail's per-photo simulations stay on
-	// the P2a enumeration route wireSmileSim just mounted (GET
+	// the enumeration route wireSmileSim just mounted (GET
 	// /api/v1/smile-simulation/photos/{photoObjectID}/simulations), which
-	// the P3 view fetches per photo rather than the case endpoint joining
+	// a per-photo view fetches rather than the case endpoint joining
 	// them (see that package doc comment's "Shape decision" section). The
 	// creator-attribution seam is demoNotesSubjectResolver, the same host
 	// type notes' module uses -- it satisfies the cases package's
@@ -3617,32 +3545,26 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// (go/storage resolves the tenant from the request context itself).
 	wireCasesRoutes(mux, cases.NewService(caseRepository), demoNotesSubjectResolver{headerDisabled: cfg.DisableDemoUserHeader}, storageModule.ObjectService())
 
-	// wireIntegrationAuthenticated mounts go/integration round 6's
+	// wireIntegrationAuthenticated mounts go/integration's
 	// mandatory-first-consumer route (cmd/server/integration_authenticate.go):
 	// a minimal "whoami" demo endpoint gated by the module's own
-	// AuthMiddleware, proving the previously-undischargeable property
-	// go/integration/AGENTS.md's round-5 section named -- a key
-	// authenticates, a rotated-away key is refused, a revoked key is
-	// refused -- through this app's own real, composed HTTP stack, with
-	// LayeredLimiter/HTTPGuard wired in front of a real Authenticate-gated
-	// surface for the first time. The rate-limit-hardening round corrected
-	// the guard's position to the module's documented layering: the route's
-	// guard is wired through integration.WithAuthenticationGuard -- applied
-	// inside wireIntegrationAuthenticated, once reg.KVStore() exists, since
+	// AuthMiddleware -- a key authenticates, a rotated-away key is refused,
+	// a revoked key is refused -- through this app's own real, composed
+	// HTTP stack, with the guard wired ahead of it through
+	// integration.WithAuthenticationGuard, applied
+	// inside wireIntegrationAuthenticated once reg.KVStore() exists, since
 	// the guard's limiter is built over this same resolved KVStore seam --
 	// so AuthMiddleware runs it BEFORE authentication and a forged-X-API-Key
 	// flood pays the guard's budget instead of reaching
-	// Service.Authenticate's lookups unbounded (apikey_authenticate_flow_test.go's
-	// forged-flood regression pins the order). The call cannot fail: nothing
+	// Service.Authenticate's lookups unbounded (apikey_authenticate_flow_test.go
+	// pins the order). The call cannot fail: nothing
 	// it does returns an error.
 	wireIntegrationAuthenticated(mux, integrationModule, reg.KVStore())
 
 	// The middleware chain: authn.Middleware(verifier) FIRST, then
-	// tenancy.Middleware(authn.NewPrincipalResolver()) -- the deliberate
-	// deviation from docs/internal/01-architecture.md's originally
-	// documented order (tenancy before authn), recorded there and in
-	// go/authn/AGENTS.md's "The middleware chain is authn, then tenancy" section: a
-	// tenancy.Resolver's signature (Resolve(*http.Request)
+	// tenancy.Middleware(authn.NewPrincipalResolver()). Running authn
+	// first verifies the token exactly once: a tenancy.Resolver's signature
+	// (Resolve(*http.Request)
 	// (pkgcore.TenantID, error)) cannot hand a verified JWT's claims to
 	// anything downstream, so running tenancy first would force verifying
 	// every token twice over two code paths free to drift. Running
@@ -3656,9 +3578,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// Service().Verifier() hands out, and authn.Middleware consults that
 	// source on every request whose token verifies -- so the plain
 	// Middleware(verifier) call below is exactly the enforced composition,
-	// not a silently unenforced one (the P1 hole this wiring closes;
-	// go/authn/AGENTS.md's "Immediate revocation is enforced by default,
-	// not by host ceremony" section has the mechanism).
+	// not a silently unenforced one: drop the option and the revocation
+	// source is a stored list nothing consults.
 	//
 	// The consequence that matters here: authn.Middleware is OPTIONAL
 	// auth (a missing token proceeds with no Principal; an invalid one
@@ -3666,9 +3587,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// -- refuse a request whose (method, path) is not on the allowlist AND
 	// whose resolver failed -- is what makes EVERY route this app mounts
 	// require a valid Principal by default, with NO extra wrapping needed
-	// per route: an unauthenticated request to the notes API now gets 403
+	// per route: an unauthenticated request to the notes API gets 403
 	// (tenant unresolved, because there is no Principal to read a tenant
-	// from) exactly the way an unrecognized Host used to. The routes
+	// from), failing closed like every other unresolvable request. The routes
 	// listed in the allowlist below are the ONLY ones that work with no
 	// Principal at all -- this chain never even sees authn's own subtree,
 	// which topMux dispatches straight from authn.Middleware's output the
@@ -3689,8 +3610,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// Allowlisting GET alone would leave HEAD one middleware change away
 	// from a 403 the moment anything probes it with HEAD instead of GET.
 	// admin.ImpersonationMiddleware sits between authn.Middleware and
-	// tenancy.Middleware, exactly as go/admin/AGENTS.md's wiring-contract
-	// section (and pipeline.go's own doc comment) describes: it never
+	// tenancy.Middleware (see pipeline.go's own doc comment): it never
 	// reorders this chain, it reads the real, already-verified
 	// authn.Principal authn.Middleware just installed, and -- only when
 	// the request carries a valid X-Admin-Impersonation grant id -- it
@@ -3698,14 +3618,13 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// everything downstream, including tenancy.Middleware's own tenant
 	// resolution. A request with no such header, or an invalid one, is
 	// unaffected: this decorator is a no-op for every route notes/org/
-	// storage/etc. serve today unless an operator has actually started an
+	// storage/etc. serve unless an operator has actually started an
 	// impersonation session.
 	//
 	// admin's OWN mounted route is deliberately excluded from that branch
 	// entirely -- topMux below dispatches it straight from
 	// authn.Middleware's own output, through guardAdminRoute's
-	// adminSubjectResolver (demo_admin.go) and nothing else. This is what
-	// go/admin/AGENTS.md's wiring-contract section requires and what
+	// adminSubjectResolver (demo_admin.go) and nothing else -- what
 	// mountModuleRoutes' own doc comment explains: admin's five
 	// permissions are evaluated in rbac.SystemDomain against the CALLER'S
 	// OWN real, unsubstituted Principal, regardless of whichever tenant
@@ -3825,7 +3744,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// the platform administrator must never be seeded from the ordinary
 	// demo users' password variable -- see
 	// demoPlatformStaffPasswordEnv's own doc comment for why. An empty
-	// variable leaves everything above exactly as it was.
+	// variable skips the seed.
 	if cfg.DemoUsersPassword != "" {
 		if seedErr := seedDemoUsers(ctx, handler, authnModule.Service(), rbacService, orgModule, cfg.HostTenants, cfg.DemoUsersPassword); seedErr != nil {
 			_ = cleanup()
@@ -3864,9 +3783,9 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// tenant's own (provision's own doc comment in self_service.go) --
 	// and the standaloneQueue rides along for the failure half of the
 	// guarantee: a synchronous provisioning attempt that fails enqueues
-	// the retry job that converges the clinic (self_service.go's #
-	// Failure semantics), and the queue's worker was started above, so
-	// the retry runs on this same process's pool.
+	// the retry job that converges the clinic (see provision's own doc
+	// comment in self_service.go), and the queue's worker was started
+	// above, so the retry runs on this same process's pool.
 	// cfg.failSelfServiceProvision rides along as the failure-injection
 	// hook -- nil under the disabled default (APP_FAIL_SELF_SERVICE_PROVISION
 	// absent or 0), armed either by configFromEnv's own env-driven parse or
@@ -3886,7 +3805,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// caller with no tenant, which is exactly what a deployed sign-in page
 	// needs, while every request the frontend does not answer (the whole
 	// /api surface, /healthz, /metrics, and any non-GET/HEAD method)
-	// reaches the composed chain byte-for-byte as it always did -- see
+	// reaches the composed chain unchanged -- see
 	// frontend.go's package doc comment for the full interception rules.
 	if cfg.WebDistDir != "" {
 		handler = withFrontend(cfg.WebDistDir, handler)

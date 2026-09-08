@@ -9,8 +9,8 @@ semantics live here. `RouteGuard` in particular takes its
 allow/deny/pending decision as a plain `status` value, never a
 callback it invokes and never a concrete authentication or routing
 import, so `product-shell` (shipped -- this package's first consumer)
-and `admin-shell` (a later round) share this exact package while
-wiring in two different authorization sources. Every built-in string renders from the
+and the platform-staff `admin-shell` (not shipped) share this exact
+package while wiring in two different authorization sources. Every built-in string renders from the
 bilingual `layout-kit` namespace registered through `@speed/i18n`, the
 same discipline `ui-kit` established, and the workspace's
 `no-literal-text` ESLint rule refuses inline text in this package's
@@ -50,10 +50,10 @@ registerNamespace(i18n, UI_KIT_NAMESPACE, uiKitResources)
 registerNamespace(i18n, LAYOUT_KIT_NAMESPACE, layoutKitResources)
 
 function AppContent() {
-  // Stands in for a real authorization source -- no auth-core round
-  // exists yet, so a host wires this to whatever it uses today (a
-  // hook backed by a real package, a stub like this one in a test).
-  // RouteGuard needs nothing more than the resulting status value.
+  // Stands in for the host's real authorization source: RouteGuard
+  // never imports an auth package, so a host wires whatever it uses
+  // (a hook backed by a real package, a stub like this one in a test)
+  // and passes the resulting status value down.
   const [status] = useState<RouteGuardStatus>('allowed')
   return (
     <AppShell
@@ -114,8 +114,8 @@ different hosts use different routers.
 Slots render exactly the content passed in -- an omitted slot renders
 nothing, never a placeholder.
 
-**Narrow-viewport protections (responsive-design-hardening round,
-CSS-only, no prop changes)**: the mobile (temporary) Drawer's paper
+**Narrow-viewport protections (CSS-only, no prop changes)**: the
+mobile (temporary) Drawer's paper
 width is capped to a CSS `min(sidebarWidth, 85vw)` -- a very narrow
 viewport (~320px and below) never gets a near-full-screen or
 overflowing drawer -- while the desktop (permanent) Drawer's paper
@@ -226,19 +226,19 @@ package -- see the AGENTS.md non-negotiable rules.
 ## Deferrals and recorded decisions
 
 - **`auth-core` wiring**: `RouteGuard`'s `status` is fed by a local
-  `useState` stub in the Quick start above -- no real authorization
-  source exists yet (a later, undispatched round). The prop shape
-  needs no change once one lands: that round only computes a
+  `useState` stub in the Quick start above -- the host computes the
+  status and passes it in, and no auth package is imported here (see
+  the AGENTS.md non-negotiable rules). The prop shape needs no change
+  for any authorization source: a host only computes a
   `RouteGuardStatus` and passes it in.
 - **`admin-shell`**: out of scope here; this package ships only the
-  shared chrome the platform-staff shell will later assemble. The
-  tenant-facing half of that row is closed: `product-shell`, this
-  package's first consumer, composes `AppShell` as its authenticated
-  frame, and its gated-journey suite proves the `RouteGuard`
-  composition shape -- a stand-in host mounting the gate inside the
-  shell's children and feeding it a status it computes from the
-  role lists it attached, exactly the host-injected-status contract
-  this package's rules require.
+  shared chrome the platform-staff shell would assemble.
+  `product-shell`, this package's first consumer, composes `AppShell`
+  as its authenticated frame, and its gated-journey suite proves the
+  `RouteGuard` composition shape -- a stand-in host mounting the gate
+  inside the shell's children and feeding it a status it computes
+  from the role lists it attached, exactly the host-injected-status
+  contract this package's rules require.
 - **Reference-app consumer**: the reference app's consumer shell
   (`examples/reference-app/web`) composes both exports as host
   composition -- product-shell's `ProductShell` renders `AppShell` as
@@ -247,10 +247,10 @@ package -- see the AGENTS.md non-negotiable rules.
   notes-list query (the server's rbac layer answers a caller without
   `notes:read` with 403, failing the gate closed to `denied`) -- the
   exact host-injected shape this package's rules require; the
-  package-level proof (`src/usage-example.test.tsx`) remains the
-  in-form leg, and the browser page leg is M4's html-runner/e2e work.
-- **Storybook / browser-side visual verification**: no preview-harness
-  round exists yet, same deferral `ui-kit` carries; `color-contrast`
+  package-level proof (`src/usage-example.test.tsx`) is the in-form
+  leg, and a browser driving the real server is not shipped.
+- **Storybook / browser-side visual verification**: no preview
+  harness exists, the same deferral `ui-kit` carries; `color-contrast`
   stays axe-disabled for the same jsdom reason.
 - **Skip-to-content beyond a single visible-on-focus link**: no
   broader "landmark navigation menu" affordance is in scope -- a

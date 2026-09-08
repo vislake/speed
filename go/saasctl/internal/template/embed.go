@@ -16,13 +16,12 @@
 // build by real materialization, never by compiling the assets in place);
 // `saasctl new` strips exactly that one line. The generated project is
 // shared across every selection except for the two files a selection
-// drives (docs/internal/02-repo-and-release.md's A5 adjudication: the
-// go.mod require set and the server.go import/module/middleware set):
-// project/.gitignore, project/README.md, project/cmd/server/main.go and
-// project/cmd/server/config.go are shared verbatim, while
-// project/selection/<key>/go.mod.txt and project/selection/<key>/server.go are
-// chosen by <key>, SelectionKey's canonical rendering of the --with module
-// set. The go.mod document is stored under the inert name go.mod.txt for a
+// drives -- the go.mod require set and the server.go
+// import/module/middleware set: project/.gitignore, project/README.md,
+// project/cmd/server/main.go and project/cmd/server/config.go are shared
+// verbatim, while project/selection/<key>/go.mod.txt and
+// project/selection/<key>/server.go are chosen by <key>, SelectionKey's
+// canonical rendering of the --with module set. The go.mod document is stored under the inert name go.mod.txt for a
 // mechanical reason: go:embed's directory scan refuses to descend into a
 // subdirectory that contains a file named go.mod -- such a directory reads
 // as a nested module root -- so a go.mod named as such would silently

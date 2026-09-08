@@ -58,25 +58,20 @@ func waitForSendRecord(t *testing.T, env testAdminEnv, tenant pkgcore.TenantID, 
 }
 
 // TestImpersonationService_Start_NoLocale_ResolvesThroughAuthn_RealDispatch
-// is P1-1's THE scenario: Start is driven through the REAL
-// notification.DeliveryService (buildTestAdminModule's genuine wiring --
-// no fakeNotifier anywhere), with StartInput.Locale left empty, against a
-// real authn user who has never chosen a locale (Locale: "" at
-// registration).
-//
-// On unfixed main this StartInput.Locale="" was forwarded straight into
-// notification.Dispatch, whose own validate() refuses an empty Locale for
-// a RecipientClassUser recipient -- Dispatch returns before ever touching
-// the queue -- and notifyStarted's Warn-and-swallow let Start still return
-// a grant (201) with the mandatory notification silently never even
-// enqueued. This test would fail against that behaviour: it demands an
-// actual, successfully-settled send record, which cannot exist for a
-// dispatch validate() ever refused.
+// pins the locale fallback through the REAL notification.DeliveryService
+// (buildTestAdminModule's genuine wiring -- no fakeNotifier anywhere):
+// with StartInput.Locale left empty and a real authn user who has never
+// chosen a locale (Locale: "" at registration), Start must resolve the
+// target's own authn.User.Locale itself -- an empty Locale forwarded
+// straight into notification.Dispatch would be refused by validate() for
+// a RecipientClassUser recipient before ever touching the queue, leaving
+// the mandatory notification never enqueued. The test demands an actual,
+// successfully-settled send record.
 func TestImpersonationService_Start_NoLocale_ResolvesThroughAuthn_RealDispatch(t *testing.T) {
 	env := buildTestAdminModule(t)
 	// Start refuses while the rbac service is unattached (its own doc
-	// comment -- the P2-3 follow-up's gate), so wire the env's real
-	// Attach()-ed *rbac.Service exactly as a wired host does.
+	// comment), so wire the env's real Attach()-ed *rbac.Service exactly
+	// as a wired host does.
 	env.Admin.AttachRBAC(env.RBAC)
 	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
 		t.Fatalf("RegisterHandler() error = %v", err)
@@ -113,15 +108,14 @@ func TestImpersonationService_Start_NoLocale_ResolvesThroughAuthn_RealDispatch(t
 }
 
 // TestImpersonationService_Start_ExplicitLocale_UsedVerbatim_RealDispatch
-// is P1-1's second, unchanged leg -- "a request WITH a locale keeps
-// working exactly as today": an explicit StartInput.Locale is trusted
+// pins the verbatim-locale leg: an explicit StartInput.Locale is trusted
 // verbatim and never overridden by the target's own authn.User.Locale,
 // against the same real, non-fake notification pipeline.
 func TestImpersonationService_Start_ExplicitLocale_UsedVerbatim_RealDispatch(t *testing.T) {
 	env := buildTestAdminModule(t)
 	// Start refuses while the rbac service is unattached (its own doc
-	// comment -- the P2-3 follow-up's gate), so wire the env's real
-	// Attach()-ed *rbac.Service exactly as a wired host does.
+	// comment), so wire the env's real Attach()-ed *rbac.Service exactly
+	// as a wired host does.
 	env.Admin.AttachRBAC(env.RBAC)
 	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
 		t.Fatalf("RegisterHandler() error = %v", err)
@@ -168,8 +162,8 @@ func TestImpersonationService_Start_ExplicitLocale_UsedVerbatim_RealDispatch(t *
 func TestImpersonationService_Start_UnknownTarget_RefusedWithNoGrant(t *testing.T) {
 	env := buildTestAdminModule(t)
 	// Start refuses while the rbac service is unattached (its own doc
-	// comment -- the P2-3 follow-up's gate), so wire the env's real
-	// Attach()-ed *rbac.Service exactly as a wired host does.
+	// comment), so wire the env's real Attach()-ed *rbac.Service exactly
+	// as a wired host does.
 	env.Admin.AttachRBAC(env.RBAC)
 	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
 		t.Fatalf("RegisterHandler() error = %v", err)
@@ -199,18 +193,17 @@ func TestImpersonationService_Start_UnknownTarget_RefusedWithNoGrant(t *testing.
 	}
 }
 
-// TestImpersonationService_Start_TargetNotAMember_RefusedWithNoGrant is
-// Finding P3-4's own regression test: a real, genuinely existing authn
-// account that simply never joined the target tenant must be refused with
+// TestImpersonationService_Start_TargetNotAMember_RefusedWithNoGrant
+// pins the membership validation: a real, genuinely existing authn account
+// that simply never joined the target tenant must be refused with
 // ErrImpersonationTargetNotMember, not a 201 for a grant nobody could
-// legitimately use against that tenant in the first place -- the exact gap
-// the audit named: a "ghost user" grant still succeeding with 201, a grant
-// for an account with no real standing in the tenant.
+// legitimately use against that tenant in the first place -- a grant for
+// an account with no real standing in the tenant.
 func TestImpersonationService_Start_TargetNotAMember_RefusedWithNoGrant(t *testing.T) {
 	env := buildTestAdminModule(t)
 	// Start refuses while the rbac service is unattached (its own doc
-	// comment -- the P2-3 follow-up's gate), so wire the env's real
-	// Attach()-ed *rbac.Service exactly as a wired host does.
+	// comment), so wire the env's real Attach()-ed *rbac.Service exactly
+	// as a wired host does.
 	env.Admin.AttachRBAC(env.RBAC)
 	if err := env.Queue.RegisterHandler(env.Notification.Deliveries()); err != nil {
 		t.Fatalf("RegisterHandler() error = %v", err)
@@ -244,12 +237,12 @@ func TestImpersonationService_Start_TargetNotAMember_RefusedWithNoGrant(t *testi
 }
 
 // TestImpersonationService_Start_AdminRoleRevoked_LiveGrantAutomaticallyEnded
-// is Finding P2-3's regression test: the exact scenario the audit named --
-// an administrator's admin:impersonate permission is revoked while a grant
-// they started is still Active, and the audit's own claim was that
-// Lookup's only checks (grant validity + AdminUserID match) never react to
-// that at all, so a revoked administrator could keep impersonating for the
-// rest of the grant's 30-minute TTL.
+// pins the automatic permission-revocation end: an administrator's
+// admin:impersonate permission is revoked while a grant they started is
+// still Active. Lookup's only checks (grant validity + AdminUserID match)
+// never react to that at all, so without the event-driven end a revoked
+// administrator could keep impersonating for the rest of the grant's
+// 30-minute TTL.
 //
 // Driven entirely against real, Attach()-ed rbac.Service and Bootstrap-
 // wired admin modules (buildTestAdminModule, mirroring role_test.go's own
@@ -392,15 +385,16 @@ func TestImpersonationService_Start_AdminKeepsPermissionViaOtherRole_GrantSurviv
 	}
 }
 
-// TestImpersonationService_Start_NotificationRow_CarriesNoInternalParams is
-// the P1 leak's regression at the row the impersonated user actually reads:
-// the mandatory notice's in_app_messages row is tenant data served back to
-// its recipient through the inbox API, and on unfixed main its params
-// column held the operator's free-text reason and the administrator's user
-// id verbatim -- notification's delivery persisted Dispatch.Params exactly
-// as admin dispatched it. Driven through the REAL notification pipeline
-// (buildTestAdminModule's genuine wiring -- no fakeNotifier anywhere), the
-// notice must still land, but its row must carry no params at all.
+// TestImpersonationService_Start_NotificationRow_CarriesNoInternalParams
+// pins the no-internal-fields boundary at the row the impersonated user
+// actually reads: the mandatory notice's in_app_messages row is tenant
+// data served back to its recipient through the inbox API, so its params
+// column must never hold the operator's free-text reason or the
+// administrator's user id -- notification's delivery persists
+// Dispatch.Params exactly as admin dispatches it. Driven through the REAL
+// notification pipeline (buildTestAdminModule's genuine wiring -- no
+// fakeNotifier anywhere), the notice must still land, but its row must
+// carry no params at all.
 func TestImpersonationService_Start_NotificationRow_CarriesNoInternalParams(t *testing.T) {
 	env := buildTestAdminModule(t)
 	env.Admin.AttachRBAC(env.RBAC)

@@ -12,14 +12,13 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// This file is go/jobs's PostgreSQL integration leg -- the module's first.
-// The standalone deployment mode's schema (store.go's ensureJobsSchema) is
-// created imperatively whenever a StandaloneQueue starts over a database,
-// and the root CLAUDE.md's composition rules make a real PostgreSQL
-// database an ordinary backing store for that same standalone
-// implementation (a single binary on real PostgreSQL is the ordinary
-// small-customer production shape). The module's unit tier runs SQLite
-// only; this leg runs the real schema DDL against a real PostgreSQL
+// This file is go/jobs's PostgreSQL integration leg. The standalone
+// deployment mode's schema (store.go's ensureJobsSchema) is created
+// imperatively whenever a StandaloneQueue starts over a database, and a
+// real PostgreSQL database is an ordinary backing store for that same
+// standalone implementation (a single binary on real PostgreSQL is the
+// ordinary small-customer production shape). The module's unit tier runs
+// SQLite only; this leg runs the real schema DDL against a real PostgreSQL
 // (dbtest.NewPostgres) and drives a real row through the real worker, so
 // a dialect bug in the DDL fails here instead of in a customer's boot.
 //

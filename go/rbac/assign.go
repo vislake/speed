@@ -16,19 +16,18 @@ import (
 // i18n id its display name resolves through, and the permissions it
 // grants.
 //
-// It is a struct rather than a parameter list so that the admin console's
-// round can add fields (a colour, an ordering hint, a parent) without
-// breaking every caller of DefineRole -- which, under this repository's
-// lockstep versioning, means every delivered project at once.
+// It is a struct rather than a parameter list because DefineRole's
+// signature is frozen: under this repository's lockstep versioning, adding
+// a parameter would break every delivered project at once, while adding a
+// struct field (a colour, an ordering hint, a parent) breaks nothing.
 type RoleDefinition struct {
 	// Key identifies the role within its tenant and is what AssignRole and
 	// RevokeRole name. It is a stable identifier, not display text.
 	Key string
 
 	// DescriptionKey is the i18n message id the role's human-readable name
-	// and description resolve through. It is an id rather than text
-	// because a role row must not carry user-facing prose in one language
-	// (root CLAUDE.md's internationalization rule).
+	// and description resolve through. It is an id rather than text because
+	// a role row must not carry user-facing prose in a single language.
 	DescriptionKey string
 
 	// Permissions is the "<resource>:<action>" set the role grants. Every
@@ -50,8 +49,8 @@ type RoleDefinition struct {
 // declared.
 //
 // A key that already exists in the tenant returns ErrDuplicateRole. Roles
-// are not updatable through this API in this milestone -- see the module's
-// AGENTS.md deferral list for where role editing belongs -- so DefineRole
+// are not updatable through this API -- role editing is not a shipped
+// surface of this module -- so DefineRole
 // is create-only and built-in roles are reconciled by EnsureBuiltinRoles
 // instead.
 //
@@ -246,7 +245,7 @@ func (s *Service) RevokeRole(ctx context.Context, sub Subject, role string, scop
 	// The deliberate origin: this is a revocation an administrator (or
 	// automation acting for one) explicitly asked for, and the mark must
 	// say so -- an org member-restore or node-restore event must never undo
-	// it (reap.go's D14-resolution documents why). The write itself is
+	// it. The write itself is
 	// RoleBindingRepository.Delete's origin-aware mark-delete, which
 	// shadows dbkit's two-column one; see its doc comment.
 	if err := s.bindings.Delete(writeCtx, binding.ID, revokeOriginDeliberate); err != nil {
@@ -292,7 +291,7 @@ func (s *Service) RevokeRole(ctx context.Context, sub Subject, role string, scop
 // after the revoke -- means the caller's desired end state, a live grant
 // here, already holds. RestoreRole reports success without writing
 // anything rather than attempting a write that would collide with
-// uq_rbac_role_bindings_tenant_user_role_node (now partial,
+// uq_rbac_role_bindings_tenant_user_role_node (partial,
 // WHERE deleted_at IS NULL -- see
 // migrations/{postgres,sqlite}/0002_add_soft_delete.sql). This mirrors
 // AssignRole's own idempotent widening semantics, not RevokeRole's strict
@@ -315,8 +314,8 @@ func (s *Service) RevokeRole(ctx context.Context, sub Subject, role string, scop
 //
 // RestoreRole re-resolves the role by key through the same s.roles.ByKey
 // call AssignRole and RevokeRole both make, so a role that somehow stopped
-// existing by the time of the restore (rbac.Role has no delete path today,
-// so this cannot happen through this module alone, but the check costs
+// existing by the time of the restore (rbac.Role has no delete path, so
+// this cannot happen through this module alone, but the check costs
 // nothing and keeps the three methods' role resolution identical) reports
 // ErrRoleNotFound rather than restoring a binding that names nothing.
 //
@@ -326,14 +325,14 @@ func (s *Service) RevokeRole(ctx context.Context, sub Subject, role string, scop
 // parent. The two situations are not the same hazard. org's tree is a
 // STRUCTURE: a node whose parent is invisible corrupts every prefix-scan,
 // ancestor walk and child-creation call that assumes Path agrees with
-// ParentID (see go/org/AGENTS.md's "Soft deletion" section). A RoleBinding
+// ParentID. A RoleBinding
 // is a LEAF row that only feeds an authorization DECISION, and the decision
 // path already tolerates a node id that resolves to nothing: scope.go's
 // SubtreeResolver reports ok=false for a node it does not know, and
 // Service.DataScope treats that as "this grant contributes nothing to
 // scope" -- denying the narrowed row-level view rather than widening to the
 // tenant -- exactly as it already does for a LIVE binding whose node was
-// deleted out from under it after AssignRole ran (rbac has never verified
+// deleted out from under it after AssignRole ran (rbac does not verify
 // node liveness at grant time; only DataScope resolution checks it, at
 // decision time, every time). Restoring a binding whose node has since
 // disappeared reintroduces no new failure mode: it is the identical
@@ -342,8 +341,7 @@ func (s *Service) RevokeRole(ctx context.Context, sub Subject, role string, scop
 // rbac to ask org whether a node is live, which the module boundary
 // forbids outright (rbac never imports org; SubtreeResolver is the only
 // fact it may learn, and only at decision time, never at grant or restore
-// time). See go/rbac/AGENTS.md's "Soft deletion" section for the recorded
-// decision and its justification in full.
+// time).
 func (s *Service) RestoreRole(ctx context.Context, sub Subject, role string, scope Scope) error {
 	if !sub.Valid() {
 		return ErrSubjectRequired

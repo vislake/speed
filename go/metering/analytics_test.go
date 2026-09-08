@@ -206,14 +206,12 @@ func TestAnalyticsRecorder_Stop_BeforeStart_DoesNotPreventStoppingALaterLoop(t *
 // TestAnalyticsRecorder_ConcurrentStartAndStop_NoDataRace drives Start
 // and Stop from racing goroutines -- one Start racing two Stops, so a
 // Stop can also land while another Stop is mid-wait and a Start has
-// already replaced the loop generation. Before the fix the two
-// sync.Once critical sections wrote and read the stop/done fields
-// without any synchronization between them, which the race detector can
-// see when the calls actually overlap. After the fix every lifecycle
-// field is guarded by the lifecycle mutex (or passed to the goroutine by
-// value), and a Stop only clears the started flag for the generation it
-// actually waited on, so any interleaving is race-free and every order
-// converges.
+// already replaced the loop generation. Every lifecycle field is guarded
+// by the lifecycle mutex (or passed to the goroutine by value) -- never
+// written and read without synchronization between the racing goroutines,
+// which the race detector would see when the calls actually overlap --
+// and a Stop only clears the started flag for the generation it actually
+// waited on, so any interleaving is race-free and every order converges.
 func TestAnalyticsRecorder_ConcurrentStartAndStop_NoDataRace(t *testing.T) {
 	agg := newTestAggregator(t)
 	for i := 0; i < 10; i++ {
@@ -256,14 +254,14 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 }
 
-// TestAnalyticsRecorder_IngestFailure_CountsIntoDropped is the
-// P2-metering-11 regression: a buffered event whose delivery into the
+// TestAnalyticsRecorder_IngestFailure_CountsIntoDropped pins the
+// drop-accounting contract: a buffered event whose delivery into the
 // aggregator fails (an Ingest error) is a lost event exactly like a
 // full-buffer drop -- it will never reach the summary row or the
-// real-time counter -- but deliver() used to only log it, leaving
-// Dropped() at zero while events vanished. Delivery failures now count
-// into the same counter the explicit drops do, so a host's drop metric
-// tells the whole truth about the fail-open tier. The failure is
+// real-time counter -- so deliver() must count it, not merely log it
+// and leave Dropped() at zero while events vanish. Delivery failures
+// count into the same counter the explicit drops do, so a host's drop
+// metric tells the whole truth about the fail-open tier. The failure is
 // injected deterministically with no database involved: an aggregator
 // whose period bucket is misconfigured refuses every Ingest with
 // ErrInvalidPeriodBucket after validation passes.
@@ -282,21 +280,21 @@ func TestAnalyticsRecorder_IngestFailure_CountsIntoDropped(t *testing.T) {
 	}
 
 	// The flush loop delivers, Ingest fails, and the failure must be
-	// counted. Pre-fix the event vanished with Dropped() still at 0, so
-	// this wait times out.
+	// counted; without the count the event vanishes with Dropped() still
+	// at 0, and this wait times out.
 	waitFor(t, func() bool { return r.Dropped() == 1 })
 }
 
 // TestAnalyticsRecorder_CancelThenStart_RestartsTheLoopAndDeliversBuffered
-// is the P3-metering-14 regression: when the flush loop exits because its
+// pins the cancel-restart contract: when the flush loop exits because its
 // ctx was canceled -- not because Stop closed the stop channel -- the
-// started flag used to stay set forever, so a later Start was a permanent
-// no-op and every Record after the cancel was silently stuffed into a
-// buffer nothing would ever drain. run now clears the started flag for
-// its own loop generation on exit (without setting the stopped latch), so
-// a canceled ctx leaves Start restartable and events recorded during the
-// gap are buffered honestly -- delivered by the fresh loop, counted drops
-// never, silence never.
+// started flag must not stay set forever, or a later Start would be a
+// permanent no-op and every Record after the cancel would be silently
+// stuffed into a buffer nothing would ever drain. run clears the started
+// flag for its own loop generation on exit (without setting the stopped
+// latch), so a canceled ctx leaves Start restartable and events recorded
+// during the gap are buffered honestly -- delivered by the fresh loop,
+// counted drops never, silence never.
 func TestAnalyticsRecorder_CancelThenStart_RestartsTheLoopAndDeliversBuffered(t *testing.T) {
 	agg := newTestAggregator(t)
 	r := NewAnalyticsRecorder(agg)

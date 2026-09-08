@@ -32,8 +32,8 @@ func TestGrantCache_PutThenGet_IsAHit(t *testing.T) {
 func TestGrantCache_StoresNodeIDsNotResolvedPaths(t *testing.T) {
 	// What a node-scoped grant carries through the cache is the node ID.
 	// Caching the resolved materialized path instead would go stale the
-	// moment the node moved in the organization tree, which is exactly the
-	// staleness docs/internal/16-verification.md forbids -- and it would
+	// moment the node moved in the organization tree -- a member's
+	// permissions must follow such a move immediately -- and it would
 	// go stale one layer further in than the binding row does, where
 	// nothing would report it.
 	c := newGrantCache(time.Minute)
@@ -68,8 +68,7 @@ func TestGrantCache_Get_UnknownSubject_IsAMiss(t *testing.T) {
 }
 
 func TestGrantCache_Get_DifferentTenantSameUser_IsAMiss(t *testing.T) {
-	// The same person in two tenants is the ordinary case
-	// docs/internal/05-identity-and-access.md calls out: an administrator
+	// The same person in two tenants is the ordinary case: an administrator
 	// in one tenant and an ordinary member in another. A cache keyed on
 	// the user alone would serve tenant A's grants in tenant B, which is a
 	// cross-tenant authorization leak rather than a cache bug.
@@ -251,8 +250,8 @@ func TestGrantCache_PutIfCurrent_SucceedsWhenFenceUnchanged(t *testing.T) {
 }
 
 func TestGrantCache_PutIfCurrent_DiscardsAfterInterveningInvalidate(t *testing.T) {
-	// The fenced race this method exists to close (see its doc comment and
-	// the review finding on service.go's grantsFor): a load captures the
+	// The fenced race this method exists to close (see its doc comment): a
+	// load captures the
 	// fence, then something invalidates the SAME subject before the load's
 	// result is written back. The stale result must not resurrect what the
 	// invalidation just dropped.
@@ -298,14 +297,13 @@ func TestGrantCache_PutIfCurrent_DiscardsAfterInterveningInvalidateTenant(t *tes
 }
 
 // TestGrantCache_PutIfCurrent_FenceIsPerSubject_OtherSubjectsInvalidateSparesThisLoad
-// pins the review finding on the cache's fence: it used to be keyed on a
-// process-global generation counter, so ANY invalidation -- any tenant,
-// any subject -- discarded every unrelated subject's in-flight load. In
-// the distributed mode every replica hears every platform-wide authz
-// change, so under write load the cache would almost never fill and every
-// check became a full database read. The fence is per-subject now: an
-// invalidation of subject A must not discard subject B's load, while A's
-// own invalidation must still fence A's own stale load.
+// pins the fence's per-subject keying: an invalidation of subject A -- any
+// tenant, any subject -- must not discard subject B's in-flight load,
+// while A's own invalidation must still fence A's own stale load. A
+// process-global generation counter would make every platform-wide authz
+// change discard every unrelated in-flight load; in the distributed mode
+// every replica hears every change, so under write load the cache would
+// almost never fill and every check would become a full database read.
 func TestGrantCache_PutIfCurrent_FenceIsPerSubject_OtherSubjectsInvalidateSparesThisLoad(t *testing.T) {
 	c := newGrantCache(time.Minute)
 	t.Cleanup(c.close)
@@ -428,8 +426,8 @@ func TestGrantCache_AbortLoad_ReleasesTheSlot(t *testing.T) {
 }
 
 func TestGrantCache_ConcurrentUse_IsRaceFree(t *testing.T) {
-	// The decision cache is the module's one concurrency hot spot (backend
-	// coding standard §13: caches require -race tests). Readers, writers,
+	// The decision cache is the module's one concurrency hot spot, and a
+	// cache's races surface only under -race. Readers, writers,
 	// both invalidation paths and both halves of the fenced write path run
 	// together against the same entries and slots.
 	c := newGrantCache(time.Minute)

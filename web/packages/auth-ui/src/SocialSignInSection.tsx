@@ -17,9 +17,9 @@
  * new attempt clears the banner, so an earlier attempt's failure can
  * never paint over a newer attempt's success or linger past it. The
  * authorize-URL report to the host runs only after the request verdict
- * settled, and a throwing onAuthorizeUrl is contained the tenancy-ui
- * way: it is not an authorization failure, never renders an error and
- * never escapes as an unhandled rejection.
+ * settled, and a throwing onAuthorizeUrl is contained: it is not an
+ * authorization failure, never renders an error and never escapes as
+ * an unhandled rejection.
  */
 
 import { useRef, useState } from 'react'

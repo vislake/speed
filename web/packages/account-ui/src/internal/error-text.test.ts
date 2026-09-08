@@ -22,13 +22,13 @@
  * session-lifecycle family, authn.rate_limited, authn.identity_already_bound
  * and authn.identity_requires_binding) must stay verbatim copies of the
  * auth-ui texts for the same codes, in both languages, so the same server
- * answer reads the same on the account page and the sign-in surface. The
- * five session-lifecycle codes are incidentally covered by tenancy-ui's
- * own copy pin today -- tenancy-ui's whitelist shares them -- but that
- * coverage is a side effect of tenancy-ui's whitelist, never account-ui's
- * protection: tenancy-ui can narrow its whitelist for its own reasons and
- * silently drop it. The eight are pinned here, from this package's own
- * suite, against the auth-ui bundles imported below as test data.
+ * answer reads the same on the account page and the sign-in surface.
+ * The pin must live in this package's own suite: another package's
+ * whitelist sharing some of these codes covers them only as a side
+ * effect of its own whitelist, never as this package's protection --
+ * that package can narrow its whitelist for its own reasons and
+ * silently drop the coverage. The eight are pinned here, against the
+ * auth-ui bundles imported below as test data.
  */
 
 import { describe, expect, it } from 'vitest'

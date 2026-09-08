@@ -12,10 +12,11 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// register_tenant_attest_flow_test.go is the P1-authn-15 regression in the
-// reference-app shape: an authenticated tenant member registering a new
-// account through the app's own register form used to stamp their tenant
-// onto the new account's authn.user.created event.
+// register_tenant_attest_flow_test.go pins the register-path tenant
+// isolation in the reference-app shape: an authenticated tenant member
+// registering a new account through the app's own register form must not
+// have their tenant stamped onto the new account's authn.user.created
+// event.
 //
 // The chain that made it a common case was this host's own composition
 // as it stood before authn's subtree moved outside the tenancy chain
@@ -38,9 +39,8 @@ import (
 // regression pin for that property, driven through the real composed
 // stack.
 //
-// Failing before the fix: the fresh account lands on tenant-acme's org
-// roster and its sign-in resolves into tenant-acme. Passing after: the
-// account is absent from the roster, its sign-in naming tenant-acme is
+// The pinned behavior: the fresh account stays absent from tenant-acme's
+// org roster, its sign-in naming tenant-acme is
 // refused with the unified 401 authn.invalid_credentials answer a wrong
 // password also gets (the fold of no-membership logins into
 // ErrInvalidCredentials: the login endpoint discloses nothing about
@@ -62,7 +62,7 @@ func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t
 
 	// tenant-acme's org root is created BEFORE the register, through org's
 	// real HTTP surface -- the state a real tenant already has, which is
-	// what makes the roster question meaningful in both the pre-fix and
+	// what makes the roster question meaningful in both the
 	// the post-fix shape (a tenant's own members are the accounts org's
 	// handleUserCreated subscriber would seat there).
 	var acmeRoot orgNode
@@ -132,7 +132,7 @@ func TestRegister_AuthenticatedCallersBearer_NeverSeatsTheAccountInTheirTenant(t
 	// Leg 2, the refusal: a sign-in of the fresh account naming
 	// tenant-acme is refused -- the account holds no membership there. The
 	// refusal is the unified 401 authn.invalid_credentials answer a wrong
-	// password also gets (this leg used to pin the distinguishable 403
+	// password also gets (this leg answers the unified 401
 	// authn.tenant_membership_required; the answer was deliberately
 	// unified, the specific reason now recorded in the login history,
 	// never the response).

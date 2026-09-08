@@ -1,47 +1,40 @@
-// Package audit is the M1 audit-infrastructure round's persistence and
-// declarative-collection home: the AuditEvent model, its dual-dialect
-// migrations, Repository (the append-only accessor that stores and reads
-// events back), Emit (the explicit collection mechanism), and Module (the
-// pkgcore.Module persister that turns published events into stored rows).
-// The complementary automatic-collection mechanism -- the GORM
-// write-capture plugin -- lives one level up, in go/dbkit itself
-// (audit_capture.go), since it has to be wired into dbkit.Open.
+// Package audit is the persistence and declarative-collection home of the
+// audit trail: the AuditEvent model, its dual-dialect migrations,
+// Repository (the append-only accessor that stores and reads events back),
+// Emit (the explicit collection mechanism), and Module (the pkgcore.Module
+// persister that turns published events into stored rows). The
+// complementary automatic-collection mechanism -- the GORM write-capture
+// plugin -- lives one level up, in go/dbkit itself (audit_capture.go),
+// since it has to be wired into dbkit.Open.
 //
-// Scope of this package, as of this milestone (docs/internal/15-roadmap.md's
-// M1 audit-infrastructure item; docs/internal/10-compliance-and-audit.md's
-// full design):
+// What this package ships:
 //
-//   - Shipped here: AuditEvent (model.go), its migrations (migrations/),
-//     Repository's Insert/Get/ListByTenant (repository.go), the explicit
-//     collection mechanism Emit (emit.go), and the pkgcore.Module
-//     persister (module.go) that subscribes to both collection
-//     mechanisms' events -- dbkit's own automatic GORM write-capture
-//     plugin (go/dbkit/audit_capture.go, one level up) and this package's
-//     own Emit -- plus tenancy's already-shipped
+//   - AuditEvent (model.go) and its migrations (migrations/), including
+//     the database-level append-only backstop
+//     (migrations/{postgres,sqlite}/0002_append_only_enforcement.sql -- a
+//     BEFORE UPDATE/DELETE trigger pair on audit_events, proven against a
+//     raw *sql.DB bypassing Repository entirely in append_only_test.go
+//     and, for PostgreSQL, integration_test/postgres_append_only_test.go).
+//   - Repository's Insert/Get/ListByTenant (repository.go) -- the minimal
+//     read path its own tests need. ListByTenant is not a query surface:
+//     there is no actor/resource/action/time-range/result search, no
+//     retention/archival and no hash chain over the table (see
+//     go/compliance for the closest read surface, AuditQuery, and its
+//     formatted CSV/JSON report export).
+//   - The explicit collection mechanism Emit (emit.go) and the
+//     pkgcore.Module persister (module.go) that subscribes to both
+//     collection mechanisms' events -- dbkit's own automatic GORM
+//     write-capture plugin (go/dbkit/audit_capture.go, one level up) and
+//     this package's own Emit -- plus tenancy's
 //     EventSystemContextEntered, normalizing each into an AuditEvent and
 //     calling Repository.Insert.
-//   - Shipped in a later round, alongside this one's own scope: a
-//     database-level append-only backstop (migrations/{postgres,sqlite}/
-//     0002_append_only_enforcement.sql -- a BEFORE UPDATE/DELETE trigger
-//     pair on audit_events, proven against a raw *sql.DB bypassing
-//     Repository entirely in append_only_test.go and, for PostgreSQL,
-//     integration_test/postgres_append_only_test.go).
-//   - Deferred to M4 (go/compliance, per docs/internal/10-compliance-and-
-//     audit.md's own delivery-phase correction): the optional hash chain,
-//     retention/archival, and the actor/resource/action/time-range/result
-//     query API beyond compliance's own AuditQuery and its formatted
-//     (CSV/JSON) report export. This package's ListByTenant is only the
-//     minimal read path its own tests (and this round's reference-app
-//     proof test) need -- not that query surface.
 //
 // Module home: this package lives inside go/dbkit, not as its own
-// go.work module and not inside go/compliance (a stub until M4). See this
-// round's scope-freeze report for the full evidence chain; in short,
-// go/dbkit already owns the one GORM-callback plugin precedent
-// (tenant_scope.go), the migration machinery (MigrationRegistry), and the
-// "real tenant_id column that is not TenantScoped" precedent this table
-// needs (go/jobs's jobRecord, go/config's row) -- and every module that
-// will eventually want to emit an audit event already depends on dbkit
-// transitively, so this costs the rest of the M1 modules zero new import
-// edges.
+// go.work module and not inside go/compliance. go/dbkit already owns the
+// one GORM-callback plugin precedent (tenant_scope.go), the migration
+// machinery (MigrationRegistry), and the "real tenant_id column that is
+// not TenantScoped" precedent this table needs (go/jobs's jobRecord,
+// go/config's row) -- and every module that emits an audit event already
+// depends on dbkit transitively, so hosting the persister here adds zero
+// new import edges for them.
 package audit

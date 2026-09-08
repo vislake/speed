@@ -10,11 +10,10 @@ import (
 
 // credentialStore is the ai_gateway_credentials table accessor. It is
 // deliberately a thin row accessor over a plain *gorm.DB -- no
-// dbkit.Repository[T], mirroring go/config's own store.go, because
-// credentialRow is platform data, not tenant data (see model.go's own doc
-// comment). Scope and system-context rules live in CredentialService above
-// it; the store itself does not know what a CredentialScope means beyond
-// the column it maps to.
+// dbkit.Repository[T], because credentialRow is platform data, not tenant
+// data (see model.go's own doc comment). Scope and system-context rules
+// live in CredentialService above it; the store itself does not know what
+// a CredentialScope means beyond the column it maps to.
 type credentialStore struct {
 	db *gorm.DB
 }
@@ -39,8 +38,8 @@ func (s *credentialStore) get(ctx context.Context, provider string, scope Creden
 
 // put inserts or updates the row for one exact (provider, scope, tenantID)
 // triple, using the row's own primary key as the upsert conflict target --
-// the identical dialect-neutral clause config's own store.put uses, so both
-// supported dialects (SQLite, PostgreSQL) stay on one code path.
+// dialect-neutral, so both supported dialects (SQLite, PostgreSQL) stay on
+// one code path.
 func (s *credentialStore) put(ctx context.Context, r credentialRow) error {
 	return s.db.WithContext(ctx).
 		Clauses(clause.OnConflict{

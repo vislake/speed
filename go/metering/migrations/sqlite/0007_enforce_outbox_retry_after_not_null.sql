@@ -1,12 +1,12 @@
 -- Makes metering_outbox_records.retry_after NOT NULL on SQLite -- the
--- P3-metering-E schema-force half; the postgres/ sibling carries the full
--- decision rationale (why NOT NULL was chosen over dropping the claim
--- query's COALESCE on a still-nullable column, and over declaring the
--- index/order-key mismatch a known trade-off). End state identical to
--- the PostgreSQL copy: NULL is structurally impossible from this
--- migration on, and the claim query's COALESCE and IS NULL escape are
--- provably dead and are removed in the same round (go/metering/
--- repository.go's claimPendingOutboxRecords).
+-- schema-force half of the decision to make NULL structurally
+-- impossible; the postgres/ sibling carries the full rationale (why NOT
+-- NULL was chosen over dropping the claim query's COALESCE on a
+-- still-nullable column, and over declaring the index/order-key mismatch
+-- a known trade-off). End state identical to the PostgreSQL copy: NULL
+-- is structurally impossible from this migration on, and the claim
+-- query's COALESCE and IS NULL escape are dead and removed
+-- (go/metering/repository.go's claimPendingOutboxRecords).
 --
 -- SQLite cannot alter an existing column's nullability (no ALTER COLUMN
 -- SET NOT NULL), so the enforcement is a table rebuild: the table is
@@ -25,10 +25,10 @@
 -- re-running it), while a row that somehow still carries NULL is
 -- converted before the copy lands it in a NOT NULL column.
 --
--- NOT NULL with no DEFAULT, deliberately: see the postgres/ sibling --
--- a constant retry-schedule default would be a lie, and a future write
--- path that forgets retry_after must fail loudly at the constraint, not
--- write a silently-wrong schedule.
+-- NOT NULL with no DEFAULT, deliberately (the postgres/ sibling carries
+-- the rationale): a constant retry-schedule default would be a lie, and
+-- any write path that forgets retry_after fails loudly at the
+-- constraint rather than writing a silently-wrong schedule.
 --
 -- This is the SQLite copy; the postgres/ sibling carries the full
 -- rationale. The two end schema-identical.

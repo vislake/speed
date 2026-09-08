@@ -70,11 +70,11 @@ func (r *FakeRepository) listBySubject(ctx context.Context, subjectID string) ([
 // dbkit.Repository[FakeNote] embedding: Sweep hard-deletes every soft-
 // deleted row at or before the given cutoff, Erase hard-deletes every row
 // belonging to the given subject (soft-deleted or not), and Export
-// returns every live row belonging to the given tenant. This is this
-// round's whole proof that the pkgcore.RetentionParticipant contract
-// compiles and works end to end: every write below is a plain
-// repo.HardDelete call, never compliance code -- or this fixture's own
-// participant wrapper -- writing to compliance_test_fake_notes directly.
+// returns every live row belonging to the given tenant. This is the whole
+// proof that the pkgcore.RetentionParticipant contract compiles and works
+// end to end: every write below is a plain repo.HardDelete call, never
+// compliance code -- or this fixture's own participant wrapper -- writing
+// to compliance_test_fake_notes directly.
 func NewParticipant(name string, repo *FakeRepository) pkgcore.RetentionParticipant {
 	return pkgcore.RetentionParticipant{
 		Name: name,

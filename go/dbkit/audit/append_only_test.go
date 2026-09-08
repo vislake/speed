@@ -74,16 +74,16 @@ func TestAppendOnlyTrigger_SQLite_RejectsRawUpdateAndDelete(t *testing.T) {
 //
 // SQLite only fires a table's DELETE triggers for the implicit
 // conflict-row removal INSERT OR REPLACE performs when the connection's
-// PRAGMA recursive_triggers is ON; it defaults OFF, and dbkit.Open never
-// set it before this test's fix, so an "INSERT OR REPLACE" against an
-// existing id silently overwrote the row's columns with no error and no
-// trigger firing at all -- reachable only via raw SQL that bypasses
-// Repository (which has no Update or Delete method to begin with), but
-// exactly the threat class the append-only triggers exist to stop. This
-// test fails on the pre-fix dialect factory (the row silently becomes
-// "tampered.action" with no error) and passes now that
-// go/dbkit/dialect/sqlite's withRecursiveTriggers folds
-// "_pragma=recursive_triggers(1)" into every SQLite DSN dbkit.Open opens.
+// PRAGMA recursive_triggers is ON; it defaults OFF, so without the pragma
+// an "INSERT OR REPLACE" against an existing id silently overwrites the
+// row's columns with no error and no trigger firing at all -- reachable
+// only via raw SQL that bypasses Repository (which has no Update or
+// Delete method to begin with), but exactly the threat class the
+// append-only triggers exist to stop. go/dbkit/dialect/sqlite's
+// withRecursiveTriggers folds "_pragma=recursive_triggers(1)" into every
+// SQLite DSN dbkit.Open opens; on a connection without it this test fails
+// (the row silently becomes "tampered.action" with no error), on
+// dbkit.Open's connections it passes.
 func TestAppendOnlyTrigger_SQLite_RejectsInsertOrReplace(t *testing.T) {
 	ctx := context.Background()
 	db := openAuditTestDB(t)

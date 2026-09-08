@@ -11,10 +11,10 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-// This file holds Service's webhook-subscription-management surface --
-// round 2's counterpart of service.go's API key Create/List/Rotate/Revoke.
-// The actual event-driven delivery pipeline (subscribing to the bus,
-// mapping events, enqueueing and running delivery jobs) lives in
+// This file holds Service's webhook-subscription-management surface -- the
+// counterpart of service.go's API key Create/List/Rotate/Revoke. The
+// actual event-driven delivery pipeline (subscribing to the bus, mapping
+// events, enqueueing and running delivery jobs) lives in
 // webhook_delivery.go; this file is configuration only.
 
 // CreateWebhookSubscriptionInput is what a caller passes to
@@ -191,7 +191,7 @@ type UpdateWebhookSubscriptionInput struct {
 // then answers ErrWebhookSubscriptionNotFound, exactly as if the deletion
 // had landed before the read. An input with no field set at all (every
 // field nil) writes nothing and still records the update audit event,
-// matching the call's pre-existing "an update was requested" accounting.
+// matching the call's "an update was requested" accounting.
 func (s *Service) UpdateWebhookSubscription(ctx context.Context, in UpdateWebhookSubscriptionInput) (*WebhookSubscriptionSummary, error) {
 	row, err := s.webhookRepo.FindByID(ctx, in.ID)
 	if err != nil {
@@ -248,32 +248,29 @@ func (s *Service) UpdateWebhookSubscription(ctx context.Context, in UpdateWebhoo
 }
 
 // DeleteWebhookSubscription mark-deletes one subscription of the caller's
-// tenant -- WebhookSubscription's dbkit.SoftDeletable adoption
+// tenant -- WebhookSubscription's dbkit.SoftDeletable implementation
 // (webhook_model.go's own doc comment) is what makes the promoted
 // webhookRepo.Delete(ctx, id) call below an UPDATE setting deleted_at/
 // deleted_by rather than a physical DELETE. Its past WebhookDelivery rows
 // are left in place as history either way -- see that field's own doc
 // comment in webhook_model.go for why this module never cascades the
 // delete (no cross-module-style foreign keys, even within this module's
-// own two tables) -- and a delivery already enqueued before this call
-// settles exactly as it always did: handleDeliveryJob's own
-// webhookRepo.FindByID lookup on the subscription is hidden from a
-// mark-deleted row by dbkit's soft-delete auto-scope plugin exactly as it
-// was made impossible by a physical DELETE before this round, so an
-// in-flight delivery still resolves ErrRecordNotFound and settles terminal
-// with "webhook subscription was deleted" (webhook_delivery.go's
-// handleDeliveryJob) -- and ONLY genuine not-found settles that way: any
-// other FindByID failure (a transient store error, a secret that no longer
-// decrypts) is returned so the job retries, never dead-lettered as if the
-// subscription were the problem (see handleDeliveryJob's own doc comment).
+// own two tables). A delivery already enqueued before this call settles
+// against the subscription's absence: handleDeliveryJob's own
+// webhookRepo.FindByID lookup is hidden from a mark-deleted row by
+// dbkit's soft-delete auto-scope plugin, so an in-flight delivery
+// resolves ErrRecordNotFound and settles terminal with "webhook
+// subscription was deleted" (webhook_delivery.go's handleDeliveryJob) --
+// and ONLY genuine not-found settles that way: any other FindByID failure
+// (a transient store error, a secret that no longer decrypts) is returned
+// so the job retries, never dead-lettered as if the subscription were the
+// problem (see handleDeliveryJob's own doc comment).
 //
-// See RestoreWebhookSubscription for undoing this, and
-// go/integration/AGENTS.md's "Soft deletion" section for the round's full
-// design record, including why a terminal delivery marked "webhook
-// subscription was deleted" does not mean the row can never reappear the
-// way it could not before a Restore existed -- a restored subscription gets
-// FRESH deliveries off the next matching domain event, never a replay of
-// the already-settled one (see handleDeliveryJob's own doc comment).
+// See RestoreWebhookSubscription for undoing this. A terminal delivery
+// marked "webhook subscription was deleted" does not mean the row can
+// never reappear: a restored subscription gets FRESH deliveries off the
+// next matching domain event, never a replay of the already-settled one
+// (see handleDeliveryJob's own doc comment).
 func (s *Service) DeleteWebhookSubscription(ctx context.Context, id string) error {
 	row, err := s.webhookRepo.FindByID(ctx, id)
 	if err != nil {
@@ -304,52 +301,49 @@ func (s *Service) DeleteWebhookSubscription(ctx context.Context, id string) erro
 //
 // This is a deliberate divergence from go/org's and go/rbac's own Restore
 // methods, both of which change nothing about the restored row but its two
-// soft-delete columns (see go/org/AGENTS.md's and go/rbac/AGENTS.md's "Soft
-// deletion" sections, and rbac's RestoreRole doc comment, for the reasoning
-// behind that choice in THEIR domains). The reason this round does not
-// follow that precedent unchanged is that org's and rbac's Restore calls
-// resume a purely INTERNAL fact -- an organization membership, an
-// authorization grant -- evaluated fresh against the rest of the system on
-// every read. Restoring a WebhookSubscription with Active still true is
-// different in kind: webhook_delivery.go's handleDomainEvent fans out to
-// every ACTIVE subscription automatically, on every matching domain event,
-// entirely without further human action -- so an unconditional restore
-// would silently resume POSTing the tenant's live event data to an
-// external, third-party URL nobody has looked at again since the
-// subscription was deleted, however long ago that was and however stale
-// its URL or receiving system might now be. That is a real-world side
-// effect leaving this process, not an internal state change this codebase
-// can fully reason about the safety of the way it can for an org membership
-// or an rbac grant. Forcing Active = false here costs the caller exactly
-// one extra explicit step -- an UpdateWebhookSubscription call setting
-// Active back to true -- to resume delivery, which is the same "no implicit
-// side effect on a structural edit" discipline this codebase already
-// applies elsewhere (see go/org/AGENTS.md's identical framing for why
-// TreeService.Delete does not re-parent orphans and does not cascade
-// Restore). A caller wanting the subscription resumed in one round trip
+// soft-delete columns (see rbac's RestoreRole doc comment for the
+// reasoning behind that choice in their domain). The reason this module
+// does not follow that precedent unchanged is that org's and rbac's
+// Restore calls resume a purely INTERNAL fact -- an organization
+// membership, an authorization grant -- evaluated fresh against the rest
+// of the system on every read. Restoring a WebhookSubscription with
+// Active still true is different in kind: webhook_delivery.go's
+// handleDomainEvent fans out to every ACTIVE subscription automatically,
+// on every matching domain event, entirely without further human action --
+// so an unconditional restore would silently resume POSTing the tenant's
+// live event data to an external, third-party URL nobody has looked at
+// again since the subscription was deleted, however long ago that was and
+// however stale its URL or receiving system might now be. That is a
+// real-world side effect leaving this process, not an internal state
+// change this codebase can fully reason about the safety of the way it can
+// for an org membership or an rbac grant. Forcing Active = false here
+// costs the caller exactly one extra explicit step -- an
+// UpdateWebhookSubscription call setting Active back to true -- to resume
+// delivery, the same "no implicit side effect on a structural edit"
+// discipline org's TreeService.Delete applies when it refuses to re-parent
+// orphans or cascade Restore. A caller wanting the subscription resumed
 // simply follows Restore with such a call; nothing here prevents that.
 //
 // # The restore and the forced pause land in ONE guarded write
 //
 // The unmark (clearing deleted_at/deleted_by) and the forced pause
 // (Active = false) are performed by a single UPDATE --
-// WebhookSubscriptionRepository.restorePaused -- never by the
-// restore-then-pause pair of separate writes this method first shipped
-// with. Two writes created a real window on both sides of the pause: the
-// row was LIVE with Active still true between the unmark's commit and the
-// pause's, which is the exact state handleDomainEvent's fan-out matches
+// WebhookSubscriptionRepository.restorePaused. Two separate writes would
+// leave a real window on both sides of the pause: the row would be LIVE
+// with Active still true between the unmark's commit and the pause's,
+// which is the exact state handleDomainEvent's fan-out matches
 // (webhook_delivery.go's matchingSubscriptions, over ListActiveByTenant) --
-// so a matching domain event observed in that window was silently fanned
-// out to the external URL this pause exists to stop POSTing to -- and a
-// pause write that failed left the row permanently restored-ACTIVE while
-// this method reported ErrInternal, a half-restored state whose repair a
-// retry could never reach (the row was no longer mark-deleted, so the
-// retry answered the collapsed not-found). One statement closes both
-// hazards: no interleaving can observe the row live-and-active between two
-// writes that are one write, and a failure of the single write leaves the
-// row exactly as it was -- still mark-deleted, never restored at all --
-// failing closed toward "nothing resumes delivering" rather than toward an
-// unnoticed resumption.
+// so a matching domain event observed in that window would be silently
+// fanned out to the external URL this pause exists to stop POSTing to --
+// and a pause write that failed would leave the row permanently
+// restored-ACTIVE while this method reported ErrInternal, a half-restored
+// state whose repair a retry could never reach (the row would no longer be
+// mark-deleted, so the retry would answer the collapsed not-found). One
+// statement closes both hazards: no interleaving can observe the row
+// live-and-active between two writes that are one write, and a failure of
+// the single write leaves the row exactly as it was -- still mark-deleted,
+// never restored at all -- failing closed toward "nothing resumes
+// delivering" rather than toward an unnoticed resumption.
 //
 // The write's own guard preserves every interleaving property this
 // method's contract promises: its WHERE requires deleted_at IS NOT NULL, so
@@ -414,8 +408,8 @@ type WebhookDeliverySummary struct {
 }
 
 // ListRecentWebhookDeliveries returns up to limit of subscriptionID's most
-// recent deliveries, newest first -- the delivery log read path
-// docs/internal/07-platform-services.md asks for. A non-positive limit
+// recent deliveries, newest first -- the delivery log read path the design
+// asks for. A non-positive limit
 // falls back to defaultRecentDeliveriesLimit, and a limit above
 // maxRecentDeliveriesLimit is clamped to it (the fragment's own limit
 // parameter declares the identical 100 ceiling -- this clamp is its
@@ -507,12 +501,11 @@ func (s *Service) toSummary(row WebhookSubscription) (WebhookSubscriptionSummary
 // verbatim into audit.Resource.DisplayName, which audit_events stores in
 // resource_display_name (VARCHAR(255)): a source wider than its target,
 // by deliberate design. The fitting happens at the audit write path, not
-// here: go/dbkit/audit's Repository.Insert cuts caller-supplied content
-// to its columns (an over-long URL is legal content and is stored cut at
-// 255 runes, with the cut recorded in a structured warning -- see
-// go/dbkit/audit/AGENTS.md's "Column bounds" section), so a legal long
-// URL must never fail this audit event after the subscription row has
-// already committed.
+// here: dbkit/audit's Repository.Insert cuts caller-supplied content to
+// its columns (an over-long URL is legal content and is stored cut at
+// 255 runes, with the cut recorded in a structured warning), so a legal
+// long URL must never fail this audit event after the subscription row
+// has already committed.
 func (s *Service) emitWebhookAudit(ctx context.Context, action string, row *WebhookSubscription) error {
 	if err := audit.Emit(ctx, s.bus, s.auditActions, audit.Input{
 		Action:   action,

@@ -23,14 +23,14 @@ import (
 // recovers panics from the handler call only, while its ErrorHandler
 // (this package's handleError, which invokes OnFailure) runs strictly
 // outside that recover in handleFailedMessage on the worker goroutine
-// (pinned v0.26.0 source) -- so without the fix a panicking hook kills
-// the whole process mid-suite. That pre-fix failure mode cannot be
-// demonstrated in-process as a clean test failure (the process dies), so
-// the deterministic fail-before proof lives in the unit tier
+// (pinned v0.26.0 source) -- so without a recovery a panicking hook kills
+// the whole process mid-suite. That failure mode cannot be demonstrated
+// in-process as a clean test failure (the process dies), so the
+// deterministic fail-before proof lives in the unit tier
 // (queue/asynq/worker_test.go's panicking-FailureHook subtest of
-// TestQueue_HandleErrorAttempt, where the pre-fix code's escaping panic
-// fails the test); this leg is the pass-after real-run proof that the
-// recovery holds end to end over a real worker.
+// TestQueue_HandleErrorAttempt, where the escaping panic fails the test);
+// this leg is the pass-after real-run proof that the recovery holds end to
+// end over a real worker.
 func TestRedisQueue_PanickingFailureHook_WorkerSurvivesAndLaterJobsRun(t *testing.T) {
 	ctx := context.Background()
 	q := startTestAsynqQueue(t, ctx)

@@ -23,8 +23,7 @@ import (
 // handleFailedMessage archives whenever retried >= maxRetry, isFailure not
 // consulted), so the bounce must not dead-letter the Job with zero
 // compensation -- the FailureHook fires, exactly as for a genuine terminal
-// failure (see queue/asynq/worker.go's handleErrorAttempt doc comment and
-// AGENTS.md's "Per-tenant concurrency limiting" section).
+// failure (see queue/asynq/worker.go's handleErrorAttempt doc comment).
 
 // capacityHolderHandler occupies a tenant's single concurrency slot for as
 // long as the test needs, blocking inside Handle.
@@ -67,8 +66,8 @@ var (
 )
 
 // TestRedisQueue_TerminalAttemptTenantBounce_ArchivesAndFiresFailureHook is
-// the P0-5 regression, orchestrated deterministically on a real asynq
-// server:
+// the terminal-attempt-bounce regression, orchestrated deterministically on
+// a real asynq server:
 //
 //  1. The always-failing Job B (MaxRetries=1, so MaxRetry=1) runs its FIRST
 //     attempt while no other tenant-a Job is running: a genuine business
@@ -83,8 +82,8 @@ var (
 //     package's ErrorHandler returns.
 //
 // The money assertion: that archive must fire B's FailureHook.OnFailure
-// exactly once (pre-fix it archived with zero compensation and zero log),
-// and B's archived record must report the terminal state honestly.
+// exactly once -- an archive with zero compensation and zero log fails the
+// test -- and B's archived record must report the terminal state honestly.
 // B's genuine retry is stretched to one second so step 3 cannot race step
 // 2 -- A is provably holding the slot long before B's final attempt
 // arrives.

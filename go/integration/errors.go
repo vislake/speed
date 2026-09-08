@@ -13,18 +13,12 @@ import (
 // WithCause derives a NEW *apperr.Error, so never compare a once-returned
 // error against a var here with == or errors.Is.
 //
-// Every code is <module>.<reason> per backend coding standard §6.2, and
-// every one has a matching message id in locales/{zh-CN,en-US}.toml. The
-// API never returns the localized prose: it returns the code plus
-// parameters and the client resolves the text.
-//
-// Round 2 adds the webhook subscription and event-mapping codes below
-// (ErrWebhookURLBlocked, ErrWebhookURLInvalid, ErrWebhookURLUnresolvable,
-// ErrInvalidEventMapping, ErrDuplicateEventMapping, and so on) alongside
-// round 1's API-key codes. Declaring a code for a feature that does not
-// exist yet is a lying vocabulary the same way an undeclared config schema
-// would be; see go/integration/AGENTS.md's "Deliberately not in scope round
-// 2 either" section for what a later round will still need to add here.
+// Every code follows the <module>.<reason> convention, and every one has a
+// matching message id in locales/{zh-CN,en-US}.toml. The API never returns
+// the localized prose: it returns the code plus parameters and the client
+// resolves the text. The index spans the API-key surface, the
+// webhook-subscription and event-mapping surface, the HTTP transport layer
+// and the API-key authentication path.
 var (
 	// ErrKeyNotFound reports an API key id that does not exist in the
 	// caller's tenant. Like dbkit.ErrRecordNotFound it never distinguishes
@@ -48,8 +42,8 @@ var (
 	// ErrExpiryExceedsMaximum reports a Create call whose requested
 	// ExpiresAt is further out than the Service's configured lifetime
 	// (WithMaxAPIKeyLifetime, or MaxAPIKeyLifetime when none was configured)
-	// from now. The design doc (docs/internal/07-platform-services.md)
-	// requires a forced expiry ceiling, defaulting to one year, specifically
+	// from now. The design requires a forced expiry ceiling, defaulting to
+	// one year, specifically
 	// because a key that never expires is the most common credential-leak
 	// surface, so this is refused rather than silently clamped: a caller
 	// that asked for ten years should learn its request was rejected, not
@@ -62,10 +56,9 @@ var (
 	ErrExpiryInPast = apperr.Invalid("integration.expiry_in_past")
 
 	// ErrScopeNotHeldByCreator reports a Create call requesting a scope the
-	// creator does not currently hold as a permission, per the design
-	// doc's rule that a key's scope is chosen from the creator's own
-	// permissions at issuance time. WithParam("scope", ...) names the
-	// offending scope.
+	// creator does not currently hold as a permission, per the design rule
+	// that a key's scope is chosen from the creator's own permissions at
+	// issuance time. WithParam("scope", ...) names the offending scope.
 	ErrScopeNotHeldByCreator = apperr.Forbidden("integration.scope_not_held_by_creator")
 
 	// ErrPermissionListerUnavailable reports a Create call requesting one
@@ -92,10 +85,10 @@ var (
 	// input -- a repository error, a PermissionLister or MembershipChecker
 	// call that itself failed, or a crypto/rand failure. Its cause is never
 	// surfaced past this module: an *apperr.Error's cause chain does not
-	// reach an HTTP response body (backend coding standard §6.2).
+	// reach an HTTP response body.
 	ErrInternal = apperr.Internal("integration.internal_error")
 
-	// The round-2 error index: outbound webhook subscriptions and their
+	// The outbound-webhook error index: webhook subscriptions and their
 	// event-mapping mechanism (webhook_service.go, webhook_delivery.go,
 	// eventmapping.go, ssrf.go).
 
@@ -120,13 +113,13 @@ var (
 
 	// ErrWebhookURLBlocked reports a webhook URL whose destination is a
 	// private, loopback, link-local, multicast or otherwise
-	// never-a-legitimate-receiver address -- the SSRF refusal
-	// docs/internal/07-platform-services.md names as the most common
-	// outbound-webhook security hole. See ssrf.go's isBlockedIP.
+	// never-a-legitimate-receiver address -- the SSRF refusal the design
+	// names as the most common outbound-webhook security hole. See
+	// ssrf.go's isBlockedIP.
 	//
 	// WithParam("ip", ...) is deliberately asymmetric between the two paths
 	// that raise this code, and the asymmetry must survive any later
-	// consistency round:
+	// consistency change:
 	//
 	//   - The literal-IP path (ssrf.go, ValidateWebhookURL) carries the
 	//     blocked address: the caller typed it into the URL, so the param is
@@ -165,21 +158,17 @@ var (
 	// See eventmapping.go's buildEventMappingIndex.
 	ErrDuplicateEventMapping = apperr.Invalid("integration.duplicate_event_mapping")
 
-	// The round-5 HTTP-transport error index: Handler's own translation
-	// layer over round 1's API-key surface (handler.go), since extended to
-	// cover round 7's webhook-subscription CRUD and recent-deliveries
-	// operations -- same layer, same two codes, no new transport condition
-	// a later round has had to add. Every code below is a transport-layer
-	// condition Service itself never raises -- it has no *http.Request to
-	// malform and no SubjectResolver of its own -- so these are declared
-	// here rather than in service.go, following org's and storage's
-	// identical split between a Service's own error index and its Handler's
-	// transport-layer additions.
+	// The HTTP-transport error index: Handler's own translation layer over
+	// the module's HTTP surface (handler.go). Every code below is a
+	// transport-layer condition Service itself never raises -- it has no
+	// *http.Request to malform and no SubjectResolver of its own -- so
+	// these are declared here rather than in service.go, following org's
+	// and storage's identical split between a Service's own error index and
+	// its Handler's transport-layer additions.
 
 	// ErrInvalidRequestBody reports a request body Handler could not decode
 	// as the spec-generated JSON type of one of its request-body operations:
-	// round 5's integration_createAPIKey and round 7's
-	// integration_createWebhookSubscription and
+	// integration_createAPIKey, integration_createWebhookSubscription and
 	// integration_updateWebhookSubscription, the latter two through
 	// decodeRequiredJSON, which treats a genuinely empty body as the same
 	// invalid-request condition. It carries no parameters: the schema itself
@@ -188,9 +177,9 @@ var (
 	// same-shaped error.
 	ErrInvalidRequestBody = apperr.Invalid("integration.invalid_request_body")
 
-	// ErrSubjectUnresolved reports integration_createAPIKey (round 5) or
-	// integration_createWebhookSubscription (round 7) -- the two
-	// request-body operations whose payload carries a CreatedBy -- with no
+	// ErrSubjectUnresolved reports integration_createAPIKey or
+	// integration_createWebhookSubscription -- the two request-body
+	// operations whose payload carries a CreatedBy -- with no
 	// SubjectResolver wired, or one that could not identify the caller. See
 	// SubjectResolver's own doc comment (seams.go): this module fails closed
 	// here rather than inventing a default creator, the identical rule
@@ -198,8 +187,8 @@ var (
 	// enforce for their own structurally-identical seam.
 	ErrSubjectUnresolved = apperr.Unauthorized("integration.subject_unresolved")
 
-	// The round-6 error index: Service.Authenticate (authenticate.go) and
-	// its HTTP transport, Middleware (middleware.go).
+	// The API-key authentication error index: Service.Authenticate
+	// (authenticate.go) and its HTTP transport, Middleware (middleware.go).
 
 	// ErrAuthenticationFailed reports that a presented raw API key could not
 	// be authenticated, for ANY of three causes: no such hash exists
@@ -207,10 +196,10 @@ var (
 	// deliberately never distinguishes which -- the identical no-enumeration
 	// discipline go/authn's ErrInvalidCredentials and go/sharing's
 	// ErrNotAccessible both apply to their own bearer-credential refusal
-	// answers (root CLAUDE.md's Security rules): a caller presenting a wrong
-	// or rotated-away key must learn nothing about whether the key ever
-	// existed, was revoked, or expired. See authenticate.go's Service.
-	// Authenticate for the full contract.
+	// answers (the repository-wide Security rules): a caller presenting a
+	// wrong or rotated-away key must learn nothing about whether the key
+	// ever existed, was revoked, or expired. See authenticate.go's
+	// Service.Authenticate for the full contract.
 	ErrAuthenticationFailed = apperr.Unauthorized("integration.authentication_failed")
 
 	// The manual-redelivery error index: Service.RedeliverWebhookDelivery's

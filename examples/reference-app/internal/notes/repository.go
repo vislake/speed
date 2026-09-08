@@ -10,14 +10,14 @@ import (
 )
 
 // Repository is notes' tenant-scoped data-access type. It embeds
-// dbkit.Repository[Note] instead of holding a *gorm.DB directly (root
-// CLAUDE.md's multi-tenant isolation rule; backend coding standard §3.2) --
+// dbkit.Repository[Note] instead of holding a *gorm.DB directly (the
+// multi-tenant isolation discipline) --
 // Create, FindByID, Update, Delete, List and HardDelete are all promoted from
 // the embedded base unchanged. It exists as notes' own named type, rather
 // than every caller using *dbkit.Repository[Note] directly, so a query
 // specific to notes that Repository[T]'s deliberately minimal surface cannot
-// express (see dbkit/AGENTS.md's "Known limitations") has somewhere to live
-// later without changing any caller's import.
+// express has somewhere to live
+// without changing any caller's import.
 type Repository struct {
 	*dbkit.Repository[Note]
 

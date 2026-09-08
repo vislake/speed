@@ -3,9 +3,9 @@
  * host: the case read through the generated cases_getCase hook over a
  * tenant-namespaced key, its photos rendered from their stored bytes,
  * and each photo carrying its smile-simulation workbench
- * (photo-simulation-panel.tsx, the block-B surface: option pickers, the
- * async generation with its honest status, and the before/after
- * comparison once a generation completes).
+ * (photo-simulation-panel.tsx: option pickers, the async generation
+ * with its honest status, and the before/after comparison once a
+ * generation completes).
  *
  * The photos are visible through the blob-URL pattern: each photo's
  * bytes are fetched through the api-client seam (the generated
@@ -16,9 +16,9 @@
  * renders leaves the page (unmount, or a refetch replacing the bytes),
  * so a session that opens and closes cases never leaks blob URLs. A
  * photo whose read fails renders its refusal's bilingual text (a case
- * another tenant once shared is not_found; a photo whose object was
- * cleaned up is photo_not_found -- both mapped in cases-errors.ts),
- * never a broken image.
+ * this tenant cannot see answers not_found; a photo whose object was
+ * cleaned up answers photo_not_found -- both mapped in
+ * cases-errors.ts), never a broken image.
  *
  * The page keeps its back control outside every state branch: a case
  * that cannot be found or fails to load is not a dead end, and the

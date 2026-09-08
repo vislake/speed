@@ -67,15 +67,15 @@ func TestPreauthExemption_CallbackAlsoReachesAuthn(t *testing.T) {
 }
 
 // TestPreauthExemption_LegacyAllowlistShapeRefusesTheSameRequest is the
-// regression anchor for what the fix removed: compose the OLD generated
-// shape -- the whole mux, authn subtree included, wrapped in
-// tenancy.Middleware with the fixed allowlist that enumerated the five
+// anchor that shows why the structural exemption exists: compose the
+// legacy generated shape -- the whole mux, authn subtree included, wrapped
+// in tenancy.Middleware with the fixed allowlist that enumerated the
 // built-in social channels -- and the identical anonymous oidc:acme
 // authorize request is refused 403 tenancy.tenant_unresolved, because no
 // fixed enumeration can contain a per-tenant provider name. If this leg
 // ever starts passing, the tenancy layer no longer refuses unlisted
-// anonymous pairs and the structural exemption would be moot; if the new
-// shape ever regresses to this one, the first test fails.
+// anonymous pairs and the structural exemption would be moot; if the
+// current shape ever regresses to the legacy one, the first test fails.
 func TestPreauthExemption_LegacyAllowlistShapeRefusesTheSameRequest(t *testing.T) {
 	handler := buildComposedHandler(t, composedShapeLegacy)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/authn/social/oidc:acme/authorize", nil)

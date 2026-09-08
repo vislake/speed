@@ -87,16 +87,13 @@ func (r *LocalKeyRepository) Delete(ctx context.Context, keyRef string) error {
 // LocalSigner is the Signer implementation with zero external dependencies
 // beyond the standard library's crypto/ed25519 plus dbkit and pkgcore --
 // what "task dev" runs and what every unit test in this module and its
-// consumers can use as a test double, per docs/internal/22-pki.md's "three
-// implementations" table.
+// consumers can use as a test double.
 //
 // It does NOT have the KeyNeverLeavesBoundary capability the vault and
-// kmsaws implementations declare in direct-sign mode (round 4): a Sign call
-// decrypts the private key into this process's memory for the duration of
-// the crypto/ed25519 call. That is the deliberate, documented cost of a
-// zero-dependency signer, not an oversight -- see AGENTS.md's Known
-// limitations for the pkgcore.Capability wiring this implies and why it is
-// not shipped yet.
+// kmsaws implementations declare in direct-sign mode: a Sign call decrypts
+// the private key into this process's memory for the duration of the
+// crypto/ed25519 call. That is the deliberate, documented cost of a
+// zero-dependency signer, not an oversight.
 type LocalSigner struct {
 	keys *LocalKeyRepository
 }

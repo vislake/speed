@@ -1,16 +1,14 @@
 name: docs-site-deploy
-
 # Publishes docs/site/ to GitHub Pages -- the public documentation site
-# for consuming teams and AI coding agents (docs/site/README.md,
-# docs/internal/13-documentation-standards.md). The site is a real Hugo
+# for consuming teams and AI coding agents. The site is a real Hugo
 # project (theme: hugo-book, pinned as a git submodule under
 # docs/site/themes/hugo-book -- docs/site/README.md has the
 # machinery-decision rationale) built here with `hugo --minify` and
-# uploaded via the modern "build_type: workflow" Pages flow
+# uploaded via the "build_type: workflow" Pages flow
 # (actions/configure-pages + actions/upload-pages-artifact +
-# actions/deploy-pages), not the legacy gh-pages-branch approach. The
-# uploaded artifact is Hugo's build output (docs/site/public/, gitignored
-# and never committed), not docs/site/ itself.
+# actions/deploy-pages). The uploaded artifact is Hugo's build output
+# (docs/site/public/, gitignored and never committed), not docs/site/
+# itself.
 #
 # TRIGGER: push to main touching docs/site/** or this workflow file
 # itself, plus workflow_dispatch for a manual re-run (e.g. after a Pages

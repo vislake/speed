@@ -4,11 +4,11 @@
 
 ## 国际化：默认支持中文与英文
 
-**这是必须从 M0 就位的横切能力，不能后补。** 多个 UI 包一旦硬编码文案发布出去，回头补 i18n 是全量返工，且业务方已经基于硬编码文案做了定制，改动会破坏他们的项目。
+**这是必须从一开始就位的横切能力，不能后补。** 多个 UI 包一旦硬编码文案发布出去，回头补 i18n 是全量返工，且业务方已经基于硬编码文案做了定制，改动会破坏他们的项目。
 
 **语言协商链**（优先级从高到低）：URL 参数 / 用户手动切换（存 localStorage）→ 用户 profile 的 `locale` 字段 → 浏览器语言偏好 → 默认 `zh-CN`。前后端使用同一套解析结果，避免出现"界面中文、邮件英文"。
 
-**实施精确化（本轮核实，`@speed/i18n` `createI18n`）：** 第三级读的是客户端 `navigator.languages` 这个浏览器 API，不是 `Accept-Language` HTTP 请求头——两者在同源请求下通常一致，但这是纯前端解析，后端从未读取过这个请求头来做语言协商；上面"前后端使用同一套解析结果"说的是协商优先级顺序一致，不是同一段代码跑在两侧。
+**实施精确化（`@speed/i18n` `createI18n`）**：第三级读的是客户端 `navigator.languages` 这个浏览器 API，不是 `Accept-Language` HTTP 请求头——两者在同源请求下通常一致，但这是纯前端解析，后端从未读取过这个请求头来做语言协商；上面"前后端使用同一套解析结果"说的是协商优先级顺序一致，不是同一段代码跑在两侧。
 
 **后端**
 - 新增 `pkgcore/i18n` 子包，选 `nicksnyder/go-i18n`（支持复数形式与嵌套消息，生态成熟）。
@@ -24,7 +24,7 @@
 - 日期、数字、货币格式一律用 `Intl.DateTimeFormat` / `Intl.NumberFormat`，不手写格式化；货币展示要同时正确处理 CNY 与 USD 的符号位置和小数位。
 - 布局注意：德语/英语文案普遍比中文长 30%~50%，`ui-kit` 组件不得依赖固定宽度容纳文案，Storybook 里为每个组件提供中英双语 story 以便及早发现截断。
 
-**范围边界**：v1.0 只保证 `zh-CN` 与 `en-US` 两种语言的完整覆盖，但架构上不写死为双语——新增语言只需补一份资源文件，不改代码。RTL（阿拉伯语等）方向支持不在 v1.0 范围，但 MUI 本身具备 RTL 能力，后续可增量启用。
+**范围边界**：只保证 `zh-CN` 与 `en-US` 两种语言的完整覆盖，但架构上不写死为双语——新增语言只需补一份资源文件，不改代码。RTL（阿拉伯语等）方向支持不在范围内，但 MUI 本身具备 RTL 能力，可增量启用。
 
 ## 配置管理：引导配置与动态配置分离
 
@@ -42,14 +42,14 @@
 - 优先级链固定为：**命令行 flag > 环境变量 > 配置文件 > 内置默认值**，写进文档不允许各模块自行发挥。
 - 环境变量统一 `SPEED_` 前缀，嵌套用双下划线（`SPEED_DB__DSN`）。
 - **强类型 + 启动时 fail-fast**：配置绑定到结构体，必填缺失或格式错误直接退出并打印清晰的错误（缺哪个键、从哪些来源找过），绝不允许带着空配置启动到一半才崩。
-  > **实现落地更正**（Round 1）：`pkgcore/config` 最终没有引入 `go-playground/validator`，而是用 `config:"required"` 结构体标签 + 反射做必填校验——范围/格式/枚举这类更复杂的校验规则暂不支持。理由是目前还没有任何 bootstrap 配置结构体需要这类校验，先不引入这个依赖；等第一个真的需要范围/枚举校验的场景出现时，再评估是加 `go-playground/validator` 还是继续扩展手写标签系统。
+  > **实现落地更正**：`pkgcore/config` 没有引入 `go-playground/validator`，而是用 `config:"required"` 结构体标签 + 反射做必填校验——范围/格式/枚举这类更复杂的校验规则不受支持，理由是目前还没有任何 bootstrap 配置结构体需要这类校验，不引入这个依赖。
 - 每个模块声明自己的配置结构体片段，由 Kernel 聚合装配——与 migrations、i18n 资源的聚合机制保持一致。
 - `saasctl config print` 打印最终生效配置及**每个值的来源**（来自 flag / env / 文件 / 默认值），敏感值自动脱敏。这是排查"为什么我改了配置文件没生效"的关键工具。
 
-  > **实现状态注记（2026-09-03，saasctl 轮）：** 上面这条 bootstrap 侧的 `config print` 已落地为 `saasctl config print [go.mod]`（`go/saasctl` 的 config 命令组），针对脚手架生成项目的引导配置：五行（`APP_DEPLOYMENT_MODE`、`PORT`、`APP_DB_PATH`、`APP_CONFIG_KEY`、`APP_ORG_INDEX_KEY`——2026-09-06 的 fix/saasctl-app-prefix-drift 轮次把这五个变量名从早先的 `SPEED_*` 前缀改成了 `APP_*`，对齐 reference-app 自己同一轮之前已经改过的前缀，两者各自独立选择，并非强制一致）各显示生效值与来源——取到环境变量的标 `from <ENV>`，未设置的标"unset or empty"，回退到生成应用的内置默认值并标注默认来源，两个密钥行无论环境里是什么一律 `[redacted]`。两处如实偏差：(1) 脚手架生成的消费应用没有 flag 层与配置文件层（引导来源实际只有 env 与内置默认值两层），因此 print 的来源标注目前只区分"环境变量"与"默认值"，flag/文件两档等消费应用真有了这些层再扩展；(2) 动态配置（`configs` 表）的值打印与编辑、以及按注册 schema 驱动的脱敏仍未实现——v0.1 的 print 覆盖的是引导配置面，动态面的 schema 与租户作用域解析是另一个维护面，与其余延期一并记录在 `go/saasctl/AGENTS.md` 的 Known limitations。print 与生成应用引导是同源的：它解析环境所用的 `internal/appconfig` 是模板内 `cmd/server/config.go` 的孪生，孪生关系由测试钉死，所以 print 打印或拒绝的正是应用会启动或不启动的。
+  > **`saasctl config print` 的落地形态**：上面这条 bootstrap 侧的 `config print` 已落地为 `saasctl config print [go.mod]`（`go/saasctl` 的 config 命令组），针对脚手架生成项目的引导配置：五行（`APP_DEPLOYMENT_MODE`、`PORT`、`APP_DB_PATH`、`APP_CONFIG_KEY`、`APP_ORG_INDEX_KEY`，统一 `APP_*` 前缀——生成项目与 reference-app 各自独立选择前缀，并非强制一致）各显示生效值与来源——取到环境变量的标 `from <ENV>`，未设置的标"unset or empty"，回退到生成应用的内置默认值并标注默认来源，两个密钥行无论环境里是什么一律 `[redacted]`。两处边界：(1) 来源标注只区分"环境变量"与"默认值"两档——生成应用没有 flag 层与配置文件层（引导来源只有 env 与内置默认值两层）；(2) 动态配置（`configs` 表）的值打印与编辑、按注册 schema 驱动的脱敏未实现——print 覆盖的是引导配置面（`go/saasctl/AGENTS.md` 的 Known limitations）。print 与生成应用引导是同源的：它解析环境所用的 `internal/appconfig` 是模板内 `cmd/server/config.go` 的孪生，孪生关系由测试钉死，所以 print 打印或拒绝的正是应用会启动或不启动的。
 
 **动态配置**
-- 存储为 `configs` 表，**三层作用域**：`system`（平台全局）→ `tenant`（租户覆盖）→ 未来可扩展到 `user`。读取时按作用域从具体到宽泛回退，这是多租户 SaaS 的刚需（每个租户可以有自己的功能开关和限额）。
+- 存储为 `configs` 表，**三层作用域**：`system`（平台全局）→ `tenant`（租户覆盖）→ `user`（预留，未实现，见下方实现落地更正）。读取时按作用域从具体到宽泛回退，这是多租户 SaaS 的刚需（每个租户可以有自己的功能开关和限额）。
 - 接口：
   ```go
   type Store interface {
@@ -71,10 +71,10 @@
   > - **事件名与防丢**：变更事件名实现为 `config.item.changed`（本节写的是 `config.changed`），经共享总线广播让各实例失效本地缓存；防丢兜底是后台轮询器定期重读近期更新的行（不是 TTL）。
   > - **敏感项**：加密存储、读取时解密、日志与响应脱敏均按设计落地；变更事件同样不携带明文——payload 的两个取值槽位都放 `[redacted]` 标记，明文不跨出模块。
   > - **作用域**：`system` 与 `tenant` 两层已落地（system 行以空字符串 `tenant_id` 为哨兵），读取从租户覆盖回退到 system 行再到 schema 默认值；`user` 层按"未来可扩展"预留但刻意未实现，任何写入返回 `ErrUserScopeUnavailable`。
-  > - **审计**："变更审计" bullet 的落地形态是 `configs` 表行级 `updated_by`/`updated_at` 留痕 + 经共享总线发布的变更事件；专门的审计记录与 `compliance` 消费者随 `compliance` 模块的 round 落地（届时订阅 `config.item.changed` 即可，本模块不依赖审计方）。
+  > - **审计**："变更审计" bullet 的落地形态是 `configs` 表行级 `updated_by`/`updated_at` 留痕 + 经共享总线发布的变更事件；专门的审计记录与 `compliance` 消费者尚未接入——本模块不依赖审计方，接入方订阅 `config.item.changed` 即可。
   > - **端点**：`/api/config/public`（公开项生效值 + 依赖解析后的启用功能开关列表）与 `/api/system/features`（启用功能开关列表）都已上线：未登录可访问、只接受 GET/HEAD（其它方法 405 + `Allow: GET, HEAD`），租户经宿主注入的 `tenancy.Resolver` 逐请求解析，未匹配时回退平台默认值、绝不报错——与上面"登录页" bullet 的规则一致。响应里的"可用支付渠道、可选语言"等条目还要等对应模块注册相应公开配置项后才会出现。
   >
-  >   **已落地**（config-web round）：`usePublicConfig(api)` / `useFeature(api, key)` hook 已在 `@speed/api-client` 的隔离子路径 `@speed/api-client/react` 落地（主入口保持零依赖，React 只出现在这个子路径，做法与 `@speed/i18n` 的 `./mui-locale` 一致）。两个 hook 都要求显式传入共享缓存所依据的 `RequestFn`：同一个 `api` 的多个消费者只触发一次请求，`useFeature` 直接复用 `usePublicConfig` 的缓存而不单独打 `/api/system/features`，未决或出错时返回 `false`、从不抛出。配置管理 UI 仍未交付。详见 `web/packages/api-client/README.md`（"Config hooks"一节）与 `AGENTS.md`。
+  >   `usePublicConfig(api)` / `useFeature(api, key)` hook 已在 `@speed/api-client` 的隔离子路径 `@speed/api-client/react` 落地（主入口保持零依赖，React 只出现在这个子路径，做法与 `@speed/i18n` 的 `./mui-locale` 一致）。两个 hook 都要求显式传入共享缓存所依据的 `RequestFn`：同一个 `api` 的多个消费者只触发一次请求，`useFeature` 直接复用 `usePublicConfig` 的缓存而不单独打 `/api/system/features`，未决或出错时返回 `false`、从不抛出。配置管理 UI 未交付。详见 `web/packages/api-client/README.md`（"Config hooks"一节）。
 
 **分层缓存**：动态配置读取路径在热路径上（每次权限判断、每次计量都可能读），必须走进程内缓存 + 变更失效，不能每次查库。
 
@@ -92,7 +92,7 @@
 - CLI 生成骨架时按需引入，未选择的模块不进依赖、不进二进制。**`billing/gateway` 是子包而非模块，排除机制相应地从「不选这个模块」变成「不 import 这个包」，效果等价**——不接支付的项目不空白导入 `billing/gateway`，三家支付 SDK 同样不进它的 `go.mod`、`go.sum` 与二进制（依赖方向的单向约束见 [06 计费与计量](06-billing-and-metering.md)）。这是最彻底的禁用，也让不需要计费的项目不必背上三家支付 SDK 的依赖树。
 - 模块间有依赖关系（`billing` 依赖 `metering`、`admin` 依赖 `rbac`），CLI 需要做依赖闭包解析并在选择冲突时明确报错。
 
-  > **实现状态注记（2026-09-03，saasctl 轮）：** `saasctl new --with=…` 按本节的"正向选择 + 依赖闭包 + 冲突报错"落地，v0.1 的可选范围是 `{authn, rbac, org}`——即下方分级表里"底座型"中已经实现、且能构成最小可用组合的三件；`jobs`、`storage`、`notification` 与下方"业务能力型"各行等其模块实现轮次后再扩展（切换范围不是本轮的承诺，见 `go/saasctl/AGENTS.md` Known limitations）。落地形态与表格措辞的三点对应：`--with` 是**正向选择**，不存在 `--without`——"不要 authn"的表达是列出其余模块；向下闭包规则是选择 `rbac` 或 `org` 而不选 `authn` 时报错并点名 `authn` 是被隐含的依赖（它们的路由需要一个认证层），未知名字报错时列出合法集合；默认值是 `authn,rbac,org` 全选，`--with=""` 显式表达只带必需五件（`pkgcore`/`dbkit`/`tenancy`/`config`/`observability` 无关闭选项，与分级表"必需"行一致），恰好就是 99 行"最小可用组合"的两种形态。表格里"底座型——关闭 jobs 意味着 storage/notification/… 全部不可用，CLI 必须在关闭前明确列出连带影响并要求确认"这一句的确认交互，在 v0.1 无对应模块可关，等可选范围扩大到有连带的模块时再定。CI 只测三种典型组合（109 行）在 v0.1 落到脚手架侧为：`new` 的每个合法选择都有 golden 钉死 + 端到端 proof 至少跑默认与 `--with=authn` 两个选择，三组合全矩阵的流水线形态属 scaffold-verify 的 M4 门（见 [18 CI/CD](18-cicd.md) 实施状态注记）。
+  > **`saasctl new` 的落地形态**：`saasctl new --with=…` 按本节的"正向选择 + 依赖闭包 + 冲突报错"落地，可选范围是 `{authn, rbac, org}`——即下方分级表里"底座型"中已经实现、且能构成最小可用组合的三件；`jobs`、`storage`、`notification` 与下方"业务能力型"各行的可选择性尚未扩展（`go/saasctl/AGENTS.md` Known limitations）。落地形态与表格措辞的三点对应：`--with` 是**正向选择**，不存在 `--without`——"不要 authn"的表达是列出其余模块；向下闭包规则是选择 `rbac` 或 `org` 而不选 `authn` 时报错并点名 `authn` 是被隐含的依赖（它们的路由需要一个认证层），未知名字报错时列出合法集合；默认值是 `authn,rbac,org` 全选，`--with=""` 显式表达只带必需五件（`pkgcore`/`dbkit`/`tenancy`/`config`/`observability` 无关闭选项，与分级表"必需"行一致），恰好就是上面"最小可用组合"的两种形态。表格里"底座型——关闭 jobs 意味着 storage/notification/… 全部不可用，CLI 必须在关闭前明确列出连带影响并要求确认"的确认交互，在可选范围扩大到有连带的模块之前不会出现。测试落在脚手架侧：`new` 的每个合法选择都有 golden 钉死，端到端 proof 至少跑默认与 `--with=authn` 两个选择（CI 化形态见 [18 CI/CD](18-cicd.md)）。
 
 **模块的可选性分级**（避免"我能不能不要 jobs"这类问题反复出现）：
 
@@ -112,7 +112,7 @@
 - 被禁用功能的接口返回 `404` 而非 `403`（不暴露"存在但被关闭"的信息），但在 `/api/system/features` 里可查询当前启用状态，方便排查。
 - 前端通过 `/api/config/public` 拿到启用列表，`useFeature('billing')` hook 控制菜单与路由的显隐；`layout-kit` 的 `NavItem` 设想支持 `requiredFeature` 字段，与 `requiredPermission` 并列，交由宿主在渲染前过滤。
 
-  **实施状态注记（本轮核实）：** 这两个字段都还没有落地。`@speed/layout-kit` 真实的 `AppShellNavItem`（`components/AppShell.tsx`）目前只有 `id`/`label`/`icon`/`href`/`onClick`/`selected` 六个字段——没有 `requiredFeature`，也没有 `requiredPermission`；权限与功能开关的显隐目前完全是宿主自己在构造 `navItems` 数组前过滤好的（`layout-kit` 本身不做任何路径匹配或权限判断，见根 `CLAUDE.md`"Depends on `@speed/i18n` 和 `@speed/ui-kit` only"一段），上面两句按"设想的扩展点"读，不按"现状"读。
+  **实施对照**：这两个字段都未落地。`@speed/layout-kit` 的 `AppShellNavItem`（`components/AppShell.tsx`）只有 `id`/`label`/`icon`/`href`/`onClick`/`selected` 六个字段——没有 `requiredFeature`，也没有 `requiredPermission`；权限与功能开关的显隐完全是宿主自己在构造 `navItems` 数组前过滤好的（`layout-kit` 本身不做任何路径匹配或权限判断，见根 `CLAUDE.md`"Depends on `@speed/i18n` 和 `@speed/ui-kit` only"一段），上面两句按"设想的扩展点"读，不按"现状"读。
 
 **组合爆炸的应对**：N 个开关有 2^N 种组合，不可能全测。策略是——依赖图校验保证非法组合根本无法启动；CI 只测三种典型组合：**最小可用组合**（上表所列）、**全开**、**典型交付组合**（最小可用组合 + billing + 一个支付渠道 + storage + notification）。
 
@@ -133,7 +133,7 @@
 
 当前窗口的计数按已经过去的时间比例，与前一个相邻窗口的计数加权，得到近似的滑动效果——这是"滑动窗口计数器"与"滑动窗口日志"的本质区别，也是它不需要存储单条请求记录的原因。
 
-**不需要修改 `pkgcore.KVStore` 接口**：`Set` + `IncrByFloat` 已经够用；`CompareAndSwap` 也已经在接口里，留给未来如果有消费者需要 token-bucket 语义时使用。`go/ratelimit` 完全建立在现有契约之上。
+**不需要修改 `pkgcore.KVStore` 接口**：`Set` + `IncrByFloat` 已经够用；`CompareAndSwap` 也已经在接口里，需要 token-bucket 语义的消费者可直接使用。`go/ratelimit` 完全建立在现有契约之上。
 
 接口形状如下（示意，字段以实现时为准）：
 ```go

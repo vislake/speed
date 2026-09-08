@@ -14,12 +14,11 @@ import (
 // Sliding-window limits for every dimension this module's login,
 // registration, code-send and code-verify endpoints are guarded on.
 //
-// These are package-level named constants, per the root CLAUDE.md's
-// Configuration and Constants section: they are stable domain defaults,
-// not values that vary by environment or that operations needs to tune
-// live, and go/ratelimit itself deliberately carries no
-// dynamic-configuration hook of its own to plug them into (see its
-// AGENTS.md's "No dynamic configuration").
+// These are package-level named constants, not dynamic-configuration
+// items: they are stable domain defaults, not values that vary by
+// environment or that operations needs to tune live, and go/ratelimit
+// itself deliberately carries no dynamic-configuration hook of its own to
+// plug them into.
 var (
 	limitLoginByAccount    = ratelimit.Limit{Rate: 5, Per: time.Minute}
 	limitLoginByIP         = ratelimit.Limit{Rate: 20, Per: time.Minute}
@@ -56,10 +55,9 @@ const (
 	// attach an expiry only on the call that creates the key and never
 	// extend a live one (see pkgcore.KVStore.IncrByFloatWithTTL's own doc
 	// comment and go/ratelimit's "The TTL-attachment race, closed" for the
-	// doctrine), and this module's own earlier sliding refresh was exactly
-	// the caller-side Get-then-Set race that doctrine exists to close.
-	// RecordLoginFailure's own doc comment states what that costs at the
-	// edge of a long run.
+	// doctrine), and a caller-side sliding refresh would be exactly the
+	// Get-then-Set race that doctrine closes. RecordLoginFailure's own doc
+	// comment states what that costs at the edge of a long run.
 	loginLockoutStateTTL = time.Hour
 
 	loginLockoutKeyPrefix = "authn:lockout:login:"
@@ -102,10 +100,10 @@ type loginLockoutState struct {
 //
 // Both keys carry loginLockoutStateTTL, attached when the run that creates
 // them starts; RecordLoginSuccess deletes both, which is what makes a
-// successful sign-in reset the run. The single JSON key an earlier version
-// of this module stored the whole state under is never written and never
-// read: any value a pre-split deployment left there simply expires within
-// its own TTL, and the account it belonged to starts from a clean slate.
+// successful sign-in reset the run. No single-key JSON state is written or
+// read: a value left under the old single-key layout by an earlier process
+// version simply expires within its own TTL, and the account it belonged
+// to starts from a clean slate.
 func loginLockoutKeys(account string) (failuresKey, deadlineKey string) {
 	return loginLockoutKeyPrefix + account + ":failures",
 		loginLockoutKeyPrefix + account + ":locked_until"
@@ -130,12 +128,12 @@ func loginLockoutDelay(failures int) time.Duration {
 
 // rateGuard is where go/ratelimit's sliding-window counters (raw request
 // volume) and this module's own progressive login delay/lockout (business
-// logic go/ratelimit deliberately does not implement -- see its AGENTS.md's
-// "No multi-dimension or progressive/escalating semantics, on purpose")
-// meet. Every method fails CLOSED: an error from the underlying limiter or
-// from the KVStore reading the lockout state is treated as "deny", never as
-// "allow" -- the same policy Middleware's revocation check and Service's
-// membership check already apply to their own unanswerable questions.
+// logic go/ratelimit deliberately does not implement -- its `Allow` answers
+// one dimension per call and nothing else) meet. Every method fails
+// CLOSED: an error from the underlying limiter or from the KVStore reading
+// the lockout state is treated as "deny", never as "allow" -- the same
+// policy Middleware's revocation check and Service's membership check
+// already apply to their own unanswerable questions.
 type rateGuard struct {
 	limiter ratelimit.Limiter
 	kv      pkgcore.KVStore
@@ -181,17 +179,17 @@ func (g *rateGuard) CheckLogin(ctx context.Context, account, ip string) error {
 // a read-modify-write cycle over a whole state value, because the two are
 // not the same thing under concurrency: a burst of login attempts that all
 // fail at once -- the exact shape an attacker produces while bursting the
-// per-minute quota -- used to lose most of its own failures (five
-// concurrent failures were measured landing as two), and since the delay
-// doubles per recorded failure, the lost ones are precisely what keeps the
-// progressive lockout from rising. See loginLockoutKeys' own doc comment
-// for the layout that closes that, and loginLockoutStateTTL's for the one
-// boundary it moves: the failure run's memory window now runs from the
-// run's first failure rather than being refreshed by each failure, so a
-// run that keeps failing for more than an hour ends at the window's edge
-// -- cutting short at most loginLockoutMax of whatever lockout it had
-// earned -- and the next failure starts a fresh run. Within a run,
-// escalation is unchanged, and no concurrent failure can be lost.
+// per-minute quota -- must not lose any of its own failures, since the
+// delay doubles per recorded failure and lost ones are precisely what
+// keeps the progressive lockout from rising. See loginLockoutKeys' own doc
+// comment for the layout that makes concurrent recording lossless, and
+// loginLockoutStateTTL's for the one boundary it moves: the failure run's
+// memory window runs from the run's first failure rather than being
+// refreshed by each failure, so a run that keeps failing for more than an
+// hour ends at the window's edge -- cutting short at most loginLockoutMax
+// of whatever lockout it had earned -- and the next failure starts a fresh
+// run. Within a run, every failure is counted, and no concurrent failure
+// can be lost.
 func (g *rateGuard) RecordLoginFailure(ctx context.Context, account string) {
 	if account == "" {
 		return
@@ -330,8 +328,8 @@ func (g *rateGuard) CheckSMSSend(ctx context.Context, target, ip string) error {
 // even compared: it protects against sheer request volume from one
 // source, a property that does not depend on WHICH target the request
 // names, so consulting it up front creates no hostage-the-victim's-own-
-// budget property the way the old, unconditional per-target check did
-// (see CheckSMSVerifyWrongGuess's own doc comment).
+// budget property (see CheckSMSVerifyWrongGuess's own doc comment for the
+// one that does).
 func (g *rateGuard) CheckSMSVerifyIP(ctx context.Context, ip string) error {
 	return g.allow(ctx, "authn:sms:verify:ip:"+ip, limitSMSVerifyByIP)
 }
@@ -343,17 +341,18 @@ func (g *rateGuard) CheckSMSVerifyIP(ctx context.Context, ip string) error {
 // This is deliberately consulted -- and its budget deliberately consumed --
 // ONLY after a guess has already been determined wrong (see verification.
 // go's LoginWithSMSCode, the one caller), never unconditionally before the
-// code is even compared, which is what this dimension's shape used to do
-// and what CheckSMSVerifyIP's own IP dimension still does today. A shared
-// per-target budget consumed on every attempt regardless of outcome can be
-// exhausted by an attacker who does not hold the real code and therefore
-// never succeeds -- 5 wrong guesses from anywhere within the window
-// permanently deny the real holder's own correct attempt for the rest of
-// it, because that attempt is refused by THIS check before it ever reaches
-// the comparison that would have told the two apart. Gating the budget on
-// "the guess just presented was wrong" instead means a correct code is
-// NEVER refused for budget reasons, no matter how many wrong guesses (from
-// however many sources) already exhausted it.
+// code is even compared; the up-front shape is reserved for
+// CheckSMSVerifyIP's IP dimension, whose volume protection does not depend
+// on the guess's outcome. A shared per-target budget consumed on every
+// attempt regardless of outcome can be exhausted by an attacker who does
+// not hold the real code and therefore never succeeds -- 5 wrong guesses
+// from anywhere within the window permanently deny the real holder's own
+// correct attempt for the rest of it, because that attempt is refused by
+// THIS check before it ever reaches the comparison that would have told
+// the two apart. Gating the budget on "the guess just presented was wrong"
+// instead means a correct code is NEVER refused for budget reasons, no
+// matter how many wrong guesses (from however many sources) already
+// exhausted it.
 //
 // This does not weaken brute-force resistance against the code itself:
 // that protection is DefaultSMSCodeMaxAttempts (verification.go), a

@@ -21,8 +21,8 @@ import (
 // minimal surface cannot express -- a subtree prefix scan, a children scan,
 // the root lookup and a sibling-name lookup.
 //
-// Those four are written the way go/dbkit/AGENTS.md's "Known limitations"
-// prescribes as option 1: build the query on the same *gorm.DB layer 1
+// Those four are written the sanctioned filtered-read way: build the query
+// on the same *gorm.DB layer 1
 // already protects, against a TenantScoped destination, so the GORM
 // isolation plugin still injects WHERE tenant_id = ? even though
 // Repository[T]'s own re-verification does not run for that call -- and run
@@ -219,8 +219,7 @@ func (r *Repository) findByIDIncludingDeletedTx(tx *gorm.DB, id string) (*OrgNod
 //     way a plain SELECT would.
 //   - On SQLite it is the caller's transaction's FIRST database statement
 //     -- never preceded by a read -- which is exactly what keeps the whole
-//     transaction out of the read-then-write lock-upgrade hazard
-//     go/dbkit/AGENTS.md's "SQLite busy timeout" section documents: an
+//     transaction out of the read-then-write lock-upgrade hazard: an
 //     ordinary contending writer waits out busy_timeout and succeeds once
 //     the holder commits, and only a transaction that read FIRST is
 //     refused immediately instead. Every caller of this function MUST
@@ -290,17 +289,16 @@ func lockLiveNode(tx *gorm.DB, id string) (*OrgNode, error) {
 // lock first; lockSubtree re-locks it too, harmlessly, since a transaction
 // re-touching a row it already holds does not block against itself.
 //
-// # Why a single "path LIKE prefix%" Find is not enough (the Move interior-
-// descendant finding)
+// # Why a single "path LIKE prefix%" Find is not enough
 //
-// Move used to read the subtree with one plain, unlocked Find and then
-// rewrite each returned row's own Path via its own conditioned UPDATE. That
-// leaves every row the scan returns other than the two endpoints Move
+// A plain, unlocked Find of the subtree, followed by rewriting each
+// returned row's own Path via its own conditioned UPDATE, would leave every
+// row the scan returns other than the two endpoints Move
 // already locks (the moved node, the new parent) completely exposed for the
 // whole rewrite: a concurrent CreateChild targeting an INTERIOR descendant
 // (never the moved node itself) calls lockLiveNode on THAT row, which Move
-// never touches, so the two calls never serialize on anything. Confirmed
-// against a real PostgreSQL server: CreateChild's insert can land, and
+// never touches, so the two calls never serialize on anything.
+// CreateChild's insert can land, and
 // commit, entirely within the gap between Move's initial unlocked scan and
 // that scan's own row's eventual UPDATE -- the new child's own row is bound
 // to the descendant's OLD (pre-move) Path and simply never existed when
@@ -310,7 +308,7 @@ func lockLiveNode(tx *gorm.DB, id string) (*OrgNode, error) {
 // disagree" corruption assertNoOrphans checks for -- despite every row Move
 // DID touch being rewritten correctly.
 //
-// The fix locks every row of the subtree, not merely its two endpoints,
+// The approach locks every row of the subtree, not merely its two endpoints,
 // before trusting the set is complete: scan for the prefix, lock every
 // newly-seen row (touchLockByID, the same primitive lockLiveNode wraps), and
 // repeat until a scan returns nothing this call has not already locked. Once
@@ -418,15 +416,14 @@ func softDeleteActor(ctx context.Context) string {
 //
 // It is a bulk write, not the single-row dbkit.Repository[OrgNode].Delete
 // promoted onto Repository: it follows the exact shape dbkit's own
-// unexported softDelete uses (see dbkit's repository.go and AGENTS.md's
-// "Soft deletion" section) -- a real *OrgNode built and written through
+// unexported softDelete uses (see dbkit's repository.go) -- a real *OrgNode
+// built and written through
 // tx.Where(...).Select(...).Updates(&m), never a map payload, so gorm's
 // SetupUpdateReflectValue resolves Model == Dest == &m and any audit
 // capture a host wires reads the real written values rather than a
 // zero-valued struct.
 //
-// The row count is checked INSIDE the transaction on purpose, exactly as it
-// was before this round switched the statement from DELETE to UPDATE. A
+// The row count is checked INSIDE the transaction on purpose. A
 // check-then-update pair would leave a window in which another request adds
 // a child to the node between the two statements, and this call would then
 // orphan that child: its parent_id would point at a soft-deleted row and its
@@ -449,12 +446,11 @@ func softDeleteActor(ctx context.Context) string {
 // row CreateChild just inserted -- that row never existed when the original
 // scan ran, so matched stays 1 (this node alone) instead of 2, and the
 // delete proceeds thinking the node is still a childless leaf. The result is
-// exactly the D1 orphan (a live child under a now-dead parent) despite
-// CreateChild's own lock having been real and properly held -- confirmed as
-// a genuine, reproducible failure against a real PostgreSQL server while
-// building this round's fix (integration_test/postgres_concurrency_test.go),
-// not merely a theoretical concern; SQLite's coarser, whole-file locking
-// does not share this specific blind spot; the deleteLeaf-and-Postgres
+// exactly the orphan state (a live child under a now-dead parent) despite
+// CreateChild's own lock having been real and properly held; the failure is
+// genuine and reproducible against a real PostgreSQL server
+// (integration_test/postgres_concurrency_test.go), not a theoretical
+// concern; SQLite's coarser, whole-file locking
 // combination is not the property either one alone appeared to be. The fix
 // is the row lock as this function's OWN first statement (the blind touch
 // lockLiveNode starts with, BEFORE the bulk scan below ever runs): it
@@ -483,17 +479,18 @@ func softDeleteActor(ctx context.Context) string {
 // after nodeID's own lock succeeds and the current prefix is derived --
 // BEFORE the bulk mark-delete statement below ever runs -- and a non-nil
 // return aborts the whole transaction (nothing is written) with that error
-// surfaced unwrapped. TreeService.Delete is what passes one: the roster's
-// "does anybody sit in this subtree" check, which used to run as its own
-// separate, unlocked read entirely BEFORE this method's own transaction
-// opened -- a real, closed TOCTOU window (a concurrent MembershipRepository
-// add landing in the gap between that read and this method's own commit,
-// leaving a membership bound to a row this call is about to soft-delete)
-// that running the check here, inside the SAME lock this method already
-// takes, closes: see tree.go's Delete doc comment for the full mechanism,
-// and membership.go's MemberService.ensure for the other half this fix
-// needed (a plain, unlocked read there could otherwise commit its own insert
-// into this exact gap regardless of what this method does). guard receives
+// surfaced unwrapped. TreeService.Delete is what passes one: it runs the
+// roster's
+// "does anybody sit in this subtree" check here, inside the SAME lock this
+// method already takes, so no gap exists between the check and the sweep --
+// a check that ran as its own separate, unlocked read before this
+// transaction opened would leave a TOCTOU window (a concurrent
+// MembershipRepository add landing in the gap between that read and this
+// method's own commit, leaving a membership bound to a row this call is
+// about to soft-delete). See tree.go's Delete doc comment for the full
+// mechanism, and membership.go's MemberService.ensure for the other half
+// (a plain, unlocked read there could otherwise commit its own insert into
+// this exact gap regardless of what this method does). guard receives
 // the locked row's current prefix as its second argument -- the guard's own
 // subtree scan must match the sweep's, and only this method knows the
 // prefix that is authoritative under the lock (see deleteSubtree's doc
@@ -558,8 +555,8 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID string, guard func(t
 // row by row -- for instance by calling the promoted, single-row
 // dbkit.Repository[OrgNode].Delete once per descendant -- would leave a
 // partially soft-deleted tree behind on any mid-loop failure, and would
-// abandon the very atomicity go/org/AGENTS.md's "Known limitations" already
-// flags as missing for Move; one UPDATE cannot leave that window.
+// abandon the very atomicity the single-statement design exists to
+// preserve; one UPDATE cannot leave that window.
 //
 // It follows dbkit's own unexported softDelete shape exactly, the same way
 // deleteLeaf's doc comment describes: a real *OrgNode, Model == Dest == &m,
@@ -571,7 +568,7 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID string, guard func(t
 // TreeService.Restore's own case) via lockLiveNode could commit -- reviving
 // a descendant -- in the gap between this statement's snapshot and its own
 // unblocking, and this bulk scan would never notice that newly-revived row,
-// leaving it live under what this call just made a dead parent: the D5
+// leaving it live under what this call just made a dead parent: the same
 // corruption, confirmed the same way against a real PostgreSQL server
 // (integration_test/postgres_concurrency_test.go). lockLiveNode's touch is
 // still the transaction's first statement; only its read-back (for the
@@ -645,8 +642,8 @@ func (r *Repository) deleteLeaf(ctx context.Context, nodeID string, guard func(t
 //     arriving rows are neither captured nor candidates for the UPDATE:
 //     they survive as LIVE rows under a mark-deleted parent -- a deletion
 //     whose event, faithful to the rows it did remove, cannot even name
-//     them for rbac's onNodeDeleted reaper, precisely the dangling-binding
-//     bug this round exists to close.
+//     them for rbac's onNodeDeleted reaper: the dangling-binding bug that
+//     reaper exists to close.
 //
 // The orchestration parks the Move with a third transaction's row lock,
 // starts the cascade only once the Move is confirmed parked, verifies the

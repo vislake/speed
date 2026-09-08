@@ -493,9 +493,9 @@ describe('FileUploader', () => {
   describe('responsive layout', () => {
     // Property assertions only (jsdom does no real layout, so nothing
     // here proves a long file name plus several buttons actually looks
-    // right at a narrow viewport) -- these prove the flexWrap CSS this
-    // round adds is wired onto both row shapes' action groups, so a
-    // future refactor dropping it would be caught.
+    // right at a narrow viewport) -- these prove the flexWrap CSS is
+    // wired onto both row shapes' action groups, so a refactor dropping
+    // it would be caught.
     it('wraps the uploading row action group (progress bar + cancel) instead of overflowing', () => {
       const view = renderHarness({
         rows: [uploadingRow('r1', 'scan.jpg')],
@@ -698,14 +698,14 @@ describe('FileUploader', () => {
 
     it('does not resurrect a pending re-announcement for a row retried before it fires (P1-1 regression)', async () => {
       // The same-name repeat path empties the region and re-announces a
-      // beat later (P2-8). A host rows update can land between the commit
-      // that armed that deferred re-announcement and its 0ms fire (a
+      // beat later. A host rows update can land between the commit that
+      // armed that deferred re-announcement and its 0ms fire (a
       // microtask-ordered update overtakes the timer), so the retry of
-      // the row the re-announcement was about may commit first. PRE-FIX
-      // the pending timer fired anyway and refilled the region with the
-      // row's stale failure text while the row was already uploading
-      // again -- a false announcement. POST-FIX the re-announcement
-      // re-checks the row's fate at fire time and stays silent.
+      // the row the re-announcement was about may commit first. The
+      // pending timer must then stay silent: the re-announcement
+      // re-checks the row's fate at fire time, so it does not refill the
+      // region with the row's stale failure text while the row is
+      // already uploading again.
       const view = renderHarness({ rows: [uploadingRow('r1', 'scan.jpg')] })
       view.setRows([failedRow('r1', 'scan.jpg', 'boom')])
       expect(view.getByRole('status')).toHaveTextContent(
@@ -733,12 +733,11 @@ describe('FileUploader', () => {
     it("never revives a departed row's pending re-announcement when that row comes back (P1-1 regression)", async () => {
       // The deferred re-announcement's target row can leave the queue
       // before the timer fires (the Remove path on a commit with no
-      // settle). PRE-FIX the pending timer fired anyway and parked a
-      // standing announcement for the departed row in state, and when
-      // the host later re-added that row -- uploading this time -- the
-      // stale failure text resurfaced in the region. POST-FIX the
-      // re-announcement re-checks the row's presence at fire time and
-      // leaves no record of the departed row behind.
+      // settle). The pending timer must then leave no record of the
+      // departed row behind: a standing announcement for it would
+      // resurface as stale failure text when the host later re-adds
+      // that row -- uploading this time. The re-announcement re-checks
+      // the row's presence at fire time.
       const view = renderHarness({ rows: [uploadingRow('r1', 'scan.jpg')] })
       view.setRows([failedRow('r1', 'scan.jpg', 'boom')])
       view.setRows([

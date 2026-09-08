@@ -1,40 +1,31 @@
 /**
  * That a member can still sign in after the server has restarted.
  *
- * This is the regression gate for the defect that made the deployed app
- * unusable within minutes of being deployed: membership lived in an
- * in-process map that only boot-time seeding ever wrote, and seeding
- * deliberately skips an account a previous boot already created. So every
- * restart left the accounts in the database with no memberships anywhere,
- * and every sign-in answered authn.tenant_membership_required until the
- * database itself was wiped. On a host that stops an idle machine -- which
- * is the ordinary, recommended shape for a small deployment, and what the
- * reference app's own fly.toml configures -- that was a few minutes of
- * idleness, not an edge case. Fixed by reading org's real membership rows
- * at sign-in.
+ * Membership lives in org's real rows, read at sign-in, so an account
+ * seeded by one boot is still a member after the next -- a property
+ * worth pinning because it is exactly what an in-process membership map
+ * would break: seeding skips an account a previous boot already
+ * created, and a host that stops an idle machine (the ordinary,
+ * recommended shape for a small deployment, and what the reference
+ * app's own fly.toml configures) would leave every sign-in answering
+ * authn.tenant_membership_required within minutes of idleness.
  *
  * THE RESTART IS SEQUENTIAL, WHICH IS THE WHOLE POINT
  *
- * The spec owns two server processes and one database file: the first boot
- * creates the file and seeds it, the spec then stops that process and
- * waits for it to be gone, and a second process boots over the file the
- * first left behind. That is what a restart is -- one process, then
- * another, over surviving state.
- *
- * It used to be written differently, and the difference mattered: a second
- * server was started while the suite's own was still running, and the
- * page's API calls were pointed at it. That is a concurrent second
- * process, not a restart, and it only resembled one because nothing in
- * the app minded. Something does now -- go/jobs grew a single-writer
- * registration, so a second queue on one database is refused outright
- * (jobs.queue_writer_active) -- and the refusal is correct: two
- * dispatchers on one jobs table would each claim the same work. The gate
- * had been passing on a shape that was never the thing it claimed to
- * check, and the guard is what exposed it.
+ * The spec owns two server processes and one database file: the first
+ * boot creates the file and seeds it, the spec then stops that process
+ * and waits for it to be gone, and a second process boots over the file
+ * the first left behind. That is what a restart is -- one process, then
+ * another, over surviving state. A second server started while the
+ * first still runs would be a concurrent second process, not a restart,
+ * and the app refuses one: go/jobs' queue registration is single-writer,
+ * so a second queue on one database is refused outright
+ * (jobs.queue_writer_active) -- correctly, since two dispatchers on one
+ * jobs table would each claim the same work.
  *
  * Because that registration is released on shutdown and stolen once its
- * heartbeat goes stale, the second boot may briefly lose a race with the
- * first process's own exit. bootServer retries for that reason --
+ * heartbeat goes stale, the second boot may briefly lose a race with
+ * the first process's own exit. bootServer retries for that reason --
  * the same thing a process supervisor does, rather than an assumption
  * about how long the window is.
  */
@@ -89,23 +80,16 @@ test('a member signs in again after the server restarts against the same databas
     // server that just booted over an existing database. The page itself
     // is untouched.
     //
-    // The calls are FETCHED by Playwright and handed back as this
-    // origin's own answer, rather than continued to a different origin.
-    //
-    // `route.continue({ url })` to another port is a CROSS-ORIGIN request
-    // as far as the page is concerned, and the browser applies CORS to
-    // it: this app's server sends no CORS headers (it has never needed
-    // to, being same-origin in every real deployment), so WebKit blocked
-    // every rewritten call and the page rendered "No network
-    // connection." The gate then failed on the sign-in surface with the
-    // frame never appearing -- which reads exactly like the membership
-    // defect it exists to catch, on an engine where nothing was wrong.
-    // Chromium happened to allow it, so the suite looked fine.
-    //
-    // route.fetch performs the request from Playwright's own stack, with
-    // no origin and no preflight involved, and fulfill returns the real
-    // response to the page. The server under test is unchanged, and so
-    // is what the browser believes it is talking to.
+    // routeApiTo fetches through Playwright's own stack and fulfills
+    // with the real answer, rather than continuing the request to
+    // another port: `route.continue({ url })` would make a CROSS-ORIGIN
+    // request as far as the page is concerned, and the browser applies
+    // CORS to it. This app's server sends no CORS headers (it has never
+    // needed to, being same-origin in every real deployment), so a
+    // rewritten call is blocked and the page renders "No network
+    // connection." -- a failure that reads exactly like the membership
+    // defect this gate exists to catch. The server under test is
+    // unchanged, and so is what the browser believes it is talking to.
     await routeApiTo(page, restartPort)
 
     // One sign-in, and it happens after the restart. Signing in before it

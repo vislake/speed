@@ -20,33 +20,19 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// self_service_test.go is the regression suite for the acceptance finding
-// this round closes: a self-registered account used to hit a dead end --
-// registration answered 201, the browser-shaped sign-in that followed
-// answered 403 authn.tenant_membership_required ("the account has no
-// organization yet"), and nothing the product offered could change that
-// state. Under the product decision this host now implements, the
-// registration itself provisions the account's clinic (self_service.go),
-// so the same journey must now land the account inside its own clinic
-// tenant with the org root, the membership and the owner grant it can act
-// on -- and that must survive the process restart that kills every
-// in-memory answer: the org rows alone answer on restart (the "which
-// tenants" question reads them through org's own cross-tenant query --
-// the host's self_service_clinics ledger was retired in the same round;
-// see the no-ledger regression below), the same two-boot shape the
-// demo-users and invitation suites already pin for their own memberships.
-//
-// Failing before the fix: on the pre-self-service code this suite's first
-// test answered the browser-shaped sign-in with the 403 the deleted
-// TestDemoUsers_RegisteredButMemberless_BrowserShapedSignInRefused used
-// to pin, and the assertions below failed where it passed; the second
-// test failed one step earlier (boot one's sign-in never succeeded). On
-// the pre-retry code -- the provisioning fix had landed, the retry had
-// not -- the suite's last test timed out waiting for a clinic that
-// nothing would ever provision: the injected failure was consumed by the
-// one synchronous attempt, the authn.user.created event never fires
-// again, and no retry existed, so the browser-shaped sign-in stayed
-// refused forever.
+// self_service_test.go is the regression suite for the self-service
+// signup journey: registration provisions the account's clinic
+// (self_service.go), so the journey must land the account inside its own
+// clinic tenant with the org root, the membership and the owner grant it
+// can act on -- and that must survive the process restart that kills
+// every in-memory answer: the org rows alone answer on restart (the
+// "which tenants" question reads them through org's own cross-tenant
+// query; see the no-ledger regression below), the same two-boot shape
+// the demo-users and invitation suites already pin for their own
+// memberships. The failure-injection/retry half is pinned too: an
+// injected synchronous failure must converge through the retry job --
+// without a retry, the authn.user.created event never fires again and
+// the browser-shaped sign-in stays refused forever.
 
 // selfServiceFreshEmail is the account every journey below registers. The
 // @example.com suffix matches the flow tests' convention; the local part
@@ -152,7 +138,7 @@ func TestSelfServiceSignup_RegisterThenSignIn_LandsInTheCreatedClinic(t *testing
 	// A fresh account registers through authn's real register route.
 	userID := registerFreshAccount(t, srv, selfServiceFreshEmail, selfServicePassword)
 
-	// The browser-shaped sign-in that used to answer the dead end now
+	// The browser-shaped sign-in that a memberless account could not take now
 	// succeeds, and lands the principal in the account's OWN clinic -- the
 	// deterministic tenant derived from the registrant's user id
 	// (self_service.go's clinicTenantOf), never a configured demo tenant.
@@ -180,9 +166,8 @@ func TestSelfServiceSignup_RegisterThenSignIn_LandsInTheCreatedClinic(t *testing
 	// pre-acceptance invitee's is -- the clinic is its own tenant, not a
 	// back door into someone else's. The refusal is the unified 401
 	// authn.invalid_credentials answer a wrong password also gets (this
-	// control used to pin the distinguishable 403
-	// authn.tenant_membership_required; the specific no-membership reason
-	// now lives in the login history, never the response).
+	// control: the specific no-membership reason
+	// lives in the login history, never the response).
 	status, code, _ = demoLogin(t, srv, selfServiceFreshEmail, selfServicePassword, "tenant-acme")
 	if status != http.StatusUnauthorized || code != "authn.invalid_credentials" {
 		t.Fatalf("sign-in of the clinic owner into tenant-acme: status = %d, code = %q, want 401 %q",
@@ -268,8 +253,8 @@ func TestSelfServiceSignup_RegisterThenSignIn_LandsInTheCreatedClinic(t *testing
 // sign-in still lands there. The clinic's membership is an org row and
 // the "which tenants" answer reads org's own memberships table directly
 // (MemberService.TenantsOf behind the sign-in store -- the
-// self_service_clinics ledger this suite's earlier rounds relied on for
-// boot-time re-discovery was retired in the same round), so nothing boot
+// self_service_clinics ledger an earlier shape relied on for
+// boot-time re-discovery), so nothing boot
 // one held in memory may be load-bearing -- the same two-boot shape the
 // demo-users and invitation suites use for their own memberships.
 func TestSelfServiceSignup_ClinicOwnerSignInSurvivesARestart(t *testing.T) {
@@ -373,7 +358,7 @@ func (f *failOnceProvisioning) observed() bool {
 // that picks the retry job up, the browser-shaped sign-in -- is the real
 // composed server, nothing mocked.
 //
-// Failing before the fix (the retry wiring absent): register answered
+// The pinned behavior: with the retry wiring absent register answers
 // 201, the injected failure was consumed by the one synchronous attempt,
 // and nothing ever ran provision again -- authn.user.created fires once
 // -- so the clinic never gained the registrant's org membership row and
@@ -405,10 +390,8 @@ func TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists(t *te
 	clinic := pkgcore.TenantID("tenant-" + userID)
 
 	// The clinic exists only once a provisioning attempt has run far
-	// enough to land the registrant's org membership (the host's
-	// self_service_clinics ledger was retired in the round that moved the
-	// sign-in answer onto org's own memberships table, so the durable
-	// record of a completed provision is that row).
+	// enough to land the registrant's org membership -- the durable
+	// record of a completed provision is that row.
 	// waitForClinicMembership polls it through a second connection to the
 	// server's own database file (the same-shape second connection the
 	// audit suite's persister test uses), with the same filter org's own
@@ -418,8 +401,8 @@ func TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists(t *te
 	// authn rate-limit budget is spent waiting for the retry.
 	waitForClinicMembership(t, cfg.SQLitePath, clinic, userID)
 
-	// The retry converged the clinic; the browser-shaped sign-in that the
-	// pre-self-service dead end used to refuse now lands in it.
+	// The retry converged the clinic; the browser-shaped sign-in now lands
+	// in it.
 	status, code, _, tenant := browserSignIn(t, srv, selfServiceFreshEmail, selfServicePassword)
 	if status != http.StatusOK {
 		t.Fatalf("sign-in of the clinic owner after the retried provisioning: status = %d, code = %q, want %d",
@@ -433,11 +416,9 @@ func TestSelfServiceSignup_ProvisioningFailure_RetriedUntilTheClinicExists(t *te
 // waitForClinicMembership polls clinic's registrant membership row through a
 // second connection to the SQLite file sqlitePath until it appears or the
 // deadline passes. The membership row is the durable record of a completed
-// provision once the host's self_service_clinics ledger was retired (the
-// round that moved the sign-in answer onto org's own memberships table), so
-// its appearance means a provisioning attempt ran to completion -- after a
-// failed synchronous attempt, the completing attempt can only be the retry
-// job's. The poll applies the same filter org's own cross-tenant query
+// provision, so its appearance means a provisioning attempt ran to
+// completion -- after a failed synchronous attempt, the completing attempt
+// can only be the retry job's. The poll applies the same filter org's own cross-tenant query
 // applies -- status "active", never soft-deleted (go/org/membership.go's
 // MembershipStatusActive and go/org/membership_tenants.go's
 // membershipTenantRow). A read, so no authn rate-limit budget is spent
@@ -607,7 +588,7 @@ func TestSelfServiceSignup_EnvDrivenFirstProvisionFailure_RetryConverges_LaterSi
 // worker context carries no attached logger, so obs.FromContext falls
 // back to slog.Default(), which the test captures.
 //
-// Failing before the fix: the handler implemented no FailureHook, so the
+// The pinned behavior: a handler with no FailureHook lets the
 // job dead-lettered with only the generic queue line and the
 // terminal-signal assertion below never matched.
 func TestSelfServiceProvisionRetry_DeadLetter_LogsTheTerminalSignalByUserAndTenant(t *testing.T) {

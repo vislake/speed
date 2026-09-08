@@ -111,12 +111,13 @@ func TestService_RevokeSigningKey_UnknownKID(t *testing.T) {
 	}
 }
 
-// TestService_RevokeSigningKey_InvalidatesTheCacheAndExcludesFromReads is the
-// round's central proof: a revoked key must be immediately excluded from
-// ActiveSigner and VerificationKeys, THROUGH the same cache-invalidation
-// mechanism round 2 built (the process-local keySetCache, cache.go),
-// exercised here with a non-trivial cache TTL so a stale cache entry would
-// actually be observable if invalidation were bypassed.
+// TestService_RevokeSigningKey_InvalidatesTheCacheAndExcludesFromReads is
+// the central proof of immediate exclusion: a revoked key must be
+// immediately excluded from ActiveSigner and VerificationKeys, THROUGH the
+// same cache-invalidation mechanism every lifecycle transition uses (the
+// process-local keySetCache, cache.go), exercised here with a non-trivial
+// cache TTL so a stale cache entry would actually be observable if
+// invalidation were bypassed.
 func TestService_RevokeSigningKey_InvalidatesTheCacheAndExcludesFromReads(t *testing.T) {
 	db := newTestDB(t)
 	signer := NewLocalSigner(db)
@@ -196,11 +197,10 @@ func TestCAService_RevokeCertificate_TransitionsToRevoked(t *testing.T) {
 
 // TestCAService_RevokeCertificate_IsIdempotent pins the sequential
 // idempotent re-revoke contract end to end: a second call on an
-// already-revoked certificate reports (false, nil) and -- the ledger
-// atomicity round's regression pin -- leaves both the ledger and the event
-// stream exactly as the first call left them: one ledger row, one
-// EventCertificateRevoked, and the FIRST call's revocation reason
-// unchanged on both the certificate row and the ledger row.
+// already-revoked certificate reports (false, nil) and leaves both the
+// ledger and the event stream exactly as the first call left them: one
+// ledger row, one EventCertificateRevoked, and the FIRST call's revocation
+// reason unchanged on both the certificate row and the ledger row.
 func TestCAService_RevokeCertificate_IsIdempotent(t *testing.T) {
 	ca, rec := newTestCAServiceWithBus(t)
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
@@ -314,10 +314,10 @@ func TestCAService_VerifyCertificate_RevokedCertificate_Refused(t *testing.T) {
 
 // TestCAService_VerifyCertificate_RevokedAuthorityInChain_Refused proves the
 // chain-verification path defends against AuthorityStatusRevoked even
-// though no method in this round's own public API ever writes it -- see
+// though no method in this module's public API ever writes it -- see
 // VerifyCertificate's own doc comment. The row is seeded directly, the same
-// precedent round 1's TestService_VerificationKeys_ReturnsNonRevokedKeys
-// sets for SigningKeyStatusRevoked.
+// precedent TestService_VerificationKeys_ReturnsNonRevokedKeys sets for
+// SigningKeyStatusRevoked.
 func TestCAService_VerifyCertificate_RevokedAuthorityInChain_Refused(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))
@@ -326,7 +326,7 @@ func TestCAService_VerifyCertificate_RevokedAuthorityInChain_Refused(t *testing.
 
 	// Seed the issuing authority as revoked directly through the
 	// repository -- no public CAService method ever performs this
-	// transition this round.
+	// transition.
 	authority.Status = AuthorityStatusRevoked
 	if err := ca.authorities.Update(ctx, authority); err != nil {
 		t.Fatalf("seed revoked authority: %v", err)
@@ -428,15 +428,14 @@ func TestCAService_RevokeCertificate_ConcurrentDoubleRevoke_ExactlyOneWinner(t *
 // ledger row always end up agreeing about when and why the revocation
 // happened.
 //
-// The ledger-atomicity round's own concurrency test raced identical
-// reasons, which is exactly why it could not see this bug: a losing
-// caller's blind full-row certificate update overwrote the certificate row
-// with the LOSER's own RevocationReason/RevokedAt after the ledger winner's
-// insert had already recorded the WINNER's -- one ledger row, one event and
-// exactly one true answer all held, while the two tables silently disagreed
-// about the metadata. With every racer carrying a distinct reason, any such
-// loser-overwrite is visible as a certificate-row/ledger-row mismatch, and
-// the run fails.
+// Racing identical reasons cannot expose this class of bug: a losing
+// caller's blind full-row certificate update would overwrite the
+// certificate row with the LOSER's own RevocationReason/RevokedAt after
+// the ledger winner's insert had already recorded the WINNER's -- one
+// ledger row, one event and exactly one true answer would all hold, while
+// the two tables silently disagreed about the metadata. With every racer
+// carrying a distinct reason, any such loser-overwrite is visible as a
+// certificate-row/ledger-row mismatch, and the run fails.
 //
 // The barrier shape and trial repetition mirror
 // ConcurrentDoubleRevoke_ExactlyOneWinner's identical rig: 8 goroutines

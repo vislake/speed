@@ -49,14 +49,9 @@ const createCasePhotosTableSQL = `CREATE TABLE IF NOT EXISTS ` + casePhotosTable
 // accepted by both SQLite and PostgreSQL) because indexes cannot be
 // declared portably inside the CREATE TABLE statements above, and the
 // model tags' index declarations only matter to AutoMigrate, which this
-// app never runs. It replaced the round's earlier
-// (tenant_id, creator_user_id) index, which backed the old "my cases"
-// list: no query filters by creator anymore (the clinic's list is
-// tenant-scoped, never creator-scoped), and the tenant-wide newest-first
-// read is the query that actually runs. A database file a previous boot
-// created keeps the old index harmlessly (CREATE INDEX IF NOT EXISTS
-// adds this one without touching it); the rows it used to serve are all
-// served by this one now.
+// app never runs. The tenant-wide newest-first read is the query the
+// clinic's list runs: it is tenant-scoped, never creator-scoped, so
+// (tenant_id, created_at) is the lookup the read needs.
 const createCasesTenantListIndexSQL = `CREATE INDEX IF NOT EXISTS idx_cases_tenant_created ON ` + casesTable + ` (tenant_id, created_at DESC)`
 
 // createCasePhotosCaseIndexSQL is the lookup index behind listing one
@@ -73,8 +68,8 @@ const createCasePhotosCaseIndexSQL = `CREATE INDEX IF NOT EXISTS idx_case_photos
 const createCasePhotosObjectUniqueIndexSQL = `CREATE UNIQUE INDEX IF NOT EXISTS uq_case_photos_tenant_object ON ` + casePhotosTable + ` (tenant_id, object_id)`
 
 // Repository is cases' tenant-scoped data-access type. It embeds
-// dbkit.Repository[caseRecord] instead of holding a *gorm.DB directly (root
-// CLAUDE.md's multi-tenant isolation rule; backend coding standard §3.2) --
+// dbkit.Repository[caseRecord] instead of holding a *gorm.DB directly
+// (the multi-tenant isolation discipline) --
 // Create, FindByID, Update, Delete, List and HardDelete are all promoted
 // from the embedded base unchanged -- and carries the child table's own
 // dbkit.Repository[casePhotoRecord] as the named field photos below. The
@@ -90,14 +85,14 @@ const createCasePhotosObjectUniqueIndexSQL = `CREATE UNIQUE INDEX IF NOT EXISTS 
 // Two cautions about the promoted surface, both deliberate and both
 // documented rather than hidden:
 //
-//   - Update and Delete on the cases side touch ONLY the cases row. This
-//     round ships no update or delete path at all (see the package doc
-//     comment's "Honest record" section -- close/delete is a P3 decision),
-//     so nothing in this app calls them; a future round that deletes a
-//     case must remove its case_photos rows in the same transaction, the
-//     aggregate-shape this file's own createCaseWithPhotos already
-//     demonstrates, and should hide or override the promoted Delete when
-//     it gets there rather than leaving the orphan-prone surface open.
+//   - Update and Delete on the cases side touch ONLY the cases row. The
+//     surface ships no update or delete path at all (see the package doc
+//     comment's "Known limitations" section), so nothing in this app calls
+//     them; a case delete must remove its case_photos rows in the same
+//     transaction -- the aggregate shape this file's own
+//     createCaseWithPhotos already demonstrates -- and should hide or
+//     override the promoted Delete rather than leaving the orphan-prone
+//     surface open.
 //   - Delete on the photos side is a physical row delete, which is fine:
 //     a case_photos row is a pure reference with no soft-delete lifecycle
 //     story of its own.
@@ -196,8 +191,8 @@ func (r *Repository) createCaseWithPhotos(ctx context.Context, record *caseRecor
 // smilesim's listByPhoto enumerates only its own tenant's. The list is
 // deliberately NOT filtered by creator: everyone who treats a patient
 // together in one practice must see the same cases, and only the tenant
-// boundary hides one (the block-A product decision the round brief and
-// the list route's spec description record). CreatorUserID stays on the
+// boundary hides one (the clinic-wide decision the package doc comment's
+// "Shape decision" section records). CreatorUserID stays on the
 // row as the recorded attribution of the create request; it is never a
 // list key.
 func (r *Repository) listByTenant(ctx context.Context) ([]caseRecord, error) {

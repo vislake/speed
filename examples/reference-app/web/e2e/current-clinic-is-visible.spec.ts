@@ -1,40 +1,31 @@
 /**
  * That a person always knows which clinic they are working in.
  *
- * A multi-location practice manager wrote a patient record in one clinic,
- * switched to the other, and the screen told them nothing: the switcher
- * that names the current clinic is invisible (its own blue on the app
- * bar's blue), the switch produced no confirmation, and no heading,
- * breadcrumb or body text carries the clinic's name. The only signal was
- * the record list going empty -- which reads as "the data is gone", not
- * as "you changed clinic".
+ * The stakes are not cosmetic: a record written in the wrong clinic's
+ * chart is a compliance problem in a medical setting, not a data-entry
+ * slip, and if the only thing that ever says which clinic is selected
+ * is a chrome control a person can scan past, nobody can reconstruct
+ * where a record landed.
  *
- * The stakes are not cosmetic. The next thing that manager does is write
- * another patient record. If they do not know where they are, that record
- * lands in the wrong clinic's chart -- a compliance problem in a medical
- * setting, not a data-entry slip -- and afterwards nobody can reconstruct
- * which clinic was selected, because the only thing that ever said so was
- * a button nobody could see.
- *
- * So this gate is deliberately stricter than "the switcher meets contrast
- * requirements" (visible-controls.spec.ts holds that separately). A
- * control can be perfectly legible and still be scanned past. The
- * question here is whether the clinic's identity reaches a person who is
- * looking at the work they are doing -- which is the main content area,
- * not the chrome around it.
+ * So this gate is deliberately stricter than "the switcher meets
+ * contrast requirements" (visible-controls.spec.ts holds that
+ * separately). A control can be perfectly legible and still be scanned
+ * past. The question here is whether the clinic's identity reaches a
+ * person who is looking at the work they are doing -- which is the main
+ * content area, not the chrome around it.
  *
  * It asserts a property, not a layout: the current clinic's name must
  * appear somewhere inside the main landmark. A page heading carrying it
- * passes. A subtitle passes. A banner-only mention does not, which is the
- * whole point.
+ * passes. A subtitle passes. A banner-only mention does not, which is
+ * the whole point.
  */
 import { expect, test } from '@playwright/test'
 // DEMO_READER, not DEMO_OWNER: this gate only reads (both demo
 // tenants hold the reader's membership, so the cross-clinic switch is
 // legal for it), and the suite spends sign-ins deliberately -- the
-// demo server's per-account limit (go/authn's ratelimit.go: five per
-// account per minute) is shared with the gates that need the owner's
-// write grant, so a read-only gate never draws on the owner's budget.
+// demo server's per-account login limit (go/authn's ratelimit.go) is
+// shared with the gates that need the owner's write grant, so a
+// read-only gate never draws on the owner's budget.
 import { DEMO_READER } from './test-utils/accounts.js'
 import {
   APP_TEXT,
@@ -61,19 +52,14 @@ const SIGNUP_PASSWORD = 'e2e-new-clinic-2026'
  */
 const RAW_TENANT_ID = /^tenant-[0-9a-f-]{8,}$/i
 
-// Both tests were tagged @pending while the defect they found was open:
-// no surface named the clinic it was scoped to, and a switch produced no
-// announcement at all -- the acceptance story in the file header. The
-// surfaces now render the clinic-context line at page-title level (the
-// host's CurrentClinicLine on the home and notes surfaces) and the
+// The surfaces render the clinic-context line at page-title level (the
+// host's CurrentClinicLine on the home and notes surfaces), and the
 // tenant switcher announces its committed switch through its live
-// region; both tests pass against the fixed tree (the closing round's
-// verification), and the acceptance session re-ran both against a
-// freshly deployed tree and confirmed it. So the tag is @budget now,
-// not @pending: verified, and out of the default run only because its
-// sign-ins do not fit the suite's per-account budget -- a suite-budget
-// decision, never a visibility one. `pnpm test:e2e:budget` runs them
-// with a budget of their own (see e2e/README.md).
+// region. The tag is @budget: verified, and out of the default run only
+// because its sign-ins do not fit the suite's per-account login budget
+// -- a suite-budget decision, never a visibility one.
+// `pnpm test:e2e:budget` runs them with a budget of their own (see
+// e2e/README.md).
 test(
   'the clinic being worked in is named in the main content, not only in the chrome',
   { tag: '@budget' },
@@ -129,32 +115,22 @@ test(
 
 test(
   'a clinic a practice just created for itself is named, not left as an id',
-  // @budget, not in the default run: the defect this test found is
-  // closed -- the clinic a registration creates is answered by its own
-  // org root name (go/org's MemberService.TenantsOf behind the sign-in
-  // store, cmd/server/self_service.go naming the root after the
-  // registrant's display name, the frame reading it from
-  // /api/reference-app/clinic-name), the same verified status its two
-  // siblings above carry: they pass and only the sign-in budget keeps
-  // them out of the default run. While the defect was open this test
-  // was @pending -- conflating the two is exactly what this suite split
-  // the tags to prevent.
+  // @budget, not in the default run: the clinic a registration creates
+  // is answered by its own org root name (go/org's MemberService.
+  // TenantsOf behind the sign-in store, cmd/server/self_service.go
+  // naming the root after the registrant's display name, the frame
+  // reading it from /api/reference-app/clinic-name) -- verified, like
+  // its two siblings above, and only the sign-in budget keeps it out of
+  // the default run.
   { tag: '@budget' },
   async ({ page }) => {
-    // THE OBSERVATION THIS GATE HAD WRONG
-    //
-    // Its two tests above sign in as a demo account, and they passed --
-    // while the property they exist for was failing for the newest kind
-    // of clinic in the product. The clinic's NAME is resolved from the
-    // host's own hard-coded demo roster, so a clinic created at run time
-    // by self-service registration is not in it: the switcher shows the
-    // raw tenant id and the work area names no clinic at all. Verified
-    // by hand on the real deployment during acceptance, on every surface
-    // (home, cases, new case), while these gates stayed green.
-    //
-    // A gate whose subject is "can a person tell which clinic they are
-    // working in" cannot only ever ask it about the clinics that were
-    // configured before the server booted.
+    // Why the self-registered population is in this file: the two tests
+    // above ask "can a person tell which clinic they are working in" of
+    // the demo tenants seeded at boot; this one asks it of a clinic a
+    // practice just created for itself, whose name comes from the org
+    // root the sign-in store answers rather than from anything
+    // configured before the server booted -- a gate with this subject
+    // cannot only ever ask it about the boot-configured clinics.
     //
     // It deliberately does NOT assert what the clinic should be called
     // -- that is a product decision (the practice's own name at signup,

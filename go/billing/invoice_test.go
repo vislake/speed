@@ -74,15 +74,15 @@ func TestInvoiceRepository_MarkPaid_NotFound(t *testing.T) {
 	}
 }
 
-// TestInvoiceRepository_VoidOnPaidInvoice_Refused is P3-15's regression
-// test: setStatus used to validate nothing, so any caller could overwrite
-// a settled invoice's Status -- Void on a Paid invoice silently rewrote
-// the record of a collected payment to "void", as if the money had never
-// arrived. The fix validates every transition against the same legal-table
-// shape Subscription transitions use: Open may move to Paid or Void, and
-// both Paid and Void are terminal -- any other move (including Void on a
-// Paid invoice) is ErrInvalidInvoiceTransition. This fails on the pre-fix
-// setStatus (which rewrote the row and reported success).
+// TestInvoiceRepository_VoidOnPaidInvoice_Refused pins the transition guard:
+// setStatus must validate every move, so a caller could never overwrite
+// a settled invoice's Status -- an unguarded Void on a Paid invoice would
+// rewrite the record of a collected payment to "void", as if the money
+// had never arrived, and report success. Every transition is validated
+// against the same legal-table shape Subscription transitions use: Open
+// may move to Paid or Void, and both Paid and Void are terminal -- any
+// other move (including Void on a Paid invoice) is
+// ErrInvalidInvoiceTransition.
 func TestInvoiceRepository_VoidOnPaidInvoice_Refused(t *testing.T) {
 	repo := NewInvoiceRepository(newTestDB(t))
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
@@ -140,8 +140,8 @@ func TestInvoiceRepository_VoidOnPaidInvoice_Refused(t *testing.T) {
 // the winner's terminal state stands and the loser reports
 // billing.invalid_invoice_transition, mirroring what a caller who had
 // observed the winner's state directly would have gotten. A race where
-// both calls report success (the pre-fix interleaving) violates the
-// transition table and fails the assertions below.
+// both calls report success would violate the transition table and fails
+// the assertions below.
 func TestInvoiceRepository_MarkPaidAndVoid_RacingTransitions_ExactlyOneCommits(t *testing.T) {
 	repo := NewInvoiceRepository(newTestDB(t))
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")

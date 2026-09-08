@@ -22,12 +22,12 @@ import (
 // deployment's replica pool is reading, so silently falling back to it
 // there would look like phone sign-in works right up until the first
 // person tries to use the code that was never actually delivered. The SMS
-// seam lives in THIS module rather than in pkgcore (see this module's
-// AGENTS.md: it is not a primitive every module needs), so unlike the
-// mailer and object-store cases this validation cannot happen inside
-// pkgcore.Kernel -- WithDeploymentMode records the one fact this module
-// needs from the host to enforce it itself, at the same wiring-time moment
-// NewModule already validates WithKeySource and WithBlindIndexKey.
+// seam lives in THIS module rather than in pkgcore -- SMS delivery is not
+// a primitive every module needs -- so unlike the mailer and object-store
+// cases this validation cannot happen inside pkgcore.Kernel --
+// WithDeploymentMode records the one fact this module needs from the host
+// to enforce it itself, at the same wiring-time moment NewModule already
+// validates WithKeySource and WithBlindIndexKey.
 var ErrMissingDistributedSMSSender = errors.New("authn: distributed deployment mode requires an explicit SMS sender")
 
 // SMS is one message to deliver to a phone number.
@@ -45,18 +45,16 @@ type SMS struct {
 // SMSSender delivers a one-time verification code, or any other short
 // message, to a phone number.
 //
-// It is authn's own seam, not a pkgcore one: docs/internal's rule for what
-// belongs in the dependency floor every module carries is "a capability
-// every module needs", and SMS delivery is specific to this module's phone
-// sign-in flow. Per the root CLAUDE.md's dual-deployment-mode rule, it
-// still ships two implementations in this package -- NewConsoleSMSSender
-// (standalone, zero external dependency) and NewHTTPSMSSender (distributed,
-// a real, independently testable second implementation) -- plus, since the
-// SMS-provider-adapter round, three real carrier adapters under go/authn/sms/
-// (aliyun, tencent, twilio), each implementing its vendor's own signing and
-// request shape. Every implementation is selected by which constructor the
-// HOST calls, never by a mode branch inside this package.
-type SMSSender interface {
+// It is authn's own seam, not a pkgcore one: the dependency floor carries
+// only capabilities every module needs, and SMS delivery is specific to
+// this module's phone sign-in flow. It ships two implementations in this
+// package -- NewConsoleSMSSender (standalone, zero external dependency) and
+// NewHTTPSMSSender (distributed, a real, independently testable second
+// implementation) -- selected by which constructor the HOST calls, never by
+// a mode branch inside this package, plus three real carrier adapters under
+// go/authn/sms/ (aliyun, tencent, twilio), each implementing its vendor's
+// own signing and request shape, constructed by the host through the
+// package's own NewSender.type SMSSender interface {
 	// Send delivers msg. An error means the message was not delivered;
 	// the caller (verification.go) surfaces that as a structured failure
 	// rather than pretending the code went out.
@@ -65,8 +63,7 @@ type SMSSender interface {
 
 // consoleSMSSender is the standalone deployment mode's SMS transport: it
 // writes every message to an injected io.Writer instead of sending
-// anything, mirroring docs/internal/03-deployment-modes.md's degradation
-// matrix entry for SMS ("printed to stdout").
+// anything -- the console-form degradation for SMS ("printed to stdout").
 type consoleSMSSender struct {
 	w io.Writer
 }
@@ -135,8 +132,7 @@ func WithHTTPSMSSenderClient(client *http.Client) HTTPSMSSenderOption {
 // are a destination an operator, not this codebase, chose -- the endpoint's
 // scheme must be https (checked before every send, see Send) and every
 // connection is dialled through safehttp's guarded client, which refuses a
-// private address at CONNECT time.
-type httpSMSSender struct {
+// private address at CONNECT time.type httpSMSSender struct {
 	endpoint string
 	client   *http.Client
 	guard    *safehttp.Guard
@@ -150,12 +146,12 @@ type httpSMSSender struct {
 // endpoint MUST be https, and Send refuses one that is not before any
 // request leaves this process. That is internal/safehttp's allowed-scheme
 // policy, the same policy a tenant administrator's OIDC issuer URL is
-// checked against when it is saved. This constructor returns no error (its
-// signature predates this requirement): the refusal surfaces on the first
-// Send instead, and through the delivery-failure log the service already
-// writes for a failed Send -- an operator whose gateway URL is refused
-// should change the scheme of the value they configured (the reference
-// app's APP_SMS_GATEWAY_URL), never replace this constructor.
+// checked against when it is saved. This constructor returns no error; the
+// refusal surfaces on the first Send instead, and through the
+// delivery-failure log the service already writes for a failed Send -- an
+// operator whose gateway URL is refused should change the scheme of the
+// value they configured (the reference app's APP_SMS_GATEWAY_URL), never
+// replace this constructor.
 func NewHTTPSMSSender(endpoint string, opts ...HTTPSMSSenderOption) SMSSender {
 	guard := safehttp.NewGuard()
 	cfg := httpSMSSenderConfig{httpClient: guard.Client()}

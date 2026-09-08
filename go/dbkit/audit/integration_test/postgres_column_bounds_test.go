@@ -17,22 +17,23 @@ import (
 // Insert applies to audit_events' descriptive columns (see
 // fitEventToColumns' doc comment in repository.go and model.go's
 // column-bounds constants for the full account). It is the fail-before /
-// pass-after regression for the finding that started the enforcement: an
-// audit event whose resource_display_name carries a legal value longer
+// pass-after regression for the enforcement itself: an audit event whose
+// resource_display_name carries a legal value longer
 // than the target column's width -- the concrete case is an integration
 // webhook URL (url VARCHAR(2048), go/integration/webhook_model.go) fed
 // verbatim into resource_display_name (VARCHAR(255)) by
-// go/integration/webhook_service.go's emitWebhookAudit -- was stored
+// go/integration/webhook_service.go's emitWebhookAudit -- is stored
 // verbatim by SQLite (whose VARCHAR bounds are unenforced) and REFUSED by
 // a real PostgreSQL server with SQLSTATE 22001 ("value too long for type
 // character varying(255)"), failing the whole INSERT. On the real
-// PostgreSQL side of this file the pre-fix behavior is a genuine 22001,
-// so this test FAILS against the unfixed code and PASSES against the
-// fixed code -- which is the point of a dual-dialect regression -- while
-// the SQLite-only unit tier pins the same Go-side cut from the other
-// direction (repository_test.go's
+// PostgreSQL side of this file the refusal is a genuine 22001, so this
+// test FAILS on a codebase that relies on the database to truncate and
+// PASSES on one whose Insert cuts the field in Go first -- which is the
+// point of a dual-dialect regression -- while the SQLite-only unit tier
+// pins the same Go-side cut from the other direction (repository_test.go's
 // TestRepository_Insert_CutsOverWideDescriptiveFieldsToTheirColumnBounds,
-// which cannot see a pre-fix failure because SQLite never refuses).
+// which cannot see a database-level refusal because SQLite never
+// enforces one).
 func TestRepository_Insert_Postgres_CutsOverWideDisplayNameToColumnBound(t *testing.T) {
 	ctx := context.Background()
 	db := newMigratedPostgresAuditDB(t)

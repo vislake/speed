@@ -1,23 +1,21 @@
 // Package smilesim is the reference app's small, non-HTTP-generated
-// business service that is go/ai-gateway round 2's mandatory first
-// consumer of Gateway.GenerateImage (root CLAUDE.md's "Reference App"
-// section: "a module API that it does not actually use is not considered
-// done"): given a patient photo the caller already uploaded through
+// business service that is go/ai-gateway's mandatory first consumer of
+// Gateway.GenerateImage (a module API this app genuinely uses): given a
+// patient photo the caller already uploaded through
 // go/storage, it asks go/ai-gateway for an async AI smile simulation --
 // an image-to-image transformation standing in for this
-// dental SaaS's own real before/after preview feature, exactly the
-// use case root CLAUDE.md's own premise for this reference app names.
+// dental SaaS's own real before/after preview feature.
 //
-// Like internal/consult (round 1's chat consumer), it deliberately does not
+// Like internal/consult (the chat consumer), it deliberately does not
 // go through the OpenAPI machinery: ai-gateway itself ships no HTTP surface
-// for either round's spec fragment to grow into. Its three routes (POST
+// for a spec fragment to grow into. Its three routes (POST
 // /api/v1/smile-simulation/simulate, GET
-// /api/v1/smile-simulation/jobs/{id}, and -- since the P2a round -- GET
+// /api/v1/smile-simulation/jobs/{id}, and GET
 // /api/v1/smile-simulation/photos/{photoObjectID}/simulations, the
-// per-photo enumeration that is the P3 gallery's data source) are mounted
-// by hand in cmd/server (cmd/server/smilesim.go), the same pattern
+// per-photo enumeration that is the smile gallery's data source) are
+// mounted by hand in cmd/server (cmd/server/smilesim.go), the same pattern
 // consult.go and the notification module's own demo patient-message route
-// already establish in this app.
+// establish in this app.
 //
 // # Completion notification
 //
@@ -28,7 +26,7 @@
 // the very request handler that just created the row. What this Service
 // DOES own is EventSimulationCompleted (mirroring notes' identical "a
 // business module publishes a fact, notification consumes it" shape --
-// root CLAUDE.md's "Notifications are event-driven" rule): Simulate
+// notifications are event-driven): Simulate
 // remembers the caller-supplied recipient against the job it started, and
 // NotifyOnCompletion -- called by cmd/server's existing job-status poll
 // route on every read, which a real client already does to learn when a
@@ -53,11 +51,8 @@
 // # Credit accounting
 //
 // This is also the reference app's mandatory first consumer of
-// go/billing's CreditService (docs/internal/15-roadmap.md's M2 exit
-// condition's credit-pack-purchase, credit-reserve/refund and
-// usage/billing-display leg), following the identical "a module API that
-// it does not actually use is not considered done" rule root CLAUDE.md's
-// Reference App section states.
+// go/billing's CreditService (a module API this app genuinely uses, the
+// credit-pack-purchase, credit-reserve/refund and usage-display surface).
 // Simulate reserves (PreDeduct) CreditsPerSimulation credits BEFORE ever
 // calling Gateway.GenerateImage -- an insufficient balance refuses the
 // request with billing.ErrInsufficientCredits and never reaches
@@ -75,10 +70,9 @@
 // gateway's own coded answer while no PreDeduct/Refund pair has ever been
 // written to the ledger for it (see Simulate's own doc comment). Every
 // credit-pack-purchase leg (a real Stripe/Alipay/WeChat sandbox charge)
-// is deliberately out of scope here -- see cmd/server/server.go's
-// seedDemoCredits for the Grant-based demo stand-in this round ships
-// instead, and go/billing/gateway/AGENTS.md for why no live payment
-// credentials exist in this environment.
+// is deliberately out of scope here -- cmd/server/server.go's
+// seedDemoCredits is the Grant-based demo stand-in, since no live
+// payment credentials exist in this environment.
 //
 // # Settlement reachability
 //
@@ -118,11 +112,10 @@
 //
 // # Parameterized simulation options
 //
-// Since this round (the product's backend parameterization milestone, P2a),
 // Simulate accepts an optional, validated option set -- variadic
 // SimulateOption helpers (WithSmileStyle/WithToothShade/WithStrength) over
-// DefaultSimulationOptions, so a call that names no options behaves exactly
-// as this service always did. The effective set is rendered into the vendor
+// DefaultSimulationOptions, so a call that names no options gets the
+// documented defaults. The effective set is rendered into the vendor
 // prompt by prompt.go's renderSimulationPrompt; each dimension's meaning
 // and legal vocabulary live on its own type (SmileStyle, ToothShade,
 // SimulationOptions.Strength in options.go). An option outside the
@@ -132,10 +125,10 @@
 // constants (a clamped value would make both the durable record and the
 // rendered prompt lie about what the caller asked for on a billed
 // operation). The prompt template keeps this product's core promise
-// intact: every render ends with the pre-parameterization preservation
+// intact: every render ends with the preservation
 // sentence verbatim ("Keep the rest of the face, lighting and background
-// unchanged."), preceded by the strengthening identity sentence this round
-// added (identity, proportions, skin tone, lip color, pose) -- the
+// unchanged."), preceded by the strengthening identity sentence
+// (identity, proportions, skin tone, lip color, pose) -- the
 // preservation instruction is never weakened, only extended (prompt.go,
 // pinned by prompt_test.go).
 //
@@ -149,7 +142,7 @@
 // dimension are of course always a new generation. The choice is pinned by
 // TestService_Simulate_SamePhotoSameOptions_IsANewGeneration.
 //
-// # Per-photo result index (the P3 gallery's data source)
+// # Per-photo result index
 //
 // Every Simulate whose enqueue succeeds also durably records, in this app's
 // own SQLite (SimulationStore, simulation_store.go's smilesim_simulations
@@ -178,7 +171,7 @@
 // not to duplicate cannot be presented after the queue that held the only
 // copy of it is gone.
 //
-// # Provider capability assessment (honest record, P2a)
+// # Provider capability assessment (honest record)
 //
 // The provider behind this service is whatever image provider this app's
 // wiring routes smilesim.LogicalModel to -- today cmd/server/server.go
@@ -209,27 +202,22 @@
 // without degrading preservation. Whether that requires a dedicated
 // face-preserving provider or a masking pipeline (mask the mouth region,
 // inpaint the smile only -- a mask path go/ai-gateway's ImageRequest
-// already supports via MaskObjectID) is a P2b-or-later product decision
-// that should be made on the acceptance run's evidence, not before it;
-// this round records the question rather than guessing.
+// already supports via MaskObjectID) is an open product decision, to be
+// made on the acceptance run's evidence, not before it.
 //
-// # Patient and case entities (P2b, landed in internal/cases)
+// # Patient and case entities live in internal/cases
 //
-// This round deliberately built NO patient/case dimension: the per-photo
-// index above is keyed by go/storage photo object id only, which is the
-// natural key at this milestone because photos are already first-class
-// objects with no patient/case table anywhere in this app to attach to --
-// and its photo-object-id key was chosen to stay correct under either
-// future model, exactly as a case layer would sit ABOVE the photo.
-// Product round P2b executed that recommendation (see internal/cases's
-// package doc comment): a Case record now groups a clinic-given patient
-// (embedded in the case row) with the case's photos, and a case detail's
-// per-photo simulations come from THIS package's enumeration, fetched per
-// photo -- the index above is unmodified and stays the single per-photo
-// data source, now with a case layer referencing its photos' object ids
-// rather than any simulation record directly. What remains P3 work is the
-// gallery UI itself, whose queries this index and internal/cases now both
-// serve.
+// This package's per-photo index above is keyed by go/storage photo
+// object id only, the natural key because photos are first-class objects
+// and a case layer sits ABOVE the photo. internal/cases's package doc
+// comment describes the Case record that now groups a clinic-given
+// patient (embedded in the case row) with the case's photos: a case
+// detail's per-photo simulations come from THIS package's enumeration,
+// fetched per photo -- the index above is unmodified and stays the single
+// per-photo data source, with the case layer referencing its photos'
+// object ids rather than any simulation record directly. The gallery UI
+// itself is not built; this index and internal/cases together serve its
+// queries.
 package smilesim
 
 import (
@@ -258,10 +246,10 @@ import (
 const LogicalModel = "image:smile-simulation"
 
 // CreditsPerSimulation is the flat credit cost Simulate reserves for one
-// smile-simulation request -- a reference-app-level demo business policy
-// (this round's own scope), not a mechanism go/billing itself prescribes:
+// smile-simulation request -- a reference-app-level demo business policy,
+// not a mechanism go/billing itself prescribes:
 // a real deployment would size this per vendor cost, per resolution tier,
-// or read it from a go/config item, none of which this round needs to
+// or read it from a go/config item, none of which this app needs to
 // prove the reserve/confirm/refund mechanism end to end.
 const CreditsPerSimulation int64 = 10
 
@@ -401,9 +389,9 @@ type Service struct {
 	// both methods may be called concurrently (a real client polls the
 	// job-status route from its own goroutine independent of any other
 	// request this process is serving). The credit-settlement mapping
-	// that used to share this lock (creditKeys) now lives durably in
-	// store instead -- see the package doc comment's "Settlement
-	// reachability" section for why.
+	// (creditKeys) lives durably in store instead of under this lock --
+	// see the package doc comment's "Settlement reachability" section
+	// for why.
 	//
 	// The two maps are bounded by outstanding notifications, never by the
 	// count of jobs ever simulated: NotifyOnCompletion deletes both
@@ -880,9 +868,9 @@ func (s *Service) NotifyOnCompletion(ctx context.Context, job *jobs.Job) error {
 // Simulate's own doc comment on its idempotency-key shape. A no-op when
 // this Service has no CreditService or store wired, or when store has no
 // outstanding reservation on file for job (e.g. a Service built with
-// credits == nil, a job that predates this round's own credit wiring, or
-// a job whose reservation some earlier settleCredit call already settled
-// and deleted).
+// credits == nil, a job created before this Service's credit wiring was
+// built, or a job whose reservation some earlier settleCredit call
+// already settled and deleted).
 //
 // Confirm/Refund are themselves idempotent under retry (CreditService's
 // own compare-and-swap contract -- credit_service.go's Confirm doc
@@ -907,8 +895,8 @@ func (s *Service) settleCredit(ctx context.Context, job *jobs.Job) error {
 	}
 
 	// Rebuilt explicitly from job.TenantID rather than trusted from ctx --
-	// root CLAUDE.md's "workers do not inherit tenant context" trap,
-	// applied defensively here even though every real caller's ctx already
+	// a worker context never carries tenant by inheritance, applied
+	// defensively here even though every real caller's ctx already
 	// carries this exact tenant (go/jobs' own Queue.Get refuses an id
 	// outside ctx's tenant, so a caller could not have reached this job's
 	// status at all under a different tenant to begin with).
@@ -976,11 +964,11 @@ type SimulationOutcome struct {
 // OptionsForJob returns the effective option set durably recorded for job,
 // and whether a record exists at all -- false with a nil error means this
 // Service never recorded one for a job under ctx's own tenant (the job
-// predates this round's per-photo index, Simulate was called on a Service
-// built with a nil simulations store, or the row belongs to another
-// tenant). The lookup is tenant-scoped: it answers only for ctx's own
-// tenant, mirroring jobs.Queue.Get's own scoping so a caller that could
-// not poll the job could not learn its options either.
+// was created before the per-photo index existed, Simulate was called on
+// a Service built with a nil simulations store, or the row belongs to
+// another tenant). The lookup is tenant-scoped: it answers only for
+// ctx's own tenant, mirroring jobs.Queue.Get's own scoping so a caller
+// that could not poll the job could not learn its options either.
 //
 // It is how the job-status route attaches the producing options to a
 // polled result -- see the package doc comment's "Per-photo result index"
@@ -1015,8 +1003,9 @@ func (s *Service) OptionsForJob(ctx context.Context, jobID jobs.JobID) (Simulati
 // photoObjectID under ctx's own tenant -- the P3 gallery's data source --
 // newest first. Each outcome's Status/OutputObjectID/Error are read LIVE
 // from the job through the same jobs.Queue a client polls (per row, under
-// the job's own rebuilt tenant context, per root CLAUDE.md's worker-context
-// trap), so the job row stays the single source of truth for the outcome
+// the job's own rebuilt tenant context, since worker contexts never carry
+// tenant by inheritance), so the job row stays the single source of truth
+// for the outcome
 // and this index carries only what no existing record can: the
 // photo-to-generation mapping and the options (see the package doc
 // comment's "Per-photo result index" section).
@@ -1040,9 +1029,9 @@ func (s *Service) OptionsForJob(ctx context.Context, jobID jobs.JobID) (Simulati
 // app boots on retains completed jobs indefinitely, so the omission only
 // ever manifests under a distributed composition. A job read that fails
 // for any OTHER reason -- the queue itself being down, say -- still
-// fails the whole enumeration: an outage is transient and will heal,
-// where retention is permanent, and an empty album must not be the
-// answer to a queue that is merely unreachable.
+// fails the whole enumeration: an outage is transient where retention
+// is permanent, and an empty album must not be the answer to a queue
+// that is merely unreachable.
 //
 // ctx must carry a tenant; one without refuses with pkgcore.ErrNoTenant
 // rather than listing across tenants. A Service built with a nil
@@ -1070,8 +1059,8 @@ func (s *Service) ListSimulationsByPhoto(ctx context.Context, photoObjectID stri
 		}
 
 		// Rebuilt from the row's own stored tenant, never trusted from ctx
-		// -- root CLAUDE.md's "workers do not inherit tenant context" trap,
-		// applied the way ReconcileOutstandingCredits already does. (The
+		// -- a worker context never carries tenant by inheritance, applied
+		// the way ReconcileOutstandingCredits already does. (The
 		// row's tenant is ctx's own by construction -- listByPhoto only
 		// ever returns ctx's own tenant's rows, filtered by dbkit's
 		// tenant-scoping plugin -- so the rebuild is belt-and-braces, not

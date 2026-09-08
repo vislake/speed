@@ -410,8 +410,8 @@ func TestHandler_IntegrationListWebhookDeliveries_BlockedDial_LastErrorNamesNoRe
 // and the retry horizon's dead-letter write failed the same way.
 //
 // The input below is 5000 three-byte runes: byte 4000 falls inside the
-// 1334th one, so the pre-fix byte cut deterministically produces invalid
-// UTF-8. The fix cuts by RUNE after sanitizing, mirroring go/sharing's
+// 1334th one, so a byte cut would deterministically produce invalid
+// UTF-8. The cut is by RUNE after sanitizing, mirroring go/sharing's
 // truncateAccessLogValue (go/sharing/service.go) and go/authn's
 // truncateClientField (go/authn/model.go): the result must be valid UTF-8
 // and no longer than the budget in RUNES -- 5000 > 4000 runes, so the cut
@@ -432,9 +432,9 @@ func TestTruncateWebhookErrorText_MultibyteText_StaysValidUTF8AndCutsByRune(t *t
 }
 
 // TestTruncateWebhookErrorText_InvalidUTF8WithinBudget_IsSanitized is the
-// second half of the same regression: failure text WITHIN the budget but
-// carrying invalid UTF-8 bytes used to pass through untouched (the pre-fix
-// cut only ever fired past 4000 bytes), storing the invalid bytes verbatim.
+// second half of the same guard: failure text WITHIN the budget but
+// carrying invalid UTF-8 bytes must not pass through untouched (a cut that
+// only ever fires past the byte budget would leave them verbatim).
 // A receiver's error text is untrusted free-form bytes -- a receiver may
 // answer its own body in any encoding, and attemptDelivery echoes the raw
 // snippet into the failure text -- so the sanitization must happen at the
@@ -465,16 +465,16 @@ func TestTruncateWebhookErrorText_InvalidUTF8WithinBudget_IsSanitized(t *testing
 // exactly like any other failure text. The body is crafted so byte 4000 of
 // the recorded failure text falls inside a three-byte rune, and the
 // receiver's body itself also ends mid-rune at the 4096-byte snippet
-// budget -- both places the pre-fix byte handling could store a split
-// rune. Pre-fix the row's LastError held invalid bytes (accepted silently
-// by SQLite, refused with SQLSTATE 22021 by PostgreSQL -- see
+// budget -- both places a byte-based cut could store a split rune. Invalid
+// bytes in LastError would be accepted silently by SQLite but refused with
+// SQLSTATE 22021 by PostgreSQL (see
 // TestTruncateWebhookErrorText_MultibyteText_StaysValidUTF8AndCutsByRune's
-// doc comment); post-fix the stored value is clean on both dialects.
+// doc comment); the stored value must be clean on both dialects.
 func TestService_handleDeliveryJob_ReceiverError_MultibyteBody_StoresValidLastError(t *testing.T) {
 	// The failure text is "integration: webhook receiver answered 500: "
 	// followed by the body snippet. The padding puts byte 4000 of that text
-	// inside the second byte of a three-byte rune, so the pre-fix byte cut
-	// splits a rune deterministically.
+	// inside the second byte of a three-byte rune, so a byte cut would
+	// split a rune deterministically.
 	prefix := fmt.Sprintf("integration: webhook receiver answered %d: ", http.StatusInternalServerError)
 	pad := (webhookDeliveryErrorBudget - len(prefix) - 2) % 3
 	if pad < 0 {
@@ -588,13 +588,13 @@ func TestService_handleDeliveryJob_SubscriptionLoadFailure_RetriesNotDeadLetters
 }
 
 // TestService_handleDeliveryJob_SubscriptionMarkDeleted_DeliveryRowUnaffected
-// is this round's own proof for the mark-delete adoption: a WebhookDelivery
-// enqueued before its subscription was mark-deleted settles exactly as
+// proves the mark-delete shape end to end: a WebhookDelivery enqueued
+// before its subscription was mark-deleted settles exactly as
 // TestService_handleDeliveryJob_SubscriptionDeleted_TerminatesWithoutRetry
-// already proves for the identical scenario (that test is unaffected by
-// this round precisely because it exercises the ordinary Service.
-// DeleteWebhookSubscription call, which is now a mark-delete) -- and this
-// test additionally reaches under the Service to confirm WHY: the
+// proves for the identical scenario (that test exercises the ordinary
+// Service.DeleteWebhookSubscription call, which performs the mark-delete)
+// -- and this test additionally reaches under the Service to confirm WHY:
+// the
 // subscription row still physically exists, mark-deleted, and the delivery
 // row -- an id reference only, per this module's own no-cross-table-FK
 // discipline (webhook_model.go's WebhookDelivery.SubscriptionID doc
@@ -639,11 +639,10 @@ func TestService_handleDeliveryJob_SubscriptionMarkDeleted_DeliveryRowUnaffected
 		t.Errorf("delivery SubscriptionID = %q, want unchanged %q", deliveryRow.SubscriptionID, subID)
 	}
 
-	// The already-enqueued job still settles terminal without retrying,
-	// exactly as it did before this round -- handleDeliveryJob's own
-	// FindByID lookup on the now mark-deleted subscription is hidden from
-	// it by dbkit's soft-delete auto-scope plugin exactly as a physical
-	// DELETE always hid it before.
+	// The already-enqueued job still settles terminal without retrying --
+	// handleDeliveryJob's own FindByID lookup on the now mark-deleted
+	// subscription is hidden from it by dbkit's soft-delete auto-scope
+	// plugin, exactly as a physical DELETE would hide it.
 	if _, err := svc.handleDeliveryJob(ctxFor(testTenant), deliveryJob(delivery.ID, subID)); err != nil {
 		t.Fatalf("handleDeliveryJob = %v, want nil (a mark-deleted subscription is terminal, not retried)", err)
 	}

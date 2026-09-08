@@ -107,8 +107,8 @@ const (
 // caller-supplied operations (createFn/findFn), and its own self-tests
 // prove — via subprocess — that it detects both of its violation classes.
 // AssertIsolated cannot take that shape: tenant data must never be queried
-// by hand (backend coding standard section 3.2), and dbkit.Repository[T] —
-// the only sanctioned access path — owns every query, so there is no
+// by hand, and dbkit.Repository[T] — the only sanctioned access path —
+// owns every query, so there is no
 // caller-side query for this suite to drive. The same fact bounds what
 // this package's self-tests can manufacture (see assert_isolated_test.go's
 // detector-test doc comment): a genuine cross-tenant leak, a transferred
@@ -386,8 +386,8 @@ func assertFindDenied[T dbkit.TenantScoped](t *testing.T, repo *dbkit.Repository
 // isRecordNotFound reports whether err is dbkit.ErrRecordNotFound, matched
 // by Code rather than identity: apperr's WithParam/WithCause always derive a
 // new *apperr.Error rather than mutate the receiver (see apperr's own doc
-// comment, and dbkit/AGENTS.md's Rules section), so the pointer a Repository
-// method returns is never the same pointer as the package-level sentinel.
+// comment), so the pointer a Repository method returns is never the same
+// pointer as the package-level sentinel.
 func isRecordNotFound(err error) bool {
 	appErr, ok := apperr.As(err)
 	return ok && appErr.Code == dbkit.ErrRecordNotFound.Code
@@ -407,9 +407,9 @@ func idSet[T any](records []T) map[string]bool {
 
 // maxTenantIDLen bounds every tenant id isolationTenants derives from a
 // test name. It matches the tenant_id column width every fixture in this
-// package declares (size:64) — the same width the backend coding
-// standard's own Subscription example uses. AssertIsolated has no generic,
-// dialect-independent way to discover the actual width of a caller's own
+// package declares (size:64), a common declared width for tenant_id
+// columns. AssertIsolated has no generic, dialect-independent way to
+// discover the actual width of a caller's own
 // tenant_id column, so a caller whose model declares a narrower one
 // (dbkit's own internal Widget fixture, for instance, uses a ULID-width
 // 26) still needs a short enough t.Name() that the derived id fits that

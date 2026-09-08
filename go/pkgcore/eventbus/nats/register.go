@@ -14,9 +14,8 @@ package nats
 // The trade this package accepts, same as any database/sql driver and the
 // same one eventbus/redis's own register.go accepts: a host that forgets to
 // import it turns "missing eventbus.nats" from a compile-time failure into a
-// Bootstrap-time pkgcore.ErrUnknownImplementation (docs/internal/03-
-// deployment-modes.md's implementation-registry section names this cost and
-// accepts it explicitly).
+// Bootstrap-time pkgcore.ErrUnknownImplementation -- the accepted
+// database/sql trade, an error that names the import which fixes it.
 
 import (
 	"fmt"

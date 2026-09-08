@@ -1,12 +1,11 @@
 // Package redis is the distributed deployment mode's EventBus, delivering
 // events between the replicas of a deployment through Redis Streams. It is
 // split out of go/pkgcore's own package -- rather than living beside the
-// EventBus interface as pkgcore.RedisEventBus once did -- so that a consumer
-// which never wires a Redis-backed bus does not inherit go-redis in its
-// dependency graph: Go resolves dependencies per package, and an interface
-// package that also carries one implementation hands every importer that
-// implementation's whole dependency closure (docs/internal/03-deployment-
-// modes.md's implementation-registry section measures the cost and names the boundary).
+// EventBus interface in the pkgcore root -- so that a consumer which never
+// wires a Redis-backed bus does not inherit go-redis in its dependency
+// graph: Go resolves dependencies per package, and an interface package
+// that also carries one implementation hands every importer that
+// implementation's whole dependency closure.
 //
 // Importing this package registers "eventbus.redis" on pkgcore's shared
 // EventBusRegistry as a side effect (see register.go), the name

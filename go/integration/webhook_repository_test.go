@@ -186,13 +186,13 @@ func TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly(t *testin
 
 // TestWebhookSubscriptionRepository_GuardedFlip_CannotResurrectADeleteThatLandedAfterTheRestoreRead
 // pins, step by step and deterministically, the property
-// Service.UpdateWebhookSubscription's write path -- and, before the
-// restore-rescan round, RestoreWebhookSubscription's pause-flip tail --
-// depends on: a guarded updateFields flip whose WHERE requires
-// deleted_at IS NULL can never resurrect a row a concurrent
-// DeleteWebhookSubscription mark-deleted after the flip's own read took
-// its snapshot -- the state a real-concurrency race cannot time (see the
-// honesty note in webhook_service_test.go's
+// Service.UpdateWebhookSubscription's write path -- and
+// RestoreWebhookSubscription's guarded restore, whose restorePaused write
+// the same guard shape protects -- depends on: a guarded updateFields flip
+// whose WHERE requires deleted_at IS NULL can never resurrect a row a
+// concurrent DeleteWebhookSubscription mark-deleted after the flip's own
+// read took its snapshot -- the state a real-concurrency race cannot time
+// (see the honesty note in webhook_service_test.go's
 // TestService_RestoreWebhookSubscription_ConcurrentDelete_DeletionWins):
 //
 //  1. the subscription is mark-deleted, then un-marked (as dbkit's
@@ -202,17 +202,16 @@ func TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly(t *testin
 //  4. the flip runs.
 //
 // Step 4 must match nothing: the row stays deleted, deletion wins, and
-// the caller answers its not-found. The pre-fix shape this guard replaced
-// was a whole-row save of the step-2 snapshot, which rewrote its nil
-// DeletedAt over the step-3 mark and silently resurrected the
-// subscription. This test fails the moment the guard is weakened (the
-// deleted_at IS NULL condition removed) or the write is widened back to
-// whole-row scope.
+// the caller answers its not-found. A whole-row save of the step-2
+// snapshot would rewrite its nil DeletedAt over the step-3 mark and
+// silently resurrect the subscription. This test fails the moment the
+// guard is weakened (the deleted_at IS NULL condition removed) or the
+// write is widened back to whole-row scope.
 //
-// One honesty note on what this replay no longer mirrors: the
-// restore-rescan round replaced RestoreWebhookSubscription's two-write
-// shape (unmark, then this guarded flip) with the single restorePaused
-// write, whose WHERE requires deleted_at IS NOT NULL instead -- so a
+// One honesty note on what this replay no longer mirrors:
+// RestoreWebhookSubscription's restore now lands through the single
+// restorePaused write, whose WHERE requires deleted_at IS NOT NULL
+// instead -- so a
 // delete landing before that write makes it match nothing in the first
 // place, and no read-then-flip window exists inside the restore at all
 // (see restorePaused's own doc comment in webhook_repository.go, and

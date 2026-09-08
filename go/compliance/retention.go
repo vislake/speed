@@ -19,8 +19,7 @@ import (
 // RetentionService.SweepTenant enters (via tenancy.WithSystemContext)
 // before calling any registered participant's Sweep callback. Module.
 // Register calls pkgcore.RegisterSystemPurpose with it, so a host that
-// bootstraps this module never needs to register it by hand -- mirroring
-// go/config's identical SystemPurposeSystemWrite convention.
+// bootstraps this module never needs to register it by hand.
 const SystemPurposeRetentionSweep pkgcore.SystemPurpose = "compliance.retention_sweep"
 
 // AuditActionRetentionSweep is the audit action Module.Register declares
@@ -32,14 +31,12 @@ const AuditActionRetentionSweep = "compliance.retention.sweep"
 // defaultRetentionWindow is the retention window a sweep uses for a
 // tenant that has never overridden ConfigDefaultRetentionWindow, and the
 // window every sweep uses at all when no *config.Service was wired
-// through WithConfigService. Thirty days is a deliberate judgment call
-// for this round -- docs/internal/10-compliance-and-audit.md gives an
-// explicit default (one year) for a different retention window, the
-// audit trail's own pre-archival retention, not the mark-delete-to-hard-
-// delete window this constant governs -- chosen as the common "recycle
-// bin" duration this pattern uses elsewhere in the industry, and is
-// exactly the kind of value ConfigDefaultRetentionWindow exists to let an
-// operator override per tenant without a code change.
+// through WithConfigService. Thirty days is a deliberate judgment call --
+// the common "recycle bin" duration this pattern uses elsewhere in the
+// industry, distinct from the audit trail's own pre-archival retention,
+// which has a separate default -- and is exactly the kind of value
+// ConfigDefaultRetentionWindow exists to let an operator override per
+// tenant without a code change.
 const defaultRetentionWindow = 30 * 24 * time.Hour
 
 // retentionSweepActor identifies the automated task performing a
@@ -53,11 +50,11 @@ const retentionSweepActor = "compliance.retention_sweep"
 const taskTypeRetentionSweep = "compliance.retention_sweep"
 
 // retentionSweepWindowSize is the period one retention-sweep idempotency
-// key covers, mirroring go/storage's expirySweepWindowSize exactly: a
-// sweep is enqueued under the key of the retentionSweepWindowSize window
-// (retentionSweepWindowStart) its enqueue falls in, so the same-window
-// duplicates the original key existed to collapse -- a scheduler with two
-// replicas, a manual re-run -- still merge into one job, while an enqueue
+// key covers: a sweep is enqueued under the key of the
+// retentionSweepWindowSize window (retentionSweepWindowStart) its enqueue
+// falls in, so the same-window duplicates the original key existed to
+// collapse -- a scheduler with two replicas, a manual re-run -- still
+// merge into one job, while an enqueue
 // in a later window becomes a NEW job and the sweep runs again. The window
 // is what makes the sweep periodic at all: jobs' idempotency is
 // unconditional for one key on StandaloneQueue (a resolved key is held

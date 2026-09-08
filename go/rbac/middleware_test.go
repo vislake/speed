@@ -475,7 +475,7 @@ func TestWithSubjectResolver_OverridesTheContextSubject(t *testing.T) {
 }
 
 // TestRequirePermission_ResolverOkWithInvalidSubject_IsForbiddenNotAServerError
-// pins the review finding on the resolver seam: WithSubjectResolver may
+// pins the resolver seam's fail-closed contract: WithSubjectResolver may
 // answer ok=true with a Subject that is not Valid (a host resolver that
 // vouches for identity it only half-read -- an empty user id, an empty
 // tenant). The default context path already folds that into ok=false

@@ -28,10 +28,9 @@
  * fetch, and the shell's own polite announcement of that flip (its
  * product-shell namespace, registered by this host at bootstrap like
  * every sibling's) carrying the human session-ended text in the
- * status region, in the active language, never the raw key
- * (reference-app-web.md P2-refappweb-1). A bilingual leg proves the
- * frame and the auth surface speak the active language while the
- * served brand stays verbatim.
+ * status region, in the active language, never the raw key. A
+ * bilingual leg proves the frame and the auth surface speak the
+ * active language while the served brand stays verbatim.
  *
  * Built-in strings are asserted through the bundles they render from --
  * the app's own zh-CN/en-US fixtures imported relatively, the auth-ui,
@@ -124,7 +123,7 @@ describe('parseHashFragment', () => {
   })
 
   it('parses the patient share fragment into the before/after pair of tokens', () => {
-    // The block-C link shape: /share/<before>/<after>, exactly two
+    // The share-link shape: /share/<before>/<after>, exactly two
     // further segments (a share token is base64url and never carries a
     // slash), constraining the pair the same way the case-detail route
     // constrains its own id.
@@ -183,7 +182,7 @@ describe('AppView', () => {
   })
 
   it('renders the patient share page for a share fragment: no sign-in gate, no frame, no config fetch', async () => {
-    // The block-C visitor journey: an anonymous visitor opens the
+    // The share-link visitor journey: an anonymous visitor opens the
     // share link and meets the before/after pair -- the sign-in
     // surface that owns every other anonymous fragment never appears,
     // and neither does the clinic frame (no nav, no brand fetch: the
@@ -476,7 +475,7 @@ describe('AppView', () => {
 
     // The journey's entrance is the frame's own navigation: the Cases
     // nav item opens the clinic's case list, whose level-one title
-    // carries the current clinic's name (the block-A gate's cases leg).
+    // carries the current clinic's name.
     await user.click(view.getByRole('link', { name: zhCN.nav.cases }))
     expect(window.location.hash).toBe('#/cases')
     const listHeading = await view.findByRole('heading', { level: 1 })
@@ -666,9 +665,7 @@ describe('AppView', () => {
     // declares the obligation). An unregistered host keeps the focus
     // half only: the shell's registration guard renders no region, so
     // assistive tech hears nothing when the whole page silently
-    // switches under them -- the shape of this app before this
-    // regression, which composed the shell without ever registering
-    // its namespace.
+    // switches under them.
     const rig = makeAppRig()
     const view = rendered(rig)
     const user = userEvent.setup()

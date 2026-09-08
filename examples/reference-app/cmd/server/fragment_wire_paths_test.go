@@ -2,8 +2,7 @@ package main
 
 // fragment_wire_paths_test.go holds the wire paths of the reference
 // app's own spec-fragment surfaces (cases and smile-simulation) as
-// test-local constants, since the P3a round removed the production
-// constants the pre-fragment routes used to register themselves: the
+// test-local constants: the
 // app's handlers now mount through the generated api.HandlerFromMux
 // helpers, whose method+path patterns are derived from
 // internal/cases/api/openapi.yaml and internal/smilesim/api/openapi.yaml
@@ -35,7 +34,7 @@ const (
 	caseDetailPathPrefix = casesPath + "/"
 
 	// casesPhotosUploadPath is the cases fragment's photo-upload route
-	// (operationId cases_uploadPhoto, added by the block-A web round):
+	// (operationId cases_uploadPhoto):
 	// POST a {content_base64} body, and the 201 answer carries the
 	// completed photo object's id.
 	casesPhotosUploadPath = casesPath + "/photos/upload"
@@ -50,8 +49,8 @@ func casePhotoContentPath(caseID, photoObjectID string) string {
 }
 
 // smileSimulationContentPath builds the smile-simulation fragment's
-// simulation-content route (operationId smilesim_getSimulationContent,
-// added by the block-B web round): GET
+// simulation-content route (operationId smilesim_getSimulationContent):
+// GET
 // smileSimulationContentPath(photoObjectID, jobID) serves one
 // simulation's generated image's stored bytes for the before/after
 // comparison view.

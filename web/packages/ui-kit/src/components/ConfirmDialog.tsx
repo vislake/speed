@@ -143,7 +143,7 @@ export function ConfirmDialog({
   // The lockout's auto-clear timer, null once fired or cancelled. Held
   // in a ref so every reset path can cancel a pending re-enable: a
   // dialog that closed, confirmed or unmounted mid-lockout must never
-  // fire one at a confirm button it no longer shows.
+  // fire one at a confirm button that is gone.
   const armLockoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Ends the lockout now: cancels the pending auto-clear timer and

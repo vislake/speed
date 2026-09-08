@@ -5,9 +5,9 @@ import "net/http"
 // SubjectResolver reports the user id of the request's authenticated
 // caller.
 //
-// It is the seam authn fills in a later round -- precedented by config's
-// own WithResolver seam for tenant resolution -- and until then a host
-// injects its own, or none at all. Every org endpoint that needs a caller
+// It is the seam the authenticating side fills -- precedented by
+// config's own WithResolver seam for tenant resolution. A host injects
+// its own resolver, or none at all. Every org endpoint that needs a caller
 // identity (creating or accepting an invitation) calls it through
 // Handler.resolveSubject; an unwired resolver, or one that reports ok=false,
 // makes that endpoint return 401 org.subject_unresolved. org never

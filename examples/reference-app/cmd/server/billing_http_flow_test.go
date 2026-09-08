@@ -7,14 +7,14 @@ package main
 // -- through the REAL composed HTTP stack, exactly the way
 // storage_flow_test.go drives go/storage's and billing_credit_flow_test.go
 // drives the service-level credit journey. It is the mandatory-first-
-// consumer proof for the round that gives go/billing its first HTTP
-// surface, and it is where this round's four regressions are pinned:
+// consumer proof for go/billing's first HTTP surface, and it is where
+// four surface regressions are pinned:
 //
 //   - (a) a caller whose smile simulation consumed credits service-side
 //     (internal/smilesim's PreDeduct/Confirm around the real gateway
 //     journey) reads back the post-consumption balance AND the ledger
-//     rows over the composed stack -- before this round no billing HTTP
-//     surface existed, so those reads were impossible over HTTP at all;
+//     rows over the composed stack -- the reads this HTTP surface
+//     exists to serve;
 //   - (b) the tenant boundary holds over HTTP: each caller reads only
 //     their own tenant's balance and rows through the routes, and a
 //     caller holding no billing permission is refused by the gate
@@ -185,9 +185,7 @@ func findBillingTransaction(page testBillingTransactionPage, match func(testBill
 // internal/smilesim's real PreDeduct/Confirm around a real gateway
 // journey, driven entirely over the composed HTTP stack -- reads back the
 // post-consumption balance and the ledger rows through the billing
-// fragment's own routes. Before this round those reads had no HTTP
-// surface at all (go/billing's Module.OpenAPISpec returned nil), so no
-// such request could succeed.
+// fragment's own routes.
 func TestBillingHttpSurface_SmilesimConsumptionReadsBackOverRoutes(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
@@ -448,8 +446,8 @@ func TestBillingHttpSurface_RefundIsALedgerRowNotASilentChange(t *testing.T) {
 // with billing.invalid_limit carrying the structured bound; the parse
 // half -- a limit that is not an integer at all -- is refused by the
 // spec-generated parameter binder with billing.invalid_request carrying
-// the failing parameter name, the coded envelope this round installs in
-// place of oapi-codegen's default plain-text http.Error.
+// the failing parameter name, the coded envelope that replaces
+// oapi-codegen's default plain-text http.Error.
 func TestBillingHttpSurface_RefusalsAreMappedCodesNotRawErrors(t *testing.T) {
 	srv, cfg := buildSmileSimTestServer(t, newFakeOpenAIImageServer(t))
 

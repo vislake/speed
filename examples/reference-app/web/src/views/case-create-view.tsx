@@ -60,7 +60,7 @@ const PATIENT_NAME_MAX_UTF16_UNITS = 200 * 2
 
 /** The one-page form's fields: the patient name only (a patient
  * reference is deliberately not collected here -- the photo and the
- * name are what the acceptance flow fills in one step). */
+ * name are what the one-step creation flow fills). */
 interface CaseDraft {
   readonly patientName: string
 }

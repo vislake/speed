@@ -60,8 +60,8 @@
  * wider columns than the host's container scroll horizontally inside
  * that wrapper rather than overflowing the page. This holds regardless
  * of column count or width and needs no prop; see DataTable.test.tsx's
- * "horizontal-scroll container" test for the regression proof (a future
- * refactor that drops `TableContainer` would fail it).
+ * "horizontal-scroll container" test for the proof (a refactor that
+ * drops `TableContainer` would fail it).
  *
  * Column priority (opt-in, additive) is the reflow alternative to that
  * scroll fallback: a column's `priority` ('high' | 'medium' | 'low')
@@ -73,8 +73,8 @@
  * the always-visible ones (no `priority` set) remain, even at `xs`. A
  * column with no `priority` renders with no visibility override at all,
  * so a host that sets no column's priority is byte-for-byte unaffected --
- * the TableContainer scroll fallback above still applies to it exactly as
- * before. The hiding is pure CSS (a breakpoint-keyed `display` value on
+ * the TableContainer scroll fallback above still applies to it. The
+ * hiding is pure CSS (a breakpoint-keyed `display` value on
  * the cell), never a JS layout decision: unlike AppShell's drawer-variant
  * switch (@speed/layout-kit), a hidden table cell has no interactive
  * state to preserve across the switch, so there is nothing a `sx`
@@ -140,8 +140,8 @@ export interface DataTableColumn<T> {
    * Opt-in responsive visibility: hides this column below the tier's
    * breakpoint as the viewport narrows (see DataTableColumnPriority and
    * the component header note for the exact cascade). Omitting it keeps
-   * the column always visible -- today's exact behavior, unaffected by
-   * this prop existing.
+   * the column always visible -- the exact behavior, unaffected by this
+   * prop existing.
    */
   readonly priority?: DataTableColumnPriority
   /** Renders one row's cell; rowIndex is the index within `rows`. */
@@ -313,9 +313,9 @@ export function DataTable<T>({
   // The loading live region must never mount together with its text: a
   // role="status" region announces only content changes that follow its
   // own insertion, so text born in the same commit as the region would
-  // be silent -- the gap the P2-6 fix closed for the empty-then-refresh
-  // path would otherwise survive for any empty phase that begins already
-  // loading (rows emptied and loading flipped in the same host commit).
+  // be silent -- and the empty phase can begin already loading (rows
+  // emptied and loading flipped in the same host commit), not only via a
+  // refresh of a phase that began not loading.
   // The loading text below is therefore gated on `statusRegionCommitted`,
   // which lags the empty phase by one commit: the effect after the
   // phase's first commit arms it, so the region's first committed frame
@@ -361,10 +361,10 @@ export function DataTable<T>({
   }
 
   // MUI v9 marks the indeterminate checkbox input with aria-checked="mixed"
-  // and a data attribute but no longer sets the input.indeterminate DOM
-  // property (its v5 behavior), so axe -- which requires the property to
-  // match the aria value -- flags it. Restore the property so the DOM
-  // state and the accessible state agree.
+  // and a data attribute, without setting the input.indeterminate DOM
+  // property; axe -- which requires the property to match the aria value
+  // -- flags the mismatch. Restore the property so the DOM state and the
+  // accessible state agree.
   const headerInputRef = useCallback(
     (instance: HTMLInputElement | null) => {
       if (instance !== null) {

@@ -102,8 +102,8 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 		// Exact match, both directions: org declares exactly the six
 		// actions its write paths can produce through automatic audit
 		// capture (module.go's audit block). A declared action no write
-		// can ever produce -- the dead-vocabulary shape this round
-		// replaced -- or a produced action nobody declared (which the
+		// can ever produce -- a dead-vocabulary declaration -- or a produced
+		// action nobody declared (which the
 		// go/dbkit/audit persister's vocabulary gate would refuse with a
 		// structured alert) both fail this assertion.
 		wantActions := []string{
@@ -157,10 +157,10 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 // capture list forgot it" half of the AuditModels contract, the half dbkit
 // cannot check at Open: Open receives no model inventory (GORM's models
 // register lazily, per statement), so resolveAuditModels can refuse a
-// LISTED model whose marker a later round removed, but no mechanism can
-// notice a marker ADDED to a model the list forgot -- and a marker with no
-// capture list entry means that model's writes silently stop being
-// audited, the exact silent-gap shape this audit round exists to close.
+// LISTED model whose marker was removed after listing, but no mechanism
+// can notice a marker ADDED to a model the list forgot -- and a marker
+// with no capture list entry means that model's writes silently stop
+// being audited.
 //
 // The model names below ARE the inventory: every org data model whose own
 // file declares `var _ dbkit.Auditable`. Adding the marker to another
@@ -656,12 +656,12 @@ func TestModule_Options(t *testing.T) {
 // maxDepthCeiling, the deepest depth whose materialized path still fits the
 // migrations' "path VARCHAR(1024)" column on both dialects.
 //
-// Before this bound existed, WithMaxDepth(maxDepthCeiling+1) (or any higher
-// value) was accepted verbatim, so a tree deep enough to overflow that
-// column would fail at the database on PostgreSQL (distributed deployment
-// mode) while SQLite's type affinity let the identical operation succeed
-// silently in standalone deployment mode -- the exact cross-dialect
-// divergence path.go's own maxDepth bound exists to rule out for the
+// Without the bound, WithMaxDepth(maxDepthCeiling+1) (or any higher
+// value) would be accepted verbatim, and a tree deep enough to overflow
+// that column would fail at the database on PostgreSQL (distributed
+// deployment mode) while SQLite's type affinity would let the identical
+// operation succeed silently in standalone deployment mode -- the exact
+// cross-dialect divergence path.go's own maxDepth bound rules out for the
 // UNCONFIGURED default, reopened here through the host override.
 func TestModule_WithMaxDepth_AboveCeilingIsIgnored(t *testing.T) {
 	tooDeep := NewModule(nil, WithMaxDepth(maxDepthCeiling+1))

@@ -2,15 +2,14 @@
  * The password sign-in journey: what a practice member does first, and
  * what the surface tells them when the server refuses.
  *
- * The refusal assertion here is a regression gate for the
- * envelope-contract defect (fixed in f23079d): @speed/api-client required
- * a traceId field on the error envelope, no backend writer has ever
- * emitted one, so every real answer degraded to a synthetic
- * client.http.<status> code that no reachable-error whitelist maps --
- * rendering the generic fallback in place of every specific message. The
- * component suites could not see it, because their scripted fetch doubles
- * wrote envelopes their own authors shaped. A browser against a real
- * server sees it on the first refused sign-in.
+ * The refusal assertion here is the browser-level end of the envelope
+ * contract: the server's answer must reach the surface as its code,
+ * mapped by the reachable-error whitelist to the specific message --
+ * if the code never arrived, every specific message would degrade to
+ * the generic fallback. The component suites cannot pin that end: their
+ * scripted fetch doubles write envelopes their own authors shaped. A
+ * browser against a real server sees the real envelope on the first
+ * refused sign-in.
  *
  * RATE LIMITING SHAPES THIS FILE. go/authn puts sign-in behind a sliding
  * window with progressive lockout (its ratelimit.go), and a single wrong
@@ -44,12 +43,12 @@ test('a seeded owner signs in and lands in the tenant frame', async ({ page }) =
 
   // The frame's own chrome: the nav and the tenant the token resolved
   // to. That a tenant is named at all is the observable proof that
-  // sign-in resolved a real membership rather than refusing for the lack
-  // of one -- the property the sign-in-membership defect broke on every
-  // process restart. WHICH tenant is deliberately not asserted: an
-  // account in several tenants lands in whichever one the host's
-  // membership order happens to put first, and that order is not fixed
-  // (see TENANT_NAMES in test-utils/journeys.ts).
+  // sign-in resolved a real membership rather than refusing for the
+  // lack of one. WHICH tenant is deliberately not asserted: an account
+  // in several tenants lands in the first of its memberships (the
+  // enumeration is ordered by tenant id; see TENANT_NAMES in
+  // test-utils/journeys.ts), a fact about the account rather than a
+  // contract to pin.
   // The frame is identified by the sign-out control rather than by a nav
   // link: below the md breakpoint the navigation is collapsed behind the
   // menu button and no link is in the DOM, which made this assertion
@@ -69,27 +68,21 @@ test('a refused sign-in renders the specific credentials message, not the generi
   // uniqueness is load-bearing rather than tidiness.
   //
   // go/authn's progressive lockout accrues per ACCOUNT on recorded
-  // failures -- thirty seconds after the first, doubling after that
-  // (ratelimit.go's loginLockoutBase), remembered for an hour. A fixed
-  // address made this gate fail ITSELF across engines: run on three
-  // projects in one invocation, chromium's deliberate failure starts a
-  // thirty-second lockout on that address and webkit's attempt, seconds
-  // later, is answered "The account is locked" instead of the
-  // credentials message. The gate then reports a product defect that is
-  // entirely its own shared state.
-  //
-  // It stayed hidden for as long as the three engines were asked for in
-  // three separate invocations (which the register budget already
-  // forces, see e2e/README.md) -- each fresh server starting with empty
-  // lockout state. One combined invocation is what surfaced it.
+  // failures (ratelimit.go), so a fixed address would make this gate
+  // fail ITSELF across engines: run on three projects in one
+  // invocation, the first engine's deliberate failure starts a lockout
+  // on that address and the next engine's attempt, seconds later, is
+  // answered "The account is locked" instead of the credentials message
+  // -- a reported product defect that is entirely the gate's own shared
+  // state.
   //
   // The identity of the address was never part of what this gate
   // checks: a never-registered address is refused with
   // authn.invalid_credentials whichever one it is, and a fresh one
   // carries no failure history to be locked out over. The suite's own
-  // sign-in ledger cannot help here -- it paces the two sliding
-  // windows, and the lockout is a third mechanism driven by failures
-  // rather than by attempts.
+  // sign-in ledger cannot help here -- it paces the sliding windows,
+  // and the lockout is a separate mechanism driven by failures rather
+  // than by attempts.
   await submitPasswordSignIn(
     page,
     `nobody-was-ever-registered-here-${Date.now()}@example.com`,
@@ -108,16 +101,12 @@ test('the SMS channel replaces the password form when its tab is chosen', async 
   //
   // What this test is about is the channel SWITCH -- that choosing
   // another channel unmounts the previous form rather than hiding it --
-  // and a deployment with nothing able to deliver a code is expected to
-  // hide the tab entirely (offered-channels-work.spec.ts holds that
-  // choice). Without this guard, closing that defect would break this
-  // test, and the round doing the closing would look like it caused a
-  // regression: the gate would be asserting the presence of the very
-  // entrance another gate asks to be removed.
-  //
-  // Two gates of mine wanting opposite things about the same tab is
-  // something only reading them together shows, which is why the fix
-  // belongs here rather than in the round that trips over it.
+  // and a deployment with nothing able to deliver a code hides the tab
+  // entirely (offered-channels-work.spec.ts holds that choice). The two
+  // gates want opposite things about the same tab -- this one exercises
+  // the switch, the other requires the tab's absence -- so without this
+  // guard this test would assert the presence of the very entrance the
+  // other gate asks to be removed.
   const smsTab = page.getByRole('tab', { name: SIGN_IN_TEXT.smsTab })
   test.skip(
     (await smsTab.count()) === 0,

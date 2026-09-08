@@ -1,22 +1,20 @@
 package aigateway
 
-// This file is round 2's image-generation pipeline: Gateway.GenerateImage,
-// the async job it enqueues, and the job handler that actually reads
-// storage, calls an ImageProvider and writes storage back.
+// This file is the image-generation pipeline: Gateway.GenerateImage, the
+// async job it enqueues, and the job handler that actually reads storage,
+// calls an ImageProvider and writes storage back.
 //
 // # The object-reference / raw-bytes boundary
 //
-// docs/internal/08-ai-gateway.md's multi-modal-expansion section states
-// that image bytes travel through storage uniformly and the interface
-// passes object references, never byte streams. This package draws that
-// boundary at the Gateway/job-handler layer, not inside ImageProvider
-// itself:
+// Image bytes travel through storage uniformly, and the interface passes
+// object references, never byte streams. This package draws that boundary
+// at the Gateway/job-handler layer, not inside ImageProvider itself:
 //
 //   - ImageRequest (Gateway.GenerateImage's own input) and ImageJobResult
 //     (what a caller polls back through jobs.Queue.Get) carry ONLY object
 //     references -- InputObjectID, MaskObjectID, OutputObjectID -- never a
-//     byte, exactly satisfying the design doc's rule at the boundary
-//     business code actually touches.
+//     byte; the boundary business code actually touches stays
+//     reference-only.
 //   - ImageProvider's own three methods (image_types.go) trade in
 //     ImageBytes -- raw content plus a MIME type -- mirroring ChatProvider,
 //     which trades in ChatMessage content rather than a storage reference
@@ -38,9 +36,9 @@ package aigateway
 //
 // # Why image generation is enqueue-then-poll, never synchronous
 //
-// Per the design doc's explicit rule that every image task is
-// asynchronous by default, running through jobs and returning a JobID,
-// Gateway.GenerateImage has no synchronous counterpart at all -- unlike
+// Every image task is asynchronous by default, running through jobs and
+// returning a JobID; Gateway.GenerateImage has no synchronous counterpart
+// at all -- unlike
 // Chat, which is synchronous by default with ChatStream as its only
 // async-shaped variant. GenerateImage validates the
 // request, checks the Entitlements seam (reused verbatim from the chat
@@ -81,14 +79,12 @@ import (
 const TaskTypeImageGenerate = "ai-gateway.image.generate"
 
 // The Feature dimensions Gateway reports for a successful image-generation
-// job -- image count and diffusion steps, per the design doc's explicit
-// rule that image usage is billed by real vendor dimensions (image count,
-// diffusion steps, resolution tier), never tokens. Resolution tier is not
-// its own Feature: it is categorical, not a quantity, so it travels in
-// UsageEvent.Metadata instead (see recordImageUsage) -- UsageEvent's own
-// doc comment already
-// names Metadata as the field for exactly this kind of small, bounded
-// call context.
+// job -- image count and diffusion steps. Image usage is billed by real
+// vendor dimensions (image count, diffusion steps, resolution tier), never
+// tokens. Resolution tier is not its own Feature: it is categorical, not a
+// quantity, so it travels in UsageEvent.Metadata instead (see
+// recordImageUsage) -- UsageEvent's own doc comment already names Metadata
+// as the field for exactly this kind of small, bounded call context.
 const (
 	usageFeatureImageCount = "ai.image_count"
 	usageFeatureImageSteps = "ai.image_steps"
@@ -133,17 +129,16 @@ func WithImageProviderRegistry(registry *pkgcore.SeamRegistry[ImageProvider]) Ga
 }
 
 // WithImageGeneration wires the two seams Gateway.GenerateImage needs to
-// run the design doc's async-only image pipeline at all: queue is the
-// jobs.Queue the generated task is enqueued on and the module's job
-// handler is registered against (Module.Register, via reg.Jobs), and
-// objects is the go/storage ObjectService the job handler reads input
-// images from and writes generated output images to, always as a brand
-// new object under the request's own tenant.
+// run the async-only image pipeline at all: queue is the jobs.Queue the
+// generated task is enqueued on and the module's job handler is registered
+// against (Module.Register, via reg.Jobs), and objects is the go/storage
+// ObjectService the job handler reads input images from and writes
+// generated output images to, always as a brand new object under the
+// request's own tenant.
 //
-// Both go/storage and go/jobs sit below go/ai-gateway in root CLAUDE.md's
-// module dependency graph ("... -> config/jobs -> storage/notification ->
-// ... -> billing/ai-gateway/... "), so importing them directly here is an
-// ordinary downward dependency -- unlike Entitlements and UsageRecorder in
+// Both go/storage and go/jobs sit below go/ai-gateway in the module
+// dependency graph, so importing them directly here is an ordinary
+// downward dependency -- unlike Entitlements and UsageRecorder in
 // seams.go, which stay structurally-typed no-import seams precisely
 // because ai-gateway sits at the SAME tier as billing/metering's own
 // consumers and may not import either.
@@ -215,9 +210,7 @@ func (g *Gateway) GenerateImage(ctx context.Context, req ImageRequest) (jobs.Job
 	// the enqueuing side. The requirement is therefore enforced HERE, in
 	// the rate limiter's own pipeline position, so the per-tenant limiter
 	// is only ever reached with a real tenant dimension -- never with the
-	// empty string a pre-round unchecked TenantFromContext fed it. The
-	// coded refusal is ErrImageRequiresTenant, the same error the later
-	// duplicate check used to raise.
+	// empty string. The coded refusal is ErrImageRequiresTenant.
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
 		return "", ErrImageRequiresTenant
@@ -317,10 +310,10 @@ func (g *Gateway) writeImageObject(ctx context.Context, img ImageBytes) (string,
 
 // recordImageUsage reports usage to the wired UsageRecorder under the
 // image billing dimensions, reusing UsageEvent/UsageRecorder verbatim --
-// see seams.go's own doc comment: the shape needed NO change at all for
-// images, since Feature/Quantity/Metadata were already generic. It is a
-// no-op when no UsageRecorder is wired or ctx carries no tenant, exactly
-// like Gateway.recordUsage for chat.
+// the shape is generic enough for images, since Feature/Quantity/Metadata
+// carry the image dimensions unchanged (see seams.go's own doc comment).
+// It is a no-op when no UsageRecorder is wired or ctx carries no tenant,
+// exactly like Gateway.recordUsage for chat.
 //
 // jobID is the owning Job's stable id (see imageUsageIdempotencyKey's own
 // doc comment for why this, unlike chat's recordUsage, can derive a stable
@@ -411,8 +404,7 @@ func (h *imageGenerateHandler) Type() string { return TaskTypeImageGenerate }
 // pkgcore.WithTenant, rebuilt by the queue worker from job.TenantID before
 // this call -- never inherited from whatever context the original
 // GenerateImage call ran in, which may no longer exist by the time a
-// worker picks the job up (jobs.Handler.Handle's own doc comment, and root
-// CLAUDE.md's "workers do not inherit tenant context" trap).
+// worker picks the job up (jobs.Handler.Handle's own doc comment).
 //
 // A payload that fails to decode, names no model/prompt, or names an
 // operation this package does not know is a task-shape violation: it fails
@@ -421,9 +413,9 @@ func (h *imageGenerateHandler) Type() string { return TaskTypeImageGenerate }
 // go/storage/derive.go's deriveHandler.Handle's identical stance on a
 // malformed task payload.
 //
-// Handle's own idempotency invariant (this round's fix for a real, audited
-// bug -- see image_job_store.go's own doc comment for the full mechanism):
-// for one enqueued Job, at most one successful ImageProvider call and at
+// Handle's own idempotency invariant (see image_job_store.go's own doc
+// comment for the full mechanism): for one enqueued Job, at most one
+// successful ImageProvider call and at
 // most one usage record ever reach the outside world, no matter how many
 // times go/jobs re-runs this method for it, or how many overlapping calls
 // ever run for the same Job at once -- and every Handle call answers with
@@ -480,11 +472,9 @@ func (h *imageGenerateHandler) Handle(ctx context.Context, job *jobs.Job, _ jobs
 
 	case marker != nil && marker.Status == imageJobStatusGenerated:
 		// An earlier attempt already got a successful vendor answer but
-		// did not finish writing it to storage (image_job_store.go's own
-		// doc comment on the SQLITE_BUSY scenario this closes). Reuse that
-		// answer verbatim -- never call the vendor again, and never
-		// re-read the input/mask objects, which this reused answer no
-		// longer needs.
+		// did not finish writing it to storage. Reuse that answer verbatim
+		// -- never call the vendor again, and never re-read the input/mask
+		// objects, which this reused answer no longer needs.
 		img = marker.image()
 		usage = marker.usage()
 		providerName = marker.Provider

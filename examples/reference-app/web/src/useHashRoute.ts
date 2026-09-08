@@ -3,13 +3,11 @@
  *
  * The shell's navigation state is the URL fragment: the sign-in surface,
  * the app frame and the surfaces behind it each own a route of the form
- * "#/route/params". B1 deliberately ships no router dependency -- the
- * frame is still a placeholder, so the only thing navigation needs today
- * is the current fragment and a subscription to its changes, which this
- * hook provides against window alone. The formal router choice for the
- * full shell (which library, if any, once the frame and its surfaces
- * land) is a DEFERRED decision of this round, recorded in the round's
- * follow-up docs.
+ * "#/route/params", and the app ships no router dependency -- a formal
+ * routing library was never chosen, so navigation is the current
+ * fragment plus a subscription to its changes, which this hook provides
+ * against window alone. Hash moves are same-document by construction,
+ * which is what keeps the memory-only session alive across them.
  *
  * The returned value is the fragment without its leading '#' ('' for the
  * bare page), re-read from window.location.hash on every hashchange

@@ -43,10 +43,10 @@ const (
 //
 // TenantID is an explicit field rather than read off ctx by
 // pkgcore.TenantFromContext, unlike the tenant-scoped HTTP API surfaces
-// this codebase otherwise mandates (root CLAUDE.md: "do not accept a
-// caller-supplied tenant_id at the API layer"). That rule targets an
-// externally reachable API boundary where a caller-supplied tenant would
-// let one tenant impersonate another; UsageEvent is an internal Go-level
+// this codebase otherwise mandates ("do not accept a caller-supplied
+// tenant_id at the API layer"). That rule targets an externally reachable
+// API boundary where a caller-supplied tenant would let one tenant
+// impersonate another; UsageEvent is an internal Go-level
 // call a business module makes from code that already knows which
 // tenant's usage it measured, and the analytics and billing-grade
 // pipelines both need to carry that tenant across an asynchronous
@@ -61,9 +61,9 @@ type UsageEvent struct {
 	TenantID string
 	// Feature is the quota/billing dimension this event measures, for
 	// example "ai.generation" or "api.calls", at most maxFeatureLength
-	// bytes. It has no closed enumeration in this round -- see AGENTS.md's
-	// Known limitations for why there is no "unknown feature" validation
-	// yet.
+	// bytes. It has no closed enumeration: metering has no feature catalog
+	// to validate against (that belongs to go/billing's Plan/Feature
+	// model), so there is no "unknown feature" validation.
 	//
 	// Feature is also the aggregation key the two reliability tiers share,
 	// which makes one feature belong to exactly one reliability tier: the
@@ -78,8 +78,7 @@ type UsageEvent struct {
 	// the same row. A feature whose records must not be lost is recorded
 	// through the billing-grade path alone, which already feeds the same
 	// counters and summary rows the analytics tier feeds. This is caller
-	// discipline, not something the pipeline enforces -- see AGENTS.md's
-	// "Reliability tiers" section for the full statement.
+	// discipline, not something the pipeline enforces.
 	Feature string
 	// Quantity is how much of Feature this event measures. Zero is legal;
 	// negative, NaN and infinite are rejected.
@@ -100,9 +99,9 @@ type UsageEvent struct {
 	// Metadata is small, bounded context carried alongside the event (at
 	// most maxMetadataEntries entries, each key and value at most
 	// maxMetadataFieldLength bytes) -- never a dumping ground for
-	// arbitrary payloads. It has no defined schema this round; a business
-	// module wanting structured billing detail should encode what it
-	// needs into Feature or wait for a future round's richer shape.
+	// arbitrary payloads. It has no defined schema; a business module
+	// wanting structured billing detail encodes what it needs into
+	// Feature.
 	Metadata map[string]string
 }
 
@@ -158,7 +157,7 @@ func (e UsageEvent) validate() error {
 // (pkgcore.EventBus, pkgcore.KVStore, and so on): a caller that only knows
 // Recorder can be handed any implementation without changing a line.
 //
-// AnalyticsRecorder is this round's one Recorder implementation, wired for
+// AnalyticsRecorder is the one Recorder implementation, wired for
 // analytics-grade (fail-open) usage. The billing-grade tier is
 // deliberately NOT behind this interface: Enqueue's signature
 // (Enqueue(ctx, tx, event)) requires the caller's own transaction handle,
@@ -168,6 +167,6 @@ type Recorder interface {
 	// Record reports event. Whether this can fail without losing event is
 	// entirely a property of the implementation -- see AnalyticsRecorder's
 	// doc comment for what "fail-open" means concretely for the one
-	// implementation this round ships.
+	// implementation shipped.
 	Record(ctx context.Context, event UsageEvent) error
 }

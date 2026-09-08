@@ -5,9 +5,9 @@
 ## 统一抽象层
 - 统一 `ChatProvider` 接口（Chat / ChatStream），`Params map[string]any` 透传厂商特有参数，避免抽象僵化。
 - `Gateway` 门面内部串起：**自动配额检查 → 凭证解析 → 模型路由 → Provider 调用 → 自动用量上报** → 自动埋点。业务代码只调 `gateway.Chat()`，AI 计量是内置行为不需手动上报（AI token 是最高频的计量场景，值得做成自动挡）。**配额检查排在最前面，先于凭证解析与真正的 Provider 调用**——这样一个被拒绝的调用者不会先产生真实的厂商调用费用再被拒绝；流式响应在最后一个 chunk 处理真实用量。
-- 凭证：支持平台统一 Key 与租户自带 Key（BYOK）两种模式，AES-GCM 加密存储，master key 从环境变量注入（Compose 场景不引入 Vault/KMS，后续上云再升级）。
+- 凭证：支持平台统一 Key 与租户自带 Key（BYOK）两种模式，AES-GCM 加密存储，master key 从环境变量注入（不引入 Vault/KMS）。
 - 模型访问控制复用 `billing.Entitlements.Check(ctx, featureKey, requested)` 的 boolean entitlement，不另造一套开关——**接口签名里没有 tenant 参数**，租户从 `ctx` 里取（与仓库"租户来自上下文，不做显式参数"的一贯做法一致），`featureKey` 形如 `"model:xxx"`。
-- MVP 不做自建推理服务，但 `ChatProvider` 接口对本地/远程无感知，后续接 Ollama/vLLM 只是新增实现。
+- 不提供自建推理服务；`ChatProvider` 接口对本地/远程无感知，接入 Ollama/vLLM 一类本地实现只是新增一个实现。
 
 ## 多模态扩展：从 Chat 到图像生成
 

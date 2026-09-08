@@ -19,7 +19,7 @@ import (
 // execute), and a refusal that lands on a terminal attempt archives -- so
 // its FailureHook fires, exactly like a terminal tenant bounce (see
 // handleErrorAttempt's doc comment). Named for the behaviour it verifies,
-// per the backend coding standard's test-naming rule, since it spans
+//  since it spans
 // worker.go's dispatchAfterMarkerRead/handleErrorAttempt and queue.go's
 // readCancelMarker. Everything here is pure Go logic against a bare
 // *Queue: the only Redis touch (the read itself) is passed in as its
@@ -41,10 +41,9 @@ func TestQueue_DispatchAfterMarkerRead_FailsClosedOnUnreadableMarker(t *testing.
 	task := asynqlib.NewTaskWithHeaders("marker-guarded", []byte("payload"), map[string]string{headerTenantID: "tenant-a"})
 	log := obs.FromContext(context.Background())
 
-	// An unreadable marker must refuse the run. Fails on the pre-fix code,
-	// where a marker-read failure was logged and the attempt proceeded to
-	// execute -- a cancelled Job ran anyway, then reported StatusCancelled
-	// later.
+	// An unreadable marker must refuse the run: a marker-read failure that
+	// was only logged while the attempt proceeded to execute would let a
+	// cancelled Job run anyway, then report StatusCancelled later.
 	err := q.dispatchAfterMarkerRead(context.Background(), task, "job-1", log, nil /* cancelledAt */, errors.New("WRONGTYPE simulated marker read failure"))
 	if !errors.Is(err, errCancelMarkerUnreadable) {
 		t.Fatalf("dispatchAfterMarkerRead(unreadable marker) error = %v, want errCancelMarkerUnreadable", err)

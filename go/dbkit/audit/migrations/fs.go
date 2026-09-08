@@ -1,8 +1,8 @@
 // Package migrations embeds the audit package's versioned SQL migration
 // files, one subdirectory per SQL dialect, for the audit persister
-// module's Migrations() method (that module lands alongside Emit and the
-// GORM write-capture plugin, in this same round -- see the parent
-// package's doc.go for the current split).
+// module's Migrations() method (the persister that subscribes to Emit and
+// the GORM write-capture plugin -- see the parent package's doc.go for
+// the current split).
 //
 // It exists as its own tiny leaf package, rather than as a var declared
 // directly inside a sibling .go file, because a //go:embed directive's

@@ -15,30 +15,26 @@ import (
 // Repository is the audit_events table accessor. It is deliberately a
 // thin row accessor over a plain *gorm.DB -- never dbkit.Repository[T] --
 // because AuditEvent is platform data with a real, non-enforced tenant_id
-// column, not tenant-scoped data (see model.go's own doc comment, and
-// go/jobs's jobRecord / go/config's row for the same pattern already
-// shipped elsewhere in this codebase). Repository needs no
-// .Table/.Model/.Raw escape hatch -- Create/Where/Order/Find all suffice --
-// and go/dbkit/** is wholesale-allowlisted in
-// tools/semgrep_rules/raw-gorm-bypass.yml regardless.
+// column, not tenant-scoped data (see model.go's own doc comment, and the
+// same pattern in go/jobs's jobRecord and go/config's row). Repository
+// needs no .Table/.Model/.Raw escape hatch: Create/Where/Order/Find all
+// suffice.
 //
 // Repository is append-only by construction: it exposes Insert and two
 // read methods (Get, ListByTenant) and NO Update or Delete method at all.
-// Per docs/internal/10-compliance-and-audit.md, an audit trail an operator
-// can edit or remove after the fact is not an audit trail. M1 enforces
-// this at the application layer by the simple absence of a mutating
-// method -- a property model_test.go's
+// An audit trail an operator can edit or remove after the fact is not an
+// audit trail; this package enforces that at the application layer by the
+// simple absence of a mutating method -- a property model_test.go's
 // TestRepository_HasNoUpdateOrDeleteMethod proves by reflecting over
 // Repository's method set, since Go has no way to express "this type
-// lacks a method" any other way that fails loudly on a future regression.
-// A second, database-level backstop against a caller that bypasses
+// lacks a method" any other way that fails loudly on a regression. A
+// second, database-level backstop against a caller that bypasses
 // Repository entirely -- a raw connection, a bug, a careless future
-// migration -- now also exists: migrations/{postgres,sqlite}/0002_append_
+// migration -- also exists: migrations/{postgres,sqlite}/0002_append_
 // only_enforcement.sql installs a trigger pair on audit_events that
-// refuses any UPDATE or DELETE regardless of which role issues it (see
-// AGENTS.md's "Append-only enforcement" section for the mechanism and why
-// a trigger, not a REVOKE-based restricted role). The optional hash chain
-// remains M4 (docs/internal/15-roadmap.md) -- not built here.
+// refuses any UPDATE or DELETE regardless of which role issues it,
+// because a restricted role alone could not be provisioned by this
+// package. A hash chain over the table is not built here.
 type Repository struct {
 	db *gorm.DB
 }
@@ -287,11 +283,11 @@ func (r *Repository) Get(ctx context.Context, id string) (*AuditEvent, error) {
 
 // ListByTenant returns every audit event recorded for tenantID, newest
 // first, using the migration's (tenant_id, occurred_at) index. It is the
-// minimal read surface B1 ships to prove persistence end to end
-// (this package's own tests, and the reference app's proof test) -- the
-// full actor/resource/action/time-range/result query API
-// docs/internal/10-compliance-and-audit.md describes is M4 (compliance)
-// scope, not built here.
+// minimal read surface this package ships to prove persistence end to
+// end (its own tests, and the reference app's proof test); the full
+// actor/resource/action/time-range/result query API is not built here --
+// go/compliance's AuditQuery is the closest read surface over this
+// table.
 //
 // tenantID may be the empty string, which returns every platform-level
 // event (the empty-tenant_id sentinel go/config's row and go/jobs's

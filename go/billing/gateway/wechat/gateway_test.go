@@ -266,13 +266,12 @@ func TestGateway_QueryStatus_ResponseSignedByWrongKey(t *testing.T) {
 	}
 }
 
-// TestGateway_CreateCharge_RefusesNonCNYCurrency is P1-3's regression test:
-// CreateCharge used to hardcode "currency":"CNY" into its outgoing request
-// body regardless of req.Amount.Currency, silently collecting a
-// caller-supplied non-CNY amount as if it were the same number of CNY
-// cents. This test fails on pre-fix code (which reaches the network and
-// returns a fabricated success instead of refusing) by asserting the call
-// never reaches doer.Do at all.
+// TestGateway_CreateCharge_RefusesNonCNYCurrency pins the CNY-only
+// boundary: the outgoing request body must not hardcode
+// "currency":"CNY" regardless of req.Amount.Currency, silently collecting
+// a caller-supplied non-CNY amount as if it were the same number of CNY
+// cents. The test asserts the call never reaches doer.Do at all: a non-CNY
+// request must be refused before the network is touched.
 func TestGateway_CreateCharge_RefusesNonCNYCurrency(t *testing.T) {
 	_, platformPubPEM, _ := generateTestKeyPair(t)
 	cfg := testGatewayConfig(t, platformPubPEM)
@@ -334,22 +333,20 @@ func TestGateway_CreateCharge_AcceptsLowercaseCNY(t *testing.T) {
 	}
 }
 
-// TestGateway_OutTradeNoWithSpecialCharacters_RoundTrips is P2-8's
-// regression test: an out_trade_no derived from a caller's idempotency key
-// may carry URL metacharacters (here "|" and "#"), and QueryStatus used to
-// interpolate the reference RAW into both the Authorization header's
-// canonical URL and the request URL. A raw "#" is a fragment delimiter:
-// Go's HTTP client truncated the request path at it (the signed canonical
-// URL and the request actually sent disagreed, and the mchid query
-// parameter was swallowed into the fragment), so WeChat Pay could never
-// have verified the signature -- the very "the signed URL and the
-// requested URL must be identical" requirement of WeChat Pay's APIv3
-// scheme. The fix percent-escapes the reference once, with url.PathEscape,
-// before BOTH signing and requesting, so the two always agree and the
-// reference round-trips: CreateCharge's handle stays usable for a later
-// QueryStatus. On pre-fix code the request URI this test asserts is simply
-// not what QueryStatus sends (the fragment eats the query, and the raw "|"
-// stays unescaped), so this fails before the fix.
+// TestGateway_OutTradeNoWithSpecialCharacters_RoundTrips pins the
+// reference escaping: an out_trade_no derived from a caller's idempotency
+// key may carry URL metacharacters (here "|" and "#"), and QueryStatus
+// must not interpolate the reference RAW into either the Authorization
+// header's canonical URL or the request URL. A raw "#" is a fragment
+// delimiter: Go's HTTP client truncates the request path at it (the signed
+// canonical URL and the request actually sent would disagree, and the
+// mchid query parameter would be swallowed into the fragment), so WeChat
+// Pay could never verify the signature -- the "signed URL and requested
+// URL must be identical" requirement of WeChat Pay's APIv3 scheme. The
+// reference is percent-escaped once, with url.PathEscape, before BOTH
+// signing and requesting, so the two always agree and the reference
+// round-trips: CreateCharge's handle stays usable for a later QueryStatus,
+// and the request URI this test asserts is exactly what QueryStatus sends.
 func TestGateway_OutTradeNoWithSpecialCharacters_RoundTrips(t *testing.T) {
 	const idemKey = "ORD|1#x"
 	_, platformPubPEM, platformPriv := generateTestKeyPair(t)

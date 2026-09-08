@@ -8,15 +8,13 @@ import (
 // Capability is a bitmask of properties a seam implementation declares about
 // itself when it registers with a SeamRegistry, or when a host injects it
 // through a KernelOption such as WithEventBus. Deployment mode and
-// implementation composition are two orthogonal axes (see
-// docs/internal/03-deployment-modes.md): the deployment mode never selects an
+// implementation composition are two orthogonal axes: the deployment mode never selects an
 // implementation, it only states which capabilities the composition it runs
 // must have, and Kernel.Bootstrap compares the two.
 //
-// The set is deliberately small today -- MultiReplicaSafe, SurvivesRestart
-// and Stateless are the three properties docs/internal/03-deployment-modes.md's
-// capability table names -- and is meant to grow by adding a row to that
-// table and a bit here, never by adding a new kind of switch elsewhere.
+// The set is deliberately small -- MultiReplicaSafe, SurvivesRestart and
+// Stateless, plus the signer-specific bit below -- and it grows by adding a
+// bit here, never by adding a new kind of switch elsewhere.
 type Capability uint8
 
 const (
@@ -70,9 +68,7 @@ const (
 	Stateless
 
 	// KeyNeverLeavesBoundary means a private key this implementation
-	// protects never exists in plaintext inside this process's memory --
-	// docs/internal/22-pki.md's "capability declarations" section names it
-	// in exactly those terms. Unlike the three bits above, this one is not
+	// protects never exists in plaintext inside this process's memory. Unlike the three bits above, this one is not
 	// about an infrastructure seam's own state; it is declared by go/pki's
 	// Signer implementations,
 	// which self-register through a pkgcore.SeamRegistry[Signer] the
@@ -87,16 +83,15 @@ const (
 	// capability the way DeploymentModeDistributed requires MultiReplicaSafe.
 	//
 	// Unlike the three bits above, this one is NOT enforced by
-	// Kernel.Bootstrap today: Bootstrap's resolveKernelSeam/
-	// validateSeamCapability machinery only ever runs over the four fixed
-	// built-in seams (EventBus, KVStore, Mailer, ObjectStore); it has no
-	// knowledge of pki.SignerRegistry or pki.Signer, and go/pki calls no
-	// equivalent check of its own -- pki.Module.WithSigner takes no
-	// Capability/requirement parameter, and SignerRegistry.Build merely
-	// returns the Capability a registration declared without comparing it to
-	// anything. So a host that wires go/pki with an implementation lacking
-	// this bit where it intended to require it gets no error today. See
-	// go/pki/AGENTS.md's Known limitations for the gap and its follow-up.
+	// Kernel.Bootstrap: Bootstrap's resolveKernelSeam/validateSeamCapability
+	// machinery only ever runs over the four fixed built-in seams (EventBus,
+	// KVStore, Mailer, ObjectStore); it has no knowledge of pki.SignerRegistry
+	// or pki.Signer, and go/pki calls no equivalent check of its own --
+	// pki.Module.WithSigner takes no Capability/requirement parameter, and
+	// SignerRegistry.Build merely returns the Capability a registration
+	// declared without comparing it to anything. A host that wires go/pki
+	// with an implementation lacking this bit where it intended to require it
+	// gets no error; the gap is recorded in go/pki's own documentation.
 	KeyNeverLeavesBoundary
 )
 

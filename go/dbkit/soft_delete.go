@@ -27,7 +27,7 @@ const softDeleteScopePluginName = "dbkit:soft_delete_scope"
 
 // ErrNotSoftDeletable is returned by Repository[T].Restore when T does not
 // implement SoftDeletable — Restore has nothing to clear for a model whose
-// Delete is, and always was, a physical DELETE.
+// Delete is the plain physical DELETE.
 var ErrNotSoftDeletable = apperr.Invalid("dbkit.not_soft_deletable")
 
 // SoftDeletable marks a GORM model as opting into dbkit's mark-delete
@@ -35,10 +35,10 @@ var ErrNotSoftDeletable = apperr.Invalid("dbkit.not_soft_deletable")
 // UPDATE setting deleted_at/deleted_by instead of a physical DELETE, and the
 // GORM plugin installed here auto-appends "deleted_at IS NULL" to that
 // model's query callbacks. A model that does not implement SoftDeletable is
-// completely unaffected — Delete keeps today's physical-delete behavior,
-// and this plugin never so much as looks at it — so soft-delete is a
-// per-model, explicitly declared capability, never an implicit new default
-// (docs/internal/04-data-and-tenancy.md's delete-semantics section, §1).
+// completely unaffected — Delete keeps the physical-delete behavior, and
+// this plugin never so much as looks at it — so soft-delete is a
+// per-model, explicitly declared capability, never an implicit new
+// default.
 //
 // Like TenantScoped, GetDeletedAt is a single-getter marker never actually
 // called by the plugin or by Repository[T] itself: the interface only says
@@ -58,13 +58,10 @@ var ErrNotSoftDeletable = apperr.Invalid("dbkit.not_soft_deletable")
 // This package's soft-delete support is scoped to mark-delete only; the
 // physical-erasure half of the delete semantics is the deliberately
 // separate Repository[T].HardDelete (hard_delete.go) — the irreversible,
-// system-context-gated compliance-erasure path
-// docs/internal/04-data-and-tenancy.md's §3 describes, landed in the
-// round after this capability. A soft-deleted row is NOT a security
-// boundary and is NOT compliance-grade deletion: it remains a real,
-// plaintext-present row (encrypted fields excepted) until a HardDelete
-// actually removes it. See AGENTS.md's "Soft deletion" and "Hard
-// deletion" sections for the full picture.
+// system-context-gated compliance-erasure path (see its own doc
+// comment). A soft-deleted row is NOT a security boundary and is NOT
+// compliance-grade deletion: it remains a real, plaintext-present row
+// (encrypted fields excepted) until a HardDelete actually removes it.
 type SoftDeletable interface {
 	GetDeletedAt() *time.Time
 }
@@ -81,23 +78,22 @@ func newSoftDeleteScopePlugin() *softDeleteScopePlugin {
 //
 // It is deliberately narrower than tenantScopePlugin: it registers on the
 // two read processors — Before("gorm:query") and Before("gorm:row") — never
-// on create/update/delete. The design doc's literal text says the
-// auto-scope belongs on the query callback only, not on
-// create/update/delete; the row-processor registration extends that same
-// auto-scope to the reads GORM routes through its Row processor
-// (Scan/Row/Rows — finisher_api.go's Scan delegates to Rows, which executes
-// callbacks.Row()), the identical finisher-to-processor reasoning
-// tenantScopePlugin's row registration and auditCapturePlugin's
+// on create/update/delete, because the auto-scope exists to hide
+// soft-deleted rows from reads only: Delete and Restore manage the
+// deleted_at columns themselves (see repository.go), and Update must keep
+// being able to see the row it saves. The row-processor registration
+// extends that same auto-scope to the reads GORM routes through its Row
+// processor (Scan/Row/Rows — finisher_api.go's Scan delegates to Rows,
+// which executes callbacks.Row()), the identical finisher-to-processor
+// reasoning tenantScopePlugin's row registration and auditCapturePlugin's
 // raw-processor registration record: a GORM operation is protected at the
 // processor its finisher executes, never at the finisher name, and without
 // the row registration every scan-shaped read of a SoftDeletable model
-// surfaced soft-deleted rows with a nil error.
+// would surface soft-deleted rows with a nil error.
 // Repository[T].Delete, Update and Restore build their own explicit
 // "deleted_at IS NULL" / "deleted_at IS NOT NULL" WHERE clauses instead of
-// relying on this plugin (see repository.go) — Update's guard being the
-// fix for the stale-model hazard that used to leave a pre-delete in-memory
-// copy free to silently clear the mark (AGENTS.md's Soft deletion section
-// records the closed state).
+// relying on this plugin (see repository.go) — Update's guard keeps a
+// stale pre-delete in-memory copy from silently clearing a row's mark.
 //
 // A caller wanting to see soft-deleted rows in a query sets
 // db.Unscoped() — GORM's own general query-scope bypass, reused here

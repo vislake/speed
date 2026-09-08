@@ -66,8 +66,7 @@ const (
 // The blind-index key that makes the encrypted address queryable lives on
 // the indexers the host injects through WithContactEmailIndexer /
 // WithContactPhoneIndexer, and must never be the encryption key: index
-// keys and the cipher key stay separate bytes (AGENTS.md's "Separate
-// index keys from the cipher key" adjudication), because a key compromise
+// keys and the cipher key stay separate bytes, because a key compromise
 // must not silently hand over both confidentiality and queryability.
 const ContactAddressSerializerName = "notification_address_enc"
 
@@ -97,10 +96,9 @@ const AddressIndexColumn = "address_index"
 //
 // # Data domain
 //
-// Tenant data (docs/internal/04-data-and-tenancy.md). A contact is
-// meaningful only inside the tenant it was created in -- consent is a
-// tenant-level record, not a person-level one -- so VerifiedContact
-// implements dbkit.TenantScoped, is reached only through
+// Tenant data. A contact is meaningful only inside the tenant it was
+// created in -- consent is a tenant-level record, not a person-level one --
+// so VerifiedContact implements dbkit.TenantScoped, is reached only through
 // VerifiedContactRepository (which embeds dbkit.Repository[VerifiedContact]),
 // and its isolation is proven by tenancytest.AssertIsolated.
 //
@@ -152,8 +150,7 @@ const AddressIndexColumn = "address_index"
 // columns -- is what makes a consumed code unusable.
 type VerifiedContact struct {
 	// ID is an application-generated UUID, never a database-generated one:
-	// the backend coding standard forbids gen_random_uuid(), which SQLite
-	// has no equivalent for.
+	// gen_random_uuid() is PostgreSQL-only, with no SQLite equivalent.
 	ID string `gorm:"column:id;primaryKey;size:36"`
 
 	// TenantModel promotes the tenant_id column and the GetTenantID method
@@ -234,8 +231,7 @@ var _ dbkit.TenantScoped = VerifiedContact{}
 // transitions, not repository reads, and they sit next to the service logic
 // that decides them.
 //
-// ByChannelAndAddressIndex is written the way go/dbkit/AGENTS.md's "Known
-// limitations" prescribes: built on the same *gorm.DB the embedded
+// ByChannelAndAddressIndex is built on the same *gorm.DB the embedded
 // Repository was built on, against a TenantScoped destination, so the GORM
 // isolation plugin still injects WHERE tenant_id = ? -- and run inside
 // dbkit.WithTenantSession, so the PostgreSQL RLS session variable is set for
@@ -544,13 +540,11 @@ type ContactCreateInput struct {
 // resolves by returning the existing row unchanged, whatever status it
 // holds -- nothing is ever re-sent to an address that already has a consent
 // record, an unsubscribed address is not silently re-registered (its
-// unsubscribe is permanent -- the per-contact rule of AGENTS.md's
-// "Unsubscribe is permanent for the contact as a whole" adjudication), and
-// a bounced address is not given a fresh flow until a later round ships
-// re-proving (AGENTS.md's "Platform-blacklist writers and bounce
-// remediation" deferral records it). A host that attests an address which
-// already exists as a pending double-opt-in row gets that pending row back,
-// unchanged: an attestation never overwrites an in-flight verification.
+// unsubscribe is permanent), and a bounced address is not given a fresh
+// flow: no path re-proves one (see blacklist.go's doc comment). A host
+// that attests an address which already exists as a pending double-opt-in
+// row gets that pending row back, unchanged: an attestation never
+// overwrites an in-flight verification.
 //
 // For a double_opt_in create, the rate limits are checked BEFORE the
 // pending row is created -- a rate-limited create fails with
@@ -659,12 +653,11 @@ type VerifyCodeInput struct {
 // Charging every attempt, correct or not, is deliberate rather than an
 // oversight: the address's ten guesses per code lifetime then bound an
 // outsider's search however the guesses land, and the module never
-// classifies a failure to decide anything, budget included. go/sharing
-// judged this same charge-before-judgment ordering a P2 on its anonymous
-// access surface and fixed it there (6af7e6c6); this endpoint is not
-// anonymous, so the ruling here differs -- see go/notification/AGENTS.md's
-// "The verify budget charges before the code is judged" adjudication for
-// the full reasoning and for the surface change that would flip it back.
+// classifies a failure to decide anything, budget included. The budget is
+// safe to charge this way because it is tied to a code the caller must
+// already possess or guess against a known address within one tenant --
+// never an anonymous surface where an outsider could exhaust a legitimate
+// holder's budget before guessing.
 //
 // The code is then consumed compare-and-swap style: an UPDATE that only moves a
 // pending row whose stored hash still equals the typed code's hash decides
@@ -845,9 +838,8 @@ func (s *ContactService) ResendCode(ctx context.Context, in ResendCodeInput) err
 // sendCode stamps a fresh code on contact and sends it over the contact's
 // channel, synchronously. The stamp happens first; the code is rendered at
 // send time in the platform default locale (see renderContactCode -- the
-// recipient's own locale is a later-round shape, as the contact row has no
-// locale column; AGENTS.md's "Per-contact locale negotiation" deferral
-// records it); a send that fails
+// contact row carries no locale, so the recipient's language cannot be
+// negotiated); a send that fails
 // leaves the fresh hash on the row as the doc comment of ResendCode
 // explains.
 func (s *ContactService) sendCode(ctx context.Context, contact *VerifiedContact) error {
@@ -1003,10 +995,9 @@ func (s *ContactService) markUnsubscribed(ctx context.Context, id string) (bool,
 // hard, permanent failure for the address (a dead number, a rejecting
 // mailbox). Delivery gate-checks contact status before every send (see
 // EnsureDeliverable), so a bounced contact stops receiving anything
-// immediately. Bounced is terminal in this round: re-proving an address
-// that bounced is a later-round remediation, recorded under AGENTS.md's
-// "Platform-blacklist writers and bounce remediation" deferral. The call
-// is idempotent for a contact that already bounced.
+// immediately. Bounced is terminal: no path re-proves an address that
+// bounced (see blacklist.go's doc comment for the unbuilt writer paths).
+// The call is idempotent for a contact that already bounced.
 //
 // The transition never overwrites the other terminal state: a contact that
 // has permanently unsubscribed stays unsubscribed, whatever the transport
@@ -1144,9 +1135,8 @@ func (s *ContactService) ensureDeliverable(ctx context.Context, contactID, typeK
 // convention for declared types.
 //
 // The locale is fixed at the platform default: the contact row carries no
-// locale, and negotiating the recipient's language is deferred (AGENTS.md's
-// "Per-contact locale negotiation" deferral records the later-round shape).
-// Every failure -- a nil catalog, an unknown locale, a missing id -- is
+// locale, so the recipient's language cannot be negotiated. Every failure
+// -- a nil catalog, an unknown locale, a missing id -- is
 // ErrInternal.WithCause, never a fallback to another language.
 func renderContactCode(catalog *i18n.Catalog, channel, code string) (subject, body string, err error) {
 	if catalog == nil {

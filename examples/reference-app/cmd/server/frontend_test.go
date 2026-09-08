@@ -95,11 +95,11 @@ func serveFrontendRequest(t *testing.T, method, target string) *httptest.Respons
 	return rec
 }
 
-// TestFrontend_GETRoot_ServesIndexHTML is the acceptance blocker's first
-// regression: an anonymous GET / must answer the app's page (the html
+// TestFrontend_GETRoot_ServesIndexHTML: an anonymous GET / must answer
+// the app's page (the html
 // carrying the mount point the bootstrap mounts into), never the tenancy
-// refusal the path answered before this round (403
-// tenancy.tenant_unresolved).
+// refusal (403 tenancy.tenant_unresolved) an unintercepted unknown path
+// gets.
 func TestFrontend_GETRoot_ServesIndexHTML(t *testing.T) {
 	rec := serveFrontendRequest(t, http.MethodGet, "/")
 	if rec.Code != http.StatusOK {
@@ -168,15 +168,15 @@ func TestFrontend_UnknownNonAPIPath_ServesIndex(t *testing.T) {
 }
 
 // TestFrontend_APIBehaviorByteIdentical pins the "API paths keep exactly
-// the current behavior" half of the round: with the frontend enabled, the
-// answers the API surface gives are byte-for-byte the answers it gave
-// before the round (the tenancy refusal for an anonymous unknown API path,
+// their current behavior" property: with the frontend enabled, the
+// answers the API surface gives are byte-for-byte unchanged (the tenancy
+// refusal for an anonymous unknown API path,
 // the healthz "ok", and the /assets miss policy that never touches the
 // API).
 func TestFrontend_APIBehaviorByteIdentical(t *testing.T) {
 	// Anonymous unknown API path: refused by the tenancy middleware with
-	// the same exact JSON body the probe of the pre-round wiring answers
-	// (tenancyUnresolvedBody) -- the frontend must never intercept /api.
+	// the exact JSON body tenancyUnresolvedBody -- the frontend must never
+	// intercept /api.
 	rec := serveFrontendRequest(t, http.MethodGet, "/api/v1/bogus-route")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("GET /api/v1/bogus-route status = %d, want 403; body = %s", rec.Code, rec.Body)
@@ -197,7 +197,7 @@ func TestFrontend_APIBehaviorByteIdentical(t *testing.T) {
 
 	// A POST to an unknown non-API path is not a page navigation and the
 	// frontend serves GET/HEAD only: it falls through to the composed
-	// chain exactly as before.
+	// chain unchanged.
 	rec = serveFrontendRequest(t, http.MethodPost, "/some/deep/link")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("POST /some/deep/link status = %d, want the unchanged 403; body = %s", rec.Code, rec.Body)
@@ -205,8 +205,8 @@ func TestFrontend_APIBehaviorByteIdentical(t *testing.T) {
 }
 
 // TestFrontend_Disabled_BehaviorsByteIdentical pins the opt-in property:
-// a buildServer boot with no WebDistDir must answer exactly as the
-// pre-round wiring did -- the frontend round changes nothing unless an
+// a buildServer boot with no WebDistDir must answer exactly as an
+// unintercepted server does -- the frontend changes nothing unless an
 // operator (or a test) configures a dist directory.
 func TestFrontend_Disabled_BehaviorsByteIdentical(t *testing.T) {
 	cfg := testConfig(t)

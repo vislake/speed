@@ -1,9 +1,8 @@
 // Package i18n is pkgcore's merged message catalog: it aggregates the locale
 // bundles every module ships, and renders a message in the language the
 // caller asks for. It is the backend half of the internationalization
-// decision recorded in docs/internal/11-cross-cutting.md, built on
-// nicksnyder/go-i18n (the library that design doc adopts for plural forms,
-// nested messages and ecosystem maturity).
+// mechanism, built on nicksnyder/go-i18n for plural forms, nested messages
+// and ecosystem maturity.
 //
 // # What pkgcore/i18n holds
 //
@@ -41,10 +40,9 @@
 // files for: the first module that ships files fixes the catalog's
 // language set, and every later module that ships messages must ship one
 // file per catalog language. Adding a language is therefore one new file
-// per message-shipping module, never a change to this package --
-// docs/internal/11-cross-cutting.md guarantees full zh-CN and en-US
-// coverage for v1.0 but deliberately does not freeze the mechanism to
-// them. The files themselves follow one rule:
+// per message-shipping module, never a change to this package.
+// Full-coverage guarantees are scoped to zh-CN and en-US; the mechanism
+// itself is deliberately not frozen to those two. The files themselves follow one rule:
 //
 //   - Every top-level key is a message id; the id is the whole key,
 //     written quoted so the dots stay literal, for example
@@ -83,9 +81,7 @@
 //     AddModule fails with ErrParityMismatch. Parity is enforced as each
 //     module is added, which makes every catalog that builds well-formed by
 //     construction; tools/check_i18n_keys.py checks the same rule over the
-//     raw zh-CN/en-US files when it is run -- no workflow runs it yet (its
-//     wiring belongs to the gated docs-check pipeline, docs/internal/
-//     18-cicd.md), so it executes directly.
+//     raw zh-CN/en-US files, run by the docs-check pipeline.
 //
 // # Plural categories
 //

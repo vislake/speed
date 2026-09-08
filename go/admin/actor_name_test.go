@@ -11,9 +11,8 @@ import (
 )
 
 // registerNamedUser registers a real authn account through the env's own
-// *authn.Module with an explicit DisplayName, returning it -- the fixture
-// shape the P2-pkgcore-actor-1 regression tests below need, since a
-// display name can only be resolved for an account that actually has one.
+// *authn.Module with an explicit DisplayName, returning it -- a display
+// name can only be resolved for an account that actually has one.
 func registerNamedUser(t *testing.T, env testAdminEnv, email, displayName string) *authn.User {
 	t.Helper()
 	user, err := env.Authn.Service().Register(context.Background(), authn.RegisterInput{
@@ -65,22 +64,22 @@ func captureEvents(t *testing.T, env testAdminEnv) *eventCapture {
 
 func (c *eventCapture) events() []pkgcore.Event { return c.got }
 
-// TestActorName_ImpersonationEventsCarryBothDisplayNames is P2-pkgcore-actor-1's
-// impersonation regression (b): an admin.impersonation.started (and the
-// matching .ended) audit record must carry BOTH the impersonated target
-// user's display name (Actor) and the real administrator's (OnBehalfOf) --
-// an investigator reading the row must be able to say who the target was
-// and who entered their account without chasing a users-table lookup, the
-// exact readability pkgcore.Actor.DisplayName exists for. It drives Start
-// and End through the REAL module graph (buildTestAdminModule wires a real
-// *authn.Service onto ImpersonationService.attach), with both actors real
-// registered accounts carrying known display names. On unfixed main both
-// records carry empty display names, so this test fails there.
+// TestActorName_ImpersonationEventsCarryBothDisplayNames pins the
+// impersonation records' dual display names: an admin.impersonation.started
+// (and the matching .ended) audit record must carry BOTH the impersonated
+// target user's display name (Actor) and the real administrator's
+// (OnBehalfOf) -- an investigator reading the row must be able to say who
+// the target was and who entered their account without chasing a
+// users-table lookup, the exact readability pkgcore.Actor.DisplayName
+// exists for. It drives Start and End through the REAL module graph
+// (buildTestAdminModule wires a real *authn.Service onto
+// ImpersonationService.attach), with both actors real registered accounts
+// carrying known display names.
 func TestActorName_ImpersonationEventsCarryBothDisplayNames(t *testing.T) {
 	env := buildTestAdminModule(t)
 	// Start refuses while the rbac service is unattached (its own doc
-	// comment -- the P2-3 follow-up's gate), so wire the env's real
-	// Attach()-ed *rbac.Service exactly as a wired host does.
+	// comment), so wire the env's real Attach()-ed *rbac.Service exactly
+	// as a wired host does.
 	env.Admin.AttachRBAC(env.RBAC)
 	// Start dispatches the mandatory impersonation-started notification
 	// onto the real queue; registering the real delivery handler keeps that
@@ -143,14 +142,13 @@ func TestActorName_ImpersonationEventsCarryBothDisplayNames(t *testing.T) {
 	}
 }
 
-// TestActorName_TenantStatusChangeCarriesOperatorDisplayName is the same
-// finding's tenant-ledger leg: an admin.tenant.status_changed record made
-// by a real platform operator must carry that operator's display name on
-// its Actor, resolved from the users table at record time by
-// TenantService.recordAudit (the caller's HTTP layer knows the operator
-// only as a Principal user id -- see handler.go's callerUserID). On
-// unfixed main the record carries no display name, so this test fails
-// there.
+// TestActorName_TenantStatusChangeCarriesOperatorDisplayName pins the
+// tenant-ledger leg of the same readability contract: an
+// admin.tenant.status_changed record made by a real platform operator
+// must carry that operator's display name on its Actor, resolved from the
+// users table at record time by TenantService.recordAudit (the caller's
+// HTTP layer knows the operator only as a Principal user id -- see
+// handler.go's callerUserID).
 func TestActorName_TenantStatusChangeCarriesOperatorDisplayName(t *testing.T) {
 	env := buildTestAdminModule(t)
 	operator := registerNamedUser(t, env, "operator@actor-name.example", "Ada Admin")

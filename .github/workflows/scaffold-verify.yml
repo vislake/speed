@@ -1,14 +1,6 @@
 name: scaffold-verify
-
-# PIPELINE (docs/internal/18-cicd.md pipeline table, scaffold-verify row):
-# generate a fresh project with the CLI, build it, boot it once in each
-# deployment mode, and smoke-test it -- the roadmap M4 acceptance: a project
-# `saasctl new` and `create-saas-app` generate must boot successfully in
-# both the standalone and distributed deployment modes with one command
-# each (docs/internal/15-roadmap.md's M4 row).
-#
-# STATUS -- moved from gated stub toward genuinely running by the
-# saasctl-distributed-mode round: this file now wires a REAL job, running
+# PURPOSE: generate a fresh project with the CLI, build it, boot it once
+# in each deployment mode, and smoke-test it. The running job exercises
 # go/saasctl/integration_test/scaffold_dual_mode_test.go's
 # TestScaffoldNewProject_AuthnOrgRbac_BootsInBothDeploymentModes --
 # materialize the authn+org+rbac selection (the richest, and the one whose
@@ -27,32 +19,24 @@ name: scaffold-verify
 # proves ONE of the five legal selections end to end in CI; the other four
 # (none, authn, authn+rbac, authn+org) are proven to materialize, tidy and
 # build correctly by go/saasctl's own offline unit suite (internal/new's
-# golden byte-identity tests, run on every PR via fast-check) plus this
-# round's own manually-run B4-style proof recorded in
-# go/saasctl/AGENTS.md's Testing section, but do NOT get a per-PR (or
-# per-schedule) dual-mode BOOT proof of their own yet -- the same
-# "representative subset, explicit reason" shape root CLAUDE.md's
-# Reference App section already blesses for go/pki's X.509 layer and
-# go/integration's two rounds (running the full generate/tidy(network)/
-# build/boot/smoke cycle five times, twice each, would multiply this job's
-# Docker and network cost for a property -- the general infrastructure-seam
-# wiring in cmd/server/config.go, identical prose across every selection --
-# this one test already exercises). create-saas-app and the web-side
-# template (frontend-scaffold round, root CLAUDE.md's Reference App
-# section) remain entirely unbuilt, so this pipeline covers only the Go
-# half of the M4 acceptance; a web-side scaffold-verify leg is a later
-# round's work once create-saas-app exists.
+# golden byte-identity tests, run on every PR via fast-check) plus a
+# manually-run proof recorded in go/saasctl/AGENTS.md's Testing section,
+# but do NOT get a per-PR (or per-schedule) dual-mode BOOT proof of their
+# own: running the full generate/tidy(network)/build/boot/smoke cycle five
+# times, twice each, would multiply this job's Docker and network cost for
+# a property -- the general infrastructure-seam wiring in
+# cmd/server/config.go, identical prose across every selection -- this one
+# test already exercises. create-saas-app and the web-side template remain
+# entirely unbuilt, so this pipeline covers only the Go half of the
+# acceptance; a web-side scaffold-verify leg waits for create-saas-app.
 #
-# TRIGGERS -- the design table calls for daily plus post-release; this
-# round wires the daily schedule (03:00 UTC, offset from security.yml's own
+# TRIGGERS: a daily schedule (03:00 UTC, offset from security.yml's own
 # 05:37 UTC daily run so the two do not contend for the same runner
 # capacity) plus workflow_dispatch for an on-demand run. The post-release
-# trigger is deliberately NOT wired yet: release.yml carries no publish
+# trigger is deliberately NOT wired: release.yml carries no publish
 # credential (permissions: contents: read) and nothing in this repository
-# publishes before M4 (root CLAUDE.md's Repository Status), so there is no
-# real "post-release" event to hook a verification gate onto today --
-# wiring one now would be dead configuration. Wire it alongside real
-# publishing at M4.
+# publishes, so there is no real "post-release" event to hook a
+# verification gate onto -- wiring one would be dead configuration.
 
 on:
   workflow_dispatch:

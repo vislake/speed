@@ -4,35 +4,24 @@
  * comparing it with the original, sharing it with the patient, and seeing
  * what it cost.
  *
- * ALL FOUR BLOCKS PASS. Eighteen gates, one run, three engines, with
- * the run's own throwaway OpenAI-compatible images provider standing in
- * for the vendor (fake-image-provider.mjs under e2e/test-utils, wired in
+ * The four blocks pass in one run, on each engine, with the run's own
+ * throwaway OpenAI-compatible images provider standing in for the vendor
+ * (fake-image-provider.mjs under e2e/test-utils, wired in
  * playwright.config.ts) so a freshly booted server completes the
  * generation deterministically:
  *
  *   pnpm test:e2e:budget
  *
- * They were @pending for a long time and the tag was earned: an
- * acceptance review found that a signed-in practice could reach nothing
- * but a notes scratchpad and an account page, while the backends for
- * every block here were real and tested (go/storage's three-step upload,
- * internal/cases, internal/smilesim's async job, go/sharing's tokens,
- * go/billing's credit ledger). The gap was assembly, not capability, and
- * these gates are what turned "assembled" into something checkable
- * rather than arguable.
+ * The suite paces its sign-ins inside go/authn's per-account login
+ * limits (test-utils/journeys.ts's payTheLoginBudget), which is why the
+ * whole file can be asked for at once rather than block by block. The
+ * tag is @budget: together the gates spend the demo-owner account's
+ * whole login allowance, so in the default tier they would be waits
+ * rather than sign-ins.
  *
- * The tag is @budget now, and that is a budget statement rather than a
- * hedge: these gates spend eight demo-owner sign-ins, and the default
- * tier already spends that account's whole five-per-minute allowance, so
- * in the fast tier they would be waits rather than sign-ins. The suite
- * paces itself inside go/authn's limits now (journeys.ts's
- * payTheLoginBudget) instead of reddening on whichever gate lost the
- * race -- which is why the whole file can be asked for at once, where it
- * used to have to be asked for one block at a time.
- *
- * A must ride along with B: each run boots a fresh server and a fresh
- * database, and block B's helpers open a case that block A's own tests
- * create earlier in the same run.
+ * Block A must ride along with B: each run boots a fresh server and a
+ * fresh database, and block B's helpers open a case that block A's own
+ * tests create earlier in the same run.
  *
  * WHAT THESE ASSERT, AND WHAT THEY DELIBERATELY DO NOT
  *
@@ -40,16 +29,13 @@
  * reach the surface, do the thing, see the result. They do not prescribe
  * layout, wording, component choice or route shape. Where a locator names
  * a control, the name is this suite's expectation of an accessible name,
- * not a design instruction -- the UI round is free to name it otherwise,
- * in which case test-utils/cases.ts's CASE_UI is the one place to
- * reconcile (it moved out of this file when the gates for the brief's
- * remaining surfaces needed the same names). That reconciliation is a
- * conversation about what a control should be called, which is worth
- * having in the open rather than buried in a test id.
+ * not a design instruction -- naming a control is a conversation about
+ * what it should be called, worth having in the open rather than buried
+ * in a test id, and test-utils/cases.ts's CASE_UI is the one place to
+ * reconcile when a name changes.
  *
- * The blocks are ordered the way they will be delivered (A first: it is
- * the journey's entrance), and each is independently runnable, so a block
- * can be accepted the day it lands instead of waiting for the whole.
+ * The blocks are ordered along the journey (A first: it is the
+ * entrance), and each is independently runnable.
  */
 import { expect, test } from '@playwright/test'
 import { DEMO_OWNER, DEMO_READER } from './test-utils/accounts.js'
@@ -104,15 +90,11 @@ test.describe('the core journey', { tag: '@budget' }, () => {
 
   test('block A: a case one colleague opened is visible to another', async ({ page }) => {
     // The property that makes this a practice's tool rather than a
-    // personal notebook, and the one the backend's own list query got
-    // wrong: it listed by creator, so a dentist could not see the case
-    // the receptionist had just opened for them, and a returning patient
-    // met a colleague who could not find their last case -- one patient,
-    // two charts, a split record.
-    //
-    // Tenant isolation is what protects another practice's cases (proven
-    // separately in authorization.spec.ts); inside one practice, the
-    // people who treat a patient together must see the same case.
+    // personal notebook: a receptionist opens cases and a dentist runs
+    // the simulations, so the people who treat a patient together must
+    // see the same case -- one patient, one chart. Tenant isolation is
+    // what protects another practice's cases (proven separately in
+    // authorization.spec.ts); inside one practice the case is shared.
     const name = caseName()
 
     await signInAs(page, DEMO_OWNER)
@@ -124,12 +106,12 @@ test.describe('the core journey', { tag: '@budget' }, () => {
     await (await chooser).setFiles(PATIENT_PHOTO)
     await page.getByRole('button', { name: /create|save|confirm/i }).click()
     await expect(page.getByText(name)).toBeVisible({ timeout: 30_000 })
-    // The clinic the case was opened in: the demo seeds no fixed
-    // sign-in landing tenant (an account's first tenant comes from a Go
-    // map's iteration order, randomized per boot -- journeys.ts's
-    // documented finding), so the colleague's visit is aimed at the
-    // clinic where the case actually lives, the same shift-change
-    // switch a front desk makes.
+    // The clinic the case was opened in, read from the frame rather
+    // than assumed (an account's landing tenant is the first row of its
+    // own membership enumeration, an app-seeded fact rather than a
+    // contract): the colleague's visit is aimed at the clinic where the
+    // case actually lives, the same shift-change switch a front desk
+    // makes.
     const clinic = await readCurrentTenant(page)
 
     // A colleague in the same practice, signing in on the same machine
@@ -155,10 +137,6 @@ test.describe('the core journey', { tag: '@budget' }, () => {
     // generates from hardcoded defaults would leave a dentist unable to
     // do the thing the product is sold on -- offering a patient a choice
     // -- while the capability sat unused underneath.
-    //
-    // This gate was missing from the first draft of these blocks, which
-    // asserted only that one simulation appeared. That omission would
-    // have let block B ship "working" and still miss a brief requirement.
     await signInAs(page, DEMO_OWNER)
     await openCaseWithPhoto(page)
 
@@ -246,30 +224,22 @@ test.describe('the core journey', { tag: '@budget' }, () => {
       // simulation at all could pass it. The image has to be one the
       // browser actually decoded, which a broken or missing source is
       // not.
-      // A PAGE with the PAIR on it, not a file and not the result alone.
       //
-      // go/sharing's public route answers the resource's raw bytes with
-      // its own MIME type (handler.go's io.Copy over the resolved
-      // content), so handing a patient that URL directly opens a bare
-      // image in their browser: no practice name, no explanation, and no
-      // BEFORE. This gate passed that shape until it was looked at --
-      // a browser given image bytes builds a document around an <img>,
-      // so an image-role check and a decoded-width check both hold.
-      // Found by reading the gate as though it had already passed and
-      // asking what it would have let through, which is the only defence
-      // available for a gate written before its surface exists.
-      //
-      // Both requirements below were settled as product decisions rather
-      // than assumed here: "before/after comparison" is a core
-      // requirement and it has to hold on the PATIENT's side -- the
-      // result alone is not a delivery, and narrowing the comparison to
-      // something only the clinic sees was considered and rejected. So
-      // the patient's landing is a side-by-side page.
+      // A PAGE with the PAIR on it, not a file and not the result
+      // alone: "before/after comparison" is a core requirement and it
+      // has to hold on the PATIENT's side -- the result alone is not a
+      // delivery -- so the patient's landing is a side-by-side page.
+      // This is also what tells a page from a file: go/sharing's public
+      // route answers the requested resource's raw bytes with its own
+      // MIME type (handler.go's io.Copy over the resolved content), and
+      // a browser given image bytes builds a document around an <img> --
+      // no text at all, no practice name, no explanation, no BEFORE.
       //
       // Text first, because it is the cheapest way to tell a page from a
       // file: a bare image document contains no text at all. What the
       // page should SAY -- the practice's name, the patient's, an
-      // explanation -- is still a product decision this does not make.
+      // explanation -- is still a product decision this gate does not
+      // make.
       await expect(
         patientPage.locator('body'),
         'the patient received a bare file rather than a page: nothing on it says whose smile this is',
@@ -279,26 +249,11 @@ test.describe('the core journey', { tag: '@budget' }, () => {
 
       // AGAIN, because a patient opens the link more than once: from the
       // message when it arrives, then later to show someone at home.
-      //
-      // Worth asserting rather than assuming now that the pair costs two
-      // token reads per visit.
-      //
-      // go/sharing's view accounting moved twice while this gate stood:
-      // first to settling a granted view only after the content was
-      // actually served (ee20d37 -- an unwired resolver or an
-      // interrupted stream had permanently spent a limited share nobody
-      // saw), then to a reserve -> confirm/refund shape (909161e --
-      // settling only afterwards meant a settle write that failed left a
-      // delivered share endlessly re-fetchable, the security mirror of
-      // the first hole). Both directions now hold at once.
-      //
-      // Neither touches this journey, because this app mints its patient
-      // links with no view cap at all (share-api.ts sends only
-      // resourceRef), so a second visit is supposed to work and does.
-      // What this gate is for is the day a cap appears: with one, the
-      // pair's two reads would spend it on the first visit and the
-      // patient's second look would be a refusal -- a consequence of a
-      // configuration change that nobody would connect to the patient.
+      // This app mints its patient links with no view cap (share-api.ts
+      // sends only resourceRef), so a second visit is supposed to work
+      // and does; go/sharing counts a served view against a grant's cap
+      // only when the grant carries one, so the repeated-open journey
+      // stays pinned against that accounting rather than assumed.
       await patientPage.reload()
       await expectBeforeAndAfter(
         patientPage.getByRole('img'),
@@ -316,66 +271,47 @@ test.describe('the core journey', { tag: '@budget' }, () => {
     // What this generation cost, where the generation happened: a
     // pay-per-use product that spends silently is one nobody trusts.
     //
-    // A NUMBER, not the vocabulary. The first draft of this asserted
-    // only that text matching /credit|cost|usage/i appeared somewhere on
-    // the page, which a nav entry called "Usage" satisfies on its own --
-    // so a surface that said the word "credits" and no amount would have
-    // passed a gate whose whole subject is how much was spent. A cost
-    // that does not say how much is not a cost.
+    // A NUMBER, not the vocabulary: a surface that said the word
+    // "credits" and no amount would pass nothing a practice can check --
+    // a cost that does not say how much is not a cost.
     const cost = page.getByRole('main').getByText(CASE_UI.cost).first()
     await expect(cost, 'a generation must say what it cost').toBeVisible()
     await expect(
       cost,
       'the surface names the idea of a cost but never an amount, so a practice still cannot tell what this generation spent',
     ).toContainText(/\d/)
-    // NOT zero, and this closes a hole found by reading go/billing's own
-    // fragment before the surface existed: a tenant with no ledger rows
-    // answers an all-zero balance by design (a zero state rather than a
-    // missing-resource refusal, which is the right answer). So "a digit
-    // appears" is satisfied by "0", and a surface that charged nothing
-    // -- or displayed the charge wrongly -- would have passed a gate
-    // whose subject is what this generation spent. A generation that
-    // costs nothing is not a pay-per-use product; either the charge did
-    // not happen or the number is wrong, and both are worth failing on.
+    // NOT zero: a tenant with no ledger rows answers an all-zero balance
+    // by design (a zero state rather than a missing-resource refusal,
+    // which is the right answer for an empty ledger), so "a digit
+    // appears" is satisfied by "0". This generation did spend -- either
+    // the charge did not happen or the figure is wrong, and both are
+    // worth failing on: a generation that costs nothing is not a
+    // pay-per-use product.
     await expect(
       cost,
       'this generation is reported as costing zero, so either nothing was charged for it or the figure shown is wrong -- a pay-per-use product cannot say both that it charges and that this was free',
     ).toContainText(/[1-9]/)
 
     // And the standing balance, somewhere a person can check it.
-    // Reached through openSurface: below the md breakpoint the
-    // navigation is behind the menu button, and clicking the link
-    // directly is the desktop-only mistake this suite has now made six
-    // times.
+    // Reached through openSurface rather than by clicking the link
+    // directly: below the md breakpoint the navigation is behind the
+    // menu button, and a direct click works only on wide screens.
     await openSurface(page, CASE_UI.navCredits)
     // Polled to settle, because the balance is a fetch and the heading
-    // renders before it answers.
-    //
-    // The fourth time this suite has read a point-in-time sample as if it
-    // were a settled state -- after an assertion, a wait, and a helper.
-    // Here it passed on chromium and failed on webkit and the iPad
-    // project, purely on how fast each got the answer: the snapshot at
-    // failure was the whole surface reduced to `heading "Credits"`, with
-    // the figure still in flight. A gate that resolves on engine speed
-    // reports nothing about the product.
+    // renders before the answer arrives: a point-in-time read would
+    // resolve on how fast the engine got the answer, reporting nothing
+    // about the product.
     const main = page.getByRole('main')
     await expect
       .poll(async () => await main.innerText(), { timeout: 15_000 })
       .toMatch(/\d/)
 
-    // The line that carries the FIGURE, not the label above it.
-    //
-    // `getByText(/balance|remaining|credits/i).first()` picked the
-    // standalone "Balance" label, which never contains a number by
-    // design -- the amount lives in its own line ("N credits
-    // available"). So the assertion could not pass on this surface at
-    // all, and the reason chromium went green earlier was that the
-    // navigation was landing on the Account page instead. Neither
-    // engine's answer was about the product.
-    //
-    // Matched on a number next to the word rather than on either alone:
-    // a label with no figure fails, and a figure belonging to something
-    // else is not accepted just for being a digit somewhere on the page.
+    // The line that carries the FIGURE, not the label above it: the
+    // standalone "Balance" label never contains a number by design --
+    // the amount lives in its own line ("N credits available"). Matched
+    // on a number next to the word rather than on either alone: a label
+    // with no figure fails, and a figure belonging to something else is
+    // not accepted just for being a digit somewhere on the page.
     const balance = main.getByText(/\d[\d,.]*\s*(credit|credits)/i).first()
     await expect(
       balance,
@@ -385,61 +321,14 @@ test.describe('the core journey', { tag: '@budget' }, () => {
 })
 
 /**
- * Opens a case that already has a photo on it, creating one when the run
- * has none. Written as a helper because blocks B, C and D all start from
- * that state. Its targeting firmed up when block A's surface landed: the
- * page's FIRST listitem is the frame navigation's own Home entry, not a
- * case row (the nav list precedes the main landmark in the DOM and both
- * use the listitem role), so the helper scopes to the main landmark --
- * the cases list -- before taking its first row. It deliberately opens
- * whatever the newest case is rather than creating one, mirroring a
- * receptionist continuing yesterday's work.
- */
-
-/**
- * Asserts a region shows a genuine before/after pair: two images, both
- * decoded by the browser, and NOT the same image twice.
- *
- * One implementation, shared by the clinic's own comparison (block B)
- * and the patient's page (block C), because the two must hold the same
- * property and a change to what counts as a pair must not leave one
- * side checking something the other stopped checking.
- *
- * Each half of it has caught something. Counting alone passes when a
- * surface renders the ORIGINAL twice -- the product's whole proposition
- * rendered as a no-op, and it looks right in a screenshot. Requiring the
- * images to have decoded catches a broken source, which is what a
- * patient would actually report: a broken frame where their new smile
- * should be.
- *
- * Compared by source rather than by pixels: two storage objects are two
- * URLs, the cheapest honest difference. A surface rendering one object
- * twice fails; one rendering the same IMAGE from two different objects
- * is not what this is about.
- */
-
-/**
- * Opens one case with one patient photo, from the cases surface, the way
- * a receptionist does: name the patient, attach the photograph, submit
- * once. Leaves the browser on the cases list with the new case in it.
- *
- * The one implementation of that sequence, shared by block A's own
- * journey and by the blocks that start from its result -- so a change to
- * how a case is opened cannot leave the later blocks driving a shape the
- * product no longer has.
- */
-
-
-/**
  * That opening a patient's photo does not spend money without saying so.
  *
  * The panel gives a photo with no simulation on it one automatic
  * generation the moment it can act (photo-simulation-panel.tsx's
- * autoPreviewStartedRef), and that is a deliberate product decision with
- * a stated reason: the case page would otherwise open on nothing but
- * pickers and a blank promise, so a practice's first look at a new
- * patient photo is the comparison the auto-run produces. This gate does
- * not argue with that.
+ * autoPreviewStartedRef), a deliberate product decision: the case page
+ * would otherwise open on nothing but pickers and a blank promise, so a
+ * practice's first look at a new patient photo is the comparison the
+ * auto-run produces. This gate does not argue with that.
  *
  * What it holds is the disclosure. A generation costs credits -- the
  * product says so itself, in the line it renders AFTERWARDS ("This
@@ -450,19 +339,14 @@ test.describe('the core journey', { tag: '@budget' }, () => {
  * disputes the charge for a simulation they asked for, and nobody
  * expects one for a page they opened.
  *
- * The bar is deliberately low, because the fix is a product decision and
- * not this gate's to make: SOMETHING on the surface, before or as the
- * automatic run happens, has to connect it to a cost. A line saying the
- * preview uses a credit, a balance shown beside the panel, a first-visit
- * note, or an explicit "generate the first preview" button that makes the
- * spend a choice -- any of them passes. Silence does not.
+ * The automatic run's credit cost is disclosed ahead of it, under the
+ * Smile simulation heading before the option pickers. The bar the gate
+ * holds is that SOMETHING on the surface, before or as the automatic
+ * run happens, connects it to a cost -- a line saying the preview uses
+ * a credit, a balance shown beside the panel, a first-visit note, or an
+ * explicit "generate the first preview" button that makes the spend a
+ * choice would each pass. Silence does not.
  */
-// Closed: a9a7e22 discloses the automatic first preview's credit cost
-// before it runs. Verified on the fix branch on all three engines and by
-// reading what a dentist actually sees -- the line sits under the Smile
-// simulation heading, ahead of the option pickers, and names the figure
-// ("10 credits") rather than only the idea of a cost.
-//
 // @budget rather than untagged: it opens a case and attaches a photo,
 // which the default tier's sign-in budget cannot absorb.
 test(
@@ -476,20 +360,9 @@ test(
     await createCaseWithPhoto(page, name)
     await page.getByText(name).click()
 
-    // Wait for the case to actually be open before reading it.
-    //
-    // Clicking the row and reading immediately sampled the CASES LIST --
-    // "Acme Dental · Cases ... NEW CASE ..." -- because opening a case is
-    // a network round trip. No honest surface has a cost word at that
-    // moment, so the gate was structurally red and would have stayed red
-    // against any correct fix. Proven by probing the sampled text on the
-    // branch that fixes the defect: the disclosure was there, and this
-    // gate was looking at the previous page.
-    //
-    // The sixth point-in-time sample this suite has read as a settled
-    // state, and the most expensive kind: not a false pass, a false
-    // ACCUSATION -- a round that had done the work correctly was told it
-    // had not.
+    // Wait for the case page itself: opening a case is a network round
+    // trip, and reading too early samples the cases list, which no
+    // honest surface would have a cost word on.
     await expect(
       page.getByRole('img', { name: /photo|patient|before/i }).first(),
       'the case never opened, so nothing here is about what it discloses',
@@ -510,39 +383,19 @@ test(
 /**
  * That nothing on the share panel is still a placeholder.
  *
- * Found by walking the journey as a person, which is the only way it
- * could have been: the panel says when the patient's link expires, and
- * it renders the literal "{date}". cases.share.expiresOn is written
- * with SINGLE braces while every other date line in this app uses
- * i18next's double ones (cases.sim.attemptDate, credits.updatedLine,
- * credits.rowMeta), so the parameter the call site correctly passes is
- * never substituted -- in both zh-CN and en-US.
- *
- * No gate here could have caught it: block C asserts that the link
- * appears and that a patient can open it, and never read the sentence
- * beside it. A share whose expiry reads "{date}" tells a practice
- * nothing about how long the patient has, which is the one thing that
- * sentence exists to say.
- *
- * Separate from block C rather than folded into it, and that placement
- * is the point: block C passes, and a red assertion inside the @budget
- * describe would cost that tier the one thing it is for -- being the
- * tier where everything is verified. An open defect belongs where the
- * @pending tier finds it.
+ * i18next interpolates {{name}} with DOUBLE braces; a single-braced
+ * token such as "{date}" is never substituted and reaches the screen
+ * verbatim, in both zh-CN and en-US. The panel says when the patient's
+ * link expires -- the one thing that sentence exists to say -- so a
+ * literal "{date}" there tells a practice nothing about how long the
+ * patient has.
  *
  * Asserted as a CLASS rather than as this one string: any single-braced
  * token surviving into rendered text is the same defect wearing a
  * different name, and this is the cheapest place to notice the next one.
+ *
+ * @budget rather than untagged: it signs in and generates.
  */
-// Closed by 2c383a0: cases.share.expiresOn carries i18next's double
-// braces now, in both languages, so the panel renders the real expiry
-// date. The fix went wider than this gate asked -- every resource string
-// in the repository was scanned for single-braced tokens, and a re-scan
-// of all twelve bundles finds none left.
-//
-// The gate stays, and asserts the class rather than the one string, so
-// the next single-braced token written anywhere on this surface fails
-// here. @budget rather than untagged: it signs in and generates.
 test(
   'the share panel shows a date, not a placeholder',
   { tag: '@budget' },
@@ -552,25 +405,6 @@ test(
     await page.getByRole('button', { name: CASE_UI.share }).click()
     await expect(page.getByRole('textbox', { name: CASE_UI.share })).toBeVisible()
 
-    //
-    // Found by walking the journey as a person rather than by any gate
-    // here: the panel says when the link expires, and it was rendering
-    // the literal "{date}". cases.share.expiresOn is written with SINGLE
-    // braces while every other date line in this app uses i18next's
-    // double ones (cases.sim.attemptDate, credits.updatedLine,
-    // credits.rowMeta), so the parameter the call site correctly passes
-    // is never substituted -- in both zh-CN and en-US.
-    //
-    // The gate above could not have caught it and neither could any
-    // other: block C asserted that the link appears and that a patient
-    // can open it, and never read the sentence next to it. A share whose
-    // expiry reads "{date}" tells a practice nothing about how long the
-    // patient has, which is the one thing that sentence exists to say.
-    //
-    // Asserted as a class rather than as this one string: any
-    // single-braced token surviving into rendered text is the same
-    // defect wearing a different name, and this is the cheapest place to
-    // notice the next one.
     const panel = await page.getByRole('main').innerText()
     const placeholders = panel.match(/\{[a-zA-Z_][\w.]*\}/g) ?? []
     expect(

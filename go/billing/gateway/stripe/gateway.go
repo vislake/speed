@@ -129,7 +129,7 @@ func (g *Gateway) CreateCharge(ctx context.Context, req billing.ChargeRequest) (
 		// (parent.subscription_details.metadata, event.go's normalizeInvoice)
 		// -- carries no speed_* keys, and those events are refused as
 		// unrecognized: the platform would see a subscription's first cycle
-		// and then go blind for every later one (P1-2).
+		// and then go blind for every later one.
 		SubscriptionData: &stripego.CheckoutSessionSubscriptionDataParams{
 			Metadata: map[string]string{
 				metadataTenantID:       req.TenantID,
@@ -224,9 +224,8 @@ func firstHeader(headers map[string][]string, name string) string {
 
 // QueryStatus implements billing.PaymentGateway: retrieves the Checkout
 // Session named by ref and maps its Status/PaymentStatus to a
-// billing.ChannelStatus -- the authoritative re-query
-// docs/internal/06-billing-and-metering.md's callbacks-cannot-be-trusted
-// rule requires, never trusting a webhook body's own numbers.
+// billing.ChannelStatus -- the authoritative re-query the rule that a
+// webhook body's own numbers are never trusted requires.
 func (g *Gateway) QueryStatus(ctx context.Context, ref billing.ChannelReference) (billing.ChannelStatus, billing.Money, error) {
 	params := &stripego.CheckoutSessionParams{}
 	params.Context = ctx

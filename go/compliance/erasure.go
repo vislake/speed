@@ -93,8 +93,8 @@ func newErasureService() *ErasureService {
 
 // Erase immediately erases every registered participant's data for
 // subject, bypassing the retention window entirely -- the right-to-
-// erasure ("right to be forgotten") path docs/internal/10-compliance-and-audit.md
-// describes. requestedBy identifies who is asking: it becomes both the
+// erasure ("right to be forgotten") path. requestedBy identifies who is
+// asking: it becomes both the
 // audited system context's SystemReason.Actor (a short stable string) and
 // the pkgcore.Actor set on ctx before the system context is entered, so
 // every participant's own HardDelete write -- and this call's own final

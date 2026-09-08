@@ -90,9 +90,9 @@ var ErrUnresolvedFeatureDependency = errors.New("pkgcore: unresolved feature fla
 // implementation -- whether picked from the Kernel's active Preset or
 // injected by the host through a KernelOption -- does not declare every
 // Capability the Kernel's DeploymentMode requires. It replaces the four
-// ErrMissingDistributed* sentinels a mode-keyed switch used to return: with N
-// implementations per seam, "missing the distributed implementation" no
-// longer describes the failure, so the error instead names the seam, the
+// ErrMissingDistributed* sentinels of a mode-keyed switch: with several
+// implementations per seam, "missing the distributed implementation" does
+// not describe the failure, so the error instead names the seam, the
 // implementation and exactly which capability is missing (see
 // validateSeamCapability).
 var ErrCapabilityUnsatisfied = errors.New("pkgcore: seam implementation does not satisfy the deployment mode's required capability")
@@ -129,7 +129,7 @@ type Module interface {
 	// it to i18n.Builder.AddModule while it assembles the merged message
 	// catalog, so a module that renders no content returns an empty
 	// embed.FS and a module that ships files must ship one file for every
-	// language the catalog serves (zh-CN.toml and en-US.toml in M0) and
+	// language the catalog serves (zh-CN.toml and en-US.toml) and
 	// none for any other, prefix its ids with its Name and keep every
 	// language's id set identical.
 	Locales() embed.FS
@@ -540,9 +540,8 @@ type Registry struct {
 	// AuditActions receives the audit action enumeration modules define.
 	AuditActions AuditActionRegistrar
 	// Retention receives the retention-sweep, right-to-erasure and
-	// data-export participants modules register (go/compliance's
-	// orchestration mechanism, still a stub module until this field's own
-	// implementing round).
+	// data-export participants modules register (go/compliance owns the
+	// orchestration over this seat).
 	Retention RetentionRegistrar
 
 	// kv is the KVStore the registry was built with. EventBus is derived from
@@ -966,10 +965,10 @@ func (r *memoryRetentionRegistrar) Participants() []RetentionParticipant {
 // Kernel assembles modules into a running application for one deployment
 // topology, built from a composition of independently selected seam
 // implementations. Deployment mode and implementation composition are two
-// orthogonal axes (docs/internal/03-deployment-modes.md): the deployment mode
-// declares how many replicas the assembled application may run as, which
-// only constrains which implementations are permissible for a
-// shared-state seam; it never selects one. Kernel assembly is the only place
+// orthogonal axes: the deployment mode declares how many replicas the
+// assembled application may run as, which only constrains which
+// implementations are permissible for a shared-state seam; it never
+// selects one. Kernel assembly is the only place
 // allowed to branch on the mode, which is why capability validation lives
 // here rather than inside a module.
 //
@@ -1114,11 +1113,11 @@ func WithObjectStore(store ObjectStore, capabilities Capability) KernelOption {
 	}
 }
 
-// NewKernel returns a Kernel that, with no options, behaves exactly like
-// today's zero-configuration standalone default: DeploymentModeStandalone
-// composed with PresetStandalone, which resolves every seam to its
-// in-process, zero-external-dependency implementation and starts in seconds
-// with nothing else running. opts layer a wider deployment mode, a different
+// NewKernel returns a Kernel that, with no options, is the
+// zero-configuration standalone default: DeploymentModeStandalone composed
+// with PresetStandalone, which resolves every seam to its in-process,
+// zero-external-dependency implementation and starts in seconds with
+// nothing else running. opts layer a wider deployment mode, a different
 // Preset, or per-seam injection on top.
 func NewKernel(opts ...KernelOption) *Kernel {
 	k := &Kernel{
@@ -1155,11 +1154,11 @@ type seamResolution struct {
 // resolveKernelSeam returns the value a Kernel bootstraps one seam with:
 // seam.value when the host injected one, or preset[seamKey] built through
 // registry otherwise. cfg is always the empty Config for a preset-resolved
-// seam today: carrying per-implementation settings (a Redis address, SMTP
-// credentials) through the Preset layer is deliberately deferred (see
-// Config's own doc comment); a host that needs them injects the
-// implementation directly instead, which is exactly what WithEventBus and
-// its siblings are for.
+// seam: carrying per-implementation settings (a Redis address, SMTP
+// credentials) through the Preset layer is not implemented (see Config's
+// own doc comment); a host that needs them injects the implementation
+// directly instead, which is exactly what WithEventBus and its siblings are
+// for.
 //
 // The third return value is the closer Bootstrap must run to release the
 // resources this resolution created: nil for an injected seam (the host owns
@@ -1226,12 +1225,12 @@ func validateSeamCapability(res seamResolution, required Capability, mode Deploy
 }
 
 // warnIfNotDurable logs a startup warning when res keeps state of its own
-// without declaring SurvivesRestart, per docs/internal/03-deployment-modes.md's
-// rule that an implementation whose state does not outlive the process must
-// announce itself at startup. A Stateless implementation is skipped: it
-// holds nothing in the process for a restart to drop, so a banner over it
-// would name no loss -- the mailer.console warning every default standalone
-// bootstrap used to print was exactly that vacuous noise. This is a property
+// without declaring SurvivesRestart: an implementation whose state does not
+// outlive the process must announce itself at startup. A Stateless
+// implementation is skipped: it holds nothing in the process for a restart
+// to drop, so a banner over it would name no loss (a mailer.console warning
+// on a default standalone bootstrap would be exactly that vacuous noise).
+// This is a property
 // of the resolved implementation, not of the deployment mode --
 // DeploymentModeStandalone never requires SurvivesRestart, but a standalone
 // composition can still choose to be warned about it -- so it runs for every
@@ -1240,12 +1239,11 @@ func validateSeamCapability(res seamResolution, required Capability, mode Deploy
 // composition.
 //
 // pkgcore is the dependency floor of the workspace and cannot import
-// go/observability (the reverse direction; see
-// docs/internal/01-architecture.md's dependency graph), so this reaches for
-// log/slog directly rather than the context-aware obs.FromContext wrapper
-// every downstream module uses for its own logging. Nothing here runs on a
-// request path, so the absence of trace/tenant correlation this one call
-// site would otherwise lose is immaterial.
+// go/observability (the dependency graph runs the other way), so this
+// reaches for log/slog directly rather than the context-aware
+// obs.FromContext wrapper every downstream module uses for its own logging.
+// Nothing here runs on a request path, so the absence of trace/tenant
+// correlation this one call site would otherwise lose is immaterial.
 func warnIfNotDurable(res seamResolution) {
 	if res.capabilities.Has(SurvivesRestart) || res.capabilities.Has(Stateless) {
 		return
@@ -1264,10 +1262,9 @@ func warnIfNotDurable(res seamResolution) {
 // Preset built through that seam's SeamRegistry. Every resolved
 // implementation's declared Capability is then checked against what
 // DeploymentMode requires, and Bootstrap fails, naming the seam and the
-// implementation, on the first one that falls short -- the direct replacement
-// for the four mode-keyed hardcoded checks (ErrMissingDistributedEventBus and
-// its three siblings) this retrofit removed: one capability comparison, run
-// once per seam, that does not grow as more implementations are registered.
+// implementation, on the first one that falls short -- one capability
+// comparison, run once per seam, that does not grow as more implementations
+// are registered.
 // An implementation that does not declare SurvivesRestart logs a startup
 // warning instead of failing Bootstrap; see warnIfNotDurable. Every
 // successful seam resolution is announced by one startup Info line naming
@@ -1311,8 +1308,7 @@ func (k *Kernel) Bootstrap(ctx context.Context, modules ...Module) (reg *Registr
 
 	// The seams are resolved, in this fixed order, before anything else, so
 	// that a misconfigured composition fails at startup rather than after a
-	// partial assembly -- the same guarantee the four mode-keyed checks this
-	// retrofit replaced used to give.
+	// partial assembly.
 	bus, busRes, busClose, err := resolveKernelSeam(k.eventBus, presetKeyEventBus, k.preset, EventBusRegistry)
 	if err != nil {
 		return nil, err

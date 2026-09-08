@@ -454,7 +454,7 @@ func newStatementCounter(t *testing.T, db *gorm.DB) *statementCounter {
 func (c *statementCounter) reset() { *c = statementCounter{} }
 
 // TestService_OnNodeDeleted_CascadeReap_NoPerBindingReReads pins the
-// review finding on the node-deleted reap's cost shape: the reap runs
+// node-deleted reap's cost shape: the reap runs
 // synchronously inside org's own delete request (the in-memory bus
 // delivers in-process), so a large-subtree cascade would drag that one
 // HTTP DELETE through one full revoke round trip per binding -- each
@@ -478,8 +478,8 @@ func TestService_OnNodeDeleted_CascadeReap_NoPerBindingReReads(t *testing.T) {
 		}
 	}
 	// Four live bindings across the two roles: two distinct roles and four
-	// rows is the shape where the per-binding re-reads the fix removes are
-	// distinguishable from the reads that must stay.
+	// rows is the shape where the per-binding re-reads a one-full-cycle
+	// revoke would add are distinguishable from the reads that must stay.
 	for _, grant := range []struct {
 		user   string
 		role   string
@@ -880,7 +880,7 @@ func TestService_OnMemberRestored_ReinstatesTheReapedBindingsAndSparesEveryoneEl
 	//
 	// The node-scoped half of the fixture needs a SubtreeResolver proving
 	// node-1 still exists: the re-instatement re-verifies each row's node
-	// through the seam before un-marking it (P1-rbac-reinstate-node), and
+	// through the seam before un-marking it, and
 	// node-1 here was never deleted -- only the member's removal reaped her
 	// writer binding -- so a resolver that resolves it is the accurate
 	// stand-in for org's live tree.
@@ -1017,7 +1017,7 @@ func TestService_OnMemberRestored_RedeliveryRestoresNothingTwice(t *testing.T) {
 }
 
 func TestService_OnMemberRestored_DeliberateRevocationPredatingTheRemoval_StaysRevoked(t *testing.T) {
-	// The P0-rbac-7 regression this round closes, reproduced
+	// The deliberate-revocation protection, reproduced
 	// deterministically in its simplest shape: the owner's grant is
 	// deliberately revoked (Service.RevokeRole, the same path go/admin's
 	// RoleService.RevokeRole delegates to), THEN the owner is removed from
@@ -1025,11 +1025,8 @@ func TestService_OnMemberRestored_DeliberateRevocationPredatingTheRemoval_StaysR
 	// nothing live to reap -- the deliberate revoke predates it -- and the
 	// member restore must NOT bring the owner's grant back: the revoked
 	// row was never written by the removal, and undoing it would silently
-	// resurrect a deliberate revocation. Before this round the row carried
-	// no revoke-origin marker, the restore re-instated every revoked tuple
-	// in the restored member's scope, and the owner came back with a grant
-	// an administrator had explicitly taken away -- this test failed on
-	// that code. The marker (0003_add_revoke_origin.sql) is what lets the
+	// resurrect a deliberate revocation. The marker
+	// (0003_add_revoke_origin.sql) is what lets the
 	// restore side tell the deliberate row apart: it carries the empty
 	// origin, never the member-removal one, and is left revoked.
 	svc, reg := newTestServiceWithRegistry(t)
@@ -1275,8 +1272,8 @@ func TestService_OnMemberRestored_RestoreOnOneReplica_ConvergesTheOther(t *testi
 }
 
 func TestService_OnMemberRestored_NodeDeletedAtMemberRestore_StaysRevokedUntilTheNodeReturns(t *testing.T) {
-	// The P1-rbac-reinstate-node regression this round closes, in the
-	// ordering the finding named: the node is deleted FIRST (the
+	// The node-deleted-before-the-member-restores ordering: the node is
+	// deleted FIRST (the
 	// node-deletion reap revokes the member's row with the node-deletion
 	// origin), THEN the member is removed -- the member-removal reap's
 	// claim step re-attributes the still-revoked row to the member-removal
@@ -1285,18 +1282,13 @@ func TestService_OnMemberRestored_NodeDeletedAtMemberRestore_StaysRevokedUntilTh
 	// asserts the membership is visible again, but the row's other
 	// structural precondition -- the node it is scoped to -- is still
 	// missing, and Can, the coarse gate, never consults node liveness at
-	// decision time. Before this round the member restore un-marked every
-	// member-removal row it enumerated regardless of its node, the binding
-	// on the deleted node went live again, and Can answered allowed -- the
-	// escalation. The row must stay revoked until the NODE returns, which
-	// is exactly what the re-attribution half of the fix arranges: a row
+	// decision time. The row must stay revoked until the NODE returns,
+	// which
+	// is exactly what the re-attribution arranges: a row
 	// whose node does not resolve at member-restore time is handed back to
 	// the node-deletion origin, where the node's own org.node.restored --
 	// and only that event -- can lift it, exactly like every other grant
 	// the deletion reaped.
-	//
-	// Pre-fix this test fails at the first post-restore assertion, with
-	// Can == true.
 	//
 	// The probe order below matters: the event-count assertions come before
 	// the live probes, because probing a live binding revokes and restores
@@ -1367,7 +1359,7 @@ func TestService_OnMemberRestored_NodeDeletedAtMemberRestore_StaysRevokedUntilTh
 }
 
 func TestService_OnMemberRestored_NodeDeletedWhileMemberGone_StaysRevokedUntilTheNodeReturns(t *testing.T) {
-	// The same P1-rbac-reinstate-node property in its second ordering: the
+	// The same node-liveness property in its second ordering: the
 	// member is removed FIRST, while her binding at node-1 is live -- the
 	// member-removal reap revokes it with the member-removal origin -- and
 	// only THEN is the node deleted. Its reap finds nothing live left at
@@ -1382,9 +1374,6 @@ func TestService_OnMemberRestored_NodeDeletedWhileMemberGone_StaysRevokedUntilTh
 	// row back to the node-deletion origin, and only the node's own return
 	// lifts it -- which also keeps her grant's fate identical to every
 	// other grant the node's deletion reaped at the same node.
-	//
-	// Pre-fix this test fails at the first post-restore assertion, with
-	// Can == true.
 	tree := &stubResolver{paths: map[string]string{"node-1": "/tenant-a/node-1"}}
 	svc, reg := newTestServiceWithRegistry(t, WithSubtreeResolver(tree))
 	member := Subject{TenantID: "tenant-a", UserID: "user-member"}
@@ -1434,17 +1423,13 @@ func TestService_OnMemberRestored_NodeDeletedWhileMemberGone_StaysRevokedUntilTh
 func TestService_OnMemberRestored_NodeUnverifiable_FailsClosed(t *testing.T) {
 	// The re-instatement gate cannot verify a node-scoped row when the
 	// host wired no SubtreeResolver, or when the resolver errors -- and
-	// "cannot verify" must fail closed, never default back to the old
-	// un-mark-anyway behavior: that default is exactly the P1 this round
-	// closes. A row the gate cannot verify stays revoked under the
+	// "cannot verify" must fail closed, never default to un-marking the
+	// row anyway. A row the gate cannot verify stays revoked under the
 	// member-removal origin (never re-attributed -- without an answer the
 	// code must not presume the node dead and hand the row to an event
 	// that may never fire), and a later delivery of the same restore event
 	// re-checks it. A tenant-wide row carries no node to verify and comes
 	// back regardless -- the no-org-module host keeps working.
-	//
-	// Both legs fail before the fix: with the row un-marked by the member
-	// restore, Can answers true.
 	//
 	// Leg 1: no SubtreeResolver wired at all.
 	svc, reg := newTestServiceWithRegistry(t)
@@ -1739,7 +1724,7 @@ func TestService_OnNodeRestored_WireShapesAllReinstateTheSameBindings(t *testing
 }
 
 func TestService_OnNodeRestored_MemberRemovedWhileNodeDeleted_IsNotReinstated(t *testing.T) {
-	// The P0-rbac-8 regression this round closes, in its hardest ordering:
+	// The hardest ordering:
 	// the node is deleted FIRST (the node-deletion reap writes the
 	// member's row with the node-deletion origin), THEN the member is
 	// removed from the tenant -- the member-removal reap finds nothing
@@ -1747,10 +1732,7 @@ func TestService_OnNodeRestored_MemberRemovedWhileNodeDeleted_IsNotReinstated(t 
 	// row to the member-removal -- and THEN the node is restored. The node
 	// restore must NOT re-instate the removed member's row: doing so would
 	// rebuild live authorization for a holder who is no longer a member,
-	// with no membership behind it. Before this round the row carried no
-	// origin, the removal recorded nothing (there was nothing live to
-	// reap), and the node restore resurrected the grant -- this test
-	// failed on that code, with the removed member's Can answering true.
+	// with no membership behind it.
 	// A second member who was never removed, whose row the same deletion
 	// reaped alongside the first, IS re-instated -- the mechanism keeps
 	// working for its intended case, and the two rows differ only in the
@@ -1795,8 +1777,7 @@ func TestService_OnNodeRestored_MemberRemovedWhileNodeDeleted_IsNotReinstated(t 
 	}
 
 	// The node comes back: only the member who is still in the tenant is
-	// re-instated. The removed member's Can must stay false -- pre-fix it
-	// was restored and counted into Can, which is exactly the escalation.
+	// re-instated. The removed member's Can must stay false.
 	rec := recordEvents(reg)
 	publishNodeRestored(t, reg, "tenant-a", restoredNode{NodeID: "node-1"})
 
@@ -1819,7 +1800,7 @@ func TestService_OnNodeRestored_MemberRemovedWhileNodeDeleted_IsNotReinstated(t 
 }
 
 func TestService_OnNodeRestored_MemberRemovedBeforeTheNodeDeleted_IsNotReinstated(t *testing.T) {
-	// The P0-rbac-8 regression in its second ordering: the member is
+	// The member-removed-before-the-node-deleted ordering: the member is
 	// removed FIRST, while her binding at node-1 is live -- the
 	// member-removal reap revokes it with the member-removal origin -- and
 	// only THEN is the node deleted (its reap finds nothing live left to
@@ -1827,10 +1808,7 @@ func TestService_OnNodeRestored_MemberRemovedBeforeTheNodeDeleted_IsNotReinstate
 	// at the restored node, and the member-origin row must not be among
 	// those it re-instates: the row belongs to the member's own removal,
 	// not to the node's deletion, and the member is not coming back (no
-	// org.member.restored ever fires for her). Before this round the
-	// restore re-instated every revoked row at the node regardless of who
-	// wrote the revoke, and the removed member's grant silently returned --
-	// this test failed on that code.
+	// org.member.restored ever fires for her).
 	svc, reg := newTestServiceWithRegistry(t)
 
 	removed := Subject{TenantID: "tenant-a", UserID: "user-removed"}
@@ -1862,14 +1840,13 @@ func TestService_OnNodeRestored_MemberRemovedBeforeTheNodeDeleted_IsNotReinstate
 }
 
 func TestService_OnNodeRestored_ReinstatesOnlyRowsTheNodeDeletionItselfReaped(t *testing.T) {
-	// The P0-rbac-8 scoping rule at its most literal: a node restore may
+	// The scoping rule at its most literal: a node restore may
 	// re-instate exactly the rows THIS node's deletion reaped -- the rows
 	// carrying the node-deletion origin -- never a deliberate RevokeRole
 	// revocation at the same node that predates the deletion. An
 	// administrator who revoked a grant while the node was still alive,
 	// and never re-granted it, made a decision the node's return must not
-	// undo; before this round the restore could not tell the deliberate
-	// row from the reaped one and undid both.
+	// undo.
 	svc, reg := newTestServiceWithRegistry(t)
 
 	deliberate := Subject{TenantID: "tenant-a", UserID: "user-deliberate"}

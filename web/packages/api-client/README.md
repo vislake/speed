@@ -174,7 +174,7 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   Responses carrying the API's envelope (`{ code, traceId?, params?,
   message?, details? }`) surface the envelope's fields verbatim. `code`
   is the only required wire field -- `traceId` is optional and surfaced
-  for correlation when a backend sends one; the backend today sends
+  for correlation when a backend sends one; the backend sends
   `{code, params}` only, so requiring anything beyond `code` would
   discard every real module code into the `client.` fallback. Responses
   without a valid envelope (a proxy error page, a 500 from an upstream
@@ -219,7 +219,7 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   as an auth `ApiError` and reports `access token refresh failed`
   through the reporter. A 401 on a credential-less request means the
   endpoint demands authentication, which refreshing cannot provide, so
-  it surfaces untouched -- and that rule is load-bearing for the M1
+  it surfaces untouched -- and that rule is load-bearing for the
   session wiring: a session's own refresh request travels
   credential-less by declaration (`omitAccessToken`, set on the
   generated refresh operation by `@speed/api-sdk`), so a refused
@@ -259,9 +259,9 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
   cancelled request never sits out its remaining delay.
 - **Structured reporting.** The reporter sink receives a constant
   English message plus snake_case attributes. The default sink writes
-  to `console.error`/`console.warn` -- a stopgap until the M1 round
-  wires the app-shell diagnostics pipeline; hosts replace it through
-  `ClientOptions.reporter`.
+  to `console.error`/`console.warn` -- the browser has no structured
+  log backend, so reports reach whatever sink hosts install; hosts
+  replace it through `ClientOptions.reporter`.
 
 ## Public surface
 
@@ -291,26 +291,23 @@ function useAppChrome(clientApi: RequestFn): AppChrome {
 
 ## What is deliberately not here
 
-- **Uploads and SSE** -- outside this package's scope
-  (docs/internal/21-api-contract.md).
+- **Uploads and SSE** -- not shipped.
 - **A consumer is not packaged here** -- `@speed/api-sdk`, the
-  orval-generated typed surface, has landed and calls into this package
-  through its `src/runtime.ts` seam, and `@speed/auth-core`
-  compile-consumes both in-workspace (its session layer imports this
-  package's `AccessTokenStore` seam and calls the generated authn
-  operations through the bound request function).
-  `usePublicConfig`/`useFeature` have landed too
-  (`@speed/api-client/react`, Config hooks section above). The runtime
-  first consumer is real and lives in the reference app's consumer
-  shell (`examples/reference-app/web`, an external member of the web
-  workspace, never versioned): its bootstrap binds one real
+  orval-generated typed surface, calls into this package through its
+  `src/runtime.ts` seam, and `@speed/auth-core` compile-consumes both
+  in-workspace (its session layer imports this package's
+  `AccessTokenStore` seam and calls the generated authn operations
+  through the bound request function). `usePublicConfig`/`useFeature`
+  live at `@speed/api-client/react` (Config hooks section above). The
+  runtime first consumer is real and lives in the reference app's
+  consumer shell (`examples/reference-app/web`, an external member of
+  the web workspace, never versioned): its bootstrap binds one real
   `createClient` over the environment's own fetch into the api-sdk
   seam, and its home view reads the server's effective Public values
   and feature flags through `usePublicConfig`/`useFeature` on that same
-  bound client -- the `requiredFeature` consumer
-  `docs/internal/11-cross-cutting.md` describes. The browser page
-  leg -- a browser driving the real server -- is M4's html-runner/e2e
-  work.
+  bound client -- the shape a `requiredFeature`-style consumer needs.
+  What is not shipped is the browser page leg: a browser driving the
+  real server.
 - **i18n resources** -- error codes map to bilingual text in the
   consuming package's catalogs; nothing here emits user-facing text.
 

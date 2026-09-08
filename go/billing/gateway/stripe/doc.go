@@ -1,11 +1,9 @@
 // Package stripe is billing's Stripe adapter -- the international leg of
-// docs/internal/06-billing-and-metering.md's domestic-plus-international dual
-// payment mode: Stripe's own
+// the domestic-plus-international dual payment mode: Stripe's own
 // native recurring-subscription primitives, used directly, with no
 // internally-managed billing cycle standing in the way (unlike this
 // repository's Alipay/WeChat adapters, whose channels have no recurring-
-// charge primitive at all -- see go/billing/gateway/AGENTS.md's own
-// pragmatic-trade-off write-up).
+// charge primitive at all).
 //
 // # SDK choice
 //
@@ -21,18 +19,16 @@
 // friends) are concrete, unexported struct types with no interface seam,
 // so nothing about them can be swapped for a test double, and this
 // package's whole testing strategy (VerifyWebhook's real, offline signature
-// verification; every other method exercised against a scripted double, per
-// go/billing/gateway/AGENTS.md's own testing-strategy write-up) depends on
-// stripe.Backend being a real, first-class interface -- its own doc comment
-// says so outright: "this interface exists to enable mocking for during
-// testing if needed". The per-resource Client type takes exactly that
-// Backend, constructed once in NewGateway and reused for every call this
-// package makes, so a unit test injects a scripted stripe.Backend and
-// asserts the exact request this package builds without a live Stripe
+// verification; every other method exercised against a scripted double)
+// depends on stripe.Backend being a real, first-class interface -- its own
+// doc comment says so outright: "this interface exists to enable mocking
+// for during testing if needed". The per-resource Client type takes
+// exactly that Backend, constructed once in NewGateway and reused for every
+// call this package makes, so a unit test injects a scripted stripe.Backend
+// and asserts the exact request this package builds without a live Stripe
 // account. The per-resource Client types are marked Deprecated in the SDK's
 // own doc comments ("use stripe.Client instead") but remain fully shipped
-// and functional as of the pinned version -- see go/billing/gateway/AGENTS.md
-// for the full write-up of this trade-off.
+// and functional as of the pinned version.
 //
 // # What is, and is not, exercised without live credentials
 //
@@ -46,13 +42,12 @@
 // package sends and returns a canned response -- proof the request/response
 // shapes are correct, never proof against Stripe's real, live API.
 //
-// Since the sandbox round, an integration tier (integration_test/,
-// -tags=integration, Docker-backed) drives the REAL HTTP dialogue -- the
-// production NewGateway construction path over stripe-go's genuine HTTP
-// backend -- against stripe/stripe-mock, the official Stripe mock server
-// Stripe itself publishes (credential-free; any key shaped like a test-mode
-// key -- sk_test_ plus alphanumerics -- is accepted). CreateCharge's POST
-// /v1/checkout/sessions and QueryStatus's
+// An integration tier (integration_test/, -tags=integration, Docker-backed)
+// drives the REAL HTTP dialogue -- the production NewGateway construction
+// path over stripe-go's genuine HTTP backend -- against stripe/stripe-mock,
+// the official Stripe mock server Stripe itself publishes (credential-free;
+// any key shaped like a test-mode key -- sk_test_ plus alphanumerics -- is
+// accepted). CreateCharge's POST /v1/checkout/sessions and QueryStatus's
 // GET /v1/checkout/sessions/{id}?expand[]=subscription run against a server
 // that validates requests against the same OpenAPI-derived schema Stripe's
 // real API enforces, so a wire-format defect that the scripted double could
@@ -63,5 +58,5 @@
 // account: a session completed by a real payer, a delivery actually signed
 // by Stripe's own servers, and Stripe's genuine error taxonomy on a live
 // account. Real verification against a live Stripe test-mode account has
-// not been performed as of the sandbox round.
+// not been performed.
 package stripe

@@ -1,9 +1,9 @@
--- authn's user record: the identity-domain root of this module (see
--- docs/internal/04-data-and-tenancy.md's data-domain table). It deliberately
--- carries NO tenant_id column: one person can belong to several tenants, so
--- scoping the person to one of them would make the "same human, two tenants"
--- case unrepresentable. Membership is a link-domain table owned by the org
--- module, and this module never reads or writes it directly.
+-- authn's user record: the identity-domain root of this module. It
+-- deliberately carries NO tenant_id column: one person can belong to
+-- several tenants, so scoping the person to one of them would make the
+-- "same human, two tenants" case unrepresentable. Membership is a
+-- link-domain table owned by the org module, and this module never reads or
+-- writes it directly.
 --
 -- email and phone are encrypted at rest by dbkit's encrypted serializer
 -- (authn.SerializerName), so the column holds ciphertext and no query can
@@ -23,10 +23,10 @@
 -- social-only or SSO-only account -- so a caller checks one column rather
 -- than distinguishing NULL from empty.
 --
--- Dual-dialect constraints (root CLAUDE.md): application-generated UUIDs, no
--- gen_random_uuid(), no NOW(), no native arrays, no JSONB filtering. The only
--- difference from the sqlite/ copy of this file is the ciphertext column
--- type, which has no single spelling both dialects accept.
+-- Dual-dialect constraints: application-generated UUIDs, no gen_random_uuid(),
+-- no NOW(), no native arrays, no JSONB filtering. The only cross-dialect
+-- difference in this file is the ciphertext column type, which has no single
+-- spelling both dialects accept.
 CREATE TABLE users (
     id             VARCHAR(36)  NOT NULL,
     email          BYTEA,

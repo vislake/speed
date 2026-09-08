@@ -6,14 +6,13 @@ import "github.com/vislake/speed/go/pkgcore"
 // <module>.<entity>.<action> convention.
 const (
 	// EventPlanChanged is published whenever a Plan's Grants change --
-	// created, updated or deleted -- so that any later consumer holding
-	// its own cached view of a Plan's grants can invalidate it, matching
-	// docs/internal/06-billing-and-metering.md's rule that entitlement
-	// changes take effect immediately, broadcast over the event bus. This
-	// round's own Entitlements.Check needs no such
-	// cache (it loads the Plan fresh on every call -- see Subscription's
-	// own doc comment), so nothing in this module subscribes to its own
-	// event; it exists for future consumers.
+	// created, updated or deleted -- so that any consumer holding its own
+	// cached view of a Plan's grants can invalidate it: entitlement
+	// changes take effect immediately, broadcast over the event bus.
+	// Entitlements.Check itself needs no such cache (it loads the Plan
+	// fresh on every call -- see Subscription's own doc comment), so
+	// nothing in this module subscribes to its own event; the event
+	// exists for out-of-module consumers.
 	EventPlanChanged = "billing.plan.changed"
 
 	// EventSubscriptionStatusChanged is published on every Subscription

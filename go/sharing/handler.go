@@ -36,9 +36,9 @@ const octetStreamContentType = "application/octet-stream"
 // constants are already excepted from elsewhere in this codebase.
 const HeaderSharePassword = "X-Sharing-Password"
 
-// Handler serves every one of sharing's HTTP operations -- the one public
-// access route (round 2) and the five owner-facing operations (round 3, PathShares)
-// -- by implementing the spec-generated api.ServerInterface
+// Handler serves every one of sharing's HTTP operations -- the public
+// access route (PathAccess) and the five owner-facing operations
+// (PathShares) -- by implementing the spec-generated api.ServerInterface
 // (api/sharing-server.gen.go, regenerated from this module's
 // api/openapi.yaml by task api:gen -- the compile-time assertion at the
 // bottom of this file is what makes "spec changed, handler not" a compile
@@ -97,9 +97,10 @@ type Handler struct {
 // the spec-generated parameter binder itself rejects -- a missing or
 // malformed token query parameter, a duplicated X-Sharing-Password header
 // -- and that path returns before SharingAccessShare, the method that sets
-// Cache-Control: no-store, ever runs. AGENTS.md's "Revocation and caching"
-// section is explicit that EVERY response the access route can produce must
-// carry that header, so NewHandler instead calls api.HandlerWithOptions
+// Cache-Control: no-store, ever runs. EVERY response the access route can
+// produce must carry that header -- revocation and a spent view must reach
+// the viewer's next fetch, never a cached copy -- so NewHandler instead
+// calls api.HandlerWithOptions
 // with a custom ErrorHandlerFunc (bindingErrorHandler below) that sets the
 // header and writes the module's own SharingError envelope itself. This
 // same ErrorHandlerFunc also runs for a PathShares binding failure (a
@@ -150,8 +151,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // spend, and a view is spent ONLY once the share's content has actually
 // reached the viewer -- the reserve/confirm/refund shape go/billing's
 // credits ledger and go/storage's transfer lifecycle establish in this
-// codebase (AGENTS.md's "Serving an access" section has the full
-// two-directions reasoning):
+// codebase. The two directions it must hold in both ways: bytes not
+// delivered never spend the view, and bytes delivered are never given
+// away unspent (service.go's viewReservationTimeout doc comment carries
+// the full reasoning):
 //
 //  1. authorizePublicAccess runs the prelude's per-IP rate-limit check
 //     and token-to-tenant lookup, then every one of Access's own refusal
@@ -177,8 +180,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //     through REFUNDS the reservation (refundAccessView -- no view
 //     consumed, so the share keeps every view it had) and settles the
 //     attempt as DENIED (settleAccessDenied): the visitor never got the
-//     content, and the log says refused -- the same honesty ee20d37
-//     established, preserved under the reservation shape.
+//     content, and the log says refused.
 //  4. Only after the body has been fully copied is the reservation
 //     resolved into a spent view: a limited share's serve is CONFIRMED
 //     (confirmAccessView -- the reserved view becomes a counted view and
@@ -193,9 +195,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Cache-Control: no-store is set FIRST, before any other work, so every
 // response this method can possibly produce -- including one that panics
 // partway through resolving the resource, which recovers to nothing more
-// specific than a connection reset -- carries it. This is the one
-// behavior AGENTS.md's "Revocation and caching" section names as a binding
-// obligation on whichever round adds this route.
+// specific than a connection reset -- carries it. This is the route-level
+// half of the module's no-caching rule: revocation and a spent view must
+// reach the viewer's very next fetch, never a cached page (model.go's
+// RevokedAt field comment).
 func (h *Handler) SharingAccessShare(w http.ResponseWriter, r *http.Request, params api.SharingAccessShareParams) {
 	w.Header().Set("Cache-Control", "no-store")
 	ctx := r.Context()
@@ -217,8 +220,9 @@ func (h *Handler) SharingAccessShare(w http.ResponseWriter, r *http.Request, par
 	// The settles below can run after the response has been committed -- and
 	// an interrupted stream is exactly the case where the client is already
 	// gone, which is when net/http cancels the request context. A canceled
-	// context would cancel the very log write rule 4 exists to guarantee, so
-	// the settles run on a context that survives the request.
+	// context would cancel the very log write the module's mandatory
+	// every-access-is-logged rule exists to guarantee, so the settles run on
+	// a context that survives the request.
 	settleCtx := context.WithoutCancel(ctx)
 
 	// Step 2: reserve the view of a MaxViews-limited share BEFORE any
@@ -259,9 +263,9 @@ func (h *Handler) SharingAccessShare(w http.ResponseWriter, r *http.Request, par
 		// Authorized, but nothing can serve this share's content: settle the
 		// attempt as denied -- the share keeps every view it had -- and
 		// answer the distinct 502. A settle failure means the refusal left
-		// no trail: answer the internal error rule 4 demands instead, the
-		// same way Service.Access refuses rather than answering when its own
-		// denied row cannot be written.
+		// no trail: answer the internal error instead, the same way
+		// Service.Access refuses rather than answering when its own denied
+		// row cannot be written.
 		if settleErr := refundAndSettleDenied(); settleErr != nil {
 			writeError(w, settleErr)
 			return
@@ -566,7 +570,6 @@ func writeError(w http.ResponseWriter, err error) {
 
 // compile-time check that *Handler implements the api.ServerInterface
 // generated from this module's api/openapi.yaml -- the enforcement half of
-// the spec-first flow (docs/internal/21-api-contract.md): add an operation
-// to the fragment, regenerate, and this assertion stops compiling until
-// Handler implements it.
+// the spec-first flow: add an operation to the fragment, regenerate, and
+// this assertion stops compiling until Handler implements it.
 var _ api.ServerInterface = (*Handler)(nil)

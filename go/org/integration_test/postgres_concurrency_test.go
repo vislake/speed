@@ -12,14 +12,13 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// This file is org's PostgreSQL proof for D1 (org-rbac P1-3), D2 (P1-4) and
-// D5 (P3) -- the module's own unit tier's tree_test.go carries the SQLite
-// forms of these same three concurrency regression tests (each with a
-// deterministic-window disclaimer in its own doc comment); this file exists
-// specifically because those tests' own honesty notes say a SQLite proof
-// alone cannot exercise PostgreSQL's real READ COMMITTED window, and this
-// module's PG tier already exists (postgres_tree_test.go) for exactly this
-// kind of proof. Each test races two operations many times against a real
+// This file is org's PostgreSQL proof for the tree's three concurrent-write
+// hazard classes -- a child landing under a soft-deleted parent, a moved
+// subtree whose Path and ParentID chain disagree, and a restored node left
+// under a parent that ends up dead -- the module's own unit tier's
+// tree_test.go carries the SQLite forms of these same concurrency
+// regression tests; this file exists because a SQLite proof alone cannot
+// exercise PostgreSQL's real READ COMMITTED window. Each test races two operations many times against a real
 // PostgreSQL 16 server and re-checks the tree's structural invariant after
 // every round through assertTreeInvariant -- deliberately the ONLY
 // assertion each one makes, for the same reason the unit tier's own
@@ -30,7 +29,7 @@ import (
 // signal. The invariant itself -- a live node's ParentID names another live
 // node, and its Path is exactly that parent's with its own id appended -- is
 // what actually distinguishes a merely-surprising outcome from the genuine
-// corruption these findings name.
+// corruption these hazard classes name.
 func assertTreeInvariant(t *testing.T, tree *org.TreeService, ctx context.Context, label string) {
 	t.Helper()
 	root, err := tree.Root(ctx)
@@ -187,7 +186,7 @@ func TestConcurrentRestoreAndCascadeDelete_NeverLandsOnADeadParent_Postgres(t *t
 	}
 }
 
-// TestConcurrentMoveAndCreateChild_TreeInvariantHolds_Postgres is D2's
+// TestConcurrentMoveAndCreateChild_TreeInvariantHolds_Postgres is the
 // second required pairing (see the unit tier's identically-named test's own
 // doc comment): a concurrent CreateChild targeting the exact node another
 // goroutine is Move-ing.
@@ -232,11 +231,11 @@ func TestConcurrentMoveAndCreateChild_TreeInvariantHolds_Postgres(t *testing.T) 
 }
 
 // TestConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvariantHolds_Postgres
-// is the peer-review finding that TestConcurrentMoveAndCreateChild_TreeInvariantHolds_Postgres
-// above never actually covered: that test's CreateChild targets the exact
+// is the interior-descendant pairing that TestConcurrentMoveAndCreateChild_TreeInvariantHolds_Postgres
+// above never actually covers: that test's CreateChild targets the exact
 // node being Moved (a.ID), a row Move already locks via lockLiveNode -- never
 // an INTERIOR DESCENDANT of the moved subtree (a-child), a row Move's
-// rewrite used to touch only through its own plain, unlocked subtree scan.
+// rewrite would touch only through its own plain, unlocked subtree scan.
 // This is the tier that actually caught the bug: a real PostgreSQL server's
 // READ COMMITTED semantics let CreateChild's insert land, and commit,
 // entirely within the gap between Move's scan and that scan's later
@@ -290,7 +289,7 @@ func TestConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvariantHolds_Post
 	}
 }
 
-// TestConcurrentMoveAndDelete_TreeInvariantHolds_Postgres is D2's third
+// TestConcurrentMoveAndDelete_TreeInvariantHolds_Postgres is the third
 // required pairing: Move racing a cascade Delete of the node it is moving.
 func TestConcurrentMoveAndDelete_TreeInvariantHolds_Postgres(t *testing.T) {
 	db := newPostgres(t)

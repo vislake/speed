@@ -19,9 +19,8 @@ import (
 //
 // Applying the module's actual migration files, rather than an AutoMigrate
 // or a hand-written CREATE TABLE, is what makes every test that uses this
-// helper also a proof that those files run from zero -- the property the
-// pre-commit checklist asks for and that AutoMigrate is banned for not
-// providing.
+// helper also a proof that those files run from zero -- the property
+// AutoMigrate is banned for not providing.
 func NewSQLite(t *testing.T, moduleName string, fs embed.FS) *gorm.DB {
 	t.Helper()
 	db := dbtest.NewSQLite(t)

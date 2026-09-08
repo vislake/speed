@@ -2,9 +2,9 @@
  * Canonical language codes and the negotiation chain that picks a start
  * language for a new i18n instance.
  *
- * The chain (priority order, mirroring docs/internal/11-cross-cutting.md's
- * frontend rules): URL parameter, manually persisted choice, the signed-in
- * user's profile locale, navigator languages, then the default language.
+ * The chain, in priority order: URL parameter, manually persisted choice,
+ * the signed-in user's profile locale, navigator languages, then the
+ * default language.
  * Every source that matches no supported language is skipped; the default
  * language wins only when every source misses, and the default is always a
  * member of the supported set -- an unknown language never selects anything
@@ -18,7 +18,7 @@
  * exactly what the bare tag names).
  */
 
-/** The canonical language tags the platform ships. zh-CN + en-US in M0. */
+/** The canonical language tags the platform ships. */
 export const DEFAULT_SUPPORTED_LANGUAGES = ['zh-CN', 'en-US'] as const
 
 /** Negotiation default: an unknown language resolves to zh-CN, never silently to English. */

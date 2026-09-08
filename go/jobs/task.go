@@ -23,9 +23,8 @@ type Task struct {
 	// legitimately called from contexts with no single ambient tenant — a
 	// platform-level scheduler enqueuing one cleanup Task per tenant in a
 	// loop, for example — mirroring pkgcore.Event.TenantID's identical
-	// reasoning. It must be non-empty: per
-	// docs/internal/07-platform-services.md, every Task must carry a
-	// tenant, and Enqueue rejects one that does not (ErrInvalidTask).
+	// reasoning. It must be non-empty: every Task must carry a tenant, and
+	// Enqueue rejects one that does not (ErrInvalidTask).
 	TenantID pkgcore.TenantID
 
 	// Payload is this Task's opaque input, already serialized by the
@@ -39,14 +38,13 @@ type Task struct {
 	// the Job (the owning tenant's own code, or a system context) and by
 	// the Handler on every attempt. Never put credentials, bearer tokens
 	// or personal data here: this package cannot tell a secret from
-	// harmless bytes and will store either without complaint. The
-	// precedent is real -- go/admin's audit-export job once carried a
-	// one-time sharing delivery token in a job result (the P1-B finding,
-	// since fixed) before review caught it: a token that must be usable
-	// exactly once is a credential, and a credential at rest in a job
-	// record is exactly the leak this warning exists to prevent. Wherever
-	// the data is sensitive, Payload should carry a reference to it (an
-	// id, an object key), not the data itself.
+	// harmless bytes and will store either without complaint. A token
+	// that must be usable exactly once is a credential, and a credential
+	// at rest in a job record is the leak this warning exists to prevent
+	// -- the reason go/admin's audit-export job result carries the
+	// share's facts (id and expiry), never the one-time sharing delivery
+	// token. Wherever the data is sensitive, Payload should carry a
+	// reference to it (an id, an object key), not the data itself.
 	Payload []byte
 
 	// IdempotencyKey, when non-empty, makes Enqueue idempotent: a second
@@ -56,15 +54,14 @@ type Task struct {
 	// for as long as the first Job's record lives. On StandaloneQueue that
 	// lifetime is unconditional: the row is never deleted, so the dedupe
 	// holds forever, regardless of what that first Job's outcome was,
-	// including a StatusDeadLetter one (see AGENTS.md for why this is
-	// unconditional rather than conditioned on the existing Job's outcome).
-	// On the asynq-backed Queue the record's lifetime is bounded by asynq's
-	// own retention and eviction windows, so a duplicate Enqueue arriving
-	// after the first Job's record has expired creates a NEW, independent
-	// Job instead of returning the original's id — the two implementations'
-	// dedupe answers agree while the first Job's record exists and differ
-	// only after it is gone (AGENTS.md's "Idempotency" section states the
-	// exact windows). One consequence a caller must design around: a key
+	// including a StatusDeadLetter one. On the asynq-backed Queue the
+	// record's lifetime is bounded by asynq's own retention and eviction
+	// windows, so a duplicate Enqueue arriving after the first Job's record
+	// has expired creates a NEW, independent Job instead of returning the
+	// original's id — the two implementations' dedupe answers agree while
+	// the first Job's record exists and differ only after it is gone (the
+	// asynq windows are its own retention and archive-eviction settings).
+	// One consequence a caller must design around: a key
 	// names ONE business-operation instance, so a task whose operation
 	// repeats over time — a periodic sweep, say — must scope its key to the
 	// period it is for (the storage and compliance sweep keys carry their
@@ -72,11 +69,10 @@ type Task struct {
 	// duplicates of one run will instead collapse every later run into the
 	// first-ever one.
 	//
-	// "Derived from the business operation", the phrase this field's
-	// AGENTS.md example uses, means deterministic — a replay of the same
-	// operation reproduces the key, which is what lets a duplicate
-	// Enqueue dedupe onto the first Job's id. It says nothing about
-	// secrecy, and unlike Payload and Result — whose do-not-put-
+	// "Derived from the business operation" means deterministic — a replay
+	// of the same operation reproduces the key, which is what lets a
+	// duplicate Enqueue dedupe onto the first Job's id. It says nothing
+	// about secrecy, and unlike Payload and Result — whose do-not-put-
 	// credentials warnings this one mirrors — the key is not opaque
 	// bytes: the asynq-backed Queue composes it verbatim into its
 	// deterministic TaskID ("idem:" + tenantID + ":" + key), which IS
@@ -90,8 +86,8 @@ type Task struct {
 	// can recognize it for removal — go/observability's value-shape net
 	// catches credential shapes, never PII, and job_id is exempt from
 	// even that scan so log lines stay joinable. Build the key from
-	// the operation's own opaque identifiers, exactly as the AGENTS.md
-	// example shows; where the
+	// the operation's own opaque identifiers, never from PII-bearing
+	// text; where the
 	// operation's only natural identity is a PII-bearing value (an
 	// invite addressed to an email, say), hash that value into the key
 	// rather than embedding it.

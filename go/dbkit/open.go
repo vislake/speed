@@ -72,12 +72,11 @@ type Options struct {
 	// AuditBus, when non-nil, installs dbkit's automatic write-capture
 	// plugin (audit_capture.go): every Create, Update or Delete against a
 	// model implementing Auditable publishes a WriteCapturedEvent on it.
-	// The zero value, nil, is what every call site that existed before this
-	// field did — and still does when it does not opt in — so leaving it
-	// unset installs no capture at all, exactly as before. A real host
-	// wires reg.EventBus() here once the audit persister module
-	// (go/dbkit/audit) is part of its module set; see that package's
-	// AGENTS.md for the end-to-end wiring.
+	// The zero value, nil, installs no capture at all: the option is
+	// additive, and a call site that does not set it gets a connection
+	// with no write-capture plugin. A host wires reg.EventBus() here, with
+	// the audit persister module (go/dbkit/audit) in its module set, and
+	// the same bus handed to Kernel.Bootstrap.
 	AuditBus pkgcore.EventBus
 
 	// AuditModels, when non-empty, restricts the write-capture plugin to
@@ -87,9 +86,9 @@ type Options struct {
 	// top: a listed entry whose type does not implement Auditable is
 	// refused here, at Open, with a named error — never silently skipped,
 	// since a capture scope that quietly misses a model is exactly the
-	// silent audit gap this option exists to prevent. nil or empty (every
-	// call site that predates this field) keeps the original semantics:
-	// every Auditable model written through this connection is captured.
+	// silent audit gap this option exists to prevent. nil or empty keeps
+	// the default scope: every Auditable model written through this
+	// connection is captured.
 	//
 	// The option exists for a host that wires AuditBus on a connection
 	// several modules share: capture is per-model and per-connection, so a
@@ -135,13 +134,14 @@ func Open(ctx context.Context, opts Options) (*gorm.DB, error) {
 	}
 
 	db, err := gorm.Open(dialector, &gorm.Config{
-		// dbkit cannot depend on the observability module (see the module
-		// boundary rule in AGENTS.md), so it cannot route GORM's own SQL
-		// logging through the structured logger the rest of the codebase
-		// uses. Silencing it here, rather than letting GORM print to
-		// stdout, keeps dbkit from emitting unstructured log lines on its
-		// own; a caller who wants a query log takes it from the returned
-		// error and logs that through its own context logger instead.
+		// dbkit cannot depend on the observability module (the dependency
+		// graph runs pkgcore -> dbkit / observability -> ..., so importing
+		// it would be a cycle), and so cannot route GORM's own SQL logging
+		// through the structured logger the rest of the codebase uses.
+		// Silencing it here, rather than letting GORM print to stdout,
+		// keeps dbkit from emitting unstructured log lines on its own; a
+		// caller who wants a query log takes it from the returned error
+		// and logs that through its own context logger instead.
 		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
 		// Both drivers implement gorm.ErrorTranslator, so this lets callers
 		// (in particular Repository[T]) match driver-agnostic sentinels
@@ -199,10 +199,10 @@ func Open(ctx context.Context, opts Options) (*gorm.DB, error) {
 var dialectMu sync.RWMutex
 
 // dialectRegistry maps a Dialect to the factory that builds its
-// gorm.Dialector from a DSN. It starts empty: dbkit's own go.mod no longer
-// imports either driver directly (see "One dependency, and why there is
-// only one" in AGENTS.md), so a driver is only registered when its
-// dbkit/dialect subpackage is blank-imported.
+// gorm.Dialector from a DSN. It starts empty: dbkit's own go.mod imports
+// neither driver directly (each lives in its own dbkit/dialect
+// subpackage), so a driver is only registered when its subpackage is
+// blank-imported.
 var dialectRegistry = map[Dialect]func(dsn string) gorm.Dialector{}
 
 // RegisterDialect registers factory as the gorm.Dialector builder for

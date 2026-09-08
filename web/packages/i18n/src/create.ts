@@ -44,8 +44,8 @@ import { missingKeyHandlerFactory, type MissingKeyDetails } from './missing-key.
 export interface CreateI18nOptions {
   /**
    * Canonical tags the instance may speak. Defaults to
-   * DEFAULT_SUPPORTED_LANGUAGES (zh-CN, en-US). Every later registration
-   * must cover this whole set, so keep it in lockstep with the language
+   * DEFAULT_SUPPORTED_LANGUAGES (zh-CN, en-US). Every registration must
+   * cover this whole set, so keep it in lockstep with the language
    * resources the platform actually ships. Entries must already be in the
    * package's canonical spelling (hyphen-separated, trimmed; see
    * normalizeLanguageTag) -- creation refuses anything else, naming the
@@ -81,8 +81,7 @@ export interface CreateI18nOptions {
   readonly storageKey?: string
   /**
    * Signed-in user's profile locale, resolved by the host before instance
-   * creation. M0 has no profile feature yet: this is the documented
-   * extension point the M1 user-profile step feeds -- hosts that can
+   * creation. The platform ships no profile feature yet: hosts that can
    * resolve a profile locale pass it here and it outranks the browser
    * (the URL parameter and a persisted manual choice still outrank it,
    * in the negotiation chain's order). When the profile resolves only

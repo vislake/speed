@@ -15,14 +15,12 @@ below is a self-contained snippet with no github.com/vislake/speed/...
 imports, so `go mod tidy`/`go build` resolve against nothing but the
 standard library.
 
-Regression coverage: two real documentation bugs this script's own first
-run against the live repository found and fixed (go/dbkit/AGENTS.md and
-go/admin/AGENTS.md each used a bare `...` as an "elided code" placeholder
-in a position where Go's grammar requires a real token) are reproduced
-directly as test_ellipsis_placeholder_in_statement_position_is_a_violation
-and test_ellipsis_placeholder_in_call_position_is_a_violation: both fail
-under every wrapping strategy before the fix and would be caught by any
-future regression of the same shape.
+Regression coverage: a bare `...` used as an "elided code" placeholder
+in a position where Go's grammar requires a real token must be a
+violation under every wrapping strategy -- the shape reproduced by
+test_ellipsis_placeholder_in_statement_position_is_a_violation and
+test_ellipsis_placeholder_in_call_position_is_a_violation, so a
+regression of the same shape fails the suite.
 """
 
 from __future__ import annotations
@@ -224,10 +222,9 @@ class CheckFragmentTests(unittest.TestCase):
         self.assertEqual(strategy, "top-level")
 
     def test_ellipsis_placeholder_in_statement_position_is_a_violation(self):
-        # Regression test for the real go/dbkit/AGENTS.md bug this script's
-        # first run against the live repo found: a bare `...` standing in
-        # for "handle it" inside a block is not valid Go anywhere a
-        # statement is expected, and must fail every wrapping.
+        # A bare `...` standing in for "handle it" inside a block is not
+        # valid Go anywhere a statement is expected, and must fail every
+        # wrapping.
         body = (
             "if err := db.Where(cond).First(&got).Error; err != nil { ... }"
         )
@@ -237,10 +234,9 @@ class CheckFragmentTests(unittest.TestCase):
         self.assertTrue(err)
 
     def test_ellipsis_placeholder_in_call_position_is_a_violation(self):
-        # Regression test for the real go/admin/AGENTS.md bug: a bare `...`
-        # standing in for "more arguments here" after a comma inside a call
-        # is not valid Go (variadic `...` must follow an actual expression,
-        # e.g. `slice...`, never a bare comma).
+        # A bare `...` standing in for "more arguments here" after a comma
+        # inside a call is not valid Go (variadic `...` must follow an
+        # actual expression, e.g. `slice...`, never a bare comma).
         body = "tenancy.Middleware(authn.NewPrincipalResolver(), ...)(mux)"
         ok, strategy, err = m.check_fragment(self.gofmt, body)
         self.assertFalse(ok)

@@ -134,8 +134,8 @@ func Example() {
 	// read: dbkit.record_not_found
 }
 
-// ExampleObjectService drives the transfer lifecycle the service round ships
-// end to end, the way a host would: open and migrate the module's tables,
+// ExampleObjectService drives the transfer lifecycle the service ships end
+// to end, the way a host would: open and migrate the module's tables,
 // construct the module with the queue Register requires, and bootstrap it
 // through the real kernel so the service's host seams -- the object store the
 // standalone deployment mode resolves -- are the real ones, not hand-wired

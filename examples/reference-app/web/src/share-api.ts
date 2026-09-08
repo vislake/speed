@@ -3,10 +3,10 @@
  * surface: the two paths and the one typed call the block-C surfaces
  * need. go/sharing's OpenAPI fragment ships a backend leg only -- it is
  * deliberately not part of the merged application document that drives
- * @speed/api-sdk (go/sharing/AGENTS.md's own note), so no generated
- * operation exists for either route and the app reaches them through
- * the api-client RequestFn the host bound, the same seam every
- * generated call travels. The path literals are hand-kept in step with
+ * @speed/api-sdk, so no generated operation exists for either route and
+ * the app reaches them through the api-client RequestFn the host bound,
+ * the same seam every generated call travels. The path literals are
+ * hand-kept in step with
  * the module's own exported Go constants (sharing.PathShares and
  * sharing.PathAccess, go/sharing/module.go) exactly as @speed/api-client's
  * config fetchers hand-keep the two pre-auth config paths -- the

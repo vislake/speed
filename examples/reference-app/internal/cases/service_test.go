@@ -37,7 +37,7 @@ func assertCode(t *testing.T, err error, code string) {
 	}
 }
 
-// TestService_CreateAndGet_RoundTrip drives the shape the P3 UI's create
+// TestService_CreateAndGet_RoundTrip drives the shape the case web UI's create
 // and detail views need end to end at service level: a create's input
 // comes back trimmed and echoed on the case (so the create answer and a
 // later detail read can never disagree), photos keep their request order
@@ -207,7 +207,7 @@ func TestService_Create_Validation(t *testing.T) {
 	})
 }
 
-// TestService_Create_PhotoObjectIDTrimmedAndBounded pins the P2-11
+// TestService_Create_PhotoObjectIDTrimmedAndBounded pins the
 // normalization of a photo object id BEFORE the uniqueness checks run:
 // the trimmed spelling is the only spelling that reaches the duplicate
 // check, the already-attached pre-flight or a written row, so two
@@ -215,7 +215,7 @@ func TestService_Create_Validation(t *testing.T) {
 // uq_case_photos_tenant_object invariant -- and an id longer than the
 // object_id column can hold is refused with its own coded error rather
 // than silently stored in full under SQLite (which enforces no VARCHAR
-// length limit at all). Failing before the fix: the padded duplicate was
+// length limit at all). An untrimmed padded duplicate would be
 // accepted as two distinct values, a padded re-attachment of an attached
 // object was accepted as a distinct key, and an over-long id was stored.
 func TestService_Create_PhotoObjectIDTrimmedAndBounded(t *testing.T) {
@@ -280,7 +280,7 @@ func TestService_Create_PhotoObjectIDTrimmedAndBounded(t *testing.T) {
 		// objectIDLimit is photoObjectIDMaxLength's value (and the
 		// casePhotoRecord.ObjectID column's declared size on both
 		// dialects): a local literal rather than the package constant, so
-		// this test also compiles and fails against the pre-fix service
+		// this test also compiles and fails against a service that
 		// (which defined neither). Changing the limit without changing
 		// this literal fails the boundary case below, the same drift alarm
 		// the constant's own doc comment serves.
@@ -300,7 +300,7 @@ func TestService_Create_PhotoObjectIDTrimmedAndBounded(t *testing.T) {
 		})
 		// The code literal rather than ErrPhotoObjectIDTooLong.Code: the
 		// error's exported var is itself the fix, so this test must still
-		// compile (and fail) against the pre-fix service, which defines
+		// compile (and fail) against a service that defines
 		// neither.
 		assertCode(t, err, "cases.photo_object_id_too_long")
 	})

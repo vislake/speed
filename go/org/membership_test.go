@@ -25,10 +25,8 @@ func seedMembership(t *testing.T, repo *MembershipRepository, ctx context.Contex
 // suite against memberships.
 //
 // AssertIsolated, not AssertNotTenantScoped, and the distinction is worth
-// stating because it is the one a reviewer is most likely to "correct":
-// memberships are LINK data, and docs/internal/04-data-and-tenancy.md
-// classifies link data as tenant-scoped and makes this suite mandatory for
-// it. The neighbouring users table is identity data and is deliberately NOT
+// stating explicitly: memberships are LINK data, and link data is
+// tenant-scoped with this suite mandatory for it. The neighbouring users table is identity data and is deliberately NOT
 // tenant-scoped -- one person belongs to several tenants -- which is exactly
 // why the bridging row must be: it is the per-tenant half of that
 // relationship, and a membership readable across tenants would expose one
@@ -426,11 +424,11 @@ func TestMemberService_NoTenantContext_EveryOperationFailsClosed(t *testing.T) {
 	}
 }
 
-// TestMemberService_Remove_ThenAdd_SameUser_Succeeds is the round's own proof
+// TestMemberService_Remove_ThenAdd_SameUser_Succeeds is the proof
 // that uq_memberships_tenant_user's replacement by its WHERE deleted_at IS
 // NULL partial-index equivalent
 // (migrations/{sqlite,postgres}/0004_add_soft_delete.sql) actually frees a
-// removed member's seat for reuse. Against the pre-round full unique index
+// removed member's seat for reuse. Against a full unique index
 // this Add would fail with ErrMembershipExists -- a real functional
 // regression the migration exists to avoid.
 func TestMemberService_Remove_ThenAdd_SameUser_Succeeds(t *testing.T) {
@@ -462,7 +460,7 @@ func TestMemberService_Remove_ThenAdd_SameUser_Succeeds(t *testing.T) {
 	}
 
 	// The seat is still exclusive among LIVE rows: a second Add for the same
-	// user is still refused, exactly as before this round.
+	// user is still refused.
 	if _, err := m.Members().Add(ctx, "u-returning", left.ID); !hasCode(err, ErrMembershipExists.Code) {
 		t.Errorf("second live Add error = %v, want org.membership_exists", err)
 	}
@@ -578,34 +576,30 @@ func TestMemberService_Restore_Twice_SecondCallReturnsMembershipNotFound(t *test
 	}
 }
 
-// TestMemberService_Remove_ConcurrentLastTwoActiveMembers is the D3 (org-rbac
-// P1-5) regression test: a tenant with EXACTLY two active members, both
-// removed by two goroutines started as close together as sync.WaitGroup can
-// arrange, over the real repository against a real, file-backed SQLite
-// database (newTestModule -- two goroutines genuinely get two separate
-// pooled connections to the same file, so this is real concurrency, not a
-// simulated interleaving).
+// TestMemberService_Remove_ConcurrentLastTwoActiveMembers is the
+// last-two-active-members regression test: a tenant with EXACTLY two active
+// members, both removed by two goroutines started as close together as
+// sync.WaitGroup can arrange, over the real repository against a real,
+// file-backed SQLite database (newTestModule -- two goroutines genuinely
+// get two separate pooled connections to the same file, so this is real
+// concurrency, not a simulated interleaving).
 //
-// On the pre-fix code (activeSample(ctx, 2) read, then a separate Delete
-// call, two independent transactions) this reproduces the bug this finding
-// names -- both Removes observe "2 active members" before either commits its
-// own delete, both proceed, and the tenant ends with ZERO active members,
-// permanently unrecoverable, since inviting requires an authenticated member
-// and signing in requires active membership -- roughly one trial in five
-// (measured empirically against the pre-fix shape while writing this test:
-// 64 of 300 single-pair trials), not on every single attempt: the window is
-// real but narrow at the timescale of two goroutines racing a fast local
-// SQLite file. A single pair of goroutines is therefore not a reliable RED
-// signal on its own, so this test repeats the pair trialAttempts times --
-// chosen so the pre-fix code's measured per-trial reproduction rate makes
-// the chance of a false-negative run (every single attempt missing the
-// window) astronomically small (roughly (1-0.2)^50) -- and fails the whole
-// test the moment ANY attempt shows the forbidden outcome (both succeeding,
-// or the tenant ever dropping to zero active members). On the fixed code
-// (MembershipRepository.removeIfNotLastActive, one database-arbitrated
-// transaction per Remove) that forbidden outcome must never occur, in any
-// of the trialAttempts attempts: exactly one goroutine succeeds and the
-// other is refused with ErrMemberNotRemovable every single time.
+// If Remove ran as an activeSample(ctx, 2) read followed by a separate
+// Delete call in two independent transactions, two concurrent Removes would
+// both observe "2 active members" before either commits its own delete,
+// both proceed, and the tenant would end with ZERO active members,
+// permanently unrecoverable, since inviting requires an authenticated
+// member and signing in requires active membership. The window is real but
+// narrow at the timescale of two goroutines racing a fast local SQLite
+// file, so a single pair of goroutines is not a reliable signal on its
+// own; this test therefore repeats the pair trialAttempts times and fails
+// the whole test the moment ANY attempt shows the forbidden outcome (both
+// succeeding, or the tenant ever dropping to zero active members). On the
+// fixed shape (MembershipRepository.removeIfNotLastActive, one
+// database-arbitrated transaction per Remove) that forbidden outcome must
+// never occur, in any of the trialAttempts attempts: exactly one goroutine
+// succeeds and the other is refused with ErrMemberNotRemovable every single
+// time.
 func TestMemberService_Remove_ConcurrentLastTwoActiveMembers(t *testing.T) {
 	const trialAttempts = 50
 	for attempt := 0; attempt < trialAttempts; attempt++ {
@@ -711,13 +705,13 @@ func TestMemberService_Remove_ConcurrentDistinctUsers_BothSucceed(t *testing.T) 
 	}
 }
 
-// TestMemberService_Restore_SeatReused_AnswersMembershipExists is the P2-7
-// regression proof: the partial unique index on (tenant_id, user_id) WHERE
+// TestMemberService_Restore_SeatReused_AnswersMembershipExists is the
+// seat-reuse regression proof: the partial unique index on (tenant_id, user_id) WHERE
 // deleted_at IS NULL (0004_add_soft_delete.sql) deliberately lets a removed
 // member's seat be taken by a fresh Add -- the whole point of narrowing the
 // index. Restoring the ORIGINAL, soft-deleted membership row then collides
-// with the live replacement at the database, and MemberService.Restore used
-// to surface that collision as a bare gorm.ErrDuplicatedKey. The database's
+// with the live replacement at the database, and MemberService.Restore would
+// otherwise surface that collision as a bare gorm.ErrDuplicatedKey. The database's
 // own arbitration is the backstop of the module's "one seat per person per
 // tenant" rule, so the collision must answer the same coded
 // org.membership_exists Add itself answers when the seat is taken.
@@ -758,14 +752,14 @@ func TestMemberService_Restore_SeatReused_AnswersMembershipExists(t *testing.T) 
 	}
 }
 
-// TestMemberService_Remove_DoesNotTouchOtherMembersUpdatedAt is the P3-9
+// TestMemberService_Remove_DoesNotTouchOtherMembersUpdatedAt is the
 // regression proof on the roster side: removeIfNotLastActive's first write
 // is a blind bulk touch-lock of every currently-active membership row of the
 // tenant (the no-op UPDATE whose RowsAffected doubles as the active count) --
-// a lock, not a data change -- but GORM's autoUpdateTime machinery appended
+// a lock, not a data change -- but GORM's autoUpdateTime machinery appends
 // updated_at = now() to that UPDATE, so every Remove of an active member
-// used to rewrite the updated_at of every OTHER active member of the tenant
-// too, exactly the "membership removal dirties every row" the finding names.
+// would otherwise rewrite the updated_at of every OTHER active member of
+// the tenant too: "membership removal dirties every row".
 // The regression: removing one member leaves the untouched members' rows
 // byte-identical, updated_at included.
 func TestMemberService_Remove_DoesNotTouchOtherMembersUpdatedAt(t *testing.T) {

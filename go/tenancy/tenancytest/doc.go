@@ -1,9 +1,7 @@
 // Package tenancytest provides the mandatory isolation-assertion test suite
 // every other module is required to run against its own dbkit.Repository[T]
-// usage (backend coding standard §3.3 / §13, and
-// docs/internal/04-data-and-tenancy.md's data-domain table): AssertIsolated
-// for tenant data and link data, AssertNotTenantScoped for identity data and
-// platform data.
+// usage: AssertIsolated for tenant data and link data,
+// AssertNotTenantScoped for identity data and platform data.
 //
 // Both functions are reusable assertions built entirely on top of dbkit's
 // already-finished public API (dbkit.Repository[T], dbkit.TenantScoped,
@@ -29,8 +27,7 @@
 // package exists to catch before it ships: a tenant table missing isolation
 // is a horizontal-privilege-escalation vulnerability, and a genuinely global
 // table accidentally made tenant-scoped is data that "mysteriously
-// disappears" in production. See docs/internal/04-data-and-tenancy.md for
-// the full data-domain table and its rationale.
+// disappears" in production.
 //
 // # Test-database setup
 //

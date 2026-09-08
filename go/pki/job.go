@@ -37,10 +37,11 @@ const taskTypeExpiryScan = "pki.expiry_scan"
 //
 // The window must be significantly larger than the host's scheduler
 // interval, or every tick lands in a fresh window and the dedup is void.
-// The reference host (examples/reference-app's periodic scheduler) ticks
-// once a minute, so the one-hour default gives a 60:1 window-to-interval
-// ratio; a host whose own interval approaches the window must widen it
-// through WithExpiryScanWindow, never shrink the interval toward it.
+// The host that schedules this task (examples/reference-app's periodic
+// scheduler) ticks once a minute, leaving a 60:1 window-to-interval ratio
+// against this one-hour default; a host whose own interval approaches the
+// window must widen it through WithExpiryScanWindow, never shrink the
+// interval toward it.
 const DefaultExpiryScanWindow = time.Hour
 
 // expiryScanWindowStart is the expiry-scan window the enqueue at now
@@ -117,10 +118,10 @@ const platformScanTenantID = pkgcore.TenantID("_pki_platform_scan")
 // already advanced.
 //
 // A host is expected to call this on its own schedule (a cron trigger, a
-// periodic goroutine) -- per docs/internal/22-pki.md's "rotation" section,
-// this module drives the state machine but never schedules its own
-// execution; scheduling when a scan runs is host wiring, the same division
-// EnqueueExpirySweep's own doc comment draws for storage.
+// periodic goroutine): this module drives the state machine but never
+// schedules its own execution; scheduling when a scan runs is host wiring,
+// the same division EnqueueExpirySweep's own doc comment draws for
+// storage.
 //
 // A nil queue (Module constructed without WithQueue) makes this report a
 // plain error, the same "no queue wired" answer

@@ -76,7 +76,7 @@ import (
 // stripe-mock is Stripe's official mock HTTP server
 // (github.com/stripe/stripe-mock), published as the stripe/stripe-mock
 // image on Docker Hub; its tags track upstream's GitHub releases, and
-// v0.203.0 is the current upstream release as of this round (2026-09-08).
+// v0.203.0 is the pinned upstream release.
 // The tag is pinned rather than "latest" so a fixture or validator change
 // upstream cannot silently alter what this leg proves; a deliberate bump
 // re-verifies the assertions below against the new release's fixtures.

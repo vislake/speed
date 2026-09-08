@@ -32,12 +32,11 @@
 // build fails (local-directory replaces -- the transition-state and
 // local-checkout shape -- carry no version and are never pinned, so they
 // are untouched by this rule). Nothing here contacts a module proxy or a
-// registry -- until M4's first release nothing is published, so the target
-// version is a required --version argument, never discovered -- and the
-// version is validated with the same release-version form the release
-// pipeline itself enforces (internal/version). web/package.json rewrites
-// are frontend work and land with the frontend-scaffold round; this package
-// rewrites go.mod files only.
+// registry -- nothing has been published, so the target version is a
+// required --version argument, never discovered -- and the version is
+// validated with the same release-version form the release pipeline itself
+// enforces (internal/version). This package rewrites go.mod files only;
+// the web packages' lockstep requires are not rewritten here.
 package upgrade
 
 import (
@@ -81,8 +80,8 @@ Upgrading over either would report a clean lockstep move of a project that
 does not actually build the lockstep version. The go.mod argument names
 the project's go.mod file, defaulting to ./go.mod.
 
-Until the first release (M4) nothing is published, so the target version is
-never discovered: it is always the required --version flag, in the
+Nothing has been published yet, so the target version is never
+discovered: it is always the required --version flag, in the
 v<major>.<minor>.<patch>[-prerelease] form the release pipeline validates.
 
 Flags:

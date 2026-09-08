@@ -71,9 +71,9 @@ const tableIngestReceipts = "metering_ingest_receipts"
 // # This table exists only for the billing-grade tier
 //
 // AnalyticsRecorder keeps calling the plain Ingest, never
-// IngestBillingGrade -- see AnalyticsRecorder's own "No idempotency dedup
-// this round" doc comment for why paying for a durable seen-key ledger
-// contradicts that tier's cheap, in-memory, best-effort positioning. The
+// IngestBillingGrade -- see AnalyticsRecorder's own "No idempotency dedup"
+// doc comment for why paying for a durable seen-key ledger contradicts
+// that tier's cheap, in-memory, best-effort positioning. The
 // table only ever grows from billing-grade traffic Dispatcher delivers,
 // and its growth is bounded, not open-ended: Dispatcher's retention sweep
 // retires each receipt together with its delivered outbox row once the

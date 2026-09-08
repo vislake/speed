@@ -35,9 +35,9 @@ const (
 // model.go's FailureReasonBadPassword.
 const FailureReasonBadCode = "bad_code"
 
-// Verification-code purposes. Only one ships in this round; the column
-// exists so a second purpose (a future phone-based password reset, say)
-// reuses this table and this row shape rather than duplicating it -- see
+// Verification-code purposes. Only one purpose is implemented (phone
+// login); the column exists so a second purpose reuses this table and this
+// row shape rather than duplicating it -- see
 // migrations/sqlite/0007_create_verification_codes.sql.
 const (
 	// VerificationPurposePhoneLogin is a one-time code sent to sign in
@@ -240,7 +240,7 @@ type SMSLoginInput struct {
 // smsCodeRequestLatencyFloor is the minimum wall-clock duration
 // RequestSMSCode's per-number work (deliverSMSCode below) takes to answer,
 // regardless of which branch it took -- see RequestSMSCode's own doc
-// comment (the P2-4 fix) for why. A package-level var, not a const, purely
+// comment for why. A package-level var, not a const, purely
 // so a test can shrink it (and restore it via t.Cleanup) without paying
 // this floor's real cost on every other test in the suite.
 //
@@ -249,11 +249,12 @@ type SMSLoginInput struct {
 // an SMS gateway) plus the persisted VerificationCode row -- both of which
 // only the KNOWN-number branch pays and neither of which this floor can
 // know precisely for an arbitrary deployment's own gateway. It closes the
-// SYSTEMATIC gap that made rotate-IP enumeration practical (an unknown
-// number used to answer in microseconds against a known number's
-// milliseconds), not every possible timing correlation: a real gateway's
-// own tail latency, still visible above this floor, is a residual this
-// constant does not and cannot erase.
+// SYSTEMATIC timing gap between the two branches (an unknown number's
+// answer is microseconds against a known number's milliseconds), which is
+// the difference an attacker rotating IPs would otherwise probe; it does
+// not close every possible timing correlation: a real gateway's own tail
+// latency, still visible above this floor, is a residual this constant
+// does not and cannot erase.
 var smsCodeRequestLatencyFloor = 150 * time.Millisecond
 
 // RequestSMSCode issues and delivers a one-time sign-in code for an
@@ -268,9 +269,9 @@ var smsCodeRequestLatencyFloor = 150 * time.Millisecond
 // CLOCK TIME to answer must not distinguish them either: a known number's
 // real work (a persisted VerificationCode row plus one real SMSSender.Send
 // call) costs measurably more than an unknown number's silent no-op, and an
-// attacker rotating IPs to dodge limitSMSSendByIP can otherwise probe that
-// timing difference directly -- silence is only the whole defence at the
-// response-BODY layer, per this method's own P2-4 fix. deliverSMSCode does
+// attacker rotating IPs to dodge limitSMSSendByIP could otherwise probe
+// that timing difference directly -- silence is only the whole defence at
+// the response-BODY layer. deliverSMSCode does
 // the real per-number work; this method pads its total duration up to
 // smsCodeRequestLatencyFloor afterward, regardless of which branch ran, so
 // neither branch can finish faster than that floor. The rate-limit gate
@@ -392,11 +393,11 @@ func (s *Service) burnSMSCodeRequestWork() error {
 //
 // The per-target wrong-guess rate-limit budget (guard.CheckSMSVerifyWrongGuess)
 // is deliberately consulted AFTER verifyPhoneLoginCode, not before: see that
-// method's own doc comment for why checking it up front -- this method's own
-// previous shape -- lets an attacker who knows the target but not the code
-// hold the real holder's own correct attempt hostage for an entire window.
-// The IP dimension (guard.CheckSMSVerifyIP) is unaffected and still checked
-// up front, since it does not create that property.
+// method's own doc comment for why an up-front check would let an attacker
+// who knows the target but not the code hold the real holder's own correct
+// attempt hostage for an entire window. The IP dimension
+// (guard.CheckSMSVerifyIP) is unaffected and still checked up front, since
+// it does not create that property.
 func (s *Service) LoginWithSMSCode(ctx context.Context, in SMSLoginInput) (*TokenPair, error) {
 	start := time.Now()
 	pair, err := s.loginWithSMSCode(ctx, in)
@@ -566,10 +567,9 @@ func (s *Service) markPhoneLoginAttempt(ctx context.Context, record *Verificatio
 }
 
 // recordSMSFailureByPhone resolves phone's owning user (if any) and records
-// a bad-code failure against index -- the lookup+call pair LoginWithSMSCode
-// used to inline directly, factored out once its wrong-guess branch grew a
-// second caller of the same pattern (this round's rate-limit fix; see
-// LoginWithSMSCode's own doc comment).
+// a bad-code failure against index -- the lookup+call pair the SMS
+// wrong-guess path needs at both of its call sites (see LoginWithSMSCode's
+// own doc comment).
 func (s *Service) recordSMSFailureByPhone(ctx context.Context, phone, index, ip string) {
 	user, lookupErr := s.users.FindByPhone(ctx, phone)
 	userID := ""

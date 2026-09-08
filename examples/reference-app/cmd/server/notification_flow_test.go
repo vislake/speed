@@ -5,7 +5,7 @@ package main
 // real handler on its mounted route (demo_subject.go's
 // demoRouteGuards names it routePublic -- the module resolves and requires
 // its own caller identity per operation), a real temp-file SQLite database
-// and the real standalone queue. Three legs cover the round's acceptance
+// and the real standalone queue. Three legs cover the module's acceptance
 // shape:
 //
 //   - the user-delivery leg: a note created by demoNotesCreatorUserID
@@ -323,7 +323,7 @@ func equalStrings(got, want []string) bool {
 	return reflect.DeepEqual(got, want)
 }
 
-// TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd drives the round's
+// TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd drives the
 // canonical user-recipient flow through the composed HTTP stack: creating
 // a note publishes notes.note.created, demo_notification.go's
 // subscription dispatches the same type back to the note's creator
@@ -481,7 +481,7 @@ func TestNotificationFlow_NoteCreatedUserDelivery_EndToEnd(t *testing.T) {
 	// unsubscribable flags -- the copy of the very distinction this test
 	// leaned on (notes' type may be switched off entirely; the
 	// demo.patient_reminder type below may not, and its refusal leg lives
-	// in the next test). Four types now: go/admin's round 1 registers its
+	// in the next test). Four types answer: go/admin registers its
 	// own admin.impersonation_started security notification alongside
 	// notes' and demo's two (see demo_admin.go's wiring in server.go, and
 	// demo's own module.go for demo.simulation_ready, the smilesim

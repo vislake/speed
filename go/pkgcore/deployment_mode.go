@@ -62,12 +62,10 @@ func (m DeploymentMode) Valid() bool {
 // small-customer production, not a misuse), RequiredCapabilities simply does
 // not demand one.
 //
-// This is the direct replacement for the deployment-mode-keyed switch that
-// used to live inside Kernel.Bootstrap's four ErrMissingDistributed* checks:
-// with N implementations per seam, "the distributed deployment mode has no
-// implementation to fall back on" no longer describes anything, so the mode
-// contributes only a capability requirement, and Bootstrap compares it
-// against whatever a Preset or a KernelOption resolved.
+// The mode contributes only a capability requirement, and Bootstrap compares
+// it against whatever a Preset or a KernelOption resolved; with several
+// implementations per seam there is no "missing distributed implementation"
+// failure to special-case.
 //
 // An invalid DeploymentMode (not DeploymentModeStandalone or
 // DeploymentModeDistributed) is not this method's concern to reject --

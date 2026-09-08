@@ -168,8 +168,8 @@ func TestSendMail_WithoutATransport(t *testing.T) {
 }
 
 // TestMail_RendersRecipientLocale_NotOperatorLocale pins the SERVICE-layer
-// half of the coding standard's rule -- backend-generated content renders in
-// the RECIPIENT's locale -- by driving InviteService.Invite directly: two
+// half of the rule -- backend-generated content renders in the RECIPIENT's
+// locale -- by driving InviteService.Invite directly: two
 // invitations, each with a different InviteRequest.Locale, must render two
 // different subjects, and Invite must never look anywhere else (an
 // operator-scoped field, say) for the language to use.

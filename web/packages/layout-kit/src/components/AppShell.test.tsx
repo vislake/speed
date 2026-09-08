@@ -9,11 +9,11 @@
  * the header/nav/main landmarks in both languages via the shipped
  * bundles, a zero-violation axe scan with `region` left enabled
  * (AppShell is page-level chrome, unlike ui-kit's per-widget components),
- * and this round's narrow-viewport CSS protections (the capped mobile
+ * and the narrow-viewport CSS protections (the capped mobile
  * drawer width, the nav content filling its paper rather than
  * re-declaring the width itself, the wrapping AppBar row) -- see the
  * "responsive protections" describe block for what each assertion does
- * and does not prove. The a11y- and state-hardening regressions live
+ * and does not prove. The a11y- and state-hardening guarantees live
  * alongside: the skip link activating without touching the host hash
  * (a hash-routed host would lose the route to fragment navigation),
  * the uncontrolled temporary drawer closing itself on nav-item
@@ -185,11 +185,11 @@ describe('AppShell', () => {
     })
 
     it('closes the uncontrolled temporary drawer itself when a nav item is activated, scrim cleared and focus released', async () => {
-      // Regression: activating a nav item in the mobile drawer used to
-      // leave the drawer open -- the temporary variant owns its open
-      // state in uncontrolled mode, so it owns the close-on-navigation
-      // transition too (the scrim clearing and the focus returning to
-      // the document are part of that close, not separate mechanisms).
+      // Activating a nav item in the mobile drawer must close it: the
+      // temporary variant owns its open state in uncontrolled mode, so
+      // it owns the close-on-navigation transition too (the scrim
+      // clearing and the focus returning to the document are part of
+      // that close, not separate mechanisms).
       mockMatchMedia(false)
       const user = userEvent.setup()
       const { getByRole } = renderWithProviders(
@@ -257,11 +257,11 @@ describe('AppShell', () => {
     })
 
     it('does not bring a portrait-open drawer back open after a widen-and-narrow round trip', async () => {
-      // Regression: the uncontrolled open state used to survive a
-      // breakpoint crossing -- a drawer opened in portrait stayed true
-      // while the layout grew into the permanent (always-open) variant
-      // and re-popped open when the viewport narrowed back. The open
-      // state belongs to the temporary variant alone; leaving temporary
+      // The uncontrolled open state must not survive a breakpoint
+      // crossing: a drawer opened in portrait stays true while the
+      // layout grows into the permanent (always-open) variant and would
+      // re-pop open when the viewport narrows back. The open state
+      // belongs to the temporary variant alone; leaving temporary
       // resets it.
       const media = mockMatchMedia(false)
       const user = userEvent.setup()
@@ -290,8 +290,8 @@ describe('AppShell', () => {
       expect(getByRole('navigation', { name: zhCN.appShell.navLabel })).toBeInTheDocument()
 
       // Narrow back below md: the temporary drawer must come back
-      // closed -- pre-fix it re-pops open, because the portrait-open
-      // state rode through the permanent spell untouched.
+      // closed -- the portrait-open state must not ride through the
+      // permanent spell and re-pop it open.
       act(() => {
         media.changeMatches(false)
       })
@@ -336,8 +336,8 @@ describe('AppShell', () => {
       expect(onMobileOpenChange).toHaveBeenCalledWith(false)
 
       // Narrow back below md: the temporary drawer comes back closed,
-      // because the host's state followed the notification -- pre-fix
-      // the host never heard about the crossing and the drawer re-popped
+      // because the host's state followed the notification -- without
+      // the crossing notification the host's state would leave it
       // open.
       act(() => {
         media.changeMatches(false)
@@ -433,15 +433,15 @@ describe('AppShell', () => {
     })
 
     it('activates the skip link without touching the host hash and moves focus into main', async () => {
-      // Regression: the skip link used to be a plain `href="#target"`
-      // anchor, and activating it ran real fragment navigation -- which
-      // REWRITES location.hash. For a host that routes through the
-      // fragment (the reference app's own router parses location.hash
-      // into its surfaces), that replaces the app route with the
-      // generated target id and the route is lost. The harness below
-      // mimics such a host: the hash carries an app route, and the skip
-      // link must leave it alone while still moving focus -- driven the
-      // way a real keyboard user would (Tab to it, Enter to activate).
+      // The skip link is not a plain `href="#target"` anchor: activating
+      // such an anchor runs real fragment navigation, which REWRITES
+      // location.hash. For a host that routes through the fragment (the
+      // reference app's own router parses location.hash into its
+      // surfaces), that would replace the app route with the generated
+      // target id and the route would be lost. The harness below mimics
+      // such a host: the hash carries an app route, and the skip link
+      // must leave it alone while still moving focus -- driven the way a
+      // real keyboard user would (Tab to it, Enter to activate).
       mockMatchMedia(true)
       window.location.hash = '/notes'
       const user = userEvent.setup()
@@ -522,17 +522,17 @@ describe('AppShell', () => {
     })
 
     it('fills its Drawer paper with the nav content instead of re-declaring sidebarWidth, so the content can never outgrow the mobile paper\'s capped width', () => {
-      // Regression test: the nav Box rendered inside both Drawer variants
-      // previously carried its own fixed `width: sidebarWidth`, independent
-      // of the paper's width. That was harmless for the desktop
-      // (permanent) Drawer, whose paper is the plain sidebarWidth too, but
-      // on the mobile (temporary) Drawer the paper is capped to
-      // `min(sidebarWidth, 85vw)` -- a second, independent sidebarWidth on
-      // the content silently outgrew that cap and bled past the paper's
-      // fixed-position edge (Drawer's paper sets no overflow-x). Asserting
-      // `width: 100%` on the nav element itself (fills whichever paper it
-      // is mounted into) is what makes that impossible by construction,
-      // in both the closed-mobile and desktop cases.
+      // The nav Box inside both Drawer variants must not carry its own
+      // fixed `width: sidebarWidth`, independent of the paper's width.
+      // The desktop (permanent) Drawer's paper is the plain
+      // sidebarWidth too, but the mobile (temporary) Drawer's paper is
+      // capped to `min(sidebarWidth, 85vw)` -- a second, independent
+      // sidebarWidth on the content would silently outgrow that cap and
+      // bleed past the paper's fixed-position edge (Drawer's paper sets
+      // no overflow-x). Asserting `width: 100%` on the nav element
+      // itself (fills whichever paper it is mounted into) makes that
+      // impossible by construction, in both the closed-mobile and
+      // desktop cases.
       mockMatchMedia(false)
       const { getByRole } = renderWithProviders(
         <AppShell navItems={NAV_ITEMS} sidebarWidth={280}>
@@ -599,11 +599,11 @@ describe('AppShell', () => {
     it('derives every spacer from the measured header height, so a wrapped header cannot cover content below it', async () => {
       // The AppBar row wraps under real overflow pressure (the flexWrap
       // protection), which makes its height taller than the theme
-      // toolbar default the placeholders used to assume -- a taller
-      // fixed header then covered the top of main and the drawer's
-      // first item. jsdom evaluates no real layout, so this test cannot
-      // observe an actual wrap or measure actual coverage; what it can
-      // and does prove is the mechanism that keeps the two in lockstep:
+      // toolbar default -- a taller fixed header would cover the top of
+      // main and the drawer's first item. jsdom evaluates no real
+      // layout, so this test cannot observe an actual wrap or measure
+      // actual coverage; what it can and does prove is the mechanism
+      // that keeps the two in lockstep:
       // the header's rendered height is measured (ResizeObserver on the
       // banner) and every spacer placeholder (one in the drawer paper,
       // one in main) derives its min-height from that measurement, and
@@ -658,10 +658,10 @@ describe('AppShell', () => {
     // Both closed-layout scans render the shell with the page content a
     // real host puts inside `main` -- including the page's h1, which
     // chrome deliberately does not render itself: page-has-heading-one
-    // is determinate in jsdom now (see the axe helper header), so a
-    // scan document without an h1 fails instead of passing by
-    // indeterminacy. The shell's own landmark structure (a real main)
-    // answers landmark-one-main; region stays enabled.
+    // is determinate in jsdom (see the axe helper header), so a scan
+    // document without an h1 fails instead of passing by indeterminacy.
+    // The shell's own landmark structure (a real main) answers
+    // landmark-one-main; region stays enabled.
     it('has no axe violations on the desktop layout, with region enabled', async () => {
       mockMatchMedia(true)
       renderWithProviders(
@@ -687,16 +687,14 @@ describe('AppShell', () => {
     })
 
     it('has no axe violations on the mobile layout with the drawer OPEN, with region enabled', async () => {
-      // Regression: the axe runs above scan the mobile drawer closed --
-      // the only state in which the scans used to run -- while OPEN the
-      // temporary drawer is a real modal (role=dialog aria-modal) and
-      // the only usable state of mobile navigation. Pre-fix the open
-      // drawer's paper had no accessible name: axe's aria-dialog-name
-      // rule failed the paper (impact serious) and no scan measured it.
-      // The drawer's paper now carries the nav label as its dialog name
-      // (see AppShell.tsx), and this scan runs over the open state.
-      // Page-context rules are exempted while the modal is open, the
-      // same passForModal semantics a browser applies.
+      // The temporary drawer is a real modal (role=dialog aria-modal)
+      // while open -- the only usable state of mobile navigation -- so
+      // the closed-layout scans above never measure it. The drawer's
+      // paper carries the nav label as its dialog name (see
+      // AppShell.tsx); without an accessible name, axe's
+      // aria-dialog-name rule fails the paper. This scan runs over the
+      // open state. Page-context rules are exempted while the modal is
+      // open, the same passForModal semantics a browser applies.
       mockMatchMedia(false)
       const user = userEvent.setup()
       const { getByRole } = renderWithProviders(

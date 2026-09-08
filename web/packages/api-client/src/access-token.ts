@@ -1,8 +1,8 @@
 /**
  * The access-token seam.
  *
- * The access token lives in memory only (docs/internal/12-frontend.md):
- * a token in localStorage is a credential an XSS walks away with. The
+ * The access token lives in memory only: a token in localStorage is a
+ * credential an XSS walks away with. The
  * refresh token is the session's business, not the store's: the authn
  * API returns it in the token-issuing response bodies and sets no
  * refresh cookie, so a session layer (@speed/auth-core) holds it in

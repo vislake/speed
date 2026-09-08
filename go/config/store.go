@@ -69,9 +69,9 @@ func (s *store) put(ctx context.Context, r row) error {
 // boundary forever, unreachable by every later poll. The inclusive form
 // re-reads the boundary rows on every sweep; they are few (rows sharing
 // one timestamp), the invalidation is idempotent, and the hole in the
-// anti-loss net closes. What remains is documented in AGENTS.md: the
-// watermark assumes writers' clocks are not behind the reader's, a
-// multi-writer clock-skew caveat the event bus itself is not subject to.
+// anti-loss net closes. What remains is inherent to the watermark: it
+// assumes writers' clocks are not behind the reader's, a multi-writer
+// clock-skew caveat the event bus itself is not subject to.
 func (s *store) changedSince(ctx context.Context, since time.Time) ([]row, error) {
 	var out []row
 	err := s.db.WithContext(ctx).

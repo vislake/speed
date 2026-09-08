@@ -13,17 +13,14 @@
  * resolve the api-client's transport code to the surface's own
  * notes.errors.client text ("Could not reach the server. Check your
  * connection and try again."), never the generic fallback -- the
- * code-mapping shape of the envelope-contract defect, where good text
- * sits behind a code that never arrives. (When this gate was written
- * the defect was believed open; on the closing round's verification the
- * mapping -- and both tests below -- pass against the real server, so
- * the gate's job from its first green run is to keep the mapping
- * honest. The acceptance session re-ran both and confirmed it, so the
- * tag is @budget now rather than @pending: verified, and out of the
- * default run only because its two owner sign-ins do not fit the
- * suite's per-account budget -- a suite-budget decision, never a
- * mapping one. `pnpm test:e2e:budget` runs them with a budget of their
- * own; see e2e/README.md.)
+ * code-mapping shape where good text sits behind a code that never
+ * arrives.
+ *
+ * Both tests are tagged @budget: verified, and out of the default run
+ * only because their two owner sign-ins do not fit the suite's
+ * per-account login budget -- a suite-budget decision, never a mapping
+ * one. `pnpm test:e2e:budget` runs them with a budget of their own;
+ * see e2e/README.md.
  *
  * The network is cut by routing the page's own API calls to failure
  * rather than by stopping a server, so the gate does not depend on how

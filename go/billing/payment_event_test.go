@@ -40,8 +40,7 @@ func TestPaymentEventRepository_InsertIfNew_DedupsOnChannelAndProviderEventID(t 
 	firstID := evt.ID
 
 	// A redelivery of the SAME event -- same Channel/ProviderEventID -- must
-	// be recognized as already recorded, per
-	// docs/internal/06-billing-and-metering.md's insert-first-to-dedup rule.
+	// be recognized as already recorded, per the insert-first-to-dedup rule.
 	redelivered := newTestPaymentEvent("stripe", "evt_1", ChannelStatusPending, time.Now())
 	inserted, err = repo.InsertIfNew(ctx, redelivered)
 	if err != nil {
@@ -175,11 +174,10 @@ func TestPaymentEventRepository_MarkStatus(t *testing.T) {
 // shape event.go's normalizeCheckoutSession's ChannelStatusPending branch
 // produces for an unsettled checkout.session.completed webhook) must have
 // its real, freshly re-queried Amount actually persisted when markStatus
-// later resolves it to Succeeded -- proving markStatus's third parameter is
-// wired all the way through, not silently dropped. This fails on the
-// pre-fix markStatus (which took no Money parameter at all and only ever
-// wrote Status, leaving AmountCents/Currency at their zero-valued insert-
-// time values forever).
+// later resolves it to Succeeded -- proving markStatus's third parameter
+// is wired all the way through, not silently dropped. markStatus without
+// the Money parameter would only ever write Status, leaving
+// AmountCents/Currency at their zero-valued insert-time values forever.
 func TestPaymentEventRepository_MarkStatus_OverwritesZeroAmount(t *testing.T) {
 	repo := NewPaymentEventRepository(newTestDB(t))
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
@@ -210,9 +208,9 @@ func TestPaymentEventRepository_MarkStatus_OverwritesZeroAmount(t *testing.T) {
 	}
 }
 
-// TestPaymentEventRepository_MarkStatus_CannotRegressResolvedRow is P3-14's
-// regression test: markStatus used to be an unguarded update keyed on the
-// row id alone, so any caller could overwrite a row's resolved Status with
+// TestPaymentEventRepository_MarkStatus_CannotRegressResolvedRow pins the
+// guarded-update rule: markStatus must never be an unguarded update keyed on the
+// row id alone, which would let any caller overwrite a row's resolved Status with
 // an older one -- e.g. two overlapping poll passes for one stuck row (or a
 // poll racing the webhook that resolved the row) could have the later,
 // stale mark clobber the earlier resolution the record had already
@@ -220,9 +218,8 @@ func TestPaymentEventRepository_MarkStatus_OverwritesZeroAmount(t *testing.T) {
 // has been marked out of Pending, no later mark may change it. The fix
 // keys the UPDATE's WHERE on the row's own current Status (Pending) too,
 // so an attempt against an already-resolved row affects nothing and
-// returns nil -- the record stands, nothing regresses. This fails on the
-// pre-fix markStatus (whose unguarded second mark overwrites the row back
-// to Failed).
+// returns nil -- the record stands, nothing regresses. An unguarded
+// second mark would overwrite the row back to Failed.
 func TestPaymentEventRepository_MarkStatus_CannotRegressResolvedRow(t *testing.T) {
 	repo := NewPaymentEventRepository(newTestDB(t))
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")

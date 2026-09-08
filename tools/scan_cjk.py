@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Repo-wide CJK scanner enforcing the root CLAUDE.md Language Rule.
+"""Repo-wide CJK scanner enforcing the repository Language Rule.
 
-The rule (CLAUDE.md, "Language Rule (read this first)"): docs/internal/** is
-written in Chinese; every other file in the repository is English, and CI
-fails on CJK characters found outside docs/internal/ (i18n resources under
-locale directories, and the docs/site/ public documentation site --
-English-first, with zh-CN localization directories added by need, per
-docs/internal/13-documentation-standards.md -- are the exceptions).
-docs/internal/18-cicd.md schedules this as a self-written discipline
-check; this script is its local-run counterpart.
+The rule: docs/internal/** is written in Chinese; every other file in the
+repository is English, and CI fails on CJK characters found outside
+docs/internal/ (i18n resources under locale directories, and the
+docs/site/ public documentation site -- English-first, with zh-CN
+localization directories added by need -- are the exceptions). This
+script is the local-run discipline check; CI runs the same check.
 
 Scan semantics, mirroring go/ratelimit/language_test.go (the module-level
 precedent):
@@ -26,11 +24,11 @@ precedent):
 * Non-text files (any NUL byte in the first 8 KiB, or undecodable bytes)
   are skipped, never reported.
 
-Carve-outs (a whole subtree is exempt, matching CLAUDE.md's exceptions):
+Carve-outs (a whole subtree is exempt):
 
   docs/internal/          Chinese by rule; never scanned
   docs/site/              public documentation site (English-first, zh-CN
-                          by need, per docs/internal/13); never scanned
+                          by need); never scanned
   resource directories    i18n resource directories, judged by CONTENT
                           rather than by directory name: a directory that
                           directly holds a zh-CN.* or en-US.* file is a

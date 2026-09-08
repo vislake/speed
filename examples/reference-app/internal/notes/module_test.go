@@ -64,9 +64,8 @@ func TestModule_Locales_ContainsBothLanguages(t *testing.T) {
 // errInternal, and the apperr.Invalid("notes.invalid_request_body") call
 // inlined in NotesCreateNote (kept as a literal here, not a named var,
 // because handler.go itself never names it either) -- and each one must
-// resolve to real text in both locale files, per root CLAUDE.md's
-// internationalization rule ("New text must ship with both zh-CN and en-US
-// resources") and backend coding standard §12.
+// resolve to real text in both locale files: new text always ships
+// with both zh-CN and en-US resources.
 func TestModule_Locales_ContainsEveryHandlerErrorCode(t *testing.T) {
 	m := NewModule(nil)
 	localesFS := m.Locales()

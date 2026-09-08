@@ -94,8 +94,8 @@ type serviceConfig struct {
 	// maxImagePixels is the pixel ceiling images are decoded against.
 	maxImagePixels int64
 	// uploadTTL is how long a declared upload stays completable. Rows whose
-	// window has passed are refused by Upload and Complete alike; sweeping
-	// them is a later round's job.
+	// window has passed are refused by Upload and Complete alike and are
+	// reclaimed by the expiry sweep (cleanup.go).
 	uploadTTL time.Duration
 	// maxObjectLifetime is the default life of an upload that requests no
 	// retention AND the ceiling a requested finite retention may not pass:
@@ -143,7 +143,7 @@ func newObjectService(objects *ObjectRepository, queue jobs.Queue, cfg serviceCo
 // the metadata every read path serves alongside it. Serializing the two
 // writers per object closes that interleaving inside one process; two
 // replicas of a distributed deployment share the ObjectStore but not this
-// map, and that residue is recorded in AGENTS.md's Known limitations.
+// map -- a recorded known limitation of the per-process lock map.
 //
 // Sweep's reclamation and Delete's protocol deliberately do not take the
 // lock: both remove rows and bytes only after the row's own state and
@@ -651,7 +651,7 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 		// unsanitized originals -- would each move the contradiction onto the
 		// other side of the two stores; the rollback restores the agreement
 		// between them instead.) A restore that itself fails leaves the
-		// pre-fix contradiction as residue, recorded in AGENTS.md.
+		// contradiction as residue -- a recorded known limitation.
 		if changed {
 			if restoreErr := st.PutObject(ctx, row.Key, bytes.NewReader(raw)); restoreErr != nil {
 				observability.FromContext(ctx).Warn("sanitized writeback not rolled back after the finalize failed",
@@ -700,9 +700,8 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 			// guessed at" rule the derive worker follows (derive.go). The
 			// residue of the coincidence -- a non-not-found re-read failure
 			// while the row is gone or doomed leaves the writeback under a
-			// key nothing will revisit -- is the class AGENTS.md's Known
-			// limitations records, alongside the take-back's own failure
-			// residue.
+			// key nothing will revisit -- the class the known limitations
+			// record, alongside the take-back's own failure residue.
 			if !hasCode(err, ErrObjectNotFound.Code) {
 				return Object{}, err
 			}
@@ -754,7 +753,7 @@ func (s *ObjectService) Complete(ctx context.Context, objectID string) (Object, 
 		//     a transient store failure here is warned about and never
 		//     retried, and with the row's removal converging regardless, the
 		//     writeback then sits under a key nothing will ever revisit --
-		//     the residue class AGENTS.md's Known limitations records. The
+		//     the residue class the known limitations record. The
 		//     shape is unreachable within one process -- the per-object lock
 		//     serializes completions and no actor flips an uploading row to
 		//     deleting -- and reachable only across the replicas of a

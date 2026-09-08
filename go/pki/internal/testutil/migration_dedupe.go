@@ -19,18 +19,17 @@ import (
 // 0007's non-unique per-certificate index on pki_certificate_revocations
 // into the uq_pki_certificate_revocations_certificate unique index the
 // current RevokeCertificate arbitration (InsertIfAbsent's ON CONFLICT)
-// builds on. Deployments that ran round 3's pre-arbitration
-// RevokeCertificate -- the check-then-act shape (find the certificate,
-// then Create the ledger row) shipped before this file existed -- against
-// 0007's non-unique schema could land TWO ledger rows for one certificate
-// when two callers revoked it concurrently. On upgrade, the CREATE UNIQUE
-// INDEX fails on such data, and because dbkit's MigrationRegistry applies
-// one module's files in a single transaction (go/dbkit/migrations.go's
-// applyModule), the failure rolls 0008 and every later file back together,
-// stranding the deployment at startup with 0008 unrecorded and no
-// remediation path. The shipped 0008 files therefore dedupe before
-// creating the index (keeping the earliest row per certificate_id), and
-// these helpers prove that upgrade path against both real engines.
+// builds on. A ledger written through the check-then-act shape that
+// predates the arbitration -- find the certificate, then Create the ledger
+// row -- can hold TWO rows for one certificate when two callers revoked it
+// concurrently, and the CREATE UNIQUE INDEX fails on such data: because
+// dbkit's MigrationRegistry applies one module's files in a single
+// transaction (go/dbkit/migrations.go's applyModule), the failure rolls
+// 0008 and every later file back together, stranding the deployment at
+// startup with 0008 unrecorded and no remediation path. The shipped 0008
+// files therefore dedupe before creating the index (keeping the earliest
+// row per certificate_id), and these helpers prove that upgrade path
+// against both real engines.
 const (
 	// migration0008Filename is 0008's file name, identical across the two
 	// dialect copies, as schema_migrations records it.
@@ -48,10 +47,10 @@ const (
 )
 
 // AssertMigration0008UpgradeDedupesDuplicateLedger proves regression (a) of
-// P0-pki-6: a database carrying two ledger rows for one certificate -- the
-// duplicate shape round 3's pre-arbitration RevokeCertificate could leave
-// behind -- upgrades through the module's migration set successfully and is
-// left with exactly one row per certificate: the EARLIEST one (by
+// the duplicate-ledger upgrade: a database carrying two ledger rows for one
+// certificate -- the duplicate shape a check-then-act ledger write could
+// leave behind -- upgrades through the module's migration set successfully
+// and is left with exactly one row per certificate: the EARLIEST one (by
 // created_at, id as the tiebreak), which is the row the arbitration the
 // unique index provides would itself have let win.
 //
@@ -122,8 +121,9 @@ func AssertMigration0008UpgradeDedupesDuplicateLedger(t *testing.T, db *gorm.DB,
 }
 
 // AssertMigration0008ReapplyLeavesAppliedDatabaseUntouched proves regression
-// (b) of P0-pki-6: a database that already applied 0008 -- ledger rows
-// included -- is unaffected by a later migration run. dbkit's registry
+// (b) of the duplicate-ledger upgrade: a database that already applied 0008
+// -- ledger rows included -- is unaffected by a later migration run.
+// dbkit's registry
 // records applied files by (module, filename) and never re-executes or
 // re-compares a recorded file's content, so 0008's in-place dedupe edit
 // reaches only databases that never recorded the file (the stranded class

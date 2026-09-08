@@ -1,20 +1,16 @@
 //go:build integration
 
-// This file is the scaffold-verify pipeline's real dual-mode boot gate: the
-// roadmap M4 acceptance (docs/internal/15-roadmap.md's M4 row: a project
-// `saasctl new` and `create-saas-app` generate must boot successfully in
-// both the standalone and distributed deployment modes with one command
-// each) applied to the Go half of that story, go/saasctl/AGENTS.md's own
-// "the scaffold-verify workflow's M4 dual-mode boot gate" limitation
-// discharged for one selection. It follows
-// the SAME real end-to-end procedure this module's own AGENTS.md Testing
-// section already documents for the B4 milestone gate (new -> tidy -> build
-// -> boot -> smoke), extended with a second boot under
-// APP_DEPLOYMENT_MODE=distributed against real Docker-backed
-// infrastructure -- the identical Redis/RustFS/mailpit trio and image pins
-// examples/reference-app/integration_test/distributed_mode_test.go already
-// uses, so every Docker-backed tier in this repository exercises the same
-// server behavior.
+// This file is the scaffold-verify pipeline's real dual-mode boot gate:
+// it runs the module's own real end-to-end procedure (new -> tidy ->
+// build -> boot -> smoke) for the authn+org+rbac selection, extended with
+// a second boot under APP_DEPLOYMENT_MODE=distributed against real
+// Docker-backed infrastructure -- the identical Redis/RustFS/mailpit trio
+// and image pins examples/reference-app/integration_test/
+// distributed_mode_test.go already uses, so every Docker-backed tier in
+// this repository exercises the same server behavior. It discharges, for
+// one selection, the "generated project boots under the distributed
+// deployment mode" acceptance the module's AGENTS.md records as a
+// limitation for the other four.
 //
 // # Why one selection, not all five
 //
@@ -31,18 +27,13 @@
 // exercises authn's "SMS sender" seam's three-way conditional-injection
 // switch (config.go's smsGatewayURLEnv doc comment) that a selection with
 // no authn module cannot touch at all. The other four selections'
-// standalone-mode boot was proven once, by the B4 procedure's own real
-// materialize-tidy-build-boot cycle recorded in AGENTS.md; their
 // materialization is pinned byte-for-byte on every PR by this SAME
 // module's offline unit suite (internal/new's golden byte-identity tests
 // -- deliberately a pin of the materializer against the committed assets
 // and nothing more: it is not a tidy/build proof, and not a freshness
 // check on the go.mod goldens, which nothing automatic re-verifies
 // today). Their own dual-mode CI coverage remains deferred, recorded as
-// such in AGENTS.md's Known limitations, exactly the same
-// "representative subset, explicit reason" shape root CLAUDE.md's
-// Reference App section already blesses for go/pki's X.509 layer and
-// go/integration's two rounds.
+// such in AGENTS.md's Known limitations.
 //
 // # What this does NOT prove
 //
@@ -99,12 +90,12 @@ const (
 // file's one test: materialize the authn+org+rbac selection for real
 // (internal/new.Run, in-process -- no separately built saasctl binary
 // needed, since this test lives in the same module and can call the
-// command packages directly), `go mod tidy` it against the real network
-// (exactly the B4 procedure), build its cmd/server, run `saasctl db
-// migrate` against it (internal/db.Run, in-process) under the standalone
-// default, boot the built binary and smoke it, then repeat the migrate step
-// and the boot under APP_DEPLOYMENT_MODE=distributed with real
-// Redis/RustFS/SMTP infrastructure this test starts itself.
+// command packages directly), `go mod tidy` it against the real network,
+// build its cmd/server, run `saasctl db migrate` against it
+// (internal/db.Run, in-process) under the standalone default, boot the
+// built binary and smoke it, then repeat the migrate step and the boot
+// under APP_DEPLOYMENT_MODE=distributed with real Redis/RustFS/SMTP
+// infrastructure this test starts itself.
 func TestScaffoldNewProject_AuthnOrgRbac_BootsInBothDeploymentModes(t *testing.T) {
 	speedRoot, err := newcmd.ResolveSpeedRoot("")
 	if err != nil {
@@ -116,9 +107,8 @@ func TestScaffoldNewProject_AuthnOrgRbac_BootsInBothDeploymentModes(t *testing.T
 		t.Fatalf("saasctl new exited %d, want 0", code)
 	}
 
-	// Genuine `go mod tidy` against the real network -- the same real
-	// proof AGENTS.md's Testing section records for the B4 milestone gate,
-	// never faked or skipped here.
+	// Genuine `go mod tidy` against the real network -- never faked or
+	// skipped here.
 	runTool(t, target, "go", "mod", "tidy")
 
 	binPath := filepath.Join(target, "server")
@@ -128,8 +118,7 @@ func TestScaffoldNewProject_AuthnOrgRbac_BootsInBothDeploymentModes(t *testing.T
 
 	// Standalone leg first: `saasctl db migrate` (internal/db.Run,
 	// in-process) against a fresh database with no special environment,
-	// then boot the built binary and smoke it -- the identical shape
-	// AGENTS.md's B4 procedure already proves for every legal selection.
+	// then boot the built binary and smoke it.
 	standaloneDB := filepath.Join(target, "standalone.db")
 	runDBMigrate(t, modPath, standaloneDB, nil)
 	smokeBoot(t, binPath, standaloneDB, nil)
@@ -163,13 +152,10 @@ func TestScaffoldNewProject_AuthnOrgRbac_BootsInBothDeploymentModes(t *testing.T
 		"APP_SMS_GATEWAY_URL=http://127.0.0.1:1/sms",
 	}
 
-	// db migrate is the round's own relaxed-refusal proof: an earlier
-	// version of this command refused any deployment mode but standalone
-	// (migrate.go's own migrate function doc comment has the full
-	// argument for why that refusal's premise did not hold); this call
-	// proves the corrected behavior against a REAL distributed-mode
-	// environment, not merely the offline unit fixture
-	// internal/db/migrate_test.go's own
+	// db migrate must not refuse a distributed deployment mode (migrate.go's
+	// own migrate function doc comment has the argument); this call proves
+	// the behavior against a REAL distributed-mode environment, not merely
+	// the offline unit fixture internal/db/migrate_test.go's own
 	// TestMigrateDistributedModeAppliesTheIdenticalSQLiteSchema pins.
 	distributedDB := filepath.Join(target, "distributed.db")
 	runDBMigrateWithEnv(t, modPath, distributedDB, distributedEnv)

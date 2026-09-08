@@ -9,7 +9,7 @@
  * 0..24, and every slot name here is a valid MUI index (1, 2, 4, 8, 16, 24).
  * Whether unlisted indices interpolate, repeat the nearest slot, or carry a
  * distinct speed design is a ui-kit theme-adapter decision, not a token
- * decision; the ui-kit round owns it (see README.md).
+ * decision.
  */
 
 export type ElevationSlot = 1 | 2 | 4 | 8 | 16 | 24

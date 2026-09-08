@@ -50,12 +50,12 @@ var invoiceTransitions = map[InvoiceStatus]map[InvoiceStatus]bool{
 // Invoice is one billing document for a Subscription's billing cycle.
 // Exactly like Subscription, it is channel-agnostic: it knows nothing
 // about which payment channel, if any, collected it -- no gateway
-// reference, no external transaction id. A later round's billing/gateway
-// package settles an Invoice from a real payment event; this round's
-// InvoiceRepository is a plain Create/FindByID/Update accessor plus the
-// newest-first ListByTenant read the module's HTTP surface serves, with
-// the status transition (Open -> Paid or Open -> Void) left to the
-// caller, exactly like Subscription's own round-1 simplification.
+// reference, no external transaction id. No live payment event settles an
+// Invoice yet (see the module's Known limitations): InvoiceRepository is
+// a plain Create/FindByID/Update accessor plus the newest-first
+// ListByTenant read the module's HTTP surface serves, with the status
+// transition (Open -> Paid or Open -> Void) left to the caller, exactly
+// as for Subscription.
 type Invoice struct {
 	dbkit.TenantModel
 
@@ -219,7 +219,7 @@ func (r *InvoiceRepository) setStatus(ctx context.Context, id string, status Inv
 		}
 
 		// The move is applied by a guarded UPDATE whose WHERE carries the
-		// very status this round validated from (setStatusIf), never by a
+		// very status the move was validated from (setStatusIf), never by a
 		// whole-row save of the read. An unconditional write would let two
 		// racing transitions that both validated from Open both commit -- a
 		// Void landing after a MarkPaid would rewrite a settled payment's

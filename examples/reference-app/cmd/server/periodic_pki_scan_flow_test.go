@@ -15,11 +15,11 @@ package main
 // most once per hour-long window in production, per-minute ticks
 // collapsing into the window's one job: exactly the cadence the day-scale
 // rotation design needs (a 30-day renewal lead against a one-year default
-// key validity), and exactly why the windowed-key round exists (a keyless
-// task -- each tick its own independent occurrence, the shape this test
-// file's older header recorded -- lets every replica's tick run a
+// key validity), and exactly why the idempotency key exists: a keyless
+// task -- each tick its own independent occurrence -- lets every
+// replica's tick run a
 // redundant scan; the window semantics themselves are pinned against a
-// real queue in go/pki's own enqueue_window_test.go). A rotation needs a
+// real queue in go/pki's own enqueue_window_test.go. A rotation needs a
 // stage on one scan run and a promotion on a LATER one (the propagation
 // window separates them), so this test compresses the scan window below
 // its own one-second tick cadence (cfg.PKIExpiryScanWindow =
@@ -180,7 +180,7 @@ func TestBuildServer_PeriodicScheduler_PKIExpiryScan_RotatesBootKey(t *testing.T
 	// token issue -- nothing at buildServer or in demo seeding signs a
 	// token -- so this assert is what makes the next read's "boot key"
 	// label exact: whatever the sign-in below creates is the key the
-	// scheduler's scans will have to replace. If a future boot path starts
+	// scheduler's scans will have to replace. If a boot path starts
 	// ensuring purposes eagerly, this assert fails and the test's premise
 	// must be re-derived rather than silently re-labeled.
 	if boot := activeSigningKey(t, keys, purpose); boot != nil {

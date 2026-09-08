@@ -8,17 +8,15 @@ import "context"
 // middleware and the reference app take this interface rather than the
 // concrete type.
 //
-// Its shape is the one docs/internal/05-identity-and-access.md pins --
-// Can, ListPermissions and AssignRole with exactly those signatures --
-// plus two deliberate additions that document itself implies but does not
-// spell out:
+// Its shape is Can, ListPermissions and AssignRole with exactly those
+// signatures, plus two deliberate additions:
 //
 //   - RevokeRole, because a grant that can only be created is not an
-//     access-control system; the document's sketch shows the happy path,
+//     access-control system -- creation alone shows only the happy path,
 //     not the whole lifecycle.
-//   - DataScope, because that document's organization-tree section
-//     requires data to be shown according to both the permission and the
-//     subtree in scope -- a row-filtering requirement Can deliberately
+//   - DataScope, because tenant data is shown according to both the
+//     permission and the subtree in scope -- a row-filtering requirement
+//     Can deliberately
 //     cannot answer (see the DataScope type's own doc comment for why the
 //     two questions are separate).
 //
@@ -77,9 +75,9 @@ type Authorizer interface {
 	DataScope(ctx context.Context, sub Subject, action, resource string) (DataScope, error)
 }
 
-// Permission composes the canonical "<resource>:<action>" permission string
-// docs/internal/05-identity-and-access.md fixes as the single permission
-// naming convention. Modules declare permissions in that form on
+// Permission composes the canonical "<resource>:<action>" permission
+// string, the single naming convention of this module. Modules declare
+// permissions in that form on
 // reg.Permissions during Register, Can takes the two halves separately, and
 // the HTTP middleware takes the composed string -- this function is what
 // keeps a host from hand-concatenating a third spelling.

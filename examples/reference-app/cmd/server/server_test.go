@@ -119,8 +119,8 @@ func buildTestServer(t *testing.T) (*httptest.Server, serverConfig, *compliance.
 // route in this app: with authn.Middleware running ahead of
 // tenancy.Middleware(authn.NewPrincipalResolver()), Host plays no part in
 // resolving the notes API's tenant at all (see server.go's middleware-chain
-// doc comment) -- every test in this file that used to vary Host to reach a
-// different tenant now varies the token it authenticates with instead.
+// doc comment) -- every test in this file varies the token it authenticates with, never Host, to reach a
+// different tenant.
 func registerAndAuthenticate(t *testing.T, srv *httptest.Server, cfg serverConfig, tenant pkgcore.TenantID, emailLocalPart string) string {
 	t.Helper()
 
@@ -644,8 +644,7 @@ func TestHealthzAllowlist_ResolutionFailure_StillReturns200(t *testing.T) {
 // "allowlist http.MethodHead explicitly if a health check needs it too."
 // Allowlisting GET alone therefore looks fine under a resolver that never
 // fails, while silently leaving HEAD one resolver failure away from a 403
-// -- exactly the swap this comment originally warned about, and exactly
-// what authn.NewPrincipalResolver genuinely does fail with today whenever
+// -- exactly what authn.NewPrincipalResolver does fail with whenever
 // no Principal is present (server.go's middleware-chain doc comment).
 //
 // This test reproduces exactly that gap (deliberately allowlisting GET
@@ -834,11 +833,10 @@ const fakeSMSGatewayURL = "http://127.0.0.1:1/sms"
 // the mode can never silently degrade into a SQLite-and-in-memory run
 // under a "distributed" label.
 //
-// The org audit round changed WHO resolves that implementation without
-// changing the property: buildServer now constructs the event bus itself
+// The event bus is constructed by buildServer itself
 // -- before dbkit.Open, so the automatic org audit capture can publish on
-// the same bus the Kernel later resolves, see the Open call's own comment
-// -- and injects it through WithEventBus in the standalone as well as the
+// the same bus the Kernel later resolves (see the Open call's own comment)
+// -- and injected through WithEventBus in the standalone as well as the
 // Redis composition. A distributed boot without cfg.RedisAddr therefore
 // fails on the INJECTED memory bus, which pkgcore's capability error names
 // as implementation "<injected>" (an injected seam has no registry name to
@@ -872,19 +870,17 @@ func TestBuildServer_DistributedDeploymentMode_FailsCapabilityValidation(t *test
 }
 
 // TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMailer
-// is the second half of the distributed-mode pin, rewritten for this
-// round's env-driven wiring: APP_REDIS_ADDR now composes BOTH the
+// is the second half of the distributed-mode pin under the env-driven
+// wiring: APP_REDIS_ADDR composes BOTH the
 // "eventbus" and the "kv" seam onto one shared *redis.Client (buildServer's
 // kernel-options doc comment explains why one Redis instance backs both),
-// so a distributed deployment with only cfg.RedisAddr set no longer fails
-// on "kv" the way it used to before this round -- it clears both
-// "eventbus" and "kv" and now fails capability validation on the NEXT seam
+// so a distributed deployment with only cfg.RedisAddr set clears both
+// "eventbus" and "kv" and fails capability validation on the NEXT seam
 // Kernel.Bootstrap resolves: "mailer", whose Preset default
 // ("mailer.console") also lacks MultiReplicaSafe, and this test configures
-// no APP_SMTP_* composition to swap it for. This is exactly the "one
-// seam wired isn't enough" property root CLAUDE.md's distributed-mode
-// section documents, now demonstrated one seam later than before this
-// round. Validation precedes module registration, so no Subscribe is ever
+// no APP_SMTP_* composition to swap it for. This is the "one
+// seam wired isn't enough" property of the distributed
+// mode, demonstrated at the mailer seam. Validation precedes module registration, so no Subscribe is ever
 // reached, and the cleanup buildServer runs on this error path is equally
 // network-free: RedisEventBus starts no goroutine and touches no network
 // until the first Subscribe (its group-destroy sweep returns early with
@@ -913,14 +909,12 @@ func TestBuildServer_DistributedDeploymentMode_RedisConfigured_StillFailsOnMaile
 }
 
 // TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed proves
-// the negative half of this round's authn "SMS sender" wiring: a
+// the negative half of the authn "SMS sender" wiring: a
 // distributed composition that forgets APP_SMS_GATEWAY_URL must fail
 // closed with authn.ErrMissingDistributedSMSSender, rather than silently
 // keeping the console transport nobody in a distributed replica pool is
-// reading -- the exact property docs/internal/03-deployment-modes.md's
-// authn round note describes and this app's own wiring never actually
-// exercised before this round, since it used to pass WithSMSSender(
-// NewConsoleSMSSender(...)) unconditionally regardless of deployment mode.
+// reading. Passing WithSMSSender(NewConsoleSMSSender(...))
+// unconditionally regardless of deployment mode would hide that gap.
 // This is authn's OWN wiring-time validation (authn.NewModule's
 // newOptions), which buildServer reaches before it ever calls
 // pkgcore.NewKernel(...).Bootstrap -- so this failure fires regardless of
@@ -942,7 +936,7 @@ func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testi
 // A no-Docker "positive" counterpart to the three tests above -- one that
 // composes every seam onto a fake, unreachable address and asserts
 // buildServer succeeds -- was deliberately NOT added here, and this is a
-// real finding rather than a silent gap: this app's own seedDemoGrants
+// real gap, not a silent one: this app's own seedDemoGrants
 // (demo_subject.go), which every buildServer call runs unconditionally
 // after Bootstrap to seed the demo tenants' built-in roles, makes a
 // SYNCHRONOUS rbac.Service call that publishes on whatever EventBus
@@ -950,8 +944,8 @@ func TestBuildServer_DistributedDeploymentMode_NoSMSGateway_FailsClosed(t *testi
 // to the Redis stream inline, unlike Subscribe's fire-and-forget background
 // reader. Pointing cfg.RedisAddr at a fake address therefore fails this
 // seeding step with a real "connection refused" the moment Redis is
-// unreachable, regardless of deployment mode -- proven empirically while
-// writing this round's tests. So the positive half of this property
+// unreachable, regardless of deployment mode. So the positive half of
+// this property
 // (assembly succeeds when every seam is genuinely satisfied) cannot be
 // proven at the unit tier without either standing up real infrastructure
 // (which belongs in a Docker-backed integration tier, not here) or
@@ -995,8 +989,8 @@ func notesRequest(t *testing.T, srv *httptest.Server, method, token string, body
 }
 
 // TestBuildServer_Unauthenticated_FailsClosed is the token-based
-// counterpart of what was, before this round, a Host-based regression
-// test: an unrecognized Host used to resolve to a shared demoDefaultTenant
+// counterpart of the Host-based isolation regression: an unrecognized
+// Host once resolved to a shared demoDefaultTenant
 // bucket any anonymous caller could read from and write to. That bucket no
 // longer exists at all -- Host plays no part in the notes API's tenant
 // resolution any more (server.go's middleware-chain doc comment) -- but
@@ -1057,7 +1051,7 @@ func TestBuildServer_Unauthenticated_FailsClosed(t *testing.T) {
 	// Step 4 (negative control): a second, completely independent
 	// unauthenticated caller is refused too -- there is no shared bucket
 	// for one anonymous caller to plant data into and another to read
-	// back, which is exactly what made the original gap a real leak
+	// back, which is exactly what made the unisolated bucket a real leak
 	// rather than a per-caller-isolated refusal.
 	getResp2 := notesRequest(t, srv, http.MethodGet, "", nil)
 	defer getResp2.Body.Close()
@@ -1071,7 +1065,7 @@ func TestBuildServer_Unauthenticated_FailsClosed(t *testing.T) {
 // TestConfigFromEnv_Defaults verifies configFromEnv's zero-environment
 // defaults. Every other test in this file drives buildServer directly
 // through testConfig(t), bypassing configFromEnv (and its os.Getenv reads)
-// entirely, so this closes the coverage gap round 3's smoke test flagged.
+// entirely, so configFromEnv itself is covered.
 //
 // Each variable configFromEnv reads is explicitly set to "" via t.Setenv,
 // rather than left untouched, so this test's outcome does not depend on
@@ -1519,7 +1513,7 @@ func TestConfigFromEnv_RootKey_IndividualOverrideWins(t *testing.T) {
 }
 
 // TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose is
-// this round's own end-to-end proof: APP_ROOT_KEY set alone (every
+// the end-to-end proof: APP_ROOT_KEY set alone (every
 // individual key env var cleared), configFromEnv resolves all six key
 // materials through dbkit.DeriveKey, buildServer boots a real composed
 // server from the result, and every one of the six derived keys is
@@ -1567,7 +1561,7 @@ func TestBuildServer_RootKeyAlone_AllSixDerivedKeysWorkForTheirRealPurpose(t *te
 
 	// ConfigKey: the exact mechanism go/config's Sensitive values are
 	// sealed with (config.WithCipher over dbkit.NewCipher, per
-	// go/config/AGENTS.md) -- a real Encrypt/Decrypt round trip under the
+	// see go/config's own docs) -- a real Encrypt/Decrypt round trip under the
 	// derived key.
 	configCipher, err := dbkit.NewCipher(cfg.ConfigKey)
 	if err != nil {
@@ -1764,8 +1758,8 @@ func TestBuildServer_ClientSuppliedTenantHints_Ignored(t *testing.T) {
 	}
 }
 
-// TestBuildServer_NoteCreate_PersistsAuditEvent is this round's B3 proof:
-// examples/reference-app -- root CLAUDE.md's mandatory first consumer of
+// TestBuildServer_NoteCreate_PersistsAuditEvent is the proof that
+// examples/reference-app -- the mandatory first consumer of
 // every module -- is a real consumer of go/dbkit/audit, not merely a
 // package that compiles against it. It drives a real POST /api/v1/notes
 // request through the full composed stack (tenancy.Middleware,
@@ -1823,10 +1817,10 @@ func TestBuildServer_NoteCreate_PersistsAuditEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListByTenant(%q): %v", tenantID, err)
 	}
-	// tenant-acme's own audit trail is no longer notes' alone: since the
-	// go/billing credit-audit round, seedDemoCredits' own boot-time Grant
+	// tenant-acme's own audit trail is not notes' alone: seedDemoCredits'
+	// own boot-time Grant
 	// (demo_credits.go) is itself a real CreditService.Grant call, which
-	// now records its own "billing.credit.grant" AuditEvent for this same
+	// records its own "billing.credit.grant" AuditEvent for this same
 	// tenant (credit_service.go's emitCreditAudit) -- see
 	// billing_credit_flow_test.go's own audit tests for that surface's
 	// dedicated proof. This test's own claim is narrower and unaffected:

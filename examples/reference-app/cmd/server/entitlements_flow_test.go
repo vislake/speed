@@ -4,8 +4,8 @@ package main
 // internal/consult's chat route and internal/smilesim's image-generation
 // route -- run behind go/billing's real Entitlements seam end to end,
 // driven through the REAL composed HTTP stack exactly like
-// consult_flow_test.go and billing_credit_flow_test.go drive their own
-// rounds' proofs.
+// consult_flow_test.go and billing_credit_flow_test.go drive their
+// proofs.
 //
 // What the seam gates, and what this file proves about it:
 //
@@ -52,9 +52,8 @@ package main
 // tenant-acme.
 //
 // The subscription state this suite depends on is a demo seed, and the
-// purchase leg that would create a subscription for real stays honestly
-// out of scope -- see demo_entitlements.go's package doc comment and
-// go/billing/AGENTS.md's own Scope table for the named gap.
+// purchase leg that would create a subscription for real stays out of
+// scope -- see demo_entitlements.go's package doc comment.
 import (
 	"context"
 	"encoding/json"

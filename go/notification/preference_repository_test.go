@@ -26,12 +26,12 @@ func newTestPreference(id string) *NotificationPreference {
 	}
 }
 
-// TestPreferenceRepository_AssertIsolated runs the tenant-data isolation suite
-// every tenant-scoped repository in this codebase is required to pass
-// (docs/internal/04-data-and-tenancy.md): two tenants' rows created side by
-// side, each tenant's FindByID/List/Update/Delete seeing only its own, a
-// forged TenantID overwritten by the context's tenant, and a tenant-less
-// context failing closed.
+// TestPreferenceRepository_AssertIsolated runs the tenant-data isolation
+// suite every tenant-scoped repository in this codebase is required to
+// pass: two tenants' rows created side by side, each tenant's
+// FindByID/List/Update/Delete seeing only its own, a forged TenantID
+// overwritten by the context's tenant, and a tenant-less context failing
+// closed.
 //
 // The closure must vary more than the id: notification_preferences' unique
 // index (tenant, recipient, type) forbids two rows for one tenant answering

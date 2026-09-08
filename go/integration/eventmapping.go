@@ -10,8 +10,7 @@ import (
 
 // EventTransform maps one internal domain event onto the raw JSON body of
 // its versioned public schema -- the "only the deliberately chosen fields
-// are exposed" rule docs/internal/07-platform-services.md's outbound-
-// webhook section states.
+// are exposed" rule of the outbound-webhook design.
 //
 // A Transform never sees WebhookSubscription -- the mapping from internal
 // event to public payload is a property of the EVENT TYPE alone, decided
@@ -33,8 +32,7 @@ type EventTransform func(ctx context.Context, evt pkgcore.Event) (json.RawMessag
 
 // EventMapping is one business module's declared internal-to-public event
 // schema mapping: "this internal event type maps to this public schema
-// version, via this transform function"
-// (docs/internal/07-platform-services.md's own phrasing).
+// version, via this transform function".
 //
 // # Why a Module option, not a pkgcore.Registry field or a business-module
 // # import
@@ -47,18 +45,17 @@ type EventTransform func(ctx context.Context, evt pkgcore.Event) (json.RawMessag
 // events directly, or (3) a host-supplied declaration this module's own
 // Module exposes.
 //
-// (2) is a straightforward violation of the root CLAUDE.md's module-
-// boundary rule and is not considered further. (1) was the task's own
-// suggested shape, and IS how a mapping conceptually belongs to the module
-// that owns the internal event -- but implementing it means changing
-// pkgcore.Registry, which this round is explicitly scoped to leave
-// untouched (pkgcore is the dependency floor every other module sits on;
-// widening its Registry contract is a change every module in the codebase
-// would need to react to, not a decision one module's round should make
-// unilaterally). (3) is what this file implements: WithEventMapping is a
-// Module Option, wired by the HOST at composition time -- exactly the shape
-// WithPermissionLister and WithMembershipChecker already established in
-// round 1 (seams.go), and exactly the shape every other cross-module seam
+// (2) is a straightforward violation of the module-boundary rule and is
+// not considered further. (1) was the suggested shape, and IS how a
+// mapping conceptually belongs to the module that owns the internal event
+// -- but implementing it means changing pkgcore.Registry, the dependency
+// floor every other module sits on; widening its Registry contract is a
+// change every module in the codebase would need to react to, not a
+// decision one module can make unilaterally. (3) is what this file
+// implements: WithEventMapping is a Module Option, wired by the HOST at
+// composition time -- exactly the shape WithPermissionLister and
+// WithMembershipChecker already established (seams.go), and exactly the
+// shape every other cross-module seam
 // in this codebase not carried on pkgcore.Registry uses (org.FeatureGate,
 // rbac.SubtreeResolver, notification.UserAddressResolver). The host already
 // imports every business module it boots plus go/integration, so it is the
@@ -72,14 +69,13 @@ type EventTransform func(ctx context.Context, evt pkgcore.Event) (json.RawMessag
 // documents the event's Type, its PayloadType and a human description
 // (pkgcore.EventDecl's own doc comment: "the declarations form the catalog
 // integration maps onto its versioned public event schema"). What a
-// business module's Register call does NOT do -- and, per this round's own
-// mandate not to touch pkgcore, cannot be made to do without a business
-// module importing go/integration -- is hand a Transform function across
-// the boundary; only the host, which sits above every module, can close
-// that function over the business module's own concrete payload type (or,
-// as this round's own proof does in webhook_delivery_test.go, read the
-// payload structurally via JSON, the identical no-import technique
-// org.userIDFromPayload already uses for authn.user.created).
+// business module's Register call does NOT do -- and cannot be made to do
+// without a business module importing go/integration -- is hand a
+// Transform function across the boundary; only the host, which sits above
+// every module, can close that function over the business module's own
+// concrete payload type (or read the payload structurally via JSON, the
+// identical no-import technique org.userIDFromPayload uses for
+// authn.user.created -- the shape webhook_delivery_test.go exercises).
 //
 // # Registered at Module construction time, not at Register time
 //
@@ -106,13 +102,13 @@ type EventMapping struct {
 	PublicType string
 
 	// PublicVersion is the schema version this mapping's Transform produces
-	// right now (for example "v1"), per docs/internal/07's rule that public
-	// events are versioned independently: a breaking change to what Transform
-	// returns ships as a NEW EventMapping under a new PublicVersion (and,
-	// per the design doc, the old version keeps being served for a
-	// deprecation window rather than changing in place) -- never by
-	// mutating an existing mapping's Transform in place, which would
-	// silently change what an already-configured subscriber receives.
+	// right now (for example "v1"), per the design rule that public events
+	// are versioned independently: a breaking change to what Transform
+	// returns ships as a NEW EventMapping under a new PublicVersion (the
+	// old version keeps being served for a deprecation window rather than
+	// changing in place) -- never by mutating an existing mapping's
+	// Transform in place, which would silently change what an
+	// already-configured subscriber receives.
 	PublicVersion string
 
 	// Transform produces the public payload from the internal event. See
@@ -121,8 +117,8 @@ type EventMapping struct {
 	Transform EventTransform
 
 	// Description is optional English catalog text -- kept for symmetry
-	// with pkgcore.EventDecl.Description and for a later round's admin
-	// console to render, never required.
+	// with pkgcore.EventDecl.Description and for an admin console to
+	// render, never required.
 	Description string
 }
 
@@ -183,10 +179,9 @@ func buildEventMappingIndex(mappings []EventMapping) (eventMappingIndex, error) 
 }
 
 // publicEventEnvelope is the versioned public wire shape every webhook
-// delivery's body is, per docs/internal/07-platform-services.md's rule that
-// the payload schema is identified by "event.type" + "event.version".
-// buildEnvelope (webhook_delivery.go) is the only place this type is
-// constructed.
+// delivery's body is, per the design rule that the payload schema is
+// identified by "event.type" + "event.version". buildEnvelope
+// (webhook_delivery.go) is the only place this type is constructed.
 type publicEventEnvelope struct {
 	Event publicEventMeta `json:"event"`
 	Data  json.RawMessage `json:"data"`

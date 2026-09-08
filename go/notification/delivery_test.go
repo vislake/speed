@@ -809,11 +809,11 @@ func TestDelivery_UnknownContactRefusalSurfacesToTheQueue(t *testing.T) {
 // retries within the queue's bounded horizon instead of silently
 // converging), and once the code IS verified the very same job payload
 // delivers -- the deferral's payoff. A verification landing inside the
-// retry horizon lets the job deliver itself; the old silent-skip behaviour
-// would have dropped the message unless someone noticed and re-dispatched,
-// and the attempt's refusal carries no record because there is no channel
-// to record under -- the gate refused before the contact's channel ever
-// resolved.
+// retry horizon lets the job deliver itself; the refusal is the job's
+// signal to retry, where a silent skip would have dropped the message
+// unless someone noticed and re-dispatched. The attempt's refusal carries
+// no record because there is no channel to record under -- the gate
+// refused before the contact's channel ever resolved.
 func TestDelivery_PendingContactRefusalIsDeferredUntilVerification(t *testing.T) {
 	env := newDeliveryEnv(t)
 	ctx := tenantCtx(deliveryTenant)
@@ -1610,15 +1610,13 @@ func deliveryHistogramCount(t *testing.T, m metricdata.Metrics, typeKey, channel
 	return 0
 }
 
-// TestDelivery_MetricsRecordCountAndDurationByChannelAndStatus is the
-// regression proof that DeliveryService actually emits the
-// docs/internal/09-observability.md must-instrument row for the
-// notification domain -- per-channel delivery success rate, latency and
-// (derived from the same counter's status attribute) bounce rate -- rather
-// than only writing send_records. Before registerDeliveryMetrics/
-// recordDeliveryMetrics existed, both collectMetric calls below would fail
-// with "metric ... not found", which is the negative control this test
-// relies on.
+// TestDelivery_MetricsRecordCountAndDurationByChannelAndStatus proves
+// DeliveryService emits the notification domain's metrics -- per-channel
+// delivery success rate, latency and (derived from the same counter's
+// status attribute) bounce rate -- rather than only writing send_records.
+// Without registerDeliveryMetrics, both collectMetric calls below would
+// fail with "metric ... not found", which is the negative control this
+// test relies on.
 //
 // One delivery whose email channel fails permanently while its SMS and
 // in-app channels succeed exercises both outcomes settle can reach in a
@@ -1947,18 +1945,15 @@ func TestDelivery_ContactBounceCarryingTheAddress_StoredRecordAndReadbackNeverCa
 }
 
 // TestDelivery_TransportEchoingTheAddressInANonNormalizedForm_NeverReachesTheStoredRecord
-// is the P1 regression the bounded-classification shape exists for. The
-// module hands a transport the normalized form of the recipient's address
-// (a lowercased email, an E.164 phone), while the transport echoes the
+// pins the bounded-classification shape's reason for existing. The module
+// hands a transport the normalized form of the recipient's address (a
+// lowercased email, an E.164 phone), while the transport echoes the
 // mailbox it rejected in whatever form IT chose -- an uppercase rendering
-// of the email, a plus-less MSISDN. The old caller-side guard redacted by
-// exact substring match against the module's own normalized form, so an
-// echo in any other form failed the Contains check and the record stored
-// the transport's message verbatim: plaintext PII in a platform table with
-// no deletion path, readable through the D10 operator search. After the
-// fix no transport text is stored at all -- the failed record carries the
-// bounded classification, and the raw echo cannot reach the column in ANY
-// form, normalized or not.
+// of the email, a plus-less MSISDN. No transport text is stored at all:
+// the failed record carries the bounded classification, and a raw echo
+// cannot reach the column in ANY form, normalized or not -- an echo in the
+// column would plant plaintext PII in a platform table with no deletion
+// path.
 //
 // The classification is asserted as its literal text ("transport refused",
 // the value of the module's unexported failureReasonTransportRefused
@@ -2339,9 +2334,9 @@ var overDeclaredAppointmentType = pkgcore.NotificationType{
 // annotation's word is not the copy's, and a value no template uses must
 // not reach the row even when a declaration says it may.
 func TestDelivery_Dispatch_RefusesParamsNoTemplateReferences(t *testing.T) {
-	// Leg 1: the unrestricted fixture type. The P1-2 recipient-visible
-	// gate has nothing to refuse (nil list = legacy unrestricted), so a
-	// copy-inert parameter must be refused by the copy gate alone.
+	// Leg 1: the unrestricted fixture type. The recipient-visible gate has
+	// nothing to refuse (nil list = legacy unrestricted), so a copy-inert
+	// parameter must be refused by the copy gate alone.
 	env := newDeliveryEnv(t)
 	ctx := tenantCtx(deliveryTenant)
 

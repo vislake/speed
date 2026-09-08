@@ -56,8 +56,9 @@
  * actually running under, or misread a login as its own credentials
  * taking effect when a different concurrent login actually won. The
  * losing operation's freshly minted tokens are never applied either
- * way -- that part of the guard is unchanged; only how the caller
- * learns about it changed. refresh() never bumps: it captures the
+ * way; only how the caller learns of the loss varies -- a superseded
+ * user operation rejects, a losing refresh resolves false. refresh()
+ * never bumps: it captures the
  * generation it started under, and its writes -- the store, the
  * snapshot -- apply only while that generation still holds. That
  * makes a completed logout win over a refresh that resolves after it
@@ -248,10 +249,9 @@ export interface AuthSession {
    * already-authenticated caller binding a new identity) is refused
    * with a client.protocol ApiError before any state change: this
    * surface is a sign-in surface, its caller is anonymous by
-   * construction, and there is nothing to bind to. Binding semantics
-   * belong to a later round. Same OperationSupersededError contract
-   * as loginWithPassword when a concurrent operation committed
-   * first. */
+   * construction, and there is nothing to bind to. Same
+   * OperationSupersededError contract as loginWithPassword when a
+   * concurrent operation committed first. */
   completeSocialLogin(
     provider: string,
     request: AuthnSocialCallbackRequest,
@@ -590,8 +590,8 @@ export function createAuthSession(store: AccessTokenStore): AuthSession {
    *
    * When another user operation committed while this one was in
    * flight, this result is superseded: its freshly minted tokens are
-   * never applied (that part is unchanged), but the caller is told so
-   * via an OperationSupersededError rejection rather than a silent
+   * never applied, and the caller is told so via an
+   * OperationSupersededError rejection rather than a silent
    * resolve carrying someone else's snapshot -- see the class's own
    * doc comment and the file header's generation-guard paragraph. */
   function settleIssued(

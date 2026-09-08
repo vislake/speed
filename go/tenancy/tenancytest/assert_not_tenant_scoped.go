@@ -31,8 +31,8 @@ const (
 
 // AssertNotTenantScoped verifies the OPPOSITE and equally important property
 // from AssertIsolated: a model that must NOT be tenant-scoped (identity or
-// platform data, per docs/internal/04-data-and-tenancy.md's data-domain
-// table) is genuinely unaffected by dbkit's isolation plugin when queried
+// platform data) is genuinely unaffected by dbkit's isolation plugin when
+// queried
 // through a plain *gorm.DB from dbkit.Open — i.e. confirms the model does
 // NOT (accidentally or otherwise) implement dbkit.TenantScoped, and that
 // querying/writing it works identically regardless of what tenant (if any)

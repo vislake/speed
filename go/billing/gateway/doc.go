@@ -9,6 +9,7 @@
 // under lockstep versioning each one costs a go.work entry, a CI matrix row,
 // an AGENTS.md and a version tag that a subpackage does not.
 //
-// See docs/internal/03-deployment-modes.md constraint 6 for the rule, and
-// docs/internal/06-billing-and-metering.md for this package's design.
+// The module-boundary rules this packaging choice rests on are stated in
+// the deployment-modes design doc; this package's own design rationale
+// lives in the billing design doc.
 package gateway

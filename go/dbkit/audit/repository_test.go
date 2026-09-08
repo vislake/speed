@@ -28,8 +28,7 @@ import (
 // fakeAuditModule is a minimal pkgcore.Module used only by this package's
 // own tests, to feed the package's embedded migrations to
 // dbkit.MigrationRegistry without depending on the persister
-// pkgcore.Module that lands alongside Emit and the write-capture plugin in
-// this same round (see doc.go). Only Name and Migrations are ever read by
+// pkgcore.Module (see doc.go). Only Name and Migrations are ever read by
 // MigrationRegistry.Apply here; DependsOn, Locales, OpenAPISpec and
 // Register exist solely to satisfy the interface, mirroring dbkit's own
 // migrations_test.go fakeModule.
@@ -149,19 +148,18 @@ func TestRepository_Insert_DuplicateID_Fails(t *testing.T) {
 	}
 }
 
-// TestRepository_InsertIdempotent_DuplicateID_IsANoOp is the regression
-// test for the finding recorded in go/dbkit/audit/AGENTS.md's
-// "Multi-replica delivery" section: in distributed deployment mode with
-// more than one replica, pkgcore.RedisEventBus delivers every event to
-// every replica once each, so Module's subscribers (module.go's
-// onWriteCaptured, onRecorded, onSystemContextEntered) independently call
-// Insert once per replica for the SAME logical event. Before
-// InsertIdempotent existed, each of those calls generated its own random
-// ID (Insert's default when evt.ID is left empty), so N replicas produced
-// N rows for one real action. This test proves the fix at the Repository
-// layer directly: inserting the same evt.ID twice through
-// InsertIdempotent succeeds both times but persists exactly one row --
-// module_test.go's
+// TestRepository_InsertIdempotent_DuplicateID_IsANoOp proves the
+// Repository-level half of Module's multi-replica deduplication (see
+// AGENTS.md's "Multi-replica delivery" section): in distributed
+// deployment mode with more than one replica, a broker-backed bus
+// delivers every event to every replica once each, so Module's
+// subscribers (module.go's onWriteCaptured, onRecorded,
+// onSystemContextEntered) independently call Insert once per replica for
+// the SAME logical event. A plain Insert would generate a fresh random ID
+// per call (its default when evt.ID is left empty), so N replicas would
+// produce N rows for one real action; inserting the same evt.ID twice
+// through InsertIdempotent succeeds both times but persists exactly one
+// row. module_test.go's
 // TestModule_OnWriteCaptured_DeliveredToMultipleReplicas_PersistsExactlyOnce
 // and its two siblings prove the same property end to end, through
 // Module's real deterministic-ID derivation.

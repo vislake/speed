@@ -2,7 +2,7 @@
 
 The platform's design tokens as pure, dependency-free data: types, the
 `defaultTokens` tree, and the `deepMerge` override mechanism. Zero runtime
-dependencies, no React, no CSS-in-JS -- consumers (the future `ui-kit`
+dependencies, no React, no CSS-in-JS -- consumers (the `ui-kit`
 theme factory, apps that need raw values) import data and types only.
 
 ## Contents
@@ -29,7 +29,7 @@ Tests deep-freeze inputs to prove `deepMerge` never mutates.
 
 ## Why the naming mirrors the MUI theme shape
 
-The tokens are deliberately structured so the future `createAppTheme`
+The tokens are deliberately structured so the `createAppTheme`
 adapter in `ui-kit` maps them onto the MUI theme **without contortions**:
 
 | Token section | MUI theme slot | Parity today |
@@ -99,6 +99,6 @@ Shape drift (an unknown section, a string where a hex belongs) is a
 
 ## Development
 
-From `web/packages/tokens`: `pnpm lint`, `pnpm typecheck`, `pnpm test`
-(31 tests), `pnpm build` (emits `dist/`). No locales: this package carries
+From `web/packages/tokens`: `pnpm lint`, `pnpm typecheck`, `pnpm test`,
+`pnpm build` (emits `dist/`). No locales: this package carries
 no user-facing text.

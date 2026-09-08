@@ -9,8 +9,7 @@
 // layout dbkit.MigrationRegistry.Apply expects from every module -- the
 // embedding file has to live in the one directory where those two names
 // are its own immediate children. This mirrors go/org/migrations,
-// go/storage/migrations and go/pki/migrations; see go/dbkit/AGENTS.md's
-// "Migrations" section.
+// go/storage/migrations and go/pki/migrations.
 package migrations
 
 import "embed"

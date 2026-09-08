@@ -46,10 +46,9 @@ const jobTypeAuditExport = "admin.audit_export"
 // the download link to its recipient receives the token only through a
 // synchronous return channel -- the shape compliance.Export's own return
 // already provides -- never from a stored job record. No admin surface
-// provides such a synchronous channel yet (Enqueue returns only the job
-// id, see Enqueue's doc comment); one must exist before any operator can
-// actually relay a link, which is future surface work recorded here
-// rather than an excuse to ship the credential at rest.
+// provides such a synchronous channel: Enqueue returns only the job id
+// (see Enqueue's doc comment), so the download link cannot be relayed to
+// its recipient through admin itself today.
 type exportJobResult struct {
 	ObjectKey string    `json:"object_key"`
 	ShareID   string    `json:"share_id"`
@@ -58,12 +57,11 @@ type exportJobResult struct {
 
 // exportJobPayload is Enqueue's job payload: the one fact Handle needs that
 // is not already carried by jobs.Job itself -- which operator asked for
-// this export (P1-2's fix). It travels the same way every other job
-// payload in this codebase does (notification.Dispatch, say): marshaled by
-// Enqueue, unmarshaled by Handle, since the worker's ctx is rebuilt from
-// the job record alone (root CLAUDE.md's "workers do not inherit tenant
-// context" trap applies identically to operator identity -- nothing about
-// the enqueuing request's own ctx survives to the worker).
+// this export. It travels the same way every other job payload in this
+// codebase does (notification.Dispatch, say): marshaled by Enqueue,
+// unmarshaled by Handle, since the worker's ctx is rebuilt from the job
+// record alone -- nothing about the enqueuing request's own ctx survives
+// to the worker, operator identity included.
 type exportJobPayload struct {
 	// OperatorUserID is the platform operator who asked for this export --
 	// resolved by the HTTP handler from the caller's own verified
@@ -74,15 +72,13 @@ type exportJobPayload struct {
 	OperatorUserID string `json:"operator_user_id"`
 }
 
-// ExportService is D7's export-leg runtime: an asynchronous kickoff over
-// compliance.ExportService.Export, going through go/jobs rather than
-// running synchronously inside the HTTP request -- root CLAUDE.md's
-// asynchronous-work discipline ("Long-running operations must go through
-// the jobs queue and report progress; never run them synchronously inside
-// an HTTP request"), the identical shape every other long-running
-// operation in this codebase already takes (go/storage's derive/expiry
-// jobs, go/notification's delivery jobs, go/ai-gateway's image-generation
-// job).
+// ExportService is the audit-export leg's runtime: an asynchronous kickoff
+// over compliance.ExportService.Export, going through go/jobs rather than
+// running synchronously inside the HTTP request -- long-running operations
+// go through the jobs queue, never inside an HTTP request's own budget --
+// the identical shape every other long-running operation in this codebase
+// takes (go/storage's derive/expiry jobs, go/notification's delivery jobs,
+// go/ai-gateway's image-generation job).
 //
 // It is also a jobs.Handler: Module.Register registers it on
 // reg.Jobs.Handle(jobTypeAuditExport, ...) directly, the same "the
@@ -94,13 +90,12 @@ type ExportService struct {
 
 	// bus and auditActions back the explicit admin.audit_export audit.Emit
 	// call Handle makes once an export's work actually completes -- fully
-	// or partially (P1-2's fix, widened by P2-4 to the partial outcome) --
-	// the same "explicit Emit over automatic write capture" shape
-	// ImpersonationService.recordAudit uses, for the identical reason:
-	// this module owns no row of its own to auto-capture a write against.
-	// Nil until Module.Register calls attachAudit, tolerated by skipping
-	// the audit side effect exactly like every other seam in this module
-	// before Register runs.
+	// or partially -- the same "explicit Emit over automatic write
+	// capture" shape ImpersonationService.recordAudit uses, for the
+	// identical reason: this module owns no row of its own to auto-capture
+	// a write against. Nil until Module.Register calls attachAudit,
+	// tolerated by skipping the audit side effect exactly like every other
+	// seam in this module before Register runs.
 	bus          pkgcore.EventBus
 	auditActions pkgcore.AuditActionRegistrar
 
@@ -108,8 +103,7 @@ type ExportService struct {
 	// ctx actor Handle installs (see Handle and resolveActorName). Nil
 	// until Module.Register calls attachAudit; WithAuthn is a mandatory
 	// production option, so this is never nil in a correctly wired
-	// Bootstrap, and a nil-seam unit fixture records id-only actors
-	// exactly as before.
+	// Bootstrap, and a nil-seam unit fixture records id-only actors.
 	authnSvc *authn.Service
 }
 
@@ -138,13 +132,15 @@ func (s *ExportService) attachAudit(bus pkgcore.EventBus, actions pkgcore.AuditA
 // belongs inside an HTTP request's own timeout budget.
 //
 // operatorUserID is the platform operator who asked for this export --
-// P1-2's fix for the one admin write path that used to attribute nobody at
-// all. It travels inside the job's own payload (exportJobPayload), since
-// the worker's ctx is rebuilt from the job record alone and carries
-// nothing of the enqueuing request's own context (root CLAUDE.md's
-// "workers do not inherit tenant context" trap, applied identically to
-// operator identity) -- Handle decodes it back out and sets it as the
-// audit event's Actor once the export completes.
+// every admin write path attributes the calling operator, and an export
+// enqueued with nobody to attribute it to would leave "who exported this
+// tenant's audit trail" permanently unanswerable (ErrExportOperatorRequired).
+// It travels inside the job's own payload (exportJobPayload), since the
+// worker's ctx is rebuilt from the job record alone and carries nothing of
+// the enqueuing request's own context (the same reason workers rebuild
+// tenant context themselves, applied identically to operator identity) --
+// Handle decodes it back out and sets it as the audit event's Actor once
+// the export completes.
 func (s *ExportService) Enqueue(ctx context.Context, tenantID, operatorUserID string) (jobs.JobID, error) {
 	if tenantID == "" {
 		return "", ErrTenantIDRequired
@@ -170,26 +166,26 @@ func (s *ExportService) Type() string { return jobTypeAuditExport }
 // (pkgcore.WithTenant, rebuilt by the worker -- jobs.Handler.Handle's own
 // doc comment), so this decodes job.Payload for the operator identity
 // Enqueue carried, forwards to compliance.ExportService.Export, records
-// admin.audit_export once the export actually completes (P1-2's fix --
-// see recordAudit's own doc comment for exactly what is and is not
-// covered), and marshals Export's outcome into the job's Result for a
-// caller polling jobs.Queue.Get to retrieve later -- the object key, the
-// minted share id and its expiry, deliberately never the one-time
-// delivery token (P1-B: the token is a bearer credential that must not
-// be persisted with the job record; see exportJobResult's own doc
-// comment for why it dies in this frame instead).
+// admin.audit_export once the export actually completes (see recordAudit's
+// own doc comment for exactly what is and is not covered), and marshals
+// Export's outcome into the job's Result for a caller polling
+// jobs.Queue.Get to retrieve later -- the object key, the minted share id
+// and its expiry, deliberately never the one-time delivery token: the
+// token is a bearer credential that must not be persisted with the job
+// record (see exportJobResult's own doc comment for why it dies in this
+// frame instead).
 //
 // Export's own ErrExportPartialFailure (some participant's data could
 // not be gathered, but the rest was gathered, stored and delivered) is
 // deliberately NOT returned as this call's error: partial failure is
-// terminal handling for this job type (P2-4). Export returns that error
-// only AFTER its work is done -- the manifest is stored, the single-view
-// share is minted, compliance's own audit event is out -- so surfacing it
-// as a Handle error would hand the queue a side-effectful, non-idempotent
+// terminal handling for this job type. Export returns that error only
+// AFTER its work is done -- the manifest is stored, the single-view share
+// is minted, compliance's own audit event is out -- so surfacing it as a
+// Handle error would hand the queue a side-effectful, non-idempotent
 // operation to retry: every retried attempt mints a fresh object key and
-// a fresh share, piling up delivered dumps while admin's own audit
-// record stays silent. Handle instead completes the job (StatusSucceeded,
-// with the partial result -- object key, share id, expiry -- recorded in
+// a fresh share, piling up delivered dumps while admin's own audit record
+// stays silent. Handle instead completes the job (StatusSucceeded, with
+// the partial result -- object key, share id, expiry -- recorded in
 // jobs.Result.Data exactly like a full export's) and records the partial
 // outcome in its own admin.audit_export event: Success false, the failing
 // participants named, the delivered result in Changes (recordAudit's own
@@ -217,12 +213,12 @@ func (s *ExportService) Handle(ctx context.Context, job *jobs.Job, _ jobs.Progre
 	// zero Actor for every admin-triggered export even though the
 	// operator identity was known and available the whole time.
 	//
-	// P2-pkgcore-actor-1: the actor is resolved against the users table
-	// here (resolveActorName) before it is layered on, so both this
-	// event and compliance's own carry the operator's display name, not
-	// an id-only Actor -- the worker context rebuilt from the job record
-	// has no other channel to learn it from, and the payload carries only
-	// the id Enqueue's HTTP caller resolved.
+	// The actor is resolved against the users table here (resolveActorName)
+	// before it is layered on, so both this event and compliance's own
+	// carry the operator's display name, not an id-only Actor -- the
+	// worker context rebuilt from the job record has no other channel to
+	// learn it from, and the payload carries only the id Enqueue's HTTP
+	// caller resolved.
 	if payload.OperatorUserID != "" {
 		ctx = pkgcore.WithActor(ctx, resolveActorName(ctx, s.authnSvc,
 			pkgcore.Actor{Type: pkgcore.ActorTypePlatformAdmin, ID: payload.OperatorUserID}))
@@ -291,18 +287,14 @@ func auditExportFailureReason(manifest compliance.ExportManifest) string {
 // key and, when a share was minted, its id and expiry) rather than
 // discarding on the way out, and failureReason is empty on a full
 // success or names the failing participants on a partial one, mirrored
-// into the event's Result (Success false with that reason). P2-4: on the
-// unfixed code the event only ever reported Success true and carried no
-// result at all -- and on a partial export it never fired, because the
-// error return sat before the recordAudit call.
+// into the event's Result (Success false with that reason).
 //
 // The operator who asked for the export (Enqueue's operatorUserID,
 // carried through the job's own payload, and already attached to ctx as
 // Actor by Handle before Export ran) is the Actor -- an ordinary,
 // single-identity attribution, never OnBehalfOf: admin's own routes
-// deliberately never sit behind ImpersonationMiddleware (AGENTS.md's
-// "The impersonation request pipeline" section), so callerUserID always
-// names the REAL calling operator here, exactly like
+// deliberately never sit behind ImpersonationMiddleware, so callerUserID
+// always names the REAL calling operator here, exactly like
 // TenantService.SetStatus's own audit event, never a substituted
 // impersonation target.
 //

@@ -20,10 +20,9 @@ import (
 )
 
 // newTestDB returns a *gorm.DB backed by a private, per-test temp-file
-// SQLite database (dbkit/dbtest, the mandatory dual-dialect test helper —
-// backend coding standard §13) with the jobs schema already applied. See
-// AGENTS.md's Known limitations for why this package's own tests exercise
-// SQLite only, never dbtest.NewPostgres.
+// SQLite database (dbkit/dbtest) with the jobs schema already applied. The
+// package's own tests exercise SQLite only; the PostgreSQL dialect of the
+// schema is covered by the integration tier.
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db := dbtest.NewSQLite(t)
@@ -204,10 +203,10 @@ func TestEnsureJobsSchema_UpgradesLegacyQueueWritersTableWithoutStaleAt(t *testi
 }
 
 // TestJobRecord_NotTenantScoped is the mandatory isolation-assertion suite
-// (root CLAUDE.md, backend coding standard §3.3) for platform data:
-// jobRecord must NOT be affected by dbkit's tenant-scoping plugin, since
-// the dispatcher scans eligible Jobs across every tenant at once. See
-// jobRecord's own doc comment for the full design rationale.
+// for platform data: jobRecord must NOT be affected by dbkit's
+// tenant-scoping plugin, since the dispatcher scans eligible Jobs across
+// every tenant at once. See jobRecord's own doc comment for the full design
+// rationale.
 func TestJobRecord_NotTenantScoped(t *testing.T) {
 	db := newTestDB(t)
 
@@ -330,10 +329,8 @@ func TestInsertRecord_IdempotencyKey_DifferentTenantsDoNotCollide(t *testing.T) 
 // createJobsIdempotencySQL's own doc comment names as the reason Enqueue
 // relies on a unique-index conflict rather than a check-then-insert
 // sequence. Concurrency is kept modest (a handful of goroutines) because
-// SQLite serializes writers on one file even under the bounded 5000 ms
-// busy_timeout every dbkit SQLite connection carries (the driver's own
-// default, declared explicitly by dbkit's dialect factory — see
-// go/dbkit/AGENTS.md's "SQLite busy timeout" section): what this test pins
+// SQLite serializes writers on one file even under the bounded busy_timeout
+// every dbkit SQLite connection carries: what this test pins
 // is the idempotency property under genuine contention, not SQLite's writer
 // scheduling, and a modest concurrency keeps the assertion about the
 // unique-index conflict rather than about lock-wait convergence.
@@ -838,8 +835,8 @@ func TestCompleteSucceeded_NoOpWhenNotRunning(t *testing.T) {
 // half of the completion guard: a row that is StatusRunning under ANOTHER
 // writer's claim — the state a second writer's reset-and-re-claim of the
 // first writer's mid-Handle row leaves behind — must not be settled by the
-// first writer's completion write. Fails on the pre-fix write, whose WHERE
-// named only id and status: the stale execution's success lands on the
+// first writer's completion write. A completion write whose WHERE named
+// only id and status would let the stale execution's success land on the
 // sibling's running row, marking it succeeded with this attempt's result
 // while the sibling is still inside Handle — the secondary harm of the
 // writer-takeover double-execution defect, and exactly why the no-op must
@@ -1183,9 +1180,9 @@ func TestResetInterruptedRecords_OwnFreshClaimIsLeftAlone(t *testing.T) {
 // the table back so the next acquire succeeds immediately. The judgment
 // datum throughout is the stale moment the INCUMBENT authored (its own
 // stale window applied to its own last beat), never the acquiring side's
-// window: the "zero stale window makes the incumbent stale immediately"
-// semantics the pre-fix gate had — the shape of the cadence-mismatch
-// double-execution defect — is deliberately gone and pinned gone here.
+// window: "zero stale window makes the incumbent stale immediately" — the
+// semantics that would produce the cadence-mismatch double-execution
+// defect — is pinned gone here.
 func TestWriterRegistration_AcquireHeartbeatRelease(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -1229,10 +1226,10 @@ func TestWriterRegistration_AcquireHeartbeatRelease(t *testing.T) {
 	}
 	// ...and STILL refused just before that moment with a ZERO stale window
 	// on the acquiring side: the taker's own window must never judge the
-	// incumbent. Fails on the pre-fix gate, whose "zero stale window makes
-	// the incumbent stale immediately" semantics let a fast-cadence taker
-	// steal a live incumbent beating at its own slower cadence — the
-	// double-execution defect this test pins closed.
+	// incumbent. A "zero stale window makes the incumbent stale
+	// immediately" reading would let a fast-cadence taker steal a live
+	// incumbent beating at its own slower cadence — the double-execution
+	// defect this test pins closed.
 	err = acquireWriterRegistration(ctx, db, "successor", now.Add(2*time.Second+400*time.Millisecond), 0)
 	if !errors.Is(err, ErrQueueWriterActive) {
 		t.Fatalf("acquire before the incumbent's own stale moment error = %v, want ErrQueueWriterActive (the taker's own window must not judge the incumbent)", err)
@@ -1390,10 +1387,10 @@ func TestQueueDepthByTypeAndStatus(t *testing.T) {
 // behaviour, identical on both dialects, while the database's refusal
 // (and the running-state wedge it leaves behind) exists only on
 // PostgreSQL and is pinned by the integration leg
-// (integration_test/postgres_overlong_message_test.go). Pre-fix, SQLite
-// happily stores the overlong value, so the width assertion here fails;
-// post-fix the choke point has cut it before the write, and each test's
-// structured-warning assertion fails if a cut ever stops warning.
+// (integration_test/postgres_overlong_message_test.go). On SQLite an
+// uncut value would store happily, so the width assertion here would
+// fail; and each test's structured-warning assertion fails if a cut ever
+// stops warning.
 func TestCompleteDeadLetter_OverlongCause_TruncatedToColumnWidth(t *testing.T) {
 	db := newTestDB(t)
 	rec := fixtureRecord("tenant-a", "t")

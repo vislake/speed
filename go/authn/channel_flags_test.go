@@ -69,14 +69,14 @@ func newScriptedFeatureGate(overrides map[string]bool) *scriptedFeatureGate {
 	return &scriptedFeatureGate{values: values}
 }
 
-// TestService_Login_PasswordChannelDisabled_Refuses is the regression for
-// the audit finding that the declared authn.password_login flag was never
-// read: a deployment turning password sign-in off (to force enterprise SSO,
-// say) hid the form from the login page, but POSTing the password endpoint
-// still issued tokens -- the "disabled" channel stayed fully callable by
-// anyone who knew the URL. With a feature gate wired and the flag off,
-// Login must refuse with authn.channel_disabled before any password work,
-// rate-limit burn or lockout accounting happens.
+// TestService_Login_PasswordChannelDisabled_Refuses pins the gate's
+// enforcement: the declared authn.password_login flag is read at request
+// time, so a deployment turning password sign-in off (to force enterprise
+// SSO, say) does more than hide the form from the login page -- POSTing the
+// password endpoint must not issue tokens, or the "disabled" channel stays
+// fully callable by anyone who knows the URL. With a feature gate wired
+// and the flag off, Login must refuse with authn.channel_disabled before
+// any password work, rate-limit burn or lockout accounting happens.
 func TestService_Login_PasswordChannelDisabled_Refuses(t *testing.T) {
 	t.Parallel()
 
@@ -98,8 +98,8 @@ func TestService_Login_PasswordChannelDisabled_Refuses(t *testing.T) {
 
 // TestService_Login_PasswordChannelEnabled_StillSucceeds guards the gate
 // against over-refusing: with the flag on, a correct password must keep
-// issuing tokens exactly as before -- the flag is a per-channel switch, not
-// a new way for logins to break.
+// issuing tokens -- the flag is a per-channel switch, not a new way for
+// logins to break.
 func TestService_Login_PasswordChannelEnabled_StillSucceeds(t *testing.T) {
 	t.Parallel()
 

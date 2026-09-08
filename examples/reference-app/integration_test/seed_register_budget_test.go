@@ -1,32 +1,33 @@
 //go:build integration
 
 // This file is the reference app's distributed-mode regression for the
-// P2-5 finding on the boot-time demo-user seed (cmd/server/demo_users.go):
+// boot-time demo-user seed's register-budget behavior
+// (cmd/server/demo_users.go):
 // repeated seeded restarts within authn's register quota window must not
 // trip the register rate limit.
 //
 // The mechanism, and why only this tier can prove it: authn limits
-// registrations per client IP to 10 per hour (go/authn/ratelimit.go's
+// registrations per client IP (go/authn/ratelimit.go's
 // limitRegisterByIP), and the seed's register POSTs travel in-process with
 // no client address, so every seeded boot debits the one shared
 // "no-address" bucket of whatever KVStore authn's rate guard sits on.
 // Under the standalone deployment mode that KVStore is per-boot memory --
 // a restart starts from a fresh budget, so the defect is unobservable
 // there. Under the distributed mode the KVStore is the shared Redis both
-// replicas compose, so the budget survives restarts: the seed used to
-// POST four registrations per boot (the three demo accounts plus the
+// replicas compose, so the budget survives restarts: a seed that POSTed
+// four registrations per boot (the three demo accounts plus the
 // platform-staff account, conflict answers included -- the guard runs
-// before the already-registered check), and the third startup within the
-// one-hour window was refused with authn.rate_limited and the boot failed.
+// before the already-registered check) would be refused on the third
+// startup within the one-hour window with authn.rate_limited and the boot
+// would fail.
 //
 // This test reboots ONE real replica process three times against the SAME
 // Redis KVStore and the SAME SQLite file with APP_DEMO_USERS_PASSWORD set
-// -- three startups within the quota window, exactly the reviewer's
-// scenario -- asserting that every boot reaches /healthz and that the
-// seeded owner can still sign in on each boot. Failing before the fix:
-// boot three's seed exhausts the shared budget and the child exits during
-// boot. Passing after: the seed now asks authn.Service.SearchUsers whether
-// each account exists BEFORE POSTing the register route
+// -- three startups within the quota window -- asserting that every boot
+// reaches /healthz and that the
+// seeded owner can still sign in on each boot. The seed asks
+// authn.Service.SearchUsers whether each account exists BEFORE POSTing
+// the register route
 // (registerDemoUserIfAbsent), so boots two and three register nothing at
 // all and never touch the public register budget, whatever deployment
 // mode and whatever KVStore state the budget lives in.

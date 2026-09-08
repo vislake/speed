@@ -29,10 +29,7 @@ func NewCredentialService(db *gorm.DB) *CredentialService {
 
 // Resolve returns the effective credential for provider: the caller's own
 // tenant BYOK row when ctx carries a tenant AND that tenant has one, the
-// platform-wide row otherwise. This is the exact tenant-override-down-to-
-// system-default fallback go/config's Service.Get walks (service.go's
-// resolve), applied to one credential lookup instead of one configuration
-// key.
+// platform-wide row otherwise.
 //
 // A context carrying no tenant (pkgcore.TenantFromContext's ok == false)
 // skips straight to the platform-wide row -- this is not an error, since a
@@ -66,8 +63,7 @@ func (s *CredentialService) Resolve(ctx context.Context, provider string) (Crede
 // ctx must carry an audited system reason (pkgcore.WithSystemContext, or
 // tenancy.WithSystemContext, which additionally publishes an audit event) --
 // an ordinary tenant-scoped context is refused with
-// ErrSystemScopeRequiresSystemContext, mirroring config's identical
-// ScopeSystem write rule exactly. provider and apiKey must both be
+// ErrSystemScopeRequiresSystemContext. provider and apiKey must both be
 // non-empty (ErrCredentialRequired otherwise); baseURL may be empty.
 //
 // Unlike SetTenantCredential, a non-empty baseURL is deliberately NOT
@@ -94,10 +90,10 @@ func (s *CredentialService) SetPlatformCredential(ctx context.Context, provider,
 
 // SetTenantCredential writes the calling tenant's own BYOK credential for
 // provider. The owning tenant comes from ctx (pkgcore.MustTenantFromContext)
-// -- never from a caller-supplied identifier, per this codebase's multi-
-// tenant isolation rule -- so a context with no tenant is refused with
-// ErrTenantScopeRequiresTenant. provider and apiKey must both be non-empty
-// (ErrCredentialRequired otherwise); baseURL may be empty.
+// -- never from a caller-supplied identifier -- so a context with no tenant
+// is refused with ErrTenantScopeRequiresTenant. provider and apiKey must
+// both be non-empty (ErrCredentialRequired otherwise); baseURL may be
+// empty.
 //
 // A non-empty baseURL is SSRF-validated by ValidateBaseURL before anything
 // is stored (ssrf.go): this row is the tenant's own influence over where

@@ -6,23 +6,22 @@
  * document is fine). color-contrast is disabled by default: jsdom does
  * no layout or color computation, so contrast results there are neither
  * trustworthy nor actionable -- contrast lives in the theme and is
- * verified visually/browser-side (see the package AGENTS.md). Tests
- * that specifically probe contrast affordances (colors roles, text
- * colors on surfaces) assert the theme values instead.
+ * verified visually/browser-side. Tests that specifically probe
+ * contrast affordances (colors roles, text colors on surfaces) assert
+ * the theme values instead.
  *
  * jsdom capability note -- why incomplete results are handled the way
  * they are below, and what "determinate" means here. axe's page-context
  * checks (page-has-heading-one, landmark-one-main) probe for an open
  * modal before evaluating their real question, through a visibility
  * filter that needs real geometry and, failing that,
- * `document.elementsFromPoint`. jsdom has neither, so the probe used to
- * THROW and every such check reported "incomplete" -- indeterminate,
- * never failing, no matter what the component rendered. That is how a
- * component scan rendered with no page-heading context passed by
- * indeterminacy: page-has-heading-one could never make any test fail,
- * and the isolated widget renders in this package's suites are exactly
- * that shape (EmptyState.test's own heading-order regression tests
- * document the gap). The helper restores determinacy two ways: it
+ * `document.elementsFromPoint`. jsdom has neither, so the probe THROWS
+ * and every such check reports "incomplete" -- indeterminate, never
+ * failing, no matter what the component rendered. A component scan
+ * rendered with no page-heading context would therefore pass by
+ * indeterminacy: page-has-heading-one could never fail a test, and the
+ * isolated widget renders in this package's suites are exactly that
+ * shape. The helper restores determinacy two ways: it
  * polyfills elementsFromPoint with an empty hit stack -- the truthful
  * answer for a document jsdom lays out not at all -- and it detects a
  * really open overlay itself (a visible `[aria-modal="true"]`
@@ -90,7 +89,7 @@ const PAGE_CONTEXT_RULES: readonly string[] = ['page-has-heading-one', 'landmark
  * `document.elementsFromPoint` when no semantic modal (role=dialog /
  * aria-modal) is present. jsdom ships elementsFromPoint only as a
  * not-implemented stub that throws, and lays nothing out, so the probe
- * threw and the page rules reported incomplete forever. The polyfill
+ * throws and the page rules report incomplete. The polyfill
  * answers "nothing at that point" -- the only truthful answer for an
  * engine that lays nothing out -- which lets the checks reach their
  * real question. The probe call below detects the throwing stub (in a
@@ -244,9 +243,9 @@ export async function expectNoAxeViolations(
  * (EmptyState and the DataTable empty placeholder render a real heading
  * element whose correct level only the host knows) are otherwise tested
  * with no ancestor heading at all, so the full run above can never reach
- * a heading-order violation regardless of what level they render as --
- * the exact gap the account-ui audit named. Scoping to one rule lets
- * those tests supply a real h1 ancestor and assert on the skip directly,
+ * a heading-order violation regardless of what level they render as.
+ * Scoping to one rule lets those tests supply a real h1 ancestor and
+ * assert on the skip directly,
  * without adopting the page-level rules (document-title, html-has-lang,
  * region) the shared harness disables for good reason (see its own
  * header comment) but that are irrelevant to heading-order anyway.

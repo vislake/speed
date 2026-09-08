@@ -8,19 +8,16 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// This file is rbac's half of docs/internal/10-compliance-and-audit.md's
-// declarative collection mechanism: the four write paths that change who
-// may do what -- defineRole (DefineRole and the built-in seeding that runs
-// through it), AssignRole, RevokeRole and RestoreRole -- call Service.
+// This file is rbac's declarative audit-emission half: the four write
+// paths that change who may do what -- defineRole (DefineRole and the
+// built-in seeding that runs through it), AssignRole, RevokeRole and
+// RestoreRole -- call Service.
 // emitAudit once their write has committed, and the row lands through the
 // same audit.event.recorded channel every other module's explicit Emit
 // calls use (go/dbkit/audit's EventRecorded, persisted by the host's
-// audit.Module subscriber). Before this round the module declared three
-// audit actions in Register (events.go's AuditActionRole*) and never
-// emitted one of them: every role define, assign and revoke -- an
-// impersonation-era grant included -- produced no audit row at all, which
-// is precisely the absence docs/internal/10-compliance-and-audit.md's
-// impersonation rule forbids.
+// audit.Module subscriber). Every role define, assign, revoke and restore
+// -- an impersonation-era grant included -- therefore produces an audit
+// row.
 //
 // The emitted rows carry the dual-identity shape audit.Emit itself reads
 // from ctx (pkgcore.ActorFromContext / pkgcore.OnBehalfOfFromContext), so
@@ -30,14 +27,14 @@ import (
 // wiring here. What this module guarantees on top is that an ordinary role-
 // management write never lands a blank attribution: when ctx carries no
 // pkgcore.Actor at all, emitAudit derives one from the rbac.Subject the
-// host's authenticating layer installed (rbac.WithSubject), the module's
-// own audit-context carrier since publishBindingChanged first read it
-// (service.go's actorFrom). A Subject in rbac.SystemDomain -- the pseudo-
-// tenant every admin:* permission is evaluated in, where go/admin's D8
-// console installs the operating staff's Subject -- derives a
+// host's authenticating layer installed (rbac.WithSubject, the module's
+// own audit-context carrier; service.go's actorFrom reads it the same
+// way). A Subject in rbac.SystemDomain -- the pseudo-
+// tenant every admin:* permission is evaluated in, and the one go/admin's
+// operations handlers install -- derives a
 // platform-admin Actor; any other tenant derives a user Actor (pkgcore's
 // own ActorType vocabulary). DisplayName stays empty: rbac holds no names
-// and performs no user lookup (P2-pkgcore-actor-1's id-only convention).
+// and performs no user lookup.
 // Only a ctx carrying neither carrier -- a write no authenticating layer
 // vouched for -- falls through to audit.Emit's own zero-value Actor, the
 // row shape go/dbkit/audit sanctions for exactly this corner.
@@ -51,9 +48,9 @@ import (
 func (s *Service) emitAudit(ctx context.Context, in audit.Input) {
 	if s.actions == nil || s.bus == nil {
 		// A Service whose Attach ran on a registry always carries both (the
-		// AuditActions seat and the Events bus exist on every Registry), so
-		// this guard exists for the shape of a future hand-built Service,
-		// never a real wiring.
+		// AuditActions seat and the Events bus exist on every Registry); a
+		// Service constructed by hand, without Attach, can carry neither
+		// and is refused here.
 		return
 	}
 	ctx = s.withAuditActor(ctx)

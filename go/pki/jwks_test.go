@@ -63,10 +63,8 @@ func TestService_ExportJWKS_ContainsOnlyActiveAndRetiring(t *testing.T) {
 // TestService_ExportJWKS_ExcludesKeysOutsideTheirValidityWindow pins the
 // JWKS-publishing half of the validity-window enforcement: the published
 // set filters by status AND by validity, so an active or retiring key
-// whose NotAfter has passed is never offered to an external verifier --
-// before the enforcement round the status filter alone kept publishing
-// expired keys for as long as their rows stayed in those statuses (until
-// the scan job happened to advance them).
+// whose NotAfter has passed is never offered to an external verifier,
+// however long its row stays in that status between scan runs.
 func TestService_ExportJWKS_ExcludesKeysOutsideTheirValidityWindow(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
@@ -125,12 +123,12 @@ func TestService_ExportJWKS_EmptyForUnknownPurpose(t *testing.T) {
 }
 
 // TestService_ExportJWKS_RoundTripsThroughStandardJWKParse proves the
-// round's explicit requirement: a JWKS response round-trips through a
+// export's central requirement: a JWKS response round-trips through a
 // standard JWK parse (go-jose's own JSONWebKeySet unmarshal, never a
 // hand-rolled decoder), the parsed public key is byte-identical to the
 // original, and it genuinely verifies a signature the corresponding
 // private key produced. It also asserts the marshaled JSON never carries a
-// private-key field ("d"), the round's "public keys only" requirement made
+// private-key field ("d"), the "public keys only" requirement made
 // concrete rather than merely assumed from the type system.
 func TestService_ExportJWKS_RoundTripsThroughStandardJWKParse(t *testing.T) {
 	svc := newTestService(t)
@@ -232,16 +230,15 @@ func TestCAService_ExportAuthorityChainJWKS_AuthorityNotFound(t *testing.T) {
 	}
 }
 
-// TestCAService_ExportAuthorityChainJWKS_RevokedAuthorityInChain_Refused is
-// the regression for the twin half-sync this round closes: VerifyCertificate
-// refuses an AuthorityStatusRevoked member at every hop of its chain walk,
-// but ExportAuthorityChainJWKS -- the document a data-plane cluster with no
-// X.509 path-validation library kid-matches against, which makes the export
-// the ONLY possible enforcement point for revocation -- originally walked
-// the same chain carrying only the cycle guard, never the refusal, so a
-// revoked authority's public key stayed in every refreshed document and a
-// data plane that had already pulled it kept accepting signatures made with
-// the revoked key. The revoked row is seeded directly through the
+// TestCAService_ExportAuthorityChainJWKS_RevokedAuthorityInChain_Refused
+// proves the export refuses an AuthorityStatusRevoked member anywhere in
+// the chain, exactly as VerifyCertificate refuses one at every hop of its
+// chain walk: ExportAuthorityChainJWKS is the document a data-plane
+// cluster with no X.509 path-validation library kid-matches against, which
+// makes the export the ONLY possible enforcement point for revocation -- a
+// revoked authority's public key must not stay in refreshed documents, or
+// a data plane that has already pulled one keeps accepting signatures made
+// with the revoked key. The revoked row is seeded directly through the
 // repository, the identical precedent revocation_test.go's own
 // chain-refusal test sets (no method in this module's public API writes
 // AuthorityStatusRevoked).
@@ -301,12 +298,9 @@ func TestCAService_ExportAuthorityChainJWKS_RevokedRootAncestor_Refused(t *testi
 // above: an authority whose certificate's validity window has closed at the
 // export clock is excluded from the document -- never published for an
 // external verifier to trust -- the exact keyInValidity boundary the
-// signing-key export applies to an expired key. Before this round the
-// authority export published an out-of-validity authority's key for as long
-// as its row stayed AuthorityStatusActive, and nothing in the module ever
-// reaps an expired authority row (AGENTS.md's Known limitations record the
-// absent expiry-driven lifecycle), so the read path itself is the only
-// enforcement point.
+// signing-key export applies to an expired key. Nothing in the module ever
+// reaps an out-of-validity authority row (authorities have no expiry-driven
+// lifecycle), so this read path is the only enforcement point.
 func TestCAService_ExportAuthorityChainJWKS_ExcludesAuthoritiesOutsideTheirValidityWindow(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := pkgcore.WithTenant(context.Background(), pkgcore.TenantID("tenant-acme"))

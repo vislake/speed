@@ -168,14 +168,12 @@ func outTradeNoFor(req billing.ChargeRequest) string {
 
 // requireCNY refuses currency at the CreateCharge boundary unless it names
 // CNY (case-insensitively) -- WeChat Pay's Native (QR-code) product only
-// ever settles in CNY (docs/internal/06-billing-and-metering.md's
-// domestic-plus-international dual payment mode; go/billing/gateway/AGENTS.md's
-// own domestic-leg trade-off section), so a request naming any other
-// currency must be refused here rather than silently collected as CNY --
-// CreateCharge's own request body used to hardcode "currency":"CNY" with no
-// check at all, so a caller-supplied USD/EUR/etc amount would have been
-// sent to WeChat Pay, and collected from the payer, as if it were the same
-// number of CNY cents.
+// ever settles in CNY (the domestic-leg trade-off), so a request naming
+// any other currency must be refused here rather than silently collected
+// as CNY. Without the check, a caller-supplied USD/EUR/etc amount would
+// ride into the request body's hardcoded "currency":"CNY" and be sent to
+// WeChat Pay, and collected from the payer, as if it were the same number
+// of CNY cents.
 func requireCNY(currency string) error {
 	if !strings.EqualFold(currency, "CNY") {
 		return billing.ErrUnsupportedCurrency.
@@ -189,8 +187,8 @@ func requireCNY(currency string) error {
 // QueryStatus implements billing.PaymentGateway: calls
 // `GET /v3/pay/transactions/out-trade-no/{out_trade_no}` for ref and maps
 // its trade_state to a billing.ChannelStatus -- the authoritative re-query
-// docs/internal/06-billing-and-metering.md's callbacks-cannot-be-trusted
-// rule requires. The response's own Wechatpay-Signature header is verified
+// the never-trust-the-callback-body rule requires. The response's own
+// Wechatpay-Signature header is verified
 // against the configured platform public key before anything in the body
 // is trusted, exactly like an inbound notification. Unlike alipay's own
 // QueryStatus, the reported Currency below already comes straight from

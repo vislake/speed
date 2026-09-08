@@ -28,7 +28,7 @@
  * surface, the host answering the handler's onBound cue by navigating
  * back to the account fragment (the account-ui family never navigates
  * itself). Everything else degrades to home with no nav item
- * selected; there is no 404 chrome in this round.
+ * selected; there is no 404 chrome.
  *
  * The brand in the AppBar and on the sign-in/home headings is the
  * server's own answer: the page renders the same Public
@@ -71,7 +71,7 @@ export const ROUTE_NOTES = '/notes'
  * been invited (the add-a-colleague surface). */
 export const ROUTE_TEAM = '/team'
 /** The credits surface fragment: the clinic's credit balance and
- * ledger (block D). */
+ * ledger. */
 export const ROUTE_CREDITS = '/credits'
 /** The account surface fragment. */
 export const ROUTE_ACCOUNT = '/account'

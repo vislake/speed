@@ -9,10 +9,9 @@
  *
  * The path constants mirror go/config's own PathPublic /
  * PathSystemFeatures exactly. No OpenAPI fragment exists for either
- * endpoint yet (go/config/AGENTS.md, Known limitations), so there is no
- * generator keeping these two constants and the two response shapes in
- * sync with the backend -- that is a real, hand-maintained seam, not an
- * oversight. Keep them in sync by hand until a spec fragment lands.
+ * endpoint, so no generator keeps these two constants and the two
+ * response shapes in sync with the backend -- a real, hand-maintained
+ * seam, not an oversight.
  */
 
 import type { RequestFn, RequestOptions } from './client.js'
@@ -35,8 +34,8 @@ export const SYSTEM_FEATURES_PATH = '/api/system/features'
  * stays `Record<string, unknown>` rather than a closed type: the schema
  * is dynamically extensible per-module (a Public config item only
  * appears once its owning module registers it), so a narrower TS type
- * would be wrong today and would need a hand-edit from every future
- * module that adds one. `features` is always a JSON array, sorted,
+ * would be wrong and would need a hand-edit from every module that
+ * adds one. `features` is always a JSON array, sorted,
  * never omitted or null even when empty.
  */
 export interface PublicConfigResponse {

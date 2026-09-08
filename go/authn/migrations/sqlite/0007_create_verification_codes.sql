@@ -23,9 +23,8 @@
 -- Service.verifyPhoneLoginCode's own doc comment.
 --
 -- There is deliberately no separate "purpose" index or table per purpose:
--- purpose is a column precisely so a second use (a future phone-based
--- password-reset flow, say) reuses this table and this row shape rather
--- than duplicating it.
+-- purpose is a column precisely so a second use reuses this table and this
+-- row shape rather than duplicating it.
 CREATE TABLE verification_codes (
     id           VARCHAR(36) NOT NULL,
     purpose      VARCHAR(32) NOT NULL,

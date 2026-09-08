@@ -13,9 +13,9 @@ import (
 )
 
 // compile-time checks that both models satisfy dbkit.TenantScoped, the
-// constraint every tenant-data row must meet (docs/internal/04-data-and-
-// tenancy.md): the embedded TenantModel supplies both the tenant_id column
-// and the GetTenantID method the isolation machinery reads.
+// constraint every tenant-data row must meet: the embedded TenantModel
+// supplies both the tenant_id column and the GetTenantID method the
+// isolation machinery reads.
 var (
 	_ dbkit.TenantScoped = Object{}
 	_ dbkit.TenantScoped = ObjectDerivative{}
@@ -62,8 +62,7 @@ func TestModel_GetTenantID_EchoesTheTenantID(t *testing.T) {
 
 // TestModel_StateConstants_AreDistinctAndStable pins the object lifecycle
 // vocabulary: the three states the state column may hold, spelled exactly
-// as the lifecycle round's transitions and the sweep round's queries will
-// compare against. A rename ripples through every switch statement that
+// as the lifecycle transitions and the sweep queries compare against. A rename ripples through every switch statement that
 // reads the column, so each value is frozen here rather than left implicit.
 func TestModel_StateConstants_AreDistinctAndStable(t *testing.T) {
 	states := map[string]string{
@@ -91,8 +90,8 @@ func TestModel_StateConstants_AreDistinctAndStable(t *testing.T) {
 	}
 }
 
-// TestModel_DerivativeKindThumbnail pins the one derivative kind this round
-// ships. The kind column is open-ended, so this test is what a new kind
+// TestModel_DerivativeKindThumbnail pins the one shipped derivative kind.
+// The kind column is open-ended, so this test is what a new kind
 // consciously extends, never what an accidental rename silently breaks.
 func TestModel_DerivativeKindThumbnail(t *testing.T) {
 	if DerivativeKindThumbnail != "thumbnail" {

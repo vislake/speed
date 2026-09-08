@@ -141,19 +141,18 @@ describe('SocialCallbackHandler', () => {
   })
 
   it('mount the pending live region empty on a retry re-entry, then fill it (mount-with-text regression)', async () => {
-    // PRE-FIX: the pending notice's role="status" region mounted together
-    // with its text on every entry into the pending state -- the initial
-    // mount and a retry's re-entry alike. A live region announces content
-    // changes that follow its own existence, never text that mounts with
-    // it, so the retry's re-entry was silent. POST-FIX: the text is gated
-    // behind a one-commit lag armed by an effect after the pending
-    // phase's first commit, so the region's first committed frame is
-    // empty whatever transition entered the phase, and the text fills an
-    // existing region a commit later. The assertion between the two
-    // commits below is what distinguishes the shapes: the region's text
-    // content must still be empty the moment the node re-appears on the
-    // retry (pre-fix it already holds the pending text). flushSync lands
-    // the retry's one commit synchronously, and the act scope holds back
+    // The pending notice's role="status" region mounts empty on every
+    // entry into the pending state -- the initial mount and a retry's
+    // re-entry alike -- because a live region announces content changes
+    // that follow its own existence, never text that mounts with it.
+    // The text is gated behind a one-commit lag armed by an effect
+    // after the pending phase's first commit, so the region's first
+    // committed frame is empty whatever transition entered the phase,
+    // and the text fills an existing region a commit later. The
+    // assertion between the two commits below is what distinguishes
+    // the shapes: the region's text content must still be empty the
+    // moment the node re-appears on the retry. flushSync lands the
+    // retry's one commit synchronously, and the act scope holds back
     // the post-commit effect that fills the region until this assertion
     // has seen the birth frame.
     let attempts = 0

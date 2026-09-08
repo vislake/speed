@@ -16,19 +16,18 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-// The two authn P2 findings this file closes sit in the same seam: the
-// dual-dialect write boundary for third-party-provided strings. The
-// provider-reported profile fields on user_identities (external_id,
-// display_name, avatar_url) and the provider-minted users.display_name were
-// written straight into fixed-width columns, so a social or SSO sign-in
-// carrying an over-width profile succeeded on SQLite (which ignores a
-// declared width) and failed on real PostgreSQL with SQLSTATE 22001 -- and
-// TouchLogin's every-login rewrite of display_name/avatar_url meant an
-// EXISTING identity broke the moment its provider's profile grew past the
-// column. The unit tier (identity_test.go, package authn) pins the bounded
-// storage on SQLite; these legs re-run the same flows against real
-// PostgreSQL, where the pre-fix behaviour is not a wrong stored value but a
-// refused write.
+// The two surfaces this file pins sit in the same seam: the dual-dialect
+// write boundary for third-party-provided strings. The provider-reported
+// profile fields on user_identities (external_id, display_name, avatar_url)
+// and the provider-minted users.display_name are written straight into
+// fixed-width columns, so a social or SSO sign-in carrying an over-width
+// profile would succeed on SQLite (which ignores a declared width) and fail
+// on real PostgreSQL with SQLSTATE 22001 -- and TouchLogin's every-login
+// rewrite of display_name/avatar_url would break an EXISTING identity the
+// moment its provider's profile grew past the column. The unit tier
+// (identity_test.go, package authn) pins the bounded storage on SQLite;
+// these legs re-run the same flows against real PostgreSQL, where the
+// unguarded behaviour is not a wrong stored value but a refused write.
 //
 // The over-width shapes below mirror the unit tier's (identity_test.go's
 // overWidthName/overWidthAvatar/overWidthSubject) and the migrations'
@@ -124,11 +123,11 @@ func socialCallback(t *testing.T, svc *authn.Service, provider *widthProbeProvid
 }
 
 // TestSocialSignIn_OverWidthProviderProfile_Postgres re-runs the unit tier's
-// first-bind regression against real PostgreSQL: a social sign-in whose
+// first-bind shape against real PostgreSQL: a social sign-in whose
 // provider reports a 200-rune name, 610-rune avatar and 250-rune subject
-// must SUCCEED here (before the fix the identity-row insert was refused with
-// SQLSTATE 22001 -- value too long for type character varying -- where
-// SQLite stored the values verbatim), and the row must hold each bounded
+// must SUCCEED here -- an unguarded identity-row insert would be refused
+// with SQLSTATE 22001 (value too long for type character varying) where
+// SQLite stores the values verbatim -- and the row must hold each bounded
 // head. The second callback proves the over-width subject still resolves to
 // the same identity on the next login.
 func TestSocialSignIn_OverWidthProviderProfile_Postgres(t *testing.T) {
@@ -252,11 +251,11 @@ func TestSocialSignIn_GrownProviderProfile_Postgres(t *testing.T) {
 }
 
 // TestSocialSignIn_MintOverWidthDisplayName_Postgres covers the users
-// display_name writer the account mints own: a first social sign-in with an
+// display_name writer the account mint owns: a first social sign-in with an
 // unmatched address provisions a brand-new user whose display name is the
-// PROVIDER's name, and on real PostgreSQL an over-width name used to refuse
-// the mint's users insert outright (SQLSTATE 22001) where SQLite stored it.
-// The mint must now land with the bounded head, and the sign-in must fail --
+// PROVIDER's name, and on real PostgreSQL an over-width name would refuse
+// the mint's users insert outright (SQLSTATE 22001) where SQLite stores it.
+// The mint must land with the bounded head, and the sign-in must fail --
 // if at all -- with the SAME answer on both dialects: the membership refusal
 // that follows successful provisioning.
 func TestSocialSignIn_MintOverWidthDisplayName_Postgres(t *testing.T) {

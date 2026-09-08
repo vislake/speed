@@ -7,27 +7,25 @@
 -- resource_ref is an opaque reference this module never interprets --
 -- typically another module's own key scheme (e.g. go/storage's object id),
 -- stored as plain data with no foreign key. Cross-module foreign keys are
--- forbidden in this codebase (docs/internal/04-data-and-tenancy.md rule 4).
+-- forbidden in this codebase.
 --
 -- token_hash is the hex-encoded SHA-256 of the bearer token a viewer
 -- presents. The token itself is NEVER stored -- see token.go's own doc
 -- comment; a leaked database backup yields no usable share link.
 --
--- expires_at is NOT NULL: rule 2 (docs/internal/07-platform-services.md's
--- "default expiry" rule) requires every share to carry an expiry, and
--- Service.Create resolves a nil caller request into a concrete time before
--- the row is ever written, refusing outright a caller that explicitly asks
--- for one that never expires. This column's NOT NULL constraint is the
--- database-level line of defense behind that application-level rule.
+-- expires_at is NOT NULL: the module's default-expiry rule requires every
+-- share to carry an expiry, and Service.Create resolves a nil caller
+-- request into a concrete time before the row is ever written, refusing
+-- outright a caller that explicitly asks for one that never expires. This
+-- column's NOT NULL constraint is the database-level line of defense
+-- behind that application-level rule.
 --
 -- password_hash, when non-null, is an argon2id PHC digest -- never
 -- plaintext (password.go).
 --
 -- sensitive records whether the caller declared the shared resource as
--- carrying sensitive personal information -- rule 4
--- (docs/internal/07-platform-services.md's "sensitive resource sharing
--- needs confirmation" rule), what makes Service.Create fire the
--- sensitive-share audit action.
+-- carrying sensitive personal information -- what makes Service.Create
+-- fire the sensitive-share audit action.
 --
 -- revoked_at is null for a live share; once set (by Service.Revoke or by
 -- the expiry sweep, cleanup.go), every access is refused on the very next

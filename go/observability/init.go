@@ -48,17 +48,14 @@ type Config struct {
 	// OTLP/gRPC. A non-empty value -- supplied via WithOTLPEndpoint -- is
 	// what switches Init onto the OTLP exporters; empty (the default)
 	// keeps Init on the local exporters. Deployment mode plays no role in
-	// that decision (docs/internal/03-deployment-modes.md: mode and
-	// implementation composition are two orthogonal axes, and exporter
-	// choice is an implementation-composition question, not a
-	// mode question).
+	// that decision: mode and implementation composition are two
+	// orthogonal axes, and exporter choice is an
+	// implementation-composition question, not a mode question.
 	//
 	// This package deliberately does not read it from the environment
-	// itself. go/pkgcore/config's bootstrap loader is the natural home
-	// for a value like this once a host wires that loader in; until then
-	// a host resolves it exactly how it resolves its other bootstrap
-	// settings and passes it here via WithOTLPEndpoint. This field is
-	// the seam a real host wires up.
+	// itself: a host resolves it exactly how it resolves its other
+	// bootstrap settings and passes it here via WithOTLPEndpoint. This
+	// field is the seam a real host wires up.
 	//
 	// examples/reference-app demonstrates that wiring since the
 	// OTLP-endpoint round closed this record: cmd/server/server.go's
@@ -79,9 +76,8 @@ type Config struct {
 	// connection. Defaults to false (secure), matching
 	// otlptracegrpc/otlpmetricgrpc's own default; set it when the
 	// configured collector is reached over a private, unencrypted network
-	// path, as docs/internal/09-observability.md's plain-container LGTM
-	// stack typically is. It has no effect when no OTLP endpoint is
-	// configured.
+	// path, as a plain-container observability stack typically is. It
+	// has no effect when no OTLP endpoint is configured.
 	OTLPInsecure bool
 }
 
@@ -320,7 +316,7 @@ func metricsUnavailable(w http.ResponseWriter, _ *http.Request) {
 // Init wires a TracerProvider and MeterProvider and installs them as
 // OpenTelemetry's global providers (otel.SetTracerProvider /
 // otel.SetMeterProvider), so that Middleware, FromContext's span lookup,
-// and any future module's own otel.Tracer/otel.Meter calls all reach them
+// and any module's own otel.Tracer/otel.Meter calls all reach them
 // without a provider threaded through every call site. It returns a
 // shutdown function the caller must invoke during graceful process
 // shutdown to flush and close both providers -- see
@@ -330,10 +326,9 @@ func metricsUnavailable(w http.ResponseWriter, _ *http.Request) {
 //
 // Which exporters get wired is decided by whether the caller supplied an
 // OTLP endpoint -- nothing else. Init takes no deployment mode and never
-// branches on one (docs/internal/03-deployment-modes.md: mode and
-// implementation composition are two orthogonal axes, and root
-// CLAUDE.md's rule confines mode differences to kernel wiring; this
-// package is not kernel wiring). A host that wants its telemetry pushed
+// branches on one: mode and implementation composition are two orthogonal
+// axes, and mode differences are confined to kernel wiring; this package
+// is not kernel wiring. A host that wants its telemetry pushed
 // to a collector simply supplies the endpoint; a host that does not gets
 // the local exporters. Both choices work in a single-process composition
 // and in a multi-replica one alike.
@@ -475,16 +470,15 @@ func initLocalExporters(res *resource.Resource) (func(context.Context) error, er
 
 	// metricsHandler defaults to the not-configured 404: a host that never
 	// registered a local metrics reader (never blank-imported
-	// go/observability/exporter/prometheus, or any future alternative
+	// go/observability/exporter/prometheus, or any alternative
 	// implementation) gets exactly that answer from MetricsHandler, per
 	// Init's own doc comment. Unlike the OTLP path above -- which fails
 	// Init outright the moment WithOTLPEndpoint is set with no registered
 	// exporter -- this default-behavior break cannot fail Init itself: the
 	// no-local-reader case is Init's own advertised default, not a
-	// misconfiguration, so the signal is a startup log line instead, on
-	// the same convention pkgcore's warnIfNotDurable uses for its own
-	// non-fatal startup banner (root CLAUDE.md's deployment-composition
-	// section) -- a constant message plus key-value attributes via
+	// misconfiguration, so the signal is a startup log line instead,
+	// mirroring pkgcore's warnIfNotDurable non-fatal startup banner -- a
+	// constant message plus key-value attributes via
 	// log/slog directly, since nothing has called Init yet to give this
 	// package a context-scoped logger of its own (obs.FromContext needs a
 	// context already carrying one). Without this line, a host that

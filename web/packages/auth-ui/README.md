@@ -12,7 +12,7 @@ persist a session, never navigate, and never touch the network
 directly -- a successful sign-in fires the host's `onSignedIn`
 callback once, and everything that happens next is the host's. Every
 host callback runs only after the operation's verdict settled, and a
-throwing callback is contained the tenancy-ui way: it is not a failure
+throwing callback is contained: it is not a failure
 of the operation it follows -- no error banner, no re-classified
 outcome, no unhandled rejection -- because the commit already
 happened. Every built-in string renders from the bilingual `auth-ui`
@@ -393,9 +393,8 @@ a sign-out action belongs (typically app chrome). The button renders
 with `color="inherit"`: mounted inside a coloured AppBar (whose
 background is the primary colour and whose own text is its
 contrastText), an inherited colour stays legible where a
-primary-coloured default would read primary-on-primary, which is how
-the reference-app's sign-out control once measured 1:1 against its own
-header.
+primary-coloured default would read primary-on-primary on the very
+surface the control usually sits on.
 
 | Prop | Type | Notes |
 |---|---|---|
@@ -403,8 +402,9 @@ header.
 
 ## SessionEndedScreen
 
-The pure placeholder a host renders where protected content used to
-be. The session lifecycle is observable, not imperative: there is no
+The pure placeholder a host renders once protected content is gone --
+the view's authenticated snapshot just turned anonymous. The session
+lifecycle is observable, not imperative: there is no
 recovery and no refresh cookie, so a page reload starts anonymous, and
 a server-side session death converges through the api-client refresh
 leg -- `refresh()` resolving `false` flips the snapshot to anonymous.
@@ -434,9 +434,8 @@ the level that continues the page's order.
 ## Text and i18n
 
 All built-in strings live in the bilingual `auth-ui` namespace
-(`src/locales/zh-CN.json` and `en-US.json`, 59 keys each with
-identical leaf key sets, enforced by registration and by
-`tools/check_i18n_keys.py` in CI):
+(`src/locales/zh-CN.json` and `en-US.json`, identical leaf key sets,
+enforced by registration and by `tools/check_i18n_keys.py` in CI):
 
 | Section | Purpose |
 |---|---|
@@ -535,8 +534,8 @@ package's `dist/`. Three layers of helpers, mirroring `@speed/auth-core`'s:
   the session-ended screen.
 
 `src/usage-example.test.tsx` compiles and executes the Quick start
-composition above end to end over the real-client rig (six requests in
-a pinned order: the password sign-in, a refused and refreshed
+composition above end to end over the real-client rig (the requests
+pinned in order: the password sign-in, a refused and refreshed
 protected call, a refused refresh converging to the session-ended
 screen, and the sign-in-again turn), and `src/session-journey.test.tsx`
 drives the journeys beyond the example -- the SMS channel, an explicit
@@ -554,7 +553,7 @@ Every component test asserts axe and the bilingual text of its states.
 | `@speed/auth-core` | dependency | the session every component drives, and the hooks the host observes through |
 | `@speed/i18n` | dependency | the namespace registration and translation hook every component renders through |
 | `@speed/ui-kit` | dependency | the `FormLayout`/`FormField` form skeleton and `EmptyState` (the session-ended screen) |
-| `@speed/api-sdk` | dependency (type-only today) | `RegisterForm`'s public callback carries the generated `AuthnUser`, so a consumer resolving the published `.d.ts` needs the specifier declared as a dependency, never a dev one -- the same rule `auth-core` applies to the packages its public types reference |
+| `@speed/api-sdk` | dependency (type-only) | `RegisterForm`'s public callback carries the generated `AuthnUser`, so a consumer resolving the published `.d.ts` needs the specifier declared as a dependency, never a dev one -- the same rule `auth-core` applies to the packages its public types reference |
 
 `@speed/api-client` stays a devDependency: only the suite binds a real
 client, and no public type of this package references it. No direct
@@ -593,8 +592,7 @@ the `speed/no-literal-text` rule enforces the namespace discipline over
   renders exactly the channels the host composes: `SignInScreen`
   without the `social` prop renders no social block, and the register
   link that sits above a real sign-in page is host content, not a
-  package export. When a discovery surface exists, hosts compose with
-  it; nothing here changes.
+  package export.
 - **Session state does not survive a page load, and the refresh token
   is JavaScript-visible in memory** -- auth-core's own known
   limitations, inherited by any host of this family: reloading starts
@@ -619,19 +617,20 @@ the `speed/no-literal-text` rule enforces the namespace discipline over
   answer). The package-level proof remains the in-form leg --
   `src/usage-example.test.tsx` drives the composed family over a real
   `@speed/api-client` bound through the same seam a host binds, with a
-  scripted fetch answering genuine `Response` objects. The remaining
-  leg, a browser driving a real server, is M4's html-runner/e2e work;
-  the M4 e2e pipeline covers the full stack.
+  scripted fetch answering genuine `Response` objects. A browser
+  driving the real server is not wired; the in-form leg and the
+  consumer shell's composed-tree suites are the shipped evidence.
 - **Auth-core hooks stay host-side by design.** Components in this
   family take the session as a prop and fire callbacks; the host
   observes session transitions with `useAuthState` and friends. A
   component that needed the hooks would have to be mounted under the
   host's `attachSession` anyway -- this family is the reason the host
   gate exists, not a consumer of it.
-- **Storybook / browser-side visual verification**: no preview-harness
-  round exists yet, same deferral `ui-kit` and `layout-kit` carry;
-  `color-contrast` stays axe-disabled for the same jsdom reason and is
-  verified browser-side in a later round.
+- **Storybook / browser-side visual verification**: no preview
+  harness exists (the same deferral `ui-kit` and `layout-kit` carry);
+  `color-contrast` stays axe-disabled for the same jsdom reason, and
+  contrast is asserted at the theme-value level in this package's
+  component suites.
 
 ## Development
 

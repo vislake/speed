@@ -57,15 +57,13 @@ var subscriptionTransitions = map[SubscriptionStatus]map[SubscriptionStatus]bool
 }
 
 // Subscription is speed's channel-agnostic internal domain concept of a
-// tenant's relationship to a Plan
-// (docs/internal/06-billing-and-metering.md's core design principle:
-// the design doc's core principle that Subscription is an internal domain
-// concept and a payment channel is merely the collector). It knows nothing
-// about which payment channel, if any, is behind it -- no Stripe
-// subscription id, no Alipay order id, nothing gateway-shaped lives on this
-// struct. A later round's billing/gateway package drives Status
-// transitions from real payment events; this round drives them with a
-// plain Go call (Activate/MarkPastDue/Cancel below).
+// tenant's relationship to a Plan -- the design principle that
+// Subscription is an internal domain concept and a payment channel is
+// merely the collector. It knows nothing about which payment channel, if
+// any, is behind it -- no Stripe subscription id, no Alipay order id,
+// nothing gateway-shaped lives on this struct. Status transitions are
+// driven by a plain Go call (Activate/MarkPastDue/Cancel below); no
+// payment event drives them yet.
 type Subscription struct {
 	// ID is an application-generated UUID (uuid.NewString), never a
 	// database-generated one -- the backend coding standard forbids
@@ -88,8 +86,7 @@ type Subscription struct {
 	// events only). Entitlements.Check loads the referenced Plan fresh
 	// on every call, so an in-place edit to that Plan's Grants (an
 	// Update through PlanStore) takes effect immediately, with no cache
-	// to invalidate for THIS package's own read path -- see AGENTS.md's
-	// "Immediate effect" section for what this does and does not cover.
+	// to invalidate for THIS package's own read path.
 	PlanID string `gorm:"column:plan_id;size:36;not null"`
 
 	// Status is a SubscriptionStatus value.
@@ -238,9 +235,9 @@ func (s *SubscriptionService) Get(ctx context.Context, id string) (*Subscription
 }
 
 // Active returns the tenant's SubscriptionStatusActive subscription, or
-// (nil, nil) when it has none. This round assumes at most one active
-// subscription per tenant -- see AGENTS.md's Known limitations for what a
-// genuine multi-subscription tenant would need instead.
+// (nil, nil) when it has none. The service assumes at most one active
+// subscription per tenant; a genuine multi-subscription model is not
+// implemented.
 func (s *SubscriptionService) Active(ctx context.Context) (*Subscription, error) {
 	subs, err := s.repo.List(ctx)
 	if err != nil {

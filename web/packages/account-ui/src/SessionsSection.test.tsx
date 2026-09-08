@@ -179,8 +179,8 @@ describe('SessionsSection', () => {
     expect(await screen.findByText(zhCN.sessions.current)).toBeTruthy()
 
     // The client-named device label and, under it, the readable summary
-    // of the current row's user agent -- where the raw string used to
-    // repeat as the detail line.
+    // of the current row's user agent -- the raw string never appears as
+    // the detail line.
     expect(screen.getByText('This laptop')).toBeTruthy()
     expect(screen.getByText(CHROME_MAC_SUMMARY)).toBeTruthy()
     // The summary as the label of a row that carries no device string.
@@ -574,7 +574,7 @@ describe('SessionsSection', () => {
     // deliberate second click waits it out in real time, inside act, so
     // the lockout's auto-clear lands inside act -- exactly as a user who
     // read the re-labelled button would. The window's shape is pinned by
-    // the ui-kit P1 regression test (ConfirmDialog.test.tsx).
+    // ui-kit's ConfirmDialog.test.tsx.
     await act(async () => {
       await new Promise((resolve) =>
         setTimeout(resolve, CONFIRM_ARM_LOCKOUT_MS + 300),
@@ -601,16 +601,14 @@ describe('SessionsSection', () => {
   })
 
   it('announce the revoke-others success into a live region that stood empty from the list phase (mount-with-text regression)', async () => {
-    // PRE-FIX: the success notice's role="status" region rendered only
-    // while the notice existed, so the region mounted in the same commit
-    // as its text. A live region announces content changes that follow
-    // its own existence, never text that mounts together with it, so the
-    // revoke-others success was silent. POST-FIX: the region stands
-    // mounted (empty, visually silent) for the whole list phase and the
-    // notice commit fills the text into a region the screen reader
-    // already knows. The same DOM node must survive the transition,
-    // which is what makes the later text change an announcement rather
-    // than another mount.
+    // The success notice's role="status" region stands mounted (empty,
+    // visually silent) for the whole list phase, because a live region
+    // announces content changes that follow its own existence, never
+    // text that mounts together with it -- a region born in the same
+    // commit as the notice would be silent. The notice commit fills the
+    // text into a region the screen reader already knows. The same DOM
+    // node must survive the transition, which is what makes the later
+    // text change an announcement rather than another mount.
     const user = userEvent.setup()
     let othersRevoked = false
     const rig = makeRealClientRig(async (call) => {
@@ -649,10 +647,10 @@ describe('SessionsSection', () => {
       name: zhCN.sessions.revokeOthers.label,
     })
     // The live region stood mounted and empty while the list was up and
-    // nothing had been announced: its text is empty here, pre-fix the
-    // region does not exist at all. (The dialog is still closed, so this
-    // status query cannot collide with the ui-kit ConfirmDialog's own
-    // arming region.)
+    // nothing had been announced: its text is empty here, because the
+    // standing region exists from the list phase on. (The dialog is
+    // still closed, so this status query cannot collide with the ui-kit
+    // ConfirmDialog's own arming region.)
     const status = screen.getByRole('status')
     expect(status).toHaveTextContent('')
 
@@ -669,7 +667,7 @@ describe('SessionsSection', () => {
     // deliberate second click waits it out in real time, inside act, so
     // the lockout's auto-clear lands inside act -- exactly as a user who
     // read the re-labelled button would. The window's shape is pinned by
-    // the ui-kit P1 regression test (ConfirmDialog.test.tsx).
+    // ui-kit's ConfirmDialog.test.tsx.
     await act(async () => {
       await new Promise((resolve) =>
         setTimeout(resolve, CONFIRM_ARM_LOCKOUT_MS + 300),
@@ -733,9 +731,9 @@ describe('SessionsSection', () => {
 
   it('render an expired session as expired, not as a live device: a past expires_at greys the row out of every revoke path', async () => {
     // The server answers only active/revoked (expiry is checked at use
-    // time, never written back), so before the fix a session whose
-    // stored expires_at had passed rendered as a live device forever:
-    // it stayed individually revocable and read as a logged-in device.
+    // time, never written back), so a session whose stored expires_at
+    // has passed must render as dead -- never as a live device that
+    // stays individually revocable and reads as a logged-in session.
     const rig = makeRealClientRig(async (call) => {
       if (call.method === 'POST' && call.path === LOGIN_PATH) {
         return jsonResponse(200, {
@@ -830,8 +828,8 @@ describe('SessionsSection', () => {
 
     expect(await screen.findByText(zhCN.sessions.status.expired)).toBeTruthy()
     // The only other session is dead: the bulk action has nothing to
-    // sign out and stays hidden -- before the fix the expired row
-    // counted as a live other and armed the action forever.
+    // sign out and stays hidden -- an expired row must not count as a
+    // live other that arms the action.
     expect(
       screen.queryByRole('button', { name: zhCN.sessions.revokeOthers.label }),
     ).toBeNull()
@@ -851,9 +849,10 @@ describe('SessionsSection', () => {
         if (listCalls === 1) {
           // AuthnListSessionsResponse marks `.sessions` optional, so a
           // 200 whose body omits the key is type-legal and react-query
-          // settles it as a successful answer. Before the fix the
-          // section read this settled shape as still loading and held
-          // the aria-busy skeleton forever, with no exit.
+          // settles it as a successful answer. The section must read
+          // this settled shape as the error state (an answer without
+          // its list is unreadable), never as still loading -- the
+          // aria-busy skeleton would have no exit.
           return jsonResponse(200, {})
         }
         return jsonResponse(200, { sessions: [session()] })
@@ -889,10 +888,9 @@ describe('SessionsSection', () => {
   })
 
   it('never hand a person a raw user-agent: no machine string appears in any row of two same-browser sign-ins', async () => {
-    // The gate's own failing design, at the component tier: two sign-ins
-    // from one browser whose rows used to render the raw UA verbatim --
-    // two identical, truncated walls of text the person who came here to
-    // spot an intruder could not tell apart. The assertion mirrors the
+    // Two sign-ins from one browser must never render as two identical
+    // walls of raw UA text: the person who came here to spot an
+    // intruder could not tell them apart. The assertion mirrors the
     // browser gate (examples/reference-app/web/e2e/
     // sessions-are-distinguishable.spec.ts) exactly: the machine
     // substrings that only ever appear in a raw UA must not appear in

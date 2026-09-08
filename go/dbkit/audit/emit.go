@@ -130,8 +130,7 @@ type RecordedEvent struct {
 	OccurredAt time.Time
 }
 
-// Emit is the declarative-secondary collection mechanism
-// docs/internal/10-compliance-and-audit.md describes: a business module
+// Emit is the declarative-secondary collection mechanism: a business module
 // calls it directly, at the point it already knows a qualified action name
 // ("org.member.remove") and, optionally, a rich before/after diff -- the
 // two things the automatic GORM write-capture plugin (dbkit's
@@ -140,46 +139,41 @@ type RecordedEvent struct {
 // Emit reads the acting identity from ctx exactly the way the automatic
 // capture plugin does -- pkgcore.ActorFromContext, pkgcore.
 // OnBehalfOfFromContext, pkgcore.TenantFromContext -- so the dual-identity
-// shape (root CLAUDE.md's impersonation rule) is populated identically
-// regardless of which of the two mechanisms produced a given AuditEvent.
+// shape (Actor plus the OnBehalfOf administrator behind an impersonation)
+// is populated identically regardless of which of the two mechanisms
+// produced a given AuditEvent.
 //
 // in.Action is validated against actions.Actions() before anything is
 // published: an action string no module ever registered through
 // AuditActionRegistrar.Add is a caller bug, and Emit rejects it with
 // ErrActionNotRegistered rather than silently recording an event under an
 // undeclared vocabulary -- mirroring how pkgcore.RegisterSystemPurpose
-// gates pkgcore.SystemReason.Purpose. This is what closes the loop
-// go/config's own AuditActionConfigSet declaration left open: declaring an
-// action was always a documentation and mapping contract, and Emit is now
-// the thing that contract gates.
+// gates pkgcore.SystemReason.Purpose. The registered enumeration is the
+// mapping contract the trail's query surfaces filter on, so every
+// recorded action is one somebody declared.
 //
 // A publish failure is returned to the caller, never swallowed: that is
-// Emit's half of docs/internal/10-compliance-and-audit.md's rule that an
-// audit-write failure must alert and never be silently dropped. The other
-// half is the caller's: a caller that discards Emit's returned error has
-// done the very silent drop the rule exists to prevent, and nothing inside
-// this package can detect it after the fact -- the obligation is written
-// into the contract because the contract is the only place this package
-// can hold it (the same shape as go/notification's UserAddressResolver
-// obligation sentence: "the obligation is written into the contract
-// because the contract is the only place this module can hold it"). The
-// reference app and go/authn model the recommended caller half -- a
-// failure is logged as a structured error (authn/handler.go's recordAudit
-// logs "authn audit event emit failed" with the action and error), never
+// Emit's half of the never-drop rule -- an audit-write failure must alert,
+// never be silently dropped. The other half is the caller's: a caller
+// that discards Emit's returned error has done the very silent drop the
+// rule exists to prevent, and nothing inside this package can detect it
+// after the fact -- the obligation is written into the contract because
+// the contract is the only place this package can hold it. The reference
+// app and go/authn model the recommended caller half -- a failure is
+// logged as a structured error (authn/handler.go's recordAudit logs
+// "authn audit event emit failed" with the action and error), never
 // dropped without a trace.
 //
-// This is deliberately NOT the automatic capture plugin's contract, the
-// way an earlier revision of this comment claimed: the plugin runs after
-// the write it describes has already durably committed (audit_capture.go's
-// own doc comment says exactly that, and why), so it has nothing left to
-// roll back or fail closed through and reports a structured alert instead
-// -- alert-and-continue is the plugin's whole fulfilment of the shared
-// rule, the drop half being inherent to its post-commit position. Emit's
-// position is different: the persister's write has not happened yet, so
-// Emit CAN fail closed, by returning the error -- and the caller half then
-// belongs to the caller. The division of fulfilment is recorded in
-// go/dbkit/audit/AGENTS.md's Collection section, the two mechanisms'
-// shared home.
+// This is deliberately NOT the automatic capture plugin's contract: the
+// plugin runs after the write it describes has already durably committed
+// (audit_capture.go's own doc comment says exactly that, and why), so it
+// has nothing left to roll back or fail closed through and reports a
+// structured alert instead -- alert-and-continue is the plugin's whole
+// fulfilment of the shared rule, the drop half being inherent to its
+// post-commit position. Emit's position is different: the persister's
+// write has not happened yet, so Emit CAN fail closed, by returning the
+// error -- and the caller half then belongs to the caller. The division
+// of fulfilment is the two mechanisms' shared contract.
 //
 // The nil-seat decision is the caller half's other obligation, settled
 // BEFORE Emit is ever called: what a caller whose audit wiring is missing

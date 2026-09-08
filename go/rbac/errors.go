@@ -9,7 +9,7 @@ import "github.com/vislake/speed/go/pkgcore/apperr"
 // derives a NEW *apperr.Error, so never compare a once-returned error
 // against a var here with == or errors.Is.
 //
-// Every code is <module>.<reason> per backend coding standard §6.2, and
+// Every code is <module>.<reason>, and
 // every one has a matching message id in locales/{zh-CN,en-US}.toml. The
 // API never returns the localized prose: it returns the code plus
 // parameters and the client resolves the text, which is why the locale
@@ -78,7 +78,7 @@ var (
 	// ErrStorage reports a failure to read or write one of this module's
 	// three tables. It wraps the underlying error as its cause; the cause
 	// chain never reaches an HTTP response, so no SQL fragment or internal
-	// identifier leaks outward (backend coding standard §6.2).
+	// identifier leaks outward.
 	ErrStorage = apperr.Internal("rbac.storage_error")
 )
 

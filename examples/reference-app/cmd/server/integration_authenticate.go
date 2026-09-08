@@ -1,34 +1,24 @@
-// The reference app's demo glue for go/integration's round-6
+// The reference app's demo glue for go/integration's
 // inbound-authentication surface: a minimal "whoami" route gated by
-// go/integration's own AuthMiddleware, demonstrating the mechanism
-// go/integration/AGENTS.md's earlier rounds documented as unbuilt --
-// "authenticating an inbound request with an API key" -- now real. This is
+// go/integration's own AuthMiddleware, demonstrating that a tenant's own
+// issued API key authenticates an inbound request. This is
 // deliberately NOT a production feature: it exists only to prove, end to
 // end through a real composed HTTP stack, that a tenant's own issued API key
 // authenticates a request, that a rotated-away key is refused, and that
-// LayeredLimiter/HTTPGuard now have a real Authenticate-gated surface to sit
-// in front of (the "not yet a real inbound surface to demonstrate against"
-// reasoning go/integration/AGENTS.md's round-5 section recorded for why
-// those two stayed unwired in front of anything here).
+// LayeredLimiter/HTTPGuard have a real Authenticate-gated surface to sit
+// in front of.
 //
-// The rate-limit-hardening round corrected where the guard sits: it is wired
-// through the module's WithAuthenticationGuard option, so AuthMiddleware
-// runs it BEFORE authenticating anything -- a forged-X-API-Key request pays
-// the route's global attempt budget instead of reaching
-// Service.Authenticate's database lookups with no bound at all (the "rate
-// limit BEFORE authentication" layering argument lives in
-// go/integration/middleware.go's own doc comment). This file's original
-// round-6 composition mounted the guard BEHIND AuthMiddleware -- the classic
-// usage-quota chain, whose Extractor read the resolved tenant and key out of
-// request context -- which left Authenticate itself unbounded against forged
-// keys; that composition is now gone, and
-// apikey_authenticate_flow_test.go's forged-flood regression pins the
-// corrected order.
+// The guard is wired through the module's WithAuthenticationGuard option,
+// so AuthMiddleware runs it BEFORE authenticating anything -- a
+// forged-X-API-Key request pays the route's global attempt budget instead
+// of reaching Service.Authenticate's database lookups with no bound at all
+// (the "rate limit BEFORE authentication" layering argument lives in
+// go/integration/middleware.go's own doc comment).
 //
 // apikey_authenticate_flow_test.go drives this route through the composed
 // HTTP stack: create, authenticate, rotate, authenticate with the old key
 // (refused) and the new one (succeeds), revoke, authenticate again
-// (refused), and the forged-flood regression above.
+// (refused), and the forged-flood proof above.
 package main
 
 import (
@@ -43,8 +33,8 @@ import (
 
 // integrationWhoamiRateLimitWindow is the sliding window the demo route's
 // authentication-attempt budget uses -- a single window kept this route's
-// own local constant rather than reused from elsewhere in this app, since no
-// other route in this codebase wires go/ratelimit at all yet.
+// own local constant rather than reused from elsewhere in this app, since
+// no other route in this codebase wires go/ratelimit.
 const integrationWhoamiRateLimitWindow = time.Minute
 
 // integrationWhoamiPath is this app's one demo route gated by
@@ -110,10 +100,10 @@ type integrationWhoamiResponse struct {
 //
 // This route is deliberately NOT gated by rbac: unlike the module's
 // spec-generated CRUD surfaces' own session-authenticated,
-// permission-checked management actions -- round 5's API-key fragment and
-// round 7's webhook-subscription fragment, the latter mounted through the
-// same gate after round 7 retired round 4's hand-mounted wireIntegrationWebhooks
-// demo route (webhooks.go) -- this route IS the authentication layer for a
+// permission-checked management actions -- the API-key fragment and the
+// webhook-subscription fragment, both mounted through the same generic
+// route gate (webhooks.go holds only the EventMapping machinery) -- this
+// route IS the authentication layer for a
 // DIFFERENT kind of caller entirely -- a script or third-party system
 // holding nothing but the API key itself, never an authn session -- so it
 // carries no rbac.Authorizer dependency and needs none: Authenticate's own

@@ -1,32 +1,28 @@
 // The reference app's smile-simulation HTTP surface: the app-side
 // implementation of the spec-derived interface generated from
-// internal/smilesim/api/openapi.yaml. Product round P3a promoted the
-// three routes from hand-written registrations (the round-2 enqueue and
-// job-status routes, plus the P2a per-photo enumeration) to that
-// fragment: this type implements the generated smilesimapi.ServerInterface
+// internal/smilesim/api/openapi.yaml. This type implements the generated
+// smilesimapi.ServerInterface
 // (compile-time-checked below), and its routing is registered by the
 // generated api.HandlerFromMux helper, which derives this surface's
 // method+path patterns from the "paths:" keys of the spec fragment
-// itself -- replacing what used to be a hand-written registration of the
-// same patterns, one less copy of path+method truth to keep in step with
+// itself -- one less copy of path+method truth to keep in step with
 // the spec by hand. The fragment joins the merged application document,
-// so the operations ship in the generated @speed/api-sdk surface the P3
-// gallery calls.
+// so the operations ship in the generated @speed/api-sdk surface the
+// smile gallery calls.
 //
-// The surface demonstrates go/ai-gateway round 2's Gateway.GenerateImage
+// The surface demonstrates go/ai-gateway's Gateway.GenerateImage
 // end to end: smilesim_flow_test.go drives it through the composed HTTP
 // stack against an httptest.Server standing in for the OpenAI-compatible
 // images endpoint.
 //
-// ai-gateway itself ships no HTTP surface for image generation (see
-// go/ai-gateway/AGENTS.md's "What this round ships" section), which is
-// why these routes are the app's own -- like consult.go's round-1 chat
+// ai-gateway itself ships no HTTP surface for image generation, which is
+// why these routes are the app's own -- like consult.go's chat
 // route and the demo-notification route, they are mounted directly on
 // mux rather than through reg.Routes/mountModuleRoutes, so none needs
 // (and cannot silently skip) an entry in demoRouteGuards' table. consult's
-// route remains hand-written for now (its chat surface has no P3 web
-// consumer yet); this file's routes are the first app-owned surfaces to
-// grow a fragment.
+// route remains hand-written (its chat surface has no web consumer to
+// render it); this file's routes are the app-owned surfaces that grow a
+// fragment.
 package main
 
 import (
@@ -58,8 +54,8 @@ var smileSimErrInternal = apperr.Internal("smilesim.internal_error")
 // The simulate route's two request-shape envelopes, named declarations so
 // the error-mapping audits of the web host (the codes-alignment suite,
 // which cites every reachable code to the declaration that defines it)
-// can cite stable sites -- the block-B round made these codes reachable
-// text on the smile-simulation surface for the first time.
+// can cite stable sites: these are the reachable codes of the
+// smile-simulation surface.
 var (
 	// smilesimErrInvalidRequestBody is the malformed-body answer every
 	// body-reading smile route writes, mirroring casesInvalidRequestBody's
@@ -100,9 +96,8 @@ var (
 // /api/v1/smile-simulation/photos/{photoObjectID}/simulations) and read
 // one simulation's generated image content (GET
 // /api/v1/smile-simulation/photos/{photoObjectID}/simulations/
-// {jobID}/content, the block-B round's addition the before/after
-// comparison view renders), backed by svc, queue and the storage
-// objects service.
+// {jobID}/content, which the before/after comparison view renders),
+// backed by svc, queue and the storage objects service.
 //
 // None of the four operations takes a subject or checks a permission of
 // its own: in this app every authenticated member of a tenant may request
@@ -213,8 +208,7 @@ func (h *smilesimHandler) SmilesimSimulate(w http.ResponseWriter, r *http.Reques
 	// RecipientUserID is optional: a caller that supplies one gets an
 	// EventSimulationCompleted notification once the job finishes
 	// (svc.NotifyOnCompletion, called from SmilesimGetJob below); a
-	// caller that omits it just polls for the result, same as before
-	// this field existed.
+	// caller that omits it just polls for the result.
 	//
 	// A named recipient must be an active member of the caller's own
 	// tenant -- the completion delivery would otherwise go out under this
@@ -248,8 +242,8 @@ func (h *smilesimHandler) SmilesimSimulate(w http.ResponseWriter, r *http.Reques
 // app shares with go/ai-gateway and answering the job's live status --
 // plus, once it has succeeded, the generated image's go/storage object
 // id and the real vendor usage the job recorded. When a durable
-// per-photo record exists for the job (every job this app enqueued since
-// the P2a round), the answer also carries the effective options the
+// per-photo record exists for the job (every job this app enqueued
+// carries one), the answer also carries the effective options the
 // simulation was generated with.
 func (h *smilesimHandler) SmilesimGetJob(w http.ResponseWriter, r *http.Request, jobID string) {
 	job, err := h.queue.Get(r.Context(), jobs.JobID(jobID))
@@ -321,7 +315,7 @@ func (h *smilesimHandler) SmilesimGetJob(w http.ResponseWriter, r *http.Request,
 // handles GET /api/v1/smile-simulation/photos/{photoObjectID}/simulations,
 // listing every simulation generated from that photo under the caller's
 // tenant, newest first, each entry carrying its options, its live status
-// and -- once the job succeeded -- its output object id. It is the P3
+// and -- once the job succeeded -- its output object id. It is the smile
 // gallery's data source (see internal/smilesim's package doc comment's
 // "Per-photo result index" section).
 func (h *smilesimHandler) SmilesimListPhotoSimulations(w http.ResponseWriter, r *http.Request, photoObjectID string) {
@@ -338,11 +332,11 @@ func (h *smilesimHandler) SmilesimListPhotoSimulations(w http.ResponseWriter, r 
 			PhotoObjectID: outcome.PhotoObjectID,
 			Options:       *toSmilesimOptions(outcome.Options),
 			Status:        smilesimapi.SmilesimSimulationStatus(outcome.Status),
-			// CreatedAt renders on the wire in the same whole-seconds UTC
-			// form the hand-written route used: the stored time is UTC
+			// CreatedAt renders on the wire in whole-seconds UTC:
+			// the stored time is UTC
 			// (gorm's autoCreateTime round-trips it so), and truncating
 			// the sub-second part keeps encoding/json's RFC3339Nano
-			// rendering byte-identical to the old RFC3339 output.
+			// rendering in a stable whole-seconds form.
 			CreatedAt: outcome.CreatedAt.Truncate(time.Second),
 		}
 		if outcome.OutputObjectID != "" {
@@ -459,7 +453,7 @@ func (h *smilesimHandler) SmilesimGetSimulationContent(w http.ResponseWriter, r 
 // spec-generated wire type, the shape both the job-status route's options
 // echo and the enumeration route's per-entry options field share. Every
 // field of the resolved set is always set, hence always present on the
-// wire, exactly as the hand-written mirror emitted them.
+// wire.
 func toSmilesimOptions(o smilesim.SimulationOptions) *smilesimapi.SmilesimSimulationOptions {
 	smileStyle := smilesimapi.SmilesimSimulationOptionsSmileStyle(o.SmileStyle)
 	toothShade := smilesimapi.SmilesimSimulationOptionsToothShade(o.ToothShade)
@@ -561,7 +555,8 @@ func writeSmileSimError(w http.ResponseWriter, err error) {
 	// Params stays nil (and thus omitted, per its omitempty tag) unless
 	// the error actually carries parameters: a pointer to a nil map would
 	// marshal as "params": null instead of the key being absent, which is
-	// not the shape the hand-written envelope produced.
+	// not the envelope shape the API documents for a parameter-less
+	// answer.
 	if appErr.Params != nil {
 		envelope.Params = &appErr.Params
 	}

@@ -26,17 +26,16 @@
  * invite field must not come back to life under a roster that has
  * since moved on).
  *
- * The roster naming is the defect this surface's walk-through found,
- * pinned here at the unit tier: the members read goes to the app's own
- * roster-with-identity answer (GET /api/reference-app/team-members,
- * which the demo server answers from its account directory), and a
- * member row renders the display identity the answer carried -- a
- * member who registered no display name is named by their email, a
- * member whose identity a suite scripts is named by it (display name
- * winning over email, the composition's own precedence), a member
- * whose account answered no identity renders the bundle's fallback
- * label -- and the raw user id is never what a row renders as a name,
- * which is the assertion that would have failed before this round.
+ * The roster naming rule -- a raw user id is never what a row renders
+ * as a name -- is pinned here at the unit tier: the members read goes
+ * to the app's own roster-with-identity answer (GET
+ * /api/reference-app/team-members, which the demo server answers from
+ * its account directory), and a member row renders the display
+ * identity the answer carried -- a member who registered no display
+ * name is named by their email, a member whose identity a suite
+ * scripts is named by it (display name winning over email, the
+ * composition's own precedence), a member whose account answered no
+ * identity renders the bundle's fallback label.
  *
  * The gate's error classification earns the same three checks the
  * notes surface's own suite runs: a refused read falls the gate shut
@@ -149,8 +148,7 @@ describe('TeamView', () => {
     // bundle's "you" label (the principal's user id names it), and the
     // reader's row is named by the email the account registered with --
     // the demo directory's answer for the reader-shaped member. The raw
-    // user id is never what a row renders as a name: the assertion that
-    // failed before this round.
+    // user id is never what a row renders as a name.
     expect(view.getByText(zhCN.team.members.youRow)).toBeInTheDocument()
     expect(view.getByText(DEMO_READER_IDENTIFIER)).toBeInTheDocument()
     expect(view.queryByText(DEMO_READER_USER_ID)).not.toBeInTheDocument()

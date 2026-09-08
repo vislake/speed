@@ -159,8 +159,8 @@ type mediaTypeCoverage struct {
 // table (module.go: every WithAllowedTypes entry must pass
 // checkAdmittedMediaType), so a type with a decoder but no strip walker --
 // image/gif below -- can never be admitted by configuration: a host that
-// wants it must first give the module strip coverage for it, the same round
-// that would flip this table's strippable half.
+// wants it must first give the module strip coverage for it, the same
+// change that would flip this table's strippable half.
 var mediaTypeSafety = map[string]mediaTypeCoverage{
 	// The module default allowlist: full coverage, both halves true.
 	"image/jpeg": {decodable: true, strippable: true},

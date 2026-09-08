@@ -7,13 +7,11 @@
 -- PostgreSQL enforces its configured client/server encoding (UTF8, this
 -- project's only supported one) on every VARCHAR/TEXT value, so writing a
 -- genuine encrypted secret through this column failed with "invalid byte
--- sequence for encoding \"UTF8\"" the very first time this round's own new
--- PostgreSQL integration tier (integration_test/postgres_softdelete_test.go)
--- actually exercised it -- exactly the kind of bug a first real-database
--- proof exists to catch, and one this module could not have caught before,
--- since it had no PostgreSQL integration tier at all until this round (see
--- go/integration/AGENTS.md's "Soft deletion" section for the round-level
--- record).
+-- sequence for encoding \"UTF8\"" the first time the module's PostgreSQL
+-- integration tier (integration_test/postgres_softdelete_test.go) actually
+-- exercised it -- exactly the kind of bug a first real-database proof
+-- exists to catch, and one the SQLite-only unit tier could not have
+-- surfaced.
 --
 -- go/org's identical WebhookSecretSerializerName-shaped precedent --
 -- org_invitations.email, encrypted under EmailSerializerName the exact same
@@ -29,22 +27,19 @@
 -- through a VARCHAR-declared column without error, which is exactly why
 -- this module's own unit test suite -- SQLite only -- never caught this),
 -- so nothing on that dialect needs to change. This is the first migration
--- in this module (and, as far as this round's own review of the repository
--- found, in the whole codebase) that genuinely does not need identical DDL
--- on both dialects, because the bug it fixes is itself dialect-specific
--- rather than a schema addition common to both -- dbkit.MigrationRegistry.
--- Apply reads each dialect's own subdirectory independently and has no
+-- in this module that genuinely does not need identical DDL on both
+-- dialects, because the bug it fixes is itself dialect-specific rather
+-- than a schema addition common to both -- dbkit.MigrationRegistry.Apply
+-- reads each dialect's own subdirectory independently and has no
 -- cross-dialect pairing requirement (go/dbkit/migrations.go's own
 -- migrationFiles), so an asymmetric fix like this one applies cleanly.
 --
 -- This column has never held real data outside this module's own test
--- suites (go/integration has no reference-app consumer yet -- see
--- AGENTS.md's "No reference-app consumer yet" section -- and this round's
--- own tier is this module's first-ever PostgreSQL run of any kind), so the
--- column is dropped and re-added rather than converted in place with a
--- USING cast: there is no existing ciphertext on this dialect a cast would
--- need to preserve correctly, and a cast's own encoding assumptions would
--- be exactly as fragile as the bug this migration fixes.
+-- suites, so the column is dropped and re-added rather than converted in
+-- place with a USING cast: there is no existing ciphertext on this dialect
+-- a cast would need to preserve correctly, and a cast's own encoding
+-- assumptions would be exactly as fragile as the bug this migration
+-- fixes.
 ALTER TABLE integration_webhook_subscriptions DROP COLUMN secret;
 ALTER TABLE integration_webhook_subscriptions ADD COLUMN secret BYTEA NOT NULL DEFAULT '';
 ALTER TABLE integration_webhook_subscriptions ALTER COLUMN secret DROP DEFAULT;

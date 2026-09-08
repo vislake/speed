@@ -1,6 +1,6 @@
 package main
 
-// admin_flow_test.go drives go/admin round 1's mandatory-first-consumer
+// admin_flow_test.go drives go/admin's mandatory-first-consumer
 // proof end to end, through the exact composed HTTP stack every other
 // module's own flow test drives (authn+tenancy(+impersonation)
 // middleware, real handlers, real dbkit-backed SQLite storage, none of it
@@ -9,19 +9,20 @@ package main
 // on the wire, never the spec-generated api.Admin* types this app must not
 // import.
 //
-// Two scenarios, matching the round's own acceptance criteria:
+// Two scenarios:
 //
-//   - TestAdminFlow_SearchMembershipsAndAudit_EndToEnd: D6 (cross-tenant
-//     user search), D6+D2 (membership composition) and D7 (audit query),
+//   - TestAdminFlow_SearchMembershipsAndAudit_EndToEnd: cross-tenant
+//     user search, membership composition and the audit query,
 //     driven by an operator looking up a real user and reading back which
 //     tenant they belong to and what happened there.
-//   - TestAdminFlow_Impersonation_EndToEnd: D5's full pipeline -- start,
+//   - TestAdminFlow_Impersonation_EndToEnd: the impersonation
+//     pipeline -- start,
 //     one request made AS the impersonated identity, the dual-identity
 //     audit trail, the mandatory security notification landing in the
 //     target's own inbox, and the grant no longer working once ended.
 //
-// D5's five mandatory properties are already pinned exhaustively at the
-// unit level in go/admin/impersonation_service_test.go and
+// Impersonation's mandatory properties are already pinned exhaustively at
+// the unit level in go/admin/impersonation_service_test.go and
 // go/admin/pipeline_test.go; this file's job is the end-to-end WIRING
 // proof -- that a real operator token, a real grant and a real subsequent
 // request compose correctly through this app's own middleware chain and
@@ -138,8 +139,8 @@ func adminRequest(t *testing.T, srv *httptest.Server, method, path, token string
 // capturing mailer so org invitation tokens can be recovered the same way
 // org_flow_test.go's buildOrgTestServer does.
 // opts, applied in order after the shared defaults above, let a caller
-// customize the config buildServer boots from -- the org-route-guards
-// round's TestAdminFlow_SuspendTenant_... test uses it to add its own
+// customize the config buildServer boots from --
+// TestAdminFlow_SuspendTenant_... uses it to add its own
 // ad hoc tenant to cfg.HostTenants (never demoHostTenants directly, a
 // shared package-level map every other test relies on unmodified), which
 // is what makes seedDemoGrants seed demoOwnerUserID's rbac grant there too.
@@ -218,11 +219,11 @@ func existingOrgRoot(t *testing.T, srv *httptest.Server, token string) orgNode {
 	return root
 }
 
-// TestAdminFlow_SearchMembershipsAndAudit_EndToEnd is D6+D2+D7's
+// TestAdminFlow_SearchMembershipsAndAudit_EndToEnd is the
 // acceptance shape: an operator finds a real user by email, reads back
 // which tenant they actually belong to (a genuine org.memberships row,
 // created through org's real invite/accept flow -- not the separate
-// authn-level "membership" seedDemoUsers grants, which D6's
+// authn-level "membership" seedDemoUsers grants, which the
 // MembershipsOf never consults), and queries that tenant's audit trail.
 func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 	srv, cfg, mailer := buildAdminTestServer(t)
@@ -232,9 +233,9 @@ func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 	// invites a fresh account, and that account accepts -- the exact
 	// sequence org_flow_test.go proves creates a genuine org.memberships
 	// row. The root's creation is also what lazily registers "tenant-acme"
-	// in admin's own D3 ledger (org.node.created -> handleOrgNodeCreated),
-	// which D7's cross-tenant query path (used implicitly below via the
-	// single-tenant path) and D6's MembershipsOf both depend on.
+	// in admin's own tenant ledger (org.node.created -> handleOrgNodeCreated),
+	// which the cross-tenant query paths below (the audit read and
+	// the membership composition) both depend on.
 	const inviterUserID = "user-admin-flow-owner"
 	const targetEmail = "admin-flow-target@example.com"
 	inviterToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "admin-flow-owner")
@@ -249,7 +250,7 @@ func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 	// invariant would refuse with 409 org.root_already_exists.
 	root := existingOrgRoot(t, srv, inviterToken)
 
-	// D3: the ledger picks up tenant-acme the moment its root is created,
+	// The ledger picks up tenant-acme the moment its root is created,
 	// with no operator action at all -- by the demo seed above in THIS
 	// test's case, rather than by a root-creation request this test makes
 	// itself.
@@ -259,13 +260,13 @@ func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 		t.Fatalf("GET tenant ledger row = %+v, want tenant-acme/active (lazily registered by org.node.created)", tenants)
 	}
 
-	// D6, first half: cross-tenant search by email -- resolved BEFORE the
+	// First half: cross-tenant search by email -- resolved BEFORE the
 	// invitation is accepted, because org's SubjectResolver (demoOrgSubjectResolver)
 	// identifies the accepting caller ONLY from the X-Demo-User-Id header
 	// it is given, never from the verified Principal (its own doc comment
 	// says so explicitly); the membership org creates is therefore bound
 	// to whatever id that header names, and it must be this account's REAL
-	// authn id for D6's later membership lookup (which is keyed on that
+	// authn id for the later membership lookup (which is keyed on that
 	// same real id) to find it.
 	var searched adminSearchUsersResponse
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+targetEmail, staffToken, nil, http.StatusOK, &searched, nil)
@@ -292,13 +293,14 @@ func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 	// SAME shared bus/persister every other flow test relies on.
 	createNoteAs(t, srv, inviterToken, "an admin-flow note")
 
-	// D6 + D2, second half: which tenants this user belongs to, composed
-	// by looping admin's own D3 ledger under tenancy.WithSystemContext and
-	// calling org's existing, unmodified per-tenant membership method. The
-	// account was registered at runtime, so under this app's self-service
-	// signup (self_service.go) its registration provisioned its own clinic
+	// Membership composition: which tenants this user belongs to, composed
+	// by looping admin's own tenant ledger under tenancy.WithSystemContext
+	// and calling org's existing, unmodified per-tenant membership method.
+	// The account was registered at runtime, so under this app's
+	// self-service signup (self_service.go) its registration provisioned
+	// its own clinic
 	// -- tenant-<targetID>, the deterministic derivation -- whose root's
-	// org.node.created lazily registered the clinic in the very same D3
+	// org.node.created lazily registered the clinic in the very same
 	// ledger this query loops; the answer must name BOTH the clinic the
 	// account owns and the tenant-acme seat its invitation acceptance
 	// created.
@@ -315,7 +317,7 @@ func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 		}
 	}
 
-	// D7: query that tenant's audit trail and find the note-create event.
+	// Query that tenant's audit trail and find the note-create event.
 	var events adminListAuditEventsResponse
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/audit-events?tenantId=tenant-acme&action=notes.note.create", staffToken, nil, http.StatusOK, &events, nil)
 	if len(events.Events) == 0 {
@@ -328,7 +330,7 @@ func TestAdminFlow_SearchMembershipsAndAudit_EndToEnd(t *testing.T) {
 	}
 }
 
-// TestAdminFlow_Impersonation_EndToEnd is D5's full pipeline, exercised
+// TestAdminFlow_Impersonation_EndToEnd is the impersonation pipeline, exercised
 // through the real composed stack: start, one impersonated request that
 // actually creates data attributed to the target, the dual-identity audit
 // row, the mandatory notification landing in the target's own inbox, and
@@ -360,9 +362,9 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 			// when this is omitted (falling back to authn.DefaultLocale
 			// when the user has never chosen one), so the mandatory
 			// notification below is guaranteed to be attempted either
-			// way -- P1-1's fix. Passed explicitly here only to exercise
+			// way. Passed explicitly here only to exercise
 			// that leg of the contract too ("a request WITH a locale
-			// keeps working exactly as today").
+			// keeps working exactly as a request without one").
 			"locale": "zh-CN",
 		}, http.StatusCreated, &grant, nil)
 	if grant.ID == "" || grant.TargetUserID != targetID || grant.TargetTenantID != "tenant-acme" {
@@ -387,7 +389,7 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 	// Step 3: the resulting audit event carries the dual identity --
 	// Actor is the impersonated target, OnBehalfOf is the real
 	// administrator -- confirmed by reading it back through admin's OWN
-	// D7 audit query, closing the loop between D5 and D7.
+	// The audit query, closing the loop between the two scenarios.
 	// AuditFilter.Resource matches an event's ResourceTYPE ("note"), not
 	// its ResourceID -- there is no per-id filter on this endpoint, so the
 	// matching event is found by scanning the (small, action-filtered)
@@ -480,7 +482,7 @@ func TestAdminFlow_Impersonation_EndToEnd(t *testing.T) {
 }
 
 // TestAdminFlow_OrdinaryTenantOwner_CannotAccessAdminConsole reproduces a
-// real privilege-escalation bug found in review: rbac.BuiltinRoleOwner
+// real privilege-escalation bug: rbac.BuiltinRoleOwner
 // grants every permission ANY module declared, with no domain
 // partitioning at all (go/rbac/builtin.go) -- so admin:* is among them --
 // and demo-owner@example.com holds exactly that role in every configured
@@ -502,13 +504,13 @@ func TestAdminFlow_OrdinaryTenantOwner_CannotAccessAdminConsole(t *testing.T) {
 		t.Fatalf("demo-owner login status = %d code = %q, want 200 with a token", status, code)
 	}
 
-	// D6: cross-tenant user search, gated on admin:search_users.
+	// Cross-tenant user search, gated on admin:search_users.
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/users?email="+demoOwnerEmail, ownerToken, nil, http.StatusForbidden, nil, nil)
 
-	// D3: the tenant ledger, gated on admin:access.
+	// The tenant ledger, gated on admin:access.
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/tenants/tenant-acme", ownerToken, nil, http.StatusForbidden, nil, nil)
 
-	// D5: starting an impersonation grant, gated on admin:impersonate --
+	// Starting an impersonation grant, gated on admin:impersonate --
 	// the most consequential of the five, since a false grant here would
 	// let this ordinary tenant owner act as ANY other user platform-wide.
 	adminRequest(t, srv, http.MethodPost, "/api/v1/admin/impersonation", ownerToken,
@@ -519,16 +521,16 @@ func TestAdminFlow_OrdinaryTenantOwner_CannotAccessAdminConsole(t *testing.T) {
 			"locale":         "en-US",
 		}, http.StatusForbidden, nil, nil)
 
-	// D7: the audit-query shell, gated on admin:audit_read.
+	// The audit-query shell, gated on admin:audit_read.
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/audit-events", ownerToken, nil, http.StatusForbidden, nil, nil)
 }
 
-// TestAdminFlow_AdminRoutes_IgnoreActiveImpersonation proves the other
-// half of this round's fix: admin's own mounted route deliberately does
-// NOT sit behind admin.ImpersonationMiddleware (go/admin/AGENTS.md's
-// wiring-contract section: "admin's OWN routes ... do not sit behind
-// ImpersonationMiddleware -- that decorator's effect is on the REST of
-// the application's routes only"). A request to admin's own console still
+// TestAdminFlow_AdminRoutes_IgnoreActiveImpersonation proves that
+// admin's own mounted route deliberately does
+// NOT sit behind admin.ImpersonationMiddleware: "admin's OWN routes do
+// not sit behind ImpersonationMiddleware -- that decorator's effect is on
+// the REST of the application's routes only". A request to admin's own
+// console still
 // carries the operator's OWN real, verified Principal even while an
 // X-Admin-Impersonation grant they themselves started is active on the
 // request, never the substituted target identity.
@@ -567,9 +569,8 @@ func TestAdminFlow_AdminRoutes_IgnoreActiveImpersonation(t *testing.T) {
 }
 
 // tenancyErrorBody decodes the {code, params} envelope
-// tenancy.Middleware's own writeError writes on every refusal -- D4's
-// coded-error discipline (root CLAUDE.md: "a coded error, never a raw
-// HTTP status with no code").
+// tenancy.Middleware's own writeError writes on every refusal -- a coded
+// error, never a raw HTTP status with no code.
 type tenancyErrorBody struct {
 	Code string `json:"code"`
 }
@@ -609,9 +610,9 @@ func rawStatusRequest(t *testing.T, srv *httptest.Server, method, path, token, d
 	return resp.StatusCode, body
 }
 
-// TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd is D4's
-// genuinely observable, live-request-pipeline proof (docs/internal/23-
-// admin.md's D4, go/tenancy/tenant_status.go's WithTenantStatusResolver
+// TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd is the
+// genuinely observable, live-request-pipeline proof of tenant
+// suspension (go/tenancy/tenant_status.go's WithTenantStatusResolver
 // seam): suspending a tenant through admin's own PATCH
 // /api/v1/admin/tenants/{id} makes every OTHER route serving that tenant
 // -- org's, here -- actually start refusing requests on the very next
@@ -620,13 +621,11 @@ func rawStatusRequest(t *testing.T, srv *httptest.Server, method, path, token, d
 // with; resuming the tenant makes the exact same route succeed again
 // immediately.
 //
-// This is the one round-2 deliverable this suite proves through the real
-// composed HTTP stack end to end, per this round's own brief: D4 is the
-// only round-2 item with a genuinely observable behavior change in a live
-// request pipeline (D8/D9/D10/D7-export are proven at go/admin's own
-// module level, mirroring how go/pki's X.509 layer and go/billing/
-// go/metering carry the identical "real, tested, but not yet a reference-
-// app HTTP consumer" exception elsewhere in this codebase).
+// The other admin surfaces (role management, usage, notifications
+// send-records, audit export) are proven at go/admin's own
+// module level, the same "real, tested, but not yet a reference-app HTTP
+// consumer" treatment go/pki's X.509 layer and go/billing and go/metering
+// carry for their unwired surfaces.
 func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	const tenant = pkgcore.TenantID("tenant-suspend-flow")
 
@@ -634,8 +633,8 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	// it must add itself to cfg.HostTenants before buildServer boots --
 	// otherwise seedDemoGrants never seeds demoOwnerUserID's rbac grant
 	// there, and the org_createNode call below (which rides on that seeded
-	// identity like every other orgRequest caller, org-route-guards round)
-	// would be refused before D4's own tenant-suspension check ever runs.
+	// identity like every other orgRequest caller)
+	// would be refused before the tenant-suspension check ever runs.
 	srv, cfg, _ := buildAdminTestServer(t, func(c *serverConfig) {
 		c.HostTenants = map[string]pkgcore.TenantID{"tenant-suspend-flow.demo.localhost": tenant}
 	})
@@ -644,10 +643,10 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	ownerToken := registerAndAuthenticate(t, srv, cfg, tenant, "suspend-flow-owner")
 
 	// The tenant's root node is what lazily registers "tenant-suspend-flow"
-	// in admin's own D3 ledger (org.node.created -> TenantService.
+	// in admin's own tenant ledger (org.node.created -> TenantService.
 	// handleOrgNodeCreated), so no separate manual ledger-registration call
-	// is needed before D4's PATCH below -- whichever caller's request
-	// happens to create it. That creator is NOT reliably this test's own
+	// is needed before the suspension PATCH below -- whichever caller's
+	// request happens to create it. That creator is NOT reliably this test's own
 	// explicit call: reusing existingOrgRoot (like
 	// TestAdminFlow_SearchMembershipsAndAudit_EndToEnd above) rather than
 	// assuming a bare org_createNode is this tenant's first-ever root
@@ -657,11 +656,11 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	// makes it one of the inEveryTenant demo owner's configured tenants --
 	// whichever of the two runs first wins the create and the other reuses
 	// it, and the ledger lands either way. orgRequest itself sends the demo
-	// rbac header naming demoOwnerUserID (org-route-guards round: org's
+	// rbac header naming demoOwnerUserID (org's
 	// route is gated per operation like every other module's, so ownerToken's
 	// freshly-registered account -- which holds no rbac grant of its own --
 	// rides on the pre-seeded owner identity's grant for this call. This
-	// test's whole point is D4's tenant-suspension gate, not org's
+	// test's whole point is the tenant-suspension gate, not org's
 	// permission gate, so borrowing the seeded identity here is a setup
 	// choice, not a weakening of what either gate enforces).
 	root := existingOrgRoot(t, srv, ownerToken)
@@ -671,15 +670,15 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 	// TenantStatusActive, or a WithTenantStatusResolver-wired but
 	// not-yet-suspended ledger row), so the ordinary request succeeds. The
 	// demo owner header rides along here too, for the same reason as the
-	// create call above -- D4's tenant-suspension check runs in
+	// create call above -- the tenant-suspension check runs in
 	// tenancy.Middleware, upstream of org's own rbac permission gate, so
-	// the caller must already clear THAT gate for D4's own refusal (below)
+	// the caller must already clear THAT gate for the suspension refusal (below)
 	// to be the one this test is actually proving.
 	if status, _ := rawStatusRequest(t, srv, http.MethodGet, nodePath, ownerToken, demoOwnerUserID); status != http.StatusOK {
 		t.Fatalf("GET %s before suspension: status = %d, want %d", nodePath, status, http.StatusOK)
 	}
 
-	// D3 + D4: suspend the tenant through admin's own console.
+	// Suspend the tenant through admin's own console.
 	var patched adminTenant
 	adminRequest(t, srv, http.MethodPatch, "/api/v1/admin/tenants/"+string(tenant), staffToken,
 		map[string]string{"status": "suspended", "suspendedReason": "reproducing a billing dispute"},
@@ -688,7 +687,7 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 		t.Fatalf("PATCH tenants/%s response Status = %q, want %q", tenant, patched.Status, "suspended")
 	}
 
-	// D4's whole point: the VERY NEXT request against this tenant --
+	// The suspension's whole point: the VERY NEXT request against this tenant --
 	// through an entirely different module's route, org's, not admin's
 	// own -- is refused, with the coded error tenancy.Middleware writes,
 	// never a bare status with no code.
@@ -716,16 +715,16 @@ func TestAdminFlow_SuspendTenant_BlocksThenResumeAllows_EndToEnd(t *testing.T) {
 
 // searchStaffID resolves the platform-staff account's own user id, for
 // asserting an audit event's OnBehalfOf against it -- found the same way
-// any operator would, through D6's own search endpoint, rather than a
+// any operator would, through the search endpoint, rather than a
 // second identity channel this test would otherwise have to invent.
 func searchStaffID(t *testing.T, srv *httptest.Server, staffToken string) string {
 	t.Helper()
 	return searchUserID(t, srv, staffToken, demoPlatformStaffEmail)
 }
 
-// searchUserID resolves one account's user id by email through D6's own
+// searchUserID resolves one account's user id by email through the
 // cross-tenant search endpoint, generalizing searchStaffID for the probe
-// accounts the round-2 permission tests below register.
+// accounts the permission tests below register.
 func searchUserID(t *testing.T, srv *httptest.Server, staffToken, email string) string {
 	t.Helper()
 	var searched adminSearchUsersResponse
@@ -767,7 +766,7 @@ type (
 // /api/v1/admin/roles to create a role scoped to a CUSTOMER tenant
 // carrying exactly permissions -- the write half of the pair bindAdminRole
 // completes -- the HTTP-shape reachability proof
-// TestAdminFlow_Round2Routes_ReachableForPlatformStaff below drives, since
+// TestAdminFlow_..._ReachableForPlatformStaff below drives, since
 // registerAndAuthenticate itself grants no rbac role at all
 // (server_test.go's own doc comment). These helpers never name
 // rbac.SystemDomain: admin's role-management surface refuses the system
@@ -803,10 +802,10 @@ func bindAdminRole(t *testing.T, srv *httptest.Server, staffToken, roleKey, tena
 	}
 }
 
-// TestAdminFlow_Round2Routes_ReachableForPlatformStaff reproduces the
-// review-flagged blocker directly: adminPermissionFor (demo_admin.go) was
-// never updated for round 2, so its switch fell through to the default
-// case for every one of D8's and D10's new sub-paths, returning "" --
+// TestAdminFlow_..._ReachableForPlatformStaff reproduces the
+// coverage gap directly: adminPermissionFor (demo_admin.go) was
+// never named every mounted sub-path, so its switch fell through to the default
+// case for the role-management and send-records sub-paths, returning "" --
 // which rbac.RequirePermissionFunc's own doc comment says unconditionally
 // denies the request, even for the platform-staff account holding
 // rbac.BuiltinRoleOwner (every permission any module declared). Before
@@ -817,7 +816,7 @@ func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
 	srv, _, _ := buildAdminTestServer(t)
 	staffToken := platformStaffToken(t, srv)
 
-	// D8, read half: the declared-permission catalog.
+	// Roles, read half: the declared-permission catalog.
 	var perms adminListDeclaredPermissionsResponse
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/roles", staffToken, nil, http.StatusOK, &perms, nil)
 	found := false
@@ -831,7 +830,7 @@ func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
 		t.Fatalf("declared permissions = %v, want it to include %q", perms.Permissions, admin.PermissionRolesManage)
 	}
 
-	// D8, write half: define a role and bind it to the staff account
+	// Roles, write half: define a role and bind it to the staff account
 	// itself (a real, already-known user id -- what it grants doesn't
 	// matter for this test, only that the two requests are reached at
 	// all rather than refused by an empty permission string).
@@ -839,20 +838,19 @@ func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
 	staffID := searchStaffID(t, srv, staffToken)
 	bindAdminRole(t, srv, staffToken, "flow-test-role-reachability", "tenant-acme", staffID)
 
-	// D10: cross-tenant notification send-record search.
+	// Send-records: cross-tenant notification send-record search.
 	var sendRecords adminListSendRecordsResponse
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/notifications/send-records", staffToken, nil, http.StatusOK, &sendRecords, nil)
 
-	// D9: the usage/billing dashboard. Since the wiring round that closed
-	// go/admin/AGENTS.md's Known-limitations no-consumer record, this app
-	// passes admin.WithMetering and admin.WithBilling at its admin-module
-	// site (cmd/server/server.go), so the platform-staff account -- which
-	// holds admin:usage_read via BuiltinRoleOwner -- answers 200 with the
-	// real per-tenant dashboard rather than the 500 (ErrUsageModulesNotWired)
-	// or 403 an unwired or unmapped route would produce; the property this
-	// test needs is that the route genuinely reaches admin's Handler,
-	// and the 200 answer is that proof. usage_summary_flow_test.go asserts
-	// on the dashboard's real data; here the status alone suffices.
+	// The usage/billing dashboard. The app wires admin.WithMetering and
+	// admin.WithBilling at its admin-module site (cmd/server/server.go), so
+	// the platform-staff account -- which holds admin:usage_read via
+	// BuiltinRoleOwner -- answers 200 with the real per-tenant dashboard
+	// rather than the 500 (ErrUsageModulesNotWired) or 403 an unwired or
+	// unmapped route would produce; the property this test needs is that
+	// the route genuinely reaches admin's Handler, and the 200 answer is
+	// that proof. usage_summary_flow_test.go asserts on the dashboard's
+	// real data; here the status alone suffices.
 	status, body := rawStatusRequest(t, srv, http.MethodGet, "/api/v1/admin/usage-summary", staffToken, "")
 	if status != http.StatusOK || body.Code != "" {
 		t.Fatalf("GET /api/v1/admin/usage-summary for platform-staff = %d %+v, want 200 with no error code (reach admin's Handler, not a 403 from an unmapped permission or a 500 from unwired modules)", status, body)
@@ -860,10 +858,10 @@ func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
 }
 
 // TestAdminFlow_AuditExport_RequiresExportPermission reproduces the
-// second review-flagged blocker directly: adminPermissionFor's switch
+// second coverage gap directly: adminPermissionFor's switch
 // matched "/api/v1/admin/audit-events/export" against the existing
 // adminAuditEventsPath prefix case (both share that prefix), gating the
-// round-2 export leg on the weaker admin:audit_read instead of the
+// export leg on the weaker admin:audit_read instead of the
 // newly-declared, deliberately-stronger admin:audit_export
 // (module.go's own PermissionAuditExport doc comment: exporting a
 // tenant's complete audit trail is a materially stronger action than
@@ -875,8 +873,8 @@ func TestAdminFlow_Round2Routes_ReachableForPlatformStaff(t *testing.T) {
 // The probes' system-domain role scaffolding is seeded directly against
 // rbac.Service under a system-tenant context -- the out-of-band shape
 // seedDemoPlatformStaff sanctions (demo_admin.go) -- rather than through
-// admin's own role-management HTTP surface, which the admin P1-2 fix
-// refuses for rbac.SystemDomain with admin.roles_system_domain_forbidden
+// admin's own role-management HTTP surface, which refuses
+// rbac.SystemDomain with admin.roles_system_domain_forbidden
 // (go/admin/role.go's checkTenantWritable: no admin:roles_manage-gated
 // permission is fine-grained enough to separate "may manage a customer
 // tenant's roles" from "may delegate platform-operator authority", so
@@ -922,7 +920,7 @@ func TestAdminFlow_AuditExport_RequiresExportPermission(t *testing.T) {
 	// The audit_read-only probe reads the audit trail fine...
 	adminRequest(t, srv, http.MethodGet, "/api/v1/admin/audit-events", readOnlyToken, nil, http.StatusOK, nil, nil)
 	// ...but MUST NOT reach the export leg: this is the exact regression
-	// the review flagged (before the fix, this answered 202).
+	// the export path must never answer to audit_read alone.
 	adminRequest(t, srv, http.MethodPost, "/api/v1/admin/audit-events/export", readOnlyToken,
 		map[string]string{"tenantId": "tenant-acme"}, http.StatusForbidden, nil, nil)
 

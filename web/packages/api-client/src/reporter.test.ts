@@ -2,8 +2,8 @@
  * Contract tests for the reporter seam: createConsoleReporter delegates
  * to console.error/console.warn with the constant message plus the
  * attribute object (undefined when the caller omitted it). The console
- * sink itself is the documented STOPGAP until the M1 round wires the
- * real app-shell diagnostics pipeline.
+ * sink is the default; a real app-shell diagnostics pipeline is host
+ * territory, wired through ClientOptions.reporter.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'

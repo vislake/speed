@@ -1,22 +1,19 @@
 package aigateway_test
 
-// Runnable documentation for this round's new public API: Handler,
-// NewHandler and the two permissions (PermissionRead, PermissionWrite,
-// PermissionManagePlatform) their operations are gated on. Mirrors
-// example_test.go's and go/integration/handler_example_test.go's
-// convention -- compiled AND executed by `go test`, so a change to this
-// module's HTTP surface that breaks the documented usage fails the build
-// rather than only rotting in prose.
+// Runnable documentation for this package's HTTP public API: Handler,
+// NewHandler and the three permissions (PermissionRead, PermissionWrite,
+// PermissionManagePlatform) their operations are gated on. Compiled AND
+// executed by `go test`, so a change to this module's HTTP surface that
+// breaks the documented usage fails the build rather than only rotting in
+// prose.
 //
-// It drives the credential-write admin surface end to end through a real,
+// It drives the credential-write surface end to end through a real,
 // composed net/http.Handler -- no mock standing in for api.ServerInterface
-// itself -- proving the shape this round closes go/ai-gateway/AGENTS.md's
-// "No admin/HTTP surface for writing platform or tenant BYOK credentials"
-// gap with: a provider with no credential at all answers 404, writing the
+// itself: a provider with no credential at all answers 404, writing the
 // platform-wide default makes it resolve, and a tenant's own BYOK write
-// then overrides that platform default for the SAME tenant -- proving the
-// write path this round adds is genuinely connected to the read path
-// CredentialService.Resolve already used before this round ever existed.
+// then overrides that platform default for the SAME tenant -- the write
+// path genuinely connects to the read path CredentialService.Resolve
+// serves.
 
 import (
 	"context"

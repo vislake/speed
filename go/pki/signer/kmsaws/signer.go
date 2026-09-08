@@ -28,10 +28,9 @@ const scheduleDeletionPendingWindowDays = 7
 
 // kmsClient is the subset of *kms.Client this package calls, declared as
 // its own interface so unit tests can inject a scripted fake without a
-// real AWS account -- exactly the stub-the-SDK-interface-for-unit-tests
-// approach docs/internal/22-pki.md's testing-strategy section prescribes
-// for this package specifically, since no integration leg exists (see
-// doc.go). *kms.Client already has every one of these
+// real AWS account -- the stub-the-SDK-interface-for-unit-tests approach
+// this package's no-integration-leg status calls for (see doc.go).
+// *kms.Client already has every one of these
 // methods with this exact signature, so it satisfies kmsClient
 // structurally -- no adapter type is needed anywhere in this package.
 type kmsClient interface {
@@ -267,9 +266,8 @@ func (s *signer) decryptPrivateKey(ctx context.Context, keyRef string) (ed25519.
 // This is an honest KMS limitation, not a bug in this package: a caller
 // that needs "gone right now" semantics does not get them from KMS-backed
 // direct-sign key destruction, only from the pki module's own revocation
-// mechanism (docs/internal/22-pki.md's "revocation" section, round 3), which
-// stops the key from being trusted immediately regardless of when KMS
-// physically deletes it.
+// mechanism, which stops the key from being trusted immediately regardless
+// of when KMS physically deletes it.
 func (s *signer) Destroy(ctx context.Context, keyRef string) error {
 	if s.mode == ModeDirectSign {
 		if _, err := s.client.ScheduleKeyDeletion(ctx, &kms.ScheduleKeyDeletionInput{

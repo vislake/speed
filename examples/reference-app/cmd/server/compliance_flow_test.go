@@ -200,7 +200,7 @@ func TestComplianceRightToErasure_NotesParticipant_ErasesOnlyItsSubject(t *testi
 // context). The manifest is stored and delivered through the real wiring:
 // ObjectKey is non-empty (a go/sharing-backed delivery is minted against
 // it), and the Delivery carries a share id, a one-time token and an
-// expiry, proving the sharing round's wiring holds end to end.
+// expiry, proving the sharing-backed delivery wiring holds end to end.
 func TestComplianceExport_NotesParticipant_ExportsLiveNotesOnly(t *testing.T) {
 	srv, cfg, complianceModule := buildTestServer(t)
 

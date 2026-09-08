@@ -7,20 +7,19 @@ executables with no third-party dependencies" convention (tools/README.md's
 
     python3 tools/test_scan_cjk.py
 
-Regression coverage: the scanner used to exempt whole subtrees by
-directory BASENAME (locales, locale, i18n, translations), which silently
-exempted source directories that merely share a name with a locale
-convention -- go/pkgcore/i18n and web/packages/i18n, both real Go/TS
-source trees, were never scanned. The fix judges resource directories by
-CONTENT -- a directory is a resource directory only when it really holds
-a zh-CN.* / en-US.* file, the same discovery rule check_i18n_keys.py
-applies -- so i18n-named source trees are scanned like any other tree
-(test_i18n_named_source_dir_is_scanned) while genuine locale bundles stay
-exempt (test_locale_bundle_directory_stays_exempt). A second carve-out
-covers the one fixture-in-comment shape the Go toolchain forces: a godoc
-Example's expected output is spelled as comments after an "Output:"
-marker, and CI compiles and runs every Example, so an Example
-demonstrating zh-CN rendering carries Chinese text in comment syntax
+Regression coverage: resource directories are judged by CONTENT, never
+by directory BASENAME (locales, locale, i18n, translations) -- a
+directory is a resource directory only when it really holds a zh-CN.* /
+en-US.* file, the same discovery rule check_i18n_keys.py applies -- so
+i18n-named source trees are scanned like any other tree:
+go/pkgcore/i18n and web/packages/i18n are real Go/TS source trees and
+are scanned (test_i18n_named_source_dir_is_scanned) while genuine
+locale bundles stay exempt (test_locale_bundle_directory_stays_exempt).
+A second carve-out covers the one fixture-in-comment shape the Go
+toolchain forces: a godoc Example's expected output is spelled as
+comments after an "Output:" marker, and CI compiles and runs every
+Example, so an Example demonstrating zh-CN rendering carries Chinese
+text in comment syntax
 (test_godoc_output_block_is_exempt_but_other_comments_are_not).
 
 Fixture text below is spelled with \\u escapes so this test file itself
@@ -64,8 +63,7 @@ class ScanRootTests(unittest.TestCase):
         # A directory NAMED i18n holding no zh-CN.*/en-US.* file is a
         # plain source tree (the shape of go/pkgcore/i18n and
         # web/packages/i18n): a CJK comment planted in its Go source is a
-        # violation. Fails before the content-based resource-dir fix (the
-        # basename skip exempted the whole subtree).
+        # violation. Fails before the content-based resource-dir rule.
         code = (
             "package i18n\n\n"
             "// ErrExample reports a missing key.\n"

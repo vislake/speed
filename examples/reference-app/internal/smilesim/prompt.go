@@ -5,12 +5,11 @@ import (
 	"strings"
 )
 
-// This file is the provider prompt template this package gained in the P2a
-// round: renderSimulationPrompt turns one validated SimulationOptions into
-// the single English instruction sent to the vendor as the image request's
-// prompt field. Like the pre-parameterization simulationPrompt constant it
-// replaces, the rendered prompt carries no user-facing text of its own to
-// localize -- it is sent to the vendor, never rendered to a person.
+// This file is the provider prompt template: renderSimulationPrompt turns
+// one validated SimulationOptions into the single English instruction sent
+// to the vendor as the image request's prompt field. The rendered prompt
+// carries no user-facing text of its own to localize -- it is sent to the
+// vendor, never rendered to a person.
 //
 // The template is a fixed sequence of five sentences, each a package
 // constant or a pure function of one option dimension, joined by single
@@ -20,16 +19,15 @@ import (
 //  2. the ToothShade sentence -- the tooth color asked for;
 //  3. the Strength sentence -- the transformation magnitude, rendered with
 //     the exact requested value (strengthText), never a rounded tier;
-//  4. identityPreservationPrompt -- the strengthening sentence this round
-//     added, spelling out what "the rest of the face" means for this
-//     product (identity, proportions, skin tone, lip color, pose);
-//  5. simulationPreservationPrompt -- the pre-existing preservation
-//     sentence, byte-for-byte the second sentence of the old
-//     simulationPrompt constant. It is deliberately the LAST sentence of
-//     every render and is never weakened, reworded or omitted: keeping
-//     "the rest of the face, lighting and background unchanged" semantics
-//     is the product's core promise, and prompt_test.go pins its verbatim
-//     presence as the suffix of every combination it renders.
+//  4. identityPreservationPrompt -- the strengthening sentence spelling
+//     out what "the rest of the face" means for this product (identity,
+//     proportions, skin tone, lip color, pose);
+//  5. simulationPreservationPrompt -- the preservation sentence. It is
+//     deliberately the LAST sentence of every render and is never
+//     weakened, reworded or omitted: keeping "the rest of the face,
+//     lighting and background unchanged" semantics is the product's core
+//     promise, and prompt_test.go pins its verbatim presence as the suffix
+//     of every combination it renders.
 
 const (
 	// smileStylePromptSubtle is the SmileStyleSubtle sentence -- the most
@@ -63,20 +61,20 @@ const (
 	strengthPromptFrame = "Apply the smile transformation at a strength of %s, where 1.0 means the complete simulated smile and lower values keep the original mouth progressively closer to unchanged."
 
 	// identityPreservationPrompt names what this product's preservation
-	// promise covers beyond the mouth itself -- the dimensions the P2a
-	// round's product vision calls out (identity, proportions, skin tone,
-	// lip color, pose) -- before the legacy preservation sentence below
-	// states the unchanged-rest rule. Adding it strengthens the
-	// instruction; it never replaces or rewrites the sentence after it.
+	// promise covers beyond the mouth itself -- the dimensions (identity,
+	// proportions, skin tone, lip color, pose) -- before the preservation
+	// sentence below states the unchanged-rest rule. Adding it
+	// strengthens the instruction; it never replaces or rewrites the
+	// sentence after it.
 	identityPreservationPrompt = "Preserve the patient's facial identity, proportions, skin tone, lip color and pose."
 
 	// simulationPreservationPrompt is the preservation instruction this
-	// service has sent since before parameterization, byte-for-byte the
-	// second sentence of the old simulationPrompt constant ("Simulate a
-	// bright, straight, natural-looking smile for this dental patient
-	// photo. Keep the rest of the face, lighting and background
-	// unchanged."). Every rendered prompt ends with exactly this sentence
-	// (see the file doc comment and prompt_test.go's suffix pins).
+	// service sends with every prompt, the closing half of the original
+	// single simulationPrompt ("Simulate a bright, straight,
+	// natural-looking smile for this dental patient photo. Keep the rest
+	// of the face, lighting and background unchanged."). Every rendered
+	// prompt ends with exactly this sentence (see the file doc comment and
+	// prompt_test.go's suffix pins).
 	simulationPreservationPrompt = "Keep the rest of the face, lighting and background unchanged."
 )
 

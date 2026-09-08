@@ -1,9 +1,8 @@
 -- memberships is the link table binding one person to one place in one
 -- tenant's organization tree (go/org/membership.go).
 --
--- Data domain: LINK data, and link data is tenant-scoped
--- (docs/internal/04-data-and-tenancy.md classifies it as isolated by
--- tenant_id and makes tenancytest.AssertIsolated mandatory for it). The
+-- Data domain: LINK data, and link data is tenant-scoped (isolated by
+-- tenant_id, with tenancytest.AssertIsolated mandatory for it). The
 -- neighbouring users table is identity data and deliberately NOT
 -- tenant-scoped, because one person belongs to several tenants -- which is
 -- exactly why this bridging row must be: it is the per-tenant half of that
@@ -12,7 +11,7 @@
 --
 -- user_id references authn's users.id and node_id references org_nodes.id,
 -- both WITHOUT a foreign key. Cross-module foreign keys are forbidden
--- (docs/internal/04, rule 4) because they make independently released
+-- because they make independently released
 -- migrations and cascading deletes unmanageable. The node reference carries
 -- no in-module foreign key either, for the dual-dialect reason
 -- go/org/repository.go documents: SQLite leaves foreign keys unenforced

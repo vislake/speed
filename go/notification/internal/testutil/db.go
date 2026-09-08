@@ -43,9 +43,9 @@ func NewSQLite(t *testing.T, moduleName string, fs embed.FS) *gorm.DB {
 // It is the integration tier's counterpart to NewSQLite and applies the
 // identical migration files from the postgres/ subdirectory, so a test can
 // run the same assertions against both dialects by swapping the constructor
-// alone. notification has no caller of it yet: the module's PostgreSQL
-// integration tier arrives in a later block of this round, and the helper
-// ships now so that tier needs nothing but its own test files.
+// alone. Its callers are the module's integration_test/ package
+// (go/notification/integration_test, run as `go test -tags=integration
+// ./integration_test/...` from the module directory).
 func NewPostgres(t *testing.T, moduleName string, fs embed.FS) *gorm.DB {
 	t.Helper()
 	db := dbtest.NewPostgres(t)

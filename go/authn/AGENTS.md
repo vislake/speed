@@ -5,24 +5,6 @@ Authentication: who a caller is. Never what they may do.
 Design rationale lives in `docs/internal/05-identity-and-access.md` (Chinese). This
 file is the discipline that ships with the module to consuming projects.
 
-> **Scope note.** This file currently documents what has landed: identity models
-> and dual-dialect migrations, password authentication, access-token issue and
-> verification, refresh rotation with replay detection, sessions and tenant
-> switching, the middleware chain, module registration, OIDC federation (an
-> enterprise relying party plus five social channels), account-binding
-> management, phone-plus-SMS-code sign-in, TOTP second-factor enrollment with
-> recovery codes and step-up re-verification, progressive/sliding-window
-> rate limiting on every login, registration, code-send, code-verify and
-> step-up path, **the full spec-first HTTP surface** (`api/openapi.yaml` →
-> `api/authn-server.gen.go` → `handler.go`, twenty operations covering every
-> flow above), and **self-service session/device-list and login-history
-> management** (`history.go`: list sessions, revoke one, revoke every other,
-> list login history). Wiring this module into a real HTTP server (the
-> reference app, `fast-check`/`full-check` CI matrices, `Taskfile.yml`'s
-> `INTEGRATION_DIRS`) is the next block's job — this module builds, lints
-> and tests green entirely on its own regardless. Judge what exists by the
-> tree, not by this note.
-
 ---
 
 ## Scope
@@ -34,12 +16,11 @@ file is the discipline that ships with the module to consuming projects.
 | Access-token issue and verification (Ed25519 JWT) | Sending notifications (`notification` subscribes to this module's events) |
 | Refresh rotation, replay detection, session revocation | Authorization decisions of any kind |
 | Tenant switching within one session | Memberships, the organization tree (`org`) |
-| Social login (Google, GitHub, WeChat, DingTalk, Feishu) and enterprise OIDC single sign-on | SAML (deferred, optional subpackage), WebAuthn/passkeys (deferred, post-v1.0) |
-| Account-binding management (list, bind, unbind) | QQ / Weibo / Alipay and other phase-two providers |
-| Phone-plus-SMS-code sign-in on the existing blind index; real SMS carrier adapters — Aliyun, Tencent Cloud and Twilio under `go/authn/sms/` | Proving the carrier adapters against each vendor's REAL gateway, which needs live account credentials: the env-gated integration legs self-skip without them (see "The three carrier adapters" below) |
-| TOTP enrollment, confirmation, recovery codes, step-up re-verification | WebAuthn/passkeys (the `SecondFactor` shape is reserved, not implemented — post-v1.0) |
-| Sliding-window plus progressive-lockout rate limiting on login/register/code-send/code-verify/step-up | Anomalous-login detection (new device/region), which needs GeoIP first (`notification`, M2) |
-
+| Social login (Google, GitHub, WeChat, DingTalk, Feishu) and enterprise OIDC single sign-on | SAML, WebAuthn/passkeys — not implemented |
+| Account-binding management (list, bind, unbind) | QQ / Weibo / Alipay and other providers — not implemented |
+| Phone-plus-SMS-code sign-in on the existing blind index, plus the real carrier adapters — Aliyun, Tencent Cloud and Twilio under `go/authn/sms/` | Proving the carrier adapters against each vendor's real gateway, which needs live account credentials: the env-gated integration legs self-skip without them (see "The three carrier adapters" below) |
+| TOTP enrollment, confirmation, recovery codes, step-up re-verification | WebAuthn/passkeys — not implemented |
+| Sliding-window plus progressive-lockout rate limiting on login/register/code-send/code-verify/step-up | Anomalous-login detection (new device/region) — not implemented; it needs GeoIP, which no resolver supplies |
 **`rbac` must never import this package.** Authorization takes a tenant and a
 user, assembled by whoever authenticated. The dependency runs one way, and an
 import in the other direction is a merge blocker rather than a style note.
@@ -55,7 +36,7 @@ import in the other direction is a merge blocker rather than a style note.
 | `NewModule(db, opts...) (*Module, error)` | The `pkgcore.Module`. Options are validated eagerly, so a missing key is a startup error. |
 | `NewService(db, bus, kv, opts...) (*Service, error)` | The service alone, for a host that does not bootstrap through a registry. |
 | `RegisterPIISerializer(cipher) error` | Registers the field-encryption serializer under `SerializerName`. **Call before opening the `*gorm.DB`.** |
-| `WithKeySource`, `WithBlindIndexKey` | **Required.** No safe default exists for either. `WithKeySource` replaced `WithSigningKeys` in the pki-integration round (breaking, no back-compat path) -- see "Tokens and passwords" below. |
+| `WithKeySource`, `WithBlindIndexKey` | **Required.** No safe default exists for either. The former static-key options (`WithSigningKeys` and the `KeySet` API) do not exist in this version — breaking, with no back-compat path; `WithKeySource` is the only way in (see "Tokens and passwords" below). |
 | `WithMembershipReader` | The seam through which membership is asked. Absent means "refuse", not "allow". |
 | `WithFeatureGate` | Makes this module's declared feature flags (`authn.password_login`, `authn.sms_login`, the five `authn.social.*` channels, `authn.sso.oidc`) effective at request time. `*config.Service` satisfies the `FeatureGate` interface structurally. See "Feature flags are enforced through a host-supplied gate" below. |
 | `WithClock`, `WithIssuer`, `WithAccessTokenTTL`, `WithRefreshTokenTTL`, `WithSessionTTL`, `WithRevocationMode`, `WithPasswordParams`, `WithPasswordPolicy` | Everything else. A nil or non-positive value leaves the default in place. `WithRevocationMode(RevocationModeImmediate)` needs no companion middleware wiring — enforcement is default — see "Immediate revocation is enforced by default, not by host ceremony". |
@@ -81,20 +62,17 @@ config. **A host that has the config module in its deployment should wire its
 service here** (read lazily at call time, the `orgFeatureGate` trick in the
 reference app's `cmd/server/server.go` is the canonical shape, since
 `configModule.Attach` produces the service only after `Bootstrap` returns). A
-nil gate -- the no-config-module deployment -- leaves every channel enabled,
-the module's pre-seam behavior: there is no feature store for an operator to
-have disabled anything in, so there is no intent for the module to enforce.
-This is the one known wiring gap left by the round that landed the seam: the
-reference app itself does not pass `WithFeatureGate` yet, so its flags remain
-unenforced there until that one-line wiring lands with its config service.
+nil gate -- the no-config-module deployment -- leaves every channel enabled:
+there is no feature store for an operator to have disabled anything in, so
+there is no intent for the module to enforce.
 
 ### Platform search: `SearchUsers` does no authorization of its own
 
-`Service.SearchUsers(ctx, UserSearchQuery) ([]User, error)` (`search.go`) is authn's one cross-tenant, platform-operator search entry point, added purely additively for `go/admin`'s D6 (no existing signature in this module changed). Unlike `FindByID`/`FindByEmail`/`FindByPhone`, which answer "does this one identifier resolve to an account" for ordinary business code that already knows which tenant it is asking about, `SearchUsers` answers "which account (if any) does this identifier or name fragment belong to" with no tenant in scope at all -- `users` is identity data, not tenant data, so only a platform-wide search makes sense here.
+`Service.SearchUsers(ctx, UserSearchQuery) ([]User, error)` (`search.go`) is authn's one cross-tenant, platform-operator search entry point; no existing signature in this module changed for it. Unlike `FindByID`/`FindByEmail`/`FindByPhone`, which answer "does this one identifier resolve to an account" for ordinary business code that already knows which tenant it is asking about, `SearchUsers` answers "which account (if any) does this identifier or name fragment belong to" with no tenant in scope at all -- `users` is identity data, not tenant data, so only a platform-wide search makes sense here.
 
 `UserSearchQuery` takes exactly one of `Email` (exact match via the email blind index), `Phone` (exact match via the E.164 phone blind index) or `DisplayNamePrefix` (case-insensitive prefix match, the only criterion that can return more than one row, bounded by `Limit` -- zero uses a small default, anything above a hard ceiling is clamped to it). Naming none of the three returns `ErrSearchCriteriaRequired` (`authn.search_criteria_required`, an `apperr.Invalid`) rather than silently answering with every user on the platform.
 
-**`Service` has no opinion on who may call it, by design.** This module never imports `rbac` (root `CLAUDE.md`'s module-boundary rule), so `SearchUsers` performs no internal permission check of any kind -- the caller (`go/admin`'s HTTP handler, gating on `admin:search_users`, in the round that consumes it) is entirely responsible for authorizing the call before it ever reaches here. Treat this the same way as any other security-sensitive, no-internal-authz method in this codebase: never expose it behind a route that is not already gated by the caller's own permission check.
+**`Service` has no opinion on who may call it, by design.** This module never imports `rbac`, so `SearchUsers` performs no internal permission check of any kind -- the caller (`go/admin`'s HTTP handler, gating on `admin:search_users`) is entirely responsible for authorizing the call before it ever reaches here. Treat this the same way as any other security-sensitive, no-internal-authz method in this codebase: never expose it behind a route that is not already gated by the caller's own permission check.
 
 ### Authentication
 
@@ -102,14 +80,14 @@ unenforced there until that one-line wiring lands with its config service.
 |---|---|
 | `Principal` | The authentication result: user, current tenant, session, AMR. No roles, no permissions. |
 | `Service.Register / Login / Refresh / SwitchTenant / Logout` | The flows. |
-| `MembershipReader` | `ActiveMembership` and `TenantsOf`. Implemented by the host, by `org` once it lands. |
+| `MembershipReader` | `ActiveMembership` and `TenantsOf`. Implemented by the host; `org`'s membership service is the canonical implementation. |
 
 ### Tokens and passwords
 
 | Symbol | Purpose |
 |---|---|
-| `KeySource` | Declared here, structurally satisfied by `*pki.Service` with zero import edge (docs/internal/22-pki.md's "authn's integration" section). Replaces the deleted `TokenKey`/`KeySet`/`NewKeySet`/`GenerateTokenKey` static-injection shape -- there is deliberately no second, fallback key-source path (docs/internal/22-pki.md's "no second path" section). `Signer`/`Verifier` resolve keys from it on every `Issue`/`Verify` call rather than holding a fixed key set; `Signer` calls `KeySource.EnsurePurpose` lazily on the first `Issue`, under one mutex serializing concurrent callers -- success is remembered permanently, while a failed call is retried once by the first `Issue` after a bounded window rather than cached for the process's lifetime -- since `Module.Register` may perform no I/O. |
-| `Signer.Issue(ctx, principal)`, `Verifier.Verify(ctx, raw)` | Access tokens, algorithm-pinned to EdDSA; both now take a `context.Context` (the breaking half of the `KeySource` switch), and `Verify`'s `keyFunc` additionally checks the token header's `alg` against the signing key's own `KeySource`-declared `Algorithm` -- defense in depth on top of the parser's single-EdDSA allowlist, so a future second algorithm cannot slip past this check by accident (docs/internal/22-pki.md's "authn's signing algorithm" section). |
+| `KeySource` | Declared here, structurally satisfied by `*pki.Service` with zero import edge. The deleted `TokenKey`/`KeySet`/`NewKeySet`/`GenerateTokenKey` static-injection API has no back-compat path: there is deliberately no second, fallback key-source path. `Signer`/`Verifier` resolve keys from it on every `Issue`/`Verify` call rather than holding a fixed key set; `Signer` calls `KeySource.EnsurePurpose` lazily on the first `Issue`, under one mutex serializing concurrent callers -- success is remembered permanently, while a failed call is retried once by the first `Issue` after a bounded window rather than cached for the process's lifetime -- since `Module.Register` may perform no I/O. |
+| `Signer.Issue(ctx, principal)`, `Verifier.Verify(ctx, raw)` | Access tokens, algorithm-pinned to EdDSA; both take a `context.Context`. `Verify`'s `keyFunc` additionally checks the token header's `alg` against the signing key's own `KeySource`-declared `Algorithm` -- defense in depth on top of the parser's single-EdDSA allowlist, so an algorithm addition that forgets this check cannot slip past by accident. |
 | `HashPassword`, `VerifyPassword`, `NeedsRehash`, `PasswordParams`, `PasswordPolicy` | argon2id with PHC-encoded parameters. |
 
 ### HTTP
@@ -126,11 +104,11 @@ unenforced there until that one-line wiring lands with its config service.
 
 | Symbol | Purpose |
 |---|---|
-| `api/openapi.yaml` | The single source of this module's HTTP surface — twenty operations under `/api/v1/authn`, path prefix and `operationId`/schema-name conventions per `.claude/skills/backend-coding-standards/SKILL.md` §6.1. `Module.OpenAPISpec()` returns it embedded. |
+| `api/openapi.yaml` | The single source of this module's HTTP surface — every operation under `/api/v1/authn`, path prefix and `operationId`/schema-name conventions per `.claude/skills/backend-coding-standards/SKILL.md` §6.1. `Module.OpenAPISpec()` returns it embedded. |
 | `api/authn-server.gen.go` | Generated by `task api:gen` (pinned `oapi-codegen` v2.8.0) from the fragment above — **never hand-edited**. Defines `api.ServerInterface` and every request/response model. |
 | `NewHandler(svc) *Handler` | Implements `api.ServerInterface`; its inner routing comes entirely from the generated `HandlerFromMux`. Runs standalone — it is **not** mounted downstream of `tenancy.Middleware` the way a tenant-scoped module's handler is (see "This handler does not run downstream of tenancy.Middleware" below). |
 | `Handler.requirePrincipal` (unexported) | This module's per-route enforcement for its own HTTP surface: every protected operation calls it first and answers a missing `Principal` with `authn.authentication_required`, exactly what `RequireAuthenticated` does for a handler composed the usual way — see "Per-route enforcement lives inside Handler, not around it" below for why. |
-| `Service.ListSessions`, `Service.RevokeSession`, `Service.RevokeOtherSessions`, `Service.ListLoginHistory` (`history.go`) | The self-service device-list and login-history surface: list every session (including revoked ones, newest first), revoke one of the caller's own sessions by id, revoke every session except the caller's current one, list the caller's own login attempts (newest first, limit clamped to `(0, 200]`). |
+| `Service.ListSessions`, `Service.RevokeSession`, `Service.RevokeOtherSessions`, `Service.ListLoginHistory` (`history.go`) | The self-service device-list and login-history surface: list every session (including revoked ones, newest first), revoke one of the caller's own sessions by id, revoke every session except the caller's current one, list the caller's own login attempts (newest first, limit clamped). |
 | `ErrSessionNotFound` | `RevokeSession`'s answer for both "no such session" and "that session belongs to someone else" — deliberately the same answer either way, so the endpoint never confirms another account's session id exists. |
 
 ### Federation
@@ -175,10 +153,9 @@ unenforced there until that one-line wiring lands with its config service.
 ### Do not put a `tenant_id` on any identity table
 
 `users`, `sessions`, `refresh_tokens` and `login_attempts` are identity-domain
-data (`docs/internal/04-data-and-tenancy.md`). A person belongs to several
-tenants, so scoping the person to one makes the multi-tenant case
-unrepresentable. None of these models may implement `dbkit.TenantScoped`, and
-embedding `dbkit.TenantModel` into one is caught by
+data. A person belongs to several tenants, so scoping the person to one makes
+the multi-tenant case unrepresentable. None of these models may implement
+`dbkit.TenantScoped`, and embedding `dbkit.TenantModel` into one is caught by
 `tenancytest.AssertNotTenantScoped` in `model_test.go`.
 
 `sessions.current_tenant_id` is the one column that looks like an exception and
@@ -189,9 +166,9 @@ every refresh rather than trusted.
 ### Repositories hold a plain `*gorm.DB`, and that is the documented pattern
 
 `dbkit.Repository[T]` is constrained to `T: dbkit.TenantScoped`, which identity
-data must not satisfy — see `go/dbkit/AGENTS.md`'s "Known limitations". The
-compensating controls are the assertion above plus two rules that apply to
-`repository.go` specifically:
+data must not satisfy — the plain `*gorm.DB` shape is the documented one for
+identity and platform data. The compensating controls are the assertion above
+plus two rules that apply to `repository.go` specifically:
 
 * **No `.Table`, `.Model` or `.Raw`.** Nothing here needs them: every conditional
   update passes its target struct to `Updates`, from which GORM parses the same
@@ -228,13 +205,12 @@ Two consequences worth knowing:
 obs.Middleware -> authn.Middleware(verifier) -> tenancy.Middleware(authn.NewPrincipalResolver()) -> handler
 ```
 
-This is a **deliberate deviation** from the order drawn in
-`docs/internal/01-architecture.md`. The evidence is the resolver signature:
-`Resolve(r *http.Request) (pkgcore.TenantID, error)` returns a tenant and no
-context, so a resolver that verified the JWT would have nowhere to hand the
-claims it just validated. The documented order therefore forces verifying every
-token twice, through two code paths free to diverge, with the tenant decided by
-the one that is *not* authorising the request.
+The chain is this way round, not the reverse, because of the resolver
+signature: `Resolve(r *http.Request) (pkgcore.TenantID, error)` returns a
+tenant and no context, so a resolver that verified the JWT would have nowhere
+to hand the claims it just validated. A tenancy-first order would force
+verifying every token twice, through two code paths free to diverge, with the
+tenant decided by the one that is *not* authorising the request.
 
 * `authn.Middleware` **never calls `pkgcore.WithTenant`.** Injecting the tenant is
   `tenancy.Middleware`'s single job.
@@ -270,12 +246,11 @@ manager). Natural mode — the module default — answers false without touching
 the store, so the check costs nothing there; immediate mode pays one
 key-value read per request, its documented price.
 
-This default was the P1 hole: the checker used to be an optional
-`MiddlewareOption`, nothing in the shipped composition (the reference app, the
-consumer skeletons) passed it, and immediate-mode revocations were recorded on
-the list nobody consulted — a revoked session's unexpired access token kept
-working to its natural expiry, which made the refresh-replay theft response
-powerless against the thief's CURRENT token. Selecting `WithRevocationMode(RevocationModeImmediate)` now genuinely enforces, and `examples/reference-app` runs in immediate mode as the mandatory first consumer of the enforced mechanism. There is deliberately no dynamic-configuration twin of the option; see Known limitations for the deleted `authn.session_revocation_immediate` item.
+Selecting `WithRevocationMode(RevocationModeImmediate)` genuinely enforces
+sign-out on outstanding access tokens, and `examples/reference-app` runs in
+immediate mode as the mandatory first consumer of the enforced mechanism.
+There is deliberately no dynamic-configuration twin of the option; see Known
+limitations for the removed `authn.session_revocation_immediate` item.
 
 ### Sign-in must not answer what it refuses to answer
 
@@ -319,30 +294,29 @@ them as two separate steps with its own membership and user-status
 re-verification run in between, rather than calling `Rotate` as one call and
 checking membership afterward.
 
-This ordering is load-bearing, not cosmetic. It used to be the other way
-round: `Rotate` consumed the token and minted its replacement, and only then
-did `refresh` re-verify membership and user status — so a re-verification
-failure (a `MembershipReader` timeout, a status flag flapping) left the
-presented token permanently spent with the caller never having received its
-replacement. The client's own, entirely legitimate retry with that same token
-then hit `Rotate`'s replay detector, which cannot distinguish that retry from
-an actual stolen token, and paid the real-theft price for it: the whole
-refresh-token family and the session revoked, `EventSessionReplayDetected`
-fired. A two-second membership-store outage should never look identical to a
-stolen refresh token.
+This ordering is load-bearing, not cosmetic. Consuming the token before
+re-verifying would leave a re-verification failure (a `MembershipReader`
+timeout, a status flag flapping) with the presented token permanently spent
+and the caller never having received its replacement. The client's own,
+entirely legitimate retry with that same token would then hit the replay
+detector, which cannot distinguish that retry from an actually stolen token,
+and pay the real-theft price for it: the whole refresh-token family and the
+session revoked, `EventSessionReplayDetected` fired. A two-second
+membership-store outage must never look identical to a stolen refresh token.
 
 Do not re-merge `resolveRotation` and `commitRotation` back into one call
-inside `refresh` "for simplicity" — that reopens this exact bug. Any future
-re-verification `refresh` grows must go between the resolve and the commit,
+inside `refresh` "for simplicity" — that reopens this exact failure. Any
+re-verification `refresh` needs must go between the resolve and the commit,
 never after the commit.
 
-### `Rotate` still exists and still behaves like one atomic call
+### `Rotate` is one atomic call; the two-step form is `refresh`'s own
 
-Callers other than `Service.refresh` (and `SessionManager`'s own tests) use
-`Rotate` exactly as before — its signature, behavior and its own replay
-detection are unchanged. `resolveRotation`/`commitRotation` are unexported
-internals `Rotate` composes itself from; they exist so `refresh` can slot
-its own checks between them, not as a new public two-step contract.
+`Rotate` composes `resolveRotation` then `commitRotation` internally, so
+callers other than `Service.refresh` (and `SessionManager`'s own tests) get
+the atomic consume-and-mint and the replay detection in one call, with no
+second step to remember. The two halves are unexported internals — they exist
+so `refresh` can slot its own checks between them, not as a public two-step
+contract.
 
 ### Tokens carry no email and no permissions
 
@@ -358,10 +332,9 @@ it expired.
 ### Auto-link an existing account only when verified AND trusted
 
 `resolveSocialAccount` (social channels) and `SSOService.resolveAccount`
-(enterprise SSO) both implement the same rule from
-`docs/internal/05-identity-and-access.md`: an unrecognised external identity
-whose email address already belongs to an account here may be linked to that
-account automatically **only when the provider asserts the address is
+(enterprise SSO) both implement the same rule: an unrecognised external
+identity whose email address already belongs to an account here may be linked
+to that account automatically **only when the provider asserts the address is
 verified AND the channel is on the platform's trusted-provider list**
 (`ConfigKeyTrustedProviders`, default empty). Anything else — verified but
 untrusted, trusted but unverified — is refused with
@@ -412,9 +385,10 @@ email-less mint is the same account shape the module already provisions for
 a trusted social identity that carries no address, and its cost is confined
 to the tenant's own flows: the account's address is not on the users row, so
 host-side consumers of `users.email` (notifications, profile display) see
-none until a future flow lets the holder add one, and the account cannot be
-merged by email with another account of the same person — merges by email
-equality alone are refused everywhere else in this module on purpose.
+none — no flow exists for the holder to add an address to such an account —
+and the account cannot be merged by email with another account of the same
+person: merges by email equality alone are refused everywhere else in this
+module on purpose.
 
 A channel that reports **no email at all** (WeChat) can never satisfy either
 rule's first condition, so it never auto-links. It is not an error path: with
@@ -460,9 +434,9 @@ never reaches the third party at all.
 
 ### `tenant_sso_configs` has no database-level "one row per tenant" constraint
 
-`docs/internal/05` specifies exactly one SSO configuration per tenant, and
-`SaveConfig` enforces it in the normal path by reading `Current` first and
-updating the existing row rather than creating a second one. There is
+Exactly one SSO configuration per tenant is the rule, and `SaveConfig`
+enforces it in the normal path by reading `Current` first and updating the
+existing row rather than creating a second one. There is
 deliberately **no** `UNIQUE` index on `tenant_id` alone backing that up: such
 a constraint would reject the second of the two rows per tenant that the
 **mandatory** `tenancytest.AssertIsolated` suite creates to prove `List`
@@ -477,7 +451,7 @@ to one row by updating whichever row `Current` returned. See
 ### The enterprise channel has a tenant-id budget, and the SSO configuration is refused, never truncated, past its column widths
 
 Both are the REFUSE branch of this module's dual-dialect width rule (the
-truncation round's per-column decisions are in `model.go`'s column-width doc
+per-column cut-versus-refuse decisions are in `model.go`'s column-width doc
 comment): PostgreSQL enforces a declared `VARCHAR(n)` width where SQLite
 ignores it, and on these two surfaces the value cannot be cut.
 
@@ -527,12 +501,11 @@ replica pool is reading. This mirrors `pkgcore.ErrMissingDistributedMailer`
 exactly, and it is the ONE piece of deployment-mode awareness this module
 carries. It lives entirely in `newOptions`' validation — never in `Service`'s
 business logic — for the same reason `pkgcore.Kernel`'s own `resolveMailer`
-and `resolveObjectStore` live in kernel wiring: the root CLAUDE.md's "do not
-branch on deployment mode in business logic" governs behavior selection
-inside a request, not a once-at-construction-time checked precondition.
-Omitting `WithDeploymentMode` (every call site that predates this option, and
-every standalone deployment) is equivalent to standalone and keeps working
-with the console default.
+and `resolveObjectStore` live in kernel wiring: deployment-mode differences
+govern behavior selection inside a request, not a once-at-construction-time
+checked precondition. Omitting `WithDeploymentMode` — every standalone
+deployment — is equivalent to standalone and keeps working with the console
+default.
 
 ### The three carrier adapters (aliyun, tencent, twilio)
 
@@ -688,46 +661,43 @@ expiry timer needed. Do not add one. Do not make `VerifyStepUp` persist the
 enriched AMR onto the session row "for convenience" — that removes the
 property entirely.
 
-### Every session-mutating call re-verifies `session.ExpiresAt`, not just `session.Status`
+### Every session-mutating call checks `session.ExpiresAt`, not just `session.Status`
 
 A session past its own `ExpiresAt` is not usable, even while its `Status` row
 still reads `active` — nothing in this module proactively flips `Status` away
 from active when a session merely times out; expiry is a read-time check, not
-a write nobody performs. `Rotate` (`session.go`) has always checked both
-`session.Status != SessionStatusActive` and `!now().Before(session.ExpiresAt)`
-together, refusing either with `ErrSessionRevoked`. `SwitchTenant` and
-`VerifyStepUp` (`mfa.go`) were re-verifying only `Status`, so a session that
-had genuinely expired but whose row nobody had touched stayed usable through
-either call for as long as the caller's already-issued access token remained
-valid — a session's practical lifetime stretched past its own configured TTL
-by one access-token lifetime.
-
-Both now carry the identical `session.Status != SessionStatusActive ||
-!s.now().Before(session.ExpiresAt)` check `Rotate` always has, refusing with
-the same `ErrSessionRevoked`. Any new session-mutating method added to this
-module must carry the same pair of checks together — never `Status` alone.
+a write nobody performs. Every session-mutating path — `Rotate`
+(`session.go`), `SwitchTenant` (`service.go`) and `VerifyStepUp` (`mfa.go`)
+— checks both `session.Status != SessionStatusActive` and
+`!now().Before(session.ExpiresAt)` together, refusing either with
+`ErrSessionRevoked`. A path that checked only `Status` would leave a session
+that had genuinely expired — but whose row nobody had touched — usable for
+as long as the caller's already-issued access token remained valid, a
+session's practical lifetime stretched past its own configured TTL by one
+access-token lifetime. Any new session-mutating method must carry the same
+pair of checks together — never `Status` alone.
 
 ### A bare access token cannot silently seize an already-active MFA factor
 
-`Service.EnrollTOTP` unconditionally deletes any existing factor (pending or
-active) before enrolling a fresh one (`UserMFAFactor`'s unique
-`(user_id, type)` index — see its own doc comment). Without a check, a bare,
-unelevated access token — the shape a stolen one has — could call
-`AuthnEnrollTOTP` then `AuthnConfirmTOTP` with a secret it chose itself,
-replacing a victim's active factor with no re-proof at all. `EnrollTOTP`
-therefore takes the caller's whole `Principal` and refuses with
+`Service.EnrollTOTP` replaces any existing PENDING factor before enrolling a
+fresh one and leaves an existing ACTIVE factor in place until a confirm
+genuinely succeeds (see `MFAFactorRepository.ReplacePending`/`Confirm` and
+the `(user_id, type)` partial indexes, migrations 0010 and 0011). Without a
+check, a bare, unelevated access token — the shape a stolen one has — could
+call `AuthnEnrollTOTP` then `AuthnConfirmTOTP` with a secret it chose
+itself, replacing a victim's active factor with no re-proof at all.
+`EnrollTOTP` therefore takes the caller's whole `Principal` and refuses with
 `ErrStepUpRequired` when an ACTIVE factor already exists and
 `principal.AMR` does not already carry one (`hasSecondFactor`) — this is
 enforced INSIDE the service rather than by wrapping the route in
 `RequireStepUp`, because whether step-up is even required depends on
 whether an active factor exists to protect, information only the service
 has without an extra round trip. A brand-new enrollment (nothing active to
-replace) proceeds exactly as before, regardless of AMR — see
-docs/internal/05-identity-and-access.md line 125 (turning MFA on for the
-first time) versus line 127 (changing it once it already exists): only the
-latter is a step-up case. `AuthnRegenerateRecoveryCodes` has no such
-first-time case (it requires an active factor as its own precondition), so
-its handler wraps the whole operation in `RequireStepUp` directly instead.
+replace) needs no step-up and proceeds regardless of AMR: turning MFA on
+for the first time is not a step-up case, while changing an existing factor
+is. `AuthnRegenerateRecoveryCodes` has no such first-time case (it
+requires an active factor as its own precondition), so its handler wraps
+the whole operation in `RequireStepUp` directly instead.
 
 ### `RequireStepUp` has no password-re-entry fallback for an account with no MFA
 
@@ -740,8 +710,9 @@ gap, not an oversight — see Known limitations.
 
 `go/ratelimit`'s `Limiter.Allow` gives the raw sliding-window counters
 (`rateGuard.allow` in `ratelimit.go`) — it deliberately understands nothing
-about "account", "progressive" or "lockout" (see its own AGENTS.md). This
-module's `rateGuard` adds the one thing `go/ratelimit` does not: a
+about "account", "progressive" or "lockout": `Allow` answers one dimension
+per call and nothing else. This module's `rateGuard` adds the one thing
+`go/ratelimit` does not: a
 progressive login-failure delay (`RecordLoginFailure`/`RecordLoginSuccess`)
 that grows exponentially from `loginLockoutBase` and saturates at
 `loginLockoutMax`, which is what turns "delay" into an effective, bounded
@@ -811,22 +782,19 @@ it.
 
 The address this module records -- the per-IP rate-limiter key, the `Session.IP`
 column, the `LoginAttempt.IP` login-history column, the address carried by the
-session and login events -- is resolved by `Handler.clientIP` (handler.go). The
-resolution has one trusted-proxy-aware shape, shipped to close the reference
-app's Fly.io finding (every recorded address was the proxy's internal
-`172.16.45.218`, never the client's): a request's direct connection address
-(`RemoteAddr`) is the answer UNLESS the host declared the proxies it receives
-requests through (`WithTrustedProxies`) AND that request's peer is one of
-them, in which case the forwarding headers are read. Everything else -- no
-proxies declared, a peer that is not one of them, a malformed chain, a chain
-naming only proxies -- falls back to the connection address. That gate is what
-keeps a direct client from minting its own recorded address with a spoofed
-header: a header is only read from a request whose peer the HOST declared
-trustworthy.
+session and login events -- is resolved by `Handler.clientIP` (handler.go).
+The resolution has one trusted-proxy-aware shape: a request's direct
+connection address (`RemoteAddr`) is the answer UNLESS the host declared the
+proxies it receives requests through (`WithTrustedProxies`) AND that
+request's peer is one of them, in which case the forwarding headers are
+read. Everything else -- no proxies declared, a peer that is not one of them,
+a malformed chain, a chain naming only proxies -- falls back to the
+connection address. That gate is what keeps a direct client from minting its
+own recorded address with a spoofed header: a header is only read from a
+request whose peer the HOST declared trustworthy.
 
-WHICH header may be read under that gate is a second, separate decision, and
-it is the shape the P0 header-selection follow-up (the reference app's own
-audit) corrected. Two kinds exist, on two footings:
+WHICH header may be read under that gate is a second, separate decision. Two
+kinds exist, on two footings:
 
 - **`X-Forwarded-For` needs no per-header declaration.** The chain protects
   itself: a proxy appends the peer it saw, so `clientIP` walks the chain from
@@ -843,10 +811,11 @@ audit) corrected. Two kinds exist, on two footings:
   request from Fly's proxy (which overwrites `Fly-Client-IP` per request) and
   a request from a generic reverse proxy (nginx, ALB, Envoy, Cloudflare --
   which forwards unknown headers verbatim) are identical to the process behind
-  them. Reading the vendor header for every declared proxy therefore let a
-  client smuggle its own value through any non-Fly proxy a host had declared,
-  minting its own recorded address AND its own rate-limiter bucket (the
-  register budget's only dimension). Only the host knows which topology it
+  them, so reading a vendor header under the trusted-peer gate alone would
+  let a client smuggle its own value through any non-Fly proxy a host had
+  declared -- minting its own recorded address AND its own rate-limiter
+  bucket (the register budget's only dimension) -- which is why the
+  per-header opt-in exists. Only the host knows which topology it
   runs, so the opt-in is its declaration, mirroring `WithSecureCookies`; the
   closed `VendorClientIPHeader` set (validated at wiring time) keeps the
   option from becoming a bare list of arbitrary header names, each
@@ -876,11 +845,11 @@ a caller enumerating other users' session ids is trying to learn.
 `ErrRateLimited` and `ErrAccountLocked` carry a `retry_after_seconds`
 PARAMETER (an integer, for `{code, params}` interpolation); the HTTP
 `Retry-After` HEADER is a transport-specific translation of that parameter,
-so `writeAppError` (`middleware.go`) is what emits it — one implementation
+so `writeAppError` (`middleware.go`) is what emits it — the HTTP translation
+is the caller's job, not the business-logic layer's — one implementation
 shared by `Middleware`, `RequireAuthenticated` and every `Handler` operation
-below, per `docs/internal/11-cross-cutting.md`'s "the HTTP translation is the
-caller's job, not the business-logic layer's" rule. Do not duplicate this
-logic inside `handler.go`; call the shared `writeAppError`.
+below. Do not duplicate this logic inside `handler.go`; call the shared
+`writeAppError`.
 
 ### A revoked session's reason reaches the sessions list tiered, never verbatim for a security mechanism
 
@@ -904,10 +873,10 @@ class (owner-action or security-mechanism) in its own doc comment, and
 naming every member of both classes — declaring a reason without taking
 that position is incomplete, and the projection's default folds an
 undeclared value rather than passing it through, so no unclassified value
-can ever leak. The fold is an API-projection-only change: it happens in
-`toSessionResponse` (`handler.go`), the stored `Session.RevokeReason` (the
-`revoke_reason` column) keeps the REAL reason — `replay_detected` stays in
-the column, the forensics/audit record — and no write path was touched. The
+can ever leak. The fold happens only at the API boundary: it is applied in
+`toSessionResponse` (`handler.go`) and never in any write path — the stored
+`Session.RevokeReason` (the `revoke_reason` column) keeps the REAL reason
+(`replay_detected` stays in the column, the forensics/audit record). The
 in-process `Service.ListSessions` rows still carry the stored values; only
 the wire projection folds. Do not "simplify" the projection into the write
 path or into `ListSessions` itself: both would destroy the stored evidence
@@ -942,8 +911,8 @@ All three are wired into CI: the unit tier and lint run through the shared
 matrices, and `Taskfile.yml`'s `INTEGRATION_DIRS` carries the same entry for
 `task test:full`'s local loop.
 
-`examples/reference-app` is this module's mandatory first consumer
-(root CLAUDE.md): `cmd/server/server.go` wires the real `Module` into the
+`examples/reference-app` is this module's mandatory first consumer:
+`cmd/server/server.go` wires the real `Module` into the
 composed server ahead of `notes`' and `config`'s, and
 `cmd/server/authn_e2e_test.go` drives all three sign-in channels (password,
 social, phone+SMS) plus session revoke/refresh end to end through that real,
@@ -953,11 +922,12 @@ wires (`authn.Middleware` then `tenancy.Middleware(NewPrincipalResolver())`,
 see "The middleware chain is authn, then tenancy" above) around a real
 `net/http` server.
 
-`Handler`'s own `recordAudit` (backing 8 of the 9 declared audit actions —
-see this file's own Known limitations row for the ninth) is proven at the
+`Handler`'s own `recordAudit` (backing every declared audit action except
+`AuditActionSSOConfigure`, whose emission lives at the service layer — see
+this file's Known limitations row) is proven at the
 `Handler` layer, not `Service`: `handler_test.go`'s `newAuditTestHandler`
 builds a real `*pkgcore.Registry` (`pkgcore.NewRegistry`, the same
-construction `module.go`'s `Register` runs in production) with the 9
+construction `module.go`'s `Register` runs in production) with the declared
 actions already added, wires it into the `Handler` under test, and
 subscribes a `testutil.EventRecorder` to `audit.EventRecorded` on the same
 bus — `TestHandler_LoginWithPassword_ValidCredentials_RecordsLoginAuditEvent`,
@@ -987,16 +957,16 @@ satisfies `MembershipReader` structurally.
 
 Concurrency is not optional to test here. The single-winner property of
 `RefreshTokenRepository.Consume` is what replay detection rests on, and it is
-exercised under `-race` by twenty goroutines racing one token at the unit
-tier (`session_test.go`) and again by sixteen goroutines against a REAL
-PostgreSQL server at the integration tier
-(`integration_test/postgres_refresh_rotation_test.go`) — SQLite's coarse
-table-level locking can pass the unit-tier version even with a broken CAS,
-which is exactly why the same property gets a second, real-database proof.
+exercised under `-race` by many goroutines racing one token at the unit
+tier (`session_test.go`) and again against a REAL PostgreSQL server at the
+integration tier (`integration_test/postgres_refresh_rotation_test.go`) —
+SQLite's coarse table-level locking can pass the unit-tier version even with
+a broken CAS, which is exactly why the same property gets a second,
+real-database proof.
 
 `handler_test.go` exercises every operation through the actual composed
 `Handler` (`httptest`, never calling `Service` methods directly), including
-the round's mandatory deployment-mode-consistency suite: the same request
+the mandatory deployment-mode-consistency suite: the same request
 sequence run against a `Handler` wired with `NewConsoleSMSSender` and again
 against one wired with `NewHTTPSMSSender` (an `httptest` server standing in
 for a distributed gateway), asserting identical status codes and error codes
@@ -1048,22 +1018,21 @@ rather than trying to synchronize on the exact step boundary.
 
 | Limitation | Why, and what closes it |
 |---|---|
-| Access-token signing keys now live in `go/pki`'s database tables rather than purely in this process's memory (the pki-integration round's `KeySource` switch). | Accepted trade-off, not an oversight: docs/internal/22-pki.md's "authn's integration" section spells out both sides -- the round buys real rotation, multi-replica key consistency, and an expiry scan, at the cost that a database compromise plus a `dbkit` master-key compromise together are now enough to sign arbitrary tokens (mitigated by the `vault`/`kmsaws` `Signer` implementations round 4 ships, under which the key never enters this process's memory at all). |
+| Access-token signing keys live in `go/pki`'s database tables rather than purely in this process's memory. | Accepted trade-off: real rotation, multi-replica key consistency and an expiry scan, at the cost that a database compromise plus a `dbkit` master-key compromise together are enough to sign arbitrary tokens (mitigated by the `vault`/`kmsaws` `Signer` implementations, under which the key never enters this process's memory at all). |
 | `Signer.EnsurePurpose` runs lazily on the FIRST `Issue` call of each process, not once at deployment-wide bootstrap. | `pkgcore.Module.Register` may perform no I/O (`Module.Register`'s own doc comment), so the earliest point a real `context.Context` and a certain need for the purpose exist is the first real token issuance. `EnsurePurpose` is idempotent past a purpose's first-ever key, so this costs nothing once the deployment has issued a single token; a process that only ever verifies (never issues) never calls it at all, and does not need to -- `Verifier` reads whatever key rows already exist in the database, created by whichever replica issued first. |
-| A brand-new deployment's very first `EnsurePurpose` calls can still race across replicas exactly like any other first-write race -- two replicas both finding no active key and both attempting the first `Create` -- but the loser of the database arbitration is answered as success, never as a token-issuance error. | The convergence is `go/pki`'s, not this module's, and it landed after this row's earlier text was written (a later `go/pki` round, the key-validity one): `Service.EnsurePurpose` treats a `Create` refused by `pki_signing_keys`' partial unique index -- at most one active row per purpose -- by re-reading the purpose and answering nil when an in-validity active key now exists, which is exactly the "someone else just created the active key counts as success" shape this row used to record as unmitigated future work. The branch covers both the first-boot double-create and the expiry-heal race, and `go/pki` pins the loser path with `TestService_EnsurePurpose_ConcurrentHeals_OneReplacementBothSucceed` (the index itself with `TestSigningKeyRepository_ActivePurposeUniqueness_IsEnforcedByTheDatabase`; its AGENTS.md's arbitration record has the detail). This module's own share is unchanged: `Signer.ensure` serializes in-process callers under one mutex (row above), and a purpose that still genuinely lacks an in-validity key after the failed insert keeps surfacing the store error loudly, retried after the bounded window. |
+| A brand-new deployment's very first `EnsurePurpose` calls can still race across replicas exactly like any other first-write race -- two replicas both finding no active key and both attempting the first `Create` -- but the loser of the database arbitration is answered as success, never as a token-issuance error. | The convergence is `go/pki`'s, not this module's: `Service.EnsurePurpose` treats a `Create` refused by `pki_signing_keys`' partial unique index -- at most one active row per purpose -- by re-reading the purpose and answering nil when an in-validity active key now exists, the "someone else just created the active key counts as success" shape. The path covers both the first-boot double-create and the expiry-heal race, pinned by `TestService_EnsurePurpose_ConcurrentHeals_OneReplacementBothSucceed` (the index itself by `TestSigningKeyRepository_ActivePurposeUniqueness_IsEnforcedByTheDatabase`). This module's own share is unchanged: `Signer.ensure` serializes in-process callers under one mutex (row above), and a purpose that still genuinely lacks an in-validity key after the failed insert keeps surfacing the store error loudly, retried after the bounded window. |
 | Registration reports a duplicate identifier as a conflict, which makes it an account-enumeration oracle in a way sign-in deliberately is not. | Closing it means answering every registration with "check your inbox" and moving the conflict into an email, which needs the delivery and verification flows. |
-| `sessions.ip_region` and `login_attempts.ip_region` ship empty. | Resolving an IP to a region needs a local GeoIP database whose licence has to clear the licence scanner first (`docs/internal/05-identity-and-access.md` says so explicitly). The columns exist now so no later table migration is needed. |
-| The declared dynamic-config items are not yet read back at runtime; the values are injected through options with the same defaults. | The schema is declared, which is what a module owes the config module. The read-through binding lands with the block that needs a live value. |
-| `ConfigKeyImmediateRevocation` (`authn.session_revocation_immediate`) was declared as a bool dynamic-config item and is now DELETED (P1). | It was declared-but-never-read: its description promised that setting it enforces immediate revocation, and no code read it — and no runtime read could ever deliver what the description promised, because the revocation mode is fixed at `SessionManager` construction and gates which revocations are even recorded, so a value read at request time cannot retrofit enforcement onto a natural-mode manager. The mode's one real selector is the `WithRevocationMode` construction option ("Immediate revocation is enforced by default, not by host ceremony" above). Reintroducing a dynamic switch needs the typed-config read-through binding the row above records as unbuilt, plus a mode that can change at runtime without contradicting natural mode's zero-cost model — not this round's design. |
-| The frontend half of this module's API contract — the generated authn surface of `@speed/api-sdk` — has no runtime end-to-end consumer against a real server yet (a browser driving a live backend). | Runtime consumption is discharged in form since the auth-ui round: `@speed/auth-ui`'s `src/usage-example.test.tsx` compiles and executes the composed sign-in family over a real `@speed/api-client` — `createClient` with a memory access-token store and an injectable fetch whose stand-in answers genuine `Response` objects, bound through the same `bindRequestFn` seam a host's client binds — driving a password sign-in, a silent credential-less refresh (the retried request carries the fresh token), and a server-side session death whose refused refresh converges the snapshot to anonymous, six requests pinned in order. The generated half stays compile-consumed in-workspace by `@speed/auth-core`; `@speed/auth-ui`'s public `RegisterForm` callback (the generated `AuthnUser`) adds a second type-level consumer. What remains is the browser-and-real-server leg, landing with the reference-app shells and the e2e pipeline. |
-| A brand-new account provisioned by an unmatched, trusted external identity (social or enterprise SSO) cannot sign in until something makes it an active member of the requested tenant. | Membership is `org`'s data and this module fails closed on it by design (see "Fail closed on membership"). The account and its identity are provisioned regardless — only the session is refused — so a later membership grant (or an `org`-round subscriber reacting to `authn.user.created`) lets the same sign-in succeed with no further action here. `examples/reference-app`'s `authn_e2e_test.go` sidesteps the same limitation the same honest way — register, grant, then sign in — for exactly this reason. |
-| The reference app's demo users reach tenants through an opt-in boot-time seed, not `task seed`: only a boot with `APP_DEMO_USERS_PASSWORD` set registers the three real demo accounts (`examples/reference-app/cmd/server/demo_users.go`'s `seedDemoUsers`, through the real composed register route) and grants each its org membership and rbac role per configured tenant -- the memberships in org's own table are what make real sign-ins succeed, via `signInMemberships` -- while an unset variable leaves only the demo header actors (`demo_subject.go`), which carry grants but no database row and cannot sign in. `Taskfile.yml`'s `seed` task remains a stub with no loader. | This module's own wiring is complete (reference-app first-consumer status, CI matrix rows, integration tier -- see this file's "Testing" section); what this row's earlier text called "no seed-data path" was closed by the app's env-gated demo-user seed round, and the accounts' membership is org data this module cannot write by design (authn and org are peers; nothing here imports org, and the app grants memberships under each tenant's own context). What remains -- a Taskfile `seed` loader that generates demo data outside boot -- is a tooling item, not authn's. |
-| `redocly.yaml`'s `rule/speed-tag-format` runs at `warn`, not `error`, because `examples/reference-app/internal/notes/api/openapi.yaml` (an earlier round, not this module's fragment) declares no per-operation `tags:` and so fails the module-tag convention once merged with this module's fragment. | Fixing notes' fragment is real but out of scope here — it also regenerates `@speed/api-sdk` (orval groups hooks by tag), a change this round has no reason to make. See `redocly.yaml`'s own comment. |
-| QQ/Weibo/Alipay social providers, SAML, and WebAuthn/passkeys are not implemented. | Each needs credentials, a live account, or is explicitly deferred by `docs/internal/05-identity-and-access.md`. See this round's plan for the owning milestone of each. |
-| The Aliyun/Tencent Cloud/Twilio adapters (`go/authn/sms/`) have never been proven against each vendor's real gateway in this repository's own runs. | Proving them needs live accounts and credentials, which are never committed. Each adapter's `integration_test/` carries an env-gated leg that self-skips with a recorded note until its `ALIYUN_SMS_*`/`TENCENT_SMS_*`/`TWILIO_SMS_*` variables are set, then sends one real (billable) message each — the alipay sandbox-leg precedent; this round deliberately did not run them. Until an operator does, the offline request-shape tests — vectors from Aliyun's own documentation and values an independent implementation precomputed — are the shipped proof, and the signing transcribes each vendor's published specification rather than trusting a maintained SDK's behavior. |
+| `sessions.ip_region` and `login_attempts.ip_region` ship empty. | Resolving an IP to a region needs a local GeoIP database whose licence has to clear the licence scanner first. The columns exist so a resolver, when one is added, needs no migration. |
+| The declared dynamic-config items are not read back at runtime; the values are injected through options with the same defaults. | The schema is declared, which is what a module owes the config module. The read-through binding is unbuilt; it needs the live `config` module wiring that would consume it. |
+| The dynamic-config item `authn.session_revocation_immediate` does not exist. | It was declared-but-never-read: its description promised that setting it enforces immediate revocation, and no code read it — and no runtime read could ever deliver what the description promised, because the revocation mode is fixed at `SessionManager` construction and gates which revocations are even recorded, so a value read at request time cannot retrofit enforcement onto a natural-mode manager. The mode's one real selector is the `WithRevocationMode` construction option ("Immediate revocation is enforced by default, not by host ceremony" above). Reintroducing a dynamic switch would require the typed-config read-through binding the row above records as unbuilt, plus a mode that can change at runtime without contradicting natural mode's zero-cost model. |
+| The generated authn surface of `@speed/api-sdk` has no browser-driven, real-server end-to-end consumer. | In-form runtime consumption exists: `@speed/auth-ui`'s `src/usage-example.test.tsx` compiles and executes the composed sign-in family over a real `@speed/api-client` — `createClient` with a memory access-token store and an injectable fetch whose stand-in answers genuine `Response` objects, bound through the same `bindRequestFn` seam a host's client binds — driving a password sign-in, a silent credential-less refresh (the retried request carries the fresh token), and a server-side session death whose refused refresh converges the snapshot to anonymous, six requests pinned in order. The generated half stays compile-consumed in-workspace by `@speed/auth-core`; `@speed/auth-ui`'s public `RegisterForm` callback (the generated `AuthnUser`) adds a second type-level consumer. What remains is the browser-and-real-server leg. |
+| A brand-new account provisioned by an unmatched, trusted external identity (social or enterprise SSO) cannot sign in until something makes it an active member of the requested tenant. | Membership is `org`'s data and this module fails closed on it by design (see "Fail closed on membership"). The account and its identity are provisioned regardless — only the session is refused — so a later membership grant (an `org` subscriber reacting to `authn.user.created`, or a host-side grant) lets the same sign-in succeed with no further action here. `examples/reference-app`'s `authn_e2e_test.go` sidesteps the same limitation the same honest way — register, grant, then sign in — for exactly this reason. |
+| The reference app's demo users reach tenants through an opt-in boot-time seed, not `task seed`. | Only a boot with `APP_DEMO_USERS_PASSWORD` set registers the three real demo accounts (`examples/reference-app/cmd/server/demo_users.go`'s `seedDemoUsers`, through the real composed register route) and grants each its org membership and rbac role per configured tenant — the memberships in org's own table are what make real sign-ins succeed, via `signInMemberships` — while an unset variable leaves only the demo header actors (`demo_subject.go`), which carry grants but no database row and cannot sign in. The membership half is org data this module cannot write by design (authn and org are peers; nothing here imports org, and the app grants memberships under each tenant's own context). `Taskfile.yml`'s `seed` task remains a stub with no loader; what remains unbuilt is a Taskfile `seed` loader that generates demo data outside boot, a tooling item, not authn's. |
+| `redocly.yaml`'s `rule/speed-tag-format` runs at `warn`, not `error`, because `examples/reference-app/internal/notes/api/openapi.yaml` declares no per-operation `tags:` and so fails the module-tag convention once merged with this module's fragment. | Fixing notes' fragment would also regenerate `@speed/api-sdk` (orval groups hooks by tag), so the warn level stands. See `redocly.yaml`'s own comment. |
+| QQ/Weibo/Alipay social providers, SAML, and WebAuthn/passkeys are not implemented. | Each needs credentials, a live account, or a design decision this module has not made. |
+| The Aliyun/Tencent Cloud/Twilio adapters (`go/authn/sms/`) have never been proven against each vendor's real gateway in this repository's own runs. | Proving them needs live accounts and credentials, which are never committed. Each adapter's `integration_test/` carries an env-gated leg that self-skips with a recorded note until its `ALIYUN_SMS_*`/`TENCENT_SMS_*`/`TWILIO_SMS_*` variables are set, then sends one real (billable) message each — the alipay sandbox-leg precedent. Until an operator runs one, the offline request-shape tests — vectors from Aliyun's own documentation and values an independent implementation precomputed — are the shipped proof, and the signing transcribes each vendor's published specification rather than trusting a maintained SDK's behavior. |
 | The Aliyun and Tencent adapters can only send through a template the operator's own account registers: Aliyun one whose single variable is named by `Config.TemplateParamName` (default `content`), Tencent one declaring exactly one positional variable; Twilio sends free text. | The seam delivers already-rendered text, and Aliyun/Tencent have no free-text send; the adapters map the whole message onto the account's template variable(s) exactly as each package doc records. The template itself is account data this codebase cannot provision or verify — a live-leg run with a mismatched template fails with the vendor's own `TemplateParamSet`-class error. |
-| `RequireStepUp` has no fallback for an account with no MFA factor enrolled — it blocks the sensitive action unconditionally rather than, say, accepting a re-entered password. | A password-re-entry fallback needs its own design decision (how long that proof stays valid, whether it composes with MFA) that this block did not make. |
-| MFA (TOTP) is not enforced at LOGIN time — only `RequireStepUp`-gated sensitive actions require it. A password or SMS sign-in for an account WITH an enrolled factor still succeeds on the first factor alone. | Full second-factor-at-login is a larger design question (an interactive "enter your code now" challenge mid-flow) this block's scope did not include; the round's plan scoped MFA to enrollment, recovery and step-up. |
-| Phone-login and TOTP/recovery-code lifetimes (`ConfigKeySMSCodeTTL`, `ConfigKeySMSCodeMaxAttempts`) are declared as dynamic-config schema but, like every other dynamic-config item in this module, are not yet read back at runtime — values are injected through options with matching defaults. | Same read-through gap `NewService`'s existing options already carry; the binding lands with whichever block wires this module to the live `config` module. |
-| The `otpauth://` provisioning URI is rendered as a plain string; no QR image is generated server-side. | Deliberate — see `internal/totp`'s own doc comment. QR rendering is display logic and belongs on the frontend, which already owns every other rendering decision in this codebase. A QR-generation dependency was weighed and rejected for the same reason `pquerna/otp` was: every dependency added here lands in every consumer's build. |
-| Members who sign in through the enterprise relying party (`SSOService.Callback`) still produce no audit row, and tenant SSO configuration still has no HTTP surface. | Configuration WRITES are no longer part of this gap, and neither is a detected replay. `AuditActionSSOConfigure` is emitted from the service layer, where the write genuinely happens: `SSOService.SaveConfig` calls `audit.Emit` after every committed create and update (`oidc.go`'s `emitConfigSavedAudit`, its registrar wired by `module.go`'s `Register`), recording the writing operator (the `pkgcore.Actor` the caller's ctx attests, the same carriers the `Handler`-layer records use) and the written configuration (issuer, client id, enabled, allowed domains) without the client secret. An earlier round had declared the action and recorded that nothing could emit it, because the only real call site has no `handler.go` surface — the round equated audit emission with the `Handler`-layer convention `notes.Handler`'s own `recordNoteCreatedAudit` set. That equation was the error: this codebase's `audit.Emit` sites are overwhelmingly service-layer (12 non-handler sites across seven modules against 3 handler-layer ones), and `SaveConfig` is itself such a site — emission belongs where the write commits, not waiting for an HTTP surface. A detected replay is likewise recorded where it is detected, for the same reason: `SessionManager.handleReplay`'s `emitReplayAudit` (`session.go`) emits under the already-declared `AuditActionSessionRevoke` with `Result{Success: false, FailureReason: RevokeReasonReplay}` — the 401 the replayed refresh answers, `RevokeReasonReplay` the same vocabulary the revoked session row itself carries in `revoke_reason` — attributed to the account owner whose family was rotated and stamped with the revoked session's tenant, its registrar wired by the same `Register`. All 9 declared audit actions now have live emit sites: 8 of them through `recordAudit` at the `Handler` layer (`handler.go`, mirroring `notes.Handler`'s own `audit.Emit` convention) — `session.revoke` among them, whose automatic replay responses are the manager-layer site just described, so an `authn.session.revoke` row records either an owner-initiated revocation (`Success=true`) or the theft response, told apart by the Result — and `AuditActionSSOConfigure` entirely from the service layer. All layers call the same `audit.Emit`, so a future SSO-config HTTP handler adds only its own `recordAudit` call, never new mechanism. See this file's own Testing section for the proofs. The sign-in half of the old gap stays open for the reason the old row gave in the wrong place: `SSOService.Callback` also runs with no handler-layer funnel, and no HTTP surface exists to host one; it closes with that surface. |
+| `RequireStepUp` has no fallback for an account with no MFA factor enrolled — it blocks the sensitive action unconditionally rather than, say, accepting a re-entered password. | A password-re-entry fallback needs its own design decision (how long that proof stays valid, whether it composes with MFA), which has not been made. |
+| MFA (TOTP) is not enforced at LOGIN time — only `RequireStepUp`-gated sensitive actions require it. A password or SMS sign-in for an account WITH an enrolled factor still succeeds on the first factor alone. | Full second-factor-at-login is a larger design question (an interactive "enter your code now" challenge mid-flow); the shipped shape is enrollment, recovery and step-up only. |
+| Phone-login and TOTP/recovery-code lifetimes (`ConfigKeySMSCodeTTL`, `ConfigKeySMSCodeMaxAttempts`) are declared as dynamic-config schema but, like every other dynamic-config item in this module, are not read back at runtime — values are injected through options with matching defaults. | Same read-through gap `NewService`'s existing options carry; the binding is unbuilt (see the dynamic-config row above). || The `otpauth://` provisioning URI is rendered as a plain string; no QR image is generated server-side. | Deliberate — see `internal/totp`'s own doc comment. QR rendering is display logic and belongs on the frontend, which already owns every other rendering decision in this codebase. A QR-generation dependency was weighed and rejected for the same reason `pquerna/otp` was: every dependency added here lands in every consumer's build. |
+| Members who sign in through the enterprise relying party (`SSOService.Callback`) produce no audit row, and tenant SSO configuration has no HTTP surface. | Configuration WRITES and replay responses are covered from the service layer: `AuditActionSSOConfigure` is emitted by `SSOService.SaveConfig` after every committed create and update (`oidc.go`'s `emitConfigSavedAudit`, its registrar wired by `module.go`'s `Register`), recording the writing operator (the `pkgcore.Actor` the caller's ctx attests) and the written configuration (issuer, client id, enabled, allowed domains) without the client secret; a detected replay is recorded by `SessionManager.handleReplay`'s `emitReplayAudit` (`session.go`) under `AuditActionSessionRevoke` with `Result{Success: false, FailureReason: RevokeReasonReplay}` — the 401 the replayed refresh answers, `RevokeReasonReplay` the same vocabulary the revoked session row stores in `revoke_reason` — attributed to the account owner and stamped with the revoked session's tenant. Every declared audit action has a live emit site: the handler-layer ones through `recordAudit` (`handler.go`) — `session.revoke` among them, whose replay responses are the manager-layer site just described, so an `authn.session.revoke` row records either an owner-initiated revocation (`Success=true`) or the theft response, told apart by the Result — and `AuditActionSSOConfigure` from the service layer; emission belongs where the write commits, not where an HTTP handler would be. An SSO-config HTTP surface, were one mounted, would add only its own `recordAudit` call, never new mechanism. See this file's Testing section for the proofs. The sign-in half of the gap stays open for the same structural reason: `SSOService.Callback` runs with no handler-layer funnel, and no HTTP surface exists to host one; it closes with that surface. |

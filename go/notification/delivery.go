@@ -38,9 +38,7 @@ const InstrumentationName = "github.com/vislake/speed/go/notification"
 
 // Metric instrument names registerDeliveryMetrics wires under
 // InstrumentationName -- the per-channel delivery success rate, latency and
-// bounce rate row
-// docs/internal/09-observability.md's must-instrument table requires for the
-// notification domain. Bounce rate is derivable from
+// bounce rate instruments. Bounce rate is derivable from
 // deliveryCountMetricName's own status attribute: a transport's permanent
 // failure settles as SendRecordStatusFailed through failAndStop (see
 // ContactService's bounce marking), so no separate bounce instrument exists.
@@ -81,9 +79,8 @@ type Dispatch struct {
 	// never guesses. It is REQUIRED for a user recipient (a delivery in a
 	// wrong language is worse than a failed one, and the module's copy
 	// rule forbids silent fallback), and ignored for an external contact,
-	// whose copy renders in the platform default locale (contact.go's
-	// renderContactCode documents the same deferral: a contact row carries
-	// no locale).
+	// whose copy renders in the platform default locale: a contact row
+	// carries no locale (see contact.go's renderContactCode).
 	Locale string `json:"locale"`
 
 	// Params supplies the interpolation values the type's templates
@@ -310,10 +307,8 @@ var _ deliveryHost = (*pkgcore.Registry)(nil)
 //     inbox write, an email, an SMS -- so one channel's failure never
 //     starves the others;
 //   - an external contact's deliverability is re-checked through
-//     ContactService.EnsureDeliverable (the send-time consent recheck;
-//     see AGENTS.md's "Every consent and address decision is re-checked
-//     at send time"); the verification-code exception that created the
-//     contact is long
+//     ContactService.EnsureDeliverable (the send-time consent recheck);
+//     the verification-code exception that created the contact is long
 //     past, so every delivery to it stands behind verified consent;
 //   - every send attempt is recorded in send_records under a derived
 //     delivery key (deriveDeliveryKey), and the record's succeeded state is
@@ -436,10 +431,10 @@ func (s *DeliveryService) attachHost(reg *pkgcore.Registry) {
 // SendRecords returns the module's SendRecordRepository -- the same
 // instance every delivery attempt settles into (newDeliveryService's own
 // doc comment: one data path, not a second wrapper over one connection).
-// This is what a caller outside this package (go/admin's D10,
-// docs/internal/23-admin.md) reaches to search send records by tenant,
-// time range, channel and status through SendRecordRepository.ListByFilter,
-// rather than this package growing its own HTTP surface for it.
+// This is what a caller outside this package (go/admin's send-records
+// surface) reaches to search send records by tenant, time range, channel
+// and status through SendRecordRepository.ListByFilter, rather than this
+// package growing its own HTTP surface for it.
 func (s *DeliveryService) SendRecords() *SendRecordRepository { return s.sendRecs }
 
 // Dispatch validates d and enqueues one delivery job for it, returning the
@@ -1026,8 +1021,7 @@ func (s *DeliveryService) deliverUserSMS(ctx context.Context, tenantID string, d
 // channel's transport, and a permanent transport refusal marks the
 // tenant's own contact bounced (MarkBounced) before the attempt is
 // recorded -- the delivery job's hard-failure leg; writing the platform
-// blacklist is a later round's work (blacklist.go's doc comment records
-// the boundary).
+// blacklist is unbuilt (blacklist.go's doc comment records the boundary).
 func (s *DeliveryService) deliverToContact(ctx context.Context, tenantID string, d Dispatch) error {
 	contact, err := s.contacts.EnsureDeliverableForType(ctx, d.Recipient.ContactID, d.TypeKey)
 	if err != nil {
@@ -1138,8 +1132,8 @@ func (s *DeliveryService) settleContactRefusal(ctx context.Context, tenantID str
 
 // deliverContactEmail is the email channel's contact delivery path: render
 // the type's copy in the platform default locale (a contact row carries no
-// locale -- contact.go's renderContactCode documents the same deferral) and
-// send to the contact's own address.
+// locale -- see contact.go's renderContactCode) and send to the contact's
+// own address.
 func (s *DeliveryService) deliverContactEmail(ctx context.Context, tenantID string, d Dispatch, contact *VerifiedContact, rec *SendRecord) error {
 	parts, err := renderContent(s.catalog(), platformDefaultLocale, d.TypeKey, ChannelEmail, d.Params)
 	if err != nil {
@@ -1454,10 +1448,10 @@ func (s *DeliveryService) alreadyDelivered(ctx context.Context, tenantID, key st
 // historical fact that this key already delivered, and a later settle under
 // the same key (a refusal replay landing after the recipient unsubscribed
 // or bounced, a retry failing inside the acknowledged double-send window,
-// any future rejection path) must never erase it. The write is dropped, not
-// rewritten -- updated_at stays unmoved -- and the caller sees the same nil
-// convergence its own settle would have returned; the job's next retry then
-// converges on the alreadyDelivered probe.
+// any other later rejection path) must never erase it. The write is
+// dropped, not rewritten -- updated_at stays unmoved -- and the caller sees
+// the same nil convergence its own settle would have returned; the job's
+// next retry then converges on the alreadyDelivered probe.
 //
 // The refusal is decided by the write itself, never by a probe: every write
 // to an existing row runs through the repository's SaveGuarded, a

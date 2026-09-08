@@ -2,9 +2,8 @@
 // pkgcore.KVStore, on Memcached, split out of go/pkgcore's own package for
 // the identical dependency-isolation reason kv/redis was: a consumer that
 // never wires a Memcached-backed store does not inherit
-// github.com/bradfitz/gomemcache in its dependency graph (docs/internal/03-
-// deployment-modes.md's implementation-registry section, and see this
-// package's own AGENTS.md entry for the measured cost).
+// github.com/bradfitz/gomemcache in its dependency graph; its measured
+// dependency cost is recorded in its package documentation.
 //
 // # Read this before choosing Memcached over Redis
 //
@@ -638,8 +637,8 @@ func isLostCASRace(err error) bool {
 // retried from a fresh read within the loop's existing bounded budget; the
 // loops' error paths only fail outright on errors that are not transient in
 // that sense (a malformed envelope, an unreachable server that outlasts the
-// whole retry budget). The read side of the loops used to fail on the first
-// such blip, which a busy or restarting server under load could trip.
+// whole retry budget). Failing on the first transient blip would let a busy
+// or restarting server under load trip a read.
 func isTransientServerErr(err error) bool {
 	if errors.Is(err, io.EOF) {
 		return true

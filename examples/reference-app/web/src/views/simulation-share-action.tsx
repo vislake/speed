@@ -1,19 +1,19 @@
 /**
- * simulation-share-action.tsx -- the block-C clinic surface: the control
- * that turns one completed simulation into a patient-facing link. It
- * renders beneath the before/after comparison of the simulation it was
- * given (the panel mounts one per newest succeeded result): the clinic
- * user clicks the share action and the app mints a PAIR of shares
- * through the owner-facing sharing route -- one for the BEFORE photo
- * the simulation was generated from and one for the simulation's OUTPUT
- * object -- because the link's patient page shows the before/after
- * comparison, not the result alone (the shape the block-C acceptance
- * gate holds the patient to: two images, both genuinely decoded, never
- * the same image twice). The minted link -- an absolute URL into the
- * app's own /#/share/<before>/<after> fragment -- appears in a
- * read-only textbox the practice can see and copy, with the earlier of
- * the two shares' expiries shown beside it (the link is whole only
- * until its first half expires).
+ * simulation-share-action.tsx -- the clinic-side share surface: the
+ * control that turns one completed simulation into a patient-facing
+ * link. It renders beneath the before/after comparison of the
+ * simulation it was given (the panel mounts one per newest succeeded
+ * result): the clinic user clicks the share action and the app mints a
+ * PAIR of shares through the owner-facing sharing route -- one for the
+ * BEFORE photo the simulation was generated from and one for the
+ * simulation's OUTPUT object -- because the link's patient page shows
+ * the before/after comparison, not the result alone (the shape the e2e
+ * share journeys hold the patient page to: two images, both genuinely
+ * decoded, never the same image twice). The minted link -- an absolute
+ * URL into the app's own /#/share/<before>/<after> fragment -- appears
+ * in a read-only textbox the practice can see and copy, with the
+ * earlier of the two shares' expiries shown beside it (the link is
+ * whole only until its first half expires).
  *
  * Failure is all-or-nothing and compensated: a mint where either half
  * is refused shows that refusal's bilingual text (never a link for a

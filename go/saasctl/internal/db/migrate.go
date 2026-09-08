@@ -156,8 +156,7 @@ var migrationUniverse = []migrationModule{
 		modPath: modulePrefix + "pki",
 		// construct is unused for this entry too -- see buildAuthnAndPKI.
 		// pki is not part of saasctl's --with selection set -- it follows
-		// authn silently (docs/internal/22-pki.md's section on where pki
-		// sits in saasctl's module selection set) -- but its own tables (pki_signing_keys and
+		// authn silently -- but its own tables (pki_signing_keys and
 		// friends) still need migrating for any project that requires it,
 		// exactly like every other migration-shipping module here, so the
 		// CLI-then-boot and boot-only paths agree (a fresh app boot after
@@ -182,15 +181,11 @@ var migrationUniverse = []migrationModule{
 // on Name(), and two DIFFERENT *pki.Module values would both report "pki"
 // and collide.
 //
-// This also simplified the file relative to before pki existed: the old
-// authn-only construct function fabricated a throwaway authn.KeySet (a
-// name, a real Ed25519 keypair, and its own error handling) purely to
-// satisfy authn.NewModule's requirement. pki.NewModule(db) needs none of
-// that -- it performs no I/O either, and neither module's own serializer
-// needs registering here, because migration application is raw versioned
-// SQL, never AutoMigrate, so it never parses either module's GORM model
-// structs (no token is ever issued or stored, and no signing key is ever
-// generated, by this command).
+// Neither module's own serializer needs registering here, because
+// migration application is raw versioned SQL, never AutoMigrate, so it
+// never parses either module's GORM model structs (no token is ever
+// issued or stored, and no signing key is ever generated, by this
+// command).
 func buildAuthnAndPKI(db *gorm.DB) (authnModule pkgcore.Module, pkiModule pkgcore.Module, err error) {
 	pm := pki.NewModule(db)
 	blindIndexKey := make([]byte, 32)
@@ -266,11 +261,9 @@ type moduleCount struct {
 // declares and selectMigrationModules preserves). The counts are whatever
 // the run applied or found recorded, never a fixed total -- they follow
 // each module's own migration set and move as modules add migration
-// files, so no concrete numbers belong in this comment (AGENTS.md's
-// Testing section quotes one concrete report, and migrate_test.go's
-// TestAgentsMdMigrationCountsMatchTheRegistry keeps that quote equal to
-// what a real run reports, which is the only place a count may be
-// asserted).
+// files, so no concrete numbers belong in this comment; migrate_test.go's
+// TestAgentsMdMigrationCountsMatchTheRegistry is where a quoted report is
+// kept equal to what a real run reports.
 func formatCounts(counts []moduleCount) string {
 	pairs := make([]string, len(counts))
 	for i, c := range counts {
@@ -362,55 +355,45 @@ func migrate(modPath string) (report string, err error) {
 	//
 	// cfg.DeploymentMode is resolved and validated (a malformed value still
 	// fails here, through appconfig.Load's own pkgcore.ParseDeploymentMode
-	// call) but no longer gates this command on being "standalone": an
-	// earlier version of this function refused any other mode, reasoning
-	// that "the distributed mode's schema lives in PostgreSQL, which this
-	// command never touches". That premise does not hold for what a
-	// saasctl-generated project actually does -- every generated
-	// cmd/server/server.go blank-imports exactly one dialect driver,
-	// go/dbkit/dialect/sqlite, with no environment variable or option
-	// anywhere in the generated wiring that selects a different one, the
-	// identical fact examples/reference-app/integration_test/
-	// distributed_mode_test.go's own package doc comment records for the
-	// reference app (the second-dialect axis for generated projects is
-	// explicitly out of scope, matching that file's own recorded
-	// deviation). A generated project's distributed deployment mode changes
-	// which infrastructure SEAMS compose real implementations (eventbus,
-	// kv, mailer, objectstore -- see cmd/server/config.go's
-	// APP_REDIS_ADDR/APP_S3_*/APP_SMTP_* wiring); it does not, today,
-	// change the SQL dialect the project's OWN database speaks. Refusing
-	// migrate under distributed mode on a dialect argument that is
-	// currently false would block a real, working operation for no reason
-	// tied to anything this command actually does.
+	// call) but does not gate this command on being "standalone": every
+	// generated cmd/server/server.go blank-imports exactly one dialect
+	// driver, go/dbkit/dialect/sqlite, with no environment variable or
+	// option anywhere in the generated wiring that selects a different one,
+	// so a generated project's own database always speaks SQLite. Its
+	// distributed deployment mode changes which infrastructure SEAMS
+	// compose real implementations (eventbus, kv, mailer, objectstore --
+	// see cmd/server/config.go's APP_REDIS_ADDR/APP_S3_*/APP_SMTP_*
+	// wiring); it does not change the
+	// SQL dialect the project's OWN database speaks. Refusing migrate
+	// under distributed mode on a dialect argument that is currently
+	// false would block a real, working operation for no reason tied to
+	// anything this command actually does.
 	//
 	// The genuine, still-real concern investigated here is a different one:
 	// concurrent writers against the SAME SQLite file. dbkit.Open carries a
 	// bounded busy_timeout -- the dialect factory this command opens through
-	// appends _pragma=busy_timeout(5000) to every DSN it sees (the fixed
-	// default go/dbkit/AGENTS.md's "SQLite busy timeout" section records) --
-	// but still pools up to 25 connections (go/dbkit/open.go's
-	// defaultMaxOpenConns), so a write that still meets an uncommitted holder
-	// once that bounded wait is spent, or upgrades a read-then-write
-	// transaction (which SQLite's deadlock avoidance refuses immediately; no
-	// timeout waits it out), fails with SQLITE_BUSY -- a real risk this
-	// command shares with the generated app's OWN startup Apply, which
-	// runs unconditionally on every boot regardless of deployment mode (see
-	// each selection's server.go). That risk is not specific to running
-	// migrate under the distributed mode, though: an operator invoking
-	// migrate twice concurrently, or invoking it while a standalone-mode
-	// replica is already booting against the same file, carries the
-	// identical hazard today, with no code-level lock guarding either case
-	// in this repository -- distributed_mode_test.go's own package doc
-	// comment records the accepted mitigation this repository already
-	// relies on for the identical topology: sequential ordering (there,
-	// staggering which replica boots first; here, running migrate to
-	// completion before any replica's own first boot), never a database
-	// lock. This command does not invent a new safety mechanism for that
-	// existing, mode-independent hazard -- it is the operator's
-	// responsibility under either deployment mode, exactly as it already
-	// was under standalone alone, and the B4 end-to-end proof procedure
-	// this module's AGENTS.md records (migrate, THEN boot) is the ordering
-	// that avoids it.
+	// appends _pragma=busy_timeout(5000) to every DSN it sees -- but still
+	// pools up to 25 connections (go/dbkit/open.go's defaultMaxOpenConns),
+	// so a write that still meets an uncommitted holder once that bounded
+	// wait is spent, or upgrades a read-then-write transaction (which
+	// SQLite's deadlock avoidance refuses immediately; no timeout waits it
+	// out), fails with SQLITE_BUSY -- a real risk this command shares with
+	// the generated app's OWN startup Apply, which runs unconditionally on
+	// every boot regardless of deployment mode (see each selection's
+	// server.go). That risk is not specific to running migrate under the
+	// distributed mode, though: an operator invoking migrate twice
+	// concurrently, or invoking it while a standalone-mode replica is
+	// already booting against the same file, carries the identical hazard,
+	// with no code-level lock guarding either case in this repository --
+	// distributed_mode_test.go's own package doc comment records the
+	// accepted mitigation this repository already relies on for the
+	// identical topology: sequential ordering (there, staggering which
+	// replica boots first; here, running migrate to completion before any
+	// replica's own first boot), never a database lock. This command does
+	// not invent a new safety mechanism for that existing, mode-independent
+	// hazard -- it is the operator's responsibility under either deployment
+	// mode, exactly as it already was under standalone alone, and the
+	// migrate-then-boot ordering is what avoids it.
 	cfg, err := appconfig.Load(proj.AppName, os.LookupEnv)
 	if err != nil {
 		return "", err
@@ -432,8 +415,7 @@ func migrate(modPath string) (report string, err error) {
 	// single shared function -- config print renders the same answer for
 	// the same project, so the command that tells the operator which file
 	// the app opens and the command that actually opens it cannot fork
-	// (appconfig's own doc comment and this module's AGENTS.md carry the
-	// rule).
+	// (appconfig's own doc comment carries the rule).
 	dbPath := cfg.EffectiveDBPath(modPath)
 
 	// A file that does not exist yet is a fresh database, migrated from

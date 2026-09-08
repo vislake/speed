@@ -184,19 +184,17 @@ describe('MfaSection', () => {
   })
 
   it('warn before the confirm when a warm step-up token re-enters set-authenticator over an active factor', async () => {
-    // The bug this pins: EnrollTOTP answers 200 -- starting a pending
-    // replacement that deliberately leaves the ACTIVE factor in place
-    // until a confirm retires it -- whenever the presented token
+    // The warning must read the caller's elevation, never the path
+    // that reached the wizard: EnrollTOTP answers 200 -- starting a
+    // pending replacement that deliberately leaves the ACTIVE factor in
+    // place until a confirm retires it -- whenever the presented token
     // already carries fresh second-factor proof, and refuses with 403
-    // authn.step_up_required only an UNELEVATED caller. The warning
-    // used to render only when the wizard was reached through that 403,
-    // so a caller who regenerated recovery codes behind a step-up (the
-    // token now carrying the factor) and then re-entered
-    // set-authenticator within the token's lifetime got a warning-free
-    // wizard whose confirm silently voided the codes just saved. The
-    // server never asked for step-up on the enroll leg at all: the
-    // warning must read the caller's elevation -- the signal that a
-    // replacement is pending -- not the path that reached the wizard.
+    // authn.step_up_required only an UNELEVATED caller. The server
+    // never asks for step-up on the enroll leg at all, so a caller who
+    // regenerated recovery codes behind a step-up (the token now
+    // carrying the factor) and then re-entered set-authenticator
+    // within the token's lifetime would otherwise reach a warning-free
+    // wizard whose confirm silently voids the codes just saved.
     let regenerateCalls = 0
     let enrollCalls = 0
     const rig = makeRealClientRig(async (call) => {

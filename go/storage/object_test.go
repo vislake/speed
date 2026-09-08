@@ -1224,9 +1224,9 @@ func TestObjectService_Complete_TakesBackItsWritebackWhenTheReclaimWins(t *testi
 // against the deleting row; the completion answers storage.object_not_uploading
 // (what the caller will find) and removes the rewrite, so the delete's
 // convergence -- which removes the row but never touches the key again --
-// does not leave the writeback orphaned under it. (On the pre-fix code this
-// test failed with the key holding the rewritten bytes after the row was
-// gone. The shape is unreachable within one process -- the per-object lock
+// does not leave the writeback orphaned under it. (Without the take-back
+// this test fails with the key holding the rewritten bytes after the row
+// is gone. The shape is unreachable within one process -- the per-object lock
 // serializes every completion, and no actor flips an uploading row to
 // deleting -- so it stands in for the cross-replica race deterministically,
 // the same way the mid-run race tests above stand in for the sweep.)
@@ -1349,9 +1349,10 @@ func TestObjectService_Complete_KeepsTheWritebackWhenAnotherCompletionWon(t *tes
 // deleting them on a guessed shape would empty a live completed object, the
 // anomaly reads report as store_error, with nothing ever rewriting the key.
 // The completion reports the re-read error unchanged and takes nothing
-// back; once the transient failure passes, the object stays readable. (On
-// the pre-fix code this test failed with the key emptied -- the take-back
-// ran on any re-read error -- and the recovery read answered store_error.)
+// back; once the transient failure passes, the object stays readable.
+// (Without the narrow rule this test fails with the key emptied -- a
+// take-back on any re-read error -- and the recovery read would answer
+// store_error.)
 // The genuine-vanished shape still takes the writeback back, pinned by
 // TestObjectService_Complete_TakesBackItsWritebackWhenTheReclaimWins.
 func TestObjectService_Complete_KeepsTheWritebackWhenTheReReadFailsTransiently(t *testing.T) {
@@ -1441,9 +1442,9 @@ func TestObjectService_Complete_KeepsTheWritebackWhenTheReReadFailsTransiently(t
 // the key while the row stays uploading. The pipeline still holds the
 // pre-rewrite bytes it read, so it rolls the writeback back by restoring
 // them; the retry then re-probes the restored bytes, re-sanitizes
-// (deterministically) and completes honestly. (On the pre-fix code this test
-// failed: the stored bytes stayed the stripped short copy, and the retry was
-// refused with storage.size_mismatch.)
+// (deterministically) and completes honestly. (Without the rollback this
+// test fails: the stored bytes stay the stripped short copy, and the retry
+// is refused with storage.size_mismatch.)
 //
 // The failure is injected on the finalize UPDATE itself, through the Update
 // processor: the lost-finalize tests above inject on the Query processor,
@@ -1756,7 +1757,7 @@ func (p *parkingReadCloser) Close() error {
 // second Upload cannot run until the Complete is done; by then the row is
 // completed, so the upload is refused with storage.object_not_uploading and
 // the finalized metadata still describes the bytes under the key.
-// Unserialized (the pre-fix behaviour), the second upload's PutObject lands
+// Unserialized, the second upload's PutObject would land
 // between the read and the finalize, and the row completes describing bytes
 // the key no longer holds -- which is exactly what the final assertion
 // (stored bytes still equal the bytes the row's digest describes) catches.
@@ -1787,7 +1788,7 @@ func TestObjectService_Complete_SecondUploadCannotReplaceTheFinalizedBytes(t *te
 
 	// Only once Complete holds the original bytes in memory and is parked do
 	// we start the second Upload, so the write it performs can never precede
-	// the read that (pre-fix) its own write would then contradict.
+	// the read its own write would then contradict.
 	<-gated.entered
 	second := bytes.Repeat([]byte{0xAB}, len(original))
 	uploadErr := make(chan error, 1)
@@ -1816,16 +1817,16 @@ func TestObjectService_Complete_SecondUploadCannotReplaceTheFinalizedBytes(t *te
 		t.Fatalf("completed row state = %q, want %q", res.obj.State, ObjectStateCompleted)
 	}
 	if !uploadFinished {
-		// The upload outlived the bound: it was holding the per-object lock
-		// (post-fix), so it finishes only once Complete's release lets it
+		// The upload outlived the bound: it was holding the per-object lock,
+		// so it finishes only once Complete's release lets it
 		// run -- and by then the row is completed, which refuses the upload.
 		secondUploadErr = <-uploadErr
 	}
 
 	// Each shape asserts its own half of the contract: an upload that ran to
-	// completion before the finalize (the pre-fix interleaving) should have
-	// succeeded -- the bytes it left are what the final assertion catches --
-	// and one that waited out the lock (post-fix) must have been refused by
+	// completion before the finalize (the unserialized interleaving) would
+	// have succeeded -- the bytes it left are what the final assertion
+	// catches -- and one that waited out the lock must have been refused by
 	// the completed row, never silently written over it.
 	if uploadFinished && secondUploadErr != nil {
 		t.Fatalf("second Upload finished early with %v, want nil (the pre-fix shape) or the lock to hold it", secondUploadErr)

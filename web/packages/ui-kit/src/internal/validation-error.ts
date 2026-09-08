@@ -10,12 +10,11 @@
  *    key), which renders as its translation in the active language, or
  *
  *  - anything else -- already-localized text a host validation function
- *    returned, a host-specific error code, a value from a future
- *    generated-types resolver -- which renders verbatim. ui-kit owns one
- *    namespace and resolves keys in it only; it never guesses another
- *    namespace's codes. Host error codes arrive as their own text when
- *    the resolver layer that turns codes into text exists (a later
- *    milestone, alongside validation derived from generated types).
+ *    returned, or a host-specific error code (no code-to-text resolver
+ *    layer exists to translate it) -- which renders verbatim. ui-kit
+ *    owns one namespace and resolves keys in it only; it never guesses
+ *    another namespace's codes. Host error codes therefore arrive as
+ *    their own text.
  */
 
 export interface ValidationErrorLookup {

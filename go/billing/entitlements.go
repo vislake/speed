@@ -15,25 +15,24 @@ import (
 // *metering.Aggregator type in EntitlementsService's own field, keeps this
 // package's unit tests independent of a real Aggregator/database wiring.
 //
-// go/billing's go.mod still requires go/metering directly -- sanctioned by
-// this codebase's dependency direction, since metering sits below billing
-// (docs/internal/01-architecture.md: "... -> authn/rbac/org/metering ->
-// billing/...") -- and module.go's compile-time assertion proves
-// *metering.Aggregator satisfies UsageReader structurally, so a host wires
-// the real thing with no adapter to write.
+// go/billing's go.mod still requires go/metering directly -- sanctioned
+// by this codebase's dependency direction, since metering sits below
+// billing in the module dependency graph -- and module.go's compile-time
+// assertion proves *metering.Aggregator satisfies UsageReader
+// structurally, so a host wires the real thing with no adapter to write.
 //
-// docs/internal/06-billing-and-metering.md is explicit that quota decisions
-// read the real-time counter, never a summary table: a summary table has
-// aggregation delay, and deciding against it would let an over-quota
-// request through.
+// Quota decisions read the real-time counter, never a summary table: a
+// summary table has aggregation delay, and deciding against it would let
+// an over-quota request through.
 type UsageReader interface {
 	RealtimeCount(tenantID, feature string, at time.Time) (float64, error)
 }
 
 // EntitlementsService implements Entitlements. It is the single judgment
-// entry point business code -- including the not-yet-built AI gateway --
-// calls to learn whether a tenant's current subscription permits a
-// feature. See the Entitlements interface's own doc comment for the full
+// entry point business code -- go/ai-gateway's checkEntitlement gate
+// included -- calls to learn whether a tenant's current subscription
+// permits a feature. See the Entitlements interface's own doc comment for
+// the full
 // contract, in particular that Check never decides anything about
 // credits (CreditService is the separate, synchronous path for that).
 //
@@ -131,9 +130,8 @@ func (s *EntitlementsService) Check(ctx context.Context, featureKey string, requ
 }
 
 // grantKind infers the Feature.Kind a Grant was issued for, from the Go
-// type of its own Value -- Grant carries no Kind field of its own
-// (docs/internal/06-billing-and-metering.md's sketch does not give it
-// one), so the value's shape is the only signal Check has. The three
+// type of its own Value -- the Grant carries no Kind field of its own --
+// so the value's shape is the only signal Check has. The three
 // legitimate shapes are model.go's own documented vocabulary: a bool for
 // FeatureKindBoolean, the GrantValueUnlimited sentinel string for
 // FeatureKindUnlimited, any numeric for FeatureKindQuota (an int64 value

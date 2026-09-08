@@ -13,11 +13,11 @@
  * next to the sign-out action in an AppBar whose background is the
  * primary color), an inherited color resolves to the surface's own
  * contrastText and stays legible where a primary-on-primary default
- * would vanish (reference-app acceptance: the trigger once measured
- * 1:1 against its own AppBar). On a plain surface the same inheritance
- * resolves to the surrounding text color, which is equally safe -- the
- * one thing the default never does is paint itself in the palette
- * color of the very surface it usually sits on.
+ * would vanish on the very surface the control usually sits on. On a
+ * plain surface the same inheritance resolves to the surrounding text
+ * color, which is equally safe -- the one thing the default never does
+ * is paint itself in the palette color of the very surface it usually
+ * sits on.
  *
  * While the switch is in flight the trigger is inert and one
  * role="status" notice renders -- a live-region announcement, never a
@@ -28,8 +28,8 @@
  * tenant the session now runs under -- a context change that silently
  * alters which rows are on screen must announce itself, and it must do
  * so in a live region, because a person using a screen reader cannot
- * glance at the chrome to check (the acceptance gate for "switching
- * clinic says so"). The confirmation stays on the page until the next
+ * glance at the chrome to check that the switch did what the notice
+ * says. The confirmation stays on the page until the next
  * switch begins (or the next attempt fails, when the failure's code
  * text replaces it) -- deliberately no auto-dismiss timer, so the
  * announcement's lifetime never races a reader's processing of it.
@@ -66,27 +66,26 @@
  * -- the winning operation's own commit already fired its own callback
  * exactly once, for the tenant the session genuinely runs under, and
  * this component is controlled (the trigger reads the host's own
- * currentTenantId), so the UI converges to that same tenant. The
- * correction of the earlier reconcile-by-re-issue design rests on one
- * fact: supersession is decided by RESPONSE settlement order, not send
- * order (auth-core rejects whichever request's answer settles after a
- * sibling committed), and settlement order carries no information
- * about whose write the server session row actually keeps. When
- * responses settle in send order, the superseded request is the
- * later-sent one, so its own write is the last one the row holds and a
- * re-issue would converge, announced. When the EARLIER-sent request
- * settles last (its response was delayed past the sibling's -- the
- * user moved on, and the tenant they picked second already committed),
- * the same re-issue would re-commit the tenant the user already
- * abandoned, actively switching the session and rewriting the server
- * row away from the tenant the user settled on. The component cannot
- * tell the two apart, so the sound rule is: a superseded request is
- * lost. The residual that rule accepts, recorded rather than
- * engineered: in the send-order case the row keeps the lost request's
- * tenant, and the next silent refresh mints for it -- the session
- * converges there through auth-core's own refresh path, announced by
- * no onSwitched; re-issuing the lost request to announce it is the
- * active wrong switch this correction removes. A failed switch leaves
+ * currentTenantId), so the UI converges to that same tenant. Why a
+ * superseded request is never re-issued: supersession is decided by
+ * RESPONSE settlement order, not send order (auth-core rejects
+ * whichever request's answer settles after a sibling committed), and
+ * settlement order carries no information about whose write the server
+ * session row actually keeps. When responses settle in send order, the
+ * superseded request is the later-sent one, so its own write is the
+ * last one the row holds and a re-issue would converge, announced.
+ * When the EARLIER-sent request settles last (its response was delayed
+ * past the sibling's -- the user moved on, and the tenant they picked
+ * second already committed), the same re-issue would re-commit the
+ * tenant the user already abandoned, actively switching the session
+ * and rewriting the server row away from the tenant the user settled
+ * on. The component cannot tell the two apart, so a superseded request
+ * is treated as lost. The residual that rule accepts: in the
+ * send-order case the row keeps the lost request's tenant, and the
+ * next silent refresh mints for it -- the session converges there
+ * through auth-core's own refresh path, announced by no onSwitched
+ * (re-issuing the lost request to announce it would be an active wrong
+ * switch). A failed switch leaves
  * the state exactly as it was (the
  * auth-core contract: a raw ApiError rejection with zero state change)
  * and renders the answer's code text in one InlineError under the
@@ -279,8 +278,7 @@ export function TenantSwitcher({
           // Inherit the ambient text color instead of defaulting to the
           // primary palette color: hosts mount this control inside a
           // colored AppBar (whose own text is its contrastText), where
-          // a primary-colored default reads primary-on-primary (the
-          // acceptance measurement that named the trigger at 1:1). On a
+          // a primary-colored default reads primary-on-primary. On a
           // plain surface the inherited color is the surrounding text
           // color, equally legible -- the file header has the full
           // rationale.

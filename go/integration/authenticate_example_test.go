@@ -1,14 +1,13 @@
 package integration_test
 
-// Runnable documentation for round 6's new public API: Service.Authenticate,
-// AuthMiddleware, NewAuthMiddleware, HeaderAPIKey and
+// Runnable documentation for the authentication public API:
+// Service.Authenticate, AuthMiddleware, NewAuthMiddleware, HeaderAPIKey and
 // AuthenticatedAPIKeyFromContext. Mirrors handler_example_test.go's own
 // convention -- compiled AND executed by `go test`, so a change to this
 // module's own authentication surface that breaks the documented usage
 // fails the build rather than only rotting in prose.
 //
-// It drives the exact property go/integration/AGENTS.md's round-5 section
-// named as unverifiable until this round shipped: a key authenticates, its
+// It drives the core property of a rotated key: a key authenticates, its
 // OLD raw value is refused after Rotate, and the NEW one authenticates in
 // its place -- entirely through a real, composed net/http.Handler (no mock
 // standing in for AuthMiddleware or Service.Authenticate).
@@ -193,8 +192,7 @@ func ExampleAuthMiddleware() {
 	fmt.Println("no credential:", status)
 
 	// Rotate: the OLD raw key value is now refused, and the NEW one
-	// authenticates in its place -- this is the exact property that had no
-	// lookup path to prove before this round.
+	// authenticates in its place.
 	rotated, err := svc.Rotate(tenantCtx, created.ID)
 	if err != nil {
 		fmt.Println("rotate:", err)

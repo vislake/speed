@@ -14,22 +14,20 @@ import (
 // the host does not call WithAnalyticsBufferSize.
 const defaultAnalyticsBufferSize = 1024
 
-// AnalyticsRecorder is the analytics-grade Recorder implementation
-// (docs/internal/06-billing-and-metering.md's "reliability tiers" section,
-// analytics-grade row): an in-process bounded channel plus a background
+// AnalyticsRecorder is the analytics-grade Recorder implementation in the
+// reliability-tiers split: an in-process bounded channel plus a background
 // flush goroutine feeding Aggregator.Ingest.
 //
 // # Fail-open, loudly
 //
 // When the channel is full, Record does NOT block the caller and does NOT
 // return an error: it drops event, increments an internal counter
-// (Dropped), and logs a structured warning. This is the design doc's
-// explicit rule that analytics-grade metering must never become a source
-// of business-request latency or failure: a full buffer drops the event
-// and counts it, with an alert, rather than blocking. A caller that needs
-// "never dropped" uses Enqueue (the billing-grade tier) instead;
-// AnalyticsRecorder is the wrong tool for that requirement by design, not
-// by omission.
+// (Dropped), and logs a structured warning. Analytics-grade metering must
+// never become a source of business-request latency or failure: a full
+// buffer drops the event and counts it, with an alert, rather than
+// blocking. A caller that needs "never dropped" uses Enqueue (the
+// billing-grade tier) instead; AnalyticsRecorder is the wrong tool for
+// that requirement by design, not by omission.
 //
 // # Shutdown is a drain, not a drop
 //
@@ -39,19 +37,18 @@ const defaultAnalyticsBufferSize = 1024
 // is lost only where the loss is explicit and counted (a full buffer, a
 // Record made after Stop has latched closed, or a buffered event whose
 // Ingest into the aggregator failed -- deliver counts all three into
-// Dropped(), the third added so a delivery failure is not a silent loss
-// any more than a full buffer is).
+// Dropped(), so a delivery failure is not a silent loss any more than a
+// full buffer is).
 //
-// # No idempotency dedup this round
+// # No idempotency dedup
 //
 // UsageEvent.IdempotencyKey is carried on every event this records, but
 // AnalyticsRecorder does NOT deduplicate a retried Record call against it:
 // doing so would require persisting every seen key somewhere durable
 // (a Redis SETNX-backed check, for instance), which contradicts this
-// tier's whole "cheap, in-memory, best-effort" positioning. See
-// AGENTS.md's Known limitations. The billing-grade Enqueue path DOES
-// dedupe, at the database level, because that path already pays for
-// durable storage on every call.
+// tier's whole "cheap, in-memory, best-effort" positioning. The
+// billing-grade Enqueue path DOES dedupe, at the database level, because
+// that path already pays for durable storage on every call.
 type AnalyticsRecorder struct {
 	aggregator *Aggregator
 	events     chan UsageEvent
@@ -72,10 +69,7 @@ type AnalyticsRecorder struct {
 	// Stop's own drain -- or is a counted drop afterwards. It is never
 	// buffered into a drain that has already run. The flush goroutine
 	// reads stop/done only through the channel values Start passes it as
-	// arguments (see run), so no lifecycle field is ever read outside mu --
-	// the sync.Once pair this replaces left stop/done readable from Stop's
-	// goroutine while a concurrent Start wrote them, a race the detector
-	// could see.
+	// arguments (see run), so no lifecycle field is ever read outside mu.
 	mu      sync.Mutex
 	started bool // a flush goroutine is running (spawned, not yet stopped)
 	stopped bool // Stop has been called; Record drops and counts from here on
@@ -200,8 +194,8 @@ func (r *AnalyticsRecorder) Start(ctx context.Context) {
 // while a loop that ends because ctx was canceled has no Stop to do it --
 // without the clearing, started would stay true forever, a later Start
 // would no-op, and Record would buffer into a loop that would never run
-// again (reviewer finding P3-metering-14). Buffered events survive the
-// exit: the stopped latch is NOT set here, so a Record made after the
+// again. Buffered events survive the exit: the stopped latch is NOT set
+// here, so a Record made after the
 // cancel still buffers honestly, and whatever sits in the buffer when the
 // next Start runs a fresh loop -- or when a later Stop drains -- is
 // delivered then. The generation check (r.done == done) makes the
@@ -301,11 +295,11 @@ func (r *AnalyticsRecorder) drain() {
 
 // deliver attempts to ingest event into the aggregator, logging -- never
 // propagating -- a per-event failure, and counting the failed event into
-// Dropped (reviewer finding P2-metering-11): a buffered event whose
-// Ingest fails is a lost event exactly like a full-buffer drop -- it will
-// never reach the summary row or the real-time counter -- so the
-// fail-open tier's "an event is dropped, or delivered; it is never
-// silently lost" accounting must count it. Shared by the flush loop and
+// Dropped: a buffered event whose Ingest fails is a lost event exactly
+// like a full-buffer drop -- it will never reach the summary row or the
+// real-time counter -- so the fail-open tier's "an event is dropped, or
+// delivered; it is never silently lost" accounting must count it. Shared
+// by the flush loop and
 // Stop's drain so both honor the identical contract: one bad event must
 // not stop the rest of the buffer from being delivered.
 func (r *AnalyticsRecorder) deliver(ctx context.Context, event UsageEvent) {

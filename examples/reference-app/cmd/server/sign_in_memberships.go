@@ -55,32 +55,19 @@ func orgCodeIs(err error, code string) bool {
 // self-registered account whose registration provisioned its own clinic
 // (self_service.go), are members because their rows exist -- in this
 // process and in the next one. A restart against the same database loses
-// neither, which is exactly the property an in-process roster could never
-// give: before this store read org, a real accepted invitation (or a seeded
-// demo account) that predated the current process answered "not a member"
-// forever after the process that created it exited, authn refusing every
-// sign-in with 403 authn.tenant_membership_required no matter how real the
-// row was.
+// neither; an in-process roster alone could never give that property,
+// since a membership created by a previous process would otherwise answer
+// "not a member" forever after that process exited.
 //
-// # The enumeration question is org's own query now, not a host scan
+// # The enumeration question is org's own query
 //
-// The "which tenants does this user belong to" half used to be answered by
-// scanning this store's OWN tenant lists -- the configured host tenants
-// plus every self-service clinic the host had provisioned (a second,
-// durable ledger, self_service.go's self_service_clinics table) -- asking
-// org's per-tenant Get once per candidate. That scan set was the host's
-// guess at "every tenant that could hold one of this user's memberships",
-// and anything the host had not been told about was invisible to it: a
-// clinic provisioned after boot was only reachable because the provisioning
-// path registered it in the ledger and the in-memory scan set, and the
-// ledger existed only to rebuild that scan set after a restart. Both lists
-// retired when org grew the real query (go/org's MemberService.TenantsOf,
-// the round that closed this gap): org's own memberships table already
-// carried every fact the scan existed to discover, so the host's parallel
-// machinery -- the universe, the clinics scan set, addClinicTenant, the
-// ledger's every reader -- was deleted rather than kept. A clinic created
-// after boot is answered from its org row with no host list to update, and
-// a restart needs no re-discovery pass at all.
+// The "which tenants does this user belong to" half is answered by org's
+// MemberService.TenantsOf (go/org's own cross-tenant query) under the
+// audited system context below -- never by a host-maintained scan set of
+// candidate tenants: org's own memberships table already carries every
+// membership fact, so a clinic created after boot is answered from its org
+// row with no host list to update, and a restart needs no re-discovery
+// pass at all.
 //
 // What is NOT answered from org is the rbac.SystemDomain pseudo-tenant
 // ("system", rbac/subject.go): the platform-operations domain has no org
@@ -157,12 +144,11 @@ func (m *signInMemberships) attach(orgMembers *org.MemberService, bus pkgcore.Ev
 // roster. It is idempotent: granting the same pair twice does not
 // duplicate the entry.
 //
-// Who may call Grant, and what it means, changed when this store learned
-// to read org: a production path that must give a user a real
+// Who may call Grant: a production path that must give a user a real
 // customer-tenant membership creates an org row instead (the demo seed's
 // addDemoOrgMembership; org's own invitation accept), and this roster is
 // only ever the fallback answer for pairs org has no row for. The two
-// remaining legitimate Grant callers are the platform-staff seed
+// legitimate Grant callers are the platform-staff seed
 // (rbac.SystemDomain, the one membership that has no org row by design)
 // and the test shortcuts that declare "this account may act in this
 // tenant" for a flow that provisions its own org state over HTTP.
@@ -186,10 +172,10 @@ func (m *signInMemberships) Grant(userID string, tenant pkgcore.TenantID) {
 // returned rather than guessed at, so authn's own fail-closed handling
 // answers a genuinely unanswerable membership question as a refusal
 // instead of a fabricated answer: password sign-in folds it into the
-// uniform 401 authn.invalid_credentials (the fold of no-membership
-// logins into ErrInvalidCredentials -- the old distinguishable 403
-// authn.tenant_membership_unavailable survived only on paths answering an
-// already-authenticated caller, tenant switching and refresh). A question
+// uniform 401 authn.invalid_credentials, indistinguishable from a wrong
+// password; the distinguishable 403 authn.tenant_membership_unavailable
+// remains only on paths answering an already-authenticated caller,
+// tenant switching and refresh. A question
 // about rbac.SystemDomain skips org entirely and is answered from the
 // roster alone.
 func (m *signInMemberships) ActiveMembership(ctx context.Context, userID string, tenant pkgcore.TenantID) (bool, error) {

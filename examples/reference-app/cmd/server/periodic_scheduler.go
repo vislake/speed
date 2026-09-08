@@ -33,13 +33,11 @@ import (
 //     queues -- while the first tick of every later window resolves a
 //     fresh key. On this app's StandaloneQueue (where a resolved key is
 //     held forever, go/jobs) that means at most one sweep per tenant per
-//     window -- not one per database file, the pre-window design's
-//     residual: an object whose retention deadline passes is reaped by the
+//     window: an object whose retention deadline passes is reaped by the
 //     next window's sweep, and a sweep job that dead-letters poisons only
-//     its own window. (The older once-per-file behaviour and its
-//     two-boot proof are recorded in go/storage/AGENTS.md's dated sweep
-//     entry.) What periodic_scheduler_flow_test.go's two-boot test proves
-//     end to end is unchanged in shape: boot 1 lets a completed object
+//     its own window. What periodic_scheduler_flow_test.go's two-boot
+//     test proves
+//     end to end: boot 1 lets a completed object
 //     expire with the scheduler disabled, and boot 2's first sweep -- the
 //     first tick lands in a fresh window -- must remove that object's row
 //     and bytes through the real host wiring.
@@ -117,7 +115,7 @@ import (
 //     still declares the CRL handler on the registry whenever the module
 //     is wired with a queue -- this host wires pki.WithQueue below, so the
 //     handler IS registered and drained onto the shared queue; it simply
-//     never receives a task. go/pki/AGENTS.md records that honestly.
+//     never receives a task.
 //
 // The tick body is synchronous: every tick runs every enqueue to
 // completion before the next tick can fire, and time.Ticker drops a tick

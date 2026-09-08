@@ -7,11 +7,11 @@
  *
  * The list is the clinic's list, not the caller's: the server answers
  * every case of the current tenant whatever creator each case carries
- * (the block-A product decision the cases fragment records), so the
- * heading is "Cases" -- never "My Cases" -- and the current clinic's
- * name rides in the title (CasesSurfaceHeading). There is no rbac gate
- * on this surface: any authenticated member of the tenant may read it,
- * so a failed read is a load failure (the error empty state), never a
+ * (the product decision the cases fragment records), so the heading is
+ * "Cases" -- never "My Cases" -- and the current clinic's name rides
+ * in the title (CasesSurfaceHeading). There is no rbac gate on this
+ * surface: any authenticated member of the tenant may read it, so a
+ * failed read is a load failure (the error empty state), never a
  * denial suit -- and a served list is rendered only once it is served;
  * while it is loading the gate's pending state stands in.
  *

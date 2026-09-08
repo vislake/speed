@@ -21,13 +21,11 @@ const moduleName = "rbac"
 // DefaultCacheTTL is how long a process-local authorization decision may
 // survive without confirmation when no invalidation event has arrived.
 //
-// It is a package-level named constant, the third of the three homes the
-// backend coding standard §10 allows for a value like this ("stable domain
-// defaults"), deliberately NOT a dynamic configuration item: reading one
-// would make rbac depend on the config module, an edge the dependency
-// graph in docs/internal/01-architecture.md does not have and that would
-// be paid for by every consumer that boots rbac without config. A host
-// that needs a different lifetime passes WithCacheTTL.
+// It is a package-level named constant, deliberately NOT a dynamic
+// configuration item: reading one would make rbac depend on the config
+// module, an edge the module graph does not have and that would be paid
+// for by every consumer that boots rbac without config. A host that needs
+// a different lifetime passes WithCacheTTL.
 const DefaultCacheTTL = 30 * time.Second
 
 // Permission strings rbac declares for its own management surface. They
@@ -35,8 +33,7 @@ const DefaultCacheTTL = 30 * time.Second
 // does not check them. That is deliberate: rbac is the decision engine,
 // not its own gatekeeper -- an engine that authorized its own writes would
 // have to answer "who may grant the first role" with a special case, and
-// special cases in an authorization engine are where the holes live. The
-// same posture config.Set takes.
+// special cases in an authorization engine are where the holes live.
 const (
 	// PermissionRead covers reading roles, their permissions and their
 	// bindings.
@@ -48,7 +45,7 @@ const (
 )
 
 // Module implements pkgcore.Module for go/rbac: the role-based access
-// control engine (docs/internal/05-identity-and-access.md).
+// control engine.
 //
 // It declares its own permissions, events and audit actions during
 // Register, and takes the frozen snapshot of EVERY module's declared
@@ -111,18 +108,16 @@ func WithCacheTTL(ttl time.Duration) Option {
 // subscriber enqueues the reaping as a task (reap_jobs.go) instead of
 // running it synchronously inside the event delivery, so a transient
 // database failure mid-reap is converged by the queue's own retries rather
-// than left to a redelivery neither published bus provides (P1-rbac-reap:
-// the depended-on side -- go/pkgcore's bus contract -- never redelivers).
-// The queue of a standalone host is jobs' StandaloneQueue; of a
+// than lost: neither published bus redelivers an event. The queue of a
+// standalone host is jobs' StandaloneQueue; of a
 // distributed host, go/jobs/queue/asynq's Queue -- whichever the host's
 // own wiring chose.
 //
-// It is OPTIONAL. A host that wires none keeps the module's original
-// synchronous best-effort reaping inside the event delivery (reap.go),
-// with its per-binding failures logged and never retried -- the shape this
-// round moves away from, available only so that a host without a jobs
-// queue at all is not refused. The reference app, the module's mandatory
-// first consumer, wires its StandaloneQueue.
+// It is OPTIONAL. A host that wires none keeps the synchronous
+// best-effort reaping inside the event delivery (reap.go),
+// with per-binding failures logged and never retried -- kept so that a
+// host without a jobs queue at all is not refused. The reference app, the
+// module's mandatory first consumer, wires its StandaloneQueue.
 func WithQueue(queue jobs.Queue) Option {
 	return func(m *Module) { m.queue = queue }
 }
@@ -169,9 +164,8 @@ func (m *Module) Locales() embed.FS { return locales.FS }
 // an admin-console surface, and the flat permission list a signed-in user
 // needs belongs to /me, which authn owns -- rbac supplies the evaluation
 // call authn's handler makes. rbac's contribution to the HTTP layer is the
-// middleware in the fixed chain docs/internal/01-architecture.md names
-// (authn.Middleware, then rbac's permission gate), not a route. Both
-// deferrals are recorded in this module's AGENTS.md.
+// middleware of the fixed chain
+// (authn.Middleware, then rbac's permission gate), not a route.
 func (m *Module) OpenAPISpec() []byte { return nil }
 
 // Register implements pkgcore.Module. Per the interface's own contract
@@ -245,9 +239,8 @@ func (m *Module) Attach(reg *pkgcore.Registry) (*Service, error) {
 	// Bootstrap AND after its Attach calls (the reference app does exactly
 	// that), so a handler registered here is on the queue before any org
 	// event can ever fire. A host that wires no queue (WithQueue absent)
-	// registers them all the same -- harmless, exactly like the sweep
-	// handler go/sharing registers whether or not its queue is wired -- and
-	// simply never enqueues.
+	// registers them all the same -- harmless, since its subscribers never
+	// fire and nothing enqueues -- and simply never enqueues.
 	//
 	// A duplicate registration is this module's own second replica: Attach
 	// runs once per MODULE instance, so two Service replicas attached to

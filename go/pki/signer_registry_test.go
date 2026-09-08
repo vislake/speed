@@ -44,9 +44,9 @@ func TestInit_RegistersSignerLocalOnTheSharedRegistry(t *testing.T) {
 }
 
 // TestSignerRegistry_BuildSignerLocal_ProducesAWorkingSigner is the "pattern
-// works end to end" proof the round asks for: a Signer built purely from a
-// name and a flat pkgcore.Config, with no Go construction code naming
-// LocalSigner directly, generates a real key and signs with it.
+// works end to end" proof: a Signer built purely from a name and a flat
+// pkgcore.Config, with no Go construction code naming LocalSigner directly,
+// generates a real key and signs with it.
 func TestSignerRegistry_BuildSignerLocal_ProducesAWorkingSigner(t *testing.T) {
 	registerLocalKeySerializer()
 	dsn := "file:signer_registry_build_test?mode=memory&cache=shared"

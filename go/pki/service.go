@@ -21,30 +21,27 @@ import (
 // specific applies (see stageRotation).
 const defaultKeyValidity = 24 * time.Hour * 365
 
-// DefaultCacheTTL is the key-set cache's anti-loss expiry -- the fallback
-// poll docs/internal/22-pki.md's "caching" section requires behind event
-// invalidation. A package-level named constant for the same reason
-// rbac.DefaultCacheTTL is one (backend coding standard §10: stable domain
-// defaults, not a dynamic configuration item -- reading one would make pki
-// depend on config, an edge this round does not add).
+// DefaultCacheTTL is the key-set cache's anti-loss expiry -- the TTL fallback
+// that expires a cached key set even when the invalidation event for a change
+// never arrives. A package-level named constant for the same reason
+// rbac.DefaultCacheTTL is one: a stable domain default, not a dynamic
+// configuration item.
 const DefaultCacheTTL = 30 * time.Second
 
-// Service is the key-lifecycle layer's public entry point --
-// docs/internal/22-pki.md's "two-layer structure" upper layer, and the type
+// Service is the key-lifecycle layer's public entry point and the type
 // authn's KeySource switch holds a *Service (or something structurally
 // identical to it) behind.
 //
-// # Round 2: the real state machine
+// # The state machine
 //
-// Every method below matches the shape docs/internal/22-pki.md's "authn's
-// integration" section requires of authn's KeySource interface: signatures
-// built entirely from standard-library types, because structural interface
-// satisfaction across two packages' own named types requires exact,
-// literal signature equality (two packages' named structs are never the
-// same type -- see keySourceShape below for the compile-time proof this
+// Every method below keeps the shape authn's KeySource interface requires:
+// signatures built entirely from standard-library types, because structural
+// interface satisfaction across two packages' own named types requires
+// exact, literal signature equality (two packages' named structs are never
+// the same type -- see keySourceShape below for the compile-time proof this
 // package carries of its own conformance).
 //
-//   - EnsurePurpose still creates a key and marks it SigningKeyStatusActive
+//   - EnsurePurpose creates a key and marks it SigningKeyStatusActive
 //     synchronously when purpose has no active key at all -- the bootstrap
 //     case, where no multi-replica cache-propagation race exists yet
 //     because nothing has verified anything under the purpose's kid before.
@@ -59,12 +56,11 @@ const DefaultCacheTTL = 30 * time.Second
 //   - ActiveSigner and VerificationKeys read through this Service's
 //     process-local key-set cache (cache.go) rather than querying the
 //     database on every call, invalidated by this module's own published
-//     events plus a TTL fallback poll -- the caching round 1's AGENTS.md
-//     flagged as its own known limitation.
-//   - EnsurePurpose still does not verify that an already-active key's
-//     Algorithm matches the requested one on a repeated call -- see
-//     AGENTS.md's Known limitations, carried forward from round 1
-//     unchanged.
+//     events plus a TTL fallback poll.
+//   - EnsurePurpose does not verify that an already-active key's Algorithm
+//     matches the requested one on a repeated call; an Algorithm mismatch
+//     is a known limitation of the call (see EnsurePurpose's own doc
+//     comment).
 //
 // # Validity is enforced at key-take time, never expressed through status
 //
@@ -77,12 +73,7 @@ const DefaultCacheTTL = 30 * time.Second
 // axes: the state machine's statuses say how far rotation has progressed,
 // while the validity window says whether the key may be USED at this
 // instant, and the two can disagree (an "active" key whose NotAfter
-// passed because the expiry scan has not run yet). Before the enforcement
-// round, not_after appeared in exactly one query -- the expiry scan's
-// staging query -- so whether an expired key kept signing and verifying
-// depended on whether the scan had run, and the reference app's
-// KeySource consumers (authn's Signer/Verifier) took keys by status
-// alone.
+// passed because the expiry scan has not run yet).
 //
 // The boundary direction, chosen and written down rather than defaulted:
 // both ends of the window are INCLUSIVE (a key is valid at its NotAfter
@@ -192,9 +183,9 @@ func (s *Service) attachBus(reg *pkgcore.Registry) {
 	reg.Events.Subscribe(EventSigningKeyStaged, s.onSigningKeyLifecycleEvent)
 	reg.Events.Subscribe(EventSigningKeyActivated, s.onSigningKeyLifecycleEvent)
 	reg.Events.Subscribe(EventSigningKeyRetired, s.onSigningKeyLifecycleEvent)
-	// Round 3: revocation must invalidate the key-set cache through this
-	// SAME event-subscription mechanism, never a second cache-clearing
-	// path -- see RevokeSigningKey's own doc comment (revocation.go).
+	// Revocation invalidates the key-set cache through this SAME
+	// event-subscription mechanism, never a second cache-clearing path --
+	// see RevokeSigningKey's own doc comment (revocation.go).
 	reg.Events.Subscribe(EventSigningKeyRevoked, s.onSigningKeyLifecycleEvent)
 }
 
@@ -263,9 +254,10 @@ func (s *Service) publish(ctx context.Context, evt pkgcore.Event) {
 //
 // Idempotent in the sense a caller needs at bootstrap: if purpose already
 // has an active key WITHIN its validity window, EnsurePurpose returns nil
-// without creating a second one. It does not currently verify that the
-// existing key's Algorithm matches the algorithm argument -- see AGENTS.md's
-// Known limitations.
+// without creating a second one. It does not verify that the existing
+// key's Algorithm matches the algorithm argument: a repeated call with a
+// different algorithm for the same purpose silently keeps the first key, a
+// known limitation of this call.
 //
 // # Self-healing an out-of-validity active key
 //
@@ -311,9 +303,10 @@ func (s *Service) EnsurePurpose(ctx context.Context, purpose, algorithm string, 
 	if err == nil {
 		if keyInValidity(*active, now) {
 			// Already has an in-validity active key -- nothing to
-			// bootstrap. A future round may decide what an Algorithm
-			// mismatch here means (error? rotate?); see AGENTS.md's Known
-			// limitations.
+			// bootstrap. What an Algorithm mismatch here should mean
+			// (error? rotate?) is an open question; the call neither
+			// detects it nor acts on it (see this method's own doc
+			// comment).
 			return nil
 		}
 		// The active key is out of validity. Heal only when no USABLE
@@ -487,9 +480,8 @@ func (s *Service) ActiveSigner(ctx context.Context, purpose string) (string, str
 // bounded availability cost are this type's own doc comment's subject.)
 // The anonymous return-slice element type is not a stylistic choice: a
 // named type here would break structural satisfaction of authn's KeySource
-// (docs/internal/22-pki.md's "authn's integration" section explains why
-// two packages' named types can never satisfy one another structurally),
-// so it is written out in full, matching KeySource's own declaration
+// -- two packages' named types can never satisfy one another structurally
+// -- so it is written out in full, matching KeySource's own declaration
 // exactly.
 func (s *Service) VerificationKeys(ctx context.Context, purpose string) ([]struct {
 	KID       string
@@ -555,15 +547,12 @@ func isNoActiveKey(err error) bool {
 	return ok && found.Code == ErrNoActiveKey.Code
 }
 
-// keySourceShape mirrors, field for field and in the same order,
-// go/authn's future KeySource interface as docs/internal/22-pki.md's
-// "authn's integration" section specifies it. It exists purely as a compile-time
-// proof that *Service already satisfies that shape TODAY, without this
-// module importing authn (which would invert the module dependency
-// direction docs/internal/01-architecture.md fixes: authn depends on pki,
-// never the reverse). When authn's round-2 KeySource is declared for real,
-// this is the interface it must be declared identically to; a mismatch
-// here is this module's bug to fix, not authn's.
+// keySourceShape mirrors, field for field and in the same order, go/authn's
+// KeySource interface. It exists purely as a compile-time proof that
+// *Service satisfies that shape without this module importing authn (which
+// would invert the module dependency direction: authn depends on pki, never
+// the reverse). A mismatch between this mirror and authn's own declaration
+// is this module's bug to fix, not authn's.
 type keySourceShape interface {
 	EnsurePurpose(ctx context.Context, purpose, algorithm string, maxCredentialLifetime time.Duration) error
 	ActiveSigner(ctx context.Context, purpose string) (kid string, algorithm string, sign func(context.Context, []byte) ([]byte, error), err error)

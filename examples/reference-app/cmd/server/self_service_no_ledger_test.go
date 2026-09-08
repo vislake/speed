@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// TestSelfServiceSignup_ClinicSignInDependsOnNoHostLedger is the round's
+// TestSelfServiceSignup_ClinicSignInDependsOnNoHostLedger is the
 // regression test for the enumeration gap's consumer half: a
 // runtime-created self-service account's browser-shaped sign-in must
 // resolve its clinic tenant from org's own memberships table ALONE --
@@ -62,7 +62,7 @@ func TestSelfServiceSignup_ClinicSignInDependsOnNoHostLedger(t *testing.T) {
 
 	// Wipe the host's own clinic-ledger table between the boots, if a
 	// pre-retirement boot created one (self_service.go's
-	// self_service_clinics, retired by this round): on the pre-query
+	// self_service_clinics ledger): on the pre-query
 	// tree this delete is exactly the state that broke boot-two's
 	// sign-in -- the ledger row was the boot-time re-discovery source --
 	// and on the fixed tree the table no longer exists at all, so the

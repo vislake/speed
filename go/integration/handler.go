@@ -23,16 +23,14 @@ const jsonContentType = "application/json; charset=utf-8"
 // regenerated from this module's api/openapi.yaml by task api:gen -- the
 // compile-time assertion at the bottom of this file is what makes "spec
 // changed, handler not" a compile failure instead of a runtime surprise).
-// The fragment grew in two rounds: round 5 added round 1's API-key surface
-// (Create/List/Rotate/Revoke), and round 7 added round 2's webhook-
-// subscription surface -- subscription CRUD (Create/List/Update/Delete),
-// Restore, and the recent-deliveries log -- retiring the "webhook CRUD
-// remains unmounted" row of AGENTS.md's "Deliberately not in scope" table.
+// The fragment covers the API-key surface (Create/List/Rotate/Revoke) and
+// the webhook-subscription surface -- subscription CRUD
+// (Create/List/Update/Delete), Restore, and the recent-deliveries log.
 //
 // It must run downstream of tenancy.Middleware on a non-allowlisted path:
 // every method reads the tenant tenancy.Middleware already resolved into the
 // request context, and never from a request parameter, header or body, per
-// root CLAUDE.md's multi-tenant isolation rule -- Service's own methods
+// the multi-tenant isolation rule -- Service's own methods
 // re-derive the tenant themselves through pkgcore.MustTenantFromContext, so
 // Handler adds no tenant resolution of its own beyond the observability
 // annotation mustTenant below performs.
@@ -44,7 +42,7 @@ const jsonContentType = "application/json; charset=utf-8"
 // build eagerly -- this Handler is built at Register time but reads
 // module.service AT CALL TIME, because go/integration's own Service is
 // built later, in Attach (see module.go's "Register-time wiring, Attach-time
-// Service" doc comment, and AGENTS.md's identical section). This is the
+// Service" doc comment). This is the
 // SAME forwarding-wrapper technique module.go's handleDomainEvent and
 // webhookDeliveryHandler already use for the identical reason -- Handler is
 // simply a third place that reads m.service once Attach has produced one,
@@ -135,8 +133,8 @@ func (h *Handler) resolveSubject(w http.ResponseWriter, r *http.Request) (string
 // empty body (io.EOF) as "use dst's zero value" rather than an error --
 // every field of IntegrationCreateAPIKeyRequest is optional, so a caller
 // issuing a key with no body at all is making a legal request, not a
-// malformed one (this handler's ONE optional body: round 7's webhook
-// request bodies declare their fields required, so they decode through
+// malformed one (this handler's ONE optional body: the webhook request
+// bodies declare their fields required, so they decode through
 // decodeRequiredJSON below instead). Any other decode failure (malformed
 // JSON, a value of the wrong shape) writes ErrInvalidRequestBody and
 // reports false.
@@ -149,8 +147,8 @@ func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 }
 
 // decodeRequiredJSON decodes r's body into dst, treating a genuinely empty
-// body (io.EOF) as a malformed request rather than a legal one: round 7's
-// webhook request bodies -- IntegrationCreateWebhookSubscriptionRequest and
+// body (io.EOF) as a malformed request rather than a legal one: the webhook
+// request bodies -- IntegrationCreateWebhookSubscriptionRequest and
 // IntegrationUpdateWebhookSubscriptionRequest -- mark every field required
 // (api/openapi.yaml declares both requestBody schemas required: true), so a
 // caller sending none is making a malformed request, refused with the plain
@@ -644,7 +642,6 @@ func writeError(w http.ResponseWriter, err error) {
 
 // compile-time check that *Handler implements the api.ServerInterface
 // generated from this module's api/openapi.yaml -- the enforcement half of
-// the spec-first flow (docs/internal/21-api-contract.md): add an operation
-// to the fragment, regenerate, and this assertion stops compiling until
-// Handler implements it.
+// the spec-first flow: add an operation to the fragment, regenerate, and
+// this assertion stops compiling until Handler implements it.
 var _ api.ServerInterface = (*Handler)(nil)

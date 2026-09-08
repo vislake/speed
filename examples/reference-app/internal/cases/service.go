@@ -142,7 +142,7 @@ type SubjectResolver interface {
 // Case is a case row as Service methods return it -- the domain value a
 // caller (the HTTP surface, tests) renders, deliberately not the row
 // model: TenantID stays internal, and the fields below are exactly what
-// the P3 UI's list and detail views render.
+// the case web UI's list and detail views render.
 type Case struct {
 	// ID is the case's application-generated id.
 	ID string
@@ -254,8 +254,8 @@ type CreateInput struct {
 //     sequential double-create; the residual race -- two creates attaching
 //     the same object in the same instant -- is caught one level down by
 //     the uq_case_photos_tenant_object unique index and surfaces as a raw
-//     create error rather than this coded conflict, recorded honestly in
-//     the package doc comment's "Honest record" section rather than
+//     create error rather than this coded conflict, recorded in
+//     the package doc comment's "Known limitations" section rather than
 //     papered over.
 //
 // The row ids (case and photos alike) are application-generated UUIDs,
@@ -341,7 +341,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Case, []Photo, er
 }
 
 // List returns every case of ctx's tenant, newest first -- the
-// clinic-wide list the round's product decision names: a case one staff
+// clinic-wide list: a case one staff
 // member created must be visible to every member of the same clinic
 // (the colleague who sees the patient next), and only the tenant
 // boundary hides a case from another practice. A tenant with no cases
@@ -361,9 +361,10 @@ func (s *Service) List(ctx context.Context) ([]Case, error) {
 }
 
 // Get returns ctx's tenant's case caseID with its photos in attachment
-// order -- the case detail the P3 UI renders (its per-photo simulations
-// are fetched from the P2a enumeration route; see the package doc
-// comment's "Shape decision" section). A case that does not exist under
+// order -- the case detail the case web UI renders (its per-photo
+// simulations are fetched from the per-photo enumeration route; see the
+// package doc comment's "Shape decision" section). A case that does not
+// exist under
 // ctx's tenant -- including one that exists under another tenant, which is
 // deliberately indistinguishable -- answers ErrNotFound. A case with no
 // photos answers an empty photo slice, never an error.

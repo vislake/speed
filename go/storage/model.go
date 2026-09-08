@@ -19,7 +19,7 @@ const (
 )
 
 // The lifecycle states of an Object, stored in its state column and
-// advanced only by ObjectService (B2/B3): an upload transaction opens a row
+// advanced only by ObjectService: an upload transaction opens a row
 // in ObjectStateUploading, Complete's revalidation pipeline moves it to
 // ObjectStateCompleted, and a delete protocol marks it ObjectStateDeleting
 // before its bytes are removed from the object store.
@@ -40,9 +40,8 @@ const (
 )
 
 // DerivativeKindThumbnail is the kind of a downscaled image rendition of an
-// original object. It is the only derivative kind this round ships; the
-// kind column is open-ended so later rounds can add more without a schema
-// change.
+// original object. It is the only shipped derivative kind; the kind column
+// is open-ended so further kinds can be added without a schema change.
 const DerivativeKindThumbnail = "thumbnail"
 
 // Object is the metadata half of one stored object: the object's bytes live
@@ -54,8 +53,8 @@ const DerivativeKindThumbnail = "thumbnail"
 //
 // # Data domain
 //
-// Tenant data (docs/internal/04-data-and-tenancy.md). An object is
-// meaningless outside its tenant and must never be visible across one, so
+// Tenant data. An object is meaningless outside its tenant and must never
+// be visible across one, so
 // it implements dbkit.TenantScoped (through the embedded TenantModel), is
 // reached only through ObjectRepository (which embeds
 // dbkit.Repository[Object]), and its isolation is proven by
@@ -65,9 +64,9 @@ const DerivativeKindThumbnail = "thumbnail"
 //
 // The primary key is (id) alone, and id is an application-generated UUID:
 // globally unique on its own, so tenant_id needs no part in the key. It
-// rides along as a plain, non-key column with its own index, promoted by the
-// embedded TenantModel -- the pattern dbkit's AGENTS.md documents for a
-// tenant-scoped model that does not need tenant_id inside its primary key.
+// rides along as a plain, non-key column with its own index, promoted by
+// the embedded TenantModel -- the pattern for a tenant-scoped model that
+// does not need tenant_id inside its primary key.
 // The id-alone key also forbids cross-tenant id reuse: the same id can never
 // name two rows, even in different tenants. Do NOT redeclare a same-named
 // TenantID field here to add a primaryKey tag -- dbkit's tenant_scope.go doc
@@ -92,10 +91,9 @@ const DerivativeKindThumbnail = "thumbnail"
 // disagree on purpose until the pipeline has reconciled them.
 type Object struct {
 	// ID is an application-generated UUID (uuid.NewString), never a
-	// database-generated one: the backend coding standard forbids
-	// gen_random_uuid(), which SQLite has no equivalent for. Its global
-	// uniqueness is what lets the primary key be (id) alone -- see the
-	// type doc comment.
+	// database-generated one: gen_random_uuid() is forbidden because
+	// SQLite has no equivalent for it. Its global uniqueness is what lets
+	// the primary key be (id) alone -- see the type doc comment.
 	ID string `gorm:"column:id;primaryKey;size:36"`
 
 	// TenantModel promotes the tenant_id column and the GetTenantID method
@@ -169,18 +167,17 @@ type Object struct {
 // TableName returns the objects table name.
 func (Object) TableName() string { return tableObjects }
 
-// ObjectDerivative is one rendition of a completed Object -- in this round,
-// exactly the thumbnail the derive pipeline produces -- stored as its own
-// object-store object under a derivative key, with the row above the bytes.
+// ObjectDerivative is one rendition of a completed Object -- exactly the
+// thumbnail the derive pipeline produces -- stored as its own object-store
+// object under a derivative key, with the row above the bytes.
 //
 // # Data domain
 //
 // Tenant data, like Object. The object_id column is an id reference, never
 // a foreign key: cross-table FKs make independently released migrations and
-// cascading deletes unmanageable (root CLAUDE.md's own rule), so the
-// referential integrity between an Object and its derivatives is maintained
-// by LifecycleService, which deletes the derivatives of an object it is
-// deleting.
+// cascading deletes unmanageable, so the referential integrity between an
+// Object and its derivatives is maintained by LifecycleService, which
+// deletes the derivatives of an object it is deleting.
 //
 // # Primary key
 //
@@ -198,10 +195,9 @@ func (Object) TableName() string { return tableObjects }
 // a no-op, never a duplicate row.
 type ObjectDerivative struct {
 	// ID is an application-generated UUID (uuid.NewString), never a
-	// database-generated one: the backend coding standard forbids
-	// gen_random_uuid(), which SQLite has no equivalent for. Its global
-	// uniqueness is what lets the primary key be (id) alone -- see the
-	// type doc comment.
+	// database-generated one: gen_random_uuid() is forbidden because
+	// SQLite has no equivalent for it. Its global uniqueness is what lets
+	// the primary key be (id) alone -- see the type doc comment.
 	ID string `gorm:"column:id;primaryKey;size:36"`
 
 	// TenantModel promotes the tenant_id column and the GetTenantID method
@@ -212,8 +208,9 @@ type ObjectDerivative struct {
 	// Plain id reference, no foreign key -- see the type doc comment.
 	ObjectID string `gorm:"column:object_id;size:36;not null"`
 
-	// Kind is the derivative kind, DerivativeKindThumbnail today, an
-	// open-ended vocabulary for later rounds.
+	// Kind is the derivative kind: DerivativeKindThumbnail is the one
+	// shipped value, and the vocabulary is open-ended so further kinds
+	// need no schema change.
 	Kind string `gorm:"column:kind;size:32;not null"`
 
 	// Key is the internal object-store key of the derivative's bytes,
@@ -228,7 +225,7 @@ type ObjectDerivative struct {
 	Size int64 `gorm:"column:size;not null"`
 
 	// Width and Height are the pixel dimensions of the derivative. NULL
-	// for a future non-image derivative kind.
+	// when the derivative kind is not an image.
 	Width  *int `gorm:"column:width"`
 	Height *int `gorm:"column:height"`
 

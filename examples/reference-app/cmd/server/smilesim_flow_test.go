@@ -1,6 +1,6 @@
 package main
 
-// smilesim_flow_test.go drives go/ai-gateway round 2's image-generation
+// smilesim_flow_test.go drives go/ai-gateway's image-generation
 // pipeline end to end through the composed HTTP stack -- the
 // authn+tenancy middleware chain, a real temp-file SQLite database
 // (carrying storage's, ai-gateway's and every other module's real
@@ -12,10 +12,9 @@ package main
 // OpenAI-compatible images endpoint (fakeOpenAIImageServer below),
 // standing in for the real vendor: no live API key is available or
 // needed, since the OpenAI-compatible images-edits multipart/form-data
-// schema is fully testable this way (see go/ai-gateway/AGENTS.md's own
-// reference-app-consumer section for round 2).
+// schema is fully testable this way.
 //
-// The one leg covers the round's acceptance shape: a patient photo,
+// The one leg covers the surface's acceptance shape: a patient photo,
 // uploaded through storage's own real HTTP surface, produces one async
 // smile-simulation job whose completion is observed by polling
 // smilesim's own job-status route -- proving the whole chain: the job
@@ -26,8 +25,7 @@ package main
 // distinct from the input, that this app's own storage HTTP surface can
 // read back.
 //
-// The P2a parameterization round added two further legs at the bottom of
-// this file: TestSmileSimulation_ParameterizedOptions_ReachTheVendorAndTheResultIndex
+// Two further legs live at the bottom of this file: TestSmileSimulation_ParameterizedOptions_ReachTheVendorAndTheResultIndex
 // drives an options-carrying simulate body end to end (the rendered
 // option clauses reach the fake vendor's prompt, the job-status response
 // echoes the recorded options, a same-photo same-options regenerate is a
@@ -39,8 +37,8 @@ package main
 //
 // Known, non-flaky WARN log this test deterministically surfaces: the
 // uploaded photo's own storage.object.derive.thumbnail job (enqueued by
-// its Complete) and this round's ai-gateway.image.generate job for the
-// SAME request now run concurrently on buildServer's one shared
+// its Complete) and the ai-gateway.image.generate job for the
+// SAME request run concurrently on buildServer's one shared
 // jobs.StandaloneQueue (WorkerCount 4 by default) against the app's one
 // file-backed SQLite database. The root cause is now precisely known: the
 // derive job's gate (go/storage/repository.go's insertDerivativeIfAbsent)
@@ -50,9 +48,9 @@ package main
 // connection holds the write lock, refusing the upgrade without
 // consulting the busy handler, so no busy_timeout setting changes the
 // outcome (the ~13 ms duration_ms on the WARN is that immediacy; the
-// boundary is spelled out in go/dbkit/AGENTS.md's "SQLite busy timeout"
-// section). It is neither the AuditBus same-goroutine self-deadlock
-// (go/dbkit/AGENTS.md's "Audit trail collection" limitation) nor ordinary
+// boundary is spelled out in go/dbkit's own "SQLite busy timeout"
+// documentation). It is neither the AuditBus same-goroutine self-deadlock
+// nor ordinary
 // busy-timeout contention. go/jobs' own retry/backoff is the existing,
 // working convergence mechanism: the losing attempt logs "job attempt
 // failed, scheduling retry" with error "storage.internal_error: database
@@ -66,16 +64,15 @@ package main
 // gate's transaction shape, pinned in isolation by
 // go/dbkit/dialect/sqlite/busy_timeout_test.go's read-then-write-upgrade
 // test, while whether this test run actually hits the collision is
-// scheduling-dependent -- 140 consecutive runs in the 2026-09-06 dbkit
-// round's environment logged none, so neither "reproduces on every run"
+// scheduling-dependent -- 140 consecutive runs in the dbkit
+// environment logged none, so neither "reproduces on every run"
 // nor "gone" is claimable from test runs alone, and a WARN-free run does
 // not mean the race is gone. Genuinely removing the WARN line now means
 // go/storage-module work on the gate's transaction shape (taking the
 // write lock first, e.g. BEGIN IMMEDIATE) or a queue-concurrency change
 // in this app's own wiring (cmd/server/server.go's shared
-// StandaloneQueue); recorded here and in go/ai-gateway/AGENTS.md's
-// "Known limitations / deferred" section rather than silently worked
-// around inside this round's tests.
+// StandaloneQueue); recorded here rather than silently worked
+// around inside these tests.
 
 import (
 	"bytes"
@@ -238,7 +235,7 @@ func buildSmileSimTestServer(t *testing.T, imgServer *fakeOpenAIImageServer) (*h
 // smileSimRequest issues method against path on srv, authenticated as
 // token -- neither smile-simulation route checks a demo-user-keyed
 // permission of its own, so no X-Demo-User header is needed, mirroring
-// consultSuggestRequest's identical shape for round 1's chat route.
+// consultSuggestRequest's identical shape for the chat route.
 func smileSimRequest(t *testing.T, srv *httptest.Server, method, path, token string, body []byte) *http.Response {
 	t.Helper()
 
@@ -316,8 +313,8 @@ func smileSimulateAndWait(t *testing.T, srv *httptest.Server, token string, phot
 }
 
 // smileSimulateBodyAndWait is smileSimulateAndWait's own implementation,
-// parametrized on an arbitrary already-marshaled request body -- the P2a
-// round's parameterized-options tests need it to enqueue simulations whose
+// parametrized on an arbitrary already-marshaled request body -- the
+// parameterized-options tests need it to enqueue simulations whose
 // body carries an "options" object (smile_style/tooth_shade/strength), which
 // the plain photo-only helper cannot express.
 func smileSimulateBodyAndWait(t *testing.T, srv *httptest.Server, token string, simulateBody []byte, deadline time.Time) map[string]any {
@@ -342,8 +339,8 @@ func smileSimulateBodyAndWait(t *testing.T, srv *httptest.Server, token string, 
 }
 
 // enumerateSimulations GETs the per-photo enumeration route for photoID and
-// returns the decoded "simulations" array -- the P3 gallery's data source,
-// asserted on by the parameterized-options flow tests.
+// returns the decoded "simulations" array -- the smile gallery's data
+// source, asserted on by the parameterized-options flow tests.
 func enumerateSimulations(t *testing.T, srv *httptest.Server, token, photoID string) []map[string]any {
 	t.Helper()
 
@@ -384,7 +381,7 @@ func assertOptionsIn(t *testing.T, m map[string]any, wantStyle, wantShade string
 	}
 }
 
-// TestSmileSimulation_ImageToImage_EndToEnd is round 2's mandatory
+// TestSmileSimulation_ImageToImage_EndToEnd is the mandatory
 // end-to-end proof: a patient photo really travels through
 // internal/smilesim.Service, through go/ai-gateway's Gateway.GenerateImage
 // async pipeline (credential resolution, model routing, the enqueued
@@ -480,12 +477,12 @@ func TestSmileSimulation_ImageToImage_EndToEnd(t *testing.T) {
 	}
 }
 
-// TestSmileSimulation_CompletionNotifiesTheNamedRecipient proves this
-// round's own addition end to end: a POST /simulate naming a
+// TestSmileSimulation_CompletionNotifiesTheNamedRecipient proves the
+// named-recipient addition end to end: a POST /simulate naming a
 // recipient_user_id gets that recipient an SMS once the job succeeds --
 // internal/smilesim's Service publishes EventSimulationCompleted (from
 // NotifyOnCompletion, called by the job-status route this test polls
-// exactly like the round's original test above), demo_notification.go's
+// exactly like the earlier image-to-image test above), demo_notification.go's
 // subscription turns that into a notification.Dispatch of
 // demo.TypeKeySimulationReady, and the delivery job renders and sends it
 // over the sms-only channel that type declares.
@@ -584,8 +581,8 @@ func TestSmileSimulation_CompletionNotifiesTheNamedRecipient(t *testing.T) {
 	}
 }
 
-// TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver is the
-// P1-refapp-4 regression: TWO simulations completed for the SAME
+// TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver pins the
+// two-occurrence case: TWO simulations completed for the SAME
 // recipient are two distinct occurrences, and each must deliver on its
 // own. Before the fix, demo_notification.go's simulation-completed
 // subscription dispatched with empty Params, so both dispatches derived
@@ -682,7 +679,7 @@ func TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver(t *testing.T)
 		t.Fatalf("second job status = %v, want \"succeeded\"", final2["status"])
 	}
 
-	// Both occurrences deliver: before the fix, the second delivery was
+	// Both occurrences must deliver: without the fix the second delivery was
 	// settled as a duplicate of the first and this wait timed out with the
 	// recipient stuck at one SMS.
 	eventually(t, 4*time.Second, "the second simulation-ready SMS", func() bool {
@@ -698,8 +695,8 @@ func TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver(t *testing.T)
 }
 
 // TestSmileSimulation_ParameterizedOptions_ReachTheVendorAndTheResultIndex
-// is the P2a parameterization round's end-to-end proof, in three legs over
-// the real composed HTTP stack:
+// is the parameterization end-to-end proof, in three legs over the real
+// composed HTTP stack:
 //
 //  1. an options-carrying /simulate body (bright style, ultra-white shade,
 //     strength 0.4) produces a job whose vendor prompt -- as recorded by
@@ -713,7 +710,7 @@ func TestSmileSimulation_TwoCompletionsForOneRecipient_BothDeliver(t *testing.T)
 //  3. the per-photo enumeration route lists all three generations of this
 //     photo -- the one made twice with the same options and a third with
 //     different ones -- each carrying the options that produced it, its
-//     status and its output object: the P3 gallery's data source.
+//     status and its output object: the smile gallery's data source.
 func TestSmileSimulation_ParameterizedOptions_ReachTheVendorAndTheResultIndex(t *testing.T) {
 	imgServer := newFakeOpenAIImageServer(t)
 	srv, cfg := buildSmileSimTestServer(t, imgServer)
@@ -846,7 +843,7 @@ func strengthTextForTest(v float64) string {
 }
 
 // TestSmileSimulation_InvalidOptions_RefusedWithCodedErrors pins the
-// parameterization round's rejection contract at the HTTP layer: an option
+// parameterization's rejection contract at the HTTP layer: an option
 // outside the vocabulary or range is refused with its coded 400 error --
 // never clamped, never silently replaced by a default -- and the refusal
 // happens before go/ai-gateway (and therefore any real vendor) is ever
@@ -903,7 +900,7 @@ func TestSmileSimulation_InvalidOptions_RefusedWithCodedErrors(t *testing.T) {
 }
 
 // TestSmileSimulation_CrossTenantRecipient_RefusedBeforeAnyEnqueue is the
-// mandatory regression the reviewer finding P2-3 requires: a POST
+// mandatory regression: a POST
 // /simulate naming a recipient who does NOT belong to the caller's tenant
 // must be refused with the app's coded error before Simulate enqueues
 // anything -- no job, no per-photo record, no vendor call, and above all no
@@ -945,7 +942,7 @@ func TestSmileSimulation_CrossTenantRecipient_RefusedBeforeAnyEnqueue(t *testing
 
 	// A real, completed photo, so that in the bug state (the request being
 	// accepted) the enqueued job genuinely succeeds and the completion
-	// notification reaches the named recipient -- the exact harm this round
+	// notification reaches the named recipient -- the exact harm the refusal prevents
 	// refuses, reproduced rather than assumed.
 	photo := jpegWithExif(t)
 	completedPhoto := uploadAndComplete(t, srv, token, photo, "")
@@ -978,7 +975,7 @@ func TestSmileSimulation_CrossTenantRecipient_RefusedBeforeAnyEnqueue(t *testing
 
 	// Bug-state evidence: an accepted request (202) runs the job to
 	// completion and puts the simulation-ready SMS on the CROSS-TENANT
-	// member's phone -- the delivery this round must refuse. On the fixed
+	// member's phone -- the delivery the refusal prevents. On the fixed
 	// tree this branch is unreachable (the refusal comes first).
 	if resp.StatusCode == http.StatusAccepted && out.JobID != "" {
 		waitForSmileSimSucceeded(t, srv, token, out.JobID, time.Now().Add(5*time.Second))

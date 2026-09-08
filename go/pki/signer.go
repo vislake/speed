@@ -6,11 +6,10 @@ import (
 )
 
 // Signer performs signing operations against a key this module manages. It
-// deliberately does NOT expose a way to read a private key back out --
-// see the package doc comment, and docs/internal/22-pki.md's "Signer seam"
-// section, for why a Protect(key)/Unprotect(ref) shape was considered and
-// rejected: that shape means the private key must exist in plaintext inside
-// this process's memory, which defeats the entire point of a KMS-backed
+// deliberately does NOT expose a way to read a private key back out: a
+// Protect(key)/Unprotect(ref) shape was considered and rejected, because
+// that shape means the private key must exist in plaintext inside this
+// process's memory, which defeats the entire point of a KMS-backed
 // implementation.
 //
 // keyRef is an opaque handle, never key material. Business tables
@@ -32,8 +31,8 @@ import (
 // round trip). LocalSigner is neither -- its "envelope" is dbkit's own
 // field-level encryption and the decrypted key lives only inside one Sign
 // call's stack, but the boundary it protects is a database column, not a
-// separate service. The vault and kmsaws implementations (round 4) are true
-// envelope and direct-sign implementations respectively.
+// separate service. The vault and kmsaws implementations are true envelope
+// and direct-sign implementations respectively.
 type Signer interface {
 	// GenerateKey creates a new key for algorithm and returns an opaque
 	// keyRef plus its public key. algorithm is one of the Algorithm
@@ -50,10 +49,10 @@ type Signer interface {
 	// package's own crypto/ed25519 usage and every KMS/HSM's Ed25519 mode
 	// (Vault Transit's "ed25519"; AWS KMS's ED25519_SHA_512 with
 	// MessageType RAW) share that same convention, which is also exactly
-	// RFC 8037's JWT "EdDSA". A future non-EdDSA algorithm (ecdsa-p256, if
-	// one is ever added) would instead take the message's SHA-256 digest --
-	// see docs/internal/22-pki.md's Signer section for the full table.
-	// Getting this wrong for AWS KMS is not cosmetic: MessageType RAW vs.
+	// RFC 8037's JWT "EdDSA". An added digest-input algorithm (ecdsa-p256,
+	// say) would instead take the message's SHA-256 digest; AlgorithmEd25519
+	// is the only algorithm shipped. Getting this wrong for AWS KMS is not
+	// cosmetic: MessageType RAW vs.
 	// DIGEST select genuinely different signature algorithms
 	// (ED25519_SHA_512 vs. ED25519_PH_SHA_512), and a signature made under
 	// the wrong one does not verify.

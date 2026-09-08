@@ -27,7 +27,7 @@ type FakeNote struct {
 
 // TableName pins FakeNote to a name that cannot collide with any real
 // module's own table, so this fixture is safe to migrate onto a shared
-// test database alongside real tables if a future test ever needs to.
+// test database alongside real tables.
 func (FakeNote) TableName() string { return "compliance_test_fake_notes" }
 
 // GetTenantID satisfies dbkit.TenantScoped.

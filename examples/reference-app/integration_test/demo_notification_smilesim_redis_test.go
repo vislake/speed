@@ -1,19 +1,16 @@
 //go:build integration
 
-// This file is the Docker-backed regression for reference-app-go.md's
-// P1-1 finding: cmd/server/demo_notification.go's smilesim.
-// EventSimulationCompleted subscription used to type-assert evt.Payload
-// directly to smilesim.SimulationCompletedPayload, on the strength of a
-// comment claiming "both sides of this subscription are reference-app
-// code, so there is no cross-module wire-shape ambiguity" the note-created
-// subscription's own probe has to handle. That claim was false:
-// pkgcore/eventbus/redis's EventBus always JSON round-trips a payload
-// before a subscriber on a different bus instance sees it, and "a
-// subscriber in the same process" is not the same thing as "the bus
-// instance that published" -- a genuinely distributed deployment's normal
-// shape, where every replica subscribes on its own instance and the bus
-// fans a publish out to all of them (see the fixed subscription's own
-// probe, simulationCompletedFieldsFromPayload, and its doc comment).
+// This file is the Docker-backed regression for the smilesim completion
+// subscription's cross-instance wire shape: cmd/server/demo_notification.go's
+// smilesim.EventSimulationCompleted subscription reads its payload through
+// a probe (simulationCompletedFieldsFromPayload) rather than a naked type
+// assertion, because pkgcore/eventbus/redis's EventBus always JSON
+// round-trips a payload before a subscriber on a different bus instance
+// sees it, and "a subscriber in the same process" is not the same thing
+// as "the bus instance that published" -- a genuinely distributed
+// deployment's normal shape, where every replica subscribes on its own
+// instance and the bus fans a publish out to all of them (see the
+// subscription's own probe and its doc comment).
 //
 // It lives in package referenceapp_test alongside
 // redis_eventbus_composition_test.go (same build tag, same
@@ -27,25 +24,25 @@
 //
 // The positive, in-process proof that a REAL smile-simulation job's
 // completion publishes smilesim.EventSimulationCompleted and reaches this
-// exact subscription already exists: cmd/server/smilesim_flow_test.go's
+// exact subscription exists: cmd/server/smilesim_flow_test.go's
 // TestSmileSimulation_CompletionNotifiesTheNamedRecipient drives the whole
 // pipeline (storage upload, go/ai-gateway's async image job against a
 // scripted OpenAI-compatible endpoint, NotifyOnCompletion's publish) over
 // the in-process EventBus and asserts the resulting SMS. That test cannot
-// exercise the bug this file targets, precisely because the in-process bus
-// delivers the publisher's own Go value unchanged to a same-process
-// subscriber -- there is no JSON round-trip to get wrong. Reproducing that
-// same pipeline against a genuinely cross-instance subscriber would need a
-// second full reference-app replica wired to the same fake AI-image
-// vendor, but cmd/server's own serverConfig.AIGatewayImageBaseURL/
-// AIGatewayImageAPIKey fields (the test-only override buildServer's
-// callers use) are never read from an environment variable by
-// configFromEnv -- there is no way to point a real `go build ./cmd/server`
-// subprocess at a fake vendor at all, and adding one would be a
-// production-code change to server.go outside this fix's scope.
+// exercise the cross-instance shape this file targets, precisely because
+// the in-process bus delivers the publisher's own Go value unchanged to a
+// same-process subscriber -- there is no JSON round-trip to get wrong.
+// Reproducing that same pipeline against a genuinely cross-instance
+// subscriber would need a second full reference-app replica wired to the
+// same fake AI-image vendor, but cmd/server's own
+// serverConfig.AIGatewayImageBaseURL/AIGatewayImageAPIKey fields (the
+// test-only override buildServer's callers use) are never read from an
+// environment variable by configFromEnv -- there is no way to point a
+// real `go build ./cmd/server` subprocess at a fake vendor at all, and
+// adding one would be a production-code change to server.go.
 //
-// So this test does the next best thing, and the one thing that actually
-// isolates the bug: it plays the role of "a completed simulation job" by
+// So this test does the one thing that actually isolates the shape: it
+// plays the role of "a completed simulation job" by
 // publishing a REAL smilesim.SimulationCompletedPayload-shaped
 // pkgcore.Event directly onto the shared Redis stream, from an
 // independent *eventbusredis.EventBus instance this test owns -- exactly
@@ -98,8 +95,8 @@ const (
 	smilesimSMSLinePrefix = "SMS to " + smilesimDemoRecipientPhone + ":"
 	// smilesimUnreadablePayloadLogSubstring is the constant warning message
 	// wireDemoNotification's smilesim subscription logs for a payload
-	// simulationCompletedFieldsFromPayload cannot read -- unchanged by this
-	// round's fix, and therefore a version-independent "the child's
+	// simulationCompletedFieldsFromPayload cannot read -- a
+	// version-independent "the child's
 	// consumer group for this event type is live and consuming" signal this
 	// test's warm-up step polls for (mirroring
 	// redis_eventbus_composition_test.go's own warmUp, adapted to a
@@ -117,8 +114,8 @@ const (
 // to the no-catch-up contract every bus instance in this codebase shares.
 // The marker payload -- a map missing both fields
 // simulationCompletedFieldsFromPayload requires -- is rejected identically
-// by the pre-fix naked type assertion and the post-fix probe, so this
-// warm-up's own pass/fail is not itself the regression under test; only the
+// by the probe, so this
+// warm-up's own pass/fail is not itself the shape under test; only the
 // real event published afterward is.
 func warmUpChildSmileSimSubscription(t *testing.T, publisher *eventbusredis.EventBus, childLogs func() string) {
 	t.Helper()
@@ -143,10 +140,9 @@ func warmUpChildSmileSimSubscription(t *testing.T, publisher *eventbusredis.Even
 }
 
 // TestServer_RealRedisEventBusComposition_SmileSimCompletionCrossesProcesses
-// is this round's proof that the smilesim completion subscription survives
+// proves that the smilesim completion subscription survives
 // a genuinely cross-instance delivery of smilesim.EventSimulationCompleted
-// over a real Redis EventBus -- the exact composition
-// reference-app-go.md's P1-1 finding named, and the one
+// over a real Redis EventBus -- the composition
 // TestSmileSimulation_CompletionNotifiesTheNamedRecipient's in-process,
 // same-bus-instance test structurally cannot reach (see this file's own
 // package doc comment).
@@ -154,9 +150,9 @@ func warmUpChildSmileSimSubscription(t *testing.T, publisher *eventbusredis.Even
 // One real reference-app subprocess is booted in standalone deployment
 // mode with APP_REDIS_ADDR set -- a real, MultiReplicaSafe-capable
 // EventBus composed in a single-process topology, exactly
-// redis_eventbus_composition_test.go's own composition (root CLAUDE.md's
-// "a single binary talking to real ... infrastructure is the ordinary
-// shape of a small-customer production install, not a misuse"). A second,
+// redis_eventbus_composition_test.go's own composition (a single binary
+// talking to real infrastructure is the ordinary shape of a
+// small-customer production install). A second,
 // independent *eventbusredis.EventBus instance -- this test's own
 // "publisher", sharing the same Redis server but never the subprocess's
 // bus instance -- publishes a real smilesim.SimulationCompletedPayload
@@ -202,15 +198,14 @@ func TestServer_RealRedisEventBusComposition_SmileSimCompletionCrossesProcesses(
 
 	// The real test event: a successful simulation completion naming the
 	// demo recipient, published from a bus instance that is NOT the
-	// child's own -- the exact cross-instance delivery
-	// reference-app-go.md's P1-1 finding named. Pre-fix, the child's own
+	// child's own -- the exact cross-instance delivery under test. A
 	// naked evt.Payload.(smilesim.SimulationCompletedPayload) type
-	// assertion fails against the JSON-decoded map[string]any this
+	// assertion would fail against the JSON-decoded map[string]any this
 	// publish produces on the child's side, logging only a warning and
-	// never dispatching -- no SMS ever appears in the child's own stdout.
-	// Post-fix, simulationCompletedFieldsFromPayload reads the decoded map
-	// correctly and the subscription dispatches exactly as it does today
-	// for a same-instance publish.
+	// never dispatching -- no SMS ever appears in the child's own stdout;
+	// simulationCompletedFieldsFromPayload reads the decoded map
+	// correctly and the subscription dispatches, exactly as it does for a
+	// same-instance publish.
 	if err := publisher.Publish(ctx, pkgcore.Event{
 		Type:     smilesim.EventSimulationCompleted,
 		TenantID: pkgcore.TenantID(acmeTenantID),

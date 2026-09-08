@@ -131,8 +131,8 @@ func Example() {
 // generated configuration reference: Describe reads back every item and
 // feature flag the frozen schema carries (brandModule's own declarations,
 // here), and RenderMarkdown turns that into the Markdown table a host
-// writes straight to a docs/config-reference.md file -- never hand-written,
-// per docs/internal/13-documentation-standards.md's must-have doc list.
+// writes straight to a docs/config-reference.md file -- the reference is
+// generated from the live schema, never hand-written.
 func ExampleService_Describe() {
 	ctx := context.Background()
 

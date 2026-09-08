@@ -15,13 +15,12 @@ import (
 // This file holds the regression tests for execute's record-ordering
 // discipline -- every outcome log line and metric record must fire strictly
 // AFTER the conditional write that persisted the outcome reported the
-// transition (worker.go's execute), never before. The dead-letter half was
-// fixed first (see worker_test.go's
-// TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric, which
-// still lives with the other execute-level tests); these two pin the
-// success and retry halves that shared the same defect. Named for the
-// behaviour they verify, per the backend coding standard's test-naming
-// rule, since they exercise execute across worker.go and store.go.
+// transition (worker.go's execute), never before. These two pin the
+// success and retry halves; the dead-letter half lives with the other
+// execute-level tests in worker_test.go's
+// TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric.
+// Named for the behaviour they verify, since they exercise execute across
+// worker.go and store.go.
 
 // succeedingCancelRaceHandler always succeeds from Handle -- the
 // success-path counterpart of worker_test.go's
@@ -48,9 +47,9 @@ var _ Handler = (*succeedingCancelRaceHandler)(nil)
 // truthful record: the "job cancelled before its outcome could be recorded,
 // outcome discarded" Info line carrying the discarded_outcome=succeeded
 // attribute. Deterministic by construction, exactly like the dead-letter
-// half: markCancelled lands before execute's success path runs. Fails on
-// the pre-fix code, where the success log and both success instruments fire
-// before the no-op write is discovered.
+// half: markCancelled lands before execute's success path runs, so a
+// no-op'd write that still produced a success log or success metrics fails
+// this test.
 func TestExecute_SuccessAfterCancel_RecordsNoSuccessMetricOrLog(t *testing.T) {
 	reader := setupTestMeterProvider(t)
 	q := NewStandaloneQueue(newTestDB(t))
@@ -158,8 +157,7 @@ var _ Handler = (*failingCancelRaceHandler)(nil)
 // Job exactly one truthful record: the "job cancelled before its outcome
 // could be recorded, outcome discarded" Info line carrying the
 // discarded_outcome=retrying attribute. Deterministic by construction,
-// exactly like the success and dead-letter halves. Fails on the pre-fix
-// code.
+// exactly like the success and dead-letter halves.
 func TestExecute_RetryAfterCancel_RecordsNoRetryMetricOrLog(t *testing.T) {
 	reader := setupTestMeterProvider(t)
 	q := NewStandaloneQueue(newTestDB(t))

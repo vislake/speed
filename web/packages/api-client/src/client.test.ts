@@ -93,9 +93,9 @@ async function expectRawAbort(promise: Promise<unknown>): Promise<void> {
  * queue first, then polling on short real timers -- and fails the test
  * when the budget runs out with the thing still unsettled. The
  * never-settling shapes this guards (a refresh hook that never
- * resolves) are deterministic: the pre-fix code stays pending forever,
- * so the bounded wait turns what used to be a hang into an assertion
- * failure, in both directions of the regression. */
+ * resolves) are deterministic: without the budget such a request would
+ * stay pending forever, so the bounded wait turns the hang into an
+ * assertion failure, in both directions of the regression. */
 async function expectSettled(
   isSettled: () => boolean,
   budgetMs = 2000,
@@ -251,8 +251,8 @@ describe('request shape', () => {
     expect(call.headers.get('accept')).toBe('application/json')
     expect(call.headers.has('content-type')).toBe(false)
     // Exactly the two documented headers go out -- and the tenant never
-    // appears as a header (docs/internal/12-frontend.md): it travels in
-    // the access-token claims, so nothing tenant-shaped may exist here.
+    // appears as a header: it travels in the access-token claims, so
+    // nothing tenant-shaped may exist here.
     expect([...call.headers.keys()].sort()).toEqual([
       'accept',
       'authorization',
@@ -402,10 +402,9 @@ describe('request shape', () => {
     // nothing -- JSON.stringify yields undefined (the value) for a
     // top-level function or symbol -- is a request the client can
     // never send as JSON, and must refuse as client.protocol before
-    // anything goes on the wire. (Before the fix it went out silently
-    // bodyless -- no body, no content-type -- and the "created"
-    // answer came back for a request the caller believed carried
-    // data.)
+    // anything goes on the wire. (Sent bodyless -- no body, no
+    // content-type -- it would earn a "created" answer for a request
+    // the caller believed carried data.)
     for (const body of [
       (): Record<string, string> => ({ title: 'T' }),
       Symbol('no-json'),
@@ -426,10 +425,9 @@ describe('request shape', () => {
   it('encodes an array query value as repeated parameters, never comma-joined', async () => {
     // An array is the form/explode convention: tag=['a','b c',3] must
     // reach the backend as three repeated parameters -- the shape a Go
-    // r.URL.Query() handler parses as a multi-valued key. (Before the
-    // fix the array was String()-ed whole, folding into one
-    // comma-joined ?tag=a,b c,3 the backend would read as a single
-    // literal value.)
+    // r.URL.Query() handler parses as a multi-valued key. (An array
+    // String()-ed whole would fold into one comma-joined ?tag=a,b c,3
+    // the backend would read as a single literal value.)
     const standin = scriptedStandin(jsonResponse(200, []))
     const api = createClient({ baseUrl: BASE_URL, fetch: standin.fetch })
     await api('/notes', {
@@ -813,8 +811,8 @@ describe('401 and the refresh hook', () => {
     // The session wiring a host builds -- the refresh operation
     // declared credential-less via omitAccessToken, travelling through
     // this same client -- must not deadlock when the endpoint refuses
-    // the stale token. Before the bearer-only rule the refresh
-    // request's own 401 re-entered the refresh path and awaited the
+    // the stale token. Without the bearer-only rule the refresh
+    // request's own 401 would re-enter the refresh path and await the
     // in-flight refresh it was part of -- a request awaiting itself,
     // forever. The declaration makes that impossibility structural: the
     // refresh request is credential-less no matter what the store
@@ -869,12 +867,12 @@ describe('401 and the refresh hook', () => {
     // The host bug this guard backstops: the refresh operation travels
     // through this same client WITHOUT the per-request credential-less
     // declaration, so its request presents the stale token and the
-    // refresh endpoint refuses it with a token-bearing 401. Before the
-    // guard that 401 re-entered the refresh path and joined -- and
-    // awaited -- the very flight it was part of: a request awaiting
+    // refresh endpoint refuses it with a token-bearing 401. Without
+    // the guard that 401 would re-enter the refresh path and join --
+    // and await -- the very flight it was part of: a request awaiting
     // itself forever (the flight could only settle when its hook
-    // settled, and the hook awaited the request). refreshCalls froze
-    // at 1 and nothing ever settled. The round's own request is now
+    // settled, and the hook awaited the request), refreshCalls frozen
+    // at 1 and nothing ever settling. The round's own request is
     // refused the refresh path, exactly like the bearer-only rule
     // refuses a credential-less 401: the inner 401 surfaces as the
     // terminal auth error, the hook answers false, and the original
@@ -1023,9 +1021,9 @@ describe('401 and the refresh hook', () => {
     // maxAttempts 2 leaves a fresh request exactly one transient
     // retry. A 401-refresh round in the middle performs no transient
     // retry, so it must not eat that budget: the 503 that follows the
-    // refresh still gets its retry. (Before the fix the refresh round
-    // consumed the second attempt, so the retryable 503 was delivered
-    // without ever being retried.)
+    // refresh still gets its retry (a round that consumed an attempt
+    // would leave the retryable 503 delivered without ever being
+    // retried).
     const store = createMemoryAccessTokenStore()
     store.set('stale-token')
     let refreshCalls = 0
@@ -1083,10 +1081,10 @@ describe('401 and the refresh hook', () => {
     // then fails. The timeout bounds one HTTP exchange -- never the
     // refresh hook -- so the envelope read after the failed refresh
     // must surface the real 401 envelope (authn.session_expired and
-    // its trace id), not a synthetic client.http.401. (Before the fix
-    // the attempt timer fired at timeoutMs into the refresh; the
-    // already-settled abort trigger then resolved the envelope read as
-    // a timeout, and the envelope -- code and trace id -- was lost.)
+    // its trace id), not a synthetic client.http.401. (An attempt
+    // timer that fired at timeoutMs into the refresh would resolve the
+    // envelope read -- through the already-settled abort trigger -- as
+    // a timeout, losing the envelope's code and trace id.)
     vi.useFakeTimers()
     try {
       const store = createMemoryAccessTokenStore()
@@ -1389,8 +1387,8 @@ describe('timeouts', () => {
     // then never finishes the body. The per-attempt timeout keeps
     // running through the body read, so the stall rejects as
     // client.timeout instead of hanging forever on a half-open
-    // response. (Before the fix the timer stopped at header arrival
-    // and the read waited on the stalled stream indefinitely.) The
+    // response. (A timer that stopped at header arrival would leave
+    // the read waiting on the stalled stream indefinitely.) The
     // release is the controller abort (real fetch ties the response
     // body to the fetch signal): the recorded request signal shows the
     // attempt aborted mid-read.
@@ -1570,15 +1568,14 @@ describe('caller cancellation', () => {
   })
 
   it('rejects raw when an abort lands while a never-settling refresh is in flight', async () => {
-    // The reviewer's real shape: a client WITH a timeoutMs, whose
-    // 401-refresh round suspends the attempt timer (the pause), and a
-    // refresh hook that never settles. An abort landing after the
-    // hook has entered used to race nothing: the attempt's fetch had
-    // already settled and its timer was suspended, so the caller-abort
-    // forwarding had no pending promise to reject -- the request
-    // promise stayed pending forever even though the caller had
-    // cancelled (and at 50ms the suspended attempt timer could not
-    // save it either). The refresh wait now races the caller's signal
+    // A client WITH a timeoutMs suspends its attempt timer across the
+    // 401-refresh round (the pause), and a refresh hook that never
+    // settles leaves the wait with nothing to race: the attempt's
+    // fetch has already settled and its timer is suspended, so the
+    // caller-abort forwarding has no pending promise to reject -- the
+    // request promise would stay pending forever even though the
+    // caller cancelled (and at 50ms the suspended attempt timer cannot
+    // save it either). The refresh wait races the caller's signal
     // exactly like the backoff sleeps do, so the abort rejects the
     // request raw on the next microtask.
     const store = createMemoryAccessTokenStore()
@@ -1635,9 +1632,9 @@ describe('caller cancellation', () => {
     // second time while the first round still holds it, which the
     // authn server reads as theft) -- and the later request's own
     // abort rejects it raw in turn: each waiter is bounded by its own
-    // signal. (Before the fix the starting request's abort settled the
-    // whole round as a failed refresh, so the later 401 started a
-    // fresh round and invoked the hook a second time.)
+    // signal. (If the starting request's abort settled the whole round
+    // as a failed refresh, the later 401 would start a fresh round and
+    // invoke the hook a second time.)
     const store = createMemoryAccessTokenStore()
     store.set('stale-token')
     let refreshCalls = 0
@@ -1695,9 +1692,9 @@ describe('caller cancellation', () => {
       await Promise.resolve()
     }
     // Flush well past the second request's own 401 branch: by the time
-    // it decides the round's fate -- join the in-flight flight (the
-    // honest shape) or start a sibling round (the pre-fix shape, which
-    // invokes the hook again) -- it must still be the one round.
+    // it decides the round's fate -- join the in-flight flight, or
+    // start a sibling round that would invoke the hook again -- it
+    // must still be the one round.
     for (let i = 0; i < 200; i += 1) {
       await Promise.resolve()
     }
@@ -1717,16 +1714,16 @@ describe('caller cancellation', () => {
   })
 
   it('lets requests already joined onto the flight succeed when the initiator aborts and the refresh then succeeds', async () => {
-    // The conflation shape: the single-flight round used to be bound
-    // to the initiating request's own signal -- that request's abort
-    // settled the WHOLE round as a failed refresh (the race rejection
-    // was caught and turned into false), so a request that had already
-    // joined was told "refresh failed" -- an auth:true ApiError, the
+    // The conflation shape: binding the single-flight round to the
+    // initiating request's own signal would let that request's abort
+    // settle the WHOLE round as a failed refresh (the race rejection
+    // caught and turned into false), telling a request that had
+    // already joined "refresh failed" -- an auth:true ApiError, the
     // host's basis for judging the session ended -- even while the
-    // hook went on to succeed and write a fresh token into the store.
+    // hook goes on to succeed and write a fresh token into the store.
     // The initiator's abort must detach only the initiator: the joined
-    // request is bounded by its own (live) signal, so it must receive
-    // the hook's real outcome -- a retry with the fresh token, and
+    // request is bounded by its own (live) signal, so it receives the
+    // hook's real outcome -- a retry with the fresh token, and
     // success.
     const store = createMemoryAccessTokenStore()
     store.set('stale-token')
@@ -1778,10 +1775,10 @@ describe('caller cancellation', () => {
     await initiator
     // The already-joined request heard nothing of the initiator's
     // abort: its own signal never fired, so it gets the hook's real
-    // outcome and its retry with the fresh token succeeds. (Before the
-    // fix the initiator's abort settled the shared round as a failed
-    // refresh, so the joiner was told the refresh failed and this
-    // rejected with an auth:true ApiError instead.)
+    // outcome and its retry with the fresh token succeeds. (An
+    // initiator abort that settled the shared round as a failed
+    // refresh would tell the joiner the refresh failed and this would
+    // reject with an auth:true ApiError instead.)
     await expect(joiner).resolves.toEqual({ notes: ['two'] })
     expect(recorded(standin, 2).headers.get('authorization')).toBe(
       'Bearer fresh-token',
@@ -1810,13 +1807,13 @@ describe('caller cancellation', () => {
     // the body (the stream's pull has been requested).
     await waitForReadStart(body)
     // The first pull -- waitForReadStart's signal -- can fire while the
-    // request is still settling its fetch, and an abort at that moment
-    // is answered by the fetch path that both the fixed and the
-    // pre-fix code share. Flush the whole microtask chain so the
-    // request genuinely settles and suspends on the stalled body read:
-    // an abort then lands mid-read, where the fix's trigger is the
-    // only thing that answers it. (The pre-fix code waited on the
-    // never-settling stream with no abort wiring and hung.)
+    // request is still settling its fetch; an abort at that moment is
+    // answered by the ordinary fetch rejection. Flush the whole
+    // microtask chain so the request genuinely settles and suspends on
+    // the stalled body read: an abort then lands mid-read, where the
+    // body-read abort trigger is the only thing that answers it.
+    // (Without the trigger the read waits on the never-settling stream
+    // with no abort wiring and hangs.)
     for (let i = 0; i < 2000; i += 1) {
       await Promise.resolve()
     }
@@ -1845,13 +1842,13 @@ describe('caller cancellation', () => {
     // the body (the stream's pull has been requested).
     await waitForReadStart(body)
     // The first pull -- waitForReadStart's signal -- can fire while the
-    // request is still settling its fetch, and an abort at that moment
-    // is answered by the fetch path that both the fixed and the
-    // pre-fix code share. Flush the whole microtask chain so the
-    // request genuinely settles and suspends on the stalled body read:
-    // an abort then lands mid-read, where the fix's trigger is the
-    // only thing that answers it. (The pre-fix code waited on the
-    // never-settling stream with no abort wiring and hung.)
+    // request is still settling its fetch; an abort at that moment is
+    // answered by the ordinary fetch rejection. Flush the whole
+    // microtask chain so the request genuinely settles and suspends on
+    // the stalled body read: an abort then lands mid-read, where the
+    // body-read abort trigger is the only thing that answers it.
+    // (Without the trigger the read waits on the never-settling stream
+    // with no abort wiring and hangs.)
     for (let i = 0; i < 2000; i += 1) {
       await Promise.resolve()
     }
@@ -1865,9 +1862,9 @@ describe('caller cancellation', () => {
     // The backoff sleep races the caller's signal: an abort landing in
     // the middle of a 2s Retry-After backoff rejects the request raw
     // on the next microtask -- it never sits out the remaining delay,
-    // and no retry fires for the cancelled caller. (Before the fix the
-    // sleep ignored the signal: with the fake clock never advanced the
-    // promise was still pending at the assertion point below.)
+    // and no retry fires for the cancelled caller. (A sleep that
+    // ignored the signal would leave the promise still pending at the
+    // assertion point below, with the fake clock never advanced.)
     vi.useFakeTimers()
     try {
       const standin = scriptedStandin(

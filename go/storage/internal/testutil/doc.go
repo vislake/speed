@@ -1,8 +1,8 @@
 // Package testutil holds the test helpers storage's own test files share.
 //
 // It exists because Go's _test.go files are not importable across files in
-// other packages, so anything more than one test file needs has to live in a
-// regular .go file of its own package (backend coding standard, section 13).
+// other packages, so anything more than one test file needs has to live in
+// a regular .go file of its own package.
 // Being under internal/, it is reachable only from within the storage module
 // and never lands in a consumer's build.
 //

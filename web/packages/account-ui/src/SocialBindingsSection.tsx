@@ -44,8 +44,7 @@
  * SocialProviderConfig are copied here, shaped identically to auth-ui's
  * own definitions, and must be kept in sync with them -- the authn spec
  * is the shared source of truth for the provider set, and a social
- * channel added to the spec lands in both packages' copies in the same
- * round.
+ * channel added to the spec lands in both packages' copies together.
  *
  * An unresolved load -- the first load in flight, or parked by
  * react-query's default networkMode 'online' while the device is

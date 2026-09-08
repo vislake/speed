@@ -16,9 +16,9 @@ import (
 	"github.com/vislake/speed/go/ratelimit"
 )
 
-// defaultShareExpiry is the expiry rule 2
-// (docs/internal/07-platform-services.md's "default expiry" rule) names
-// outright for the UNSPECIFIED default: 30 days, used whenever a caller
+// defaultShareExpiry is the expiry the module's default-expiry rule (see
+// doc.go) names outright for the UNSPECIFIED default: 30 days, used
+// whenever a caller
 // leaves CreateParams.ExpiresAt nil and no TenantConfigReader is wired, or
 // the wired one reports the tenant has configured none. It is also this
 // module's ConfigDefaultExpiry config item's own declared default
@@ -35,10 +35,10 @@ import (
 const defaultShareExpiry = 30 * 24 * time.Hour
 
 // MaxExplicitShareLifetime is the module's ceiling on a caller-supplied
-// EXPLICIT ExpiresAt -- the "never-expiring in disguise" arm of rule 2
-// (docs/internal/07-platform-services.md's "default expiry" rule): an
-// explicit expiresAt of 9999-12-31 must not smuggle a never-expiring link
-// past CreateParams.Forever's refusal, so resolveExpiry refuses an explicit
+// EXPLICIT ExpiresAt -- the never-expiring-in-disguise arm of the
+// module's no-never-expiring rule (see doc.go): an explicit expiresAt of
+// 9999-12-31 must not smuggle a never-expiring link past
+// CreateParams.Forever's refusal, so resolveExpiry refuses an explicit
 // ExpiresAt further out than this with ErrExpiryOutOfRange.
 //
 // For a tenant that has configured a default longer than this (through the
@@ -77,39 +77,38 @@ const maxRecordViewAttempts = 8
 // ShareRepository.tryReserveView's takeover clause, tryRecordView's
 // stale-or-free clause, and Service.Sweep's reservation arm). It is the
 // reservation half of this module's "a view is spent on delivery, never on
-// authorization" discipline (AGENTS.md's "Serving an access" section): a
-// serve resolves its own reservation the moment the delivery succeeds
-// (confirmAccessView) or fails (refundAccessView), so a reservation that
-// outlives this timeout is by construction one whose serve died without
-// resolving it -- the module's standing model for "interrupted", exactly
-// as go/storage treats an uploading row whose upload window closed, and
-// go/billing treats a pending reservation its caller never resolves.
+// authorization" discipline: a serve resolves its own reservation the
+// moment the delivery succeeds (confirmAccessView) or fails
+// (refundAccessView), so a reservation that outlives this timeout is by
+// construction one whose serve died without resolving it -- the module's
+// standing model for "interrupted", exactly as go/storage treats an
+// uploading row whose upload window closed, and go/billing treats a
+// pending reservation its caller never resolves.
 //
 // The timeout must be far larger than any legitimate serve: a genuine
 // delivery (the resolver open plus the streamed response) takes seconds
 // for ordinary content and minutes for a large bundle over a slow link,
 // and a reservation older than the timeout may be taken over by a newer
-// fetch -- the accepted residual of any timeout-based convergence, recorded
-// in AGENTS.md's Known limitations (a serve so slow it outlives the
-// timeout and a second fetch arriving exactly then can both deliver, with
-// the ceiling still enforced at confirm time -- and, symmetrically, a
-// fully delivered serve whose confirm could not be recorded is held spent
-// only while its reservation stands, a persistent store outage outlasting
-// the timeout being the one shape that can still reopen it). 30 minutes
-// clears any realistic serve by an order of magnitude while keeping a
-// crashed serve's dead reservation from squatting on the share's last view
-// for long.
+// fetch -- the accepted residual of any timeout-based convergence (a serve
+// so slow it outlives the timeout and a second fetch arriving exactly
+// then can both deliver, with the ceiling still enforced at confirm time
+// -- and, symmetrically, a fully delivered serve whose confirm could not
+// be recorded is held spent only while its reservation stands, a
+// persistent store outage outlasting the timeout being the one shape that
+// can still reopen it). 30 minutes clears any realistic serve by an order
+// of magnitude while keeping a crashed serve's dead reservation from
+// squatting on the share's last view for long.
 const viewReservationTimeout = 30 * time.Minute
 
 // TenantConfigReader is the structurally-typed seam Service reads a
 // tenant's configured default share expiry through -- the same
 // no-import-edge shape go/org's FeatureGate and go/org's Scope use to reach
 // go/config-shaped or go/org-shaped behavior without an import in either
-// direction. A future host's adapter over *config.Service satisfies this
-// structurally; see AGENTS.md's "Tenant-configured default expiry" section
-// for why sharing declares the config item (module.go's
-// ConfigDefaultExpiry) but does not itself depend on go/config, and for the
-// honest statement that no host wires a TenantConfigReader yet.
+// direction. A host's adapter over *config.Service satisfies this
+// structurally (the reference app wires one, its sharingConfigReader);
+// sharing declares the config item (module.go's ConfigDefaultExpiry) but
+// never imports go/config itself, and without a wired reader Service falls
+// back to defaultShareExpiry.
 type TenantConfigReader interface {
 	// ShareDefaultExpiry returns tenant's configured default share expiry
 	// duration. ok is false when the tenant has configured none -- Service
@@ -131,10 +130,8 @@ type CreateParams struct {
 	ExpiresAt *time.Time
 
 	// Forever requests a share that never expires. Always refused with
-	// ErrExpiryRequired -- rule 2 (docs/internal/07-platform-services.md's
-	// "never-expiring links are not allowed" rule) is explicit that this is
-	// the most common source of data leaks and must never be silently
-	// allowed. The field
+	// ErrExpiryRequired -- never-expiring links are the most common source
+	// of data leaks and must never be silently allowed. The field
 	// exists, rather than simply having no way to ask, so a caller's
 	// deliberate attempt to bypass the default fails loudly and
 	// specifically instead of being reinterpreted as "use the default".
@@ -150,12 +147,9 @@ type CreateParams struct {
 	Password *string
 
 	// Sensitive marks the shared resource as carrying sensitive personal
-	// information -- rule 4 (docs/internal/07-platform-services.md's
-	// "sensitive resource sharing needs confirmation" rule). A
-	// caller-supplied flag, not a computed
-	// classification: this module deliberately builds no generic
-	// sensitivity-classification system, per the round's own scope
-	// boundary (AGENTS.md).
+	// information. A caller-supplied flag, not a computed classification:
+	// this module deliberately builds no generic sensitivity-classification
+	// system (see Share.Sensitive's field comment, model.go).
 	Sensitive bool
 }
 
@@ -250,19 +244,17 @@ func (s *Service) AccessLogs() *AccessLogRepository { return s.accessLogs }
 // per CreateResult's own doc comment.
 //
 // Create first checks the caller tenant's share-creation rate limit
-// (ratelimit.go's checkCreateRateLimit, ErrRateLimited on denial) -- the
-// round-2 answer to AGENTS.md's former "Create or Access has no rate
-// limiting" known limitation -- before any other validation runs, so a
-// tenant already over budget pays no further work for a request that was
-// never going through.
+// (ratelimit.go's checkCreateRateLimit, ErrRateLimited on denial) before
+// any other validation runs, so a tenant already over budget pays no
+// further work for a request that was never going through.
 //
-// Every one of rule 1's, rule 2's and rule 4's checks runs here, in this
-// order: ResourceRef must be non-empty (ErrResourceRefRequired); a
+// Every one of the module's mandatory checks runs here, in this order:
+// ResourceRef must be non-empty (ErrResourceRefRequired); a
 // never-expiring request is refused outright (ErrExpiryRequired,
 // CreateParams.Forever's own doc comment) before an expiry is ever
 // resolved; a nil ExpiresAt resolves through TenantConfigReader, falling
-// back to defaultShareExpiry, while an explicit ExpiresAt outside rule
-// 2's bounds -- not strictly in the future, or beyond the tenant's
+// back to defaultShareExpiry, while an explicit ExpiresAt outside the
+// allowed bounds -- not strictly in the future, or beyond the tenant's
 // operative explicit-expiry ceiling (MaxExplicitShareLifetime, raised to a
 // longer tenant-configured default) -- is refused with ErrExpiryOutOfRange
 // (resolveExpiry's own doc comment);
@@ -342,14 +334,13 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*CreateResult, er
 
 	if p.Sensitive {
 		if auditErr := s.emitSensitiveAudit(ctx, share); auditErr != nil {
-			// Per docs/internal/10-compliance-and-audit.md's rule that an
-			// audit-write failure "must alert, must not be silently
+			// An audit-write failure "must alert, must not be silently
 			// dropped": the share itself was already committed by this
 			// point, so a failure here must not turn an otherwise
 			// successful create into an error for the caller -- an
-			// Error-level structured log is what "alert" means at this
-			// milestone's scope, mirroring the reference app's
-			// recordNoteCreatedAudit's identical reasoning.
+			// Error-level structured log is what "alert" means here,
+			// mirroring the reference app's recordNoteCreatedAudit's
+			// identical reasoning.
 			observability.FromContext(ctx).Error("sensitive-share audit emit failed", "share_id", share.ID, "error", auditErr)
 		}
 	}
@@ -370,9 +361,10 @@ func (s *Service) Create(ctx context.Context, p CreateParams) (*CreateResult, er
 // (explicitExpiryCeiling's own doc comment: MaxExplicitShareLifetime,
 // raised to the tenant's configured default when that default is longer)
 // -- so an expiresAt of 9999-12-31 cannot bypass CreateParams.Forever's
-// refusal and create the effectively-never-expiring link rule 2 exists to
-// forbid, while a tenant whose own policy admits 90-day shares never
-// refuses a 45-day explicit request within that envelope.
+// refusal and create the effectively-never-expiring link the module's
+// no-never-expiring rule forbids, while a tenant whose own policy admits
+// 90-day shares never refuses a 45-day explicit request within that
+// envelope.
 func (s *Service) resolveExpiry(ctx context.Context, tenant pkgcore.TenantID, requested *time.Time) (time.Time, error) {
 	if requested != nil {
 		now := s.now()
@@ -431,11 +423,11 @@ func (s *Service) explicitExpiryCeiling(ctx context.Context, tenant pkgcore.Tena
 //
 // The declarative path is the right one here for the identical reason
 // examples/reference-app/internal/notes/handler.go's recordNoteCreatedAudit
-// documents: go/dbkit/AGENTS.md's "Audit trail collection" section records
-// that AuditBus must never point a persister at the same database a
-// dbkit.Repository[T] write's own open transaction is still writing to, or
-// the write-capture plugin's synchronous, same-goroutine publish deadlocks.
-// Calling audit.Emit here, AFTER s.shares.Create has already returned, means
+// documents: an AuditBus persister on the same database a
+// dbkit.Repository[T] write's own open transaction is still writing to
+// would deadlock the write-capture plugin's synchronous, same-goroutine
+// publish (dbkit's audit_capture.go records the hazard). Calling
+// audit.Emit here, AFTER s.shares.Create has already returned, means
 // Create's own transaction has already committed by the time this runs.
 func (s *Service) emitSensitiveAudit(ctx context.Context, share *Share) error {
 	if s.host == nil {
@@ -456,15 +448,10 @@ func (s *Service) emitSensitiveAudit(ctx context.Context, share *Share) error {
 }
 
 // Access resolves token into the share it names, for the caller's tenant
-// (read from ctx). See AGENTS.md's "Tenant resolution for an
-// unauthenticated viewer" section for a known, unresolved gap this leaves
-// for a genuinely anonymous external visitor: unlike
-// org.InvitationRepository's otherwise similar byTokenHash construction,
-// whose caller (org.InviteService.Accept) is already authenticated and
-// already tenant-resolved before it is called, this module's actual
-// intended caller holds no access token and therefore no tenant claim to
-// resolve ctx's tenant from -- this round does not solve that, and the
-// round that adds the HTTP surface must.
+// (read from ctx). A genuinely anonymous external visitor cannot use this
+// method: such a visitor holds no tenant claim to supply one. The
+// unauthenticated surface is Service.AccessPublic, which resolves the
+// tenant from the token alone and then re-enters this same implementation.
 //
 // Access records exactly one AccessLogEntry and publishes exactly one
 // EventShareAccessed on every path below that reaches a recognized token
@@ -483,24 +470,22 @@ func (s *Service) emitSensitiveAudit(ctx context.Context, share *Share) error {
 // (every other path) carry no share state, so they are written after the
 // decision as a plain guarded write.
 //
-// A failure to WRITE a log row is never swallowed into a Warn. Rule 4
-// (docs/internal/07-platform-services.md's "access needs no login, but
-// must leave a trail" rule) makes the trail the point of the whole
-// exercise, so an Access whose log row did not commit -- granted or
+// A failure to WRITE a log row is never swallowed into a Warn: the access
+// trail is the point of the whole exercise (doc.go's mandatory rules), so
+// an Access whose log row did not commit -- granted or
 // refused -- returns ErrInternal rather than answering as if the access
 // had been processed normally: the recordView store failures below already
 // surface as internal errors, and a log-write failure is the same class of
 // operational fault, one an operator must see in the error rate rather
 // than discover later by auditing a trail with holes in it. The event
-// publish stays best-effort (a Warn), as it always was: the event bus is
-// not the durable trail.
+// publish stays best-effort (a Warn): the event bus is not the durable
+// trail.
 //
 // Every refusal reason -- an unrecognized token hash, a revoked share, an
 // expired one, a view-exhausted one, a missing password, or a wrong one --
-// answers with the identical ErrNotAccessible and nothing else, per rule 5
-// (docs/internal/07-platform-services.md's "the share surface must leak
-// nothing about the tenant" rule): an outside caller who cannot tell these
-// apart learns nothing by probing, including by timing the response --
+// answers with the identical ErrNotAccessible and nothing else: an
+// outside caller who cannot tell these apart learns nothing by probing,
+// including by timing the response --
 // every path below that would otherwise skip password verification
 // entirely instead burns an equivalent argon2id check against a dummy hash
 // (see burnSharePasswordCheck), so a caller cannot use response latency to
@@ -511,11 +496,10 @@ func (s *Service) emitSensitiveAudit(ctx context.Context, share *Share) error {
 // the database at all, that is not a refusal reason an outside caller
 // produced -- it is this module's own infrastructure failing, and hiding
 // it behind a 404-shaped ErrNotAccessible would erase the operational
-// signal (and, until this round, did so without even a log line). Those
-// paths log an Error and return the internal error, exactly as the
-// pre-existing recordView error path always did; rule 5 protects the
-// reasons an ACCESS can be refused, never an operator's ability to see
-// that the module itself is broken.
+// signal. Those paths log an Error and return the internal error; the
+// outward-identical-answer rule protects the reasons an ACCESS can be
+// refused, never an operator's ability to see that the module itself is
+// broken.
 //
 // A granted access is recorded -- through recordView's compare-and-swap
 // retry loop for a limited share, or its single atomic increment for an
@@ -578,23 +562,21 @@ func (s *Service) accessAuthorized(ctx context.Context, token string, p AccessPa
 	return result, nil
 }
 
-// AccessPublic is Access's genuinely unauthenticated entry point: the round-2
-// answer to AGENTS.md's former "Tenant resolution for an unauthenticated
-// viewer" gap. A caller here holds no tenant claim at all -- that is the
-// whole point of this method existing separately from Access -- so ctx is
-// not expected to carry one; AccessPublic resolves the tenant itself, from
-// the token alone, before anything else runs.
+// AccessPublic is Access's genuinely unauthenticated entry point. A caller
+// here holds no tenant claim at all -- that is the whole point of this
+// method existing separately from Access -- so ctx is not expected to
+// carry one; AccessPublic resolves the tenant itself, from the token
+// alone, before anything else runs.
 //
 // It does exactly two things and nothing more: resolve tenant via
 // repository.go's tenantForTokenHash (the narrow, deliberately
 // non-tenant-scoped lookup that method's own doc comment justifies in
 // full), then re-enter Access's own implementation (accessAuthorized) with
 // that tenant attached to ctx via pkgcore.WithTenant -- every one of
-// Access's own guarantees (rule 3's immediate revocation, rule 4's access
-// logging, rule 5's outward-identical answers, the constant-time password
-// check) therefore holds for an anonymous caller exactly as they already
-// hold for an authenticated one, because this method does not reimplement
-// any of them.
+// Access's own guarantees (immediate revocation, access logging,
+// outward-identical answers, the constant-time password check) therefore
+// holds for an anonymous caller exactly as it holds for an authenticated
+// one, because this method does not reimplement any of them.
 //
 // Before Access is ever reached, this method checks the anonymous surface's
 // per-IP rate-limit budget (ratelimit.go's checkAccessIPLimit, checked
@@ -604,41 +586,40 @@ func (s *Service) accessAuthorized(ctx context.Context, token string, p AccessPa
 // and nothing downstream could do with one anyway.
 //
 // The surface's per-token wrong-guess budget is deliberately NOT checked
-// here, ahead of the password comparison: the rate-limit-timing correction
-// (ratelimit.go's checkAccessTokenWrongGuess, its own doc comment) moved
-// that dimension's consumption into authorizeAttempt, after a presented
-// credential has been judged wrong, so a leaked-link holder who exhausts
-// the budget with wrong guesses can never hold the legitimate
-// password-holder's correct attempt hostage -- that attempt is never judged
-// wrong, never pays, and is never refused. Because the judgment runs in the
-// shared authorizeAttempt, whose other callers are the host's own
-// authenticated Access calls, AccessPublic marks its re-entry with
-// chargeTokenBudget true (accessAuthorized) so that only the genuinely
-// unauthenticated surface's wrong guesses pay the per-token budget.
+// here, ahead of the password comparison: that dimension's consumption
+// lives in authorizeAttempt (ratelimit.go's checkAccessTokenWrongGuess,
+// its own doc comment), after a presented credential has been judged
+// wrong, so a leaked-link holder who exhausts the budget with wrong
+// guesses can never hold the legitimate password-holder's correct attempt
+// hostage -- that attempt is never judged wrong, never pays, and is never
+// refused. Because the judgment runs in the shared authorizeAttempt, whose
+// other callers are the host's own authenticated Access calls, AccessPublic
+// marks its re-entry with chargeTokenBudget true (accessAuthorized) so
+// that only the genuinely unauthenticated surface's wrong guesses pay the
+// per-token budget.
 //
 // The unrecognized-token refusal is deliberately CHEAP: it pays only the
 // rate-limit check and the token-index lookup, never the argon2id burn the
-// recognized-token refusal paths inside Access pay. Rule 5's
-// constant-time equalization protects the reasons a REFUSAL of a
-// recognized share can be produced (so a prober cannot learn, by latency,
-// which refusal reason applied, or whether a recognized token names a
-// password-protected share); a scanner spraying random tokens never
-// reaches any of those paths -- its guesses fail the token-index lookup
-// first -- so burning a full ~19 MiB argon2id check on every one of them
-// (burnSharePasswordCheck against the dummy hash) bought nothing rule 5
-// needs and handed the scanner a memory- and CPU-amplification primitive
-// instead: per-token rate limits cannot bind a scanner, since every
-// guessed token hashes differently, leaving the per-IP budget as the only
-// cap on an attack that cost the platform 19 MiB per request. The cost of
-// that decision is that an unrecognized token is now faster to refuse than
-// a recognized-but-refused one -- but that timing delta was already
-// documented as outside rule 5's scope (tenantForTokenHash's own doc
+// recognized-token refusal paths inside Access pay. The
+// outward-identical-answer rule's constant-time equalization protects the
+// reasons a REFUSAL of a recognized share can be produced (so a prober
+// cannot learn, by latency, which refusal reason applied, or whether a
+// recognized token names a password-protected share); a scanner spraying
+// random tokens never reaches any of those paths -- its guesses fail the
+// token-index lookup first -- so burning a full argon2id check on every
+// one of them (burnSharePasswordCheck against the dummy hash) buys
+// nothing that rule needs and hands the scanner a memory- and
+// CPU-amplification primitive instead: per-token rate limits cannot bind a
+// scanner, since every guessed token hashes differently, leaving the
+// per-IP budget as the only cap on such an attack. The cost of that
+// decision is that an unrecognized token is refused faster than a
+// recognized-but-refused one -- but that timing delta is outside the
+// outward-identical-answer rule's scope (tenantForTokenHash's own doc
 // comment), because it discloses only "does this token exist at all", a
 // fact any valid token's own successful use already reveals to whoever
 // holds it, never which of the hidden refusal reasons applied. A token
-// that DOES resolve here re-enters the ordinary, unchanged Access path,
-// where every recognized-token refusal still pays its argon2id check
-// exactly as before.
+// that resolves here re-enters the ordinary Access path, where every
+// recognized-token refusal pays its argon2id check.
 func (s *Service) AccessPublic(ctx context.Context, token string, p AccessParams) (*Share, error) {
 	tenant, err := s.accessPublicPrelude(ctx, token, p)
 	if err != nil {
@@ -660,12 +641,12 @@ func (s *Service) AccessPublic(ctx context.Context, token string, p AccessParams
 // refuse exactly alike.
 //
 // The surface's per-token wrong-guess budget deliberately has NO presence
-// here: consumption moved after the credential judgment that happens later,
-// inside authorizeAttempt (ratelimit.go's checkAccessTokenWrongGuess and
+// here: consumption happens later, inside authorizeAttempt after the
+// credential judgment (ratelimit.go's checkAccessTokenWrongGuess and
 // AccessPublic's own doc comment have the full argument -- a budget spent
 // before the password comparison would let a leaked-link holder deny the
-// legitimate password-holder's correct attempt with 429s, the defect the
-// after-judgment shape removes).
+// legitimate password-holder's correct attempt with 429s, the hostage
+// defect the after-judgment shape avoids).
 func (s *Service) accessPublicPrelude(ctx context.Context, token string, p AccessParams) (pkgcore.TenantID, error) {
 	if err := s.checkAccessIPLimit(ctx, p.IP); err != nil {
 		return "", err
@@ -715,9 +696,9 @@ func (s *Service) authorizePublicAccess(ctx context.Context, token string, p Acc
 // recognized token can take, and the share's own current liveness
 // (Share.isLive: not revoked, not expired, not exhausted). A refusal settles
 // the attempt before it is returned, exactly as Access's refusal paths
-// always settled one: one denied log row and one EventShareAccessed with
+// settle one: one denied log row and one EventShareAccessed with
 // Granted false, with a log-row write failure surfacing as the internal
-// error rule 4 demands rather than a refusal that leaves no trail. An
+// error rather than a refusal that leaves no trail. An
 // unrecognized token is the one refusal with no settle at all -- there is no
 // Share row to attribute an entry to (Access's own doc comment).
 //
@@ -728,20 +709,21 @@ func (s *Service) authorizePublicAccess(ctx context.Context, token string, p Acc
 // wrong-credential refusal of a password-protected share, a true flag
 // additionally charges the share token's per-token wrong-guess budget
 // (ratelimit.go's checkAccessTokenWrongGuess), settling the refusal first
-// -- one denied row and one denied event, exactly as rule 4 demands of
-// every recognized-token refusal -- and then answering ErrRateLimited
+// -- one denied row and one denied event, exactly as the module's
+// every-access-is-logged rule demands of every recognized-token refusal --
+// and then answering ErrRateLimited
 // instead of ErrNotAccessible once the budget is spent. Charging at this
 // point, after the credential comparison judged the attempt wrong rather
 // than before it ran, is what makes the budget unable to hold the
 // legitimate password-holder's correct attempt hostage: that attempt is
 // never judged wrong, never reaches the charge, and is never refused by it
-// (the rate-limit-timing correction; checkAccessTokenWrongGuess's own doc
-// comment has the full argument, the same one go/authn already applied to
+// (checkAccessTokenWrongGuess's own doc
+// comment has the full argument, the same one go/authn applies to
 // its own per-target wrong-guess dimension).
 //
 // That substitution -- 429 where every other refusal this method can
 // produce answers ErrNotAccessible -- is itself a recognized-token-path
-// disclosure in the scope of rule 5's outward-identical answers, and it is
+// disclosure in the scope of the outward-identical-answer rule, and it is
 // recorded here on the mechanism's own site rather than claimed by that
 // guarantee. Only a caller presenting a token that resolves to a
 // password-protected share ever reaches the charge, so only such a caller
@@ -760,8 +742,9 @@ func (s *Service) authorizePublicAccess(ctx context.Context, token string, p Acc
 // would have no way to know further guessing is futile until the window
 // recovers -- the information the 429's retry_after_seconds param exists
 // to carry -- while every futile attempt would still settle one denied
-// row and one denied event, rule 4's own cost, against a budget that
-// cannot admit it. The outward identity of every remaining answer is
+// row and one denied event, the access-log rule's own cost, against a
+// budget that cannot admit it. The outward identity of every remaining
+// answer is
 // preserved: unrecognized tokens, under-budget wrong credentials, and
 // revoked, expired and view-exhausted shares all answer the identical
 // ErrNotAccessible, and the legitimate password-holder is never the party
@@ -922,8 +905,8 @@ func (s *Service) settleGranted(ctx context.Context, share *Share, p AccessParam
 }
 
 // settleDenied records one access attempt's denied outcome: exactly one
-// denied log row -- a write failure returns the ErrInternal rule 4 demands
-// rather than a refusal that leaves no trail -- and exactly one
+// denied log row -- a write failure returns ErrInternal rather than a
+// refusal that leaves no trail -- and exactly one
 // EventShareAccessed with Granted false, published best-effort AFTER the row
 // attempt, so a log-write failure never silences the event either (the event
 // bus is not the durable trail). ctx must carry the share's tenant (Access
@@ -958,10 +941,10 @@ func (s *Service) publishAccessEvent(ctx context.Context, tenant pkgcore.TenantI
 // the resource, or the content stream dying partway through the response --
 // as one denied log row and one denied event, consuming nothing (the share
 // keeps every view it had). The share's tenant comes from its own row, so
-// the route's bare request context suffices. A log-write failure returns the
-// ErrInternal rule 4 demands; the route then answers that instead of the
-// underlying serve failure, exactly as Access refuses rather than answering
-// when its own denied row cannot be written.
+// the route's bare request context suffices. A log-write failure returns
+// ErrInternal; the route then answers that instead of the underlying serve
+// failure, exactly as Access refuses rather than answering when its own
+// denied row cannot be written.
 func (s *Service) settleAccessDenied(ctx context.Context, share *Share, p AccessParams) error {
 	tenant := pkgcore.TenantID(share.GetTenantID())
 	return s.settleDenied(pkgcore.WithTenant(ctx, tenant), tenant, share, p)
@@ -993,9 +976,8 @@ func (s *Service) settleAccessGranted(ctx context.Context, share *Share, p Acces
 // right now is refused by this call -- the identical outward answer a
 // share that had simply exhausted its views answers with -- instead of
 // being authorized, delivered in full, and only then losing the settlement
-// race the pre-ee20d37 flow lost at the front of the request and the
-// post-ee20d37 flow can still lose when the post-delivery settle write
-// fails (AGENTS.md's "Serving an access" section has the full reasoning).
+// race when the post-delivery settle write fails (confirmAccessView's own
+// doc comment has the full reasoning).
 //
 // An unlimited share (MaxViews nil) is returned from unchanged -- no
 // reservation, and no way to be refused for being in use.
@@ -1004,7 +986,8 @@ func (s *Service) settleAccessGranted(ctx context.Context, share *Share, p Acces
 // denied event before they return, exactly as authorizeAttempt settles its
 // own refusals: a lost reservation means the share was revoked, expired,
 // exhausted or taken by a concurrent serve between the authorization and
-// this write (all refused identically per rule 5), and a store failure on
+// this write (all refused with the identical outward answer), and a store
+// failure on
 // the reservation itself attempts the same denied settle before surfacing
 // the internal error -- nothing has been delivered either way, so the
 // caller's answer is the whole story.
@@ -1037,8 +1020,8 @@ func (s *Service) reserveAccessView(ctx context.Context, share *Share, p AccessP
 // the resolver's own failure, a stream dying partway -- so the share is
 // left exactly as it was: the reservation is returned and no view is spent,
 // and a later fetch of a MaxViews=1 share can still succeed (the
-// delivery-failure half of ee20d37's direction, preserved under the
-// reservation shape). It is the route's partner to settleAccessDenied,
+// delivery-failure direction: bytes never delivered never spend the view).
+// It is the route's partner to settleAccessDenied,
 // which logs the same failed serve as denied. Idempotent under the guarded
 // write: a reservation already resolved (or cleared by a revoke) makes the
 // refund affect zero rows and report success. Only a MaxViews-limited share
@@ -1088,7 +1071,7 @@ func (s *Service) refundAccessView(ctx context.Context, share *Share) error {
 // A share that ceased to be live while the delivery was in flight (revoked
 // or expired mid-stream) refuses the confirm at its WHERE clause; the serve
 // is then settled as denied and the reservation released -- the same
-// settle-time liveness semantics ee20d37 established for its own
+// settle-time liveness semantics settleGranted applies to its own
 // post-delivery record. The response has already been committed by the time
 // this runs, so a returned error can only be logged, never answered.
 func (s *Service) confirmAccessView(ctx context.Context, share *Share, p AccessParams) error {
@@ -1240,7 +1223,7 @@ func (s *Service) recordView(ctx context.Context, share *Share, now time.Time, g
 	// Exhausted every retry against genuine, sustained contention -- treat
 	// as a refusal rather than looping forever; a real deployment racing
 	// this many concurrent viewers on one limited share within one CAS
-	// window is not a case this round optimizes for.
+	// window is not a case this module optimizes for.
 	return current, false, nil
 }
 
@@ -1268,8 +1251,8 @@ func (s *Service) accessLogEntry(tenant pkgcore.TenantID, shareID, outcome strin
 // writeAccessLog persists one already-built access log row and returns an
 // internal error when the row could not be written -- never swallowed:
 // Access treats a log-write failure as a failed call (see Access's own doc
-// comment for the rule-4 reasoning), since an access that leaves no trail
-// is exactly the failure mode rule 4 exists to forbid.
+// comment), since an access that leaves no trail is exactly the failure
+// mode the module's mandatory access-log rule forbids.
 //
 // The write runs through AccessLogRepository.createWithRetry -- the same
 // withTxRetry envelope this module's guarded writes run under -- so a
@@ -1296,7 +1279,8 @@ func (s *Service) writeAccessLog(ctx context.Context, entry *AccessLogEntry) err
 // outright (SQL error 22021). A caller-controlled User-Agent or Referer
 // can carry either hazard -- HTTP headers are free-form bytes -- and either
 // one failing the INSERT would make the whole access leave no trail (the
-// exact failure rule 4 exists to forbid), which is why the value is made
+// exact failure the mandatory access-log rule forbids), which is why the
+// value is made
 // safe HERE, at the write boundary, rather than relying on the database to
 // reject it after the fact. Invalid bytes are rendered as the Unicode
 // replacement character, never silently dropped (dropping them could
@@ -1314,12 +1298,10 @@ func truncateAccessLogValue(v string, maxRunes int) string {
 }
 
 // Revoke withdraws share immediately: the very next Access call against it
-// refuses with ErrNotAccessible, per rule 3
-// (docs/internal/07-platform-services.md's "revocation takes effect
-// immediately" rule) -- there is no
-// cache anywhere on this module's own side to invalidate, so this method
-// need do nothing beyond persisting RevokedAt. Revoking an already-revoked
-// share is idempotent and reports success.
+// refuses with ErrNotAccessible -- there is no cache anywhere on this
+// module's own side to invalidate, so this method need do nothing beyond
+// persisting RevokedAt. Revoking an already-revoked share is idempotent
+// and reports success.
 //
 // The RevokedAt write is a narrow, guarded UPDATE (ShareRepository's
 // markRevoked), never a whole-row write-back of the Share read above:
@@ -1332,8 +1314,7 @@ func truncateAccessLogValue(v string, maxRunes int) string {
 // actual transition -- only by the caller whose guarded update was the one
 // that set RevokedAt -- so two racing Revoke calls never announce one
 // revocation twice; a loser (or a sequential second revoke, caught by the
-// pre-read below) publishes nothing, exactly as the pre-existing
-// already-revoked early return always did.
+// pre-read below) publishes nothing.
 func (s *Service) Revoke(ctx context.Context, shareID string) error {
 	tenant, err := pkgcore.MustTenantFromContext(ctx)
 	if err != nil {
@@ -1422,12 +1403,10 @@ func (s *Service) List(ctx context.Context, limit int, beforeID string) ([]Share
 
 // ListAccessLog returns every recorded access attempt against the caller
 // tenant's share shareID, newest first -- the owner-facing "who viewed
-// this and how many times" answer rule 4
-// (docs/internal/07-platform-services.md's "access needs no login, but
-// must leave a trail" rule)
-// requires. It first confirms the share exists in the caller's tenant
-// (ErrShareNotFound otherwise), so a caller cannot learn anything about
-// another tenant's share id by probing this method either.
+// this and how many times" answer the module's mandatory access-log rule
+// requires (doc.go). It first confirms the share exists in the caller's
+// tenant (ErrShareNotFound otherwise), so a caller cannot learn anything
+// about another tenant's share id by probing this method either.
 func (s *Service) ListAccessLog(ctx context.Context, shareID string) ([]AccessLogEntry, error) {
 	if _, err := s.Get(ctx, shareID); err != nil {
 		return nil, err

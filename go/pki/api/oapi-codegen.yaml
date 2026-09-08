@@ -1,9 +1,8 @@
 # Generator configuration for pki's OpenAPI fragment (openapi.yaml in this
-# directory, per docs/internal/21-api-contract.md's module-asset
-# convention: every module keeps its spec at <module>/api/openapi.yaml).
-# Mirrors go/storage/api/oapi-codegen.yaml exactly in shape -- see that
-# file's own comment for the full rationale; this one records only what is
-# pki-specific.
+# directory, per the module-asset convention every module follows:
+# <module>/api/openapi.yaml). Mirrors go/storage/api/oapi-codegen.yaml
+# exactly in shape -- see that file's own comment for the full rationale;
+# this one records only what is pki-specific.
 #
 # The module's generated surface is regenerated with oapi-codegen v2.8.0,
 # pinned at exactly that version in the two commands that must move

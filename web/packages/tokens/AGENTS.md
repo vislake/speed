@@ -25,8 +25,8 @@ no React bindings and no stylesheet output in this package, by design.
   (the zero-runtime-dependency rule above is about what ships, and nothing
   here ships). The reference is never an in-tree copy of the expected
   values: a copied expectation can only agree with the tokens it was
-  copied from. When an MUI upgrade changes those defaults, the test
-  failure here tells the adapter round exactly what to re-decide. Never
+  copied from. When an MUI upgrade changes those defaults, the test failure
+  here names exactly what to re-decide. Never
   "fix" the test by loosening it; update the parity decision deliberately.
   `shape.borderRadius` is the recorded exception: tokens ship 8 where MUI
   defaults to 4, and the deviation is pinned as one (the test fails if

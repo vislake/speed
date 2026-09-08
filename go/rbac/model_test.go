@@ -73,7 +73,7 @@ func TestRoleBinding_IsTenantWide(t *testing.T) {
 
 // TestModels_ColumnsMatchTheMigrations is the model/migration drift gate.
 //
-// There is no AutoMigrate in this codebase (root CLAUDE.md), so nothing at
+// Without AutoMigrate, nothing at
 // run time reconciles a struct field with the column a versioned migration
 // actually created: a renamed field, a forgotten column, or a column added
 // to only one of the two dialect files fails as a confusing SQL error at
@@ -81,8 +81,7 @@ func TestRoleBinding_IsTenantWide(t *testing.T) {
 // of each model against the columns EVERY migration file of a dialect
 // contributes to that table, in filename order -- not just 0001's CREATE
 // TABLE -- because 0002_add_soft_delete.sql grows rbac_role_bindings by two
-// columns through ALTER TABLE ADD COLUMN rather than a fresh CREATE TABLE,
-// exactly as go/org's own soft-delete round grew org_nodes and memberships.
+// columns through ALTER TABLE ADD COLUMN rather than a fresh CREATE TABLE.
 func TestModels_ColumnsMatchTheMigrations(t *testing.T) {
 	models := map[string]any{
 		"rbac_roles":            &Role{},
@@ -143,8 +142,8 @@ func sortedMigrationNames(t *testing.T, dialect string) []string {
 }
 
 // TestMigrations_ForbidDialectSpecificConstructs pins the dual-dialect
-// rules of the backend coding standard §5 on this module's own SQL, so a
-// later migration cannot quietly introduce a construct that only one of
+// rules on this module's own SQL, so a
+// migration cannot quietly introduce a construct that only one of
 // the two supported databases understands.
 func TestMigrations_ForbidDialectSpecificConstructs(t *testing.T) {
 	banned := []string{"gen_random_uuid", "now()", "jsonb", "serial", "text[]", "uuid_generate"}
@@ -172,14 +171,14 @@ func TestMigrations_ForbidDialectSpecificConstructs(t *testing.T) {
 }
 
 // TestMigrations_TenantIDIsLeftmostInEveryIndex pins the composite-index
-// rule of the backend coding standard §5: an index whose leading column is
+// rule: an index whose leading column is
 // not tenant_id cannot serve a tenant-filtered query, which is the only
 // kind of query this module ever issues.
 //
 // It scans EVERY migration file of a dialect, not just 0001's, so the
 // partial index 0002_add_soft_delete.sql re-creates
-// (uq_rbac_role_bindings_tenant_user_role_node, now WHERE deleted_at IS
-// NULL) is checked exactly like every index 0001 declares from scratch.
+// (uq_rbac_role_bindings_tenant_user_role_node, scoped WHERE deleted_at
+// IS NULL) is checked exactly like every index 0001 declares from scratch.
 func TestMigrations_TenantIDIsLeftmostInEveryIndex(t *testing.T) {
 	indexRe := regexp.MustCompile(`(?is)CREATE\s+(?:UNIQUE\s+)?INDEX\s+(\S+)\s+ON\s+\S+\s*\(([^)]*)\)`)
 	for _, dialect := range []string{"postgres", "sqlite"} {

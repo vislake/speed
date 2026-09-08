@@ -7,33 +7,33 @@
  *
  * The gate is the list query itself: the server's rbac layer answers a
  * caller without notes:read with 403 rbac.permission_denied, so the
- * query is the real permission fetch -- the router-level RouteGuard
- * behind real fetches that the auth-ui census defers to this shell.
- * The classification is error-state first, because the error state is
- * where every failure of this read lands, whatever it carried: only
- * the rbac read gate's own refusal (its code, rbac.permission_denied)
- * is an authorization fact and maps to 'denied'; every other failed
- * read -- a coded transport answer or server 5xx, or a refusal that
- * carries no code at all (a raw AbortError, an error thrown before
- * the api-client could normalize it) -- is a load failure and renders
- * the ui-kit error empty state in its own suit, never the
- * no-permission one (reference-app-web.md P2-2, P2-rnweb-1).
- * Whichever suit, a failed read means no surface, whether or not an
- * earlier read on the very same query already left rows in the cache:
- * tanstack query v5 never clears a query's `data` on a failed refetch
- * (the last successful answer stays in the cache while the retry
- * runs), so classifying by the error's code alone -- this view's
- * earlier shape -- let a codeless refusal fall through to the stale
- * rows (the code check found none, `data` was still defined, the gate
- * read 'allowed') or, with no data ever served, park at 'pending'
- * forever instead of rendering a failure. Checking `isError` ahead of
- * anything else closes both: a served list is 'allowed' only when no
- * error stands, and no answer at all yet is 'pending'
- * (reference-app-web.md P1-1 covers the coded-refusal half of the same
- * ordering). The create form lives inside the allowed branch, and a
- * refused create (a caller without notes:write answers the same 403)
- * stays on the page with its code text -- the write gate is probed by
- * the mutation, never pre-empted client-side.
+ * query is the real permission fetch behind the router-level
+ * RouteGuard. The classification is error-state first, because the
+ * error state is where every failure of this read lands, whatever it
+ * carried: only the rbac read gate's own refusal (its code,
+ * rbac.permission_denied) is an authorization fact and maps to
+ * 'denied'; every other failed read -- a coded transport answer or
+ * server 5xx, or a refusal that carries no code at all (a raw
+ * AbortError, an error thrown before the api-client could normalize
+ * it) -- is a load failure and renders the ui-kit error empty state in
+ * its own suit, never the no-permission one (a down server is not a
+ * permission problem, and a user told they are forbidden while the
+ * server is failing reads like a misconfiguration to the operator who
+ * must fix it). Whichever suit, a failed read means no surface,
+ * whether or not an earlier read on the very same query already left
+ * rows in the cache: tanstack query v5 never clears a query's `data`
+ * on a failed refetch (the last successful answer stays in the cache
+ * while the retry runs), so classifying by the error's code alone
+ * would let a codeless refusal fall through to the stale rows (the
+ * code check finds none, `data` is still defined, the gate reads
+ * 'allowed') or, with no data ever served, park at 'pending' forever
+ * instead of rendering a failure. Checking `isError` ahead of anything
+ * else closes both: a served list is 'allowed' only when no error
+ * stands, and no answer at all yet is 'pending'. The create form lives
+ * inside the allowed branch, and a refused create (a caller without
+ * notes:write answers the same 403) stays on the page with its code
+ * text -- the write gate is probed by the mutation, never pre-empted
+ * client-side.
  *
  * The list query key is tenant-namespaced per the frontend standard
  * (['tenant', tenantId, ...] over the generated bare key) so a tenant
@@ -151,18 +151,15 @@ export function NotesView(): ReactElement {
   const { t, i18n } = useTranslation(REFERENCE_APP_NAMESPACE)
   const queryClient = useQueryClient()
   // useCurrentTenant returns { tenantId } | null, not a bare string --
-  // the plain string is what the frontend standard's own tenant-
-  // namespaced-key convention documents (['tenant', tenantId, ...]) and
-  // what user-menu.tsx's tenant-switch eviction and main.tsx's session-
-  // end eviction both key their removeQueries call on, so it is
-  // extracted here rather than embedding the hook's object wholesale --
-  // a previous version of this view did exactly that, which meant
-  // every removeQueries call keyed on a bare tenant id could never
-  // structurally match the real cached key (['tenant', {tenantId},
-  // ...]) and silently evicted nothing (reference-app-web.md P1-1's
-  // root cause: without a real eviction, only a query key that itself
-  // changes -- as it does on an actual tenant switch -- ever produced
-  // fresh data; the same tenant reused across two sessions never did).
+  // the plain string is what the tenant-namespaced-key convention
+  // documents (['tenant', tenantId, ...]) and what user-menu.tsx's
+  // tenant-switch eviction and main.tsx's session-end eviction both key
+  // their removeQueries call on, so it is extracted here rather than
+  // embedding the hook's object: the object is a fresh reference per
+  // render, so a key or an eviction built from it could never
+  // structurally match the cached key and would evict nothing --
+  // without a real eviction, only a query key that itself changes (as
+  // it does on an actual tenant switch) would ever produce fresh data.
   const currentTenant = useCurrentTenant()
   const tenantId = currentTenant?.tenantId ?? null
 
@@ -208,11 +205,11 @@ export function NotesView(): ReactElement {
   // Only the rbac read gate's own refusal -- its code -- is an
   // authorization fact; every other failed read, coded or not, is a
   // load failure and renders the read-error state below, never the
-  // no-permission suit (reference-app-web.md P2-2: a down server is
-  // not a permission problem, and a user told they are forbidden while
-  // the server is failing reads like a misconfiguration to the
-  // operator who must fix it; P2-rnweb-1: a codeless refusal is a
-  // failure too, never stale rows and never a permanent pending).
+  // no-permission suit (a down server is not a permission problem, and
+  // a user told they are forbidden while the server is failing reads
+  // like a misconfiguration to the operator who must fix it; and a
+  // codeless refusal is a failure too -- never stale rows, never a
+  // permanent pending).
   const listReadFailed = notesQuery.isError
   const listErrorCode = listReadFailed
     ? apiErrorCodeOf(notesQuery.error)
@@ -222,11 +219,10 @@ export function NotesView(): ReactElement {
   // The gate: an error state fails it closed before anything else is
   // consulted -- even when the query still holds an earlier read's
   // data, since tanstack query v5 never clears `data` on a failed
-  // refetch (see the file header). Classifying on the error alone was
-  // the fail-open bug reference-app-web.md P1-1 and P2-rnweb-1 named:
-  // a refusal whose error carries no code slipped past the code check
-  // into the stale `data` (gate 'allowed') or, with no data ever
-  // served, parked at 'pending' -- so a served list is checked only
+  // refetch (see the file header). Classifying on the error alone would
+  // fail open: a refusal whose error carries no code slips past the
+  // code check into the stale `data` (gate 'allowed') or, with no data
+  // ever served, parks at 'pending' -- so a served list is checked only
   // once no error stands, and no answer at all yet is pending.
   const gateStatus: RouteGuardStatus = gateDenied
     ? 'denied'
@@ -307,9 +303,7 @@ export function NotesView(): ReactElement {
           h1: a person writing a patient record here must be able to
           see which clinic the record will land in from where they are
           writing, never only from the chrome (current-clinic.tsx has
-          the full story -- the acceptance story is a practice manager
-          who cannot tell whether a switch changed where their work
-          goes). */}
+          the full story). */}
       <CurrentClinicLine />
       <Typography
         variant="body1"

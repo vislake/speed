@@ -1,7 +1,7 @@
 /**
  * use-date-formatter.ts -- the one date-formatting hook the app's data
  * surfaces share (the cases list and detail; the notes surface formats
- * inline in its own view, predating this module). Created-at values
+ * inline in its own view, not through this hook). Created-at values
  * render through Intl in the surface language -- never hand-formatted
  * -- and an unparseable value renders as an empty string rather than
  * reaching Intl and throwing.

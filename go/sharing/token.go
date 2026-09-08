@@ -9,18 +9,17 @@ import (
 )
 
 // shareTokenBytes is the entropy of a share token: 32 bytes of crypto/rand,
-// 256 bits -- well above the 128-bit floor rule 1
-// (docs/internal/07-platform-services.md's "tokens must be high-entropy and
-// unenumerable" rule) sets, and the same strength org.invitationTokenBytes
-// uses for its own bearer credential.
+// 256 bits -- well above the 128-bit floor the module's mandatory
+// high-entropy rule sets (see doc.go), and the same strength
+// org.invitationTokenBytes uses for its own bearer credential.
 const shareTokenBytes = 32
 
 // newShareToken returns a fresh share token and its stored hash.
 //
 // The token is drawn from crypto/rand and nothing else -- never a sequential
 // id, never a hash of predictable input (a share id, a timestamp, a
-// resource ref) -- which is exactly what rule 1 requires: leaking one token
-// must not let an attacker derive any other. base64url encoding lets the
+// resource ref) -- so leaking one token cannot let an attacker derive any
+// other. base64url encoding lets the
 // token survive a URL path segment or query parameter without escaping; the
 // hash is hex so the stored column is a fixed 64 characters on both
 // dialects.

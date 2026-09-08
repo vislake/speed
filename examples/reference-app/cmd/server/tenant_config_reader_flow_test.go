@@ -1,9 +1,9 @@
 package main
 
 // tenant_config_reader_flow_test.go is the mandatory-first-consumer proof
-// this round closes go/sharing's and go/compliance's own honest "no live
+// the suite pins go/sharing's and go/compliance's own "no live
 // TenantConfigReader adapter over go/config" limitation with (each
-// module's own AGENTS.md, "Tenant-configured default expiry" / "Expiry,
+// module's own docs, "Tenant-configured default expiry" / "Expiry,
 // view limit and no password" sections): it drives the exact
 // sharingConfigReader/complianceConfigReader adapters server.go's real
 // buildServer wires (defined alongside orgFeatureGate) against a real
@@ -13,18 +13,18 @@ package main
 // itself uses -- proving both halves rule 2's own "N days if the tenant
 // has not configured one" phrasing promises: a tenant that DOES configure
 // one gets it, and a tenant that does not still gets the module's own
-// fixed default, unchanged from before this round.
+// fixed default when no tenant row overrides it.
 //
 // This does not go through the composed HTTP stack buildTestServer wires:
 // neither sharing.Service.Create nor compliance.ExportService.Export has
-// an owner-facing HTTP route yet (both modules' own AGENTS.md record this
-// as a known limitation unrelated to this round), so sharing_flow_test.go's
+// an owner-facing HTTP route yet (both modules record this
+// as a known limitation), so sharing_flow_test.go's
 // own secondSharingService already established the precedent of reaching
 // these two Service-level operations directly rather than through HTTP.
 // What this file adds beyond that precedent is wiring the SAME
 // sharingConfigReader/complianceConfigReader types production code uses,
 // rather than an unwired *sharing.Service/*compliance.Module, so what is
-// proven here is genuinely this round's own new code, not a stand-in for
+// proven here is the host adapters' own new code, not a stand-in for
 // it.
 
 import (
@@ -45,7 +45,7 @@ import (
 // tenantConfigReaderHarness is what
 // newTenantConfigReaderHarness hands back: a real, attached
 // *config.Service alongside the real *sharing.Service and *compliance.Module
-// wired against it through this round's own adapters -- everything a test
+// wired against it through the host adapters -- everything a test
 // needs to write a tenant's configured expiry and observe it actually
 // govern a real Create/Export call.
 type tenantConfigReaderHarness struct {
@@ -63,7 +63,7 @@ type tenantConfigReaderHarness struct {
 // pkgcore.NewKernel().Bootstrap call, then config.Module.Attach -- the
 // exact ordering buildServer itself uses (config's own *config.Service is
 // only produced strictly after Bootstrap returns), just trimmed to the
-// three modules this round's own adapters touch.
+// three modules the host adapters touch.
 func newTenantConfigReaderHarness(t *testing.T) tenantConfigReaderHarness {
 	t.Helper()
 	ctx := context.Background()
@@ -139,7 +139,7 @@ func newTenantConfigReaderHarness(t *testing.T) tenantConfigReaderHarness {
 
 // setTenantDurationConfig writes value at ScopeTenant for key, under the
 // given tenant's own context -- the real go/config Set path an operator's
-// admin-console write would ultimately go through (go/config/AGENTS.md),
+// admin-console write would ultimately go through,
 // exercised here directly.
 func setTenantDurationConfig(t *testing.T, cfg *config.Service, tenant pkgcore.TenantID, key string, value time.Duration) {
 	t.Helper()
@@ -179,7 +179,7 @@ func TestTenantConfigReader_Sharing_ConfiguredTenant_UsesConfiguredExpiry(t *tes
 // TestTenantConfigReader_Sharing_UnconfiguredTenant_FallsBackToDefault
 // proves the inverse: a tenant that never configured sharing.default_expiry
 // still gets the module's own fixed 30-day default, unchanged from before
-// this round -- sharingConfigReader wired but reporting "unconfigured"
+// the default shape -- sharingConfigReader wired but reporting "unconfigured"
 // behaves exactly as if it were never wired at all.
 func TestTenantConfigReader_Sharing_UnconfiguredTenant_FallsBackToDefault(t *testing.T) {
 	h := newTenantConfigReaderHarness(t)
@@ -231,7 +231,7 @@ func TestTenantConfigReader_Compliance_ConfiguredTenant_UsesConfiguredExpiry(t *
 // TestTenantConfigReader_Compliance_UnconfiguredTenant_FallsBackToDefault
 // proves the inverse: a tenant that never configured
 // compliance.export_delivery_expiry still gets the module's own fixed
-// 24-hour default, unchanged from before this round.
+// 24-hour default when no tenant row overrides it.
 func TestTenantConfigReader_Compliance_UnconfiguredTenant_FallsBackToDefault(t *testing.T) {
 	h := newTenantConfigReaderHarness(t)
 	const tenant = pkgcore.TenantID("tenant-unconfigured")

@@ -18,14 +18,13 @@
  * deployment has no way to deliver an SMS code -- the server's SMS
  * seam resolves to the console sender, so a code the surface said went
  * to a phone reaches no phone -- and the page is what a prospective
- * customer sees in a demo, not a developer's own machine (the state-1
- * branch of e2e/offered-channels-work.spec.ts, the resolution e2e
- * ownership settled for this deployment). One consequence: the channel
- * tab strip is gone, because one channel has nothing to switch
- * between, and the two assertions below that used to read "the
- * password channel is up" through its tab's title text now read it
- * through the form itself -- the tab title renders nowhere, while the
- * identifier field is the channel, visible without a click.
+ * customer sees in a demo, not a developer's own machine (the outcome
+ * e2e/offered-channels-work.spec.ts holds this deployment to). One
+ * consequence: the channel tab strip is gone, because one channel has
+ * nothing to switch between, and the assertions below read the channel
+ * through the form itself rather than a tab's title -- the tab title
+ * renders nowhere, while the identifier field is the channel, visible
+ * without a click.
  */
 
 import userEvent from '@testing-library/user-event'

@@ -37,9 +37,8 @@ agreement:
     window of whitespace between the opening parenthesis and the
     literal), so a code on its own continuation line is found here even
     though gen_error_code_index.py indexes only same-line literals
-    (none exists in the tree today; if one ever lands, this check goes
-    red and the generator must be extended rather than the code
-    re-spelled);
+    (none exists in the tree; if one ever lands, this check goes red and
+    the generator must be extended rather than the code re-spelled);
   * comment text is masked out by a small lexer (full-line "//" lines,
     trailing "//" comments and "/* ... */" blocks), so a doc comment
     quoting a construction can never fabricate a code on this side;

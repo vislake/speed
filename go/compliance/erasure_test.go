@@ -249,13 +249,11 @@ func erasureRecorder(calls *int, observed *[]pkgcore.Actor) pkgcore.RetentionPar
 }
 
 // TestErasureService_Erase_NoTenantContext_Refused pins the fail-closed
-// tenant gate (finding P0-5's first half): Erase is irreversible, so a
-// ctx carrying no tenant must be refused with pkgcore.ErrNoTenant before
-// any participant runs -- a bare context must never become a license to
-// erase rows in a tenant the SubjectRef merely names. The ungated behavior
-// this test pins against is Erase's old unconditional re-scope to the
-// subject's tenant, under which this call hard-deleted tenant-a's note
-// from a background context and returned nil.
+// tenant gate: Erase is irreversible, so a ctx carrying no tenant must be
+// refused with pkgcore.ErrNoTenant before any participant runs -- a bare
+// context must never become a license to erase rows in a tenant the
+// SubjectRef merely names. A gate that tolerated a tenantless ctx would
+// let this call hard-delete tenant-a's note from a background context.
 func TestErasureService_Erase_NoTenantContext_Refused(t *testing.T) {
 	svc, repo, captured := newErasureHarness(t)
 	tenant := pkgcore.TenantID("tenant-a")
@@ -274,15 +272,15 @@ func TestErasureService_Erase_NoTenantContext_Refused(t *testing.T) {
 }
 
 // TestErasureService_Erase_TenantMismatch_RefusedBeforeAnyParticipant is
-// the regression test for finding P0-5: Erase must refuse a SubjectRef
-// whose tenant differs from the ctx tenant, before any participant's Erase
-// callback runs. Erase is the one operation in this module that is
-// irreversible, so a caller-supplied tenant that is absent, empty or
-// different from the ctx tenant is refused with the coded error
+// the regression test for the erasure tenant gate: Erase must refuse a
+// SubjectRef whose tenant differs from the ctx tenant, before any
+// participant's Erase callback runs. Erase is the one operation in this
+// module that is irreversible, so a caller-supplied tenant that is absent,
+// empty or different from the ctx tenant is refused with the coded error
 // (ErrErasureTenantMismatch) -- never a license to hard-delete another
-// tenant's rows with a compliant audit record to show for it. The ungated
-// behavior this pins against re-scoped ctx to the subject's tenant-b and
-// erased tenant-b's rows while the caller's ctx said tenant-a.
+// tenant's rows with a compliant audit record to show for it. Without the
+// gate, an unconditional re-scope to the subject's tenant would erase
+// tenant-b's rows while the caller's ctx says tenant-a.
 func TestErasureService_Erase_TenantMismatch_RefusedBeforeAnyParticipant(t *testing.T) {
 	repo := testutil.NewFakeRepository(testutil.NewDB(t))
 	seedLiveFakeNote(t, repo, "tenant-b", "note-b", "subject-shared")
@@ -306,14 +304,14 @@ func TestErasureService_Erase_TenantMismatch_RefusedBeforeAnyParticipant(t *test
 	}
 }
 
-// TestErasureService_Erase_EmptyActorFallsBackToSystemActor pins finding
-// P0-5's attribution sibling: a requestedBy Actor with an empty ID (the
-// zero Actor included) must be replaced by the fallback system actor
-// BEFORE the Actor is placed on ctx -- not only inside the system reason
-// -- so the audit row and every participant capture carry the fallback
-// id. The ungated behavior placed the empty-ID Actor on ctx and reserved
-// the fallback for SystemReason.Actor alone, leaving audit rows and
-// participant captures attributed to an Actor with an empty id.
+// TestErasureService_Erase_EmptyActorFallsBackToSystemActor pins the
+// attribution fallback: a requestedBy Actor with an empty ID (the zero
+// Actor included) must be replaced by the fallback system actor BEFORE
+// the Actor is placed on ctx -- not only inside the system reason -- so
+// the audit row and every participant capture carry the fallback id.
+// Placing the empty-ID Actor on ctx with the fallback reserved for
+// SystemReason.Actor alone would leave audit rows and participant
+// captures attributed to an Actor with an empty id.
 func TestErasureService_Erase_EmptyActorFallsBackToSystemActor(t *testing.T) {
 	tenant := pkgcore.TenantID("tenant-a")
 	calls := 0
@@ -343,16 +341,16 @@ func TestErasureService_Erase_EmptyActorFallsBackToSystemActor(t *testing.T) {
 	}
 }
 
-// TestErasureService_Erase_ParticipantPartialCountSurvivesError pins
-// finding P0-5's count semantics: a participant whose Erase callback
+// TestErasureService_Erase_ParticipantPartialCountSurvivesError pins the
+// count semantics of a partial failure: a participant whose Erase callback
 // failed part-way through has already hard-deleted the rows it reports
 // erasing, so that count must survive into ErasureResult.Erased --
 // TotalErased and the audit event's Changes["erased"] breakdown count rows
 // that are genuinely gone even when the callback also errored, never
-// silently dropping them from the record of an irreversible operation. The
-// ungated behavior recorded the count only on success, so a participant
-// reporting (2, err) contributed 0 to TotalErased and vanished from the
-// audit trail's erased map entirely.
+// silently dropping them from the record of an irreversible operation. A
+// count recorded only on success would let a participant reporting (2,
+// err) contribute 0 to TotalErased and vanish from the audit trail's
+// erased map entirely.
 func TestErasureService_Erase_ParticipantPartialCountSurvivesError(t *testing.T) {
 	partial := pkgcore.RetentionParticipant{
 		// NoopSweep satisfies the registrar's mandatory-Sweep rule; the

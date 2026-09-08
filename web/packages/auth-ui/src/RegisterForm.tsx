@@ -16,9 +16,9 @@
  * created user is handed to onRegistered -- the host navigates to its
  * sign-in screen -- or, when no callback is given, rendered as a success
  * panel in place of the form. The callback runs only after the
- * register verdict settled, and a throwing host callback is contained
- * the tenancy-ui way: it is not a registration failure (the account
- * exists server-side), never renders the failure banner -- which would
+ * register verdict settled, and a throwing host callback is contained:
+ * it is not a registration failure (the account exists server-side),
+ * never renders the failure banner -- which would
  * invite a duplicate resubmission of an already-registered account --
  * and never escapes as an unhandled rejection. Nothing here navigates,
  * and the heading above the form is host content.

@@ -1545,23 +1545,19 @@ var (
 	_ interface{ Unwrap() http.ResponseWriter } = unwrappingResponseWriter{}
 )
 
-// TestHandler_Stream_FindsFlusherThroughAWrappingResponseWriter pins the fix
-// for a real bug: handleStream used to look for http.Flusher with a naive
-// w.(http.Flusher) type assertion, which fails the instant a middleware
-// wraps the response writer in anything that does not ALSO directly
-// implement Flush -- exactly the shape every request reaching this handler
-// through this app's real composed HTTP chain has, since
-// go/observability's Middleware wraps every response writer in its own
-// statusRecorder, which exposes Flush only via Unwrap. Before the fix, a
-// stream request through that chain always failed with a 500
-// notification.internal_error -- discovered by
-// examples/reference-app/integration_test/distributed_mode_test.go's
-// TestServer_DistributedMode_TwoReplicas_NotificationCrossesRealInfrastructure,
-// the first test anywhere in this repository to drive this route through a
-// real composed HTTP stack rather than calling the Handler directly. This
-// test reproduces the same wrapper shape without needing the whole app: the
-// stream must still open (a 200 status and at least one flush) despite the
-// response writer never satisfying http.Flusher directly.
+// TestHandler_Stream_FindsFlusherThroughAWrappingResponseWriter pins the
+// flusher lookup through a wrapping response writer: handleStream must find
+// http.Flusher through wrappers -- a naive w.(http.Flusher) type assertion
+// fails the instant a middleware wraps the response writer in anything
+// that does not ALSO directly implement Flush, exactly the shape every
+// request reaching this handler through this app's real composed HTTP
+// chain has, since go/observability's Middleware wraps every response
+// writer in its own statusRecorder, which exposes Flush only via Unwrap
+// (the wrapper shape the reference app's distributed-mode suite first
+// drove through this route). This test reproduces the same wrapper shape
+// without needing the whole app: the stream must still open (a 200 status
+// and at least one flush) despite the response writer never satisfying
+// http.Flusher directly.
 func TestHandler_Stream_FindsFlusherThroughAWrappingResponseWriter(t *testing.T) {
 	env := newHandlerEnv(t)
 

@@ -3,20 +3,19 @@
 // credential storage, and a Gateway facade that wires entitlement checks and
 // usage metering around every call automatically.
 //
-// # Scope of this round
+// # Scope
 //
-// This round implements only the unified-abstraction-layer section of
-// docs/internal/08-ai-gateway.md: chat, not image generation. Image
-// generation -- the design doc's multi-modal-expansion section --
-// ImageProvider, jobs-based async image tasks, storage integration -- is
-// out of scope and deferred to a later round; nothing in this package's
-// public API commits to a shape for it.
+// The package has two halves. The chat half is what this overview
+// documents: a unified ChatProvider abstraction, logical-to-vendor model
+// routing, platform/BYOK credential storage, and the Gateway.Chat /
+// Gateway.ChatStream facade. The image-generation half -- ImageProvider,
+// jobs-based async image tasks, storage integration -- lives in
+// image_gateway.go with its own doc comment.
 //
-// # The pipeline
+// # The chat pipeline
 //
 // Business code calls only Gateway.Chat or Gateway.ChatStream, never a
-// ChatProvider directly. Internally, each call runs the design doc's fixed
-// pipeline:
+// ChatProvider directly. Internally, each call runs a fixed pipeline:
 //
 //  1. Resolve the logical model key (req.Model, e.g. "chat:default") to a
 //     ModelRoute -- a (Provider, VendorModel) pair -- through the routes a
@@ -47,16 +46,15 @@
 // # Module boundaries: no billing or metering import
 //
 // ai-gateway sits at the same dependency tier as billing, sharing and
-// integration (root CLAUDE.md's graph) -- none of the three may import each
-// other. Entitlements and UsageRecorder are therefore declared here as
-// small, structurally-typed interfaces this package owns, the same
-// no-import seam pattern go/integration/seams.go uses for rbac: a host that
-// has go/billing and go/metering wired satisfies both interfaces with a
-// one-line adapter over the real services (see Entitlements and
-// UsageRecorder's own doc comments); a host with neither wires nothing and
-// the Gateway still works, just with no quota enforcement and no automatic
-// metering. Shipping without Entitlements wired means this gateway enforces
-// NO quota at all -- a real production deployment always wires it.
+// integration -- none of the three may import each other. Entitlements and
+// UsageRecorder are therefore declared here as small, structurally-typed
+// interfaces this package owns: a host that has go/billing and go/metering
+// wired satisfies both interfaces with a one-line adapter over the real
+// services (see Entitlements and UsageRecorder's own doc comments); a host
+// with neither wires nothing and the Gateway still works, just with no quota
+// enforcement and no automatic metering. Shipping without Entitlements wired
+// means this gateway enforces NO quota at all -- a real production
+// deployment always wires it.
 //
 // # Credentials: platform key vs. tenant BYOK
 //
@@ -83,8 +81,8 @@
 // module's default path, the same posture go/pki's LocalSigner and
 // pkgcore's in-process EventBus keep for their own defaults. It registers
 // itself into the package-level ChatProviderRegistry under the name
-// ProviderOpenAICompatible from this package's own init(), mirroring
-// go/pki/signer_registry.go's SeamRegistry precedent; a future vendor-SDK
-// provider (a hypothetical go/ai-gateway/provider/anthropic subpackage)
-// would self-register the same way, without touching this round's code.
+// ProviderOpenAICompatible from this package's own init(). The registry is
+// open to further registrations: an additional vendor-SDK provider
+// (a hypothetical go/ai-gateway/provider/anthropic subpackage) self-registers
+// the same way and needs no change to this package's own code.
 package aigateway

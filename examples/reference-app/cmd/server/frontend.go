@@ -2,14 +2,9 @@ package main
 
 // This file serves the reference app's built frontend -- the dist/
 // directory examples/reference-app/web's `pnpm build` (tsc plus vite)
-// emits -- from the same process that serves the API. Before this file
-// existed the image carried no frontend at all: the app's browser page
-// only ever ran under the vite dev server of the browser-runner round, and
-// "the reference-app server serving that built page itself" was recorded
-// as M4 work (examples/reference-app/web/README.md's own deferral note).
-// This file discharges that deferral for the reference app: an operator
+// emits -- from the same process that serves the API. An operator
 // who points APP_WEB_DIST at a built dist/ gets the deployed product URL
-// serving its own frontend, and the Dockerfile now builds that dist into
+// serving its own frontend, and the Dockerfile builds that dist into
 // the image and sets the variable itself.
 //
 // The serving design is deliberate on one axis the name APP_WEB_DIST
@@ -24,8 +19,8 @@ package main
 // -- would then depend on a committed snapshot of hashed bundle files
 // nobody regenerates before building). Reading the directory at runtime
 // instead keeps every Go build and test independent of the frontend
-// having been built, keeps the vite dev-server workflow of the
-// browser-runner round exactly as it was (the dev server serves the page
+// having been built, keeps the vite dev-server workflow of the web host
+// working (the dev server serves the page
 // and proxies /api to this process; this handler simply never intercepts
 // anything unless APP_WEB_DIST names a real directory), and lets tests
 // point the same code at a throwaway fixture directory.
@@ -38,9 +33,9 @@ package main
 //   - The paths this process's server surface owns are never intercepted:
 //     everything under /api (every module route -- the admin console
 //     included, which mounts at /api/v1/admin -- plus config's two pre-auth
-//     endpoints), /healthz and /metrics. Those keep answering exactly as
-//     they did before this file existed, tenancy/auth middleware chain
-//     included. In this app every mounted route lives under /api and the
+//     endpoints), /healthz and /metrics. Those keep answering through the
+//     ordinary tenancy/auth middleware chain, untouched by this wrapper. In
+//     this app every mounted route lives under /api and the
 //     two probe endpoints are the only non-API paths the server owns, so
 //     the check below is the whole ownership list.
 //   - Everything else -- "/" itself, a hashed asset under /assets/, a
@@ -58,7 +53,7 @@ package main
 //     output in buildServer, so a request the frontend answers never meets
 //     tenant resolution (GET / answers 200 to a caller with no tenant,
 //     exactly what a deployed sign-in page needs) and the API requests
-//     that do reach the chain are byte-for-byte what it always received.
+//     that do reach the chain pass through unchanged.
 //
 // Path resolution is deliberately narrow and self-contained rather than a
 // generic file server: request paths are pinned to the root before
@@ -88,9 +83,9 @@ import (
 // webDistEnv names the environment variable holding the path of the
 // directory this server serves the built frontend from (see this file's
 // package doc comment for the full serving design). Empty -- the default,
-// and what every existing caller of buildServer without a frontend gets --
-// leaves the composed API handler exactly as it was before this file
-// existed: no interception, no extra wrapping, byte-identical answers.
+// and what every caller of buildServer without a frontend gets --
+// leaves the composed API handler serving no static files: no
+// interception, no extra wrapping.
 const webDistEnv = "APP_WEB_DIST"
 
 // indexFile is the SPA fallback target and the answer for "/" itself.
@@ -189,15 +184,15 @@ func (f *frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// path-injection customization admits exactly filepath.IsLocal,
 	// strings.Contains(x, ".."), strings.HasPrefix and filepath.Clean("/" +
 	// x) results as path sanitizers -- never filepath.IsAbs and never a
-	// "/../" literal -- and the four clauses this replaces matched none of
-	// them: HasPrefix also guards the branch a ".." climb never takes, and
+	// "/../" literal -- and of those alternatives only IsLocal both refuses
+	// a climb and stays visible: HasPrefix also guards the branch a ".."
+	// climb never takes, and
 	// cleanWebRel's own path.Clean is invisible to a model that knows only
 	// the path/filepath package by name. On Windows builds the clause is
 	// not belt-and-braces: IsLocal splits on the host separator, so a
 	// backslash dot-dot climb ("assets\..\..\x" -- "\" is an ordinary
 	// character to path.Clean and every forward-slash clause, but a
-	// separator to the filepath.Join below) is refused too, closing the one
-	// escape the root pin and the old guard both left open there.
+	// separator to the filepath.Join below) is refused too.
 	if !filepath.IsLocal(rel) {
 		http.NotFound(w, r)
 		return

@@ -66,9 +66,7 @@ const (
 	// Middleware consults that source unless the host passed an explicit
 	// WithRevocationChecker -- so a host that selects this mode through
 	// WithRevocationMode gets its enforcement without a second, forgettable
-	// wiring step (this default was the P1 hole: the middleware used to
-	// consult only an explicit option, and the shipped composition passed
-	// none).
+	// wiring step.
 	//
 	// The list only ever holds sessions that are revoked AND not yet
 	// naturally expired, with a TTL of one access-token lifetime, so it
@@ -233,10 +231,9 @@ func (m *SessionManager) issueRefreshToken(ctx context.Context, session *Session
 
 // Rotate consumes the presented refresh token and issues its replacement,
 // returning the session the token belongs to. It is the composition of
-// resolveRotation followed by commitRotation below -- unchanged from the
-// caller's perspective, still one atomic-looking call -- kept as two
-// internal steps so Service.refresh can run its own re-verification between
-// them.
+// resolveRotation followed by commitRotation below: the two internal steps
+// stay one atomic-looking call from a caller's perspective, split so
+// Service.refresh can run its own re-verification between them.
 //
 // It is where replay detection lives. Every refresh invalidates the token it
 // was given and mints a new one in the same family, so a token is usable
@@ -261,21 +258,20 @@ func (m *SessionManager) Rotate(ctx context.Context, presented string) (*Session
 
 // resolveRotation is Rotate's read-only half: it locates the presented
 // token, treats an already-consumed one as a replay (revoking the family
-// and session exactly as Rotate has always done for that case), and loads
-// the session the token belongs to -- all without spending anything.
+// and session, exactly as Rotate does for that case), and loads the
+// session the token belongs to -- all without spending anything.
 //
 // It exists as its own step so a caller with its own business-rule
 // re-verification to run in between -- Service.refresh's membership and
 // user-status re-check chief among them -- can run that re-verification
-// against the token's session BEFORE the token is actually consumed,
-// rather than after. Consuming first and re-verifying second meant a
-// re-verification failure left the presented token permanently spent with
-// nothing to show the caller for it: the client's own, entirely
-// legitimate retry with that same token then looked identical to an
-// actual replay and paid the same price -- the whole family and session
-// revoked, a "suspected theft" event fired -- over what was really a
-// transient membership-lookup failure or a passing status flap. See
-// Service.refresh's doc comment for the full account.
+// against the token's session BEFORE the token is actually consumed. A
+// re-verification failure must not leave the presented token permanently
+// spent with nothing to show the caller for it: the client's own,
+// entirely legitimate retry with that same token would otherwise look
+// identical to an actual replay and pay the same price -- the whole
+// family and session revoked, a "suspected theft" event fired -- over
+// what is really a transient membership-lookup failure or a passing
+// status flap. See Service.refresh's doc comment for the full account.
 func (m *SessionManager) resolveRotation(ctx context.Context, presented string) (*RefreshToken, *Session, error) {
 	if presented == "" {
 		return nil, nil, ErrRefreshTokenInvalid

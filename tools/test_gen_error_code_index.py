@@ -115,9 +115,7 @@ class ScanGoFileTests(unittest.TestCase):
         # though it binds no package-level variable -- "a code is indexed
         # iff it is constructed in Go source with a literal code argument"
         # -- so it yields an INLINE entry (ident ""), never a phantom
-        # DECLARED entry: the code is real, the declaration is not. This is
-        # the regression test for the round that closed the inline blind
-        # spot: the pre-fix scanner dropped every such code silently.
+        # DECLARED entry: the code is real, the declaration is not.
         entries = self._scan(
             'package foo\n\n'
             'func handle() error {\n'
@@ -155,10 +153,10 @@ class ScanGoFileTests(unittest.TestCase):
         self.assertEqual([e.status for e in entries], [404, 400])
 
     def test_inline_panic_construction_is_indexed_with_enclosing_doc(self):
-        # The jobs pattern this round exists for: a With* option function
+        # The jobs pattern this indexing serves: a With* option function
         # refuses an unhonourable value with panic(apperr.Invalid("code")),
         # and the code's triggering condition is the function's own doc
-        # comment. Fails before the fix (the panic line produced no entry).
+        # comment.
         entries = self._scan(
             'package foo\n\n'
             '// WithWorkers sets the worker count. A value below 1 is\n'

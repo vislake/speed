@@ -5,16 +5,16 @@ package s3
 // package -- for side effect alone, if the host calls nothing else in it --
 // registers "objectstore.s3" on pkgcore's shared ObjectStoreRegistry, the
 // name pkgcore.PresetDistributed already names for the "objectstore" seam.
-// Before the split this registration lived in pkgcore's own
-// builtin_implementations.go, alongside the implementation it adapts; moving
-// the implementation out without moving the registration would have left
-// PresetDistributed pointing at a name nothing could ever resolve.
+// The registration lives here, beside the implementation it adapts, rather
+// than in pkgcore's own builtin_implementations.go: if the implementation
+// sat in its own package while the registration stayed behind,
+// PresetDistributed would point at a name nothing could resolve.
 //
 // The trade this package accepts, same as any database/sql driver: a
 // distributed-mode host that forgets to import it turns "missing
 // objectstore.s3" from a compile-time failure into a Bootstrap-time
-// pkgcore.ErrUnknownImplementation (docs/internal/03-deployment-modes.md's
-// implementation-registry section names this cost and accepts it explicitly).
+// pkgcore.ErrUnknownImplementation -- the accepted database/sql trade, an
+// error that names the import which fixes it.
 //
 // # Declared capabilities
 //

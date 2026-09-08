@@ -15,9 +15,9 @@ import (
 // correct once every module has declared its permissions, which is what
 // Attach waits for.
 //
-// The decision path is deliberately short and has no branch on deployment
-// mode anywhere in it (root CLAUDE.md's rule; the differences live in the
-// EventBus and the *gorm.DB the host injected):
+// The decision path is deliberately short, with no branch on deployment
+// mode anywhere in it (the mode's differences live in the EventBus and the
+// *gorm.DB the host injected):
 //
 //	Subject -> bindings of that (tenant, user)
 //	        -> permissions of those roles
@@ -174,8 +174,8 @@ func (s *Service) ListPermissions(ctx context.Context, sub Subject) ([]string, e
 // says what one Subject has been GRANTED; DeclaredPermissions says what
 // the platform knows how to grant at all, regardless of subject. A role-
 // management UI needs exactly this to render "every permission that
-// exists" as a checklist when assigning a new role -- go/admin's D8
-// (docs/internal/23-admin.md) is this method's first consumer, wrapping
+// exists" as a checklist when assigning a new role; go/admin's
+// role-management surface is this method's first consumer, wrapping
 // it in an HTTP surface rather than growing rbac its own.
 //
 // The returned slice is a copy of the frozen catalog's own snapshot

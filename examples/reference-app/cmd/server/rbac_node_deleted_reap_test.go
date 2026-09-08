@@ -12,8 +12,8 @@ import (
 	"github.com/vislake/speed/go/rbac"
 )
 
-// This file is the REAL cross-module regression org-rbac.md's P1-2 finding
-// requires: a role binding scoped to an org node, that node deleted through
+// This file is the real cross-module regression: a role binding scoped to
+// an org node, that node deleted through
 // org's own real TreeService, delivered to rbac's own real Service through
 // the actual event bus -- no mock, no fake payload, no direct call into
 // either module's internals.
@@ -22,7 +22,7 @@ import (
 // test package, because it is the one place in this repository that can
 // import both go/org and go/rbac concrete packages without adding a new
 // dependency edge between them: this app already requires both (see
-// go.mod), and root CLAUDE.md's mandatory-first-consumer rule makes it the
+// go.mod), and the mandatory-first-consumer discipline makes it the
 // intended home for exactly this kind of real, composed proof. rbac itself
 // must keep importing neither org nor anything shaped like it -- see
 // go/rbac/reap.go's own header comment -- so a test that needs BOTH real
@@ -31,13 +31,10 @@ import (
 // own minimal two-module kernel, independent of buildServer's much larger
 // composition.
 //
-// PRE-FIX, this test failed for real: org.node.deleted carried no
-// subscriber in go/rbac at all, so a binding scoped to a deleted node
-// simply stayed live forever. That was verified by temporarily commenting
-// out module.go's `reg.Events.Subscribe(eventNodeDeleted, svc.onNodeDeleted)`
-// line and re-running this file -- both tests below then failed with the
-// binding still granted after the delete, which is the exact defect this
-// round closes.
+// The property: a binding scoped to a deleted node must not stay live.
+// org.node.deleted is delivered to rbac's own onNodeDeleted subscriber on
+// the real bus; a rbac with no such subscriber would leave the binding
+// granted after the delete forever.
 
 // newOrgRBACReapHarness boots a minimal, self-contained kernel of exactly
 // two modules -- org and rbac -- over a fresh SQLite file, migrated and
@@ -129,7 +126,7 @@ var testOrgRBACIndexKey = []byte("org-rbac-reap-test-blind-index32")
 // TestOrgRBACReap_NodeDeleted_ReapsDanglingBinding is the single-node-delete
 // leg of the cross-module regression: a role binding scoped to a node with
 // no org member ever bound to it (so org's own TreeService.Delete member
-// refusal -- which this round does not weaken -- never blocks the delete),
+// refusal never blocks the delete),
 // deleted through org's real, non-cascading Delete, must leave rbac showing
 // that binding reaped once the real org.node.deleted event has travelled
 // the real bus.
@@ -202,7 +199,7 @@ func TestOrgRBACReap_NodeDeleted_ReapsDanglingBinding(t *testing.T) {
 // TestOrgRBACReap_NodeDeleted_CascadeReapsEveryBinding is the cascade leg:
 // a subtree with no members anywhere in it, cascade-deleted through org's
 // real Delete, must leave rbac showing every binding across that subtree
-// reaped in the one pass this round's reap runs.
+// reaped in the one pass the reap runs.
 func TestOrgRBACReap_NodeDeleted_CascadeReapsEveryBinding(t *testing.T) {
 	tree, _, rbacService := newOrgRBACReapHarness(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")

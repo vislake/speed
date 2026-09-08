@@ -2,11 +2,9 @@ package kmsaws_test
 
 // Runnable documentation for the AWS KMS-backed Signer, compiled and
 // executed by `go test`. Neither Example below reaches a real AWS account
-// -- see doc.go's own "no integration leg" section (docs/internal/22-pki.md's
-// own testing-strategy note that AWS KMS gets no integration leg even in
-// its target design, LocalStack's KMS implementation being known to
-// diverge from the real service). Both demonstrate construction and
-// pki.SignerRegistry usage only.
+// -- AWS KMS has no integration leg, by design (see doc.go: LocalStack's
+// KMS implementation is known to diverge from the real service). Both
+// demonstrate construction and pki.SignerRegistry usage only.
 
 import (
 	"fmt"

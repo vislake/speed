@@ -14,7 +14,7 @@
 //     the delivery job asks about; this one returns the demo table's entry.
 //
 //   - wireDemoNotification's note-created subscription is the reference
-//     app's instance of the round's canonical flow: a business module
+//     app's instance of the canonical event-driven flow: a business module
 //     (notes) publishes a domain event as a fact; the notification module
 //     consumes it as a dispatch trigger. notes publishes notes.note.created
 //     with the creating user's id; the subscription dispatches the same
@@ -380,9 +380,9 @@ func wireDemoNotification(mux *http.ServeMux, bus pkgcore.EventBus, module *noti
 	// and one that has since unsubscribed or bounced is settled as a
 	// skipped send before any transport is touched), and the send travels
 	// only on the contact's own verified channel. The platform blacklist
-	// is not among those gates this round: nothing in the delivery
-	// pipeline consults it (go/notification/AGENTS.md's "Platform-blacklist
-	// writers and bounce remediation"). A real deployment would gate its
+	// is not among those gates: nothing in the delivery
+	// pipeline consults it, and no writer or bounce-remediation path
+	// exists to populate it. A real deployment would gate its
 	// own trigger route however its staff model requires; the dispatch
 	// call itself is all the notification module asks of it.
 	mux.HandleFunc(http.MethodPost+" "+demoPatientMessagePath, func(w http.ResponseWriter, r *http.Request) {

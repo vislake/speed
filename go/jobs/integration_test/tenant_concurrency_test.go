@@ -33,10 +33,9 @@ func (h *blockingHandler) Handle(_ context.Context, job *jobs.Job, _ jobs.Progre
 // deployment mode's counterpart of standalone_queue_test.go's TestPerTenantConcurrencyLimiting:
 // proof that one tenant's backlog cannot starve another tenant's Jobs, and
 // that go/jobs/queue/asynq's Queue's own admission gate (its worker.go's
-// tryReserveTenantSlot, layered on top of asynq -- see AGENTS.md's
-// "Per-tenant concurrency limiting" section for why asynq offers nothing
-// equivalent natively) is actually enforced against a real asynqlib.Server
-// dequeuing from real Redis, not merely documented.
+// tryReserveTenantSlot, layered on top of asynq because asynq offers
+// nothing equivalent natively) is actually enforced against a real
+// asynqlib.Server dequeuing from real Redis, not merely documented.
 //
 // Concurrency is deliberately small (2) relative to the flood size (3) so
 // that, exactly as in the standalone deployment mode's own proof, more

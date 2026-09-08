@@ -100,12 +100,12 @@ const (
 // hardcoded guess that could silently drift out of sync with it.
 //
 // 256 is comfortably above the number of distinct literal routes any real
-// module in this repository registers today (a handful per module; see
+// module in this repository registers (a handful per module; see
 // mountModuleRoutes in examples/reference-app/cmd/server/server.go), even
 // summed across all planned modules, while still bounding worst-case
 // series growth to a small, fixed number instead of the unbounded growth
-// an attacker-supplied path previously produced. If a legitimate route
-// count ever approaches this, that is a signal to build the route-capture
+// an attacker-supplied path would produce. If a legitimate route count
+// ever approaches this, that is a signal to build the route-capture
 // mechanism the "Metric label cardinality caveats" section below already
 // anticipates, not to raise this constant.
 const MaxRouteLabelValues = 256
@@ -140,18 +140,16 @@ const RouteLabelOverflowValue = "{overflow}"
 // concern independent of the map.
 //
 // 512 is comfortably above the length of every distinct literal route any
-// real module in this repository registers today: "/api/v1/notes" (the
-// notes module's apiPath) is 14 bytes, and "/healthz" / "/metrics" (see
+// real module in this repository registers: "/api/v1/notes" (the notes
+// module's apiPath) is 14 bytes, and "/healthz" / "/metrics" (see
 // mountModuleRoutes and its callers in
 // examples/reference-app/cmd/server/server.go) are 8 bytes each. It also
-// comfortably outsizes a plausible near-future route this repository does
-// not mount yet but its planned modules (root CLAUDE.md's module
-// dependency graph) could -- for example a four-level nested resource path
-// with a 36-byte UUID at every level plus literal segment names, which
-// totals well under 250 bytes -- while still keeping routeLabelLimiter's
-// worst-case memory footprint a small, fixed number
+// comfortably outsizes any four-level nested resource path with a 36-byte
+// UUID at every level plus literal segment names, which totals well under
+// 250 bytes -- while still keeping routeLabelLimiter's worst-case memory
+// footprint a small, fixed number
 // (MaxRouteLabelValues*MaxRouteLabelLength = 128 KiB) instead of the
-// up-to-~256-MiB worst case an unbounded value length previously allowed.
+// up-to-~256-MiB worst case an unbounded value length would allow.
 // If a legitimate route's raw request path ever approaches this, that is a
 // signal to revisit this constant deliberately, not evidence it was set
 // too low by accident.
@@ -232,19 +230,18 @@ func methodMetricLabel(method string) string {
 //
 // # Where this sits in the chain, and why
 //
-// docs/internal/01-architecture.md fixes the middleware chain order as
-// recover -> request-id/log-context -> observability -> tenancy.Middleware
-// -> authn.Middleware -> rbac.RequirePermission -> handler, and says so is
-// not to be casually adjusted. tenancy.Middleware's own doc comment
-// (go/tenancy/middleware.go) says nothing about tracing middleware
-// specifically, so that fixed chain is the tie-breaker this package
-// follows: Middleware is meant to wrap OUTSIDE tenancy.Middleware, not
-// inside it. See examples/reference-app/cmd/server/server.go's buildServer
-// for where this is actually wired, with the same reasoning repeated at
-// the call site.
+// The fixed middleware chain order is recover -> request-id/log-context ->
+// observability -> tenancy.Middleware -> authn.Middleware ->
+// rbac.RequirePermission -> handler, and is not to be casually adjusted.
+// tenancy.Middleware's own doc comment (go/tenancy/middleware.go) says
+// nothing about tracing middleware specifically, so that fixed chain is
+// the tie-breaker this package follows: Middleware is meant to wrap
+// OUTSIDE tenancy.Middleware, not inside it. See
+// examples/reference-app/cmd/server/server.go's buildServer for where this
+// is actually wired, with the same reasoning repeated at the call site.
 //
 // That position is deliberate, not incidental: a request tenancy.Middleware
-// (or, once they exist, authn.Middleware / rbac.RequirePermission) REJECTS
+// (or authn.Middleware / rbac.RequirePermission) REJECTS
 // never reaches a handler at all, so if this middleware ran further in, a
 // flood of 403s or 401s -- exactly the signal an operator most needs during
 // an attack or a misconfigured client -- would be invisible to both the
@@ -293,9 +290,9 @@ func methodMetricLabel(method string) string {
 // sits between this middleware and any mux), so it is not reliably set on
 // the request this middleware observes either.
 //
-// Using the raw path is not merely a "future parameterized route" risk: it
-// is exploitable today, by any unauthenticated caller, against this
-// repository's current, unmodified route set. Neither a mux 404 (no
+// Using the raw path is not merely a parameterized-route risk: it is
+// exploitable by any unauthenticated caller, against this repository's
+// current, unmodified route set. Neither a mux 404 (no
 // registered pattern matches -- including a request under a registered
 // subtree such as examples/reference-app's "/api/v1/notes/", which the
 // outer mux dispatches as a match even though the notes Handler's own
@@ -369,9 +366,9 @@ func methodMetricLabel(method string) string {
 //
 // The span does not share the metric instruments' cardinality (or
 // per-value size) problem -- a trace is not a Prometheus series -- but a
-// trace IS an exit of the data-protection rule (docs/internal/
-// 09-observability.md's "never enter logs, traces or API responses"
-// clause), and the raw path is where request paths carry tenant and
+// trace IS an exit of the data-protection rule ("never enter logs, traces
+// or API responses"), and the raw path is where request paths carry tenant
+// and
 // resource ids. The span's route attribute therefore shares the route
 // dimension's bounded value with the metric side: routeLabels.label(...)
 // is computed once per request and feeds both the metric label and the
@@ -388,17 +385,16 @@ func methodMetricLabel(method string) string {
 // disclosure or validity surface, and verbatim methods keep existing
 // trace dashboards working), matching how AnnotateTenant treats
 // tenant_id -- span attribute, never a metric label -- for the same
-// Tempo-tolerates-high-cardinality reason docs/internal/09-observability.md
-// gives.
+// Tempo-tolerates-high-cardinality reason.
 //
 // # Why no span surface carries the raw request path
 //
 // The span NAME is under the same bound, not a raw-path exception to it:
 // the otelhttp formatter at the bottom of Middleware returns method + the
-// same routeLabels.label(...) result. The name used to keep method + raw
-// path as a deliberate residual -- a trace-side correlation string in the
-// tolerated-cardinality class of tenant_id -- until the raw byte it could
-// carry became an availability defect rather than a cardinality one:
+// same routeLabels.label(...) result. A raw method + raw path name would
+// carry the raw byte an invalid-UTF-8 request target supplies -- a
+// trace-side correlation string in the tolerated-cardinality class of
+// tenant_id, but an availability defect once the raw byte is invalid:
 // net/http percent-decodes a request target byte-wise, so a request whose
 // target contains %FF (or any other invalid UTF-8 encoding) reaches this
 // middleware with the raw invalid byte in the path and no parse error
@@ -447,12 +443,12 @@ func methodMetricLabel(method string) string {
 // RegisterMountedRoutes, for example) still records one distinct value
 // per distinct request path up to the cap before collapsing to the
 // overflow bucket. That is a deliberate, bounded imprecision -- the
-// alternative to an unbounded label space -- and true per-template
-// folding (mirroring AnnotateTenant, but for the matched pattern)
-// remains future work: the route limiter exists so the interim state is
-// "bounded but occasionally imprecise" instead of "unbounded and
-// exploitable today." Flag this explicitly before adding a parameterized
-// route anywhere downstream of this middleware. The method bound has no
+// alternative to an unbounded label space. True per-template folding
+// (mirroring AnnotateTenant, but for the matched pattern) is not built:
+// the route limiter exists so the state is "bounded but occasionally
+// imprecise" instead of "unbounded and exploitable." Flag this
+// explicitly before adding a parameterized route anywhere downstream of
+// this middleware. The method bound has no
 // equivalent imprecision: its known set is complete by construction, so
 // the method dimension is never approximate.
 func Middleware(next http.Handler) http.Handler {
@@ -632,8 +628,8 @@ func Middleware(next http.Handler) http.Handler {
 // # Why this exists as its own function
 //
 // Middleware, per its own doc comment, is mounted OUTSIDE
-// tenancy.Middleware in the fixed chain (docs/internal/01-architecture.md)
-// and therefore does not reliably see a tenant on the request context it
+// tenancy.Middleware in the fixed chain and therefore does not reliably
+// see a tenant on the request context it
 // is handed. A trace Span, unlike a plain context value, is a shared
 // mutable object reachable from every context that descends from the one
 // it was placed on -- including ones produced by an intervening
@@ -647,11 +643,10 @@ func Middleware(next http.Handler) http.Handler {
 // Call it once tenant resolution has actually run: from a business
 // handler that already reads the tenant for its own purposes (see
 // examples/reference-app/internal/notes/handler.go's NotesCreateNote
-// method for a live example), or from downstream middleware such as a
-// future authn.Middleware / rbac.RequirePermission. Unlike a Prometheus
-// metric label, a span attribute is exactly where tenant_id belongs per
-// docs/internal/09-observability.md: Tempo, unlike Prometheus, tolerates
-// high-cardinality dimensions.
+// method for a live example), or from downstream middleware such as
+// authn.Middleware / rbac.RequirePermission. Unlike a Prometheus metric
+// label, a span attribute is exactly where tenant_id belongs: Tempo,
+// unlike Prometheus, tolerates high-cardinality dimensions.
 func AnnotateTenant(ctx context.Context) {
 	tenant, ok := pkgcore.TenantFromContext(ctx)
 	if !ok {
@@ -1111,7 +1106,7 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 // http.NewResponseController, so that a handler downstream of Middleware
 // can still reach optional interfaces such as http.Flusher or
 // http.Hijacker (needed by, for example, the SSE-based in-app-notification
-// endpoints docs/internal/09-observability.md's metrics table anticipates)
+// endpoints the must-instrument metrics catalog anticipates)
 // straight through this wrapper, per the standard library's own Go 1.20+
 // ResponseWriter-wrapping convention.
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }

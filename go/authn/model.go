@@ -198,10 +198,10 @@ const revokeReasonExportSecurity = "security_revoked"
 //     which mechanism.
 //
 // A value no declared reason names -- an empty or hand-edited column, or a
-// reason a future round declared without naming it in the switch below --
-// takes the folding default: of the answers an undeclared value could
-// take, the folded one is the only one that can never leak an undeclared
-// security mechanism. The fold is a read-side, API-projection-only change:
+// declared reason that was not added to the switch below -- takes the
+// folding default: of the answers an undeclared value could take, the
+// folded one is the only one that can never leak an undeclared security
+// mechanism. The fold is a read-side, API-projection-only change:
 // nothing here writes, and the stored reason is untouched (a replay
 // revocation persisting RevokeReasonReplay verbatim is pinned by
 // TestSessionManager_Rotate_ReplayRevokesTheFamilyAndTheSession).
@@ -288,8 +288,8 @@ const (
 // holds a sealed empty string rather than NULL. Nothing reads it -- lookups
 // go through the index column -- so it costs a few bytes and no correctness.
 type User struct {
-	// ID is an application-generated UUID (root CLAUDE.md bans
-	// gen_random_uuid(), which exists on only one of the two dialects).
+	// ID is an application-generated UUID, because gen_random_uuid() exists
+	// on only one of the two dialects.
 	ID string `gorm:"primaryKey;size:36"`
 
 	// Email is the account's email address, encrypted at rest, or "" when
@@ -315,12 +315,12 @@ type User struct {
 	// for an account with no password at all (social-only or SSO-only).
 	//
 	// The digest is a credential and must never leave this module: no
-	// projection, response, event or log carries it. The json:"-" tag is
-	// what makes a mistaken whole-struct marshal impossible rather than a
-	// review finding -- this model carries no other JSON tags, so without
-	// it a marshal would emit the hash under its field name, and nothing
-	// in this module marshals the struct today (each field that a response
-	// needs is copied onto an API type by hand).
+	// projection, response, event or log carries it. The json:"-" tag makes
+	// a mistaken whole-struct marshal impossible rather than relying on
+	// review -- this model carries no other JSON tags, so without it a
+	// marshal would emit the hash under its field name, and nothing in this
+	// module marshals the struct (each field that a response needs is
+	// copied onto an API type by hand).
 	PasswordHash string `gorm:"size:255;not null" json:"-"`
 
 	// DisplayName is the name shown in the product. It is not an
@@ -404,8 +404,9 @@ type Session struct {
 	IP        string `gorm:"column:ip;size:45;not null"`
 
 	// IPRegion is the resolved region of IP. It ships empty: the GeoIP
-	// database that would fill it needs a licence review first, so the
-	// column exists and the resolver lands later.
+	// database that would fill it needs a licence review, and no resolver
+	// is wired. The column exists so the row shape already carries the
+	// field.
 	IPRegion string `gorm:"column:ip_region;size:128;not null"`
 
 	CreatedAt  time.Time `gorm:"autoCreateTime;not null;index:idx_sessions_user_id,priority:2"`

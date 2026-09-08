@@ -192,14 +192,13 @@ func WithTenantSession(ctx context.Context, db *gorm.DB, fn func(tx *gorm.DB) er
 	isPostgres := db.Name() == string(DialectPostgres)
 
 	// Only a db carrying the audit write-capture plugin (Options.AuditBus
-	// was set) needs a buffer at all — this type-asserts db.Plugins, the
-	// map every db.Use registration lands in, rather than adding a new
+	// set) needs a buffer at all — this type-asserts db.Plugins, the map
+	// every db.Use registration lands in, rather than adding a new
 	// parameter to this function or to Repository[T]: the plugin is
 	// already reachable from the exact *gorm.DB every caller already
-	// passes here. A db with no such plugin (the common case before this
-	// mechanism existed, and every caller that never sets AuditBus) takes
-	// the pre-existing code path unchanged: ctx flows through untouched,
-	// with no buffer allocated and no extra work done.
+	// passes here. A db with no such plugin — every caller that never sets
+	// AuditBus — takes the plain path: ctx flows through untouched, with
+	// no buffer allocated and no extra work done.
 	plugin, auditEnabled := db.Plugins[auditCapturePluginName].(*auditCapturePlugin)
 
 	txCtx := ctx
@@ -276,11 +275,10 @@ func WithTenantSession(ctx context.Context, db *gorm.DB, fn func(tx *gorm.DB) er
 	// returning and the publishes below (and the audit persister's own
 	// inserts) landing leaves a committed business write with no audit row
 	// and no trace that one was owed. The window is shared by audit.Emit's
-	// path, cannot be closed without resurrecting the SQLITE_BUSY
-	// self-deadlock this mechanism replaced, and is recorded, with its
-	// detection story, in go/dbkit/audit/AGENTS.md's
-	// "Collection-to-persistence crash window" section — the two
-	// mechanisms' common home — not only here.
+	// path and cannot be closed without resurrecting the SQLITE_BUSY
+	// self-deadlock the buffer-until-after-commit design exists to avoid;
+	// the window and its detection story are recorded for both mechanisms
+	// together in the audit package's documentation.
 	if auditEnabled {
 		plugin.publishBuffered(ctx, buf)
 	}

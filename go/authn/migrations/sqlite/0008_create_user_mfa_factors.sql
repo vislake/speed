@@ -2,13 +2,13 @@
 -- before it: MFA is a property of the person, not of a tenant they happen
 -- to be acting inside.
 --
--- Only one factor type ships in this round: 'totp' (mfa.go's MFATypeTOTP).
--- The unique index on (user_id, type) is what makes enrolling again REPLACE
+-- 'totp' (mfa.go's MFATypeTOTP) is the only shipped factor type. The
+-- unique index on (user_id, type) is what makes enrolling again REPLACE
 -- rather than accumulate a second pending row for the same type -- see
--- Service.EnrollTOTP's own doc comment -- and it is also the reserved slot
--- a future WebAuthn/passkey factor (docs/internal/05: not in v1.0 scope,
--- but the second-factor interface shape is) would take a second row under,
--- with a different 'type' value, rather than a schema change.
+-- Service.EnrollTOTP's own doc comment. A second factor type (no
+-- WebAuthn/passkey factor is implemented) would take its own second row
+-- under the index with a different 'type' value, rather than a schema
+-- change.
 --
 -- secret is TOTP's shared secret, base32-encoded before encryption at rest
 -- through this module's PII serializer -- the same treatment as

@@ -3,11 +3,10 @@
 // consult_flow_test.go drives it through the composed HTTP stack against an
 // httptest.Server standing in for the OpenAI-compatible endpoint.
 //
-// ai-gateway itself ships no HTTP surface this round (go/ai-gateway/
-// AGENTS.md's "What this round ships" section), so there is no spec
-// fragment for this route to grow into -- it is mounted by hand, outside
+// ai-gateway itself ships no HTTP surface for chat, so there is no spec
+// fragment for this route to live in -- it is mounted by hand, outside
 // the OpenAPI machinery, the same pattern demo_notification.go's own demo
-// patient-message route already establishes in this app. Like that route,
+// patient-message route establishes in this app. Like that route,
 // it is deliberately outside demoRouteGuards' table too: it is mounted
 // directly on mux rather than through reg.Routes/mountModuleRoutes, so it
 // never needs (and cannot silently skip) an entry there.

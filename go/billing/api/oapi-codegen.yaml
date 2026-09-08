@@ -1,18 +1,15 @@
 # Generator configuration for billing's OpenAPI fragment (openapi.yaml in
-# this directory, per docs/internal/21-api-contract.md's module-asset
-# convention: every module keeps its spec at <module>/api/openapi.yaml).
+# this directory, following the module-asset convention that every module
+# keeps its spec at <module>/api/openapi.yaml).
 # Mirrors go/storage/api/oapi-codegen.yaml exactly in shape -- see that
 # file's own comment for the full rationale; this one records only what is
 # billing-specific.
 #
 # The module's generated surface is regenerated with oapi-codegen v2.8.0,
 # pinned at exactly that version in the two commands that must move
-# together: Taskfile.yml's api:gen task command (which will grow billing's
-# leg in the round that wires this fragment into the api-contract
-# enforcement, exactly as go/sharing's and go/pki's fragments each got
-# their own chore(ci) wiring commit after their surface round -- see this
-# module's AGENTS.md "Deferred" notes) and the identical pinned
-# invocation run from this directory during this round's own development.
+# together: Taskfile.yml's api:gen task command (the invocation that
+# regenerates this module's committed artifact) and the identical pinned
+# invocation run from this directory during development.
 # Both run `go run .../cmd/oapi-codegen@v2.8.0 -config oapi-codegen.yaml
 # openapi.yaml` from this directory. The generated file's header records
 # the generator version, so a regeneration with a different tool version

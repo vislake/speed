@@ -80,27 +80,23 @@ func TestAuditEvent_SetResult_Result_RoundTrip(t *testing.T) {
 
 // TestAuditEvent_DoesNotImplementTenantScoped and
 // TestAuditEvent_VisibilityDoesNotDependOnTenantContext together prove the
-// reverse-and-equally-important property this round's scope-freeze report
-// calls for: audit_events is platform data, not tenant data, so dbkit's
-// tenant-isolation plugin must leave it genuinely unaffected -- exactly
-// like go/config's row and go/jobs's jobRecord already prove of
-// themselves.
+// reverse-and-equally-important property: audit_events is platform data,
+// not tenant data, so dbkit's tenant-isolation plugin must leave it
+// genuinely unaffected -- the same proof go/config's row and go/jobs's
+// jobRecord carry.
 //
-// Both files that ship that exact proof (go/config/model_test.go,
-// go/jobs/store_test.go) call tenancytest.AssertNotTenantScoped, from
-// go/tenancy/tenancytest. This package cannot do the same:
+// go/config and go/jobs prove it with tenancytest.AssertNotTenantScoped,
+// from go/tenancy/tenancytest. This package cannot do the same:
 // go/tenancy/tenancytest imports go/dbkit itself (its AssertIsolated and
 // AssertNotTenantScoped both drive dbkit.Repository[T] and
 // dbkit.TenantScoped), and go/tenancy sits ABOVE go/dbkit in the module
 // dependency graph (pkgcore -> dbkit -> tenancy -> config/jobs -> ...).
 // go/dbkit/audit is a subpackage of dbkit itself, so importing
 // go/tenancy/tenancytest from here would make dbkit depend on tenancy --
-// inverting the direction CLAUDE.md's "Dependencies flow strictly
-// bottom-up" rule requires, and reintroducing exactly the kind of module
-// cycle (tenancy already requires dbkit) that rule exists to rule out.
-// These two tests reproduce AssertNotTenantScoped's two checks by hand
-// instead, using only dbkit and pkgcore -- the same two modules this
-// round's scope-freeze report says go/dbkit/audit may depend on.
+// inverting the bottom-up dependency direction and reintroducing exactly
+// the module cycle (tenancy already requires dbkit) the graph exists to
+// rule out. These two tests reproduce AssertNotTenantScoped's two checks
+// by hand instead, using only dbkit and pkgcore.
 func TestAuditEvent_DoesNotImplementTenantScoped(t *testing.T) {
 	if _, ok := any(AuditEvent{}).(dbkit.TenantScoped); ok {
 		t.Fatalf("AuditEvent implements dbkit.TenantScoped; audit_events is platform data (see model.go's own doc comment) and must not be tenant-scoped")

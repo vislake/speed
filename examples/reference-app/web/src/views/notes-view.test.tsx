@@ -60,8 +60,7 @@ import { NotesView } from './notes-view.js'
  * the api-client could normalize it) arrives in: no envelope code, no
  * client.* code, nothing apiErrorCodeOf can read. The bound-seam
  * replacement is how these tests drive the generated hook's queryFn
- * through a genuine codeless rejection (reference-app-web.md
- * P2-rnweb-1). */
+ * through a genuine codeless rejection. */
 const UNNORMALIZED_TRANSPORT_FAILURE: RequestFn = () =>
   Promise.reject(
     new Error('[notes-view.test] an un-normalized transport failure'),
@@ -419,10 +418,10 @@ describe('NotesView', () => {
     // query is refetched into a refusal that carries NO code -- a raw
     // transport error the api-client never normalized. The failed
     // refetch leaves the earlier `data` in the cache (tanstack v5
-    // keeps it), so classifying the failure by its code alone -- this
-    // view's earlier shape -- read "no code, data defined" and kept
-    // the stale row under an 'allowed' gate. The error state itself
-    // must be the classification: it renders the read-error suit.
+    // keeps it), so classifying the failure by its code alone would
+    // read "no code, data defined" and keep the stale row under an
+    // 'allowed' gate. The error state itself must be the
+    // classification: it renders the read-error suit.
     const rig = makeRealClientRig(demoServer({ initialNotes: [NOTE_ONE] }))
     await signInWithPassword(rig)
     const view = renderNotes(rig)
@@ -484,12 +483,11 @@ describe('NotesView', () => {
   it('surfaces a refused read on the first response under the app bootstrap\'s own query-client policy (reference-app-web.md P2-rnweb-2)', async () => {
     // The production QueryClient (createAppQueryClient) retries
     // nothing: transient retries belong to the api-client transport
-    // (its frozen policy already retries 429/502/503/504, network and
-    // timeouts on idempotent methods before an answer surfaces), and a
-    // definitive refusal like the rbac gate's 403 must never burn a
-    // doomed ~7-second react-query retry window (three retries at 1s,
-    // 2s and 4s of backoff) before the gate sees it. The gate answer
-    // must land on the FIRST response.
+    // (its frozen policy already retries the transient classes on
+    // idempotent methods before an answer surfaces), and a definitive
+    // refusal like the rbac gate's 403 must never burn a doomed
+    // multi-second react-query retry window before the gate sees it.
+    // The gate answer must land on the FIRST response.
     const rig = makeRealClientRig(demoServer({ denyNotesRead: true }))
     await signInWithPassword(rig)
     const view = renderNotes(rig, { queryClient: createAppQueryClient() })

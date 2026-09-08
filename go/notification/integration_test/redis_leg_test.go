@@ -20,8 +20,8 @@ package notification_test
 // JSON map (never the original struct -- go/pkgcore's own tier pins that),
 // so the test asserts the payload's four wire keys by the names the event
 // contract spells out (events.go's json tags), which is exactly what any
-// cross-replica consumer of the event -- this module's Hub included, and a
-// future mirror -- must key on.
+// cross-replica consumer of the event -- this module's Hub included --
+// must key on.
 //
 // The delivery driven here is a real one, not a direct announce: the
 // fixture "clinic" module (clinic/, booted only on the writer)

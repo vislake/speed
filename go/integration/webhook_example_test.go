@@ -1,12 +1,12 @@
 package integration_test
 
-// Runnable documentation for round 2's outbound-webhook surface, mirroring
-// example_test.go's round-1 convention: compiled AND executed by `go test`,
+// Runnable documentation for the outbound-webhook surface, mirroring
+// example_test.go's own convention: compiled AND executed by `go test`,
 // so a change to this module's public API that breaks the documented usage
 // fails the build.
 //
-// This is also round 2's mandatory end-to-end proof of the internal-to-
-// public event mapping mechanism (eventmapping.go's EventMapping,
+// It is also the end-to-end proof of the internal-to-public event mapping
+// mechanism (eventmapping.go's EventMapping,
 // module.go's WithEventMapping): it maps a REAL, already-shipped domain
 // event -- go/org's "org.member.joined" (go/org/events.go's
 // EventMemberJoined, go/org's MemberJoined payload) -- onto a versioned
@@ -37,16 +37,14 @@ package integration_test
 // suite (webhook_delivery_test.go, ssrf_test.go) -- compiled and run by
 // `go test` exactly as this example is, just not as a godoc Example, since
 // exercising the SSRF-guarded transport this way needs an override
-// (WithWebhookURLValidator/WithWebhookHTTPClient, module.go -- promoted to
-// exported options in the round that follows this one, once a real host
-// needed them too, see AGENTS.md's "Seams" section) that a production
-// composition must never call, so it has no place in documentation code
-// meant to be copied. examples/reference-app/cmd/server/webhook_flow_test.go
-// is that real host: it drives this exact org.member.joined mapping through
-// a real, composed application, against a real receiver process it
-// controls, with an independently re-verified HMAC signature and a real
-// retry-then-dead-letter proof -- see go/integration/AGENTS.md's "Reference
-// app: mandatory first consumer (round 2's webhook surface)" section.
+// (WithWebhookURLValidator/WithWebhookHTTPClient, module.go) that a
+// production composition must never call, so it has no place in
+// documentation code meant to be copied.
+// examples/reference-app/cmd/server/webhook_flow_test.go is that real
+// host: it drives this exact org.member.joined mapping through a real,
+// composed application, against a real receiver process it controls, with
+// an independently re-verified HMAC signature and a real
+// retry-then-dead-letter proof.
 import (
 	"context"
 	"encoding/json"
@@ -60,8 +58,8 @@ import (
 
 // orgMemberJoinedPublicPayload is the public v1 schema this example maps
 // org's real org.member.joined event onto -- a deliberately chosen SUBSET
-// of org.MemberJoined's own fields (per docs/internal/07-platform-
-// services.md's "only the deliberately chosen fields are exposed" rule):
+// of org.MemberJoined's own fields (per the "only the deliberately chosen
+// fields are exposed" rule):
 // InvitationID, an internal bookkeeping detail, is left out of the public
 // schema entirely.
 type orgMemberJoinedPublicPayload struct {

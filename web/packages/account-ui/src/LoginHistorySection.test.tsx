@@ -378,9 +378,10 @@ describe('LoginHistorySection', () => {
         if (historyCalls === 1) {
           // AuthnListLoginHistoryResponse marks `.attempts` optional, so
           // a 200 whose body omits the key is type-legal and react-query
-          // settles it as a successful answer. Before the fix the
-          // section read this settled shape as still loading and held
-          // the aria-busy skeleton forever, with no exit.
+          // settles it as a successful answer. The section must read
+          // this settled shape as the error state (an answer without
+          // its list is unreadable), never as still loading -- the
+          // aria-busy skeleton would have no exit.
           return jsonResponse(200, {})
         }
         return jsonResponse(200, { attempts: [attempt()] })

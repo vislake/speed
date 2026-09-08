@@ -88,11 +88,11 @@ import type { FileUploaderRow } from '@speed/ui-kit'
 /**
  * The upload endpoint the host's transport sends its one round trip
  * per file to. A real host's upload code calls a generated api-sdk
- * storage operation here -- the hooks publish only when the merged
- * document gains the storage fragment (deferred alongside org's, see
- * go/storage/AGENTS.md) -- so this is an explicitly labelled fixture
- * placeholder: ui-kit ships no endpoint, and the suite pins the
- * transport shape without pretending to know a wire protocol.
+ * storage operation here -- the merged API document ships no storage
+ * fragment, so no such operation exists -- and this is an explicitly
+ * labelled fixture placeholder: ui-kit ships no endpoint, and the
+ * suite pins the transport shape without pretending to know a wire
+ * protocol.
  */
 const STORAGE_UPLOAD_URL = 'https://uploads.example.test/objects'
 
@@ -410,11 +410,10 @@ naturally); buttons fall back to namespace defaults.
 
 ### The form family (FormField + FormLayout)
 
-The form family's shape mirrors the roadmap's form milestone: screens
-own a react-hook-form `useForm` instance, `FormLayout` supplies the
-skeleton and context, `FormField` adapts one field. Validation derived
-from generated types is the form milestone's follow-up (see
-Deferrals); today rules are RHF's.
+The form family's shape: screens own a react-hook-form `useForm`
+instance, `FormLayout` supplies the skeleton and context, `FormField`
+adapts one field. Validation derived from generated types is not
+implemented (see Deferrals); rules are RHF's.
 
 **FormLayout** -- the skeleton: installs the `FormProvider` context (so
 `FormField` children need no `control` prop), renders the `<form>` with
@@ -429,22 +428,21 @@ larger form, a filters panel). Props: `form` (the host's
 `UseFormReturn`, required), `children`, `onSubmit?`, `actions?`,
 `spacing?`, `maxWidth?`, `columns?`.
 
-`columns?: 1 | 2` (default `1`) is this round's opt-in responsive
-addition: omitting it (or passing `1` explicitly) renders the exact
-single-column flex flow FormLayout has always rendered -- zero behavior
-change for every existing consumer. Passing `columns={2}` switches the
-flow to a CSS Grid with two responsive column tracks: one track (a
-single column) below the `sm` breakpoint (600px), two equal tracks at
-`sm` and up. Each direct child (typically one `FormField` per cell)
-becomes one grid cell in source order; the `actions` row spans every
-column track in grid mode (`gridColumn: '1 / -1'`) so it always reads
-as one full-width row, matching its single-column appearance today.
-`sm` is the deliberate breakpoint, not `md`: a two-field row (name and
-email side by side, say) still has legible field widths as soon as a
-viewport clears the phone/tablet-portrait boundary, and a form whose
-fields genuinely need the full row width can still pass `columns={1}`
-regardless of viewport -- there is no per-field override to a wider
-span today (a possible future enhancement, not built).
+`columns?: 1 | 2` (default `1`) is the opt-in responsive addition:
+omitting it (or passing `1` explicitly) renders the exact single-column
+flex flow -- zero behavior change for every existing consumer. Passing
+`columns={2}` switches the flow to a CSS Grid with two responsive
+column tracks: one track (a single column) below the `sm` breakpoint
+(600px), two equal tracks at `sm` and up. Each direct child (typically
+one `FormField` per cell) becomes one grid cell in source order; the
+`actions` row spans every column track in grid mode
+(`gridColumn: '1 / -1'`) so it always reads as one full-width row,
+matching its single-column appearance. `sm` is the deliberate
+breakpoint, not `md`: a two-field row (name and email side by side,
+say) still has legible field widths as soon as a viewport clears the
+phone/tablet-portrait boundary, and a form whose fields genuinely need
+the full row width can still pass `columns={1}` regardless of viewport
+-- there is no per-field override to a wider span.
 
 ```tsx
 <FormLayout
@@ -546,9 +544,8 @@ page or squeezing column widths -- true regardless of column count or
 width, and needs no prop. `DataTable.test.tsx`'s
 "horizontal-scroll container" test pins this by rendering a
 deliberately over-wide column set and asserting the wrapper is a real
-`TableContainer` with `overflow-x: auto`, so a future refactor that
-drops `TableContainer` would fail a test instead of silently
-regressing.
+`TableContainer` with `overflow-x: auto`, so a refactor that drops
+`TableContainer` would fail a test instead of silently regressing.
 
 **Column priority is the opt-in reflow alternative to that scroll
 fallback.** A column's `priority?: 'high' | 'medium' | 'low'` hides it
@@ -561,15 +558,14 @@ responsive surface in this repo reads from (`@speed/tokens`'
 | `low` | `lg` (1200px) | `lg` -- the first column dropped as the viewport narrows |
 | `medium` | `md` (900px) | `md` |
 | `high` | `sm` (600px) | `sm` -- the last column dropped, only below the narrowest phone widths |
-| unset (default) | always | never -- today's exact behavior |
+| unset (default) | always | never -- the exact behavior |
 
 A narrowing viewport therefore sheds the least important columns
 first and keeps shedding until only the always-visible columns (no
 `priority` set) remain, even at `xs`. Omitting `priority` on every
 column renders with no visibility override at all -- a host that sets
-no column's priority sees byte-identical rendering, on every viewport,
-to before this feature existed; the `TableContainer` scroll fallback
-above still applies to it exactly as before.
+no column's priority sees byte-identical rendering on every viewport,
+and the `TableContainer` scroll fallback above still applies to it.
 
 The hiding is pure CSS -- a breakpoint-keyed `display` value (`none`
 below the tier's breakpoint, `table-cell` -- a table cell's own default
@@ -638,10 +634,9 @@ text is host-written and host-translated (the same contract as the form
 family's validation-error text); pre-flight validation (size, type,
 count) is the host's job, done before its transport starts. A real
 host's transport typically calls a generated api-sdk storage operation
-(the hooks publish only when the merged document gains the storage
-fragment -- deferred alongside org's, see `go/storage/AGENTS.md`);
-ui-kit ships no endpoint, and the usage example's scripted fetch stub
-stands in for that call.
+(the merged API document carries no storage fragment, so no generated
+storage operation exists); ui-kit ships no endpoint, and the usage
+example's scripted fetch stub stands in for that call.
 
 Other props: `multiple` (several files per selection; false by
 default), `accept` (forwarded to the picker; advisory only -- real
@@ -753,20 +748,19 @@ same rationale documented here.
 ## Deferrals and recorded decisions
 
 - **DataTable column-hiding / priority-reflow for narrow viewports**:
-  landed this round (see the DataTable section's Column priority
-  subsection) -- an opt-in `priority` field on `DataTableColumn` hides
-  lower-priority columns first as the viewport narrows through the
-  shared breakpoint scale, alongside the unaffected horizontal-scroll
-  fallback for columns that don't opt in.
-- **Validation from generated types**: zod-style validation derived from
-  the API-generated types is the form milestone's follow-up (roadmap),
-  deliberately not implemented here. The validation-error contract is
-  the seam: a future resolver layer can emit any message and the form
-  family renders it correctly today.
+  shipped (see the DataTable section's Column priority subsection) --
+  an opt-in `priority` field on `DataTableColumn` hides lower-priority
+  columns first as the viewport narrows through the shared breakpoint
+  scale, alongside the unaffected horizontal-scroll fallback for
+  columns that don't opt in.
+- **Validation from generated types**: zod-style validation derived
+  from the API-generated types is not implemented here. The
+  validation-error contract is the seam: a resolver layer can emit any
+  message and the form family renders it correctly.
 - **Error-code mapping**: backend error codes render verbatim unless
-  they happen to be ui-kit keys. The resolver round that turns codes
-  into text (which namespace owns which codes) is a later milestone; the
-  form family resolves keys in the ui-kit namespace only.
+  they happen to be ui-kit keys. A code-to-text resolver (which
+  namespace owns which codes) is not implemented; the form family
+  resolves keys in the ui-kit namespace only.
 - **Shadows adapter**: the floored 25-entry ramp (nearest token slot at
   or below each elevation) is a deliberate decision over interpolation,
   recorded in `createAppTheme.ts` and pinned by its tests.
@@ -776,23 +770,25 @@ same rationale documented here.
   branches are literals, a literal passed into a component across a
   boundary) are not flagged -- hosts own their literals; the rule is
   the floor, not the ceiling.
-- **Storybook**: no preview-harness round exists yet; components are
-  covered by jsdom unit tests plus axe scans, and color-contrast
-  verification awaits a browser-side visual round (see Accessibility).
+- **Storybook**: no preview harness exists; components are covered by
+  jsdom unit tests plus axe scans, and color-contrast verification is
+  not implemented (see Accessibility for what axe can and cannot
+  determine under jsdom).
 - **Tone 950**: the neutral ramp's 950 step has no MUI grey slot and is
   deliberately not mapped (see the factory table).
 
 ## Development
 
-From `web/packages/ui-kit`: `pnpm lint`, `pnpm typecheck`, `pnpm test`
-(175 tests across 12 files), `pnpm build`. The test suite runs in jsdom
+From `web/packages/ui-kit`: `pnpm lint`, `pnpm typecheck`, `pnpm test`,
+`pnpm build`. The test suite runs in jsdom
 (`vitest.config.ts`); shared helpers live in `test-utils/`
 (`renderWithProviders` builds the host tree -- fresh i18n instance per
 call, namespace registered -- `expectNoAxeViolations` runs axe -- and
 `emitted-css.ts`'s `emittedStyleText()` reads the CSS text emotion has
-injected into the document, used by the breakpoint-keyed sx assertions
-this round's responsive tests need: jsdom evaluates neither real layout
-nor `@media` conditions, so those tests are property/snapshot proofs
+injected into the document, used by the breakpoint-keyed sx
+assertions the responsive tests need: jsdom evaluates neither real
+layout nor `@media` conditions, so those tests are property/snapshot
+proofs
 that the intended declaration was wired into the render, not proofs
 that either side of a breakpoint looks correct at a real viewport
 width). Bilingual fixtures are the shipped locale files under `src/locales/`,

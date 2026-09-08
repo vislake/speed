@@ -25,10 +25,9 @@ const jsonContentType = "application/json; charset=utf-8"
 // ErrTextRequired is returned when a create-note request's text is empty
 // or all whitespace. Its localized text lives in this module's Locales()
 // resources (locales/{zh-CN,en-US}.toml, key "notes.text_required"), never
-// hardcoded here: per the backend coding standard's error-handling rule
-// (§6.2), a handler returns the structured code alone, and a client
-// resolves the human-readable message through its own i18n catalog keyed
-// on that code.
+// hardcoded here: a handler returns the structured code alone, and a
+// client resolves the human-readable message through its own i18n
+// catalog keyed on that code.
 var ErrTextRequired = apperr.Invalid("notes.text_required")
 
 // maxTextLength is the maximum number of characters -- Unicode code
@@ -123,8 +122,7 @@ var ErrNoteNotFound = apperr.NotFound("notes.note_not_found")
 // tenant tenancy.Middleware already resolved into the request context --
 // via pkgcore.MustTenantFromContext, both directly here and, redundantly,
 // again inside dbkit.Repository[Note]'s own methods -- and never from a
-// request parameter, header or body, per root CLAUDE.md's multi-tenant
-// isolation rule and backend coding standard §3.1.
+// request parameter, header or body.
 type Handler struct {
 	repo         *Repository
 	bus          pkgcore.EventBus
@@ -159,12 +157,11 @@ type Handler struct {
 // api.HandlerFromMux helper: it derives this module's method+path
 // patterns ("POST /api/v1/notes", "GET /api/v1/notes") from the "paths:"
 // keys of api/openapi.yaml itself (see api/notes-server.gen.go's
-// HandlerWithOptions), replacing what used to be a hand-written
-// registration of the same two patterns -- one less copy of path+method
+// HandlerWithOptions) -- one less copy of path+method
 // truth to keep in step with the spec by hand. net/http's own ServeMux
-// still gives every other method on apiPath an automatic 405 Method Not
-// Allowed (with a correctly populated Allow header) for free, exactly as
-// before. The spec's path and module.go's apiPath (the mount point, and
+// gives every other method on apiPath an automatic 405 Method Not
+// Allowed (with a correctly populated Allow header) for free. The spec's
+// path and module.go's apiPath (the mount point, and
 // the path tests request) must keep agreeing -- see apiPath's doc
 // comment in module.go.
 func NewHandler(repo *Repository, bus pkgcore.EventBus, auditActions pkgcore.AuditActionRegistrar, subject SubjectResolver) *Handler {
@@ -329,21 +326,21 @@ func (h *Handler) resolveSubject(w http.ResponseWriter, r *http.Request) (string
 // already committed by the time this runs, so a failure to record its
 // audit trail must not turn an otherwise successful create into a 500 for
 // the caller -- matching publishNoteCreated's identical reasoning below,
-// and docs/internal/10-compliance-and-audit.md's own rule that an
+// and the rule that an
 // audit-write failure "must alert, must not be silently dropped": an
 // Error-level structured log line is what "alert" means at this
-// milestone's scope, there being no dedicated alerting pipe yet. This and
+// scope, there being no dedicated alerting pipe yet. This and
 // publishNoteCreated are deliberately the only two places in this handler
-// that both log and do not also return the same error -- the backend
-// coding standard's "do not log an error and also return it" rule (§11)
-// is about not doing both for the SAME failure, and here nothing else
+// that both log and do not also return the same error -- logging and
+// returning the same error for the SAME failure is what the discipline
+// forbids, and here nothing else
 // ever surfaces either one.
 func (h *Handler) recordNoteCreatedAudit(ctx context.Context, note *Note, creatorUserID string) {
 	if h.bus == nil {
 		return
 	}
 	if creatorUserID != "" {
-		// P2-pkgcore-actor-1: Actor.DisplayName is deliberately left empty
+		// Actor.DisplayName is deliberately left empty
 		// here because this handler genuinely has no name to record. Its
 		// whole knowledge of the creator is the user id its host's
 		// SubjectResolver seam answered -- the seam's contract is
@@ -583,10 +580,10 @@ func noteMutationError(err error, noteID string) error {
 
 // writeError writes err to w as a JSON {code, params} body -- the
 // spec-generated api.NotesError, whose shape is the structured-error
-// envelope documented in docs/internal/11-cross-cutting.md and already
+// envelope already
 // used by go/tenancy/middleware.go's own (unexported) tenantErrorBody:
 // APIs return a stable code plus structured parameters, never localized
-// text (backend coding standard §6.2). An err that is not an
+// text. An err that is not an
 // *apperr.Error -- meaning something below this handler did not classify
 // it, such as pkgcore.ErrNoTenant -- is folded into errInternal so a
 // caller never sees raw Go error text either way.
@@ -642,7 +639,7 @@ type SubjectResolver interface {
 
 // compile-time check that *Handler implements the api.ServerInterface
 // generated from this module's api/openapi.yaml -- the enforcement half of
-// the spec-first flow (docs/internal/21-api-contract.md): add an operation
+// the spec-first flow: add an operation
 // to the fragment, regenerate, and this assertion stops compiling until
 // Handler implements it.
 var _ api.ServerInterface = (*Handler)(nil)

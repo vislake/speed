@@ -17,8 +17,8 @@ type QueryFilter struct {
 	// Actor, when non-empty, matches AuditEvent.ActorID exactly.
 	Actor string
 	// OnBehalfOf, when non-empty, matches AuditEvent.OnBehalfOfID exactly
-	// -- the impersonation-accountability dimension (P2-1): an event
-	// written during an impersonation session carries the impersonated
+	// -- the impersonation-accountability dimension: an event written
+	// during an impersonation session carries the impersonated
 	// user as Actor and the real administrator behind the session as
 	// OnBehalfOf (pkgcore's dual-identity rule), so filtering by
 	// OnBehalfOf answers "what did this administrator do through their
@@ -66,17 +66,14 @@ func (f QueryFilter) matches(evt audit.AuditEvent) bool {
 }
 
 // AuditQuery is compliance's read-only query layer over dbkit/audit.
-// Repository's existing, deliberately thin ListByTenant/Get surface --
-// the query-and-retention read side docs/internal/10-
-// compliance-and-audit.md describes as compliance's own scope. It adds
-// no method to audit.Repository itself and therefore cannot add an
+// Repository's existing, deliberately thin ListByTenant/Get surface. It
+// adds no method to audit.Repository itself and therefore cannot add an
 // Update or a Delete: it holds only the Repository's existing exported
-// methods and filters, in Go, what they return. This round's own scope
-// deliberately does not touch go/dbkit, so AuditQuery's filtering runs
-// entirely in application code rather than as SQL WHERE clauses -- an
-// honest limitation for a tenant with a very large audit trail, recorded
-// in AGENTS.md's Known limitations, not hidden behind a query-looking
-// method name.
+// methods and filters, in Go, what they return. Filtering runs entirely
+// in application code rather than as SQL WHERE clauses, since
+// audit.Repository exposes no SQL-level filter -- an honest cost for a
+// tenant with a very large audit trail (O(all rows for the tenant) per
+// call), stated rather than hidden behind a query-looking method name.
 //
 // The zero value is not ready to use; construct one with NewAuditQuery.
 type AuditQuery struct {
@@ -118,11 +115,11 @@ func (q *AuditQuery) Query(ctx context.Context, filter QueryFilter) ([]audit.Aud
 // The caller supplies this list explicitly -- typically every tenant a
 // TenantLister returned -- because audit.Repository exposes no single
 // "every tenant, all at once" read (a deliberate omission of dbkit/audit's
-// own round, and this round does not touch dbkit to add one): a genuinely
-// unbounded cross-tenant scan is composed here from one ListByTenant call
-// per named tenant, so its cost scales with len(tenants), not with a
-// dedicated cross-tenant index. Results are merged, filtered by filter,
-// and sorted newest first across the whole set.
+// Repository): a genuinely unbounded cross-tenant scan is composed here
+// from one ListByTenant call per named tenant, so its cost scales with
+// len(tenants), not with a dedicated cross-tenant index. Results are
+// merged, filtered by filter, and sorted newest first across the whole
+// set.
 func (q *AuditQuery) QueryAcrossTenants(ctx context.Context, tenants []string, filter QueryFilter) ([]audit.AuditEvent, error) {
 	if _, ok := pkgcore.SystemReasonFromContext(ctx); !ok {
 		return nil, ErrAuditQueryRequiresSystemContext

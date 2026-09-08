@@ -142,8 +142,8 @@ func waitForImageGenerateJob(ctx context.Context, queue jobs.Queue, id jobs.JobI
 	}
 }
 
-// Example_generateImage walks round 2's async image-generation pipeline
-// end to end: wire a jobs.StandaloneQueue and a real go/storage
+// Example_generateImage walks the async image-generation pipeline end to
+// end: wire a jobs.StandaloneQueue and a real go/storage
 // ObjectService (both required by WithImageGeneration), call
 // Gateway.GenerateImage, drain the module's declared job handlers onto the
 // queue, and poll the enqueued job to completion -- against a fake

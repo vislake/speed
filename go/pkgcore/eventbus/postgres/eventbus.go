@@ -10,10 +10,8 @@
 //
 // It is split out of go/pkgcore's own package for the identical reason
 // eventbus/redis is: a consumer which never wires a PostgreSQL-backed bus
-// must not inherit jackc/pgx/v5 in its dependency graph (docs/internal/03-
-// deployment-modes.md's implementation-registry section measures the cost
-// and names the boundary; this package's own AGENTS.md entry records the
-// measured number for pgx specifically).
+// must not inherit jackc/pgx/v5 in its dependency graph; its measured
+// dependency cost is recorded in its package documentation.
 //
 // Importing this package registers "eventbus.postgres" on pkgcore's shared
 // EventBusRegistry as a side effect (see register.go) -- the same
@@ -24,7 +22,7 @@
 // instead builds its own Preset (a plain map literal, see Preset's own doc
 // comment) or bypasses the preset layer entirely by constructing NewEventBus
 // and wiring it with pkgcore.WithEventBus, exactly as a host choosing
-// eventbus/redis explicitly does today.
+// eventbus/redis explicitly does.
 package postgres
 
 import (
@@ -68,9 +66,7 @@ const (
 	// before this package treats the wake as a plain timeout and polls the
 	// outbox anyway. It is this implementation's counterpart of
 	// eventbus/redis's eventReaderBlock: a short block keeps Close
-	// prompt, and doubles as the periodic anti-loss poll interval described
-	// in this package's own AGENTS.md entry (go/config's "anti-loss poller
-	// behind the events" is the precedent both share) -- there is no
+	// prompt, and doubles as the periodic anti-loss poll interval -- there is no
 	// separate ticker, because a WaitForNotification that times out is
 	// itself the tick.
 	listenBlock = 2 * time.Second
@@ -174,10 +170,10 @@ const (
 //     the catch-up loop's own handler-then-advance gap redelivers the
 //     row for the same reason. advanceCursorAtLeast retries a bounded
 //     number of times over pool (see its own doc comment) precisely to
-//     shrink the catch-up side of this window -- most single connection
-//     blips now recover inside that call instead of surfacing as a
-//     duplicate at all -- but a failure that outlasts every retry still
-//     redelivers rather than silently drops. One exception to the
+//     shrink the catch-up side of this window -- most single-connection
+//     blips recover inside that call instead of surfacing as a duplicate at
+//     all. A failure that outlasts every retry still redelivers rather than
+//     silently drops. One exception to the
 //     never-loss half of that argument exists, and it is the price of
 //     the wedge property below: a row whose LOCAL delivery is still in
 //     progress when the catch-up scan passes it (the scan skips rows
@@ -386,7 +382,7 @@ type EventBus struct {
 	// completed, the decoded event retries re-invoke them with, and the
 	// attempt accounting that keeps the retry bounded. The record is what
 	// preserves the "a panicked delivery is not acked as delivered" intent
-	// without the type-stalling wedge it used to cause: the scan advances
+	// without wedging the type: the scan advances
 	// its cursor past a panicked row exactly like a clean one (see
 	// deliverPendingForType), so the row is never fetched again and never
 	// re-fanned out to the healthy siblings, while the still-panicking
@@ -727,8 +723,8 @@ func (b *EventBus) subscribedTypes() []string {
 // asked for translated into pgx's own idiom: go/dbkit's precedent (see
 // go/dbkit/audit's append-only bypass tests) is a dedicated *sql.Conn
 // pulled out of an existing *sql.DB's pool; this package has no *sql.DB or
-// *gorm.DB at all (go/pkgcore cannot import go/dbkit -- see root CLAUDE.md's
-// module dependency direction), so its own dedicated connection is a wholly
+// *gorm.DB at all (go/pkgcore cannot import go/dbkit: the dependency graph
+// runs pkgcore -> dbkit -> ...), so its own dedicated connection is a wholly
 // independent *pgx.Conn dialed from pool's own connection config, rather
 // than one borrowed from and never returned to pool -- simpler, and with
 // no risk of leaving a LISTENing session inside a pool other queries might
@@ -1001,9 +997,8 @@ func (b *EventBus) deliverPendingForType(ctx context.Context, eventType string) 
 				// permanently panicking handler is a programming bug an
 				// operator must fix or remove, and after
 				// maxPanickedRowAttempts attempts the row settles with a
-				// terminal log line -- never an unbounded hot loop, unlike
-				// the wedge this branch used to cause by returning before
-				// the advance (the broker-backed twins bound their own
+				// terminal log line -- never an unbounded hot loop, and never a wedge:
+				// returning before the advance would stall the type (the broker-backed twins bound their own
 				// panicked-delivery redeliveries by their own mechanisms:
 				// eventbus/nats's negatively-acknowledged messages are
 				// redelivered only up to the eventMaxDeliver budget --

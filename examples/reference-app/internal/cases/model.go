@@ -31,10 +31,10 @@ const casePhotosTable = "case_photos"
 //
 // The row carries no status column: a "case status workflow" (open/closed/
 // archived vocabulary and the transitions between states) is deliberately
-// not built this round -- nothing in this app would read or write it, and
-// the P3 UI round should own the semantics when it designs the case list's
-// interactions (see the package doc comment's "Honest record" section).
-// The row is created once and read; nothing in this package updates it.
+// absent -- nothing in this app would read or write it, and a status
+// vocabulary is a case-list-interaction decision (see the package doc
+// comment's "Known limitations" section). The row is created once and
+// read; nothing in this package updates it.
 type caseRecord struct {
 	// ID is an application-generated UUID (see service.go's Create), never
 	// a database-generated one -- the backend coding standard (§5) requires
@@ -59,7 +59,8 @@ type caseRecord struct {
 	// PatientRef is the optional clinic-given identifier for the patient
 	// (a chart number, an internal reference) -- display-only, deliberately
 	// no PHI semantics beyond what a demo intake form needs (see the
-	// package doc comment's "Honest record" section). Empty is the "the
+	// package doc comment's "Known limitations" section). Empty is the
+	// "the
 	// clinic gave none" sentinel, the same NOT NULL DEFAULT '' convention
 	// notes.Note's CreatorUserID column follows.
 	PatientRef string `gorm:"column:patient_ref;size:64;not null;default:''"`
@@ -71,8 +72,8 @@ type caseRecord struct {
 	// Create. It is the row's recorded attribution: the case list is
 	// clinic-wide (Service.List enumerates every case of the tenant,
 	// never one creator's subset -- see the package doc comment's
-	// "Shape decision" section for the block-A decision), so this column
-	// is history, not a list key. The column carries a NOT NULL
+	// "Shape decision" section for the clinic-wide decision), so this
+	// column is history, not a list key. The column carries a NOT NULL
 	// DEFAULT '' so pre-existing rows and any caller that creates a case
 	// without a resolvable creator (tests, seed code) stay valid: an
 	// empty CreatorUserID is the "no attributable creator" sentinel, and
@@ -92,11 +93,10 @@ func (caseRecord) TableName() string { return casesTable }
 // casePhotoRecord is one photo of one case: a reference to an existing
 // go/storage photo object the case's patient record groups with its other
 // photos. The bytes never live here -- the object id is a reference only,
-// recorded without any cross-module foreign key (root CLAUDE.md: "Do not
-// create cross-module foreign keys"), and go/storage's own object access
-// controls remain the protection when the bytes are opened (see the
-// package doc comment's "Honest record" section on what create does not
-// verify).
+// recorded without any cross-module foreign key, and go/storage's own
+// object access controls remain the protection when the bytes are opened
+// (see the package doc comment's "Known limitations" section on what
+// create does not verify).
 //
 // The row is tenant data, shaped exactly like caseRecord above (TenantModel
 // embed, tenant filter injected, never hand-written). Its identity is its
@@ -111,8 +111,9 @@ func (caseRecord) TableName() string { return casesTable }
 //
 // Position is the photo's deterministic place in the case's attachment
 // order, taken from the create request's photo list (0-based). The detail
-// read orders by it; a future add-photo operation appends at max+1, which
-// is why the column exists rather than relying on timestamp luck.
+// read orders by it; an add-photo operation, once one exists, appends at
+// max+1 -- which is why the column exists rather than relying on
+// timestamp luck.
 type casePhotoRecord struct {
 	// ID is an application-generated UUID (see service.go's Create), the
 	// row's own identity -- the same application-generated-primary-key rule
@@ -132,8 +133,9 @@ type casePhotoRecord struct {
 	CaseID string `gorm:"column:case_id;size:36;not null"`
 
 	// ObjectID is the referenced go/storage photo object's id -- the value
-	// that feeds smilesim's per-photo enumeration (the P3 pairing's "after"
-	// candidates) and, when bytes are needed, go/storage's own open paths.
+	// that feeds smilesim's per-photo enumeration (the before/after
+	// pairing's "after" candidates) and, when bytes are needed,
+	// go/storage's own open paths.
 	ObjectID string `gorm:"column:object_id;size:64;not null"`
 
 	// Position is the 0-based attachment-order index within the case (see

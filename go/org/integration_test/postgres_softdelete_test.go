@@ -10,17 +10,16 @@ import (
 
 // TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds_Postgres
 // re-runs go/org's own tree_test.go case of the same name against a real
-// PostgreSQL server. It is the round's own proof that
+// PostgreSQL server. It is the proof that
 // uq_org_nodes_sibling_name's replacement by its WHERE deleted_at IS NULL
 // partial-index equivalent (migrations/{sqlite,postgres}/0004_add_soft_delete.sql)
 // behaves identically on the engine whose partial-index syntax and collation
 // genuinely differ from SQLite's -- the unit-tier SQLite proof alone cannot
 // rule out a PostgreSQL-specific partial-index mistake (a wrong predicate, a
 // missing WHERE clause the SQLite planner tolerates differently) shipping
-// unnoticed. Against the pre-round full unique index this CreateChild would
-// fail with ErrDuplicateSiblingName -- a real functional regression the
-// migration exists to avoid, per its own header comment and
-// docs/internal/04-data-and-tenancy.md's delete-semantics section.
+// unnoticed. Against a full unique index this CreateChild would fail with
+// ErrDuplicateSiblingName -- a real functional regression the migration
+// exists to avoid, per its own header comment.
 func TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds_Postgres(t *testing.T) {
 	tree := org.NewTreeService(newPostgres(t))
 	ctx := tenantCtx("tenant-a")
@@ -103,15 +102,15 @@ func TestTreeService_Restore_RecreatesLiveTree_Postgres(t *testing.T) {
 
 // TestMemberService_Remove_ThenAdd_SameUser_Succeeds_Postgres re-runs
 // go/org's own membership_test.go case of the same name against a real
-// PostgreSQL server. It is the round's own proof that
+// PostgreSQL server. It is the proof that
 // uq_memberships_tenant_user's replacement by its WHERE deleted_at IS NULL
 // partial-index equivalent (migrations/{sqlite,postgres}/0004_add_soft_delete.sql)
 // actually frees a removed member's seat for reuse on PostgreSQL, not only
 // on SQLite -- the two engines' partial-index and collation behaviour
 // genuinely differ, so a SQLite-only proof cannot rule out a
-// PostgreSQL-specific regression here. Against the pre-round full unique
-// index this Add would fail with ErrMembershipExists -- a real functional
-// regression the migration exists to avoid.
+// PostgreSQL-specific regression here. Against a full unique index this
+// Add would fail with ErrMembershipExists -- a real functional regression
+// the migration exists to avoid.
 func TestMemberService_Remove_ThenAdd_SameUser_Succeeds_Postgres(t *testing.T) {
 	db := newPostgres(t)
 	tree := org.NewTreeService(db)
@@ -151,7 +150,7 @@ func TestMemberService_Remove_ThenAdd_SameUser_Succeeds_Postgres(t *testing.T) {
 	}
 
 	// The seat is still exclusive among LIVE rows on PostgreSQL too: a second
-	// Add for the same user is still refused, exactly as before this round.
+	// Add for the same user is still refused.
 	if _, err := members.Add(ctx, "u-returning", left.ID); !hasCode(err, org.ErrMembershipExists.Code) {
 		t.Errorf("second live Add error = %v, want org.membership_exists", err)
 	}
@@ -207,14 +206,14 @@ func TestMemberService_Restore_ThenGet_Postgres(t *testing.T) {
 
 // TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds_Postgres re-runs
 // go/org's own tree_test.go case of the same name against a real PostgreSQL
-// server. It is the P1-org-11 regression proof on the dialect the fix's
-// migration was shipped for as much as for SQLite: 0007's single-root index
-// scoped on parent_id = "" alone, so a mark-deleted root kept occupying its
-// tenant's root slot and every later CreateRoot collided with the invisible
-// row (org.root_already_exists, forever); 0008_single_root_live.sql narrows
-// the index to WHERE parent_id = "" AND deleted_at IS NULL, and this test
-// pins that a soft-deleted root's slot frees immediately on real
-// PostgreSQL, whose partial-index behaviour genuinely differs from SQLite's.
+// server. It is the soft-deleted-root-slot regression proof on the dialect
+// whose partial-index behaviour genuinely differs from SQLite's: 0007's
+// single-root index scoped on parent_id = "" alone keeps a mark-deleted
+// root occupying its tenant's root slot, and every later CreateRoot
+// collides with the invisible row (org.root_already_exists, forever);
+// 0008_single_root_live.sql narrows the index to WHERE parent_id = "" AND
+// deleted_at IS NULL, and this test pins that a soft-deleted root's slot
+// frees immediately on real PostgreSQL.
 func TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds_Postgres(t *testing.T) {
 	tree := org.NewTreeService(newPostgres(t))
 	ctx := tenantCtx("tenant-a")

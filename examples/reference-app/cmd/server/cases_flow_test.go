@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// This file drives product round P2b's case domain routes
+// This file drives the case domain routes
 // (cmd/server/cases.go) through the real composed HTTP stack
 // buildTestServer builds -- the authn+tenancy middleware chain, the real
 // registration/sign-in surface, and a real temp-file SQLite database whose
@@ -145,7 +145,7 @@ func assertCasesError(t *testing.T, resp *http.Response, wantStatus int, wantCod
 // happy path: a clinic staff member creates a case for a patient with two
 // uploaded photos, sees it on the clinic's case list, and reads its
 // detail back with the photos in attachment order -- the exact queries
-// the P3 UI will make.
+// the case web UI will make.
 func TestCasesFlow_CreateListDetail_Journey(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-journey")
@@ -356,8 +356,8 @@ func TestCasesFlow_Anonymous_Refused(t *testing.T) {
 	}
 }
 
-// TestCasesFlow_OversizedBody_RefusedWithInvalidRequestBody is the P2-12
-// regression for the MaxBytesReader bound cmd/server/cases.go now applies
+// TestCasesFlow_OversizedBody_RefusedWithInvalidRequestBody pins the
+// MaxBytesReader bound cmd/server/cases.go applies
 // (see casesMaxRequestBodyBytes), mirroring the identical regressions
 // internal/notes/handler_test.go's own oversized-body test and
 // go/authn/handler_test.go's TestHandler_Register_OversizedBody_RefusedWithInvalidRequestBody
@@ -368,13 +368,13 @@ func TestCasesFlow_Anonymous_Refused(t *testing.T) {
 // padding is a perfectly legal create-case request, so the ONLY thing that
 // can refuse it is the body bound, and the refusal must surface as the
 // catalogued invalid-request-body code rather than a successful case
-// creation (which is what an unbounded decoder did before the fix).
+// creation: an unbounded decoder would accept the whole body.
 func TestCasesFlow_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 	acmeToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "cases-oversized")
 
 	// One byte over the bound -- casesMaxRequestBodyBytes's value, 1<<16,
-	// written as a literal so this test also compiles against the pre-fix
+	// written as a literal so this test also compiles against a handler that
 	// handler, which defined no constant -- spent on JSON-leading
 	// whitespace (legal, and skipped by the decoder), so the payload that
 	// follows -- a valid create-case request -- is what an unbounded
@@ -393,17 +393,12 @@ func TestCasesFlow_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T) {
 	})
 }
 
-// TestCasesFlow_ColleagueSeesColleaguesCase is the block-A regression in
-// its cleanest form: two real signed-in accounts in ONE tenant; the
-// first creates a case; the second's list must contain it. The test is
-// written against API surface that predates the block-A round (create
-// and list only, no photo operations), so it compiles and runs against
-// the pre-fix code untouched -- where it FAILS, because the pre-fix list
-// answered the caller's own cases and the colleague's read came back
-// empty (one patient, two charts: the acceptance review's exact
-// finding). Against the clinic-wide list it passes. Root CLAUDE.md's
-// bug-fix test policy: this is the fail-before/pass-after pin for the
-// list-scoping fix.
+// TestCasesFlow_ColleagueSeesColleaguesCase is the clinic-wide-list
+// regression in its cleanest form: two real signed-in accounts in ONE
+// tenant; the first creates a case; the second's list must contain it.
+// The property being pinned is that the list answers every case of the
+// tenant -- never the caller's own cases only, which would leave the
+// colleague's read empty (one patient, two charts).
 func TestCasesFlow_ColleagueSeesColleaguesCase(t *testing.T) {
 	srv, cfg, _ := buildTestServer(t)
 	aliceToken := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "colleague-alice")
@@ -428,13 +423,11 @@ func TestCasesFlow_ColleagueSeesColleaguesCase(t *testing.T) {
 }
 
 // TestCasesFlow_BlockA_ClinicJourney is the composed-stack form of the
-// block-A acceptance journey the e2e gate (core-journey.pending.spec.ts's
-// two block-A tests) names: a clinic user creates a case with a real
+// clinic-wide acceptance journey the e2e gate (core-journey.spec.ts)
+// names: a clinic user creates a case with a real
 // photo and sees it listed with the photo readable on the case, and a
 // second user of the SAME clinic sees the first user's case in the list
-// -- the property that fails before the clinic-wide list fix (the list
-// used to answer the caller's own cases only, so the colleague's read
-// came back empty and the patient got a second chart) -- while a third
+// -- while a third
 // user in ANOTHER tenant sees neither. The journey runs through the real
 // composed HTTP stack with real signed-in accounts (no demo header, the
 // browser shape): the photo travels through the cases upload op, the

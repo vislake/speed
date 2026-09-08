@@ -211,7 +211,7 @@ func TestExportService_Export_ParticipantErrorIsPartialFailure(t *testing.T) {
 
 // TestExportService_Export_DeliversThroughSharing proves Export creates a
 // go/sharing share pointing at the stored object, with the delivery
-// choices this round makes: a single view, defaultExportDeliveryExpiry's
+// choices of the module: a single view, defaultExportDeliveryExpiry's
 // duration and Sensitive true -- and returns the minted share's id and
 // token to the caller.
 func TestExportService_Export_DeliversThroughSharing(t *testing.T) {
@@ -390,17 +390,17 @@ func TestExportService_Export_ConfigReaderReportingNonPositive_FallsBackToDefaul
 }
 
 // TestExportService_Export_ConfigReaderBeyondSharingCeiling_Clamped proves
-// the upper clamp of exportDeliveryExpiry (finding P1-sharing-3's
-// compliance leg): a wired ExportDeliveryExpiryReader answering a duration
-// LONGER than go/sharing's explicit-expiry ceiling
-// (sharing.MaxExplicitShareLifetime) must not be handed to sharing.Create
-// as an explicit ExpiresAt -- sharing refuses an explicit expiry beyond
-// its ceiling, so honoring the answer as given would let one host
-// configuration break every export. The window is clamped DOWN to the
-// sharing ceiling (the closest mintable duration to what the operator
-// configured -- the mirror image of the `<= 0` fallback's "nonsense
-// resolves to the honest default"), never minted at the configured length
-// and never silently dropped to defaultExportDeliveryExpiry.
+// the upper clamp of exportDeliveryExpiry: a wired
+// ExportDeliveryExpiryReader answering a duration LONGER than go/sharing's
+// explicit-expiry ceiling (sharing.MaxExplicitShareLifetime) must not be
+// handed to sharing.Create as an explicit ExpiresAt -- sharing refuses an
+// explicit expiry beyond its ceiling, so honoring the answer as given
+// would let one host configuration break every export. The window is
+// clamped DOWN to the sharing ceiling (the closest mintable duration to
+// what the operator configured -- the mirror image of the `<= 0`
+// fallback's "nonsense resolves to the honest default"), never minted at
+// the configured length and never silently dropped to
+// defaultExportDeliveryExpiry.
 func TestExportService_Export_ConfigReaderBeyondSharingCeiling_Clamped(t *testing.T) {
 	svc, repo, _, fakeSharing := newExportHarness(t)
 	svc.cfg = fakeExportDeliveryExpiryReader{d: sharing.MaxExplicitShareLifetime + 30*24*time.Hour, ok: true}
@@ -468,10 +468,9 @@ func TestExportService_Export_DeliveryWindowBeyondSharingCeiling_RealSharingStil
 // ctx that carries no tenant. The ctx tenant is the single data boundary an
 // export may ever read through -- every participant's Export callback reads
 // repo.List(ctx) -- so a bare or background ctx must never become a license
-// to pick any tenant via the tenant argument. The ungated behavior this
-// test pins against is Export's old unconditional
-// pkgcore.WithTenant(ctx, tenant) re-scope, under which this call exported
-// tenant-a's rows from a background context and returned nil.
+// to pick any tenant via the tenant argument. An unconditional re-scope to
+// the tenant argument would let this call export tenant-a's rows from a
+// background context.
 func TestExportService_Export_NoTenantContext_Refused(t *testing.T) {
 	svc, _, _, fakeSharing := newExportHarness(t)
 
@@ -488,8 +487,8 @@ func TestExportService_Export_NoTenantContext_Refused(t *testing.T) {
 // the tenant ctx carries differs from the tenant argument. Export is
 // documented to read the SAME tenant the caller's own ctx is scoped to, so
 // the argument may only echo the ctx tenant back, never name a wider one --
-// under the old unconditional re-scope this call exported tenant-a's rows
-// while the ctx said tenant-b.
+// an unconditional re-scope would let this call export tenant-a's rows
+// while the ctx says tenant-b.
 func TestExportService_Export_TenantMismatch_Refused(t *testing.T) {
 	svc, _, _, fakeSharing := newExportHarness(t)
 
@@ -520,13 +519,11 @@ func TestExportService_Export_NoSharingWired_Refuses(t *testing.T) {
 // go/sharing.Create is reported as ErrExportDeliveryFailed, distinct from
 // a participant gathering failure, while the already-gathered manifest and
 // its storage key are still returned -- and that the stored object itself
-// is deleted before Export returns (finding P1-6's delivery-failure half):
-// a manifest no share can ever reference is an un-shareable copy of the
-// tenant's complete data, so a failed delivery must not leave it behind
-// and an admin's retried Export calls must not accumulate one dump per
-// attempt. The behavior this test pins against left every failed
-// attempt's manifest stored forever, so three retries left three orphaned
-// objects.
+// is deleted before Export returns: a manifest no share can ever
+// reference is an un-shareable copy of the tenant's complete data, so a
+// failed delivery must not leave it behind and an admin's retried Export
+// calls must not accumulate one dump per attempt. Three retried failing
+// attempts must leave zero objects behind.
 func TestExportService_Export_DeliveryFailureIsReported(t *testing.T) {
 	svc, repo, store, fakeSharing := newExportHarness(t)
 	tenant := pkgcore.TenantID("tenant-a")
@@ -620,10 +617,9 @@ func newRealSharingService(t *testing.T) *sharing.Service {
 // whose ResourceRef names the export's own stored object key, and reading
 // that key back from the same ObjectStore Export wrote it to yields the
 // identical manifest Export gathered. (go/sharing's Access does not itself
-// resolve ResourceRef into bytes -- AGENTS.md's Known limitations records
-// that as sharing's own future-round work -- so this test reads the
-// object directly through the ObjectStore, the same seam a future HTTP
-// layer would use once it exists.)
+// resolve ResourceRef into bytes, so this test reads the object directly
+// through the ObjectStore -- the same seam an HTTP layer resolving a share
+// to its bytes would use.)
 func TestExportService_Export_DeliversThroughRealSharingService(t *testing.T) {
 	svc, repo, store, _ := newExportHarness(t)
 	tenant := pkgcore.TenantID("tenant-a")
@@ -684,11 +680,11 @@ func TestExportService_Export_DeliversThroughRealSharingService(t *testing.T) {
 // the audience not entitled to platform-internal diagnostics -- the link
 // holder, who is entitled to read the export's data but not internal
 // failure text that can name other subjects, internal object keys or
-// infrastructure details (the finding's audience argument). The text's
-// home is the structured log at the gather site, behind
-// go/observability's redaction layer; neither the returned manifest nor
-// the stored bytes may carry it. The unfixed code wrote
-// exportErr.Error() into the manifest, so both assertions fail against it.
+// infrastructure details (the audience argument). The text's home is the
+// structured log at the gather site, behind go/observability's redaction
+// layer; neither the returned manifest nor the stored bytes may carry it
+// -- writing exportErr.Error() into the manifest would fail both
+// assertions.
 func TestExportService_Export_ParticipantErrorClassifiedNeverRawText(t *testing.T) {
 	// The failure text names an internal object key -- the class of
 	// platform-internal content the deliverable must never carry.

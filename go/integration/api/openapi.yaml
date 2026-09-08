@@ -3,46 +3,38 @@ info:
   title: integration
   description: >-
     A tenant's outward-facing API surface: the API keys a tenant issues to
-    its own scripts and third-party systems (round 1: issuance, listing,
-    rotation and revocation, under /apikeys), and the outbound webhook
+    its own scripts and third-party systems (issuance, listing, rotation
+    and revocation, under /apikeys), and the outbound webhook
     subscriptions that deliver this platform's public events to a tenant's
-    own receivers (round 2's subscription management, mounted in round 7:
-    create, list, update, delete, restore, and the recent-deliveries log,
-    under /webhooks). This
-    fragment follows the operationId (integration_<action><Resource>) and
-    schema-name (Integration<Type>) conventions from
-    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
-    regenerates integration-server.gen.go (in this directory) from this
-    file, with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
-    .github/workflows/api-contract.yml.
+    own receivers (create, list, update, delete, restore, and the
+    recent-deliveries log, under /webhooks). This fragment follows the
+    operationId (integration_<action><Resource>) and schema-name
+    (Integration<Type>) naming conventions of the repository's OpenAPI
+    fragments. task api:gen regenerates integration-server.gen.go (in this
+    directory) from this file, with oapi-codegen pinned at v2.8.0 -- see
+    oapi-codegen.yaml and .github/workflows/api-contract.yml.
 
     There is deliberately no tenant_id anywhere on this surface, in any
     path, query, header or request/response body: the tenant is always the
-    one tenancy.Middleware already resolved from the request
-    (docs/internal/04-data-and-tenancy.md; root CLAUDE.md's multi-tenant
-    isolation rule).
+    one tenancy.Middleware already resolved from the request, per the
+    multi-tenant isolation rule.
 
-    Round 7 grew the fragment's webhook half -- round 2's Service-level
-    subscription CRUD (CreateWebhookSubscription and friends, until now
-    deliberately unmounted; see AGENTS.md's round-7 record) plus round 3's
-    RestoreWebhookSubscription and the recent-deliveries log -- and it now
-    covers both surfaces. Both halves live under ONE mount path
-    (/api/v1/integration): /apikeys for round 1's four operations and
-    /webhooks for round 2/3's six. A router-level permission gate that must
-    tell them apart (a GET under /apikeys needs integration:apikey:read, a
-    GET under /webhooks integration:webhook:read) therefore dispatches on
-    the request's sub-path, never on method alone -- see the reference
-    app's guardIntegrationRoute.
+    Both halves live under ONE mount path (/api/v1/integration): /apikeys
+    for the four API-key operations and /webhooks for the six webhook
+    operations (subscription CRUD, restore, and the recent-deliveries
+    log). A router-level permission gate that must tell them apart (a GET
+    under /apikeys needs integration:apikey:read, a GET under /webhooks
+    integration:webhook:read) dispatches on the request's sub-path, never
+    on method alone -- see the reference app's guardIntegrationRoute.
 
-    Merging this fragment into the application-wide build/openapi/speed.yaml
-    is deliberately deferred, the identical carve-out org's, storage's and
-    sharing's own fragments already draw: this surface has no in-workspace
-    web (@speed/api-sdk / orval) consumer yet, only the reference app's Go
-    HTTP clients in apikey_flow_test.go and webhook_crud_flow_test.go, so
-    joining the merged document and generating a frontend SDK for it would
-    be generating code nothing calls. See Taskfile.yml's api:gen/api:merge
-    task comments for the exact "which fragments join the merge" rationale
-    this fragment follows.
+    This fragment stays out of the application-wide
+    build/openapi/speed.yaml merge, the identical carve-out org's,
+    storage's and sharing's own fragments already draw: this surface has
+    no in-workspace web (@speed/api-sdk / orval) consumer yet, only the
+    reference app's Go HTTP clients in apikey_flow_test.go and
+    webhook_crud_flow_test.go, so joining the merged document and
+    generating a frontend SDK for it would be generating code nothing
+    calls.
   version: 0.0.0
 paths:
   /api/v1/integration/apikeys:
@@ -208,12 +200,11 @@ paths:
       description: >-
         The creator is the caller's own authenticated identity, resolved
         server-side through the same SubjectResolver seam
-        integration_createAPIKey uses (AGENTS.md's round-7 record) -- never
-        a request field. url is validated exactly as
-        Service.CreateWebhookSubscription validates it, before anything is
-        persisted: missing is 400, and a URL whose host is malformed,
-        unresolvable, or blocked as private/loopback is refused outright
-        (go/integration's two-time SSRF rules -- see AGENTS.md). Every
+        integration_createAPIKey uses -- never a request field. url is
+        validated exactly as Service.CreateWebhookSubscription validates
+        it, before anything is persisted: missing is 400, and a URL whose
+        host is malformed, unresolvable, or blocked as private/loopback is
+        refused outright (the module's two-time SSRF rules). Every
         eventTypes entry must be some registered EventMapping's public type
         (400 naming the first unknown one); the empty set is refused. The
         response's secret field is the raw HMAC signing secret a receiver
@@ -571,9 +562,9 @@ components:
       type: object
       description: >-
         Service.CreateWebhookSubscription's result: the one and only place
-        the raw signing secret is ever available, mirroring round 1's
-        IntegrationCreatedAPIKey "shown once" contract. secret is never
-        logged and never returned again by any other operation.
+        the raw signing secret is ever available, mirroring
+        IntegrationCreatedAPIKey's own "shown once" contract. secret is
+        never logged and never returned again by any other operation.
       properties:
         id:
           type: string
@@ -721,11 +712,9 @@ components:
       type: object
       description: >-
         The structured {code, params} error envelope every speed API
-        returns instead of localized text (backend coding standard §6.2;
-        docs/internal/11-cross-cutting.md) -- a client resolves code
-        through its own i18n catalog, populated from this module's
-        Locales() resources for the codes documented in AGENTS.md's error
-        index.
+        returns instead of localized text -- a client resolves code through
+        its own i18n catalog, populated from this module's Locales()
+        resources for the codes documented in its error index.
       properties:
         code:
           type: string

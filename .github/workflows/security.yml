@@ -1,34 +1,28 @@
 name: security
-
-# Supply-chain and security scans -- docs/internal/18-cicd.md's pipeline
-# table, security row: dependency vulnerabilities, secret scanning, SAST,
-# license compliance, container image scanning. Target under 10 minutes
-# for the per-PR legs; every job carries a timeout and stale runs are
-# cancelled via concurrency (18-cicd cost-control rules 4 and 5).
+# Supply-chain and security scans: dependency vulnerabilities, secret
+# scanning, SAST, license compliance, container image scanning. Target
+# under 10 minutes for the per-PR legs; every job carries a timeout and
+# stale runs are cancelled via concurrency.
 #
-# DESIGN-TABLE TRIGGER: every PR plus a daily run; both are enabled by
-# this implementing round, which replaces the gated stub that stood here.
-# The daily cron (05:37 UTC, deliberately off the round marks) exists
+# TRIGGER: every PR plus a daily run. The daily cron (05:37 UTC) exists
 # because the advisory databases this pipeline consults -- npm, Go's
 # vuln DB, CodeQL -- move between PRs; the scheduled run re-checks the
 # default branch.
 #
-# TOOL POSTURE (docs/internal/20-quality-and-security.md, supply-chain,
-# secret-management and license-compliance sections):
+# TOOL POSTURE:
 #   * pnpm audit for npm dependencies -- LIVE (deps-js job). web/ ships a
 #     pnpm lockfile with real runtime dependencies (@speed/i18n carries
 #     i18next/react-i18next), so the audit scans a real graph; the
 #     frozen-lockfile CI install resolves exactly what the lockfile
 #     pins, which is what the audit consults. Renovate, the
-#     automated-update half of the documented posture, is a later round:
-#     it needs its own app-level credentials, and this repo never holds
+#     automated-update half of the documented posture, is not wired: it
+#     needs its own app-level credentials, and this repo never holds
 #     credentials (see SECRETS below).
 #   * gitleaks for secret leakage -- LIVE (secrets job), the CI half of
-#     the documented posture. The pre-commit-hook half is
-#     developer-local tooling and belongs to a dev-workflow round, not
-#     to CI. The binary is pinned by release and verified by checksum
-#     (the setup-go-env download pattern); the default rule set is used
-#     -- .gitleaks.toml extends it with exactly one path allowlist, for
+#     the documented posture; the pre-commit-hook half is
+#     developer-local tooling, not CI. The binary is pinned by release
+#     and verified by checksum; the default rule set is used --
+#     .gitleaks.toml extends it with exactly one path allowlist, for
 #     the go/observability redaction-test fixtures (secret-shaped
 #     stand-in values are the point of that test code; the allowlist
 #     comment records the reasoning). Any further allowlist entry must
@@ -40,89 +34,50 @@ name: security
 #     with no go.mod at the root; the CodeQL Go extractor supports
 #     go.work workspaces natively (module discovery from the workspace
 #     file), so autobuild at the checkout root covers every module.
-#   * license scan -- LIVE (license job): tools/license_scan.py from the
-#     same implementing round. The committed manifest
-#     (tools/dependency-licenses.json) is re-derived from the live tree
-#     on every run -- a newly required dependency, an orphan entry, a
-#     version change or a used_by drift all fail with an actionable
-#     message -- and every entry must satisfy the copyleft policy:
-#     GPL/AGPL banned outright (this repo scaffolds commercial
+#   * license scan -- LIVE (license job): tools/license_scan.py. The
+#     committed manifest (tools/dependency-licenses.json) is re-derived
+#     from the live tree on every run -- a newly required dependency, an
+#     orphan entry, a version change or a used_by drift all fail with an
+#     actionable message -- and every entry must satisfy the copyleft
+#     policy: GPL/AGPL banned outright (this repo scaffolds commercial
 #     deliveries, so dependency licenses transmit to customer projects),
-#     MPL/LGPL only with a recorded ADR (none exists), unknown ids fail
-#     closed pending adjudication.
+#     MPL/LGPL only with a recorded ADR (github.com/hashicorp/vault/api
+#     carries one), unknown ids fail closed pending adjudication.
 #   * govulncheck for Go dependencies -- LIVE (deps-go job), see TOOLCHAIN
-#     below for what it took to get here.
+#     below.
 #   * trivy for container images -- NOT WIRED, see DEFERRED.
 #
-# TOOLCHAIN (govulncheck's own prerequisites, closed by this round -- what
-# was DEFERRED before now records what was actually done):
-#   * stdlib class: go.work's `go` directive was 1.25.0, which predated the
-#     fixes for a long tail of Go-standard-library advisories accumulated
-#     since (net/url, crypto/tls, crypto/x509, encoding/xml,
-#     encoding/asn1 among them -- a fresh govulncheck baseline against the
-#     unpatched 1.25.0 toolchain found each of the twenty-one implemented
-#     modules affected by anywhere from 3 to 32 stdlib findings, GO-2025-
-#     and GO-2026-prefixed alike, strictly more than any single advisory
-#     list this comment could enumerate and stay current). The fix: the
-#     go directive is raised to 1.26.8 (the latest patched release on the
-#     1.26.x line as of this writing, clearing every cited advisory --
-#     each is fixed by go1.25.13/1.26.6/1.27.0-rc.3 or earlier). Re-run
-#     against the new toolchain: zero stdlib findings across all
-#     twenty-one modules. The .mise.toml mirror was bumped alongside (its
-#     own drift gate, tools/check_toolchain.py, proves the two cannot
-#     drift apart).
-#   * module class: a same-day Dependabot bump had already cleared two of
-#     the three dependency-level CVEs this comment used to name before
-#     this round touched anything -- github.com/moby/go-archive is v0.3.0
-#     in dbkit/tenancy (was v0.2.0, GO-2026-6253) and
-#     google.golang.org/grpc is v1.83.1 in observability (was v1.81.1,
-#     GO-2026-6061) -- confirmed clear by the fresh baseline above. The
-#     one that remained: golang.org/x/crypto v0.55.0 (GO-2026-6355/6354,
-#     an SSH deadlock DoS pair), reachable through testcontainers'
-#     Docker-integration test-support packages in eleven modules --
-#     authn, billing, dbkit, integration, metering, notification, org,
-#     pki, sharing, storage, tenancy -- each bumped to v0.56.0 (`go get
-#     golang.org/x/crypto@v0.56.0 && go mod tidy` under GOWORK=off, this
-#     repo's own per-module bump discipline), which raised each bumped
-#     module's own go.mod `go` directive to 1.26.0 (x/crypto v0.56.0's own
-#     minimum) -- still below go.work's 1.26.8, so the workspace load-time
-#     guard (setup-go-env's own header) stays satisfied. The other ten
-#     modules never had x/crypto as a reachable finding (present in their
-#     go.mod as a transitive dependency, but their own test code never
-#     calls the affected ssh package), so they were left untouched. The
-#     bump rippled further than those eleven, though: every module that
-#     locally `replace`s one of them now resolves x/crypto v0.56.0
-#     transitively even where its own go.mod still pinned v0.55.0,
-#     leaving it "go mod tidy"-dirty under GOWORK=off -- seven more
-#     modules (admin, ai-gateway, compliance, config, jobs, rbac, saasctl)
-#     plus the reference app needed the same tidy for that reason alone,
-#     with no CVE of their own to clear. Re-run after every fix: zero
-#     findings, every module, `govulncheck` exit 0.
-#   * deps-go itself: one job below, a matrix over the twenty-one
-#     implemented modules, `go run golang.org/x/vuln/cmd/govulncheck@v1.1.4
-#     ./...` with working-directory go/<module> after setup-go-env (which
-#     now installs 1.26.8). Govulncheck version stays pinned at v1.1.4.
+# TOOLCHAIN (govulncheck's prerequisites):
+#   * stdlib class: the go directive is 1.26.8, the patched line that
+#     clears the accumulated Go-standard-library advisories (net/url,
+#     crypto/tls, crypto/x509, encoding/xml, encoding/asn1 among them);
+#     a fresh govulncheck baseline finds zero stdlib findings across all
+#     modules. The .mise.toml mirror carries the same version, proven in
+#     step by tools/check_toolchain.py's own drift gate.
+#   * module class: golang.org/x/crypto sits at v0.56.0 in the modules
+#     whose Docker-integration test-support packages reach it
+#     (testcontainers' transitive chain), which cleared the ssh
+#     deadlock-DoS advisory pair (GO-2026-6355/6354); every module that
+#     `replace`s one of the bumped modules was re-tidied under GOWORK=off
+#     so its own go.mod resolves the bumped version transitively. A
+#     govulncheck run finds zero findings in every module.
+#   * deps-go job: a matrix over the implemented modules,
+#     `go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...` with
+#     working-directory go/<module> after setup-go-env. Govulncheck
+#     version stays pinned at v1.1.4.
 #
 # DEFERRED (a real prerequisite is still missing; wiring it now would
-# produce a permanently red check -- the half-wired state this repo
-# refuses to ship, see the gated-stub rationale in fast-check.yml):
-#   * trivy (container image scanning): UPDATED by the
-#     reference-app-docker-image round -- the repository now builds a real
+# produce a permanently red check):
+#   * trivy (container image scanning): the repository builds a real
 #     image (examples/reference-app/Dockerfile, proven via
-#     docker-image-ci.yml calling reusable-docker-build.yml), so "nothing
-#     ships a Dockerfile" is no longer the reason to defer. What still
-#     blocks wiring trivy HERE, on this workflow's own every-PR/daily
-#     triggers, is that the image build is workflow_dispatch-only, not
-#     part of any PR or scheduled run -- there is no STANDING image this
-#     job could reach to scan on its own schedule, only an on-demand one a
-#     human triggers by hand. Wire trivy once an image build genuinely
-#     runs on a trigger this workflow shares (the release round, or a
-#     later round that makes image builds part of full-check/nightly).
+#     docker-image-ci.yml calling reusable-docker-build.yml), but the
+#     image build is workflow_dispatch-only -- there is no STANDING image
+#     this job could reach to scan on its own every-PR/daily schedule,
+#     only an on-demand one a human triggers by hand.
 #
 # SECRETS: the repo holds no real credentials of any kind and must never
-# acquire any (20-quality-and-security.md secret management); CI secrets
-# belong to GitHub Environments. Every tool download below is pinned by
-# commit SHA or release checksum.
+# acquire any; CI secrets belong to GitHub Environments. Every tool
+# download below is pinned by commit SHA or release checksum.
 
 on:
   pull_request:

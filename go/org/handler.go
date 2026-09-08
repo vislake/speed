@@ -24,8 +24,7 @@ const jsonContentType = "application/json; charset=utf-8"
 // every method except OrgAcceptInvitation reads the tenant tenancy.Middleware
 // already resolved into the request context -- via pkgcore.MustTenantFromContext,
 // both directly here and, redundantly, again inside every dbkit.Repository[T]
-// call underneath -- and never from a request parameter, header or body, per
-// root CLAUDE.md's multi-tenant isolation rule. Accept is the deliberate
+// call underneath -- and never from a request parameter, header or body. Accept is the deliberate
 // exception, and the host must let its path through tenant resolution (the
 // same allowlist treatment go/sharing's public access path needs): its
 // caller is a freshly invited person who by definition holds no target-tenant
@@ -413,11 +412,11 @@ func (h *Handler) OrgAcceptInvitation(w http.ResponseWriter, r *http.Request) {
 // header: that header belongs to the authenticated inviter/operator making
 // THIS HTTP call, and the invitee -- who has made no request of their own
 // yet, and may not even be a user -- has no channel to reach the server
-// through at invite-creation time. An earlier version of this handler read
-// Accept-Language here, which silently rendered every invitation email in
-// the ADMIN's own browser language, directly contradicting the "renders in
-// the recipient's locale" contract this endpoint documents (root CLAUDE.md's
-// i18n rule; org/api/openapi.yaml's org_createInvitation description). See
+// through at invite-creation time. Reading it here would render every
+// invitation email in the ADMIN's own browser language, directly
+// contradicting the "renders in the recipient's locale" contract this
+// endpoint documents (org/api/openapi.yaml's org_createInvitation
+// description). See
 // TestHandler_OrgCreateInvitation_LocaleIsFromRequestBody_NeverAcceptLanguage.
 //
 // An empty return is not an error: InviteService.Invite negotiates it
@@ -512,7 +511,7 @@ func writeError(w http.ResponseWriter, err error) {
 
 // compile-time check that *Handler implements the api.ServerInterface
 // generated from this module's api/openapi.yaml -- the enforcement half of
-// the spec-first flow (docs/internal/21-api-contract.md): add an operation
+// the spec-first flow: add an operation
 // to the fragment, regenerate, and this assertion stops compiling until
 // Handler implements it.
 var _ api.ServerInterface = (*Handler)(nil)

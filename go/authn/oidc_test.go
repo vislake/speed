@@ -187,11 +187,11 @@ func ssoAuthorize(t *testing.T, f *serviceFixture, tenantID pkgcore.TenantID) (s
 	return state, nonce
 }
 
-// TestSSOService_Callback_FullRoundTrip is the round's full relying-party
-// proof: a real ID token, signed by a locally generated key, served through a
-// real discovery document and JWKS, verified end to end -- and the account it
-// resolves to must already be an active member of the tenant that configured
-// this identity provider, which is the third linking condition
+// TestSSOService_Callback_FullRoundTrip is the full relying-party proof: a
+// real ID token, signed by a locally generated key, served through a
+// real discovery document and JWKS, verified end to end -- and the account
+// it resolves to must already be an active member of the tenant that
+// configured this identity provider, which is the third linking condition
 // Callback's doc comment explains.
 func TestSSOService_Callback_FullRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -485,11 +485,11 @@ func TestSSOService_Callback_JITProvisioningStillRequiresMembership(t *testing.T
 	}
 }
 
-// TestSSOService_Callback_RefusesToProvisionFromAnUnverifiedEmail is the
-// defect this round closes: the just-in-time branch used to mint an ACTIVE
-// account carrying the IdP-claimed address -- seating the platform-unique
-// email index -- even when the identity provider did not assert the address
-// was verified. The mint is now refused with the same error the
+// TestSSOService_Callback_RefusesToProvisionFromAnUnverifiedEmail pins the
+// unverified-claim boundary on the just-in-time branch: it must not mint an
+// ACTIVE account carrying the IdP-claimed address -- seating the
+// platform-unique email index -- when the identity provider did not assert
+// the address was verified. The mint is refused with the same error the
 // existing-account branch gives for the same fact, and nothing is
 // provisioned: no identity, no account, no EventUserCreated, so the
 // address's true owner keeps the seat free to register it themselves.
@@ -625,8 +625,8 @@ func writeSSOConfig(t *testing.T, f *serviceFixture, tenantID pkgcore.TenantID, 
 }
 
 // TestSSOService_Callback_JITMintDoesNotCaptureTheAddressOwnersLaterTrustedSignIn
-// is the P1-6 regression, reproducing the takeover chain end to end against
-// this module's own scaffolding:
+// reproduces the takeover chain end to end against this module's own
+// scaffolding:
 //
 // Leg 1 -- the tenant administrator of tenant A, who configures the issuer
 // and the allowed domains and may run the identity provider themselves (the
@@ -643,13 +643,13 @@ func writeSSOConfig(t *testing.T, f *serviceFixture, tenantID pkgcore.TenantID, 
 // module's own social round-trip suites use) at the same address. The
 // verified-and-trusted auto-link rule resolves the owner's identity against
 // the platform-unique email index; the minted account must not be there.
-// Pre-fix the mint seated the tenant-grade claim as a platform-verified
-// address, so the owner's genuine Google identity was auto-linked INTO the
-// tenant administrator's account -- the account takeover. The fix keeps the
-// seat free: the mint is email-less (the claimed address lives on the
-// identity row as display data only), the owner's sign-in provisions their
-// own account at the address, and the tenant-minted account never gains the
-// owner's identity.
+// If the mint seated the tenant-grade claim as a platform-verified address,
+// the owner's genuine Google identity would be auto-linked INTO the tenant
+// administrator's account -- the account takeover. The seat stays free: the
+// mint is email-less (the claimed address lives on the identity row as
+// display data only), the owner's sign-in provisions their own account at
+// the address, and the tenant-minted account never gains the owner's
+// identity.
 func TestSSOService_Callback_JITMintDoesNotCaptureTheAddressOwnersLaterTrustedSignIn(t *testing.T) {
 	t.Parallel()
 
@@ -742,22 +742,22 @@ func TestSSOService_Callback_JITMintDoesNotCaptureTheAddressOwnersLaterTrustedSi
 	}
 }
 
-// TestSSOService_Discover_DoesNotHoldTheMutexAcrossTheNetworkCall is the
-// P3-11 regression: discover() used to hold the service-wide s.mu across the
+// TestSSOService_Discover_DoesNotHoldTheMutexAcrossTheNetworkCall pins the
+// lock scope: discover() must not hold the service-wide s.mu across the
 // whole discovery round trip to the tenant-supplied issuer -- a fetch whose
 // only bound is the HTTP client's own timeout. One tenant's black-holed
-// issuer therefore queued every other tenant's discovery behind it (both
-// AuthorizeURL and Callback call discover), so every other tenant's SSO
-// sign-in stalled for as long as the slow issuer took to time out.
+// issuer would otherwise queue every other tenant's discovery behind it
+// (both AuthorizeURL and Callback call discover), stalling every other
+// tenant's SSO sign-in for as long as the slow issuer took to time out.
 //
 // The test reproduces the hazard deterministically: the slow issuer's
 // discovery handler parks on the wire (testutil.OIDCServer's GateDiscovery)
-// while a first discovery for it is in flight -- under the old code s.mu is
-// held for that whole park -- and a second tenant's discovery of a healthy
-// issuer must still complete while the slow one is parked. The blocking is a
-// lock-ordering guarantee under the old code, not a timing race: discover of
-// the healthy issuer simply cannot pass s.mu until the slow fetch releases
-// it, which the test only does after the assertion.
+// while a first discovery for it is in flight -- s.mu is held for that
+// whole park -- and a second tenant's discovery of a healthy issuer must
+// still complete while the slow one is parked. The blocking is a
+// lock-ordering guarantee, not a timing race: discover of the healthy
+// issuer simply cannot pass s.mu until the slow fetch releases it, which
+// the test only does after the assertion.
 func TestSSOService_Discover_DoesNotHoldTheMutexAcrossTheNetworkCall(t *testing.T) {
 	slow := testutil.NewOIDCServer(t, "slow-client")
 	fast := testutil.NewOIDCServer(t, "fast-client")
@@ -771,7 +771,7 @@ func TestSSOService_Discover_DoesNotHoldTheMutexAcrossTheNetworkCall(t *testing.
 
 	// A first-time discovery of the slow issuer starts and parks on the
 	// network round trip. The entered signal means the fetch is genuinely on
-	// the wire -- and, under the old code, that s.mu is held.
+	// the wire -- and, if s.mu were held across it, that the lock is held.
 	first := make(chan error, 1)
 	go func() {
 		_, err := svc.discover(t.Context(), slow.URL())
@@ -823,14 +823,13 @@ func TestSSOService_Discover_DoesNotHoldTheMutexAcrossTheNetworkCall(t *testing.
 	}
 }
 
-// TestSSOService_Discover_ForgetDuringAnInFlightFetchIsNotUndone is the
-// P2-18 regression: a forget() that runs while a discovery fetch is on the
-// wire must win over that fetch's store-back. The double-checked re-check
-// alone cannot see the difference between "never memoized" and "just
-// forgotten" -- both leave the map empty -- so the store-back resurrects
-// the document the forget evicted, and the eviction silently never takes
-// effect. (The old comment claimed the forget won; the code proved
-// otherwise.)
+// TestSSOService_Discover_ForgetDuringAnInFlightFetchIsNotUndone pins the
+// forget-vs-fetch race: a forget() that runs while a discovery fetch is on
+// the wire must win over that fetch's store-back. The double-checked
+// re-check alone cannot see the difference between "never memoized" and
+// "just forgotten" -- both leave the map empty -- so without the forgotten
+// generation counter, the store-back would resurrect the document the
+// forget evicted, and the eviction would silently never take effect.
 func TestSSOService_Discover_ForgetDuringAnInFlightFetchIsNotUndone(t *testing.T) {
 	t.Parallel()
 
@@ -888,12 +887,12 @@ func TestSSOService_Discover_ForgetDuringAnInFlightFetchIsNotUndone(t *testing.T
 	}
 }
 
-// TestSSOService_SaveConfig_IssuerChangeEvictsTheOldIssuerFromTheMemo is the
-// P2-19 regression: SaveConfig's forget must target the issuer the row held
-// BEFORE the update. An A-to-B issuer change whose forget evicts the NEW
-// issuer (a no-op, never memoized) leaves A's discovery document memoized
-// forever -- silently reused if the tenant ever points back at A, stale
-// however long the provider was away.
+// TestSSOService_SaveConfig_IssuerChangeEvictsTheOldIssuerFromTheMemo pins
+// the forget target: SaveConfig's forget must evict the issuer the row held
+// BEFORE the update. An A-to-B issuer change whose forget evicted the NEW
+// issuer (a no-op, never memoized) would leave A's discovery document
+// memoized forever -- silently reused if the tenant ever points back at A,
+// stale however long the provider was away.
 func TestSSOService_SaveConfig_IssuerChangeEvictsTheOldIssuerFromTheMemo(t *testing.T) {
 	t.Parallel()
 
@@ -922,9 +921,9 @@ func TestSSOService_SaveConfig_IssuerChangeEvictsTheOldIssuerFromTheMemo(t *test
 	}
 
 	// A discovery of the OLD issuer must now be a real fetch, not a memo
-	// hit: before the fix, A's document survived the save (the forget
-	// evicted the never-memoized B), and this call would have been
-	// answered from the memo with no request reaching the server.
+	// hit: if A's document had survived the save (a forget that evicted the
+	// never-memoized B), this call would be answered from the memo with no
+	// request reaching the server.
 	if _, err := svc.discover(ctx, issuerA); err != nil {
 		t.Fatalf("discover(issuer A) after the issuer change error = %v", err)
 	}
@@ -1025,10 +1024,8 @@ func TestSSOService_Callback_BoundsOverWidthClaims(t *testing.T) {
 	}
 }
 
-// The width-regression fixtures below (and the regressions themselves) close
-// the two authn batch-2 findings that are the truncation round's siblings:
-// the same dual-dialect write divergence, on the two remaining surfaces
-// where the semantic is REFUSE, not cut.
+// The width-regression fixtures below pin the dual-dialect write divergence
+// on the two remaining surfaces where the semantic is REFUSE, not cut.
 //
 //   - The tenant-id budget: user_identities.provider is VARCHAR(64)
 //     (migration 0005) and the enterprise channel name is "oidc:" plus the
@@ -1042,10 +1039,9 @@ func TestSSOService_Callback_BoundsOverWidthClaims(t *testing.T) {
 //
 // The fixtures are plain rune counts rather than expressions over those
 // constants, and the expected error codes are string literals rather than
-// the sentinels, so the regressions compile and run unchanged against the
-// pre-fix code during a genuine fail-before pass (the constants and the
-// sentinels only exist after the fix). PostgreSQL counts characters against
-// a VARCHAR(n) width, so every fixture is built in runes.
+// the sentinels, so the tests do not depend on the very constants they
+// pin. PostgreSQL counts characters against a VARCHAR(n) width, so every
+// fixture is built in runes.
 const (
 	// ssoTenantBudgetRunes is the longest tenant id the enterprise channel
 	// can serve (see the comment above).
@@ -1096,18 +1092,19 @@ const (
 	ssoAllowedDomainsTooLongCode = "authn.sso_allowed_domains_too_long"
 )
 
-// TestSSOService_SaveConfig_RefusesAnOverLongTenantID is finding (1)'s
-// configuration-time regression: a tenant id of 60 runes makes the synthetic
+// TestSSOService_SaveConfig_RefusesAnOverLongTenantID pins the
+// configuration-time refusal: a tenant id of 60 runes makes the synthetic
 // "oidc:<tenant>" provider name overflow user_identities.provider
-// (VARCHAR(64)) at the identity write of the first sign-in -- before the
-// fix, SaveConfig accepted and stored the configuration on SQLite, and the
-// tenant's first enterprise login then diverged: it worked on SQLite and was
-// refused by PostgreSQL with SQLSTATE 22001. Truncating the provider name is
-// not an option (it would collide under the (provider, external_id) unique
-// index and silently merge distinct tenants' identities), so the refusal
-// belongs at configuration time, where the host learns which tenant name is
-// too long -- never at a random login. The same named refusal must answer on
-// both dialects; the PostgreSQL leg re-runs this in the integration tier.
+// (VARCHAR(64)) at the identity write of the first sign-in. If SaveConfig
+// accepted and stored such a configuration, the tenant's first enterprise
+// login would diverge across dialects: it would work on SQLite and be
+// refused by PostgreSQL with SQLSTATE 22001. Truncating the provider name
+// is not an option (it would collide under the (provider, external_id)
+// unique index and silently merge distinct tenants' identities), so the
+// refusal belongs at configuration time, where the host learns which
+// tenant name is too long -- never at a random login. The same named
+// refusal must answer on both dialects; the PostgreSQL leg re-runs this in
+// the integration tier.
 func TestSSOService_SaveConfig_RefusesAnOverLongTenantID(t *testing.T) {
 	t.Parallel()
 
@@ -1124,14 +1121,15 @@ func TestSSOService_SaveConfig_RefusesAnOverLongTenantID(t *testing.T) {
 	}
 }
 
-// TestSSOService_SaveConfig_RefusesOverWidthConfigFields is finding (2)'s
-// regression: a tenant administrator's configuration value longer than its
-// column (issuer VARCHAR(512), client_id VARCHAR(255), allowed_domains
-// VARCHAR(1024), migration 0006) is REFUSED with an error naming the field,
-// on both dialects -- before the fix, SQLite stored the value and PostgreSQL
-// refused the write with a raw 22001. Truncation is not the answer for an
-// administrator's own specification: a silently shortened issuer URL would
-// point enterprise single sign-on at the wrong endpoint.
+// TestSSOService_SaveConfig_RefusesOverWidthConfigFields pins the
+// configuration-field refusal: a tenant administrator's configuration value
+// longer than its column (issuer VARCHAR(512), client_id VARCHAR(255),
+// allowed_domains VARCHAR(1024), migration 0006) is REFUSED with an error
+// naming the field, on both dialects. If it were stored, SQLite would keep
+// the value while PostgreSQL refused the write with a raw 22001.
+// Truncation is not the answer for an administrator's own specification: a
+// silently shortened issuer URL would point enterprise single sign-on at
+// the wrong endpoint.
 func TestSSOService_SaveConfig_RefusesOverWidthConfigFields(t *testing.T) {
 	t.Parallel()
 
@@ -1219,14 +1217,13 @@ func TestSSOService_SaveConfig_AcceptsValuesAtTheColumnWidths(t *testing.T) {
 // module travels: a pkgcore.Actor (and pkgcore.OnBehalfOf, when an
 // impersonation flow installs one) on ctx, the carriers audit.Emit itself
 // reads back -- handler.go's recordAudit layers the same shape. The tenant
-// is the ctx tenant SaveConfig itself validated. Before the fix this round
-// ships, the action was declared on the registry but no code emitted it
-// anywhere: the round that wired the other eight concluded SaveConfig had
-// "no site" because no HTTP handler exists for it, missing that the service
-// layer is where this module's own write happens and where the audit calls
-// of every other module's services legitimately live. The pre-fix code
-// therefore fails this test with "recorded 0 authn.sso.configure rows
-// across the create and the update, want 2".
+// is the ctx tenant SaveConfig itself validated. The emission lives at the
+// service layer because that is where this module's own write happens --
+// the audit calls of every other module's services legitimately live there
+// too -- so the action is emitted whether or not an HTTP handler exists
+// for the write. If no code emitted it, this test would fail with
+// "recorded 0 authn.sso.configure rows across the create and the update,
+// want 2".
 func TestSSOService_SaveConfig_RecordsTheWriteAsAuditActionSSOConfigure(t *testing.T) {
 	t.Parallel()
 
@@ -1242,9 +1239,10 @@ func TestSSOService_SaveConfig_RecordsTheWriteAsAuditActionSSOConfigure(t *testi
 
 	// The writing operator: a real account, attested on ctx exactly as the
 	// audit carriers demand. SaveConfig itself performs no authorization --
-	// who may write a tenant's SSO configuration is the caller's gate (a
-	// future HTTP surface behind PermissionSSOManage) -- so the recorded
-	// attribution is precisely the identity the caller vouched for.
+	// who may write a tenant's SSO configuration is the caller's gate
+	// (PermissionSSOManage; no HTTP surface exists for it yet) -- so the
+	// recorded attribution is precisely the identity the caller vouched
+	// for.
 	user, err := svc.Register(t.Context(), RegisterInput{
 		Email: "sso-operator@example.com", Password: testPassword, DisplayName: "SSO Operator",
 	})

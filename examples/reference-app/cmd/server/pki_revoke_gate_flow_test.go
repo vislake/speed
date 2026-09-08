@@ -8,16 +8,16 @@ package main
 // pki_signing_keys (platform data) is gated on pki.PermissionRevokeSigningKey
 // evaluated under rbac.SystemDomain, NEVER in the request tenant's domain.
 //
-// The negative leg is the finding's exploit shape, made concrete: the demo
+// The negative leg is the exploit shape, made concrete: the demo
 // owner role holds EVERY declared permission -- pki:revoke_signing_key
 // included -- in every demo tenant (seedDemoGrants), so a request acting
 // as demo-owner in tenant-acme passes any tenant-domain evaluation of the
 // permission and would revoke the platform signing key every tenant's
 // tokens are verified under. The gate must refuse it anyway, because the
 // subject resolver pins the signing-key revoke's evaluation tenant to
-// rbac.SystemDomain, where demo-owner holds no grant at all. Pre-fix code
-// (the route-level gate evaluating the then-spanning pki:revoke in the
-// request tenant's domain) answered that request 200 and revoked the key;
+// rbac.SystemDomain, where demo-owner holds no grant at all. A route-level
+// gate evaluating the permission in the request tenant's domain would
+// answer that request 200 and revoke the key;
 // this test's 403 expectation is the fail-before leg.
 //
 // The positive leg is the honest counterpart: a real platform-staff
@@ -112,7 +112,7 @@ func TestBuildServer_PkiSigningKeyRevoke_RequiresThePlatformDomainPermission(t *
 	// there (the owner role carries every declared permission), yet the
 	// revoke must be refused: the gate evaluates that permission under
 	// rbac.SystemDomain, where the header identity has no grant. This is
-	// the leg that failed on pre-fix code with a 200 that revoked the key.
+	// the leg that an ungated route answers with a 200 that revokes the key.
 	ownerResp := storageRequest(t, srv, http.MethodPost, revokePath, ownerToken, demoOwnerUserID, "application/json",
 		strings.NewReader(`{"reason":"tenant admin test revoke"}`))
 	defer ownerResp.Body.Close()
@@ -162,5 +162,5 @@ func TestBuildServer_PkiSigningKeyRevoke_RequiresThePlatformDomainPermission(t *
 // rbacPermissionDeniedCode is the error code the rbac gate answers a
 // denied request with -- asserted by string here (the module's own
 // constant lives in go/rbac's middleware internals) so the fail-before
-// leg can run against pre-fix code too.
+// leg runs against the ungated shape too.
 const rbacPermissionDeniedCode = "rbac.permission_denied"

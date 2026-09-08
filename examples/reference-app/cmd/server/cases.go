@@ -1,28 +1,25 @@
 // The reference app's case-domain HTTP surface: the app-side
 // implementation of the spec-derived interface generated from
-// internal/cases/api/openapi.yaml. Product round P3a promoted the three
-// hand-written routes (product round P2b's demo glue for internal/cases)
-// to that fragment: this type implements the generated
+// internal/cases/api/openapi.yaml. This type implements the generated
 // casesapi.ServerInterface (compile-time-checked below), and its routing
 // is registered by the generated api.HandlerFromMux helper, which
 // derives this surface's method+path patterns from the "paths:" keys of
-// the spec fragment itself -- replacing what used to be a hand-written
-// registration of the same patterns, one less copy of path+method truth
+// the spec fragment itself -- one less copy of path+method truth
 // to keep in step with the spec by hand. The fragment joins the merged
 // application document, so the operations ship in the generated
-// @speed/api-sdk surface the P3 web UI calls. cases_flow_test.go drives
+// @speed/api-sdk surface the case web UI calls. cases_flow_test.go drives
 // them through the composed HTTP stack.
 //
-// The five operations the P3 web UI needs: upload a patient photo (the
-// one-shot go/storage protocol wrapper the block-A round added, in
+// The five operations the case web UI renders from: upload a patient
+// photo (the one-shot go/storage protocol wrapper, in
 // cases_photos.go), create a case (a clinic staff member naming a
 // patient and the photos already uploaded through that upload op), list
 // the caller's tenant's cases, read one case's detail with its photos,
 // and read one photo's bytes for the case view to render. A case
 // detail's per-photo simulations deliberately stay on the smile-
 // simulation surface (see internal/cases's package doc comment's
-// "Shape decision" section) -- fetched per photo by the P3 view from
-// the P3a fragment that file's sibling cmd/server/smilesim.go
+// "Shape decision" section) -- fetched per photo by the case view from
+// the simulation fragment that file's sibling cmd/server/smilesim.go
 // implements.
 //
 // None of these operations takes a permission check of its own: in this
@@ -59,8 +56,7 @@ var casesErrInternal = apperr.Internal("cases.internal_error")
 
 // casesInvalidRequestBody is the malformed-or-oversized request body
 // answer every body-reading cases route writes. It exists as a named
-// sentinel (rather than the inline apperr.Invalid(...) creation the
-// routes used to carry) so the error-mapping audits and the shell's
+// sentinel so the error-mapping audits and the shell's
 // codes-alignment suite can cite a stable declaration site, exactly as
 // the notes surface's own handler sentinels are cited.
 var casesInvalidRequestBody = apperr.Invalid("cases.invalid_request_body")
@@ -144,8 +140,7 @@ func (h *casesHandler) CasesCreateCase(w http.ResponseWriter, r *http.Request) {
 	// PatientRef and PhotoObjectIds are spec-optional, hence
 	// pointer-shaped in the generated request type: an absent field maps
 	// to the domain layer's documented "gave none"/"no photos yet"
-	// sentinels (empty string, empty list), exactly as the hand-written
-	// request type's plain-string/plain-slice fields used to.
+	// sentinels (empty string, empty list).
 	patientRef := ""
 	if body.PatientRef != nil {
 		patientRef = *body.PatientRef
@@ -173,8 +168,8 @@ func (h *casesHandler) CasesCreateCase(w http.ResponseWriter, r *http.Request) {
 
 // CasesListCases implements casesapi.ServerInterface: it handles GET
 // /api/v1/cases, listing every case of the caller's tenant, newest
-// first -- the clinic-wide list the block-A product decision names (see
-// the spec fragment's own description). The list needs no creator
+// first -- the clinic-wide list (see the spec fragment's own
+// description). The list needs no creator
 // attribution: any authenticated member of the tenant may read every
 // case of the tenant, so no subject is resolved here.
 func (h *casesHandler) CasesListCases(w http.ResponseWriter, r *http.Request) {
@@ -234,11 +229,11 @@ func resolveCasesSubject(w http.ResponseWriter, subject cases.SubjectResolver, r
 
 // toCasesCase renders a case (with its photos, when given) as the
 // spec-generated wire type both the create answer and the detail answer
-// share -- one shape a P3 view can render with one component. CreatedAt
-// renders on the wire in the same whole-seconds UTC form the hand-written
-// route used: the stored time is UTC (gorm's autoCreateTime round-trips
-// it so), and truncating the sub-second part keeps encoding/json's
-// RFC3339Nano rendering byte-identical to the old RFC3339 output. An
+// share -- one shape a web view can render with one component. CreatedAt
+// renders on the wire in whole-seconds UTC: the stored time is UTC
+// (gorm's autoCreateTime round-trips it so), and truncating the
+// sub-second part keeps encoding/json's RFC3339Nano rendering in a stable
+// whole-seconds form. An
 // empty photos slice renders as [] (never null): the detail of a
 // photo-less case and the list entries both stay honest about what
 // exists.
@@ -269,7 +264,8 @@ func writeCasesError(w http.ResponseWriter, err error) {
 	// Params stays nil (and thus omitted, per its omitempty tag) unless
 	// the error actually carries parameters: a pointer to a nil map would
 	// marshal as "params": null instead of the key being absent, which is
-	// not the shape the hand-written envelope produced.
+	// not the envelope shape the API documents for a parameter-less
+	// answer.
 	if appErr.Params != nil {
 		envelope.Params = &appErr.Params
 	}

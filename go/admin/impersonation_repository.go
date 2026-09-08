@@ -62,23 +62,21 @@ func (r *ImpersonationRepository) Save(ctx context.Context, grant *Impersonation
 }
 
 // SaveGuarded persists grant's EndedAt/EndedBy under a conditional UPDATE
-// that also requires the row's CURRENT ended_at still be NULL --
-// P3-3's CAS fix (half 2): two concurrent End calls on the same grant id
-// (an operator's own DELETE racing this module's own automatic
-// permission-revocation end, say) both start from an in-memory read
-// showing EndedAt == nil, so an unconditional Save would let BOTH land,
-// producing a double admin.impersonation.ended audit trail for one
-// logical end. The guard makes only the FIRST write actually change the
-// row; the second's WHERE no longer matches (RowsAffected == 0), and the
-// caller reports the grant as already ended instead of silently
-// succeeding a second time. Mirrors
-// go/notification/send_record.go's SaveGuarded conditional-UPDATE idiom
-// exactly, narrowed to the two columns an end ever changes -- and, like
+// that also requires the row's CURRENT ended_at still be NULL: two
+// concurrent End calls on the same grant id (an operator's own DELETE
+// racing this module's own automatic permission-revocation end, say) both
+// start from an in-memory read showing EndedAt == nil, so an
+// unconditional Save would let BOTH land, producing a double
+// admin.impersonation.ended audit trail for one logical end. The guard
+// makes only the FIRST write actually change the row; the second's WHERE
+// no longer matches (RowsAffected == 0), and the caller reports the grant
+// as already ended instead of silently succeeding a second time. The
+// conditional-UPDATE shape is go/notification/send_record.go's SaveGuarded
+// idiom, narrowed to the two columns an end ever changes -- and, like
 // that idiom, naming no .Model()/.Table(): GORM infers the table from
-// grant's own struct type via Updates(grant), the same raw-GORM-bypass
-// entry point (tools/semgrep_rules/raw-gorm-bypass.yml) the map-shaped
-// form would otherwise have to name explicitly to know which table to
-// touch.
+// grant's own struct type via Updates(grant), where the map-shaped form
+// would otherwise have to name the table explicitly through the
+// raw-GORM-bypass entry points.
 //
 // It reports whether the write landed:
 //   - (true, nil): the guard passed and EndedAt/EndedBy are now persisted.
@@ -99,7 +97,7 @@ func (r *ImpersonationRepository) SaveGuarded(ctx context.Context, grant *Impers
 
 // ListActive returns every grant that is Active at instant now -- the
 // currently-effective grants an operator can inspect through
-// GET /api/v1/admin/impersonation (D5's self-audit listing).
+// GET /api/v1/admin/impersonation.
 func (r *ImpersonationRepository) ListActive(ctx context.Context, now time.Time) ([]ImpersonationGrant, error) {
 	var rows []ImpersonationGrant
 	err := r.db.WithContext(ctx).
@@ -119,11 +117,9 @@ const grantIDBytes = 16
 
 // newGrantID returns a fresh, unguessable grant id: 16 random bytes
 // hex-encoded to a 32-character string, comfortably inside the model's
-// size:36 column and with 128 bits of entropy -- the credential itself
-// (docs/internal/23-admin.md section 5's description of the grant id as
-// the credential itself, randomly generated and unguessable),
-// so it must never be derived from AdminUserID, TargetUserID or any other
-// predictable input.
+// size:36 column and with 128 bits of entropy. The id is the credential
+// itself, so it must never be derived from AdminUserID, TargetUserID or
+// any other predictable input.
 func newGrantID() (string, error) {
 	buf := make([]byte, grantIDBytes)
 	if _, err := rand.Read(buf); err != nil {

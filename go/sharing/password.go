@@ -29,18 +29,16 @@ var ErrInvalidSharePasswordHash = errors.New("sharing: stored share password has
 // existing share keeps verifying under the parameters its hash was created
 // with, because the reading side re-derives the digest from the stored
 // triple, never from package constants. The sharePassword* constants below
-// are therefore what THIS round's writer emits -- OWASP's first recommended
+// are what this module's writer emits -- OWASP's first recommended
 // argon2id configuration, the same floor authn.DefaultPasswordParams ships
 // -- not what the reader assumes. A share's access password protects a
 // single resource behind a link, not an account, so this module does not
 // pull in authn (a heavy module several tiers away in the dependency graph)
 // just to reuse its PasswordParams type; a self-contained argon2id
 // implementation is a few dozen lines against golang.org/x/crypto, already
-// a common, low-cost dependency elsewhere in this codebase. Making the
-// writer's parameters host-configurable, the way authn's own are, is
-// deferred to whichever round wires an actual host-facing knob for it
-// (AGENTS.md's Known limitations); the reader already honors any valid
-// stored parameters.
+// a common, low-cost dependency elsewhere in this codebase. The writer's
+// parameters are package constants -- no host-facing knob configures them;
+// the reader already honors any valid stored parameters.
 const (
 	sharePasswordAlgorithm  = "argon2id"
 	sharePasswordVersion    = argon2.Version
@@ -125,9 +123,9 @@ var dummySharePasswordHash = encodeSharePasswordPHC(
 // password-protected share pays argon2id's tens-of-milliseconds cost,
 // letting an external prober distinguish "this token names a
 // password-protected share" from every other refusal reason purely by
-// response latency -- undermining rule 5's outward-identical-answer
-// property (AGENTS.md's "The five mandatory rules" section) even though
-// every refusal already answers with the identical ErrNotAccessible.
+// response latency -- undermining the module's outward-identical-answer
+// property (see doc.go) even though every refusal already answers with
+// the identical ErrNotAccessible.
 //
 // guess, when non-nil, is hashed as the attacker-supplied password would
 // be, so a probe that supplies a password guess against an unprotected

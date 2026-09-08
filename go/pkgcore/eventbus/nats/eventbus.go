@@ -1,9 +1,8 @@
 // Package nats is a second distributed deployment mode EventBus, delivering
 // events between the replicas of a deployment through a NATS JetStream
-// server. docs/internal/03-deployment-modes.md's own seam table used to name
-// NATS a candidate for this seam alongside the already-real
-// eventbus/redis implementation; this package makes it real, following the
-// identical split eventbus/redis established: it lives in its own subpackage
+// server. NATS implements this seam alongside the eventbus/redis
+// implementation, following the identical split eventbus/redis established:
+// it lives in its own subpackage
 // rather than in go/pkgcore's own root -- Go resolves dependencies per
 // package, so a consumer that never wires a NATS-backed bus does not inherit
 // nats.go in its dependency graph (see the "Dependency cost" section below).
@@ -11,9 +10,9 @@
 // Importing this package registers "eventbus.nats" on pkgcore's shared
 // EventBusRegistry as a side effect (see register.go) -- the same
 // database/sql-style driver-registration pattern eventbus/redis's own
-// register.go uses, one seam now backed by two registered names. Neither
-// name is what PresetDistributed points the "eventbus" seam at today (it
-// still names "eventbus.redis"); a host that wants this implementation
+// register.go uses, one seam backed by two registered names, only one of
+// which ("eventbus.redis") is what PresetDistributed points the "eventbus"
+// seam at. A host that wants this implementation
 // instead calls NewEventBus directly and wires it with pkgcore.WithEventBus,
 // or builds it by name through pkgcore.EventBusRegistry.Build("eventbus.nats", cfg).
 //
@@ -155,25 +154,22 @@
 // broker's own durability, not about this bus's own reader cursor surviving
 // an app restart.
 //
-// # Dependency cost (root CLAUDE.md's mandatory measurement)
+// # Dependency cost
 //
-// Measured the way root CLAUDE.md's "Adding a built-in implementation
-// requires measuring what it costs consumers" rule prescribes: a throwaway
-// module that requires only github.com/nats-io/nats.go and blank-imports its
-// jetstream subpackage, then run under `go mod tidy` with GOWORK=off, picks
-// up 5 "// indirect" entries (github.com/klauspost/compress,
-// github.com/nats-io/nkeys, github.com/nats-io/nuid, golang.org/x/crypto,
-// golang.org/x/sys) -- against the identical measurement for
-// github.com/redis/go-redis/v9, eventbus/redis's own dependency, which costs
-// 3 (github.com/cespare/xxhash/v2, go.uber.org/atomic, golang.org/x/sys).
-// Both numbers describe the dependency in total isolation, per the
-// prescribed methodology; go/pkgcore's own go.mod already carries several of
-// nats.go's transitive dependencies at an equal or newer version for other
-// reasons (klauspost/compress among them), so the marginal lines this
-// package's own go.mod addition actually adds are fewer than 5 -- the
-// isolated number above is the one this repository's convention asks to be
-// recorded, matching how eventbus/redis's own AGENTS.md census entry reports
-// its own isolated cost rather than a merged one.
+// Measured the way the repository's built-in-implementation rule prescribes:
+// a throwaway module that requires only github.com/nats-io/nats.go and
+// blank-imports its jetstream subpackage, then run under `go mod tidy` with
+// GOWORK=off, reports its closure in "// indirect" entries
+// (github.com/klauspost/compress, github.com/nats-io/nkeys,
+// github.com/nats-io/nuid, golang.org/x/crypto, golang.org/x/sys) -- the
+// identical measurement for github.com/redis/go-redis/v9, eventbus/redis's
+// own dependency, reports 3 entries (github.com/cespare/xxhash/v2,
+// go.uber.org/atomic, golang.org/x/sys). Both numbers describe the
+// dependency in total isolation, per the prescribed methodology;
+// go/pkgcore's own go.mod already carries several of nats.go's transitive
+// dependencies at an equal or newer version for other reasons
+// (klauspost/compress among them), so the marginal lines this package's own
+// go.mod addition actually adds are fewer than 5.
 //
 // The bus is safe for concurrent use by multiple goroutines. Publish after
 // Close returns ErrEventBusClosed, and Subscribe after Close is a no-op;
@@ -815,9 +811,9 @@ func (b *EventBus) remoteHandlerFor(eventType string, ledger *panicRetryLedger) 
 //     consumer's own MaxDeliver enforces server-side -- settles: the record
 //     is dropped and the message terminated with a terminal log line (see
 //     abandonPanickedMessage), the logged dead-letter of this mechanism --
-//     never an unbounded redelivery loop, and never the consumer stall an
-//     endless accumulation of unacknowledged messages used to cause once
-//     MaxAckPending was reached.
+//     never an unbounded redelivery loop, and never the consumer stall
+//     that an endless accumulation of unacknowledged messages causes once
+//     MaxAckPending is reached.
 //
 // See the package doc comment's delivery note for the contract in one
 // paragraph.

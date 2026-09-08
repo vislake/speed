@@ -1,6 +1,5 @@
 # Generator configuration for sharing's OpenAPI fragment (openapi.yaml in
-# this directory, per docs/internal/21-api-contract.md's module-asset
-# convention: every module keeps its spec at <module>/api/openapi.yaml).
+# this directory: every module keeps its spec at <module>/api/openapi.yaml).
 # Mirrors go/storage/api/oapi-codegen.yaml exactly in shape -- see that
 # file's own comment for the full rationale; this one records only what is
 # sharing-specific.

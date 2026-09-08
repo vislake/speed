@@ -10,12 +10,13 @@ import "github.com/vislake/speed/go/pkgcore/apperr"
 // rather than mutating the receiver -- the same convention dbkit, tenancy,
 // org, pki and metering already document.
 //
-// Only the codes this round's own code paths can actually return are
-// declared here. The gateway round added the four codes
-// PaymentGateway.VerifyWebhook/QueryStatus and PaymentEventRepository can
-// actually return; a code for a check nothing performs would still be dead
-// catalog weight, not forward compatibility -- the same discipline go/pki's
-// and go/metering's error indexes document for their own round boundaries.
+// Only the codes this module's own code paths can actually return are
+// declared here -- the validation and lifecycle codes below, plus the
+// webhook/payment-event codes PaymentGateway.VerifyWebhook/QueryStatus and
+// PaymentEventRepository can actually return. A code for a check nothing
+// performs would be dead catalog weight, not forward compatibility -- the
+// same discipline go/pki's and go/metering's error indexes document for
+// their own module boundaries.
 var (
 	// ErrPlanNotFound reports that no Plan exists for whatever was looked
 	// up in the scope it was looked up under: a plan id in a named scope
@@ -146,8 +147,7 @@ var (
 
 	// ErrUnsupportedCurrency reports that a ChargeRequest named a currency
 	// the target payment channel cannot actually collect -- Alipay and
-	// WeChat Pay's Native (QR-code) product only ever settle in CNY
-	// (go/billing/gateway/AGENTS.md's own domestic-leg trade-off), so a
+	// WeChat Pay's Native (QR-code) product only ever settle in CNY, so a
 	// request naming any other currency is refused at the CreateCharge
 	// boundary rather than silently collected as if it were CNY.
 	ErrUnsupportedCurrency = apperr.Invalid("billing.unsupported_currency")
@@ -183,11 +183,10 @@ var (
 	// the structured "parameter" param. It is deliberately the generic
 	// request-shape code, never one naming limit's own semantics: the
 	// binder never sees the bound (only the handler does, answering
-	// ErrInvalidLimit for an integer outside it), and a future spec edit
-	// that adds another bindable parameter should reuse this same code
-	// for its own malformed-value refusals rather than minting one per
-	// parameter -- the identical stance go/sharing's own ErrInvalidRequest
-	// takes for its binder failures.
+	// ErrInvalidLimit for an integer outside it), and any bindable
+	// parameter the spec gains is refused through this same code rather
+	// than one minted per parameter -- the identical stance go/sharing's
+	// own ErrInvalidRequest takes for its binder failures.
 	ErrInvalidRequest = apperr.Invalid("billing.invalid_request")
 
 	// ErrInternal reports a failure the module's HTTP layer cannot

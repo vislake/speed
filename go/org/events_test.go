@@ -521,20 +521,14 @@ func TestTreeService_PublishesNodeEvents(t *testing.T) {
 	}
 }
 
-// TestTreeService_NodeDeletedPayload_CarriesTheRealRemovedIDSet is the
-// widened-payload regression org-rbac.md's P1-2 finding requires: before
-// this round, org.node.deleted carried only RemovedCount, a bare number
-// with no row identity behind it, so a subscriber that needed to act on
-// WHICH rows disappeared (rbac's dangling-binding reap, added alongside
-// this) had nothing to read. This proves DeletedNodeIds is now populated
-// correctly for both delete shapes -- exactly [nodeID] for a single,
-// non-cascading delete, and every row a cascade actually removed for one
-// that cascades.
-//
-// This is not a classic red/green flip on org's own side: before this
-// round the field did not exist at all, so the "pre-fix" state is "this
-// assertion does not compile" rather than "this assertion fails" -- the
-// structure the task's own test-policy note calls for.
+// TestTreeService_NodeDeletedPayload_CarriesTheRealRemovedIDSet pins the
+// widened-payload contract org's node-deleted consumers depend on:
+// org.node.deleted carries the real row identities, because a subscriber
+// that must act on WHICH rows disappeared (rbac's dangling-binding reap)
+// has nothing to read from a bare count. This proves DeletedNodeIds is
+// populated correctly for both delete shapes -- exactly [nodeID] for a
+// single, non-cascading delete, and every row a cascade actually removed
+// for one that cascades.
 func TestTreeService_NodeDeletedPayload_CarriesTheRealRemovedIDSet(t *testing.T) {
 	t.Run("a single, non-cascading delete carries exactly its own id", func(t *testing.T) {
 		m, host := newTestModule(t)
@@ -620,9 +614,9 @@ func TestTreeService_NodeDeletedPayload_CarriesTheRealRemovedIDSet(t *testing.T)
 	})
 }
 
-// TestTreeService_PublishesNodeRestoredEvent closes the loop for the fourth
-// tree event this round adds: org.node.restored has a publisher, and it
-// carries the payload EventNodeRestored's own EventDecl names.
+// TestTreeService_PublishesNodeRestoredEvent covers the fourth tree event's
+// publisher: org.node.restored has a publisher, and it carries the payload
+// EventNodeRestored's own EventDecl names.
 func TestTreeService_PublishesNodeRestoredEvent(t *testing.T) {
 	m, host := newTestModule(t)
 	ctx := tenantCtx("tenant-a")
@@ -694,13 +688,12 @@ func TestEventPayloads_CarryJSONTags(t *testing.T) {
 // PII to all three -- and so does the address's blind index, a keyed digest
 // of a low-entropy value that any holder with a candidate list can reverse.
 // The check reads both the Go field name and the json tag, because the tag
-// is what the broker's map keys are built from. This round's upgrade: the
-// payload used to carry EmailIndex (its json tag "email_index") on the
-// "digest, not the address" reasoning this very comment's predecessor
-// recorded; a digest of a low-entropy value IS an identifier, so the
-// assertion now forbids the address and every derivation of it alike. The
-// payload identifies the invitation; a subscriber that must reach the
-// person reads the invitation row through org (MemberInvited's doc comment).
+// is what the broker's map keys are built from. The assertion forbids the
+// address and every derivation of it alike: a digest of a low-entropy
+// value IS an identifier, so the payload must not carry EmailIndex (its
+// json tag "email_index") either. The payload identifies the invitation;
+// a subscriber that must reach the person reads the invitation row through
+// org (MemberInvited's doc comment).
 func TestMemberInvited_CarriesNoAddressOrIndex(t *testing.T) {
 	typ := reflect.TypeOf(MemberInvited{})
 	for i := range typ.NumField() {

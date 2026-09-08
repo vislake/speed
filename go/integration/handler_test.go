@@ -93,7 +93,7 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, wantStatus in
 
 // assertAuditGapSuccess decodes rec's success body in ONE pass and requires
 // it to answer wantStatus with NO error-envelope field (neither code nor
-// params -- the P0-closing invariant: a created credential never rides in an
+// params -- the invariant that a created credential never rides in an
 // error envelope, because error responses flow into logs, tickets and bug
 // reports that success bodies do not) and the response's own
 // auditRecordMissing field true, returning the raw body so the caller can

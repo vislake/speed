@@ -16,15 +16,14 @@
  * UNIT TIER
  *
  * The ledger's auto-registered rows carry an empty displayName by
- * go/admin design, so a row rendered as stored would list
- * `tenant-64307885-...` -- the identical raw-identifier defect the
- * team roster shipped with and 42a14614 closed. The rows therefore
- * render the naming ladder the view's own doc comment records: a row
- * an operator recorded a display name on is named by it, a tenant
- * this app's demo roster knows is named by the roster copy, and a row
- * with no name source renders the bundle's fallback label -- and the
- * raw tenant id is never what a row renders as a name, which is the
- * assertion that would have failed before this round.
+ * go/admin design, so a row rendered as stored would show a raw
+ * tenant id -- the raw-identifier shape the team roster's naming
+ * ladder exists to prevent. The rows therefore render the naming
+ * ladder the view's own doc comment records: a row an operator
+ * recorded a display name on is named by it, a tenant this app's demo
+ * roster knows is named by the roster copy, and a row with no name
+ * source renders the bundle's fallback label -- and the raw tenant id
+ * is never what a row renders as a name.
  *
  * The gate's error classification earns the same three checks the
  * notes and team surfaces' own suites run: a refused read falls the
@@ -85,9 +84,8 @@ const DEMO_TENANT_ROWS: readonly DemoAdminTenant[] = [
   },
 ]
 
-/** A tenant id of the ledger's own shape -- full raw identifiers the
- * gate's trap is written about; the assertion that no rendered text
- * ever carries one is what failed before this round. */
+/** A tenant id of the ledger's own shape -- full raw identifiers of
+ * the kind the gate's naming rule forbids a rendered row to carry. */
 const RAW_LEDGER_TENANT_ID = 'tenant-64307885-8a11-4b23-9c45-6d7e8f90a1b2'
 
 /** Renders the administration surface over a signed-in rig (the

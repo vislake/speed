@@ -17,7 +17,7 @@
 // machinery (go/sharing's create/access/revoke surface, proven end to
 // end in sharing_flow_test.go over a plain storage object; this file's
 // cases+simulation legs, proven in smile_journey_flow_test.go). What this
-// round assembles is the product surface -- the clinic's share action and
+// journey assembles is the product surface -- the clinic's share action and
 // the patient's page -- which cannot be driven by a Go wire test alone;
 // the web host's own journeys (views/simulation-share-action.test.tsx,
 // views/share-view.test.tsx) and the block-C e2e gate

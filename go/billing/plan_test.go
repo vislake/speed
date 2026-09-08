@@ -82,11 +82,10 @@ func TestPlanStore_Create_SameKeyDifferentTenants_Allowed(t *testing.T) {
 	}
 }
 
-// TestPlanStore_Resolve_TenantCustomOverridesPlatformWide is the round's
-// mandated proof of the tenant-custom Plan lookup precedence
-// (docs/internal/06-billing-and-metering.md): a tenant-custom Plan for
-// (tenantID, key) is used when one exists; the platform-wide Plan for key
-// is used otherwise; ErrPlanNotFound when neither exists.
+// TestPlanStore_Resolve_TenantCustomOverridesPlatformWide is the mandated
+// proof of the tenant-custom Plan lookup precedence: a tenant-custom Plan
+// for (tenantID, key) is used when one exists; the platform-wide Plan for
+// key is used otherwise; ErrPlanNotFound when neither exists.
 func TestPlanStore_Resolve_TenantCustomOverridesPlatformWide(t *testing.T) {
 	store := NewPlanStore(newTestDB(t))
 	ctx := context.Background()
@@ -205,14 +204,14 @@ func uniqueKey() string {
 	return "probe-key-" + uuid.NewString()
 }
 
-// TestPlanStore_Update_EmptyID_RefusedNotSilentlyInserted is P2-16's
-// regression: an Update whose plan.ID is empty must answer the coded
+// TestPlanStore_Update_EmptyID_RefusedNotSilentlyInserted pins the
+// empty-ID refusal: an Update whose plan.ID is empty must answer the coded
 // not-found and change nothing. No stored Plan can carry an empty ID (Create
 // generates a UUID whenever plan.ID is blank), but GORM's Save performs a
 // CREATE whenever the primary key is blank -- the Where clause
-// notwithstanding -- so on pre-fix code this call silently INSERTED a new
-// row (with id "") and returned nil, and a subsequent Get found the ghost
-// row the caller never meant to create.
+// notwithstanding -- so without the guard the empty-ID call would silently
+// insert a new row (with id "") and return nil, and a subsequent Get would
+// find the ghost row the caller never meant to create.
 func TestPlanStore_Update_EmptyID_RefusedNotSilentlyInserted(t *testing.T) {
 	store := NewPlanStore(newTestDB(t))
 	ctx := context.Background()
@@ -232,12 +231,11 @@ func TestPlanStore_Update_EmptyID_RefusedNotSilentlyInserted(t *testing.T) {
 	}
 }
 
-// TestPlanStore_ScopedGet_OwnRowsOnly is P2-1's regression for the read
+// TestPlanStore_ScopedGet_OwnRowsOnly pins the scope guard on the read
 // side: a Get naming tenant-a's scope must return only tenant-a's own
-// custom Plan, never tenant-b's -- on the pre-fix store (whose Get had no
-// scope at all) the same read crossed tenants freely. A platform-wide row
-// is not in any tenant's own scope either: it is read through
-// GetPlatformPlan, the named platform-level read.
+// custom Plan, never tenant-b's -- an unscoped read would cross tenants
+// freely. A platform-wide row is not in any tenant's own scope either: it
+// is read through GetPlatformPlan, the named platform-level read.
 func TestPlanStore_ScopedGet_OwnRowsOnly(t *testing.T) {
 	store := NewPlanStore(newTestDB(t))
 	ctx := context.Background()
@@ -290,13 +288,12 @@ func TestPlanStore_ScopedGet_OwnRowsOnly(t *testing.T) {
 	}
 }
 
-// TestPlanStore_ScopedUpdate_OwnRowsOnly is P2-1's regression for the
+// TestPlanStore_ScopedUpdate_OwnRowsOnly pins the scope guard on the
 // write side: an Update naming tenant-a's scope must not modify tenant-b's
-// custom Plan -- on the pre-fix store (whose Update had no scope at all)
-// the same update wrote tenant-b's row. The named scope must own the row
-// both as stored and as the plan struct carries it, so an update can
-// neither touch another tenant's row nor move one of the caller's own
-// rows into another scope.
+// custom Plan -- an unscoped update would write tenant-b's row. The named
+// scope must own the row both as stored and as the plan struct carries it,
+// so an update can neither touch another tenant's row nor move one of the
+// caller's own rows into another scope.
 func TestPlanStore_ScopedUpdate_OwnRowsOnly(t *testing.T) {
 	store := NewPlanStore(newTestDB(t))
 	ctx := context.Background()
@@ -396,15 +393,14 @@ func TestPlanStore_ScopedUpdate_PlatformScope(t *testing.T) {
 	}
 }
 
-// TestErrPlanNotFound_Message_RendersTheLookedUpValue is P2-20's regression:
+// TestErrPlanNotFound_Message_RendersTheLookedUpValue pins the rendered message:
 // billing.plan_not_found's locale template must interpolate the value every
 // lookup site actually decorates the error with. All four sites carry the
 // looked-up value under the same "id" parameter name (PlanStore.Get/Update
 // and SubscriptionService.Create by plan id, PlanStore.Resolve by plan key)
-// and the template interpolates {{.id}} -- on pre-fix code three sites
-// passed "id" while the template read {{.key}}, so the common lookup path
-// (Get, and with it Entitlements.Check's deleted-plan handling) rendered
-// the value as an empty slot ("<no value>") instead of the id.
+// and the template interpolates {{.id}}: a site passing a differently
+// named parameter would render the common lookup path's value as an empty
+// slot ("<no value>") instead of the id.
 func TestErrPlanNotFound_Message_RendersTheLookedUpValue(t *testing.T) {
 	db := newTestDB(t)
 	plans := NewPlanStore(db)

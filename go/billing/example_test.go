@@ -6,16 +6,15 @@ package billing_test
 // executed by `go test`, so a change to billing's public API that breaks
 // the documented usage fails the build rather than only rotting in prose.
 //
-// It walks the round's whole shape in one pass: a platform-wide Plan with
+// It walks the module's whole shape in one pass: a platform-wide Plan with
 // a Boolean and a Quota grant, a Subscription activated onto it,
 // Entitlements.Check answering both grant kinds, and the credits ledger's
-// reserve -> confirm pattern -- the two independent paths
-// docs/internal/06-billing-and-metering.md's own split describes.
+// reserve -> confirm pattern -- the two independent paths the module's own
+// split describes.
 //
-// This module has no reference-app consumer yet (see AGENTS.md's Known
-// limitations); this Example is the compensating obligation the round's
-// own instructions call for in that situation, the identical shape
-// go/pki's X.509 layer already uses for the same reason.
+// This module has no reference-app consumer for these surfaces yet; this
+// Example is the compensating obligation for that gap, the identical
+// shape go/pki's X.509 layer already uses for the same reason.
 
 import (
 	"context"

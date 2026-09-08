@@ -12,9 +12,8 @@ package sharing
 // of whether a sweep has ever run, mirroring go/storage's own LifecycleService
 // doc comment ("Sweep is what makes interrupted deletions finish", not what
 // makes a single Delete call correct). What the sweep buys is row hygiene:
-// ListAccessLog's caller and any future admin-facing share listing see an
-// explicit RevokedAt rather than inferring "must be expired" by re-deriving
-// isLive themselves.
+// an owner-facing listing shows an explicit RevokedAt rather than leaving
+// the reader to infer "must be expired" by re-deriving isLive.
 //
 // EnqueueExpirySweepIdempotencyKey and the task type follow go/storage's own
 // expiry-sweep convention (cleanup.go there) as the established precedent
@@ -40,18 +39,17 @@ const taskTypeExpirySweep = "sharing.expiry_sweep"
 
 // expirySweepWindowSize is the period one expiry-sweep idempotency key
 // covers: a sweep is enqueued under the key of the expirySweepWindowSize
-// window (expirySweepWindowStart) its enqueue falls in, so the same-window
-// duplicates the original key existed to collapse -- a scheduler with two
-// replicas, a manual re-run -- still merge into one job, while an enqueue
-// in a later window becomes a NEW job and the sweep runs again. The window
-// is what makes the sweep periodic at all: jobs' idempotency is
-// unconditional for one key on StandaloneQueue (a resolved key is held
-// forever), so a tenant-only key would give each tenant exactly one sweep
-// per database file -- the pre-window design's residual -- and, worse, a
-// sweep job that dead-letters would poison its tenant forever, since every
-// later enqueue would keep returning the dead job's id. A dead-lettered
-// job now poisons only its own window; the next window's enqueue is a
-// fresh key and runs. One hour means a share past its expiry is marked --
+// window (expirySweepWindowStart) its enqueue falls in, so same-window
+// duplicates -- a scheduler with two replicas, a manual re-run -- merge
+// into one job, while an enqueue in a later window becomes a NEW job and
+// the sweep runs again. The window is what makes the sweep periodic at
+// all: jobs' idempotency is unconditional for one key on StandaloneQueue
+// (a resolved key is held forever), so a tenant-only key would give each
+// tenant exactly one sweep per database file and let one dead-lettered
+// sweep job poison its tenant forever, since every later enqueue would
+// keep returning the dead job's id. A dead-lettered job poisons only its
+// own window; the next window's enqueue is a fresh key and runs. One hour
+// means a share past its expiry is marked --
 // and a view reservation that has outlived viewReservationTimeout is
 // refunded -- at most expirySweepWindowSize after the sweep that should
 // have caught it was enqueued, while keeping the sweep load at one task

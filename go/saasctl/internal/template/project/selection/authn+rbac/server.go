@@ -58,8 +58,7 @@ const (
 // generator's --with set for this project; the README's environment table
 // and this project's go.mod show which module set a differently-generated
 // project carries) plus pki, which is not part of the --with set at all --
-// it follows authn silently (docs/internal/22-pki.md's section on where
-// pki sits in saasctl's module selection set), supplying the KeySource
+// it follows authn silently, supplying the KeySource
 // authn's signing keys now live behind. Migrations register in the same order Bootstrap runs,
 // so every Register-time declaration (authn's config items, permissions
 // and events first, then config's own Register, and rbac's Attach-time
@@ -67,9 +66,8 @@ const (
 // chain is authn.Middleware(verifier) then
 // tenancy.Middleware(authn.NewPrincipalResolver()): authn first, so each
 // token is verified exactly once and the tenant comes from the verified
-// Principal's claims, never a Host header -- go/authn/AGENTS.md's "The
-// middleware chain is authn, then tenancy" section carries the full
-// reasoning. authn.Middleware is optional auth (a bad token is a 401, an
+// Principal's claims, never a Host header. authn.Middleware is optional
+// auth (a bad token is a 401, an
 // absent one stays anonymous), so tenancy.Middleware's fail-closed default
 // is what protects every route this file does NOT allowlist: such a route
 // answers 403 without a valid Principal and needs no per-route wrapping.
@@ -180,8 +178,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// so it persists across restarts with no dev-seed derivation required
 	// -- see config.go's devPKILocalKeyCipherKey doc comment for what seals
 	// that stored key. pki is not part of this generator's --with selection
-	// set (docs/internal/22-pki.md's section on where pki sits in saasctl's
-	// module selection set): it follows authn silently,
+	// set: it follows authn silently,
 	// which is why it is wired here rather than offered as its own choice.
 	pkiModule := pki.NewModule(db)
 
@@ -189,9 +186,8 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// as every other seam this file wires: a configured gateway URL always
 	// wins, under either deployment mode, and composes authn's real HTTP
 	// transport (authn.NewHTTPSMSSender); absent that, the standalone
-	// deployment mode falls back to the console transport this composition
-	// used before this wiring existed, while the distributed deployment mode
-	// is left deliberately UNWIRED -- authn.NewModule's own newOptions then
+	// deployment mode falls back to the console transport, while the
+	// distributed deployment mode is left deliberately UNWIRED -- authn.NewModule's own newOptions then
 	// fails closed with authn.ErrMissingDistributedSMSSender rather than
 	// this composition silently keeping a console sender nobody in a
 	// distributed replica pool is reading (see config.go's smsGatewayURLEnv
@@ -255,8 +251,7 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// the migration order above -- see buildServer's doc comment.
 	// WithDeploymentMode declares the topology the assembled composition is
 	// validated against; it never selects an implementation (the deployment
-	// mode and the implementation composition are orthogonal axes --
-	// docs/internal/03-deployment-modes.md), and the validation refuses a
+	// mode and the implementation composition are orthogonal axes, and the validation refuses a
 	// composition the declared mode cannot run, naming the seam, the
 	// implementation and the missing capability.
 	//

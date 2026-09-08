@@ -173,9 +173,9 @@ describe('README usage example', () => {
     // refused request that presented one. A credential-less 401 means
     // the endpoint demands authentication, which refreshing cannot
     // supply; the refresh hook stays untouched and nothing is
-    // reported. The hook's M1 wiring (a token-carrying request whose
-    // session expired, refreshing against the session endpoint) is
-    // exercised in the 401-and-refresh describe block of client.test.
+    // reported. The token-carrying 401-and-refresh path (a request
+    // whose session expired, refreshing against the session endpoint)
+    // is exercised in the 401-and-refresh describe block of client.test.
     const call = onlyCall(standin)
     expect(call.url).toBe('/api/v1/notes?page=1')
     expect(consoleWarn).not.toHaveBeenCalled()

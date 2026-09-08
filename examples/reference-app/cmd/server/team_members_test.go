@@ -313,7 +313,7 @@ func TestTeamMembersEndpoint_NamesAnInvitedColleagueByTheirRegisteredDisplayName
 	}
 
 	// The clinic's roster now names the colleague by the display name they
-	// registered with -- the row the walk-through would previously have
+	// registered with -- the row the walk-through would otherwise
 	// answered as another raw user id.
 	status, answer, _ := rosterRequest(t, srv, ownerToken)
 	if status != http.StatusOK {

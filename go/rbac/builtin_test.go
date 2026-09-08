@@ -289,11 +289,11 @@ func TestService_EnsureBuiltinRoles_SeedsOneTenantOnly(t *testing.T) {
 
 func TestService_EnsureBuiltinRoles_SeedsTheSystemPseudoTenant_WithNoSpecialCase(t *testing.T) {
 	// Platform-operations grants are rows with tenant_id = "system".
-	// docs/internal/05-identity-and-access.md requires platform operations
-	// to reuse this very engine through a "system" pseudo-tenant rather
-	// than getting an authorization system of their own, so the grant must
-	// travel the identical code path -- which is exactly what this test
-	// asserts: the same call, the same result, no branch.
+	// Platform operations reuse this very engine through a "system"
+	// pseudo-tenant rather than getting an authorization system of their
+	// own, so the grant must travel the identical code path -- which is
+	// exactly what this test asserts: the same call, the same result, no
+	// branch.
 	svc := newTestService(t)
 	ctx := pkgcore.WithTenant(context.Background(), SystemDomain)
 

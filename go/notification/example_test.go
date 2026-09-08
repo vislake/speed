@@ -114,10 +114,10 @@ func ExampleInboxMessage() {
 	// other tenant: dbkit.record_not_found
 }
 
-// ExampleSendRecordRepository_ListByFilter walks D10's operator-facing
-// search (docs/internal/23-admin.md, go/admin's round 2): finding out
-// whether a delivery actually went out, and what happened, filtered by
-// tenant, channel and status.
+// ExampleSendRecordRepository_ListByFilter walks the operator-facing
+// send-record search go/admin's surface builds on: finding out whether a
+// delivery actually went out, and what happened, filtered by tenant,
+// channel and status.
 //
 // The example needs no delivery pipeline: it writes two send_records rows
 // directly, exactly as an outbound delivery attempt itself would (Create

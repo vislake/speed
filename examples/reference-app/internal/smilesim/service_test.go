@@ -459,9 +459,8 @@ func TestService_NotifyOnCompletion_NonTerminalStatus_NeverPublishes(t *testing.
 	}
 }
 
-// TestService_Simulate_InsufficientCredits_RefusesBeforeAnyEnqueue is this
-// round's mandated proof (root CLAUDE.md's "Reference App" section, and the
-// task that opened this round): a tenant whose balance cannot cover
+// TestService_Simulate_InsufficientCredits_RefusesBeforeAnyEnqueue is the
+// mandated proof: a tenant whose balance cannot cover
 // CreditsPerSimulation is refused with billing.ErrInsufficientCredits
 // BEFORE Gateway.GenerateImage ever reaches the queue -- queue.enqueueCalls
 // stays at zero, proving go/ai-gateway (and, transitively, any real
@@ -557,8 +556,7 @@ func newSimulateResultJob(t *testing.T, jobID jobs.JobID, tenantID pkgcore.Tenan
 // becomes a permanent spend (Reserved returns to zero, Available stays
 // debited), and a second, repeated poll of the same already-terminal job
 // settles again without error or double-applying -- the "provably safe
-// under a retried job settlement" property the task that opened this round
-// requires.
+// under a retried job settlement" property.
 func TestService_NotifyOnCompletion_Succeeded_ConfirmsReservation(t *testing.T) {
 	credits := newTestCreditService(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -660,13 +658,13 @@ func TestService_NotifyOnCompletion_NilBus_IsANoOp(t *testing.T) {
 	}
 }
 
-// TestService_ReconcileOutstandingCredits_SettlesAJobNeverPolled is this
-// round's own regression proof for the bug this round fixes: before it,
-// settleCredit was reachable ONLY through NotifyOnCompletion, itself
-// reachable only by a client polling the job-status route -- a reservation
-// whose job finished while nobody was watching (a closed tab, a dropped
-// connection, a caller that simply never checked back) stayed Reserved
-// forever, with no other path to settle it. This test drives Simulate to
+// TestService_ReconcileOutstandingCredits_SettlesAJobNeverPolled pins
+// the sweep's reach: settleCredit must be reachable beyond
+// NotifyOnCompletion, which only a client polling the job-status route
+// drives -- a reservation whose job finished while nobody was watching (a
+// closed tab, a dropped connection, a caller that simply never checked
+// back) must not stay Reserved forever with no other path to settle it.
+// This test drives Simulate to
 // open a real reservation, records the resulting job as StatusSucceeded
 // directly on queue (standing in for "the job finished"), and calls ONLY
 // ReconcileOutstandingCredits -- NotifyOnCompletion is never called at
@@ -780,10 +778,10 @@ func TestService_ReconcileOutstandingCredits_NilWiring_IsANoOp(t *testing.T) {
 	}
 }
 
-// TestService_CreditReservation_SurvivesRestart is this round's other own
-// regression proof: before it, the job-id-to-CreditTransaction-key mapping
-// lived in a plain Go map (creditKeys), which a process restart wipes --
-// so even a client that kept polling faithfully after a restart would find
+// TestService_CreditReservation_SurvivesRestart pins the durable mapping:
+// the job-id-to-CreditTransaction-key mapping must not live in a plain Go
+// map (creditKeys), which a process restart wipes --
+// even a client that kept polling faithfully after a restart would find
 // settleCredit's lookup come up empty and silently do nothing, leaking the
 // reservation forever with no error and no distinguishing log line. This
 // test builds a Service (serviceA), reserves credits through it, then
@@ -852,7 +850,7 @@ func TestService_CreditReservation_SurvivesRestart(t *testing.T) {
 // ReconcileOutstandingCredits on its own, with no test code ever calling
 // NotifyOnCompletion or ReconcileOutstandingCredits directly -- the full,
 // end-to-end shape of "settlement is reachable independent of any client
-// polling" this round's fix provides.
+// polling".
 func TestService_StartReconciler_AutomaticallySettlesWithoutAnyPoll(t *testing.T) {
 	credits := newTestCreditService(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-acme")
@@ -902,7 +900,7 @@ func TestService_StartReconciler_NilWiring_ReturnsAHarmlessStop(t *testing.T) {
 }
 
 // TestService_Simulate_InvalidOptions_RefusedBeforeReservationOrEnqueue
-// pins the refusal ordering this round's parameterization promises: an
+// pins the refusal ordering the parameterization promises: an
 // option set with any out-of-vocabulary or out-of-range value is refused
 // with its coded smilesim.* error BEFORE any credit is reserved and before
 // Gateway.GenerateImage -- and therefore go/ai-gateway, and any real
@@ -977,8 +975,8 @@ func TestService_Simulate_InvalidOptions_RefusedBeforeReservationOrEnqueue(t *te
 	}
 }
 
-// TestService_Simulate_SamePhotoSameOptions_IsANewGeneration pins this
-// round's regenerate decision (see the package doc comment's
+// TestService_Simulate_SamePhotoSameOptions_IsANewGeneration pins the
+// regenerate decision (see the package doc comment's
 // "Parameterized simulation options" section): calling Simulate again with
 // the SAME photo and the SAME options enqueues a genuinely NEW generation --
 // a fresh job id, a fresh credit reservation, a second enqueue -- and
@@ -1086,7 +1084,7 @@ func TestService_Simulate_DefaultOptions_AreRecordedExplicitly(t *testing.T) {
 	}
 }
 
-// TestService_OptionsAndListing_SurviveRestart is this round's restart
+// TestService_OptionsAndListing_SurviveRestart is the restart
 // proof for the per-photo index: a generation recorded through one Service
 // instance -- photo, effective options and job id -- is still enumerated,
 // with its options and its live job status/output, by a brand new Service
@@ -1246,8 +1244,8 @@ func TestService_PerPhotoIndex_NilWiring_IsANoOp(t *testing.T) {
 	}
 }
 
-// TestService_ListSimulationsByPhoto_AgedOutJob_DoesNotFailTheAlbum is the
-// P3-refapp-13 regression: before the fix, ONE row whose job the queue no
+// TestService_ListSimulationsByPhoto_AgedOutJob_DoesNotFailTheAlbum pins
+// the aged-out-row tolerance: ONE row whose job the queue no
 // longer has on file -- a completed task whose retention window passed
 // (the distributed queue answers jobs.ErrJobNotFound once go/jobs/queue/
 // asynq's DefaultCompletedRetention has elapsed), or a queue that answers
@@ -1311,11 +1309,11 @@ func TestService_ListSimulationsByPhoto_AgedOutJob_DoesNotFailTheAlbum(t *testin
 	}
 }
 
-// TestService_NotifyOnCompletion_DeliveredEntriesAreForgotten is the
-// P3-refapp-14 regression: before the fix, recipients and notified kept
+// TestService_NotifyOnCompletion_DeliveredEntriesAreForgotten pins that
+// recipients and notified do not keep
 // one entry per job forever -- every job Simulate ran with a recipient
-// and every delivery it latched accumulated across the process's life,
-// unbounded by anything. The two maps must be bounded by outstanding
+// and every delivery it latched would accumulate across the process's
+// life, unbounded by anything. The two maps are bounded by outstanding
 // notifications instead: once a job's terminal outcome is fully processed
 // -- an accepted publish on the success path, and a terminal job observed
 // by a bus-less Service that can never deliver -- both entries are
@@ -1370,17 +1368,17 @@ func TestService_NotifyOnCompletion_DeliveredEntriesAreForgotten(t *testing.T) {
 	}
 }
 
-// TestService_Simulate_EntitlementRefusal_WritesNoLedgerRow is the
-// P3-refapp-17 regression: before the fix, Simulate reserved credits
-// before calling Gateway.GenerateImage, whose own entitlement gate then
-// refused the request -- leaving the reservation opened and immediately
-// refunded (the PreDeduct/Refund pair: one ledger row under the
-// reservation's own reason, plus the two balance moves) for a request no
-// job ever ran for. The model-access gate must be pre-flighted BEFORE the
-// reservation opens -- through the very seam the gateway gates on, so the
-// two checks cannot disagree about the same state -- and a deterministically
-// refused request must be refused with the gateway's own coded answer and
-// no ledger row at all.
+// TestService_Simulate_EntitlementRefusal_WritesNoLedgerRow pins that
+// Simulate does not reserve credits
+// before calling Gateway.GenerateImage: if it did, the gateway's own
+// entitlement gate could refuse the request after the reservation opened,
+// leaving it immediately refunded (the PreDeduct/Refund pair: one ledger
+// row under the reservation's own reason, plus the two balance moves) for
+// a request no job ever ran for. The model-access gate is pre-flighted
+// BEFORE the reservation opens -- through the very seam the gateway gates
+// on, so the two checks cannot disagree about the same state -- and a
+// deterministically refused request is refused with the gateway's own
+// coded answer and no ledger row at all.
 func TestService_Simulate_EntitlementRefusal_WritesNoLedgerRow(t *testing.T) {
 	billingDB := dbtest.NewSQLite(t)
 	credits := newTestCreditServiceWithDB(t, billingDB)

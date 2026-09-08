@@ -19,8 +19,9 @@
 // type, checksum), what the pipeline established once the bytes were in
 // (finalized size, detected MIME type, SHA-256 digest, pixel dimensions),
 // and where the object stands in its lifecycle (the ObjectState constants).
-// Derived renditions -- thumbnails today, other kinds as needs grow --
-// get one row each in object_derivatives, with their own keys. Both tables
+// Derived renditions -- thumbnails are the shipped kind, and the kind
+// vocabulary is open for further ones -- get one row each in
+// object_derivatives, with their own keys. Both tables
 // are tenant-scoped and reachable only through the module's repositories
 // (repository.go), which embed dbkit's Repository base and so inherit its
 // three isolation layers; cursor-paged object listing uses the

@@ -14,11 +14,10 @@ import (
 //
 // Why this pin at all: dbkit.NewBlindIndexer's contract makes the column
 // argument the blind-index column's exact SQL name, and it refuses an EMPTY
-// name but has no guard for a non-empty wrong one -- the failure that guard
-// gap once allowed is the cross-module mis-copy this constant exists to make
-// structurally impossible: org's own wiring docs used to teach the name as a
-// hand-typed string, the copyable literal another module's host wiring then
-// mis-copied into its own indexers. Nothing in this module's behaviour can
+// name but has no guard for a non-empty wrong one -- the mis-copy this
+// constant exists to make structurally impossible: the column name is a
+// hand-typed, copyable literal in every indexer's construction, so a host
+// wiring can silently mis-copy it into its own indexers. Nothing in this module's behaviour can
 // fail on such a wrong name: its runtime consumes the indexer's computed
 // Index values and Equal conditions, never the column name the indexer was
 // built with, and the suite's own indexers are built over the literal too.

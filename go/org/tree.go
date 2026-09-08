@@ -42,7 +42,7 @@ type TreeService struct {
 	// It is an option rather than a dynamic configuration item because org
 	// cannot read one without importing the config module, which the
 	// dependency graph forbids; declaring a config schema this module would
-	// then ignore would be a lying schema. See go/org/AGENTS.md.
+	// then ignore would be a lying schema.
 	maxDepth int
 
 	// members, when wired, is asked whether anybody is bound inside a subtree
@@ -141,8 +141,8 @@ func (s *TreeService) Children(ctx context.Context, nodeID string) ([]OrgNode, e
 // uq_org_nodes_single_root (migrations/{sqlite,postgres}/0007_single_root.sql,
 // narrowed to live rows only by 0008_single_root_live.sql -- the same
 // WHERE deleted_at IS NULL predicate 0004 applied to the sibling-name and
-// membership indexes, closing the finding that 0007's parent_id = "" scope
-// alone left a mark-deleted root occupying its tenant's root slot forever)
+// membership indexes, because 0007's parent_id = "" scope alone keeps a
+// mark-deleted root occupying its tenant's root slot forever)
 // -- UNIQUE (tenant_id) over exactly the rows whose parent_id holds the
 // empty-string root sentinel and whose deleted_at is NULL, so at most one
 // LIVE root row per tenant, however it is created, and a soft-deleted
@@ -209,7 +209,7 @@ func (s *TreeService) CreateRoot(ctx context.Context, name, kind string) (*OrgNo
 // findParent's read, the sibling-name check and the insert all run inside
 // ONE dbkit.WithTenantSession transaction, with the parent row locked first
 // through lockLiveNode -- never a plain read followed by a separate write,
-// which is exactly the shape that used to leave a window between reading
+// which is exactly the shape that would leave a window between reading
 // the parent as live and inserting the child: deleteLeaf's own mark-delete
 // is a single UPDATE inside its own single-statement transaction, so a
 // concurrent CreateChild whose parent-liveness check was a plain,
@@ -223,7 +223,7 @@ func (s *TreeService) CreateRoot(ctx context.Context, name, kind string) (*OrgNo
 // commits (after which this call's own lock attempt correctly fails to
 // match a now-dead row) or rolls back; on SQLite it is this transaction's
 // first statement, which keeps it out of the read-then-write lock-upgrade
-// hazard go/dbkit/AGENTS.md's "SQLite busy timeout" section documents.
+// hazard SQLite's busy_timeout semantics describe.
 //
 // The whole transaction is wrapped in withRetry: SQLite contention this
 // shape cannot itself avoid, and a PostgreSQL deadlock against an
@@ -425,7 +425,7 @@ func (s *TreeService) Rename(ctx context.Context, nodeID, name string) (*OrgNode
 // commit; on SQLite it is this transaction's first statement (see
 // lockLiveNode's own doc comment for why every subsequent read and write in
 // the same transaction is then safe from the read-then-write lock-upgrade
-// hazard go/dbkit/AGENTS.md's "SQLite busy timeout" section documents).
+// hazard SQLite's busy_timeout semantics describe).
 // Every row of the subtree -- locked fresh inside this same transaction,
 // after the moved node's own lock is already held, through lockSubtree
 // (repository.go) rather than a single plain, unlocked Find -- is then
@@ -778,7 +778,7 @@ func (s *TreeService) Delete(ctx context.Context, nodeID string, cascade bool) e
 // The returned closure is a no-op when no roster is wired, which is the case
 // for a TreeService constructed on its own -- deleteLeaf/deleteSubtree still
 // receive it and still call it, but it immediately reports no members every
-// time, exactly as the check being entirely absent used to behave.
+// time, exactly as it would if the check were entirely absent.
 func (s *TreeService) memberGuardFor(nodeID string) func(tx *gorm.DB, prefix string) error {
 	return func(tx *gorm.DB, prefix string) error {
 		if s.members == nil {
@@ -835,8 +835,8 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 // partial indexes deliberately free a deleted node's constraint slots for
 // immediate reuse -- a sibling name under the same parent (0004, WHERE
 // deleted_at IS NULL) and the tenant root slot (0007, itself narrowed to
-// live rows by 0008_single_root_live.sql, the P1-org-11 fix: 0007's
-// parent_id = "" scope alone never freed a mark-deleted root's slot, which
+// live rows by 0008_single_root_live.sql: 0007's
+// parent_id = "" scope alone never frees a mark-deleted root's slot, which
 // is exactly the reuse this paragraph is about) -- so restoring into a slot
 // a live row now occupies trips the same unique index a concurrent
 // CreateChild's insert would trip. A root's slot can be freed only through
@@ -854,8 +854,8 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 // NOT restore any descendant a cascading TreeService.Delete soft-deleted
 // alongside it, and does not attempt to distinguish "deleted in that same
 // cascade" from "independently soft-deleted earlier for an unrelated
-// reason" -- the two are indistinguishable without inventing a batch marker
-// this round does not add. That is a deliberate design decision, not an
+// reason" -- the two are indistinguishable without a batch marker that
+// does not exist. That is a deliberate design decision, not an
 // oversight: it is the same "no implicit side effect on a structural edit"
 // discipline this file already applies elsewhere -- Delete does not
 // re-parent orphans to the grandparent (that would silently widen a
@@ -867,14 +867,12 @@ func (s *TreeService) publishDeleted(ctx context.Context, node OrgNode, cascade 
 // restored later. A node restored here may therefore have descendants that
 // stay invisible, mark-deleted, exactly as Delete's cascade left them (or
 // as their own, earlier, unrelated delete left them); the caller restores
-// each such descendant explicitly by id. See go/org/AGENTS.md's "Soft
-// deletion" section for the full rationale and the resulting known
-// limitation -- org exposes no query today that lists a node's
-// mark-deleted descendants, which a future admin restore surface would
-// need.
+// each such descendant explicitly by id. org exposes no query that lists
+// a node's mark-deleted descendants; the only caller such a list would
+// serve is an administrative restore surface, which does not exist.
 //
-// Restore is deliberately not exposed over HTTP this round; see
-// go/org/AGENTS.md's "Soft deletion" section for why.
+// Restore is deliberately not exposed over HTTP; it is a Service-level
+// call only.
 //
 // # Restore refuses to land a node on a dead parent
 //

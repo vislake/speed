@@ -7,8 +7,8 @@
 // the cross-replica cache invalidation that a stale authorization decision
 // makes a security problem rather than a performance one. It is physically
 // separate from go/rbac's unit tests (all of which live in package rbac
-// itself, one file per source file, per the backend coding standard's
-// testing layout rule) and carries the "integration" build tag: a plain
+// itself, one file per source file) and carries the "integration" build
+// tag: a plain
 // "go test ./..." never compiles or runs anything in this directory; it is
 // invoked explicitly with "go test -tags=integration ./...". This mirrors
 // the identical convention of go/dbkit, go/jobs, go/pkgcore and go/config.
@@ -17,8 +17,8 @@
 // working Docker (or Docker-API-compatible) daemon; there is no fallback
 // or skip-on-missing-Docker path, matching the other modules' tiers.
 //
-// Why PostgreSQL earns a leg of its own: root CLAUDE.md requires
-// migrations to run from zero on BOTH dialects, and the unit tier can only
+// Why PostgreSQL earns a leg of its own: migrations must run from zero on
+// BOTH dialects, and the unit tier can only
 // run the SQLite half. The PostgreSQL half is not a formality here -- the
 // bindings table's node_id column is NOT NULL with an empty-string
 // default, and carries a sentinel rather than a NULL,
@@ -88,7 +88,7 @@ func startPostgresContainer(t *testing.T, ctx context.Context) *postgres.Postgre
 // migrations to it with the dialect they ship for, exactly the way a host
 // applies them at startup. Nothing here calls AutoMigrate; the versioned
 // SQL under migrations/postgres is what creates every table, which is what
-// makes this the zero-to-head proof root CLAUDE.md asks for on the second
+// makes this the zero-to-head proof on the second
 // dialect.
 func openRBACPostgres(t *testing.T, ctx context.Context, pgContainer *postgres.PostgresContainer) *gorm.DB {
 	t.Helper()

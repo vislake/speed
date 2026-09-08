@@ -30,9 +30,8 @@ func testItemChangedEvent() config.ItemChangedEvent {
 // TestModule_OnConfigItemChanged_PersistsAnAuditRow proves the subscriber
 // Register installs (config_audit.go's onConfigItemChanged) actually turns
 // a real config.EventConfigItemChanged event into a persisted
-// audit.AuditEvent row under config.AuditActionConfigSet -- the exact gap
-// docs/internal/11-cross-cutting.md's change-audit bullet recorded as
-// deferred to this module's own round.
+// audit.AuditEvent row under config.AuditActionConfigSet -- the change
+// audit every successful config.Set must leave behind.
 func TestModule_OnConfigItemChanged_PersistsAnAuditRow(t *testing.T) {
 	auditRepo := newTestAuditRepo(t)
 	m := NewModule(auditRepo, WithQueue(&recordingQueue{}))

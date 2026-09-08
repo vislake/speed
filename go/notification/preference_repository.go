@@ -18,8 +18,7 @@ import (
 // cannot express: a lookup by (recipient, type) and a listing of one
 // recipient's preferences.
 //
-// Both are written the way go/dbkit/AGENTS.md's "Known limitations"
-// prescribes: built on the same *gorm.DB the embedded Repository was built
+// Both are built on the same *gorm.DB the embedded Repository was built
 // on, against a TenantScoped destination, so the GORM isolation plugin still
 // injects WHERE tenant_id = ? even though Repository[T]'s own
 // re-verification does not run for the call -- and run inside

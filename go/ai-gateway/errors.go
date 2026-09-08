@@ -14,9 +14,8 @@ import (
 
 // hasCode reports whether err is, or wraps, an *apperr.Error with the given
 // code. Codes are compared rather than pointers because WithParam and
-// WithCause derive a new *apperr.Error every time -- the same helper
-// go/storage's and go/rbac's identical errors.go carry, used here by
-// image_job_store.go's get to recognize dbkit.ErrRecordNotFound.
+// WithCause derive a new *apperr.Error every time; image_job_store.go's get
+// uses it to recognize dbkit.ErrRecordNotFound.
 func hasCode(err error, code string) bool {
 	appErr, ok := apperr.As(err)
 	return ok && appErr.Code == code
@@ -63,7 +62,7 @@ var (
 	// that carries no tenant. The owning tenant always comes from the
 	// context -- never from a caller-supplied identifier -- so a
 	// tenant-scoped write on an unscoped context fails closed. The cause is
-	// pkgcore.ErrNoTenant, mirroring config's identical rule.
+	// pkgcore.ErrNoTenant.
 	ErrTenantScopeRequiresTenant = apperr.Invalid("aigateway.tenant_scope_requires_tenant").
 					WithCause(pkgcore.ErrNoTenant)
 
@@ -71,7 +70,7 @@ var (
 	// context that carries no audited system reason. Platform-wide
 	// credentials are only writable through the audited system-context path
 	// (pkgcore.WithSystemContext, or tenancy.WithSystemContext, which adds
-	// its own audit event), mirroring config's ScopeSystem rule exactly.
+	// its own audit event).
 	ErrSystemScopeRequiresSystemContext = apperr.Forbidden("aigateway.system_scope_requires_system_context")
 
 	// ErrBaseURLInvalid reports a tenant BYOK credential write whose baseURL
@@ -96,8 +95,8 @@ var (
 	// skips it.
 	//
 	// WithParam("ip", ...) is deliberately asymmetric between the two paths
-	// that raise this code, and the asymmetry must survive any later
-	// consistency round:
+	// that raise this code, and the asymmetry is a load-bearing invariant a
+	// refactor must not flatten:
 	//
 	//   - The literal-IP path (ssrf.go, ValidateBaseURL) carries the blocked
 	//     address: the caller typed it into the URL, so the param is an
@@ -112,9 +111,7 @@ var (
 	//     back would let a tenant admin submit hostnames and read back the
 	//     internal IPs they resolve to. The coded error, whose generic
 	//     base_url_blocked rendering names no address, is the honest answer
-	//     shape for that path. This mirrors go/integration's
-	//     ErrWebhookURLBlocked asymmetry (integration/errors.go) exactly --
-	//     the two refusals must keep agreeing.
+	//     shape for that path.
 	ErrBaseURLBlocked = apperr.Invalid("aigateway.base_url_blocked")
 
 	// ErrProviderRequestFailed reports a transport-level failure calling a
@@ -140,9 +137,9 @@ var (
 	// config needs are known, and classified Invalid with this code so a
 	// caller can tell "fix the stored credential" apart from a genuine
 	// provider/vendor failure -- never an uncoded error a transport layer
-	// must fold into a bare internal failure. The cause stays
-	// pkgcore.ErrMissingSeamConfig so errors.Is-based registry callers keep
-	// working unchanged.
+	// must fold into a bare internal failure. The cause is
+	// pkgcore.ErrMissingSeamConfig, so errors.Is-based registry callers keep
+	// recognizing the refusal.
 	ErrProviderConfigInvalid = apperr.Invalid("aigateway.provider_config_invalid").
 					WithCause(pkgcore.ErrMissingSeamConfig)
 
@@ -194,8 +191,8 @@ var (
 
 	// ErrImageGenerationUnavailable reports Gateway.GenerateImage called on
 	// a Gateway never given WithImageGeneration -- a Gateway built for
-	// chat-only use has no queue or storage seam to run the design doc's
-	// async-only image pipeline on.
+	// chat-only use has no queue or storage seam to run the async-only
+	// image pipeline on.
 	ErrImageGenerationUnavailable = apperr.Internal("aigateway.image_generation_unavailable")
 
 	// ErrImageRequiresTenant reports Gateway.GenerateImage called on a

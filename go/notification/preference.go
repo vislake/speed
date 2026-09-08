@@ -18,12 +18,12 @@ const tableNotificationPreferences = "notification_preferences"
 //
 // # Data domain
 //
-// Tenant data (docs/internal/04-data-and-tenancy.md). A preference is
-// meaningful only inside the tenant it was set in -- the same person may want
-// billing mail at home and in-app alerts at work -- so NotificationPreference
-// implements dbkit.TenantScoped, is reached only through PreferenceRepository
-// (which embeds dbkit.Repository[NotificationPreference]), and its isolation
-// is proven by tenancytest.AssertIsolated.
+// Tenant data. A preference is meaningful only inside the tenant it was set
+// in -- the same person may want billing mail at home and in-app alerts at
+// work -- so NotificationPreference implements dbkit.TenantScoped, is reached
+// only through PreferenceRepository (which embeds
+// dbkit.Repository[NotificationPreference]), and its isolation is proven by
+// tenancytest.AssertIsolated.
 //
 // It embeds dbkit.TenantModel for the tenant_id column and the promoted
 // GetTenantID method, exactly as InboxMessage does and for the same reasons
@@ -46,11 +46,11 @@ const tableNotificationPreferences = "notification_preferences"
 //
 // There is deliberately no row for "the recipient has not chosen". Absence
 // means the type's declared DefaultChannels apply (see types.go), and the
-// defaults are never materialized into rows -- a type whose defaults change
-// in a later release then changes behavior for every recipient who never
-// chose, which is exactly the intent. A row only exists once the recipient
-// has actively chosen something, and its channels column then holds the
-// choice: a non-empty JSON array of channel names in the platform's canonical
+// defaults are never materialized into rows -- a declared default change
+// therefore changes behavior for every recipient who never chose, which is
+// exactly the intent. A row only exists once the recipient has actively
+// chosen something, and its channels column then holds the choice: a
+// non-empty JSON array of channel names in the platform's canonical
 // vocabulary order (types.go's sortedChannels), or the empty array "[]" for
 // the one case an empty choice is legal, the deliberate opt-out on a type
 // whose declaration permits it (Unsubscribable, see types.go). An empty
@@ -67,8 +67,7 @@ const tableNotificationPreferences = "notification_preferences"
 // per (tenant, person).
 type NotificationPreference struct {
 	// ID is an application-generated UUID, never a database-generated one:
-	// the backend coding standard forbids gen_random_uuid(), which SQLite
-	// has no equivalent for.
+	// gen_random_uuid() is PostgreSQL-only, with no SQLite equivalent.
 	ID string `gorm:"column:id;primaryKey;size:36"`
 
 	// TenantModel promotes the tenant_id column and the GetTenantID method

@@ -98,9 +98,9 @@ func TestFactoryVars_ConcurrentRegisterAndInit_NoDataRace(t *testing.T) {
 		}
 	}()
 
-	// Let the three goroutines overlap long enough that, pre-fix, the race
-	// detector cannot miss the collision; the loops are tight, so 100ms is
-	// thousands of iterations each.
+	// Let the three goroutines overlap long enough that the race detector
+	// cannot miss the collision; the loops are tight, so 100ms is thousands
+	// of iterations each.
 	time.Sleep(100 * time.Millisecond)
 	close(stop)
 	wg.Wait()

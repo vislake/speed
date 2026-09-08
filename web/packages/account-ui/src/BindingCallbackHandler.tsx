@@ -45,11 +45,10 @@ import type { SocialProvider } from './SocialBindingsSection.js'
 export interface BindingCallbackHandlerProps {
   /**
    * The channel the redirect came back on, a path segment of the
-   * callback endpoint, threaded through to the exchange verbatim. The
-   * plan's original prop table omitted it (the exchange reads the
-   * provider from the URL); the spec's callback endpoint is per-provider
-   * segments, so the channel must travel as a prop -- see the round
-   * report.
+   * callback endpoint, threaded through to the exchange verbatim: the
+   * spec's callback endpoint is per-provider segments, so the exchange
+   * cannot recover the provider from the URL and the channel must
+   * travel as a prop.
    */
   readonly provider: SocialProvider
   /** The authorization response the provider redirected back. */

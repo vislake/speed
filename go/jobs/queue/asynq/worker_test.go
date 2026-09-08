@@ -293,10 +293,9 @@ func TestQueue_HandleErrorAttempt(t *testing.T) {
 		// archives whenever retried >= maxRetry; isFailure is not consulted
 		// for that decision). A dead-letter that fires no OnFailure strands
 		// the Job's compensation, so the terminal-attempt bounce's hook must
-		// fire exactly like any other terminal failure's. Fails on the
-		// pre-fix code, where the bounce short-circuited before the
-		// archive-boundary check and the Job archived with zero
-		// compensation.
+		// fire exactly like any other terminal failure's: a bounce that
+		// short-circuited before the archive-boundary check would let the
+		// Job archive with zero compensation, which fails this test.
 		q.handleErrorAttempt(task, errTenantAtCapacity, 3 /* retried */, 3 /* maxRetry */, "job-1", nil /* not cancelled */, obs.FromContext(context.Background()))
 
 		if len(h.calls) != 1 {

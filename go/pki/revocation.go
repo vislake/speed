@@ -14,9 +14,8 @@ import (
 
 // RevokeSigningKey transitions the signing key kid to
 // SigningKeyStatusRevoked, of any prior status (pending, active or
-// retiring), and publishes EventSigningKeyRevoked -- round 3's addition,
-// docs/internal/22-pki.md's "revocation" section: "revoked keys immediately
-// reject signing".
+// retiring), and publishes EventSigningKeyRevoked, so a revoked key
+// immediately stops signing and verifying.
 //
 // Idempotent: revoking an already-revoked key reports (false, nil) and does
 // nothing further -- no second cache invalidation, no second event -- the
@@ -36,22 +35,19 @@ import (
 // ErrNoActiveKey if the revoked key was the purpose's active one, exactly
 // as if EnsurePurpose had never run for it.
 //
-// # Cache invalidation reuses the SAME mechanism round 2 built
+// # Cache invalidation goes through the shared event subscription
 //
-// The task this method fulfills is explicit that revocation "must reuse
-// [the key-set cache's] existing event-invalidation mechanism, [and] not
-// bypass it with a second cache-clearing path". This method satisfies that
-// by publishing EventSigningKeyRevoked on the SAME pkgcore.EventBus every
-// other signing-key lifecycle transition publishes on, through attachBus's
-// SAME subscription (service.go) that already invalidates cache.go's
-// keySetCache for staged/activated/retired -- attachBus now additionally
-// subscribes to EventSigningKeyRevoked, so a revoke on one replica
-// converges every other replica's cache through the identical bus fan-out,
-// never a second, parallel invalidation call. The s.cache.invalidate call
-// below is this replica's OWN local application of that exact mechanism
-// (the in-memory bus delivers synchronously, so the local write is visible
-// before this call returns), not a second path -- see
-// onSigningKeyLifecycleEvent in service.go, which is what a REMOTE
+// Revocation invalidates the key-set cache through the SAME pkgcore.EventBus
+// subscription every other signing-key lifecycle transition uses -- never a
+// second, parallel cache-clearing path: this method publishes
+// EventSigningKeyRevoked, and attachBus's subscription (service.go), which
+// already invalidates cache.go's keySetCache for staged/activated/retired,
+// handles revoked the same way, so a revoke on one replica converges every
+// other replica's cache through the identical bus fan-out. The
+// s.cache.invalidate call below is this replica's OWN local application of
+// that exact mechanism (the in-memory bus delivers synchronously, so the
+// local write is visible before this call returns), not a second path --
+// see onSigningKeyLifecycleEvent in service.go, which is what a REMOTE
 // replica's identical event runs through.
 func (s *Service) RevokeSigningKey(ctx context.Context, kid, reason string) (bool, error) {
 	key, err := s.signingKeys.FindByID(ctx, kid)
@@ -90,8 +86,8 @@ func (s *Service) RevokeSigningKey(ctx context.Context, kid, reason string) (boo
 // RevokeCertificate transitions certificateID's certificate, in the
 // caller's ctx tenant, to CertificateStatusRevoked, records its single
 // CertificateRevocation ledger row (model.go) -- the row CRL generation
-// reads -- and publishes EventCertificateRevoked. Round 3's addition,
-// reworked by the ledger-atomicity round into the arbitrated form below.
+// reads -- and publishes EventCertificateRevoked. The transition and the
+// ledger write are arbitrated as described below.
 //
 // # One winner per certificate: two arbitrated writes
 //
@@ -105,10 +101,7 @@ func (s *Service) RevokeSigningKey(ctx context.Context, kid, reason string) (boo
 //     row still CertificateStatusActive. Of any number of racing revokes
 //     for one certificate, exactly one call's UPDATE matches and commits;
 //     every loser's matches zero rows, so a loser can never write its own
-//     reason and timestamp over the winner's committed row -- the blind
-//     full-row save the round's follow-up review found (see go/pki/AGENTS.md's
-//     round entry), which left the certificate row holding a loser's
-//     revocation while the ledger and the event held the winner's.
+//     reason and timestamp over the winner's committed row.
 //   - The ledger write is INSERT ... ON CONFLICT (certificate_id) DO
 //     NOTHING whose RowsAffected verdict
 //     (CertificateRevocationRepository.InsertIfAbsent), enforced by
@@ -158,11 +151,11 @@ func (s *Service) RevokeSigningKey(ctx context.Context, kid, reason string) (boo
 // A failed ledger insert is RETURNED, wrapped to state the facts a
 // retrying caller needs: the certificate is already revoked (that write
 // committed), its ledger row is missing, and calling RevokeCertificate
-// again reconstructs the row. The old log-and-return-success behavior was
-// the bug this round fixes: a revocation whose ledger write failed was
-// reported as success, and every later call then found the certificate
-// already revoked and returned before ever reaching the ledger write again
-// -- a revoked certificate permanently missing from CRLs.
+// again reconstructs the row. Reporting success on a failed ledger write
+// is deliberately impossible: the certificate row is already revoked by
+// then, so a later call finds it revoked and, without this error, would
+// return before ever reaching the ledger write again -- leaving a revoked
+// certificate permanently missing from CRLs.
 //
 // ErrRecordNotFound (dbkit's own, via CertificateRepository.FindByID) when
 // certificateID does not name a certificate of ctx's tenant.
@@ -270,13 +263,12 @@ func (s *CAService) recordRevocation(ctx context.Context, cert *Certificate, rev
 //     its authority_id before visit runs, so a revoked member -- the
 //     requested authority itself or any ancestor up to the root -- fails
 //     the whole verification and the whole export alike. The refusal is
-//     enforced inside the walk precisely so no future rewrite of either
-//     caller can silently drop it: the round-3 hand-copy of this loop that
-//     ExportAuthorityChainJWKS originally walked carried over only the
-//     cycle guard and not the revocation refusal -- the half-sync this
-//     shared walk exists to prevent -- and its consequence was that a data
-//     plane refreshing the authority-chain JWKS was handed a revoked
-//     authority's public key forever.
+//     enforced inside the walk precisely so no rewrite of either caller
+//     can silently drop it: the half-sync risk this shared walk exists to
+//     prevent is a per-caller copy that carries the cheap property (the
+//     cycle guard) but not the expensive one (the revocation refusal),
+//     whose consequence would be a data plane refreshing the
+//     authority-chain JWKS handed a revoked authority's public key.
 //   - A member whose certificate's validity window does not cover the
 //     current instant is vouched for by neither path, though the two
 //     enforce the window at different granularity: the verifier hands the
@@ -331,9 +323,7 @@ func (s *CAService) walkAuthorityChain(ctx context.Context, startID string, visi
 
 // VerifyCertificate verifies certificateID's certificate (in the caller's
 // ctx tenant) against its full issuing chain, up to and including a
-// self-signed root, and returns the parsed leaf on success -- round 3's
-// addition, the "revoked certificates fail chain verification" half of
-// docs/internal/22-pki.md's "revocation" section.
+// self-signed root, and returns the parsed leaf on success.
 //
 // It refuses with ErrCertificateRevoked, before any cryptographic
 // verification runs, when:
@@ -342,17 +332,16 @@ func (s *CAService) walkAuthorityChain(ctx context.Context, startID string, visi
 //   - any authority in its chain (its direct issuer, or that issuer's own
 //     issuer, up to the root) is AuthorityStatusRevoked.
 //
-// The second case defends a status value this round's own public API never
-// writes -- AGENTS.md's Known limitations and model.go's own
-// AuthorityStatus doc comment both record that no method here ever sets
-// AuthorityStatusRevoked -- but the chain-verification path checks it
-// anyway, so a future round that DOES add authority revocation (or a row
-// seeded directly, as this round's own tests do) is correctly refused from
-// day one, never silently trusted because "nothing sets this yet" quietly
-// became "nothing here needs to check it". The refusal runs inside
-// walkAuthorityChain above -- the shared chain walk ExportAuthorityChainJWKS
-// (jwks.go) uses too, whose doc comment is this property's protected
-// contract -- so verification and export can never drift apart on it again.
+// The second case defends a status value no method in this module's public
+// API ever writes (model.go's own AuthorityStatus doc comment records
+// that) -- but the chain-verification path checks it anyway, so the moment
+// authority revocation exists (or a row is seeded directly, as this
+// module's own tests do) the refusal is already in force, never silently
+// absent because "nothing sets this yet" quietly became "nothing here
+// needs to check it". The refusal runs inside walkAuthorityChain above --
+// the shared chain walk ExportAuthorityChainJWKS (jwks.go) uses too, whose
+// doc comment is this property's protected contract -- so verification and
+// export cannot drift apart on it.
 //
 // ErrAuthorityNotFound if the chain names an authority id that does not
 // exist (a data-integrity fault, not a normal-operation case). Any other

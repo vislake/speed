@@ -2,10 +2,8 @@
 // runtime configuration store that every module's ConfigItem and
 // FeatureFlag declarations land in after Bootstrap, served through
 // typed reads, scoped writes, change propagation and two unauthenticated
-// HTTP endpoints. The design this package implements lives in
-// docs/internal/11-cross-cutting.md; the module's contracts, the
-// post-Bootstrap attach seam and its known limitations are documented in
-// go/config/AGENTS.md.
+// HTTP endpoints. The module's contracts, the post-Bootstrap attach seam
+// and its known limitations are documented in go/config/AGENTS.md.
 //
 // The module's shape, in one pass:
 //
@@ -47,7 +45,7 @@
 //   - GET /api/config/public answers a resolved tenant's effective values
 //     for every Public item plus the enabled feature flag list, and
 //     GET /api/system/features answers the enabled flags -- both
-//     unauthenticated by design in this milestone, resolving the tenant
-//     through the host-injected tenancy.Resolver (see the trust boundary in
-//     docs/internal/04-data-and-tenancy.md).
+//     unauthenticated, since a login page must render before any sign-in
+//     has happened, resolving the tenant through the host-injected
+//     tenancy.Resolver and never erroring over an unmapped host.
 package config

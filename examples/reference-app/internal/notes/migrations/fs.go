@@ -9,7 +9,7 @@
 // module -- the embedding file has to live in the one directory where
 // those two names are its own immediate children. This mirrors
 // go/dbkit/internal/migrationfixture's basemodule and derivedmodule
-// packages exactly; see go/dbkit/AGENTS.md's "Migrations" section.
+// packages exactly.
 package migrations
 
 import "embed"

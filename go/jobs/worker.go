@@ -29,8 +29,8 @@ var ErrHandlerNotRegistered = apperr.Internal("jobs.handler_not_registered")
 // package's own Enqueue created — Task.validate rejects an empty TenantID
 // before Enqueue ever inserts a row — the only realistic cause is a row
 // that reached the jobs table by some path other than Enqueue: a migration
-// bug, a manual SQL fixup, or a future writer that bypasses this package's
-// own API. Checked before calling Handle, exactly mirroring
+// bug, a manual SQL fixup, or a writer that bypasses this package's own
+// API. Checked before calling Handle, exactly mirroring
 // errTaskMissingTenant's identical defense for asynq.Queue
 // (queue/asynq/worker.go's processTaskUncancelled) — without this guard, Handle
 // would run on a context reporting no usable tenant at all
@@ -55,10 +55,9 @@ var errStandaloneHandlerPanicked = apperr.Internal("jobs.standalone_handler_pani
 
 // claimBatchSize bounds how many candidate rows one dispatch tick reads
 // before applying per-tenant concurrency gating in Go. It is a package
-// constant (backend coding standard §10) rather than configurable: unlike
-// worker count or the per-tenant concurrency limit, which are genuine
-// deployment-dependent tuning knobs, this is purely an internal batch size
-// with one reasonable value.
+// constant rather than configurable: unlike worker count or the per-tenant
+// concurrency limit, which are genuine deployment-dependent tuning knobs,
+// this is purely an internal batch size with one reasonable value.
 const claimBatchSize = 100
 
 // jobContext rebuilds the context a Handler (and FailureHook) call
@@ -71,10 +70,10 @@ const claimBatchSize = 100
 // abruptly cancel a Handle call already in flight (see StandaloneQueue.Close's
 // own doc comment).
 //
-// This is the one function responsible for closing "the tenant context
-// trap" described in AGENTS.md: see worker_test.go's
-// TestJobContext_ProducesTenantScopedContext (the positive case: a context
-// built by this function carries exactly the tenant given) and
+// This is the one function responsible for closing the tenant-context
+// trap: see worker_test.go's TestJobContext_ProducesTenantScopedContext
+// (the positive case: a context built by this function carries exactly the
+// tenant given) and
 // TestJobContext_ContrastWithoutRebuild_FailsClosedWithErrNoTenant (the
 // failure mode a worker reproduces if it ever calls Handle with any OTHER
 // context instead — including, but not limited to, forgetting to call this
@@ -184,10 +183,10 @@ func (q *StandaloneQueue) heartbeat() {
 // from blocking a batch-mate that belongs to someone else. Neither one
 // alone is sufficient — see candidate_window_fairness_test.go's
 // TestDispatchOnce_CandidateWindowDoesNotStarveOtherTenants, which pins
-// exactly the gap that existed before claimCandidates' own interleaving
-// was added, and TestPerTenantConcurrencyLimiting, which pins the
-// complementary concurrency-admission property this file's skip-and-
-// continue loop provides.
+// exactly the starvation gap claimCandidates' own interleaving closes, and
+// TestPerTenantConcurrencyLimiting, which pins the complementary
+// concurrency-admission property this file's skip-and-continue loop
+// provides.
 func (q *StandaloneQueue) dispatchOnce(dispatch chan<- jobRecord) {
 	ctx := context.Background()
 	candidates, err := claimCandidates(ctx, q.db, time.Now(), claimBatchSize)
@@ -303,17 +302,16 @@ func (q *StandaloneQueue) runAttempt(rec jobRecord) {
 // — a nil dereference, an out-of-range slice index against a malformed
 // job.Payload, a failed type assertion, a panicking third-party dependency
 // — crashes the entire worker-pool process, taking every OTHER tenant's
-// and every OTHER module's in-flight and queued Jobs down with it (root
-// CLAUDE.md: speed's modules "compile into one binary"). The resulting
-// error is handled identically to any other Handle failure by execute:
-// retried while attempts remain, then dead-lettered.
+// and every OTHER module's in-flight and queued Jobs down with it: the
+// modules compile into one binary, so no process boundary contains the
+// crash. The resulting error is handled identically to any other Handle
+// failure by execute: retried while attempts remain, then dead-lettered.
 //
 // The panic value becomes errStandaloneHandlerPanicked's cause, so job.Error
 // stays a short, operator-readable line exactly like every other failure
 // this package records; the full stack trace is only logged, never
-// persisted — backend coding standard §6.2 forbids letting a stack trace
-// reach a response body, and Job.Error is operator-facing text a caller
-// can read back through Get/DeadLetterJobs.
+// persisted in job.Error, which is operator-facing text a caller reads
+// back through Get/DeadLetterJobs.
 func invokeHandle(ctx context.Context, handler Handler, job *Job, progress ProgressFn, log *slog.Logger) (result Result, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -619,8 +617,8 @@ func (q *StandaloneQueue) settleFailedAttempt(log *slog.Logger, rec jobRecord, c
 // resetInterruptedRecords/claimOne stealing the row after a writer-gate
 // lapse -- the row back in Pending, running under the other writer's claim,
 // or already settled by the other execution: the first symptom of a double
-// execution, which the pre-fix code's blanket cancellation explanation
-// erased exactly when it mattered. The strongest of those shapes, a row
+// execution, never to be explained away as a cancellation. The strongest
+// of those shapes, a row
 // STILL RUNNING under another writer's claim (the other execution is in
 // flight right now), is logged at Error with its own message; the other
 // stolen shapes fall through to the Warn below. Returns whether the row was

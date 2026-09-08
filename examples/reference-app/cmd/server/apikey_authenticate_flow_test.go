@@ -1,10 +1,9 @@
 package main
 
-// apikey_authenticate_flow_test.go is go/integration round 6's own
-// mandatory-first-consumer proof: the property go/integration/AGENTS.md's
-// round-5 section named as unverifiable until this round shipped an
-// Authenticate/Verify path -- "a request bearing a rotated-away or revoked
-// key is refused" -- driven for real, through this app's own composed HTTP
+// apikey_authenticate_flow_test.go is go/integration's
+// mandatory-first-consumer proof for the inbound-authentication path: "a
+// request bearing a rotated-away or revoked key is refused", driven for
+// real, through this app's own composed HTTP
 // stack, against a real inbound endpoint (cmd/server/
 // integration_authenticate.go's integrationWhoamiPath) gated by
 // integration.AuthMiddleware. It shares apikey_flow_test.go's own helpers
@@ -12,13 +11,13 @@ package main
 // half of the flow, and never imports go/integration itself, matching that
 // file's own wire-shape discipline.
 //
-// The rate-limit-hardening round's own regression lives here too: the same
-// route now carries its rate-limit guard BEFORE authentication (wired through
+// The rate-limit guard's regression lives here too: the same
+// route carries its rate-limit guard BEFORE authentication (wired through
 // integration.WithAuthenticationGuard), and
 // TestBuildServer_APIKeyAuthenticateFlow_ForgedKeyFlood_GuardBudgetExhausted_Answers429
 // proves a forged-X-API-Key flood pays that budget and answers 429 once it
-// is spent, where the pre-correction composition answered 401 forever -- one
-// unbounded database-hit Authenticate per forged key.
+// is spent -- never an unbounded database-hit Authenticate per forged
+// key.
 
 import (
 	"encoding/json"
@@ -82,7 +81,7 @@ func decodeWhoami(t *testing.T, resp *http.Response, wantStatus int, what string
 }
 
 // TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey
-// drives the full, previously-impossible property end to end: create a key,
+// drives the full property end to end: create a key,
 // use it as a bearer credential against integrationWhoamiPath (succeeds),
 // rotate it, use the OLD raw key value again (refused), use the NEW key
 // (succeeds), revoke it, use it again (refused).
@@ -92,7 +91,7 @@ func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *te
 
 	// Create with an empty body, through the ordinary session-authenticated
 	// CRUD surface apikey_flow_test.go's own helpers drive -- the identical
-	// shape that test uses, since round 6 changes nothing about how a key is
+	// shape that test uses, since the inbound path changes nothing about how a key is
 	// issued.
 	createResp := apikeyRequest(t, srv, http.MethodPost, apikeyBasePath, acmeToken, demoOwnerUserID)
 	created := decodeCreatedAPIKey(t, createResp, http.StatusCreated, "create")
@@ -131,8 +130,8 @@ func TestBuildServer_APIKeyAuthenticateFlow_RotateAndRevokeRefuseTheOldKey(t *te
 	rotated := decodeCreatedAPIKey(t, rotateResp, http.StatusOK, "rotate")
 
 	// The OLD raw key value is now refused as a bearer credential -- THE
-	// property go/integration/AGENTS.md's round-5 section named as
-	// unverifiable until this round.
+	// property named as
+	// unverifiable without a real inbound endpoint.
 	oldKeyResp := whoamiRequest(t, srv, created.Key)
 	oldKeyResp.Body.Close()
 	if oldKeyResp.StatusCode != http.StatusUnauthorized {

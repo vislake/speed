@@ -207,9 +207,9 @@ func (r *MigrationRegistry) Register(m pkgcore.Module) error {
 // replicas' boots by design -- replica A boots fully, its startup Apply
 // included, before replica B even starts, so B's own Apply always runs
 // against an already-migrated schema and no-ops. Shared-file SQLite is not
-// the database of any real multi-replica deployment shape here (see
-// docs/internal/03-deployment-modes.md), so a lock on this path would
-// protect against a hazard no supported composition can reach.
+// the database of any real multi-replica deployment shape here, so a lock
+// on this path would protect against a hazard no supported composition can
+// reach.
 func (r *MigrationRegistry) Apply(ctx context.Context, db *gorm.DB, dialect Dialect) error {
 	dir, err := dialectDir(dialect)
 	if err != nil {
@@ -390,11 +390,11 @@ func acquireMigrationLock(ctx context.Context, db *gorm.DB) error {
 // closes for good -- stuck.
 //
 // A release failure is reported as a warning via log/slog (mirroring
-// audit_capture.go's auditPublishFailed idiom, and for the identical reason
-// -- dbkit cannot depend on go/observability; see AGENTS.md's "One
-// dependency, and why there is only one") rather than returned: by this
-// point Apply's own result is already determined, and there is nothing left
-// to roll back. An operator seeing this warning knows the advisory lock may
+// audit_capture.go's auditPublishFailed idiom, for the identical reason --
+// dbkit cannot depend on go/observability) rather than returned: by this
+// point Apply's own result is already determined, and there is nothing
+// left to roll back. An operator seeing this warning knows the advisory
+// lock may
 // still be held by this session until its pooled connection is closed for
 // good, and should investigate rather than assume a future Apply call that
 // blocks on this lock will simply resolve itself.

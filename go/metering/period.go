@@ -4,16 +4,16 @@ import "time"
 
 // The PeriodBucket vocabulary: the calendar granularity real-time counters
 // and usage-summary rows reset on. Both are calendar-aligned (a real
-// billing month, not a rolling 30-day window), matching how Plan.Grants'
-// ResetPeriod is framed in docs/internal/06-billing-and-metering.md.
+// billing month, not a rolling 30-day window), matching how go/billing's
+// Plan.Grants ResetPeriod is framed.
 const (
 	PeriodBucketDaily   = "daily"
 	PeriodBucketMonthly = "monthly"
 )
 
 // defaultPeriodBucket is what NewModule wires when the host does not call
-// WithPeriodBucket -- monthly, matching the doc's own worked example and
-// how a subscription billing cycle ordinarily resets.
+// WithPeriodBucket -- monthly, matching how a subscription billing cycle
+// ordinarily resets.
 const defaultPeriodBucket = PeriodBucketMonthly
 
 // periodBounds returns the inclusive start and exclusive end of the

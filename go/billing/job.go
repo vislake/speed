@@ -11,18 +11,16 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-// This file is the active-polling fallback
-// docs/internal/06-billing-and-metering.md requires: a callback may arrive
-// before the order-creation response returns, or may never arrive at all,
-// so an active-polling fallback is mandatory -- a jobs scheduled task
-// scanning orders stuck in an intermediate state. A PaymentEvent row
-// inserted at ChannelStatusPending (payment_event.go) and never updated by
-// a later webhook is exactly that intermediate-state order;
-// PollingService.Poll re-queries each such row's owning channel through
-// PaymentGateway.QueryStatus -- the same authoritative,
-// never-trust-the-callback-body re-query docs/internal/06-billing-and-metering.md's
-// callbacks-cannot-be-trusted rule requires of live webhook processing too,
-// run here proactively instead of reactively.
+// This file is the active-polling fallback the billing design requires: a
+// callback may arrive before the order-creation response returns, or may
+// never arrive at all, so an active-polling fallback is mandatory -- a
+// jobs scheduled task scanning orders stuck in an intermediate state. A
+// PaymentEvent row inserted at ChannelStatusPending (payment_event.go)
+// and never updated by a later webhook is exactly that intermediate-state
+// order; PollingService.Poll re-queries each such row's owning channel
+// through PaymentGateway.QueryStatus -- the same authoritative re-query
+// of a channel whose callbacks cannot be trusted, run here proactively
+// instead of reactively.
 
 // taskTypePoll names the jobs queue task PollingService.EnqueuePoll
 // schedules and pollHandler claims. The task is tenant-scoped, mirroring
@@ -41,11 +39,11 @@ const taskTypePoll = "billing.poll_pending_payments"
 // poll runs again. The window is what makes the poll periodic at all:
 // jobs' idempotency is unconditional for one key on StandaloneQueue (a
 // resolved key is held forever), so a tenant-only key would give each
-// tenant exactly one poll task per database file -- the pre-window
-// design's recorded residual -- and, worse, a poll job that dead-letters
-// would poison its tenant forever, since every later enqueue would keep
-// returning the dead job's id. A dead-lettered job now poisons only its
-// own window; the next window's enqueue is a fresh key and runs. The
+// tenant exactly one poll task per database file -- and, worse, a poll
+// job that dead-letters would poison its tenant forever, since every
+// later enqueue would keep returning the dead job's id. A dead-lettered
+// job poisons only its own window; the next window's enqueue is a fresh
+// key and runs. The
 // window is chosen equal to DefaultPollStuckAfter (15 minutes), the
 // poll's own detection granularity: a poll cadence finer than the stuck
 // threshold has nothing extra to detect (no row is poll-eligible until it
@@ -105,19 +103,15 @@ const defaultPollBatchLimit = 100
 // through PaymentGateway.QueryStatus, recording what it finds back onto the
 // row.
 //
-// # What this round's Poll does NOT do
+// # What Poll does NOT do
 //
 // It updates PaymentEvent.Status alone -- it does not drive any
-// Subscription or Invoice transition from what QueryStatus reports. That is
-// a deliberate round boundary, not an oversight: no HTTP surface exists yet
-// to receive a live webhook in the first place (this round's own stated
-// non-scope), so there is no live processing loop for this round's polling
-// fallback to feed into, and half-wiring one without a real caller to prove
-// it against is exactly the kind of speculative build-ahead
-// go/billing/AGENTS.md's own "Live audit.Emit calls" entry already declines
-// for a different mechanism, for the identical reason. A later round's live
-// webhook endpoint is where a PaymentEvent's Status actually starts driving
-// billing's own domain state.
+// Subscription or Invoice transition from what QueryStatus reports. No
+// HTTP surface exists yet to receive a live webhook, so there is no live
+// processing loop for the polling fallback to feed into, and half-wiring
+// one without a real caller to prove it against would be speculative
+// build-ahead. A live webhook endpoint is where a PaymentEvent's Status
+// actually starts driving billing's own domain state.
 type PollingService struct {
 	events *PaymentEventRepository
 	// gateways maps NormalizedEvent.Channel/PaymentEvent.Channel (e.g.
@@ -125,9 +119,9 @@ type PollingService struct {
 	// it -- WithGateways' own doc comment explains why this is a plain map
 	// a host builds once, rather than a per-call PaymentGatewayRegistry.Build
 	// lookup: a registry Build call re-constructs a fresh implementation
-	// (and, for the providers in this round, would re-parse credentials)
-	// from a Config on every call, which is the wrong cost to pay once per
-	// stuck row on every poll tick.
+	// (and re-parses credentials for the providers that store them in
+	// their Config) from a Config on every call, which is the wrong cost
+	// to pay once per stuck row on every poll tick.
 	gateways map[string]PaymentGateway
 	queue    jobs.Queue
 
@@ -163,10 +157,8 @@ func newPollingService(events *PaymentEventRepository, gateways map[string]Payme
 // PaymentEvent row older than StuckAfter is re-queried through
 // PaymentGateway.QueryStatus and its Status updated to whatever the channel
 // authoritatively reports right now -- never the webhook body's own
-// numbers, per docs/internal/06-billing-and-metering.md's
-// callbacks-cannot-be-trusted rule,
-// which this active-polling fallback obeys identically to live webhook
-// processing.
+// numbers, whose trustworthiness this active-polling fallback treats
+// exactly as live webhook processing does.
 //
 // ctx must carry a tenant -- the worker rebuilds it from the task's
 // TenantID before Handle runs (see pollHandler.Handle), and a direct caller

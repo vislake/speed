@@ -12,15 +12,15 @@ import (
 	"golang.org/x/text/language"
 )
 
-// LocaleZHCN and LocaleENUS name the two languages whose full coverage v1.0
-// guarantees (docs/internal/11-cross-cutting.md). They are naming
-// conveniences for callers that want the M0 pair by hand -- the zh-CN
-// default of the negotiation chain, the lookup tests -- not a closed list:
-// the catalog serves exactly the languages modules ship locale files for,
-// and a language added later is one more file, never a change here.
+// LocaleZHCN and LocaleENUS name the catalog's two seed languages. They are
+// naming conveniences for callers that want the zh-CN/en-US pair by hand
+// -- the zh-CN default of the negotiation chain, the lookup tests -- not a
+// closed list: the catalog serves exactly the languages modules ship
+// locale files for, and a language added later is one more file, never a
+// change here.
 const (
 	// LocaleZHCN is Simplified Chinese, the default language of the
-	// negotiation chain in docs/internal/11-cross-cutting.md.
+	// negotiation chain.
 	LocaleZHCN = "zh-CN"
 	// LocaleENUS is American English.
 	LocaleENUS = "en-US"
@@ -55,7 +55,7 @@ var (
 	// module ships some locale files but not one for every language of the
 	// catalog. A module either ships no locale resources at all (its
 	// Locales() embed.FS is empty, which contributes nothing) or it ships
-	// one file per catalog language -- in M0, zh-CN.toml and en-US.toml:
+	// one file per catalog language -- zh-CN.toml and en-US.toml:
 	// full coverage is the point of the catalog, and a missing file is how
 	// an id silently stops existing for the users of that language.
 	ErrMissingLocaleFile = errors.New("i18n: missing locale file")
@@ -108,10 +108,8 @@ var (
 // catalog's language set; every later module that ships files must ship
 // exactly that set, so every catalog language is covered by every module
 // that renders content. Adding a language is therefore one new file per
-// message-shipping module and nothing else -- the mechanism
-// docs/internal/11-cross-cutting.md requires, which scopes v1.0's
-// full-coverage guarantee to zh-CN and en-US without freezing the catalog
-// to them.
+// message-shipping module and nothing else; full-coverage guarantees are
+// scoped to zh-CN and en-US without freezing the catalog to them.
 //
 // AddModule validates each module's locale files as they arrive: their
 // shape, their id prefixes, the completeness of the file set against the
@@ -160,7 +158,7 @@ func NewBuilder() *Builder {
 // embed.FS{} every current test double returns), and treating that as a
 // module with messages would invent ids rather than detect a bug. Any
 // .toml file at the root of a non-empty fsys, however, commits the module
-// to the full contract: one file per language the catalog serves (in M0,
+// to the full contract: one file per language the catalog serves (in the shipped pair,
 // zh-CN.toml and en-US.toml) and no file for any other language, each file
 // parsing into the flat one-entry-per-message shape, every id starting
 // with module+".", and every language carrying the same id set.
@@ -283,7 +281,7 @@ func (b *Builder) AddModule(module string, fsys fs.FS) error {
 
 // fileNames renders locale codes as the .toml file names error text lists,
 // in the sorted order its callers' codes are in: "en-US.toml, zh-CN.toml"
-// for the M0 pair.
+// for the zh-CN/en-US pair.
 func fileNames(codes []string) string {
 	names := make([]string, len(codes))
 	for i, code := range codes {
@@ -345,7 +343,7 @@ func (c *Catalog) Locales() []string {
 // params into its template.
 //
 // code must be a message id the locale carries. locale must be one of the
-// locales this catalog ships -- in M0, LocaleZHCN and LocaleENUS, the pair
+// locales this catalog ships -- LocaleZHCN and LocaleENUS, the pair
 // Catalog.Locales() enumerates; it is matched exactly, like the values the
 // negotiation chain stores. params
 // provides the template data: a message referencing {{.Name}} is rendered

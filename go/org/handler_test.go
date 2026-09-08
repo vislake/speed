@@ -285,7 +285,7 @@ func TestHandler_OrgListMembers_NoRootYet_ReturnsEmptyList(t *testing.T) {
 	}
 }
 
-// TestHandler_OrgListMembers_ScopesToSubtree is the round's dental-SaaS
+// TestHandler_OrgListMembers_ScopesToSubtree is the dental-SaaS
 // acceptance shape made a handler-level test: a member bound to one store is
 // visible from the group above it and invisible from the sibling store next
 // to it.
@@ -367,7 +367,7 @@ func TestHandler_OrgCreateInvitation_UnresolvedSubject_Returns401(t *testing.T) 
 // pins the PII rule this module holds itself to everywhere else (invite.go,
 // invitation.go): the response is a spec-generated api.OrgInvitation, which
 // has no field the plaintext address or the bearer token could occupy --
-// and, since org P1-1, no field the blind index could occupy either. HMAC
+// and no field the blind index could occupy either. HMAC
 // non-invertibility is no defense against an online oracle, and invitation
 // creation itself yields (address, index) pairs (toInvitationResponse's own
 // doc comment carries the argument); the sibling list-all regression is
@@ -437,8 +437,8 @@ func TestHandler_OrgListInvitations_ReturnsPending(t *testing.T) {
 	}
 }
 
-// TestHandler_OrgListInvitations_Success_ExposesNoBlindIndex pins org P1-1:
-// the invitation list-all SUCCESS response must not carry any listed
+// TestHandler_OrgListInvitations_Success_ExposesNoBlindIndex pins the
+// no-blind-index rule: the invitation list-all SUCCESS response must not carry any listed
 // invitation's blind index, in any form -- not the "emailIndex" key, and
 // not one invitation's EmailIndex value in the raw response bytes.
 //
@@ -635,12 +635,12 @@ func doRequestWithHeaders(h *Handler, ctx context.Context, method, path string, 
 }
 
 // TestHandler_OrgCreateInvitation_LocaleIsFromRequestBody_NeverAcceptLanguage
-// pins the fix for the bug where OrgCreateInvitation read the invitation's
-// locale off the CALLER's own Accept-Language header -- the authenticated
+// pins where OrgCreateInvitation takes the invitation's locale from: never
+// off the CALLER's own Accept-Language header -- the authenticated
 // inviter/operator making this request, not the invitee, who has made no
-// request of their own for the server to read a header from. Root CLAUDE.md:
-// "Backend-generated content ... renders in the recipient's locale, not the
-// operator's UI language."
+// request of their own for the server to read a header from.
+// Backend-generated content renders in the recipient's locale, not the
+// operator's UI language.
 func TestHandler_OrgCreateInvitation_LocaleIsFromRequestBody_NeverAcceptLanguage(t *testing.T) {
 	h, m, _ := newTestHandler(t, fixedSubject{userID: "u-inviter", ok: true})
 	ctx := tenantCtx("tenant-a")

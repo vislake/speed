@@ -64,8 +64,8 @@ describe('useNotesListNotes', () => {
   })
 
   it('stamps the spec path as the query key, with no tenant prefix', () => {
-    // Query-key tenant namespacing is an M1 consumer-shell discipline;
-    // the generated key is the bare spec path (package AGENTS.md).
+    // Query-key tenant namespacing is a consumer-shell discipline; the
+    // generated key is the bare spec path.
     expect(getNotesListNotesQueryKey()).toEqual(['/api/v1/notes'])
   })
 })

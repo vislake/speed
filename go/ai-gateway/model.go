@@ -35,8 +35,7 @@ const CredentialAPIKeySerializerName = "aigateway_credential_api_key"
 // credentialRow is one stored row of the shared ai_gateway_credentials
 // table.
 //
-// The table is platform data, not tenant data (docs/internal/04-data-and-
-// tenancy.md's data-domain table), modeled directly on go/config's own
+// The table is platform data, not tenant data, shaped like go/config's own
 // configs table (go/config/model.go): rows are written and read only
 // through CredentialService's methods, which enforce the scope and
 // system-context rules, so this model deliberately implements no
@@ -49,10 +48,10 @@ const CredentialAPIKeySerializerName = "aigateway_credential_api_key"
 // The primary key is (provider, scope, tenant_id): one row per provider per
 // scope, with tenant_id disambiguating the rows of the tenant tier.
 // tenant_id is NOT NULL and holds the empty string on system-tier rows --
-// empty rather than NULL for the identical reason config's row documents:
-// NULLs are distinct in a PostgreSQL unique index, so two system rows for
-// one provider could otherwise coexist under NULL, where the empty-string
-// sentinel collapses them into the single row the primary key promises.
+// empty rather than NULL because NULLs are distinct in a PostgreSQL unique
+// index: two system rows for one provider could otherwise coexist under
+// NULL, where the empty-string sentinel collapses them into the single row
+// the primary key promises.
 type credentialRow struct {
 	// Provider is the ChatProviderRegistry name this credential is for
 	// (for example "chat.openai-compatible").

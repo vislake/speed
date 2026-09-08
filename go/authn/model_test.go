@@ -229,15 +229,14 @@ func TestUser_EmailIsEncryptedAtRest(t *testing.T) {
 }
 
 // TestExportRevokeReason_ClassifiesEveryDeclaredReason pins the tiered
-// export rule on the four reasons the vocabulary currently declares. The
-// rule itself is stated at the vocabulary's declaration sites (the
-// RevokeReason* groups in model.go and history.go, whose doc comments make
-// every new reason take its class position), and this test is what makes a
-// future reason's declaration incomplete until its position in
-// exportRevokeReason's switch exists: an owner-action reason (the owner
-// closed the session themselves) exports verbatim, a security-mechanism
-// reason (replay detection closed it) folds into revokeReasonExportSecurity
-// and never exports as itself.
+// export rule on every reason the vocabulary declares. The rule itself is
+// stated at the vocabulary's declaration sites (the RevokeReason* groups in
+// model.go and history.go, whose doc comments make every reason take its
+// class position), and this test is what makes a declaration incomplete
+// until its position in exportRevokeReason's switch exists: an owner-action
+// reason (the owner closed the session themselves) exports verbatim, a
+// security-mechanism reason (replay detection closed it) folds into
+// revokeReasonExportSecurity and never exports as itself.
 func TestExportRevokeReason_ClassifiesEveryDeclaredReason(t *testing.T) {
 	t.Parallel()
 
@@ -265,8 +264,8 @@ func TestExportRevokeReason_ClassifiesEveryDeclaredReason(t *testing.T) {
 
 // TestExportRevokeReason_UnknownReasonsFoldNeverPassThrough pins the
 // projection's default: a stored value no declared reason names -- an empty
-// or hand-edited column, or a reason a future round declared without taking
-// its class position in exportRevokeReason's switch -- folds into
+// or hand-edited column, or a declared reason that did not take its class
+// position in exportRevokeReason's switch -- folds into
 // revokeReasonExportSecurity rather than passing through. Of the answers an
 // undeclared value could take, the folded one is the only one that can
 // never leak an undeclared security mechanism.

@@ -155,6 +155,6 @@ print` shows how this project's bootstrap environment resolves -- each
 (the five key variables, the S3 secret key and the SMTP password) rendered
 `[redacted]`. Dynamic-configuration value print and editing (the `configs`
 table's values with their tenant scopes and schema-driven redaction) and
-the web-side scaffolds are later `saasctl` rounds. Speed modules are
+the web-side scaffolds are not part of `saasctl` today. Speed modules are
 libraries: when the checkout's modules change, rebuilding this project
 picks the changes up -- there is no separate install step.

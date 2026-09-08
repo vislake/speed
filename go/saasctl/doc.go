@@ -12,7 +12,5 @@
 //	config  show how a generated project's bootstrap configuration
 //	        resolves
 //
-// This build wires all four commands; db migrate and config print landed
-// with the saasctl milestone's B3 round (docs/internal/15-roadmap.md
-// tracks which).
+// This build wires all four commands.
 package main

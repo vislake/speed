@@ -1,5 +1,5 @@
 -- admin_impersonation_grants is admin's impersonation authorization
--- credential ledger (go/admin/model.go, D5): platform data, no tenant_id
+-- credential ledger (go/admin/model.go): platform data, no tenant_id
 -- column scoping the TABLE itself (target_tenant_id is a data column
 -- naming the tenant a grant is scoped to, not a filter column). Its
 -- isolation is proven by tenancytest.AssertNotTenantScoped.
@@ -23,10 +23,10 @@ CREATE TABLE admin_impersonation_grants (
     PRIMARY KEY (id)
 );
 
--- ImpersonationMiddleware's Lookup path reads by id (the primary key
--- already covers that); these three secondary indexes back
--- ImpersonationRepository.ListActive's "ended_at IS NULL AND expires_at >
--- ?" scan and any future per-actor listing.
+-- ImpersonationMiddleware's Lookup path reads by id, which the primary
+-- key already covers. These secondary indexes cover the per-actor
+-- columns the model's fields tag as indexed (admin_user_id,
+-- target_user_id, target_tenant_id).
 CREATE INDEX idx_admin_impersonation_grants_admin_user_id ON admin_impersonation_grants (admin_user_id);
 CREATE INDEX idx_admin_impersonation_grants_target_user_id ON admin_impersonation_grants (target_user_id);
 CREATE INDEX idx_admin_impersonation_grants_target_tenant_id ON admin_impersonation_grants (target_tenant_id);

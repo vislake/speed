@@ -10,19 +10,18 @@ import (
 
 // rolesSystemDomainForbiddenCode is the wire code ("<module>.<reason>")
 // every RoleService tenant-naming write must answer with when the request
-// names rbac.SystemDomain as the tenant to write into -- the P1-2 closure
-// this file's escalation test below pins. It is deliberately a literal,
-// not the sentinel's own Code: the regression must compile -- and fail at
-// runtime with the escalation succeeding -- against the UNFIXED code,
-// which has no sentinel to reference yet. The parity between this literal
-// and the real sentinel's Code is asserted at the top of
+// names rbac.SystemDomain as the tenant to write into -- the refusal this
+// file's escalation test below pins. It is deliberately a literal, not
+// the sentinel's own Code, so the escalation test compiles even against
+// code with no sentinel to reference; the parity between this literal and
+// the real sentinel's Code is asserted at the top of
 // TestRoleService_SystemDomain_RolesManageOnlyCaller_CannotEscalate so the
 // two cannot silently drift apart.
 const rolesSystemDomainForbiddenCode = "admin.roles_system_domain_forbidden"
 
-// TestRoleService_BeforeAttachRBAC_FailsClosed pins D8's fail-closed
-// contract: every method refuses with ErrRBACServiceRequired, never a
-// nil-service panic, until Module.AttachRBAC has been called.
+// TestRoleService_BeforeAttachRBAC_FailsClosed pins the role surface's
+// fail-closed contract: every method refuses with ErrRBACServiceRequired,
+// never a nil-service panic, until Module.AttachRBAC has been called.
 func TestRoleService_BeforeAttachRBAC_FailsClosed(t *testing.T) {
 	svc := NewRoleService()
 
@@ -46,10 +45,10 @@ func TestRoleService_BeforeAttachRBAC_FailsClosed(t *testing.T) {
 	}
 }
 
-// TestRoleService_DeclaredPermissions_IsTheFrozenCatalog proves D8's
+// TestRoleService_DeclaredPermissions_IsTheFrozenCatalog pins the
 // checklist read against a REAL, Attach()-ed rbac.Service: the catalog
-// includes admin's own newly-declared permissions (PermissionRolesManage
-// among them) alongside rbac's and every other module's, since it is one
+// includes admin's own declared permissions (PermissionRolesManage among
+// them) alongside rbac's and every other module's, since it is one
 // shared, frozen snapshot -- not a per-module view.
 func TestRoleService_DeclaredPermissions_IsTheFrozenCatalog(t *testing.T) {
 	env := buildTestAdminModule(t)
@@ -87,7 +86,7 @@ func TestRoleService_DefineRole_EmptyTenantID_Refused(t *testing.T) {
 	}
 }
 
-// TestRoleService_DefineAssignRevokeRestore_EndToEnd is D8's full-lifecycle
+// TestRoleService_DefineAssignRevokeRestore_EndToEnd is the role surface's full-lifecycle
 // proof, driven entirely through RoleService against a REAL, Attach()-ed
 // rbac.Service (no mocks, no fakes): define a custom role scoped to a
 // real tenant, assign it to a real user, confirm the grant took effect
@@ -196,19 +195,18 @@ func seedRolesManageOnlyCaller(t *testing.T, env testAdminEnv, callerID string) 
 }
 
 // TestRoleService_SystemDomain_RolesManageOnlyCaller_CannotEscalate pins
-// the closure of the roles/define/bind escalation the P1-2 finding names: a
-// caller holding ONLY admin:roles_manage under rbac.SystemDomain must not
-// be able to obtain any other admin:* permission through the role surface
-// by naming the system pseudo-tenant as the tenant to write into. Before
-// the fix every write below succeeded: DefineRole/AssignRole took the
-// tenant from the request and rejected only the empty string, so a
+// the SystemDomain write refusal end to end: a caller holding ONLY
+// admin:roles_manage under rbac.SystemDomain must not be able to obtain
+// any other admin:* permission through the role surface by naming the
+// system pseudo-tenant as the tenant to write into. Without the refusal,
+// DefineRole/AssignRole would take that tenant from the request and
+// accept it -- the role catalog is single and global with no domain
+// partitioning (admin's own admin:* permissions included) -- so a
 // roles_manage-only caller could define a role carrying admin:impersonate
-// in the system domain and bind it to themselves -- collapsing the nine
-// admin permission boundaries D1 draws into one (the role catalog is
-// single and global, admin's own admin:* permissions included). After the
-// fix every RoleService tenant-naming write refuses rbac.SystemDomain with
-// ErrRolesSystemDomainForbidden, and no grant ever takes effect (Can
-// answers false throughout).
+// in the system domain and bind it to themselves, collapsing the admin
+// permission boundaries into one. Every RoleService tenant-naming write
+// must refuse rbac.SystemDomain with ErrRolesSystemDomainForbidden, and
+// no grant may ever take effect (Can answers false throughout).
 func TestRoleService_SystemDomain_RolesManageOnlyCaller_CannotEscalate(t *testing.T) {
 	if got := ErrRolesSystemDomainForbidden.Code; got != rolesSystemDomainForbiddenCode {
 		t.Fatalf("ErrRolesSystemDomainForbidden.Code = %q, want the pinned wire code %q", got, rolesSystemDomainForbiddenCode)
@@ -280,10 +278,10 @@ func TestRoleService_SystemDomain_RolesManageOnlyCaller_CannotEscalate(t *testin
 // TestRoleService_RealTenant_RolesManageOnlyCaller_ManagesRolesStill is
 // the refusal's positive half: the SAME roles_manage-only caller can still
 // run the whole define/assign/revoke lifecycle against an ordinary tenant
-// id, where the role surface's job genuinely lies. The P1-2 closure is
-// scoped to the system pseudo-tenant alone -- the platform's internal
-// domain, not a tenant any admin:roles_manage holder may write roles into
-// -- so role management for a real tenant is unchanged.
+// id, where the role surface's job genuinely lies. The refusal is scoped
+// to the system pseudo-tenant alone -- the platform's internal domain, not
+// a tenant any admin:roles_manage holder may write roles into -- so role
+// management for a real tenant is unchanged.
 func TestRoleService_RealTenant_RolesManageOnlyCaller_ManagesRolesStill(t *testing.T) {
 	env := buildTestAdminModule(t)
 	env.Admin.AttachRBAC(env.RBAC)

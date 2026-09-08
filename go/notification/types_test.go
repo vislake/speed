@@ -8,10 +8,9 @@ import (
 // TestIsKnownChannel pins the platform's closed channel vocabulary: the three
 // canonical names are known, and everything else -- empty, a near-miss, a
 // capitalised variant, a name with whitespace -- is not. PreferenceService.Set
-// refuses a selection naming anything outside this set (see types.go), so the
-// table below is the enumeration a future fourth channel must extend in two
-// places at once: the vocabulary switch in types.go and the known-name cases
-// here.
+// refuses a selection naming anything outside this set (see types.go), so an
+// added channel must extend the vocabulary in two places at once: the switch
+// in types.go and the known-name cases here.
 func TestIsKnownChannel(t *testing.T) {
 	cases := []struct {
 		name string

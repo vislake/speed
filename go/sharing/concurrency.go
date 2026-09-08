@@ -44,11 +44,11 @@ import (
 // almost continuously, and a writer waiting on that convoy only ever gets
 // scheduled to re-check the lock at instants the lock is held -- so an
 // attempt that does not win on its opening instant can wait out dbkit's
-// full busy_timeout again and again without ever winning (measured on the
-// plain runner's harshest scheduling: under GOMAXPROCS=1 the
-// views-survive-revoke regression failed 5 of 8 runs with the retry alone,
-// every lost attempt having burned the full 5s timeout; shorter per-attempt
-// waits fared strictly worse, because the winning re-check only ever
+// full busy_timeout again and again without ever winning (under the plain
+// runner's harshest scheduling, GOMAXPROCS=1, the views-survive-revoke
+// regression failed repeatedly with the retry alone, every lost attempt
+// having burned the full busy_timeout; shorter per-attempt waits fared
+// strictly worse, because the winning re-check only ever
 // arrives after seconds of continuous waiting). On SQLite alone,
 // runGuardedWrite therefore ALSO serializes this repository's own guarded
 // writes behind one in-process mutex (ShareRepository.writeMu, gated by
@@ -136,9 +136,8 @@ func (r *ShareRepository) runGuardedWrite(ctx context.Context, fn func(tx *gorm.
 // transient contention. Any other error is returned immediately,
 // unretried. Exhausting the budget returns the last conflict error raw;
 // each guarded write's caller wraps its store failure as ErrInternal
-// (repository.go), which is the answer a conflict that outlasts the budget
-// deserves -- the identical answer that same write gave the very first
-// conflict before this retry existed.
+// (repository.go), the answer a conflict that outlasts the budget deserves
+// -- the same answer that write gives any conflict.
 func withTxRetry(op func() error) error {
 	var err error
 	for attempt := 0; attempt < txRetryBudget; attempt++ {

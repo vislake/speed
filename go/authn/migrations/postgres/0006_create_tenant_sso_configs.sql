@@ -1,10 +1,10 @@
 -- authn's per-tenant enterprise single sign-on configuration: which OpenID
 -- Connect identity provider a tenant federates with.
 --
--- This is the ONE tenant-domain table this module owns (see
--- docs/internal/05-identity-and-access.md, which specifies exactly one
--- configuration row per tenant). Everything else authn stores is identity
--- data with no tenant column at all, so the difference is worth stating
+-- This is the ONE tenant-domain table this module owns: exactly one
+-- configuration row per tenant is the rule. Everything else authn stores is
+-- identity data with no tenant column at all, so the difference is worth
+-- stating
 -- plainly: rows here belong to a tenant, are reached exclusively through
 -- dbkit.Repository[TenantSSOConfig], and are pinned by tenancytest.AssertIsolated
 -- in oidc_test.go -- while users, sessions, refresh_tokens, login_attempts and
@@ -34,9 +34,9 @@
 -- operators to filter (also banned). Nothing filters on it: it is read whole
 -- and compared in Go.
 --
--- Dual-dialect constraints (root CLAUDE.md): application-generated UUIDs, no
--- gen_random_uuid(), no NOW(), no native arrays, no JSONB filtering. The only
--- difference from the sqlite/ copy of this file is the ciphertext column type.
+-- Dual-dialect constraints: application-generated UUIDs, no gen_random_uuid(),
+-- no NOW(), no native arrays, no JSONB filtering. The only cross-dialect
+-- difference in this file is the ciphertext column type.
 CREATE TABLE tenant_sso_configs (
     tenant_id       VARCHAR(64)   NOT NULL,
     id              VARCHAR(36)   NOT NULL,

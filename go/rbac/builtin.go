@@ -7,7 +7,7 @@ import (
 )
 
 // The built-in role keys every tenant gets. They are constants rather than
-// free strings because org, authn and the admin console will all name them
+// free strings because the keys are identifiers other code and hosts name
 // (a new member is bound to BuiltinRoleMember, a tenant's creator to
 // BuiltinRoleOwner), and a typo in any of those would produce a role that
 // exists but grants nothing.

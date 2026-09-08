@@ -117,11 +117,10 @@ func setupTracerProvider(t *testing.T) *tracetest.InMemoryExporter {
 	return exp
 }
 
-// labelMap flattens a data point's attribute set into a map. Unlike the
-// Prometheus exporter this file used to gather through, a ManualReader's
-// metricdata carries no exporter-specific bookkeeping labels (no
-// otel_scope_* noise to filter out): every attribute here is one
-// Middleware itself attached.
+// labelMap flattens a data point's attribute set into a map. Unlike
+// gathering through the Prometheus exporter, a ManualReader's metricdata
+// carries no exporter-specific bookkeeping labels (no otel_scope_* noise
+// to filter out): every attribute here is one Middleware itself attached.
 func labelMap(attrs attribute.Set) map[string]string {
 	kvs := attrs.ToSlice()
 	out := make(map[string]string, len(kvs))
@@ -213,9 +212,9 @@ func TestMiddleware_RecordsRequestCountAndDuration(t *testing.T) {
 // Two requests, differing ONLY in which tenant issued them, must produce
 // metrics that (a) carry no tenant_id label at all and (b) collapse into
 // exactly one series rather than forking into one per tenant. Either
-// failure mode reproduces the exact cardinality incident
-// docs/internal/09-observability.md warns about: a few thousand tenants
-// multiplying every HTTP metric series by a few thousand.
+// failure mode reproduces the cardinality incident the tenant_id rule
+// warns about: a few thousand tenants multiplying every HTTP metric
+// series by a few thousand.
 func TestMiddleware_MetricsExcludeTenant_NoPerTenantSeries(t *testing.T) {
 	reader := setupMeterProvider(t)
 	handler := obs.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -840,17 +839,17 @@ func TestMiddleware_QueryStringSecrets_NeverReachSpanAttributes(t *testing.T) {
 	}
 }
 
-// TestMiddleware_SpanRouteAttribute_MatchesTheMetricRouteLabel is the
-// tracing-side regression for the span http.route attribute: the span's
-// route attribute used to be set from r.URL.Path verbatim -- the module's
-// only span SetAttributes site -- while the metric side of the SAME
-// middleware bounded the same route concept in three orthogonal dimensions
-// (MaxRouteLabelValues distinct values, MaxRouteLabelLength bytes, valid
-// UTF-8 only). A trace is still an exit of the data-protection rule
-// (docs/internal/09-observability.md's "never enter logs, traces or API
-// responses" clause), and the raw path is where path segments carry tenant
-// and resource ids; the metric side's bounds are disclosure bounds too. The
-// span route attribute therefore now reuses the metric side's route value
+// TestMiddleware_SpanRouteAttribute_MatchesTheMetricRouteLabel pins the
+// span http.route attribute to the metric side's bounded route value: set
+// from r.URL.Path verbatim, the span's route attribute -- the module's
+// only span SetAttributes site -- would escape every bound the metric side
+// of the SAME middleware applies to the same route concept in three
+// orthogonal dimensions (MaxRouteLabelValues distinct values,
+// MaxRouteLabelLength bytes, valid UTF-8 only). A trace is still an exit
+// of the data-protection rule ("never enter logs, traces or API
+// responses"), and the raw path is where path segments carry tenant and
+// resource ids; the metric side's bounds are disclosure bounds too. The
+// span route attribute therefore reuses the metric side's route value
 // -- the same bounded label, computed once per request -- so an id-bearing
 // request path below a seeded mount folds to the mount label and a path
 // past the distinct-value budget collapses to RouteLabelOverflowValue,
@@ -952,8 +951,8 @@ func TestMiddleware_SpanRouteAttribute_MatchesTheMetricRouteLabel(t *testing.T) 
 		spans := exp.GetSpans()
 		// The victim request is the last one served, so its span is the last
 		// exported (the in-memory exporter records spans in end order). It
-		// can no longer be located by its raw-path name the way it used to
-		// be -- bounding that name is part of what this test pins.
+		// cannot be located by its raw-path name -- bounding that name is
+		// part of what this test pins.
 		if len(spans) == 0 {
 			t.Fatalf("expected spans to be exported, got none")
 		}
@@ -1107,16 +1106,16 @@ func TestAnnotateTenant_NoTenant_LeavesSpanUnmodified(t *testing.T) {
 	}
 }
 
-// TestMiddleware_PanickingHandler_StillRecordsMetricsAndErrorSpan is the
-// regression for a hole in Middleware's "Every request gets counted here"
-// contract: the metric-recording and span-enriching block used to run
-// after next.ServeHTTP returned, with no defer, so a handler that panicked
-// unwound straight past this middleware -- the reference app's chain has
-// no recover middleware above this one, and net/http's own per-connection
-// recovery is the first thing a panic reaches -- and the request vanished
-// from both the metrics and the span status entirely (0 metrics collected,
-// and a span left with an unset status). The recording block now runs in a
-// defer, so a panic still produces the request's count/duration data point
+// TestMiddleware_PanickingHandler_StillRecordsMetricsAndErrorSpan pins the
+// "Every request gets counted here" contract against a panicking handler:
+// the metric-recording and span-enriching block runs in a defer, not after
+// next.ServeHTTP returns -- a handler that panicked would otherwise unwind
+// straight past this middleware (the reference app's chain has no recover
+// middleware above this one, and net/http's own per-connection recovery is
+// the first thing a panic reaches), and the request would vanish from both
+// the metrics and the span status entirely (0 metrics collected, and a
+// span left with an unset status). With the defer, a panic still produces
+// the request's count/duration data point
 // -- labeled with the 500 this middleware records as its stand-in for a
 // response that never reached the client (see the defer's own comment) --
 // and an error-status span. The panic itself is deliberately NOT recovered
@@ -1231,7 +1230,7 @@ func TestMiddleware_InvalidUTF8Path_SanitizesBeforeTheLabel(t *testing.T) {
 // in exporter/prometheus) already cover for labels. net/http
 // percent-decodes a request target byte-wise, so a %FF in the path reaches
 // Middleware as a raw invalid byte with no parse error anywhere -- and the
-// same raw byte used to reach the exported span through FOUR surfaces at
+// same raw byte would reach the exported span through FOUR surfaces at
 // once: the otelhttp span-name formatter returned method + URL.Path
 // verbatim, and otelhttp's own server-span semconv (installed by the
 // dependency, not by this module) attached url.path (the path),
@@ -1428,19 +1427,16 @@ func TestMiddleware_RealRoutesSurviveGarbage_WhenSeeded(t *testing.T) {
 }
 
 // TestMiddleware_RealRoutesBelowSeededPrefixes_SurviveStartupGarbage is
-// the regression for the P1-obs-8 gap in the seed's PREFIX semantics:
+// the regression for the seed's PREFIX semantics:
 // pkgcore.MountedRoute.Path is the PREFIX a module's handler was mounted
 // at (pkgcore/registry.go), while the route limiter's runtime input is
 // the request's full URL.Path and its seen-set is an exact-string map --
-// so the exact-match seed shipped by the earlier round protected only
-// the request whose whole path WAS a mount prefix. Every genuine
-// operation path deeper than its mount -- /api/v1/authn/login/password
-// under the /api/v1/authn prefix, and with it authn's twenty, org's
-// eleven, notification's eleven, storage's seven and sharing's one
-// operations -- was unseeded and still collapsed to
-// obs.RouteLabelOverflowValue once startup garbage had exhausted the
-// budget: the P1-8 consequence held for almost every real route. The
-// seed now treats each entry as covering its whole mount subtree -- a
+// an exact-match seed would protect only the request whose whole path WAS
+// a mount prefix. Every genuine operation path deeper than its mount --
+// /api/v1/authn/login/password under the /api/v1/authn prefix -- would
+// stay unseeded and collapse to obs.RouteLabelOverflowValue once startup
+// garbage had exhausted the budget. The seed treats each entry as
+// covering its whole mount subtree -- a
 // request at or below a seeded path is labeled with the seeded path
 // itself, the closest this limiter can get to route-template folding
 // without a real route-capture mechanism -- so a deep operation
@@ -1635,9 +1631,9 @@ func TestMiddleware_SeededMountPrefix_FoldsRequestsAtOrBelowIt(t *testing.T) {
 
 // erroringMeterProvider and erroringMeter stand in for a MeterProvider
 // whose instrument construction fails, so
-// TestMiddleware_InstrumentConstructionError_IsReported can prove the
-// construction errors Middleware used to drop (requestCount, _ := ...)
-// are now routed to OTel's global error handler. The real SDK only errors
+// TestMiddleware_InstrumentConstructionError_IsReported can prove that
+// construction errors Middleware would otherwise drop (requestCount, _ :=
+// ...) are routed to OTel's global error handler. The real SDK only errors
 // on genuinely invalid instrument configurations (and validates silently
 // where these probes would need it to fail), so the failure has to be
 // injected; embedding noop.Meter keeps the rest of the interface live for

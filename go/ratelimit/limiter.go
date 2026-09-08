@@ -187,8 +187,8 @@ func New(store pkgcore.KVStore) Limiter {
 // The instant t is the calling process's own local wall clock: Allow
 // reads time.Now at the moment of the call and derives windowIndex and
 // elapsedFraction from it, and New accepts no clock to substitute (the
-// package is dependency-free by design; see AGENTS.md) — windows advance
-// by the process's local wall clock, never by a time the store or a peer
+// package is dependency-free by design) — windows advance by the
+// process's local wall clock, never by a time the store or a peer
 // supplies. This clock source is the limiter's own behaviour, not a
 // policy some other layer chose, and in a deployment where replicas
 // share one KVStore it makes the limiter's cross-replica behaviour
@@ -199,14 +199,13 @@ func New(store pkgcore.KVStore) Limiter {
 // keys its peers read as a different window and reads their counters
 // through shifted boundaries.
 //
-// The agreement is not hypothetical for this repository:
+// The agreement is exercised for real in this repository:
 // examples/reference-app/integration_test/distributed_mode_test.go is a
-// real two-process composition of this limiter — two replicas sharing
-// one Redis-backed KVStore — whose cross-replica lockout assertions
-// rely on it: they expect rate-limiting state one replica recorded
-// under its own process clock to hold when the other reads it under its
-// own, an expectation satisfied today because both CI processes share
-// one host clock.
+// two-process composition of this limiter — two replicas sharing one
+// Redis-backed KVStore — whose cross-replica lockout assertions rely on
+// it: they expect rate-limiting state one replica recorded under its own
+// process clock to hold when the other reads it under its own, which
+// holds because both processes share one host clock.
 //
 // Recording a hit increments the current window's key with
 // KVStore.IncrByFloatWithTTL, which is unconditionally called first, before
@@ -218,9 +217,8 @@ func New(store pkgcore.KVStore) Limiter {
 // expiry left untouched — so no concurrent caller ever loses its own
 // increment, on a fresh key or a live one alike, and no separate call or
 // gate is needed to attach the window's expiry on the specific hit that
-// happens to create the key. See "The TTL-attachment race, closed" below
-// for why this collapses what used to be a two-call, race-prone sequence
-// into one atomic primitive call.
+// happens to create the key. See "The TTL-attachment race" below for why
+// the whole sequence is one atomic primitive call.
 //
 // The previous window's count is read with a plain KVStore.Get
 // (readWindowCount): a missing key — either it never existed, or it expired
@@ -282,66 +280,56 @@ func New(store pkgcore.KVStore) Limiter {
 // This is safe-direction (it never over-admits) and a faithful consequence
 // of the weighted formula above combined with "every call is a hit"
 // (Limiter's own doc comment), not a defect in this implementation of that
-// formula — see AGENTS.md's Known limitations for the full analysis,
-// including why avoiding it needs a different, unimplemented algorithm
-// (increment only on an allowed call) rather than a correction to this one.
+// formula. Avoiding it would need a different, unimplemented algorithm
+// (increment only on an allowed call), not a correction to this one.
 // TestAllow_SaturatingClient_ConvergesToRateMinusOnePerWindow in
 // limiter_test.go pins the Rate >= 2 shape down deterministically,
 // independent of intra-window timing, and
 // TestAllow_RateOne_RefusedWithCodedReasonBeforeStoreTouched pins the
 // Rate == 1 refusal.
 //
-// # The TTL-attachment race, closed
+// # The TTL-attachment race
 //
-// Earlier versions of this package attached a freshly-created window key's
-// expiry with a caller-side Get-then-Set sequence run only on the specific
-// hit whose IncrByFloat call created the key (the classic Redis
-// INCR-then-EXPIRE-if-first idiom), because KVStore exposed no primitive
-// that could set an expiry and increment atomically in one step. That
-// sequence had two disclosed failure modes: a process crash between the
-// increment and the Set left a window's counter permanently without an
-// expiry (harmless -- nothing ever reads a window other than "current" or
-// "immediately previous" again), and, far more importantly, a concurrent
-// caller's own increment landing in the residual gap between the Get and
-// the Set was silently overwritten by that Set, undercounting the window
-// and admitting more traffic than configured -- a real, security-relevant
-// over-admit gap, not a cosmetic one, recurring on every window boundary
-// for as long as a caller's key kept being hit (windowKey mints a
-// brand-new, never-before-used storage key every single Per interval), with
-// no hard bound on how much a single burst could lose.
+// The window's expiry must be attached atomically with the increment that
+// creates the key. A two-call sequence — increment, then attach the expiry
+// only on the hit that created the key — carries two failure modes: a
+// process crash between the two calls leaves a window's counter without an
+// expiry (harmless — nothing ever reads a window other than "current" or
+// "immediately previous" again), and a concurrent caller's own increment
+// landing in the gap between them is silently overwritten by the second
+// call, undercounting the window and admitting more traffic than
+// configured — a security-relevant over-admit gap with no hard bound on
+// how much a single burst could lose (windowKey mints a brand-new,
+// never-before-used storage key every single Per interval, so the gap
+// would recur on every window boundary for as long as a caller's key kept
+// being hit).
 //
-// pkgcore.KVStore.IncrByFloatWithTTL closes that gap completely by
-// collapsing "increment" and "attach the window's expiry, but only on the
-// hit that creates the key" into one atomic KVStore call: every backend
-// implements it as a single atomic operation extending whatever mechanism
-// already makes its own IncrByFloat atomic (a mutex-guarded map update, a
-// single Lua script, one database-arbitrated upsert, a compare-and-swap
-// retry loop -- see go/pkgcore/kv's own per-backend doc comments), never as
-// a caller-side sequence with a gap between two separate calls for a
-// concurrent increment to land in. Allow below calls it unconditionally on
-// every hit, passing windowTTLFactor*limit.Per as the ttl: the primitive
-// itself ignores that ttl for a key that already exists, so there is no
-// gate to get wrong and no residual race left to document -- both of the
-// old failure modes (the crash-only gap and the concurrency-only gap) are
-// gone, not merely narrowed, because there is no longer a second call for
-// either one to land between.
+// pkgcore.KVStore.IncrByFloatWithTTL exists precisely so the whole
+// sequence is one atomic KVStore call: every backend implements it as a
+// single atomic operation extending whatever mechanism already makes its
+// own IncrByFloat atomic (a mutex-guarded map update, a single Lua script,
+// one database-arbitrated upsert, a compare-and-swap retry loop — see
+// go/pkgcore/kv's own per-backend doc comments), never as a caller-side
+// sequence with a gap between two separate calls for a concurrent
+// increment to land in. Allow below calls it unconditionally on every hit,
+// passing windowTTLFactor*limit.Per as the ttl: the primitive itself
+// ignores that ttl for a key that already exists, so there is no gate to
+// get wrong and no second call for either failure mode to land between.
 //
 // TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost and
 // TestAllow_ConcurrentFirstHits_SameFreshKey_NoIncrementLostAndTTLAttached
-// in limiter_test.go pin this down: the former reproduces the exact
-// pre-fix sequence deterministically (it fails against the old
-// two-call implementation and passes against this one, since the fix
-// makes the vulnerable call unreachable at all), and the latter races
-// hundreds of goroutines to create one fresh window key at once and proves
-// both that no increment is lost and that the key still ends up with its
-// ttl attached.
+// in limiter_test.go pin this down: the former reproduces the two-call
+// interleaving deterministically (it fails against a two-call
+// implementation and passes against this one, since the vulnerable call is
+// unreachable), and the latter races hundreds of goroutines to create one
+// fresh window key at once and proves both that no increment is lost and
+// that the key still ends up with its ttl attached.
 //
 // Do not "fix" a future correctness question in this algorithm by reading
 // the key before calling IncrByFloatWithTTL to decide whether to skip
 // straight to some other call: a Get-then-branch ahead of the atomic
-// increment reintroduces a real lost-update race on every hit, not just the
-// first one in a window, which is strictly worse than anything this section
-// used to document.
+// increment reintroduces a real lost-update race on every hit, not just
+// the first one in a window — strictly worse than the hazards above.
 type slidingWindowLimiter struct {
 	store pkgcore.KVStore
 }
@@ -464,10 +452,10 @@ func clampRemaining(remaining float64) int {
 // for their "retry_after_seconds" parameter. The package's Decision stays
 // plain data with no protocol awareness (see its own doc comment); this
 // function is the one vocabulary conversion every consumer of a denied
-// Decision performs, offered here because the conversion's boundary kept
-// drifting apart in per-consumer copies: a round that fixed one module's
-// rounding left another's truncating, and the copies disagreed on the
-// extremes. One function is the family's single written shape.
+// Decision performs, offered here because a conversion each consumer would
+// otherwise copy is exactly the boundary that drifts apart in rounding
+// direction and extreme-value handling. One function is the family's
+// single written shape.
 //
 // The conversion rounds UP. A sub-second remainder is the ordinary tail of
 // every exhausted window -- a window ends at an arbitrary phase, so the
@@ -551,8 +539,8 @@ func (l *slidingWindowLimiter) readWindowCount(ctx context.Context, key string) 
 // IPv6-address-shaped key, or a key already shaped like "something:123" all
 // included -- crossed with every windowIndex, not merely the sample crossed
 // in TestWindowKey_DistinctPairsNeverCollide below. key is treated as an
-// opaque, caller-owned string throughout this package (see AGENTS.md); this
-// function only ever builds a windowKey, it never parses one back apart.
+// opaque, caller-owned string throughout this package; this function only
+// ever builds a windowKey, it never parses one back apart.
 func windowKey(key string, windowIndex int64) string {
 	return key + ":" + strconv.FormatInt(windowIndex, 10)
 }

@@ -1,6 +1,6 @@
 // Package testutil holds shared test helpers for go/admin's own test
 // files -- a dedicated package rather than helpers scattered across test
-// files, per root CLAUDE.md's testing rule.
+// files.
 package testutil
 
 import (

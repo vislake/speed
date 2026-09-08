@@ -5,13 +5,11 @@ package sharing_test
 // executed by `go test`, so a change to sharing's public API that breaks
 // the documented usage fails the build rather than only rotting in prose.
 //
-// This example is one of the compensating obligations AGENTS.md's "No real
-// consumer yet" section places on this round (the reference app does not
-// wire sharing as a live consumer): it covers the module's full main path
-// -- create a share, access it as an unauthenticated viewer would, revoke
-// it, and observe the very next access refused -- so at least this shape is
-// known to compile and run under an external caller's own import, even
-// without a real business module driving it.
+// It covers the module's full main path -- create a share, access it as an
+// unauthenticated viewer would, revoke it, and observe the very next
+// access refused -- so this shape is known to compile and run under an
+// external caller's own import. (The reference app additionally drives the
+// module over real HTTP; see its sharing_flow_test.go.)
 
 import (
 	"context"
@@ -25,9 +23,8 @@ import (
 )
 
 // Example creates a share link, accesses it, revokes it, and observes the
-// very next access refused -- rules 1, 2, 3 and 5
-// (docs/internal/07-platform-services.md) exercised end to end through
-// sharing's exported API alone.
+// very next access refused -- the module's mandatory rules (see the
+// package doc) exercised end to end through sharing's exported API alone.
 func Example() {
 	ctx := context.Background()
 
@@ -95,10 +92,8 @@ func Example() {
 	}
 	fmt.Println("share revoked")
 
-	// The very next access fails immediately -- rule 3
-	// (docs/internal/07-platform-services.md's "revocation takes effect
-	// immediately" rule): there is no cache on this module's own side to
-	// invalidate.
+	// The very next access fails immediately: there is no cache on this
+	// module's own side to invalidate.
 	_, err = module.Service().Access(tenantCtx, created.Token, sharing.AccessParams{})
 	fmt.Println("access after revoke:", err)
 
@@ -109,8 +104,7 @@ func Example() {
 	// access after revoke: sharing.not_accessible
 }
 
-// ExampleService_List demonstrates the round-3 owner-facing addition this
-// example's own Example above predates: listing every share of a tenant, a
+// ExampleService_List demonstrates listing every share of a tenant, a
 // revoked one included -- the backing method behind the owner-facing HTTP
 // surface's sharing_listShares operation (api/openapi.yaml, handler.go).
 func ExampleService_List() {

@@ -5,8 +5,7 @@
 // go/pkgcore/eventbustest.AssertConforms plays for EventBus: one suite every
 // implementation — built-in (pkgcore.NewConsoleMailer, pkgcore.NewSMTPMailer)
 // or host-supplied through pkgcore.WithMailer — must pass, so drift between
-// implementations is caught here once instead of pairwise (see
-// docs/internal/03-deployment-modes.md).
+// implementations is caught here once instead of pairwise.
 package mailertest
 
 import (

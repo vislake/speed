@@ -60,7 +60,7 @@ func TestNote_GetTenantID_ReturnsEmbeddedTenantModelValue(t *testing.T) {
 // model.go's compile-time `var _ dbkit.TenantScoped = Note{}` assertion --
 // redundant with it today, but unlike that line, a test failure here shows
 // up in `go test`'s own output instead of only a build error, which is
-// easier for a future reader to spot in CI.
+// easier for a reader to spot in CI.
 func TestNote_ImplementsTenantScoped(t *testing.T) {
 	var _ dbkit.TenantScoped = Note{}
 }
@@ -129,7 +129,7 @@ var _ pkgcore.EventBus = (*notesCapturedBus)(nil)
 // Note create must still never carry the note's body text into the
 // captured payload that lands in the append-only audit trail. Note.Text
 // is plaintext-sensitive tenant content (in this app's domain, the real
-// content later milestones' fields stand in for is patient data), so the
+// content this placeholder field stands in for is patient data), so the
 // tag must make the captured "text" column travel as the "[redacted]"
 // marker: the key stays, because a diff reader must still see the write
 // touched the column, while the plaintext appears nowhere in the payload

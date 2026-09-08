@@ -25,7 +25,8 @@
  *     /api/v1/sharing/access, the public route): sharing.not_accessible
  *     is the module's ONE outward answer for every refusal of a
  *     recognized token -- revoked, expired, view-exhausted or
- *     password-refused alike (rule 5, outward-identical answers) -- so
+ *     password-refused are indistinguishable by design, the module's
+ *     outward answers being identical for every refusal reason -- so
  *     one honest text serves the expired link and the revoked one
  *     identically; sharing.resource_unavailable answers a granted
  *     share whose bytes could not be opened (the simulation object
@@ -67,8 +68,9 @@ export const SHARE_ACTION_ERROR_TEXT_KEYS: Readonly<Record<string, string>> = {
 export const SHARE_VIEW_ERROR_TEXT_KEYS: Readonly<Record<string, string>> = {
   // The module's one outward refusal for a recognized token that is no
   // longer accessible -- expired, revoked, view-exhausted or
-  // password-refused are indistinguishable by design (rule 5), so one
-  // honest text covers the expired link and the revoked one alike.
+  // password-refused are indistinguishable by design, the outward
+  // answer being identical for every refusal reason, so one honest text
+  // covers the expired link and the revoked one alike.
   'sharing.not_accessible': 'shareView.errors.notAccessible',
   // The access route's per-IP/per-token rate limit.
   'sharing.rate_limited': 'shareView.errors.rateLimited',

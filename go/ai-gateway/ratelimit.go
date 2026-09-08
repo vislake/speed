@@ -10,16 +10,15 @@ import (
 	"github.com/vislake/speed/go/ratelimit"
 )
 
-// This file closes the known gap docs/internal/11-cross-cutting.md's
-// ratelimit consumer table records for this module: per-tenant request-rate
-// limiting, independent of the credit-based cost quota Entitlements
-// already enforces. It applies go/ratelimit to Gateway's three call
+// This file adds per-tenant request-rate limiting to Gateway's three call
 // sites -- Chat, ChatStream and GenerateImage, whenever the call carries a
-// tenant -- the same one-dimension shape go/sharing's checkCreateRateLimit
-// applies to its own single per-tenant dimension, with the underlying
-// Limiter built lazily over the host's KVStore (rateLimiter, below) so it
-// always reads whichever implementation the running deployment mode
-// actually resolved, never one captured before Bootstrap ran.
+// tenant -- independent of the credit-based cost quota Entitlements
+// already enforces. It applies go/ratelimit in the same one-dimension
+// shape go/sharing's checkCreateRateLimit applies to its own single
+// per-tenant dimension, with the underlying Limiter built lazily over the
+// host's KVStore (rateLimiter, below) so it always reads whichever
+// implementation the running deployment mode actually resolved, never one
+// captured before Bootstrap ran.
 //
 // A call whose context carries no tenant never reaches this limiter: the
 // three call sites gate on pkgcore.TenantFromContext's ok themselves --
@@ -30,13 +29,11 @@ import (
 // tenant; silently sharing one empty-string bucket across every tenantless
 // caller would merge callers the moment such a key was ever reused for a
 // quota or billing dimension. The tenantless path is therefore by design
-// UNTHROTTLED, never a shared bucket: before this rule the tenantless
-// callers shared one bounded bucket (wrong but bounded); after it they are
-// entirely unthrottled -- an accepted trade because only the host's own
-// in-process code can produce a tenantless call at all (HTTP-facing
-// tenants come from the request context, never from the request itself),
-// so no attacker-reachable request path ever reaches the limiter with no
-// tenant to key it on.
+// UNTHROTTLED, never a shared bucket -- an accepted trade because only the
+// host's own in-process code can produce a tenantless call at all
+// (HTTP-facing tenants come from the request context, never from the
+// request itself), so no attacker-reachable request path ever reaches the
+// limiter with no tenant to key it on.
 //
 // Positioned as the FIRST check in the pipeline, before checkEntitlement:
 // a request-rate limit protects the gateway (and the vendor credentials it

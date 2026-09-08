@@ -92,9 +92,9 @@ func findOutboxByIdempotencyKey(ctx context.Context, db *gorm.DB, tenantID, idem
 // markOutboxAttemptFailed), so this is exactly go/jobs' scheduled_at
 // discipline: a failed row re-enters the candidate set at a moment in the
 // future rather than re-joining the queue head. That single property
-// delivers both fairness directions the ordering before it could not hold
-// at once (see Dispatcher's "Retry is scheduled, not priority-classed" doc
-// comment):
+// delivers both fairness directions at once, which an attempts-based class
+// ordering could not (see Dispatcher's "Retry is scheduled, not
+// priority-classed" doc comment):
 //
 //   - A pile of permanently failing rows cannot occupy batch after batch
 //     ahead of healthy rows: each pile row is ineligible for the retry
@@ -105,22 +105,24 @@ func findOutboxByIdempotencyKey(ctx context.Context, db *gorm.DB, tenantID, idem
 //     number of new rows can push its schedule slot later than the delay
 //     itself.
 //
-// It is a read only -- it does not mark anything as in-flight -- because
-// this round runs exactly one in-process Dispatcher; see Dispatcher's and
-// OutboxRecord's doc comments for what a second concurrent dispatcher
-// process would need that this round does not build. The now cutoff is
-// time.Now(), computed here rather than by the database so a caller --
-// or a test seeding rows around the boundary -- reasons about the same
-// clock the query compares against.
+// It is a read only -- it does not mark anything as in-flight -- which is
+// safe because the shipped composition runs exactly one in-process
+// Dispatcher; see Dispatcher's and OutboxRecord's doc comments for what a
+// second concurrent dispatcher process would need. The now cutoff is
+// time.Now(), computed here rather than by the database so a caller -- or
+// a test seeding rows around the boundary -- reasons about the same clock
+// the query compares against.
 //
-// # Ordering and the index serve each other (P3-metering-E)
+// # Ordering and the index serve each other
 //
-// Migration 0007 made retry_after NOT NULL (running 0005's own
-// idempotent backfill first), so NULL is structurally impossible here:
-// this query carries no COALESCE and no IS NULL escape -- 0005's comment
-// called NULL "a legacy-only state, never a state the module itself
-// produces", and the schema now backs that claim rather than the code
-// discipline alone. The ORDER BY is therefore the bare column,
+// retry_after is NOT NULL in the schema (migration 0007), so NULL is
+// structurally impossible here: this query carries no COALESCE and no
+// IS NULL escape. That matters twice over. NULL would sort differently
+// on the two dialects -- SQLite orders NULLs first in ASC, PostgreSQL's
+// ASC default is NULLS LAST -- so a single stray NULL row would jump the
+// head of every claim poll on one engine and sit at its tail on the
+// other; the schema removes the state instead of betting the ordering on
+// code discipline. And with NULL gone, the ORDER BY is the bare column,
 // retry_after ASC, created_at ASC -- an order key idx_
 // metering_outbox_records_status_retry_after's own second column
 // supplies: both engines scan the (status, retry_after) index for
@@ -128,10 +130,10 @@ func findOutboxByIdempotencyKey(ctx context.Context, db *gorm.DB, tenantID, idem
 // retry_after order, stopping at the limit, with only the created_at
 // tie-break sorted among rows that share one retry_after instant (the
 // never-failed majority carry retry_after == created_at, so schedule
-// order and creation order coincide there -- the property 0005's header
-// already recorded). A COALESCE-wrapped order key could not be served by
-// that index at all: every claim poll materialized and fully sorted the
-// entire eligible set before the limit could return, on both dialects.
+// order and creation order coincide there). A COALESCE-wrapped order key
+// could not be served by that index at all: every claim poll would
+// materialize and fully sort the entire eligible set before the limit
+// could return, on both dialects.
 func claimPendingOutboxRecords(ctx context.Context, db *gorm.DB, limit int) ([]OutboxRecord, error) {
 	now := time.Now()
 	var recs []OutboxRecord
@@ -195,7 +197,8 @@ func markOutboxAttemptFailed(ctx context.Context, db *gorm.DB, id string, cause 
 // the ingest receipt each delivered row's fold created -- the retention
 // half of the outbox lifecycle (see Dispatcher's "Retention: delivered
 // rows and receipts are retired" doc comment): without it both tables
-// grew without bound, delivered rows forever and receipts with them.
+// would grow without bound, delivered rows forever and receipts with
+// them.
 //
 // What the sweep can safely delete, and only that: a row is retired only
 // in the outboxStatusDelivered state (never a pending row -- pending rows
@@ -223,11 +226,11 @@ func markOutboxAttemptFailed(ctx context.Context, db *gorm.DB, id string, cause 
 // delivered between the read and the delete. Delivery is one-way --
 // markOutboxDelivered moves pending -> delivered and its own WHERE
 // refuses every other state, markOutboxAttemptFailed never writes Status
-// at all, and the Enqueue conflict path an earlier revision of this
-// comment named as the example only reads the existing row back, never
-// writes it -- so a row the sweep read as delivered is still delivered
-// when the delete runs, in the shipped single-Dispatcher composition or
-// under any writer this module owns. The guard stays because it costs
+// at all, and Enqueue's conflict path only reads the existing row back,
+// never writes it -- so a row the sweep read as delivered is still
+// delivered when the delete runs, in the shipped single-Dispatcher
+// composition or under any writer this module owns. The guard stays
+// because it costs
 // one status predicate on the delete and keeps the delete honest should
 // a future writer ever change that: a row that no longer matches is
 // left alone, and its receipt with it, which is the conservative
@@ -255,8 +258,7 @@ func retireDeliveredOutboxRecords(ctx context.Context, db *gorm.DB, olderThan ti
 		// deletes both succeeded. The count itself accumulates only
 		// OUTSIDE the transaction, once it has genuinely committed: a
 		// closure error rolls the outbox delete back, and a row the
-		// rollback resurrected was not retired and must not be counted
-		// (P3-metering-F).
+		// rollback resurrected was not retired and must not be counted.
 		var txRetired bool
 		err := dbkit.WithTenantSession(tenantCtx, db, func(tx *gorm.DB) error {
 			res := tx.Where("id = ? AND status = ?", rec.ID, outboxStatusDelivered).Delete(&OutboxRecord{})
@@ -292,9 +294,9 @@ const maxLastErrorLength = 500
 // truncateError makes cause safe for OutboxRecord.LastError's column at
 // ANY length, the rune-safe-helper shape go/sharing's
 // truncateAccessLogValue and go/authn's truncateClientField already
-// established (this module's copy is the third instance of the shape):
-// it never writes more bytes than the column can hold, and the stored
-// value is always valid UTF-8. A value that is short AND valid passes
+// established: it never writes more bytes than the column can hold, and
+// the stored value is always valid UTF-8. A value that is short AND valid
+// passes
 // through untouched; anything else is first sanitized -- invalid byte
 // sequences rendered as the Unicode replacement character via
 // strings.ToValidUTF8, exactly the sharing helper's choice, never

@@ -1,9 +1,8 @@
 -- billing_subscriptions is billing's channel-agnostic Subscription model
 -- (go/billing/subscription.go): a tenant's relationship to a Plan, with no
 -- payment-channel reference of any kind (no gateway subscription id, no
--- external transaction id) -- docs/internal/06-billing-and-metering.md's
--- core principle that Subscription is an internal domain concept and a
--- payment channel is merely the collector.
+-- external transaction id) -- the core principle that Subscription is an
+-- internal domain concept and a payment channel is merely the collector.
 --
 -- id is an application-generated UUID, already globally unique on its
 -- own, so it alone is the primary key here -- tenant_id gets its own

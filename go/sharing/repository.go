@@ -109,10 +109,10 @@ func (r *ShareRepository) byTokenHash(ctx context.Context, hash string) (*Share,
 // The count-and-trail atomicity above holds for every failure INSIDE the
 // transaction; one failure sits OUTSIDE it, and this method answers that
 // cell below rather than leaving it to the caller's re-read loop. dbkit's
-// commit-time-failure cell (WithTenantSession's own doc comment and
-// go/dbkit/AGENTS.md's "commit-time failure" entry) is the commit itself
-// reported failed while the fn's writes actually stuck, durably and
-// together: the retried attempt then finds its WHERE clause no longer
+// commit-time-failure cell (WithTenantSession's own doc comment) is the
+// commit itself reported failed while the fn's writes actually stuck,
+// durably and together: the retried attempt then finds its WHERE clause no
+// longer
 // matching -- the count it premised on is gone -- and must not read the
 // zero rows as "a concurrent writer took the view". The one state that
 // distinguishes "someone else committed" from "I committed" is the granted
@@ -301,8 +301,9 @@ func (r *ShareRepository) tryReserveView(ctx context.Context, share *Share, now 
 // as tryRecordView's own settle-time guards do: a share revoked or expired
 // while its delivery was in flight refuses the confirm (the delivery is
 // settled as denied and the reservation refunded by the caller instead,
-// the same settle-time-liveness semantics ee20d37 established), and the
-// ceiling check keeps the count from ever exceeding max_views even in the
+// the same settle-time-liveness semantics the guarded records apply), and
+// the ceiling check keeps the count from ever exceeding max_views even in
+// the
 // one corner where two serves can overlap -- a stale reservation taken
 // over by a newer fetch while its original, still-alive serve later
 // completes (see viewReservationTimeout's own doc comment for that
@@ -409,9 +410,10 @@ func (r *ShareRepository) tryRefundView(ctx context.Context, shareID string, now
 // semgrep rule flags as Repository workarounds are .Table/.Model/.Raw; a
 // plain .Exec(sql, args...) is a different, narrower surface that rule does
 // not (and, per its own "Residual gaps" note, deliberately cannot) catch
-// -- the exact "raw SQL escape hatch" backend-coding-standards SKILL.md
-// §3.2 sanctions for a genuine need like this one, PROVIDED the tenant is
-// passed explicitly and the call carries an isolation test. The precedent
+// -- the exact "raw SQL escape hatch" this codebase sanctions for a
+// genuine server-side-arithmetic need like this one, PROVIDED the tenant
+// is passed explicitly and the call carries an isolation test. The
+// precedent
 // is go/billing's applyBalanceDelta (credit_service.go), the identical
 // shape: server-side arithmetic .Exec with the tenant bound into the WHERE
 // clause by hand, because .Exec bypasses the ORM callback chain entirely
@@ -534,12 +536,11 @@ func (r *ShareRepository) createWithTokenIndex(ctx context.Context, share *Share
 
 // tenantForTokenHash resolves the tenant a token hash belongs to, with NO
 // tenant predicate anywhere in the query -- the one deliberately narrow
-// exception to this module's "every query is tenant-scoped" rule, and the
-// mechanism AGENTS.md's "Tenant resolution for an unauthenticated viewer"
-// section chose to close round 1's documented gap: a genuinely
-// unauthenticated visitor holds no tenant claim, so nothing about their
-// request can scope this lookup by tenant before it runs -- that is
-// precisely the property this method exists to establish, not violate.
+// exception to this module's "every query is tenant-scoped" rule: a
+// genuinely unauthenticated visitor holds no tenant claim, so nothing
+// about their request can scope this lookup by tenant before it runs --
+// that is precisely the property this method exists to establish, not
+// violate.
 //
 // This is not a second byTokenHash and not a general cross-tenant query
 // capability: it reads shareTokenIndex, a table that was never tenant-
@@ -557,9 +558,9 @@ func (r *ShareRepository) createWithTokenIndex(ctx context.Context, share *Share
 //
 // Service.AccessPublic is this method's only caller: it resolves the
 // tenant here, attaches it to ctx with pkgcore.WithTenant, and re-enters
-// the ordinary tenant-scoped Service.Access unchanged -- Access itself
-// still performs its own byTokenHash lookup, its own password check, and
-// its own outward-identical-answer handling exactly as it always has. An
+// the ordinary tenant-scoped Service.Access -- Access itself performs its
+// own byTokenHash lookup, its own password check, and its own
+// outward-identical-answer handling. An
 // unrecognized hash here returns ErrNotAccessible, the same sentinel
 // byTokenHash returns for an unrecognized hash under a known tenant, so a
 // caller cannot distinguish "no such token anywhere" from "no such token
@@ -567,13 +568,14 @@ func (r *ShareRepository) createWithTokenIndex(ctx context.Context, share *Share
 // method does NOT hide is documented at AccessPublic's own doc comment:
 // an unrecognized token is answered after this single read, deliberately
 // without the argon2id burn Access's recognized-token refusal paths pay
-// (that burn on every unknown token was the scanner amplification the
-// rules-reinforcement round removed), while a recognized-but-refused
+// (that burn on every unknown token would be the scanner amplification
+// AccessPublic's doc comment describes), while a recognized-but-refused
 // token pays one extra repository read (Access's own byTokenHash) plus
-// its argon2id check on top -- a timing difference rule 5 was never
-// written to cover, since it protects "which of these refusal reasons
-// applied", not "does this token exist at all", which a valid token's own
-// successful use already discloses to whoever holds it.
+// its argon2id check on top -- a timing difference the
+// outward-identical-answer rule does not cover, since it protects "which
+// of these refusal reasons applied", not "does this token exist at all",
+// which a valid token's own successful use already discloses to whoever
+// holds it.
 func (r *ShareRepository) tenantForTokenHash(ctx context.Context, hash string) (pkgcore.TenantID, error) {
 	var idx shareTokenIndex
 	err := r.db.WithContext(ctx).Where("token_hash = ?", hash).First(&idx).Error
@@ -722,8 +724,8 @@ func NewAccessLogRepository(db *gorm.DB) *AccessLogRepository {
 // other writers and nothing a failed insert leaves inconsistent -- so this
 // is deliberately the retry alone, without ShareRepository's writeMu
 // ordering: the retry absorbs momentary congestion, and a failure that
-// outlasts it surfaces to Service.writeAccessLog as the ErrInternal rule 4
-// demands (Service.Access's own doc comment).
+// outlasts it surfaces to Service.writeAccessLog as ErrInternal
+// (Service.Access's own doc comment).
 func (r *AccessLogRepository) createWithRetry(ctx context.Context, entry *AccessLogEntry) error {
 	return withTxRetry(func() error {
 		return dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {

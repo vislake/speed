@@ -81,7 +81,7 @@ const invitationTokenBytes = 32
 //
 // # Data domain
 //
-// Tenant data (docs/internal/04-data-and-tenancy.md): an invitation belongs
+// Tenant data: an invitation belongs
 // to exactly one tenant and must never be visible from another. It
 // implements dbkit.TenantScoped, is reached only through
 // InvitationRepository, and its isolation is proven by
@@ -99,8 +99,7 @@ const invitationTokenBytes = 32
 //
 // Email is an email address: PII, and encrypted at rest through the
 // serializer named by EmailSerializerName. An encrypted column cannot be
-// queried, which is exactly the trap the root CLAUDE.md warns about, so
-// EmailIndex carries the HMAC blind index dbkit.NewBlindIndexer computes
+// queried, so EmailIndex carries the HMAC blind index dbkit.NewBlindIndexer computes
 // over dbkit.NormalizeEmail's canonical form. Every write goes through
 // BlindIndexer.Index and every lookup through BlindIndexer.Equal; org
 // reimplements neither.
@@ -227,7 +226,7 @@ func (i Invitation) IsPending(now time.Time) bool {
 // that type's own doc comment. Captured only when a host wires
 // dbkit.Options.AuditBus on org's connection AND lists this model in its
 // Options.AuditModels scope (org.AuditableModels() is the module's own
-// list); see go/org/AGENTS.md's "The audit trail" section.
+// list).
 func (Invitation) AuditResourceType() string { return AuditResourceTypeInvitation }
 
 // compile-time check that Invitation satisfies dbkit.TenantScoped.
@@ -239,28 +238,25 @@ var _ dbkit.Auditable = Invitation{}
 // invitationTokenIndex is the narrow, deliberately non-tenant-scoped row
 // that resolves an invitation token's owning tenant before any tenant is
 // known at all -- the mechanism InviteService.Accept uses when the accepting
-// caller holds no tenant context (a freshly invited person has no membership
-// in -- and typically no token for -- the inviting tenant yet, which is the
-// whole reason acceptance used to be impossible for the very caller
-// invitations exist for).
+// caller holds no tenant context (a freshly invited person has no
+// membership -- and typically no token -- in the inviting tenant yet).
 //
-// It is go/sharing's shareTokenIndex pattern, adopted for org's invitation
-// token: the exact same shape, the same data-domain reasoning, and the same
-// "write alongside the row it indexes, read only by the tenantless entry
-// point, never updated" lifecycle. Compare that type's doc comment in
-// go/sharing/model.go for the full argument; this one records only what is
-// org-specific.
+// It mirrors go/sharing's shareTokenIndex: the same shape, the same
+// data-domain reasoning, and the same "write alongside the row it indexes,
+// read only by the tenantless entry point, never updated" lifecycle
+// (that type's doc comment in go/sharing/model.go has the full argument;
+// this one records only what is org-specific).
 //
 // # Data domain
 //
-// Platform data (docs/internal/04-data-and-tenancy.md's data-domain table),
-// NOT tenant data, and deliberately so: a tenantless acceptor holds no
+// Platform data, NOT tenant data, and deliberately so: a tenantless
+// acceptor holds no
 // tenant claim for dbkit's tenant-scope GORM plugin to filter by, and that
 // plugin fails every tenant-scoped query closed when the context carries
 // none (go/dbkit's tenant_scope.go) -- correctly, since it has no way to
 // tell "this caller is allowed to look this up with no tenant" apart from an
-// ordinary forgotten-tenant bug. The same repository-wide rule root
-// CLAUDE.md states for identity/platform data applies here without
+// ordinary forgotten-tenant bug. The same repository-wide rule that
+// governs identity/platform data applies here without
 // exception: this table implements no dbkit.TenantScoped, is reached through
 // dbkit.Open()'s plain *gorm.DB (never dbkit.Repository[T], whose generic
 // constraint requires TenantScoped, which this type must NOT implement), and
@@ -475,9 +471,9 @@ func (r *InvitationRepository) acceptIfPending(ctx context.Context, id string, a
 // InvitationStatusRevoked, and reports whether this call is the one that
 // performed the transition -- the status-revoked twin of acceptIfPending
 // above, and the answer to the same problem on the other side of the token:
-// InviteService.Revoke used to write Status = Revoked with a plain,
-// unconditional Update after a status read, and an Accept that won its own
-// compare-and-swap between that read and that write was overwritten --
+// a plain,
+// unconditional Update after a status read would overwrite an Accept that
+// won its own compare-and-swap between that read and that write --
 // landing the invitation terminal-revoked while the membership the accept
 // created stayed live. Gating the write on the row still being pending
 // means the revoke can never overwrite a state another caller already
@@ -543,25 +539,24 @@ func (r *InvitationRepository) settleClaim(ctx context.Context, id, status strin
 // createPending revokes every pending invitation already outstanding for
 // invitation's own address, then inserts invitation and its
 // invitationTokenIndex row, all inside ONE dbkit.WithTenantSession
-// transaction -- the atomic replacement for the separate
-// revokePendingFor-then-Create shape InviteService.Invite used to run as
-// two independent transactions.
+// transaction -- the atomic replacement for a separate revoke-then-Create
+// pair of transactions.
 //
 // # The race this closes
 //
-// revokePendingFor's original shape was a read (pendingByEmail) followed by
-// a per-row Update loop, itself followed -- as a wholly separate
-// transaction -- by the new row's Create. Two concurrent Invite calls for
+// If the revoke ran as a read (pendingByEmail) followed by a per-row Update
+// loop in one transaction, and the insert followed in a wholly separate
+// one, two concurrent Invite calls for
 // the SAME address could each run their own read-then-revoke-loop before
 // either had inserted anything, see no pending invitation to revoke (there
-// was genuinely none yet), and both go on to Create: two simultaneously
+// is genuinely none yet), and both go on to Create: two simultaneously
 // live tokens for one address, violating this module's own "at most one
 // live token at a time" claim (invite.go's Invite doc comment) --
 // acceptIfPending's per-id compare-and-swap does not help here, since the
 // two tokens are two DIFFERENT rows, and two different accepters could each
 // win one.
 //
-// # The fix
+// # The single transaction
 //
 // Three writes, in order, no read of anything in between -- so this
 // transaction's first statement is a write, the same reasoning

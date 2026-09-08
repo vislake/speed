@@ -1,9 +1,9 @@
 package main
 
-// webhook_flow_test.go is go/integration's round-2 outbound-webhook DELIVERY
-// surface mandatory-first-consumer proof (go/integration/AGENTS.md's "No
+// webhook_flow_test.go is go/integration's outbound-webhook DELIVERY
+// surface mandatory-first-consumer proof
 // reference-app consumer yet" section named this the compensating
-// obligation the round carried until a real host wired it end to end). It
+// It
 // drives a real webhook subscription through the composed HTTP stack --
 // the REAL org.member.joined domain event org's own invite/accept flow
 // publishes (the identical flow org_flow_test.go itself drives),
@@ -11,19 +11,19 @@ package main
 // jobs.StandaloneQueue-backed delivery pipeline -- against two real,
 // non-fake receiver processes this test controls.
 //
-// How a subscription is created here changed in round 7, when the module's
+// How a subscription is created here: through the module's
 // spec-generated webhook-subscription-CRUD surface
 // (go/integration/api/openapi.yaml, mounted under /api/v1/integration)
-// retired the round-4 hand-mounted wireIntegrationWebhooks demo route this
-// file's createWebhookSubscription helper used to drive (webhooks.go's own
+// (the spec-generated surface this
+// file's createWebhookSubscription helper drives (webhooks.go's own
 // package doc records that retirement): each test below now subscribes
 // through the spec surface's integration_createWebhookSubscription
 // operation instead -- the POST createWebhookSubscription issues, mounted
 // through the same generic mountModuleRoutes loop every other module's
-// fragment uses, gated by demo_subject.go's guardIntegrationRoute. Round
+// fragment uses, gated by demo_subject.go's guardIntegrationRoute.
 // 7's own consumer proof -- the whole CRUD + recent-deliveries surface
 // driven end to end -- lives in webhook_crud_flow_test.go; this file's
-// remaining job is the DELIVERY side round 2 shipped, which no CRUD
+// remaining job is the DELIVERY side, which no CRUD
 // surface exercises.
 //
 // # Why this needs cfg.WebhookURLValidator/cfg.WebhookHTTPClient at all
@@ -223,7 +223,7 @@ func buildWebhookFlowTestServer(t *testing.T, client *http.Client) (*httptest.Se
 // (POST /api/v1/integration/webhooks, webhookBasePath) as demoOwnerUserID
 // -- whose built-in owner role carries integration.PermissionWebhookManage,
 // the permission demo_subject.go's guardIntegrationRoute dispatches a
-// non-GET request under /webhooks to (the router-level gate round 7
+// non-GET request under /webhooks to (the router-level gate
 // extended from method-only dispatch to sub-path dispatch precisely so the
 // API-key and webhook permission pairs each gate their own half of the
 // shared /api/v1/integration mount). The X-Demo-User-Id header names
@@ -231,7 +231,7 @@ func buildWebhookFlowTestServer(t *testing.T, client *http.Client) (*httptest.Se
 // identity: integration_createWebhookSubscription attributes the new
 // subscription's CreatedBy through integration.SubjectResolver
 // (demoOrgSubjectResolver in server.go -- the identical seam instance
-// round 5's integration_createAPIKey already reads), which reads that same
+// integration_createAPIKey already reads), which reads that same
 // header; a create without it is refused 401 integration.subject_unresolved,
 // never attributed to a default user. token selects the tenant the
 // subscription is created in, exactly like every other permission-gated
@@ -316,12 +316,12 @@ func triggerOrgMemberJoined(t *testing.T, srv *httptest.Server, cfg serverConfig
 	return membership
 }
 
-// TestWebhookFlow_RealSignedDelivery_EndToEnd is this round's positive
+// TestWebhookFlow_RealSignedDelivery_EndToEnd is the positive
 // proof: a demo tenant subscribes to org.member.joined, a real invite is
 // accepted, and a REAL, independently-verifiable HMAC-signed HTTP POST
 // lands at a receiver this test controls -- carrying the real membership's
 // own ids, wrapped in the versioned public envelope, with the internal
-// InvitationID deliberately left out (docs/internal/07-platform-services.md's
+// InvitationID deliberately left out (the
 // "only the deliberately chosen fields are exposed" rule).
 func TestWebhookFlow_RealSignedDelivery_EndToEnd(t *testing.T) {
 	receiver := newWebhookReceiver(t, http.StatusOK)
@@ -381,7 +381,7 @@ func TestWebhookFlow_RealSignedDelivery_EndToEnd(t *testing.T) {
 	}
 }
 
-// TestWebhookFlow_ReceiverNonSuccess_RetriesThenDeadLetters is this round's
+// TestWebhookFlow_ReceiverNonSuccess_RetriesThenDeadLetters is the
 // negative proof: a receiver that always answers a non-2xx status makes
 // go/integration's own real retry/dead-letter state machine run to
 // exhaustion -- webhookMaxRetries (go/integration/webhook_delivery.go) is 6,

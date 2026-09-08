@@ -25,16 +25,15 @@ const (
 	// at most once per delay and never re-joins the queue head while rows
 	// enqueued during its window wait (see claimPendingOutboxRecords' and
 	// markOutboxAttemptFailed's doc comments). It defaults to the poll
-	// interval -- one retry per cycle per row, the pacing this module
-	// always documented -- but measured from the failure itself rather
-	// than from queue position.
+	// interval -- one retry per cycle per row -- but measured from the
+	// failure itself rather than from queue position.
 	defaultDispatchRetryDelay = 2 * time.Second
 	// defaultDispatchEscalationAttempts is the stated escalation horizon
 	// for the billing-grade delivery contract's alert half (see
 	// Dispatcher's "Escalation" doc comment): a permanently failing outbox
 	// row whose failed delivery attempts reach this count is logged at
-	// Error level on that attempt and on every later failed one, where its
-	// per-attempt Warns stopped being enough for operations to notice it.
+	// Error level on that attempt and on every later failed one, where a
+	// per-attempt Warn alone would not make operations notice it.
 	// At the module's default pacing (one retry per
 	// defaultDispatchRetryDelay, two seconds) the horizon is reached
 	// roughly two minutes after a row's first failure; a host that
@@ -57,13 +56,13 @@ const (
 // Dispatcher is the billing-grade tier's delivery half of the outbox
 // pattern: a background poller that claims pending metering_outbox_records
 // rows and delivers each into Aggregator.Ingest, retrying INDEFINITELY on
-// failure rather than dropping (docs/internal/06-billing-and-metering.md's
-// billing-grade row: delivery failure retries indefinitely, plus an
-// alert). The alert half of that contract is the escalation described in
-// its own section below, implemented rather than promised. This round's
-// implementation is an in-process goroutine (the task's own scope
-// explicitly allows a jobs-queue-driven poller as later-round hardening);
-// see AGENTS.md's Known limitations for exactly what that costs.
+// failure rather than dropping (the billing-grade delivery contract: a
+// delivery failure retries indefinitely, plus an alert). The alert half of
+// that contract is the escalation described in its own section below. The
+// implementation is an in-process goroutine poller; a jobs-queue-driven
+// poller would need a real claim step before it could run more than one
+// worker -- see the "Single in-process dispatcher assumed" section below
+// for what that costs.
 //
 // # Retry is scheduled, not priority-classed
 //
@@ -74,8 +73,8 @@ const (
 // RunOnce cycle after that moment, driven by the poll interval, is the
 // retry. This is the scheduled-eligibility discipline go/jobs' own
 // scheduled_at gives its retrying jobs, with a fixed rather than curving
-// delay this round (a real backoff curve remains future hardening, see
-// AGENTS.md): every failing row is retried at most once per retryDelay,
+// delay (a real backoff curve -- the delay growing per attempt -- is not
+// implemented): every failing row is retried at most once per retryDelay,
 // measured from the failure itself.
 //
 // # A failed row re-enters the queue at a future moment, never its head
@@ -83,7 +82,7 @@ const (
 // Because RetryAfter -- not attempts, not age -- orders the claim
 // (claimPendingOutboxRecords), a row that failed is out of the candidate
 // set for the whole retry delay. That one property delivers both fairness
-// directions an ordering alone could not hold at once:
+// directions at once, which an attempts-based class ranking could not:
 //
 //   - A pile of permanently failing rows cannot occupy batch after batch
 //     ahead of a healthy row enqueued behind them: every row enqueued
@@ -93,20 +92,20 @@ const (
 //   - A row that failed once -- or fifty times -- is reached the moment
 //     its window opens, whatever the arrival rate of new rows: no
 //     sustained flood can push its schedule slot later than the retry
-//     delay itself. (The ordering this replaces ranked never-failed rows
-//     as a strict class ahead of every failed row, so under a sustained
-//     enqueue rate -- every batch full of never-failed rows -- a row that
-//     failed once was never claimed again: permanent starvation of
-//     exactly the rows retry exists to reach. Reviewer finding
-//     P1-metering-10; see migration 0005.)
+//     delay itself. Ranking never-failed rows as a strict class ahead of
+//     every failed row would starve exactly this row: under a sustained
+//     enqueue rate, every batch full of never-failed rows, a row that
+//     failed once would never be claimed again -- permanent starvation of
+//     the very rows retry exists to reach. The retry schedule is the
+//     claim order precisely so no class ranking can do that.
 //
 // # Escalation: the alert the billing-grade contract promises
 //
 // A row that fails forever is not a data-loss case -- it is an
-// observability one. docs/internal/06-billing-and-metering.md's
-// billing-grade row promises that a delivery failure "retries indefinitely,
-// plus an alert"; the retry half has always been real, and the alert half
-// is this: a row whose failed delivery attempts reach the stated escalation
+// observability one. The billing-grade delivery contract -- "retries
+// indefinitely, plus an alert" -- has its retry half in the schedule above;
+// the alert half is this: a row whose failed delivery attempts reach the
+// stated escalation
 // horizon (escalationAttempts, default defaultDispatchEscalationAttempts,
 // host-tunable through Module.WithDispatchEscalationAttempts) switches its
 // failure cadence from the per-attempt Warn
@@ -133,22 +132,23 @@ const (
 // row's fold created, are deleted together in one transaction. Pending
 // rows and their receipts are never touched -- a pending row is the retry
 // queue, and its receipt is what makes its redelivery idempotent. Without
-// the sweep both tables grew without bound (reviewer finding
-// P3-metering-16). The window is the idempotency horizon documented on
-// defaultOutboxRetention: a caller retrying an Enqueue whose answer it
-// never saw resolves against the existing row while it lives; a key
-// re-enqueued after its row was retired is a genuinely new event.
+// the sweep both tables would grow without bound. The window is the
+// idempotency horizon documented on defaultOutboxRetention: a caller
+// retrying an Enqueue whose answer it never saw resolves against the
+// existing row while it lives; a key re-enqueued after its row was retired
+// is a genuinely new event.
 //
 // # Single in-process dispatcher assumed
 //
 // claimPendingOutboxRecords is a read, not an atomic claim-and-lock: it
 // does not mark a row as "being processed" before RunOnce attempts
 // delivery. That is safe with exactly one Dispatcher running against a
-// database at a time (this round's whole story -- an in-process goroutine,
-// not a distributed worker pool), and would double-deliver under two
-// concurrent Dispatcher processes racing the same pending row. See
-// AGENTS.md's Known limitations for what a jobs-queue-driven poller (the
-// explicitly allowed later hardening) would need to add.
+// database at a time -- the dispatcher is an in-process goroutine, not a
+// distributed worker pool -- and would double-deliver under two concurrent
+// Dispatcher processes racing the same pending row. A jobs-queue-driven
+// poller would need a real claim step (an atomic status: pending ->
+// processing transition with a visibility timeout) before running more
+// than one worker.
 type Dispatcher struct {
 	db         *gorm.DB
 	aggregator *Aggregator
@@ -172,9 +172,7 @@ type Dispatcher struct {
 	// mu guards every lifecycle field below, exactly as on
 	// AnalyticsRecorder. The poll goroutine reads stop/done only through
 	// the channel values Start passes it as arguments (see run), so no
-	// lifecycle field is ever read outside mu -- the sync.Once pair this
-	// replaces left stop/done readable from Stop's goroutine while a
-	// concurrent Start wrote them, a race the detector could see.
+	// lifecycle field is ever read outside mu.
 	mu         sync.Mutex
 	started    bool // a poll goroutine is running (spawned, not yet stopped)
 	stopClosed bool // stop has been closed (at most once per loop generation)
@@ -233,12 +231,10 @@ func (d *Dispatcher) Start(ctx context.Context) {
 // Stop is already handling that: a loop that ends because Stop closed
 // stop leaves the clearing (and the drain) to Stop's own post-wait code,
 // while a loop that ends because ctx was canceled has no Stop to do it --
-// without the clearing, started would stay true forever, a later Start
-// would no-op, and Record would buffer into a loop that would never run
-// again (the lifecycle defect reviewer finding P3-metering-14 closes for
-// the AnalyticsRecorder; this is its Dispatcher twin). The generation
-// check (d.done == done) makes the clearing a no-op when a newer Start
-// has already replaced the channels.
+// without the clearing, started would stay true forever and a later Start
+// would no-op, leaving pending rows unclaimed. The generation check
+// (d.done == done) makes the clearing a no-op when a newer Start has
+// already replaced the channels.
 func (d *Dispatcher) run(ctx context.Context, stop <-chan struct{}, done chan struct{}) {
 	defer close(done)
 	ticker := time.NewTicker(d.interval)
@@ -322,9 +318,8 @@ func (d *Dispatcher) Stop() {
 // claiming the batch itself failed (a database-level problem, not a
 // per-row one).
 //
-// RunOnce is exported so a host -- or a test proving the crash-recovery
-// property Enqueue's atomicity promises -- can drive one delivery cycle
-// synchronously without waiting on the poll interval.
+// RunOnce is exported so a host -- or a test -- can drive one delivery
+// cycle synchronously without waiting on the poll interval.
 func (d *Dispatcher) RunOnce(ctx context.Context) (delivered int, err error) {
 	records, err := claimPendingOutboxRecords(ctx, d.db, d.batchSize)
 	if err != nil {

@@ -4,15 +4,15 @@
 >
 > 组织结构（多层级组织树）也在本文档中，因为它与权限判定紧密耦合。
 
-## 认证与授权：Casbin 自建 RBAC + OIDC RP
+## 认证与授权：自建 RBAC + OIDC RP
 不自建 IdP（范围蔓延+安全责任重），不强依赖 Auth0/Ory（给每个交付项目强加付费第三方依赖，且用户身份脱离自己库表，破坏 tenant 关联与审计一致性）。
 
-> **实现落地更正**（rbac 轮次实现本节 RBAC 时确认）：**`rbac` 模块最终没有采用 Casbin**，而是在三张受 `dbkit` 托管的 `TenantScoped` 表（`rbac_roles` / `rbac_role_permissions` / `rbac_role_bindings`）上自建判定引擎。**本节约定的语义全部保留**——domain 即 tenant、`resource:action` 命名、`"system"` 伪租户承载平台运营授权、物化路径前缀匹配的子树范围、必备的策略缓存——变的只是存储与判定的实现载体。
+> **实现落地更正**：**`rbac` 模块没有采用 Casbin**，而是在三张受 `dbkit` 托管的 `TenantScoped` 表（`rbac_roles` / `rbac_role_permissions` / `rbac_role_bindings`）上自建判定引擎。**本节约定的语义全部保留**——domain 即 tenant、`resource:action` 命名、`"system"` 伪租户承载平台运营授权、物化路径前缀匹配的子树范围、必备的策略缓存——变的只是存储与判定的实现载体。
 >
 > 换掉 Casbin 的直接原因是它与本仓库三条 CI 强制纪律无法调和：
 >
 > 1. `casbin_rule` 表**没有 `tenant_id` 列**，租户藏在策略的 `v0`（domain）值里。这意味着全产品最安全敏感的一张表，会同时退出[04 数据与多租户](04-data-and-tenancy.md)的**三层隔离**：GORM 插件注入不到过滤条件、用不了 `Repository[T]`、Postgres RLS 也无从下手（RLS 策略以 `tenant_id` 列为准）。`tenancytest.AssertIsolated` 对它根本跑不起来，隔离保证退化成"调用方传对了 domain 字符串"。
-> 2. `gorm-adapter` 自己持有 `*gorm.DB` 并自行发查询，正是 §3.2 与 `tools/semgrep_rules/raw-gorm-bypass.yml` 要禁止的形态。
+> 2. `gorm-adapter` 自己持有 `*gorm.DB` 并自行发查询，正是 `tools/semgrep_rules/raw-gorm-bypass.yml` 要禁止的形态。
 > 3. `gorm-adapter` 默认 `AutoMigrate`（有 `TurnOffAutoMigrate` 可关，这条尚可绕过，前两条不能）。
 >
 > 而 Casbin 真正的价值（可插拔 model.conf、ABAC、RESTful matcher）在这里全部用不上：判定链就是 `subject → bindings → role → permissions` 加一次物化路径前缀判断。在"以库的形式分发的模块化单体"这个前提下，为此往每个交付项目的 `go.sum` 里塞两个第三方依赖，不成立。
@@ -21,13 +21,12 @@
 >
 > - **不做角色到角色的继承**（Casbin 的 `g` 分组）。本节"权限沿树继承"说的是**组织树**继承——绑定在 `/g1` 的授权覆盖 `/g1/r2/s7`——这一条已实现；角色层级本节从未要求，不臆测实现。
 > - **节点物化路径在判定时解析，绝不快照到绑定行上**。绑定表只存 `node_id`。[16 验证](16-verification.md)要求"成员在树中移动后权限即时随之变化"，一旦把路径反规范化到绑定行，恰恰在这个场景上失效。
-> - **`rbac` 不 import `authn`，也不 import `org`**，这是模块的定义性属性。它对两个邻居的全部认知就是两个在 `rbac` 内声明、由宿主实现的接口：`SubtreeResolver`（node id → 物化路径，`org` 建成后由它实现）和中间件的 `WithSubjectResolver`（认证方组装 `Subject{TenantID, UserID}` 传入）。任一 node 解析不出来时**拒绝**该条绑定，绝不回退成租户级授权。
+> - **`rbac` 不 import `authn`，也不 import `org`**，这是模块的定义性属性。它对两个邻居的全部认知就是两个在 `rbac` 内声明、由宿主实现的接口：`SubtreeResolver`（node id → 物化路径，由 `org` 实现）和中间件的 `WithSubjectResolver`（认证方组装 `Subject{TenantID, UserID}` 传入）。任一 node 解析不出来时**拒绝**该条绑定，绝不回退成租户级授权。
 > - **权限通配符（`billing:*`）不做**。通配符语法是一个安全面，需要专门的设计决策，不是实现时随手猜一个。当前判定是 `resource:action` 精确匹配。
-> - **`Repository[T].WithinSubtree(nodeID)`（本节末尾承诺的）延后到 `org` 落地后再进 `dbkit`**。真实查询形态在组织树存在之前是未知的，`dbkit` 明确反对无消费者的推测性泛型扩展。`rbac` 先提供 `DataScope` 与 `PathWithinSubtree`，由消费方自行套用。
-> - **`rbac` 不暴露任何 HTTP 端点**（`OpenAPISpec()` 返回 nil）：角色管理属于 M3 管理后台，`/me` 的扁平权限列表属于 `authn`（由它调 `ListPermissions`）。`rbac` 对 HTTP 层的贡献只有[01 架构](01-architecture.md)固定中间件链里的那道权限闸门。
-> - [17 风险](17-risks.md)与[16 验证](16-verification.md)要求的"千级节点前缀匹配压测"仍然有效，但**归属 `org` 轮次**：`rbac` 造不出千级节点的组织树。前缀匹配的**正确性**（含 `/g1/r2` 不得匹配 `/g1/r20` 这个经典陷阱）已在 `rbac` 单元测试中锁死。
+> - **`rbac` 不暴露任何 HTTP 端点**（`OpenAPISpec()` 返回 nil）：角色管理属于运营后台（`go/admin` 的 role 管理面），扁平权限列表由 `rbac.Service.ListPermissions` 提供、经宿主附到前端（见下文对照）。`rbac` 对 HTTP 层的贡献只有[01 架构](01-architecture.md)固定中间件链里的那道权限闸门。
+> - [17 风险](17-risks.md)与[16 验证](16-verification.md)要求的"千级节点前缀匹配压测"尚未执行：`rbac` 造不出千级节点的组织树（需要 `org` 规模的树）。前缀匹配的**正确性**（含 `/g1/r2` 不得匹配 `/g1/r20` 这个经典陷阱）已在 `rbac` 单元测试中锁死。
 
-- **RBAC**：Casbin `RBAC with domains` 模型，domain = tenant_id，天然支持"同一用户在租户 A 是 admin、在租户 B 是普通成员"。策略存储用 `casbin/gorm-adapter`。权限命名统一 `resource:action`（`billing:manage`、`org:invite_member`）。平台运营权限复用同一引擎，用 `domain="system"` 伪租户表示，不为运营后台另造一套鉴权。
+- **RBAC**：`domain` = tenant_id，天然支持"同一用户在租户 A 是 admin、在租户 B 是普通成员"。判定引擎自建在三张 `TenantScoped` 表上（非 Casbin，见上），语义即上文的"实现落地更正"约定的集合。权限命名统一 `resource:action`（`billing:manage`、`org:invite_member`）。平台运营权限复用同一引擎，用 `domain="system"` 伪租户表示，不为运营后台另造一套鉴权。
 - **SSO**：`coreos/go-oidc` + `oauth2` 实现标准 OIDC Relying Party，覆盖 Okta/Azure AD/Google Workspace。每租户一条 `TenantSSOConfig`（issuer/client_id/secret/allowed_domains）存库，客户可自助配置 SSO 无需改代码；回调后 claims → Principal 映射，支持 JIT 建用户。
 - **SAML** 作为可选子包延后，OIDC 已覆盖多数企业场景，不把 SAML 依赖强加给所有消费方。
 - **面向个人用户的社交登录（Google/GitHub/微信/钉钉/飞书等）是另一套机制，见本文档「第三方账号登录与注册」**—— 配置层级和协议差异都很大，不要与企业 SSO 复用同一套配置。
@@ -61,10 +60,10 @@ type Authorizer interface {
 - **密码存储用 argon2id**（不用 bcrypt：argon2id 是当前 OWASP 首选，抗 GPU 破解更强），参数随硬件可配；密码策略走动态配置（最小长度、复杂度、常见弱口令字典校验），默认值遵循 NIST 建议——长度优先于强制符号组合。
 - **前后端契约**：`rbac` 必须提供 `ListPermissions(ctx, subject) []string`，在 `/me` 接口返回**扁平化有效权限列表**。前端不重新实现策略引擎，`usePermission` 只做集合查找。切换租户时重新拉取 `/me` 获得新权限集。
 
-**实现状态注记**：
+**实现对照**：
 
-- **跨租户用户检索 `authn.Service.SearchUsers`（安全敏感，无内部鉴权）**——为配合 `go/admin` D6 落地的纯新增方法：按邮箱/手机号盲索引精确匹配，或按 `DisplayName` 做大小写不敏感的前缀匹配，无 tenant 概念（`users` 本就是身份数据）。它不做任何内部权限判定——`authn` 从不 import `rbac`——调用方（`go/admin` 的 HTTP handler）必须自己在到达这个方法之前完成 `admin:search_users` 权限判定；缺三个查询条件时返回 `authn.search_criteria_required`（`ErrSearchCriteriaRequired`），从不默默返回全平台用户。详见 `go/authn/AGENTS.md` 的"Platform search"一节。
-- **`rbac.RoleBinding` 的标记删除与 `RestoreRole`**：`RevokeRole` 已经从物理 `DELETE` 换成标记删除（`RoleBinding` 实现 `dbkit.SoftDeletable`），`Service.RestoreRole(ctx, sub, role, scope)` 撤销一次匹配的 `RevokeRole`；同一 `(tenant, user, role, node)` 元组的唯一索引已改写成局部索引（`WHERE deleted_at IS NULL`），使撤销后立刻用同一范围重新授权不再被占位挡住。一处刻意的安全决策与 `org` 的"死父节点拒绝恢复"相反：**`RestoreRole` 允许恢复一个所指节点已经不存在的绑定**——`RoleBinding` 是叶子行而非结构，`DataScope` 本来就把"解析不出节点"的绑定当作"这条授权对范围没有贡献"处理（拒绝该行的可见范围，绝不放宽到整租户），恢复一个悬空引用不过是复现了这个模块一直能安全处理的既有状态，不是新增的失败模式。详见 `go/rbac/AGENTS.md` 的"Soft deletion"一节。
+- **跨租户用户检索 `authn.Service.SearchUsers`（安全敏感，无内部鉴权）**——为 `go/admin` 的跨租户用户检索落地的纯新增方法：按邮箱/手机号盲索引精确匹配，或按 `DisplayName` 做大小写不敏感的前缀匹配，无 tenant 概念（`users` 本就是身份数据）。它不做任何内部权限判定——`authn` 从不 import `rbac`——调用方（`go/admin` 的 HTTP handler）必须自己在到达这个方法之前完成 `admin:search_users` 权限判定；缺三个查询条件时返回 `authn.search_criteria_required`（`ErrSearchCriteriaRequired`），从不默默返回全平台用户。
+- **`rbac.RoleBinding` 的标记删除与 `RestoreRole`**：`RevokeRole` 从物理 `DELETE` 换成标记删除（`RoleBinding` 实现 `dbkit.SoftDeletable`），`Service.RestoreRole(ctx, sub, role, scope)` 撤销一次匹配的 `RevokeRole`；同一 `(tenant, user, role, node)` 元组的唯一索引改写成局部索引（`WHERE deleted_at IS NULL`），使撤销后立刻用同一范围重新授权不再被占位挡住。一处刻意的安全决策与 `org` 的"死父节点拒绝恢复"相反：**`RestoreRole` 允许恢复一个所指节点已经不存在的绑定**——`RoleBinding` 是叶子行而非结构，`DataScope` 本来就把"解析不出节点"的绑定当作"这条授权对范围没有贡献"处理（拒绝该行的可见范围，绝不放宽到整租户），恢复一个悬空引用不过是复现了这个模块一直能安全处理的既有状态，不是新增的失败模式。
 
 ## 第三方账号登录与注册
 
@@ -96,7 +95,7 @@ type ExternalIdentity struct {
 }
 ```
 
-**v1.0 内置渠道**：Google、GitHub（标准 OAuth2，覆盖海外与开发者场景）+ 微信开放平台、企业微信、钉钉、飞书（覆盖国内 to C 与 to B 场景）。QQ、微博、支付宝作为二期按需补充。**手机号 + 短信验证码**在国内几乎是刚需，作为独立的 `Authenticator` 实现（不是 social provider）一并纳入，短信网关同样做接口抽象，其中一套实现是打印到控制台，供开发与 CI 的组装选用（见 [03 部署模式与实现组装](03-deployment-modes.md)）。
+**内置渠道**：Google、GitHub（标准 OAuth2，覆盖海外与开发者场景）、微信开放平台、钉钉、飞书（覆盖国内 to C 与 to B 场景）均已实现；企业微信、QQ、微博、支付宝尚未实现。**手机号 + 短信验证码**在国内几乎是刚需，作为独立的 `Authenticator` 实现（不是 social provider）一并纳入，短信网关同样做接口抽象，其中一套实现是打印到控制台，供开发与 CI 的组装选用（见 [03 部署模式与实现组装](03-deployment-modes.md)）。
 
 **账号关联模型**：`user_identities` 表（`user_id`, `provider`, `external_id`, `unique(provider, external_id)`），一个用户可绑定多个外部身份，也可同时保留密码登录。
 
@@ -108,7 +107,7 @@ type ExternalIdentity struct {
 
 **与多租户的衔接**：社交登录成功且是新用户时，进入引导流程——创建自己的组织，或接受已有的邀请（邀请链接里携带 tenant 上下文）。社交登录本身不决定租户归属，租户归属由组织创建/邀请流程决定。
 
-**前端**：`@speed/auth-ui` 的 `SocialLoginButtons` 组件根据 `/api/config/public` 下发的**已启用渠道列表**动态渲染，业务项目不需要改代码就能增减渠道；各渠道图标与品牌规范（Google 对按钮样式有强制要求）内置。
+**前端**：`@speed/auth-ui` 的 `SignInScreen` 只在收到宿主传入的 `social` 选项块时渲染 `SocialSignInSection`，渲染哪些 provider 由该块决定——服务端没有"已启用渠道列表"的发现端点（authn 的 spec 无此类 operation，`/api/config/public` 只下发配置项与功能开关），增减渠道因此是宿主组合层的改动；组件渲染的是 bundle 文案按钮，不打包品牌资产。
 
 ## 组织模型：多层级组织树
 
@@ -134,20 +133,20 @@ type Membership struct {
 ```
 
 - 从"Organization → Workspace"两级扩展为**任意层级的组织树**（如 集团 → 区域 → 门店），用 `parent_id` + 物化路径（materialized path）实现，兼顾查询效率与实现复杂度。
-- **权限沿树继承**：上级角色可下探管辖下级。以下按当初的 Casbin 方案描述（实际实现见本文档开头的「实现落地更正」：语义一致，载体换成了自建引擎）——domain 仍是租户根，**被管辖节点的物化路径作为策略的一个维度**参与判定：
+- **权限沿树继承**：上级角色可下探管辖下级。`domain` 仍是租户根，**被管辖节点的物化路径作为授权的一个维度**参与判定（实现载体是自建引擎，见文档开头的实现落地更正）：
 
   ```
   p, role:store_manager, tenant_42, /group1/region2/store7/*, order:read
   ```
 
-  用自定义 matcher 做路径前缀匹配（`pathMatch(r.node, p.node)`），角色绑定在树节点上而非整个租户上。这个 matcher 与物化路径的组合是本模块的实现难点，需要在 M1 早期就打样并压测——前缀匹配的策略数量会随节点数增长，必须配合策略缓存，不能每次请求都全量加载。
-- 数据可见范围按节点子树计算，`Repository[T]` 提供 `WithinSubtree(nodeID)` 作用域，避免每个业务自己拼递归查询。
+  用自定义 matcher 做路径前缀匹配（`pathMatch(r.node, p.node)`），角色绑定在树节点上而非整个租户上。前缀匹配的策略数量会随节点数增长，必须配合策略缓存，不能每次请求都全量加载。
+- 数据可见范围按节点子树计算，避免每个业务自己拼递归查询；子树作用域的落点见下文实现落地更正。
 
-  > **实现落地更正**（实现 `org` 模块时确认）：本节组织树部分已按下列实际形态落地，个别表述与设计不同：
-  > - **树结构与查询**：`parent_id` + 物化路径按设计落地为 `OrgNode{ParentID, Path, Depth}`，**没有 closure table，也不用递归 CTE**——两条都在 M0 之后被明确否决：closure table 每节点 O(depth) 行、移动一次要重写 O(子树×depth) 行；`WITH RECURSIVE` 虽然 SQLite 和 PostgreSQL 都支持，但项目的可移植性原则是"结构上不可能分叉"而不是"两边碰巧都支持"，`LIKE` 前缀扫描不需要这个论证。子树查询是 `path LIKE prefix||'%'` 一条前缀扫描；祖先链在 Go 里对 `path` 按分隔符 split 即可，不查库。这个方案能立住的前提是**id 字母表被钉死为全小写十六进制 + 连字符**（`uuid.NewString()`），不含任何 `LIKE` 元字符（`%`、`_`），也不含大小写——SQLite 的 `LIKE` 默认大小写不敏感、PostgreSQL 默认大小写敏感，字母表全小写这条不变量测试锁定（`go/org/path.go` 的校验函数 + 200 个 `uuid.NewString()` 采样测试），未来若切到 ULID/Crockford base32 这类含大写的 id 方案，必须重新论证这一节。物化路径**首尾都带分隔符**（`"/id1/id2/.../idN/"`），这样前缀匹配不依赖 id 定长，也让"`1a` 与 `1aa` 这类共享前缀的兄弟节点"不会被误判为子树成员——这条属性有专门测试两端锁定。同一套断言在 SQLite 单元测试与 PostgreSQL `integration_test/` 里跑两遍，结果集必须一致，这就是选择物化路径而非 closure table 的完整证明义务，不是文档一句话带过。
+  > **实现落地更正**：本节组织树部分已按下列实际形态落地，个别表述与设计不同：
+  > - **树结构与查询**：`parent_id` + 物化路径按设计落地为 `OrgNode{ParentID, Path, Depth}`，**没有 closure table，也不用递归 CTE**——两条都被明确否决：closure table 每节点 O(depth) 行、移动一次要重写 O(子树×depth) 行；`WITH RECURSIVE` 虽然 SQLite 和 PostgreSQL 都支持，但项目的可移植性原则是"结构上不可能分叉"而不是"两边碰巧都支持"，`LIKE` 前缀扫描不需要这个论证。子树查询是 `path LIKE prefix||'%'` 一条前缀扫描；祖先链在 Go 里对 `path` 按分隔符 split 即可，不查库。这个方案能立住的前提是**id 字母表被钉死为全小写十六进制 + 连字符**（`uuid.NewString()`），不含任何 `LIKE` 元字符（`%`、`_`），也不含大小写——SQLite 的 `LIKE` 默认大小写不敏感、PostgreSQL 默认大小写敏感，字母表全小写这条不变量测试锁定（`go/org/path.go` 的校验函数 + 200 个 `uuid.NewString()` 采样测试），未来若切到 ULID/Crockford base32 这类含大写的 id 方案，必须重新论证这一节。物化路径**首尾都带分隔符**（`"/id1/id2/.../idN/"`），这样前缀匹配不依赖 id 定长，也让"`1a` 与 `1aa` 这类共享前缀的兄弟节点"不会被误判为子树成员——这条属性有专门测试两端锁定。同一套断言在 SQLite 单元测试与 PostgreSQL `integration_test/` 里跑两遍，结果集必须一致，这就是选择物化路径而非 closure table 的完整证明义务，不是文档一句话带过。
   > - **`parent_id` 用空字符串哨兵，不用 `NULL`**：与本节代码示例的 `*string` 不同，落地后 `parent_id` 是非空字符串列，租户根节点的 `parent_id` = `""`。原因与 `go/config` 的 `tenant_id` 哨兵一致：`UNIQUE(tenant_id, parent_id, name)` 这条兄弟节点同名唯一索引，在两边数据库里 `NULL` 都被当作"各不相同"，唯一索引形同虚设；空字符串则是一个正常可比较的值，索引才能真正生效。
-  > - **`Membership.Roles []string` 不由 `org` 存储**：设计草图里的角色字段被否决，两个理由——原生数组跨方言被禁用；角色状态属于 `rbac` 的 Casbin 策略存储（按 tenant + user + node path 索引），`org` 只存成员与节点的绑定关系，不重复保管权限状态。`memberships` 落地为**关联数据**（`TenantScoped`，跑 `tenancytest.AssertIsolated`，与本文档 04 节的数据分域表一致），`user_id` 只存 authn 的 id 引用，不建跨模块外键。
-  > - **`Repository[T].WithinSubtree(nodeID)` 尚未落地**：这是 `dbkit` 公共泛型接口的改动，不是 `org` 自己能单方面加的——`go/dbkit/AGENTS.md` 说得很明确，`Repository[T]` 的查询面是刻意收窄的，由后续模块按真实查询需求扩展。`org` 目前只对外暴露 `Scope.DescendantIDs(ctx, nodeID) ([]string, error)`（一次索引前缀扫描），消费方（`rbac` 等）自己拼 `IN ?`。`WithinSubtree` 留给一个手握 `org` + 至少一个别的消费方真实查询形状的 `dbkit` round 再落地。
+  > - **`Membership.Roles []string` 不由 `org` 存储**：设计草图里的角色字段被否决，两个理由——原生数组跨方言被禁用；角色状态属于 `rbac` 的授权存储（按 tenant + user + node path 索引），`org` 只存成员与节点的绑定关系，不重复保管权限状态。`memberships` 落地为**关联数据**（`TenantScoped`，跑 `tenancytest.AssertIsolated`，与本文档 04 节的数据分域表一致），`user_id` 只存 authn 的 id 引用，不建跨模块外键。
+  > - **`Repository[T].WithinSubtree(nodeID)` 尚未落地**：这是 `dbkit` 公共泛型接口的改动，不是 `org` 自己能单方面加的——`Repository[T]` 的查询面是刻意收窄的，按真实查询需求扩展。`org` 只对外暴露 `Scope.DescendantIDs(ctx, nodeID) ([]string, error)`（一次索引前缀扫描），消费方（`rbac` 等）自己拼 `IN ?`；`WithinSubtree` 在出现手握 `org` 加至少一个别的消费方真实查询形状的需求前不会进 `dbkit`。
   > - **`Scope` 与 `FeatureGate` 两个免 import 的结构化接口**：`org` 与 `rbac`、`org` 与 `config` 之间都没有 import 边（01 节依赖图上也没有画），却各自需要对方的数据——`rbac` 需要节点物化路径与成员可见节点集，`org` 需要功能开关是否启用。两边都复用了 `config.WithResolver` 已经立住的"接口签名只用标准库类型，消费方在自己包里声明同名接口，靠结构化满足"手法：`Scope{Path, DescendantIDs, MemberNodeIDs}` 与 `FeatureGate{IsEnabled}`，宿主在 `Bootstrap` 之后手工把两个模块的实现接到一起，是唯一同时出现两个包名字的地方。
 
 ## 多因素认证（MFA）
@@ -157,7 +156,7 @@ type Membership struct {
 - **恢复码**：开启 MFA 时一次性生成 10 个一次性恢复码，仅展示一次、哈希存储。没有恢复码机制的 MFA 会直接制造大量"永久锁死账号"的客服工单。
 - **强制策略分层**：平台可要求特定角色（如平台运营、租户 Owner）强制启用；租户管理员可对本租户成员强制启用。策略走动态配置的租户级覆盖。
 - **重新验证（step-up）**：改密码、改 MFA 设置、删除组织、导出数据这类高风险操作，要求重新输入第二因素，而不是仅凭已有会话放行。
-- WebAuthn / Passkey 不在 v1.0 范围，但 `SecondFactor` 接口预留实现位。
+- WebAuthn / Passkey 不在内置范围，`SecondFactor` 接口预留实现位。
 
 ## 会话与租户的关系
 
@@ -209,60 +208,48 @@ type Membership struct {
 
 ---
 
-> **实现状态注记（2026-09-03，authn 轮）——本注记不是设计正文，设计正文保持原样；当前实现状态以根目录 CLAUDE.md 的 Repository Status 为准。**
+> **authn 实现对照**：`go/authn` 是有真实实现、有测试的模块，`examples/reference-app` 是它的强制第一消费者。设计目标里已经落地的部分：
 >
-> `go/authn` 已经是有真实实现、有测试的模块，`examples/reference-app` 是它的强制第一消费者。本文设计目标里已经落地的部分：
->
-> - **令牌**：access token 用 EdDSA（Ed25519）签名而非本文未点名算法，`kid` 寻址，一把当前签名密钥 + 任意把只验证的历史密钥（`KeySet`，形状照抄 `dbkit.NewCipher(activeKey, retiredKeys...)`）；access token 默认 15 分钟，携带 `sub`/`tid`/`sid`/`amr`，不含权限（rbac 的边界）；refresh token 为服务端生成的高熵随机值，存哈希，绑定 session，`family_id`/`rotated_from` 支持重放检测。
+> - **令牌**：access token 用 EdDSA（Ed25519）签名，`kid` 寻址，默认 15 分钟，携带 `sub`/`tid`/`sid`/`amr`，不含权限（rbac 的边界）；签名与验证密钥通过 `authn.KeySource` 接口在每次 `Issue`/`Verify` 时现取（`WithKeySource` 是唯一、强制的注入点，见文档末尾的密钥来源对照）；refresh token 为服务端生成的高熵随机值，存哈希，绑定 session，`family_id`/`rotated_from` 支持重放检测。
 > - **会话与撤销**：`sessions` 表 + 上文"自然过期"/"立即失效"两种模式，均可通过动态配置项 `authn.session_revocation_immediate` 选择，而不是按部署模式二选一——两种模式在两种部署模式下都能工作。已作废的 refresh token 被重放 ⇒ 撤销整个 token 族与 session，发布 `authn.session.replay_detected` 事件。
-> - **登录日志与限流**：`login_attempts` 表按本文所写记录方式/结果/失败原因；`go/ratelimit` 之上叠了本文明确要求的"渐进式"业务逻辑（`go/authn/ratelimit.go`），登录/注册/短信发送/短信校验/step-up 均已接入，且按账号+IP、IP、目标标识符等本文规定的维度独立限流；`KVStore` 不可用时一律 fail-closed（拒绝而非放行），这是本轮明确记录的策略决定，不是遗漏。**唯一未实现的一格**：`ip_region`（IP 归属地）列已建但留空——GeoIP 许可证审查（本文自己点名的 MaxMind GeoLite2 注册与条款问题）尚未完成，因此"异常登录检测"（新设备/新地区/不可能位移）整体推迟，属于依赖 GeoIP 结果的下游能力。
-> - **第三方账号登录**：Google、GitHub、微信开放平台、钉钉、飞书五个渠道全部实现，且每一个都能在完全离线（`httptest`）下通过测试——不依赖真实网络请求。"只有 `EmailVerified=true` 且渠道在信任名单上才自动关联"的规则、微信必须用 `unionid` 而非 `openid`、解绑不能致账号无路可登，三条安全规则均已落地并有对应的负向测试。QQ/微博/支付宝按本文"二期按需补充"仍未做；SAML 按本文"作为可选子包延后"仍未做。
-> - **组织模型**：本文"组织模型：多层级组织树"一节整体仍是设计目标——`org` 模块还是占位 stub。`go/authn` 因此没有 `memberships` 表，也不 import `org`，而是声明了一个它自己的最小 `MembershipReader` 接口，由宿主注入；`resolveTenant` 在没有注入实现、或调用返回"不是成员"时一律拒绝（fail-closed），绝不放行——这条边界本身就是"业务模块之间禁止 import 对方的 struct"规则的直接应用。
-> - **MFA**：TOTP（RFC 6238，标准库自实现并用官方测试向量钉住，未引入 `pquerna/otp`）、十个一次性恢复码、`RequireStepUp` 对改密码/改 MFA 等敏感操作的二次校验均已实现。**尚未做的**：登录时刻本身尚不强制第二因子——已启用 MFA 的账号仅凭密码或短信验证码仍可完成首次登录，第二因子只在 step-up 场景生效；WebAuthn/passkey 按本文"不在 v1.0 范围"仍只预留了接口位。
-> - **会话/设备自助管理**：`examples/reference-app`（无 `@speed/auth-ui`，前端页面尚未存在）的 `authn_e2e_test.go` 通过真实 HTTP 端到端验证了本节描述的核心行为——列出设备、查看登录历史、下线单个设备、被下线设备的 refresh 立即失败而其余设备不受影响。
+> - **登录日志与限流**：`login_attempts` 表按本文所写记录方式/结果/失败原因；`go/ratelimit` 之上叠了本文明确要求的"渐进式"业务逻辑（`go/authn/ratelimit.go`），登录/注册/短信发送/短信校验/step-up 均已接入，且按账号+IP、IP、目标标识符等本文规定的维度独立限流；`KVStore` 不可用时一律 fail-closed（拒绝而非放行），这是明确记录的策略决定，不是遗漏。**未实现的一格**：`ip_region`（IP 归属地）列已建但留空——GeoIP 许可证审查（MaxMind GeoLite2 的注册与条款限制）尚未完成，"异常登录检测"（新设备/新地区/不可能位移）作为依赖 GeoIP 结果的下游能力因此也未实现。
+> - **第三方账号登录**：Google、GitHub、微信开放平台、钉钉、飞书五个渠道全部实现，且每一个都能在完全离线（`httptest`）下通过测试——不依赖真实网络请求。"只有 `EmailVerified=true` 且渠道在信任名单上才自动关联"的规则、微信必须用 `unionid` 而非 `openid`、解绑不能致账号无路可登，三条安全规则均已落地并有对应的负向测试。QQ/微博/支付宝（本文"二期按需补充"）与 SAML（本文"作为可选子包延后"）尚未实现。
+> - **组织模型**：`org` 模块已实现（见上文"组织模型"一节的实现落地更正）。`go/authn` 没有 `memberships` 表，也不 import `org`，而是声明了一个它自己的最小 `MembershipReader` 接口，由宿主注入；`resolveTenant` 在没有注入实现、或调用返回"不是成员"时一律拒绝（fail-closed），绝不放行——这条边界本身就是"业务模块之间禁止 import 对方的 struct"规则的直接应用。
+> - **MFA**：TOTP（RFC 6238，标准库自实现并用官方测试向量钉住，未引入 `pquerna/otp`）、十个一次性恢复码、`RequireStepUp` 对改密码/改 MFA 等敏感操作的二次校验均已实现。**尚未实现的**：登录时刻本身尚不强制第二因子——已启用 MFA 的账号仅凭密码或短信验证码仍可完成首次登录，第二因子只在 step-up 场景生效；WebAuthn/passkey 只预留了 `SecondFactor` 接口实现位。
+> - **会话/设备自助管理**：`examples/reference-app` 的 `authn_e2e_test.go` 通过真实 HTTP 端到端验证了本节描述的核心行为——列出设备、查看登录历史、下线单个设备、被下线设备的 refresh 立即失败而其余设备不受影响；前端页面由 `@speed/account-ui` 提供（见下文对照）。
 >
-> **中间件顺序的调整**（详见 [01 架构](01-architecture.md) 的同名实现状态注记）：`authn.Middleware` 实际跑在 `tenancy.Middleware` **之前**，而非本文所在的 01 号文档原始顺序——`go/authn/AGENTS.md`"The middleware chain is authn, then tenancy"一节有完整推理。
+> **中间件顺序**：`authn.Middleware` 跑在 `tenancy.Middleware` **之前**，理由见 [01 架构](01-architecture.md) 的"中间件链固定顺序"一节。
 
 ---
 
-> **实现状态注记（2026-09-08，authn P1 修复轮：上文 authn 轮注记"会话与撤销"一条对动态配置项的说法已成历史）——本注记不是设计正文，设计正文保持原样；当前实现状态以根目录 CLAUDE.md 的 Repository Status 为准。**
+> **会话撤销模式的选择器是构造期选项，不是动态配置项**：
 >
-> authn 轮注记"会话与撤销"一条称两种模式"均可通过动态配置项 `authn.session_revocation_immediate` 选择"。该说法不成立，本轮 P1 修复（立即吊销从未在出厂组合中接通）以三个修正落地：
+> - 吊销模式在 `SessionManager` 构造时固定，并决定哪些吊销会被记入吊销表——因此不存在 `authn.session_revocation_immediate` 之类的动态配置项：请求期读到的值无法给 natural 模式的 manager 补装强制，一个"声明了却从未被读取"的悬空开关已被删除（`ConfigKeyImmediateRevocation` 常量同删）。模式的唯一真实选择器是构造期选项 `WithRevocationMode`。
+> - **立即模式的强制是默认接线。** `NewService` 把自己构造的 `*SessionManager` 挂为它交出的 `Verifier`（`Service.Verifier()`）的吊销源，`Middleware` 在每次验证成功的请求上默认查询该源（显式 `WithRevocationChecker` 覆盖它）。natural 模式（模块默认）下 `IsRevoked` 不碰存储、恒答 false，默认接线零成本；immediate 模式每次请求一次 KV 读，即该模式文档所写的代价。吊销检查不能只是可选 option——若参考应用与消费者骨架都没传，吊销表记了却无人查询，被吊销会话的未过期 access token 会一直用到自然过期，重放防盗响应对攻击者手里的**当前** token 无能为力。
+> - **参考应用以立即模式运行**（`authn.WithRevocationMode(authn.RevocationModeImmediate)`），作为强制机制的强制第一消费者：无论哪条吊销路径（用户登出、会话自助下线、重放检测撤销）都立即切断同一 access token——`authn_e2e_test.go` 的吊销腿断言"被吊销会话的同一未过期 access token 的下一请求被拒（`authn.session_revoked`）"。
 >
-> - **`authn.session_revocation_immediate` 配置项与 `ConfigKeyImmediateRevocation` 常量已删除。** 它是"声明了却从未被读取"的悬空开关：没有任何代码读它，设置它毫无效果；而且结构上不可能兑现其描述——吊销模式在 `SessionManager` 构造时固定，并决定哪些吊销会被记入吊销表，请求期读到的值无法给 natural 模式的 manager 补装强制。模式的唯一真实选择器是构造期选项 `WithRevocationMode`。
-> - **立即模式的强制现在是默认接线，不再需要宿主仪式。** `NewService` 把自己构造的 `*SessionManager` 挂为它交出的 `Verifier`（`Service.Verifier()`）的吊销源，`Middleware` 在每次验证成功的请求上默认查询该源（显式 `WithRevocationChecker` 覆盖它）。natural 模式（模块默认）下 `IsRevoked` 不碰存储、恒答 false，默认接线零成本；immediate 模式每次请求一次 KV 读，即该模式文档所写的代价。修复前吊销检查只是 `Middleware` 的可选 option，参考应用与消费者骨架都没传——吊销表记了却无人查询，被吊销会话的未过期 access token 一直用到自然过期，重放防盗响应因此对攻击者手里的**当前** token 无能为力。
-> - **参考应用以立即模式运行**（`authn.WithRevocationMode(authn.RevocationModeImmediate)`），作为强制机制的强制第一消费者：无论哪条吊销路径（用户登出、会话自助下线、重放检测撤销）都立即切断同一 access token——`authn_e2e_test.go` 的吊销腿新增"被吊销会话的同一未过期 access token 的下一请求被拒（`authn.session_revoked`）"断言。
->
-> 已作废 refresh token 被重放 ⇒ 撤销整个 token 族与 session、发布 `authn.session.replay_detected` 事件的部分不受影响，继续准确。动态配置项整体"声明而尚未被读回"的读通缺口是平台级状态（`go/authn/AGENTS.md` 的 Known limitations 有记录），与本轮删除的这一个结构性死开关无关。
+> 已作废 refresh token 被重放 ⇒ 撤销整个 token 族与 session、发布 `authn.session.replay_detected` 事件，继续准确。动态配置项整体"声明而尚未被读回"的读通缺口是平台级状态（`go/authn/AGENTS.md` 的 Known limitations 有记录），与上述结构性死开关的删除无关。
 
 ---
 
-> **实现状态注记（2026-09-03，auth-ui 轮：本文两处点名 `@speed/auth-ui` 的设计以修正形状落地）——本注记不是设计正文，设计正文保持原样；当前实现状态以根目录 CLAUDE.md 的 Repository Status 为准。**
+> **auth-ui 对照**：落地的 `@speed/auth-ui`（登录组件家族：`SignInScreen`/`PasswordSignInForm`/`SMSSignInForm`/`RegisterForm`/`SocialSignInSection`/`SocialCallbackHandler`/`SignOutButton`/`SessionEndedScreen`）使上文两处设想以修正形状落地（机制记录见 [12 前端架构](12-frontend.md)）：
 >
-> 落地的 `@speed/auth-ui`（登录组件家族：`SignInScreen`/`PasswordSignInForm`/`SMSSignInForm`/`RegisterForm`/`SocialSignInSection`/`SocialCallbackHandler`/`SignOutButton`/`SessionEndedScreen`）使上文两处设想可以对照记录偏差：
->
-> - **"前端"一段设想的 `SocialLoginButtons` 按服务端下发渠道动态渲染，没有以该形状交付。** 服务端不存在"已启用渠道列表"的发现端点——authn 的 spec 没有此类 operation，`/api/config/public` 只下发配置项与功能开关——"业务项目不需要改代码就能增减渠道"因此不成立。落地的对应物 `SocialSignInSection` 改为 **props 组合**：`SignInScreen` 只在收到宿主传入的 `social` 选项块时渲染社交区，渲染哪些 provider 由该块决定，包内不读取任何配置端点；"各渠道图标与品牌规范内置"同样未落地——组件渲染的是 bundle 文案按钮，不打包品牌资产，与 `ui-kit` 的边界规则一致。该机制记录见 [12 前端架构](12-frontend.md) 的 auth-ui 轮注记三。
-> - **上文设备管理设计段设想的自助管理页面不在组件族内。** 该轮交付的是登录/登出/会话结束占位这一面；设备列表、单设备下线、一键下线其他设备、修改密码联动下线等页面属账号管理 UI，尚未落地——上文 authn 轮注记"会话/设备自助管理"一条括号里的"前端页面尚未存在"对它们仍然准确。其服务端行为（列出设备、查看登录历史、下线单个设备、被下线设备的 refresh 立即失败而其余设备不受影响）已由 `examples/reference-app` 的 `authn_e2e_test.go` 真实 HTTP 端到端验证，见该注记同一条，不依赖这些页面存在。
+> - **"前端"一段设想的 `SocialLoginButtons` 按服务端下发渠道动态渲染，没有以该形状交付。** 服务端不存在"已启用渠道列表"的发现端点——authn 的 spec 没有此类 operation，`/api/config/public` 只下发配置项与功能开关——"业务项目不需要改代码就能增减渠道"因此不成立。落地的对应物 `SocialSignInSection` 改为 **props 组合**：`SignInScreen` 只在收到宿主传入的 `social` 选项块时渲染社交区，渲染哪些 provider 由该块决定，包内不读取任何配置端点；"各渠道图标与品牌规范内置"同样未落地——组件渲染的是 bundle 文案按钮，不打包品牌资产，与 `ui-kit` 的边界规则一致。
+> - **账号管理页面不在 auth-ui 组件族内。** 该族交付的是登录/登出/会话结束占位这一面；设备列表、单设备下线、一键下线其他设备、修改密码联动下线等账号管理页面由 `@speed/account-ui` 提供（见下文对照）。其服务端行为（列出设备、查看登录历史、下线单个设备、被下线设备的 refresh 立即失败而其余设备不受影响）已由 `examples/reference-app` 的 `authn_e2e_test.go` 真实 HTTP 端到端验证，不依赖这些页面存在。
 
 ---
 
-> **实现状态注记（2026-09-04，account-ui 轮：上文 auth-ui 轮注记"账号管理 UI 尚未落地"的翻转落地）——本注记不是设计正文，设计正文保持原样；当前实现状态以根目录 CLAUDE.md 的 Repository Status 为准。**
+> **account-ui 对照**：`@speed/account-ui`（账号管理组件家族：`SessionsSection`/`LoginHistorySection`/`SocialBindingsSection`/`BindingCallbackHandler`/`MfaSection`，宿主组合成账号页区块）使上文"用户可见的设备管理"设计段的大部分设想落地：
 >
-> `@speed/account-ui`（账号管理组件家族：`SessionsSection`/`LoginHistorySection`/`SocialBindingsSection`/`BindingCallbackHandler`/`MfaSection`，宿主组合成账号页区块）使上文"用户可见的设备管理"设计段的大部分设想落地：
->
-> - **设备列表与两种下线按本文形状交付。** 会话列表来自 authn 的 sessions 面，当前设备由服务端答的 `is_current` 明确标记（行内 badge，非客户端推断）；单设备下线走行内操作（被下线会话的 refresh 立即失败仍由服务端保证，`authn_e2e_test.go` 已端到端验证），一键下线其他设备走双确认的危险对话框，以服务端答的 `revoked_count` 播报结果。authn 轮注记里"前端页面尚未存在"的括号对这三者不再准确。
+> - **设备列表与两种下线按本文形状交付。** 会话列表来自 authn 的 sessions 面，当前设备由服务端答的 `is_current` 明确标记（行内 badge，非客户端推断）；单设备下线走行内操作（被下线会话的 refresh 立即失败仍由服务端保证，`authn_e2e_test.go` 已端到端验证），一键下线其他设备走双确认的危险对话框，以服务端答的 `revoked_count` 播报结果。
 > - **登录历史、社交绑定/解绑、TOTP 注册一并交付**：登录历史列表渲染服务端记录的 method/result/failure_reason（裸 token 走组件内已知清单，清单外渲染通用文案）；社交绑定走与登录同款的 authorize URL + 回调路由，回调按应答形状分派（绑定形→刷新绑定列表并通知宿主，登录形→渲染"已在别处登录"面板且不回调宿主——该交换把某个账号登了进来）；step-up 门控的 TOTP 更换与恢复码再生成走 `session.verifyStepUp`，"注册成功只活在单个 access token 寿命内"在组件层不承诺重问豁免。"解绑不能致账号无路可登"（`authn.last_login_method`，解绑 409 拒绝并留在页面上）是前端可见的服务端规则之一。
-> - **修改密码时询问"是否同时下线其他设备"仍未落地。** authn 的 spec 至今没有 change-password operation——登录面与账号面上没有任何一处能触发密码修改，联动下线因此无从发生，与上一条注记记录的原因相同。留给 spec 长出 change-password operation 的轮次，届时该行一并实现（服务端"改密即撤销"的会话族行为已有 `authn_e2e_test.go` 同款端到端验证可对照）。
+> - **修改密码时询问"是否同时下线其他设备"尚未落地。** authn 的 spec 没有 change-password operation——登录面与账号面上没有任何一处能触发密码修改，联动下线因此无从发生；服务端"改密即撤销"的会话族行为已有 `authn_e2e_test.go` 同款端到端验证可对照。
 
 ---
 
-> **实现状态注记（2026-09-04，pki 轮：上文 authn 轮注记"令牌"一条的 `KeySet` 描述已成历史）——本注记不是设计正文，设计正文保持原样；当前实现状态以根目录 CLAUDE.md 的 Repository Status 为准。**
+> **密钥来源对照**：签名密钥来自 `authn.KeySource` 接口，由 `go/pki` 的 `Service` 提供（见 [22 密钥与证书生命周期](22-pki.md)）：
 >
-> authn 轮注记"令牌"一条描述的"一把当前签名密钥 + 任意把只验证的历史密钥（`KeySet`，形状照抄 `dbkit.NewCipher(activeKey, retiredKeys...)`）"是静态注入的旧形状，已在本轮被整体替换，**不再是当前实现**：
->
-> - **`KeySet`/`TokenKey`/`GenerateTokenKey`/`NewKeySet`/`WithSigningKeys` 已从 `go/authn/token.go` 删除，不留回退路径。** 取而代之的是 `authn.KeySource` 接口（结构化声明，与实现方无 import 边）：`Signer.Issue`/`Verifier.Verify` 现在每次调用都从注入的 `KeySource` 现取签名/验证密钥，而不再持有一份固定密钥集；`WithKeySource` 是唯一、强制的注入点。
-> - **`go/pki` 的 `Service` 是这个接口目前唯一的真实实现**，结构上满足 `KeySource`（同样无 import 边），其背后是真正的密钥生命周期状态机——`pending → active → retiring → retired`——而不是 authn 自己维护的"当前+历史"两态列表；密钥的签发、轮换、过期由 `go/pki` 一侧的 `lifecycle.go`/`job.go`（一个 `go/jobs` 驱动的到期扫描任务）负责，`go/authn` 只消费结果，不再自己管理密钥寿命。细节见 `go/pki/AGENTS.md` 的 round-2 条目与 `docs/internal/22-pki.md`。
-> - **`examples/reference-app` 与 `go/saasctl` 的四个含 authn 模板均已改接。** 参考应用不再注入 dev 种子静态密钥，而是 `pkiModule := pki.NewModule(db)` 后把 `pkiModule.Service()` 传给 `authn.WithKeySource`；`LocalSigner`（`go/pki` 自带、零外部依赖的默认签名实现）把密钥持久化进同一个 SQLite 文件，跨重启无需重新派生种子。
-> - **签名算法校验加了一道防线。** `Verifier.Verify` 的 `keyFunc` 除了解析器本身的单一 EdDSA 白名单外，额外核对令牌头部 `alg` 与签名密钥自身在 `KeySource` 侧声明的 `Algorithm` 是否一致，使未来引入第二种算法时不会因疏忽绕过这层检查。
->
-> 上文"令牌"一条其余描述（access token 默认 15 分钟、携带 `sub`/`tid`/`sid`/`amr`、refresh token 高熵随机值存哈希、`family_id`/`rotated_from` 支持重放检测）未受本轮影响，继续准确。
+> - **`authn.KeySource` 是签名密钥的注入点**（结构化声明，与实现方无 import 边）：`Signer.Issue`/`Verifier.Verify` 每次调用都从注入的 `KeySource` 现取签名/验证密钥，不持有一份固定密钥集；`WithKeySource` 是唯一、强制的注入点。
+> - **`go/pki` 的 `Service` 是这个接口唯一的真实实现**，结构上满足 `KeySource`（同样无 import 边），其背后是密钥生命周期状态机——`pending → active → retiring → retired`——密钥的签发、轮换、过期由 `go/pki` 一侧的 `lifecycle.go`/`job.go`（一个 `go/jobs` 驱动的到期扫描任务）负责，`go/authn` 只消费结果，不管理密钥寿命。
+> - **`examples/reference-app` 与 `go/saasctl` 的四个含 authn 模板均接 `pki` 作为 `KeySource`。** 参考应用不注入 dev 种子静态密钥，而是 `pkiModule := pki.NewModule(db)` 后把 `pkiModule.Service()` 传给 `authn.WithKeySource`；`LocalSigner`（`go/pki` 自带、零外部依赖的默认签名实现）把密钥持久化进同一个 SQLite 文件，跨重启无需重新派生种子。
+> - **签名算法校验有第二道防线。** `Verifier.Verify` 的 `keyFunc` 除了解析器本身的单一 EdDSA 白名单外，额外核对令牌头部 `alg` 与签名密钥自身在 `KeySource` 侧声明的 `Algorithm` 是否一致，使未来引入第二种算法时不会因疏忽绕过这层检查。

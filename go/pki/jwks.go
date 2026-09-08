@@ -8,15 +8,15 @@ import (
 	"github.com/go-jose/go-jose/v4"
 )
 
-// This file is round 3's JWKS-export half, docs/internal/22-pki.md's "JWKS
-// export" section: two DISTINCT surfaces, deliberately not conflated --
+// This file carries the JWKS-export half of the module's two JWKS surfaces,
+// deliberately not conflated:
 //
 //   - Service.ExportJWKS (key-lifecycle layer): the active/retiring public
 //     keys of one purpose, for an EXTERNAL verifier of speed-issued
 //     tokens.
 //   - CAService.ExportAuthorityChainJWKS (X.509 layer): one authority's own
-//     certificate chain, for the diagnosed system's own documented need --
-//     pushing a jwks.json to a data-plane cluster.
+//     certificate chain, for a consumer that pushes a jwks.json to a
+//     data-plane cluster.
 //
 // Both return ONLY public keys, never a private key or key reference, even
 // for a Signer capable of direct-sign mode: nothing in either export path
@@ -27,39 +27,29 @@ import (
 // x509.Certificate.PublicKey) has anywhere to put a private key even if one
 // were fetched.
 //
-// go-jose (github.com/go-jose/go-jose/v4) is this repository's own
-// established JWK/JWKS encoder -- go/authn already depends on it
-// transitively through golang-jwt (go/authn/go.mod), and it was already an
-// INDIRECT dependency of this very module before this round, pulled in by
-// go/pki/signer/vault's hashicorp/vault/api client (`go mod why -m
-// github.com/go-jose/go-jose/v4` from this module's directory shows that
-// exact chain). This round promotes it to a direct dependency of the ROOT
-// package for the first time -- a consumer that imports only go/pki's root
-// package (never go/pki/signer/vault) previously carried zero go-jose
-// transitive dependencies, and will now carry go-jose itself. Measured with
-// this repository's own required method (a throwaway module, `go mod tidy`
-// under GOWORK=off): go-jose/go-jose/v4 v4.1.4 pulls in ZERO further
-// indirect dependencies of its own -- the cost of this round's choice is
-// exactly one direct entry, no transitive tail. Using go-jose rather than
-// hand-rolling RFC 7517 JWK encoding (base64url field layout, the "kty"/
-// "crv" discriminated union for OKP/Ed25519 keys, and so on) is exactly the
-// case this codebase's own "check what's already available before adding a
-// new dependency" rule anticipates: the library was already reachable, and
-// the round's own "prove a JWKS response round-trips through a standard JWK
-// parse" test requirement (jwks_test.go) is far stronger run against a
-// well-established implementation's own parser than against a hand-rolled
-// one asserting its own output.
+// go-jose (github.com/go-jose/go-jose/v4) is this repository's established
+// JWK/JWKS encoder -- go/authn already depends on it transitively through
+// golang-jwt, and go/pki/signer/vault's hashicorp/vault/api client pulls it
+// in as well -- and the root package declares it as a direct dependency.
+// Measured with this repository's required method (a throwaway module,
+// `go mod tidy` under GOWORK=off): go-jose pulls in no further indirect
+// dependencies of its own, so the cost is exactly one direct entry. Using
+// go-jose rather than hand-rolling RFC 7517 JWK encoding (base64url field
+// layout, the "kty"/"crv" discriminated union for OKP/Ed25519 keys, and so
+// on) is exactly the case this codebase's own "check what's already
+// available before adding a new dependency" rule anticipates, and proving a
+// JWKS response round-trips through a well-established implementation's own
+// parser (jwks_test.go) is far stronger than asserting a hand-rolled
+// encoder's own output.
 
 // ExportJWKS exports purpose's active and retiring public keys as an RFC
 // 7517 JSON Web Key Set -- the key-lifecycle layer's JWKS export. This is
 // deliberately NOT what authn's own in-process token verification uses:
-// docs/internal/22-pki.md's "JWKS export" section is explicit that adding a
-// JWKS endpoint to authn is not what this method is for -- speed's access
-// tokens are verified in-process via KeySource, and public keys travel
-// through Service.VerificationKeys (service.go), never HTTP. ExportJWKS
-// exists for a genuinely EXTERNAL consumer: any system, outside this
-// deployment's own processes, that needs to independently verify a token
-// this Service signed.
+// speed's access tokens are verified in-process via KeySource, and public
+// keys travel through Service.VerificationKeys (service.go), never HTTP.
+// ExportJWKS exists for a genuinely EXTERNAL consumer: any system, outside
+// this deployment's own processes, that needs to independently verify a
+// token this Service signed.
 //
 // Only SigningKeyStatusActive and SigningKeyStatusRetiring keys that are
 // also WITHIN their validity window at this instant are included -- never
@@ -107,12 +97,10 @@ func (s *Service) ExportJWKS(ctx context.Context, purpose string) (jose.JSONWebK
 // authorityID itself, then its issuer, then that issuer's own issuer, up to
 // and including the root -- as an RFC 7517 JSON Web Key Set, one JWK per
 // authority keyed by its Authority.ID, each entry carrying only that
-// authority's public key. This is the X.509 layer's JWKS export: the
-// diagnosed system's own documented need, per docs/internal/22-pki.md's
-// "JWKS export" section -- pushing a jwks.json to a data-plane cluster so
-// it can validate JWTs (or certificates, by kid-matched public key) issued
-// under this authority chain without a full X.509 path-validation library
-// of its own.
+// authority's public key. This is the X.509 layer's JWKS export, for a
+// data-plane cluster that validates JWTs (or certificates, by kid-matched
+// public key) issued under this authority chain without a full X.509
+// path-validation library of its own.
 //
 // The chain is walked through walkAuthorityChain (revocation.go) -- the
 // SAME walk VerifyCertificate uses, not a hand-copy -- whose doc comment

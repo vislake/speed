@@ -126,30 +126,28 @@ func accessTestIP(i int) string {
 }
 
 // TestService_AccessPublic_TokenBudgetExhaustedByWrongPasswords_AdmitsTheCorrectHolder
-// is the regression for the rate-limit-timing finding: the per-token budget
-// (accessPerTokenRate wrong-credential attempts per window, keyed on the
-// share's token hash and shared by every IP that presents it) used to be
-// consumed in accessPublicPrelude BEFORE the presented password was ever
-// compared -- so a leaked-link holder who does not hold the password could
-// exhaust it with wrong guesses and hold the legitimate password-holder's own
-// correct attempt hostage for the rest of the window: that attempt was
-// refused with 429 by the budget check before it ever reached the comparison
-// that would have admitted it. The authn paradigm this module now follows
-// (go/authn's CheckSMSVerifyWrongGuess, argued and fixed on exactly this
-// reasoning) consumes a shared per-target budget only AFTER a guess has been
-// judged wrong, which is what makes the budget unable to deny a correct
-// attempt -- a correct attempt is never judged wrong, so it never pays and is
-// never refused.
+// pins the after-judgment consumption of the per-token wrong-guess budget
+// (ratelimit.go's checkAccessTokenWrongGuess): the budget is
+// accessPerTokenRate wrong-credential attempts per window, keyed on the
+// share's token hash and shared by every IP that presents it. Consumed on
+// every attempt regardless of outcome, it could be exhausted by a
+// leaked-link holder who does not hold the password and would then hold
+// the legitimate password-holder's own correct attempt hostage for the
+// rest of the window -- that attempt refused with 429 before it ever
+// reached the comparison that would have admitted it. Consumed only AFTER
+// a guess has been judged wrong -- the shape go/authn's
+// CheckSMSVerifyWrongGuess applies to its own per-target budget -- the
+// budget cannot deny a correct attempt: a correct attempt is never judged
+// wrong, so it never pays and is never refused.
 //
-// Legs 1-2 pin the fix's property: twenty wrong-password attempts (one per
+// Legs 1-2 pin the property: twenty wrong-password attempts (one per
 // distinct IP, so the per-IP dimension stays out of the way) exhaust the
-// per-token budget, and the legitimate holder's correct attempt that follows
-// still reaches the password comparison and succeeds. Against the pre-fix
-// code the correct attempt was the budget's twenty-first hit and was refused
-// with ErrRateLimited before the password was ever checked. Leg 3 pins that
-// the budget still binds illegitimate attempts -- consumed only by the wrong
-// guesses, the very next wrong guess is the budget's twenty-first hit and is
-// refused with ErrRateLimited on the token dimension.
+// per-token budget, and the legitimate holder's correct attempt that
+// follows still reaches the password comparison and succeeds. Leg 3 pins
+// that the budget still binds illegitimate attempts -- consumed only by
+// the wrong guesses, the very next wrong guess is the budget's
+// twenty-first hit and is refused with ErrRateLimited on the token
+// dimension.
 func TestService_AccessPublic_TokenBudgetExhaustedByWrongPasswords_AdmitsTheCorrectHolder(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	password := "s3cret"

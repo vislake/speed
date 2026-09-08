@@ -39,8 +39,8 @@ func seedNode(t *testing.T, repo *Repository, ctx context.Context, node OrgNode)
 }
 
 // TestRepository_AssertIsolated runs the mandatory tenant-isolation suite
-// against org_nodes. org_nodes is tenant data (docs/internal/04-data-and-
-// tenancy.md), so AssertIsolated -- not AssertNotTenantScoped -- is the
+// against org_nodes. org_nodes is tenant data, so AssertIsolated -- not
+// AssertNotTenantScoped -- is the
 // correct half of the pair: a node is meaningless outside its tenant and
 // must never be readable, updatable or deletable from another one.
 //
@@ -428,12 +428,12 @@ func assertStringSet(t *testing.T, ids []string, want []string) {
 	}
 }
 
-// TestRepository_touchLockByID_DoesNotRewriteUpdatedAt is the P3-9
+// TestRepository_touchLockByID_DoesNotRewriteUpdatedAt is the
 // regression proof: touchLockByID is a no-op WRITE -- its whole purpose is
 // the row lock a write takes, with no data intended to change -- but GORM's
 // autoUpdateTime machinery appends updated_at = now() to every struct UPDATE
 // unless the timestamp column is explicitly excluded, so the "no-op" touch
-// used to dirty the locked row's updated_at. The regression: taking the lock
+// would dirty the locked row's updated_at. The regression: taking the lock
 // must leave the row's updated_at exactly as it was.
 func TestRepository_touchLockByID_DoesNotRewriteUpdatedAt(t *testing.T) {
 	repo := NewRepository(newTestDB(t))

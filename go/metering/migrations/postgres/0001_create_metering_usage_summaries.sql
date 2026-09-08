@@ -1,8 +1,7 @@
 -- metering_usage_summaries is metering's aggregated usage table
 -- (go/metering/model.go): one row per (tenant, feature, calendar period),
--- the SQLite/PostgreSQL "usage_*_summary" table
--- docs/internal/06-billing-and-metering.md's in-process-implementation
--- column names. tenant_id is real and enforced; UsageSummary implements dbkit.TenantScoped
+-- the design's SQLite/PostgreSQL usage-summary table, named
+-- "usage_*_summary" there. tenant_id is real and enforced; UsageSummary implements dbkit.TenantScoped
 -- and is reached only through SummaryRepository (embedding
 -- dbkit.Repository[UsageSummary]), isolation proven by
 -- tenancytest.AssertIsolated.
@@ -23,9 +22,10 @@
 --
 -- quantity is DOUBLE PRECISION: the running sum of every UsageEvent.Quantity
 -- folded into this row so far, updated by Aggregator.upsertSummary under
--- its own single-process serializing mutex (see Aggregator's doc comment
--- for why that is this round's concurrency story, and what a distributed
--- aggregation backend would replace it with).
+-- its own single-process serializing mutex -- see Aggregator's doc
+-- comment for why the mutex is the concurrency story of the in-process
+-- backend and what a distributed aggregation backend would replace it
+-- with.
 CREATE TABLE metering_usage_summaries (
     id           VARCHAR(200)     NOT NULL,
     tenant_id    VARCHAR(64)      NOT NULL,

@@ -13,17 +13,15 @@ import (
 // database/sql driver-registration pattern pkgcore's own
 // EventBusRegistry/KVStoreRegistry/MailerRegistry/ObjectStoreRegistry
 // already follow (go/pkgcore/builtin_implementations.go) -- and the exact
-// mechanism docs/internal/22-pki.md's "three implementations, each its own
-// subpackage" section names for the KMS-backed providers: go/pki/signer/vault
-// and go/pki/signer/kmsaws each register themselves under a name
+// mechanism the KMS-backed providers follow too: go/pki/signer/vault and
+// go/pki/signer/kmsaws each register themselves under a name
 // ("signer.vault", "signer.aws-kms") from their own init(), the same shape
-// go/pkgcore/eventbus/redis, go/pkgcore/kv/redis and
-// go/pkgcore/objectstore/s3 already established for issue #1's split. A host
-// that never imports a provider subpackage never resolves that name, and
-// resolving an unimported one at Bootstrap time fails with
-// pkgcore.ErrUnknownImplementation naming it -- the "unknown driver" cost
-// database/sql's own drivers accept, spelled out for the built-in seams'
-// own registries.
+// go/pkgcore's own eventbus/redis, kv/redis and objectstore/s3
+// registrations establish. A host that never imports a provider subpackage
+// never resolves that name, and resolving an unimported one at Bootstrap
+// time fails with pkgcore.ErrUnknownImplementation naming it -- the
+// "unknown driver" cost database/sql's own drivers accept, spelled out for
+// the built-in seams' own registries.
 //
 // "signer.local" is registered below, in this package's own init(), rather
 // than through a subpackage: LocalSigner already lives in go/pki's root
@@ -83,11 +81,9 @@ func mustRegisterSigner(r pkgcore.Registration[Signer]) {
 // localSignerFromConfig adapts a flat pkgcore.Config onto NewLocalSigner,
 // which needs a *gorm.DB -- something a map[string]string cannot carry
 // directly. This constructor resolves that by opening its OWN database
-// connection via dbkit.Open, using cfg's "dialect" and "dsn": the same flat-
-// Config-carries-rich-configuration trade the redis and S3 registrations
-// already make for a client address and credentials (docs/internal/22-pki.md's
-// own note that vault/kmsaws will need "more than a Config map" pointed at
-// this exact precedent).
+// connection via dbkit.Open, using cfg's "dialect" and "dsn": the same
+// flat-Config-carries-rich-configuration trade the redis and S3
+// registrations already make for a client address and credentials.
 //
 // # This is deliberately NOT the same connection a Module shares
 //
@@ -123,12 +119,11 @@ func mustRegisterSigner(r pkgcore.Registration[Signer]) {
 // # No caller-supplied context
 //
 // pkgcore.Registration[T].New takes no context.Context, but dbkit.Open
-// performs a real connection and pings it. Every other built-in seam
-// registration avoids this problem because its client construction never
-// dials (go-redis and the S3/SMTP clients all connect lazily, on first
-// use) -- "signer.local" is the first SeamRegistry-based registration in
-// this codebase that genuinely needs one and does not have it. This
-// function uses context.Background(), so a Build call against an
+// performs a real connection and pings it. The other built-in seam
+// registrations never hit this because their client construction does not
+// dial (go-redis and the S3/SMTP clients all connect lazily, on first
+// use); "signer.local" genuinely must dial at Build time, so this
+// function uses context.Background() and a Build call against an
 // unreachable dsn can block until the underlying driver's own dial/ping
 // timeout elapses (SQLite's is effectively instantaneous; a network
 // PostgreSQL server that is down is not). A host that needs a bounded

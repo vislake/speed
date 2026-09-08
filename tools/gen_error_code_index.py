@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """Error-code index generator.
 
-Closes docs/internal/13-documentation-standards.md's must-have doc list
-item (an error-code index) and its AI Agent requirements item 6 (every
-error code gets its own documented entry, with the triggering condition
-and what to do about it). No such index existed anywhere in the repository
-before this script: go/pkgcore/apperr/apperr.go only has the encoding
-mechanism (the six status-mapped builders), never a catalog of the codes
-built with it.
+The index gives every error code its own documented entry, with the
+triggering condition and what to do about it. go/pkgcore/apperr/apperr.go
+holds only the encoding mechanism (the status-mapped builders); the
+catalog of the codes built with it lives in the generated index.
 
 What it does: walks every *.go file under --roots (default: go/ and
 examples/, this repository's two source trees; excludes _test.go files
@@ -31,19 +28,15 @@ package-level declaration: a return, panic or assignment such as
 A code is indexed iff it is constructed in Go source with a literal code
 argument -- named declaration or inline, builder call or struct literal;
 the construction form is irrelevant, and the absence of a declaration
-never hides a code. (The discriminator this rule replaced was "indexed
-iff bound to a named variable", which silently dropped every inline code:
-13 jobs.* option-time panics, 6 dbkit.* plugin/connect refusals, the
-reference app's request-shape refusals -- 25 codes in all, the two
-rateLimited-routed declarations included. The boundary this coverage
-claim lives inside is enforced rather than assumed: a code built from a
-non-literal argument (a variable, constant or concatenation) cannot be
-indexed by this line-based tool -- a literal argument is a hard
-requirement -- and a literal sitting on a different line than its
-builder call cannot either; none of either exists in the tree today, and
+never hides a code (inline constructions are indexed too, not only
+named declarations). The boundary this coverage claim lives inside is
+enforced rather than assumed: a code built from a non-literal argument
+(a variable, constant or concatenation) cannot be indexed by this
+line-based tool -- a literal argument is a hard requirement -- and a
+literal sitting on a different line than its builder call cannot either;
 tools/check_error_code_index_coverage.py, the independent side this
 output is measured against, turns red on both classes if they ever
-land.)
+land.
 
 The struct-literal and helper shapes exist because none of apperr's six
 builder statuses (400/401/403/404/409/500) is 429: a module stamps HTTP
@@ -164,8 +157,8 @@ _HELPER_DECL_RE = re.compile(
 # no package-level declaration. The literal must sit on the same line as
 # the builder name; a code literal on its own continuation line is the one
 # boundary this line-based tool records rather than indexes (none exists
-# in the tree today; check_error_code_index_coverage.py's multi-line net
-# turns red if one ever lands).
+# in the tree; check_error_code_index_coverage.py's multi-line net turns
+# red if one ever lands).
 _INLINE_BUILDER_RE = re.compile(
     r'apperr\.(?P<builder>NotFound|Invalid|Conflict|Unauthorized|Forbidden|Internal)'
     r'\(\s*"(?P<code>[^"]+)"'
@@ -720,8 +713,8 @@ def render_markdown(entries: list[ErrorEntry]) -> str:
             # wiring refusal that never reaches an end user, and a
             # request-time refusal that reaches one only as its structured
             # code, whose text -- if any -- comes from the client's own
-            # fallback). A row-level "not user-facing" gloss would repeat
-            # the single-class claim that header replaced and contradict it
+            # fallback). A row-level "not user-facing" gloss would assert a
+            # single class where the header defines two, contradicting it
             # on the request-time rows, so the cell states only the shared
             # fact.
             message = e.message.replace("|", "\\|").replace("\n", " ") or "_(no locale message -- the catalog carries no copy)_"

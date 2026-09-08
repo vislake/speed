@@ -2,10 +2,9 @@ package aigateway
 
 import "context"
 
-// ImageOperation names which of the three image tasks
-// docs/internal/08-ai-gateway.md's multi-modal-expansion section describes
-// an ImageRequest performs: text-to-image, image-to-image, or image
-// editing/inpainting (an input image plus a mask plus a prompt).
+// ImageOperation names which of the three image tasks an ImageRequest
+// performs: text-to-image, image-to-image, or image editing/inpainting (an
+// input image plus a mask plus a prompt).
 type ImageOperation string
 
 const (
@@ -28,11 +27,10 @@ const (
 // async-only image-generation request.
 //
 // Unlike ChatRequest, whose Messages carry conversation content directly,
-// ImageRequest never carries raw image bytes: per the design doc's rule
-// that input and output images travel through storage uniformly, with the
-// interface passing object references rather than byte streams,
-// InputObjectID and MaskObjectID name go/storage objects the caller already
-// uploaded and
+// ImageRequest never carries raw image bytes: input and output images
+// travel through storage uniformly, with the interface passing object
+// references rather than byte streams, so InputObjectID and MaskObjectID
+// name go/storage objects the caller already uploaded and
 // completed, and the new image this request produces lands as a brand new
 // go/storage object of its own -- see image_gateway.go's own doc comment
 // for exactly where the object-reference boundary sits relative to
@@ -66,8 +64,8 @@ type ImageRequest struct {
 
 	// Params carries vendor-specific arguments (size, quality, style, and
 	// so on) passed through to the provider's wire request verbatim,
-	// mirroring ChatRequest.Params exactly -- the design doc's identical
-	// "avoid an over-rigid abstraction" rule applies to images too.
+	// mirroring ChatRequest.Params exactly -- the same avoid-an-over-rigid-
+	// abstraction reasoning applies to images.
 	Params map[string]any
 }
 
@@ -106,8 +104,8 @@ func (r ImageRequest) validate() error {
 }
 
 // ImageUsage is the vendor billing dimensions for one image-generation
-// call, per the design doc's explicit rule that image metering reports
-// image count, diffusion steps and resolution tier, rather than tokens.
+// call: image metering reports image count, diffusion steps and resolution
+// tier, rather than tokens.
 type ImageUsage struct {
 	// ImageCount is how many images the vendor actually generated and
 	// returned for this call.
@@ -125,8 +123,8 @@ type ImageUsage struct {
 // -- the vendor-transport layer, playing the same role for ImageProvider
 // that ChatMessage plays for ChatProvider. See image_gateway.go's own doc
 // comment for why ImageProvider itself is byte-based while the surrounding
-// Gateway/job-handler layer is where the design doc's object-reference rule
-// is actually enforced.
+// Gateway/job-handler layer is where the object-reference rule is actually
+// enforced.
 type ImageBytes struct {
 	// Content is the raw, undecoded image bytes.
 	Content []byte
@@ -180,8 +178,8 @@ type InpaintRequest struct {
 // the full pipeline and its object-reference/raw-bytes boundary.
 //
 // Each method is a distinct operation rather than one method branching on
-// ImageOperation, mirroring the design doc's own three-operation framing
-// and ChatProvider's Chat/ChatStream split by call shape.
+// ImageOperation, mirroring ChatProvider's Chat/ChatStream split by call
+// shape.
 type ImageProvider interface {
 	// TextToImage generates a new image from req.Prompt alone.
 	TextToImage(ctx context.Context, req TextToImageRequest) (ImageResult, error)

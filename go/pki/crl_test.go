@@ -64,8 +64,8 @@ func TestCAService_GenerateCRL_EmptyWhenNoRevocations(t *testing.T) {
 }
 
 // TestCAService_GenerateCRL_ListsRevokedCertificates_AndVerifiesSignature is
-// the round's central CRL proof: it revokes a real certificate, generates
-// the issuing authority's CRL, and verifies the CRL's OWN signature against
+// the central CRL proof: it revokes a real certificate, generates the
+// issuing authority's CRL, and verifies the CRL's OWN signature against
 // the issuer's certificate through the standard library's own
 // x509.RevocationList.CheckSignatureFrom -- never a hand-rolled check --
 // while also confirming the revoked certificate's serial appears in the
@@ -130,19 +130,16 @@ func TestCAService_GenerateCRL_IncrementsCRLNumber(t *testing.T) {
 	}
 }
 
-// TestCAService_GenerateCRL_ConcurrentCalls_EveryCallLandsItsOwnNumber is
-// the P2-3 regression proof: concurrent GenerateCRL calls for one authority
-// must each land its own CRL at its own number -- the register advances by
-// exactly one per successful call, however many calls overlap. Before the
-// fix the persist step was a blind full-row save of a read-modify-write
-// cycle, so racing calls that read the same CRLNumber both wrote the same
-// nextNumber: the loser's document silently overwrote the winner's, the
-// register advanced once where N calls had run, and a loser whose
-// revocation snapshot was older than the winner's dropped that revocation
-// from the persisted CRL until a later tick. The fix arbitrates the write
-// on the crl_number register (repository.go's UpdateCRLIfCurrent), so
-// exactly one racing call's conditional UPDATE lands per number and every
-// loser retries at the fresh number.
+// TestCAService_GenerateCRL_ConcurrentCalls_EveryCallLandsItsOwnNumber
+// proves concurrent GenerateCRL calls for one authority each land their own
+// CRL at their own number -- the register advances by exactly one per
+// successful call, however many calls overlap. The persist step is a
+// guarded conditional UPDATE on the crl_number register (repository.go's
+// UpdateCRLIfCurrent), so exactly one racing call's write lands per number
+// and every loser retries at the fresh number, its revocation snapshot
+// folded into the retry's document rather than dropped -- a blind full-row
+// save would instead let a stale snapshot overwrite the winner's document
+// and register.
 //
 // The barrier shape and trial repetition mirror
 // TestCAService_RevokeCertificate_ConcurrentDoubleRevoke_ExactlyOneWinner's
@@ -216,7 +213,7 @@ func TestCAService_GenerateCRL_AuthorityNotFound(t *testing.T) {
 }
 
 // TestCAService_GenerateCRL_WrapsSignerFailureAsErrSignerUnavailable proves
-// this round's real first trigger of ErrSignerUnavailable: a Signer.Sign
+// one of ErrSignerUnavailable's triggers: a CRL-signing Signer.Sign
 // failure that is not itself a coded *apperr.Error is folded into it.
 func TestCAService_GenerateCRL_WrapsSignerFailureAsErrSignerUnavailable(t *testing.T) {
 	db := newTestDB(t)

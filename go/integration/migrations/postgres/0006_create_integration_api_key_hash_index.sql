@@ -1,13 +1,10 @@
 -- integration_api_key_hash_index holds the narrow, deliberately
 -- non-tenant-scoped hash -> tenant_id mapping go/integration/model.go's
--- apiKeyHashIndex documents in full -- this round's mechanism that resolves
--- a presented API key's owning tenant before any tenant is known at all, so
+-- apiKeyHashIndex documents in full: the mechanism that resolves a
+-- presented API key's owning tenant before any tenant is known at all, so
 -- a genuinely inbound, API-key-authenticated request (holding no separate
 -- tenant claim) can still reach the ordinary tenant-scoped
--- Service.Authenticate -> APIKeyRepository.byHash path. This is the exact
--- gap keygen.go's own hashAPIKeyToken doc comment named ("go/integration
--- ships no Authenticate/Verify method yet ... there is no lookup path today
--- that could ever feed this function attacker-influenced input").
+-- Service.Authenticate -> APIKeyRepository.byHash path.
 --
 -- This is platform data, deliberately never dbkit.TenantScoped -- the
 -- identical treatment go/sharing's sharing_token_index, go/authn's users
@@ -39,14 +36,13 @@
 -- ErrAuthenticationFailed).
 --
 -- 0001_create_integration_api_keys.sql's own comment on
--- uq_integration_api_keys_tenant_hash records round 1's original
--- assumption that a future authentication lookup would already know its
--- tenant. This round's real design need did not bear that out -- see
--- model.go's apiKeyHashIndex doc comment for the full argument -- so this
--- table is added instead of relying on that index; 0001's own comment is
--- left unedited as the historical record, and
--- uq_integration_api_keys_tenant_hash / APIKey.Hash's stored format are
--- both untouched by this migration.
+-- uq_integration_api_keys_tenant_hash records the assumption that an
+-- authentication lookup would already know its tenant. The real design
+-- need did not bear that out -- see model.go's apiKeyHashIndex doc
+-- comment for the full argument -- so this table exists instead of relying
+-- on that index; 0001's own comment is left unedited as the historical
+-- record, and uq_integration_api_keys_tenant_hash / APIKey.Hash's stored
+-- format are both untouched by this migration.
 --
 -- This is the PostgreSQL copy; see the sqlite/ sibling for the identical
 -- schema on that dialect.

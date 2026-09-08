@@ -32,10 +32,10 @@
 // bundles.
 //
 // The seed messages are not pkgcore's own user-facing content: pkgcore
-// renders no messages in M0. A real message pkgcore ever needs to render
-// belongs in the bundle of the module that renders it, not here -- joining
-// this directory is not enough, since nothing reads it; the seed entries
-// can be dropped when they stop earning their keep as fixtures.
+// renders no messages of its own. A real message pkgcore ever needs to
+// render belongs in the bundle of the module that renders it, not here --
+// joining this directory is not enough, since nothing reads it; the seed
+// entries exist only for as long as they earn their keep as fixtures.
 //
 // # The file contract
 //

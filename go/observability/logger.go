@@ -11,10 +11,10 @@ import (
 
 // TraceIDKey, SpanIDKey and TenantIDKey are the structured log field keys
 // FromContext attaches, and the span attribute key AnnotateTenant attaches.
-// They are shared, stable, snake_case names per root CLAUDE.md's logging
-// rule (field names are snake_case and consistent across the whole stack:
-// tenant_id, user_id, job_id, trace_id, ... one place spelling it userId
-// and another uid makes logs unqueryable), exported so other modules that
+// They are shared, stable, snake_case names: field names are snake_case
+// and consistent across the whole stack (tenant_id, user_id, job_id,
+// trace_id, ... -- one place spelling it userId and another uid makes logs
+// unqueryable), exported so other modules that
 // need to name the same field -- in a log call of their own, or a query
 // against Loki -- spell it identically rather than inventing their own
 // casing.
@@ -55,12 +55,11 @@ type loggerCtxKey struct{}
 // WithLogger there would only defeat that and is not what this function
 // is for. Any other genuinely context-less special case may attach a
 // hand-built logger here too (tests are the everyday one): the shared
-// rules -- root CLAUDE.md's take-the-logger-from-the-context rule and
-// backend-coding-standards.md §11's never-a-fresh-logger-inside-a-
-// request-path rule -- exclude exactly the sites where a context exists,
-// and the startup confinement of hand-built loggers is this module's own
-// rule (see FromContext's doc comment and this module's AGENTS.md), not
-// a prohibition on every non-startup site.
+// rules -- the logger comes from the context, and a fresh logger is never
+// built inside a request path -- exclude exactly the sites where a context
+// exists, and the startup confinement of hand-built loggers is this
+// module's own rule (see FromContext's doc comment), not a prohibition on
+// every non-startup site.
 func WithLogger(ctx context.Context, logger *slog.Logger) context.Context {
 	return context.WithValue(ctx, loggerCtxKey{}, logger)
 }
@@ -91,9 +90,9 @@ func baseLogger(ctx context.Context) *slog.Logger {
 //     rather than the call failing.
 //
 // This is the ONLY sanctioned way to obtain a logger inside request-scoped
-// or job-scoped code (root CLAUDE.md's rule that the logger comes from the
-// context; backend-coding-standards.md §11's never-a-fresh-logger-inside-a-
-// request-path rule): constructing a fresh *slog.Logger deep inside a
+// or job-scoped code (the logger comes from the context; a fresh logger is
+// never built inside a request path): constructing a fresh *slog.Logger
+// deep inside a
 // request path loses this correlation, and a later log line can no longer
 // be traced back to the request, trace or tenant it belongs to. Both conditions above are independently optional,
 // which is what makes this safe to call from a background job with no
@@ -126,9 +125,8 @@ func baseLogger(ctx context.Context) *slog.Logger {
 //     by this module's own rules to the genuinely context-less sites a
 //     hand-built logger is legitimate at: process startup above all, plus
 //     any other special case that has no context to derive a logger from
-//     (see WithLogger's doc comment). Root CLAUDE.md and
-//     backend-coding-standards.md are not the source of that confinement;
-//     they only require the context logger where a context exists.
+//     (see WithLogger's doc comment). The context logger is only required
+//     where a context exists.
 func FromContext(ctx context.Context) *slog.Logger {
 	logger := baseLogger(ctx)
 

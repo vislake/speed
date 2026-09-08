@@ -1,7 +1,7 @@
 //go:build integration
 
-// The soft-delete leg of go/rbac's PostgreSQL integration tier: this
-// round's own proof that RoleBinding's mark-delete/restore mechanism and
+// The soft-delete leg of go/rbac's PostgreSQL integration tier: the
+// proof that RoleBinding's mark-delete/restore mechanism and
 // its partial unique index (migrations/{sqlite,postgres}/
 // 0002_add_soft_delete.sql) behave identically on the engine whose
 // partial-index syntax and collation genuinely differ from SQLite's -- the
@@ -9,13 +9,6 @@
 // TestService_RevokeRole_ThenAssignRole_SameScope_Succeeds and
 // TestService_RestoreRole_UndoesTheRevokeAndAnnouncesIt) cannot rule out a
 // PostgreSQL-specific partial-index mistake shipping unnoticed.
-//
-// This mirrors go/org's own
-// integration_test/postgres_softdelete_test.go, added as a SEPARATE,
-// proactive file in this round -- the org round added its equivalent leg
-// after the fact, once its first review pass flagged the gap; this module's
-// round adds it from the start instead. See go/rbac/AGENTS.md's "Soft
-// deletion" section for the round's full design record.
 package rbac_test
 
 import (
@@ -28,7 +21,7 @@ import (
 
 // TestPostgres_RevokeRole_ThenAssignRole_SameScope_Succeeds re-runs
 // assign_test.go's TestService_RevokeRole_ThenAssignRole_SameScope_Succeeds
-// against a real PostgreSQL server. Against the pre-round FULL unique index
+// against a real PostgreSQL server. Against a FULL unique index
 // this AssignRole would fail with rbac.duplicate_role's binding-side
 // twin -- a gorm.ErrDuplicatedKey the revoked row's occupied tuple would
 // still be holding -- which is exactly the real functional regression the
@@ -149,7 +142,7 @@ func TestPostgres_RestoreRole_UndoesTheRevoke(t *testing.T) {
 // assign_test.go's TestService_RestoreRole_NothingToRestore_IsReported
 // against a real PostgreSQL server, so the "nothing soft-deleted matches
 // this tuple" path is proven on the dialect whose partial index actually
-// enforces the narrowed uniqueness this round adds.
+// enforces the narrowed uniqueness.
 func TestPostgres_RestoreRole_NothingToRestore_IsReported(t *testing.T) {
 	ctx := context.Background()
 	db := openRBACPostgres(t, ctx, startPostgresContainer(t, ctx))
@@ -171,7 +164,7 @@ func TestPostgres_RestoreRole_NothingToRestore_IsReported(t *testing.T) {
 }
 
 // TestPostgres_RevokeOriginMarker_ScopesTheOrgRestorePaths re-proves the
-// revoke-origin marker round (migrations/{sqlite,postgres}/
+// revoke-origin marker (migrations/{sqlite,postgres}/
 // 0003_add_revoke_origin.sql) against a real PostgreSQL server: the 0003
 // ALTER applies, the origin-aware mark-deletes and the claim step write
 // their values, and the org restore-side scoping -- a deliberate

@@ -10,9 +10,9 @@
 // postgres_leg_test.go (which also carries the test fixtures the two legs
 // share) and redis_leg_test.go. The tier is physically separate from
 // go/notification's unit tests (all of which live in package notification
-// itself, one file per source file, per the backend coding standard's
-// testing layout rule) and carries the "integration" build tag: a plain
-// "go test ./..." never compiles or runs anything in this directory; the
+// itself, one file per source file) and carries the "integration" build
+// tag: a plain "go test ./..." never compiles or runs anything in this
+// directory; the
 // tier is invoked explicitly with "go test -tags=integration
 // ./integration_test/..." from the module directory. This mirrors the
 // identical convention of go/dbkit, go/jobs, go/pkgcore, go/config,
@@ -81,10 +81,9 @@ import (
 
 // The fixture keys mirror the unit tier's byte for byte (contact_test.go's
 // constants): a host's address-encryption key and its two blind-index keys
-// must never share bytes (AGENTS.md's "Separate index keys from the cipher
-// key" adjudication, spelled out in contact.go's doc comment), and the
-// constants stand apart so no fixture can accidentally conflate them. This
-// binary is a separate process from the
+// must never share bytes (spelled out in contact.go's doc comment), and
+// the constants stand apart so no fixture can accidentally conflate them.
+// This binary is a separate process from the
 // unit tier's, so the values being identical to the unit tier's matters
 // only for the reader's familiarity.
 const (
@@ -593,19 +592,17 @@ func TestPostgres_ConsentFlow_SingleWinnerVerifyAndDeliverabilityGate(t *testing
 // TestPostgres_SendRecordSaveGuarded_GuardStatementRunsAgainstARealServer
 // executes the delivery log's guarded rewrite (notification's SaveGuarded)
 // against real PostgreSQL -- the second-dialect execution the unit tier
-// cannot provide, since it runs the statement only on SQLite, and the one
-// this module's PG leg had simply never driven before: settle's guarded
-// write is the statement whose dialect shape only the second dialect
-// exercises. Its value-vs-value comparison of this write's status against
-// the succeeded sentinel used to bind BOTH sides as parameters, an
-// expression whose type PostgreSQL resolves only through its implicit
-// text-typing of unknown parameters (42P18 the day either side stops being
-// plain text) -- the sentinel is bound as a literal now. This test pins
-// that every guarded outcome the statement promises -- the refused
-// downgrade, the allowed rewrite of a non-succeeded row, and the allowed
-// re-settle of a succeeded one -- lands through the real server's own
-// semantics, with the guard's refusal a (false, nil) answer rather than an
-// error.
+// cannot provide, since it runs the statement only on SQLite: settle's
+// guarded write is the statement whose dialect shape only the second
+// dialect exercises. Its value-vs-value comparison of this write's status
+// against the succeeded sentinel binds the sentinel as a SQL literal -- an
+// expression with both sides as parameters resolves only through
+// PostgreSQL's implicit text-typing of unknown parameters (42P18 the day
+// either side stops being plain text). This test pins that every guarded
+// outcome the statement promises -- the refused downgrade, the allowed
+// rewrite of a non-succeeded row, and the allowed re-settle of a succeeded
+// one -- lands through the real server's own semantics, with the guard's
+// refusal a (false, nil) answer rather than an error.
 func TestPostgres_SendRecordSaveGuarded_GuardStatementRunsAgainstARealServer(t *testing.T) {
 	ctx := context.Background()
 	db := openNotificationPostgres(t, ctx, startPostgresContainer(t, ctx))

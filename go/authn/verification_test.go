@@ -81,7 +81,7 @@ func extractSentCode(t *testing.T, buf *bytes.Buffer) string {
 // TestRequestSMSCode_UnknownPhone_SendsNothingButSucceeds proves the
 // enumeration defence at the RESPONSE-BODY layer: a request for a phone
 // with no account behind it succeeds with no error and delivers no
-// message. This is only half the P2-4 defence -- see
+// message. This is only half the defence -- see
 // TestRequestSMSCode_TimingParity_KnownAndUnknownPhoneAnswerInComparableTime
 // below for the WALL-CLOCK half: an identical response body sent back
 // measurably faster is still a working enumeration oracle.
@@ -100,13 +100,13 @@ func TestRequestSMSCode_UnknownPhone_SendsNothingButSucceeds(t *testing.T) {
 }
 
 // TestRequestSMSCode_TimingParity_KnownAndUnknownPhoneAnswerInComparableTime
-// is the regression for P2-4's other half: the WALL-CLOCK time to answer
-// must not tell a known number apart from an unknown one, even though the
-// response BODY already does not (proven separately just above). Before
-// the fix, an unknown number returned in microseconds (no DB write, no SMS
-// send) while a known number paid for both -- a gap an attacker rotating
-// IPs (to dodge limitSMSSendByIP) could probe directly. After the fix,
-// RequestSMSCode pads both branches up to a shared smsCodeRequestLatencyFloor.
+// pins the WALL-CLOCK half of the defence: the time to answer must not
+// tell a known number apart from an unknown one, even though the response
+// BODY already does not (proven separately just above). An unknown number
+// would otherwise return in microseconds (no DB write, no SMS send) while
+// a known number pays for both -- a gap an attacker rotating IPs (to dodge
+// limitSMSSendByIP) could probe directly. RequestSMSCode pads both
+// branches up to a shared smsCodeRequestLatencyFloor.
 //
 // Deliberately NOT t.Parallel(): it temporarily overrides the
 // package-level smsCodeRequestLatencyFloor var, which is safe only while
@@ -140,10 +140,10 @@ func TestRequestSMSCode_TimingParity_KnownAndUnknownPhoneAnswerInComparableTime(
 	// A generous 3x tolerance absorbs scheduler/GC jitter on a loaded CI
 	// runner (both durations are dominated by the SAME floor sleep, so
 	// genuine timing noise between them is only ever a few milliseconds)
-	// while still catching the pre-fix shape: an unfixed unknown-phone
-	// path returns in low microseconds against a known-phone path's
-	// multiple milliseconds (a real DB write plus a console SMS send) --
-	// many orders of magnitude apart, not a mere 3x.
+	// while still catching the shape without the floor: an unknown-phone
+	// path without it returns in low microseconds against a known-phone
+	// path's multiple milliseconds (a real DB write plus a console SMS
+	// send) -- many orders of magnitude apart, not a mere 3x.
 	const toleranceFactor = 3
 	if ratio := durationRatio(knownDuration, unknownDuration); ratio > toleranceFactor {
 		t.Errorf("timing ratio between known (%v) and unknown (%v) phone requests = %.2f, want <= %d (the timing side channel is not closed)",
@@ -389,13 +389,13 @@ func TestLoginWithSMSCode_LocksAfterMaxAttempts(t *testing.T) {
 	}
 }
 
-// TestLoginWithSMSCode_AttackerWrongGuesses_DoNotBlockVictimsCorrectCode is
-// the regression for P2-3: an attacker who knows the victim's phone number
-// but not the code used to be able to hold the shared per-target rate-limit
-// budget hostage, permanently denying the real holder's own correct
-// attempt for the rest of the window. See ratelimit.go's
-// CheckSMSVerifyWrongGuess and LoginWithSMSCode's own doc comment for the
-// fix.
+// TestLoginWithSMSCode_AttackerWrongGuesses_DoNotBlockVictimsCorrectCode
+// pins the wrong-guess-only budget shape: an attacker who knows the
+// victim's phone number but not the code must not be able to hold the
+// shared per-target rate-limit budget hostage, permanently denying the
+// real holder's own correct attempt for the rest of the window. The budget
+// is consumed only after a guess has been determined wrong (ratelimit.go's
+// CheckSMSVerifyWrongGuess; LoginWithSMSCode's own doc comment).
 //
 // smsCodeMaxAttempts is deliberately raised well above the rate limiter's
 // own Rate so the attacker's wrong guesses exhaust the RATE LIMITER without
@@ -445,12 +445,12 @@ func TestLoginWithSMSCode_AttackerWrongGuesses_DoNotBlockVictimsCorrectCode(t *t
 	}
 }
 
-// TestLoginWithSMSCode_SustainedWrongGuessing_StillLocksViaMaxAttempts is
-// the guard regression for P2-3: proving the fix above did not weaken
-// brute-force resistance against the code itself. A sustained attacker
-// guessing wrong from ONE source still gets the code locked by
+// TestLoginWithSMSCode_SustainedWrongGuessing_StillLocksViaMaxAttempts
+// guards the other side of the wrong-guess budget: the budget shape must
+// not weaken brute-force resistance against the code itself. A sustained
+// attacker guessing wrong from ONE source still gets the code locked by
 // smsCodeMaxAttempts (verifyPhoneLoginCode's own, independent counter),
-// which the rate-limiter change never touched.
+// which the rate limiter never touches.
 func TestLoginWithSMSCode_SustainedWrongGuessing_StillLocksViaMaxAttempts(t *testing.T) {
 	t.Parallel()
 
@@ -545,14 +545,14 @@ func TestMarkPhoneLoginAttempt_RetriesOnLostRace(t *testing.T) {
 }
 
 // TestMarkPhoneLoginAttempt_LosingAttemptOnOldCode_NeverCountsAgainstTheNewCode
-// is the P3-15 regression: markPhoneLoginAttempt's retry after losing
-// MarkAttempt's compare-and-swap used to re-read "the latest active code for
-// the target" instead of re-reading THE RECORD (by id) whose compare-and-swap
-// just lost. When the user re-requested a code while the losing guess's retry
-// was still running, the retry would pick up the NEW code and count the old
-// guess -- aimed at a code the user had already abandoned -- against the new
-// code's attempt budget, up to pushing the just-issued code to its
-// MaxAttempts before the user ever typed it.
+// pins markPhoneLoginAttempt's retry target: a retry after losing
+// MarkAttempt's compare-and-swap must re-read THE RECORD (by id) whose
+// compare-and-swap just lost, never "the latest active code for the
+// target". If the user re-requests a code while the losing guess's retry is
+// still running, a latest-code re-read would pick up the NEW code and count
+// the old guess -- aimed at a code the user had already abandoned --
+// against the new code's attempt budget, up to pushing the just-issued
+// code to its MaxAttempts before the user ever typed it.
 //
 // Like TestMarkPhoneLoginAttempt_RetriesOnLostRace, the race is reproduced
 // deterministically rather than with real goroutines: code A's row is
@@ -630,7 +630,7 @@ func TestMarkPhoneLoginAttempt_LosingAttemptOnOldCode_NeverCountsAgainstTheNewCo
 }
 
 // TestVerificationCodeModel_IsNotTenantScoped is the mandatory isolation
-// assertion for this round's identity-domain table: a code is issued to a
+// assertion for the module's verification-code table: a code is issued to a
 // phone number, not to a tenant, so it must stay visible whatever tenant
 // happens to be in the calling context.
 func TestVerificationCodeModel_IsNotTenantScoped(t *testing.T) {
@@ -651,12 +651,12 @@ func TestVerificationCodeModel_IsNotTenantScoped(t *testing.T) {
 	)
 }
 
-// TestRequestSMSCode_GatewayFailure_AnswersLikeAnUnknownNumber is the P2-8
-// regression: a delivery failure on a REGISTERED number must not answer
-// differently from a request for an unregistered number. Before the fix the
-// registered branch returned ErrSMSDeliveryFailed when the SMS gateway
-// failed while the unknown-number branch returned nil -- a status split
-// (500 vs 202) that turned every gateway outage into a registration oracle,
+// TestRequestSMSCode_GatewayFailure_AnswersLikeAnUnknownNumber pins the
+// delivery-failure answer: a delivery failure on a REGISTERED number must
+// not answer differently from a request for an unregistered number. If the
+// registered branch answered ErrSMSDeliveryFailed when the SMS gateway
+// failed while the unknown-number branch returned nil, the status split
+// (500 vs 202) would turn every gateway outage into a registration oracle,
 // undoing the response-body defence
 // TestRequestSMSCode_UnknownPhone_SendsNothingButSucceeds proves. The real
 // error stays in the log line the transport branch writes; the request

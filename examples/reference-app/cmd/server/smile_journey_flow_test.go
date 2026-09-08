@@ -4,7 +4,7 @@
 // jobs.StandaloneQueue, the cases surface (cmd/server/cases.go and
 // cases_photos.go, whose upload/create/content operations block A
 // shipped) and the smile-simulation surface (cmd/server/smilesim.go,
-// whose simulate/job-status/enumeration/content operations this round's
+// whose simulate/job-status/enumeration/content operations the
 // comparison view calls) -- against fakeOpenAIImageServer's canned,
 // replayed provider answers, the same deterministic stand-in the
 // smilesim flow suite uses. No live provider, no live API key: the
@@ -18,7 +18,7 @@
 // beside the original -- which the wire test can only prove by reading
 // the result's bytes back through the surface the comparison view
 // renders (the fragment's simulation-content operation, added by this
-// round), distinct from the uploaded photo and served with the media
+// journey), distinct from the uploaded photo and served with the media
 // type storage's probe assigned.
 package main
 

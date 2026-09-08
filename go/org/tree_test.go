@@ -102,21 +102,20 @@ func TestTreeService_CreateRoot_Twice_ReturnsRootAlreadyExists(t *testing.T) {
 }
 
 // TestTreeService_CreateRoot_ConcurrentRaces_ExactlyOneRootSurvives is the
-// P1-5 regression proof for the "two differently-named roots" half of the
-// finding: CreateRoot's single-root check used to be a Go-level pre-check
-// alone (findRoot, then the insert) with no database constraint behind it,
-// so two concurrent CreateRoot calls for one tenant -- both with DIFFERENT
-// names, which the sibling-name unique index does not catch -- could each
-// read "no root yet" and both insert, landing a tenant with two roots and
-// silently breaking every invariant that reasons from "every node descends
-// from the single root" (Move's cycle check above all). The fix makes the
-// invariant database-arbitrated: a partial unique index on root-ness
-// (migrations/{sqlite,postgres}/0007_single_root.sql) admits at most one
-// row per tenant with the empty-string parent sentinel, and CreateRoot
-// translates a lost race against it into the identical ErrRootAlreadyExists
-// its own pre-check reports.
+// regression proof for the "two differently-named roots" half of the
+// single-root rule: CreateRoot's single-root check is a Go-level pre-check
+// (findRoot, then the insert) backed by a partial unique index on root-ness
+// (migrations/{sqlite,postgres}/0007_single_root.sql) that admits at most
+// one row per tenant with the empty-string parent sentinel. Without the
+// index, two concurrent CreateRoot calls for one tenant -- both with
+// DIFFERENT names, which the sibling-name unique index does not catch --
+// could each read "no root yet" and both insert, landing a tenant with two
+// roots and silently breaking every invariant that reasons from "every
+// node descends from the single root" (Move's cycle check above all).
+// CreateRoot translates a lost race against the index into the identical
+// ErrRootAlreadyExists its own pre-check reports.
 //
-// # Deterministic, exactly like the P1-2/P1-3 delete tests above
+// # Deterministic
 //
 // A second connection holds an open write transaction on the org_nodes file
 // (a touch of another tenant's root row -- on SQLite any writer holds the
@@ -125,10 +124,8 @@ func TestTreeService_CreateRoot_Twice_ReturnsRootAlreadyExists(t *testing.T) {
 // before either has written; each call's insert then parks behind the
 // holder. The holder is released only after a fixed margin, so both inserts
 // execute strictly after both reads, against the committed state -- the
-// exact interleaving the pre-fix pre-check could not arbitrate. Pre-fix both
-// inserts land and both calls succeed (two roots -- the assertions fail);
-// post-fix the partial unique index admits the first insert and refuses the
-// second with the coded org.root_already_exists.
+// exact interleaving only the index can arbitrate. The index admits the
+// first insert and refuses the second with the coded org.root_already_exists.
 func TestTreeService_CreateRoot_ConcurrentRaces_ExactlyOneRootSurvives(t *testing.T) {
 	ctxA := tenantCtx("tenant-a")
 	ctxB := tenantCtx("tenant-b")
@@ -238,19 +235,19 @@ func TestTreeService_CreateRoot_ConcurrentRaces_ExactlyOneRootSurvives(t *testin
 }
 
 // TestTreeService_CreateRoot_SecondRootAndRootUnderRoot_AreRefused is the
-// P1-5 regression proof for the "root under another root" half: with two
-// roots on one tenant -- a state only a bypass of CreateRoot can construct,
-// which is exactly how this test plants it, through the raw repository --
-// Move of one root under the other used to SUCCEED (the second root is not
-// a descendant of the first, so the cycle check never fires, and the
+// regression proof for the "root under another root" half: with two roots
+// on one tenant -- a state only a bypass of CreateRoot can construct, which
+// is exactly how this test plants it, through the raw repository -- Move of
+// one root under the other must not SUCCEED (the second root is not a
+// descendant of the first, so the cycle check never fires, and the
 // sibling-name pre-check looks at the target's children, which are none).
-// The fix refuses the state at the schema: the same partial unique index on
-// root-ness makes the direct second-root insert itself fail with a
-// duplicated key, so no code path -- TreeService or a host's direct
-// repository write -- can ever put a second root in a position to be moved
-// under. The assertion holds on both shapes: either the database refused
-// the second root outright (post-fix), or the tree layer had to refuse the
-// root-under-root move (pre-fix, where the plant succeeded).
+// The schema refuses the state: the partial unique index on root-ness makes
+// the direct second-root insert itself fail with a duplicated key, so no
+// code path -- TreeService or a host's direct repository write -- can ever
+// put a second root in a position to be moved under. The assertion holds on
+// both shapes: either the database refused the second root outright, or the
+// tree layer had to refuse the root-under-root move because the plant
+// succeeded.
 func TestTreeService_CreateRoot_SecondRootAndRootUnderRoot_AreRefused(t *testing.T) {
 	tree := newTestTree(t)
 	ctx := tenantCtx("tenant-a")
@@ -268,15 +265,15 @@ func TestTreeService_CreateRoot_SecondRootAndRootUnderRoot_AreRefused(t *testing
 
 	switch {
 	case plantErr == nil:
-		// The schema admitted a second root (pre-fix shape): the tree layer
-		// must at least refuse to move the real root under it.
+		// The schema admitted a second root: the tree layer must at least
+		// refuse to move the real root under it.
 		if _, err := tree.Move(ctx, root.ID, planted.ID); err == nil {
 			t.Fatal("moving the tenant root under a second root was not refused -- root-under-root is a corrupt tree, and the move must answer a coded error")
 		}
 	case errors.Is(plantErr, gorm.ErrDuplicatedKey):
-		// The database itself arbitrates the single-root invariant (post-fix
-		// shape): the second root never existed, so root-under-root is
-		// structurally impossible.
+		// The database itself arbitrates the single-root invariant: the
+		// second root never existed, so root-under-root is structurally
+		// impossible.
 	default:
 		t.Fatalf("planting a second root row = %v, want success (pre-fix) or a duplicated-key refusal (post-fix)", plantErr)
 	}
@@ -910,15 +907,15 @@ func TestTreeService_Delete_WithCascade_RemovesTheWholeSubtree(t *testing.T) {
 }
 
 // TestTreeService_Delete_WithCascade_MarksEveryLevelSoftDeletedAndRestorable
-// is the round's own proof for the cascade rewrite from a physical DELETE to
-// a mark-delete: a 3-level subtree (north -> store -> room) cascade-deleted
+// is the proof for the cascade's mark-delete semantics: a 3-level subtree
+// (north -> store -> room) cascade-deleted
 // in one call leaves every one of the three levels invisible to Get (proven
 // above by TestTreeService_Delete_WithCascade_RemovesTheWholeSubtree already)
 // AND individually restorable, with its original data -- parent, path,
 // depth, name -- intact. "Restorable" is the property a real physical DELETE
-// could never have: this test would fail against the pre-round
-// implementation with dbkit.ErrRecordNotFound, since there would be no row
-// left for Restore to find.
+// could never have: a physical DELETE leaves no row
+// for Restore to find, and the pre-mark-delete implementation answered
+// dbkit.ErrRecordNotFound on every restore.
 func TestTreeService_Delete_WithCascade_MarksEveryLevelSoftDeletedAndRestorable(t *testing.T) {
 	tree := newTestTree(t)
 	ctx := tenantCtx("tenant-a")
@@ -1374,14 +1371,13 @@ func TestTreeService_MaxDepth_IsPerServiceNotGlobal(t *testing.T) {
 }
 
 // TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds is the
-// round's own proof that uq_org_nodes_sibling_name's replacement by its
-// WHERE deleted_at IS NULL partial-index equivalent
+// proof that uq_org_nodes_sibling_name's WHERE deleted_at IS NULL
+// partial-index equivalent
 // (migrations/{sqlite,postgres}/0004_add_soft_delete.sql) actually frees a
-// mark-deleted node's (parent_id, name) slot for reuse. Against the
-// pre-round full unique index this Create would fail with
+// mark-deleted node's (parent_id, name) slot for reuse. Against a
+// full unique index this Create would fail with
 // ErrDuplicateSiblingName -- a real functional regression the migration
-// exists to avoid, per its own header comment and
-// docs/internal/04-data-and-tenancy.md's delete-semantics section.
+// exists to avoid.
 func TestTreeService_Delete_ThenCreateChild_SameSiblingName_Succeeds(t *testing.T) {
 	tree := newTestTree(t)
 	ctx := tenantCtx("tenant-a")
@@ -1441,8 +1437,8 @@ func TestTreeService_Restore_LiveNode_ReturnsNodeNotFound(t *testing.T) {
 	}
 }
 
-// TestTreeService_Restore_IsNotCascading pins the round's design decision
-// (go/org/AGENTS.md's "Soft deletion" section): restoring an ancestor never
+// TestTreeService_Restore_IsNotCascading pins the per-node design
+// decision: restoring an ancestor never
 // resurrects its cascade-deleted descendants. The caller restores each node
 // explicitly by id.
 func TestTreeService_Restore_IsNotCascading(t *testing.T) {
@@ -1476,14 +1472,15 @@ func TestTreeService_Restore_IsNotCascading(t *testing.T) {
 }
 
 // TestTreeService_Restore_DeadParent_RefusesRestore reproduces the tree
-// corruption a bare, bottom-up Restore used to produce: cascade-delete
+// corruption a bare, bottom-up Restore would produce: cascade-delete
 // root -> north -> store, then restore ONLY store, leaving north still
-// mark-deleted. Before the ErrRestoreParentNotLive guard this call
-// succeeded and left store reachable from Subtree(root) (the prefix scan
-// does not care that north is invisible) yet unreachable from Get(north) or
-// any Children()-based walk, and let a caller CreateChild beneath it --
+// mark-deleted. Without the ErrRestoreParentNotLive guard such a call
+// would succeed and leave store reachable from Subtree(root) (the prefix
+// scan does not care that north is invisible) yet unreachable from
+// Get(north) or any Children()-based walk, and would let a caller
+// CreateChild beneath it --
 // exactly the "path disagrees with the parent chain" state path.go calls
-// corrupt, not supported. Restore must now refuse instead.
+// corrupt, not supported. Restore refuses instead.
 func TestTreeService_Restore_DeadParent_RefusesRestore(t *testing.T) {
 	tree := newTestTree(t)
 	ctx := tenantCtx("tenant-a")
@@ -1518,9 +1515,9 @@ func TestTreeService_Restore_DeadParent_RefusesRestore(t *testing.T) {
 }
 
 // TestTreeService_Restore_AfterAncestorMoved_ReexpressesUnderTheCurrentParent
-// is the P1-org-restore-path regression proof: the four-step sequence --
+// is the restore-path regression proof: the four-step sequence --
 // cascade-delete a subtree, restore its ancestor, move that ancestor, restore
-// a descendant -- used to leave the descendant LIVE with a stale materialized
+// a descendant -- must not leave the descendant LIVE with a stale materialized
 // Path naming the ancestor's OLD location. Move's rewrite carries
 // WHERE deleted_at IS NULL on every row it touches, so a mark-deleted
 // descendant is invisible to it and never has its path rebased when its live
@@ -1531,7 +1528,7 @@ func TestTreeService_Restore_DeadParent_RefusesRestore(t *testing.T) {
 // consequences in BOTH directions: the old branch's prefix scan still
 // surfaces the row (a scope anchored under the old location covers it), while
 // the real parent's subtree no longer does (a scope anchored at the restored
-// ancestor misses its own live child). Restore must therefore re-express the
+// ancestor misses its own live child). Restore therefore re-expresses the
 // row it brings back under its live parent's CURRENT path -- the parent is
 // locked and read inside the same transaction as the write -- never resurrect
 // the stored, stale one.
@@ -1654,10 +1651,10 @@ func TestTreeService_Restore_WouldLandBeyondMaxDepth_Refused(t *testing.T) {
 }
 
 // TestTreeService_Restore_RestoreMoveDeleteRace_RestoresUnderCurrentParent
-// is the org-restore-race regression proof: a competing sequence --
+// is the restore-race regression proof: a competing sequence --
 // Restore(child), Move(child, newParent), Delete(child) again -- racing a
 // second Restore(child) that read the row BEFORE that sequence committed
-// used to land child LIVE with ParentID = newParent but a materialized Path
+// must not land child LIVE with ParentID = newParent but a materialized Path
 // naming the OLD parent. restoreNodeTx wrote Path/Depth conditioned only on
 // id and deleted_at IS NOT NULL, never touching or checking ParentID, so its
 // write matched the re-deleted row and resurrected it under a path its own
@@ -1784,8 +1781,9 @@ func TestTreeService_Restore_RestoreMoveDeleteRace_RestoresUnderCurrentParent(t 
 // currently-live node, and every live node's Path is exactly its parent's
 // Path with its own id appended -- the two invariants path.go's own doc
 // comment calls "corrupt, not a supported state" when violated, and which
-// D1 (a child landing under a soft-deleted parent) and D2 (a moved subtree
-// whose Path and ParentID chain disagree) each name as their own violation.
+// the two concurrent-write hazards -- a child landing under a soft-deleted
+// parent, and a moved subtree whose Path and ParentID chain disagree --
+// each name as their own violation.
 //
 // It reads every row once, through the ordinary soft-delete auto-scope
 // (never Unscoped), so only currently-live rows are ever checked -- exactly
@@ -1820,7 +1818,7 @@ func assertNoOrphans(t *testing.T, db *gorm.DB, ctx context.Context, label strin
 }
 
 // TestTreeService_ConcurrentCreateChildAndDelete_NeverOrphansAChild is the
-// D1 (org-rbac P1-3) regression proof.
+// concurrent-create-vs-delete regression proof.
 //
 // # Why this is a stress test, not a deterministic interleaving
 //
@@ -1829,15 +1827,14 @@ func assertNoOrphans(t *testing.T, db *gorm.DB, ctx context.Context, label strin
 // lock), not between two statements of the SAME call this test could pause
 // midway through with a hook -- there is no seam in either method's real,
 // shipped code a test could deterministically suspend without adding a
-// test-only instrumentation point to production code, which this round
-// deliberately does not do. This test instead runs many rounds of the two
+// test-only instrumentation point to production code, which this test
+// deliberately avoids. This test instead runs many rounds of the two
 // operations racing for real, over a real file-backed SQLite database, and
-// asserts the invariant (assertNoOrphans) after every single round: on the
-// pre-fix code the two outcomes below could BOTH occur in the same round
-// (CreateChild succeeding while Delete also succeeds), landing a live child
-// under a soft-deleted parent; after the fix, lockLiveNode's shared row lock
-// makes that combination impossible -- at most one of the two operations
-// can ever win a given round.
+// asserts the invariant (assertNoOrphans) after every single round: without
+// lockLiveNode's shared row lock the two outcomes below could BOTH occur in
+// the same round (CreateChild succeeding while Delete also succeeds),
+// landing a live child under a soft-deleted parent; with it, at most one of
+// the two operations can ever win a given round.
 func TestTreeService_ConcurrentCreateChildAndDelete_NeverOrphansAChild(t *testing.T) {
 	const rounds = 200
 	for round := 0; round < rounds; round++ {
@@ -1872,8 +1869,9 @@ func TestTreeService_ConcurrentCreateChildAndDelete_NeverOrphansAChild(t *testin
 	}
 }
 
-// TestTreeService_ConcurrentMoveAndMove_TreeInvariantHolds is the D2
-// (org-rbac P1-4) regression proof: two overlapping Moves -- swapping two
+// TestTreeService_ConcurrentMoveAndMove_TreeInvariantHolds is the
+// concurrent-move-vs-move regression proof: two overlapping Moves --
+// swapping two
 // subtrees' positions under each other's own current parent -- racing for
 // real over many rounds, each followed by assertNoOrphans. Move's rewrite
 // now runs as one transaction with lockLiveNode locking the moved node and
@@ -1914,7 +1912,7 @@ func TestTreeService_ConcurrentMoveAndMove_TreeInvariantHolds(t *testing.T) {
 	}
 }
 
-// TestTreeService_ConcurrentMoveAndCreateChild_TreeInvariantHolds is D2's
+// TestTreeService_ConcurrentMoveAndCreateChild_TreeInvariantHolds is the
 // second required pairing: a concurrent CreateChild targeting the exact
 // node another goroutine is Move-ing. Both now lock that node's row through
 // the same lockLiveNode primitive (tree.go's CreateChild locks the PARENT
@@ -1952,7 +1950,7 @@ func TestTreeService_ConcurrentMoveAndCreateChild_TreeInvariantHolds(t *testing.
 	}
 }
 
-// TestTreeService_ConcurrentMoveAndDelete_TreeInvariantHolds is D2's third
+// TestTreeService_ConcurrentMoveAndDelete_TreeInvariantHolds is the third
 // required pairing: Move racing a cascade Delete of the node it is moving.
 // Move's lockLiveNode on the moved node and deleteSubtree's own single
 // UPDATE now contend for the identical row, so exactly one of the two wins
@@ -1990,11 +1988,11 @@ func TestTreeService_ConcurrentMoveAndDelete_TreeInvariantHolds(t *testing.T) {
 }
 
 // TestTreeService_ConcurrentRestoreAndCascadeDelete_NeverLandsOnADeadParent
-// is the D5 (org-rbac P3) regression proof: Restore of a node racing a
-// cascade Delete of that same node's live ancestor, over many rounds, each
-// followed by assertNoOrphans -- which catches exactly the corrupt state
-// this finding names, a restored node left LIVE under a parent that ends up
-// soft-deleted.
+// is the restore-vs-cascade-delete regression proof: Restore of a node
+// racing a cascade Delete of that same node's live ancestor, over many
+// rounds, each followed by assertNoOrphans -- which catches exactly the
+// corrupt state this pairing can produce, a restored node left LIVE under a
+// parent that ends up soft-deleted.
 //
 // # Two legitimate outcomes, and the one that would not be
 //
@@ -2021,9 +2019,10 @@ func TestTreeService_ConcurrentMoveAndDelete_TreeInvariantHolds(t *testing.T) {
 //     also reports success; the final state has BOTH rows dead, which is
 //     consistent, not corrupt.
 //
-// The corrupt state D5 exists to rule out -- the child ending up LIVE
-// while its parent ends up dead -- is not reachable under either ordering,
-// which is exactly what assertNoOrphans checks for on every round: it is
+// The corrupt state this test exists to rule out -- the child ending up
+// LIVE while its parent ends up dead -- is not reachable under either
+// ordering, which is exactly what assertNoOrphans checks for on every round:
+// it is
 // the sole assertion here, deliberately, rather than a check on which of
 // the two calls "won".
 func TestTreeService_ConcurrentRestoreAndCascadeDelete_NeverLandsOnADeadParent(t *testing.T) {
@@ -2036,9 +2035,9 @@ func TestTreeService_ConcurrentRestoreAndCascadeDelete_NeverLandsOnADeadParent(t
 		parent := mustCreateChild(t, tree, ctx, root.ID, "parent")
 		child := mustCreateChild(t, tree, ctx, parent.ID, "child")
 
-		// Soft-delete the child alone first (a leaf delete), so the round's
-		// race is specifically "restore the child" vs "cascade-delete its
-		// still-live parent" -- the exact shape the finding describes.
+		// Soft-delete the child alone first (a leaf delete), so the race is
+		// specifically "restore the child" vs "cascade-delete its still-live
+		// parent".
 		if err := tree.Delete(ctx, child.ID, false); err != nil {
 			t.Fatalf("round %d: seed delete(child): %v", round, err)
 		}
@@ -2064,35 +2063,33 @@ func TestTreeService_ConcurrentRestoreAndCascadeDelete_NeverLandsOnADeadParent(t
 }
 
 // TestTreeService_ConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvariantHolds
-// is the peer-review finding that TestTreeService_ConcurrentMoveAndCreateChild_TreeInvariantHolds
-// above never actually covered: that test's CreateChild targets the exact
+// is the interior-descendant pairing the sibling test above never actually
+// covers: that test's CreateChild targets the exact
 // node being Moved (a.ID), a row Move already locks via lockLiveNode -- it
 // never exercises a CreateChild targeting an INTERIOR DESCENDANT of the
 // moved subtree, a row Move's rewrite touches only through its own subtree
 // scan, never through an up-front lockLiveNode call the way the moved node
 // and the new parent are.
 //
-// Before this round's fix, Move's subtree scan was one plain, unlocked Find:
-// a concurrent CreateChild(a-child, ...) could insert its new row -- bound to
+// If Move's subtree scan were one plain, unlocked Find, a concurrent
+// CreateChild(a-child, ...) could insert its new row -- bound to
 // a-child's OLD, pre-move Path -- entirely within the gap between that scan
 // and Move's own later per-row rewrite of a-child, so the new grandchild
-// simply never appeared in the row set Move rewrote and kept a stale Path
-// forever. lockSubtree (repository.go) closes it by locking every row of the
-// subtree, not merely the two endpoints, before trusting the set is
-// complete.
+// would simply never appear in the row set Move rewrote and would keep a
+// stale Path forever. lockSubtree (repository.go) closes it by locking every
+// row of the subtree, not merely the two endpoints, before trusting the set
+// is complete.
 //
 // # Honest limits, exactly like this file's other four concurrent stress
 // tests
 //
 // SQLite's coarse, whole-file locking does not give this test the same
-// reproduction odds it gave the review's own adversarial harness against a
-// real PostgreSQL server (round 24 of 60 there); this SQLite form is kept
-// for symmetry with this file's other TestTreeService_Concurrent* tests and
-// as a light smoke test of the fix, but
+// reproduction odds a real PostgreSQL server's READ COMMITTED window does;
+// this SQLite form is kept for symmetry with this file's other
+// TestTreeService_Concurrent* tests and as a light smoke test, while
 // integration_test/postgres_concurrency_test.go's
 // TestConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvariantHolds_Postgres
-// is the tier that actually forces the real READ COMMITTED window this
-// finding named and reliably reproduces the pre-fix corruption.
+// is the tier that actually forces the real window this test names.
 func TestTreeService_ConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvariantHolds(t *testing.T) {
 	const rounds = 150
 	for round := 0; round < rounds; round++ {
@@ -2124,18 +2121,19 @@ func TestTreeService_ConcurrentMoveAndCreateChild_InteriorDescendant_TreeInvaria
 	}
 }
 
-// TestTreeService_ConcurrentDeleteAndMemberAdd_NeverDanglesAMembership is the
-// peer-review finding that TreeService.Delete's members guard used to run as
-// its own separate, unlocked read entirely BEFORE deleteLeaf/deleteSubtree
-// ever opened their own transaction: a concurrent MemberService.Add binding
-// a fresh membership to the node about to be deleted could land in the gap
-// between that read and the cascade's own commit, leaving an active
-// membership whose NodeID names a row that is no longer visible.
+// TestTreeService_ConcurrentDeleteAndMemberAdd_NeverDanglesAMembership is
+// the delete-vs-member-add regression proof: TreeService.Delete's members
+// guard runs as an in-transaction check inside the delete's own lock. If it
+// ran as its own separate, unlocked read entirely BEFORE
+// deleteLeaf/deleteSubtree ever opened their own transaction, a concurrent
+// MemberService.Add binding a fresh membership to the node about to be
+// deleted could land in the gap between that read and the cascade's own
+// commit, leaving an active membership whose NodeID names a row that is no
+// longer visible.
 //
-// Unlike the interior-descendant Move finding above, this one is a wide-open
-// TOCTOU gap with no locking on either side of the original code, so it
-// reproduces reliably on plain SQLite -- the review's own adversarial
-// reproduction failed at round 1 of 200. The fix makes both sides serialize
+// Unlike the interior-descendant Move case above, this one is a wide-open
+// TOCTOU gap with no locking on either side of the unguarded shape, so it
+// reproduces reliably on plain SQLite. The lock makes both sides serialize
 // on the identical lockLiveNode lock: tree.go's Delete now runs the members
 // check inside the same transaction that locks the node being deleted
 // (memberGuardFor), and membership.go's MemberService.ensure now takes that
@@ -2190,24 +2188,24 @@ func TestTreeService_ConcurrentDeleteAndMemberAdd_NeverDanglesAMembership(t *tes
 	}
 }
 
-// TestTreeService_ConcurrentRenameAndDelete_NeverResurrectsTheNode is the D6
-// (P1-org-1) regression proof: Rename used to be a SEPARATED read (s.Get)
-// followed by a standalone full-field dbkit.Repository[OrgNode].Update -- the
-// one tree write the concurrency-hardening round did not wrap in a
-// lockLiveNode transaction -- so a concurrent soft-delete of the very node
-// being renamed, landing between those two calls, was silently UNDONE. The
-// Update is a full-field Save that writes whatever the caller's in-memory
-// model holds back over the whole row, and the rename's model is a stale
-// pre-delete snapshot: its DeletedAt is nil, so the Save wrote the delete's
-// committed mark (deleted_at/deleted_by) back to NULL, resurrecting a node
-// the caller had just deleted.
+// TestTreeService_ConcurrentRenameAndDelete_NeverResurrectsTheNode is the
+// concurrent-rename-vs-delete regression proof. If Rename's write were a
+// standalone full-field dbkit.Repository[OrgNode].Update following a
+// separate read (s.Get) -- not a lockLiveNode transaction -- a concurrent
+// soft-delete of the very node being renamed, landing between read and
+// write, would be silently UNDONE. The Update is a full-field Save that
+// writes whatever the caller's in-memory model holds back over the whole
+// row, and the rename's model is a stale pre-delete snapshot: its DeletedAt
+// is nil, so the Save would write the delete's committed mark
+// (deleted_at/deleted_by) back to NULL, resurrecting a node the caller had
+// just deleted.
 //
 // # Why this test is deterministic, unlike this file's other concurrent tests
 //
 // The window this closes sits between two statements of the SAME call --
 // Rename's own read and its own write -- with no seam in shipped code a test
-// could pause between, the same reason the D1-D5 proofs above are stress
-// tests. But the resurrection does not need timing luck: it needs only the
+// could pause between, which is why the other concurrent proofs above are
+// stress tests. But the resurrection does not need timing luck: it needs only the
 // rename's READ to precede the delete's COMMIT, and the rename's WRITE to
 // follow it. SQLite's own locking supplies that deterministically. A second
 // connection executes the mark-delete and holds its transaction OPEN before
@@ -2217,9 +2215,9 @@ func TestTreeService_ConcurrentDeleteAndMemberAdd_NeverDanglesAMembership(t *tes
 // fixed 200ms margin -- the same holder-then-release shape go/dbkit's own
 // busy-timeout contention tests use -- so the rename's microsecond read has
 // long since landed when the mark-delete commits, and the rename's blocked
-// write then executes against the committed delete. On the pre-fix shape
-// that write resurrects the row and every assertion below fails; on the
-// fixed shape the rename's own lockLiveNode is the write that blocked, and
+// write then executes against the committed delete. On the unguarded shape
+// that write would resurrect the row; with the rename's own lockLiveNode
+// being the write that blocked, and
 // once the delete commits it re-evaluates against the now-dead row, matches
 // nothing and refuses with ErrNodeNotFound -- the row stays deleted, unnamed,
 // untouched. (Had the rename started before the hold was established it
@@ -2305,10 +2303,10 @@ func TestTreeService_ConcurrentRenameAndDelete_NeverResurrectsTheNode(t *testing
 	}
 
 	// The delete happened while the rename was in flight, so the rename must
-	// have been refused and the node must still be gone. On the pre-fix shape
-	// the rename's stale full-field Save has just run over the committed
-	// delete: the node is live again (first assertion fails) and renamed
-	// (third) with its delete mark cleared (fourth and fifth).
+	// have been refused and the node must still be gone. Without the lock, the
+	// rename's stale full-field Save would have run over the committed
+	// delete: the node would be live again and renamed with its delete mark
+	// cleared.
 	if _, getErr := tree.Get(ctx, target.ID); getErr == nil {
 		t.Fatalf("node %q is visible again after a concurrent soft-delete of it -- the rename resurrected the deleted row", target.ID)
 	}
@@ -2329,17 +2327,18 @@ func TestTreeService_ConcurrentRenameAndDelete_NeverResurrectsTheNode(t *testing
 }
 
 // TestTreeService_Delete_CascadeRacingAMove_NeverSilentlyDeletesNothing is
-// the P1-2 regression proof: TreeService.Delete used to derive the cascade's
-// path prefix from its own OUTER, unlocked s.Get read and pass that prefix
-// down into deleteSubtree, whose transaction then locked nodeID and swept
-// whatever the STALE prefix matched. A concurrent Move of the node that
-// commits between Delete's Get and deleteSubtree's lock leaves the node --
-// and its whole relocated subtree -- outside the stale prefix: the cascade's
-// mark-delete UPDATE matches zero rows, deleteSubtree reports a clean
-// (0, nil, nil), and Delete publishes org.node.deleted with an empty
-// DeletedNodeIds and returns success -- a silent 204 that deleted nothing.
+// the cascade-vs-move regression proof. If Delete derived the cascade's path
+// prefix from its own OUTER, unlocked s.Get read and passed that prefix down
+// into deleteSubtree, whose transaction then locked nodeID and swept
+// whatever the STALE prefix matched, a concurrent Move of the node
+// committing between Delete's Get and deleteSubtree's lock would leave the
+// node -- and its whole relocated subtree -- outside the stale prefix: the
+// cascade's mark-delete UPDATE would match zero rows, deleteSubtree would
+// report a clean (0, nil, nil), and Delete would publish org.node.deleted
+// with an empty DeletedNodeIds and return success -- a silent 204 that
+// deleted nothing.
 //
-// # Why this test is deterministic, exactly like the D6 rename test above
+// # Why this test is deterministic
 //
 // A second connection holds an open transaction that has already performed
 // Move's own per-row conditional rewrites of the node and its subtree
@@ -2349,13 +2348,12 @@ func TestTreeService_ConcurrentRenameAndDelete_NeverResurrectsTheNode(t *testing
 // then parks behind the holder's write lock until release. The holder is
 // released only after a fixed margin, so the Get has certainly landed when
 // the move commits and Delete's blocked write executes against the
-// committed, post-move state: on the pre-fix shape the stale prefix matches
-// nothing and the delete reports success while the node stays live (the
-// first assertion below fails); on the fixed shape the prefix is re-derived
-// from the locked row's CURRENT path, the cascade removes the node at its
-// new location, and the node is genuinely gone. The delete therefore always
-// reports one of the two legitimate outcomes this finding demands -- the
-// node deleted, or node_not_found -- never a silent zero-match.
+// committed, post-move state: with a stale prefix the delete would match
+// nothing and report success while the node stays live; with the prefix
+// re-derived from the locked row's CURRENT path, the cascade removes the
+// node at its new location and the node is genuinely gone. The delete
+// therefore always reports one of the two legitimate outcomes -- the node
+// deleted, or node_not_found -- never a silent zero-match.
 func TestTreeService_Delete_CascadeRacingAMove_NeverSilentlyDeletesNothing(t *testing.T) {
 	ctx := tenantCtx("tenant-a")
 
@@ -2387,8 +2385,7 @@ func TestTreeService_Delete_CascadeRacingAMove_NeverSilentlyDeletesNothing(t *te
 	// per-row conditional UPDATEs Move performs -- Select(Path, Depth,
 	// ParentID), WHERE id AND deleted_at IS NULL, paths rebased the way
 	// rebasePath does -- and hold the transaction open until release. The
-	// statements' own completion closes `held`, never timing luck, exactly as
-	// in the D6 rename test above.
+	// statements' own completion closes `held`, never timing luck.
 	newAPath := buildPath(b.Path, a.ID)
 	held := make(chan struct{})
 	release := make(chan struct{})
@@ -2457,7 +2454,8 @@ func TestTreeService_Delete_CascadeRacingAMove_NeverSilentlyDeletesNothing(t *te
 }
 
 // TestTreeService_Delete_CascadeOfAConcurrentlyDeletedNode_AnswersNodeNotFound
-// is the P1-3 regression proof: deleteSubtree reports a vanished node as a
+// is the vanished-node regression proof: deleteSubtree reports a vanished
+// node as a
 // clean (removed=0, nil error) and TreeService.Delete's cascade branch used
 // to treat that as success -- publishing org.node.deleted with an empty
 // DeletedNodeIds and returning nil -- where the non-cascade branch has
@@ -2466,7 +2464,8 @@ func TestTreeService_Delete_CascadeRacingAMove_NeverSilentlyDeletesNothing(t *te
 // under the call must answer org.node_not_found, never success, and must
 // never emit the empty-ids event.
 //
-// Deterministic for the same reason the P1-2 test above is: a second
+// Deterministic for the same reason the vanished-node test above is: a
+// second
 // connection holds the mark-delete of A open (the identical
 // Select(DeletedAt, DeletedBy) UPDATE deleteSubtree itself issues, held
 // uncommitted). Delete's outer Get reads the still-live pre-delete state;
@@ -2474,7 +2473,7 @@ func TestTreeService_Delete_CascadeRacingAMove_NeverSilentlyDeletesNothing(t *te
 // delete commit, and Delete's resumed lock attempt fails to match the
 // now-dead row. deleteSubtree reports removed=0 -- which the cascade branch
 // must answer with ErrNodeNotFound instead of the success plus empty-ids
-// event the pre-fix shape produced.
+// event the unguarded shape would have produced.
 func TestTreeService_Delete_CascadeOfAConcurrentlyDeletedNode_AnswersNodeNotFound(t *testing.T) {
 	ctx := tenantCtx("tenant-a")
 
@@ -2513,8 +2512,8 @@ func TestTreeService_Delete_CascadeOfAConcurrentlyDeletedNode_AnswersNodeNotFoun
 	a := mustCreateChild(t, tree, ctx, root.ID, "a")
 
 	// The concurrent deleter: mark-delete A's row on db2 and hold the
-	// transaction open until release -- the same holder rig the D6 rename
-	// test and the P1-2 test above use.
+	// transaction open until release -- the same holder rig the deterministic
+	// tests above use.
 	held := make(chan struct{})
 	release := make(chan struct{})
 	holderErr := make(chan error, 1)
@@ -2573,13 +2572,13 @@ func TestTreeService_Delete_CascadeOfAConcurrentlyDeletedNode_AnswersNodeNotFoun
 }
 
 // TestTreeService_Restore_ReusedSiblingNameSlot_AnswersDuplicateSiblingName
-// is the P2-8 regression proof: the partial unique index on
+// is the seat-reuse regression proof: the partial unique index on
 // (tenant_id, parent_id, name) WHERE deleted_at IS NULL (0004_add_soft_delete.sql)
 // deliberately lets a deleted node's sibling-name slot be reused by a fresh
 // CreateChild -- the whole point of narrowing the index. Restoring the
 // ORIGINAL, soft-deleted node then collides with the live replacement at the
-// database, and TreeService.Restore used to surface that collision as a bare
-// gorm.ErrDuplicatedKey. The collision is the sibling-name rule enforced by
+// database, and TreeService.Restore would otherwise surface that collision
+// as a bare gorm.ErrDuplicatedKey. The collision is the sibling-name rule enforced by
 // the database (restore-vs-reuse, exactly the race CreateChild's own
 // mapWriteError translation already covers in the other direction), so it
 // must answer the same coded org.duplicate_sibling_name.
@@ -2611,8 +2610,8 @@ func TestTreeService_Restore_ReusedSiblingNameSlot_AnswersDuplicateSiblingName(t
 	}
 }
 
-// TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds is the P1-org-11
-// regression proof. uq_org_nodes_single_root shipped (0007_single_root.sql)
+// TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds is the
+// soft-deleted-root-slot regression proof. uq_org_nodes_single_root shipped (0007_single_root.sql)
 // scoped on parent_id = "" alone, so a mark-deleted root row still occupied
 // the tenant's single root slot: once a host had removed a tenant's root
 // through the exported Repository surface (TreeService.Delete refuses the
@@ -2683,8 +2682,9 @@ func TestTreeService_CreateRoot_AfterSoftDeletedRoot_Succeeds(t *testing.T) {
 	}
 }
 
-// TestTreeService_Rename_ReturnsThePostWriteUpdatedAt is the P3-org-13
-// regression proof for Rename: Rename used to return the node as read under
+// TestTreeService_Rename_ReturnsThePostWriteUpdatedAt is the
+// post-write-updated_at regression proof for Rename: Rename returns the
+// node as written
 // the lock -- the PRE-write snapshot, whose UpdatedAt predates the rename's
 // own UPDATE (gorm's autoUpdateTime stamps the row at write time). A caller
 // that rendered that returned row (the handler's PATCH response does,
@@ -2713,8 +2713,9 @@ func TestTreeService_Rename_ReturnsThePostWriteUpdatedAt(t *testing.T) {
 	}
 }
 
-// TestTreeService_Move_ReturnsThePostWriteUpdatedAt is the P3-org-13
-// regression proof for Move, Rename's twin: Move used to return the moved
+// TestTreeService_Move_ReturnsThePostWriteUpdatedAt is the
+// post-write-updated_at regression proof for Move, Rename's twin: Move
+// returns the moved
 // node as read under the lock, before the rewrite loop's own UPDATEs
 // (updated_at stamped per row at write time), so the returned row's
 // UpdatedAt disagreed with the value a subsequent Get reads back.

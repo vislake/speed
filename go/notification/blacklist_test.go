@@ -10,9 +10,9 @@ import (
 )
 
 // TestPlatformBlacklist_AssertNotTenantScoped is the mandatory isolation
-// assertion for a platform-domain table (docs/internal/04-data-and-tenancy.md's
-// data-domain table): an address that complained or hard-bounced is bad for
-// every tenant of the platform, so platform_blacklist must be visible to any
+// assertion for a platform-domain table: an address that complained or
+// hard-bounced is bad for every tenant of the platform, so platform_blacklist
+// must be visible to any
 // query whatever tenant -- or no tenant -- is in the context. The suite's
 // createFn returns a distinct id and address index on every call, as it
 // requires: the platform-wide UNIQUE (channel, address_index) index would
@@ -137,8 +137,8 @@ func TestPlatformBlacklist_IsBlacklisted_VisibleAcrossTenants(t *testing.T) {
 
 	// Written with no tenant in the context -- the platform-level shape.
 	insertBlacklistFixture(t, db, "blk-001", ChannelSMS, "index-sms-7", BlacklistReasonHardBounce)
-	// Written with a tenant attached, imitating the future writer recording
-	// whose send produced the record.
+	// Written with a tenant attached, the shape a platform-blacklist writer
+	// would record when one exists.
 	insertBlacklistFixture(t, db, "blk-002", ChannelEmail, "index-email-7", BlacklistReasonComplaint)
 
 	for _, probe := range []struct {

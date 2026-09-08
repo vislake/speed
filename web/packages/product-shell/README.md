@@ -1,10 +1,10 @@
 # @speed/product-shell
 
-The tenant-facing assembly shell. Where the platform-facing shell (a later
-round) is the same tier for platform staff, this package composes the shared
-app chrome (`@speed/layout-kit`'s `AppShell`), the sign-in family
+The tenant-facing assembly shell. This package composes the shared app
+chrome (`@speed/layout-kit`'s `AppShell`), the sign-in family
 (`@speed/auth-ui`) and the headless session hooks (`@speed/auth-core`) into
-one ready-to-copy front door for a tenant-facing business application.
+one ready-to-copy front door for a tenant-facing business application. The
+platform-staff shell of the same tier is not built.
 
 The package exports `ProductShell` (and its props type) plus the
 `PRODUCT_SHELL_NAMESPACE` / `productShellResources` pair every sibling
@@ -237,7 +237,7 @@ sees the requirement at every level of the chain). `layout-kit` and
 nothing beyond them. No routing, state or query library is required — your
 `children` bring their own.
 
-## What this shell does not do (yet)
+## What this shell does not do
 
 - **No permission gating of its own.** The shell never consumes layout-kit's
   `RouteGuard`, never calls `usePermission`, never attaches permission lists

@@ -4,8 +4,7 @@ package observability_test
 // go/pkgcore/example_test.go's and go/dbkit/example_test.go's convention:
 // every example here is compiled AND executed by `go test`, so an API
 // change that invalidates the documented usage fails the build instead of
-// only rotting in prose (root CLAUDE.md's Documentation section; this
-// package's own doc.go and AGENTS.md).
+// only rotting in prose.
 //
 // Deliberately self-contained: none of these examples reuse helpers from
 // init_test.go or middleware_test.go, even though Go would allow it (all
@@ -170,8 +169,8 @@ func ExampleFromContext() {
 }
 
 // ExampleRedactedValue shows the redaction layer in action on the log
-// channel -- RedactedValue is exactly the marker a sink sees where a
-// sensitive attribute used to be. Two distinct mechanisms are demonstrated,
+// channel -- RedactedValue is exactly the marker a sink sees in place of
+// a sensitive attribute. Two distinct mechanisms are demonstrated,
 // mirroring redact.go's doc comment: key-based redaction replaces the whole
 // value of an attribute whose key is secret-shaped (access_token below),
 // and value-shaped redaction masks a credential embedded inside an

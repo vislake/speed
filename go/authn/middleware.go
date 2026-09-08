@@ -206,14 +206,14 @@ func bearerToken(r *http.Request) (string, bool) {
 //
 // # Why the chain is authn.Middleware then tenancy.Middleware
 //
-// docs/internal/01-architecture.md draws the middleware chain the other way
-// round. It cannot work that way, and the reason is in the Resolver signature
-// itself: Resolve(r *http.Request) (pkgcore.TenantID, error) returns a tenant
-// and nothing else. A resolver that verified the JWT would have no way to
-// hand the claims it just validated to anything downstream, so the token
-// would have to be verified a second time by authn.Middleware -- two
-// verification paths over one credential, free to drift apart, with the
-// tenant decided by the one that is NOT the one authorising the request.
+// A tenancy-first chain cannot work, and the reason is in the Resolver
+// signature itself: Resolve(r *http.Request) (pkgcore.TenantID, error)
+// returns a tenant and nothing else. A resolver that verified the JWT
+// would have no way to hand the claims it just validated to anything
+// downstream, so the token would have to be verified a second time by
+// authn.Middleware -- two verification paths over one credential, free to
+// drift apart, with the tenant decided by the one that is NOT the one
+// authorising the request.
 //
 // Running authn.Middleware first verifies once, and this resolver then reads
 // the already-verified result. tenancy.Middleware keeps its single job (it,
@@ -256,11 +256,10 @@ type errorBody struct {
 // ErrAccountLocked) additionally gets a Retry-After header from its
 // "retry_after_seconds" parameter -- the HTTP-specific translation of the
 // underlying decision, and therefore this function's job rather than
-// ratelimit.go's (docs/internal/11-cross-cutting.md). handler.go's HTTP
-// surface shares this one implementation with Middleware and
-// RequireAuthenticated above rather than writing its own, so every authn
-// endpoint's error body has exactly one shape and exactly one place that
-// decides what a Retry-After header is worth.
+// ratelimit.go's. handler.go's HTTP surface shares this one implementation
+// with Middleware and RequireAuthenticated above rather than writing its
+// own, so every authn endpoint's error body has exactly one shape and
+// exactly one place that decides what a Retry-After header is worth.
 func writeAppError(w http.ResponseWriter, err error) {
 	appErr, ok := apperr.As(err)
 	if !ok {

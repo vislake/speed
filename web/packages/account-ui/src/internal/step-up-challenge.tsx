@@ -48,9 +48,10 @@
  * server). The dialog renders the same used-code text a re-submitted
  * consumed code draws and clears the field: the attempt is NOT
  * retryable with the same code -- the next submit can only verify with
- * a fresh one. (Pre-fix, the dialog stayed silent and told the caller
- * the code was intact and retryable; the code was in fact consumed, and
- * the ensuing re-submit drew the invalid-code answer forever.)
+ * a fresh one. A dialog that stayed silent on this race would tell the
+ * caller the code was intact and retryable when it is in fact
+ * consumed, and the ensuing re-submit would draw the used-code refusal
+ * forever.
  */
 
 import { useEffect, useId, useState } from 'react'

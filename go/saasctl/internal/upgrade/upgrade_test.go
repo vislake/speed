@@ -477,15 +477,15 @@ exclude github.com/vislake/speed/go/authn v0.1.0
 	}
 }
 
-// TestRewriteRefusesASpeedModuleExcludeAtTheGoalVersion drives the whole P2
-// scenario at the Rewrite level: requires at v0.1.0 plus an exclude ruling
-// out authn at v0.2.0 -- the very version the rewrite targets -- exactly the
-// consumer shape that produced the finding (a released version found broken
-// and excluded, the lockstep target later landing on it). Before the fix the
-// rewrite ignored exclude directives entirely: it rewrote the requires to
-// the goal version, passed the self-check (only the replaces were compared)
-// and reported clean over a go.mod the go command cannot build at the
-// claimed version; the refusal must now name the exclude and change nothing.
+// TestRewriteRefusesASpeedModuleExcludeAtTheGoalVersion drives the refusal
+// at the Rewrite level: requires at v0.1.0 plus an exclude ruling out
+// authn at v0.2.0 -- the very version the rewrite targets (a released
+// version found broken and excluded, the lockstep target later landing on
+// it). A rewrite that ignored exclude directives entirely would move the
+// requires to the goal version, pass the self-check (only the replaces are
+// compared) and report clean over a go.mod the go command cannot build at
+// the claimed version; the refusal must name the exclude and change
+// nothing.
 func TestRewriteRefusesASpeedModuleExcludeAtTheGoalVersion(t *testing.T) {
 	orig := readFixture(t, "pinned_exclude.go.mod")
 	out, changed, err := Rewrite(orig, "v0.2.0")

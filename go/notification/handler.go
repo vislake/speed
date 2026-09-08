@@ -654,12 +654,10 @@ func (h *Handler) NotificationUpdatePreference(w http.ResponseWriter, r *http.Re
 // announcements is indistinguishable from a dead one until a proxy or the
 // client times it out, and the cadence that would keep one alive is a
 // deployment-tuned value -- what a proxy keeps alive differs per
-// installation -- so none is guessed at here. The absence is a deliberate
-// non-goal of this round: the loss a heartbeat would mask, a connection a
-// proxy already dropped, is recovered by the same reconnect-and-catch-up
-// path any disconnection takes, and hardening the stream with a heartbeat
-// is deferred alongside the platform-staff push consumer of a later round
-// (AGENTS.md's Known limitations records the deferral).
+// installation -- so none is guessed at here. The absence is deliberate:
+// the loss a heartbeat would mask, a connection a proxy already dropped,
+// is recovered by the same reconnect-and-catch-up path any disconnection
+// takes, and no heartbeat mechanism exists.
 //
 // Requests that cannot flush (a response writer without http.Flusher) are
 // refused before the stream opens; a write that fails mid-stream (the
@@ -691,7 +689,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			// The client went away or the server is shutting down. Close
-			// (deferred) removes the connection from the hub.
+			// removes the connection from the hub.
 			return
 		case msg := <-conn.Messages():
 			// Every frame the hub enqueues on a scoped connection is one
@@ -901,8 +899,8 @@ func toTypeResponse(t pkgcore.NotificationType, description string) api.Notifica
 }
 
 // negotiateLocale picks the language a request's type-directory copy (and
-// any future locale-sensitive rendering) is served in: the first
-// Accept-Language tag the merged catalog supports, where a header tag
+// any other locale-sensitive rendering the surface adds) is served in: the
+// first Accept-Language tag the merged catalog supports, where a header tag
 // matches a supported locale exactly or as its language prefix ("en"
 // matches "en-US"), and zh-CN -- the module's default language -- when
 // nothing matches, the header is empty, or no catalog is attached yet.
@@ -1017,6 +1015,5 @@ type SubjectResolver interface {
 
 // compile-time check that *Handler satisfies the generated ServerInterface
 // for this module's fragment -- the guarantee that a spec whose generated
-// interface outgrew this handler cannot compile (docs/internal/21's
-// spec-first order).
+// interface outgrew this handler cannot compile.
 var _ api.ServerInterface = (*Handler)(nil)

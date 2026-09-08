@@ -252,22 +252,21 @@ func TestSubscriptionService_Create_UnknownPlanID_Refused(t *testing.T) {
 }
 
 // TestSubscriptionService_ConcurrentCancelAndMarkPastDue_CanceledIsTerminal
-// is P2-7's regression test: Cancel and MarkPastDue are legal moves from
-// Active, so two racing calls can both read Active before either write
-// commits. Pre-fix, transition() applied the caller's new status with an
-// unguarded full-row update, so whichever write landed LAST won outright --
-// when Cancel's write landed first and MarkPastDue's second, a successfully
-// canceled (terminal) subscription was silently overwritten back to
-// PastDue, and Cancel returned success for a subscription that ended up
-// non-terminal. Post-fix, the status change is database-arbitrated: each
-// attempt is a guarded UPDATE whose WHERE carries the status the move was
-// validated from, with RowsAffected as the arbiter, so a transition whose
-// guard misses (the row already moved) re-reads and re-attempts while the
-// move stays legal -- and nothing can ever overwrite a Canceled row, since
-// no legal move exists out of Canceled and no stale guard can match it.
-// The assertion pins exactly the invariant the finding names: a Cancel
-// that reported success must leave the subscription Canceled, no matter
-// how the two calls interleave.
+// pins the compare-and-swap terminality: Cancel and MarkPastDue are legal
+// moves from Active, so two racing calls can both read Active before
+// either write commits. An unguarded full-row update would let whichever
+// write lands LAST win outright -- when Cancel's write lands first and
+// MarkPastDue's second, a successfully canceled (terminal) subscription is
+// silently overwritten back to PastDue, and Cancel returns success for a
+// subscription that ends up non-terminal. The status change is therefore
+// database-arbitrated: each attempt is a guarded UPDATE whose WHERE
+// carries the status the move was validated from, with RowsAffected as the
+// arbiter, so a transition whose guard misses (the row already moved)
+// re-reads and re-attempts while the move stays legal -- and nothing can
+// ever overwrite a Canceled row, since no legal move exists out of
+// Canceled and no stale guard can match it. The assertion pins exactly
+// that invariant: a Cancel that reported success must leave the
+// subscription Canceled, no matter how the two calls interleave.
 func TestSubscriptionService_ConcurrentCancelAndMarkPastDue_CanceledIsTerminal(t *testing.T) {
 	const iterations = 150
 	for i := 0; i < iterations; i++ {
@@ -283,8 +282,7 @@ func TestSubscriptionService_ConcurrentCancelAndMarkPastDue_CanceledIsTerminal(t
 		}
 
 		// Launch both transitions from a common start line so both reads
-		// race the same window, the shape that produced the pre-fix
-		// overwrite.
+		// race the same window, the interleaving the guard must survive.
 		start := make(chan struct{})
 		cancelErr := make(chan error, 1)
 		pastDueErr := make(chan error, 1)

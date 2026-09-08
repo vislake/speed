@@ -15,8 +15,9 @@ import (
 	"github.com/vislake/speed/go/pkgcore/apperr"
 )
 
-// Service is go/integration's runtime entry point: round 1's four API key
-// operations (Create, List, Rotate, Revoke) plus round 2's outbound-webhook
+// Service is go/integration's runtime entry point: the four API key
+// operations (Create, List, Rotate, Revoke), the API-key authentication
+// entry point (Authenticate, authenticate.go), and the outbound-webhook
 // surface -- subscription management (webhook_service.go) and the
 // event-driven delivery pipeline (webhook_delivery.go). It is built by
 // Module.Attach, never constructed directly by a host.
@@ -34,8 +35,8 @@ type Service struct {
 	// MaxAPIKeyLifetime package default stands (see maxAPIKeyLifetime).
 	maxLifetime time.Duration
 
-	// The round-2 fields below back webhook_service.go and
-	// webhook_delivery.go; see those files for how each is used.
+	// The fields below back webhook_service.go and webhook_delivery.go; see
+	// those files for how each is used.
 	webhookRepo  *WebhookSubscriptionRepository
 	deliveryRepo *WebhookDeliveryRepository
 	queue        jobs.Queue
@@ -180,10 +181,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreatedAPIKey, e
 		CreatedBy: in.CreatedBy,
 		ExpiresAt: expiresAt,
 	}
-	// createWithHashIndex, not the embedded Repository[APIKey].Create: round
-	// 6's Authenticate needs the accompanying apiKeyHashIndex row to resolve
-	// a tenant from this key's hash alone -- see that method's, and model.go's
-	// apiKeyHashIndex's, own doc comments for why.
+	// createWithHashIndex, not the embedded Repository[APIKey].Create:
+	// Service.Authenticate needs the accompanying apiKeyHashIndex row to
+	// resolve a tenant from this key's hash alone -- see that method's, and
+	// model.go's apiKeyHashIndex's, own doc comments for why.
 	if err := s.repo.createWithHashIndex(ctx, row); err != nil {
 		return nil, ErrInternal.WithCause(err)
 	}
@@ -221,8 +222,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreatedAPIKey, e
 
 // List returns every API key of the caller's tenant as a
 // credential-material-free summary, newest first is NOT guaranteed --
-// callers that need an order sort the result themselves; round 1's only
-// consumer is this module's own tests.
+// callers that need an order sort the result themselves; the consumers are
+// handler.go's SharingListAPIKeys and the module's own tests.
 //
 // CreatorLeft is computed per row through the optional MembershipChecker
 // seam (see seams.go): false for every row when none was wired, exactly the
@@ -309,7 +310,7 @@ func (s *Service) List(ctx context.Context) ([]APIKeySummary, error) {
 //
 // The two writes are NOT wrapped in one database transaction: dbkit.
 // Repository[T] exposes no cross-call transaction seam a business module can
-// reach (backend coding standard's Repository-only rule), and a partial
+// reach (the Repository-only rule), and a partial
 // failure here is safe-direction rather than corrupting -- a predecessor
 // revoke that fails after a successful create leaves two live keys instead
 // of one, which is a caller-visible surplus of access, never a lockout, and

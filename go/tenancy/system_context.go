@@ -12,11 +12,10 @@ import (
 // WithSystemContext successfully grants the tenant-isolation escape hatch.
 // Its Payload is a SystemContextEnteredEvent.
 //
-// Per docs/internal/01-architecture.md, the event bus is the one seam
-// reserved for observability and audit: a future audit-log consumer (the
-// eventual compliance module) can build a complete record of every
-// system-context grant purely by subscribing to this one event type on the
-// same pkgcore.EventBus, without any further dependency on tenancy.
+// The event bus is the one seam reserved for observability and audit: an
+// audit-log consumer builds a complete record of every system-context
+// grant purely by subscribing to this one event type on the same
+// pkgcore.EventBus, without any further dependency on tenancy.
 const EventSystemContextEntered = "tenancy.system_context.entered"
 
 // SystemContextEnteredEvent is the Payload carried by an
@@ -58,11 +57,11 @@ var ErrAuditPublishFailed = apperr.Internal("tenancy.system_context_audit_publis
 
 // WithSystemContext wraps pkgcore.WithSystemContext, additionally publishing
 // an audit event (via the given pkgcore.EventBus) recording who entered the
-// system context, for what declared purpose, and when. Per CLAUDE.md's
-// security rules, entering system context without a resulting audit record
-// is exactly the failure mode this wrapper exists to prevent -- if the audit
-// publish fails, WithSystemContext must fail closed (return the original ctx
-// and a non-nil error), NOT silently proceed as if nothing happened.
+// system context, for what declared purpose, and when. Entering system
+// context without a resulting audit record is exactly the failure mode this
+// wrapper exists to prevent -- if the audit publish fails, WithSystemContext
+// must fail closed (return the original ctx and a non-nil error), NOT
+// silently proceed as if nothing happened.
 //
 // Business code should call this instead of pkgcore.WithSystemContext
 // directly. The raw primitive still exists, and remains the right choice, for
@@ -76,13 +75,13 @@ var ErrAuditPublishFailed = apperr.Internal("tenancy.system_context_audit_publis
 // able to import tenancy should prefer this one.
 //
 // IMPORTANT -- what this does NOT do: granting a system context does not
-// widen what dbkit.Repository[T] (the sanctioned data-access path, backend
-// coding standard section 3.2) can see or touch. Repository[T] consults
+// widen what dbkit.Repository[T] -- the sanctioned tenant data-access path
+// -- can see or touch. Repository[T] consults
 // pkgcore.SystemReasonFromContext in exactly one place, and only as a
 // refusal gate that demands the grant's presence, never as an amplifier
 // that widens a statement: dbkit's HardDelete (hard_delete.go, the
-// system-context-gated physical-delete path added after the mark-delete
-// round) refuses a plain tenant-scoped context with
+// system-context-gated physical-delete path) refuses a plain tenant-scoped
+// context with
 // dbkit.ErrHardDeleteRequiresSystemContext, and even with the gate passed
 // it operates strictly inside the ctx tenant's own rows. Every other
 // Repository[T] method never consults pkgcore.SystemReasonFromContext at
@@ -100,16 +99,14 @@ var ErrAuditPublishFailed = apperr.Internal("tenancy.system_context_audit_publis
 // context after tenancy.Middleware has already resolved a tenant
 // correlates the audit event with that same tenant, while doing so on
 // an allowlisted request carrying no tenant at all correlates with
-// none. Until Repository[T]
-// deliberately implements the cross-tenant escape hatch that dbkit's own
-// tenant_scope.go doc comment anticipates it will, WithSystemContext only
-// produces an audited record that the escape hatch was granted -- it does
-// not, by itself, unlock any cross-tenant Repository[T] read or write.
-// HardDelete is not that escape hatch either: its gate is a who-may-ask
-// restriction on an operation that is tenant-scoped regardless, never a
-// route around tenant filtering. A genuine cross-tenant admin search or
-// background job needs the raw-SQL escape hatch (backend coding standards
-// section 3.2) instead, today.
+// none. Repository[T] implements no cross-tenant escape hatch, so
+// WithSystemContext only produces an audited record that the escape
+// hatch was granted -- it does not, by itself, unlock any cross-tenant
+// Repository[T] read or write. HardDelete is not that escape hatch
+// either: its gate is a who-may-ask restriction on an operation that is
+// tenant-scoped regardless, never a route around tenant filtering. A
+// genuine cross-tenant admin search or background job needs the raw-SQL
+// escape hatch instead.
 //
 // Two failure modes are handled differently:
 //

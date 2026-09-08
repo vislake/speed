@@ -17,11 +17,10 @@ import (
 // DefaultPollInterval is how often the anti-loss poller re-reads
 // recently-updated configs rows when the host does not configure one. It is
 // a documented package constant (the option is WithPollInterval): the
-// design's TTL-fallback poller (docs/internal/11-cross-cutting.md's
-// dynamic-config section) is the net under the event bus, so its
-// cadence only bounds how long a lost event can leave a stale cache -- the
-// poll interval itself is deliberately long enough to be a no-op in the
-// common case where no event was ever lost.
+// poller is the net under the event bus, so its cadence only bounds how
+// long a lost event can leave a stale cache -- the poll interval itself is
+// deliberately long enough to be a no-op in the common case where no event
+// was ever lost.
 const DefaultPollInterval = 30 * time.Second
 
 // fullReconcileEvery is how many Refresh cycles pass between one full
@@ -48,24 +47,22 @@ const DefaultPollInterval = 30 * time.Second
 // sits. The cost is a burst of cache misses every fullReconcileEvery
 // cycles rather than none; at the default 30s poll interval that is one
 // burst roughly every 10 minutes, far less frequent than the normal
-// incremental poll, which is the tradeoff the design accepts for closing
-// a rare but genuine permanent-staleness gap. See AGENTS.md's Known
-// limitations for the accepted residual (a stuck row still serves its
-// stale cached value for up to fullReconcileEvery cycles, never longer).
+// incremental poll. The accepted residual of the tradeoff: a stuck row
+// still serves its stale cached value for up to fullReconcileEvery cycles,
+// never longer.
 const fullReconcileEvery = 20
 
 // Service is the runtime face of the config module: the schema-driven,
 // scope-resolved, cached, event-invalidated configuration store a host
-// (and, later, other modules) reads and writes through. A Service is
-// obtained from (*Module).Attach, which freezes the schema snapshot from
-// the booted registry and wires the store, the bus subscription and the
-// poller. Until Attach runs, no Service exists (see ErrServiceNotAttached
-// for what a route served in that window reports).
+// reads and writes through. A Service is obtained from (*Module).Attach,
+// which freezes the schema snapshot from the booted registry and wires the
+// store, the bus subscription and the poller. Until Attach runs, no Service
+// exists (see ErrServiceNotAttached for what a route served in that window
+// reports).
 //
-// Everything the design's dynamic-config section asks of the runtime is
-// here: Get resolves a key across scopes, from tenant override down to
-// system row and schema default, Set validates against the schema and
-// writes the configs row, every Set
+// The runtime surface: Get resolves a key across scopes, from tenant
+// override down to system row and schema default, Set validates against the
+// schema and writes the configs row, every Set
 // publishes config.item.changed (the hot-update signal other instances
 // consume), the poller is the anti-loss net, and Sensitive values are
 // encrypted at rest through the injected dbkit.Cipher. The Service is safe
@@ -130,12 +127,12 @@ type Service struct {
 
 	// afterRefreshLock, when non-nil, is called synchronously by Refresh
 	// immediately after it acquires pollMu and before it does any work. It
-	// exists solely so a test can force the exact interleaving the
-	// Close/poller deadlock this package's history records needs -- a
-	// poller-triggered Refresh call provably holding pollMu at the moment
-	// Close is invoked -- deterministically rather than by timing alone.
-	// See TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh.
-	// Nil on every production path.
+	// exists solely so a test can force, deterministically rather than by
+	// timing alone, the exact interleaving the Close/poller deadlock guard
+	// protects against: a poller-triggered Refresh call provably holding
+	// pollMu at the moment Close is invoked. See
+	// TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh. Nil on
+	// every production path.
 	afterRefreshLock func()
 }
 
@@ -145,9 +142,8 @@ var now = time.Now
 
 // Get resolves key to its effective value: the tenant row when the context
 // carries a tenant and such a row exists, else the system row, else the
-// schema default (docs/internal/11-cross-cutting.md's scope fallback). The
-// returned Value carries the decoded typed value and the scope tier it was
-// resolved at.
+// schema default (the scope fallback). The returned Value carries the
+// decoded typed value and the scope tier it was resolved at.
 //
 // Get serves ConfigItem keys and FeatureFlag keys alike -- a flag is a bool
 // item -- but only the flag's plain effective value: whether a flag counts
@@ -282,7 +278,6 @@ func (s *Service) Set(ctx context.Context, scope Scope, key string, v Value, by 
 	// statements, not one transaction: this module has no outbox, and a
 	// torn read here can at worst misreport the event's OldValue -- the
 	// row itself is the source of truth and the poller heals caches.
-	// (See AGENTS.md's known limitations for the no-outbox stance.)
 	changedAt := now()
 	existing, err := s.st.get(ctx, scope, tenantID, key)
 	if err != nil {
@@ -356,7 +351,7 @@ func (s *Service) Set(ctx context.Context, scope Scope, key string, v Value, by 
 // fn runs synchronously inside the publishing Set; under the distributed
 // bus it runs asynchronously on event delivery, and a Set whose event is
 // lost (before the poller heals caches) never fires fn -- the poller
-// converges readers, not watchers (see AGENTS.md).
+// converges readers, not watchers.
 //
 // Registering the same fn for the same key twice registers it twice; the
 // return value reports only whether key is a declared schema key, so an
@@ -425,9 +420,8 @@ func (s *Service) IsEnabled(ctx context.Context, key string) (bool, error) {
 }
 
 // EnabledFlags returns every declared feature flag that IsEnabled reports
-// enabled for the context's tenant, sorted ascending by key. It is the
-// runtime half of the "/api/system/features query" contract
-// (docs/internal/11-cross-cutting.md): consumers ask "which features are
+// enabled for the context's tenant, sorted ascending by key. It serves the
+// "/api/system/features query" contract: consumers ask "which features are
 // on" rather than probing one flag at a time. The returned slice is never
 // nil: an empty result must marshal as JSON's [] -- the wire shape the
 // features endpoints document -- not as null.
@@ -478,7 +472,7 @@ func (s *Service) PublicSnapshot(ctx context.Context) (map[string]any, []string,
 			// An item the resolve walk cannot serve is skipped -- that key
 			// absent from the snapshot -- rather than failing the whole
 			// response. The endpoint's contract is the platform-defaults
-			// fallback, never an error: a future module declaring a Public
+			// fallback, never an error: a module declaring a Public
 			// item without a Default (legal: "the module serves no value
 			// until one is set") must not take the pre-auth login surface
 			// down for every tenant while ops has not written the row yet.

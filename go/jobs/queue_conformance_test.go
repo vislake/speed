@@ -5,7 +5,7 @@
 // back is an import cycle Go's toolchain refuses ("import cycle not
 // allowed in test"), while an external test file compiles as a separate
 // package and carries no such restriction. This is the mechanical exception
-// the backend coding standard's testing-layout rule names for exactly this
+// the testing-layout rule names for exactly this
 // situation (package x vs. package x_test cases cannot share a file), the
 // same one go/pkgcore/kv_conformance_test.go's own doc comment documents
 // for kvstoretest.
@@ -25,14 +25,13 @@ import (
 // -- the standalone deployment mode's half of the proof that both
 // implementations (this one and go/jobs/queue/asynq's, proven by
 // go/jobs/integration_test's own TestAsynqQueue_ConformsToQueueContract)
-// agree on Enqueue/Get/Cancel/idempotency/retry/dead-letter semantics,
-// replacing what used to be five independently hand-maintained tests in
-// standalone_queue_test.go (TestEnqueue_Get_HappyPath,
-// TestGet_TenantIsolation, TestCancel_TenantIsolation_And_Idempotency,
-// TestRetry_SucceedsAfterTransientFailures,
-// TestDeadLetter_ExhaustsRetries_And_InvokesFailureHook) that duplicated,
-// assertion for assertion, what go/jobs/integration_test's own Redis-backed
-// tests already proved for asynq's Queue.
+// agree on Enqueue/Get/Cancel/idempotency/retry/dead-letter semantics.
+// The five contract subtests (enqueue_get_happy_path,
+// get_tenant_isolation, cancel_tenant_isolation_and_idempotency,
+// retry_succeeds_after_transient_failures,
+// dead_letter_exhausts_retries_and_invokes_failure_hook) are the single
+// home of the portable contract, covering what was once hand-maintained
+// separately for each implementation.
 func TestStandaloneQueue_ConformsToQueueContract(t *testing.T) {
 	queuetest.AssertConforms(t, func() queuetest.Runnable {
 		db := dbtest.NewSQLite(t)

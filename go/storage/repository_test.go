@@ -65,7 +65,7 @@ func newUpload(id string, tenant pkgcore.TenantID, createdAt time.Time) Object {
 // whose revalidation pipeline has already run, so it carries the finalized
 // columns a completed row must. The digest is a deterministic function of
 // the id rather than of real bytes -- the repository neither knows nor
-// cares about content, and the service round proves the real shape. The
+// cares about content, and the service layer proves the real shape. The
 // explicit CreatedAt is what the ordering tests seed staggered times with.
 func newCompleted(id string, tenant pkgcore.TenantID, createdAt time.Time) Object {
 	o := newUpload(id, tenant, createdAt)

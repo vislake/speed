@@ -6,14 +6,12 @@ package tenancy_test
 // tenancy's public API that breaks the documented usage fails the build
 // instead of only rotting in prose.
 //
-// Example demonstrates exactly the pattern AGENTS.md's "Typical
-// integration" section walks through: a DomainResolver wired into
-// Middleware to protect a plain http.Handler -- tenancy's most central,
-// most likely-to-be-copied capability. ExampleWithAllowlist and
-// ExampleWithSystemContext cover the module's other two central entry
-// points; tenancytest is exercised by its own tests instead of an Example
-// here, the same way dbkit's dbtest helper package has no example_test.go
-// of its own.
+// Example demonstrates tenancy's most central, most likely-to-be-copied
+// pattern: a DomainResolver wired into Middleware to protect a plain
+// http.Handler. ExampleWithAllowlist and ExampleWithSystemContext cover
+// the module's other two central entry points; tenancytest is exercised
+// by its own tests instead of an Example here, the same way dbkit's
+// dbtest helper package has no example_test.go of its own.
 
 import (
 	"context"
@@ -45,8 +43,8 @@ func exampleTenantsByHost(host string) (pkgcore.TenantID, bool) {
 // plain http.Handler, for the unauthenticated routes -- a login page,
 // public branding -- tenancy itself resolves. An authenticated route's
 // Resolver, reading the tenant out of an already-verified access token, is
-// authn's responsibility once that module exists; see resolver.go's own
-// doc comment for why tenancy does not, and cannot, implement one itself.
+// authn's responsibility; see resolver.go's own doc comment for why
+// tenancy does not, and cannot, implement one itself.
 func Example() {
 	resolver := tenancy.NewDomainResolver(exampleTenantsByHost, "public")
 
@@ -139,9 +137,9 @@ func ExampleWithTenantStatusResolver() {
 	// handler saw tenant="public" ok=true
 }
 
-// exampleTokenResolver stands in for the Resolver authn will eventually
-// supply for authenticated requests (see resolver.go's own doc comment for
-// why tenancy does not implement one itself): it "verifies" a bearer token
+// exampleTokenResolver stands in for the Resolver authn supplies for
+// authenticated requests (see resolver.go's own doc comment for why
+// tenancy does not implement one itself): it "verifies" a bearer token
 // by table lookup and fails whenever none is present or recognized --
 // exactly the kind of Resolver failure WithAllowlist exists to carve a
 // narrow, explicit exception around.

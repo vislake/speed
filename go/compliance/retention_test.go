@@ -212,9 +212,9 @@ func TestRetentionService_SweepTenant_ParticipantErrorIsPartialFailure(t *testin
 // count must survive into SweepResult.Reaped -- TotalReaped and the audit
 // event's Changes["reaped"] breakdown count rows that are genuinely and
 // irreversibly gone even when the callback also errored, never silently
-// dropping them from the record. The ungated behavior recorded the count
-// only on success, so a participant reporting (2, err) contributed 0 to
-// TotalReaped and vanished from the audit trail's reaped map entirely.
+// dropping them from the record. A count recorded only on success would
+// let a participant reporting (2, err) contribute 0 to TotalReaped and
+// vanish from the audit trail's reaped map entirely.
 func TestRetentionService_SweepTenant_ParticipantPartialCountSurvivesError(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
 	reg := pkgcore.NewRegistry(bus, pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())

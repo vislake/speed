@@ -18,14 +18,13 @@ import "sort"
 // declared (ErrUnknownPermission). It is deliberately not consulted the
 // same way at check time -- an unknown permission simply denies there,
 // because a permission check must never error a request open. That
-// asymmetry is stated in the module's AGENTS.md and pinned by tests.
+// asymmetry is deliberate and pinned by tests.
 //
-// The catalog holds bare strings. Growing them into a
-// PermissionDecl{Key, Description, Group} record is deferred: the only
-// consumer of that metadata is the admin console's auto-rendered
-// role-configuration page, and changing pkgcore's frozen
-// PermissionRegistrar.Add(perms ...string) is a breaking change for every
-// module already calling it.
+// The catalog holds bare strings, not a richer record: the one consumer
+// of permission metadata such as description or grouping is an admin
+// console's auto-rendered role-configuration page, and widening pkgcore's
+// frozen PermissionRegistrar.Add(perms ...string) is a breaking change for
+// every module already calling it.
 type catalog struct {
 	// known is the membership set Has answers from.
 	known map[string]struct{}

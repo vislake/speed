@@ -25,8 +25,8 @@ import (
 // standalone_queue.go has a regression here, so the suite really does
 // cover each option's invalid-value behaviour, and a new constructor
 // option cannot be added to that file without landing its refusal test
-// beside it. Named for the behaviour it verifies, per the backend coding
-// standard's test-naming rule. (The per-Enqueue options in queue.go are a
+// beside it. Named for the behaviour it verifies. (The per-Enqueue options
+// in queue.go are a
 // separate layer with their own individually documented rules --
 // WithMaxRetries clamps, WithTimeout falls back -- and are not what this
 // file pins.)
@@ -55,8 +55,7 @@ func assertOptionPanics(t *testing.T, code string, fn func()) {
 // TestWithWorkerCount_ZeroOrNegative_Refused pins the WithWorkerCount(0)
 // refusal: a queue with no workers would claim every eligible Job into
 // StatusRunning and execute none of them -- a silent no-op that looks like
-// a healthy queue in every metric except the ones that never move. Fails
-// on the pre-fix code, where the option is accepted silently.
+// a healthy queue in every metric except the ones that never move.
 func TestWithWorkerCount_ZeroOrNegative_Refused(t *testing.T) {
 	assertOptionPanics(t, "jobs.worker_count_zero", func() { WithWorkerCount(0) })
 	assertOptionPanics(t, "jobs.worker_count_zero", func() { WithWorkerCount(-4) })
@@ -72,13 +71,10 @@ func TestWithTenantConcurrencyLimit_ZeroOrNegative_Refused(t *testing.T) {
 }
 
 // TestWithPollInterval_ZeroOrNegative_Refused pins the WithPollInterval(0)
-// refusal and closes the accepted-then-crashing shape that motivated it: a
-// zero poll interval used to be accepted at option time, Start reported
-// success, and only then did the dispatcher goroutine's time.NewTicker
-// panic and kill the whole process -- the one failure direction
-// construction-time validation exists to prevent. The pre-fix code fails
-// this test with "expected a coded panic, got none" before any Start is
-// ever reached.
+// refusal against the crash shape construction-time validation exists to
+// prevent: accepted silently, a zero poll interval would let Start report
+// success and then the dispatcher goroutine's time.NewTicker would panic
+// and kill the whole process.
 func TestWithPollInterval_ZeroOrNegative_Refused(t *testing.T) {
 	assertOptionPanics(t, "jobs.poll_interval_zero", func() { WithPollInterval(0) })
 	assertOptionPanics(t, "jobs.poll_interval_zero", func() { WithPollInterval(-5 * time.Millisecond) })

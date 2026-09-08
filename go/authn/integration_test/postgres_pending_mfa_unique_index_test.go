@@ -14,7 +14,7 @@ import (
 )
 
 // TestSecondPendingMFAFactorRefused_Postgres is the PostgreSQL leg of the
-// P3-22 regression (its SQLite twin, TestMFAFactorRepository_
+// pending-row race (its SQLite twin, TestMFAFactorRepository_
 // SecondPendingRowForOneUserIsRefused, lives in the unit suite): migration
 // 0011's partial unique index over the status='pending' rows must exist and
 // be enforced on real PostgreSQL, so a second PENDING factor for one

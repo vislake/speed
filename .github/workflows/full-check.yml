@@ -1,215 +1,154 @@
 name: full-check
-
-# Pre-merge FULL MATRIX pipeline -- docs/internal/18-cicd.md's pipeline
-# table, full-check row: every module through the unit suite under the race
-# detector, plus the Docker-backed integration tiers and the reference-app
-# suite. This is 18-cicd's layered-triggering layer 2: integration runs live
-# here, NOT in the fast per-PR check (fast-check). Target duration under 25
-# minutes; every job carries a timeout and stale runs are cancelled via
-# concurrency (18-cicd cost-control rules 4 and 5).
+# Pre-merge FULL MATRIX pipeline: every module through the unit suite
+# under the race detector, plus the Docker-backed integration tiers and
+# the reference-app suite. This is the layered-triggering layer 2:
+# integration runs live here, NOT in the fast per-PR check (fast-check).
+# Target duration under 25 minutes; every job carries a timeout and
+# stale runs are cancelled via concurrency.
 #
-# DESIGN-TABLE TRIGGER: a PR labeled `full-ci`, plus every direct push to
-# main, plus workflow_dispatch. Label-only events do not re-run on later
-# pushes, so the pull_request types cover the opened/synchronize/reopened
-# flow (re-run on every push while the label is present) plus labeled
-# (first run on labeling), and every job gates itself on
+# TRIGGERS: a PR labeled `full-ci`, every direct push to main, and
+# workflow_dispatch. Label-only events do not re-run on later pushes, so
+# the pull_request types cover the opened/synchronize/reopened flow
+# (re-run on every push while the label is present) plus labeled (first
+# run on labeling), and every job gates itself on
 # workflow_dispatch/push/the label: an unlabeled, non-push PR run skips
-# every job, a labeled PR re-runs on each push. workflow_dispatch (kept
-# from the stub) runs the same jobs bypassing the label gate, for manual
-# full-matrix runs. The push trigger exists because main allows direct
-# pushes and that is the normal path here (18-cicd's branch-protection
-# section), not an edge case a `full-ci` label could be relied on to
-# catch -- a push carries no PR to label at all, so without this trigger
-# the Docker-backed integration tiers below would only ever run when a
-# human remembers to workflow_dispatch them by hand. This mirrors
-# fast-check's own push-to-main trigger one layer up, at real cost: every
-# push now pays this pipeline's ~25-minute Docker-backed budget.
+# every job. workflow_dispatch runs the same jobs bypassing the label
+# gate, for manual full-matrix runs. The push trigger exists because
+# main allows direct pushes and that is the normal path here -- a push
+# carries no PR to label at all, so without this trigger the Docker-
+# backed integration tiers would only ever run when a human remembers
+# to workflow_dispatch them by hand. This mirrors fast-check's own
+# push-to-main trigger one layer up, at real cost: every push now pays
+# this pipeline's ~25-minute Docker-backed budget.
 #
-# COVERAGE -- what genuinely runs today
-#   * go-modules job: the same twenty-one-module matrix as fast-check through
-#     the reusable go-module-ci workflow (golangci-lint, go vet, unit tests
+# COVERAGE -- what runs:
+#   * go-modules job: the same module matrix as fast-check through the
+#     reusable go-module-ci workflow (golangci-lint, go vet, unit tests
 #     under -race, a workspace-context build and a GOWORK=off standalone
-#     build) -- the full matrix runs the unit tier too. Per 18-cicd's
+#     build) -- the full matrix runs the unit tier too. Per the
 #     reusable-workflow design rule, this file adds one matrix row per
-#     module and copies no legs. go/sharing, go/billing, go/compliance and
-#     go/admin ship no Docker-backed integration_test/ tier, so they are
-#     deliberately absent from the integration-tiers matrix below, the same
-#     absence go/metering's own round recorded for itself until that round
-#     landed its PostgreSQL tier (see go/metering/AGENTS.md's Testing
-#     section and Known limitations); go/pki's own tier joined the matrix
-#     the same way, in the round after its migration-dedupe leg shipped.
+#     module and copies no legs.
 #   * integration-tiers job: the Docker-backed integration tiers
-#     (-tags=integration), one matrix row per module that ships a tier, run
-#     from inside the module: go test -race -tags=integration ./... -- the
-#     exact command shape and module enumeration of Taskfile test:full's
-#     INTEGRATION_DIRS loop (the source of truth for which modules carry an
-#     integration_test/ directory). Docker is preinstalled on ubuntu-latest
-#     runners; testcontainers pulls images per leg on first use:
+#     (-tags=integration), one matrix row per module that ships a tier,
+#     run from inside the module: go test -race -tags=integration ./...
+#     -- the exact command shape and module enumeration of Taskfile
+#     test:full's INTEGRATION_DIRS loop (the source of truth for which
+#     modules carry an integration_test/ directory). Docker is
+#     preinstalled on ubuntu-latest runners; testcontainers pulls images
+#     per leg on first use. The legs, module by module:
 #       go/dbkit     PostgreSQL
 #       go/tenancy   PostgreSQL (its tier lives under
 #                    tenancytest/integration_test/; ./... covers it)
-#       go/config    PostgreSQL and Redis -- its integration_test/ runs
-#                    both legs (postgres_leg_test.go,
-#                    redis_leg_test.go)
+#       go/config    PostgreSQL and Redis
 #       go/jobs      Redis
-#       go/pkgcore   Redis and RustFS/S3 -- its integration_test/ runs both
-#                    tiers (redis_container_test.go/redis_kv_test.go/
-#                    redis_eventbus_test.go against Redis,
-#                    rustfs_container_test.go/objectstore_test.go against
-#                    RustFS/S3)
-#       go/rbac      PostgreSQL and Redis -- its integration_test/ runs
-#                    both legs (postgres_leg_test.go for the second
-#                    dialect's migrations and AssertIsolated,
-#                    redis_leg_test.go for the cross-replica cache
+#       go/pkgcore   Redis and RustFS/S3
+#       go/rbac      PostgreSQL and Redis (migrations and AssertIsolated
+#                    on the second dialect; cross-replica cache
 #                    invalidation a revoke depends on)
-#       go/org       PostgreSQL -- its integration_test/ re-runs the A1
-#                    materialized-path dialect-identity proof
-#                    (postgres_tree_test.go) and the three tenant-scoped
-#                    repositories' AssertIsolated suite
-#                    (postgres_isolation_test.go) against a real server
-#       go/authn     PostgreSQL -- migrations zero-to-head, the mandatory
-#                    tenancytest isolation suite, blind-index uniqueness
-#                    and concurrent refresh-token rotation, all proven
-#                    against real PostgreSQL rather than SQLite (no Redis
-#                    tier: authn touches KVStore only through ratelimit and
-#                    the revocation list, both already covered by their own
-#                    owning module's tier -- go/authn/AGENTS.md)
-#       go/storage   PostgreSQL and RustFS/S3 -- its integration_test/ runs
-#                    both legs (postgres_leg_test.go for the module's
-#                    migrations applied from zero on the second dialect and
-#                    the tenant-scoped repositories' AssertIsolated suite,
-#                    rustfs_leg_test.go for object-store round-trips against
-#                    RustFS through pkgcore.NewS3ObjectStore)
-#       go/notification PostgreSQL and Redis -- its integration_test/
-#                       runs both legs (postgres_leg_test.go for the
-#                       schema and isolation semantics of the five
-#                       tables -- migrations zero to head,
-#                       AssertIsolated against a real server, and the
-#                       consent-ledger single-winner verify whose
-#                       compare-and-swap SQLite cannot even put at
-#                       risk -- and redis_leg_test.go for the
-#                       cross-replica inbox delivery: two booted
-#                       modules over one shared Redis client and
-#                       database, a delivery written on one replica
+#       go/org       PostgreSQL (materialized-path dialect-identity
+#                    proof and the tenant-scoped AssertIsolated suites)
+#       go/authn     PostgreSQL (migrations zero-to-head, isolation
+#                    suite, blind-index uniqueness and concurrent
+#                    refresh-token rotation; no Redis tier -- authn
+#                    touches KVStore only through ratelimit and the
+#                    revocation list, covered by their owning modules'
+#                    tiers)
+#       go/storage   PostgreSQL and RustFS/S3
+#       go/notification PostgreSQL and Redis (schema and isolation
+#                       semantics of the five tables, the consent-ledger
+#                       single-winner verify, and cross-replica inbox
+#                       delivery: a delivery written on one replica
 #                       announcing its inbox row on the bus the other
 #                       replica reads)
-#       go/integration  PostgreSQL -- its integration_test/
-#                       (postgres_softdelete_test.go, added in the
-#                       soft-delete-adoption round) applies the module's
-#                       migrations from zero and re-proves
-#                       WebhookSubscription's mark-delete/restore
-#                       mechanism against a real server, a PostgreSQL-
-#                       specific mistake the unit tier's SQLite-only
-#                       proof cannot rule out
-#       go/metering   PostgreSQL -- its integration_test/ (added in the
-#                     metering-PostgreSQL round) applies the module's
-#                     migrations from zero on the real server, re-runs the
-#                     two tenant-scoped repositories' AssertIsolated
-#                     suites, and carries the round's three regressions --
-#                     PostgreSQL-only failures an SQLite-only suite cannot
-#                     see, each proven to fail pre-fix and pass post-fix on
-#                     real PostgreSQL: Enqueue's idempotent retry inside a
-#                     caller transaction (postgres_outbox_test.go), the
-#                     redelivered-event no-op and the redelivered outbox
-#                     row retiring instead of failing forever
-#                     (postgres_ingest_receipts_test.go), and validate's
-#                     byte bounds refusing an over-long field before any
-#                     write (postgres_validation_test.go)
-#       go/billing    PostgreSQL -- its integration_test/ (added in the
-#                     billing-P1 round) applies the module's migrations
-#                     from zero on the real server, re-runs both
-#                     tenant-scoped models' AssertIsolated suites
-#                     (postgres_isolation_test.go), and carries the
-#                     round's PreDeduct regression -- proven to fail
-#                     pre-fix and pass post-fix on real PostgreSQL with
-#                     SQLSTATE 25P02: PreDeduct's idempotent-retry
-#                     recovery read the duplicate row back on the same
-#                     transaction a unique-violation error had already
-#                     aborted, so a retried reservation could never
-#                     succeed on PostgreSQL though SQLite stayed green
-#                     (postgres_credit_transactions_test.go), plus the
-#                     full reserve/confirm/refund lifecycle and the
-#                     concurrent over-balance single-winner proof
-#                     re-run against the real server
-#       go/pki       PostgreSQL -- its integration_test/ applies the
-#                    migration-dedupe round's regression against a real
-#                    server (postgres_migration_dedupe_test.go: a database
-#                    stranded at migration 0008 with duplicate
-#                    certificate-revocation ledger rows upgrades through
-#                    the registry to exactly one row per certificate).
-#                    Narrower than the module's eventual tier (dual-dialect
-#                    migrations from zero plus the isolation suites, still
-#                    future rounds' work per go/pki/AGENTS.md), but it is
-#                    the one regression whose second dialect no SQLite
-#                    proof can rule out
-#   * reference-app job: examples/reference-app's golangci-lint leg, unit
-#     suite under -race, and its Docker-backed integration tier
-#     (-tags=integration -- testcontainers Redis, RustFS and a Mailpit SMTP
-#     catcher) -- reference-app is its own module, listed in go.work but
+#       go/integration  PostgreSQL (migrations from zero and the
+#                       WebhookSubscription mark-delete/restore
+#                       mechanism against a real server -- a PostgreSQL-
+#                       specific class the unit tier's SQLite-only proof
+#                       cannot rule out)
+#       go/metering   PostgreSQL (migrations from zero, the tenant-
+#                     scoped repositories' AssertIsolated suites, and
+#                     the PostgreSQL-only regressions: Enqueue's
+#                     idempotent retry inside a caller transaction, the
+#                     redelivered-event no-op, the redelivered outbox
+#                     row retiring instead of failing forever, and
+#                     validate's byte bounds)
+#       go/billing    PostgreSQL (migrations from zero, both
+#                     tenant-scoped models' AssertIsolated suites, the
+#                     PreDeduct unique-violation recovery regression --
+#                     a retried reservation read the duplicate row back
+#                     on the transaction a unique-violation error had
+#                     aborted, so it could never succeed on PostgreSQL
+#                     though SQLite stayed green -- plus the
+#                     reserve/confirm/refund lifecycle and the
+#                     concurrent over-balance single-winner proof)
+#       go/pki        PostgreSQL (the migration-dedupe regression
+#                     against a real server: a database stranded at
+#                     migration 0008 with duplicate certificate-
+#                     revocation ledger rows upgrades through the
+#                     registry to exactly one row per certificate --
+#                     the one regression whose second dialect no SQLite
+#                     proof can rule out)
+#     Modules without a matrix row here: go/sharing, go/compliance and
+#     go/admin (see each module's AGENTS.md for what each ships).
+#   * reference-app job: examples/reference-app's golangci-lint leg,
+#     unit suite under -race, and its Docker-backed integration tier
+#     (-tags=integration -- testcontainers Redis, RustFS and a Mailpit
+#     SMTP catcher). The app is its own module, listed in go.work but
 #     outside go/, so neither the module matrix above nor the go/...
 #     import-path build of fast-check covers it (Taskfile's APP_DIR legs
-#     are the local mirror, and Taskfile test:full runs the app's
-#     integration tier the same way this job does). The app's
-#     integration_test/ carries two proofs at this point:
-#     redis_eventbus_composition_test.go boots the real server with a real
-#     Redis Streams EventBus in a STANDALONE topology (the
-#     deployment-composition retrofit's original proof that implementation
-#     composition is orthogonal to deployment mode), and
-#     distributed_mode_test.go (this round) boots the real server TWICE,
-#     both replicas under SPEED_DEPLOYMENT_MODE=distributed against the
-#     same real Redis/RustFS/SMTP-catcher infrastructure. Replica B boots
-#     with SPEED_DISABLE_QUEUE_WORKER=true so it can never self-produce a
-#     delivery; the test opens replica B's own SSE inbox stream
-#     (GET /api/v1/notifications/stream) before replica A creates the note,
-#     and asserts the EventInboxCreated announcement still reaches B --
-#     provable only if the real Redis-backed EventBus crossed the process
-#     boundary, since the two replicas share one SQLite file and a shared
-#     jobs table alone could not explain it. A second sub-assertion drives
-#     one wrong-password login against each replica for the same account
-#     and checks replica B sees the account-locked state replica A's
-#     attempt wrote, proving the KVStore seam crossed the same boundary --
-#     the positive half of the M0 exit condition this file's own NOT YET
-#     section used to record as entirely missing -- plus a negative-path
-#     sub-test proving an incompletely-composed distributed boot still
-#     fails closed through the real binary's own process exit code, not
-#     just server_test.go's in-process form. Its
-#     lint lives here, not in fast-check, keeping the fast per-PR pipeline
-#     on its 8-minute budget; the app's go.mod is still validated on every
-#     PR by fast-check's repo-checks workspace build.
+#     are the local mirror). The app's integration_test/ carries two
+#     proofs: redis_eventbus_composition_test.go boots the real server
+#     with a real Redis Streams EventBus in a STANDALONE topology (the
+#     proof that implementation composition is orthogonal to deployment
+#     mode), and distributed_mode_test.go boots the real server TWICE,
+#     both replicas under APP_DEPLOYMENT_MODE=distributed against the
+#     same real Redis/RustFS/SMTP-catcher infrastructure. Replica B
+#     boots with APP_DISABLE_QUEUE_WORKER=true so it can never
+#     self-produce a delivery; the test opens replica B's own SSE inbox
+#     stream (GET /api/v1/notifications/stream) before replica A creates
+#     the note, and asserts the EventInboxCreated announcement still
+#     reaches B -- provable only if the real Redis-backed EventBus
+#     crossed the process boundary, since the two replicas share one
+#     SQLite file and a shared jobs table alone could not explain it. A
+#     second sub-assertion drives one wrong-password login against each
+#     replica for the same account and checks replica B sees the
+#     account-locked state replica A's attempt wrote, proving the KVStore
+#     seam crossed the same boundary; a negative-path sub-test proves an
+#     incompletely-composed distributed boot fails closed through the
+#     real binary's own process exit code. The app's lint lives here, not
+#     in fast-check, keeping the fast per-PR pipeline on its 8-minute
+#     budget; the app's go.mod is still validated on every PR by
+#     fast-check's repo-checks workspace build.
 #
-# NOT YET -- listed honestly, roadmap M0:
-#   * the dual deployment mode x dual dialect full-matrix acceptance across
-#     every module. What runs above is the real part of the matrix that
-#     exists today: the standalone-mode unit suites, the PostgreSQL /
-#     Redis / RustFS-S3 integration tiers, and the reference-app job's two
-#     integration-tier proofs (a real-Redis composition in a STANDALONE
-#     topology, and -- new this round -- a genuine two-replica DISTRIBUTED
-#     boot against real Redis/RustFS/SMTP, both still on the app's own
-#     hard-coded SQLite dialect: the deployment-mode axis this condition
-#     names is now real, the second-dialect axis is not, and
-#     distributed_mode_test.go's own header records that combination
-#     explicitly as a recorded, not silently worked around, deviation from
-#     what a genuinely dual-dialect distributed run would need). No
-#     dual-mode-x-dual-dialect combined tier exists to run yet.
-#   * coverage reporting: Taskfile test:full passes -cover, but CI has no
-#     collector for coverage output, so -cover is deliberately not passed
-#     on the legs above (and the go-module-ci legs are shared with fast-check
-#     unchanged -- zero regression risk on the every-PR workflow).
+# KNOWN LIMITATIONS (listed honestly):
+#   * the dual deployment mode x dual dialect full-matrix acceptance
+#     across every module does not exist. What runs above is the real
+#     part of the matrix: the standalone-mode unit suites, the
+#     PostgreSQL / Redis / RustFS-S3 integration tiers, and the
+#     reference-app job's two integration-tier proofs -- both replicas
+#     still on the app's own hard-coded SQLite dialect, so the
+#     deployment-mode axis is real while the second-dialect axis is not
+#     (distributed_mode_test.go's own header records that combination
+#     as a recorded deviation, not a silently worked-around one).
+#   * coverage reporting: Taskfile test:full passes -cover, but CI has
+#     no collector for coverage output, so -cover is deliberately not
+#     passed on the legs above (and the go-module-ci legs are shared
+#     with fast-check unchanged -- zero regression risk on the every-PR
+#     workflow).
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
-  # main allows direct pushes (18-cicd.md's branch-protection section) and
-  # that is the normal path here, not an edge case -- most commits land on
-  # main by a direct push rather than a merged, full-ci-labeled pull
-  # request, so without this trigger the Docker-backed integration tiers
-  # below almost never run at all: a push carries no PR to label, so it
-  # could only ever be caught by workflow_dispatch, i.e. a human
-  # remembering to run it by hand. This mirrors fast-check's own
-  # push-to-main trigger and closes the same gap one layer up, at real
-  # cost -- every push now pays this pipeline's ~25-minute Docker-backed
-  # budget, not just fast-check's few minutes.
+  # main allows direct pushes and that is the normal path here, not an
+  # edge case -- most commits land on main by a direct push rather than a
+  # merged, full-ci-labeled pull request, so without this trigger the
+  # Docker-backed integration tiers below almost never run at all: a push
+  # carries no PR to label, so it could only ever be caught by
+  # workflow_dispatch, i.e. a human remembering to run it by hand. This
+  # mirrors fast-check's own push-to-main trigger and closes the same gap
+  # one layer up, at real cost -- every push now pays this pipeline's
+  # ~25-minute Docker-backed budget, not just fast-check's few minutes.
   push:
     branches: [main]
 

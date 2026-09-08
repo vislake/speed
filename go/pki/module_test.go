@@ -35,8 +35,8 @@ func TestModule_DefaultsToLocalSigner(t *testing.T) {
 }
 
 // TestModule_WithSigner_Overrides proves a caller can swap in a different
-// Signer implementation -- the seam round 4's vault/kmsaws provider
-// subpackages will use.
+// Signer implementation -- the seam the vault/kmsaws provider subpackages
+// use.
 func TestModule_WithSigner_Overrides(t *testing.T) {
 	fake := &fakeSigner{}
 	m := NewModule(newTestDB(t), WithSigner("fake", fake))
@@ -146,8 +146,7 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	})
 
 	t.Run("HTTP surface is mounted", func(t *testing.T) {
-		// Round 3 gives pki an HTTP surface -- see AGENTS.md's Known
-		// limitations for the round-1/2 history this supersedes.
+		// pki mounts its HTTP surface at apiPath.
 		routes := reg.Routes.Routes()
 		if len(routes) != 1 {
 			t.Fatalf("Register mounted %d route(s), want exactly 1 (apiPath)", len(routes))
@@ -158,8 +157,8 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	})
 
 	t.Run("events", func(t *testing.T) {
-		// The five signing-key/certificate lifecycle events this round's
-		// expiry scan and revocation drive -- see events.go's doc comment.
+		// The five signing-key/certificate lifecycle events the expiry scan
+		// and revocation drive -- see events.go's doc comment.
 		var types []string
 		for _, decl := range reg.Events.Published() {
 			types = append(types, decl.Type)
@@ -188,8 +187,8 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 
 // TestModule_Register_WithQueue_ClaimsTheExpiryScanHandler proves the
 // opposite of the "no jobs handler without a queue" case above: WithQueue
-// makes Register claim taskTypeExpiryScan AND (round 3) taskTypeCRLRegenerate
-// on reg.Jobs, so a host draining reg.Jobs.Handlers() onto its jobs.Queue
+// makes Register claim taskTypeExpiryScan AND taskTypeCRLRegenerate on
+// reg.Jobs, so a host draining reg.Jobs.Handlers() onto its jobs.Queue
 // gets a worker for both.
 func TestModule_Register_WithQueue_ClaimsTheExpiryScanHandler(t *testing.T) {
 	db := newTestDB(t)
@@ -209,8 +208,8 @@ func TestModule_Register_WithQueue_ClaimsTheExpiryScanHandler(t *testing.T) {
 }
 
 // TestModule_Register_RevokePermissionsAreSplitByDataDomain pins the
-// permission-split half of the platform-domain finding: no single
-// permission may cover both the signing-key revoke (a platform-level
+// permission split: no single permission may cover both the signing-key
+// revoke (a platform-level
 // operation on pki_signing_keys, whose permission must be evaluated in the
 // platform domain -- rbac.SystemDomain -- never in a request tenant's
 // domain) and the certificate revoke (a tenant-level operation on

@@ -95,8 +95,7 @@ func renderAuditReportJSON(events []audit.AuditEvent) ([]byte, error) {
 		// json.Marshal only fails on a value it cannot represent at all
 		// (a channel, a function, a cyclic map) -- not a realistic shape
 		// for audit.AuditEvent's plain fields -- but the error is
-		// propagated rather than assumed impossible, per this
-		// repository's own error-handling discipline.
+		// propagated rather than assumed impossible.
 		return nil, fmt.Errorf("compliance: render JSON audit report: %w", err)
 	}
 	return b, nil

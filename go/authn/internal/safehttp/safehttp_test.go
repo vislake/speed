@@ -384,9 +384,8 @@ func TestGuard_Client_RefusesA307Or308RedirectToAForbiddenScheme(t *testing.T) {
 
 // TestGuard_Client_StillFollowsARedirectThatKeepsAnAllowedScheme pins the
 // no-over-blocking side of the redirect policy's scheme re-check: a hop
-// whose scheme is still allowed is followed exactly as it was before the
-// check existed. The chain here stays https end to end under the guard's
-// default https-only allowlist.
+// whose scheme is still allowed is followed. The chain here stays https end
+// to end under the guard's default https-only allowlist.
 func TestGuard_Client_StillFollowsARedirectThatKeepsAnAllowedScheme(t *testing.T) {
 	var hop *httptest.Server
 	hop = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

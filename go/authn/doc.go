@@ -26,7 +26,7 @@
 // why none of those models implements [github.com/vislake/speed/go/dbkit.TenantScoped]
 // and why their repositories hold a plain *gorm.DB rather than embedding
 // dbkit.Repository[T] -- see repository.go's file comment for the full
-// justification, and go/authn/AGENTS.md for the rule a reviewer should apply.
+// justification.
 //
 // # Sessions, tenants and tokens
 //

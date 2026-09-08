@@ -153,13 +153,12 @@ func TestHandler_Register_WeakPassword_Returns400(t *testing.T) {
 }
 
 // TestHandler_Register_MalformedBody_ReturnsCatalogedInvalidRequestBodyCode
-// is the regression for P2-6: decodeJSON's answer for a malformed request
-// body -- returned by every one of this module's operations that reads
-// one, register included -- used to have no entry in errorCodes (and so no
-// locale text in either language): a real answer no client could
-// localize, only render as a raw key. It is now ErrInvalidRequestBody
-// (errors.go), cataloged and bilingually rendered like every other coded
-// error this module returns.
+// pins decodeJSON's answer for a malformed request body -- returned by
+// every one of this module's operations that reads one, register included.
+// The answer must be a cataloged error: an uncataloged code would give a
+// client no locale text to localize, only a raw key to render. The answer
+// is ErrInvalidRequestBody (errors.go), cataloged and bilingually rendered
+// like every other coded error this module returns.
 func TestHandler_Register_MalformedBody_ReturnsCatalogedInvalidRequestBodyCode(t *testing.T) {
 	t.Parallel()
 	h, _ := newTestHandler(t)
@@ -186,16 +185,15 @@ func TestHandler_Register_MalformedBody_ReturnsCatalogedInvalidRequestBodyCode(t
 	}
 }
 
-// TestHandler_Register_OversizedBody_RefusedWithInvalidRequestBody is the
-// P3-12 regression for the MaxBytesReader bound: an unauthenticated register
-// (or login) endpoint must not read an arbitrarily large body in full --
-// unbounded buffering of an attacker's payload before any validation has
-// run -- nor let an over-width display name reach the database. The body
-// below is valid JSON whose display_name field alone exceeds the byte bound;
-// every other field is within policy, so the ONLY thing that can refuse it
-// is the body bound, and the refusal must surface as the catalogued
-// ErrInvalidRequestBody rather than a successful account creation (which is
-// what an unbounded decoder did before the fix, on the unit tier's SQLite).
+// TestHandler_Register_OversizedBody_RefusedWithInvalidRequestBody pins
+// the MaxBytesReader bound: an unauthenticated register (or login) endpoint
+// must not read an arbitrarily large body in full -- unbounded buffering of
+// an attacker's payload before any validation has run -- nor let an
+// over-width display name reach the database. The body below is valid JSON
+// whose display_name field alone exceeds the byte bound; every other field
+// is within policy, so the ONLY thing that can refuse it is the body bound,
+// and the refusal must surface as the catalogued ErrInvalidRequestBody
+// rather than a successful account creation.
 func TestHandler_Register_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T) {
 	t.Parallel()
 	h, _ := newTestHandler(t)
@@ -226,13 +224,13 @@ func TestHandler_Register_OversizedBody_RefusedWithInvalidRequestBody(t *testing
 	}
 }
 
-// TestHandler_Register_DisplayNameLengthIsValidated is the P3-12 display-name
-// half: the schema declares no maxLength for display_name, but the
-// users.display_name column the value lands in is VARCHAR(128) -- the
-// module's displayNameWidth constant, enforced by PostgreSQL and ignored by
-// SQLite -- so an over-width name must be refused here with the catalogued
-// ErrDisplayNameTooLong, and a name exactly at the width must still be
-// accepted.
+// TestHandler_Register_DisplayNameLengthIsValidated pins the display-name
+// half of the body bound: the schema declares no maxLength for display_name,
+// but the users.display_name column the value lands in is VARCHAR(128) --
+// the module's displayNameWidth constant, enforced by PostgreSQL and
+// ignored by SQLite -- so an over-width name must be refused here with the
+// catalogued ErrDisplayNameTooLong, and a name exactly at the width must
+// still be accepted.
 func TestHandler_Register_DisplayNameLengthIsValidated(t *testing.T) {
 	t.Parallel()
 
@@ -267,13 +265,13 @@ func TestHandler_Register_DisplayNameLengthIsValidated(t *testing.T) {
 	})
 }
 
-// TestHandler_EnsurePreAuthCookie_MaxAgeTracksConfiguredStateTTL is the
-// P3-14 regression: the pre-auth cookie's Max-Age used to hardcode
-// DefaultOAuthStateTTL (10 minutes) while the state record it accompanies is
-// issued with the CONFIGURED cfg.oauthStateTTL -- a host that raised the TTL
-// for slow identity providers got a cookie that died before its state,
-// stranding the callback without its binding. With the state TTL configured
-// above the default, the minted cookie must carry that longer Max-Age.
+// TestHandler_EnsurePreAuthCookie_MaxAgeTracksConfiguredStateTTL pins the
+// cookie's Max-Age to the state TTL: the cookie accompanies a state record
+// issued with the CONFIGURED cfg.oauthStateTTL, so a Max-Age that
+// hard-coded the default would give a host that raised the TTL for slow
+// identity providers a cookie that dies before its state -- stranding the
+// callback without its binding. With the state TTL configured above the
+// default, the minted cookie must carry that longer Max-Age.
 func TestHandler_EnsurePreAuthCookie_MaxAgeTracksConfiguredStateTTL(t *testing.T) {
 	t.Parallel()
 
@@ -358,7 +356,7 @@ func TestHandler_LoginWithPassword_WrongPassword_Returns401(t *testing.T) {
 }
 
 // findAuditEvent scans recorder for an audit.EventRecorded event whose
-// Action matches, failing the test when none is found -- the P2-5
+// Action matches, failing the test when none is found -- the audit-record
 // regression tests' shared assertion helper.
 func findAuditEvent(t *testing.T, recorder *testutil.EventRecorder, action string) audit.RecordedEvent {
 	t.Helper()
@@ -378,8 +376,9 @@ func findAuditEvent(t *testing.T, recorder *testutil.EventRecorder, action strin
 	return audit.RecordedEvent{}
 }
 
-// auditTenantIs asserts that evt's tenant_id equals want -- the P1-4
-// regression's shared assertion helper. authn's routes are not downstream
+// auditTenantIs asserts that evt's tenant_id equals want -- the
+// audit-record tenant assertions' shared helper. authn's routes are not
+// downstream
 // of tenancy.Middleware, so the tenant on every audit row it records comes
 // from the call site itself (recordAudit's tenant argument, handler.go);
 // these assertions pin that each site really names the tenant it decided
@@ -407,11 +406,10 @@ func auditTenantIsEmpty(t *testing.T, evt audit.RecordedEvent) {
 	}
 }
 
-// TestHandler_LoginWithPassword_ValidCredentials_RecordsLoginAuditEvent is
-// one of the P2-5 regression's representative sample (root round prompt's
-// own named example, "login success"): 9 audit actions were declared on
-// the registry but nothing anywhere ever called audit.Emit for any of
-// them, so a real password sign-in used to leave no AuditEvent at all.
+// TestHandler_LoginWithPassword_ValidCredentials_RecordsLoginAuditEvent
+// pins the login-success audit record: the declared audit actions are only
+// declarations until a real call site emits, so the assertion here proves a
+// real password sign-in leaves an AuditEvent behind.
 func TestHandler_LoginWithPassword_ValidCredentials_RecordsLoginAuditEvent(t *testing.T) {
 	t.Parallel()
 	h, f, recorder := newAuditTestHandler(t)
@@ -434,13 +432,11 @@ func TestHandler_LoginWithPassword_ValidCredentials_RecordsLoginAuditEvent(t *te
 	if evt.Actor.ID != user.ID {
 		t.Errorf("Actor.ID = %q, want %q", evt.Actor.ID, user.ID)
 	}
-	// P2-pkgcore-actor-1: a human subject's audit record must carry the
-	// account's display name, resolved from the users table at record time
-	// (recordAudit's own doc comment in handler.go). An empty
-	// Actor.DisplayName means the trail can no longer say who this actor
-	// was once the account is renamed or deleted -- the very readability
-	// pkgcore.Actor.DisplayName exists for. On unfixed main every human
-	// actor was recorded id-only, so this assertion fails there.
+	// A human subject's audit record must carry the account's display name,
+	// resolved from the users table at record time (recordAudit's own doc
+	// comment in handler.go). An empty Actor.DisplayName means the trail can
+	// no longer say who this actor was once the account is renamed or
+	// deleted -- the very readability pkgcore.Actor.DisplayName exists for.
 	if evt.Actor.DisplayName != user.DisplayName {
 		t.Errorf("Actor.DisplayName = %q, want %q (the registered account's own display name)",
 			evt.Actor.DisplayName, user.DisplayName)
@@ -453,9 +449,9 @@ func TestHandler_LoginWithPassword_ValidCredentials_RecordsLoginAuditEvent(t *te
 }
 
 // TestHandler_LoginWithPassword_WrongPassword_RecordsLoginFailureAuditEvent
-// is the P2-5 regression's other named representative ("login failure"):
-// a failed sign-in attempt is exactly as security-relevant as a
-// successful one, and used to leave the same nothing behind.
+// pins the login-failure audit record: a failed sign-in attempt is exactly
+// as security-relevant as a successful one and must leave the same kind of
+// record behind.
 func TestHandler_LoginWithPassword_WrongPassword_RecordsLoginFailureAuditEvent(t *testing.T) {
 	t.Parallel()
 	h, f, recorder := newAuditTestHandler(t)
@@ -482,7 +478,7 @@ func TestHandler_LoginWithPassword_WrongPassword_RecordsLoginFailureAuditEvent(t
 }
 
 // TestHandler_LoginWithPassword_Locked_Returns429WithRetryAfter is the
-// round's HTTP-translation proof: ratelimit.go's progressive lockout is
+// HTTP-translation proof: ratelimit.go's progressive lockout is
 // business logic with no HTTP opinion of its own, and this handler is what
 // turns ErrAccountLocked into a 429 carrying a Retry-After header.
 func TestHandler_LoginWithPassword_Locked_Returns429WithRetryAfter(t *testing.T) {
@@ -541,14 +537,13 @@ func TestHandler_RequestSMSCode_KnownAndUnknownPhone_BothReturn202(t *testing.T)
 	}
 }
 
-// TestHandler_RequestSMSCode_GatewayDown_RegisteredPhoneStillAnswers202 is
-// the P2-8 regression at the layer the oracle actually lives: the HTTP
-// status. Before the fix, a registered phone whose SMS gateway failed
-// answered 500 while an unregistered phone answered 202 under the very same
-// outage -- a response-status split that tells an attacker a number is
-// registered exactly when the platform can least afford to admit it. The
-// gateway failure is logged server-side and both requests answer 202 with
-// an empty body.
+// TestHandler_RequestSMSCode_GatewayDown_RegisteredPhoneStillAnswers202
+// pins the response-status layer of the oracle: a registered phone whose
+// SMS gateway failed must not answer 500 while an unregistered phone
+// answers 202 under the same outage -- a response-status split would tell
+// an attacker a number is registered exactly when the platform can least
+// afford to admit it. The gateway failure is logged server-side and both
+// requests answer 202 with an empty body.
 func TestHandler_RequestSMSCode_GatewayDown_RegisteredPhoneStillAnswers202(t *testing.T) {
 	t.Parallel()
 
@@ -710,10 +705,10 @@ func TestHandler_Logout_ValidPrincipal_RevokesSessionAndReturns204(t *testing.T)
 	}
 }
 
-// TestHandler_Logout_ValidPrincipal_RecordsSessionRevokeAuditEvent is the
-// P2-5 regression's third named representative, "session revocation":
-// AuditActionSessionRevoke was declared but never emitted for any of
-// this module's three revoke paths (logout, revoke-one, revoke-others).
+// TestHandler_Logout_ValidPrincipal_RecordsSessionRevokeAuditEvent pins the
+// "session revocation" representative: AuditActionSessionRevoke must be
+// emitted for the module's three revoke paths (logout, revoke-one,
+// revoke-others), and this test covers the logout path.
 func TestHandler_Logout_ValidPrincipal_RecordsSessionRevokeAuditEvent(t *testing.T) {
 	t.Parallel()
 	h, f, recorder := newAuditTestHandler(t)
@@ -743,15 +738,15 @@ func TestHandler_Logout_ValidPrincipal_RecordsSessionRevokeAuditEvent(t *testing
 	auditTenantIs(t, evt, pair.Principal.TenantID)
 }
 
-// TestHandler_NilBus_LogsTheInoperativeAuditStateOnce is the regression for
-// the P3 finding that recordAudit's nil-bus branch was quieter than its
-// Emit-failure branch: an Emit that fails mid-publish logs at Error, while a
-// Handler constructed without a bus -- a permanent state in which NONE of
-// the module's declared audit actions will ever be recorded -- returned
-// silently on every audited operation, so a host that mis-wired its Handler
-// by hand would never hear about it. The fix announces the inoperative
-// state once per Handler, at Error level, on the first audited operation
-// (see recordAudit and nilBusWarned): before it, no log line exists at all.
+// TestHandler_NilBus_LogsTheInoperativeAuditStateOnce pins recordAudit's
+// nil-bus branch against being quieter than its Emit-failure branch: an
+// Emit that fails mid-publish logs at Error, while a Handler constructed
+// without a bus -- a permanent state in which NONE of the module's declared
+// audit actions will ever be recorded -- must not return silently on every
+// audited operation, or a host that mis-wired its Handler by hand would
+// never hear about it. The inoperative state is announced once per Handler,
+// at Error level, on the first audited operation (see recordAudit and
+// nilBusWarned).
 //
 // The deliberate once-per-Handler shape is itself pinned here: a second
 // audited operation on the same bus-less Handler must not add a second
@@ -792,20 +787,18 @@ func TestHandler_NilBus_LogsTheInoperativeAuditStateOnce(t *testing.T) {
 	}
 }
 
-// The eight tests below close a code-review gap the P2-5 round's own
-// summary left as "a scope decision": only 3 of the 9 declared audit
-// actions (AuditActionUserLogin above, twice, plus
-// AuditActionSessionRevoke's logout path) were verified against a real
-// event landing on the bus. Each of these drives the real HTTP path that
-// calls recordAudit and asserts on the recorded event's Action, Resource,
-// Actor and Result -- exactly as the three above do -- so a wrong resource
-// id, actor or action string at any of these call sites now fails a test
-// rather than going unnoticed.
+// The tests below extend the audit-record proofs beyond the actions the
+// tests above verify (AuditActionUserLogin, and AuditActionSessionRevoke's
+// logout path). Each drives the real HTTP path that calls recordAudit and
+// asserts on the recorded event's Action, Resource, Actor and Result --
+// exactly as the ones above do -- so a wrong resource id, actor or action
+// string at any of these call sites fails a test rather than going
+// unnoticed.
 
-// TestHandler_Register_ValidBody_RecordsUserRegisterAuditEvent covers
-// AuditActionUserRegister, wired at AuthnRegister but never previously
-// observed landing on the bus (TestHandler_Register_ValidBody_ReturnsCreatedUser
-// uses the plain newTestHandler, which discards its EventRecorder).
+// TestHandler_Register_ValidBody_RecordsUserRegisterAuditEvent pins
+// AuditActionUserRegister's emission on AuthnRegister's HTTP path
+// (TestHandler_Register_ValidBody_ReturnsCreatedUser uses the plain
+// newTestHandler, which discards its EventRecorder).
 func TestHandler_Register_ValidBody_RecordsUserRegisterAuditEvent(t *testing.T) {
 	t.Parallel()
 	h, _, recorder := newAuditTestHandler(t)
@@ -840,24 +833,18 @@ func TestHandler_Register_ValidBody_RecordsUserRegisterAuditEvent(t *testing.T) 
 }
 
 // TestHandler_Register_AuthenticatedCaller_AuditRowCarriesTheAttestedTenant
-// is the P1-authn-15 consequence-(3) regression: AuthnRegister's audit row
-// used to hard-code an empty tenant, dropping the tenant the caller's own
-// Principal attested -- while the same request's authn.user.created event
-// (then) stamped that tenant onto the account's provisioning, so the row
-// and the operation's real effect disagreed. Registration itself is
-// pre-tenant by construction after this round (Service.Register publishes
-// the event through the tenant-less funnel, whatever the context holds),
-// but the row is this handler's request ledger: when the caller arrived
-// authenticated, the acting Principal's TenantID claim is the one tenant
+// pins the register audit row's tenant when the caller arrived
+// authenticated: the acting Principal's TenantID claim is the one tenant
 // the request actually attested, and the row records it -- so tenant X's
 // own audit reader sees that an account creation was initiated by one of
-// X's members. The multi-account-per-person shape is what keeps the
-// register itself succeeding for an authenticated caller (the attested
-// tenant is recorded, never acted on: the event stays tenant-less and the
-// account keeps no membership in the caller's tenant).
-//
-// Failing before the fix: the row carried no tenant although the request
-// context held a Principal attesting testTenantA.
+// X's members. A row that hard-coded an empty tenant would drop that
+// attestation, while the same request's authn.user.created event stays
+// tenant-less (Service.Register publishes it through the tenant-less
+// funnel, whatever the context holds): the row is this handler's request
+// ledger, not the account's seat. The multi-account-per-person shape is
+// what keeps the register itself succeeding for an authenticated caller
+// (the attested tenant is recorded, never acted on: the event stays
+// tenant-less and the account keeps no membership in the caller's tenant).
 func TestHandler_Register_AuthenticatedCaller_AuditRowCarriesTheAttestedTenant(t *testing.T) {
 	t.Parallel()
 	h, _, recorder := newAuditTestHandler(t)
@@ -886,9 +873,8 @@ func TestHandler_Register_AuthenticatedCaller_AuditRowCarriesTheAttestedTenant(t
 	auditTenantIs(t, evt, testTenantA)
 }
 
-// TestHandler_SwitchTenant_ActiveMember_RecordsTenantSwitchAuditEvent covers
-// AuditActionTenantSwitch, wired at AuthnSwitchTenant but never previously
-// observed landing on the bus
+// TestHandler_SwitchTenant_ActiveMember_RecordsTenantSwitchAuditEvent pins
+// AuditActionTenantSwitch's emission at AuthnSwitchTenant's HTTP path
 // (TestHandler_SwitchTenant_ActiveMember_ReissuesAccessToken uses the plain
 // newTestHandler).
 func TestHandler_SwitchTenant_ActiveMember_RecordsTenantSwitchAuditEvent(t *testing.T) {
@@ -999,11 +985,11 @@ func TestHandler_SocialCallback_BindToSignedInAccount_RecordsIdentityBindAuditEv
 	auditTenantIsEmpty(t, evt)
 
 	// The EventIdentityBound the same flow announces is pinned empty for
-	// the same reason (P2-9's per-site decision): the binding is an
-	// account-level fact recorded at a pre-auth callback where no tenant is
-	// attested -- the mirror of the audit row above. Only an operation that
-	// can attest a tenant (the session events, from the session row; the
-	// protected user events, from the layered principal) stamps one.
+	// the same reason: the binding is an account-level fact recorded at a
+	// pre-auth callback where no tenant is attested -- the mirror of the
+	// audit row above. Only an operation that can attest a tenant (the
+	// session events, from the session row; the protected user events, from
+	// the layered principal) stamps one.
 	boundEvent, ok := f.events.First(EventIdentityBound)
 	if !ok {
 		t.Fatalf("no %s event was published", EventIdentityBound)
@@ -1014,8 +1000,7 @@ func TestHandler_SocialCallback_BindToSignedInAccount_RecordsIdentityBindAuditEv
 }
 
 // TestHandler_UnbindIdentity_OwnedBySelfWithPasswordRemaining_RecordsIdentityUnbindAuditEvent
-// covers AuditActionIdentityUnbind, wired at AuthnUnbindIdentity but never
-// previously observed landing on the bus
+// pins AuditActionIdentityUnbind's emission at AuthnUnbindIdentity
 // (TestHandler_UnbindIdentity_NotOwnedBySelf_Returns404 only exercises the
 // 404 path, on an identity id that never existed). The identity is bound
 // directly through the Service (SocialAuthorizeURL/SocialCallback), the
@@ -1071,10 +1056,10 @@ func TestHandler_UnbindIdentity_OwnedBySelfWithPasswordRemaining_RecordsIdentity
 	auditTenantIs(t, evt, testTenantA)
 
 	// The business event the same protected operation announces must carry
-	// the same tenant as its audit row (P2-9): the handler layers the
-	// acting principal's tenant onto the ctx it hands the service, and
-	// Service.publish reads it back. Before the fix EventIdentityUnbound
-	// published with TenantID empty.
+	// the same tenant as its audit row: the handler layers the acting
+	// principal's tenant onto the ctx it hands the service, and
+	// Service.publish reads it back. An empty TenantID would strand a
+	// tenant-scoped subscriber that must route on the event's tenant.
 	unboundEvent, ok := f.events.First(EventIdentityUnbound)
 	if !ok {
 		t.Fatalf("no %s event was published", EventIdentityUnbound)
@@ -1084,10 +1069,10 @@ func TestHandler_UnbindIdentity_OwnedBySelfWithPasswordRemaining_RecordsIdentity
 	}
 }
 
-// TestHandler_ConfirmTOTP_ValidCode_RecordsMFAEnrollAuditEvent covers
-// AuditActionMFAEnroll, wired at AuthnConfirmTOTP but never previously
-// observed landing on the bus (TestHandler_MFAEnrollConfirmStepUp_FullRoundTrip
-// uses the plain newTestHandler).
+// TestHandler_ConfirmTOTP_ValidCode_RecordsMFAEnrollAuditEvent pins
+// AuditActionMFAEnroll's emission on AuthnConfirmTOTP's HTTP path
+// (TestHandler_MFAEnrollConfirmStepUp_FullRoundTrip uses the plain
+// newTestHandler).
 func TestHandler_ConfirmTOTP_ValidCode_RecordsMFAEnrollAuditEvent(t *testing.T) {
 	t.Parallel()
 	h, f, recorder := newAuditTestHandler(t)
@@ -1126,8 +1111,8 @@ func TestHandler_ConfirmTOTP_ValidCode_RecordsMFAEnrollAuditEvent(t *testing.T) 
 	auditTenantIs(t, evt, testTenantA)
 
 	// The business event the same protected operation announces must carry
-	// the same tenant as its audit row (P2-9); before the fix
-	// EventMFAEnrolled published with TenantID empty.
+	// the same tenant as its audit row; an empty TenantID would strand a
+	// tenant-scoped subscriber that must route on the event's tenant.
 	enrolled, ok := f.events.First(EventMFAEnrolled)
 	if !ok {
 		t.Fatalf("no %s event was published", EventMFAEnrolled)
@@ -1138,9 +1123,8 @@ func TestHandler_ConfirmTOTP_ValidCode_RecordsMFAEnrollAuditEvent(t *testing.T) 
 }
 
 // TestHandler_RegenerateRecoveryCodes_SteppedUp_RecordsMFARecoveryCodesRegenerateAuditEvent
-// covers AuditActionMFARecoveryCodesRegenerate, wired at
-// AuthnRegenerateRecoveryCodes but never previously observed landing on the
-// bus.
+// pins AuditActionMFARecoveryCodesRegenerate's emission on
+// AuthnRegenerateRecoveryCodes' HTTP path.
 func TestHandler_RegenerateRecoveryCodes_SteppedUp_RecordsMFARecoveryCodesRegenerateAuditEvent(t *testing.T) {
 	t.Parallel()
 	h, f, recorder := newAuditTestHandler(t)
@@ -1203,8 +1187,8 @@ func TestHandler_RegenerateRecoveryCodes_SteppedUp_RecordsMFARecoveryCodesRegene
 	auditTenantIs(t, evt, testTenantA)
 
 	// The business event the same protected operation announces must carry
-	// the same tenant as its audit row (P2-9); before the fix
-	// EventMFARecoveryCodesRegenerated published with TenantID empty.
+	// the same tenant as its audit row; an empty TenantID would strand a
+	// tenant-scoped subscriber that must route on the event's tenant.
 	regenerated, ok := f.events.First(EventMFARecoveryCodesRegenerated)
 	if !ok {
 		t.Fatalf("no %s event was published", EventMFARecoveryCodesRegenerated)
@@ -1214,9 +1198,8 @@ func TestHandler_RegenerateRecoveryCodes_SteppedUp_RecordsMFARecoveryCodesRegene
 	}
 }
 
-// TestHandler_RevokeSession_OwnSession_RecordsSessionRevokeAuditEvent covers
-// AuditActionSessionRevoke's revoke-one path, wired at AuthnRevokeSession
-// but never previously observed landing on the bus
+// TestHandler_RevokeSession_OwnSession_RecordsSessionRevokeAuditEvent pins
+// AuditActionSessionRevoke's revoke-one path at AuthnRevokeSession
 // (TestHandler_RevokeSession_AnotherUsers_Returns404 only exercises the 404
 // path, never a successful revoke).
 func TestHandler_RevokeSession_OwnSession_RecordsSessionRevokeAuditEvent(t *testing.T) {
@@ -1250,9 +1233,8 @@ func TestHandler_RevokeSession_OwnSession_RecordsSessionRevokeAuditEvent(t *test
 	auditTenantIs(t, evt, testTenantA)
 }
 
-// TestHandler_RevokeOtherSessions_RecordsSessionRevokeAuditEvent covers
-// AuditActionSessionRevoke's revoke-others path, wired at
-// AuthnRevokeOtherSessions but never previously observed landing on the bus
+// TestHandler_RevokeOtherSessions_RecordsSessionRevokeAuditEvent pins
+// AuditActionSessionRevoke's revoke-others path at AuthnRevokeOtherSessions
 // (TestHandler_RevokeOtherSessions_KeepsCurrent uses the plain
 // newTestHandler). This is also the one call site whose Resource carries a
 // DisplayName ("other sessions", handler.go's own comment on why: the
@@ -1334,18 +1316,18 @@ func TestHandler_SocialAuthorize_UnknownProvider_Returns400(t *testing.T) {
 
 // TestHandler_SocialSignIn_FullRoundTrip drives authorize then callback
 // exactly as a browser would: the pre-auth cookie the first response sets
-// is carried onto the second request. This is the round's proof that the
-// cookie-derived SessionBinding actually gates the callback end to end,
-// through the HTTP surface rather than by calling SocialAuthorizeURL and
-// SocialCallback directly the way identity_test.go's socialSignIn does.
+// is carried onto the second request. It proves that the cookie-derived
+// SessionBinding actually gates the callback end to end, through the HTTP
+// surface rather than by calling SocialAuthorizeURL and SocialCallback
+// directly the way identity_test.go's socialSignIn does.
 func TestHandler_SocialSignIn_FullRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	// The callback auto-links to a PRE-REGISTERED account (verified email,
 	// trusted provider) rather than letting the flow JIT-provision a brand
 	// new one: a freshly provisioned account has no tenant membership yet
-	// (org's own concern, deferred per AGENTS.md's Known Limitations) and
-	// would fail to mint a session for exactly that reason, which is not
+	// (membership is org's own concern, which authn never grants on its own)
+	// and would fail to mint a session for exactly that reason, which is not
 	// what this test is proving.
 	provider := &stubProvider{name: ProviderGoogle, identity: &ExternalIdentity{
 		ExternalID: "ext-1", Email: "social@example.com", EmailVerified: true, Name: "Social Person",
@@ -1648,11 +1630,11 @@ func TestHandler_EnrollTOTP_ReplacingActiveFactor_RequiresStepUp(t *testing.T) {
 // r.TLS is nil for every request in the most common production topology --
 // TLS terminated at a reverse proxy, the Go process only ever seeing
 // plaintext HTTP -- so a cookie whose Secure flag follows r.TLS alone ships
-// without the attribute exactly there (the reported gap). The host knows its
-// own topology and forces the attribute through WithSecureCookies; a request
-// that did arrive over direct TLS still gets it without the option, and a
-// plaintext listener (local development) with no option keeps issuing an
-// insecure cookie as before.
+// without the attribute exactly there. The host knows its own topology and
+// forces the attribute through WithSecureCookies; a request that did arrive
+// over direct TLS still gets it without the option, and a plaintext
+// listener (local development) with no option keeps issuing an insecure
+// cookie.
 func TestHandler_PreAuthCookie_SecureAttribute(t *testing.T) {
 	t.Parallel()
 
@@ -2089,32 +2071,26 @@ func TestHandler_DeploymentModeConsistency_SMSFlow(t *testing.T) {
 func strPtr(s string) *string { return &s }
 
 // ---------------------------------------------------------------------------
-// Trusted-proxy client-IP derivation (handler.go's clientIP), the
-// regression suite for the reference-app Fly.io finding: every recorded
-// session/login-history address was the proxy's (172.16.45.218), never the
-// real client's, because the platform-injected forwarding headers
-// (Fly-Client-IP / X-Forwarded-For) were never read. The fix gates header
-// reading on a host-declared trusted-proxy list (WithTrustedProxies), so
-// the two halves of the finding each get their own pinned shape: with the
-// proxies declared, a request from one of them records the forwarded
-// client address; without them (or from a peer that is not one), a request
-// carrying spoofed forwarding headers still records its connection
-// address. The derivation tests below exercise clientIP directly; the
-// flow tests drive whole sign-in and registration paths and read the
-// recorded rows and responses back.
+// Trusted-proxy client-IP derivation (handler.go's clientIP). Header
+// reading is gated on a host-declared trusted-proxy list
+// (WithTrustedProxies): with the proxies declared, a request from one of
+// them records the forwarded client address; without them (or from a peer
+// that is not one), a request carrying spoofed forwarding headers still
+// records its connection address. The derivation tests below exercise
+// clientIP directly; the flow tests drive whole sign-in and registration
+// paths and read the recorded rows and responses back.
 //
-// The header-selection follow-up round (the P0 finding that reading
-// Fly-Client-IP for ANY declared proxy handed the client the recorded and
-// rate-limited address through any generic reverse proxy that forwards
-// unknown headers verbatim -- nginx, ALB, Envoy, Cloudflare) re-aimed this
-// suite at host-declared header semantics: X-Forwarded-For -- the
-// self-protecting chain walk, whose rightmost entry a trusted proxy itself
-// appended -- is the one forwarding header read under the trusted-peer
-// gate alone, while a single-hop vendor header (Fly-Client-IP) is read
-// ONLY when the host opted into that specific header
+// WHICH headers may be read is host-declared per header: X-Forwarded-For --
+// the self-protecting chain walk, whose rightmost entry a trusted proxy
+// itself appended -- is the one forwarding header read under the
+// trusted-peer gate alone, while a single-hop vendor header (Fly-Client-IP)
+// is read ONLY when the host opted into that specific header
 // (WithVendorClientIPHeaders) for a deployment whose proxy genuinely
-// overwrites it on every request. The XFF cases below pin the default
-// shape; the vendor-header cases have tests of their own.
+// overwrites it on every request. Reading a vendor header for ANY declared
+// proxy would hand the client the recorded and rate-limited address through
+// any generic reverse proxy that forwards unknown headers verbatim (nginx,
+// ALB, Envoy, Cloudflare). The XFF cases below pin the default shape; the
+// vendor-header cases have tests of their own.
 
 // signInFrom issues a password sign-in for identifier on h over a request
 // whose direct connection address is peer (r.RemoteAddr) and which carries
@@ -2144,14 +2120,13 @@ func signInFrom(h *Handler, identifier, peer string, headers [][2]string) *httpt
 // derivation level: with the proxies declared
 // (WithTrustedProxies("203.0.113.0/24")), a request whose direct peer is
 // one of them carries the real client in the chain the proxy appended to
-// X-Forwarded-For, and clientIP must return that address -- where the
-// pre-fix code returned the proxy (the finding's 172.16.45.218). The chain
-// is walked from the right, stripping entries that name declared proxies,
-// so a client's own spoofed prefix entries can never displace the address
-// the trusted proxy appended. X-Forwarded-For is read under the
-// trusted-peer gate alone, no per-header host declaration required: the
-// walk itself is the protection, the rightmost entries being the work of
-// the declared proxies only.
+// X-Forwarded-For, and clientIP must return that address -- not the proxy
+// itself. The chain is walked from the right, stripping entries that name
+// declared proxies, so a client's own spoofed prefix entries can never
+// displace the address the trusted proxy appended. X-Forwarded-For is read
+// under the trusted-peer gate alone, no per-header host declaration
+// required: the walk itself is the protection, the rightmost entries being
+// the work of the declared proxies only.
 func TestHandler_ClientIP_DeclaredProxyXForwardedFor_ResolvesTheRealClient(t *testing.T) {
 	t.Parallel()
 	h, _ := newTestHandler(t, WithTrustedProxies("203.0.113.0/24"))
@@ -2211,20 +2186,20 @@ func TestHandler_ClientIP_DeclaredProxyXForwardedFor_ResolvesTheRealClient(t *te
 	})
 }
 
-// TestHandler_ClientIP_VendorHeader_RequiresHostOptIn is the P0-authn-14
-// regression at the derivation level: a single-hop vendor header
-// (Fly-Client-IP) is read ONLY when the host opted into that specific
-// header (WithVendorClientIPHeaders), never merely because the request's
-// direct peer is a declared proxy. The deployment this test stands in for
+// TestHandler_ClientIP_VendorHeader_RequiresHostOptIn pins the opt-in at
+// the derivation level: a single-hop vendor header (Fly-Client-IP) is read
+// ONLY when the host opted into that specific header
+// (WithVendorClientIPHeaders), never merely because the request's direct
+// peer is a declared proxy. The deployment this test stands in for
 // declared its GENERIC reverse proxy (nginx/ALB/Envoy/Cloudflare -- the
 // shapes that forward unknown headers verbatim, never stripping a
 // Fly-specific one), so a client-chosen Fly-Client-IP must never become
 // the recorded address: with the honest X-Forwarded-For chain in hand it
-// is the chain's answer that wins, and without one it is the peer. The
-// pre-fix code failed both halves -- the reviewer's probe returned the
-// client-chosen value 192.0.2.66 over the chain's own 198.51.100.7, and
-// accepted 192.0.2.66, 8.8.8.8, 203.0.113.250 (inside the declared trust
-// range itself -- X-Forwarded-For would have stripped it) and ::1.
+// is the chain's answer that wins, and without one it is the peer. A
+// gate-only read would return the client-chosen value 192.0.2.66 over the
+// chain's own 198.51.100.7, and would accept 192.0.2.66, 8.8.8.8,
+// 203.0.113.250 (inside the declared trust range itself --
+// X-Forwarded-For would have stripped it) and ::1.
 func TestHandler_ClientIP_VendorHeader_RequiresHostOptIn(t *testing.T) {
 	t.Parallel()
 	h, _ := newTestHandler(t, WithTrustedProxies("203.0.113.0/24"))
@@ -2246,8 +2221,8 @@ func TestHandler_ClientIP_VendorHeader_RequiresHostOptIn(t *testing.T) {
 		// The strongest exploit shape: the honest chain the deployment's
 		// own proxy appended is PRESENT and names the true client
 		// (198.51.100.7), while the client has additionally smuggled a
-		// Fly-Client-IP the proxy did not strip. The pre-fix code had the
-		// truth in hand and preferred the attacker's value.
+		// Fly-Client-IP the proxy did not strip. A gate-only read would have
+		// the truth in hand and prefer the attacker's value.
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
 		req.RemoteAddr = "203.0.113.10:443"
 		req.Header.Set(headerXForwardedFor, "198.51.100.7")
@@ -2268,9 +2243,9 @@ func TestHandler_ClientIP_VendorHeader_RequiresHostOptIn(t *testing.T) {
 }
 
 // TestHandler_ClientIP_OptedInVendorHeader_PreservesTheLegitimateFlyShape
-// is regression (b) of P0-authn-14 at the derivation level: the host that
-// opted into headerFlyClientIP (WithVendorClientIPHeaders) is a REAL Fly
-// deployment whose proxy overwrites the header on every request it
+// pins the legitimate side of the opt-in at the derivation level: the host
+// that opted into headerFlyClientIP (WithVendorClientIPHeaders) is a REAL
+// Fly deployment whose proxy overwrites the header on every request it
 // forwards, and that legitimate shape must keep working -- a request from
 // the declared proxy carrying the proxy-written Fly-Client-IP records it.
 // The opt-in is what the handler built in the vendor-opt-in test above
@@ -2283,9 +2258,9 @@ func TestHandler_ClientIP_OptedInVendorHeader_PreservesTheLegitimateFlyShape(t *
 		WithVendorClientIPHeaders(VendorClientIPHeaderFlyClientIP))
 
 	t.Run("proxy-overwritten fly client ip is recorded", func(t *testing.T) {
-		// The request shape the pre-fix declared-proxy test asserted: a
-		// Fly deployment's proxy wrote the header, no X-Forwarded-For is
-		// in play, and the recorded address is the forwarded client's.
+		// The request shape of a real Fly deployment: the proxy wrote the
+		// header, no X-Forwarded-For is in play, and the recorded address
+		// is the forwarded client's.
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/authn/login/password", nil)
 		req.RemoteAddr = "203.0.113.10:443"
 		req.Header.Set(headerFlyClientIP, "198.51.100.7")
@@ -2318,14 +2293,14 @@ func TestHandler_ClientIP_OptedInVendorHeader_PreservesTheLegitimateFlyShape(t *
 	})
 }
 
-// TestHandler_ClientIP_SpoofedHeaders_NeverBeatTheConnectionAddress is
-// regression (b) at the derivation level: WITHOUT the trusted-proxy
+// TestHandler_ClientIP_SpoofedHeaders_NeverBeatTheConnectionAddress pins
+// the no-trust side at the derivation level: WITHOUT the trusted-proxy
 // configuration -- or with it, but for a request whose peer is not a
 // declared proxy -- a direct request carrying a spoofed Fly-Client-IP or
-// X-Forwarded-For still resolves to the connection address. A naive fix
-// that read the headers unconditionally fails this test; the pre-fix code
-// passes it trivially, which is exactly why it exists alongside the
-// trusted-proxy cases above: the two together pin the honest shape.
+// X-Forwarded-For still resolves to the connection address. An
+// implementation that read the headers unconditionally fails this test; it
+// exists alongside the trusted-proxy cases above so the two together pin
+// the honest shape.
 func TestHandler_ClientIP_SpoofedHeaders_NeverBeatTheConnectionAddress(t *testing.T) {
 	t.Parallel()
 
@@ -2352,21 +2327,19 @@ func TestHandler_ClientIP_SpoofedHeaders_NeverBeatTheConnectionAddress(t *testin
 }
 
 // TestHandler_LoginThroughDeclaredProxy_RecordsAndReportsTheClientAddress
-// is the finding's shape end to end (regressions (a) and (c)): through the
-// real sign-in handler, with the proxy declared, a request from the proxy
-// carrying the forwarded client address lands that address -- not the
-// proxy's -- in the session row, the login-history row, the sessions
-// response and the login-history response; and a direct request carrying a
-// spoofed header still lands its own connection address in all four.
+// pins the trusted-proxy shape end to end: through the real sign-in
+// handler, with the proxy declared, a request from the proxy carrying the
+// forwarded client address lands that address -- not the proxy's -- in the
+// session row, the login-history row, the sessions response and the
+// login-history response; and a direct request carrying a spoofed header
+// still lands its own connection address in all four.
 func TestHandler_LoginThroughDeclaredProxy_RecordsAndReportsTheClientAddress(t *testing.T) {
 	h, f := newTestHandler(t, WithTrustedProxies("203.0.113.0/24"))
 	const realClient = "198.51.100.7"
 	const directPeer = "192.0.2.55:4321"
 
 	// The forwarded leg: a request from the declared proxy. The recorded
-	// address must be the client's, where the pre-fix code recorded the
-	// proxy (the probe that opened this round failed here with the proxy
-	// address in the session row).
+	// address must be the client's, not the proxy's.
 	forwarded := f.registerUser(t, "forwarded@example.com", testTenantA)
 	rec := signInFrom(h, "forwarded@example.com", "203.0.113.10:443",
 		[][2]string{{headerXForwardedFor, realClient}})
@@ -2478,15 +2451,15 @@ func registerFrom(h *Handler, email, peer string, headers [][2]string) *httptest
 }
 
 // TestHandler_RegisterThroughDeclaredGenericProxy_RateLimitIgnoresTheClientChosenFlyHeader
-// is regression (c) of P0-authn-14 end to end: CheckRegister's per-IP
+// pins the register bucket end to end: CheckRegister's per-IP
 // bucket (10 registrations per hour, IP the one dimension -- there is no
 // account yet to key a second one on) must keep counting the deployment's
 // own proxy address when a client behind a declared GENERIC proxy rotates
-// a smuggled Fly-Client-IP on every attempt. The pre-fix code gave each
-// attempt its own client-chosen bucket and the eleventh registration
-// succeeded -- unlimited account creation through one HTTP header; the
-// fix (no vendor header opted in) keys every attempt on the peer, and the
-// eleventh is refused with authn.rate_limited.
+// a smuggled Fly-Client-IP on every attempt. Each attempt keyed on its own
+// client-chosen value would give every attempt its own bucket and let the
+// eleventh registration succeed -- unlimited account creation through one
+// HTTP header; with no vendor header opted in, every attempt keys on the
+// peer, and the eleventh is refused with authn.rate_limited.
 func TestHandler_RegisterThroughDeclaredGenericProxy_RateLimitIgnoresTheClientChosenFlyHeader(t *testing.T) {
 	t.Parallel()
 	h, _ := newTestHandler(t, WithTrustedProxies("203.0.113.0/24"))

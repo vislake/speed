@@ -25,8 +25,7 @@ import (
 // enqueued "if neither deadline nor timeout are set" -- so the property
 // holds only as long as the enqueue option list ALWAYS passes an explicit
 // asynqlib.Timeout for an omitted jobs option. The suite is named for the
-// behaviour it verifies, per the backend coding standard's test-naming
-// rule.
+// behaviour it verifies.
 
 // taskTimeout reads back the per-task timeout asynq's processor will
 // enforce for id, probing the three fixed priority tier queues the same

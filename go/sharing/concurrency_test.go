@@ -14,9 +14,9 @@ import (
 )
 
 // TestShareRepository_GuardedWritesStaySerializedOnSQLite pins the SQLite
-// half of the writeMu scope decision (finding P2-sharing-5): the
-// in-process mutex exists for SQLite's single-writer file lock and MUST
-// stay engaged there -- serializeWrites is true over the SQLite test
+// half of the writeMu scope decision (concurrency.go's own doc comment):
+// the in-process mutex exists for SQLite's single-writer file lock and
+// MUST stay engaged there -- serializeWrites is true over the SQLite test
 // database, and a guarded write issued while another guarded write holds
 // the mutex queues behind it (deterministically: the goroutine cannot
 // finish until the holder releases) rather than contending for the file

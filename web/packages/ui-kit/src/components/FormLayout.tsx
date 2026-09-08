@@ -17,9 +17,9 @@
  * larger form, a filters panel). The form element carries no styling
  * beyond the layout; hosts keep their own width constraints.
  *
- * Columns (opt-in, additive): `columns` defaults to 1, which is exactly
- * today's unconditional single-column flex flow -- byte-for-byte
- * unchanged for every existing consumer that does not pass it. Setting
+ * Columns (opt-in, additive): `columns` defaults to 1 -- the
+ * unconditional single-column flex flow, preserved for every consumer
+ * that does not pass it. Setting
  * `columns={2}` switches the flow to a CSS Grid with two responsive
  * column tracks (`sm` -- 600px -- and up; a single track below it) so
  * each direct child (typically one FormField per cell) lays out two per
@@ -30,7 +30,7 @@
  * genuinely need the full row can still pass `columns={1}` regardless
  * of viewport. The actions row spans every column track in grid mode so
  * it always reads as one full-width row, matching its single-column
- * appearance today.
+ * appearance.
  */
 
 import type { ReactNode } from 'react'
@@ -39,8 +39,8 @@ import { FormProvider } from 'react-hook-form'
 import type { FieldValues, SubmitHandler, UseFormReturn } from 'react-hook-form'
 
 /** The field-flow column count. 2 is a responsive CSS Grid (1 column
- * below the `sm` breakpoint, 2 at `sm` and up); 1 is today's single-
- * column flex flow. */
+ * below the `sm` breakpoint, 2 at `sm` and up); 1 is the single-column
+ * flex flow. */
 export type FormLayoutColumns = 1 | 2
 
 export interface FormLayoutProps<TFieldValues extends FieldValues = FieldValues> {
@@ -61,10 +61,10 @@ export interface FormLayoutProps<TFieldValues extends FieldValues = FieldValues>
   /** Content width in px. Defaults to 600; false widens to the parent. */
   readonly maxWidth?: number | false
   /**
-   * Field-flow column count. Defaults to 1 (today's unconditional
-   * single-column flow, unchanged for every consumer that omits this
-   * prop). See the module doc comment for the responsive breakpoint
-   * this switches on and the reasoning behind it.
+   * Field-flow column count. Defaults to 1 (the unconditional
+   * single-column flow, for every consumer that omits this prop). See
+   * the module doc comment for the responsive breakpoint this switches
+   * on and the reasoning behind it.
    */
   readonly columns?: FormLayoutColumns
 }

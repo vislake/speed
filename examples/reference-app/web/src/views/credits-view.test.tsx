@@ -163,12 +163,12 @@ describe('CreditsView', () => {
   })
 
   it('renders the balance and the ledger rows after a real simulation consumption (regression a)', async () => {
-    // The block-D round's regression (a): the view renders the balance
-    // and the transactions from the real composed reads AFTER a real
-    // consumption -- the generated simulate and job-status calls above
-    // reserved and settled one generation against the same responder
-    // the view then reads, so the confirmed deduct row and the reduced
-    // balance are the ledger's own answer, not a scripted state.
+    // The view renders the balance and the transactions from the real
+    // composed reads AFTER a real consumption -- the generated simulate
+    // and job-status calls above reserved and settled one generation
+    // against the same responder the view then reads, so the confirmed
+    // deduct row and the reduced balance are the ledger's own answer,
+    // not a scripted state.
     const rig = makeRealClientRig(demoServer())
     await signInWithPassword(rig)
     await runSimulationToTerminal()
@@ -190,8 +190,7 @@ describe('CreditsView', () => {
     // go/billing's machine annotation (the same value audit Changes
     // rows copy verbatim) holds no meaning the translated label above
     // does not already carry, so the row shows label, date and amount,
-    // never the token (the pre-fix code rendered the reason verbatim
-    // beside the date, and this assertion failed on it).
+    // never the token.
     const rows = view.getAllByRole('listitem')
     expect(rows).toHaveLength(2)
     expect(rows[0]).toHaveTextContent(zhCN.credits.rows.deductConfirmed)

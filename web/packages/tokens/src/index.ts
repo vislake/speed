@@ -3,8 +3,8 @@
  *
  * The runtime surface is deliberately two symbols: defaultTokens (the tree
  * every project starts from) and deepMerge (the only sanctioned way to
- * override it). Everything else is types, so token authors and the future
- * ui-kit theme adapter get full compile-time shape without extra runtime.
+ * override it). Everything else is types, so token authors and the ui-kit
+ * theme adapter get full compile-time shape without extra runtime.
  */
 
 export { defaultTokens } from './defaultTokens.js'

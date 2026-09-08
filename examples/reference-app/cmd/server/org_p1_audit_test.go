@@ -11,15 +11,15 @@ import (
 )
 
 // TestOrgP1Audit_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentityRows
-// is the org P1 regression: an administrator removing a member or deleting
+// is the regression: an administrator removing a member or deleting
 // an org node through the real composed stack leaves an audit row carrying
 // the operator identity -- and, performed during an impersonation session,
-// the row carries BOTH identities per docs/internal/10's hard rule: Actor
+// the row carries BOTH identities, per the hard rule: Actor
 // (the impersonated user) and OnBehalfOf (the real administrator). Before
-// the org audit round, org's seven declared audit actions had zero
+// org's declared audit actions had zero
 // emission, no dbkit.Auditable opt-in and no wired capture, so these two
-// operations produced NO audit row at all -- the same-class P1 the rbac
-// zero-audit finding graded, and doc 10's easiest accountability accident
+// operations produced NO audit row at all -- the same class the rbac
+// zero-audit gap graded, the easiest accountability accident
 // in the ops console.
 //
 // The fix this test pins is doc 10's own "automatic first, declaration
@@ -37,7 +37,7 @@ import (
 // mark-delete UPDATEs underneath, so the rows they leave are
 // "org.member.update" and "org.node.update" respectively, distinguishable
 // from an ordinary update by the written deleted_at/deleted_by columns in
-// the changes diff (see go/org/AGENTS.md's "The audit trail" section).
+// the changes diff (see go/org's own audit-trail doc comments).
 //
 // The test drives the REAL impersonation pipeline (admin's
 // ImpersonationMiddleware, exactly as admin_flow_test.go's
@@ -113,7 +113,7 @@ func TestOrgP1Audit_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentityRows
 	// membership row removed, diff carrying the mark-delete columns) and
 	// the bulk row-lock write removeIfNotLastActive issues over the
 	// tenant's active memberships before the deletion (an empty
-	// {deleted_by: ""} diff -- see go/org/AGENTS.md's lock-touch note).
+	// {deleted_by: ""} diff -- see go/org's own lock-touch note).
 	// Exact counts are asserted so a double record (capture plus a
 	// hand-written Emit) or a missed write both fail this test.
 	var memberUpdates, memberLockTouches []auditRow
@@ -251,12 +251,12 @@ func TestOrgP1Audit_ImpersonatedMemberRemovalAndNodeDelete_LeaveDualIdentityRows
 }
 
 // TestOrgP1Audit_InvitationCreate_AuditRowCarriesNoAddressIndex extends the
-// org P1 regression to the third opted-in model -- Invitation -- and to the
+// regression to the third opted-in model -- Invitation -- and to the
 // one org write whose captured diff carries the invitee's address-derived
 // values. The invitation create must leave exactly one
 // "org.invitation.create" row (the forward half of the capture-scope
 // contract: Invitation sits inside the host's Options.AuditModels scope,
-// which is org's own org.AuditableModels() export, so a round that dropped
+// which is org's own org.AuditableModels() export, so a change that dropped
 // the model from that export would fail here, in the composed app, not in
 // a compliance query years later). And that row's changes diff must carry
 // NEITHER the address's blind index NOR the address itself. The index is

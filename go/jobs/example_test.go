@@ -4,12 +4,11 @@ package jobs_test
 // go/pkgcore/example_test.go's, go/dbkit/example_test.go's and
 // go/tenancy/example_test.go's identical convention: every example here is
 // compiled AND executed by `go test`, so an API change that invalidates the
-// documented usage fails the build instead of only rotting in prose (root
-// CLAUDE.md's Documentation section; this package's own AGENTS.md).
+// documented usage fails the build instead of only rotting in prose.
 //
 // Both examples poll Queue.Get in a tight loop bounded by a short deadline
-// rather than sleeping a fixed duration: StandaloneQueue's dispatch/execute cycle
-// is asynchronous by design (see AGENTS.md), so a fixed sleep would either
+// rather than sleeping a fixed duration: StandaloneQueue's dispatch/execute
+// cycle is asynchronous by design, so a fixed sleep would either
 // make this file's own test run needlessly slow or be a source of
 // flakiness under load -- polling is both fast and deterministic here
 // because the registered Handlers do no real work.
@@ -50,9 +49,8 @@ func waitForTerminal(ctx context.Context, queue jobs.Queue, id jobs.JobID, deadl
 
 // Example demonstrates the whole Queue contract this package pins:
 // register a Handler, Enqueue a Task under a tenant, and poll Get until
-// the resulting Job completes. See examples/reference-app (once a later
-// milestone wires jobs into it) for the same shape used against a real
-// business handler.
+// the resulting Job completes. See examples/reference-app's own wiring
+// for the same shape used against a real business handler.
 func Example() {
 	ctx := context.Background()
 	db, err := dbkit.Open(ctx, dbkit.Options{
@@ -166,10 +164,8 @@ func ExampleNewHandlerFunc() {
 	// result: ping
 }
 
-// The distributed deployment mode's own Queue implementation --
-// previously exercised here as ExampleNewAsynqQueue -- now lives in its
+// The distributed deployment mode's own Queue implementation lives in its
 // own subpackage, go/jobs/queue/asynq, precisely so a consumer that only
 // ever runs jobs.StandaloneQueue (the standalone deployment mode) never
 // pulls in asynq or go-redis at all; see that subpackage's own
-// ExampleNewQueue for the equivalent shape, and go/jobs/AGENTS.md for the
-// measured dependency-cost win the split buys.
+// ExampleNewQueue for the equivalent shape.

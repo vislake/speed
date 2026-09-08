@@ -24,52 +24,44 @@ import (
 var configAuditEventIDNamespace = uuid.MustParse("875a41cd-229c-4648-8633-a100d3485831")
 
 // onConfigItemChanged normalizes a config.EventConfigItemChanged event into
-// an audit.AuditEvent under config.AuditActionConfigSet, closing the gap
-// docs/internal/11-cross-cutting.md's own "change audit" bullet records as
-// deferred to this module's own round: a dedicated audit record and its
-// compliance consumer land with compliance's own round, subscribing to
-// config.item.changed; that module takes no dependency on the audit side
-// for it. config.AuditActionConfigSet
-// is already declared on reg.AuditActions by config's own Register (see
-// go/dbkit/audit/emit.go's own doc comment: "closing the loop go/config's
-// own AuditActionConfigSet declaration left open") -- no new audit action
-// needs declaring here, only the subscriber that finally persists a row
-// under it.
+// an audit.AuditEvent under config.AuditActionConfigSet: every successful
+// config.Set gets a dedicated audit record, written by this
+// compliance-side subscriber to config.item.changed -- config itself takes
+// no dependency on the audit side for it. config.AuditActionConfigSet is
+// already declared on reg.AuditActions by config's own Register -- no new
+// audit action needs declaring here, only the subscriber that persists a
+// row under it.
 //
-// Mirrors go/dbkit/audit's own onWriteCaptured/onSystemContextEntered
-// subscribers exactly: a payload this handler cannot decode is dropped
-// rather than failing the whole handler chain (an event neither of
-// configItemChangedFromWire's two accepted shapes is not this event, and
-// must not wedge every other subscriber of the same event type), and the
-// insert is idempotent (configAuditEventID derives the same row id for the
-// same underlying change on every replica) so the distributed bus's
-// at-least-once, once-per-replica delivery never double-records one
-// change.
+// A payload this handler cannot decode is dropped rather than failing the
+// whole handler chain (an event of neither of configItemChangedFromWire's
+// two accepted shapes is not this event, and must not wedge every other
+// subscriber of the same event type), and the insert is idempotent
+// (configAuditEventID derives the same row id for the same underlying
+// change on every replica) so the distributed bus's at-least-once,
+// once-per-replica delivery never double-records one change.
 //
 // config.ItemChangedEvent.Actor is a bare string (config.Actor carries no
 // ActorType of its own -- see that type's own doc comment in
 // go/config/values.go), so the recorded pkgcore.Actor is always typed
-// ActorTypeUser: every config.Set call site this codebase wires today is
-// an authenticated operator acting through an admin surface, never a
+// ActorTypeUser: every config.Set call site this codebase wires is an
+// authenticated operator acting through an admin surface, never a
 // system-context caller (the system-context path is tenancy's own
 // EventSystemContextEntered, already covered by go/dbkit/audit's own
-// subscriber). A future config.Set caller that is genuinely a system
-// actor would need config's own event to carry an ActorType before this
-// subscriber could record it correctly -- a known limitation, not a
-// silent guess this file hides.
+// subscriber). A config.Set caller that is genuinely a system actor is
+// therefore recorded as ActorTypeUser regardless: config's event carries
+// no ActorType for this subscriber to record -- a known limitation of the
+// record, not a silent guess this file hides.
 //
-// P2-pkgcore-actor-1: DisplayName is left empty here because the event
-// genuinely carries no name to record: config.ItemChangedEvent (see
-// go/config/events.go) ships only config.Actor's id string, and config's
-// Set callers pass ids, never display names (go/config/values.go's own
-// doc comment: "a real deployment fills it from the authenticated
-// principal"). Filling the column would require either config's event to
-// carry the actor's display name -- a change to the go/config module,
-// outside this subscriber's control -- or this subscriber to resolve the
-// name against a users store it deliberately does not depend on. The row
-// stays fully attributable by id, exactly as the "readable after
-// rename/deletion" guarantee would want were a name available to capture
-// at write time; the empty label is recorded here, not papered over.
+// DisplayName is left empty here because the event genuinely carries no
+// name to record: config.ItemChangedEvent (see go/config/events.go) ships
+// only config.Actor's id string, and config's Set callers pass ids, never
+// display names (go/config/values.go's own doc comment: "a real
+// deployment fills it from the authenticated principal"). Filling the
+// column would require either config's event to carry the actor's display
+// name -- a change to the go/config module, outside this subscriber's
+// control -- or this subscriber to resolve the name against a users store
+// it deliberately does not depend on. The row stays fully attributable by
+// id; the empty label is recorded here, not papered over.
 func (m *Module) onConfigItemChanged(ctx context.Context, evt pkgcore.Event) error {
 	payload, ok := configItemChangedFromWire(evt.Payload)
 	if !ok {

@@ -8,10 +8,9 @@
  * sign-in surface rendering under the provider stack, and a clean
  * unmount. Every other suite composes the tree by hand through the
  * shared test-utils rigs; this is the one that runs the function a
- * real page runs (reference-app-web.md P2-5). The browser-level half
- * of that proof -- the real page in a real browser over the real
- * server -- arrives with the Playwright e2e suite on the
- * test/reference-app-e2e-suite branch, not yet on main.
+ * real page runs. The browser-level half of that proof -- the real
+ * page in a real browser over the real server -- lives in this
+ * directory's e2e suite, not here.
  *
  * evictQueriesOnSessionEnd -- the session-end eviction of everything
  * the departing principal left on the page -- the query cache and the
@@ -21,20 +20,19 @@
  * rig's own scripted responder), a real QueryClient and the draft
  * store, without mounting any DOM tree: the wiring is pure
  * session-and-cache plumbing, so nothing here needs React or the
- * app's own views. The cross-account leaks this pins are
- * reference-app-web.md P1-1's root cause -- nothing evicted a
- * tenant's cached queries on sign-out/session-death, only a tenant
- * switch did -- and P1-apisdk-1's: the eviction the P1-1 round added
- * cleared only the departing tenant's ['tenant', tenantId] prefix, so
- * the identity-domain rows the account surface reads through bare
- * spec-path keys (sessions, login history, bound identities) survived
- * a session end for a different account signing in afterward to
- * inherit. The eviction is therefore total: whatever domain a future
- * surface reads in, no row outlives the session that fetched it. The
- * notes-view suite's own gate test covers the ternary-ordering half
- * of the P1-1 finding; the full end-to-end regressions (a signed-out
- * account's cached notes and account rows never reaching a different
- * account signing in after it) live in app-journey.test.tsx.
+ * app's own views. The cross-account leaks this pins: nothing evicted
+ * a tenant's cached queries on sign-out or session death (only a
+ * tenant switch did), and an eviction scoped to the departing
+ * tenant's ['tenant', tenantId] prefix cannot reach the identity-
+ * domain rows the account surface reads through bare spec-path keys
+ * (sessions, login history, bound identities) -- a different account
+ * signing in afterward would inherit them. The eviction is therefore
+ * total: whatever domain a surface reads in, no row outlives the
+ * session that fetched it. The notes-view suite covers its own
+ * gate-ordering half of the same session hygiene; the full
+ * end-to-end regressions (a signed-out account's cached notes and
+ * account rows never reaching a different account signing in after
+ * it) live in app-journey.test.tsx.
  */
 
 import { QueryClient } from '@tanstack/react-query'
@@ -93,7 +91,7 @@ function seedNotesCache(queryClient: QueryClient): void {
  * exact bare generated keys its reads use (the login-history key
  * carries its {limit} query params as a further element, the shape the
  * real hook's key has). Nothing here is tenant-namespaced -- the shape
- * that made the earlier tenant-prefix-only eviction miss them. */
+ * no tenant-prefixed removal can reach. */
 function seedIdentityCache(queryClient: QueryClient): void {
   queryClient.setQueryData(
     [...getAuthnListSessionsQueryKey()],
@@ -129,13 +127,10 @@ describe('bootstrapReferenceApp', () => {
   // client over the environment's own fetch (createClient captures
   // globalThis.fetch at construction), the seam binding, the provider
   // stack and the view machine -- runs exactly once per call, so a
-  // jsdom mount proves the real bootstrap executes at all
-  // (reference-app-web.md P2-5: no suite executed bootstrapReferenceApp
-  // until this one). The browser-level leg of that proof -- the real
-  // page over the real server -- arrives with the Playwright e2e suite
-  // (test/reference-app-e2e-suite), which is where a real network and
-  // a real browser belong; until it merges, this mount is the shipped
-  // floor.
+  // jsdom mount proves the real bootstrap executes at all. The
+  // browser-level leg of that proof -- the real page over the real
+  // server -- lives in the e2e suite, which is where a real network
+  // and a real browser belong.
   let observedCalls: Array<{
     readonly method: string
     readonly path: string
@@ -235,9 +230,8 @@ describe('bootstrapReferenceApp', () => {
     // the product-shell namespace among them: product-shell's own
     // resources.ts declares the host obligation, and the shell's
     // session-ended announcement renders only where the registration
-    // happened (reference-app-web.md P2-refappweb-1) -- the bundle
-    // check is the registration itself, at the layer the finding
-    // names, independent of any journey reaching the ended view.
+    // happened -- the bundle check is the registration itself,
+    // independent of any journey reaching the ended view.
     expect(
       boot?.i18n.hasResourceBundle('zh-CN', PRODUCT_SHELL_NAMESPACE),
     ).toBe(true)
@@ -287,14 +281,13 @@ describe('bootstrapReferenceApp', () => {
 
 describe('evictQueriesOnSessionEnd', () => {
   it('empties every domain a sign-out leaves behind: the tenant rows, the identity-domain rows and any unrelated key', async () => {
-    // reference-app-web.md P1-1 and P1-apisdk-1 together: the first
-    // session-end eviction cleared only the departing tenant's
-    // ['tenant', tenantId] prefix, so the identity-domain rows (bare
-    // spec-path keys -- nothing in @speed/api-sdk is tenant-
-    // namespaced) stayed cached for a different account signing in
-    // afterward to inherit. The eviction is total: every domain is
-    // asserted gone, including a key no eviction call site knows
-    // about, so a future surface's domain cannot leak either.
+    // The identity-domain rows (bare spec-path keys -- nothing in
+    // @speed/api-sdk is tenant-namespaced) have no tenant segment for
+    // a tenant-prefixed removal to reach, so without total eviction a
+    // different account signing in afterward would inherit them. The
+    // eviction is total: every domain is asserted gone, including a
+    // key no eviction call site knows about, so a future surface's
+    // domain cannot leak either.
     const rig = makeRealClientRig(respond)
     const queryClient = new QueryClient()
     evictQueriesOnSessionEnd(rig.session, queryClient)

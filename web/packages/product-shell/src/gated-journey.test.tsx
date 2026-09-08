@@ -8,8 +8,7 @@
  * by a status the host derives, auth-core's permission lists the host
  * attaches). This suite is the packaged proof that the composition works
  * end to end over the pieces the other packages ship -- the fixture host
- * below plays exactly the host role the README's "multi-tenant userMenu"
- * section and this package's AGENTS.md describe:
+ * below plays exactly that host role:
  *
  *   - the shell's authenticated frame with the tenant switcher
  *     (@speed/tenancy-ui) in the userMenu;
@@ -146,8 +145,7 @@ interface GatedTenantAppProps {
  * before any sign-in), derives each destination's RouteGuardStatus on
  * every render from usePermission over the lists it attached, and
  * re-attaches the lists itself when a role load completes -- the
- * setPermissionSet host duty this package's AGENTS.md keeps assigning
- * to hosts, played here for real.
+ * setPermissionSet host duty, played here for real.
  */
 function GatedTenantApp({
   session,

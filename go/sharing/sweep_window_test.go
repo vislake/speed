@@ -15,18 +15,17 @@ import (
 // This file pins the window semantics of the expiry-sweep idempotency key
 // (expirySweepIdempotencyKey): enqueues inside one expirySweepWindowSize
 // window collapse into one job (the concurrency protection the key exists
-// for, preserved), enqueues in a later window become new jobs and sweep
-// again (periodicity), a sweep job that dead-letters poisons only its own
-// window, never its tenant's later windows, and -- the single-module
-// consequence the reviewer's correction re-framed -- a later window's sweep
+// for), enqueues in a later window become new jobs and sweep again
+// (periodicity), a sweep job that dead-letters poisons only its own
+// window, never its tenant's later windows, and a later window's sweep
 // really re-runs Service.Sweep, so an overage view reservation (past
 // viewReservationTimeout on a share nobody accesses again) is really
 // refunded by the sweep's own reservation arm. All four run against a REAL
 // jobs.StandaloneQueue over a real SQLite database -- the dedupe behaviour
 // under test lives in jobs' partial unique index and row semantics, which a
-// fake queue cannot exercise. Tests (a), (c) and (d) fail on the pre-window
-// key (tenant-only): the later enqueue returns the first job's id and no
-// second sweep ever runs.
+// fake queue cannot exercise. A tenant-only key would make the later
+// enqueues of the window tests below return the first job's id and no
+// second sweep would ever run; the windowed key is what lets them.
 //
 // EnqueueExpirySweep returns no job id (it is a fire-and-forget schedule
 // point), so the tests observe the queue's own database -- the same
@@ -155,10 +154,10 @@ func TestModule_EnqueueExpirySweep_SameWindowEnqueuesCollapseIntoOneJob(t *testi
 }
 
 // TestModule_EnqueueExpirySweep_LaterWindowEnqueuesNewJobAndSweepsAgain pins
-// regression (a): an enqueue in a later window is a NEW job and the sweep
-// runs again. Fails on the pre-window key (tenant only), where the later
-// enqueue resolves the first job's id -- the first-ever sweep's permanent
-// dedupe -- so no second row is ever created and nothing ever runs again.
+// periodicity: an enqueue in a later window is a NEW job and the sweep
+// runs again. Under a tenant-only key the later enqueue would resolve the
+// first job's id -- a permanent dedupe -- so no second row would ever be
+// created and nothing would ever run again.
 func TestModule_EnqueueExpirySweep_LaterWindowEnqueuesNewJobAndSweepsAgain(t *testing.T) {
 	q, db := startSweepWindowQueue(t)
 	m := NewModule(newTestDB(t), WithQueue(q))
@@ -193,10 +192,10 @@ func TestModule_EnqueueExpirySweep_LaterWindowEnqueuesNewJobAndSweepsAgain(t *te
 }
 
 // TestModule_EnqueueExpirySweep_DeadLetteredWindowDoesNotPoisonLaterOnes pins
-// regression (c): a sweep job that dead-letters poisons only its own
-// window. Fails on the pre-window key (tenant only), where the dead job's
-// idempotency key stays resolved forever -- every later enqueue returns the
-// dead job's id, no second row is ever created and the tenant is never
+// the dead-letter isolation: a sweep job that dead-letters poisons only its
+// own window. Under a tenant-only key the dead job's idempotency key would
+// stay resolved forever -- every later enqueue would return the dead job's
+// id, no second row would ever be created and the tenant would never be
 // swept again.
 func TestModule_EnqueueExpirySweep_DeadLetteredWindowDoesNotPoisonLaterOnes(t *testing.T) {
 	q, db := startSweepWindowQueue(t)
@@ -262,17 +261,17 @@ func TestModule_EnqueueExpirySweep_DeadLetteredWindowDoesNotPoisonLaterOnes(t *t
 }
 
 // TestModule_EnqueueExpirySweep_LaterWindowSweepRefundsAnOverageReservation
-// is the single-module verification the reviewer re-framed: pins regression
-// (d). A view reservation past viewReservationTimeout on a share nobody
-// accesses again is refunded by sharing's own sweep refund arm -- but only
-// if the scheduled sweep REALLY re-runs. The test constructs the overage
+// is the single-module verification of the periodicity half: pins that a
+// view reservation past viewReservationTimeout on a share nobody accesses
+// again is refunded by sharing's own sweep refund arm -- but only if the
+// scheduled sweep REALLY re-runs. The test constructs the overage
 // reservation (taken at windowA-10min), lets window A's scheduled sweep run
 // while the reservation is still young (it must leave it standing --
 // nothing auto-converges a reservation younger than the timeout), then
 // schedules window B's sweep the way the host's periodic scheduler would;
 // only the windowed key lets that enqueue become a new job whose run, past
-// the timeout, refunds the reservation. Fails on the pre-window key (tenant
-// only), where window B's enqueue resolves window A's completed job, no
+// the timeout, refunds the reservation. Under a tenant-only key, window B's
+// enqueue resolves window A's completed job, no
 // second sweep ever runs, and the reservation stands forever -- the legal
 // recipient's one view permanently lost.
 func TestModule_EnqueueExpirySweep_LaterWindowSweepRefundsAnOverageReservation(t *testing.T) {

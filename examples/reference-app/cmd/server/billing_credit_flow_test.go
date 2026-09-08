@@ -1,13 +1,12 @@
 package main
 
-// billing_credit_flow_test.go is this round's mandated end-to-end proof
-// (root CLAUDE.md's "Reference App" section, and the task that opened this
-// round): go/billing's CreditService, reserved and settled by
+// billing_credit_flow_test.go is the mandated end-to-end proof:
+// go/billing's CreditService, reserved and settled by
 // internal/smilesim's own wiring (internal/smilesim/service.go's "Credit
 // accounting" section), driven through the REAL composed HTTP stack -- the
 // same buildServer/httptest.Server rig smilesim_flow_test.go's own suite
-// uses -- across the three scenarios docs/internal/15-roadmap.md's M2 exit
-// condition and this round's own task both require:
+// uses -- across the three scenarios the credit leg of the billing
+// surface requires:
 //
 //   - a tenant with a sufficient granted balance (the demo seed
 //     cmd/server/demo_credits.go's seedDemoCredits grants tenant-acme at
@@ -26,13 +25,13 @@ package main
 //     refunded back to the tenant's pre-reservation balance once the job
 //     dead-letters, rather than stuck in Reserved or lost from Available.
 //
-// What this round deliberately does NOT prove, and never claims to: an
+// What this suite deliberately does NOT prove, and never claims to: an
 // actual credit-pack purchase through a real Stripe/Alipay/WeChat sandbox.
-// go/billing/gateway/AGENTS.md records that no live credentials for any of
-// the three providers exist in this environment, so that leg stays
-// explicitly out of scope -- cmd/server/demo_credits.go's seedDemoCredits
-// is the deliberate, documented stand-in (a Grant, never a payment) that
-// gives this suite something real to reserve against.
+// No live credentials for any of the three providers exist in this
+// environment, so that leg stays explicitly out of scope --
+// cmd/server/demo_credits.go's seedDemoCredits is the deliberate,
+// documented stand-in (a Grant, never a payment) that gives this suite
+// something real to reserve against.
 
 import (
 	"context"
@@ -125,8 +124,7 @@ func newAlwaysFailingImageServer(t *testing.T) *newAlwaysFailingImageServerResul
 // connection is the only reach a test has into storage" pattern
 // openBillingCredits above and server_test.go's own
 // TestBuildServer_NoteCreate_PersistsAuditEvent both already use, applied
-// here to prove go/billing's own audit.Emit wiring (this round's own
-// scope) rather than notes'. No migration call is needed on this second
+// here to prove go/billing's own audit.Emit wiring rather than notes'. No migration call is needed on this second
 // connection: buildServer's own migrationRegistry.Apply already applied
 // go/dbkit/audit's migrations (auditModule shares this app's one database
 // connection -- see server.go's own auditModule construction comment)
@@ -162,7 +160,7 @@ func auditEventsForTenant(t *testing.T, cfg serverConfig, tenantID pkgcore.Tenan
 // share one tenant (this file's own tests seed a demo Grant at boot, on
 // top of whatever reserve/confirm/refund the test itself drives), so
 // asserting on "at least one event with this exact action and
-// transaction id" is what actually proves this round's wiring, not a
+// transaction id" is what actually proves the wiring, not a
 // brittle exact-count or exact-order assumption over the whole table.
 func findAuditEvent(events []audit.AuditEvent, action, resourceID string) (audit.AuditEvent, bool) {
 	for _, evt := range events {
@@ -173,8 +171,8 @@ func findAuditEvent(events []audit.AuditEvent, action, resourceID string) (audit
 	return audit.AuditEvent{}, false
 }
 
-// TestSmileSimulation_SuccessfulReserveConfirm_PersistsAuditEvents is this
-// round's own mandated proof (the task brief's point 3): a real smilesim
+// TestSmileSimulation_SuccessfulReserveConfirm_PersistsAuditEvents is the
+// mandated proof: a real smilesim
 // credit reserve/confirm cycle, driven through the REAL composed HTTP
 // stack exactly like TestSmileSimulation_SufficientCredits_DebitsBalance
 // above, produces real, readable go/dbkit/audit rows -- read back through
@@ -184,8 +182,8 @@ func findAuditEvent(events []audit.AuditEvent, action, resourceID string) (audit
 // the same "explicit audit.Emit call, not dbkit's AuditBus write-capture
 // plugin" wiring choice notes' own TestBuildServer_NoteCreate_
 // PersistsAuditEvent proves for notes -- see server.go's auditModule
-// construction comment and root CLAUDE.md's known same-file SQLITE_BUSY
-// limitation for why: billingModule and auditModule share one database
+// construction comment and the known same-file SQLITE_BUSY limitation
+// for why: billingModule and auditModule share one database
 // connection, and audit.Emit's own write only ever runs after
 // CreditService's own mutating transaction has already committed
 // (credit_service.go's emitCreditAudit), so no nested-transaction
@@ -255,7 +253,7 @@ func TestSmileSimulation_SuccessfulReserveConfirm_PersistsAuditEvents(t *testing
 }
 
 // TestSmileSimulation_FailedGeneration_PersistsRefundAuditEvent is the
-// refund half of this round's own mandated proof: a generation that fails
+// refund half of the mandated proof: a generation that fails
 // at the vendor (the same fake-500 image endpoint
 // TestSmileSimulation_FailedGeneration_RefundsReservation above drives)
 // leaves a real, readable audit.deduct_reserve row followed by a real
@@ -352,8 +350,8 @@ func findFirstCreditAuditEvent(events []audit.AuditEvent, action string) (audit.
 	return audit.AuditEvent{}, false
 }
 
-// assertCreditAuditEvent checks the fields every one of this round's
-// credit-ledger audit rows must carry regardless of which of the five
+// assertCreditAuditEvent checks the fields every credit-ledger audit row
+// must carry regardless of which of the five
 // actions produced it: the acting tenant, the Resource shape
 // emitCreditAudit always uses, and a successful Result (every call site
 // only calls audit.Emit after its own mutating transaction has already

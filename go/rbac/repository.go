@@ -12,9 +12,8 @@ import (
 )
 
 // The three repositories below are this module's only data-access types.
-// Each embeds dbkit.Repository[T] rather than holding a bare *gorm.DB
-// (root CLAUDE.md's multi-tenant isolation rule; backend coding standard
-// §3.2), so Create, FindByID, Update, Delete and List come from the
+// Each embeds dbkit.Repository[T] rather than holding a bare *gorm.DB, so
+// Create, FindByID, Update, Delete and List come from the
 // generic base with the tenant check already fail-closed.
 //
 // All three tables are tenant-owned -- rbac_roles and rbac_role_permissions
@@ -28,8 +27,8 @@ import (
 //
 // Each repository additionally carries the *gorm.DB it was built on, for
 // the filtered reads Repository[T]'s deliberately minimal surface cannot
-// express (it has List-all and nothing else). Those reads follow option 1
-// of go/dbkit/AGENTS.md's "Known limitations": the query is built on the
+// express (it has List-all and nothing else). Those reads are the
+// sanctioned filtered-read path: the query is built on the
 // same *gorm.DB layer 1 already protects, still against a TenantScoped
 // model, so the isolation plugin's own WHERE tenant_id = ? is appended for
 // us -- no tenant filter is ever hand-written here -- and the whole call
@@ -292,20 +291,20 @@ func (r *RoleBindingRepository) RevokedByNodes(ctx context.Context, nodeIDs []st
 	return owned, nil
 }
 
-// The revoke-origin vocabulary (migrations/{postgres,sqlite}/
-// 0003_add_revoke_origin.sql adds the column; model.go's RevokeOrigin field
-// comment and reap.go's D14-resolving documentation carry the full story):
+// The revoke-origin vocabulary (the 0003_add_revoke_origin.sql migration
+// adds the column; model.go's RevokeOrigin field comment and reap.go's
+// file header carry the full story):
 // every mark-delete of a RoleBinding row records which writer wrote it, so
 // the org restore-side subscribers re-instate exactly the rows the matching
-// removal or deletion reaped. A deliberate RevokeRole revocation (or any
-// row that predates the column, per the migration's backfill policy) is
-// never auto-reinstated by an org event.
+// removal or deletion reaped. A deliberate RevokeRole revocation is never
+// auto-reinstated by an org event.
 const (
 	// revokeOriginDeliberate is the value a Service.RevokeRole mark-delete
 	// writes: a deliberate revocation, restorable only by an explicit,
 	// affirmative Service.RestoreRole -- never by an org member-restore or
-	// node-restore event. The empty string is also what every pre-marker
-	// row carries after the 0003 backfill, and the two are deliberately the
+	// node-restore event. The empty string is also the value the 0003
+	// migration's backfill wrote for every row soft-deleted before the
+	// column existed, and the two are deliberately the
 	// same value: both are "unknown or deliberate", and both must fail
 	// closed the same way.
 	revokeOriginDeliberate = ""
@@ -323,10 +322,11 @@ const (
 	revokeOriginNodeDeletion = "node-deletion"
 )
 
-// Delete marks the binding with the given id soft-deleted, exactly as
-// dbkit.Repository[RoleBinding].Delete's mark-delete did before it, and
-// additionally records in revoke_origin which writer performed the revoke.
-// It SHADOWS the promoted dbkit Delete of the same name on purpose: this
+// Delete marks the binding with the given id soft-deleted and records in
+// revoke_origin which writer performed the revoke -- the mark-delete
+// dbkit.Repository[RoleBinding].Delete performs, extended by the one
+// column. It SHADOWS the promoted dbkit Delete of the same name on
+// purpose: this
 // repository's callers -- Service.RevokeRole and the two reaps -- must not
 // be able to reach a mark-delete that leaves the origin column unwritten,
 // because a revoked row whose writer is unknown is indistinguishable from a
@@ -351,11 +351,11 @@ const (
 // update this module issues through dbkit's repositories (the identical
 // reliance org's TreeService places on it for its own conditional writes).
 //
-// It reports dbkit.ErrRecordNotFound when no live row matches: the same
-// zero-rows-affected outcome dbkit's own Delete reported, decorated the
-// same way, so the callers' existing hasCode classification (RevokeRole's
-// concurrent-double-revoke branch, revokeReapedBindings' concurrent-revoke
-// skip) is unchanged.
+// It reports dbkit.ErrRecordNotFound when no live row matches, the same
+// zero-rows-affected outcome dbkit's own Delete reports: a concurrent
+// revoke already withdrew the row, which the callers' hasCode
+// classification (RevokeRole's concurrent-double-revoke branch,
+// revokeReapedBindings' concurrent-revoke skip) treats as success.
 func (r *RoleBindingRepository) Delete(ctx context.Context, id string, origin string) error {
 	if _, err := pkgcore.MustTenantFromContext(ctx); err != nil {
 		return err
@@ -408,12 +408,12 @@ func (r *RoleBindingRepository) Delete(ctx context.Context, id string, origin st
 // here in case the soft-delete auto-scope is ever broadened to updates).
 //
 // It reports dbkit.ErrRecordNotFound when no currently soft-deleted row
-// matches, the identical zero-rows outcome dbkit's own Restore reported, so
-// Service.RestoreRole's existing classification is unchanged. A restore
+// matches, the identical zero-rows outcome dbkit's own Restore reports:
+// nothing was left to un-mark. A restore
 // that collides with uq_rbac_role_bindings_tenant_user_role_node -- a live
 // row already occupies the tuple -- surfaces the driver-agnostic
 // gorm.ErrDuplicatedKey sentinel dbkit.Open wires TranslateError to, the
-// same signal Service.RestoreRole already classifies.
+// signal Service.RestoreRole classifies as the grant already existing.
 func (r *RoleBindingRepository) Restore(ctx context.Context, id string) error {
 	if _, err := pkgcore.MustTenantFromContext(ctx); err != nil {
 		return err
@@ -441,11 +441,11 @@ func (r *RoleBindingRepository) Restore(ctx context.Context, id string) error {
 }
 
 // claimByUser re-attributes every currently soft-deleted binding of userID
-// that the org.node.deleted reap wrote (revoke_origin = 'node-deletion') to
+// that the org.node.deletion reap wrote (revoke_origin = 'node-deletion') to
 // the member-removal origin. Service.onMemberRemoved runs it after reaping
-// the removed member's live bindings, and it is the second half of closing
-// the P0-rbac-8 hazard this module's D14-resolution records in reap.go: a
-// node-reaped row of a user who is LATER removed from the tenant must not
+// the removed member's live bindings, and it closes the hazard of a
+// node-reaped row of a user who is removed from the tenant later: the row
+// must not
 // be resurrectable by a node restore -- the node restore would rebuild
 // authorization for a holder who is no longer a member -- so the removal
 // claims the row for itself, making the user's own org.member.restored
@@ -496,9 +496,9 @@ func (r *RoleBindingRepository) claimByUser(ctx context.Context, userID string) 
 // definition fires only when the node is genuinely visible again) can lift
 // it, exactly like every other grant the deletion reaped. Without the
 // reverse claim the row would stay stranded under the member-removal origin
-// forever -- no node restore ever touches that origin -- or, before this
-// round, come back live with the member while the node was still gone (the
-// P1-rbac-reinstate-node escalation; see that method's doc comment).
+// forever -- no node restore ever touches that origin -- or come back live
+// with the member while the node was still gone (see that method's doc
+// comment).
 //
 // The UPDATE is deliberately guarded to the row's id AND its current
 // member-removal origin, so a deliberate RevokeRole row (which the caller's

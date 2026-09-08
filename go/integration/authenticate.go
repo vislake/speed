@@ -14,11 +14,9 @@ import (
 // storage-only field.
 type AuthenticatedAPIKey struct {
 	// KeyID is the authenticated key's own id -- what a caller keys a
-	// per-key rate-limit counter on (LayeredLimiter's key layer,
-	// docs/internal/07-platform-services.md's three-layer design, finally
-	// concrete against a real Authenticate-gated surface -- see
-	// AGENTS.md's own "In scope round 6" section) and what an audit trail
-	// cites.
+	// per-key rate-limit counter on (LayeredLimiter's key layer, the
+	// design's three-layer composition made concrete against a real
+	// Authenticate-gated surface) and what an audit trail cites.
 	KeyID string
 
 	// TenantID is the tenant Authenticate resolved the presented key to --
@@ -45,11 +43,11 @@ type AuthenticatedAPIKey struct {
 // Authenticate resolves rawKey to the APIKey that issued it, or refuses with
 // ErrAuthenticationFailed -- an outward-identical refusal across every
 // possible cause (no such hash anywhere, a revoked key, an expired key), per
-// root CLAUDE.md's no-enumeration Security rule and the identical discipline
-// go/authn's ErrInvalidCredentials and go/sharing's ErrNotAccessible already
-// apply to their own refusal answers: a caller presenting a wrong key must
-// learn nothing about whether the key ever existed, was rotated away, or
-// expired.
+// the repository-wide no-enumeration Security rule and the identical
+// discipline go/authn's ErrInvalidCredentials and go/sharing's
+// ErrNotAccessible apply to their own refusal answers: a caller presenting
+// a wrong key must learn nothing about whether the key ever existed, was
+// rotated away, or expired.
 //
 // # Tenant resolution
 //
@@ -67,14 +65,14 @@ type AuthenticatedAPIKey struct {
 // (tenantForTokenHash then re-entering the tenant-scoped Access), applied
 // here to a bearer API key instead of a bearer share token.
 //
-// This is a deliberate correction of round 1's own migration comment
-// (migrations/{sqlite,postgres}/0001_create_integration_api_keys.sql, on
-// uq_integration_api_keys_tenant_hash), which assumed a future
-// authentication lookup would already know its tenant from request context.
-// That assumption does not hold for a real inbound API-key surface -- see
-// model.go's apiKeyHashIndex doc comment for the full argument -- so this
-// round resolves the tenant here instead of requiring a caller to already
-// have one.
+// This two-step shape departs from the migration comment on
+// uq_integration_api_keys_tenant_hash
+// (migrations/{sqlite,postgres}/0001_create_integration_api_keys.sql),
+// which assumed an authentication lookup would already know its tenant
+// from request context. That assumption does not hold for a real inbound
+// API-key surface -- see model.go's apiKeyHashIndex doc comment for the
+// full argument -- so Authenticate resolves the tenant from the hash
+// instead of requiring a caller to already have one.
 //
 // # What is NOT re-derived
 //
@@ -87,9 +85,9 @@ type AuthenticatedAPIKey struct {
 // # LastUsedAt
 //
 // A successful Authenticate best-effort records now as the row's
-// LastUsedAt, closing the round-1 gap APIKey.LastUsedAt's own doc comment
-// named ("Round 1 never writes it: no code path here authenticates a
-// request with a key"). This write is display bookkeeping, never a security
+// LastUsedAt -- the write APIKey.LastUsedAt's own field comment describes
+// as otherwise never happening, since no other code path authenticates a
+// request with a key. This write is display bookkeeping, never a security
 // control -- a failure to record it is logged and swallowed, never
 // surfaced as an authentication failure: an operator missing a "last used"
 // timestamp on one request is a materially smaller problem than refusing an

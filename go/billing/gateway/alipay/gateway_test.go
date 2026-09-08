@@ -137,7 +137,7 @@ func TestGateway_CreateCharge_SignsAndParsesPrecreate(t *testing.T) {
 	// notify-side VerifySignature must NOT be used for this check: it
 	// canonicalizes with sign_type excluded, the inbound-notification rule,
 	// and would pass an outgoing signature that failed to cover sign_type
-	// (the very asymmetry P2-6 pins).
+	// (the very asymmetry the request-side canonical form pins).
 	merchantPub := mustPublicFromPrivatePEM(t, cfg.PrivateKeyPEM)
 	params := map[string]string{}
 	for k := range doer.lastForm {
@@ -240,13 +240,13 @@ func TestGateway_QueryStatus_ResponseSignedByWrongKey(t *testing.T) {
 	}
 }
 
-// TestGateway_CreateCharge_RefusesNonCNYCurrency is P1-3's regression test:
-// CreateCharge used to ignore req.Amount.Currency entirely (formatAmount's
-// own doc comment admitted a non-CNY request was "a caller error this
-// package does not detect"), silently collecting a caller-supplied non-CNY
-// amount as if it were the same number of CNY cents. This test fails on
-// pre-fix code (which reaches the network instead of refusing) by
-// asserting the call never reaches doer.Do at all.
+// TestGateway_CreateCharge_RefusesNonCNYCurrency pins the CNY-only
+// boundary: CreateCharge's cents-to-yuan conversion has no unit
+// conversion of its own, so a caller-supplied non-CNY amount would
+// otherwise be sent to Alipay, and collected from the payer, as if it
+// were the same number of CNY cents. The test asserts the call never
+// reaches doer.Do at all: a non-CNY request must be refused before the
+// network is touched.
 func TestGateway_CreateCharge_RefusesNonCNYCurrency(t *testing.T) {
 	_, alipayPubPEM, _ := generateTestKeyPair(t)
 	cfg := testGatewayConfig(t, alipayPubPEM)
@@ -359,19 +359,15 @@ func verifyRequestSignature(params map[string]string, pub *rsa.PublicKey) error 
 	return rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest[:], sig)
 }
 
-// TestGateway_CreateCharge_OutgoingSignatureCoversSignType is P2-6's
-// regression test: signContent used to be shared by request signing and
-// notify verification, excluding "sign_type" from BOTH canonical strings.
-// Alipay's documented scheme is asymmetric -- the merchant's outgoing
-// request string includes sign_type (sign.go's own doc comment now states
-// the verified asymmetry and its sources), while notify verification
-// excludes it -- so every outgoing request this package signed was signed
-// over a string missing a parameter Alipay's own server includes when it
-// verifies: a signature mismatch on the first real call. This test fails
-// on the pre-fix signParams (whose outgoing signature does not verify
-// against the request-side canonical form recomputed independently here,
-// sign_type included) and passes once the request side signs the
-// asymmetric string.
+// TestGateway_CreateCharge_OutgoingSignatureCoversSignType pins the
+// request-side canonical form: Alipay's documented scheme is asymmetric --
+// the merchant's outgoing request string includes sign_type (sign.go's own
+// doc comment states the verified asymmetry and its sources), while notify
+// verification excludes it -- so a request signed with the notify-side
+// form would be signed over a string missing a parameter Alipay's own
+// server includes when it verifies: a signature mismatch on the first real
+// call. The outgoing signature must verify against the request-side
+// canonical form recomputed independently here, sign_type included.
 func TestGateway_CreateCharge_OutgoingSignatureCoversSignType(t *testing.T) {
 	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
 	cfg := testGatewayConfig(t, alipayPubPEM)
@@ -422,18 +418,17 @@ func TestGateway_CreateCharge_OutgoingSignatureCoversSignType(t *testing.T) {
 	}
 }
 
-// TestGateway_QueryStatus_TradeClosedWithFullRefund_ReportsRefunded is
-// P2-9's regression test: alipay.trade.query reports TRADE_CLOSED for two
-// distinct fates -- an unpaid trade closed by timeout, and a PAID trade
-// closed by a FULL refund (the query response's own trade_status
+// TestGateway_QueryStatus_TradeClosedWithFullRefund_ReportsRefunded pins
+// the poll-side refund distinction: alipay.trade.query reports TRADE_CLOSED
+// for two distinct fates -- an unpaid trade closed by timeout, and a PAID
+// trade closed by a FULL refund (the query response's own trade_status
 // definition, mirroring the notify side's). The poll payload tells them
-// apart the same way the P1-4 notify detection does: a closed-by-full-
-// refund trade's response carries refund_fee (the refunded amount, a
-// decimal yuan string), which a timeout closure never does. QueryStatus
-// used to map every TRADE_CLOSED to ChannelStatusFailed, so a fully
-// refunded charge was recorded -- by the active-polling fallback, the
-// authoritative re-query -- as a failed payment. On pre-fix code this
-// response shape reports ChannelStatusFailed; the fix reports
+// apart the same way the notify detection does: a closed-by-full-refund
+// trade's response carries refund_fee (the refunded amount, a decimal yuan
+// string), which a timeout closure never does. Mapping every TRADE_CLOSED
+// to ChannelStatusFailed would record a fully refunded charge -- by the
+// active-polling fallback, the authoritative re-query -- as a failed
+// payment; a closed-with-refund response must report
 // ChannelStatusRefunded.
 func TestGateway_QueryStatus_TradeClosedWithFullRefund_ReportsRefunded(t *testing.T) {
 	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
@@ -466,11 +461,10 @@ func TestGateway_QueryStatus_TradeClosedWithFullRefund_ReportsRefunded(t *testin
 }
 
 // TestGateway_QueryStatus_TradeClosedWithoutRefundFee_StillFailed pins the
-// other half of the P2-9 distinction on the poll side: a trade closed by
-// timeout without ever being paid carries no refund_fee and keeps mapping
-// to ChannelStatusFailed exactly as before -- and a zero-valued refund_fee
-// ("0.00", an explicit no-refund marker) must not be mistaken for a
-// refund either.
+// other half of the poll-side distinction: a trade closed by timeout
+// without ever being paid carries no refund_fee and keeps mapping to
+// ChannelStatusFailed -- and a zero-valued refund_fee ("0.00", an explicit
+// no-refund marker) must not be mistaken for a refund either.
 func TestGateway_QueryStatus_TradeClosedWithoutRefundFee_StillFailed(t *testing.T) {
 	for _, refundFee := range []string{"", "0.00"} {
 		_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
@@ -505,13 +499,14 @@ func TestGateway_QueryStatus_TradeClosedWithoutRefundFee_StillFailed(t *testing.
 }
 
 // TestGateway_QueryStatus_TradeSuccessWithPartialRefundFee_StillSucceeded
+// TestGateway_QueryStatus_TradeSuccessWithPartialRefundFee_StillSucceeded
 // pins the poll-side boundary next to the full-refund case: a PARTIAL
 // refund leaves the trade at TRADE_SUCCESS (only a full refund moves the
 // order off it, per Alipay's own status definitions), so a query response
 // reporting TRADE_SUCCESS alongside a refund_fee is a paid trade that has
 // been partially refunded -- still a succeeded collection of the original
-// amount, never a refunded order. The P2-9 fix's scope is the TRADE_CLOSED
-// full-refund case and nothing beyond it.
+// amount, never a refunded order. The refunded classification covers the
+// TRADE_CLOSED full-refund case and nothing beyond it.
 func TestGateway_QueryStatus_TradeSuccessWithPartialRefundFee_StillSucceeded(t *testing.T) {
 	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
 	cfg := testGatewayConfig(t, alipayPubPEM)
@@ -539,22 +534,22 @@ func TestGateway_QueryStatus_TradeSuccessWithPartialRefundFee_StillSucceeded(t *
 	}
 }
 
-// TestGateway_CreateCharge_TimestampRenderedInAlipayTimeZone is P2-10's
-// regression test: the outgoing request's "timestamp" common parameter used
-// to be rendered from time.Now() in the HOST's local time zone. Alipay's
-// open-platform gateway interprets the parameter as China Standard Time
-// (UTC+8) -- the same fixed zone alipayLocation() already parses Alipay's
-// own gmt_* timestamps in -- so a server outside UTC+8 signed and sent a
-// timestamp whose wall-clock time was wrong by the host's whole UTC offset.
-// The test forces time.Local to UTC (so pre-fix code -- which renders in
-// time.Local -- deterministically sends the UTC wall clock on every host,
-// not just on non-UTC+8 CI machines), then asserts the timestamp this
-// request actually carries parses, in the alipay CST zone, to within a
-// small slack of the current instant. Pre-fix code's UTC-rendered
-// timestamp, parsed back AS UTC+8 wall time, sits eight hours in the
-// future and fails the window; post-fix code renders through
-// time.Now().In(alipayLocation()) and passes. time.Local is restored
-// before the test returns; no test in this package runs in parallel.
+// TestGateway_CreateCharge_TimestampRenderedInAlipayTimeZone pins the
+// timestamp's time zone: the outgoing request's "timestamp" common
+// parameter must be rendered from time.Now() in Alipay's own zone, never
+// the HOST's local one. Alipay's open-platform gateway interprets the
+// parameter as China Standard Time (UTC+8) -- the same fixed zone
+// alipayLocation() already parses Alipay's own gmt_* timestamps in -- so
+// a server outside UTC+8 signing in its local zone sends a timestamp whose
+// wall-clock time is wrong by the host's whole UTC offset. The test forces
+// time.Local to UTC (so a host-zone renderer deterministically sends the
+// UTC wall clock on every machine, not just on non-UTC+8 CI machines),
+// then asserts the timestamp this request actually carries parses, in the
+// alipay CST zone, to within a small slack of the current instant: a
+// UTC-rendered timestamp, parsed back AS UTC+8 wall time, sits eight hours
+// in the future and fails the window; the alipay-zone renderer passes.
+// time.Local is restored before the test returns; no test in this package
+// runs in parallel.
 func TestGateway_CreateCharge_TimestampRenderedInAlipayTimeZone(t *testing.T) {
 	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
 	cfg := testGatewayConfig(t, alipayPubPEM)
@@ -603,16 +598,14 @@ func TestGateway_CreateCharge_TimestampRenderedInAlipayTimeZone(t *testing.T) {
 	}
 }
 
-// TestGateway_CreateCharge_RefusesNonPositiveAmount is P3-12's boundary
-// regression: Alipay's total_amount must be a positive decimal yuan
-// amount, and CreateCharge used to validate nothing -- a zero or negative
-// req.Amount.Cents reached formatAmount, which rendered -2950 as the
-// garbage string "-29.-50" (Go's %02d of a negative remainder) and 0 as
-// "0.00", and sent the result to Alipay as if it were a genuine amount.
-// The fix refuses cents <= 0 at the CreateCharge boundary with
-// billing.ErrInvalidAmount before anything is formatted or sent. This
-// fails on pre-fix code (which reaches the network instead of refusing)
-// by asserting the call never reaches doer.Do at all.
+// TestGateway_CreateCharge_RefusesNonPositiveAmount pins the amount
+// boundary: Alipay's total_amount must be a positive decimal yuan amount,
+// so CreateCharge must validate before anything is formatted or sent -- a
+// zero or negative req.Amount.Cents would otherwise reach formatAmount
+// (rendering -2950 as the garbage string "-29.-50" and 0 as "0.00") and
+// be sent to Alipay as if it were a genuine amount. cents <= 0 is refused
+// at the CreateCharge boundary with billing.ErrInvalidAmount; the test
+// asserts the call never reaches doer.Do at all.
 func TestGateway_CreateCharge_RefusesNonPositiveAmount(t *testing.T) {
 	_, alipayPubPEM, _ := generateTestKeyPair(t)
 	cfg := testGatewayConfig(t, alipayPubPEM)
@@ -643,16 +636,16 @@ func TestGateway_CreateCharge_RefusesNonPositiveAmount(t *testing.T) {
 	}
 }
 
-// TestFormatAmount_Negative_NotGarbled is P3-12's formatting-leg
-// regression: formatAmount(cents) used to render a negative input as the
-// garbage "-29.-50" (the whole-yuan part "-29", a literal ".", then "%02d"
-// of the negative remainder "-50"). The CreateCharge boundary now refuses
-// every non-positive amount before formatting is ever reached (see
-// TestGateway_CreateCharge_RefusesNonPositiveAmount) -- the actual fix for
-// a caller-supplied negative -- and formatAmount itself renders a negative
-// input sign-correctly ("-29.50") as a defensive backstop, so no code path
-// can ever fabricate "-29.-50" or drop the sign. This fails on the pre-fix
-// formatAmount (which returns "-29.-50" for -2950).
+// TestFormatAmount_Negative_NotGarbled pins the formatting-leg backstop:
+// formatAmount must render a negative input sign-correctly ("-29.50"),
+// never as the garbage "-29.-50" (the whole-yuan part "-29", a literal
+// ".", then "%02d" of the negative remainder "-50") and never with the
+// sign dropped. The CreateCharge boundary refuses every non-positive
+// amount before formatting is ever reached (see
+// TestGateway_CreateCharge_RefusesNonPositiveAmount) -- the real guard for
+// a caller-supplied negative -- and formatAmount's sign-correct rendering
+// is the defensive backstop underneath it, so no code path can fabricate
+// "-29.-50".
 func TestFormatAmount_Negative_NotGarbled(t *testing.T) {
 	if got := formatAmount(-2950); got != "-29.50" {
 		t.Errorf("formatAmount(-2950) = %q, want %q -- never the pre-fix garbage \"-29.-50\", never a sign dropped", got, "-29.50")
@@ -668,14 +661,13 @@ func TestFormatAmount_Negative_NotGarbled(t *testing.T) {
 	}
 }
 
-// TestParseAmount_RefusesNegativeOrSignDropping is P3-12's parsing-leg
-// regression: parseAmount("-0.50") used to return 50 -- the sign silently
+// TestParseAmount_RefusesNegativeOrSignDropping pins the parsing-leg
+// refusal: parseAmount("-0.50") must not return 50 -- the sign silently
 // dropped, turning a negative wire value into a small positive one -- and
-// parseAmount("-29.50") returned -2850, corrupting the sign's arithmetic.
-// Amounts Alipay actually sends are always non-negative, so a negative
-// string is a protocol anomaly the parser refuses outright rather than
-// guessing. This fails on the pre-fix parseAmount (which returns a value
-// and nil error for both inputs).
+// parseAmount("-29.50") must not return -2850, the sign's arithmetic
+// corrupted. Amounts Alipay actually sends are always non-negative, so a
+// negative string is a protocol anomaly the parser refuses outright rather
+// than guessing.
 func TestParseAmount_RefusesNegativeOrSignDropping(t *testing.T) {
 	for _, s := range []string{"-0.50", "-29.50"} {
 		if cents, err := parseAmount(s); err == nil {

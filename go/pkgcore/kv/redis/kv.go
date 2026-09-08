@@ -1,12 +1,11 @@
 // Package redis is the distributed deployment mode's KVStore, backed by a
 // shared Redis server every replica of a deployment reads and writes. It is
 // split out of go/pkgcore's own package -- rather than living beside the
-// KVStore interface as pkgcore.redisKVStore once did -- so that a consumer
-// which never wires a Redis-backed store does not inherit go-redis in its
-// dependency graph: Go resolves dependencies per package, and an interface
-// package that also carries one implementation hands every importer that
-// implementation's whole dependency closure (docs/internal/03-deployment-
-// modes.md's implementation-registry section measures the cost and names the boundary).
+// KVStore interface in the pkgcore root -- so that a consumer which never
+// wires a Redis-backed store does not inherit go-redis in its dependency
+// graph: Go resolves dependencies per package, and an interface package
+// that also carries one implementation hands every importer that
+// implementation's whole dependency closure.
 //
 // Importing this package registers "kv.redis" on pkgcore's shared
 // KVStoreRegistry as a side effect (see register.go), the name

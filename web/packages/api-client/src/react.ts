@@ -29,12 +29,11 @@
  *   the request's *host*, never from the access token, so a token
  *   refresh or a tenant switch (which only changes token claims) has
  *   no bearing on this cache. This is a deliberate non-feature.
- * - No auto-polling or window-focus revalidation in this round --
- *   `refresh()` is the explicit revalidation lever, and a *failed*
- *   first load is automatically retried by the next subscriber (below),
- *   so a transient outage is not cached as a permanent "feature flag
- *   off" answer. A future shell round that wants "admin edited config,
- *   show a live update" can add a revalidation policy without changing
+ * - No auto-polling or window-focus revalidation. `refresh()` is the
+ *   explicit revalidation lever, and a *failed* first load is
+ *   automatically retried by the next subscriber (below), so a
+ *   transient outage is not cached as a permanent "feature flag
+ *   off" answer. Adding a revalidation policy later would not change
  *   either hook's public shape.
  * - No unmount cancellation, and no retry-while-mounted. The cache is
  *   keyed by `api` identity, not by component lifetime -- an in-flight

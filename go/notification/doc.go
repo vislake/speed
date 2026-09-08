@@ -1,7 +1,6 @@
 // Package notification delivers a tenant's notifications to the people it
 // serves, on the channels those people want, and — for contacts who are
 // not users of any tenant — only where consent has been verified first.
-// Its design lives in docs/internal/07-platform-services.md.
 //
 // # What notification owns
 //
@@ -17,11 +16,10 @@
 //     registered queue handler) that produces one rendered message per
 //     recipient, per selected channel, with a send record per attempt as
 //     the replay-safe outcome log — an identical re-dispatch converges on
-//     the settled record, while aggregation and delivery-path rate
-//     limiting are deferred (go/notification/AGENTS.md's "Deferred to
-//     later rounds"). The pipeline's input is a host's Dispatch call —
-//     hosts wire their own module events to it — and its in-app arm
-//     writes the inbox row the hub wakes on.
+//     the settled record; aggregation and delivery-path rate limiting are
+//     not implemented. The pipeline's input is a host's Dispatch call —
+//     hosts wire their own module events to it — and its in-app arm writes
+//     the inbox row the hub wakes on.
 //
 // # What notification deliberately does NOT own
 //
@@ -51,10 +49,8 @@
 // channel preference matrix, the external-contact consent ledger with
 // double opt-in and business attestation, the async delivery pipeline with
 // its per-attempt send records, the platform-blacklist table (schema and
-// read path — the writers that feed it are deferred), the module's own
-// OpenAPI fragment with a generated, compile-checked HTTP handler, and the
-// dual-dialect migration set. The reference app is the mandatory first
-// consumer of the whole surface. What this round deliberately does not
-// ship is recorded, complete and honest, in go/notification/AGENTS.md's
-// "Deferred to later rounds" section.
+// read path — no writers feed it yet), the module's own OpenAPI fragment
+// with a generated, compile-checked HTTP handler, and the dual-dialect
+// migration set. The reference app is the mandatory first consumer of the
+// whole surface.
 package notification

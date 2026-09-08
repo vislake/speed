@@ -109,15 +109,15 @@ describe('AppThemeProvider', () => {
   })
 
   it('picks up a language a child switches to inside its own mount effect (P1-4 regression)', async () => {
-    // PRE-FIX (P1-4): AppThemeProvider snapshots i18n.language into state
-    // at first render and registers its languageChanged listener in an
-    // effect. React runs child effects before parent effects, so a child
-    // that switches language inside its own mount effect emits the event
-    // before the provider's listener exists -- the MUI built-in texts stay
-    // on the snapshot language permanently. POST-FIX: (re)attaching the
-    // listener re-adopts the instance's live language in the same effect,
-    // so a switch that fired before the listener existed is recovered at
-    // attach time instead of being lost.
+    // AppThemeProvider snapshots i18n.language into state at first render
+    // and registers its languageChanged listener in an effect. React runs
+    // child effects before parent effects, so a child that switches
+    // language inside its own mount effect emits the event before the
+    // provider's listener exists -- the MUI built-in texts would stay on
+    // the snapshot language. (Re)attaching the listener re-adopts the
+    // instance's live language in the same effect, so a switch that fired
+    // before the listener existed is recovered at attach time instead of
+    // being lost.
     const i18n = createUiKitI18n('zh-CN')
     let seen: Theme | undefined
     function SwitchingChild() {
@@ -143,12 +143,11 @@ describe('AppThemeProvider', () => {
   })
 
   it('adopts the language of a swapped-in i18n instance without waiting for an event (P1-4 regression)', () => {
-    // PRE-FIX (P1-4): the effect re-subscribes to a new i18n instance when
-    // the prop changes identity, but the language state still holds the
-    // first instance's snapshot -- a new instance never emits
-    // languageChanged for the language it was created on, so MUI built-in
-    // texts stay in the old instance's language forever. POST-FIX: the
-    // re-attach re-adopts the new instance's live language.
+    // Re-subscribing the effect to a new i18n instance (the prop changed
+    // identity) must also re-adopt the instance's live language: a new
+    // instance never emits languageChanged for the language it was
+    // created on, so the re-attach is the only point that can pick it
+    // up.
     const first = createUiKitI18n('zh-CN')
     const second = createUiKitI18n('en-US')
     const seen: Theme[] = []

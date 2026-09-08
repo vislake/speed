@@ -1,29 +1,27 @@
 // Disconnect- and delivery-robustness regressions for Service's credit
-// settlement and completion-notification bookkeeping (reviewer findings
-// P2-6, P2-7, P2-8 and P2-10): the file's tests pin, respectively, that a
+// settlement and completion-notification bookkeeping. The file's tests
+// pin, respectively: that a
 // refused completion-event publish leaves the notification retryable by a
-// later poll instead of latching it as delivered (P2-6); that Simulate's
+// later poll instead of latching it as delivered; that Simulate's
 // compensating refund of a failed enqueue survives a canceled request
 // context, and that a refund which still cannot run is durably recorded
-// as an orphaned reservation for ReconcileOutstandingCredits to refund
-// (P2-7); that Simulate's two post-enqueue persistence writes -- the
+// as an orphaned reservation for ReconcileOutstandingCredits to refund;
+// that Simulate's two post-enqueue persistence writes -- the
 // credit-reservation row and the per-photo index row -- likewise survive a
 // request context canceled after the enqueue, so the enqueued job stays
-// settleable and enumerable (P2-8); and that a Service assembled with a
+// settleable and enumerable; and that a Service assembled with a
 // CreditService but no ReservationStore reserves nothing at all, since a
-// reservation no settlement path could ever act on must never be opened
-// (P2-10).
+// reservation no settlement path could ever act on must never be opened.
 //
-// The smilesim rescan round added two further regressions here: that
+// Two further regressions live here: that
 // NotifyOnCompletion's settlement of a terminal job commits even when the
 // poll request's context is already canceled -- the poll-tab-disconnect
 // shape of the poll-driven settlement path, the twin of Simulate's own
-// post-enqueue writes (P1-refapp-5); and that a Service assembled with a
+// post-enqueue writes; and that a Service assembled with a
 // CreditService and a ReservationStore but no jobs.Queue reserves nothing
 // at all, since the reconciliation sweep -- the net beneath the poll
 // path -- is a permanent no-op without the queue, leaving such a
-// reservation settleable only by a client that keeps polling forever
-// (P2-refapp-9).
+// reservation settleable only by a client that keeps polling forever.
 //
 // The canceled-context shapes are driven deterministically through
 // recordingQueue's onEnqueue hook (see that type's doc comment in
@@ -62,15 +60,15 @@ func grantTestCredits(t *testing.T, credits *billing.CreditService) {
 	}
 }
 
-// TestService_Simulate_EnqueueFailureOnCanceledRequest_StillRefunds is the
-// P2-7 regression: before the fix, Simulate's compensating refund of a
-// failed enqueue ran on the request context itself, so a client that
-// disconnected mid-request (the context canceled -- driven here at the
-// enqueue point, after the reservation has already committed) made the
-// refund fail with context canceled and left the reservation Reserved
-// with no durable record anywhere and no path back. The refund must run
-// on a cancel-free derivation of the request context and release the
-// credits regardless of what happened to the caller.
+// TestService_Simulate_EnqueueFailureOnCanceledRequest_StillRefunds pins
+// that Simulate's compensating refund of a failed enqueue does not run on
+// the request context itself: a client that disconnects mid-request (the
+// context canceled -- driven here at the enqueue point, after the
+// reservation has already committed) must not make the refund fail with
+// context canceled, leaving the reservation Reserved with no durable
+// record anywhere and no path back. The refund runs on a cancel-free
+// derivation of the request context and releases the credits regardless
+// of what happened to the caller.
 func TestService_Simulate_EnqueueFailureOnCanceledRequest_StillRefunds(t *testing.T) {
 	credits := newTestCreditService(t)
 	grantTestCredits(t, credits)
@@ -103,16 +101,17 @@ func TestService_Simulate_EnqueueFailureOnCanceledRequest_StillRefunds(t *testin
 	}
 }
 
-// TestService_Simulate_CanceledAfterEnqueue_PersistenceWritesStillLand is
-// the P2-8 regression: before the fix, Simulate's two post-enqueue
+// TestService_Simulate_CanceledAfterEnqueue_PersistenceWritesStillLand
+// pins that Simulate's two post-enqueue
 // persistence writes -- the credit-reservation row and the per-photo
-// index row -- ran on the request context itself, so a request context
-// canceled after the enqueue succeeded (the client closed its tab the
-// moment the job was accepted) failed both writes. The enqueued job then
-// settled against no durable reservation (its credits stayed Reserved
-// forever, since neither NotifyOnCompletion nor the sweep had a row to
-// act on) and the per-photo index lost the generation. Both writes must
-// run on a cancel-free derivation of the request context and land
+// index row -- do not run on the request context itself: a request
+// context canceled after the enqueue succeeded (the client closed its
+// tab the moment the job was accepted) must not fail both writes,
+// leaving the enqueued job to settle against no durable reservation (its
+// credits stuck Reserved forever, since neither NotifyOnCompletion nor
+// the sweep would have a row to act on) and the per-photo index to lose
+// the generation. Both writes run on a cancel-free derivation of the
+// request context and land
 // regardless of what happened to the caller.
 func TestService_Simulate_CanceledAfterEnqueue_PersistenceWritesStillLand(t *testing.T) {
 	credits := newTestCreditService(t)
@@ -167,15 +166,15 @@ func TestService_Simulate_CanceledAfterEnqueue_PersistenceWritesStillLand(t *tes
 }
 
 // TestService_NotifyOnCompletion_RefusedPublish_LeavesNotificationRetryable
-// is the P2-6 regression: before the fix, NotifyOnCompletion set its
-// "already notified" latch before attempting the publish, so a refused
-// publish (a subscriber failure) left the latch set -- and since this
+// pins that NotifyOnCompletion sets its
+// "already notified" latch only AFTER the publish is accepted: a refused
+// publish (a subscriber failure) must not leave the latch set -- this
 // method's only caller (cmd/server's job-status route) logs and swallows
-// the error, the notification was dropped silently and permanently: every
-// later poll read the latch and skipped. The latch must record an
-// ACCEPTED delivery only: a refused publish is rolled back, so the next
-// poll retries the delivery, while an accepted delivery stays latched
-// against later polls exactly once.
+// the error, so a latched refusal would drop the notification silently
+// and permanently: every later poll would read the latch and skip. The
+// latch records an ACCEPTED delivery only: a refused publish is rolled
+// back, so the next poll retries the delivery, while an accepted delivery
+// stays latched against later polls exactly once.
 func TestService_NotifyOnCompletion_RefusedPublish_LeavesNotificationRetryable(t *testing.T) {
 	bus := pkgcore.NewMemoryEventBus()
 	svc := NewService(nil, nil, bus, nil, nil, nil, nil)
@@ -225,15 +224,15 @@ func TestService_NotifyOnCompletion_RefusedPublish_LeavesNotificationRetryable(t
 }
 
 // TestService_Simulate_RefundFailure_RecordsOrphanedReservationForTheSweep
-// is the P2-7 healing-half regression: when Simulate's compensating refund
+// pins the healing half: when Simulate's compensating refund
 // of a failed enqueue cannot run even on its cancel-free context (here the
 // billing database itself is closed at the enqueue point -- a genuine
 // store failure, not a client disconnect), the reservation must not be
-// left with its only record in a log line. Simulate must durably record
-// it as an orphaned reservation (orphanRefundJobIDPrefix in
+// left with its only record in a log line. Simulate durably records it
+// as an orphaned reservation (orphanRefundJobIDPrefix in
 // reservation_store.go) so ReconcileOutstandingCredits' sweep can refund
-// it on a later pass; before the fix no such record was written and no
-// mechanism could ever release the Reserved credits.
+// it on a later pass; without the record no mechanism could ever release
+// the Reserved credits.
 func TestService_Simulate_RefundFailure_RecordsOrphanedReservationForTheSweep(t *testing.T) {
 	billingDB := dbtest.NewSQLite(t)
 	credits := newTestCreditServiceWithDB(t, billingDB)
@@ -338,13 +337,13 @@ func TestService_ReconcileOutstandingCredits_RefundsOrphanedReservation(t *testi
 }
 
 // TestService_Simulate_CreditServiceWithoutReservationStore_DoesNotReserve
-// is the P2-10 regression: before the fix, Simulate reserved credits
-// whenever a CreditService was wired, regardless of whether the durable
-// store was -- but settlement (settleCredit, reached from both
+// pins that Simulate does not reserve credits
+// when only a CreditService is wired, without the durable
+// store: settlement (settleCredit, reached from both
 // NotifyOnCompletion's poll and the reconciliation sweep) requires the
 // store's row before it acts on anything, so such a reservation could
-// never be settled and stayed Reserved forever. A Service assembled with
-// a CreditService but no store must perform no reservation at all (the
+// never be settled and would stay Reserved forever. A Service assembled
+// with a CreditService but no store performs no reservation at all (the
 // package doc's "a nil store ... performs no credit accounting at all"
 // contract), leaving the request charge-free and nothing to settle later.
 func TestService_Simulate_CreditServiceWithoutReservationStore_DoesNotReserve(t *testing.T) {
@@ -403,19 +402,19 @@ func TestService_Simulate_CreditServiceWithoutReservationStore_DoesNotReserve(t 
 }
 
 // TestService_NotifyOnCompletion_CanceledRequestCtx_SettlementStillCommits
-// is the P1-refapp-5 regression: before the fix, NotifyOnCompletion ran
-// its credit settlement on the poll request's own context, so a client
-// that closed its poll tab at the moment its poll observed the terminal
+// pins that NotifyOnCompletion does not run
+// its credit settlement on the poll request's own context: a client that
+// closes its poll tab at the moment its poll observes the terminal
 // status -- the context canceled, driven here before the call, the
-// deterministic shape of that disconnect -- failed the settlement's own
-// store read (the transaction cannot begin on a done context) and rolled
-// the Confirm back: cmd/server's job-status route logs and swallows
-// NotifyOnCompletion's error, so the reservation stayed silently Reserved,
-// healed only if some later poll or the reconciliation sweep happened to
-// come by. The settlement must run on a cancel-free derivation of the
-// request context, the identical context.WithoutCancel boundary Simulate
-// draws around its own post-enqueue writes, and commit regardless of what
-// happened to the caller.
+// deterministic shape of that disconnect -- would fail the settlement's
+// own store read (the transaction cannot begin on a done context) and
+// roll the Confirm back: cmd/server's job-status route logs and swallows
+// NotifyOnCompletion's error, so the reservation would stay silently
+// Reserved, healed only if some later poll or the reconciliation sweep
+// happens to come by. The settlement runs on a cancel-free derivation of
+// the request context, the identical context.WithoutCancel boundary
+// Simulate draws around its own post-enqueue writes, and commits
+// regardless of what happened to the caller.
 func TestService_NotifyOnCompletion_CanceledRequestCtx_SettlementStillCommits(t *testing.T) {
 	credits := newTestCreditService(t)
 	grantTestCredits(t, credits)
@@ -451,19 +450,18 @@ func TestService_NotifyOnCompletion_CanceledRequestCtx_SettlementStillCommits(t 
 	}
 }
 
-// TestService_Simulate_CreditServiceAndStoreWithoutQueue_DoesNotReserve is
-// the P2-refapp-9 regression: before the fix, Simulate's reservation guard
-// required only the CreditService and the durable store, so a Service
-// assembled with both but no jobs.Queue still debited the tenant -- while
-// the reconciliation sweep that heals a reservation no client ever polls
-// to completion is a permanent no-op without the queue (it can ask
-// nothing about any job's status, and StartReconciler refuses to even
-// start). A debit whose only settlement net cannot run is exactly the
-// never-settleable reservation the P2-10 store-less guard refuses, and
-// the package doc already promises "a nil jobs.Queue performs no credit
-// accounting at all": the queue must be required by the same guard, so a
-// Service that debits always keeps its safety net reachable. This is the
-// P2-10 test's own shape applied to the third missing piece.
+// TestService_Simulate_CreditServiceAndStoreWithoutQueue_DoesNotReserve
+// pins that Simulate's reservation guard requires the jobs.Queue too, not
+// only the CreditService and the durable store: a Service assembled with
+// both but no jobs.Queue would debit the tenant while the reconciliation
+// sweep that heals a reservation no client ever polls to completion is a
+// permanent no-op without the queue (it can ask nothing about any job's
+// status, and StartReconciler refuses to even start). A debit whose only
+// settlement net cannot run is exactly the never-settleable reservation
+// the store-less guard refuses, and the package doc promises "a nil
+// jobs.Queue performs no credit accounting at all": the queue is
+// required by the same guard, so a Service that debits always keeps its
+// safety net reachable.
 func TestService_Simulate_CreditServiceAndStoreWithoutQueue_DoesNotReserve(t *testing.T) {
 	credits := newTestCreditService(t)
 	grantTestCredits(t, credits)

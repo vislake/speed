@@ -46,10 +46,9 @@ const (
 //
 // # Data domain
 //
-// Link data (docs/internal/04-data-and-tenancy.md), and link data is
-// tenant-scoped: that document's data-domain table classifies it as
-// isolated by tenant_id and states outright that AssertIsolated is mandatory
-// for tenant data AND link data both. So Membership implements
+// Link data, and link data is tenant-scoped: a bridging row is isolated by
+// tenant_id exactly like tenant data, so AssertIsolated is mandatory for it.
+// Membership implements
 // dbkit.TenantScoped, is reached only through MembershipRepository, and its
 // isolation is proven by tenancytest.AssertIsolated -- never by
 // AssertNotTenantScoped, which would assert the opposite of the requirement.
@@ -63,11 +62,11 @@ const (
 // # Cross-module references
 //
 // UserID names a row in authn's users table and carries NO foreign key.
-// Cross-module foreign keys are forbidden (docs/internal/04, rule 4): they
+// Cross-module foreign keys are forbidden: they
 // make independently released migrations and cascading deletes unmanageable.
 // org learns a user id from an authenticated caller or from a domain event,
-// and never imports an authn type to hold it -- the canonical example the
-// root CLAUDE.md gives for the module-boundary rule.
+// and never imports an authn type to hold it -- the canonical
+// module-boundary example.
 //
 // NodeID names an OrgNode of the same tenant and likewise carries no
 // database-level foreign key, for the same dual-dialect reason
@@ -78,7 +77,7 @@ const (
 //
 // # What is deliberately absent
 //
-// Roles. docs/internal/05-identity-and-access.md sketches a Roles []string
+// Roles. The design sketches a Roles []string
 // field here; org does not store one. Native arrays are banned dual-dialect,
 // and more importantly role state belongs to rbac's policy store keyed by
 // tenant, user and node path. org answers "where in the tree is this
@@ -153,8 +152,7 @@ func (m Membership) GetDeletedAt() *time.Time { return m.DeletedAt }
 // columns in the changes diff (deleted_at set vs. cleared). Captured only
 // when a host wires dbkit.Options.AuditBus on org's connection AND sets
 // that connection's Options.AuditModels scope from org.AuditableModels()
-// -- the reference app is the first host fulfilling the contract; see
-// go/org/AGENTS.md's "The audit trail" section.
+// -- the reference app is the first host fulfilling the contract.
 func (Membership) AuditResourceType() string { return AuditResourceTypeMember }
 
 // compile-time check that Membership satisfies dbkit.TenantScoped.
@@ -284,9 +282,9 @@ var (
 // Two writes, and deliberately NO read of anything in between them, so
 // this whole transaction's first database statement is a write -- the
 // shape that keeps it out of SQLite's read-then-write lock-upgrade hazard
-// (go/dbkit/AGENTS.md's "SQLite busy timeout" section; lockLiveNode's own
+// (lockLiveNode's own
 // doc comment in repository.go explains the identical reasoning for the
-// tree side of this round).
+// tree writes).
 //
 //  1. A blind, no-op bulk touch-update of EVERY currently-active
 //     membership row in the tenant (status = 'active' AND deleted_at IS
@@ -317,8 +315,7 @@ var (
 // every OTHER active membership row of the tenant too, not just its own
 // target -- a real, deliberately accepted cost of getting a correct
 // database-arbitrated answer without a version column or a second module.
-// See go/org/AGENTS.md's concurrency note for the scale this is and is not
-// meant to cover.
+
 func (r *MembershipRepository) removeIfNotLastActive(ctx context.Context, membershipID string) error {
 	now := time.Now()
 	deletedBy := softDeleteActor(ctx)
@@ -372,7 +369,7 @@ func (r *MembershipRepository) removeIfNotLastActive(ctx context.Context, member
 // after the lock succeeds and before the bulk mark-delete statement runs --
 // see tree.go's Delete doc comment for why a separate, ctx-bound call
 // opening its own transaction would leave the exact TOCTOU window the
-// concurrency-hardening round's fix closes.
+// in-transaction guard closes.
 func (r *MembershipRepository) anyInNodesTx(tx *gorm.DB, nodeIDs []string) (bool, error) {
 	if len(nodeIDs) == 0 {
 		return false, nil
@@ -698,8 +695,8 @@ func (s *MemberService) Remove(ctx context.Context, userID string) error {
 // A caller wanting the modern invariants re-checked calls Add instead of
 // Restore.
 //
-// Restore is deliberately not exposed over HTTP this round; see
-// go/org/AGENTS.md's "Soft deletion" section for why.
+// Restore is deliberately not exposed over HTTP; it is a Service-level
+// call only.
 func (s *MemberService) Restore(ctx context.Context, membershipID string) (*Membership, error) {
 	if err := s.repo.Restore(ctx, membershipID); err != nil {
 		if hasCode(err, dbkit.ErrRecordNotFound.Code) {

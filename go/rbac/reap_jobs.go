@@ -12,20 +12,20 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// This file is rbac's queue-backed reaping (P1-rbac-reap): the revoke-side
+// This file is rbac's queue-backed reaping: the revoke-side
 // org-event subscribers -- onMemberRemoved for org.member.removed,
 // onNodeDeleted for org.node.deleted -- enqueue a reap task on the host's
 // jobs.Queue (Module.WithQueue) instead of running the reaping
 // synchronously inside the event delivery, and these tasks are what this
-// module's own workers execute. The jobs queue is the retry home the
-// depended-on side of the old design never had: go/pkgcore's bus contract
+// module's own workers execute. The queue is the retry home the reaps
+// need: go/pkgcore's bus contract
 // (eventbus/redis/eventbus.go and the in-memory bus alike) states that the
 // bus never redelivers and handler errors never come back to the
-// publisher, so a reap that hit a transient database error mid-pass was
-// simply over -- every binding after the failure stayed live forever, and
-// a member later re-joined through a FRESH membership (org fires no
-// restore event for that path) silently kept a role the removal should
-// have ended. A task the queue retries until it succeeds is the honest
+// publisher, so a synchronous run that hits a transient database error
+// mid-pass simply ends -- every binding after the failure stays live
+// forever, and a member who re-joins through a FRESH membership (org fires
+// no restore event for that path) silently keeps a role the removal
+// should have ended. A task the queue retries until it succeeds is the
 // convergence for that failure shape.
 //
 // One prerequisite of that convergence is the enqueue itself, and it has
@@ -49,19 +49,19 @@ import (
 // identity -- the removal's (tenant, user, membership id) or the
 // deletion's (tenant, node id set) -- and that identity is also the
 // task's deterministic idempotency key, so two deliveries of one event
-// (which neither bus produces today, but which an at-least-once bus would)
+// (which neither bus produces, but which an at-least-once bus would)
 // collapse into one job. The reap itself is idempotent under re-runs for
-// the same reason the synchronous one was: its enumerations return live
+// the same reason the synchronous reap is: its enumerations return live
 // rows only, so a retried task finds the bindings its first attempt
 // already revoked gone from the enumeration. A membership that is removed,
 // restored and removed again is a NEW event instance each time (a new
 // membership id per removal), so its reap task is never collapsed into an
 // earlier one.
 //
-// Ordering note, recorded rather than papered over: the queue cannot
+// Ordering note: the queue cannot
 // promise that a removal reap runs before a later org.member.restored
-// reinstate, the way the synchronous subscriber's in-event-order
-// execution did. The residual window is a restore processed while its
+// reinstate, the way the synchronous subscribers' in-event-order
+// execution does. The residual window is a restore processed while its
 // removal's reap task is still queued or running -- sub-worker-latency
 // automation, never an operator's restore -- and the wrong end state it
 // produces is a revoked binding for a member org made visible again:
@@ -69,7 +69,7 @@ import (
 // healed by the member's next removal-and-restore cycle, whose reinstate
 // pass re-lifts every member-removal row. That is the direction this
 // module accepts residual risk in; the leak direction the reaps exist to
-// close is the one the queue's retries now converge. The restore-side
+// close is the one the queue's retries converge. The restore-side
 // subscribers (onMemberRestored, onNodeRestored) deliberately stay
 // synchronous for the same reason: their re-instatements must never race
 // their matching reaps.
@@ -118,10 +118,9 @@ type reapNodePayload struct {
 // memberReapKey is the deterministic idempotency key of a member-removal
 // reap task: the removal instance's (tenant, membership) identity. The
 // membership id is what distinguishes one removal from the next removal of
-// the same user; the user id is the fallback for an event whose payload
-// carried no membership id (an org version before MemberRemoved carried
-// one), where the instance identity degrades to the user -- the same
-// collapse the old redelivery assumption would have had.
+// the same user; the user id is the fallback when the payload carries no
+// membership id, where the instance identity degrades to the user and
+// successive removals of one user collapse into one task.
 func memberReapKey(tenant pkgcore.TenantID, userID, membershipID string) string {
 	instance := membershipID
 	if instance == "" {
@@ -187,7 +186,7 @@ func (s *Service) enqueueNodeReap(ctx context.Context, tenant pkgcore.TenantID, 
 // is retried instead of abandoned. ctx carries the job's tenant, rebuilt
 // by the worker from the task (jobs.Handler's own contract), so every
 // repository call runs under the tenant whose member was removed, exactly
-// as the synchronous subscriber's rebuilt context did.
+// as the synchronous subscriber's rebuilt context does.
 type memberReapTask struct {
 	svc *Service
 }

@@ -265,8 +265,9 @@ func TestModule_Register_AdmitsTheDefaultAllowlistAndOnlyIt(t *testing.T) {
 	})
 }
 
-// TestModule_Options_StoreTheirValues pins that each With* option writes the
-// value its doc comment promises, into the field the enforcing rounds read.
+// TestModule_Options_StoreTheirValues pins that each With* option writes
+// the value its doc comment promises, into the field the enforcing logic
+// reads.
 func TestModule_Options_StoreTheirValues(t *testing.T) {
 	m := NewModule(nil,
 		WithMaxUploadBytes(1<<30),

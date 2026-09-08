@@ -2,21 +2,15 @@
 """check_markdown_examples.py -- compile/parse-check fenced ```go blocks in
 markdown prose (AGENTS.md, package READMEs, ADRs).
 
-Root CLAUDE.md's Documentation section states the gap this script closes:
-"Godoc Example functions are compiled and run by CI inside each module's
-unit suite... Examples embedded in markdown prose (AGENTS.md, READMEs, ADRs)
-have no compile harness." docs-check.yml's own header carried the matching
-entry in its DELIBERATELY NOT WIRED list ("a dedicated harness for
-prose-embedded documentation examples... what does not exist is a harness
-for examples embedded in docs prose and AGENTS.md files") until this script
-and its docs-check.yml wiring landed.
+Godoc Example functions compile inside each module's own unit suite;
+examples embedded in markdown prose have no compile harness of their own,
+and this script is the check that closes that gap.
 
 WHAT IS CHECKED, and why a blanket "every fenced go block must go build"
-rule is not honest here: a real survey of this repository's markdown corpus
-(see the "Survey" note below) found the overwhelming majority of fenced
-```go blocks are deliberately partial illustrative fragments -- a bare
-method signature, a struct literal, a handful of statements with the
-surrounding function/imports left to the reader's imagination -- not
+rule is not honest here: the overwhelming majority of fenced ```go blocks
+in the markdown corpus are deliberately partial illustrative fragments --
+a bare method signature, a struct literal, a handful of statements with
+the surrounding function/imports left to the reader's imagination -- not
 complete, buildable Go files. Forcing every one of those into a padded,
 noisy "complete program" just to satisfy a linter would make the docs
 worse, not better. So this script draws the same line the corpus itself
@@ -66,24 +60,19 @@ clause:
     overrides it when the fragment is genuinely, unavoidably not
     wrappable.
 
-Survey (repository state as of this script's introduction; re-run
---survey to recheck): 53 in-scope files were found under the corpus
-described below, 8 of which contain at least one ```go block, for 20
-blocks total -- 2 "complete" (own `package` clause) and 18 "fragment".
-Every fragment in the corpus parses under one of the four wrappings once
-two markdown bugs the survey turned up were fixed (a bare `...` elision
-standing where Go syntax requires a real token, in go/dbkit/AGENTS.md and
-go/admin/AGENTS.md -- see this script's companion commit for the fix).
-docs/internal/** also contains ```go blocks (9 files, 26 blocks) but is
-out of scope by design: that directory is Chinese-language internal
-design discussion (root CLAUDE.md's Language Rule), its own audience and
-its own rules, and its code blocks are illustrative API sketches for
+Survey: run with --survey to re-print the corpus census. The census
+answers the honest-check question above: the corpus's fenced ```go
+blocks are overwhelmingly partial illustrative fragments, which is why
+the package-clause distinction exists. docs/internal/** also contains
+```go blocks but is out of scope by design: that directory is
+Chinese-language internal design discussion, its own audience and its
+own rules, and its code blocks are illustrative API sketches for
 still-being-designed shapes -- not the "AGENTS.md, READMEs, ADRs" gap
-CLAUDE.md's Documentation section and docs-check.yml's own header name.
-Confirmed by inspection, not assumed: several of its blocks mix Chinese
-prose comments into the Go and sketch signatures for mechanisms predating
-their real implementation, which is a different, and legitimately
-unchecked, kind of example than a shipped module's own AGENTS.md makes.
+this script closes. Confirmed by inspection, not assumed: several of its
+blocks mix Chinese prose comments into the Go and sketch signatures of
+mechanisms whose real implementation does not exist, which is a
+different, and legitimately unchecked, kind of example than a shipped
+module's own AGENTS.md makes.
 
 CORPUS -- exactly:
   * every **/AGENTS.md
@@ -106,9 +95,7 @@ This is a hard, git-diff-visible, per-block opt-out a reviewer sees in the
 same pull request that adds it -- the same shape as this repository's
 other adjudication escapes (dependency-licenses.json's "adr" field for a
 weak-copyleft exception, semgrep's planted-fixture allowlist): recorded
-and reviewed, never silent. As of this script's introduction nothing in
-the corpus uses it -- every real violation the survey found was fixed in
-the markdown instead.
+and reviewed, never silent.
 
 Exit codes (matching tools/check_docs_site.py's convention): 0 clean;
 1 a block failed its check (a complete block did not build/vet clean, or

@@ -435,7 +435,7 @@ func TestWithTrustedProxies_ValidatesItsEntries(t *testing.T) {
 }
 
 // TestWithVendorClientIPHeaders_RequiresKnownHeaders pins the closed-set
-// contract of the vendor client-IP header opt-in (P0-authn-14): only the
+// contract of the vendor client-IP header opt-in: only the
 // declared VendorClientIPHeader constants may be read, and an entry that
 // is not one of them -- a bare host-typed header name -- is refused at
 // wiring time. That refusal is what keeps the option an opt-in into a

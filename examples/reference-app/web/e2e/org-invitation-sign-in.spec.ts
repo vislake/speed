@@ -3,37 +3,30 @@
  * gets invited, accepts, and can then sign in to the organization they
  * were invited to.
  *
- * This is the regression gate for the two defects that made the journey a
- * dead end, both found by driving the deployed app rather than by reading
- * it:
- *
- *  1. Sign-in read membership from an in-process shadow map that only
- *     boot-time demo seeding ever wrote, while real acceptances wrote
- *     org's own table. A genuinely invited person was answered
- *     authn.tenant_membership_required forever -- and the seeded demo
- *     accounts lost every membership on each process restart, which
- *     scale-to-zero made a matter of minutes. Fixed by reading org's real
- *     rows at sign-in.
- *  2. Accepting required an access token already scoped to the tenant
- *     being joined, which is exactly what an invitee cannot have: the
- *     acceptance is what would create the membership that a scoped token
- *     needs. A closed loop. Fixed by resolving the tenant from the
- *     invitation token itself.
+ * Two properties carry the journey end to end. Sign-in reads membership
+ * from org's real rows, so a genuinely invited person is answered by
+ * the membership the acceptance wrote -- nothing depends on an
+ * in-process shadow of boot-time seeding. And accepting resolves the
+ * tenant from the invitation token itself, which is the only
+ * tenant-bearing credential an invitee can have: the acceptance is what
+ * creates the membership a tenant-scoped access token would need, so
+ * the tenant has to travel in the invitation.
  *
  * The spec walks the whole loop and ends where it matters: the invitee
- * signs in through the browser, with no tenant named, and the frame shows
- * the organization it was invited to. The setup steps use the API because
- * the surfaces for them do not exist yet -- there is no team-management
- * UI, and an invitation token is never in an API response (see
- * test-utils/invitations.ts) -- while the two steps that decide whether
- * the product works, where the invitee lands before acceptance and the
- * sign-in into the invited organization after, are both driven through
- * the browser. (Before acceptance the invitee's registration already
- * provisioned a clinic of its own -- self-service signup,
- * cmd/server/self_service.go -- so the pre-acceptance leg asserts the
- * invitee is NOT yet inside the inviting organization, in place of the
- * old refused-sign-in control that the memberless registration shape
- * used to provide.)
+ * signs in through the browser, with no tenant named, and the frame
+ * offers the organization it was invited to. The setup steps -- the
+ * invitee's registration, the invitation itself, reading the acceptance
+ * token -- go through the API, because they are harness plumbing rather
+ * than the journey under test and an invitation token is never in an
+ * API response (see test-utils/invitations.ts); the two steps that
+ * decide whether the product works, where the invitee lands before
+ * acceptance and the sign-in into the invited organization after, are
+ * both driven through the browser. Before acceptance the invitee's
+ * registration has already provisioned a clinic of its own
+ * (self-service signup, cmd/server/self_service.go), so the account can
+ * sign in from the moment it exists -- what it cannot do yet is enter
+ * the ORGANIZATION that invited it, and the pre-acceptance leg asserts
+ * exactly that.
  */
 import { expect, test } from '@playwright/test'
 import { DEMO_OWNER } from './test-utils/accounts.js'
@@ -64,11 +57,10 @@ test('an invited colleague accepts and can then sign in to that organization', a
 
   // The invitee registers, the way a person following an invitation link
   // does. Registration provisions the registrant a clinic of its own
-  // (self-service signup, cmd/server/self_service.go), so unlike the old
-  // memberless shape the account CAN sign in from the moment it exists
-  // -- what it cannot do yet is enter the ORGANIZATION that invited it.
-  // This pre-acceptance leg asserts exactly that, in place of the old
-  // refused-sign-in control: the browser-shaped sign-in lands in the
+  // (self-service signup, cmd/server/self_service.go), so the account
+  // can sign in from the moment it exists -- what it cannot do yet is
+  // enter the ORGANIZATION that invited it. This pre-acceptance leg
+  // asserts exactly that: the browser-shaped sign-in lands in the
   // invitee's own clinic, never inside one of the demo organizations the
   // invitation below will open -- if it ever did land there, the
   // acceptance would prove nothing.
@@ -78,14 +70,13 @@ test('an invited colleague accepts and can then sign in to that organization', a
   await expectSignedIn(page)
   // The invitee's own clinic is not one of the demo organizations the
   // helper knows by name -- readCurrentTenant's failure to find one IS
-  // the assertion's first half (the clinic's trigger names its raw
+  // the assertion's first half (the clinic's switcher names its raw
   // tenant id, never a demo practice's name).
   // Both halves, in order: a tenant is named at all, and it is not one
-  // of the demo organizations. The form this replaces asserted only the
-  // second and passed whenever the read THREW -- an unloaded frame, an
-  // unrendered switcher, a bug in the helper -- so it could not tell
-  // "landed in its own clinic" from "shows no tenant", and the direction
-  // it failed in was the one where it says yes.
+  // of the demo organizations. An assertion of only the second would
+  // pass whenever the read THREW -- an unloaded frame, an unrendered
+  // switcher, a bug in the helper -- so it could not tell "landed in
+  // its own clinic" from "shows no tenant".
   await expectOutsideDemoOrganizations(page)
 
   // The acceptance steps below run through the API while the browser is
@@ -99,10 +90,10 @@ test('an invited colleague accepts and can then sign in to that organization', a
   const node = await rootNodeId(request, owner)
   const token = await inviteAndReadToken(request, owner, invitee, node)
 
-  // The invitee accepts holding no tenant-scoped credential at all --
-  // the shape that used to be impossible to serve, since the tenant now
-  // comes from the token rather than from a token the invitee could not
-  // have had.
+  // The invitee accepts holding no tenant-scoped credential at all: the
+  // tenant comes from the invitation token, not from an access token the
+  // invitee could not have had before the acceptance created the
+  // membership.
   await acceptInvitationAsFreshUser(request, inviteeUserId, token)
 
   // The step that decides whether the product works: the invitee signs in
@@ -110,17 +101,12 @@ test('an invited colleague accepts and can then sign in to that organization', a
   // invited them.
   //
   // Asserted on the clinics the switcher OFFERS, not on the one the
-  // frame opened. This assertion used to read
-  // `TENANT_NAMES.toContain(await readCurrentTenant(page))` -- the
-  // invitee lands in a demo practice -- which was true only while an
-  // invitee had exactly one tenant. Self-service registration now gives
-  // every registrant a clinic of their own, so an invitee has two and
-  // the one they land in is whichever the membership answer returned
-  // first, an order this suite has documented as not fixed. The gate
-  // went red on all three engines the moment that landed, naming a
-  // clinic called "Workspace" -- the invitee's own -- which is not a
-  // product defect at all: the invitation worked, and the assertion was
-  // about ordering.
+  // frame opened: self-service registration gives every registrant a
+  // clinic of their own, so an invitee holds at least two tenants and
+  // the frame opens on the first of the membership answer's rows
+  // (ordered by tenant id) rather than on a clinic this assertion
+  // chooses. The invitation working is the product fact; the landing
+  // tenant is ordering.
   await visitSignIn(page)
   await submitPasswordSignIn(page, invitee, INVITEE_PASSWORD)
   await expectSignedIn(page)

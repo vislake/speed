@@ -4,15 +4,15 @@ import "time"
 
 // row is one stored configuration value in the shared configs table.
 //
-// The table is platform data, not tenant data (docs/internal/04-data-and-
-// tenancy.md lists system-level configuration among its platform-domain
-// examples): rows are written and read through this module's service
-// methods, which enforce the scope and system-context rules, so the model
-// deliberately implements no dbkit.TenantScoped interface and is never
-// touched through a dbkit.Repository[T]. The GORM tenant-isolation plugin
-// only filters models that opt into tenancy, so a plain *gorm.DB carries no
-// tenant filter for this table; tenancytest.AssertNotTenantScoped proves
-// the point in this module's own tests.
+// The table is platform data, not tenant data -- every tenant's rows share
+// it, with the tenant_id column distinguishing them: rows are written and
+// read through this module's service methods, which enforce the scope and
+// system-context rules, so the model deliberately implements no
+// dbkit.TenantScoped interface and is never touched through a
+// dbkit.Repository[T]. The GORM tenant-isolation plugin only filters models
+// that opt into tenancy, so a plain *gorm.DB carries no tenant filter for
+// this table; tenancytest.AssertNotTenantScoped proves the point in this
+// module's own tests.
 //
 // The primary key is (key, scope, tenant_id): one row per configuration key
 // per scope, with tenant_id disambiguating the rows of the tenant tier.
@@ -20,10 +20,8 @@ import "time"
 // Empty is a deliberate choice over NULL: NULLs are distinct in a
 // PostgreSQL unique index, so two system rows for one key could coexist
 // under NULL where the empty-string sentinel collapses them into the
-// single row the primary key promises. No config row is ever deleted in
-// this milestone (see
-// go/config/AGENTS.md's known limitations), so the primary key needs no
-// tombstone column.
+// single row the primary key promises. Config rows have no delete path, so
+// the primary key needs no tombstone column.
 //
 // value holds the row's canonical string (see values.go) -- except on
 // Sensitive items, where it holds base64(ciphertext) sealed by the host's

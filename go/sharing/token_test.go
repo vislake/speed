@@ -6,11 +6,10 @@ import (
 	"testing"
 )
 
-// TestNewShareToken_MeetsTheEntropyFloor pins rule 1
-// (docs/internal/07-platform-services.md's "tokens must be high-entropy and
-// unenumerable" rule): at least 128 bits of randomness. shareTokenBytes is
-// 32 (256 bits), so this also catches an accidental reduction below the
-// documented floor.
+// TestNewShareToken_MeetsTheEntropyFloor pins the module's mandatory
+// high-entropy rule (see doc.go): at least 128 bits of randomness.
+// shareTokenBytes is 32 (256 bits), so this also catches an accidental
+// reduction below the documented floor.
 func TestNewShareToken_MeetsTheEntropyFloor(t *testing.T) {
 	const minBits = 128
 	if shareTokenBytes*8 < minBits {

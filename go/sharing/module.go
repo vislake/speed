@@ -58,11 +58,9 @@ const (
 	PermissionRevoke = "sharing:revoke"
 )
 
-// AuditActionSensitiveShareCreate is the one audit action sharing
-// contributes this round: rule 4 (docs/internal/07-platform-services.md's
-// "sensitive resource sharing needs confirmation" rule)
-// requires that creating a share for a resource carrying sensitive personal
-// information is itself an audit event. Fired by Service.Create's
+// AuditActionSensitiveShareCreate is sharing's one audit action: creating a
+// share for a resource carrying sensitive personal information is itself an
+// audit event (Share.Sensitive, model.go). Fired by Service.Create's
 // emitSensitiveAudit, only when CreateParams.Sensitive is true -- never
 // unconditionally, per this codebase's own "an undeclared-but-unused
 // action is dead catalog weight" discipline turned around: a declared
@@ -76,11 +74,8 @@ const (
 	// EventShareCreated announces a new share link.
 	EventShareCreated = "sharing.share.created"
 	// EventShareAccessed announces one access attempt, granted or denied
-	// alike (ShareAccessedPayload.Granted) -- the event
-	// docs/internal/07-platform-services.md's "relationship to other
-	// modules" section names as flowing into compliance's own audit trail
-	// once that module exists. This module only publishes; see events.go's
-	// own doc comment.
+	// alike (ShareAccessedPayload.Granted). This module only publishes;
+	// see events.go's own doc comment.
 	EventShareAccessed = "sharing.share.accessed"
 	// EventShareRevoked announces a share's revocation, owner-initiated or
 	// sweep-initiated alike.
@@ -88,9 +83,8 @@ const (
 )
 
 // shareEventDecls is the catalog entry for each of the three events, all
-// declared up front in Register even though only Create/Access/Revoke's own
-// rounds each publish -- there is exactly one round here, so all three ship
-// together.
+// declared up front in Register so a subscriber can declare its interest
+// before any publish happens.
 var shareEventDecls = []pkgcore.EventDecl{
 	{
 		Type:        EventShareCreated,
@@ -110,14 +104,13 @@ var shareEventDecls = []pkgcore.EventDecl{
 }
 
 // ConfigDefaultExpiry is the tenant-overridable configuration key backing
-// rule 2's default-expiry duration (docs/internal/07-platform-services.md's
-// "default expiry" rule): "30 days if the tenant has not configured one". Declared
-// on the registry by Register so the value is visible and, eventually,
-// editable through go/config's own admin-console machinery; see
-// TenantConfigReader's own doc comment for the honest statement that no
-// host wires a live reader against it yet in this round -- Service.Create
-// falls back to defaultShareExpiry, which is exactly this item's own
-// Default value, whenever no TenantConfigReader is wired at all.
+// the default-expiry fallback: "30 days if the tenant has not configured
+// one". Declared on the registry by Register so the value is visible to
+// go/config-backed hosts and editable through their own configuration
+// machinery. Service.Create resolves it through the TenantConfigReader
+// seam only when a host wires one (see TenantConfigReader's own doc
+// comment); without a reader it falls back to defaultShareExpiry, which is
+// exactly this item's own Default value.
 const ConfigDefaultExpiry = "sharing.default_expiry"
 
 // configItemDecls is the catalog entry for sharing's one config item,
@@ -154,8 +147,8 @@ var ErrQueueRequiredForSweep = errors.New("sharing: no queue wired; construct th
 // OpenAPISpec returns this module's real fragment (api/openapi.yaml): one
 // genuinely public, unauthenticated route (handler.go's Handler,
 // PathAccess) that resolves a bearer token into the share it names and
-// streams the resource behind it, plus, as of this round, five owner-facing
-// operations (PathShares) a resource's own owner uses to create, list, get,
+// streams the resource behind it, plus five owner-facing operations
+// (PathShares) a resource's own owner uses to create, list, get,
 // revoke and audit their own shares. See Register's own doc comment for the
 // contrasting gating obligation each of the two paths places on a host, and
 // WithResourceResolver for the seam that turns a Share's ResourceRef into
@@ -176,10 +169,9 @@ type Option func(*Module)
 
 // WithTenantConfigReader wires the live reader Service.Create resolves a
 // tenant's configured default expiry through. Without it (the default),
-// Create always falls back to defaultShareExpiry -- still correct, per
-// rule 2's own "30 days if the tenant has not configured one" fallback,
-// just never per-tenant-tunable until a host wires this. See
-// TenantConfigReader's own doc comment.
+// Create always falls back to defaultShareExpiry -- still correct, the
+// "30 days if the tenant has not configured one" fallback, just not
+// per-tenant-tunable. See TenantConfigReader's own doc comment.
 func WithTenantConfigReader(cfg TenantConfigReader) Option {
 	return func(m *Module) { m.cfg = cfg }
 }
@@ -187,8 +179,7 @@ func WithTenantConfigReader(cfg TenantConfigReader) Option {
 // WithQueue wires the jobs.Queue Module.EnqueueExpirySweep enqueues the
 // expiry-sweep task on. Optional: without it, Register still registers the
 // sweep's jobs.Handler (a host may run workers without ever scheduling this
-// module's own sweep, or may schedule it once a queue becomes available
-// later), and EnqueueExpirySweep itself fails with
+// module's own sweep), and EnqueueExpirySweep itself fails with
 // ErrQueueRequiredForSweep only if a caller actually tries to use it.
 func WithQueue(queue jobs.Queue) Option {
 	return func(m *Module) { m.queue = queue }
@@ -269,10 +260,9 @@ func (m *Module) EnqueueExpirySweep(ctx context.Context) error {
 // Name implements pkgcore.Module.
 func (m *Module) Name() string { return moduleName }
 
-// DependsOn implements pkgcore.Module: nothing. sharing sits above jobs in
-// docs/internal/01-architecture.md's graph, but its dependence on a queue
-// is a seam the host wires (WithQueue), not a requirement that the jobs
-// module itself be in the bootstrap set -- the identical reasoning
+// DependsOn implements pkgcore.Module: nothing. sharing's dependence on a
+// queue is a seam the host wires (WithQueue), not a requirement that the
+// jobs module itself be in the bootstrap set -- the identical reasoning
 // go/storage's own DependsOn doc comment gives.
 func (m *Module) DependsOn() []string { return nil }
 
@@ -293,11 +283,10 @@ var openAPISpecYAML []byte
 
 // OpenAPISpec implements pkgcore.Module: sharing's own OpenAPI fragment,
 // embedded from api/openapi.yaml. The fragment is the single source of
-// this module's one HTTP operation -- the api package's generated types
-// and ServerInterface (api/sharing-server.gen.go, regenerated by task
-// api:gen) derive from it, and Handler implements that interface (see
-// handler.go) -- per docs/internal/21-api-contract.md's spec-first
-// decision.
+// this module's HTTP operations -- the api package's generated types and
+// ServerInterface (api/sharing-server.gen.go, regenerated by task api:gen)
+// derive from it, and Handler implements that interface (see handler.go) --
+// so a spec change without a matching handler change cannot compile.
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
 // Register implements pkgcore.Module. Per the interface's own contract it
@@ -318,8 +307,8 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // limits).
 //
 // It also builds and mounts this module's HTTP routes: PathAccess (one
-// operation) and, as of this round, PathShares (five owner-facing
-// operations), both served by the SAME *Handler instance -- Handler
+// operation) and PathShares (five owner-facing operations), both served
+// by the SAME *Handler instance -- Handler
 // implements the whole generated api.ServerInterface, and mounting it twice
 // under two different registrar paths works correctly because oapi-codegen's
 // generated router dispatches on the request's own literal path regardless
@@ -334,9 +323,9 @@ func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 // tenancy.WithAllowlist, the same mechanism go/config's own two pre-auth
 // endpoints already use, before this route can ever serve a genuinely
 // anonymous visitor -- without that allowlist entry, tenancy.Middleware's
-// own fail-closed default (root CLAUDE.md's multi-tenant isolation rule)
-// refuses every request here with 403 before Handler is ever reached, since
-// the request carries no tenant claim by design. Whichever gate table a host
+// own fail-closed default refuses every request here with 403 before
+// Handler is ever reached, since the request carries no tenant claim by
+// design. Whichever gate table a host
 // layers on top of Routes.Routes() (examples/reference-app's
 // demoRouteGuards, for instance) must mark this same path as needing no
 // permission, for the identical reason: an unauthenticated visitor holds no

@@ -190,14 +190,15 @@ func TestVerifyPassword_UnrunnableStoredParametersAreRejectedNotPanicked(t *test
 
 // TestVerifyPassword_EmptySaltStaysOKFalse pins the one short-salt shape
 // that is NOT a panic: argon2 accepts an empty salt and simply derives a
-// digest no honest hash can match, so before this round's fix an empty salt
-// answered (false, nil) -- "wrong password". The decode path now applies
-// the writer's own floor (PasswordParams.validate, which HashPassword
-// enforces at write time: no legitimate hash has a salt under 8 bytes), so
-// the same stored value answers (false, ErrInvalidPasswordHash). The "ok"
-// half of the answer is what must not move -- a false result with no panic
-// -- while the error half correctly tells the operator the stored value is
-// corrupt rather than pretending the password was merely wrong.
+// digest no honest hash can match, so without the writer's own floor an
+// empty salt would answer (false, nil) -- "wrong password". The decode path
+// applies the writer's own floor (PasswordParams.validate, which
+// HashPassword enforces at write time: no legitimate hash has a salt under
+// 8 bytes), so the same stored value answers (false,
+// ErrInvalidPasswordHash). The "ok" half of the answer is what must not
+// move -- a false result with no panic -- while the error half correctly
+// tells the operator the stored value is corrupt rather than pretending the
+// password was merely wrong.
 func TestVerifyPassword_EmptySaltStaysOKFalse(t *testing.T) {
 	t.Parallel()
 

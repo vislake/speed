@@ -95,7 +95,7 @@ func TestRenderMarkdown_NonSensitiveItemDefault_RendersRealValue(t *testing.T) {
 }
 
 // TestRenderMarkdown_SensitiveAndNonSensitiveItems_DoNotCrossContaminate is
-// an adversarial check for P2-3: render several items together -- a
+// an adversarial check: render several items together -- a
 // Sensitive one first, a Sensitive one with an empty-string Default, and a
 // non-Sensitive one whose real Default happens to look distinctive -- and
 // confirm each row's redaction decision is independent of its neighbours'.

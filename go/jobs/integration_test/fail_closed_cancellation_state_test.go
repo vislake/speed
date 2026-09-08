@@ -24,10 +24,10 @@ import (
 // marker (queue/asynq/queue.go's cancelMarkerKey, an "asynqjobs:cancelled:"
 // key written by Cancel and read by Get/DeadLetterJobs and the dispatch
 // check alike), a second state source that can fail while asynq's own
-// task machinery keeps working — the exact shape in which the divergence
-// commit c26b058b corrected happened. The leg's adapter therefore
-// sabotages the marker key itself, the destructive injection the finding
-// names: the marker (a string) is deleted and replaced with a Redis LIST,
+// task machinery keeps working — the exact shape of the divergence this
+// tier exists to catch. The leg's adapter therefore sabotages the marker
+// key itself, the destructive injection the tier's design names: the
+// marker (a string) is deleted and replaced with a Redis LIST,
 // so every read of it answers a real WRONGTYPE error on a real Redis, and
 // Repair deletes the sabotage and restores the captured marker value — the
 // outage delays the report, it does not lose the cancellation.

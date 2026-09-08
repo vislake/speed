@@ -4,8 +4,8 @@
 // go/tenancy/tenancytest.AssertIsolated plays for dbkit.Repository[T] and
 // go/pkgcore/eventbustest.AssertConforms plays for EventBus: one suite every
 // implementation — built-in or host-supplied through pkgcore.WithKVStore —
-// must pass, so drift between implementations is caught here once instead of
-// pairwise (see docs/internal/03-deployment-modes.md).
+// must pass, so drift between implementations is caught here once instead
+// of pairwise.
 //
 // # The two-instance shape
 //

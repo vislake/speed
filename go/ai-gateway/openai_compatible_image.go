@@ -122,10 +122,10 @@ type openaiImageDataWire struct {
 
 // openaiImageUsageWire is the billing-dimension shape this provider reads
 // from a response's "usage" object -- image count, diffusion steps and the
-// vendor's own resolution/size label, per the design doc's rule that image
-// metering is not token-based. A response carrying no "usage" object at
-// all (some vendors omit it) leaves Usage nil; imageResultFromWire falls
-// back to the real delivered image count in that case.
+// vendor's own resolution/size label: image metering is not token-based.
+// A response carrying no "usage" object at all (some vendors omit it)
+// leaves Usage nil; imageResultFromWire falls back to the real delivered
+// image count in that case.
 type openaiImageUsageWire struct {
 	ImageCount int    `json:"image_count"`
 	Steps      int    `json:"steps"`

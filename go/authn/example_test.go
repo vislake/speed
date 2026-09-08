@@ -23,10 +23,10 @@ import (
 
 // exampleKeySource is a minimal, self-contained authn.KeySource for these
 // examples, so they need no live go/pki module: a production deployment
-// wires a *pki.Service here instead (docs/internal/22-pki.md's "authn's
-// integration" section), satisfying authn.KeySource structurally with zero import
-// edge between the two packages -- exactly the property this example
-// package's own freedom from a go/pki dependency demonstrates in practice.
+// wires a *pki.Service here instead, satisfying authn.KeySource
+// structurally with zero import edge between the two packages -- exactly
+// the property this example package's own freedom from a go/pki dependency
+// demonstrates in practice.
 type exampleKeySource struct {
 	activeKID string
 	active    ed25519.PrivateKey
@@ -513,12 +513,11 @@ func ExampleNewHandler() {
 }
 
 // ExampleService_SearchUsers drives the platform-operator search entry
-// point D6 of docs/internal/23-admin.md adds: unlike FindByID/FindByEmail/
-// FindByPhone, which answer for one already-known identifier, SearchUsers
-// finds an account with no tenant in scope at all. authn itself performs no
-// authorization check here -- go/admin's HTTP handler is what gates this
-// call behind a platform permission such as admin:search_users before it
-// ever reaches this method.
+// point: unlike FindByID/FindByEmail/FindByPhone, which answer for one
+// already-known identifier, SearchUsers finds an account with no tenant in
+// scope at all. authn itself performs no authorization check here --
+// go/admin's HTTP handler is what gates this call behind a platform
+// permission such as admin:search_users before it ever reaches this method.
 func ExampleService_SearchUsers() {
 	ctx := context.Background()
 	module, _ := exampleModule(ctx)

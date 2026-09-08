@@ -18,25 +18,22 @@
  * dark pixel) in byte length and color -- both are 1x1, so it is not a
  * difference in image DIMENSIONS -- and that is what makes the
  * before/after pair a gate examines genuinely two different images.
- * (The earlier wording here said "size", which a reader could check and
- * find false; a checkable claim that is wrong costs the rest of this
- * comment its credibility, which matters because the rest is what a
- * reviewer relies on to judge the seam.) The image passes
- * go/storage's probe exactly like the Go suite's canned gray PNG: a
- * small, structurally valid PNG with no metadata segments.
+ * The image passes go/storage's probe exactly like the Go suite's
+ * canned gray PNG: a small, structurally valid PNG with no metadata
+ * segments.
  *
  * It answers after a short delay (FAKE_IMAGE_DELAY_MS, 300ms by
  * default) rather than instantly, and that is fidelity rather than
  * padding: a real image generation takes seconds, which is why the
  * pipeline is asynchronous and why the product must tell a person their
- * simulation is running. A vendor that answers in five milliseconds
- * makes the in-flight state nearly unobservable, so the gate for "a
- * generation in flight must say so" was passing or failing on whether
- * it won a race against the provider -- and a gate that depends on
- * winning a race is not a gate, it is a source of red that gets blamed
- * on the product. The delay makes the requirement checkable; it does
- * not make a broken product pass, because a surface that announces
- * nothing still announces nothing after 300ms.
+ * simulation is running. An instant answer would make the in-flight
+ * state nearly unobservable, and the gate for "a generation in flight
+ * must say so" would pass or fail on whether it won a race against the
+ * provider -- a gate that depends on winning a race is not a gate, it
+ * is a source of red that gets blamed on the product. The delay makes
+ * the requirement checkable; it does not make a broken product pass,
+ * because a surface that announces nothing still announces nothing
+ * after 300ms.
  *
  * Health: GET /healthz answers 200 so Playwright's webServer health
  * check can wait for the process.
@@ -91,12 +88,12 @@ const server = createServer((request, response) => {
         response.end(
           JSON.stringify({
             data: [{ b64_json: SIMULATED_SMILE_B64 }],
-            // Consistent with the bytes actually returned. It used to say
-            // 1024x1024 while answering a 1x1 image: harmless today, since
-            // go/storage's probe of the stored bytes is the authority over
-            // any claim about them, but it meant a gate could not have
-            // caught a product that started trusting the vendor's claim
-            // instead.
+            // Consistent with the bytes actually returned: this answers
+            // a 1x1 image and says so, because go/storage's probe of the
+            // stored bytes is the authority over any claim about them --
+            // a usage block that lied about the size would leave a gate
+            // unable to catch a product that started trusting the
+            // vendor's claim instead.
             usage: { image_count: 1, steps: 30, size: "1x1" },
           }),
         );

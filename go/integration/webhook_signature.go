@@ -8,10 +8,9 @@ import (
 	"time"
 )
 
-// This file implements docs/internal/07-platform-services.md's "HMAC
-// signature + timestamp" requirement: every delivered payload is signed
-// with the subscription's own secret and carries a timestamp, so the
-// receiving end
+// This file implements the delivery signature scheme: every delivered
+// payload is signed with the subscription's own secret and carries a
+// timestamp, so the receiving end
 // can verify authenticity (the body was not tampered with, and it really
 // came from this deployment) and reject replays outside a tolerance window.
 //
@@ -30,8 +29,7 @@ import (
 // further from the receiver's own clock than
 // WebhookReplayTolerance -- both checks are the receiver's own
 // responsibility; this module signs and stamps, and has no receiving side
-// of its own to enforce either half against (see AGENTS.md's "Deliberately
-// not in scope" table).
+// of its own to enforce either half against.
 const (
 	// HeaderWebhookID carries the delivering WebhookDelivery.ID, so a
 	// receiver can deduplicate on it directly rather than only via the
@@ -51,13 +49,12 @@ const (
 	HeaderWebhookSignature = "X-Speed-Webhook-Signature"
 )
 
-// WebhookReplayTolerance is the maximum age docs/internal/07-platform-
-// services.md's replay-rejection rule implies a receiver should accept
-// between HeaderWebhookTimestamp and its own clock. Exported purely as
-// documented guidance for a receiver's own verification code (this module
-// signs; it has no receiving side to enforce the tolerance itself -- see
-// this file's own header comment) rather than something any code in this
-// module reads.
+// WebhookReplayTolerance is the maximum age a receiver should accept
+// between HeaderWebhookTimestamp and its own clock when rejecting
+// replays. Exported purely as documented guidance for a receiver's own
+// verification code (this module signs; it has no receiving side to
+// enforce the tolerance itself -- see this file's own header comment)
+// rather than something any code in this module reads.
 const WebhookReplayTolerance = 5 * time.Minute
 
 // webhookSignatureScheme is HeaderWebhookSignature's prefix.

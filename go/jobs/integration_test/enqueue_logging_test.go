@@ -15,24 +15,25 @@ import (
 )
 
 // TestRedisQueue_Enqueue_LogsSingleCorrectTenantID is Queue's half of
-// the "job enqueued" duplicate/conflicting tenant_id regression: the same
-// bug StandaloneQueue had (see go/jobs's own standalone_queue_test.go
+// the "job enqueued" tenant_id rule for Queue.Enqueue: the line must carry
+// exactly one tenant_id attribute -- the enqueuing Task's own -- rebuilt
+// from task.TenantID, never an explicit "tenant_id" kv layered on top of
+// whatever obs.FromContext(ctx) already auto-attaches from ctx's own
+// ambient tenant (the same rule StandaloneQueue's Enqueue follows; see
+// go/jobs's own standalone_queue_test.go
 // TestEnqueue_LogsSingleCorrectTenantID_EvenWhenCtxTenantDiffers, in the
-// parent package and so not importable from here) also existed in
-// Queue.Enqueue's own, separate obs.FromContext(ctx).Info("job
-// enqueued", ...) call (go/jobs/queue/asynq's queue.go): an explicit "tenant_id" kv for
-// task.TenantID logged on top of whatever obs.FromContext(ctx) already
-// auto-attaches from ctx's own ambient tenant. AGENTS.md documents the
-// "platform-level scheduler enqueuing one cleanup Task per tenant in a
-// loop" pattern as equally legitimate for Queue.Enqueue and
-// StandaloneQueue.Enqueue alike, so whenever ctx's ambient tenant differs from
-// task.TenantID, the pre-fix line carried both side by side --
-// slog.TextHandler does not deduplicate repeated attribute keys.
+// parent package and so not importable from here). The "platform-level
+// scheduler enqueuing one cleanup Task per tenant in a loop" pattern makes
+// a differing ambient tenant legitimate, so whenever ctx's ambient tenant
+// differs from task.TenantID, the line must carry only the rebuilt task
+// tenant -- slog.TextHandler does not deduplicate repeated attribute keys,
+// and logging both would render the wrong tenant side by side with the
+// right one.
 //
 // Run against a real Redis-backed Queue (not StandaloneQueue) because the
-// fix lives in Queue's own Enqueue method, with its own independent
-// call to obs.FromContext -- fixing StandaloneQueue's copy does not, by itself,
-// prove anything about this one.
+// rule lives in Queue's own Enqueue method, with its own independent call
+// to obs.FromContext -- StandaloneQueue's copy being correct does not, by
+// itself, prove anything about this one.
 func TestRedisQueue_Enqueue_LogsSingleCorrectTenantID(t *testing.T) {
 	ctx := context.Background()
 	q := startTestAsynqQueue(t, ctx)

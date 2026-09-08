@@ -15,11 +15,10 @@ import (
 // PreferenceService is the preference matrix's decision layer: the only
 // sanctioned way to set, read and resolve a recipient's channel preferences.
 //
-// It sits between the module's future HTTP handler (and the delivery
-// subscriber of a later block) and PreferenceRepository. What makes it a
-// service rather than a thin repository pass-through is that the matrix is
-// only meaningful against the type taxonomy, which the repository must never
-// know about:
+// It sits between the module's HTTP handler and delivery pipeline and
+// PreferenceRepository. What makes it a service rather than a thin
+// repository pass-through is that the matrix is only meaningful against the
+// type taxonomy, which the repository must never know about:
 //
 //   - a preference names a notification type, and the type's declaration
 //     (the channels it uses, whether opting out is legal) comes from the

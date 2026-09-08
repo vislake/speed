@@ -163,8 +163,8 @@ func newAuditCapturePlugin(bus pkgcore.EventBus, models map[reflect.Type]struct{
 // Refusing, rather than ignoring, is deliberate: a capture scope that
 // silently skips a listed model is exactly the silent audit gap Options
 // documented as the reason the restriction exists, and a host that lists
-// a model whose Auditable marker a later round removes should hear about
-// it at startup, not discover the missing rows in a compliance query.
+// a model whose Auditable marker gets removed should hear about it at
+// startup, not discover the missing rows in a compliance query.
 func resolveAuditModels(models []any) (map[reflect.Type]struct{}, error) {
 	if len(models) == 0 {
 		return nil, nil
@@ -188,15 +188,14 @@ func resolveAuditModels(models []any) (map[reflect.Type]struct{}, error) {
 
 // auditCapturePlugin is a gorm.Plugin that publishes a WriteCapturedEvent
 // after every successful Create, Update or Delete against a model
-// implementing Auditable. It is the automatic-first half of
-// docs/internal/10-compliance-and-audit.md's collection design; the
-// declarative-secondary half is go/dbkit/audit's Emit.
+// implementing Auditable — the automatic half of the audit-trail
+// collection design; the declarative-secondary half is go/dbkit/audit's
+// Emit.
 //
 // It is unexported: Open is the one place that installs it, gated on
-// Options.AuditBus being non-nil — nil (the zero value every pre-existing
-// caller already has) means no capture is installed, so adding this field
-// to Options is 100% backward compatible with every call site that existed
-// before this plugin did.
+// Options.AuditBus being non-nil. A nil bus (the zero value) installs no
+// capture at all, so the option is fully additive: every call site that
+// does not set it gets a connection without the plugin.
 //
 // Registered callbacks run After the corresponding "gorm:*" callback, so
 // db.RowsAffected and the model's own field values are available — but a
@@ -206,18 +205,16 @@ func resolveAuditModels(models []any) (map[reflect.Type]struct{}, error) {
 // until the whole fn passed to WithTenantSession returns — arbitrarily many
 // statements later, entirely outside this Process's own callback chain, and
 // GORM's own BeginTransaction/CommitOrRollbackTransaction callbacks are
-// no-ops for a write already running inside an open transaction (confirmed
-// by reading gorm.io/gorm@v1.31.2/finisher_api.go's Begin and
-// callbacks/transaction.go while designing this fix), so nothing in this
-// Process's own chain — including its own "gorm:commit_or_rollback_
-// transaction" step — reflects whether that surrounding transaction ever
+// no-ops for a write already running inside an open transaction — nothing
+// in a single statement's own callback chain can tell whether the
+// transaction around it will ultimately commit — so nothing in this
+// Process's own chain, including its own "gorm:commit_or_rollback_
+// transaction" step, reflects whether that surrounding transaction ever
 // actually commits. Building the event to publish at capture time is
 // therefore safe (every field it needs is already resolved), but actually
 // publishing it here, synchronously, would be publishing before the write
-// is known to have durably happened at all — exactly the bug this
-// package's own history records (see docs 10's stale note on this file
-// predicting the fix, and go/dbkit/AGENTS.md's "Audit trail collection"
-// section).
+// is known to have durably happened at all — exactly the bug the
+// buffer-until-after-commit design below exists to avoid.
 //
 // So capture (below) never publishes directly. It either appends the built
 // event to a per-transaction *auditBuffer carried on the write's own
@@ -249,8 +246,8 @@ func resolveAuditModels(models []any) (map[reflect.Type]struct{}, error) {
 // A publish failure can therefore never roll anything back — by the time
 // either path calls Publish, there is nothing left to roll back — so it is
 // reported as a structured alert instead of a db.AddError injection (see
-// auditPublishFailed), per docs/internal/10-compliance-and-audit.md's rule
-// that an audit-write failure must alert and never be silently dropped.
+// auditPublishFailed): an audit-write failure must alert, never be
+// silently dropped.
 type auditCapturePlugin struct {
 	bus pkgcore.EventBus
 	// models is the capture scope resolveAuditModels derived from
@@ -498,24 +495,21 @@ const (
 // error. There is nothing left here to roll back or fail loudly through
 // the triggering Create/Update/Delete call (it has already returned, or is
 // past the point where its result can change), so this is a structured
-// alert rather than an error return, per
-// docs/internal/10-compliance-and-audit.md's rule that an audit-write
-// failure must alert and never be silently dropped: an operator reading
-// this line has every field needed to reconstruct and manually re-publish
-// or investigate.
+// alert rather than an error return: an audit-write failure must alert and
+// never be silently dropped. An operator reading this line has every field
+// needed to reconstruct and manually re-publish or investigate.
 //
 // dbkit cannot depend on go/observability (the two sit at the same depth
 // in the module dependency graph — pkgcore -> dbkit / observability ->
-// ... — so an import would run against the bottom-up rule; see
-// go/dbkit/AGENTS.md's "One dependency, and why there is only one"), so
-// this reaches for log/slog directly rather than the context-aware
-// obs.FromContext wrapper every downstream module uses for its own
-// logging — the identical reasoning go/pkgcore/registry.go's
-// warnIfNotDurable documents for the same constraint one tier down. The
-// message is a constant string and every variable goes into key-value
-// attributes, snake_case and shared with the rest of the codebase's
-// logging convention (table, resource_type, operation, tenant_id, error),
-// mirroring go/jobs/worker.go's own dispatch-failure logging.
+// ... — so an import would be a cycle), so this reaches for log/slog
+// directly rather than the context-aware obs.FromContext wrapper every
+// downstream module uses for its own logging — the identical reasoning
+// go/pkgcore/registry.go's warnIfNotDurable documents for the same
+// constraint one tier down. The message is a constant string and every
+// variable goes into key-value attributes, snake_case and shared with the
+// rest of the codebase's logging convention (table, resource_type,
+// operation, tenant_id, error), mirroring go/jobs/worker.go's own
+// dispatch-failure logging.
 func auditPublishFailed(ctx context.Context, evt pkgcore.Event, cause error) {
 	payload, _ := evt.Payload.(WriteCapturedEvent)
 	slog.Default().ErrorContext(ctx, "dbkit: audit event publish failed after commit",
@@ -894,14 +888,13 @@ func (p *auditCapturePlugin) capture(db *gorm.DB, operation string) {
 // in that case.
 //
 // For a model that does not implement TenantScoped at all -- a platform- or
-// identity-domain Auditable model (root CLAUDE.md's four-data-domain
-// table) -- evt.TenantID is left empty, with no ctx fallback of any kind:
-// tenantScopePlugin gives no guarantee whatsoever for a model it never
-// scopes, so a platform write can run under any tenant's ctx for reasons
-// entirely unrelated to the row itself (a job or admin operation that
-// rebuilt tenant ctx for an unrelated purpose), and stamping that tenant
-// onto the event would misattribute it in the audit trail -- exactly
-// dbkit-tenancy P2-2. The acting identity is still fully captured, just
+// identity-domain Auditable model -- evt.TenantID is left empty, with no
+// ctx fallback of any kind: tenantScopePlugin gives no guarantee
+// whatsoever for a model it never scopes, so a platform write can run
+// under any tenant's ctx for reasons entirely unrelated to the row itself
+// (a job or admin operation that rebuilt tenant ctx for an unrelated
+// purpose), and stamping that tenant onto the event would misattribute it
+// in the audit trail. The acting identity is still fully captured, just
 // under Actor/OnBehalfOf rather than TenantID, which is sufficient: a
 // platform write's "who did this, from where" is Actor/OnBehalfOf's job,
 // and TenantID empty is the truthful answer to "which tenant does this row
@@ -955,9 +948,9 @@ func tenantScopedOf(stmt *gorm.Statement) (TenantScoped, bool) {
 // Unlike isTenantScopedValue, this needs an actual value to call
 // AuditResourceType() on, not merely a type test, so it does not attempt
 // the slice-element unwrap isTenantScopedValue performs: a batch
-// Create/Update/Delete over a slice is not captured by this plugin in M1 —
-// every Repository[T] write in this codebase operates on one record at a
-// time, so this is not a gap in the sanctioned data-access path, only in a
+// Create/Update/Delete over a slice is not captured by this plugin — every
+// Repository[T] write in this codebase operates on one record at a time,
+// so this is not a gap in the sanctioned data-access path, only in a
 // hand-rolled batch write, which a caller wanting audit capture for should
 // use audit.Emit explicitly instead.
 func auditableOf(stmt *gorm.Statement) (Auditable, bool) {
@@ -1064,8 +1057,8 @@ const auditRedactedFieldValue = "[redacted]"
 // key is deliberately this package's own ("audit") rather than a
 // hypothetical shared convention: dbkit's write capture is the audit
 // mechanism in this ecosystem, and only its parser reads the key. The
-// fieldValuesMap doc comment and go/dbkit/AGENTS.md's "Audit trail
-// collection" section carry the full rationale and the behavior contract.
+// fieldValuesMap doc comment carries the full rationale and the behavior
+// contract.
 const (
 	auditRedactTagKey   = "audit"
 	auditRedactTagValue = "redact"
@@ -1210,9 +1203,8 @@ func fieldValuesMap(stmt *gorm.Statement) map[string]any {
 //     differ, after describes the Model's fields (SetupUpdateReflectValue
 //     resets ReflectValue to the Model), which may not be the payload the
 //     assignments came from — the known limitation the Select shape above
-//     already carries (see go/dbkit/AGENTS.md's Model == Dest discussion);
-//     the written set is computed against those same Model fields, and
-//     scoping it is no less truthful than before this branch existed.
+//     already carries; the written set is computed against those same
+//     Model fields, and scoping it is no less truthful.
 //
 // Select/Omit entries are resolved the way GORM itself resolves them
 // (LookUpField, statement.go's SelectAndOmitColumns): a Go field name like

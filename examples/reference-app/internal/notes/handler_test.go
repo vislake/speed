@@ -259,7 +259,7 @@ func TestHandler_Create_ValidText_RecordsAuditEvent(t *testing.T) {
 	// pkgcore.ActorFromContext at emit time and nothing in the composed
 	// chain populates that carrier (recordNoteCreatedAudit's own doc
 	// comment says so in full). An empty actor here means the audit trail
-	// cannot answer "who created this note", the P1 finding this assertion
+	// cannot answer "who created this note" -- the fact this assertion
 	// pins.
 	if payload.Actor.Type != pkgcore.ActorTypeUser || payload.Actor.ID != "test-creator" {
 		t.Fatalf("recorded event Actor = %+v, want {Type: %q, ID: %q}",
@@ -302,18 +302,15 @@ func TestHandler_Create_EmptyText_ReturnsTextRequiredError(t *testing.T) {
 	}
 }
 
-// TestHandler_Create_TextExceedsMaxLength_ReturnsTextTooLongError reproduces
-// the round-3 kernel bootstrap smoke test finding directly against Handler:
-// curling POST /api/v1/notes with a 10,000-character text value returned
-// HTTP 201 Created and stored the full string verbatim (confirmed by
-// reading it back via GET), even though api/openapi.yaml declares
+// TestHandler_Create_TextExceedsMaxLength_ReturnsTextTooLongError pins
+// the length bound directly against Handler:
+// api/openapi.yaml declares
 // "maxLength: 4000" on NotesCreateNoteRequest.text and both
 // migrations/{postgres,sqlite}/0001_create_notes.sql declare the column
 // VARCHAR(4000) -- SQLite's type-affinity system does not itself enforce
-// that length, and NotesCreateNote used to check only for
-// empty/whitespace-only text, never a maximum. This test fails against
-// that unfixed handler (status would be 201, not 400) and passes once
-// NotesCreateNote enforces maxTextLength.
+// that length, and a handler that checked only for
+// empty/whitespace-only text would accept an over-long value. The bound
+// lives in NotesCreateNote's maxTextLength check.
 func TestHandler_Create_TextExceedsMaxLength_ReturnsTextTooLongError(t *testing.T) {
 	h, _ := newTestHandler(t)
 
@@ -415,8 +412,8 @@ func TestHandler_Create_InvalidJSON_ReturnsInvalidRequestBodyError(t *testing.T)
 	}
 }
 
-// TestHandler_Create_OversizedBody_RefusedWithInvalidRequestBody is the
-// P2-12 regression for the MaxBytesReader bound this handler now applies
+// TestHandler_Create_OversizedBody_RefusedWithInvalidRequestBody pins
+// the MaxBytesReader bound this handler applies
 // (see maxRequestBodyBytes in handler.go -- the test's body is written in
 // terms of the bound's own value so the relationship cannot drift),
 // mirroring the identical regression go/authn/handler_test.go's
@@ -471,11 +468,11 @@ func TestHandler_Create_OversizedBody_RefusedWithInvalidRequestBody(t *testing.T
 }
 
 // TestHandler_Create_ResponseCreatedAt_IsWholeSeconds pins the created_at
-// wire format to the shape the hand-written noteResponse used to emit.
+// wire format to whole-second RFC3339.
 // The generated NotesNote.CreatedAt is a time.Time (api/openapi.yaml
 // declares "format: date-time"), and encoding/json renders a time.Time
-// with RFC3339Nano -- byte-identical to the RFC3339 the old code
-// formatted by hand whenever the fractional second is zero. Handler's
+// with RFC3339Nano -- identical to whole-second RFC3339 whenever the
+// fractional second is zero. Handler's
 // toNoteResponse truncates to the whole second before encoding (see its
 // doc comment in handler.go); this test fails against a response that
 // carries a fractional second (or any non-RFC3339 layout), even though a
@@ -600,12 +597,12 @@ func TestHandler_ServeHTTP_UnsupportedMethod_ReturnsMethodNotAllowed(t *testing.
 	}
 }
 
-// TestHandler_List_AnnotatesSpanWithTenant reproduces the round-4
-// reference-app retrofit finding: NotesListNotes runs downstream of the
-// identical tenancy.Middleware as NotesCreateNote -- both read an
-// equally-resolved tenant off ctx -- yet only NotesCreateNote called
-// obs.AnnotateTenant, so a GET /api/v1/notes span carried no tenant_id
-// while a POST /api/v1/notes one did. This starts a real span the same
+// TestHandler_List_AnnotatesSpanWithTenant pins that NotesListNotes
+// annotates its span with the tenant like NotesCreateNote does: both run
+// downstream of the identical tenancy.Middleware and read an
+// equally-resolved tenant off ctx, so a GET /api/v1/notes span must
+// carry tenant_id exactly as a POST /api/v1/notes one does. This starts
+// a real span the same
 // way go/observability/middleware_test.go's own AnnotateTenant tests do,
 // puts a tenant on that same context, calls Handler.NotesListNotes
 // through ServeHTTP, and asserts the exported span carries a tenant_id
@@ -653,11 +650,11 @@ func TestHandler_List_AnnotatesSpanWithTenant(t *testing.T) {
 	}
 }
 
-// TestHandler_List_LogsWithTenantID reproduces the round-4 reference-app
-// retrofit finding's medium-severity half: NotesListNotes never logged
-// anything at all, so a GET /api/v1/notes request left behind zero
-// tenant_id-bearing log lines, unlike NotesCreateNote's "note created"
-// line (obs.FromContext(ctx).Info in handler.go's NotesCreateNote). This
+// TestHandler_List_LogsWithTenantID pins that NotesListNotes logs a
+// tenant_id-bearing line, unlike a list method that never logs at all,
+// leaving a GET /api/v1/notes request with zero correlated log lines
+// (contrast NotesCreateNote's "note created"
+// line, obs.FromContext(ctx).Info in handler.go's NotesCreateNote). This
 // injects a text-handler logger via obs.WithLogger -- the same technique
 // go/observability/logger_test.go uses to assert on FromContext's
 // attached fields -- calls Handler.NotesListNotes through ServeHTTP, and

@@ -3,8 +3,7 @@
 Guidance for AI tooling working in or against this package. The public
 surface, semantics and deferred items are documented in the package
 `README.md`; this file records the invariants that keep the package
-safe to consume, mirroring the repo rules in `CLAUDE.md` and
-`docs/internal/21-api-contract.md`.
+safe to consume.
 
 ## What this module is
 
@@ -23,8 +22,8 @@ this one may issue HTTP requests itself.
   `createMemoryAccessTokenStore`), is re-read before every attempt, and
   never touches `localStorage`, `sessionStorage`, IndexedDB or cookies.
   Do not add a storage-backed token store; the refresh token's home is
-  an httpOnly cookie managed by the M1 authn module, outside this
-  package.
+  the session layer above this package (the authn API returns it in the
+  token-issuing response bodies, never a cookie or this store).
 - **No tenant header exists.** Tenant context travels inside the access
   token; the API layer derives it from token claims. Never add
   `x-tenant-id` or similar, and never accept a caller-supplied tenant.
@@ -38,8 +37,8 @@ this one may issue HTTP requests itself.
   never wrapped). Envelope-bearing non-2xx responses surface the
   envelope's code plus its traceId/params/message/details whenever the
   backend sent them (`code` is the only required wire field --
-  `parseEnvelope` must never demand `traceId`, which no backend sends
-  today); everything else synthesizes a reserved `client.*` code
+  `parseEnvelope` must never demand `traceId`, which no backend sends);
+  everything else synthesizes a reserved `client.*` code
   (`client.network`, `client.timeout`, `client.protocol`,
   `client.http.<status>`). The reservation is a parse-time mechanism,
   not a convention: server codes are module-scoped and `client` is no
@@ -101,106 +100,89 @@ this one may issue HTTP requests itself.
   the failure state by design: a load that settles on an error caches
   nothing, so the next subscriber of that `api` starts a fresh fetch
   instead of inheriting the dead state for the client's whole lifetime
-  (the failure-recovery shape the B2 round's "fetched at startup"
-  contract needs; `refresh()` remains the explicit retry lever).
+  (the failure-recovery shape startup fetches depend on; `refresh()`
+  remains the explicit retry lever).
 
-## In this round vs. deferred
+## What ships vs. what is deferred
 
-Landed: the runtime above (client, errors, retry, reporter, token
-store) plus the `speed/no-direct-http` ESLint rule that routes all
-other package HTTP through it. Also landed (config-web round, B1):
-`fetchPublicConfig` / `fetchSystemFeatures` in `src/config-fetcher.ts`
--- typed wrappers around go/config's two pre-auth endpoints
-(`PathPublic` / `PathSystemFeatures`), built on the `RequestFn` seam
-above. Both path constants are hand-kept in sync with the Go side
-(`go/config/AGENTS.md`'s Known limitations: no OpenAPI fragment exists
-for these endpoints). Neither function accepts a tenant argument --
-both endpoints resolve tenant server-side from the request host. Also
-landed (config-web round, B2): `usePublicConfig` / `useFeature` in
-`src/react.ts`, exported from the isolated `./react` subpath. The
-manifest declares `react` as a peer and marks it optional
-(`peerDependenciesMeta.react.optional`) -- npm peers are package-level,
-not per-subpath, so the optional marker is what keeps the main entry
-React-free in practice: a consumer that only uses the main entry
-installs no react, while a consumer of the `./react` subpath supplies
-it as its own dependency (the package's own suites resolve it from
-devDependencies). `src/package.json.test.ts` pins that metadata shape. Both hooks share one cache keyed by `RequestFn`
-identity via `useSyncExternalStore`: the first mounted consumer of a
-given `api` starts the one fetch, every other instance backed by the
-same `api` reads and re-renders off that shared state, and `refresh()`
-republishes a forced refetch to all of them. `useFeature` composes on
-`usePublicConfig`'s cache rather than calling `/api/system/features`
-itself, and returns `false` (never throws) while loading or on error.
-Neither hook does fallback-to-defaults detection, tenant-switch
-revalidation, or auto-polling -- see `src/react.ts`'s header comment
-for why each is a deliberate non-feature, not a gap. Two defensive
-details recorded here so no future round "simplifies" them away: both
-config fetchers refuse an **empty** 2xx body (the RequestFn's own
-204-style empty-success shape) as a coded `client.protocol` error --
-go/config always writes a JSON document, so an empty answer is a
-broken one, and resolving `undefined` would pass for the typed
-document until a consumer reads a field off it. The refusal is the
-request's own (`RequestOptions.requireJsonBody`, client.ts), so it
-carries the exchange's real status and attempt count rather than a
+The runtime above (client, errors, retry, reporter, token store) plus
+the `speed/no-direct-http` ESLint rule that routes all other package
+HTTP through it.
+
+`fetchPublicConfig` / `fetchSystemFeatures` live in
+`src/config-fetcher.ts` -- typed wrappers around go/config's two
+pre-auth endpoints (`PathPublic` / `PathSystemFeatures`), built on the
+`RequestFn` seam above. Both path constants are hand-kept in sync with
+the Go side (no OpenAPI fragment exists for these endpoints). Neither
+function accepts a tenant argument -- both endpoints resolve tenant
+server-side from the request host.
+
+`usePublicConfig` / `useFeature` live in `src/react.ts`, exported from
+the isolated `./react` subpath. The manifest declares `react` as a
+peer and marks it optional (`peerDependenciesMeta.react.optional`) --
+npm peers are package-level, not per-subpath, so the optional marker
+is what keeps the main entry React-free in practice: a consumer that
+only uses the main entry installs no react, while a consumer of the
+`./react` subpath supplies it as its own dependency (the package's
+own suites resolve it from devDependencies). `src/package.json.test.ts`
+pins that metadata shape. Both hooks share one cache keyed by
+`RequestFn` identity via `useSyncExternalStore`: the first mounted
+consumer of a given `api` starts the one fetch, every other instance
+backed by the same `api` reads and re-renders off that shared state,
+and `refresh()` republishes a forced refetch to all of them.
+`useFeature` composes on `usePublicConfig`'s cache rather than calling
+`/api/system/features` itself, and returns `false` (never throws)
+while loading or on error. Neither hook does fallback-to-defaults
+detection, tenant-switch revalidation, or auto-polling -- see
+`src/react.ts`'s header comment for why each is a deliberate
+non-feature, not a gap. Two defensive details recorded here so they
+are not "simplified" away: both config fetchers refuse an **empty**
+2xx body (the RequestFn's own 204-style empty-success shape) as a
+coded `client.protocol` error -- go/config always writes a JSON
+document, so an empty answer is a broken one, and resolving
+`undefined` would pass for the typed document until a consumer reads
+a field off it. The refusal is the request's own
+(`RequestOptions.requireJsonBody`, client.ts), so it carries the
+exchange's real status and attempt count rather than a
 wrapper-synthesized pair -- a 503/503/empty-200 exchange surfaces as
 attempts 3 / status 200, never the hardcoded 1/0 a fetcher-level
-error could only fake -- and `useFeature`
-null-guards `data.features` (absent/null reads as "nothing enabled",
-never a render-time throw), because the response shape is this
+error could only fake -- and `useFeature` null-guards
+`data.features` (absent/null reads as "nothing enabled", never a
+render-time throw), because the response shape is this
 hand-maintained seam and a payload violating it must fail softly.
 
 Deferred with reasons:
 
-- Uploads and SSE transports -- outside this package's scope
-  (`docs/internal/21-api-contract.md`).
-- A real reference-app consumer -- the consumer itself is landed; what
-  stays deferred here is only its browser page leg. The runtime first
-  consumer is the reference app's consumer shell
-  (`examples/reference-app/web`, an external member of the web
-  workspace, never versioned): its bootstrap binds one real
-  `createClient` over the environment's own fetch into the api-sdk
-  seam -- `@speed/api-sdk`, the orval-generated typed surface, calls
-  into this runtime through its `src/runtime.ts` seam, and
+- Uploads and SSE transports -- not shipped.
+- A browser-page consumer -- a real browser driving the real server.
+  The consumer shell (`examples/reference-app/web`, an external
+  member of the web workspace, never versioned) already binds one
+  real `createClient` over the environment's own fetch into the
+  api-sdk seam: `@speed/api-sdk`, the orval-generated typed surface,
+  calls into this runtime through its `src/runtime.ts` seam, and
   `@speed/auth-core` compile-consumes both in-workspace (its session
-  layer imports this package's `AccessTokenStore` seam and calls the
-  generated authn operations through the bound request function) --
-  and its home view reads the server's effective Public values and
-  feature flags through `usePublicConfig`/`useFeature`
-  (`@speed/api-client/react`, with their own README quick start in
-  `src/react.ts`, `src/react-usage-example.test.ts`) on that same
-  bound client, the `requiredFeature` consumer
-  `docs/internal/11-cross-cutting.md` describes. The browser page leg
-  -- a browser driving the real server -- is M4's html-runner/e2e
-  work.
-- Real `refreshAccessToken` hooks -- M1 authn work (the seam
-  `refreshAccessToken?: () => Promise<boolean>` is the contract).
+  layer imports this package's `AccessTokenStore` seam, calls the
+  generated authn operations through the bound request function, and
+  fills the `refreshAccessToken` hook with `() => session.refresh()`).
+  The shell's home view reads the server's effective Public values
+  and feature flags through `usePublicConfig`/`useFeature` on that
+  same bound client, the shape a `requiredFeature`-style consumer
+  needs. What is not shipped is browser automation driving the
+  server-served page.
 
 ## Known limitations
 
 - **No backend sends `traceId`, so an `ApiError` never carries one
-  against the real API -- resolved on the client side, with a
-  correlation follow-up left to the backend.** `parseEnvelope` used to
-  treat a body as a trustworthy envelope only when both `code` and
-  `traceId` were strings, so every real module error -- go/config's
-  `errorEnvelope` (`go/config/http.go`) and every other module's
-  writeError encode only `{code, params}`, and `apperr` has no
-  `TraceID` concept -- degraded its real module code to a synthetic
-  `client.http.<status>`, which rendered as the consuming UI's generic
-  fallback instead of the specific error text. That client-side
-  overreach is fixed: `code` is the envelope's only required field and
-  `traceId` is optional (parsed and surfaced when present, omitted from
-  reporter attributes when absent), so real `{code, params}` bodies
-  keep their codes end to end. `config-fetcher.test.ts`'s two
-  traceId-less fixture tests and `client.test.ts`'s backend-shaped
-  envelope test pin the literal wire shape. What remains is the
-  correlation half, deliberately a backend follow-up rather than this
-  round's fix: a backend-wide change for every module's error writer
-  to emit a real `traceId` (sourced from request tracing), so user
-  reports can be tied to server logs. The contract schema recorded in
-  `docs/internal/21-api-contract.md` still describes `traceId` as a
-  required field and needs the same revisit -- tracked for the docs
-  drift sweep, since this package's doc comments now describe the
-  actual wire contract.
+  against the real API.** `code` is the envelope's only required
+  field; `traceId` is optional (parsed and surfaced when present,
+  omitted from reporter attributes when absent), so the `{code,
+  params}` bodies every module's error writer actually encodes keep
+  their codes end to end. `config-fetcher.test.ts`'s two traceId-less
+  fixture tests and `client.test.ts`'s backend-shaped envelope test
+  pin the literal wire shape. The correlation half -- a backend-wide
+  change for every module's error writer to emit a real `traceId`
+  (sourced from request tracing), so user reports can be tied to
+  server logs -- is not implemented.
 
 ## Public surface
 

@@ -196,9 +196,10 @@ describe('isTransportFailure', () => {
   it('answers false for any error an HTTP response can carry, whatever code it claims', () => {
     // An envelope can only arrive through an HTTP response, and a
     // response always has a status -- so a code attached to a real
-    // status is a server-answered envelope (a forged client.* code
-    // until the parse-time reserved-namespace refusal lands), never
-    // this client's transport diagnosis. This is the discriminator the
+    // status is a server-answered envelope, never this client's
+    // transport diagnosis (client.ts refuses such an envelope at parse
+    // time, so constructing one directly, as here, is the only way to
+    // reach this branch). This is the discriminator the
     // reserved-namespace claim rests on: status 0 is not forgeable.
     const forgedTimeout = new ApiError({
       status: 401,

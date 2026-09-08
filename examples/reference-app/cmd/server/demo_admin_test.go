@@ -7,8 +7,8 @@ package main
 // admin's admin:* permissions included -- must never be seeded from the
 // ordinary demo-users password variable (APP_DEMO_USERS_PASSWORD,
 // demo_users.go). One passphrase unlocking the platform administrator and
-// every ordinary demo account at once is the exact sharing the reviewer
-// finding this file pins (P1-1) names as the bug.
+// every ordinary demo account at once is the sharing bug this file
+// pins.
 import (
 	"context"
 	"net/http"
@@ -19,13 +19,13 @@ import (
 )
 
 // TestDemoPlatformStaff_NotSeededWithTheDemoUsersPassword is the mandatory
-// regression for the finding: a boot with ONLY the demo-users password set
+// regression: a boot with ONLY the demo-users password set
 // -- cfg.DemoUsersPassword filled, exactly what an operator setting
 // APP_DEMO_USERS_PASSWORD alone produces -- must not leave the platform
-// administrator reachable with that password. The bug it pins: the staff
-// account WAS registered with the very same password, so a single
-// APP_DEMO_USERS_PASSWORD value unlocked every demo user AND the platform
-// administrator at once.
+// administrator reachable with that password: if the staff account were
+// registered with the very same password, a single
+// APP_DEMO_USERS_PASSWORD value would unlock every demo user AND the
+// platform administrator at once.
 func TestDemoPlatformStaff_NotSeededWithTheDemoUsersPassword(t *testing.T) {
 	srv, _ := buildSeededUsersTestServer(t, demoSeedPassword)
 

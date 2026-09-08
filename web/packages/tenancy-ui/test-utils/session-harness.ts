@@ -12,8 +12,9 @@
  * (and of auth-ui's copy of it), trimmed to the operations the
  * tenancy-ui surface drives -- the password login a host journey performs
  * before a tenant switch can exist, the switch operation itself, and the
- * token refresh the no-silent-drift regression drives (the refresh mints
- * for the server-stored current tenant, which is the drift probe). The
+ * token refresh the drift probe drives (the refresh mints
+ * for the server-stored current tenant, which is how drift becomes
+ * visible). The
  * endpoint path constants are the same literal keys. The core package's
  * harness is deliberately not published, so a package whose tests drive
  * sessions carries its own copy -- keeping the copies in lockstep when

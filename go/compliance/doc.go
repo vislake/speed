@@ -1,16 +1,13 @@
 // Package compliance provides the governance layer over the deletion,
 // audit and export primitives that already ship lower in the module
 // graph: dbkit's mark-delete/hard-delete pair, dbkit/audit's append-only
-// audit trail, and tenancy's audited WithSystemContext escape hatch.
-// docs/internal/10-compliance-and-audit.md is explicit about this
-// phasing -- field encryption, blind indexes, soft delete and hard delete
-// are dbkit (M0-M1), audit collection and persistence are dbkit/audit
-// (M1), and compliance's own job is the M4 governance layer built on top:
-// retention-window scheduling, right-to-erasure orchestration, data-export
-// gathering and a read-only audit query surface. This module invents no
-// new deletion mechanism -- every physical delete it ever causes runs
-// through a business module's own dbkit.Repository[T].HardDelete, already
-// tenant-bound and system-context-gated (go/dbkit/hard_delete.go).
+// audit trail, and tenancy's audited WithSystemContext escape hatch. The
+// module invents no new deletion mechanism -- every physical delete it
+// ever causes runs through a business module's own
+// dbkit.Repository[T].HardDelete, already tenant-bound and
+// system-context-gated (go/dbkit/hard_delete.go) -- and owns no table and
+// ships no migrations: the durable record is dbkit/audit's existing table
+// plus each participant's own already-migrated one.
 //
 // # Orchestration, not ownership
 //
@@ -26,47 +23,40 @@
 // participants at call time, invoke their callbacks under the right
 // context, aggregate the results and audit the operation. See
 // pkgcore/registry.go's RetentionParticipant doc comment for the callback
-// contracts in full, and this module's AGENTS.md for the worked example
-// every business module follows to register one.
+// contracts in full.
 //
-// # Round 1 of an unbounded number
+// # What the module ships
 //
-// This is a deliberately bounded foundation round, proved end to end
-// against a fake participant registered by this module's own test suite
-// (internal/testutil) rather than against a real business module -- no
-// existing business module is modified to opt in this round; that is each
-// owning module's own, later decision. It ships:
-//
-//   - RetentionService: a per-tenant retention-window sweep
-//     (SweepTenant), a periodic jobs.Handler wrapping it
-//     (EnqueueRetentionSweep, the host-facing schedule point), and an
-//     optional TenantLister seam (SweepAllTenants) so a host that wants
-//     one scheduled task to cover every tenant can supply one without
-//     compliance importing org.
+//   - RetentionService: a per-tenant retention-window sweep (SweepTenant),
+//     a periodic jobs.Handler wrapping it (EnqueueRetentionSweep, the
+//     host-facing schedule point), and an optional TenantLister seam
+//     (SweepAllTenants) so a host that wants one scheduled task to cover
+//     every tenant can supply one without compliance importing org.
 //   - ErasureService: Erase, the right-to-erasure entry point, bypassing
 //     the retention window and calling every participant's Erase callback
 //     under an audited system context.
-//   - ExportService: Export, the tenant-data export capability in full --
-//     every participant's Export data for one tenant is aggregated into
-//     one JSON document -- the whole tenant's data bundle, never one
-//     subject's personal data; a subject-scoped ("this is your data")
-//     export is not built and would be a future round's work if the
-//     product needs that GDPR-shaped delivery -- stored through the
-//     pkgcore.ObjectStore seam, and delivered as a short-lived,
-//     single-view go/sharing.Share whose one-time token Export returns
-//     to its caller to relay (round 2, once go/sharing had landed on
-//     main -- see ExportDelivery and SharingCreator's own doc comments).
+//   - ExportService: Export, the tenant-data export capability -- every
+//     participant's Export data for one tenant is aggregated into one
+//     JSON document, stored through the pkgcore.ObjectStore seam, and
+//     delivered as a short-lived, single-view go/sharing.Share whose
+//     one-time token Export returns to its caller to relay (see
+//     ExportDelivery and SharingCreator's own doc comments). The bundle is
+//     the whole tenant's data, never one subject's personal data; a
+//     subject-scoped ("this is your data") export is not built.
 //   - AuditQuery: a read-only query layer over dbkit/audit.Repository's
 //     existing, deliberately thin ListByTenant/Get surface, adding
-//     actor/resource/action/time-range/result filtering and (under a
-//     system context only) a caller-supplied multi-tenant scan --
-//     dbkit/audit.Repository itself is untouched, per this round's own
-//     scope boundary; see AuditQuery's doc comment for exactly what that
-//     means for performance.
+//     actor/on-behalf-of/resource/action/time-range/result filtering and
+//     (under a system context only) a caller-supplied multi-tenant scan.
+//     Filtering happens in application code over everything the repository
+//     returns -- there is no SQL-level pushdown; see AuditQuery's doc
+//     comment for exactly what that means for performance.
+//   - RenderAuditReport (report.go): pure CSV/JSON rendering of an
+//     []audit.AuditEvent, with no I/O, pagination or tenant-scope
+//     enforcement of its own.
 //
-// It does NOT ship append-only enforcement via database role privilege
-// revocation or triggers, the optional hash chain, time-partitioned audit
-// archival, formatted CSV/JSON report export, or an HTTP surface. See
-// AGENTS.md's Known limitations for the complete boundary and the
-// compensating godoc Example this round ships in its place.
+// What is not shipped here is a boundary, not a gap: no HTTP surface of
+// its own, no hash chain over the audit trail, no time-partitioned
+// archival, and no subject-scoped export. Database-level append-only
+// enforcement on audit_events lives in go/dbkit/audit's own migrations,
+// not in this module.
 package compliance

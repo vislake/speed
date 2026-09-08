@@ -2,14 +2,14 @@
  * The registration journey: creating an account from the sign-in surface,
  * and what the form says when the server's password policy refuses.
  *
- * The too-short-password assertion is this suite's second, independent
- * regression gate for the envelope-contract defect (f23079d), and the
- * cheaper of the two: it reaches a specific server error without
- * spending a failed sign-in, so it costs no lockout window
- * (password-sign-in.spec.ts's header explains why that matters). The
- * server answers authn.password_too_short with a min_length parameter;
- * the surface is expected to render the whitelisted message for that
- * code, never the whitelist's generic fallback.
+ * The too-short-password assertion reaches a specific server error
+ * without spending a failed sign-in, so it costs no lockout window --
+ * the cheaper counterpart of password-sign-in.spec.ts's refusal gate,
+ * and independent of it (that spec's header explains why the failed
+ * sign-in is expensive). The server answers authn.password_too_short
+ * with a min_length parameter; the surface is expected to render the
+ * whitelisted message for that code, never the whitelist's generic
+ * fallback.
  *
  * Registration deliberately does NOT sign the new account in
  * (@speed/auth-ui's RegisterForm: register is not a session operation),

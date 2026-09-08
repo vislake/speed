@@ -23,14 +23,12 @@ import (
 // this app is the one place that can import both go/org and go/rbac without
 // adding a dependency edge between the modules themselves.
 //
-// PRE-FIX, these tests failed for real: go/rbac carried no subscriber for
-// org.member.restored or org.node.restored at all, so the bindings the
-// removal and deletion reaps had soft-revoked stayed revoked forever --
-// silently, with no restore-side event ever undoing them (the gap the
-// fix's reap.go header comment now documents). Running this file against
-// go/rbac before that fix failed every test with the binding still revoked
-// after org's restore had committed, which is the exact defect this round
-// closes.
+// The property: the bindings the removal and deletion reaps had
+// soft-revoked must come back when org restores the membership or the
+// node -- go/rbac's onMemberRestored / onNodeDeleted subscribers receive
+// the real events and undo the reap (reap.go's header comment documents
+// the shape). A rbac with no restore-side subscriber would leave every
+// reaped binding revoked forever after org's restore had committed.
 
 // TestOrgRBACRestore_MemberRestored_ReinstatesTheReapedBindings is the
 // member leg: a member with role bindings at two scopes is removed through
@@ -124,8 +122,8 @@ func TestOrgRBACRestore_MemberRestored_ReinstatesTheReapedBindings(t *testing.T)
 }
 
 // TestOrgRBACRestore_MemberRestored_NodeDeletedWhileMemberGone_StaysRevokedUntilTheNodeReturns
-// pins the node-deleted half of the b52b64d discipline through the real
-// composed stack, the sequence this round's sibling test's happy path
+// pins the node-deleted half of the discipline through the real
+// composed stack, the sequence the sibling test's happy path
 // cannot show: a member whose seat node is deleted while she is gone, and
 // whose membership org then restores while the node STAYS deleted, must
 // not regain her node-scoped grant. The org.member.restored event asserts

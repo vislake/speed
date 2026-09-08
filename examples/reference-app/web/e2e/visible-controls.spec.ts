@@ -1,30 +1,28 @@
 /**
  * That the controls a person needs are ones a person can actually see.
  *
- * This gate exists because the suite once passed while the product was
- * unusable. session-lifecycle.spec.ts clicked "sign out" and went green
- * for weeks, and all the while that button was rendered in the app bar's
- * own blue on the app bar's own blue -- contrast ratio 1:1, invisible.
- * The tenant switcher beside it, the only way a multi-location practice
- * changes which clinic it is working in, was invisible the same way.
- * Playwright finds a control by its role and its accessible name; it does
- * not look at it. A person looking at the screen saw an empty blue bar.
+ * The other specs click controls by role and accessible name; they do
+ * not look at them. A control rendered in the app bar's own blue on the
+ * app bar's own blue -- the sign-out button, and the tenant switcher
+ * beside it, the only way a multi-location practice changes which
+ * clinic it is working in -- is as clickable to Playwright as a legible
+ * one, while a person looking at the screen sees an empty blue bar.
  *
  * So this spec asserts what the other specs cannot: that the text of
- * every control in the app's chrome stands out from what is behind it, by
- * the ratio WCAG 2.1 AA asks for. It is deliberately narrow -- the app
- * bar and the navigation, the chrome a person needs before they can do
- * anything else -- rather than a whole-page audit, because a gate that
- * fails for a decorative caption is a gate people learn to ignore.
+ * every control in the app's chrome stands out from what is behind it,
+ * by the ratio WCAG 2.1 AA asks for. It is deliberately narrow -- the
+ * app bar and the navigation, the chrome a person needs before they
+ * can do anything else -- rather than a whole-page audit, because a
+ * gate that fails for a decorative caption is a gate people learn to
+ * ignore.
  *
  * The ratio is computed in the page from resolved colours,
  * alpha-compositing every layer from the control upward exactly the way
- * a browser composites one (the naive "first non-transparent
- * background" walk that preceded this discarded the alpha of
- * translucent layers like the nav's selected-item tint and misreported
- * what a browser renders -- see backgroundOf below). That is what makes
- * it catch the real defect: both colours were fully legitimate on their
- * own, and only their pairing was wrong.
+ * a browser composites one (a naive "first non-transparent background"
+ * walk discards the alpha of translucent layers like the nav's
+ * selected-item tint and misreports what a browser renders -- see
+ * backgroundOf below). That is what makes it catch the real defect:
+ * two fully legitimate colours whose pairing is wrong.
  */
 import { expect, test } from '@playwright/test'
 import { DEMO_OWNER, DEMO_READER } from './test-utils/accounts.js'
@@ -68,25 +66,21 @@ async function chromeContrast(page: import('@playwright/test').Page): Promise<Co
      * The pixel a translucent colour actually becomes over an opaque
      * one. WCAG asks about rendered pixels, and TEXT carries alpha in
      * this design system as routinely as backgrounds do: MUI's light
-     * palette states its text colours as black at an opacity --
-     * text.primary at 0.87, text.secondary at 0.6, the disabled tier at
-     * 0.38, action.active at 0.54 -- so a foreground read straight off
+     * palette states its text colours as black at an opacity -- the
+     * text.primary, text.secondary and disabled tiers and action.active
+     * each carry their own -- so a foreground read straight off
      * getComputedStyle and measured as if opaque is not the colour on
      * the screen.
      *
      * It is measured in the lenient direction, which is why this matters
      * rather than being a rounding quibble: dark text treated as fully
      * opaque looks DARKER than it renders, so the ratio comes out too
-     * high and a control passes on a number the browser never produced.
-     * Over white, text.secondary really renders at 5.74:1 and the
-     * disabled tier at 2.65:1 -- a genuine AA failure -- while both
-     * measure 21:1 when their alpha is dropped. This gate would have
-     * reported the failing one as excellent.
-     *
-     * The background half of exactly this mistake was found and fixed by
-     * the round that closed the colour defects (see backgroundOf below);
-     * the foreground half was left, so this closes the same error on the
-     * other side of the ratio.
+     * high and a control passes on a number the browser never produced
+     * -- a semi-transparent text tier that genuinely fails AA over
+     * white measures as 21:1 when its alpha is dropped, and this gate
+     * would report the failing one as excellent. The background half of
+     * the same mistake is what backgroundOf below corrects; this closes
+     * the error on the foreground side of the ratio.
      */
     const flatten = (
       colour: [number, number, number, number],
@@ -110,15 +104,14 @@ async function chromeContrast(page: import('@playwright/test').Page): Promise<Co
      * way the browser composites them, stopping at the first opaque
      * layer and finishing over white when the document background is
      * itself transparent. A naive "first non-transparent background"
-     * walk is NOT the same thing, and this gate lived with that bug
-     * once: MUI's selected nav item paints a semi-transparent
-     * primary tint (rgba(37, 99, 235, 0.08)) over the white drawer,
-     * and the naive walk treated that translucent layer as an opaque
-     * primary background -- discarding its alpha for the luminance
-     * math -- and reported the Home link at 3.45:1, where the browser
-     * composites it to a pale tint under dark text at ~16:1. WCAG's
-     * question is what the rendered pixel is, so the composited pixel
-     * is what this measures.
+     * walk is NOT the same thing: MUI's selected nav item paints a
+     * semi-transparent primary tint over the white drawer, and treating
+     * that translucent layer as an opaque primary background --
+     * discarding its alpha for the luminance math -- reports a ratio no
+     * browser ever produced, where the browser composites the tint
+     * under dark text to a pale layer that passes AA comfortably.
+     * WCAG's question is what the rendered pixel is, so the composited
+     * pixel is what this measures.
      */
     const backgroundOf = (element: Element): [number, number, number, number] => {
       let node: Element | null = element
@@ -183,29 +176,16 @@ async function chromeContrast(page: import('@playwright/test').Page): Promise<Co
   })
 }
 
-// These two tests were tagged @pending while the defect they found was
-// open: on the day they were written both failed, naming the tenant
-// switcher and the sign-out control at 1:1 -- both rendered in the
-// AppBar's own primary blue on the AppBar's own primary blue, the exact
-// silent-failure shape this suite exists for -- plus a third reading,
-// the Home nav link at 3.45:1, which turned out to be this suite's own
-// measurement bug (a translucent selected-item tint measured as if it
-// were opaque; see backgroundOf above).
-//
-// Both are closed, and measured closed on the real deployment across
-// all three engines in the acceptance session: the two invisible
-// controls now read 5.17:1 (white on the AppBar's blue) and the Home
-// link 15.99:1, the nav's other links 17.85:1. Those numbers are worth
-// keeping here because they corroborate each other from opposite
-// directions -- 3.45:1 is exactly what near-black text over an OPAQUE
-// primary blue measures, and ~16:1 is exactly what the same text over
-// that blue at 8% over white measures, so the old reading and the new
-// one are the same pixel described by a broken and a working
+// The tenant switcher and the sign-out control are legible against the
+// AppBar (white text on the AppBar's blue), and the backgroundOf walk
+// exists because the Home nav link's translucent selected-item tint,
+// measured as if it were opaque, once reported a ratio no browser ever
+// produced -- the same pixel described by a broken and a working
 // instrument.
 //
-// The tag is @budget now, not @pending: verified, and out of the default
-// run only because its sign-ins do not fit the suite's per-account
-// budget (see e2e/README.md).
+// The tags are @budget and @deployment: verified, and out of the
+// default local run only because its sign-ins do not fit the suite's
+// per-account budget (see e2e/README.md).
 test('every control in the signed-in chrome is legible against its background', {
   tag: ['@budget', '@deployment'],
 }, async ({ page }) => {

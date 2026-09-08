@@ -1,17 +1,16 @@
 -- Adds WebhookSubscription's dbkit.SoftDeletable pair (deleted_at/
 -- deleted_by) to integration_webhook_subscriptions, following dbkit's own
--- soft-delete design (docs/internal/04-data-and-tenancy.md, delete-semantics
--- section): a mark-delete is a plain UPDATE setting these two columns, never
--- a physical DELETE, and both columns stay dialect-portable (kept identical
--- to the postgres/ copy of this file) -- no PostgreSQL-only type, no
--- gen_random_uuid(), no NOW().
+-- soft-delete design: a mark-delete is a plain UPDATE setting these two
+-- columns, never a physical DELETE, and both columns stay
+-- dialect-portable (kept identical to the postgres/ copy of this file) --
+-- no PostgreSQL-only type, no gen_random_uuid(), no NOW().
 --
--- WebhookSubscription is the only one of this module's models this round
--- touches. Service.DeleteWebhookSubscription's
+-- WebhookSubscription is the only one of this module's models carrying
+-- these columns. Service.DeleteWebhookSubscription's
 -- webhookRepo.Delete(ctx, id) call is the only real delete-shaped operation
--- this module has ever had against a table without its own domain-specific
+-- this module has against a table without its own domain-specific
 -- revocation mark -- APIKey already carries RevokedAt and never calls
--- Delete at all (see go/integration/AGENTS.md's "Soft deletion" section),
+-- Delete at all (see the module's Soft-deletion record),
 -- and WebhookDelivery is a transient, append-only attempt log with no
 -- Delete operation of its own, so integration_api_keys and
 -- integration_webhook_deliveries are untouched by this migration.

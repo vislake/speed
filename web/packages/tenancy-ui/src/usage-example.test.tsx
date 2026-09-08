@@ -37,13 +37,12 @@
  * harness, which is the right tool when a test must script raw
  * ApiErrors or inspect the RequestFn contract directly.
  *
- * A second journey pins the lost-race rule (the D2 correction of the
- * supersession handling, see the component header): a switch the user
- * issues through the switcher settles after a sibling operation on the
- * same session committed first, so the UI request is superseded. It
- * stays lost -- no corrective re-issue -- and the host hook converges
- * the trigger onto the tenant the sibling committed, never back to the
- * abandoned pick.
+ * A second journey pins the lost-race rule (see the component header):
+ * a switch the user issues through the switcher settles after a sibling
+ * operation on the same session committed first, so the UI request is
+ * superseded. It stays lost -- no corrective re-issue -- and the host
+ * hook converges the trigger onto the tenant the sibling committed,
+ * never back to the abandoned pick.
  */
 
 import type { ReactElement } from 'react'
@@ -305,7 +304,7 @@ describe('the README quick start, exercised over a real api-client', () => {
   })
 
   it('never re-commit a superseded switch over the real client: the trigger settles on the sibling tenant', async () => {
-    // The D2 drift shape at journey level: the user picks tenant-2
+    // The drift shape at journey level: the user picks tenant-2
     // through the switcher (its response is gated), then a sibling
     // operation on the same session -- the shape another mounted
     // switch surface produces -- commits tenant-3 first. The UI's own
@@ -313,8 +312,8 @@ describe('the README quick start, exercised over a real api-client', () => {
     // (no corrective re-issue, no onSwitched), and the host hook
     // re-renders the trigger onto tenant-3, the tenant the user
     // actually settled on -- never back to the abandoned tenant-2.
-    // Fails before the lost-race correction: the corrective re-issue
-    // commits access-2, fires onSwitched('tenant-2') and flips the
+    // The stale path the test excludes: a corrective re-issue would
+    // commit access-2, fire onSwitched('tenant-2') and flip the
     // trigger back to Bright Smile Clinic.
     let releaseTenant2!: (response: Response) => void
     const tenant2Gate = new Promise<Response>((resolve) => {
@@ -336,11 +335,11 @@ describe('the README quick start, exercised over a real api-client', () => {
               return tenant2Gate
             }
             // A corrective re-issue of the abandoned switch would be a
-            // fresh request and answers like one (the pre-correction
-            // code's replay -- a Response body is single-use, so the
-            // replayed request must not be answered with the consumed
-            // gate response, or the replay would die on a network error
-            // instead of showing the corruption it causes).
+            // fresh request and answers like one (a Response body is
+            // single-use, so a replayed request must not be answered
+            // with the consumed gate response, or the replay would die
+            // on a network error instead of showing the corruption it
+            // causes).
             return jsonResponse(200, switchPair('access-2', 'tenant-2'))
           }
           // The sibling's switch answers immediately.

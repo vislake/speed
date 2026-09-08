@@ -52,15 +52,11 @@ const txRetryBackoff = 5 * time.Millisecond
 // enumeration a doc comment would have to keep in step: every
 // transaction-shaped write that must re-run from a clean read on
 // contention wraps itself here, and grepping this module's non-test files
-// for withRetry( is exact. Today that is seven call sites across both write
-// services -- six in tree.go (CreateChild, Rename, Move, both of Delete's
-// write paths, and Restore) and one in membership.go (MemberService.ensure's
-// membership insert, the shared core of Add and of the authn.user.created
-// subscriber). A new operation of that shape wraps its own transaction
-// here. MemberService.Remove and InviteService.Invite are the two standing
-// exceptions: each rewrite is a single, database-arbitrated transaction
-// whose first statement takes every lock it will ever hold (see
-// go/org/AGENTS.md's D3 and D4 notes), the shape that cannot produce the
+// for withRetry( is exact. A new operation of that shape wraps its own
+// transaction here. MemberService.Remove and InviteService.Invite are the
+// two standing exceptions: each rewrite is a single, database-arbitrated
+// transaction whose first statement takes every lock it will ever hold,
+// the shape that cannot produce the
 // overlapping-lock-order deadlock this envelope exists to retry.
 func withRetry(op func() error) error {
 	var err error

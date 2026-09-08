@@ -10,16 +10,15 @@ import (
 	"gorm.io/gorm"
 )
 
-// Enqueue is the billing-grade tier's write half of the outbox pattern
-// (docs/internal/06-billing-and-metering.md's billing-grade row: written
-// in the same transaction as the business operation). The caller passes
-// its OWN transaction as tx -- typically the
-// tx argument of a db.Transaction(func(tx *gorm.DB) error { ... }) call
-// that also performs the business write Enqueue's event measures --
-// exactly like the shape go/dbkit's audit_capture.go plugin achieves
-// automatically for its own GORM-callback-driven capture, except here it
-// is an explicit call the caller makes rather than an automatic hook,
-// since metering has no write to attach a callback to (the caller's
+// Enqueue is the billing-grade tier's write half of the outbox pattern:
+// the row is written in the same transaction as the business operation
+// it measures. The caller passes its OWN transaction as tx -- typically
+// the tx argument of a db.Transaction(func(tx *gorm.DB) error { ... })
+// call that also performs the business write Enqueue's event measures --
+// the same-transaction shape go/dbkit's audit_capture.go plugin
+// achieves automatically for its own GORM-callback-driven capture, except
+// here it is an explicit call the caller makes rather than an automatic
+// hook, since metering has no write to attach a callback to (the caller's
 // business write is not a call into this module at all).
 //
 // Because the outbox row and the business write share one transaction,
@@ -27,7 +26,8 @@ import (
 // physically impossible: either both land when tx commits, or neither
 // does when it rolls back. This is the property Enqueue exists to
 // guarantee -- see Dispatcher's doc comment for the asynchronous delivery
-// half that later moves the row into the aggregation pipeline.
+// half that moves the row into the aggregation pipeline in the
+// background.
 //
 // Enqueue is idempotent under retry: if event.IdempotencyKey was already
 // enqueued for event.TenantID (the database's own unique index on
@@ -80,11 +80,10 @@ func Enqueue(ctx context.Context, tx *gorm.DB, event UsageEvent) (*OutboxRecord,
 	// unique-violation error would leave that transaction aborted, and
 	// neither this recovery nor the caller's own still-pending business
 	// write could run another statement on it (SQLSTATE 25P02). SQLite
-	// tolerates a failed statement inside an open transaction, which is
-	// exactly why this shape's original error-catch-then-read-back worked
-	// on the unit tier and broke on PostgreSQL -- see insertOutboxRecord's
-	// own doc comment and go/metering/AGENTS.md's "PostgreSQL integration
-	// tier" section.
+	// tolerates a failed statement inside an open transaction; PostgreSQL
+	// does not, which is exactly why the insert must never raise a
+	// unique-violation error there -- see insertOutboxRecord's own doc
+	// comment for the full poisoned-transaction argument.
 	inserted, insertErr := insertOutboxRecord(ctx, tx, rec)
 	if insertErr != nil {
 		return nil, insertErr
@@ -103,11 +102,12 @@ func Enqueue(ctx context.Context, tx *gorm.DB, event UsageEvent) (*OutboxRecord,
 	}
 	if !found {
 		// The conflicting row vanished between the no-op insert and this
-		// read-back -- only a concurrent deleter could do that, and
-		// nothing in this round deletes outbox rows, so this branch is
-		// unreachable in practice. Enqueue is retry-safe either way, so
-		// the honest answer to the caller is a coded error it can retry
-		// on, not a fabricated row.
+		// read-back -- only a concurrent deleter could do that. The
+		// retention sweep is the sole deleter of outbox rows and it
+		// removes delivered rows only, never the pending row this read-back
+		// runs against, so this branch is unreachable in practice. Enqueue
+		// is retry-safe either way, so the honest answer to the caller is
+		// a coded error it can retry on, not a fabricated row.
 		return nil, errOutboxConflictRowVanished
 	}
 	return existing, nil

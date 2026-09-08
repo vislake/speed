@@ -36,12 +36,12 @@
  *     identity-domain rows the account surface reads alike -- is gone
  *     the moment the session is, so a different account signing in
  *     afterward, into any tenant, starts from an empty cache and can
- *     never inherit an earlier session's rows (reference-app-web.md
- *     P1-1 and P1-apisdk-1).
+ *     never inherit an earlier session's rows.
  *
  *  2a. The query client itself -- created by createAppQueryClient,
  *     below, whose no-retry policy is this host's deliberate answer to
- *     where transient retries belong (reference-app-web.md P2-rnweb-2).
+ *     where transient retries belong (its doc comment carries the
+ *     reasoning).
  *
  *  3. The client -- the app's one HTTP surface: @speed/api-client's
  *     createClient over the environment's own fetch (no fetch option:
@@ -73,11 +73,9 @@
  *     library packages stay bundler-free by discipline). The built page
  *     is also what the reference-app server itself serves in a deployed
  *     shape: the Dockerfile builds this directory's dist/ into the image
- *     and the server serves it from disk under APP_WEB_DIST (see
- *     cmd/server/frontend.go -- the round that discharged the serving
- *     deferral this comment used to record). What still lands with the
- *     M4 e2e/html-runner work is browser automation driving that
- *     server-served page; until then the shipped browser story is the
+ *     and the server serves it from disk under APP_WEB_DIST
+ *     (cmd/server/frontend.go). What does not ship is browser automation
+ *     driving that server-served page; the shipped browser story is the
  *     dev-server page plus rendering under test harnesses.
  */
 
@@ -142,31 +140,28 @@ export interface ReferenceAppBootstrap {
  * The eviction is total -- removeQueries() with no filter -- because
  * every query this page holds was fetched under the departing
  * principal's access token, and no query is safe to carry across an
- * authenticated -> anonymous boundary. That includes two domains the
- * earlier, tenant-only eviction (reference-app-web.md P1-1) missed:
+ * authenticated -> anonymous boundary. Two domains make total
+ * eviction necessary rather than a coarse hammer:
  *
- *  - the tenant-namespaced rows (['tenant', tenantId, ...] -- the notes
- *    list), which the old eviction cleared for the session's one
- *    tenant, and
+ *  - the tenant-namespaced rows (['tenant', tenantId, ...] -- the
+ *    notes list), keyed under the session's one tenant, and
  *  - the identity-domain rows the account surface reads through bare
  *    spec-path keys ('/api/v1/authn/sessions', '/api/v1/authn/
  *    login-history' and '/api/v1/authn/identities' -- nothing in
- *    @speed/api-sdk is tenant-namespaced), which the old eviction never
- *    touched: the keys carry no tenant segment for a ['tenant',
- *    tenantId] removal to reach, so a session-end left them cached for
- *    a different account signing in afterward to inherit -- the
- *    account page would answer the earlier account's sessions, login
- *    history and bound identities out of the shared QueryClient's
- *    memory (reference-app-web.md P1-apisdk-1).
+ *    @speed/api-sdk is tenant-namespaced): those keys carry no tenant
+ *    segment for a tenant-scoped removal to reach, so only a total
+ *    eviction stops a different account signing in afterward from
+ *    inheriting the earlier account's sessions, login history and
+ *    bound identities out of the shared QueryClient's memory.
  *
  * Evicting everything on the authenticated -> anonymous edge closes
- * both at the root: whatever domain a future surface reads in, its
- * rows cannot outlive the session that fetched them, and a later
- * account always starts from an empty cache. (user-menu.tsx's own
- * tenant-switch eviction -- still mid-session, where this eviction
- * deliberately does not fire -- clears the same tenant prefix plus the
- * identity-domain keys, since a switch rotates the access token those
- * rows were answered under.)
+ * both at the root: whatever domain a surface reads in, its rows
+ * cannot outlive the session that fetched them, and a later account
+ * always starts from an empty cache. (user-menu.tsx's own tenant-switch
+ * eviction -- still mid-session, where this eviction deliberately does
+ * not fire -- clears the same tenant prefix plus the identity-domain
+ * keys, since a switch rotates the access token those rows were
+ * answered under.)
  *
  * Returns the session's own unsubscribe function for a caller that
  * wants to tear this down (unit tests do); bootstrapReferenceApp does
@@ -203,9 +198,9 @@ export function evictQueriesOnSessionEnd(
  *  - Every answer that carries a code -- an envelope answer such as a
  *    403 rbac.permission_denied, or a client.* transport code -- is a
  *    definitive answer a repetition cannot redeem. Retrying a refused
- *    authorization read three times with the default backoff burns a
- *    doomed ~7-second window before the refusal surfaces, and re-arms
- *    it on every refetch (reference-app-web.md P2-rnweb-2).
+ *    authorization read with the default backoff burns a doomed
+ *    multi-second window before the refusal surfaces, and re-arms it
+ *    on every refetch.
  *  - A mutation must never re-fire after a lost response: a create
  *    whose answer timed out server-side may already have committed,
  *    and a retry would duplicate it.

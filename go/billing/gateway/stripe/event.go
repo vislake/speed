@@ -11,8 +11,8 @@ import (
 
 // The Stripe event types this package recognizes. Every other event type
 // Stripe might deliver -- and Stripe delivers many, for objects and
-// lifecycle transitions this round's Checkout-Session-only flow never
-// creates -- is ErrWebhookPayloadUnrecognized, never silently ignored: a
+// lifecycle transitions the Checkout-Session-only flow never creates -- is
+// ErrWebhookPayloadUnrecognized, never silently ignored: a
 // caller asking "was this delivery understood" must get an honest no for
 // anything this package cannot yet map, rather than a NormalizedEvent
 // synthesized from a guess.
@@ -29,9 +29,9 @@ const (
 	// collected entirely on Stripe's side -- never a second
 	// checkout.session.completed, which fires exactly once, for the first
 	// cycle's own Checkout Session. A renewal that fails at Stripe without
-	// this package recognizing invoice.payment_failed is exactly the
-	// "renewal fails silently" gap this package's own earlier revision left
-	// open.
+	// this package recognizing invoice.payment_failed is a renewal that
+	// fails silently: every renewal event must be recognized or refused,
+	// never dropped.
 	eventTypeInvoicePaid          = "invoice.paid"
 	eventTypeInvoicePaymentFailed = "invoice.payment_failed"
 
@@ -58,8 +58,8 @@ func normalizeEvent(event stripego.Event, rawBody []byte) (billing.NormalizedEve
 	// stripe-go's Event.Data is a POINTER: a delivery whose JSON carries no
 	// "data" object (or an explicitly null one) unmarshals with Data == nil,
 	// and every recognized event type's object lives at event.Data.Raw -- an
-	// unconditional dereference of a nil Data panics the process instead of
-	// refusing the delivery (P3-11). A recognized event type with no data
+	// unconditional dereference of a nil Data would panic the process
+	// instead of refusing the delivery. A recognized event type with no data
 	// object is undecodable by definition, so it is refused up front as
 	// ErrWebhookPayloadUnrecognized like any other payload this package
 	// cannot parse into a known event -- never a crash, never a synthesized
@@ -84,8 +84,8 @@ func normalizeEvent(event stripego.Event, rawBody []byte) (billing.NormalizedEve
 // metadataSubscriptionID/metadataInvoiceID constants), from whichever
 // channel-side object's own Metadata map carried them. Shared by every event
 // type this package recognizes so the "missing required identifiers"
-// refusal is byte-identical no matter which Stripe object this round's
-// events concern.
+// refusal is byte-identical no matter which Stripe object the events
+// concern.
 func metadataIdentifiers(metadata map[string]string) (tenantID, subscriptionID, invoiceID string, err error) {
 	tenantID = metadata[metadataTenantID]
 	subscriptionID = metadata[metadataSubscriptionID]
@@ -122,9 +122,9 @@ func normalizeCheckoutSession(event stripego.Event, rawBody []byte) (billing.Nor
 		// still carry PaymentStatusUnpaid (a deferred payment method, or a
 		// genuinely delayed settlement), and reporting
 		// NormalizedEventChargeSucceeded/ChannelStatusSucceeded for that case
-		// -- as this package once did unconditionally -- is exactly the
-		// webhook-vs-query disagreement docs/internal/06-billing-and-metering.md's
-		// callbacks-cannot-be-trusted rule exists to prevent: one Stripe
+		// -- reporting Succeeded unconditionally is exactly the
+		// webhook-vs-query disagreement the callbacks-cannot-be-trusted rule
+		// exists to prevent: one Stripe
 		// session state must produce ONE module-side record whichever
 		// channel reported it. sessionStatus's own "complete but unpaid ->
 		// still pending" answer is mirrored here exactly, so a
@@ -176,10 +176,9 @@ func normalizeCheckoutSession(event stripego.Event, rawBody []byte) (billing.Nor
 // "Set of key-value pairs defined as subscription metadata when an invoice
 // is created. Becomes an immutable snapshot of the subscription metadata at
 // the time of invoice finalization"); Stripe does not copy the keys onto
-// the invoice's own metadata field, so reading inv.Metadata -- as an
-// earlier revision of this function did, with a unit fixture hand-seeded to
-// match -- sees nothing on a real delivery and refuses every renewal event
-// (P1-3). An invoice whose parent is missing, is not a subscription, or
+// the invoice's own metadata field, so reading inv.Metadata sees nothing on
+// a real delivery and refuses every renewal event. An invoice whose parent
+// is missing, is not a subscription, or
 // whose snapshot carries no speed_* keys is refused exactly like any other
 // uncorrelatable event: the only invoices this package's subscription-mode
 // Checkout flow ever produces are subscription invoices of the platform's
@@ -192,12 +191,10 @@ func normalizeCheckoutSession(event stripego.Event, rawBody []byte) (billing.Nor
 // verbatim, on every later cycle's Stripe-generated invoice -- this package
 // has no way to mint a fresh billing.Invoice id for a cycle it was never
 // asked to create one for (CreateCharge is called exactly once, at
-// Subscription activation; docs/internal/06's own
-// domestic-plus-international dual payment mode write-up and this package's
-// own doc.go explain why). A later round's live webhook processing loop
-// (go/billing/AGENTS.md's own Known limitations records that no such loop
-// exists yet) is where a genuine per-cycle billing.Invoice would need to be
-// created before this identifier round-trips meaningfully past cycle one.
+// Subscription activation, per the domestic-plus-international split). A
+// live webhook-processing loop -- none exists yet -- is where a genuine
+// per-cycle billing.Invoice would need to be created before this
+// identifier round-trips meaningfully past cycle one.
 func normalizeInvoice(event stripego.Event, rawBody []byte) (billing.NormalizedEvent, error) {
 	var inv stripego.Invoice
 	if err := json.Unmarshal(event.Data.Raw, &inv); err != nil {

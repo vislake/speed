@@ -6,12 +6,11 @@
 // dbkit.Repository[T] / *gorm.DB). It is physically separate from
 // tenancytest's unit tests (assert_isolated_test.go,
 // assert_not_tenant_scoped_test.go, and friends, all in package tenancytest
-// itself, one directory up) and carries the "integration" build tag, per
-// the backend coding standard's testing layout rule (§13): a plain
-// "go test ./..." never compiles or runs anything in this directory; it is
-// invoked explicitly with "go test -tags=integration ./...". This mirrors
-// go/dbkit/integration_test's own package-doc comment and directory shape
-// one module over.
+// itself, one directory up) and carries the "integration" build tag: a
+// plain "go test ./..." never compiles or runs anything in this directory;
+// it is invoked explicitly with "go test -tags=integration ./...". This
+// mirrors go/dbkit/integration_test's own package-doc comment and
+// directory shape one module over.
 //
 // Every test here starts its own disposable PostgreSQL container via
 // testutil.Dialects()'s index-1 entry (dbtest.NewPostgres) and requires a
@@ -187,18 +186,15 @@ func TestAssertIsolated_SystemCtxElevatedDB_Postgres(t *testing.T) {
 // TestAssertIsolated_LongDescriptiveSubtestName_WorksAcrossDialects_Postgres
 // is the postgres-dialect leg of
 // tenancytest.TestAssertIsolated_LongDescriptiveSubtestName_WorksAcrossDialects,
-// the regression test proving a long, descriptive subtest name can no
-// longer derive a tenant id overflowing the 64-character tenant_id column
-// -- see that test's own doc comment for the full mechanism. PostgreSQL is
-// the dialect that actually enforces VARCHAR(64) and is what surfaced the
-// tenant-id-length bug being regression-tested in the first place, so this
-// leg matters more than most -- and postgres_assert_isolated_test.go's own
-// doc comment for why it lives here instead of in the unit tier.
+// the regression test proving that a long, descriptive subtest name still
+// derives a tenant id within the 64-character tenant_id column -- see that
+// test's own doc comment for the full mechanism. PostgreSQL is the dialect
+// that enforces VARCHAR(64), so the overflow this leg guards against can
+// only be exercised there.
 //
 // Reuses the sprocket fixture (type, newSprocket, createSprocketsTableSQL)
 // declared in postgres_assert_isolated_test.go: same package, same
-// directory, so no re-declaration is needed the way the unit tier's own
-// AGENTS.md/doc-comment guidance requires across separate packages.
+// directory, so no re-declaration is needed.
 func TestAssertIsolated_LongDescriptiveSubtestName_WorksAcrossDialects_Postgres(t *testing.T) {
 	db := testutil.Dialects()[1].NewDB(t) // postgres: see postgres_assert_isolated_test.go's doc comment
 	if err := db.Exec(createSprocketsTableSQL).Error; err != nil {

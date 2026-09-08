@@ -10,8 +10,8 @@
  * read the list, write through the form, assert the row a person sees --
  * never a request or a cache key.
  *
- * One sign-in covers both behaviours. Sign-in is rate-limited per account
- * (go/authn's ratelimit.go: five per account per minute) and this file
+ * One sign-in covers both behaviours. Sign-in is rate-limited per
+ * account (the limits live in go/authn's ratelimit.go) and this file
  * needs the owner, the one account the write path depends on, so it
  * spends exactly one of the owner's sign-ins.
  */

@@ -17,9 +17,8 @@ import (
 
 // exampleAuditModule is the minimal pkgcore.Module shape needed to feed
 // audit's embedded migrations to a dbkit.MigrationRegistry. A real host
-// gets this for free from the pkgcore.Module the audit persister exposes
-// (landing alongside this same round's collection mechanisms); this
-// stand-in keeps the example self-contained.
+// gets this for free from the pkgcore.Module the audit persister exposes;
+// this stand-in keeps the example self-contained.
 type exampleAuditModule struct{}
 
 func (exampleAuditModule) Name() string                     { return "audit" }
@@ -30,9 +29,8 @@ func (exampleAuditModule) OpenAPISpec() []byte              { return nil }
 func (exampleAuditModule) Register(*pkgcore.Registry) error { return nil }
 
 // Example shows Repository end to end: migrating audit_events, appending
-// an event that records an impersonated action (an Actor together with an
-// OnBehalfOf administrator -- root CLAUDE.md's dual-identity security
-// rule), and reading it back.
+// an event that records an impersonated action (an Actor together with
+// the OnBehalfOf administrator behind it), and reading it back.
 func Example() {
 	ctx := context.Background()
 
@@ -86,15 +84,15 @@ func Example() {
 	// org.member.remove user-42 admin-1 true
 }
 
-// ExampleEmit shows the collection half of this round's design end to
-// end: a business module registers its qualified action name on
+// ExampleEmit shows the collection half of the design end to end: a
+// business module registers its qualified action name on
 // pkgcore.Registry.AuditActions, wires audit.New's pkgcore.Module (the
 // persister) into the same registry, then records an impersonated action
-// (an Actor together with an OnBehalfOf administrator -- root CLAUDE.md's
-// dual-identity security rule) through Emit rather than writing to
-// Repository directly. Emit publishes an event; the persister's own
-// subscription (installed by Register) is what turns that event into the
-// AuditEvent row this example reads back through ListByTenant.
+// (an Actor together with the OnBehalfOf administrator behind it) through
+// Emit rather than writing to Repository directly. Emit publishes an
+// event; the persister's own subscription (installed by Register) is what
+// turns that event into the AuditEvent row this example reads back
+// through ListByTenant.
 func ExampleEmit() {
 	ctx := context.Background()
 

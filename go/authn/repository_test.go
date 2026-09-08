@@ -349,12 +349,12 @@ func TestSessionRepository_SetCurrentTenantAndListByUser(t *testing.T) {
 	}
 }
 
-// TestSessionRepository_SetCurrentTenant_OnRevokedSessionReportsNoChange is
-// the regression for the audit finding that SetCurrentTenant dropped its own
-// CAS result: the status in the WHERE clause is a compare-and-swap, and a
-// caller that ignores whether it swapped proceeds as if the switch landed.
-// A revoked session must report false -- the exact signal the concurrent
-// revoke-versus-switch race needs -- never a nil error meaning "done".
+// TestSessionRepository_SetCurrentTenant_OnRevokedSessionReportsNoChange
+// pins the compare-and-swap report: SetCurrentTenant's status-in-the-WHERE
+// clause is a compare-and-swap, and a caller that ignores whether it
+// swapped proceeds as if the switch landed. A revoked session must report
+// false -- the exact signal the concurrent revoke-versus-switch race needs
+// -- never a nil error meaning "done".
 func TestSessionRepository_SetCurrentTenant_OnRevokedSessionReportsNoChange(t *testing.T) {
 	t.Parallel()
 

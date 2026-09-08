@@ -23,12 +23,11 @@ import (
 )
 
 // serialNumberBytes is the width of a certificate serial number: 16 bytes
-// of crypto/rand, per docs/internal/22-pki.md's explicit diagnosis of the
-// anti-pattern this replaces (System.currentTimeMillis(), which collides
-// under concurrent issuance because it has millisecond resolution and no
-// randomness at all). 16 bytes gives 128 bits of entropy, comfortably
-// beyond RFC 5280's non-normative 20-octet ceiling once the sign bit is
-// accounted for below.
+// of crypto/rand. A timestamp-based serial is the anti-pattern this width
+// avoids: System.currentTimeMillis() has millisecond resolution and no
+// randomness at all, so it collides under concurrent issuance. 16 bytes
+// gives 128 bits of entropy, comfortably beyond RFC 5280's non-normative
+// 20-octet ceiling once the sign bit is accounted for below.
 const serialNumberBytes = 16
 
 // newSerialNumber returns a new certificate serial number: 16 bytes of
@@ -64,7 +63,7 @@ func serialHex(serial *big.Int) string {
 // crypto/x509 special-cases Ed25519 for exactly the PureEdDSA reason
 // Signer.Sign's doc comment explains), so passing digest straight through
 // to signer.Sign is correct for AlgorithmEd25519 without any hashing here.
-// A future non-EdDSA algorithm would need this adapter (or its caller) to
+// An added non-EdDSA algorithm would need this adapter (or its caller) to
 // hash first -- see Signer.Sign's doc comment.
 type signerAdapter struct {
 	ctx    context.Context
@@ -77,23 +76,23 @@ type signerAdapter struct {
 func (a signerAdapter) Public() crypto.PublicKey { return a.public }
 
 // Sign implements crypto.Signer. rand and opts are unused: LocalSigner (and
-// every Signer implementation this round ships) draws its own randomness
-// internally where the algorithm needs any (Ed25519 is deterministic), and
-// opts carries no information Sign needs beyond what algorithm the keyRef
+// every shipped Signer implementation) draws its own randomness internally
+// where the algorithm needs any (Ed25519 is deterministic), and opts
+// carries no information Sign needs beyond what algorithm the keyRef
 // already fixed at generation time.
 func (a signerAdapter) Sign(_ io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
 	return a.signer.Sign(a.ctx, a.keyRef, digest)
 }
 
 // CAService issues the internal CA chain and the end-entity certificates
-// authorities sign -- the X.509 layer docs/internal/22-pki.md's "two-layer
-// structure" section describes.
+// authorities sign -- the X.509 layer of the two the package doc comment
+// describes.
 //
 // # Real consumer: the reference app's AI-output attestation
 //
 // The reference app's internal/attestation package is this type's real
 // consumer (mandatory-first-consumer rule discharged; see AGENTS.md's
-// "Real consumer: AI-output attestation" round entry and
+// "X.509 layer: real consumer, precise residuals" section and
 // examples/reference-app/internal/attestation's package doc): at boot the
 // app calls CreateRootCA + CreateIntermediateCA once per database
 // (EnsureAuthorityChain), and every simulation output a tenant observes
@@ -101,31 +100,28 @@ func (a signerAdapter) Sign(_ io.Reader, digest []byte, _ crypto.SignerOpts) ([]
 // per-tenant "simulation.attestation" certificate, whose public shares
 // are gated on VerifyCertificate. The integration found exactly one
 // missing capability -- a way to sign with an issued certificate's key
-// (SignCertificate, added by that round) -- and changed nothing else:
-// this type's public API is no longer under the "first consumer may break
-// it freely" exemption, though it is still not held to the same
-// frozen-API standard as the key-lifecycle layer (AGENTS.md's consumer
-// record states what remains unconsumed and what that means for API
-// stability).
+// (SignCertificate) -- and changed nothing else: this type's public API
+// is no longer under the "first consumer may break it freely" exemption,
+// though it is still not held to the same frozen-API standard as the
+// key-lifecycle layer (AGENTS.md's consumer record states what remains
+// unconsumed and what that means for API stability).
 //
 // # One Signer per CAService
 //
 // Every authority and certificate this CAService issues is signed through
 // the same Signer instance, recorded on each row as SignerName/KeyRef.
-// Nothing here prevents a future host from running two CAServices over two
-// different Signer implementations (an offline root under "vault", online
-// intermediates under "local", say) -- each authority row already carries
-// its own SignerName, so a future round's lookup-by-name is a schema-
-// compatible addition, not a migration.
+// A host running two CAServices over two different Signer implementations
+// (an offline root under "vault", online intermediates under "local",
+// say) is a schema-compatible composition, not a migration: each
+// authority row already carries its own SignerName.
 type CAService struct {
 	signer       Signer
 	signerName   string
 	authorities  *AuthorityRepository
 	certificates *CertificateRepository
 
-	// revocations is the round-3 revocation ledger repository
-	// RevokeCertificate writes to and GenerateCRL reads from (revocation.go,
-	// crl.go).
+	// revocations is the revocation ledger repository RevokeCertificate
+	// writes to and GenerateCRL reads from (revocation.go, crl.go).
 	revocations *CertificateRevocationRepository
 
 	// bus is the pkgcore.EventBus CAService publishes pki.certificate.*
@@ -159,7 +155,7 @@ type CAService struct {
 
 // NewCAService returns a CAService that signs through signer (recorded on
 // every issued row under signerName) and persists through authorities,
-// certificates and (round 3) the revocation ledger revocations.
+// certificates and the revocation ledger revocations.
 func NewCAService(signer Signer, signerName string, authorities *AuthorityRepository, certificates *CertificateRepository, revocations *CertificateRevocationRepository) *CAService {
 	return &CAService{
 		signer:              signer,
@@ -215,13 +211,13 @@ type RootCAParams struct {
 	// served at, recorded on the resulting Authority row and read at
 	// issuance time by CreateIntermediateCA/IssueCertificate to populate
 	// each certificate THIS authority signs with a CRLDistributionPoints
-	// extension pointing back here -- round 3's addition. Empty means no
-	// extension is ever written into a child certificate, never a broken
-	// placeholder URL, matching every other unset-value convention this
-	// module already follows (see Authority.CRLDistributionPoint's own
-	// model.go doc comment for the full "child cert names ITS issuer's CRL"
-	// argument). The root certificate's OWN CertificatePEM never carries
-	// this extension -- nothing signs the root, so it has no meaningful "my
+	// extension pointing back here. Empty means no extension is ever
+	// written into a child certificate, never a broken placeholder URL,
+	// matching every other unset-value convention this module already
+	// follows (see Authority.CRLDistributionPoint's own model.go doc
+	// comment for the full "child cert names ITS issuer's CRL" argument).
+	// The root certificate's OWN CertificatePEM never carries this
+	// extension -- nothing signs the root, so it has no meaningful "my
 	// issuer's CRL" to name.
 	CRLDistributionPoint string
 }
@@ -292,9 +288,8 @@ func (s *CAService) CreateRootCA(ctx context.Context, params RootCAParams) (*Aut
 // revoked authority is a certificate every verifier refuses, so nothing NEW
 // may be signed under that chain, whether the revoked row is the direct
 // issuer or a distant ancestor. The direct authority is the walk's first
-// member (its own status check is what CreateIntermediateCA and
-// IssueCertificate historically applied to the issuer alone); the walk then
-// follows ParentID upward until a nil parent -- a root -- ends the chain.
+// member; the walk then follows ParentID upward until a nil parent -- a
+// root -- ends the chain.
 //
 // The returned error is ErrAuthorityRevoked, never ErrCertificateRevoked:
 // nothing is being verified here, only refused an issuer -- the direct-
@@ -305,9 +300,9 @@ func (s *CAService) CreateRootCA(ctx context.Context, params RootCAParams) (*Aut
 //
 // The walk is cycle-guarded the same way VerifyCertificate's own walk is
 // (revocation.go): Authority.ParentID values are application-generated and
-// this round adds no constraint preventing a corrupt cycle, so the loop
-// must not be able to spin forever on one. Each ancestor costs one
-// FindByID, which issuance -- never a hot path -- can afford.
+// no constraint prevents a corrupt cycle, so the loop must not be able to
+// spin forever on one. Each ancestor costs one FindByID, which issuance --
+// never a hot path -- can afford.
 func (s *CAService) checkNoRevokedAuthorityInChain(ctx context.Context, authority *Authority) error {
 	seen := make(map[string]bool)
 	for {
@@ -350,8 +345,7 @@ type IntermediateCAParams struct {
 // signed by parentID's authority, storing the result in pki_authorities.
 // The intermediate's MaxPathLen is 0: it may sign end-entity certificates
 // but never a further intermediate, keeping the chain to the three levels
-// docs/internal/22-pki.md's diagnosed system used (root / intermediate /
-// end-entity).
+// root / intermediate / end-entity.
 //
 // Refused with ErrAuthorityRevoked when parentID's authority -- or any of
 // its ancestors up to the root -- is AuthorityStatusRevoked: a certificate

@@ -14,18 +14,19 @@ import (
 // This file holds the deterministic PostgreSQL proof behind
 // MemberService.ensure's doc comment ("The insert race: the database is
 // the backstop, and the recovery must leave the failed transaction
-// behind", membership.go): the recovery for a lost insert race used to
-// re-read the winning membership on the SAME transaction that had just
+// behind", membership.go): the recovery for a lost insert race must NOT
+// re-read the winning membership on the SAME transaction that just
 // failed the insert with a unique violation. SQLite tolerates a failed
 // statement inside an open transaction; PostgreSQL does not -- a
-// unique-violation error aborts the whole transaction, so the follow-up
-// read died with SQLSTATE 25P02 ("current transaction is aborted,
-// commands ignored until end of transaction block") in exactly the
-// concurrent-duplicate case the branch exists to absorb: two concurrent
-// ensures of the same (tenant, user) both pass the byUser pre-check, the
-// partial unique index admits one insert, and the loser -- which must
-// answer exactly as a sequential duplicate would, the coded
-// org.membership_exists from Add -- failed with an internal error instead.
+// unique-violation error aborts the whole transaction, so a follow-up
+// read on that transaction dies with SQLSTATE 25P02 ("current transaction
+// is aborted, commands ignored until end of transaction block") in exactly
+// the concurrent-duplicate case the branch exists to absorb: two
+// concurrent ensures of the same (tenant, user) both pass the byUser
+// pre-check, the partial unique index admits one insert, and the loser --
+// which must answer exactly as a sequential duplicate would, the coded
+// org.membership_exists from Add -- would otherwise fail with an internal
+// error instead.
 //
 // # Orchestration
 //

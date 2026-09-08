@@ -235,21 +235,19 @@ func TestGateway_VerifyWebhook_RefundEventTypeWithTransactionResource_Refused(t 
 	}
 }
 
-// TestGateway_VerifyWebhook_StaleTimestamp_Refused is P3-13's regression
-// test: VerifyWebhook used to check nothing about the delivery's
+// TestGateway_VerifyWebhook_StaleTimestamp_Refused pins the delivery
+// freshness bound: VerifyWebhook must check the delivery's
 // Wechatpay-Timestamp -- a captured, replayed notification with a fully
-// valid signature was accepted no matter how old it was. WeChat Pay's own
-// notification scheme (like the signature-verification scheme this
-// module's stripe leg already enforces through stripe-go's own timestamp
-// tolerance) expects the receiver to bound the delivery's age: a
-// notification older than the freshness window is a replay and is refused
-// even though its signature verifies. The fix checks the header's Unix
-// timestamp against the same 300-second tolerance stripe-go's webhook
-// handling applies (its DefaultTolerance), refusing a delivery outside it
+// valid signature must not be accepted no matter how old it is. WeChat
+// Pay's own notification scheme (like the signature-verification scheme
+// this module's stripe leg already enforces through stripe-go's own
+// timestamp tolerance) expects the receiver to bound the delivery's age: a
+// notification older than the freshness window is a replay and must be
+// refused even though its signature verifies. The header's Unix timestamp
+// is checked against the same 300-second tolerance stripe-go's webhook
+// handling applies (its DefaultTolerance), a delivery outside it refused
 // with ErrWebhookSignatureInvalid exactly like any other
-// authentication-class failure. On pre-fix code this stale-but-genuinely
-// signed delivery is accepted and normalized, so the test fails before the
-// fix and passes after.
+// authentication-class failure.
 func TestGateway_VerifyWebhook_StaleTimestamp_Refused(t *testing.T) {
 	_, platformPubPEM, platformPriv := generateTestKeyPair(t)
 	cfg := testGatewayConfig(t, platformPubPEM)
@@ -269,8 +267,8 @@ func TestGateway_VerifyWebhook_StaleTimestamp_Refused(t *testing.T) {
 }
 
 // TestGateway_VerifyWebhook_CurrentTimestamp_StillAccepted pins the other
-// side of P3-13: a genuinely fresh delivery keeps verifying exactly as
-// before, so the freshness check cannot become overzealous.
+// side of the freshness bound: a genuinely fresh delivery keeps verifying
+// exactly as before, so the check cannot become overzealous.
 func TestGateway_VerifyWebhook_CurrentTimestamp_StillAccepted(t *testing.T) {
 	_, platformPubPEM, platformPriv := generateTestKeyPair(t)
 	cfg := testGatewayConfig(t, platformPubPEM)

@@ -1,22 +1,21 @@
 /**
  * The ApiError envelope and the reserved client.* code vocabulary.
  *
- * Every speed API answers non-2xx responses with one shared envelope
- * (docs/internal/21-api-contract.md):
+ * Every speed API answers non-2xx responses with one shared envelope:
  *
  *   { code: string, traceId?: string,
  *     params?: object, message?: string, details?: FieldError[] }
  *
  * `code` is the envelope's only required field; `traceId`, `params`,
  * `message` and `details` are optional, parsed whenever present. In
- * practice the backend today sends `{code, params}` only: the module
+ * practice the backend sends `{code, params}` only: the module
  * handlers' shared error body carries no trace id (go/authn's
  * errorBody and every module's writeError encode just those two
  * fields, and the OpenAPI fragments document {code, params} as the
  * contract), so a client must trust a body's `code` on its own --
  * demanding `traceId` too would discard every real backend code into
- * the client.* fallback. `traceId` stays in the shape for the day a
- * backend does send one: it is surfaced on the ApiError and in the
+ * the client.* fallback. `traceId` stays optional in the shape: when a
+ * backend does send one it is surfaced on the ApiError and in the
  * reporter's attributes for correlating user reports to server logs.
  * `message` is an English log-triage fallback that must never be
  * rendered to users (frontends resolve `code` through the i18n
@@ -190,11 +189,12 @@ export function isApiError(value: unknown): value is ApiError {
  * and an envelope can only arrive through a response, so *no*
  * server-answered error can carry status 0. A `client.network` or
  * `client.timeout` code attached to a real status is therefore not this
- * client's synthesis but a backend or intermediary that borrowed the
- * reserved vocabulary (refused at parse time by client.ts today, and
- * possibly produced by an older copy of this library) -- answering
- * false keeps such a forgery from rendering as "the request never
- * completed" in consumer surfaces. Protocol refusals answer false
+ * client's synthesis -- client.ts refuses such envelopes at parse time
+ * -- but a backend or intermediary borrowing the reserved vocabulary,
+ * or a second copy of the library without that refusal, could produce
+ * one: answering false keeps such a forgery from rendering as "the
+ * request never completed" in consumer surfaces. Protocol refusals
+ * answer false
  * whatever their status: `client.protocol` is a contract violation
  * (unsendable request body, malformed 2xx), never a transport failure.
  * Structural acceptance mirrors {@link isApiError}, for errors thrown

@@ -183,21 +183,20 @@ describe('DataTable', () => {
   })
 
   it('announces the loading state on the empty-then-refresh path through a live region that already exists (P2-6 regression)', () => {
-    // PRE-FIX (P2-6): the role="status" region rendered only while
-    // loading, so on the empty-table refresh path (rows stay empty,
-    // loading flips false -> true) the region appeared in the same commit
-    // as its text. A live region announces content changes that follow
-    // its own existence, never text that mounts together with it, so that
-    // refresh's loading announcement was silent. POST-FIX: the region is
-    // mounted for the whole empty phase and carries that phase's text,
-    // so both fills -- the empty-result wording while not loading (P2-2),
-    // the loading text on refresh -- are text changes inside a region
-    // the screen reader already knows. The same DOM node must survive the
+    // The role="status" region is mounted for the whole empty phase and
+    // carries that phase's text: on the empty-table refresh path (rows
+    // stay empty, loading flips false -> true) the region must already
+    // exist before the loading text lands, because a live region
+    // announces content changes that follow its own existence, never
+    // text that mounts together with it. Both fills -- the
+    // empty-result wording while not loading, the loading text on
+    // refresh -- are therefore text changes inside a region the screen
+    // reader already knows. The same DOM node must survive the
     // transition, which is what makes the later text change an
-    // announcement rather than another mount. A stateful host drives the
-    // flip (the refresh is the host's own action): RTL's rerender would
-    // replace the provider tree and remount the table, which is exactly
-    // the mount the fix must prevent.
+    // announcement rather than another mount. A stateful host drives
+    // the flip (the refresh is the host's own action): RTL's rerender
+    // would replace the provider tree and remount the table, which is
+    // exactly the mount the mechanism must prevent.
     function RefreshHarness() {
       const [loading, setLoading] = useState(false)
       return (
@@ -223,24 +222,23 @@ describe('DataTable', () => {
   })
 
   it('mounts the loading region empty when the empty phase begins already loading (D5 regression)', () => {
-    // The P2-6 sibling path above fixes the empty-then-refresh route, but
-    // the same mount-with-text shape survives on the transition where the
-    // empty phase BEGINS already loading: rows empty out and loading flips
-    // in the same host commit (a filter that clears the current page while
-    // the next query runs). The region is born inside that commit, so its
-    // text was born with it and the announcement never fired -- live
-    // regions speak about content changes that follow their own
-    // existence, never text that mounts together with them. POST-FIX the
-    // region's first committed frame is empty whatever transition enters
-    // the empty phase: the loading text is gated behind a one-commit lag
-    // armed by an effect after that first commit, so it always fills a
-    // region the screen reader already knows. The assertion between the
-    // two commits below is what distinguishes the shapes: the region's
-    // text content must still be empty the moment the node first appears
-    // (pre-fix it already holds the loading text). A stateful host drives
-    // the flip; flushSync lands its one commit synchronously, and the act
-    // scope holds back the post-commit effect that fills the region until
-    // this assertion has seen the birth frame.
+    // The empty-then-refresh route above covers a region that already
+    // existed, but the empty phase can also BEGIN already loading: rows
+    // empty out and loading flips in the same host commit (a filter
+    // that clears the current page while the next query runs). A region
+    // born inside that commit would carry its text with it and the
+    // announcement would never fire -- live regions speak about content
+    // changes that follow their own existence, never text that mounts
+    // together with them. The region's first committed frame is
+    // therefore empty whatever transition enters the empty phase: the
+    // loading text is gated behind a one-commit lag armed by an effect
+    // after that first commit, so it always fills a region the screen
+    // reader already knows. The assertion between the two commits below
+    // is what distinguishes the shapes: the region's text content must
+    // still be empty the moment the node first appears. A stateful host
+    // drives the flip; flushSync lands its one commit synchronously,
+    // and the act scope holds back the post-commit effect that fills
+    // the region until this assertion has seen the birth frame.
     function EmptyingRefreshHarness() {
       const [rows, setRows] = useState<readonly Member[]>(MEMBERS)
       const [loading, setLoading] = useState(false)
@@ -280,15 +278,14 @@ describe('DataTable', () => {
   })
 
   it('announces the empty result when a load ends with no rows: the region fills with the empty-result wording (P2-2 regression)', () => {
-    // The loading live region carried only the loading text, and the
-    // stock EmptyState — the empty result's own presentation — sat
-    // outside it as a sibling. A load that ended empty therefore left
-    // the region empty: a screen-reader user heard the loading text and
-    // then silence, with zero rows to navigate to that would disambiguate
-    // still-loading from finished-and-found-nothing. POST-FIX the
-    // region's text is the empty-result wording once the load finishes,
-    // so the terminal state lands as a text change inside the same
-    // region — never a trailing empty string.
+    // The region's text is the empty-result wording once the load
+    // finishes: the stock EmptyState — the empty result's own
+    // presentation — sits outside the region as a sibling, so an
+    // end-of-load that left the region empty would let a screen-reader
+    // user hear the loading text and then silence, with zero rows to
+    // navigate to that would disambiguate still-loading from
+    // finished-and-found-nothing. The terminal state lands as a text
+    // change inside the same region — never a trailing empty string.
     function LoadsEmptyHarness() {
       const [rows, setRows] = useState<readonly Member[]>(MEMBERS)
       const [loading, setLoading] = useState(false)
@@ -376,12 +373,12 @@ describe('DataTable', () => {
 
   it("fills the empty-result wording only after the region's first committed frame (P2-2 regression)", () => {
     // The loading fill owes its announcability to the one-commit birth
-    // discipline (see the D5 regression above): the region's first
-    // committed frame is empty whatever transition enters the empty
-    // phase, so any later text fill is a change. The empty-result fill
-    // must spend that same first frame empty — an empty phase entered
-    // not loading may not be born carrying the empty-result wording, or
-    // that wording is never a change and never announces. The assertion
+    // discipline (see the test above): the region's first committed
+    // frame is empty whatever transition enters the empty phase, so any
+    // later text fill is a change. The empty-result fill must spend
+    // that same first frame empty — an empty phase entered not loading
+    // may not be born carrying the empty-result wording, or that
+    // wording is never a change and never announces. The assertion
     // inside the act scope pins the birth frame; the one after it pins
     // the fill.
     function ShowsEmptyHarness() {
@@ -832,9 +829,9 @@ describe('DataTable', () => {
     it('renders a column with no priority with no visibility override -- unaffected by the feature', () => {
       // BASE_COLUMNS sets no column's priority; this restates the
       // existing "applies column alignment and width to cells" contract
-      // as this round's own required backward-compatibility proof: a
-      // host that sets no column's priority sees byte-identical
-      // rendering, on every viewport.
+      // as the feature's backward-compatibility proof: a host that sets
+      // no column's priority sees byte-identical rendering, on every
+      // viewport.
       const utils = renderTable()
       const creditCells = utils.container.querySelectorAll(
         'tbody td.MuiTableCell-alignRight',
@@ -939,7 +936,7 @@ describe('DataTable', () => {
   it('passes axe over the empty placeholder state', async () => {
     // emptyHeadingLevel supplied, as a correctly-migrated caller would:
     // the stock placeholder h6 under the real page h1 is a genuine
-    // heading-order skip (pinned by the two P2-3 tests below).
+    // heading-order skip (pinned by the two tests below).
     renderTable(
       { rows: [], emptyHeadingLevel: 'h2' },
       { heading: 'Members' },
@@ -948,16 +945,16 @@ describe('DataTable', () => {
   })
 
   describe('the empty placeholder under a real page heading (P2-3)', () => {
-    // Regression for the reviewer finding (web-base-packages ui-kit P2-3):
-    // the axe case that claimed to cover the empty state rendered the
-    // table with loading: true, so the stock EmptyState placeholder never
-    // rendered at all -- and a component-level render has no ancestor
-    // heading anyway -- which left the real surface's h1 -> h6 skip
-    // invisible to the package suite. The reference-app notes surface is
-    // exactly that real shape: a page h1 above an empty table whose stock
-    // placeholder defaults to the h6 heading level. These two cases
-    // supply the h1 themselves (the same mechanism EmptyState.test.tsx
-    // uses) so the skip is reachable, mirroring that suite's pair: the
+    // The axe case covering the empty state must render the table
+    // actually empty: a case rendered with loading: true never shows
+    // the stock EmptyState placeholder at all -- and a component-level
+    // render has no ancestor heading anyway -- so the real surface's
+    // h1 -> h6 skip would stay invisible to the package suite. The
+    // reference-app notes surface is exactly that real shape: a page
+    // h1 above an empty table whose stock placeholder defaults to the
+    // h6 heading level. These two cases supply the h1 themselves (the
+    // same mechanism EmptyState.test.tsx uses) so the skip is
+    // reachable, mirroring that suite's pair: the
     // stock default under a real h1 still skips (a compatibility floor,
     // not a claim that h6 is correct), and supplying the level that
     // continues the page order removes the violation entirely.

@@ -23,23 +23,21 @@ var (
 	ErrResourceRefRequired = apperr.Invalid("sharing.resource_ref_required")
 
 	// ErrExpiryRequired reports that Service.Create's caller explicitly
-	// asked for a share that never expires (CreateParams.Forever). Rule 2
-	// (docs/internal/07-platform-services.md's "default expiry" rule) is
-	// explicit that this must be refused outright, never silently allowed
-	// -- see CreateParams.Forever's own doc comment.
+	// asked for a share that never expires (CreateParams.Forever). Such a
+	// request is refused outright, never silently allowed -- see
+	// CreateParams.Forever's own doc comment.
 	ErrExpiryRequired = apperr.Invalid("sharing.expiry_required")
 
 	// ErrExpiryOutOfRange reports that Service.Create's caller supplied an
-	// ExpiresAt outside the bounds rule 2 allows an explicit expiry to
-	// occupy: not strictly in the future (a share born already expired is
-	// refused rather than created dead), or further out than the tenant's
-	// operative explicit-expiry ceiling -- MaxExplicitShareLifetime (the
-	// module's 30-day ceiling on explicit requests), raised to the tenant's
+	// ExpiresAt outside the bounds an explicit expiry may occupy: not
+	// strictly in the future (a share born already expired is refused
+	// rather than created dead), or further out than the tenant's operative
+	// explicit-expiry ceiling -- MaxExplicitShareLifetime (the module's
+	// 30-day ceiling on explicit requests), raised to the tenant's
 	// configured default when that default is longer (see
-	// MaxExplicitShareLifetime's own doc comment). The second half is the
-	// "never-expiring in disguise" arm of rule 2: an expiresAt of
-	// 9999-12-31 must not be accepted just because it is technically not
-	// Forever.
+	// MaxExplicitShareLifetime's own doc comment). The second half closes
+	// the never-expiring-in-disguise hole: an expiresAt of 9999-12-31 must
+	// not be accepted just because it is technically not Forever.
 	ErrExpiryOutOfRange = apperr.Invalid("sharing.expiry_out_of_range")
 
 	// ErrInvalidMaxViews reports that Service.Create was called with a
@@ -61,12 +59,10 @@ var (
 	// ErrNotAccessible is Service.Access's single outward answer for every
 	// reason an access attempt may be refused: an unrecognized token, a
 	// revoked, expired or view-exhausted share, or a missing or wrong
-	// password. It deliberately carries no parameter distinguishing which
-	// -- rule 5 (docs/internal/07-platform-services.md's "the share surface
-	// must leak nothing about the tenant" rule) requires that probing a
-	// token teach an outside caller nothing about which of those it
-	// actually is, mirroring the existence-disclosure suppression go/authn
-	// already applies to account enumeration.
+	// password. It deliberately carries no parameter distinguishing which:
+	// probing a token must teach an outside caller nothing about which of
+	// those it actually is, mirroring the existence-disclosure suppression
+	// go/authn already applies to account enumeration.
 	ErrNotAccessible = apperr.NotFound("sharing.not_accessible")
 
 	// ErrShareNotFound reports that an owner-facing call (Service.Revoke,
@@ -85,9 +81,8 @@ var (
 	// X-Sharing-Password header -- api/sharing-server.gen.go's
 	// ServerInterfaceWrapper), via NewHandler's custom ErrorHandlerFunc
 	// (bindingErrorHandler, which also guarantees Cache-Control: no-store
-	// on the response -- see AGENTS.md's "Revocation and caching" section
-	// for why every response the access route can produce must carry that
-	// header); and, as of the owner-facing round, a malformed JSON body on
+	// on the response: revocation and a spent view must reach the viewer's
+	// very next fetch, never a cached copy); and a malformed JSON body on
 	// sharing_createShare (handler.go's decodeJSON), which never reaches
 	// the spec-generated binder at all since a request body is not a
 	// bound parameter. Both sources report the same code because both mean
@@ -109,9 +104,9 @@ var (
 	// consumed (SharingAccessShare's own doc comment) -- so a MaxViews
 	// budget is never spent by a serve whose content nobody saw.
 	// This is deliberately a distinct, undisguised failure from
-	// ErrNotAccessible: rule 5's outward-identical-answer property covers
-	// the question "is this token/password valid", which the authorization
-	// has already answered yes to by the time this error can occur, so there
+	// ErrNotAccessible: the outward-identical-answer property covers the
+	// question "is this token/password valid", which the authorization has
+	// already answered yes to by the time this error can occur, so there
 	// is nothing left to hide by collapsing this into the same 404 -- doing
 	// so would instead hide a real operational fault (a broken resolver, a
 	// resource genuinely gone from its own store) behind a code that means

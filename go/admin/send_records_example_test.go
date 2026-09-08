@@ -1,6 +1,6 @@
 package admin
 
-// Runnable documentation for SendRecordSearchService (D10), mirroring the
+// Runnable documentation for SendRecordSearchService, mirroring the
 // examples in example_test.go but living IN-package because the service's
 // bus arrives through Module.Register's unexported attach -- see the
 // example's own doc comment below.
@@ -18,13 +18,13 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// ExampleNewSendRecordSearchService demonstrates D10's cross-tenant
+// ExampleNewSendRecordSearchService demonstrates the cross-tenant
 // notification send-record search (SendRecordSearchService)'s
 // single-tenant path: a platform operator searching ONE tenant's send
 // records is still a cross-tenant read of platform data, so even the
 // named-tenant path goes through tenancy.WithSystemContext's audited
-// wrapper (P2-7's fix) -- the read must leave the same
-// tenancy.system_context.entered audit trail the cross-tenant path does.
+// wrapper -- the read must leave the same tenancy.system_context.entered
+// audit trail the cross-tenant path does.
 // That wrapper needs both the "admin.cross_tenant" system purpose
 // registered (RegisterSystemPurpose) and the service's bus attached
 // (Module.Register's own wiring step, reproduced here by hand because

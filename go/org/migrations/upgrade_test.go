@@ -44,9 +44,9 @@ func (migrationSetModule) Locales() embed.FS                { return embed.FS{} 
 func (migrationSetModule) OpenAPISpec() []byte              { return nil }
 func (migrationSetModule) Register(*pkgcore.Registry) error { return nil }
 
-// stageSingleRootUpgrade drives the P1-org-11 upgrade-path proof on one
+// stageSingleRootUpgrade drives the single-root upgrade-path proof on one
 // real database: apply the 0007-era subset, pin that its single-root index
-// still counts a soft-deleted root (the pre-0008 behavior the bug was), then
+// still counts a soft-deleted root (the pre-0008 behavior), then
 // upgrade by applying the FULL set through a second registry -- whose ledger
 // skip is the real upgrade mechanism -- and pin that the narrowed index now
 // lets a live root coexist with the soft-deleted one while still refusing
@@ -71,8 +71,8 @@ func stageSingleRootUpgrade(t *testing.T, db *gorm.DB, dialect dbkit.Dialect) {
 
 	// The 0007-era index scopes on parent_id = '' alone: a soft-deleted root
 	// row still occupies the tenant's single root slot, so a live root
-	// cannot exist beside it -- the pre-fix state of the P1-org-11 bug,
-	// pinned here so the upgrade's effect is visible in the same test.
+	// cannot exist beside it -- the state the 0008 narrowing fixes, pinned
+	// here so the upgrade's effect is visible in the same test.
 	if err := db.Exec(insertRoot, "old-root", "tenant-a", "/old-root/", 0, "Old Root", "group", now, now, now).Error; err != nil {
 		t.Fatalf("insert the soft-deleted root row on the 0007-era schema: %v", err)
 	}
@@ -128,9 +128,9 @@ func assertUniqueViolation(t *testing.T, err error, what string) {
 	}
 }
 
-// TestMigrations_0008_UpgradeFromA0007EraDatabase is the P1-org-11
+// TestMigrations_0008_UpgradeFromA0007EraDatabase is the
 // upgrade-path proof on SQLite: a database migrated through 0007 -- the
-// state every environment that shipped the 0007 round is in today -- gets
+// pre-narrowing state -- gets
 // 0008_single_root_live.sql applied by the ordinary re-run of the migration
 // registry, and ends with uq_org_nodes_single_root narrowed to live rows.
 func TestMigrations_0008_UpgradeFromA0007EraDatabase(t *testing.T) {

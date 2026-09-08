@@ -1,8 +1,8 @@
 /**
- * credits-view.tsx -- the block-D surface: one clinic's credit balance
- * and the recent window of its append-only credit ledger, read through
- * the generated billing operations over tenant-namespaced query keys --
- * the same read discipline as the notes and cases surfaces.
+ * credits-view.tsx -- one clinic's credit balance and the recent window
+ * of its append-only credit ledger, read through the generated billing
+ * operations over tenant-namespaced query keys -- the same read
+ * discipline as the notes and cases surfaces.
  *
  * The balance the view renders is the tenant's own, from the same
  * CreditService.Balance read the billing module's service code uses
@@ -171,7 +171,8 @@ export function CreditsView(): ReactElement {
   // The gate: an error state fails it closed before anything else is
   // consulted; a served surface is 'allowed' only when both reads have
   // answered with no error standing, and no answer at all yet is
-  // 'pending' -- the notes-view ordering (reference-app-web.md P1-1).
+  // 'pending' -- the ordering notes-view.tsx documents for its own
+  // gate.
   const gateStatus: RouteGuardStatus = gateDenied
     ? 'denied'
     : balanceQuery.data !== undefined &&

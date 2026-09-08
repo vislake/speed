@@ -98,15 +98,15 @@ plumbing and deliberately not exported.
   its tests, this AGENTS.md, the README (contract prose and the
   resource table when keys change), and the compiled usage example when
   the documented composition changes. `FormLayout`'s `columns?: 1 | 2`
-  (responsive-design-hardening round) is the template for how an
-  additive prop stays additive: it defaults to `1`, exactly today's
-  unconditional single-column flow, so every existing consumer that
-  omits it is byte-for-byte unaffected; only passing `columns={2}`
-  opts into the new CSS Grid flow. `DataTableColumn`'s `priority?: 'high'
-  | 'medium' | 'low'` follows the identical template: undefined by
-  default, exactly today's always-visible column, so an existing
-  consumer that sets no column's priority is byte-for-byte unaffected;
-  only a column that opts in gets the breakpoint-keyed hide/show.
+  is the template for how an additive prop stays additive: it defaults
+  to `1`, exactly the unconditional single-column flow, so every
+  existing consumer that omits it is byte-for-byte unaffected; only
+  passing `columns={2}` opts into the new CSS Grid flow.
+  `DataTableColumn`'s `priority?: 'high' | 'medium' | 'low'` follows
+  the identical template: undefined by default, exactly the
+  always-visible column, so an existing consumer that sets no column's
+  priority is byte-for-byte unaffected; only a column that opts in
+  gets the breakpoint-keyed hide/show.
 
 ## Testing
 
@@ -136,8 +136,8 @@ composition — host-owned queue, host AbortControllers, host transport
 transports and their fixture URLs live in test files only, and the
 workspace's `no-direct-http` rule keeps every fetch out of `src`.
 
-**Responsive sx assertions (responsive-design-hardening round)**: a
-plain, non-breakpoint-gated sx value (`flexWrap: 'wrap'`, a fixed
+**Responsive sx assertions**: a plain, non-breakpoint-gated sx value
+(`flexWrap: 'wrap'`, a fixed
 `width`) computes fine through jsdom's `getComputedStyle`, so those
 stay ordinary `toHaveStyle` assertions (`FileUploader`'s row action
 groups, `PageHeader`'s title/actions row). A breakpoint-keyed sx value
@@ -149,10 +149,10 @@ actual generated CSS text, read across every `<style>` tag in the
 document. Both forms are property/snapshot proofs that the intended
 declaration was wired into the render; neither proves a layout looks
 correct at a real viewport width, which this package's jsdom suite
-cannot render at all (see the package README's Deferrals: Storybook /
-browser-side visual verification is the same standing gap).
+cannot render at all (the README's Deferrals record the same
+browser-side visual gap).
 
-**DataTable column priority (this round)** reuses the same
+**DataTable column priority** reuses the same
 `emittedStyleText()` technique for its own breakpoint-keyed `display`
 value (see the README's Column priority subsection): one test per tier
 asserts the tier's exact `@media (min-width:...)` breakpoint and the
@@ -168,27 +168,24 @@ that a real viewport actually hides or shows the column.
 
 ## Deferrals (recorded, do not re-open silently)
 
-- **Validation from generated types** (zod-from-generated-types) is the
-  form milestone's follow-up; the validation-error contract is the seam
-  it plugs into.
+- **Validation from generated types** (zod-from-generated-types) is
+  not implemented; the validation-error contract is the seam it would
+  plug into.
 - **Error-code mapping** (which namespace turns which backend code into
-  text) is a later resolver round; verbatim passthrough is the current
-  contract.
-- **Storybook**: no preview harness round exists yet; components are
-  covered by jsdom tests + axe, and color-contrast verification awaits
-  a browser-side visual round.
+  text) is not implemented; verbatim passthrough is the contract.
+- **Storybook**: no preview harness exists; components are covered by
+  jsdom tests + axe, and color-contrast is verified against the theme
+  values, never a rendered browser.
 - **The `no-literal-text` rule** catches the direct literal routes but
   not indirect ones (ternary branches, literals crossing component
   boundaries) — documented partial enforcement; hosts own their
   literals.
 - **The storage frontend leg** — storage operations generated into
   `@speed/api-sdk` from the `go/storage` OpenAPI fragment, the natural
-  transport for a host's upload code — waits for the merged document
-  to gain that fragment: orval runs over the merged document only
-  (notes and authn today), and the round that first extends it is the
-  M1 `org-web` round joining org's fragment, storage's riding that
-  same regeneration. Until then the wire contract's authority is
-  `go/storage/api/openapi.yaml` itself; hosts run their own transport
-  and this package ships none. The deferral is recorded three ways so
-  no single doc owns the claim: `go/storage/AGENTS.md`'s deferral
-  list, the Taskfile `api:gen` header comment, and this entry.
+  transport for a host's upload code — is not implemented: orval runs
+  over the merged document only, which carries no storage fragment, so
+  no generated storage operation exists. The wire contract's authority
+  is `go/storage/api/openapi.yaml` itself; hosts run their own
+  transport and this package ships none. The deferral is recorded in
+  `go/storage/AGENTS.md`'s deferral list and the Taskfile `api:gen`
+  header comment as well, so no single doc owns the claim.

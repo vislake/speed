@@ -11,17 +11,16 @@
  * customer sees in a demo, not a developer's own machine where reading
  * the code in the server log is the point. Offering the SMS tab there
  * would invite a person down a path the deployment cannot finish and
- * then claim a delivery that never happened (the registration dead end
- * in another costume; e2e/offered-channels-work.spec.ts holds the
- * choice). A deployment with a real SMS transport wires it first and
- * then adds the channel back to the list below.
+ * then claim a delivery that never happened; the channel set is
+ * declared here as channels={['password']}, and
+ * e2e/offered-channels-work.spec.ts holds the choice.
  *
  * Registration is a destination, not a session operation: the created
  * account (auth-ui's RegisterForm hands it to the host through
  * onRegistered -- the form never signs in, by package contract) lands
  * in a success state with a way back to the sign-in surface, the
- * exact composition auth-ui's round documented for hosts that keep
- * the two steps apart.
+ * composition auth-ui documents for hosts that keep the two steps
+ * apart.
  *
  * The view state is interaction-local: a completed registration does
  * not flip the auth-core snapshot (nothing here calls login), so

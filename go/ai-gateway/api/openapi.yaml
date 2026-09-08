@@ -3,27 +3,24 @@ info:
   title: ai-gateway
   description: >-
     Writing and reading the platform-wide and tenant BYOK credentials
-    go/ai-gateway's Gateway resolves at call time -- the HTTP surface that
-    closes this module's own AGENTS.md "No admin/HTTP surface for writing
-    platform or tenant BYOK credentials" gap. This fragment follows the
-    operationId (aiGateway_<verb><Resource>) and schema-name
-    (AiGateway<Type>) conventions from
-    .claude/skills/backend-coding-standards/SKILL.md §6.1 -- "aiGateway"
-    rather than the module directory's literal "ai-gateway" spelling,
-    since neither an operationId nor a Go schema name may contain a
-    hyphen; the path prefix keeps the literal directory name instead,
-    exactly as every other module fragment's "/api/v1/<module>" prefix
-    does. task api:gen regenerates ai-gateway-server.gen.go (in this
-    directory) from this file, with oapi-codegen pinned at v2.8.0 -- see
-    oapi-codegen.yaml and .github/workflows/api-contract.yml.
+    go/ai-gateway's Gateway resolves at call time -- this module's
+    credential-write admin surface. This fragment follows the operationId
+    (aiGateway_<verb><Resource>) and schema-name (AiGateway<Type>)
+    conventions -- "aiGateway" rather than the module directory's literal
+    "ai-gateway" spelling, since neither an operationId nor a Go schema
+    name may contain a hyphen; the path prefix keeps the literal directory
+    name instead, exactly as every other module fragment's
+    "/api/v1/<module>" prefix does. task api:gen regenerates
+    ai-gateway-server.gen.go (in this directory) from this file, with
+    oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
+    .github/workflows/api-contract.yml.
 
     The credential's own API key is NEVER read back over this surface, on
-    either write operation's response or the read operation below --
-    write-only, mirroring every other secret-handling precedent in this
-    repository (go/integration's API-key surface never re-returns a raw
-    key after creation). The read operation exists purely so a caller can
-    confirm what is CONFIGURED -- which scope actually answers for a
-    provider, and its base URL -- without ever seeing the secret again.
+    either write operation's response or the read operation below: a raw
+    API key, once written, is never returned by any operation. The read
+    operation exists purely so a caller can confirm what is CONFIGURED --
+    which scope actually answers for a provider, and its base URL --
+    without ever seeing the secret again.
 
     Two materially different privilege levels are gated by two
     DISTINCTLY NAMED permissions, never one shared between them: setting
@@ -32,25 +29,21 @@ info:
     while setting the PLATFORM-WIDE default every tenant without its own
     BYOK row falls back to (aiGateway_setPlatformCredential) is a
     strictly more privileged operation -- see go/ai-gateway/module.go's
-    PermissionWrite / PermissionManagePlatform doc comments, and this
-    reference app's demo_subject.go for how the two map to distinct rbac
-    grants. The read operation (aiGateway_getCredential) is gated on a
-    third, weaker permission (PermissionRead) of the same resource.
+    PermissionWrite / PermissionManagePlatform doc comments. The read
+    operation (aiGateway_getCredential) is gated on a third, weaker
+    permission (PermissionRead) of the same resource.
 
     There is deliberately no tenant_id anywhere on this surface, in any
     path, query, header or request/response body: the tenant a
     setTenantCredential call writes under, and a getCredential call
     resolves for, is always the one tenancy.Middleware already resolved
-    from the request (docs/internal/04-data-and-tenancy.md; root
-    CLAUDE.md's multi-tenant isolation rule). setPlatformCredential
-    writes no tenant row at all -- see its own description.
+    from the request. setPlatformCredential writes no tenant row at all
+    -- see its own description.
 
-    Merging this fragment into the application-wide build/openapi/
-    speed.yaml stays future work, like go/storage's, go/sharing's and
-    go/integration's own fragments: this module has no in-workspace web
-    consumer yet (go/ai-gateway/AGENTS.md's own reference-app-consumer
-    section), so joining it into the merge and running it through orval
-    would generate frontend code nothing calls.
+    This fragment is not merged into the application-wide build/openapi/
+    speed.yaml: this module has no in-workspace web consumer, so joining
+    it into the merge and running it through orval would generate
+    frontend code nothing calls.
   version: 0.0.0
 paths:
   /api/v1/ai-gateway/credentials/{provider}:
@@ -217,13 +210,12 @@ components:
       type: object
       description: >-
         The structured {code, params} error envelope every speed API
-        returns instead of localized text (backend coding standard §6.2;
-        docs/internal/11-cross-cutting.md) -- a client resolves code
-        through its own i18n catalog. This module renders no user-facing
-        text of its own (go/ai-gateway/module.go's Locales doc comment),
-        so a client resolves these codes through its own catalog exactly
-        as it already does for every other structured error this module
-        returns from its non-HTTP surface.
+        returns instead of localized text (backend coding standard §6.2)
+        -- a client resolves code through its own i18n catalog. This module
+        renders no user-facing text of its own (go/ai-gateway/module.go's
+        Locales doc comment), so a client resolves these codes through its
+        own catalog exactly as it does for every other structured error
+        this module returns from its non-HTTP surface.
       properties:
         code:
           type: string

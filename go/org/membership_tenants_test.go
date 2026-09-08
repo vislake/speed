@@ -31,11 +31,11 @@ func systemCtx(ctx context.Context) (context.Context, error) {
 }
 
 // TestMemberService_TenantsOf_AnswersAcrossTenantsUnderSystemContext is
-// the round's regression test: a user with memberships in several tenants
-// is answered with all of them, by one query under a system context --
-// where before this query existed, a host could only scan its own bounded
-// tenant lists and ask per tenant (the reference app's sign_in_memberships
-// scan), so a tenant created after boot was invisible to the question.
+// the cross-tenant read's regression test: a user with memberships in
+// several tenants is answered with all of them, by one query under a system
+// context -- a host without the query can only scan its own bounded tenant
+// lists and ask per tenant (the reference app's sign_in_memberships scan),
+// which leaves a tenant created after boot invisible to the question.
 func TestMemberService_TenantsOf_AnswersAcrossTenantsUnderSystemContext(t *testing.T) {
 	m, _ := newTestModule(t)
 	svc := m.Members()

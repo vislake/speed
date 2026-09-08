@@ -46,8 +46,8 @@ package main
 //     storage leg above: TestBuildServer_PeriodicScheduler_RetentionSweep_
 //     ReapsExpiredSoftDeletedNote proves the host-scheduled retention sweep
 //     really hard-deletes an expired soft-deleted note's row end to end --
-//     the half go/compliance/AGENTS.md's Known limitations records as
-//     having no schedule point until the host wiring this test proves.
+//     the half that had no schedule point until the host wiring this test
+//     proves.
 //     Same two-boot shape, same reason: the sweep key must stay
 //     unresolved for boot 1 so boot 2's first tick demonstrably schedules
 //     the sweep. Boot 1 runs with the worker and scheduler disabled,
@@ -65,12 +65,11 @@ package main
 //     notes participant's real HardDelete: the expired note's physical row
 //     is gone -- observed through the same second connection -- while the
 //     live note's row is untouched. The test FAILS when retention
-//     scheduling is unwired -- the state that predates this round, where
-//     no tick enqueued compliance's task and every soft-deleted row past
-//     its window was kept indefinitely.
+//     scheduling is unwired: no tick enqueues compliance's task and
+//     every soft-deleted row past its window is kept indefinitely.
 //
-//   - The self-registered-clinic leg closes the wiring P1 where the
-//     scheduler's tenant universe was only ever cfg.HostTenants:
+//   - The self-registered-clinic leg pins the scheduler's tenant
+//     universe reaching beyond cfg.HostTenants:
 //     TestBuildServer_PeriodicScheduler_ExpiryAndRetentionSweeps_
 //     ReachSelfRegisteredClinicTenant proves BOTH wired mechanisms reach
 //     the rows of a tenant no configuration ever names -- a clinic the
@@ -82,7 +81,7 @@ package main
 //     legs above: boot 1 registers the clinic owner through the real
 //     register route -- whose synchronous provisioning creates the
 //     clinic's org root, the org.node.created event that lands the
-//     clinic in go/admin's D3 tenant ledger, the discovery half of the
+//     clinic in go/admin's tenant ledger, the discovery half of the
 //     scheduler's universe -- hosts a completed object whose retention
 //     deadline passes and a soft-deleted note backdated past the
 //     retention window, all under the clinic tenant, and closes with
@@ -92,8 +91,8 @@ package main
 //     converges on the expired object's row and bytes gone and the
 //     expired note's physical row gone while the live note survives. The
 //     test FAILS when the scheduler's universe is only cfg.HostTenants
-//     -- the pre-fix state this P1 records, where every self-registered
-//     clinic's expired objects and soft-deleted notes aged past their
+//     where every self-registered
+//     clinic's expired objects and soft-deleted notes age past their
 //     deadlines with no sweep ever reaching them.
 //
 // What remains honestly limited:
@@ -103,8 +102,8 @@ package main
 //     retentionSweepIdempotencyKey each name their enqueue's
 //     window-start), so on this app's StandaloneQueue -- which holds a
 //     resolved key forever (go/jobs) -- each tenant is swept at most once
-//     per hour-long window, not once per database file and not once per
-//     tick. That is why the two-boot shape above must exist at all (boot
+//     per window, not once per tick. That is why the two-boot shape above
+//     must exist at all (boot
 //     2's first tick must find no resolved key for its window), and why
 //     a host that needs tighter reaping bounds must enqueue more often
 //     than the module's window constant or shrink that constant. The
@@ -696,7 +695,7 @@ func TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject(t *testi
 // is the compliance retention-sweep leg of this file's wiring proof: it
 // proves the host-scheduled retention sweep really hard-deletes an expired
 // soft-deleted note's row end to end -- the trigger-half proof
-// go/compliance/AGENTS.md's "no schedule point" Known-limitations entry
+// the compliance module's own "no schedule point" limitation entry
 // records the absence of -- over two real boots of the composed server
 // sharing one SQLite file, the same two-boot shape the storage expiry-sweep
 // leg above uses and for the same reason: the sweep keys are
@@ -938,7 +937,7 @@ func observeClinicSweepEnd(t *testing.T, srv *httptest.Server, token string, exp
 // TestBuildServer_PeriodicScheduler_ExpiryAndRetentionSweeps_ReachSelfRegisteredClinicTenant
 // is the self-registered-clinic leg of this file's wiring proof: it
 // proves the host-scheduled expiry AND retention sweeps reach a tenant
-// no configuration ever names -- the P1 closure the file header
+// no configuration ever names -- the closure the file header
 // describes -- over two real boots of the composed server sharing one
 // SQLite file and one object-store directory, the same two-boot shape
 // the two configured-universe legs above use and for the same reason
@@ -976,8 +975,9 @@ func observeClinicSweepEnd(t *testing.T, srv *httptest.Server, token string, exp
 // bounded, with no wall-clock race, exactly like the two legs above --
 // until every terminal property holds in one observation, then asserts
 // the strict post-conditions once more with the decode helpers. If the
-// scheduler's universe were still only cfg.HostTenants -- the pre-fix
-// state this P1 records -- boot 2's ticks would never enqueue anything
+// scheduler's universe were still only cfg.HostTenants -- the wiring this
+// state the file header records -- boot 2's ticks would never enqueue
+// anything
 // for the clinic and the wait would fail: a self-registered tenant's
 // expired objects and soft-deleted notes past their retention windows
 // would stay unreclaimed forever.
@@ -1003,7 +1003,7 @@ func TestBuildServer_PeriodicScheduler_ExpiryAndRetentionSweeps_ReachSelfRegiste
 	// synchronously creates the clinic. The tenant id derivation is
 	// spelled out here rather than reached through the production helper
 	// so this leg keeps compiling (and failing with a clean assertion)
-	// against the pre-fix wiring this regression is measured on.
+	// against the wiring this regression is measured on.
 	userID := registerFreshAccount(t, boot1.srv, periodicClinicEmail, testPassword)
 	clinic := pkgcore.TenantID("tenant-" + userID)
 	status, code, token, signedInTenant := browserSignIn(t, boot1.srv, periodicClinicEmail, testPassword)

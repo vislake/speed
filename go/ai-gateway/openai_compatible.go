@@ -143,9 +143,8 @@ func buildRequestBody(req ChatRequest, stream bool, streamUsage bool) ([]byte, e
 			// stream_options.include_usage is what makes an OpenAI-
 			// compatible streaming response carry a final chunk with real
 			// token usage -- without it, a streaming response never
-			// reports usage at all. This is exactly the design doc's rule
-			// that streaming responses handle real usage at the last
-			// chunk, made real by asking for it explicitly.
+			// reports usage at all. Streaming usage lands on the last
+			// chunk only when it is asked for explicitly.
 			body["stream_options"] = map[string]any{"include_usage": true}
 		}
 	}

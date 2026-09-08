@@ -58,8 +58,9 @@ export interface AppServices {
  * tenant's name with its other ['tenant', tenantId] data and the new
  * tenant's name loads under its own key. Null while the answer is
  * loading or absent: the switcher and the work-area clinic line render
- * nothing rather than inventing a name, exactly the roster's old
- * out-of-set behavior for a tenant the app could not name.
+ * nothing rather than inventing a name -- the same out-of-set
+ * treatment demo-tenants.ts gives a tenant id that is not on the
+ * roster.
  */
 export function useCurrentTenantName(): string | null {
   const { api } = useAppServices()
@@ -138,9 +139,8 @@ export function useAppServices(): AppServices {
  * truthy `data` with no `config` member is exactly what a
  * shape-mismatched 200 hands back, and reading `[key]` off the missing
  * member is a render-time TypeError on the page's most-mounted surface
- * (reference-app-web acceptance: a shape-mismatched config answer must
- * not white-screen the app -- no error boundary exists below this
- * hook).
+ * (a shape-mismatched config answer must not white-screen the app --
+ * no error boundary exists below this hook).
  */
 export function useBrandName(): string {
   const { api } = useAppServices()

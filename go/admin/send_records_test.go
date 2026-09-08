@@ -60,16 +60,15 @@ func TestSendRecordSearchService_SingleTenant_Filters(t *testing.T) {
 	}
 }
 
-// TestSendRecordSearchService_SingleTenant_ReadIsAuditedSystemContext is
-// P2-7's regression test: even the NAMED-tenant path of D10's send-record
-// search must take D2's audited tenancy.WithSystemContext wrapper, exactly
-// like AuditService.Query's own single-tenant read -- a platform operator
-// reading one tenant's send records is still a cross-tenant read of
-// platform data, and it must leave the same tenancy.system_context.entered
-// audit trail (who read which tenant's records, under which declared
-// purpose) every other admin cross-tenant read does. On unfixed main the
-// single-tenant path called ListByFilter directly with no wrapper at all,
-// so such a read published no system-context event and left no trace.
+// TestSendRecordSearchService_SingleTenant_ReadIsAuditedSystemContext
+// pins the single-tenant path's audited wrapper: even the NAMED-tenant
+// path of the send-record search must take tenancy.WithSystemContext's
+// audited wrapper, exactly like AuditService.Query's own single-tenant
+// read -- a platform operator reading one tenant's send records is still
+// a cross-tenant read of platform data, and it must leave the same
+// tenancy.system_context.entered audit trail (who read which tenant's
+// records, under which declared purpose) every other admin cross-tenant
+// read does.
 func TestSendRecordSearchService_SingleTenant_ReadIsAuditedSystemContext(t *testing.T) {
 	env := buildTestAdminModule(t)
 	repo := notification.NewSendRecordRepository(env.DB)
@@ -106,10 +105,10 @@ func TestSendRecordSearchService_SingleTenant_ReadIsAuditedSystemContext(t *test
 }
 
 // TestSendRecordSearchService_CrossTenant_SearchesEveryLedgerTenant pins
-// D10's cross-tenant path (D2's mechanism): with no tenantID named, every
-// tenant in admin's own D3 ledger is searched, and rows from a tenant NOT
-// in the ledger are correctly invisible (the ledger, not send_records
-// itself, is what bounds the cross-tenant search space).
+// the cross-tenant path: with no tenantID named, every tenant in admin's
+// own ledger is searched, and rows from a tenant NOT in the ledger are
+// correctly invisible (the ledger, not send_records itself, is what
+// bounds the cross-tenant search space).
 func TestSendRecordSearchService_CrossTenant_SearchesEveryLedgerTenant(t *testing.T) {
 	env := buildTestAdminModule(t)
 	repo := notification.NewSendRecordRepository(env.DB)
@@ -126,7 +125,7 @@ func TestSendRecordSearchService_CrossTenant_SearchesEveryLedgerTenant(t *testin
 	insertTestSendRecord(t, repo, string(tenantA), "sr-a-1", notification.ChannelEmail, notification.SendRecordStatusSucceeded, "key-a-1")
 	insertTestSendRecord(t, repo, string(tenantB), "sr-b-1", notification.ChannelEmail, notification.SendRecordStatusSucceeded, "key-b-1")
 	// Not in the ledger at all -- must never surface in the cross-tenant
-	// search, since D2's mechanism draws its candidate tenants from D3's
+	// search, since the search draws its candidate tenants from admin's
 	// own ledger.
 	insertTestSendRecord(t, repo, "tenant-send-record-not-in-ledger", "sr-x-1", notification.ChannelEmail, notification.SendRecordStatusSucceeded, "key-x-1")
 

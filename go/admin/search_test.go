@@ -166,16 +166,13 @@ func TestSearchService_Users_DelegatesToAuthn(t *testing.T) {
 	}
 }
 
-// TestSearchService_Users_SearchLeavesAuditedSystemContext is the
-// D6-search P1's regression test at the service boundary: Users must run
-// the search under D2's audited tenancy.WithSystemContext wrapper exactly
-// like MembershipsOf, with the platform OPERATOR as pkgcore.SystemReason.
-// Actor -- never the searched-for user -- so a cross-tenant search that
-// answers with plaintext email and phone leaves a tenancy.
-// system_context.entered audit record naming who performed it. On unfixed
-// main Users was a wrapper-less passthrough to authn.Service.SearchUsers
-// that did not even take an operator, so the search published no
-// system-context event and left no trace at all.
+// TestSearchService_Users_SearchLeavesAuditedSystemContext pins the
+// search's audited trail at the service boundary: Users must run the
+// search under the audited tenancy.WithSystemContext wrapper exactly like
+// MembershipsOf, with the platform OPERATOR as pkgcore.SystemReason.Actor
+// -- never the searched-for user -- so a cross-tenant search that answers
+// with plaintext email and phone leaves a tenancy.system_context.entered
+// audit record naming who performed it.
 func TestSearchService_Users_SearchLeavesAuditedSystemContext(t *testing.T) {
 	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
 
@@ -218,9 +215,10 @@ func TestSearchService_Users_SearchLeavesAuditedSystemContext(t *testing.T) {
 	}
 }
 
-// TestSearchService_MembershipsOf_ListsOnlyTenantsWithActiveMembership is
-// D6+D2's core proof: the answer is drawn from admin's own D3 ledger, and
-// only tenants where the user actually has a membership are reported.
+// TestSearchService_MembershipsOf_ListsOnlyTenantsWithActiveMembership
+// pins the membership composition: the answer is drawn from admin's own
+// ledger, and only tenants where the user actually has a membership are
+// reported.
 func TestSearchService_MembershipsOf_ListsOnlyTenantsWithActiveMembership(t *testing.T) {
 	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
 

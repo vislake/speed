@@ -80,13 +80,10 @@ describe('HomeView', () => {
   })
 
   it('a clinic with no enabled feature is told the truth, never to seek an administrator', async () => {
-    // The self-registered-practice shape -- the population the
-    // new-practice gate meets, a real registrant whose server answer
-    // enables nothing. The old copy -- "No features are enabled yet",
-    // "Ask an administrator to enable a feature for this clinic" -- told
-    // a practice that just registered itself that nothing works and to
-    // go find the one person who does not exist: the registrant IS the
-    // administrator, nothing in the app was ever disabled, and the
+    // The self-registered-practice shape -- a real registrant whose
+    // server answer enables nothing. Such a practice must not be told
+    // that nothing works and to find an administrator: the registrant
+    // IS the administrator, nothing in the app is disabled, and the
     // whole journey works from that very account. The surface instead
     // says something true: the work lives in the navigation, and
     // nothing needs to be enabled or asked for.
@@ -131,8 +128,7 @@ describe('HomeView', () => {
     // reader the opposite thing two lines apart. The intro renders
     // only beside the card list it describes (the cards-branch tests
     // below pin that half), so a no-flags home never pairs the two
-    // sentences. This assertion failed before the fix, when the intro
-    // rendered above the empty state.
+    // sentences.
     expect(
       view.queryByText(enUS.home.intro),
       'the no-features home must not say both "what is here depends on enabled features" and "no feature to enable"',

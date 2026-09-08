@@ -30,9 +30,8 @@ const (
 
 	// apiPath is the path this module's HTTP surface is mounted at (see
 	// Register below). It must agree with the path prefix declared in
-	// this module's own OpenAPI fragment (api/openapi.yaml) -- the
-	// module-asset convention of docs/internal/21-api-contract.md -- for
-	// the same reason notes' identical apiPath constant gives: the
+	// this module's own OpenAPI fragment (api/openapi.yaml) -- for the
+	// same reason notes' identical apiPath constant gives: the
 	// fragment's "paths:" keys are what oapi-codegen turns into the
 	// method+path patterns of the generated registration helpers (see
 	// api/authn-server.gen.go's HandlerWithOptions) and into the
@@ -192,23 +191,21 @@ const (
 // never learns that authn exists; the host passes one to the other, and the
 // host is the only place both names appear.
 //
-// This seam is what makes this module's declared feature flags REAL at
-// request time -- see FeatureFlagPasswordLogin's own doc comment for what a
-// flag turning out to be a declaration with no enforcement used to mean for
-// a deployment that disabled a channel. Every sign-in channel consults the
-// gate before it lets a request through, and the login page's own channel
-// visibility comes from the same flag values served by the config module's
-// pre-authentication features endpoint, so the page and the API agree on
-// which channels exist.
+// This seam is what makes this module's declared feature flags effective
+// at request time: without the gate, a flag is a declaration with no
+// enforcement, and a deployment that disabled a channel would still serve
+// it. Every sign-in channel consults the gate before it lets a request
+// through, and the login page's own channel visibility comes from the same
+// flag values served by the config module's pre-authentication features
+// endpoint, so the page and the API agree on which channels exist.
 //
 // A nil gate means this deployment has no feature-flag module at all -- a
 // host running authn without the config module -- and every channel behaves
-// as enabled, which is what this module did before the seam existed and
-// what such a host's login page (which has no features endpoint to read)
-// already shows: the channels the host configured. The flags' effect is
-// expressed in config, so only a host with config can turn a channel off,
-// and the wiring contract is: if the config module is in the deployment,
-// pass its Service here.
+// as enabled; such a host's login page (which has no features endpoint to
+// read) shows exactly the channels the host configured. The flags' effect
+// is expressed in config, so only a host with config can turn a channel
+// off, and the wiring contract is: if the config module is in the
+// deployment, pass its Service here.
 type FeatureGate interface {
 	IsEnabled(ctx context.Context, key string) (bool, error)
 }
@@ -276,11 +273,10 @@ type Option func(*options)
 
 // WithKeySource supplies the signing-key lifecycle provider access tokens
 // are minted and verified through. It is REQUIRED: there is no safe
-// default, and there is deliberately no second, static-injection path
-// (docs/internal/22-pki.md's "no second path" section) -- a fallback path
-// is exactly the failure mode the diagnosed system that motivated go/pki
-// had (an implicit "generate one myself if nothing was configured" route
-// that nobody could say for certain was or wasn't taken in production).
+// default, and there is deliberately no second, static-injection path -- a
+// fallback path is exactly the failure mode of an implicit "generate one
+// myself if nothing was configured" route, which nobody could say for
+// certain was or wasn't taken in production.
 //
 // A production deployment wires a *pki.Service here (structurally, with no
 // import of go/pki from this package -- see KeySource's own doc comment);
@@ -373,12 +369,11 @@ func WithSessionTTL(d time.Duration) Option {
 // over Service.Verifier consults that list by default, so selecting
 // RevocationModeImmediate genuinely enforces sign-out on outstanding access
 // tokens -- no separate middleware option to forget. There is deliberately
-// no dynamic-configuration twin of this option (the schema used to declare
-// one, authn.session_revocation_immediate, and nothing ever read it; it is
-// deleted because a value read at request time could not deliver what its
-// description promised -- the mode is fixed at SessionManager construction
-// and gates which revocations are even recorded -- see AGENTS.md's
-// revocation section).
+// no dynamic-configuration twin of this option: the schema key once
+// declared for one, authn.session_revocation_immediate, is gone because a
+// value read at request time could not deliver what its description
+// promised -- the mode is fixed at SessionManager construction and gates
+// which revocations are even recorded.
 func WithRevocationMode(mode RevocationMode) Option {
 	return func(o *options) {
 		if mode == RevocationModeNatural || mode == RevocationModeImmediate {
@@ -448,14 +443,14 @@ func WithOAuthStateTTL(d time.Duration) Option {
 // TLS terminated at a load balancer or reverse proxy, with the Go process
 // itself only ever seeing plaintext HTTP on its own listener -- so relying
 // on it alone silently drops Secure in exactly the deployment shape most
-// hosts run. This is bootstrap configuration (root CLAUDE.md's "values that
-// vary by environment"), set once by the host at startup from its own
-// knowledge of its topology (e.g. an SPEED_TLS_TERMINATED env var), rather
-// than inferred per request from a client-controlled header -- the same
-// reason handler.go's clientIP reads X-Forwarded-For only from a request
-// whose peer is a declared trusted proxy (WithTrustedProxies), with no such
-// gate available for a header asserting TLS: a host that is not actually
-// behind TLS anywhere must never pass true here.
+// hosts run. This is bootstrap configuration (a value that varies by
+// environment), set once by the host at startup from its own knowledge of
+// its topology (e.g. an SPEED_TLS_TERMINATED env var), rather than
+// inferred per request from a client-controlled header -- the same reason
+// handler.go's clientIP reads X-Forwarded-For only from a request whose
+// peer is a declared trusted proxy (WithTrustedProxies), with no such gate
+// available for a header asserting TLS: a host that is not actually behind
+// TLS anywhere must never pass true here.
 func WithSecureCookies(secure bool) Option {
 	return func(o *options) { o.secureCookies = secure }
 }
@@ -764,8 +759,7 @@ func (m *Module) Locales() embed.FS { return locales.FS }
 // single source of this module's API surface -- the api package's
 // generated types and ServerInterface (api/authn-server.gen.go,
 // regenerated by task api:gen) derive from it, and Handler implements that
-// interface (see handler.go) -- per docs/internal/21-api-contract.md's
-// spec-first decision.
+// interface (see handler.go).
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
 // Service returns the module's service. It is nil until Register has run,

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Toolchain drift gate for the root .mise.toml.
 
-docs/internal/19-dev-workflow.md pins the developer toolchain with mise;
-the root .mise.toml carries the versions. CI cannot read .mise.toml
+The developer toolchain is pinned with mise; the root .mise.toml
+carries the versions. CI cannot read .mise.toml
 directly -- actions/setup-go's go-version-file resolves go.mod, go.work,
 go.sum or .go-version only, and setup-node reads web/.nvmrc -- so every
 .mise.toml version is a MIRROR of an authoritative source elsewhere in

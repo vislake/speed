@@ -24,10 +24,9 @@ import (
 const billingCreditBalancesTableName = billingCreditBalancesTable
 
 // CreditService is the credits ledger's one write surface: PreDeduct,
-// Confirm, Refund, Grant and Expire, implementing
-// docs/internal/06-billing-and-metering.md's reserve -> confirm/refund
-// pattern for "pay-per-use that might fail" business operations, plus the
-// two single-phase paths (Grant, Expire).
+// Confirm, Refund, Grant and Expire, implementing the reserve ->
+// confirm/refund pattern for "pay-per-use that might fail" business
+// operations, plus the two single-phase paths (Grant, Expire).
 //
 // # The Reason contract
 //
@@ -59,9 +58,9 @@ const billingCreditBalancesTableName = billingCreditBalancesTable
 // # Credits are a separate path from Entitlements.Check
 //
 // CreditService never consults a Plan or a Subscription, and
-// EntitlementsService never touches CreditBalance --
-// docs/internal/06-billing-and-metering.md's own explicit split (see
-// model.go's Entitlements doc comment).
+// EntitlementsService never touches CreditBalance -- the explicit split of
+// the credits path from the entitlements judgment (see model.go's
+// Entitlements doc comment).
 type CreditService struct {
 	db           *gorm.DB
 	balances     *CreditBalanceRepository
@@ -94,8 +93,7 @@ type CreditService struct {
 	// second, concurrent Grant for the SAME tenant cannot commit inside
 	// that window -- the exact property that makes reading the resulting
 	// balance INSIDE the transaction (readBalanceForAudit) safe, where a
-	// separate query issued only after commit (what this round's fix
-	// replaced) would not be.
+	// separate query issued only after commit would not be.
 	testHookAfterBalanceDelta func()
 }
 
@@ -174,12 +172,11 @@ func (s *CreditService) Balance(ctx context.Context) (*CreditBalance, error) {
 }
 
 // Transactions returns the tenant's credit ledger rows, newest first --
-// every CreditTransaction the tenant's balance movements ever wrote,
-// which docs/internal/06-billing-and-metering.md's
-// reconstructable/auditable requirement names as the ledger's own
-// authority (Balance above answers the number those rows produced; this
-// answers the rows themselves). The read is tenant-scoped exactly like
-// Balance's: it goes through CreditTransactionRepository.ListByTenant
+// every CreditTransaction the tenant's balance movements ever wrote, the
+// reconstructable/auditable ledger that is the authority on the tenant's
+// credit history (Balance above answers the number those rows produced;
+// this answers the rows themselves). The read is tenant-scoped exactly
+// like Balance's: it goes through CreditTransactionRepository.ListByTenant
 // (dbkit's isolation plugin injecting the tenant filter from ctx, never a
 // hand-written WHERE), so a caller can only ever see its own tenant's
 // rows.
@@ -267,11 +264,10 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 	// never on the idempotent-retry branch that finds an already-existing
 	// row. This is what lets the audit.Emit call after the transaction
 	// commits fire exactly once per genuine reservation, never a second
-	// time for a retried call that reserved nothing new: docs/internal/10's
-	// own rule (repeated in this round's brief) that an audit record must
-	// never be written for something that did not actually happen this
-	// call applies just as much to a harmless no-op retry as to an
-	// outright failure.
+	// time for a retried call that reserved nothing new: an audit record
+	// must never be written for something that did not actually happen
+	// this call, and a harmless no-op retry is as much "nothing happened"
+	// as an outright failure.
 	var reserved bool
 	var resultBalance *CreditBalance
 	txErr := dbkit.WithTenantSession(ctx, s.db, func(session *gorm.DB) error {
@@ -286,15 +282,15 @@ func (s *CreditService) PreDeduct(ctx context.Context, in PreDeductInput) (*Cred
 		// (id, tenant_id) as inserted==false with NO error (see
 		// insertIdempotent's own doc comment for why that matters): the
 		// transaction stays healthy, and the read-back below -- the
-		// idempotent retry's answer -- runs on it either way. On PostgreSQL
-		// the shape this replaced -- catching the insert's unique-violation
-		// error and reading the existing row back on the SAME transaction
-		// -- could not work: the violation aborts the whole transaction
-		// (SQLSTATE 25P02), the read-back failed, and a retried PreDeduct
-		// whose first attempt had already committed returned an error
-		// instead of its own earlier reservation, breaking the money path
-		// on the one dialect SQLite's tolerance of a failed statement never
-		// exposed (P1-1, proven against real PostgreSQL by
+		// idempotent retry's answer -- runs on it either way. The insert
+		// must never raise a unique-violation error: on PostgreSQL the
+		// violation aborts the whole transaction (SQLSTATE 25P02), the
+		// read-back could not run on it, and a retried PreDeduct whose
+		// first attempt had already committed would return an error
+		// instead of its own earlier reservation -- the money path failing
+		// on the one dialect SQLite's tolerance of a failed statement
+		// inside a transaction never exposes (proven against real
+		// PostgreSQL by
 		// go/billing/integration_test/postgres_credit_transactions_test.go).
 		inserted, insertErr := s.transactions.insertIdempotent(ctx, session, row)
 		if insertErr != nil {
@@ -430,9 +426,8 @@ func (s *CreditService) resolve(
 				// The ledger row transitioned but the balance guard did
 				// not hold -- a bookkeeping inconsistency between
 				// Reserved and the outstanding pending transactions, not
-				// a caller error. Round 1 has no compensating recovery
-				// path for this beyond surfacing it loudly; see AGENTS.md's
-				// Known limitations.
+				// a caller error. No compensating recovery path exists
+				// for this beyond surfacing it loudly.
 				return ErrCreditBalanceInconsistent.WithParam("idempotency_key", idempotencyKey)
 			}
 			result = row
@@ -576,9 +571,9 @@ type ExpireInput struct {
 // its CreditTransaction.ID is a fresh uuid.NewString() every call, so a
 // retried call -- a scheduler that crashed after its first attempt
 // committed, rerunning without knowing -- would deduct a second time.
-// That is the single-phase shape Expire has shipped since round 1, and it
-// stays available for one-off, operator-driven expiries (an ad-hoc policy
-// deduction naming its own reason).
+// That is the one-off, operator-driven shape: an ad-hoc policy deduction
+// naming its own reason, deliberately never the shape a retrying caller
+// may use.
 //
 // A keyed Expire is the contract a jobs-driven expiry sweep needs: the
 // key becomes the row's own ID, and the insert runs through the same ON
@@ -606,8 +601,7 @@ type ExpireInput struct {
 // product policy this module's data model cannot anchor (no
 // grant-vintage or expiry-window data exists in the ledger), and the
 // scheduler that runs such a policy is a host's jobs wiring. This method
-// supplies the at-most-once write that scheduler needs, never the policy;
-// see AGENTS.md's Known limitations for the recorded dependency.
+// supplies the at-most-once write that scheduler needs, never the policy.
 func (s *CreditService) Expire(ctx context.Context, in ExpireInput) (*CreditTransaction, error) {
 	if in.Amount <= 0 {
 		return nil, ErrInvalidAmount.WithParam("amount", in.Amount)
@@ -910,11 +904,10 @@ func (s *CreditService) readBalanceForAudit(ctx context.Context, session *gorm.D
 // dbkit.WithTenantSession transaction has already committed, never from
 // inside the closure, so audit.Emit's own write opens a fresh,
 // uncontended database session rather than nesting inside one still open
-// -- the identical same-file SQLITE_BUSY hazard root CLAUDE.md's and
-// go/dbkit/AGENTS.md's "Audit trail collection" section document for
-// AuditBus's automatic write-capture plugin, sidestepped here exactly the
-// way notes' own handler sidesteps it: by construction, never by
-// avoiding the shared connection.
+// -- the same-file SQLITE_BUSY hazard of AuditBus's automatic
+// write-capture plugin, sidestepped here exactly the way notes' own
+// handler sidesteps it: by construction, never by avoiding the shared
+// connection.
 //
 // The Resource this ledger's five audited actions all record is the
 // CreditTransaction row itself (Type "credit_transaction", ID txID) --
@@ -924,11 +917,11 @@ func (s *CreditService) readBalanceForAudit(ctx context.Context, session *gorm.D
 // not some other aggregate it happens to touch. Result is always
 // {Success: true}: every call site below runs only once its own mutating
 // transaction has already committed, so an audited action that reaches
-// this method by definition succeeded -- the "must never write an audit
-// record for something that did not happen" half of this round's own
-// brief is enforced by each call site's own reserved/resolved guard
-// (PreDeduct, resolve) or its single-phase always-succeeds shape (Grant,
-// Expire), never by branching inside this shared helper.
+// this method by definition succeeded -- an audit record is never written
+// for something that did not happen this call, enforced by each call
+// site's own reserved/resolved guard (PreDeduct, resolve) or its
+// single-phase always-succeeds shape (Grant, Expire), never by branching
+// inside this shared helper.
 //
 // Changes.After carries the delta this specific action applied (amount,
 // and reason when the caller supplied one) plus, best effort, the
@@ -979,10 +972,10 @@ func (s *CreditService) emitCreditAudit(ctx context.Context, action string, tena
 		// See this method's own doc comment above for why the operation
 		// that produced txID is never turned into a failure by this: the
 		// underlying credit mutation already committed by the time this
-		// runs. An Error-level structured log line is this milestone's
-		// whole "must alert" mechanism, per docs/internal/10-compliance-
-		// and-audit.md's rule -- the same choice notes' own
-		// recordNoteCreatedAudit makes for the identical situation.
+		// runs. An Error-level structured log line is the whole "must
+		// alert" mechanism for the lost-audit-write window -- the same
+		// choice notes' own recordNoteCreatedAudit makes for the identical
+		// situation.
 		obs.FromContext(ctx).Error("billing.credit audit event emit failed",
 			"action", action, "credit_transaction_id", txID, "tenant_id", string(tenant), "error", err)
 	}

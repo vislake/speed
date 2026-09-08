@@ -4,9 +4,8 @@ import "github.com/vislake/speed/go/pkgcore/apperr"
 
 // This file is admin's error catalog. Every value here is an *apperr.Error
 // whose Code follows "<module>.<reason>", and every Code has a matching
-// entry in BOTH locales/zh-CN.toml and locales/en-US.toml, mirroring every
-// other module's identical convention (see go/authn/errors.go's own header
-// for the full rationale, which applies here unchanged).
+// entry in both locales/zh-CN.toml and locales/en-US.toml, the convention
+// every module's error catalog follows.
 //
 // Holding these as package-level sentinels is safe because *apperr.Error's
 // builders derive a new value instead of mutating the receiver. Match on
@@ -16,10 +15,10 @@ var (
 	// requested tenant id.
 	ErrTenantNotFound = apperr.NotFound("admin.tenant_not_found")
 
-	// ErrTenantAlreadyExists reports a manual-registration attempt
-	// (D3's second population path) for a tenant id the ledger already
-	// carries a row for -- whether from an earlier manual registration or
-	// from the event-driven lazy population path.
+	// ErrTenantAlreadyExists reports a manual-registration attempt for a
+	// tenant id the ledger already carries a row for -- whether from an
+	// earlier manual registration or from the event-driven lazy population
+	// path.
 	ErrTenantAlreadyExists = apperr.Conflict("admin.tenant_already_exists")
 
 	// ErrTenantIDRequired is returned when a manual tenant registration
@@ -29,12 +28,12 @@ var (
 	// ErrTenantStatusInvalid is returned by the tenant-ledger PATCH handler
 	// when the request names a status outside the API enum's closed
 	// vocabulary ("active"/"suspended"), validated through the generated
-	// api.AdminTenantStatus.Valid() before anything is persisted (P2-5's
-	// fix). tenancy's own gate (tenant_status.go) refuses ANY status other
-	// than active -- including a value this version does not define -- so
-	// an out-of-vocabulary string persisted verbatim would silently take
-	// the tenant offline until an operator noticed; refusing the write
-	// here keeps that gate from ever being fed garbage.
+	// api.AdminTenantStatus.Valid() before anything is persisted. tenancy's
+	// own gate refuses any status other than active -- including a value
+	// this version does not define -- so an out-of-vocabulary string
+	// persisted verbatim would silently take the tenant offline until an
+	// operator noticed; refusing the write here keeps that gate from ever
+	// being fed garbage.
 	ErrTenantStatusInvalid = apperr.Invalid("admin.tenant_status_invalid")
 
 	// ErrGrantNotFound reports that no admin_impersonation_grants row
@@ -42,8 +41,8 @@ var (
 	ErrGrantNotFound = apperr.NotFound("admin.impersonation_grant_not_found")
 
 	// ErrImpersonationReasonRequired reports a start-impersonation request
-	// with no Reason: docs/internal/23-admin.md section 5 requires the
-	// operator to state one, itself part of the audit trail.
+	// with no Reason: the operator must state one, the reason itself part
+	// of the audit trail.
 	ErrImpersonationReasonRequired = apperr.Invalid("admin.impersonation_reason_required")
 
 	// ErrImpersonationTargetRequired reports a start-impersonation request
@@ -60,14 +59,14 @@ var (
 	// ErrImpersonationTargetForbidden refuses a start-impersonation request
 	// naming rbac.SystemDomain -- the platform-operations pseudo-tenant --
 	// as TargetTenantID. admin's own routes evaluate every admin:*
-	// permission in exactly that domain (D1), so a grant scoped to it would
-	// let the substituted Principal ImpersonationMiddleware installs reach
+	// permission in exactly that domain, so a grant scoped to it would let
+	// the substituted Principal ImpersonationMiddleware installs reach
 	// whatever admin:* permissions the TARGET happens to hold there --
 	// turning the very mechanism meant to cap an impersonating admin at
-	// the target's own access (D5 property (b)) into a path for picking a
-	// MORE privileged target instead. This is refused unconditionally,
-	// never merely gated on a stricter permission: no round-1 permission
-	// is fine-grained enough to distinguish "may impersonate an ordinary
+	// the target's own access into a path for picking a MORE privileged
+	// target instead. This is refused unconditionally, never merely gated
+	// on a stricter permission: no permission in the catalog is
+	// fine-grained enough to distinguish "may impersonate an ordinary
 	// business-tenant user" from "may impersonate a fellow platform
 	// operator", so the only safe default is refusing the latter outright.
 	// It is the subject-side half of the SystemDomain boundary: the
@@ -84,8 +83,8 @@ var (
 	// ErrImpersonationTargetNotFound is returned by Start when the target
 	// user id does not resolve to any real authn account at all -- surfaced
 	// while resolving the target's own locale for the mandatory security
-	// notification (P1-1's fix), since a ghost user id can never receive
-	// one. No grant is ever written when this is returned.
+	// notification, since a ghost user id can never receive one. No grant
+	// is ever written when this is returned.
 	ErrImpersonationTargetNotFound = apperr.NotFound("admin.impersonation_target_not_found")
 
 	// ErrImpersonationNotificationUnavailable is returned by Start when the
@@ -95,70 +94,68 @@ var (
 	// cross-tenant system-context grant could not be entered, or the
 	// notification itself could not even be enqueued. Start refuses the
 	// whole call rather than writing a grant behind a notification nobody
-	// will ever receive (P1-1's fix: previously this failure was logged
-	// and swallowed behind a 201).
+	// will ever receive.
 	ErrImpersonationNotificationUnavailable = apperr.Internal("admin.impersonation_notification_unavailable")
 
 	// ErrPrincipalRequired is returned by every admin HTTP operation when
 	// the request carries no verified authn.Principal -- every route this
 	// module mounts sits downstream of authn.Middleware in a correctly
-	// wired host (see AGENTS.md's wiring section), so this is a wiring
-	// failure, not an expected runtime condition, but it must still fail
-	// closed rather than invent an actor id for the audit trail.
+	// wired host, so this is a wiring failure, not an expected runtime
+	// condition, but it must still fail closed rather than invent an actor
+	// id for the audit trail.
 	ErrPrincipalRequired = apperr.Unauthorized("admin.principal_required")
 
 	// The four wiring errors below are boot-time failures Module.Register
 	// returns when a mandatory host seam was never injected through the
-	// matching With* option -- the same pattern org's ErrEmailIndexerRequired
-	// and config's ErrCipherRequired follow. They are never returned from
-	// an HTTP handler; they fail Kernel.Bootstrap itself, naming exactly
-	// which option the host forgot.
+	// matching With* option. They are never returned from an HTTP handler;
+	// they fail Kernel.Bootstrap itself, naming exactly which option the
+	// host forgot.
 
 	// ErrAuthnServiceRequired is returned when no *authn.Service was
-	// injected with WithAuthn -- D6's cross-tenant user search has nothing
+	// injected with WithAuthn -- the cross-tenant user search has nothing
 	// to search without one.
 	ErrAuthnServiceRequired = apperr.Internal("admin.authn_service_required")
 
 	// ErrOrgModuleRequired is returned when no *org.Module was injected
-	// with WithOrg -- D6's membership composition and D3's root-node
-	// discriminator both depend on it.
+	// with WithOrg -- the search path's membership composition and the
+	// subscriber's root-node discriminator both depend on it.
 	ErrOrgModuleRequired = apperr.Internal("admin.org_module_required")
 
 	// ErrComplianceModuleRequired is returned when no *compliance.Module
-	// was injected with WithCompliance -- D7's audit query HTTP shell has
+	// was injected with WithCompliance -- the audit-query HTTP surface has
 	// no read path without one.
 	ErrComplianceModuleRequired = apperr.Internal("admin.compliance_module_required")
 
 	// ErrNotificationModuleRequired is returned when no *notification.Module
-	// was injected with WithNotification -- D5's mandatory
+	// was injected with WithNotification -- the mandatory
 	// impersonation-started security notification has no transport
 	// without one.
 	ErrNotificationModuleRequired = apperr.Internal("admin.notification_module_required")
 
 	// ErrQueueRequired is returned when no jobs.Queue was injected with
-	// WithQueue -- D7's export leg (POST /api/v1/admin/audit-events/export)
-	// has no way to run compliance.ExportService.Export asynchronously
-	// without one.
+	// WithQueue -- the audit-export leg
+	// (POST /api/v1/admin/audit-events/export) has no way to run
+	// compliance.ExportService.Export asynchronously without one.
 	ErrQueueRequired = apperr.Internal("admin.queue_required")
 
-	// ErrRBACServiceRequired is returned by every RoleService (D8) method
-	// and by ImpersonationService.Start (D5) when Module.AttachRBAC has
-	// not been called yet. Unlike the six wiring errors above, this is
-	// NOT a Register-time (Bootstrap) failure: rbac.Service does not
-	// exist until the host calls rbacModule.Attach(reg), which must run
+	// ErrRBACServiceRequired is returned by every RoleService method and
+	// by ImpersonationService.Start when Module.AttachRBAC has not been
+	// called yet. Unlike the wiring errors above, this is NOT a
+	// Register-time (Bootstrap) failure: rbac.Service does not exist
+	// until the host calls rbacModule.Attach(reg), which must run
 	// strictly AFTER Bootstrap returns -- a full cycle later than admin's
 	// own Register runs. See role.go's own RoleService doc comment and
-	// Module.AttachRBAC for the full reasoning. A request reaching D8's
-	// HTTP surface before the host has called AttachRBAC gets this
-	// refusal instead of a nil-service panic; an impersonation Start gets
-	// it instead of issuing a grant that could outlive its
+	// Module.AttachRBAC for the full reasoning. A request reaching the
+	// role-management HTTP surface before the host has called AttachRBAC
+	// gets this refusal instead of a nil-service panic; an impersonation
+	// Start gets it instead of issuing a grant that could outlive its
 	// administrator's admin:impersonate permission -- the automatic
-	// permission-revocation end of a live grant (P2-3's fix) depends on
-	// the same attached service (impersonation_service.go's own rbacSvc
-	// doc comment).
+	// permission-revocation end of a live grant depends on the same
+	// attached service (impersonation_service.go's own rbacSvc doc
+	// comment).
 	ErrRBACServiceRequired = apperr.Internal("admin.rbac_service_required")
 
-	// ErrRolesSystemDomainForbidden is returned by every RoleService (D8)
+	// ErrRolesSystemDomainForbidden is returned by every RoleService
 	// tenant-naming write when the request names rbac.SystemDomain -- the
 	// platform-operations pseudo-tenant -- as the tenant to write into.
 	// The role-management surface is gated on admin:roles_manage, and the
@@ -167,12 +164,12 @@ var (
 	// tenant as an ordinary request-body tenant would let a roles_manage-
 	// only caller define a role carrying admin:impersonate (or any other
 	// admin:*) inside the system domain and bind it to themselves --
-	// collapsing the nine admin permission boundaries D1 draws into one.
-	// SystemDomain's role catalog and bindings are the platform's internal
-	// domain, administered by hosts out of band, directly against
-	// rbac.Service under a system-tenant context (the shape the reference
-	// app's seedDemoPlatformStaff takes), never through this surface. This
-	// is refused unconditionally, never merely gated on a stricter
+	// collapsing the admin permission boundaries into one. SystemDomain's
+	// role catalog and bindings are the platform's internal domain,
+	// administered by hosts out of band, directly against rbac.Service
+	// under a system-tenant context (the shape the reference app's
+	// seedDemoPlatformStaff takes), never through this surface. This is
+	// refused unconditionally, never merely gated on a stricter
 	// permission: no admin permission is fine-grained enough to distinguish
 	// "may manage a customer tenant's roles" from "may delegate
 	// platform-operator authority", so the only safe default is refusing
@@ -182,82 +179,74 @@ var (
 	// nor WRITTEN into it through the role surface.
 	ErrRolesSystemDomainForbidden = apperr.Invalid("admin.roles_system_domain_forbidden")
 
-	// ErrUsageModulesNotWired is returned by UsageService.Summary (D9)
-	// when NEITHER go/metering nor go/billing was ever wired through
+	// ErrUsageModulesNotWired is returned by UsageService.Summary when
+	// NEITHER go/metering nor go/billing was ever wired through
 	// WithMetering/WithBilling. A dashboard with nothing at all to stitch
 	// is a wiring gap, not a partial answer -- when only one of the two
 	// is wired, Summary instead answers with that one dimension present
 	// and the other absent from every row, never refusing outright.
 	ErrUsageModulesNotWired = apperr.Internal("admin.usage_modules_not_wired")
 
-	// ErrExportOperatorRequired is returned by ExportService.Enqueue (D7's
-	// export leg) when called with no operator user id -- P1-2's fix:
-	// every admin write path attributes the calling operator, and an
-	// export enqueued with nothing to attribute it to would leave "who
-	// exported this tenant's audit trail" permanently unanswerable. The
-	// HTTP handler always supplies one (callerUserID, exactly like every
-	// other admin write path); this is reachable only through a direct,
-	// non-HTTP caller of Enqueue.
+	// ErrExportOperatorRequired is returned by ExportService.Enqueue when
+	// called with no operator user id: every admin write path attributes
+	// the calling operator, and an export enqueued with nothing to
+	// attribute it to would leave "who exported this tenant's audit
+	// trail" permanently unanswerable. The HTTP handler always supplies
+	// one (callerUserID, exactly like every other admin write path); this
+	// is reachable only through a direct, non-HTTP caller of Enqueue.
 	ErrExportOperatorRequired = apperr.Invalid("admin.export_operator_required")
 
 	// ErrRequestBodyInvalid is returned by every handler.go operation whose
 	// request body failed to json.Decode -- malformed JSON or a field of
 	// the wrong wire type, nothing to do with which fields the decoded
-	// value then carries. P3-5's fix: six sites used to wrap a genuine
-	// decode failure in ErrTenantIDRequired (five of them) or
-	// ErrImpersonationTargetRequired (the sixth), both semantically wrong
-	// -- a caller who sent syntactically broken JSON was told "you forgot
-	// the tenant id" or "you forgot the target", neither of which is what
-	// happened. This code is used ONLY at the decode step itself; every
-	// site's own SEPARATE, correct field-validation refusal (an
-	// actually-missing tenant id or target AFTER a successful decode) is
-	// unchanged.
+	// value then carries. This code is used ONLY at the decode step
+	// itself; every site's own SEPARATE, correct field-validation refusal
+	// (an actually-missing tenant id or target AFTER a successful decode)
+	// is a different error.
 	ErrRequestBodyInvalid = apperr.Invalid("admin.request_body_invalid")
 
-	// ErrImpersonationTargetNotMember is returned by ImpersonationService.Start
-	// (P3-4's fix) when the target user id resolves to a real authn account
-	// but that account holds no membership in the target tenant at all --
-	// a grant scoped to a tenant the target does not even belong to would
-	// substitute an identity that could never legitimately act there in
-	// the first place.
+	// ErrImpersonationTargetNotMember is returned by
+	// ImpersonationService.Start when the target user id resolves to a
+	// real authn account but that account holds no membership in the
+	// target tenant at all -- a grant scoped to a tenant the target does
+	// not even belong to would substitute an identity that could never
+	// legitimately act there in the first place.
 	ErrImpersonationTargetNotMember = apperr.Invalid("admin.impersonation_target_not_member")
 
 	// ErrImpersonationTargetValidationUnavailable is returned by Start
-	// (P3-4's fix) when the target's existence or tenant membership could
-	// not be determined for a reason OTHER than "does not exist" or "not a
+	// when the target's existence or tenant membership could not be
+	// determined for a reason OTHER than "does not exist" or "not a
 	// member" -- the cross-tenant system-context grant needed to check
 	// membership could not be entered, or the membership lookup itself
 	// failed. Start refuses rather than writing a grant no one has
 	// actually verified the target may even use.
 	ErrImpersonationTargetValidationUnavailable = apperr.Internal("admin.impersonation_target_validation_unavailable")
 
-	// ErrImpersonationNotWired is returned by Start (P2-4's fix) when the
+	// ErrImpersonationNotWired is returned by Start when the
 	// ImpersonationService was never attached by Module.Register's attach
-	// call -- the pre-Register window, reachable through
-	// Module.Impersonation() before Bootstrap, and, before the fix, the
-	// state the exported NewImpersonationService constructor handed any
-	// caller. A service in that state cannot run the mandatory
-	// validate-and-notify pass (target existence and locale resolution,
-	// tenant-membership validation, and the security notification), so
-	// Start refuses outright rather than writing a grant no one has
-	// validated or notified; attach always runs during Register with the
-	// full mandatory seam set, so a correctly wired host never sees this.
+	// call -- the state a service is in before Register runs, reachable
+	// through Module.Impersonation() before Bootstrap. A service in that
+	// state cannot run the mandatory validate-and-notify pass (target
+	// existence and locale resolution, tenant-membership validation, and
+	// the security notification), so Start refuses outright rather than
+	// writing a grant no one has validated or notified; attach always
+	// runs during Register with the full mandatory seam set, so a
+	// correctly wired host never sees this.
 	ErrImpersonationNotWired = apperr.Internal("admin.impersonation_not_wired")
 
 	// ErrTenantConcurrentUpdate is returned by TenantRepository.Update
-	// (P3-3's fix) when the conditional UPDATE's guard finds the row no
-	// longer matches what was read moments earlier -- a concurrent PATCH
-	// (suspend racing resume, say) already landed in between. The caller's
-	// own patch is refused rather than silently overwriting the
-	// concurrent write with a stale read; a retry re-reads the current row
-	// and reapplies its intent against it.
+	// when the conditional UPDATE's guard finds the row no longer matches
+	// what was read moments earlier -- a concurrent PATCH (suspend racing
+	// resume, say) already landed in between. The caller's own patch is
+	// refused rather than silently overwriting the concurrent write with
+	// a stale read; a retry re-reads the current row and reapplies its
+	// intent against it.
 	ErrTenantConcurrentUpdate = apperr.Conflict("admin.tenant_concurrent_update")
 )
 
 // errorCodes lists every code this module can return, in catalog order. It
 // exists so the locale files and the catalog cannot drift apart unnoticed
-// -- errors_test.go walks it against both embedded .toml files, mirroring
-// go/authn/errors.go's identical errorCodes convention.
+// -- errors_test.go walks it against both embedded .toml files.
 var errorCodes = []string{
 	ErrTenantNotFound.Code,
 	ErrTenantAlreadyExists.Code,

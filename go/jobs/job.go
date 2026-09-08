@@ -12,8 +12,9 @@ import (
 // supplied by the caller.
 type JobID string
 
-// Status is a Job's lifecycle state. See AGENTS.md for the full state
-// diagram and transition table.
+// Status is a Job's lifecycle state. The transitions between the states
+// are pinned by the queue implementations' shared conformance suite
+// (queuetest/assert_conforms.go).
 type Status string
 
 const (
@@ -42,12 +43,11 @@ const (
 
 	// StatusCancelled is terminal: Queue.Cancel was called. A Job already
 	// StatusRunning when cancelled is allowed to keep executing to its own
-	// completion or timeout (the standalone deployment mode's
+	// completion or timeout — the standalone deployment mode's
 	// implementation in this package does not preempt a running Handler
-	// goroutine — see AGENTS.md's Known
-	// limitations), but whatever outcome it eventually reaches is
-	// discarded in favor of StatusCancelled, which is never overwritten
-	// once set.
+	// goroutine, a known limitation — but whatever outcome it eventually
+	// reaches is discarded in favor of StatusCancelled, which is never
+	// overwritten once set.
 	StatusCancelled Status = "cancelled"
 )
 
@@ -74,7 +74,7 @@ func (s Status) Terminal() bool {
 // at the same position in their shares, higher values run first, and two
 // Jobs of equal Priority are claimed in ScheduledAt order (earliest
 // first). asynq.Queue is coarser still: Priority selects one of three
-// weighted queues (see AGENTS.md's "Priority → queue mapping").
+// fixed asynq queues (see queue/asynq/store.go's queueForPriority).
 type Priority int
 
 const (
@@ -99,14 +99,13 @@ const (
 // whose job rows are never deleted — readable back by any caller that can
 // Get the Job. Task.Payload's warning applies unchanged to what a Handler
 // writes here: no credentials, bearer tokens or personal data. The
-// concrete precedent is go/admin's audit-export job, which once marshalled
-// a one-time sharing delivery token into its result (the P1-B finding,
-// since fixed) — a bearer credential at rest in the jobs table, at odds
-// with the delivery mechanism's own store-only-the-hash design — before
-// review caught it and the result was reshaped to carry the share's facts
-// (id and expiry) while the token died inside the Handler's own frame. If
-// a Handler's output includes something usable exactly once, the result
-// must carry a reference to it, never the thing itself.
+// concrete case is go/admin's audit-export job: its result carries the
+// share's facts (id and expiry), never the one-time sharing delivery
+// token — a bearer credential at rest in the jobs table would be at odds
+// with the delivery mechanism's own store-only-the-hash design, so the
+// token stays inside the Handler's own frame. If a Handler's output
+// includes something usable exactly once, the result must carry a
+// reference to it, never the thing itself.
 type Result struct {
 	Data []byte
 }
@@ -126,9 +125,8 @@ type Job struct {
 	// enqueuing Task.TenantID. A worker rebuilds tenant context from
 	// exactly this field before calling Handle — never from whatever
 	// context the original Queue.Enqueue call happened to run in, which no
-	// longer exists by the time a worker picks the Job up. See AGENTS.md's
-	// "The tenant context trap" section and Handler.Handle's own doc
-	// comment.
+	// longer exists by the time a worker picks the Job up. See
+	// Handler.Handle's own doc comment.
 	TenantID pkgcore.TenantID
 
 	// Payload is the enqueuing Task's opaque, caller-serialized input,
@@ -198,7 +196,7 @@ type Job struct {
 
 // ErrJobNotFound is returned by Queue.Get and Queue.Cancel for an id that
 // does not exist, or that exists under a tenant the caller's context
-// cannot access. Both cases are deliberately indistinguishable — see
-// AGENTS.md — mirroring dbkit.Repository[T].FindByID's documented collapse
-// of the same two cases.
+// cannot access. Both cases are deliberately indistinguishable,
+// mirroring dbkit.Repository[T].FindByID's documented collapse of the
+// same two cases.
 var ErrJobNotFound = apperr.NotFound("jobs.job_not_found")

@@ -1,11 +1,11 @@
--- integration_webhook_subscriptions is go/integration's round-2 table
+-- integration_webhook_subscriptions is go/integration's webhook table
 -- (go/integration/webhook_model.go): one row per outbound webhook a tenant
 -- has configured -- which public event types it wants delivered, and to
--- which URL. Tenant data (docs/internal/04-data-and-tenancy.md), isolation
--- proven by tenancytest.AssertIsolated, never AssertNotTenantScoped.
+-- which URL. Tenant data, isolation proven by tenancytest.AssertIsolated,
+-- never AssertNotTenantScoped.
 --
--- The primary key is (id) alone, matching round 1's integration_api_keys
--- precedent (itself matching go/storage's Object): id is an
+-- The primary key is (id) alone, matching integration_api_keys' precedent
+-- (itself matching go/storage's Object): id is an
 -- application-generated UUID, globally unique on its own, so tenant_id
 -- rides along as a plain, non-key column promoted by the embedded
 -- dbkit.TenantModel.

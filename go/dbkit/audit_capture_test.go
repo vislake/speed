@@ -367,12 +367,11 @@ func TestAuditCapturePlugin_Update_PublishesWriteCapturedEvent(t *testing.T) {
 }
 
 // TestAuditCapturePlugin_SoftDelete_ClassifiesAsUpdateWithRealDiff is the
-// scouting round's own named regression test: soft-delete
+// named regression test for soft-delete capture: soft-delete
 // (Repository[T].Delete against a SoftDeletable model) is, underneath, one
 // UPDATE, and must be captured with Update semantics -- never a hand-rolled
 // extra Delete-semantics event bolted onto Delete's own code, which would
-// duplicate the automatic capture
-// (docs/internal/04-data-and-tenancy.md's delete-semantics section, §4's own named pitfall).
+// duplicate the automatic capture.
 //
 // Checking Operation == "update" alone is not enough to catch the real
 // hazard here: softDelete (repository.go) must build a real *T and write

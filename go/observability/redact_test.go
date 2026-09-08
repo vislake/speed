@@ -127,9 +127,8 @@ func TestRedact_TokenStemDoesNotOverRedactUnrelatedWords(t *testing.T) {
 }
 
 // TestRedact_TokenStemWordBoundary_AdversarialVocabulary is a broader
-// adversarial pass on P2-5's word-boundary fix, checked in both
-// directions at once against a wider vocabulary than the original
-// regression test:
+// adversarial pass on the "token" stem's word-boundary rule, checked in
+// both directions at once against a wide vocabulary:
 //
 //  1. legitimate diagnostic keys where "token" is merely a substring of a
 //     longer, different word must survive unredacted (the over-redaction
@@ -145,10 +144,10 @@ func TestRedact_TokenStemDoesNotOverRedactUnrelatedWords(t *testing.T) {
 // identically. The underscore-joined forms below ("access_token") mark
 // their boundaries with a non-letter; the camelCase forms ("accessToken",
 // "tokenValue") mark the same boundaries with a lowercase-to-uppercase
-// case transition instead -- the regression class this round closes, after
-// the original fix's letter-only boundary check stopped treating "Token"
-// following a lowercase letter as a whole word and let exactly these key
-// names leak their values again. Both styles appear in both directions:
+// case transition instead -- a letter-only boundary check would stop
+// treating "Token" following a lowercase letter as a whole word and let
+// exactly these key names leak their values again. Both styles appear in
+// both directions:
 // prompt_tokens and its camelCase plural "promptTokens" are equally
 // legitimate usage counts that must survive, and a bare "token" segment
 // joined either way is equally secret-bearing.
@@ -216,12 +215,11 @@ func TestRedact_TokenStemWordBoundary_AdversarialVocabulary(t *testing.T) {
 		"TOKEN", "x_auth_token",
 		// Separator-free camelCase compounds, both boundary directions:
 		// "Token" following a lowercase letter (the accessToken family --
-		// the security regression this round fixes: the word-boundary
-		// check's letter-only left boundary rejected these, so the key
-		// rule stopped redacting them entirely and only the weaker
-		// value-shape net remained) and "token" followed by an uppercase
-		// letter starting the next word (tokenValue). Each was redacted
-		// before the word-boundary narrowing and must redact again.
+		// a letter-only left boundary would reject these, so the key rule
+		// would stop redacting them entirely and only the weaker
+		// value-shape net would remain) and "token" followed by an
+		// uppercase letter starting the next word (tokenValue). Both must
+		// redact.
 		"accessToken", "sessionToken", "refreshToken", "apiToken",
 		"userToken", "idToken", "tokenValue",
 		// Run-together compounds whose last morpheme IS the stem, with no
@@ -587,11 +585,10 @@ func TestRedact_SecretShapesInValues(t *testing.T) {
 			// The same three names mid-string, behind a benign first
 			// parameter: the gate reaches a non-leading parameter only
 			// through its any-anchor name probe, so these rows pin the
-			// gate/regexp equivalence for the non-leading anchor -- the
-			// shape this round's regression is about (bare form bodies
-			// carry neither '?' nor '://', and a secret parameter that is
-			// not first used to leave the gate false and skip the
-			// pattern entirely).
+			// gate/regexp equivalence for the non-leading anchor (bare
+			// form bodies carry neither '?' nor '://', and a secret
+			// parameter that is not first must not leave the gate false
+			// and skip the pattern entirely).
 			name:     "apikey mid-string in a bare form body",
 			value:    "scope=read&apikey=abCdefgh1234567890",
 			secret:   "abCdefgh1234567890",
@@ -911,8 +908,7 @@ func TestRedact_NoPerAttributeAllocationOnBenignRecord(t *testing.T) {
 	}
 }
 
-// TestRedact_ExemptKeysUnderSensitivePaths pins the interaction the
-// exemption's own documentation used to overstate: what happens when a
+// TestRedact_ExemptKeysUnderSensitivePaths pins what happens when a
 // never-redact correlation key sits under a path that names a secret.
 // TestRedact_CorrelationKeysNeverRedacted above logs correlation keys
 // under no sensitive path at all, so nothing exercised this intersection
@@ -975,10 +971,9 @@ func TestRedact_ExemptKeysUnderSensitivePaths(t *testing.T) {
 	})
 }
 
-// TestRedact_EmptyKeyAttributes_ValueRulesStillApply is the regression
-// for a total redaction bypass: redactAttr used to return an attribute
-// with an empty key untouched, on the theory that an empty key names no
-// secret. But slog's inline-group idiom -- slog.Group("", ...) -- attaches
+// TestRedact_EmptyKeyAttributes_ValueRulesStillApply pins the empty-key
+// bypass shape: redactAttr must not return an attribute with an empty key
+// untouched, on the theory that an empty key names no secret. But slog's inline-group idiom -- slog.Group("", ...) -- attaches
 // an attribute whose key is empty while its VALUE is a group of named
 // children, and the built-in sinks render those children normally (an
 // empty group key adds no qualification, so the children appear inline,
@@ -1049,9 +1044,9 @@ func TestRedact_EmptyKeyAttributes_ValueRulesStillApply(t *testing.T) {
 }
 
 // TestRedact_EmptyKeyScalarUnderSensitiveGroupPath_RedactedWholesale is
-// the regression for a path-rule bypass in redactAttr's empty-key branch
-// (P1-2): the branch used to skip the pathSensitive(groups) check every
-// sibling branch runs, reasoning only about what the empty key ITSELF
+// the regression for a path-rule bypass in redactAttr's empty-key branch:
+// the branch must run the pathSensitive(groups) check every sibling
+// branch runs, not reason only about what the empty key ITSELF
 // contributes to an attribute's key path -- true for the key's own empty
 // segment, over-broad for the branch, which already holds the segments in
 // groups as an independent input. A logger-level WithGroup("credentials")

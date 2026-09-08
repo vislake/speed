@@ -507,14 +507,12 @@ func (s *Service) signInWithExternalIdentity(ctx context.Context, external *Exte
 }
 
 // resolveSocialAccount decides which account an unrecognised external
-// identity belongs to, and is where docs/internal/05's first social-login
-// security rule is enforced.
-//
-// The rule: an existing account may be linked to a new external identity
-// automatically ONLY when the provider asserts it verified the address AND
-// the platform has put that provider on its trusted list. Anything else means
-// the person must sign in the way they already can and bind the identity from
-// their settings page.
+// identity belongs to. It enforces the module's automatic-link rule for the
+// social channels: an existing account may be linked to a new external
+// identity automatically ONLY when the provider asserts it verified the
+// address AND the platform has put that provider on its trusted list.
+// Anything else means the person must sign in the way they already can and
+// bind the identity from their settings page.
 //
 // Why both conditions and not just the first: "verified" is the provider's
 // word, and the provider is a third party a deployment chose to accept logins
@@ -714,11 +712,11 @@ func (s *Service) ListIdentities(ctx context.Context, userID string) ([]UserIden
 
 // UnbindIdentity detaches an external identity from its owner.
 //
-// It refuses when the removal would leave the account with no way in at all
-// (docs/internal/05's fourth social-login rule). The refusal matters because
-// there is no self-service recovery from the state it prevents: an account
-// with no password, no verified phone number and no remaining identity cannot
-// be signed in to, and cannot prove ownership to have one restored.
+// It refuses when the removal would leave the account with no way in at all.
+// The refusal matters because there is no self-service recovery from the
+// state it prevents: an account with no password, no verified phone number
+// and no remaining identity cannot be signed in to, and cannot prove
+// ownership to have one restored.
 //
 // The count guard above is deliberately applied twice. The read-then-delete
 // check here answers the ordinary sequential case cheaply, but it is stale

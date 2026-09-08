@@ -270,9 +270,9 @@ func TestAllow_ResetAfter_TracksTimeRemainingInWindow(t *testing.T) {
 
 // TestAllow_SaturatingClient_ConvergesToRateMinusOnePerWindow proves a
 // documented, deliberately-kept characteristic of the weighted formula
-// itself (see AGENTS.md's Known limitations, and slidingWindowLimiter's own
-// doc comment, "Saturating clients permanently lose one slot per window"):
-// once a window's recorded count has reached limit.Rate, the Rate-th
+// itself (see slidingWindowLimiter's own doc comment, "Saturating clients
+// permanently lose one slot per window"): once a window's recorded count
+// has reached limit.Rate, the Rate-th
 // sequential Allow call of every window after that is denied
 // unconditionally, forever -- a client that always attempts exactly Rate
 // hits per window is admitted the full Rate only in the very first window a
@@ -347,21 +347,19 @@ func TestAllow_SaturatingClient_ConvergesToRateMinusOnePerWindow(t *testing.T) {
 // distinct code "ratelimit.rate_one_unsupported" (so a host whose Rate-1
 // configuration is refused can recognize exactly what was wrong).
 //
-// Before the refusal existed, this exact input was accepted: the very first
-// hit on a fresh key was Allowed and every hit in every later window was
-// denied forever -- the permanent-lockout shape the former
-// TestAllow_SaturatingClient_Rate1_LocksOutPermanently used to pin -- the
-// opposite of the "once per Per" semantics the caller meant, arriving in
-// production only once the window rolled over (a day after the first hit,
-// for the Per: 24h a host would pair with "once a day").
+// A Rate-1 Limit's literal semantics cannot be honoured by the weighted
+// formula: the first-ever hit would be Allowed and every hit in every
+// later window denied forever -- the permanent lockout a host pairing
+// Rate: 1 with Per: 24h would meet a day after the key's first use, the
+// opposite of the "once per Per" semantics it meant (see
+// ErrRateOneUnsupported's own doc comment for the full reasoning).
 //
 // The erroringKVStore wrapper below (failMethod IncrByFloatWithTTL) makes
-// the "before the store is ever touched" promise part of the assertion: on
-// unfixed code Allow(Rate: 1) reaches the wrapper's failing
-// IncrByFloatWithTTL and surfaces the wrapper's own error, so the
-// ErrInvalidLimit assertions fail; on fixed code validate refuses first and
-// the wrapper is never reached. Either way the failure is deterministic,
-// with no timing involved.
+// the "before the store is ever touched" promise part of the assertion:
+// if validate ever stopped short of refusing a Rate-1 Limit, Allow would
+// reach the wrapper's failing IncrByFloatWithTTL and surface the
+// wrapper's own error instead, failing the ErrInvalidLimit assertions.
+// Deterministic, with no timing involved.
 func TestAllow_RateOne_RefusedWithCodedReasonBeforeStoreTouched(t *testing.T) {
 	limit := Limit{Rate: 1, Per: time.Hour}
 	ctx := context.Background()
@@ -449,12 +447,11 @@ func TestAllow_WindowExpiry_OldWindowKeyExpires(t *testing.T) {
 // that already exists -- isolating "many concurrent hits against a live
 // key" from "many concurrent hits racing to create a fresh one", which
 // TestAllow_ConcurrentFirstHits_SameFreshKey_NoIncrementLostAndTTLAttached
-// covers separately (pkgcore.KVStore.IncrByFloatWithTTL makes that race-free
-// too, closing what used to be this package's one remaining concurrency gap
-// -- see slidingWindowLimiter's doc comment, "The TTL-attachment race,
-// closed"). Both scenarios are now equally covered; this test keeps its
-// warm-up because it is still the cleanest way to isolate "concurrent hits
-// against a live key" as its own, narrower claim.
+// covers separately (pkgcore.KVStore.IncrByFloatWithTTL makes a fresh
+// key's creation race-free too -- see slidingWindowLimiter's doc comment,
+// "The TTL-attachment race"). This test keeps its warm-up because it is
+// the cleanest way to isolate "concurrent hits against a live key" as its
+// own, narrower claim.
 //
 // The outcome is not just bounded but exactly determined: with Per a full
 // minute and no prior activity, every one of the 200 concurrent calls lands
@@ -568,16 +565,14 @@ func TestAllow_ContextCanceled_ReturnsContextError(t *testing.T) {
 // test can compute how many real increments landed against the key
 // regardless of which code path Allow takes to get there.
 //
-// This models a concurrent caller's increment landing in the exact
-// Get-to-Set gap the pre-fix attachWindowTTL left open: attachWindowTTL Gets
-// the key's current value and then Sets it back with a ttl attached, and
-// anything that increments the key in between those two calls is exactly
-// what this wrapper's Set override reproduces deterministically, with no
-// goroutines or scheduler luck involved (see
-// TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost below for the actual
-// regression proof, and slidingWindowLimiter's former "The TTL-attachment
-// race" doc comment, since replaced by pkgcore.KVStore.IncrByFloatWithTTL's
-// own contract, for the race itself).
+// This models a concurrent caller's increment landing in the gap of a
+// two-call expiry attachment: a Get of the key's current value followed by
+// a Set writing it back with a ttl attached. Anything that increments the
+// key between those two calls is exactly what this wrapper's Set override
+// reproduces deterministically, with no goroutines or scheduler luck
+// involved (see TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost
+// below for the proof, and slidingWindowLimiter's "The TTL-attachment
+// race" for the race itself).
 type setInjectsConcurrentIncrementKVStore struct {
 	pkgcore.KVStore
 	injectKey string
@@ -594,42 +589,42 @@ func (s *setInjectsConcurrentIncrementKVStore) Set(ctx context.Context, key stri
 	return s.KVStore.Set(ctx, key, value, ttl)
 }
 
-// TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost is the deterministic
-// regression proof for the finding this round closes (a peer-session audit's
-// P1-3: "TTL-attachment race is a real over-admit gap, recurring on every
-// window boundary, with no hard bound"). It reproduces the exact sequence
-// the pre-fix attachWindowTTL's own doc comment described as its residual,
-// non-crash failure mode -- a concurrent increment landing in the narrow gap
-// between attachWindowTTL's own Get and its own Set -- with no goroutines,
-// timing, or scheduler luck involved: setInjectsConcurrentIncrementKVStore's
-// Set override performs the "concurrent" increment itself, synchronously,
-// at the exact instant the pre-fix code's Set call would have raced against
-// one.
+// TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost proves
+// deterministically -- with no goroutines, timing, or scheduler luck
+// involved -- that no increment is ever lost to a caller-side TTL-attach
+// gap, the security-relevant over-admit failure mode a two-call
+// "increment, then attach the expiry on creation" sequence would carry (a
+// concurrent increment landing in the gap between the Get and the Set is
+// silently overwritten, undercounting the window with no hard bound; see
+// slidingWindowLimiter's "The TTL-attachment race"). The interleaving is
+// forced: setInjectsConcurrentIncrementKVStore's Set override performs the
+// "concurrent" increment itself, synchronously, at the exact instant a
+// caller-side Set write-back would have raced against one.
 //
-// On pre-fix code, a single Allow call against a fresh key runs exactly this
-// sequence: IncrByFloat creates the key at "1"; since that is the first hit
-// in the window, attachWindowTTL runs, Gets "1" back, then calls Set with a
-// ttl -- and this wrapper's Set override fires first, bumping the real
-// store's value to "2" via a genuine IncrByFloat call, before attachWindowTTL's
-// own Set proceeds to write back the stale "1" it read a moment earlier
-// (now carrying a ttl, but the wrong number). Two real increments happened
-// against the key (the Allow hit itself, and the injected one), but the
-// final stored value reflects only one of them -- exactly the silent
-// undercount the finding describes, and exactly why this assertion fails on
-// unfixed code.
+// A two-call Allow against a fresh key would run exactly this sequence:
+// IncrByFloat creates the key at "1"; since that is the first hit in the
+// window, a caller-side expiry attachment Gets "1" back, then calls Set
+// with a ttl -- and this wrapper's Set override fires first, bumping the
+// real store's value to "2" via a genuine IncrByFloat call, before the
+// caller-side Set proceeds to write back the stale "1" it read a moment
+// earlier (now carrying a ttl, but the wrong number). Two real increments
+// would have happened against the key (the Allow hit itself, and the
+// injected one), but the final stored value would reflect only one of
+// them -- exactly the silent undercount this assertion fails on for a
+// two-call implementation.
 //
-// On post-fix code, Allow's fixed path collapses "increment" and "attach the
-// ttl, but only on creation" into one atomic pkgcore.KVStore.IncrByFloatWithTTL
-// call, with no caller-side Set anywhere on that path -- so this wrapper's
-// Set override is never reached at all (fake.injected stays false), the
+// Allow's actual path collapses "increment" and "attach the ttl, but only
+// on creation" into one atomic pkgcore.KVStore.IncrByFloatWithTTL call,
+// with no caller-side Set anywhere on that path -- so this wrapper's Set
+// override is never reached at all (fake.injected stays false), the
 // wrapper's own injected increment never happens, and the store correctly
 // reflects the single real increment the Allow call actually made. The
 // assertion below computes its expected count from whether the injection
 // actually fired (rather than hardcoding it), so it is a meaningful
 // regression proof in both directions: it fails if a real increment ever
 // goes missing while the injection point is reachable, and it passes,
-// non-vacuously, precisely because the fix makes that injection point
-// structurally unreachable from Allow.
+// non-vacuously, precisely because the injection point is structurally
+// unreachable from Allow.
 func TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost(t *testing.T) {
 	// A single sequential Allow call, not a burst spanning any real
 	// duration, so a short window is all this test needs -- no risk of
@@ -688,21 +683,20 @@ func TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost(t *testing.T) {
 // why a plain, unsynchronized goroutine race cannot make this guarantee:
 // on a fast machine the first-hit goroutine's increment can commit before
 // any sibling goroutine has even reached its own Allow call, so the race
-// the pre-fix code was vulnerable to simply may not occur in a given run).
+// a two-call TTL-attachment implementation was vulnerable to simply may
+// not occur in a given run).
 //
-// The refactor that closed the TTL-attachment race (see
-// slidingWindowLimiter's "The TTL-attachment race, closed") collapsed the
-// first hit's whole "increment, then attach the expiry on creation"
-// sequence into Allow's single atomic pkgcore.KVStore.IncrByFloatWithTTL
-// call, so there is only one call site left on Allow's write path to
-// synchronize around. The Get-side trigger and Set-side blocking this type
-// used to carry are structurally unreachable under current production code
-// -- Allow never reads the current window's key back with Get, and never
-// calls Set at all (readWindowCount's Get is the *previous* window's key,
-// always distinct from watchKey) -- so only the firstHit gate remains.
+// Allow's write path is one atomic pkgcore.KVStore.IncrByFloatWithTTL
+// call (see slidingWindowLimiter's "The TTL-attachment race": "increment"
+// and "attach the expiry on creation" are collapsed into it, and Allow
+// never reads the current window's key back with Get or calls Set at all
+// -- readWindowCount's Get is the *previous* window's key, always distinct
+// from watchKey) -- so there is only one call site left on Allow's write
+// path to synchronize around, and the firstHit gate is the only
+// synchronization this wrapper needs to carry.
 //
-// The gate works off that one remaining call: firstHit closes the instant
-// the very first increment against watchKey commits, observed from
+// The gate works off that one call: firstHit closes the instant the very
+// first increment against watchKey commits, observed from
 // IncrByFloatWithTTL's own return of exactly 1, which only the call that
 // creates the key can see. Every "other" concurrent caller blocks on
 // firstHit before calling Allow at all, so none of them can race to create
@@ -710,10 +704,11 @@ func TestAllow_ConcurrentIncrementInTTLAttachGap_NeverLost(t *testing.T) {
 // Allow directly, never launched behind this gate) is guaranteed to be the
 // one that creates it, its creating increment carrying the window's ttl
 // with it in the same atomic step, while every sibling increment that
-// follows races the others against the now-live key. On the old two-call
-// implementation the gate released at a strictly earlier, vulnerable point
-// (between the creating increment and its caller-side Set write-back);
-// that point no longer exists, which is what the test below proves.
+// follows races the others against the now-live key. Releasing the gate
+// from inside the creating call itself -- rather than at some point
+// between two separate calls -- is what makes the burst genuinely
+// concurrent without ever recreating the vulnerable interleaving, which
+// is what the test below proves.
 type barrierAroundFirstHitKVStore struct {
 	pkgcore.KVStore
 	watchKey string
@@ -739,12 +734,12 @@ func (s *barrierAroundFirstHitKVStore) IncrByFloatWithTTL(ctx context.Context, k
 // leaves the key with its ttl attached -- deliberately with NO warm-up
 // call, unlike TestAllow_ConcurrentCallers_SameKey_NeverExceedsLimit above,
 // which warms the key up first specifically so its own burst never has to
-// create the key during the test (see that test's own doc comment). This is
-// the scenario the pre-fix Get-then-Set TTL attachment could not make fully
-// race-free: a concurrent caller's increment landing between the first
-// hit's read of its own just-created count and that count's caller-side Set
-// write-back was silently overwritten (see slidingWindowLimiter's "The
-// TTL-attachment race, closed").
+// create the key during the test (see that test's own doc comment). A
+// two-call TTL attachment could not make this scenario fully race-free: a
+// concurrent caller's increment landing between the first hit's read of
+// its own just-created count and that count's caller-side Set write-back
+// was silently overwritten (see slidingWindowLimiter's "The TTL-attachment
+// race").
 //
 // barrierAroundFirstHitKVStore's firstHit gate makes the interleaving
 // deterministic instead of scheduler-luck-dependent: the otherCallers
@@ -753,19 +748,17 @@ func (s *barrierAroundFirstHitKVStore) IncrByFloatWithTTL(ctx context.Context, k
 // IncrByFloatWithTTL's own return of 1, so exactly one goroutine -- the
 // test's own, never launched behind the gate -- creates watchKey and every
 // sibling increment lands against the live key in a genuine concurrent
-// burst. On pre-fix code the same gate released at a strictly earlier,
-// vulnerable point (between the creating increment and its write-back) and
-// made the loss unconditional, not merely probable; on the fixed code the
-// identical setup resolves without any coordination at all beyond the
-// atomic primitive itself.
+// burst. If a gate ever released between two separate calls instead, the
+// same setup would make the loss unconditional, not merely probable; the
+// actual single-call path resolves the identical setup without any
+// coordination at all beyond the atomic primitive itself.
 //
-// On the fixed code, pkgcore.KVStore.IncrByFloatWithTTL's atomicity
-// guarantees both halves of the contract survive the burst: the final
-// stored count equals exactly the number of callers (no increment lost,
-// unlike the pre-fix sequence this primitive replaces), and the key ends up
-// with a ttl attached -- checked here the same way
-// TestAllow_WindowExpiry_OldWindowKeyExpires checks it, by waiting past the
-// attached ttl and confirming the key is then gone.
+// pkgcore.KVStore.IncrByFloatWithTTL's atomicity guarantees both halves of
+// the contract survive the burst: the final stored count equals exactly
+// the number of callers (no increment lost), and the key ends up with a
+// ttl attached -- checked here the same way
+// TestAllow_WindowExpiry_OldWindowKeyExpires checks it, by waiting past
+// the attached ttl and confirming the key is then gone.
 //
 // Per is a full second, generous enough that every caller -- a trivial,
 // in-memory, mutex-protected operation with no I/O -- reliably completes

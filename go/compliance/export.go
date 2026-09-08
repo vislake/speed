@@ -51,10 +51,9 @@ const participantErrorMarker = "failed"
 // participant's own gathered data for one tenant, keyed by participant
 // Name, plus any per-participant gathering classification. It is the JSON
 // document ExportService.Export stores through pkgcore.ObjectStore and
-// then delivers as a short-lived, single-view go/sharing.Share (round 2,
-// see deliverExport): the manifest is the tenant-level export bundle
-// itself, and the share is the credentialed window on the stored copy of
-// it.
+// then delivers as a short-lived, single-view go/sharing.Share (see
+// deliverExport): the manifest is the tenant-level export bundle itself,
+// and the share is the credentialed window on the stored copy of it.
 type ExportManifest struct {
 	// Tenant is the tenant the export was gathered for.
 	Tenant pkgcore.TenantID `json:"tenant"`
@@ -84,15 +83,13 @@ func (m ExportManifest) HasErrors() bool { return len(m.Errors) > 0 }
 
 // ConfigExportDeliveryExpiry is the dotted configuration key for how long a
 // data-export download link stays valid once Export mints it through
-// go/sharing. Declared, like sharing's own ConfigDefaultExpiry
-// (go/sharing/module.go), so the value is visible and, eventually,
-// editable through go/config's own admin-console machinery; a host reads
-// its tenant-resolved value live by wiring an ExportDeliveryExpiryReader
-// through WithExportConfigReader (its own doc comment has the wiring
-// detail) -- without one, every export mints
-// defaultExportDeliveryExpiry regardless of what an operator sets here,
-// exactly as sharing's own ConfigDefaultExpiry falls back to
-// defaultShareExpiry with no TenantConfigReader wired.
+// go/sharing. Declared as a go/config item, like sharing's own
+// ConfigDefaultExpiry (go/sharing/module.go), so the value is tenant-
+// overridable like any config item; a host reads its tenant-resolved value
+// live by wiring an ExportDeliveryExpiryReader through
+// WithExportConfigReader (its own doc comment has the wiring detail) --
+// without one, every export mints defaultExportDeliveryExpiry regardless
+// of what an operator sets here.
 const ConfigExportDeliveryExpiry = "compliance.export_delivery_expiry"
 
 // defaultExportDeliveryExpiry is ConfigExportDeliveryExpiry's own declared
@@ -104,29 +101,23 @@ const ConfigExportDeliveryExpiry = "compliance.export_delivery_expiry"
 // MaxExplicitShareLifetime: an export bundles one tenant's complete data
 // -- potentially many subjects' records -- into a single downloadable
 // package, so the window in which a leaked or intercepted link stays
-// usable must be measured in hours, not weeks.
-// docs/internal/10-compliance-and-audit.md's data-export bullet describes
-// asynchronously generating the package and handing it off through
-// sharing, which this module reads as a one-time credentialed handoff:
-// Export mints the share and returns its token to the caller, who relays
-// the link to the export's recipient -- never an open, long-lived
-// download link. 24 hours is chosen as long enough for a relayed link to
-// reach its recipient and be used (a delivery-notification round is a
-// later round's job -- this round mints the share and returns its token,
-// see ExportDelivery) without leaving the window open for days.
+// usable must be measured in hours, not weeks. Delivery is a one-time
+// credentialed handoff: Export mints the share and returns its token to
+// the caller, who relays the link to the export's recipient -- never an
+// open, long-lived download link. 24 hours is long enough for a relayed
+// link to reach its recipient and be used (see ExportDelivery), without
+// leaving the window open for days.
 const defaultExportDeliveryExpiry = 24 * time.Hour
 
 // exportDeliveryMaxViews caps a data-export share at exactly one granted
 // view. The design alternative -- a password-protected share -- was
-// considered and rejected for this round: a password needs its own
-// delivery channel (the caller would have to relay it to the link's
-// recipient separately from the link itself), which is more moving parts
-// than this round's scope, while a single-view, 256-bit-token share
-// (sharing/token.go's newShareToken) already gives the "one-time
-// credentialed handoff" docs/internal/10-compliance-and-audit.md
-// describes: the token itself is the credential, and MaxViews=1 means the
-// link is spent the moment it is actually used, not merely until it
-// expires.
+// considered and rejected: a password needs its own delivery channel (the
+// caller would have to relay it to the link's recipient separately from
+// the link itself), which is more moving parts, while a single-view,
+// 256-bit-token share (sharing/token.go's newShareToken) already gives
+// the one-time credentialed handoff: the token itself is the credential,
+// and MaxViews=1 means the link is spent the moment it is actually used,
+// not merely until it expires.
 const exportDeliveryMaxViews = 1
 
 // ExportDeliveryExpiryReader is the structurally-typed seam ExportService
@@ -139,9 +130,7 @@ const exportDeliveryMaxViews = 1
 // after Kernel.Bootstrap returns -- by which point every module's own
 // NewModule call, this one included, has already run. This interface
 // exists so a host can wire a lazy adapter over a later-filled
-// **config.Service the exact way examples/reference-app/cmd/server/
-// server.go's orgFeatureGate already does for org.FeatureGate, not to
-// avoid an import edge compliance does not have.
+// **config.Service, not to avoid an import edge compliance does not have.
 //
 // ok is false when the tenant has configured none (the value resolved at
 // go/config's own schema default) -- Export then falls back to
@@ -160,13 +149,9 @@ type ExportDeliveryExpiryReader interface {
 // ExportService's own field, keeps this package's unit tests independent
 // of a real sharing.Service's own gorm.DB, migrations and registry wiring.
 //
-// go/compliance's go.mod requires go/sharing directly -- sanctioned by
-// this codebase's dependency direction, since sharing sits below
-// compliance in the module graph (root CLAUDE.md: "... ->
-// authn/rbac/org/metering -> billing/ai-gateway/sharing/integration ->
-// compliance -> admin"), the identical reasoning go/billing's own
-// UsageReader doc comment gives for its own sanctioned direct dependency
-// on go/metering. module.go's compile-time assertion proves
+// go/compliance's go.mod requires go/sharing directly: sharing sits below
+// compliance in the module dependency graph, so the import edge runs in
+// the sanctioned direction. module.go's compile-time assertion proves
 // *sharing.Service satisfies this interface structurally, so a host wires
 // the real thing with no adapter to write.
 type SharingCreator interface {
@@ -220,21 +205,19 @@ type ExportResult struct {
 // for one tenant into one tenant-level ExportManifest, stores it through
 // the pkgcore.ObjectStore seam, and delivers that bundle as a short-
 // lived, single-view go/sharing.Share whose one-time token it returns to
-// the caller to relay -- the data-export half of
-// docs/internal/10-compliance-and-audit.md's export capability, in full:
-// gathering, storage and delivery, not gathering alone. The export scope
-// is one whole tenant, never one data subject: a subject-scoped ("this is
-// your data") export is not built -- see doc.go's ExportService bullet
-// and this module's AGENTS.md for that recorded boundary. Unlike
-// RetentionService and ErasureService, Export needs no system context: it
-// only ever reads the caller's own ctx tenant, through each participant's
-// Export callback (typically backed by that participant's own tenant-
-// scoped dbkit.Repository[T] read), so it never bypasses tenant isolation
-// and grants nothing extra. That ctx tenant is the single data boundary an
-// export may ever cross: Export refuses a ctx carrying no tenant
-// (pkgcore.ErrNoTenant) and refuses a tenant argument that differs from
-// the ctx tenant (ErrExportTenantMismatch), before gathering, storing or
-// delivering anything -- see Export's own doc comment.
+// the caller to relay: gathering, storage and delivery, not gathering
+// alone. The export scope is one whole tenant, never one data subject: a
+// subject-scoped ("this is your data") export is not built (see doc.go's
+// ExportService bullet). Unlike RetentionService and ErasureService,
+// Export needs no system context: it only ever reads the caller's own ctx
+// tenant, through each participant's Export callback (typically backed by
+// that participant's own tenant-scoped dbkit.Repository[T] read), so it
+// never bypasses tenant isolation and grants nothing extra. That ctx
+// tenant is the single data boundary an export may ever cross: Export
+// refuses a ctx carrying no tenant (pkgcore.ErrNoTenant) and refuses a
+// tenant argument that differs from the ctx tenant
+// (ErrExportTenantMismatch), before gathering, storing or delivering
+// anything -- see Export's own doc comment.
 //
 // The zero value is not ready to use; construct one with newExportService
 // and wire it through Module.Register.
@@ -452,14 +435,13 @@ func (s *ExportService) Export(ctx context.Context, tenant pkgcore.TenantID) (*E
 // lived share naming key as its opaque ResourceRef. Sensitive is always
 // true -- an export is, by construction, one tenant's whole data bundle,
 // potentially many subjects' records, so it always qualifies for
-// sharing's own sensitive-resource confirmation audit
-// (sharing.share.create_sensitive, go/sharing/
-// AGENTS.md's "Sensitive-resource confirmation" section), independently of
-// and in addition to this module's own AuditActionExportRequest event.
+// sharing's own sensitive-resource confirmation audit (the
+// sharing.share.create_sensitive action), independently of and in
+// addition to this module's own AuditActionExportRequest event.
 //
 // No password is set -- see exportDeliveryMaxViews's own doc comment for
-// why a single-view link over a 256-bit token is this round's chosen
-// mechanism instead.
+// why a single-view link over a 256-bit token is the chosen mechanism
+// instead.
 func (s *ExportService) deliverExport(ctx context.Context, tenant pkgcore.TenantID, key string) (ExportDelivery, error) {
 	maxViews := exportDeliveryMaxViews
 	expiry, err := s.exportDeliveryExpiry(ctx, tenant)

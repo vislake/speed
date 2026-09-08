@@ -176,22 +176,19 @@ func passbackFixture(t *testing.T) string {
 }
 
 // TestGateway_VerifyWebhook_PartialRefundNotify_IsRefusedNotMistakenForThePayment
-// is P1-4's regression for the partial-refund leg. Alipay keeps a
-// partially-refunded trade at TRADE_SUCCESS and re-sends the TRADE_SUCCESS
-// async notification for the refund (its order status only moves on a FULL
-// refund), carrying the refund's own parameters -- refund_fee and
-// gmt_refund -- alongside the trade's. On pre-fix code normalizeNotify
-// mapped that delivery to the identical
+// pins the partial-refund refusal. Alipay keeps a partially-refunded trade
+// at TRADE_SUCCESS and re-sends the TRADE_SUCCESS async notification for
+// the refund (its order status only moves on a FULL refund), carrying the
+// refund's own parameters -- refund_fee and gmt_refund -- alongside the
+// trade's. Mapping that delivery to the identical
 // NormalizedEventChargeSucceeded/EventID "ORD1:TRADE_SUCCESS" the original
-// payment produced, so the payment_events insert-first-dedup ledger
-// swallowed the refund signal as a duplicate of the payment -- the platform
-// would never learn a refund happened. This round's posture mirrors
-// go/billing/gateway/wechat's own REFUND.* handling exactly: the delivery
-// is refused loudly as ErrWebhookPayloadUnrecognized rather than guessed
-// at, because the trade-notify vocabulary carries no per-refund-occurrence
-// identifier to build a dedup-safe NormalizedEventRefunded EventID from
-// (see go/billing/gateway/AGENTS.md's "refund notifications are not
-// decoded" note).
+// payment produced would hand the payment_events insert-first-dedup ledger
+// a duplicate of the payment, swallowing the refund signal -- the platform
+// would never learn a refund happened. The posture mirrors the wechat
+// leg's own REFUND.* handling exactly: the delivery is refused loudly as
+// ErrWebhookPayloadUnrecognized rather than guessed at, because the
+// trade-notify vocabulary carries no per-refund-occurrence identifier to
+// build a dedup-safe NormalizedEventRefunded EventID from.
 func TestGateway_VerifyWebhook_PartialRefundNotify_IsRefusedNotMistakenForThePayment(t *testing.T) {
 	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
 	cfg := testGatewayConfig(t, alipayPubPEM)
@@ -217,20 +214,19 @@ func TestGateway_VerifyWebhook_PartialRefundNotify_IsRefusedNotMistakenForThePay
 	}
 }
 
-// TestGateway_VerifyWebhook_FullRefundTradeClosed_MapsToRefunded is P1-4's
-// regression for the full-refund leg: Alipay's own status definitions say
-// TRADE_CLOSED covers two distinct fates -- an unpaid trade closed by
-// timeout, and a PAID trade closed by a full refund (only a full refund
-// moves the order off TRADE_SUCCESS). The two are told apart by the
-// notification's own parameters: the full-refund delivery carries
-// refund_fee (the refunded amount) and gmt_refund (the refund time); the
-// timeout delivery carries neither. A TRADE_CLOSED notification bearing
-// those refund markers therefore reports a refund of the earlier succeeded
-// charge and must map to NormalizedEventRefunded/ChannelStatusRefunded --
-// never to the ChannelStatusFailed a timed-out unpaid order gets. On
-// pre-fix code every TRADE_CLOSED mapped to charge_failed, so a fully
-// refunded charge was recorded as a failed payment and the refund signal
-// was lost.
+// TestGateway_VerifyWebhook_FullRefundTradeClosed_MapsToRefunded pins the
+// full-refund mapping: Alipay's own status definitions say TRADE_CLOSED
+// covers two distinct fates -- an unpaid trade closed by timeout, and a
+// PAID trade closed by a full refund (only a full refund moves the order
+// off TRADE_SUCCESS). The two are told apart by the notification's own
+// parameters: the full-refund delivery carries refund_fee (the refunded
+// amount) and gmt_refund (the refund time); the timeout delivery carries
+// neither. A TRADE_CLOSED notification bearing those refund markers
+// therefore reports a refund of the earlier succeeded charge and must map
+// to NormalizedEventRefunded/ChannelStatusRefunded -- never to the
+// ChannelStatusFailed a timed-out unpaid order gets: mapping every
+// TRADE_CLOSED to charge_failed would record a fully refunded charge as a
+// failed payment and lose the refund signal.
 func TestGateway_VerifyWebhook_FullRefundTradeClosed_MapsToRefunded(t *testing.T) {
 	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)
 	cfg := testGatewayConfig(t, alipayPubPEM)
@@ -329,13 +325,13 @@ func TestGateway_VerifyWebhook_UnrecognizedTradeStatus(t *testing.T) {
 	}
 }
 
-// TestGateway_VerifyWebhook_StaleNotification_Refused is P2-21's
-// regression: VerifyWebhook must bound the delivery's age the way the
-// stripe and wechat legs do. Alipay's signature covers the form parameters
-// (notify_time included) and stays valid forever, so on pre-fix code a
-// captured notification could be replayed at arbitrary leisure and
-// normalized as live. The fix refuses a delivery whose signed notify_time
-// sits more than notifyTimeTolerance from now with the same
+// TestGateway_VerifyWebhook_StaleNotification_Refused pins the delivery
+// freshness ceiling: VerifyWebhook must bound the delivery's age the way
+// the stripe and wechat legs do. Alipay's signature covers the form
+// parameters (notify_time included) and stays valid forever, so without
+// the ceiling a captured notification could be replayed at arbitrary
+// leisure and normalized as live. A delivery whose signed notify_time sits
+// more than notifyTimeTolerance from now is refused with the same
 // authentication-class error a stale Stripe or WeChat delivery gets.
 func TestGateway_VerifyWebhook_StaleNotification_Refused(t *testing.T) {
 	_, alipayPubPEM, alipayPriv := generateTestKeyPair(t)

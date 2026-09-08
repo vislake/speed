@@ -57,7 +57,7 @@ func newIntegrationService(t *testing.T, db *gorm.DB, members *testutil.Membersh
 }
 
 // TestRefreshRotation_ConcurrentReplay_ExactlyOneWinner_Postgres proves the
-// round's most important concurrency guarantee under a REAL database rather
+// module's most important concurrency guarantee under a REAL database rather
 // than SQLite's coarse locking: concurrentRefreshers goroutines all present
 // the SAME refresh token to Service.Refresh at once. Exactly one may
 // succeed; every other goroutine must observe a refusal, and the whole

@@ -18,10 +18,9 @@ import (
 
 // errAuditSinkUnavailable stands in for a subscriber failure such as a down
 // audit-log sink. Subscribing a handler that always returns it is how these
-// tests force the real pkgcore.EventBus.Publish to fail, instead of writing a
-// bespoke EventBus implementation -- per pkgcore/AGENTS.md: "Do not write a
-// mock for KVStore or EventBus. NewMemoryEventBus and NewMemoryKVStore are
-// the test doubles."
+// tests force the real pkgcore.EventBus.Publish to fail, instead of writing
+// a bespoke EventBus implementation -- the in-memory bus and in-memory
+// store are the sanctioned test doubles.
 var errAuditSinkUnavailable = errors.New("audit sink unavailable")
 
 // TestWithSystemContext_Success covers the happy path: the bus receives
@@ -190,9 +189,8 @@ func TestWithSystemContext_PublishFails_FailsClosedWithoutElevatingContext(t *te
 	pkgcore.RegisterSystemPurpose(purpose)
 	reason := pkgcore.SystemReason{Actor: "admin@example.com", Purpose: purpose, Ticket: "SUP-9999"}
 
-	// A real in-memory bus (per pkgcore/AGENTS.md, EventBus must not be
-	// mocked) whose one subscriber always fails, so Publish itself returns a
-	// non-nil error.
+	// A real in-memory bus (the sanctioned EventBus test double) whose one
+	// subscriber always fails, so Publish itself returns a non-nil error.
 	bus := pkgcore.NewMemoryEventBus()
 	var publishCalls int
 	bus.Subscribe(EventSystemContextEntered, func(_ context.Context, _ pkgcore.Event) error {
@@ -288,10 +286,10 @@ func TestWithSystemContext_RepeatedCalls_OneEventPerCall(t *testing.T) {
 // when a context carrying a tenant (as Middleware produces) and a context
 // carrying a granted system reason (as WithSystemContext produces) are
 // combined, and that combined context is then handed to the ONE sanctioned
-// data-access path, dbkit.Repository[T] (backend coding standard §3.2)?
+// data-access path, dbkit.Repository[T]?
 //
 // The short answer, proved below: WithSystemContext and dbkit.Repository[T]
-// do not interact at all yet. WithSystemContext only ever adds a
+// do not interact at all. WithSystemContext only ever adds a
 // SystemReason value to the context; it never removes, replaces, or
 // otherwise touches whatever tenant that context already carried (see its
 // own doc comment: "a system context is orthogonal to a tenant context").
@@ -300,22 +298,14 @@ func TestWithSystemContext_RepeatedCalls_OneEventPerCall(t *testing.T) {
 // tenant with pkgcore.MustTenantFromContext and, when one is present, scopes
 // its query to exactly that tenant regardless of any system reason also
 // present; when none is present, every method fails closed with
-// pkgcore.ErrNoTenant regardless of any system reason also present. dbkit's
-// own tenant_scope.go documents this as a deliberate, temporary gap: "It
-// also does not implement the system-context cross-tenant escape hatch
-// ([...]) Routing an authorized cross-tenant admin or job query around
-// tenant filtering is left to a higher layer (expected to be
-// dbkit.Repository[T])" -- but Repository[T], as it stands, does not
-// implement that either. So today, composing WithSystemContext with
-// Repository[T] is inert: it changes nothing about which rows a query can
-// see, in either direction. A caller reaching for WithSystemContext
-// expecting it to unlock a cross-tenant Repository[T] read (an admin
-// tenant-search feature, say) would find it does not, with no error to
-// signal that expectation was wrong -- which is exactly why this composition
-// is worth a standing test, not just a one-off investigation: if a future
-// change wires the escape hatch into Repository[T], the "still scoped to
-// tenant A" and "still fails with ErrNoTenant" assertions below must be
-// deliberately updated, not silently broken.
+// pkgcore.ErrNoTenant regardless of any system reason also present.
+// Repository[T] implements no system-context cross-tenant escape hatch, so
+// composing WithSystemContext with it is inert: it changes nothing about
+// which rows a query can see, in either direction. A caller reaching for
+// WithSystemContext expecting it to unlock a cross-tenant Repository[T]
+// read (an admin tenant-search feature, say) finds that it does not, with
+// no error to signal that expectation was wrong -- which is exactly why
+// this composition is worth a standing test.
 //
 // sysCtxWidget is a minimal tenant-scoped fixture local to this file --
 // see sprocket's doc comment in tenancytest/assert_isolated_test.go for why
@@ -434,11 +424,10 @@ func TestSystemContext_DoesNotWidenRepositoryVisibilityBeyondTheContextTenant(t 
 // want: a context that carries a granted system reason but NO tenant at
 // all, used to attempt a Repository[T] read that is meant to span every
 // tenant. It still fails closed with pkgcore.ErrNoTenant, exactly as if no
-// system reason had ever been granted -- proving the escape hatch, as wired
-// today, grants no read capability through the one sanctioned data-access
-// path at all. Reaching cross-tenant data legitimately today requires
-// bypassing Repository[T] for the raw-SQL escape hatch documented in
-// backend-coding-standards §3.2, not WithSystemContext plus Repository[T].
+// system reason had ever been granted -- proving the escape hatch grants no
+// read capability through the one sanctioned data-access path at all.
+// Reaching cross-tenant data legitimately requires bypassing Repository[T]
+// for the raw-SQL escape hatch, not WithSystemContext plus Repository[T].
 func TestSystemContext_WithoutTenant_StillFailsClosedOnRepository(t *testing.T) {
 	const purpose pkgcore.SystemPurpose = "tenancy_test.system_context_repository.no_tenant"
 	pkgcore.RegisterSystemPurpose(purpose)

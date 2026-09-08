@@ -63,8 +63,8 @@
 // QueryStatus must answer ChannelStatusPending. The asynchronously-
 // notified post-payment half (VerifyWebhook against a genuinely
 // Alipay-delivered notification) accordingly stays on the
-// untestable-without-a-driven-payment boundary recorded in
-// go/billing/gateway/AGENTS.md.
+// untestable-without-a-driven-payment boundary the gateway package's own
+// docs record.
 package alipay_test
 
 import (

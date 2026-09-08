@@ -93,11 +93,10 @@ const (
 )
 
 // Resource identifies what an audited action was performed on: the
-// flattened form of the "Resource" element of docs/internal/10-compliance-
-// and-audit.md's six-element AuditEvent shape (Actor, OnBehalfOf, Action,
-// Resource, Result, Changes). Type is a module-owned string such as
-// "note" or "org.member" -- there is no closed enumeration, since every
-// business module names its own resources.
+// flattened "Resource" element of AuditEvent's six-element shape (Actor,
+// OnBehalfOf, Action, Resource, Result, Changes). Type is a module-owned
+// string such as "note" or "org.member" -- there is no closed
+// enumeration, since every business module names its own resources.
 type Resource struct {
 	Type        string
 	ID          string
@@ -131,8 +130,8 @@ type Result struct {
 // callers never have to touch the six *_type/_id/_display_name columns
 // directly.
 //
-// Data-domain classification (docs/internal/04-data-and-tenancy.md): an
-// audit event is neither purely tenant data nor purely platform data -- a
+// Data-domain classification: an audit event is neither purely tenant
+// data nor purely platform data -- a
 // tenant-scoped action produces a tenant-attributed record, but a
 // platform-level action (a platform admin's tenancy.WithSystemContext
 // grant, a cross-tenant admin search) produces one with no tenant at all,
@@ -157,8 +156,7 @@ type Result struct {
 // independent application-layer paths that could erase an audit trail,
 // one of them closed at compile time rather than by convention. Adding a
 // GetTenantID method to AuditEvent for any other reason would silently
-// remove the type-level protection; go/dbkit/audit/AGENTS.md's data-domain
-// section records the same warning.
+// remove the type-level protection.
 // model_test.go's TestAuditEvent_DoesNotImplementTenantScoped and
 // TestAuditEvent_VisibilityDoesNotDependOnTenantContext are the standing
 // proof (see that file's own doc comment for why they do not use
@@ -171,12 +169,12 @@ type Result struct {
 // cleanly under an ordinary equality WHERE.
 //
 // See Repository's own doc comment for why AuditEvent is queried through a
-// plain *gorm.DB, never a dbkit.Repository[T], and for how M1 enforces
-// "no UPDATE, no DELETE" on this table at the application layer.
+// plain *gorm.DB, never a dbkit.Repository[T], and for how this package
+// enforces "no UPDATE, no DELETE" on the table at the application layer.
 type AuditEvent struct {
 	// ID is an application-generated UUID (see Repository.Insert), never a
-	// database-generated one -- the backend coding standard (§5) forbids
-	// gen_random_uuid().
+	// database-generated one -- gen_random_uuid() has no SQLite equivalent,
+	// and application-generated ids keep both dialects portable.
 	ID string `gorm:"column:id;primaryKey;size:36"`
 
 	// ActorType, ActorID and ActorDisplayName are the flattened form of
@@ -188,9 +186,9 @@ type AuditEvent struct {
 
 	// OnBehalfOfType, OnBehalfOfID and OnBehalfOfDisplayName are the
 	// flattened form of an OPTIONAL pkgcore.Actor: the real administrator
-	// behind an impersonated Actor above (docs/internal/10-compliance-and-
-	// audit.md's dual-identity rule). All three are genuinely nullable
-	// columns (NULL, never an empty-string sentinel), so that "no
+	// behind an impersonated Actor (the dual-identity rule: an
+	// impersonated action carries both identities). All three are genuinely
+	// nullable columns (NULL, never an empty-string sentinel), so that "no
 	// impersonation" is distinguishable from "impersonated by an actor
 	// whose fields happen to be empty". Use SetOnBehalfOf and OnBehalfOf to
 	// read and write all three together, rather than touching the three
@@ -228,11 +226,10 @@ type AuditEvent struct {
 	FailureReason string `gorm:"column:failure_reason;size:1000;not null"`
 
 	// Changes carries a before/after diff as raw JSON text, or is empty
-	// when the audited action recorded has no diff to show
-	// (docs/internal/10-compliance-and-audit.md's before/after-comparison
-	// field). What lands in it is decided upstream, by whichever of the two
-	// collection mechanisms produced the row, and the author obligation
-	// that keeps sensitive content out of it differs between the two:
+	// when the audited action recorded has no diff to show. What lands in
+	// it is decided upstream, by whichever of the two collection
+	// mechanisms produced the row, and the author obligation that keeps
+	// sensitive content out of it differs between the two:
 	//
 	//   - On a row the automatic write-capture plugin produced (go/dbkit/
 	//     audit_capture.go), the Before/After maps are whole-column

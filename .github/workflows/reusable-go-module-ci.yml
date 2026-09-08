@@ -1,22 +1,19 @@
 name: go-module-ci
-
-# Reusable per-module Go CI, called by the pipeline orchestrators (fast-check
-# and full-check today; nightly when it lands). docs/internal/18-cicd.md's
-# reusable-workflow design section is the governing spec: callers enumerate
-# one matrix row per module, so adding a module means adding one row to a
-# caller's matrix -- never copying this file's legs into a workflow.
+# Reusable per-module Go CI, called by the pipeline orchestrators
+# (fast-check and full-check). Callers enumerate one matrix row per
+# module, so adding a module means adding one row to a caller's matrix --
+# never copying this file's legs into a workflow.
 #
 # INPUT
 # `module` is the module's directory relative to the repository root
-# (e.g. go/pkgcore). Every leg runs from inside that directory, because the
-# repository root is a go.work workspace, not a module: bare ./... patterns
-# do not resolve there (root CLAUDE.md, "Traps"; Taskfile.yml's package-
-# patterns note).
+# (e.g. go/pkgcore). Every leg runs from inside that directory, because
+# the repository root is a go.work workspace, not a module: bare ./...
+# patterns do not resolve there.
 #
 # LEGS -- unit tier only, container-free by design:
 #   1. golangci-lint run ./...   the project-standard lint leg (.golangci.yml
-#                                at the repo root, v2 schema; 18-cicd
-#                                discipline-table rows that have golangci
+#                                at the repo root, v2 schema; the
+#                                discipline rows that have golangci
 #                                tooling today -- errcheck, gosec, govet's
 #                                shadow check, depguard's pkgcore-root
 #                                module-boundary rule plus the concrete-
@@ -34,7 +31,7 @@ name: go-module-ci
 #                                and tenancy, Redis for jobs, and Redis
 #                                plus RustFS/S3 for pkgcore -- its
 #                                integration_test/ runs both tiers)
-#                                intentionally do NOT run here: 18-cicd's
+#                                intentionally do NOT run here: the
 #                                layered-triggering rule puts them in the
 #                                pre-merge full matrix (full-check), not in
 #                                the fast per-PR check.
@@ -56,15 +53,12 @@ name: go-module-ci
 #   4. go build ./...            module build in workspace context.
 #   5. GOWORK=off go build ./... standalone build proving the module's
 #                                go.mod/go.sum suffice outside the
-#                                workspace. This is the CI replacement for
-#                                the interim standalone_build_test.go
-#                                guards (go/pkgcore, go/tenancy), per the
-#                                last row of 18-cicd's discipline table;
-#                                those tests stay for local runs and still
-#                                execute under leg 3 on CI.
+#                                workspace. The standalone build guards
+#                                (go/pkgcore, go/tenancy) stay for local
+#                                runs and still execute under leg 3 on CI.
 #
-# jobs.timeout-minutes bounds every run (18-cicd cost control); the caller
-# additionally cancels stale runs via concurrency.
+# jobs.timeout-minutes bounds every run; the caller additionally cancels
+# stale runs via concurrency.
 
 on:
   workflow_call:

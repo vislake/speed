@@ -54,9 +54,9 @@ func TestNewHandlerFunc_PropagatesError(t *testing.T) {
 }
 
 // hookHandler is a minimal Handler that also implements FailureHook, used
-// to prove the two interfaces compose the way AGENTS.md documents: a
-// Handler implementation opts into failure compensation simply by also
-// implementing FailureHook, with no separate registration mechanism.
+// to prove the two interfaces compose: a Handler implementation opts into
+// failure compensation simply by also implementing FailureHook, with no
+// separate registration mechanism.
 type hookHandler struct {
 	onFailureCalls int
 }

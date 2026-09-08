@@ -89,11 +89,11 @@ func TestCredentialRow_NamesTheCredentialsTable(t *testing.T) {
 }
 
 func TestCredentialRow_IsNotTenantScoped(t *testing.T) {
-	// ai_gateway_credentials is platform data (docs/internal/04-data-and-
-	// tenancy.md): a system-tier row must be readable regardless of which
-	// tenant (if any) is asking. AssertNotTenantScoped proves the model
-	// never implements dbkit.TenantScoped and that reads and writes behave
-	// identically with any (or no) tenant in context.
+	// ai_gateway_credentials is platform data: a system-tier row must be
+	// readable regardless of which tenant (if any) is asking.
+	// AssertNotTenantScoped proves the model never implements
+	// dbkit.TenantScoped and that reads and writes behave identically with
+	// any (or no) tenant in context.
 	var created int
 	createFn := func(db *gorm.DB) error {
 		created++

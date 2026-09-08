@@ -56,11 +56,10 @@ func TestSummaryRepository_CreateAndFindByID(t *testing.T) {
 }
 
 // TestSummaryRepository_AssertIsolated runs the mandatory tenant-isolation
-// suite against metering_usage_summaries. UsageSummary is tenant data
-// (docs/internal/04-data-and-tenancy.md), so AssertIsolated -- not
-// AssertNotTenantScoped -- is the correct half of the pair: one tenant's
-// usage summary must never be readable, updatable or deletable from
-// another tenant.
+// suite against metering_usage_summaries. UsageSummary is tenant data, so
+// AssertIsolated -- not AssertNotTenantScoped -- is the correct half of
+// the pair: one tenant's usage summary must never be readable, updatable
+// or deletable from another tenant.
 func TestSummaryRepository_AssertIsolated(t *testing.T) {
 	repo := NewSummaryRepository(newTestDB(t))
 
@@ -121,18 +120,14 @@ func TestInsertOutboxRecord_AndFindByIdempotencyKey(t *testing.T) {
 	}
 }
 
-// TestInsertOutboxRecord_NilRetryAfter_RefusedBySchema is the
-// P3-metering-E regression in its repository-level form: retry_after is
-// NOT NULL since migration 0007, so an insert that fails to schedule the
-// row -- the legacy NULL state 0005's backfill eliminated and the schema
-// used to still permit -- is refused by the constraint itself. Enqueue
-// and markOutboxAttemptFailed always write a concrete value, so the
-// refusal can only ever bite a write path that forgets; the point of the
-// schema force is that such a future writer fails LOUDLY here, at the
-// write, instead of storing a NULL the claim query used to have to
-// accommodate. Fails before the fix (migration 0007 absent, the column
-// nullable: the insert succeeds and the nil-error assertion trips),
-// passes after.
+// TestInsertOutboxRecord_NilRetryAfter_RefusedBySchema pins the
+// schema-level invariant in its repository form: retry_after is NOT NULL
+// (migration 0007), so an insert that fails to schedule the row is
+// refused by the constraint itself. Enqueue and markOutboxAttemptFailed
+// always write a concrete value, so the refusal can only ever bite a
+// write path that forgets; the point of the schema force is that such a
+// writer fails LOUDLY at the write instead of storing a NULL the claim
+// query would otherwise have to accommodate (it no longer does).
 func TestInsertOutboxRecord_NilRetryAfter_RefusedBySchema(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -163,11 +158,10 @@ func TestInsertOutboxRecord_NilRetryAfter_RefusedBySchema(t *testing.T) {
 // false with NO error -- the insert runs as ON CONFLICT DO NOTHING, so
 // the transaction is never left in the aborted state that would break
 // Enqueue's read-back recovery (and the caller's own transaction) on
-// PostgreSQL, where a statement error aborts the whole transaction. The
-// pre-fix function returned gorm.ErrDuplicatedKey here; the PostgreSQL
-// half of the regression, where the aborted transaction is actually
-// observable, lives in the integration tier
-// (TestPostgres_Enqueue_IdempotentRetry_InsideOneCallerTransaction).
+// PostgreSQL, where a statement error aborts the whole transaction. A
+// plain insert would return gorm.ErrDuplicatedKey here; the integration
+// tier (TestPostgres_Enqueue_IdempotentRetry_InsideOneCallerTransaction)
+// is where the aborted transaction is actually observable.
 func TestInsertOutboxRecord_DuplicateKey_IsANoOpNotAnError(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -265,8 +259,8 @@ func TestClaimPendingOutboxRecords(t *testing.T) {
 }
 
 // TestClaimPendingOutboxRecords_OrderedByRetrySchedule pins the claim
-// query's schedule semantics -- the ordering migration 0005 introduced to
-// replace the attempts-class ordering (reviewer finding P1-metering-10):
+// query's schedule semantics -- ordering by the row's retry_after
+// schedule, migration 0005's design, rather than by an attempts class:
 // only pending rows whose retry_after has arrived are claimable, and they
 // come back oldest-scheduled first. A row that failed once and whose
 // re-claim window has opened is claimed before a never-failed row
@@ -437,19 +431,17 @@ func TestTruncateError_DoesNotSplitAMultiByteRune(t *testing.T) {
 	}
 }
 
-// TestTruncateError_ShortInvalidUTF8_IsSanitized is the reviewer finding
-// P3-metering-15 regression in its unit form: truncateError's short-value
-// fast path returned cause untouched whenever it fit the column, so a
-// SHORT cause carrying an invalid byte sequence was stored raw -- and
-// PostgreSQL refuses exactly that on the failure-record write
-// (SQLSTATE 22021), taking the record of a failure down with the failure
-// it recorded. The column safety must hold at ANY length, not only past
-// the truncation point: invalid bytes are rendered as the Unicode
-// replacement character (strings.ToValidUTF8), never passed through and
-// never silently dropped. The fixed shape mirrors go/sharing's
-// truncateAccessLogValue and go/authn's truncateClientField -- the third
-// instance of the rune-safe helper this codebase now carries in three
-// modules.
+// TestTruncateError_ShortInvalidUTF8_IsSanitized pins the
+// sanitize-at-any-length contract in its unit form: truncateError's
+// short-value path must not return a SHORT cause carrying an invalid
+// byte sequence untouched -- stored raw, PostgreSQL refuses exactly that
+// on the failure-record write (SQLSTATE 22021), taking the record of a
+// failure down with the failure it recorded. The column safety holds at
+// ANY length, not only past the truncation point: invalid bytes are
+// rendered as the Unicode replacement character (strings.ToValidUTF8),
+// never passed through and never silently dropped. The shape mirrors
+// go/sharing's truncateAccessLogValue and go/authn's truncateClientField,
+// the rune-safe helpers this codebase carries in three modules.
 func TestTruncateError_ShortInvalidUTF8_IsSanitized(t *testing.T) {
 	// A short value (well under the 500-byte bound) whose middle byte is
 	// an invalid UTF-8 sequence -- what a caller-supplied error string
@@ -505,11 +497,11 @@ func TestMarkOutboxAttemptFailed_ShortInvalidUTF8Cause_StoredValueIsSanitized(t 
 }
 
 // TestMarkOutboxAttemptFailed_LongMultiByteCause_StoredValueStaysValidUTF8
-// pins the finding at the write path itself -- the stored value is the
-// assertion target, exactly as PostgreSQL would validate it on its way
-// into the column: a cause whose byte-truncation used to split a rune is
-// stored whole-rune-truncated, valid UTF-8 and within the column's byte
-// bound.
+// pins the rune-safe truncation at the write path itself -- the stored
+// value is the assertion target, exactly as PostgreSQL would validate it
+// on its way into the column: a cause whose byte-truncation would split
+// a rune is stored whole-rune-truncated, valid UTF-8 and within the
+// column's byte bound.
 func TestMarkOutboxAttemptFailed_LongMultiByteCause_StoredValueStaysValidUTF8(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -551,22 +543,20 @@ func TestMarkOutboxAttemptFailed_LongMultiByteCause_StoredValueStaysValidUTF8(t 
 }
 
 // TestRetireDeliveredOutboxRecords_ReceiptDeleteFailure_ReturnsCountExcludingTheRolledBackRow
-// is the P3-metering-F regression: retireDeliveredOutboxRecords used to
-// count a row retired the moment its outbox delete succeeded INSIDE the
-// transaction -- before the receipt delete that follows it in the same
-// transaction had run. When that receipt delete failed, the whole
-// transaction rolled back, the outbox delete with it: the row was NOT
-// retired, yet the returned count already included it, over-reporting by
-// exactly the uncommitted row and making the function's own "both deletes
-// committed" doc claim false in that case. The count now accumulates only
+// pins the count semantics: retireDeliveredOutboxRecords must not count
+// a row retired the moment its outbox delete succeeds INSIDE the
+// transaction -- the receipt delete follows in the same transaction, and
+// when it fails the whole transaction rolls back, the outbox delete with
+// it: the row was NOT retired, and counting it would over-report by
+// exactly the uncommitted row, making the function's own "both deletes
+// committed" doc claim false in that case. The count accumulates only
 // when the transaction genuinely commits.
 //
 // The receipt delete's failure is made deterministic by dropping the
 // ingest-receipts table before the call: the outbox delete succeeds
 // inside the transaction, the receipt delete errors, the transaction
 // rolls back -- and the count must exclude the row the rollback
-// resurrected. Fails before the fix (the count includes the uncommitted
-// row), passes after.
+// resurrected.
 func TestRetireDeliveredOutboxRecords_ReceiptDeleteFailure_ReturnsCountExcludingTheRolledBackRow(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()

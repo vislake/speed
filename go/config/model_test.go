@@ -52,8 +52,8 @@ func TestRow_NamesTheConfigsTable(t *testing.T) {
 }
 
 func TestRow_IsNotTenantScoped(t *testing.T) {
-	// The configs table is platform data (docs/internal/04-data-and-tenancy.
-	// md): system rows are read by every tenant's resolution path, so a
+	// The configs table is platform data: system rows are read by every
+	// tenant's resolution path, so a
 	// tenant filter on this table would make configuration vanish per
 	// tenant. AssertNotTenantScoped proves the model never implements
 	// dbkit.TenantScoped and that reads and writes behave identically with

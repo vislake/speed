@@ -65,8 +65,8 @@ func (h *cancelDuringFinalAttemptHandler) OnFailure(context.Context, *jobs.Job, 
 // (in whichever of its interleavings fires: the handler's own returned
 // error, or the ctx cancellation the CancelProcessing signal itself caused,
 // which handleFailedMessage turns into a failure of the very same terminal
-// attempt), this package's ErrorHandler sees the marker and skips OnFailure.
-// Fails on the pre-fix code, where OnFailure fires regardless of the marker.
+// attempt), this package's ErrorHandler sees the marker and skips OnFailure;
+// OnFailure firing regardless of the marker would fail this test.
 func TestRedisQueue_CancelDuringFinalAttempt_SkipsOnFailureHook(t *testing.T) {
 	ctx := context.Background()
 	q := startTestAsynqQueue(t, ctx)
@@ -104,7 +104,7 @@ func TestRedisQueue_CancelDuringFinalAttempt_SkipsOnFailureHook(t *testing.T) {
 	// and the failure-processing that attempt goes through is exactly what
 	// the fix gates on the marker. The 5s window -- the same bound the other
 	// integration tests here use -- is far wider than the sub-second
-	// localhost round trips in which a pre-fix OnFailure would fire, and
+	// localhost round trips in which an unguarded OnFailure could fire, and
 	// nothing can fire it later: a cancelled Job is never dispatched again
 	// (processTask's own marker check), so no later attempt exists to fail.
 	select {

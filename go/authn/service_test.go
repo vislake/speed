@@ -144,17 +144,18 @@ func TestService_RegisterAndLogin(t *testing.T) {
 	}
 }
 
-// TestService_Login_TruncatesOverWidthClientStringsToTheColumnWidths is the
-// P3-13 regression: sessions.device (VARCHAR(255)) and sessions.user_agent /
-// login_attempts.user_agent (VARCHAR(512)) are the widths the migrations
-// declare, and the two dialects disagree about enforcement -- PostgreSQL
-// refuses an over-width write (SQLSTATE 22001) where SQLite stores it, so
-// the SAME login with an over-width device or user agent succeeds on one
-// dialect and fails on the other. The repository write boundary truncates
-// the client-supplied strings to the columns' widths, so both dialects store
-// the identical value. The exact truncated prefix is asserted, not merely a
-// length: truncation must keep the value's HEAD (the part that identifies
-// the device), cut at a rune boundary, and never touch a within-width value.
+// TestService_Login_TruncatesOverWidthClientStringsToTheColumnWidths pins
+// the write boundary for client-supplied strings: sessions.device
+// (VARCHAR(255)) and sessions.user_agent / login_attempts.user_agent
+// (VARCHAR(512)) are the widths the migrations declare, and the two
+// dialects disagree about enforcement -- PostgreSQL refuses an over-width
+// write (SQLSTATE 22001) where SQLite stores it, so the SAME login with an
+// over-width device or user agent would succeed on one dialect and fail on
+// the other. The repository write boundary truncates the client-supplied
+// strings to the columns' widths, so both dialects store the identical
+// value. The exact truncated prefix is asserted, not merely a length:
+// truncation must keep the value's HEAD (the part that identifies the
+// device), cut at a rune boundary, and never touch a within-width value.
 func TestService_Login_TruncatesOverWidthClientStringsToTheColumnWidths(t *testing.T) {
 	t.Parallel()
 
@@ -323,16 +324,17 @@ func TestService_Login_DoesNotDistinguishFailureCauses(t *testing.T) {
 	}
 }
 
-// TestService_Login_NoMembershipIsIndistinguishableFromWrongPassword is the
-// password-confirmation-oracle regression. The login endpoint used to answer
-// an anonymous attacker whether the password was right: a wrong password
-// answered 401 authn.invalid_credentials, but a correct password whose
-// account resolved no membership -- no membership anywhere, or none of an
-// explicitly requested tenant -- answered 403 authn.tenant_membership_*
-// instead. Reaching the membership question at all means every earlier check
-// passed, so the distinguishable answer certified the credential, and in a
-// generated project whose membership seam is not wired yet (nil reader) the
-// answer held for EVERY correct password, every attempt.
+// TestService_Login_NoMembershipIsIndistinguishableFromWrongPassword pins
+// the password-confirmation boundary: the login endpoint must not answer an
+// anonymous attacker whether the password was right. A wrong password
+// answers 401 authn.invalid_credentials; a correct password whose account
+// resolved no membership -- no membership anywhere, or none of an
+// explicitly requested tenant -- must answer the same, never 403
+// authn.tenant_membership_*. Reaching the membership question at all means
+// every earlier check passed, so a distinguishable answer would certify the
+// credential -- and in a generated project whose membership seam is not
+// wired (nil reader) it would do so for EVERY correct password, every
+// attempt.
 func TestService_Login_NoMembershipIsIndistinguishableFromWrongPassword(t *testing.T) {
 	t.Parallel()
 
@@ -374,8 +376,8 @@ func TestService_Login_NoMembershipIsIndistinguishableFromWrongPassword(t *testi
 	}
 
 	// The same fold for a correct password naming a tenant the account has
-	// no membership of -- the 403 tenant_membership_required shape a member
-	// of another tenant used to draw when it asked for the wrong one.
+	// no membership of -- never the 403 tenant_membership_required shape a
+	// member of another tenant would otherwise draw for the wrong tenant.
 	_, wrongTenantErr := f.svc.Login(t.Context(), LoginInput{
 		Identifier: "elsewhere@example.com", Password: testPassword, TenantID: testTenantB,
 	})
@@ -540,8 +542,8 @@ func TestService_Login_FailsClosedWithoutAMembershipReader(t *testing.T) {
 	}
 
 	// The sign-in still refuses -- never a permissive default -- but with
-	// the collapsed credential answer, not the distinguishable 403 a
-	// memberless-correct-password used to draw from this nil-reader wiring.
+	// the collapsed credential answer, never the distinguishable 403 a
+	// memberless-correct-password would draw from this nil-reader wiring.
 	_, err = unwired.Login(t.Context(), LoginInput{Identifier: "closed@example.com", Password: testPassword})
 	if !hasCode(err, ErrInvalidCredentials.Code) {
 		t.Fatalf("Login() error = %v, want code %q", err, ErrInvalidCredentials.Code)
@@ -748,9 +750,9 @@ func TestService_SwitchTenant_RefusesAnExpiredSession(t *testing.T) {
 	}
 }
 
-// TestService_SwitchTenant_StillValidSessionSucceeds guards the fix above
-// against over-refusing: a session that has not yet reached its own
-// ExpiresAt must keep switching tenants exactly as before.
+// TestService_SwitchTenant_StillValidSessionSucceeds guards against
+// over-refusing: a session that has not yet reached its own ExpiresAt must
+// keep switching tenants.
 func TestService_SwitchTenant_StillValidSessionSucceeds(t *testing.T) {
 	t.Parallel()
 
@@ -806,15 +808,16 @@ func (w *wedgeMembershipReader) TenantsOf(ctx context.Context, userID string) ([
 	return w.inner.TenantsOf(ctx, userID)
 }
 
-// TestService_SwitchTenant_ConcurrentRevoke_IsRefused is the regression for
-// the audit finding that SessionRepository.SetCurrentTenant dropped its own
-// compare-and-swap result: a revoke landing between SwitchTenant's read of
-// the session and its tenant update made the UPDATE match zero rows while
-// still returning nil, so the caller minted a full-lifetime token pair for a
-// session a concurrent sign-out had just killed -- a revoked session kept
-// issuing tokens. The wedge parks the switch between its read and its write
-// (both sides of the race run for real against the same database) and proves
-// the revoke wins: the switch must answer ErrSessionRevoked and mint nothing.
+// TestService_SwitchTenant_ConcurrentRevoke_IsRefused pins the
+// compare-and-swap report on the switch path: SetCurrentTenant must report
+// whether its UPDATE matched a row, because a revoke landing between
+// SwitchTenant's read of the session and its tenant update makes the UPDATE
+// match zero rows -- if the caller ignored that, it would mint a
+// full-lifetime token pair for a session a concurrent sign-out had just
+// killed, and a revoked session would keep issuing tokens. The wedge parks
+// the switch between its read and its write (both sides of the race run for
+// real against the same database) and proves the revoke wins: the switch
+// must answer ErrSessionRevoked and mint nothing.
 func TestService_SwitchTenant_ConcurrentRevoke_IsRefused(t *testing.T) {
 	t.Parallel()
 
@@ -920,17 +923,17 @@ func TestService_Refresh_RefusesASuspendedAccount(t *testing.T) {
 	}
 }
 
-// TestService_Refresh_TransientMembershipFailureDoesNotConsumeTheToken is the
-// regression for the go/authn audit's sequencing finding: refresh used to
-// rotate (consume) the presented refresh token BEFORE re-verifying
-// membership, so a transient MembershipReader failure left the presented
-// token permanently spent even though the caller never received its
-// replacement. The client's own, entirely legitimate retry with that same
-// token then hit Rotate's replay detector -- which is exactly correct
-// behaviour for an actually-replayed token, but wrong here -- and revoked
-// the whole refresh-token family, the session, and fired
+// TestService_Refresh_TransientMembershipFailureDoesNotConsumeTheToken pins
+// the sequencing boundary: refresh must re-verify membership BEFORE
+// rotating (consuming) the presented refresh token. Rotating first would
+// leave a transient MembershipReader failure with the presented token
+// permanently spent even though the caller never received its replacement;
+// the client's own, entirely legitimate retry with that same token would
+// then hit the replay detector -- exactly correct behaviour for an
+// actually-replayed token, but wrong here -- and revoke the whole
+// refresh-token family and the session and fire
 // EventSessionReplayDetected, all over what was really a backend hiccup. A
-// two-second MembershipReader outage does not get to look identical to a
+// two-second MembershipReader outage must not get to look identical to a
 // stolen refresh token.
 func TestService_Refresh_TransientMembershipFailureDoesNotConsumeTheToken(t *testing.T) {
 	t.Parallel()
@@ -973,11 +976,11 @@ func TestService_Refresh_TransientMembershipFailureDoesNotConsumeTheToken(t *tes
 }
 
 // TestService_Refresh_ActualReplayStillRevokesTheFamily is the companion
-// guard for the fix above: an actually-replayed refresh token -- one already
-// rotated by a prior, successful call -- must still be caught, still revoke
-// the whole family and session, and still announce
-// EventSessionReplayDetected. Reordering refresh's re-verification ahead of
-// rotation must not weaken this real security property.
+// guard: an actually-replayed refresh token -- one already rotated by a
+// prior, successful call -- must still be caught, still revoke the whole
+// family and session, and still announce EventSessionReplayDetected.
+// Running refresh's re-verification ahead of rotation must not weaken this
+// real security property.
 func TestService_Refresh_ActualReplayStillRevokesTheFamily(t *testing.T) {
 	t.Parallel()
 
@@ -1009,25 +1012,23 @@ func TestService_Refresh_ActualReplayStillRevokesTheFamily(t *testing.T) {
 	}
 }
 
-// TestService_Refresh_ActualReplay_LeavesADurableAuditRecord is the
-// regression for the P1 finding that a detected refresh-token replay left
-// no durable record: the module audits an ordinary wrong password but not a
-// detected credential theft, so a theft that was correctly stopped left no
-// trace anyone could query afterwards. It drives the real service path --
-// register, sign in, refresh (which rotates the family), then present the
-// now-consumed token again -- through the same construction a host uses (a
-// Module registered on a real pkgcore.Registry, exactly module.go's
-// Register runs in production, so the registrar wiring under test is the
-// real one), and asserts the response lands in the audit trail: an
-// authn.session.revoke record with Success=false and RevokeReasonReplay as
-// the FailureReason, attributed to the account owner and stamped with the
-// tenant the revoked session acted in -- the same shape that tells the
+// TestService_Refresh_ActualReplay_LeavesADurableAuditRecord pins the
+// durable record a detected refresh-token replay must leave: the module
+// audits an ordinary wrong password, so a detected credential theft must
+// leave a trace anyone can query afterwards too. It drives the real service
+// path -- register, sign in, refresh (which rotates the family), then
+// present the now-consumed token again -- through the same construction a
+// host uses (a Module registered on a real pkgcore.Registry, exactly
+// module.go's Register runs in production, so the registrar wiring under
+// test is the real one), and asserts the response lands in the audit trail:
+// an authn.session.revoke record with Success=false and RevokeReasonReplay
+// as the FailureReason, attributed to the account owner and stamped with
+// the tenant the revoked session acted in -- the same shape that tells the
 // record apart from an owner-initiated logout, which records Success=true
 // under the same action. The detection's own behavior (family rotation,
 // session revocation, the two events) is pinned here too, so the record
-// cannot be bought by weakening it. Before the fix, nothing durable exists:
-// findAuditEvent fails the flow with its no-audit-event error, since not a
-// single EventRecorded event reaches the bus.
+// cannot be bought by weakening it: if nothing durable were emitted, no
+// EventRecorded event would reach the bus at all.
 //
 // The replay path also writes no login-attempt row -- refresh is not a
 // sign-in attempt -- pinned by the history-count assertion below (the one
@@ -1078,7 +1079,7 @@ func TestService_Refresh_ActualReplay_LeavesADurableAuditRecord(t *testing.T) {
 		t.Fatalf("replayed Refresh() error = %v, want code %q", replayErr, ErrRefreshTokenReused.Code)
 	}
 
-	// The detection still does what it always did: the security event fires
+	// The detection keeps its own behavior: the security event fires
 	// and the session's end is announced.
 	if n := recorder.Count(EventSessionReplayDetected); n != 1 {
 		t.Fatalf("EventSessionReplayDetected fired %d times for an actual replay, want 1", n)
@@ -1087,10 +1088,10 @@ func TestService_Refresh_ActualReplay_LeavesADurableAuditRecord(t *testing.T) {
 		t.Fatalf("EventSessionRevoked fired %d times for an actual replay, want 1", n)
 	}
 
-	// And now it also leaves the record the fix ships: one audit row under
-	// the session-revoke action, refused-presentation shape, attributable
-	// to the owner and tenant-stamped -- indistinguishable from nothing at
-	// all before the fix, and distinguishable from a logout after it.
+	// The replay leaves one audit row under the session-revoke action, in
+	// the refused-presentation shape, attributable to the owner and
+	// tenant-stamped -- present where nothing else would be, and
+	// distinguishable from a logout.
 	evt := findAuditEvent(t, recorder, AuditActionSessionRevoke)
 	if evt.Result.Success {
 		t.Errorf("Result.Success = true, want false: the replayed refresh was refused (401)")
@@ -1425,17 +1426,17 @@ func TestRegisterAuthMetrics_Smoke(t *testing.T) {
 	}
 }
 
-// TestService_UpgradePasswordHash_DoesNotRegressACommittedColumn is the
-// regression test for upgradePasswordHash's write shape. The method used to
-// persist its rehash through UserRepository.Save -- a whole-row rewrite of
-// the user the sign-in read BEFORE the argon2 verification ran. Any column
-// another caller committed on that row between the read and the save (a
-// concurrent SMS sign-in marking the phone verified, the shape this test
-// stands in for) was silently undone by the stale snapshot's write-back.
+// TestService_UpgradePasswordHash_DoesNotRegressACommittedColumn pins
+// upgradePasswordHash's write shape: the rehash must NOT persist through a
+// whole-row rewrite of the user the sign-in read BEFORE the argon2
+// verification ran. Any column another caller committed on that row between
+// the read and the save (a concurrent SMS sign-in marking the phone
+// verified, the shape this test stands in for) would be silently undone by
+// the stale snapshot's write-back.
 //
 // The test is deterministic rather than a timed race because the hazard
 // does not need real concurrency to materialize: the stale snapshot IS the
-// bug, so handing upgradePasswordHash a user object that predates a
+// hazard, so handing upgradePasswordHash a user object that predates a
 // committed column change reproduces it exactly. Sequence:
 //
 //  1. an account whose password hash was minted under WEAKER parameters
@@ -1446,9 +1447,9 @@ func TestRegisterAuthMetrics_Smoke(t *testing.T) {
 //     sign-in's own commit);
 //  4. the rehash.
 //
-// Before the fix, step 4's whole-row Save writes the step-2 snapshot's
-// PhoneVerified == false back over step 3's commit: the flag regresses. The
-// rehash must persist exactly the one column it owns.
+// A whole-row save in step 4 would write the step-2 snapshot's
+// PhoneVerified == false back over step 3's commit: the flag would regress.
+// The rehash must persist exactly the one column it owns.
 func TestService_UpgradePasswordHash_DoesNotRegressACommittedColumn(t *testing.T) {
 	// An account whose stored hash is stale against this Service's current
 	// parameters: minted under weaker ones.
@@ -1502,18 +1503,19 @@ func TestService_UpgradePasswordHash_DoesNotRegressACommittedColumn(t *testing.T
 	}
 }
 
-// TestService_Register_ConcurrentDuplicateAnswersTheCodedConflict is the
-// P3-20 regression: when two registrations of one email race, the database's
-// unique index (idx_users_email_index) admits exactly one insert and refuses
-// the other, and the loser must hear the same coded conflict a sequential
-// duplicate hears (Register's pre-checks answer that one) -- never a bare
-// internal error, which would tell the client the server broke when the
-// truth is that the address is taken.
+// TestService_Register_ConcurrentDuplicateAnswersTheCodedConflict pins the
+// duplicate-registration race: when two registrations of one email race,
+// the database's unique index (idx_users_email_index) admits exactly one
+// insert and refuses the other, and the loser must hear the same coded
+// conflict a sequential duplicate hears (Register's pre-checks answer that
+// one) -- never a bare internal error, which would tell the client the
+// server broke when the truth is that the address is taken.
 //
 // Deliberately not t.Parallel and run over fresh fixtures per round: the
 // losers' inserts only lose when their pre-checks overlap (both read "no
-// such account" before either inserts), a wall-clock race -- the loop only
-// costs the broken code its luck.
+// such account" before either inserts), a wall-clock race -- the loop
+// exists because every round must be deterministic: the database arbitrates
+// exactly one winner.
 func TestService_Register_ConcurrentDuplicateAnswersTheCodedConflict(t *testing.T) {
 	const (
 		rounds = 8
@@ -1560,28 +1562,27 @@ func TestService_Register_ConcurrentDuplicateAnswersTheCodedConflict(t *testing.
 	}
 }
 
-// TestService_Register_CallerContextTenantNeverReachesEventUserCreated is
-// the P1-authn-15 regression at the service layer: Service.Register used to
-// publish authn.user.created through Service.publish, which filled an
-// event's empty TenantID from the context it was published in. A host
-// composition whose tenancy middleware resolves even allowlisted pre-auth
-// routes -- go/tenancy.WithAllowlist exempts a route from the 403 on a
-// RESOLUTION FAILURE, it does not skip resolution -- hands Register a
-// context carrying the CALLER's own tenant whenever the caller holds a
-// valid bearer (the api-client attaches the held token to every request by
-// default), so registering through the app's own register form used to
-// stamp the caller's tenant onto the new account's user.created event.
-// Subscribers then read that stamp as the account's tenant: org's
-// handleUserCreated (go/org/events.go) seats the account in the caller's
-// tenant, and a host's tenant-less self-service provisioning skips it, so
-// the account got a seat in the caller's tenant and no workspace of its
-// own -- and any authenticated tenant member could add arbitrary new
-// accounts to their tenant with no invitation, permission check or email
-// verification.
+// TestService_Register_CallerContextTenantNeverReachesEventUserCreated
+// pins the pre-tenant publish at the service layer: Service.Register
+// publishes authn.user.created through Service.publishTenantless, so the
+// event never picks a TenantID up from the context it is published in. The
+// hazard the shape guards is real: a host composition whose tenancy
+// middleware resolves even allowlisted pre-auth routes --
+// go/tenancy.WithAllowlist exempts a route from the 403 on a RESOLUTION
+// FAILURE, it does not skip resolution -- hands Register a context carrying
+// the CALLER's own tenant whenever the caller holds a valid bearer (the
+// api-client attaches the held token to every request by default), so an
+// event that inherited the context tenant would stamp the caller's tenant
+// onto the new account's user.created event. Subscribers would then read
+// that stamp as the account's tenant: org's handleUserCreated
+// (go/org/events.go) would seat the account in the caller's tenant, and a
+// host's tenant-less self-service provisioning would skip it -- the account
+// would get a seat in the caller's tenant and no workspace of its own, and
+// any authenticated tenant member could add arbitrary new accounts to their
+// tenant with no invitation, permission check or email verification.
 //
 // Registration is pre-tenant: the account is created in no tenant, and the
-// event must carry no tenant regardless of what the caller's context
-// holds. Failing before the fix: the event carried the caller's tenant.
+// event must carry no tenant regardless of what the caller's context holds.
 func TestService_Register_CallerContextTenantNeverReachesEventUserCreated(t *testing.T) {
 	t.Parallel()
 

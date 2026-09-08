@@ -47,10 +47,10 @@
  * tenants) and a later sign-in of the same identifier succeeds into
  * that clinic, exactly like any member's sign-in -- the browser shape,
  * a body naming no tenant_id (the login form has no tenant field),
- * which the composed stack answers the same way. The old
- * registered-but-unseeded dead end -- registration answering 201 and a
- * later sign-in answering 403 authn.tenant_membership_required -- no
- * longer exists on the real server and no longer exists here. A
+ * which the composed stack answers the same way. The
+ * registered-but-unseeded shape -- a registration answering 201 and a
+ * later sign-in answering 403 authn.tenant_membership_required --
+ * exists on neither the real server nor this fixture. A
  * clinic's NAME mirrors the real host's naming decision
  * (cmd/server/self_service.go's clinicRootNameFor): the display name a
  * register body carries names the provisioned clinic (the later
@@ -101,7 +101,7 @@
  * POST /api/v1/cases/photos/upload (201 {object_id}, the one-shot
  * upload answer), GET /api/v1/cases/{caseId} (200, one case) and GET
  * /api/v1/cases/{caseId}/photos/{photoObjectID}/content (200, the
- * photo's bytes) -- plus the block-D credits surface's two reads, GET
+ * photo's bytes) -- plus the credits surface's two reads, GET
  * /api/v1/billing/credits/balance (200, the balance) and GET
  * /api/v1/billing/credits/transactions (200, the recent ledger rows,
  * newest first), mirroring go/billing's read-only fragment: the

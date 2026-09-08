@@ -68,9 +68,9 @@ import (
 //     the SAME holder's row would wake together and race each other for it,
 //     a coin flip no test may depend on). M completes its move and commits,
 //     and only then is X woken: X's mark-delete statement resumes against
-//     M's committed result, which is exactly the state the pre-fix code
-//     mishandled. The outcome is a forced, reproducible failure on the
-//     pre-fix code and a consistent one on the fixed code, in three rounds
+//     M's committed result. The outcome is a forced, reproducible failure on
+//     the plain-Find shape and a consistent one on the lockSubtree shape,
+//     in three rounds
 //     each on fresh tenants.
 //
 // Against the plain-Find version of deleteSubtree, Test
@@ -78,11 +78,11 @@ import (
 // assertCascadeDeleteConsistency (the event names the moved-out node the
 // UPDATE skipped) and ...MoveInDuringCascade fails its no-live-rows
 // assertion (the moved-in nodes survive under the mark-deleted parent).
-// Against the fixed code both tests pass: lockSubtree holds every subtree
-// row's lock to a fixed point before the UPDATE, so the row set it returns
-// is exactly the row set the UPDATE matches -- a writer that committed into
-// the subtree is re-scanned and locked, a writer that moved a row out loses
-// it from the re-scan before the UPDATE ever runs.
+// Against the lockSubtree shape both tests pass: lockSubtree holds every
+// subtree row's lock to a fixed point before the UPDATE, so the row set it
+// returns is exactly the row set the UPDATE matches -- a writer that
+// committed into the subtree is re-scanned and locked, a writer that moved
+// a row out loses it from the re-scan before the UPDATE ever runs.
 
 // holdNodeRowLockTx opens a transaction on db and write-locks the live row
 // nodeID with the identical no-op UPDATE touchLockByID (repository.go) uses,
@@ -236,7 +236,7 @@ func subtreeRowsUnscoped(t *testing.T, db *gorm.DB, ctx context.Context, prefix 
 }
 
 // assertCascadeDeleteConsistency checks the two directions of the race the
-// plain-Find deleteSubtree used to lose, and nothing else: after the delete
+// plain-Find deleteSubtree would lose, and nothing else: after the delete
 // has returned, no live row may remain under prefix (a cascade delete that
 // orphans a just-moved-in node fails here), and the org.node.deleted event's
 // DeletedNodeIds must equal the set of rows actually mark-deleted under
@@ -281,14 +281,14 @@ func assertCascadeDeleteConsistency(t *testing.T, db *gorm.DB, ctx context.Conte
 // roles are T = this test, holding the lock on E that the Move's destination
 // parent lock must wait on; M = Move(D, E), parked with D locked while T is
 // held; X = the cascading Delete(A), parked on D's lock with its capture
-// (pre-fix Find) or lockSubtree scan (fixed code) already done. When T
+// (plain Find) or lockSubtree scan already done. When T
 // commits, M relocates D under E and commits before X resumes; the plain
 // Find had already captured D's id, but the UPDATE's EvalPlanQual re-check
 // skips D the moment its committed path no longer matches the prefix -- the
 // event over-counts, and only assertCascadeDeleteConsistency's
 // event-set-vs-reality comparison catches it. The fixed code re-scans after
-// D's lock is taken, sees D leave the subtree, and reports exactly the rows
-// it deletes.
+// D's lock is taken, sees D leave the subtree, and reports exactly the
+// rows it deletes.
 func TestDeleteSubtreeEventIDs_MoveOutDuringCascade_NoOvercount_Postgres(t *testing.T) {
 	db := newPostgres(t)
 	tree, _, events := wiredOrgTree(t, db)
@@ -318,7 +318,7 @@ func TestDeleteSubtreeEventIDs_MoveOutDuringCascade_NoOvercount_Postgres(t *test
 
 		// T holds E, so M's lockLiveNode on its destination parent parks it
 		// after it has already locked D -- the exact mid-Move state whose
-		// eventual commit the pre-fix capture could not survive.
+		// eventual commit a plain-Find capture could not survive.
 		held := holdNodeRowLockTx(t, db, ctx, e.ID)
 
 		var (
@@ -372,13 +372,13 @@ func TestDeleteSubtreeEventIDs_MoveOutDuringCascade_NoOvercount_Postgres(t *test
 // child) that M's lockSubtree must wait on, which also proves M has already
 // locked B and its destination C by the time X starts; M = Move(B, C); X =
 // the cascading Delete(A). When T commits, M rewrites B and D2 under C and
-// commits before X resumes; the pre-fix Find never saw B or D2, and the
+// commits before X resumes; a plain Find never saw B or D2, and the
 // mark-delete UPDATE's statement snapshot -- taken while M was still parked
 // -- predates M's commit, so B and D2 are not even candidates for it: they
 // survive as LIVE rows under the mark-deleted C, a deletion the event set
 // (which matches reality) cannot expose to any subscriber. Only
-// assertCascadeDeleteConsistency's no-live-rows assertion catches it. The
-// fixed code's lockSubtree re-scans once C's lock is taken, discovers the
+// assertCascadeDeleteConsistency's no-live-rows assertion catches it.
+// lockSubtree re-scans once C's lock is taken, discovers the
 // newly arrived B and D2, locks them, and includes them in both the deleted
 // set and the UPDATE.
 func TestDeleteSubtreeEventIDs_MoveInDuringCascade_NoUnderCount_Postgres(t *testing.T) {
@@ -452,21 +452,21 @@ func TestDeleteSubtreeEventIDs_MoveInDuringCascade_NoUnderCount_Postgres(t *test
 		if !evt.Cascade {
 			t.Fatalf("%s: org.node.deleted Cascade = false, want true", label)
 		}
-		// Post-fix the whole relocated subtree lands in the deleted set with
-		// A and C: the event names B and D2 and no live row survives under
-		// A's prefix. Pre-fix B and D2 survive live under the mark-deleted C
+		// The whole relocated subtree lands in the deleted set with A and C:
+		// the event names B and D2 and no live row survives under A's prefix.
+		// With a plain Find, B and D2 survive live under the mark-deleted C
 		// and fail the assertion below.
 		assertCascadeDeleteConsistency(t, db, ctx, a.Path, evt, label)
 	}
 }
 
 // TestDeleteSubtree_MemberAddToInteriorDescendant_DuringCascade_NoDanglingMembership_Postgres
-// is the deterministic P1-4 proof: deleteSubtree's member guard used to run
-// right after nodeID's own lock but BEFORE lockSubtree ever locked the
+// is the deterministic member-guard proof: deleteSubtree's member guard
+// runs right after nodeID's own lock but BEFORE lockSubtree ever locks the
 // interior descendants of the subtree. A concurrent MemberService.Add
 // targeting an INTERIOR descendant -- never the deleted node itself -- takes
 // only lockLiveNode on THAT row (membership.go's ensure), a row the cascade
-// had not touched yet at guard time, so Add could commit a membership into
+// had not touched yet at guard time, so Add can commit a membership into
 // the window between the guard's read and the cascade's eventual sweep of
 // the descendant: the membership survives bound to a row the cascade then
 // mark-deleted. This is the same TOCTOU family the member-guard round closed
@@ -487,14 +487,14 @@ func TestDeleteSubtreeEventIDs_MoveInDuringCascade_NoUnderCount_Postgres(t *test
 // its membership insert commits, and its transaction ends while X is still
 // mid-lockSubtree.
 //
-// On the pre-fix code X's guard already ran (before lockSubtree) and saw no
-// members, so once T commits and X sweeps the whole subtree, A2's just-
-// committed membership is left bound to a mark-deleted row -- the dangling
-// membership the assertions below catch. On the fixed code the guard runs
-// only after lockSubtree has locked every row of the subtree to a fixed
-// point, so A2's committed membership is visible to that later guard read
-// and X refuses with org.node_has_members, rolling back; the membership and
-// its node both stay live.
+// If X's guard ran (before lockSubtree) it would see no members, so once T
+// commits and X sweeps the whole subtree, A2's just-committed membership is
+// left bound to a mark-deleted row -- the dangling membership the
+// assertions below catch. With the guard running only after lockSubtree has
+// locked every row of the subtree to a fixed point, A2's committed
+// membership is visible to that later guard read and X refuses with
+// org.node_has_members, rolling back; the membership and its node both stay
+// live.
 func TestDeleteSubtree_MemberAddToInteriorDescendant_DuringCascade_NoDanglingMembership_Postgres(t *testing.T) {
 	db := newPostgres(t)
 	tree, members, _ := wiredOrgTree(t, db)
@@ -566,8 +566,8 @@ func TestDeleteSubtree_MemberAddToInteriorDescendant_DuringCascade_NoDanglingMem
 
 		// The invariant that matters either way: the membership Add created
 		// must not be bound to a row the cascade removed. If the cascade won
-		// (pre-fix shape) the Add committed into its sweep window and this
-		// Get fails -- the dangling membership.
+		// the race, the Add committed into its sweep window and this Get
+		// fails -- the dangling membership.
 		if _, err := members.Get(ctx, userID); err != nil {
 			t.Fatalf("%s: the membership Add reported success but Get failed: %v", label, err)
 		}

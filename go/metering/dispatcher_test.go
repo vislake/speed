@@ -152,15 +152,15 @@ func TestDispatcher_RunOnce_DeliveryFailure_LeavesRowPendingWithAttemptRecorded(
 }
 
 // TestDispatcher_CrashMidDelivery_RowIsRecoveredOnTheNextRun is the
-// round's mandated crash-recovery proof: it "kills" the delivery path
-// mid-flight -- an Aggregator whose database connection has been closed,
-// simulating a process crash between claiming a row and finishing its
-// delivery -- confirms the outbox row is NOT lost (still present, still
-// pending, in the SAME durable table Enqueue wrote it to), and then
-// confirms a fresh, healthy Dispatcher recovers and delivers it
-// successfully. This is what makes Enqueue's "write, then async deliver"
-// promise real rather than aspirational: nothing about a mid-delivery
-// crash can make an enqueued event disappear.
+// crash-recovery proof: it "kills" the delivery path mid-flight -- an
+// Aggregator whose database connection has been closed, simulating a
+// process crash between claiming a row and finishing its delivery --
+// confirms the outbox row is NOT lost (still present, still pending, in
+// the SAME durable table Enqueue wrote it to), and then confirms a
+// fresh, healthy Dispatcher recovers and delivers it successfully. This
+// is what makes Enqueue's "write, then async deliver" promise real
+// rather than aspirational: nothing about a mid-delivery crash can make
+// an enqueued event disappear.
 func TestDispatcher_CrashMidDelivery_RowIsRecoveredOnTheNextRun(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "metering_dispatcher_crash.sqlite")
 
@@ -416,11 +416,10 @@ func TestDispatcher_Stop_BeforeStart_DoesNotPreventStoppingALaterLoop(t *testing
 // TestDispatcher_ConcurrentStartAndStop_NoDataRace drives Start and Stop
 // from racing goroutines -- one Start racing two Stops, so a Stop can
 // also land while another Stop is mid-wait and a Start has already
-// replaced the loop generation. Before the fix the two sync.Once
-// critical sections wrote and read the stop/done fields without any
-// synchronization between them, which the race detector can see when the
-// calls actually overlap. After the fix every lifecycle field is guarded
-// by the lifecycle mutex (or passed to the goroutine by value), and a
+// replaced the loop generation. Every lifecycle field is guarded by the
+// lifecycle mutex (or passed to the goroutine by value) -- never written
+// and read without synchronization between the racing goroutines, which
+// the race detector would see when the calls actually overlap -- and a
 // Stop only clears the started flag for the generation it actually
 // waited on, so any interleaving is race-free and every order converges.
 func TestDispatcher_ConcurrentStartAndStop_NoDataRace(t *testing.T) {
@@ -476,8 +475,9 @@ func TestDispatcher_RunOnce_FailedRowsAtTheHead_DoNotStarveNewerRows(t *testing.
 		// row's CreatedAt is the wall clock at Enqueue, so it must be
 		// strictly newer than every poison row at any execution speed -- a
 		// fast setup would otherwise land it inside the pile's timestamp
-		// window and the pre-fix created_at-only claim (the bug this test
-		// pins) would deliver it by accident, a false green in plain mode.
+		// window and a created_at-only claim (the ordering this test pins
+		// against) would deliver it by accident, a false green in plain
+		// mode.
 		at := poisonAt.Add(-time.Hour).Add(time.Duration(i) * time.Millisecond)
 		rec.CreatedAt = at
 		rec.RetryAfter = &at
@@ -560,17 +560,17 @@ func pendingRowsForTest(t *testing.T, ctx context.Context, db *gorm.DB, limit in
 }
 
 // TestDispatcher_RunOnce_OnceFailedRow_IsStillRetriedUnderSteadyArrivals
-// is the P1-metering-10 regression at the Dispatcher level: the claim
-// query this round replaced ranked never-failed rows (Attempts 0) as a
-// strict class ahead of every already-failed row, so under a sustained
-// enqueue rate -- where every batch filled with never-failed rows -- a
-// row that had failed ONCE was never claimed again: permanent starvation
-// of exactly the rows retry exists to reach. Under the schedule ordering
-// (retry_after, migration 0005) the once-failed row is claimable again
-// the moment its re-claim window opens, and because its schedule slot
-// predates every row enqueued afterwards, no flood of new arrivals can
-// push it out of the batch: it is retried -- and here, recovered -- on
-// the very next cycle.
+// pins the anti-starvation property at the Dispatcher level: ranking
+// never-failed rows (Attempts 0) as a strict class ahead of every
+// already-failed row would, under a sustained enqueue rate -- every
+// batch filled with never-failed rows -- leave a row that had failed
+// ONCE unclaimed forever: permanent starvation of exactly the rows
+// retry exists to reach. Under the schedule ordering (retry_after,
+// migration 0005) the once-failed row is claimable again the moment its
+// re-claim window opens, and because its schedule slot predates every
+// row enqueued afterwards, no flood of new arrivals can push it out of
+// the batch: it is retried -- and here, recovered -- on the very next
+// cycle.
 func TestDispatcher_RunOnce_OnceFailedRow_IsStillRetriedUnderSteadyArrivals(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "metering_dispatcher_starvation.sqlite")
 	db := openAndMigrate(t, dsn)
@@ -607,8 +607,8 @@ func TestDispatcher_RunOnce_OnceFailedRow_IsStillRetriedUnderSteadyArrivals(t *t
 	// From cycle 2 on, a healthy dispatcher races the once-failed row
 	// against a steady flood: every cycle enqueues one full batch of
 	// fresh rows before RunOnce claims one batch, so each batch could
-	// fill entirely with never-failed rows -- which is exactly what the
-	// pre-fix attempts-class ordering did, every cycle, forever.
+	// fill entirely with never-failed rows -- which is exactly what an
+	// attempts-class ordering would do, every cycle, forever.
 	dHealthy := NewDispatcher(db, NewAggregator(NewSummaryRepository(db)))
 	dHealthy.batchSize = 5
 	const floodCycles = 10
@@ -651,11 +651,11 @@ func TestDispatcher_RunOnce_OnceFailedRow_IsStillRetriedUnderSteadyArrivals(t *t
 	}
 }
 
-// TestDispatcher_RetentionSweep_RetiresDeliveredRowsOlderThanRetention is
-// the P3-metering-16 regression: delivered outbox rows and the ingest
-// receipts their deliveries created used to stay on their tables forever
-// -- monotonic growth with every delivered event. Dispatcher's poll loop
-// now runs a bounded retention pass each cycle
+// TestDispatcher_RetentionSweep_RetiresDeliveredRowsOlderThanRetention
+// pins the retention contract: delivered outbox rows and the ingest
+// receipts their deliveries created must not stay on their tables
+// forever -- monotonic growth with every delivered event. Dispatcher's
+// poll loop runs a bounded retention pass each cycle
 // (retireDeliveredOutboxRecords) that retires delivered rows which have
 // stayed delivered past the retention window, together with each row's
 // receipt, in one transaction. A delivered row younger than the window --
@@ -722,13 +722,13 @@ func TestDispatcher_RetentionSweep_RetiresDeliveredRowsOlderThanRetention(t *tes
 	})
 }
 
-// TestDispatcher_CancelThenStart_RestartsThePollLoop is the
-// P3-metering-14 lifecycle finding in its Dispatcher form: when the poll
-// loop exits because its ctx was canceled -- not because Stop closed the
-// stop channel -- the started flag used to stay set forever, so a later
-// Start was a permanent no-op and the dispatcher never polled again. run
-// now clears the started flag for its own loop generation on exit, so a
-// canceled ctx leaves Start restartable.
+// TestDispatcher_CancelThenStart_RestartsThePollLoop pins the
+// cancel-restart contract in its Dispatcher form: when the poll loop
+// exits because its ctx was canceled -- not because Stop closed the stop
+// channel -- the started flag must not stay set forever, or a later
+// Start would be a permanent no-op and the dispatcher would never poll
+// again. run clears the started flag for its own loop generation on
+// exit, so a canceled ctx leaves Start restartable.
 func TestDispatcher_CancelThenStart_RestartsThePollLoop(t *testing.T) {
 	d, agg, db := newTestDispatcher(t)
 	d.interval = 10 * time.Millisecond
@@ -763,11 +763,9 @@ func TestDispatcher_CancelThenStart_RestartsThePollLoop(t *testing.T) {
 }
 
 // TestDispatcher_RunOnce_PermanentlyFailingRow_EscalatesToErrorPastTheStatedHorizon
-// is the P2 billing/metering observability regression: a billing-grade
-// delivery row whose sink permanently fails delivery was retried forever
-// with only a per-attempt Warn -- no cap, no escalation -- although the
-// documented billing-grade contract (docs/internal/06-billing-and-metering.md's
-// reliability-tier table: delivery failure "retries indefinitely, plus an
+// pins the escalation half of the billing-grade contract: a delivery row
+// whose sink permanently fails delivery must not be retried forever with
+// only a per-attempt Warn -- the contract ("retries indefinitely, plus an
 // alert", restated on Dispatcher's own doc comment) promises exactly that
 // alert. The contract's alert half is implemented as an escalation horizon:
 // once a row's failed attempts reach the dispatcher's stated threshold

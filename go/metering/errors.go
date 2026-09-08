@@ -16,10 +16,9 @@ import "github.com/vislake/speed/go/pkgcore/apperr"
 // ErrUsageSummariesUnconfigured). In particular there is no
 // "metering.unknown_feature": metering has no feature catalog to check an
 // event's Feature against (that belongs to go/billing's
-// Plan/Feature/Entitlement model, per AGENTS.md), so a code for a check
-// nothing performs would be dead catalog weight, not forward
-// compatibility -- the same discipline go/pki's error index documents for
-// its own round boundary.
+// Plan/Feature/Entitlement model), so a code for a check nothing performs
+// would be dead catalog weight, not forward compatibility -- the same
+// discipline go/pki's error index documents for its own module boundary.
 var (
 	// ErrMissingTenantID reports that a UsageEvent's TenantID was empty.
 	// Unlike an HTTP API, this Go-level Recorder/Enqueue surface takes the
@@ -40,8 +39,8 @@ var (
 	// ErrInvalidQuantity reports that a UsageEvent's Quantity was negative,
 	// NaN or infinite. Zero is legal (a usage event that measures something
 	// other than a positive quantity, e.g. a heartbeat); negative is not --
-	// a correction or refund is a business-level concept metering's own
-	// pipeline does not model this round, not a negative usage record.
+	// a correction or refund is a business-level concept outside metering's
+	// pipeline, not a negative usage record.
 	ErrInvalidQuantity = apperr.Invalid("metering.invalid_quantity")
 
 	// ErrMetadataTooLarge reports that a UsageEvent's Metadata exceeded the

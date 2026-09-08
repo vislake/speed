@@ -408,11 +408,10 @@ var (
 
 	// ErrInvalidRequestBody is returned by decodeJSON (handler.go) for a
 	// request body that does not decode into the operation's expected
-	// shape. Every one of this module's twenty HTTP operations that reads
-	// a body can answer with it, which is exactly what made its previous
-	// absence from this catalog (and from both locale files) a real gap: a
-	// client had no text to render for the single most common decode
-	// failure any endpoint can produce, only the raw code.
+	// shape. Every one of this module's HTTP operations that reads a body
+	// can answer with it, and both locale files carry its text, so a client
+	// has something to render for the single most common decode failure any
+	// endpoint can produce rather than only the raw code.
 	ErrInvalidRequestBody = apperr.Invalid("authn.invalid_request_body")
 )
 

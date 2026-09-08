@@ -109,8 +109,8 @@ func TestAuditService_Query_CrossTenant_UsesLedgerAsTenantList(t *testing.T) {
 	insertTestEvent(t, auditRepo, "tenant-a", "notes.note.create")
 	insertTestEvent(t, auditRepo, "tenant-b", "notes.note.create")
 	// A tenant NOT in the ledger: the cross-tenant read must not see it,
-	// since D7's cross-tenant path draws its candidate list from D3's own
-	// ledger.
+	// since the cross-tenant path draws its candidate list from admin's
+	// own ledger.
 	insertTestEvent(t, auditRepo, "tenant-unregistered", "notes.note.create")
 
 	events, err := svc.Query(ctx, "operator-1", AuditFilter{})
@@ -158,18 +158,16 @@ func TestAuditService_Get_PassesThrough(t *testing.T) {
 	}
 }
 
-// TestHandler_AdminListAuditEvents_ServesChangesBackToTheOperator is
-// P2-2's read-back regression at the D7 shell: the audit event's
+// TestHandler_AdminListAuditEvents_ServesChangesBackToTheOperator pins
+// the changes read-back at the audit shell: the audit event's
 // before/after changes must come back through GET /api/v1/admin/audit-events,
 // so the record an operator searches for -- an impersonation start among
-// them -- carries the diff that names the operator's own reason. On
-// unfixed code the shell served every element of the six-element audit
-// event shape except Changes: an event could say that an impersonation
-// started but never why, and the mandatory reason (docs/internal/23-admin.md
-// section 4.1: the reason itself is part of the audit) was a write-time
+// them -- carries the diff that names the operator's own reason. Without
+// it an event could say that an impersonation started but never why, and
+// the mandatory reason (itself part of the audit) would be a write-time
 // formality the operator who wrote it could not read back once the grant
-// ended. The assertion walks the raw JSON response so the regression
-// holds against the wire shape itself.
+// ended. The assertion walks the raw JSON response so the test holds
+// against the wire shape itself.
 func TestHandler_AdminListAuditEvents_ServesChangesBackToTheOperator(t *testing.T) {
 	svc, auditRepo, _ := newTestAuditService(t)
 

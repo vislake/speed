@@ -61,13 +61,12 @@ func TestInit_NoEndpoint_MetricsHandlerIsNotConfiguredByDefault(t *testing.T) {
 }
 
 // TestInit_NoEndpoint_NoLocalMetricsReader_LogsStartupWarning proves the
-// no-local-scrape-endpoint default is no longer silent: with nothing
-// registered via RegisterLocalMetricsReader, Init now logs a one-time
-// startup warning naming both ways forward, mirroring go/pkgcore's own
-// non-fatal warnIfNotDurable startup-banner convention (root CLAUDE.md's
-// deployment-composition section) rather than leaving discovery entirely
-// to whoever eventually probes /metrics or notices a scrape-failure
-// dashboard. This package's own test binary never blank-imports
+// no-local-scrape-endpoint default is not silent: with nothing registered
+// via RegisterLocalMetricsReader, Init logs a one-time startup warning
+// naming both ways forward, mirroring go/pkgcore's own non-fatal
+// warnIfNotDurable startup-banner convention, rather than leaving
+// discovery entirely to whoever eventually probes /metrics or notices a
+// scrape-failure dashboard. This package's own test binary never blank-imports
 // exporter/prometheus (see
 // TestInit_NoEndpoint_MetricsHandlerIsNotConfiguredByDefault's own
 // comment on why), so metricsReaderFactory is genuinely nil here.
@@ -145,18 +144,17 @@ func TestMetricsHandler_WithOTLPEndpoint_ReturnsNotFound(t *testing.T) {
 // serializes and transmits a real span and a real metric to it,
 // deterministically and in-process.
 // Because it needs no external process or Docker, it stays in the
-// regular unit-test set rather than integration_test/ -- see
-// backend-coding-standards.md §13's own reasoning for why
-// integration_test/ is reserved specifically for tests that need a real
-// external dependency such as testcontainers' PostgreSQL or Redis.
+// regular unit-test set rather than integration_test/, which is reserved
+// specifically for tests that need a real external dependency such as
+// testcontainers' PostgreSQL or Redis.
 //
-// The Init call below passes no deployment mode: Init no longer takes
-// one, and the endpoint alone decides that the OTLP exporters get wired.
-// That is docs/internal/03-deployment-modes.md's composition axis applied
-// to observability -- exporter choice is an implementation-composition
-// decision, never a mode decision -- so this success path is exactly the
-// one a single-process assembly pointing at a real collector configures,
-// no less than a multi-replica deployment does.
+// The Init call below passes no deployment mode: Init takes none, and the
+// endpoint alone decides that the OTLP exporters get wired. That is the
+// composition axis applied to observability -- exporter choice is an
+// implementation-composition decision, never a mode decision -- so this
+// success path is exactly the one a single-process assembly pointing at a
+// real collector configures, no less than a multi-replica deployment
+// does.
 func TestInit_WithOTLPEndpoint_ExportsRealSpansAndMetricsOverOTLP(t *testing.T) {
 	lis, srv := startFakeCollector(t)
 	traces, metrics := srv.traces, srv.metrics
@@ -222,32 +220,32 @@ func TestInit_WithOTLPEndpoint_ExportsRealSpansAndMetricsOverOTLP(t *testing.T) 
 }
 
 // TestInit_WithOTLPEndpoint_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer
-// is a regression test for a goroutine-leak bug found in the test this one
-// grew out of: the endpoint-configuring OTLP export test used to call
-// shutdown(ctx) only once, near the end of its happy path, with no
-// defer or t.Cleanup registered right after Init succeeded. Any assertion
-// firing between Init succeeding and that manual call would exit the test
-// via t.Fatal's runtime.Goexit() without ever invoking shutdown, leaking
-// the OTLP-exporter TracerProvider's batch-span-processor goroutine and
-// the MeterProvider's periodic-reader goroutine for the rest of the test
-// binary's process life. The fix is a defer registered immediately
+// pins the goroutine-leak hazard of an endpoint-configuring Init call
+// whose shutdown is not deferred: calling shutdown(ctx) only once, near
+// the end of the happy path, with no defer or t.Cleanup registered right
+// after Init succeeded, means any assertion firing between Init
+// succeeding and that manual call exits the test via t.Fatal's
+// runtime.Goexit() without ever invoking shutdown -- leaking the
+// OTLP-exporter TracerProvider's batch-span-processor goroutine and the
+// MeterProvider's periodic-reader goroutine for the rest of the test
+// binary's process life. The contract: a defer registered immediately
 // after Init's error check, matching the pattern
-// TestMetricsHandler_WithOTLPEndpoint_ReturnsNotFound already
-// established (see that test's own comment for why it must be a plain
-// defer, not t.Cleanup).
+// TestMetricsHandler_WithOTLPEndpoint_ReturnsNotFound already uses (see
+// that test's own comment for why it must be a plain defer, not
+// t.Cleanup).
 //
-// This proves both directions of that fix with a real negative control,
-// using t.Fatal's own exit mechanism -- runtime.Goexit -- inside a
-// throwaway goroutine so it can reproduce an early test failure without
+// This proves both directions of that contract with a real negative
+// control, using t.Fatal's own exit mechanism -- runtime.Goexit -- inside
+// a throwaway goroutine so it can reproduce an early test failure without
 // actually failing this test:
-//   - without a defer registered before the early exit (the pre-fix
+//   - without a defer registered before the early exit (the undeferred
 //     shape), Init's background goroutines measurably leak. If this
 //     stopped being true (e.g. a future OTel SDK version started
 //     lazily starting these goroutines, or stopped needing Shutdown to
 //     stop them), this test would no longer be proving anything, so
 //     the leak is asserted explicitly rather than assumed.
 //   - with a defer registered right after Init's error check -- the
-//     fixed shape, and what every endpoint-configuring Init call in
+//     shape every endpoint-configuring Init call in
 //     this file now uses -- they do not.
 func TestInit_WithOTLPEndpoint_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer(t *testing.T) {
 	lis, srv := startFakeCollector(t)
@@ -296,7 +294,7 @@ func TestInit_WithOTLPEndpoint_EarlyExitLeaksGoroutinesWithoutAnImmediateDefer(t
 
 	baseline := settledGoroutineCount(t)
 
-	// Negative control: the pre-fix shape (no defer before the early
+	// Negative control: the undeferred shape (no defer before the early
 	// exit) must actually leak, or the rest of this test proves nothing.
 	leakedShutdown := runInitThenExitEarly(t, false)
 	if got := settledGoroutineCount(t); got <= baseline {
@@ -440,11 +438,11 @@ func stopFakeCollector(t *testing.T, _ net.Listener, srv *fakeCollectorServer) {
 	}
 }
 
-// TestInit_SecondCall_TearsDownThePreviousProviders is the regression for
-// the repeated-Init leak (Finding 4a): calling Init a second time without
-// invoking the first call's shutdown used to leave the first pair of
-// providers -- and their exporters' background processors -- running for
-// the life of the process, since nothing tracked or tore them down. The
+// TestInit_SecondCall_TearsDownThePreviousProviders pins the repeated-Init
+// teardown contract: calling Init a second time without invoking the first
+// call's shutdown must not leave the first pair of providers -- and their
+// exporters' background processors -- running for the life of the process;
+// nothing else tracks or tears them down. The
 // flush is the observable: an OTLP exporter's Shutdown flushes its pending
 // spans synchronously (proven by
 // TestInit_WithOTLPEndpoint_ExportsRealSpansAndMetricsOverOTLP's own
@@ -524,9 +522,10 @@ func TestInit_SecondCall_TearsDownThePreviousProviders(t *testing.T) {
 	}
 }
 
-// TestInit_EmptyServiceName_Refused is the regression for Finding 4b: an
-// explicitly empty service name (WithServiceName("")) used to be accepted
-// and become the resource's service.name attribute verbatim -- an empty
+// TestInit_EmptyServiceName_Refused pins the empty-service-name refusal:
+// an explicitly empty service name (WithServiceName("")) must not be
+// accepted and become the resource's service.name attribute verbatim -- an
+// empty
 // service.name is not a legal value under the OTel semantic conventions
 // this module adopts wholesale (every span and metric is tagged with it,
 // and backends key ownership off it), and it could only arise from an

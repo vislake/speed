@@ -64,10 +64,10 @@ func TestTenantRepository_EnsureExists_IsIdempotent(t *testing.T) {
 	}
 }
 
-// TestTenantRepository_EnsureExists_DoesNotOverwriteManualRow is the
-// regression test D3's own design requires: a redelivered
-// org.node.created event, or a tenant already registered manually, must
-// never clobber an operator's own edits (DisplayName, Notes, ...).
+// TestTenantRepository_EnsureExists_DoesNotOverwriteManualRow pins the
+// idempotent-population contract: a redelivered org.node.created event,
+// or a tenant already registered manually, must never clobber an
+// operator's own edits (DisplayName, Notes, ...).
 func TestTenantRepository_EnsureExists_DoesNotOverwriteManualRow(t *testing.T) {
 	db := testutil.NewDB(t)
 	repo := NewTenantRepository(db)
@@ -171,11 +171,11 @@ func TestTenantRepository_Update_Missing_ReportsNotFound(t *testing.T) {
 	}
 }
 
-// TestTenantRepository_Update_ConcurrentConflictingPatches_SecondRefused is
-// Finding P3-3's regression test: two concurrent PATCH calls that both
-// read the row before either wrote back (a suspend racing a resume, the
-// audit finding's own example) must not both silently succeed with the
-// second's stale read overwriting the first's intent.
+// TestTenantRepository_Update_ConcurrentConflictingPatches_SecondRefused
+// pins the guarded-write contract: two concurrent PATCH calls that both
+// read the row before either wrote back (a suspend racing a resume) must
+// not both silently succeed with the second's stale read overwriting the
+// first's intent.
 //
 // The race is forced deterministically, not by hoping two real Update
 // calls interleave within a narrow timing window: both goroutines are

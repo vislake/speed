@@ -46,8 +46,7 @@ func tenantCtx(tenant pkgcore.TenantID) context.Context {
 }
 
 // TestRepository_Case_AssertIsolated runs the mandatory tenant-isolation
-// suite (root CLAUDE.md's multi-tenant isolation rule; backend coding
-// standard §3.3; go/dbkit/AGENTS.md's "Known limitations" section) against
+// suite (the multi-tenant isolation discipline) against
 // the cases repository's real dbkit.Repository[caseRecord] usage. caseRecord
 // is tenant data, not identity or platform data, so AssertIsolated is the
 // correct half of the AssertIsolated/AssertNotTenantScoped pair, never

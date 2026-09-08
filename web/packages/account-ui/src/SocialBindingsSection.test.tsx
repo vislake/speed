@@ -194,11 +194,10 @@ describe('SocialBindingsSection', () => {
     // Two SSO bindings of the same account in two tenants: go/authn
     // stores each under its dynamic per-tenant provider name
     // ("oidc:<tenant>"), and the provider account's email can be the
-    // same in both -- so before the fix the two rows rendered as two
-    // identical generic "other" rows, each with an unbind button, and
-    // unbinding the wrong one was possible. Each row must carry its own
-    // identity: the family label for the prefix plus the raw provider
-    // value as the reference line.
+    // same in both. Two identical rows -- each with an unbind button --
+    // would make unbinding the wrong one possible, so each row must
+    // carry its own identity: the family label for the prefix plus the
+    // raw provider value as the reference line.
     const list = [
       identity({
         id: 'sso-a-1',
@@ -513,9 +512,9 @@ describe('SocialBindingsSection', () => {
         call.method === 'GET' &&
         call.path === '/api/v1/authn/social/google/authorize'
       ) {
-        // An answer the pre-fix code would have collected: a second
-        // flow started while the WeChat one was still building. The
-        // fix keeps this path untouched -- the assertion below pins it.
+        // The answer a second flow started while the WeChat one was
+        // still building would collect: this path stays untouched -- the
+        // assertion below pins it.
         return jsonResponse(200, {
           authorize_url:
             'https://accounts.google.com/o/oauth2/v2/auth?state=st-2',
@@ -947,9 +946,10 @@ describe('SocialBindingsSection', () => {
         if (listCalls === 1) {
           // AuthnListIdentitiesResponse marks `.identities` optional, so
           // a 200 whose body omits the key is type-legal and react-query
-          // settles it as a successful answer. Before the fix the
-          // section read this settled shape as still loading and held
-          // the aria-busy skeleton forever, with no exit.
+          // settles it as a successful answer. The section must read
+          // this settled shape as the error state (an answer without
+          // its list is unreadable), never as still loading -- the
+          // aria-busy skeleton would have no exit.
           return jsonResponse(200, {})
         }
         return jsonResponse(200, {

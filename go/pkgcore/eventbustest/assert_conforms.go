@@ -5,8 +5,7 @@
 // or host-supplied through pkgcore.WithEventBus — is checked against the
 // same suite, the
 // same role go/tenancy/tenancytest.AssertIsolated plays for
-// dbkit.Repository[T]: with N implementations per seam under the
-// composition retrofit (see docs/internal/03-deployment-modes.md), drift
+// dbkit.Repository[T]: with several implementations per seam, drift
 // between them is caught here once instead of pairwise.
 //
 // # The two-instance shape
@@ -22,12 +21,7 @@
 // replica cursors on one PostgreSQL outbox), and the same assertions
 // become the checks that make the suite able to see what such a bus exists
 // for: that an event published on one instance is delivered to a
-// subscriber on another. Before the two-instance shape, the suite built a
-// single bus per subtest and asserted zero of the cross-instance contract —
-// a bus that silently delivered nothing remotely still passed every check,
-// which is how three of the five defective implementations reviewed under
-// the deployment-composition retrofit could be EventBus implementations
-// (see go/pkgcore/AGENTS.md and docs/internal/03-deployment-modes.md).
+// subscriber on another. The two-instance shape exists because a bus that silently delivers nothing to a remote instance would otherwise pass every single-instance check: only an assertion across two genuine instances can see a fan-out that never happens.
 //
 // The cross-instance assertions are also the contract-suite form of
 // verifying the MultiReplicaSafe capability bit an implementation declares

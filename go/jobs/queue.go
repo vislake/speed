@@ -11,8 +11,8 @@ import (
 // (this package's implementation for the standalone deployment mode)
 // exposes additional methods (RegisterHandler, Start, Close) that
 // configure and run it, which deliberately do not appear here, because
-// the distributed deployment mode's Redis/asynq-backed implementation is
-// expected to need a different setup shape of its own.
+// the distributed deployment mode's Redis/asynq-backed implementation
+// (queue/asynq) has a different setup shape of its own.
 //
 // ctx is never the source of a new Job's own tenant — that is
 // Task.TenantID's job, since Enqueue is legitimately called from a context
@@ -48,14 +48,14 @@ type Queue interface {
 	// A Job already StatusRunning when Cancel is called is allowed to keep
 	// executing its current Handle call to completion or timeout, but
 	// whatever outcome that call reaches is discarded in favor of
-	// StatusCancelled — see AGENTS.md's Known limitations.
+	// StatusCancelled (a known limitation of the non-preempting
+	// implementations).
 	Cancel(ctx context.Context, id JobID) error
 }
 
 // Package-level defaults applied when the corresponding EnqueueOption is
-// not given. Named constants per the backend coding standard's
-// configuration rule (§10): stable domain defaults belong in package-level
-// constants, not scattered magic numbers.
+// not given. Named constants: stable domain defaults belong in
+// package-level constants, not scattered magic numbers.
 const (
 	// DefaultMaxRetries is how many retries beyond the first attempt a Job
 	// gets when Enqueue is called with no WithMaxRetries option.

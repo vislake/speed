@@ -101,21 +101,22 @@ func TestAggregator_Ingest_DifferentPeriodsDoNotShareACounter(t *testing.T) {
 	}
 }
 
-// TestAggregator_Ingest_SeparatorInTenantOrFeature_KeepsBucketsDistinct is
-// the P3-metering-D regression: realtimeKey used to concatenate its three
-// segments around an unescaped "|". That encoding is safe for the durable
-// summary id -- there the tenant rides in its own primary-key column (see
-// summaryID's doc comment) -- but the real-time counter map is flat, so
-// its key carries the tenant in-band, and tenantID and feature are both
-// variable-length values neither this module nor the layers beneath it
-// restrict against "|" (UsageEvent.validate bounds length only;
-// pkgcore.TenantID is an unrestricted string). Whenever either segment
-// contains the separator, the boundary shifts: the two distinct buckets
-// ("a", "b|c") and ("a|b", "c") both concatenated to "a|b|c|" + the
-// period, so they shared one counter entry -- each bucket's RealtimeCount
-// answered with the other bucket's quantity folded in too, a silent
-// misattribution across (tenant, feature) boundaries in the billing-grade
-// counter. Each bucket must keep its own running total.
+// TestAggregator_Ingest_SeparatorInTenantOrFeature_KeepsBucketsDistinct
+// pins the separator-ambiguity hazard of the real-time counter key: the
+// key must not be a concatenation of its segments around an unescaped
+// "|". That encoding is safe for the durable summary id -- there the
+// tenant rides in its own primary-key column (see summaryID's doc
+// comment) -- but the real-time counter map is flat, so its key carries
+// the tenant in-band, and tenantID and feature are both variable-length
+// values neither this module nor the layers beneath it restrict against
+// "|" (UsageEvent.validate bounds length only; pkgcore.TenantID is an
+// unrestricted string). Whenever either segment contains the separator,
+// the boundary shifts: the two distinct buckets ("a", "b|c") and ("a|b",
+// "c") would both concatenate to "a|b|c|" + the period, sharing one
+// counter entry -- each bucket's RealtimeCount would answer with the
+// other bucket's quantity folded in too, a silent misattribution across
+// (tenant, feature) boundaries in the billing-grade counter. Each bucket
+// must keep its own running total.
 func TestAggregator_Ingest_SeparatorInTenantOrFeature_KeepsBucketsDistinct(t *testing.T) {
 	agg := newTestAggregator(t)
 	ctx := context.Background()
@@ -325,17 +326,17 @@ func TestAggregator_Ingest_PerFeatureThresholdOverridesDefault(t *testing.T) {
 // merely because the secondary overage-notification publish failed. The
 // second half of the test copies the property assertions of
 // TestAggregator_Ingest_SummaryWriteFailure_DoesNotSilentlyLoseOverage
-// onto the publish-failure side -- the P1 regression for the overage
-// latch: pre-fix the notifiedOverage latch was set inside applyDelta
-// BEFORE the publish ran, so a publish failure left the latch consumed and
-// no later fold in the same period could ever fire the crossing again.
-// What that lost was not a log line but the trigger go/billing's
-// OverageModeNotify (billing/model.go) is built on. The fix latches only
-// once the publish has succeeded; a failed publish leaves the latch open,
-// so the next fold that finds the bucket still above the threshold is the
-// crossing event again and retries the delivery -- the signal must not be
-// lost to a transient publish failure, any more than to a transient
-// summary-write failure.
+// onto the publish-failure side -- the overage-latch invariant: the
+// notifiedOverage latch must be set only AFTER the publish succeeds. A
+// latch set before an unconfirmed publish would be consumed by a publish
+// failure, and no later fold in the same period could ever fire the
+// crossing again. What that would lose is not a log line but the trigger
+// go/billing's OverageModeNotify (billing/model.go) is built on. The
+// latch is set only once the publish has succeeded; a failed publish
+// leaves the latch open, so the next fold that finds the bucket still
+// above the threshold is the crossing event again and retries the
+// delivery -- the signal must not be lost to a transient publish failure,
+// any more than to a transient summary-write failure.
 func TestAggregator_Ingest_OverageBusPublishFailure_DoesNotFailIngest(t *testing.T) {
 	agg := newTestAggregator(t)
 	threshold := 1.0
@@ -644,19 +645,19 @@ func TestAggregator_IngestBillingGrade_InvalidEvent_ReturnsValidationError(t *te
 	}
 }
 
-// TestUpsertSummaryTx_ConcurrentSameRow_NoLostUpdate is the P1 regression
-// for the summary-fold race: upsertSummaryTx used to be a Go-level
-// read-modify-write -- read the existing UsageSummary row, add the delta
-// in memory, write the mutated value back -- serialized only by
-// Aggregator's in-process mu, a lock two replicas (or, as exercised here,
-// two real database connections to one database file) do not share. Two
-// folds of the same summary row then each read the pre-other value, and
-// the loser's write clobbers the winner's delta: already-metered usage
-// silently lost, after the outbox receipt was already committed, with no
-// compensation path (see the Aggregator type's "Summary folds are
-// database-arbitrated" doc comment).
+// TestUpsertSummaryTx_ConcurrentSameRow_NoLostUpdate pins the
+// summary-fold race: the fold must not be a Go-level read-modify-write
+// -- read the existing UsageSummary row, add the delta in memory, write
+// the mutated value back -- serialized only by Aggregator's in-process
+// mu, a lock two replicas (or, as exercised here, two real database
+// connections to one database file) do not share. Two folds of the same
+// summary row would each read the pre-other value, and the loser's write
+// would clobber the winner's delta: already-metered usage silently lost,
+// after the outbox receipt was already committed, with no compensation
+// path (see the Aggregator type's "Summary folds are database-arbitrated"
+// doc comment).
 //
-// The fix rewrote the fold as ONE database-arbitrated statement -- an
+// The fold is therefore ONE database-arbitrated statement -- an
 // INSERT ... ON CONFLICT DO UPDATE whose conflict branch does the
 // addition server-side (see upsertSummaryTx's own doc comment) -- so the
 // database itself serializes concurrent folds of the same row: both
@@ -664,11 +665,12 @@ func TestAggregator_IngestBillingGrade_InvalidEvent_ReturnsValidationError(t *te
 // upsertSummaryTx directly, under two real connections (two dbkit.Open
 // handles over one temp-file database), with no Aggregator in the picture
 // to serialize the calls: leg 1 races two folds against a bucket that has
-// no row yet -- a bucket's first touch, pre-fix one of the two concurrent
-// first folds failed (busy or duplicate key) or was lost; leg 2 races a
-// batch of folds against the row leg 1 created -- pre-fix the loser's
-// read-modify-write either failed busy or silently clobbered a delta.
-// Both legs must return no error and leave the row holding the exact sum.
+// no row yet -- a bucket's first touch, where a naive implementation
+// would see one of the two concurrent first folds fail (busy or
+// duplicate key) or get lost; leg 2 races a batch of folds against the
+// row leg 1 created -- where the loser's read-modify-write would either
+// fail busy or silently clobber a delta. Both legs must return no error
+// and leave the row holding the exact sum.
 func TestUpsertSummaryTx_ConcurrentSameRow_NoLostUpdate(t *testing.T) {
 	ctx := context.Background()
 	tenantCtx := pkgcore.WithTenant(ctx, "tenant-a")
@@ -756,15 +758,16 @@ func (failingEventBus) Subscribe(string, pkgcore.EventHandler) {}
 
 var _ pkgcore.EventBus = failingEventBus{}
 
-// TestAggregator_RealtimeCount_AfterRestart_ReflectsSummaryHistory is the
-// P2-metering-12 regression in its read form: the real-time counters are
-// in-process state, so a fresh Aggregator over the same database (a
-// mid-period restart) used to answer RealtimeCount from an empty map --
-// zero until enough new events arrived -- under-reporting the period's
-// history to every quota check and dashboard read that runs before the
-// first post-restart event. ensureSeeded reconstructs a counter from its
-// bucket's durable UsageSummary row on the key's first touch, so the
-// restarted aggregator reflects the full period history immediately.
+// TestAggregator_RealtimeCount_AfterRestart_ReflectsSummaryHistory pins
+// the restart-reconstruction contract in its read form: the real-time
+// counters are in-process state, so a fresh Aggregator over the same
+// database (a mid-period restart) must never answer RealtimeCount from an
+// empty map -- zero until enough new events arrived -- under-reporting
+// the period's history to every quota check and dashboard read that runs
+// before the first post-restart event. ensureSeeded reconstructs a
+// counter from its bucket's durable UsageSummary row on the key's first
+// touch, so the restarted aggregator reflects the full period history
+// immediately.
 func TestAggregator_RealtimeCount_AfterRestart_ReflectsSummaryHistory(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -800,15 +803,15 @@ func TestAggregator_RealtimeCount_AfterRestart_ReflectsSummaryHistory(t *testing
 }
 
 // TestAggregator_IngestBillingGrade_AfterRestart_RedeliveryAndNewEvents
-// is the P2-metering-12 regression in its billing-grade form, pinning the
-// alreadyIngested path's interplay with the reconstruction: after a
-// restart, a redelivered event (its receipt and summary fold committed
-// before the "crash") must leave the reconstructed counter exactly where
-// the summary says -- no double count, no under-count -- and a genuinely
-// new event must then apply on top of that reconstructed base. The crash
-// window between a fold's commit and its counter increment is closed by
-// the seed read itself: the summary row that fold wrote is what the
-// fresh process reconstructs from.
+// pins the alreadyIngested path's interplay with the reconstruction in
+// its billing-grade form: after a restart, a redelivered event (its
+// receipt and summary fold committed before the "crash") must leave the
+// reconstructed counter exactly where the summary says -- no double
+// count, no under-count -- and a genuinely new event must then apply on
+// top of that reconstructed base. The crash window between a fold's
+// commit and its counter increment is closed by the seed read itself:
+// the summary row that fold wrote is what the fresh process reconstructs
+// from.
 func TestAggregator_IngestBillingGrade_AfterRestart_RedeliveryAndNewEvents(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
@@ -851,16 +854,15 @@ func TestAggregator_IngestBillingGrade_AfterRestart_RedeliveryAndNewEvents(t *te
 	}
 }
 
-// TestAggregator_Restart_ReconstructsOverageLatch_NoDoubleFire is the
-// P2-metering-12 regression for the overage half: the notifiedOverage
-// latch is in-process state too, so a restarted aggregator used to start
-// with every latch open -- and a tenant whose durable usage already
-// crossed a threshold before the restart crossed "again" on the first
-// post-restart event, publishing a second EventOverageThresholdCrossed
-// for one period. The reconstruction latches from the summary row (a
-// quantity at or above the threshold means the crossing durably
-// happened), so the edge fires exactly once per period whatever the
-// restart count.
+// TestAggregator_Restart_ReconstructsOverageLatch_NoDoubleFire pins the
+// reconstruction's overage half: the notifiedOverage latch is in-process
+// state too, so a restarted aggregator must never start with every latch
+// open -- a tenant whose durable usage already crossed a threshold
+// before the restart must not cross "again" on the first post-restart
+// event, publishing a second EventOverageThresholdCrossed for one
+// period. The reconstruction latches from the summary row (a quantity at
+// or above the threshold means the crossing durably happened), so the
+// edge fires exactly once per period whatever the restart count.
 func TestAggregator_Restart_ReconstructsOverageLatch_NoDoubleFire(t *testing.T) {
 	db := newTestDB(t)
 	threshold := 5.0
@@ -907,26 +909,27 @@ func TestAggregator_Restart_ReconstructsOverageLatch_NoDoubleFire(t *testing.T) 
 	}
 }
 
-// TestAggregator_Restart_ThresholdLoweredAcrossRestart_CrossingFires is
-// the P2-metering-B regression: the reconstruction equivalence "once the
-// durable summary holds a quantity at or above this bucket's threshold,
-// the crossing has happened" holds ONLY while the threshold is unchanged.
-// The thresholds are a construction-time field (module.go's
-// WithOverageThresholds option mutates the Aggregator before Bootstrap
-// returns), so changing one -- an operator lowering a limit is the
-// routine shape -- requires a restart. After that restart, quantity >=
-// threshold is true not because a crossing was ever published but because
-// the threshold moved below an already-existing quantity: pre-fix the
-// seed latched notifiedOverage on the mere quantity match, the crossing
-// under the new threshold never fired for the period, and "the crossing
-// has happened" was false in that cell. The fix records on the durable
-// summary row the overage threshold that was in force at the row's last
-// fold, so the rebuild latches only when the recorded threshold IS the
-// current one; a row written under a different (here: higher) threshold
-// leaves the latch open and the first post-restart fold that finds the
-// bucket at or above the lowered threshold is the crossing event.
+// TestAggregator_Restart_ThresholdLoweredAcrossRestart_CrossingFires pins
+// the threshold-identity qualification of the reconstruction: the
+// equivalence "once the durable summary holds a quantity at or above this
+// bucket's threshold, the crossing has happened" holds ONLY while the
+// threshold is unchanged. The thresholds are a construction-time field
+// (module.go's WithOverageThresholds option mutates the Aggregator before
+// Bootstrap returns), so changing one -- an operator lowering a limit is
+// the routine shape -- requires a restart. After that restart, quantity
+// >= threshold is true not because a crossing was ever published but
+// because the threshold moved below an already-existing quantity: the
+// seed must not latch notifiedOverage on the mere quantity match, or the
+// crossing under the new threshold would never fire for the period and
+// "the crossing has happened" would be false in that cell. Every fold
+// records on the durable summary row the overage threshold that was in
+// force at the row's last fold, so the rebuild latches only when the
+// recorded threshold IS the current one; a row written under a different
+// (here: higher) threshold leaves the latch open and the first
+// post-restart fold that finds the bucket at or above the lowered
+// threshold is the crossing event.
 //
-// The test also pins the read-form amplifier of the same finding: a pure
+// The test also pins the read-form amplifier of the same rule: a pure
 // RealtimeCount after the restart must not latch the open crossing away
 // either -- a read reconstructs the quantity but publishes nothing, so
 // it must leave the crossing for the next fold.
@@ -979,9 +982,9 @@ func TestAggregator_Restart_ThresholdLoweredAcrossRestart_CrossingFires(t *testi
 
 	// The first post-restart event: the bucket (6, soon 7) is already at or
 	// above the lowered threshold of 5, and no crossing under 5 has ever
-	// fired. Pre-fix the reconstruction latched on the quantity match
-	// alone -- the event published nothing and the lowered threshold's
-	// signal was gone for the whole period; post-fix the crossing under the
+	// fired. The reconstruction must not latch on the quantity match alone
+	// -- that would publish nothing and leave the lowered threshold's
+	// signal gone for the whole period; the crossing under the
 	// recorded-threshold-discerning rebuild fires exactly once.
 	if err := restarted.Ingest(ctx, UsageEvent{TenantID: "tenant-a", Feature: "ai.generation", Quantity: 1, IdempotencyKey: idem(3), OccurredAt: at}); err != nil {
 		t.Fatalf("Ingest(after restart): %v", err)
@@ -1029,15 +1032,15 @@ func TestAggregator_Restart_ThresholdLoweredAcrossRestart_CrossingFires(t *testi
 }
 
 // TestAggregator_Restart_ThresholdConfiguredWhereNoneApplied_CrossingFires
-// pins the NULL-record arm of the P2-metering-B fix: a row whose folds
-// all ran under NO threshold records a nil OverageThreshold -- the
+// pins the NULL-record arm of the threshold-identity rule: a row whose
+// folds all ran under NO threshold records a nil OverageThreshold -- the
 // identical durable state a row written before migration 0006 carries
 // after it -- and a restart that CONFIGURES a threshold below the
 // existing quantity is the same "new configuration, crossing never
-// fired" shape as the lowering case: pre-fix the seed latched on the
-// quantity comparison alone and the newly configured threshold's signal
-// was silently absent for the whole period; post-fix the unattested row
-// leaves the latch open and the first fold that finds the bucket at or
+// fired" shape as the lowering case: the seed must not latch on the
+// quantity comparison alone, or the newly configured threshold's signal
+// would stay silently absent for the whole period. The unattested row
+// leaves the latch open, and the first fold that finds the bucket at or
 // above the threshold is the crossing event under it.
 func TestAggregator_Restart_ThresholdConfiguredWhereNoneApplied_CrossingFires(t *testing.T) {
 	db := newTestDB(t)
@@ -1085,15 +1088,15 @@ func TestAggregator_Restart_ThresholdConfiguredWhereNoneApplied_CrossingFires(t 
 	}
 }
 
-// TestAggregator_RealtimeCount_NilSummariesRepository_ReturnsError is the
-// P3-metering-C regression: RealtimeCount answered a counter miss on an
-// Aggregator built with no summaries repository (NewAggregator(nil)) with
-// (0, nil) -- a silent zero -- while zero is a legal, MEANINGFUL answer in
-// a quota context (zero usage means certainly within quota). "Cannot
-// answer" must not be expressed as an exactly-legal value: the read
-// cannot distinguish "this bucket has no row yet" (which zero means)
+// TestAggregator_RealtimeCount_NilSummariesRepository_ReturnsError pins
+// the nil-summaries refusal: RealtimeCount must not answer a counter miss
+// on an Aggregator built with no summaries repository (NewAggregator(nil))
+// with (0, nil) -- a silent zero -- while zero is a legal, MEANINGFUL
+// answer in a quota context (zero usage means certainly within quota).
+// "Cannot answer" must not be expressed as an exactly-legal value: the
+// read cannot distinguish "this bucket has no row yet" (which zero means)
 // from "there is no durable state to reconstruct from at all", so the
-// miss now returns the coded configuration error
+// miss returns the coded configuration error
 // (metering.usage_summaries_unconfigured), aligned with the vocabulary of
 // go/billing's own ErrUsageReaderUnconfigured -- the layer that consumes
 // RealtimeCount for quota decisions and refuses the same class of
@@ -1114,21 +1117,21 @@ func TestAggregator_RealtimeCount_NilSummariesRepository_ReturnsError(t *testing
 }
 
 // TestAggregator_NilSummariesRepository_IngestPathsRefuse pins the
-// P3-metering-4 parts-(b)-and-(c) closure of the same nil-summaries root
-// P3-metering-C's own regression above pins for the read path: every
-// operation that needs the summaries repository refuses with the coded
-// ErrUsageSummariesUnconfigured, never half-works. Pre-fix (and
-// pre-closure), the two ingest paths were the crash half of the broken
-// object -- their seed "succeeded" seeding to zero, so the fold ran and
-// died on a bare nil-pointer dereference of the repository's connection
-// (upsertSummaryInto's summaries.db on the Ingest path, foldIntoSummaryOnce's
-// a.summaries.db on the billing-grade one). ensureSeeded now refuses an
-// unconfigured construction BEFORE any counter entry is created, so both
-// folds short-circuit on the seed's error and neither crash point is
-// reachable; and because the refusal happens before the map insert, the
-// failed writes leave nothing behind for a later read to misreport --
-// the same bucket answered after them is refused afresh with the same
-// coded error, never (0, nil) off an unseeded entry.
+// nil-summaries refusal on the ingest paths, the counterpart of the
+// read-form test above: every operation that needs the summaries
+// repository refuses with the coded ErrUsageSummariesUnconfigured, never
+// half-works. Without the refusal the two ingest paths would be the crash
+// half of the unconfigured object -- their seed would "succeed" seeding
+// to zero, the fold would run and die on a bare nil-pointer dereference
+// of the repository's connection (upsertSummaryInto's summaries.db on the
+// Ingest path, foldIntoSummaryOnce's a.summaries.db on the billing-grade
+// one). ensureSeeded refuses an unconfigured construction BEFORE any
+// counter entry is created, so both folds short-circuit on the seed's
+// error and neither crash point is reachable; and because the refusal
+// happens before the map insert, the failed writes leave nothing behind
+// for a later read to misreport -- the same bucket answered after them is
+// refused afresh with the same coded error, never (0, nil) off an
+// unseeded entry.
 func TestAggregator_NilSummariesRepository_IngestPathsRefuse(t *testing.T) {
 	agg := NewAggregator(nil)
 	ctx := context.Background()
@@ -1166,15 +1169,15 @@ func assertNilSummariesRefusal(t *testing.T, path string, err error) {
 	}
 }
 
-// TestAggregator_Ingest_ExpiredPeriodEntriesAreEvicted is the
-// P2-metering-13 regression: counter entries live per
+// TestAggregator_Ingest_ExpiredPeriodEntriesAreEvicted pins the
+// expired-period eviction: counter entries live per
 // (tenant, feature, period), and periods end -- without eviction the
-// in-process map kept every period's entries for the process lifetime,
-// growing without bound. Ingest and IngestBillingGrade sweep, at most
-// once per period boundary crossed, every resident entry whose period
-// predates the event's own (sweepExpiredCountersLocked), so advancing
-// past a period retires the old entries instead of letting them sit
-// forever.
+// in-process map would keep every period's entries for the process
+// lifetime, growing without bound. Ingest and IngestBillingGrade sweep,
+// at most once per period boundary crossed, every resident entry whose
+// period predates the event's own (sweepExpiredCountersLocked), so
+// advancing past a period retires the old entries instead of letting
+// them sit forever.
 func TestAggregator_Ingest_ExpiredPeriodEntriesAreEvicted(t *testing.T) {
 	agg := newTestAggregator(t)
 	agg.bucket = PeriodBucketDaily

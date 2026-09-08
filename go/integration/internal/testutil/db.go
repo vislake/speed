@@ -31,9 +31,9 @@ func NewSQLite(t *testing.T, moduleName string, fs embed.FS) *gorm.DB {
 // NewPostgres returns a migrated PostgreSQL *gorm.DB, backed by a real
 // server started with testcontainers. It skips the test when no Docker
 // daemon is reachable, so callers need no availability check of their own.
-// No integration_test/ package calls this yet in round 1 (see AGENTS.md's
-// Known limitations); it is included now so a later round's PostgreSQL leg
-// needs no db.go of its own.
+// No integration_test/ package calls it yet (the module's PostgreSQL leg,
+// integration_test/postgres_softdelete_test.go, opens its own database);
+// the helper exists so any future leg needs no db.go of its own.
 func NewPostgres(t *testing.T, moduleName string, fs embed.FS) *gorm.DB {
 	t.Helper()
 	db := dbtest.NewPostgres(t)

@@ -23,11 +23,10 @@ func TestImageJobRow_TableName(t *testing.T) {
 }
 
 // TestImageJobRow_IsTenantScoped_AssertIsolated proves ai_gateway_image_jobs
-// is tenant data (docs/internal/04-data-and-tenancy.md), exactly like
-// go/storage's own objects table: an image-generation job's marker is
-// meaningless outside the tenant it was enqueued under and must never be
-// visible across one. This is the test the postgres and sqlite migration
-// files' own doc comments cite.
+// is tenant data, exactly like go/storage's own objects table: an
+// image-generation job's marker is meaningless outside the tenant it was
+// enqueued under and must never be visible across one. This is the test the
+// postgres and sqlite migration files' own doc comments cite.
 func TestImageJobRow_IsTenantScoped_AssertIsolated(t *testing.T) {
 	db := newTestDB(t)
 	repo := dbkit.NewRepository[imageJobRow](db)

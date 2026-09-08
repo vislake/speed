@@ -9,9 +9,9 @@ import (
 	"github.com/vislake/speed/go/dbkit/dbtest"
 )
 
-// TestMigrations_0007_UpgradeFromA0006EraDatabase_Postgres is the
-// P3-metering-E upgrade-path proof against a real PostgreSQL server: the
-// same staged 0006-era-database-then-upgrade run upgrade_test.go performs
+// TestMigrations_0007_UpgradeFromA0006EraDatabase_Postgres is the 0007
+// upgrade-path proof against a real PostgreSQL server: the same staged
+// 0006-era-database-then-upgrade run upgrade_test.go performs
 // on SQLite, on the engine whose ALTER COLUMN SET NOT NULL and
 // not-null-violation behaviour genuinely differs -- the SQLite-only proof
 // cannot rule out a PostgreSQL-specific failure of 0007's backfill-then-

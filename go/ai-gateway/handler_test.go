@@ -4,9 +4,9 @@ package aigateway
 // against api.ServerInterface, and the error-shaping edge cases
 // handler_example_test.go's happy-path walk does not exercise -- an
 // unknown provider's read, a malformed write body, and an empty api key on
-// both write operations. The example proves the round's mandatory
-// write-then-resolve connection; this file proves the handler's own
-// request/response translation is correct in isolation.
+// both write operations. The example proves the write-then-resolve
+// connection; this file proves the handler's own request/response
+// translation is correct in isolation.
 
 import (
 	"context"
@@ -210,11 +210,9 @@ func TestHandler_SetPlatformCredential_NoBaseURL_OmitsBaseURLField(t *testing.T)
 // through tenancy.WithSystemContext (the audited wrapper), which publishes
 // an EventSystemContextEntered event on the bus it was built with -- never
 // through pkgcore's bare WithSystemContext, which publishes nothing (see
-// handler.go's AiGatewaySetPlatformCredential, and the root CLAUDE.md rule
-// that code able to import tenancy must use its audited wrapper). Before
-// this regression test existed the path used the bare primitive and this
-// test failed with zero events received; it passes only because the handler
-// now goes through the wrapper.
+// handler.go's AiGatewaySetPlatformCredential). The wrapper is the
+// mandatory path for code that can import tenancy; the test fails if the
+// path ever regresses to the bare primitive, which emits zero events.
 func TestHandler_SetPlatformCredential_PublishesAuditedSystemContextEvent(t *testing.T) {
 	pkgcore.RegisterSystemPurpose(SystemPurposeCredentialWrite)
 

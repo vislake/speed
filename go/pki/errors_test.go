@@ -10,9 +10,9 @@ import (
 )
 
 // TestErrors_HaveTheExpectedCodesAndStatuses pins every error this module
-// declares to its code and suggested HTTP status, so a future edit that
+// declares to its code and suggested HTTP status, so an edit that
 // accidentally changes either is caught here rather than downstream in a
-// consumer that matched on the old value.
+// consumer that matched on the previous value.
 func TestErrors_HaveTheExpectedCodesAndStatuses(t *testing.T) {
 	tests := []struct {
 		name       string

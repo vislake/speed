@@ -131,8 +131,8 @@ authority:
    gate (`checkAdmittedMediaType`, validate.go's `mediaTypeSafety`) refuses a
    configured type the module cannot pixel-check AND metadata-strip, so an
    admitted type is a promise that steps 5 and 6 both apply to it.
-5. Images decode their header only (`image.DecodeConfig` — no full decode in this
-   round) and their pixel count is checked against the module ceiling
+5. Images decode their header only (`image.DecodeConfig` — header-only, no
+   full decode) and their pixel count is checked against the module ceiling
    (`storage.pixel_limit_exceeded`, param `max_pixels`; an undecodable header is
    `storage.image_unreadable`).
 6. The metadata strip (`sanitize.go`) removes location and authorship metadata
@@ -254,7 +254,7 @@ still learns the pass was not clean.
 Reclaiming an upload is safe against a completion racing it only because the
 upload window is enforced at the finalize write itself, not at listing time:
 `finalizeUpload` refuses a completion whose window closed mid-flight
-(repository.go; the write-time deadline this round's fix shipped), so a row
+(repository.go enforces the deadline at the write), so a row
 this sweep listed can never complete behind its back — either the completion
 committed before the window closed, in which case the row is completed and no
 longer matches the reclaim listing, or the write is refused and the row is
@@ -308,9 +308,8 @@ magic numbers:
   failing with `storage.allowed_type_unsupported` before anything is declared.
   The gate makes the whitelist's safety promise a checked one: a type can no
   longer be admitted with a decoder but no strip coverage (image/gif's state —
-  see `mediaTypeSafety`), and the "three facts in three files" that used to
-  describe the whitelist — which types have a decoder, which have a strip
-  walker, what may be admitted — now live in the one table;
+  see `mediaTypeSafety`), and the three facts — which types have a decoder,
+  which have a strip walker, what may be admitted — live in the one table;
 - declares permissions `storage:read` and `storage:write`, audit actions
   `storage.object.create` / `storage.object.complete` / `storage.object.delete`,
   and the published events `storage.object.completed` (payload
@@ -472,17 +471,17 @@ invocation full-check.yml's integration-tiers job runs for this module:
   carries no recognized vocabulary rides through untouched, exactly as
   metadata smuggled into the entropy-coded scan data does — the walker can
   verify container structure, never content semantics, and unclassifiable
-  payload is the re-encode round's work. The header-only pixel probe
+  payload is out of a structural walker's reach. The header-only pixel probe
   (`DecodeConfig`) cannot see corruption or smuggled metadata below the
   header. The module's own tests construct real carriers for every covered
   class; anything the walker cannot verify structurally is refused rather
-  than passed through. Full-decode verification (and re-encode-based
-  sanitizing) is the processing round's work, which is where thumbnails
-  already force a full decode to happen.
+  than passed through. Full-decode verification and re-encode-based
+  sanitizing are not shipped; the thumbnail pipeline is where a full decode
+  already happens.
 - The cursor page composes the keyset query on the plugin-guarded `*gorm.DB`
-  exactly as `go/dbkit/AGENTS.md`'s "Known limitations" option 1 prescribes,
-  inside `dbkit.WithTenantSession`; this file never writes `tenant_id = ?` and
-  never reaches for `db.Table` / `db.Model` / `db.Raw`.
+  exactly as the dbkit layering rule's option 1 prescribes, inside
+  `dbkit.WithTenantSession`; this file never writes `tenant_id = ?` and never
+  reaches for `db.Table` / `db.Model` / `db.Raw`.
 - The completion event, the derive enqueue and the object-deleted publish all
   warn rather than fail their calls, by design; a host that needs delivery
   guarantees subscribes through the bus machinery those guarantees belong to.
@@ -496,11 +495,9 @@ invocation full-check.yml's integration-tiers job runs for this module:
   keeps one window's concurrent enqueues from racing each other — the sweeps
   that do run never duplicate within a window — while later windows' enqueues
   schedule the sweep again.
-- **2026-09-07: the sweep keys are window-scoped; the
-  per-database-file-once limitation this entry originally recorded is
-  closed.** The app's host-side periodic-task scheduler
-  (`examples/reference-app/cmd/server/periodic_scheduler.go`) enqueues one
-  sweep per unique host tenant every tick — the cadence
+- **The sweep keys are window-scoped.** The app's host-side periodic-task
+  scheduler (`examples/reference-app/cmd/server/periodic_scheduler.go`)
+  enqueues one sweep per unique host tenant every tick — the cadence
   `cfg.PeriodicTaskInterval` (one minute by default,
   `defaultPeriodicTaskSchedulerInterval`), the tenants the values of the
   host's own `cfg.HostTenants` map, deduplicated, each sweep enqueued under
@@ -510,28 +507,24 @@ invocation full-check.yml's integration-tiers job runs for this module:
   gate). `EnqueueExpirySweep` derives its idempotency key from the
   `expirySweepWindowSize` window the enqueue falls in
   (`expirySweepIdempotencyKey`/`expirySweepWindowStart`, cleanup.go), not
-  from the tenant alone: on this host's `StandaloneQueue`, whose resolved
+  from the tenant alone: on the host's `StandaloneQueue`, whose resolved
   idempotency keys are held forever (go/jobs), the ticks inside one window
   still merge into the window's one job — the concurrency protection the
   key exists for — but the first tick of every later window resolves a
   fresh key and schedules the sweep again, at most one sweep per tenant
-  per hour. A sweep job that dead-letters therefore poisons only its own
-  window; the next window's tick is a new job. The original
-  per-database-file-once design and the flow-test proof it motivated are
-  recorded in the entry's pre-window history: the original 2026-09-06
-  record described the scheduler shape above and proved, end to end by
+  per window. A sweep job that dead-letters therefore poisons only its own
+  window; the next window's tick is a new job. The end-to-end deletion
+  proof — two boots over one database file and one object-store directory,
+  boot 1 hosting a completed object whose retention deadline passes plus a
+  no-deadline survivor with the worker-and-scheduler pair disabled (expiry
+  alone removes nothing), boot 2 starting the normal gate so the sweep its
+  first tick enqueues removes the expired object's row and bytes — is
   `TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject`
-  (`examples/reference-app/cmd/server/periodic_scheduler_flow_test.go`), a
-  two-boot deletion over one database file and one object-store directory —
-  boot 1 hosts a completed object whose retention deadline passes, plus a
-  no-deadline survivor, with the worker-and-scheduler pair disabled
-  (expiry alone removes nothing: both objects still serve and list past
-  the deadline), and boot 2 starts the normal gate so the sweep its first
-  tick enqueues removes the expired object's row and bytes — observed
-  through the host's HTTP surface, a second-connection repository read
-  and the filesystem, with the survivor untouched. That proof's deletion
-  still holds unchanged under the windowed key (boot 2's first tick is in
-  a fresh window), and the windowed keying is pinned by this module's own
+  (`examples/reference-app/cmd/server/periodic_scheduler_flow_test.go`),
+  observed through the host's HTTP surface, a second-connection repository
+  read and the filesystem, with the survivor untouched. That proof holds
+  unchanged under the windowed key (boot 2's first tick is in a fresh
+  window), and the windowed keying is pinned by this module's own
   `sweep_window_test.go` (same-window collapse, later-window re-run,
   dead-lettered-window non-poisoning, each against a real
   `jobs.StandaloneQueue`). What remains genuinely limited: an object whose
@@ -547,18 +540,18 @@ invocation full-check.yml's integration-tiers job runs for this module:
   the key no longer holds. The lock map is process-local, though, so two
   replicas of a distributed deployment — which share the ObjectStore but not
   the map — can still interleave an Upload on one replica with a Complete on
-  another. Closing that residue needs a store-level compare-and-swap the
-  ObjectStore seam could carry in a later round; until then, the standalone
-  shape (one process, one store) is airtight and the multi-replica one is not,
-  recorded here rather than pretended away.
-- **A lost finalize's writeback take-back is one-shot best-effort
-  (2026-09-07).** When `Complete`'s finalize commits zero rows and the
-  re-read finds the row reclaimed, its upload window closed, or deleting, a
-  sanitizer writeback (`changed`) is taken back with one best-effort
-  `DeleteObject` call (object.go's lost-finalize branch, the deleting shape
-  added 2026-09-06); a failure is warned about, never retried -- the call is
+  another. Closing that residue would need a store-level compare-and-swap
+  the ObjectStore seam does not carry; the standalone shape (one process,
+  one store) is airtight and the multi-replica one is not — recorded here
+  rather than pretended away.
+- **A lost finalize's writeback take-back is one-shot best-effort.**
+  When `Complete`'s finalize commits zero rows and the re-read finds the
+  row reclaimed, its upload window closed, or deleting, a sanitizer
+  writeback (`changed`) is taken back with one best-effort `DeleteObject`
+  call (object.go's lost-finalize branch); a failure is warned about,
+  never retried -- the call is
   answering the transfer pipeline's caller, not running a protocol it owns.
-  A re-read that itself fails is narrower (2026-09-07): only its not-found
+  A re-read that itself fails is narrower: only its not-found
   shape -- the row genuinely vanished -- triggers the take-back, and every
   other failure is reported unchanged with nothing removed, because the
   row's state is unknown and may be exactly the live completed row a
@@ -588,14 +581,14 @@ invocation full-check.yml's integration-tiers job runs for this module:
   sweep's reclaim of it re-deletes the key. The residue is reachable only
   across the replicas of a distributed deployment (within one process the
   per-object lock serializes completions and no actor flips an uploading
-  row to deleting). Closing it needs machinery that revisits keys, which
-  this round does not ship: a key-reaping sweep over the store's key space,
-  or key removal folded into the delete protocol's own convergence at a
-  point guaranteed to follow any writeback (closing the deleting shape; the
+  row to deleting). Closing it would need machinery that revisits keys,
+  which is not shipped: a key-reaping sweep over the store's key space, or
+  key removal folded into the delete protocol's own convergence at a point
+  guaranteed to follow any writeback (closing the deleting shape; the
   vanished shape's row is already gone when its writeback lands, so only a
   key sweep reaches it). Recorded here rather than pretended away.
-- **A failed finalize's writeback rollback is one-shot best-effort
-  (2026-09-07).** When `Complete`'s finalize write errors outright -- as
+- **A failed finalize's writeback rollback is one-shot best-effort.**
+  When `Complete`'s finalize write errors outright -- as
   opposed to committing zero rows, the lost-finalize shapes above -- the
   pipeline rolls its sanitizer writeback back by restoring the pre-rewrite
   bytes it still holds (object.go's finalize-err branch): the row almost
@@ -635,159 +628,131 @@ invocation full-check.yml's integration-tiers job runs for this module:
 
 ## Deferred and not shipped (with reasons)
 
-- **Frontend `@speed/api-sdk` generation for this module's fragment.** The
+- **No frontend `@speed/api-sdk` surface for this module's fragment.** The
   frontend orval leg of `task api:gen` runs over the merged document only
-  (`build/openapi/speed.yaml` — today the notes and authn fragments), so a
-  fragment reaches `@speed/api-sdk` by entering that merge; storage's
-  fragment feeds neither the merge nor orval, and the reference app's
-  consumer shell has no upload surface yet to exercise generated storage
-  hooks against. Deferred to the merged document's next extension: org's
-  fragment is queued first (the M1 `org-web` round —
-  docs/internal/21-api-contract.md's implementation-status note), and
-  storage's would enter through the same regeneration. The backend half
+  (`build/openapi/speed.yaml`), so a fragment reaches `@speed/api-sdk` by
+  entering that merge; storage's fragment feeds neither the merge nor
+  orval, and the reference app's consumer shell has no upload surface that
+  would exercise generated storage hooks. The backend half
   (`api/storage-server.gen.go`) and its api-contract.yml diff gate ship
   regardless.
-- **Audit emission.** The three audit actions are declared; the services log
-  their transitions (`object completed`, `object deleted`, `expired upload
-  reclaimed`) but emit no audit rows. A host that needs rows now emits
-  explicitly under the declared actions (the reference-app notes pattern);
-  emission wiring is a later round of its own.
-- **Upload-credential and short-lived-read-URL machinery.** No presigner exists
-  and none is imported: uploads stream through `Upload` and reads through
-  `OpenContent` inside the server, which suits the standalone and small-replica
-  shapes. Direct-to-store client uploads with presigned credentials, and
-  short-lived read URLs, are a later distributed-mode round and are deliberately
-  not half-built here.
+- **Audit emission is not wired.** The three audit actions are declared;
+  the services log their transitions (`object completed`, `object deleted`,
+  `expired upload reclaimed`) but emit no audit rows. A host that needs
+  rows emits explicitly under the declared actions (the reference-app
+  notes pattern).
+- **No upload-credential or short-lived-read-URL machinery.** No presigner
+  exists and none is imported: uploads stream through `Upload` and reads
+  through `OpenContent` inside the server, which suits the standalone and
+  small-replica shapes. Direct-to-store client uploads with presigned
+  credentials, and short-lived read URLs, are not shipped.
 
-## Round note — JPEG EOI strictness (2026-09-06)
+## JPEG EOI strictness
 
-`sanitizeJPEG`'s SOS case previously carried the marker and everything after
-it over verbatim, so a JPEG whose entropy-coded data never terminated in EOI
-was accepted, and anything appended after a real EOI (a second EXIF/XMP APP1,
-arbitrary bytes) was copied into the sanitized output. The walker now walks
-every scan to its terminating marker — byte-stuffed 0xFF 0x00 pairs, restart
-markers 0xFFD0-0xFFD7 and 0xFF fill are scan content, walked past, never
-parsed — and dispatches that marker like any other, so the scans of a
-progressive or hierarchical JPEG are each walked and only the file's final
-EOI ends the walk (which also means an EXIF/XMP APP1 sitting between scans is
-now stripped, a behavior the earlier "first scan only" scope never covered).
-Pinned decisions, with tests: a file cut inside the SOS header or whose scan
-data runs off the end without EOI is refused as a structure error (the PNG
-path's required-IEND doctrine, mirrored); bytes after the EOI are dropped at
-the boundary, mirroring the PNG walker's post-IEND rule, except a tail of
-pure 0xFF fill, which is conventionally legal padding and is carried over so
-a padded clean file passes through byte-identical with nothing written back.
-What remains invisible to a structural strip is unchanged and still recorded
-in "Known limitations": metadata smuggled into the entropy-coded data
-itself.
+`sanitizeJPEG` walks every scan to its terminating marker — byte-stuffed
+0xFF 0x00 pairs, restart markers 0xFFD0-0xFFD7 and 0xFF fill are scan
+content, walked past, never parsed — and dispatches that marker like any
+other, so the scans of a progressive or hierarchical JPEG are each walked
+and only the file's final EOI ends the walk. A JPEG whose entropy-coded
+data never terminates in EOI is refused as a structure error (the PNG
+path's required-IEND doctrine, mirrored); anything appended after a real
+EOI (a second EXIF/XMP APP1, arbitrary bytes) is dropped at the boundary,
+mirroring the PNG walker's post-IEND rule, except a tail of pure 0xFF
+fill, which is conventionally legal padding and is carried over so a
+padded clean file passes through byte-identical with nothing written
+back. An EXIF/XMP APP1 sitting between scans of a progressive file is
+stripped like any other marker. What remains invisible to a structural
+strip is unchanged and still recorded in "Known limitations": metadata
+smuggled into the entropy-coded data itself.
 
-## Round note — reviewer-findings batch: default-life cap, sweep partial failures, whitelist admission gate, content hardening, key shape (2026-09-07)
+## Lifecycle default, sweep partial failures, whitelist admission gate, key shape
 
-Five review findings closed in one round, all behavioural or doc-only changes
-whose regressions fail before and pass after:
-
-- **The lifetime option now governs the default path** (P2-1). `WithMaxObjectLifetime`
-  documents "the longest an object may be retained before it expires", and the
-  enforcement used to compare only when a create EXPLICITLY requested a retention —
-  an ordinary upload (no request) defaulted to never-expiring, so the option's
-  promise did not hold for the path most uploads take. `Create` now settles every
-  row's expiry: a requested finite retention lands as that deadline (capped as
-  before), NO request defaults to the configured maximum, and only an explicit
-  `CreateParams.NoExpiry` request — on a module whose host opted in with the new
-  `WithNoExpiryAllowed()` option — leaves the row without an expiry. The product
-  choice, stated: never-expiring objects remain representable (the `expires_at`
-  NULL state the sweep skips) but require two deliberate acts, a host option and
-  a per-object request; omission produces bounded life, never permanence. The
-  module's own HTTP surface offers no never-expiring spelling (the fragment's
-  create description says so); a host whose product needs permanent objects
-  requests them through `ObjectService` behind its own opt-in.
-  **Cross-repo consequence, recorded for the follow-up round that owns it:** the
-  reference app's `periodic_scheduler_flow_test.go`
-  (`TestBuildServer_PeriodicScheduler_ExpirySweep_RemovesExpiredObject`) declares
-  its "survivor" with no expiresAt and asserts the create response carries none —
-  the pre-change no-expiry default this fix retires. The survivor now carries an
-  expiry at the default ceiling (it still outlives the test's 3-second sweep),
-  so that test's `survivor.ExpiresAt != ""` assertion must move to the
-  reference-app side of the change.
-- **The sweep no longer fails fast; one row's failure cannot starve the tenant's
-  expiry pass** (P2-3). Storage's `Sweep` used to stop at the first refusing row;
-  compliance's `SweepTenant` runs every participant and aggregates the failures.
-  The asymmetry holds because the sweep's listings are deterministic: a row that
-  fails permanently is re-listed first on every pass, so a fail-fast sweep would
-  never reach the rows after it — the compliance shape is the right one at row
-  granularity too. `Sweep` now runs every row of every phase, logs each failure
-  with its id, and answers `storage.sweep_partial_failure` (param `failed_rows`)
-  when any row failed; failed rows stay in the state the next pass resumes.
-- **The whitelist admission gate makes the safety envelope a checked invariant**
-  (P2-5/P2-6). The three facts that used to live apart — which probed types have a
-  decoder, which have metadata-strip coverage, what the whitelist may admit — now
-  live in validate.go's `mediaTypeSafety` table, and Register refuses
-  (`storage.allowed_type_unsupported`, naming the type and the admissible set)
-  any configured type the module cannot pixel-check AND metadata-strip.
-  image/gif is recorded with its honest halves (decodable, not strippable) and is
-  therefore refused admission — a host that wants GIFs must first give the module
-  a GIF strip walker, the same round that flips the table's strippable half. The
-  content endpoint's two hardening headers — `X-Content-Type-Options: nosniff`
-  and `Content-Disposition: attachment` — are now unconditional, so serving bytes
-  is safe regardless of how wide the whitelist ever grows.
-- **The reclaim's load-bearing dependency is recorded at the code** (P2-2
-  residue): `reclaimUpload`'s no-event shortcut and its licence to remove a row
-  family outside the delete protocol rest on there being no path that returns a
-  completed row (which may carry derivatives) to uploading. The day a re-upload
-  or back-to-uploading transition appears, the reclaim would delete a completed
-  object's family with no protocol and no event — that hazard is written down
-  beside the reclaim code.
-- **The key grammar's fixed shapes are now enforced by segment count** (P2-4
-  residue, state-then-fix). The validator checked every segment but not how many
-  there were; a tenant id or object id that smuggled in a "/" would pass every
-  per-segment rule while fabricating segments and blurring the boundary between
-  key components and key families. Today's uuid-shaped ids cannot contain a "/",
-  so no reachable input changes behavior — the count checks in `ObjectKey`
-  (exactly three segments) and `DerivativeKey` (exactly four) exist so the day an
+- **Every row's expiry is settled at create.** `WithMaxObjectLifetime`
+  promises "the longest an object may be retained before it expires", and
+  `Create` settles every row's expiry against it: a requested finite
+  retention lands as that deadline (capped by the ceiling), NO request
+  defaults to the configured maximum, and only an explicit
+  `CreateParams.NoExpiry` request — on a module whose host opted in with
+  `WithNoExpiryAllowed()` — leaves the row without an expiry. Never-expiring
+  objects therefore remain representable (the `expires_at` NULL state the
+  sweep skips) but require two deliberate acts, a host option and a
+  per-object request; omission produces bounded life, never permanence. The
+  module's own HTTP surface offers no never-expiring spelling (the
+  fragment's create description says so); a host whose product needs
+  permanent objects requests them through `ObjectService` behind its own
+  opt-in.
+- **The sweep does not fail fast; one row's failure cannot starve the
+  tenant's expiry pass.** `Sweep` runs every row of every phase, logs each
+  failure with its id, and answers `storage.sweep_partial_failure` (param
+  `failed_rows`) when any row failed; failed rows stay in the state the
+  next pass resumes. Fail-fast would be wrong here: the sweep's listings
+  are deterministic, so a row that fails permanently is re-listed first on
+  every pass, and a fail-fast sweep would never reach the rows after it —
+  the same row-granularity shape compliance's `SweepTenant` uses when it
+  runs every participant and aggregates the failures.
+- **The whitelist admission gate makes the safety envelope a checked
+  invariant.** The three facts — which probed types have a decoder, which
+  have metadata-strip coverage, what the whitelist may admit — live in
+  validate.go's `mediaTypeSafety` table, and Register refuses
+  (`storage.allowed_type_unsupported`, naming the type and the admissible
+  set) any configured type the module cannot pixel-check AND
+  metadata-strip. image/gif is recorded with its honest halves (decodable,
+  not strippable) and is therefore refused admission — admitting GIFs
+  requires a GIF strip walker first, the change that would flip the table's
+  strippable half. The content endpoint's two hardening headers —
+  `X-Content-Type-Options: nosniff` and `Content-Disposition: attachment`
+  — are unconditional, so serving bytes is safe regardless of how wide the
+  whitelist ever grows.
+- **The reclaim's load-bearing dependency is recorded at the code.**
+  `reclaimUpload`'s no-event shortcut and its licence to remove a row
+  family outside the delete protocol rest on there being no path that
+  returns a completed row (which may carry derivatives) to uploading. The
+  day a re-upload or back-to-uploading transition appears, the reclaim
+  would delete a completed object's family with no protocol and no event —
+  that hazard is written down beside the reclaim code.
+- **The key grammar's fixed shapes are enforced by segment count.** The
+  validator checks every segment and how many there are: a tenant id or
+  object id that smuggled in a "/" would otherwise pass every per-segment
+  rule while fabricating segments and blurring the boundary between key
+  components and key families. uuid-shaped ids cannot contain a "/", so no
+  reachable input trips the count — the checks in `ObjectKey` (exactly
+  three segments) and `DerivativeKey` (exactly four) exist so the day an
   id alphabet changes, the violation is a loud builder error at the single
   create/derive site, never a silently reshaped key.
 
-## Round note — carrier-class metadata strip: APP13 IRB/IPTC, COM, the PNG text family (2026-09-08)
+## Carrier-class metadata strip: APP13 IRB/IPTC, COM, the PNG text family
 
-A reviewer finding (P1) closed the gap between the strip's rule and its
-execution. The rule enumerates two content classes — location and authorship
-metadata — not two containers, but the walkers' drops covered only APP1-EXIF,
-APP1-XMP and PNG `eXIf`, while APP13 (Photoshop IRB, carrying IPTC-IIM's
-By-line/Copyright/City/Country/Sub-location) and COM (free text) flowed
-through JPEG whole, and PNG's tEXt family rode through whole. The heart of
-the finding is that this was not a cold container being missed: `iTXt` under
-the `XML:com.adobe.xmp` keyword is the PNG standard's own carrier for the
-same Adobe XMP packet sanitize.go's scope note names as the geolocation and
-authorship carrier — explicitly stripped on one admitted type, untouched on
-the other. A malicious uploader needed no smuggling: a Lightroom/Photoshop
-JPEG export commonly carries APP13 IPTC, a PS-saved PNG carries iTXt XMP, and
-both pass the walkers' strict structural validation (correct lengths, CRCs
-included) while carrying GPS and bylines straight into the object the
-platform serves — through `Complete`'s irreversible write-back and, in the
-reference app, onto sharing's unauthenticated access route.
+The strip's rule enumerates two content classes — location and authorship
+metadata — and the walkers drop every carrier family that can hold either
+class on an admitted type, wholesale. On JPEG: EXIF and XMP (APP1, by
+payload signature), IPTC-IIM (APP13 whose payload is a Photoshop
+image-resource block, dropped whole so the strip never depends on the
+IRB's internal resource layout), and COM — free text has no signature that
+could classify it, so the whole marker is the carrier and every comment
+segment goes. On PNG: `eXIf` plus the tEXt family (`tEXt`/`zTXt`/`iTXt`),
+iTXt being the PNG standard's own carrier for the same Adobe XMP packet
+`eXIf` carries (under the `XML:com.adobe.xmp` keyword), the other two
+keyworded free text no structure check can classify. A Lightroom/Photoshop
+JPEG export commonly carries APP13 IPTC and a PS-saved PNG carries iTXt
+XMP; both pass strict structural validation (correct lengths, CRCs
+included) while carrying GPS and bylines into the object the platform
+serves — through `Complete`'s irreversible write-back and, in the
+reference app, onto sharing's unauthenticated access route — so the
+carrier families are dropped, never passed through.
 
-The fix follows the rule's classes, not a longer marker list: the walkers now
-enumerate the carrier families that can carry the two classes on each
-admitted type and drop each family wholesale. On JPEG: EXIF and XMP (APP1,
-by payload signature — unchanged), IPTC-IIM (APP13 whose payload is a
-Photoshop image-resource block, dropped whole so the strip never depends on
-the IRB's internal resource layout), and COM — free text has no signature
-that could classify it, so the whole marker is the carrier and every comment
-segment goes. On PNG: `eXIf` (unchanged) plus the tEXt family (`tEXt`/`zTXt`/
-`iTXt`), iTXt the XMP carrier and the other two keyworded free text no
-structure check can classify. The strip classifies carriers, never payload
-bytes — the honest boundary, stated in sanitize.go's scope note and in the
-Known limitations list above: an APP segment or ancillary chunk carrying no
-recognized vocabulary rides through, exactly as entropy-smuggled bytes do.
-The admission gate's promise is reconciled to that same boundary: errors.go's
-"an admitted type is a promise" wording and validate.go's `strippable` now
+The strip classifies carriers, never payload bytes — the honest boundary,
+stated in sanitize.go's scope note and in the Known limitations list
+above: an APP segment or ancillary chunk carrying no recognized
+vocabulary rides through, exactly as entropy-smuggled bytes do. The
+admission gate's promise is reconciled to that same boundary: errors.go's
+"an admitted type is a promise" wording and validate.go's `strippable`
 measure against the carrier classes the walkers actually enumerate, never
 against byte purity no structural walk could deliver. ICC APP2 stays kept
 (decoders need it for correct color), as do APP0 and other vendor APP
-segments — pinned by the existing keep-tests and the new non-IRB APP13 and
-tIME boundary pins. Regressions build real carriers — an IRB-with-IPTC APP13
+segments — pinned by the keep-tests and the non-IRB APP13 and tIME
+boundary pins. Regressions build real carriers — an IRB-with-IPTC APP13
 holding IIM By-line/City/Copyright data sets, COM comments, an iTXt XMP
-packet with exif GPS and dc:creator content, tEXt Author/Location pairs and
-a zlib-compressed zTXt — and assert the marker content itself is absent from
-the stripped bytes, not merely that a rewrite happened; every strip stays
-idempotent and decode-equal to the pristine base.
+packet with exif GPS and dc:creator content, tEXt Author/Location pairs
+and a zlib-compressed zTXt — and assert the marker content itself is
+absent from the stripped bytes, not merely that a rewrite happened; every
+strip stays idempotent and decode-equal to the pristine base.

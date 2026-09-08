@@ -26,11 +26,10 @@ import (
 
 // This file is go/integration's event-driven outbound-delivery pipeline:
 // the subscriber side that turns a matching internal domain event into one
-// signed HTTP POST per matching subscription, per
-// docs/internal/07-platform-services.md's outbound-webhook section: a
-// tenant subscribes to event types and configures a receiving address; the
-// event source is the domain event bus, and business modules need write no
-// extra code for it.
+// signed HTTP POST per matching subscription, per the outbound-webhook
+// design: a tenant subscribes to event types and configures a receiving
+// address; the event source is the domain event bus, and business modules
+// need write no extra code for it.
 //
 //   - handleDomainEvent is the pkgcore.EventHandler Module.Register
 //     subscribes (through module.go's Module-level forwarding wrapper) for
@@ -48,9 +47,9 @@ import (
 // jobTypeDeliver naming convention.
 const jobTypeWebhookDeliver = "integration.webhook.deliver"
 
-// webhookMaxRetries is the bounded retry horizon
-// docs/internal/07-platform-services.md's exponential-backoff-retry
-// requirement asks for: beyond the first attempt, jobs.StandaloneQueue
+// webhookMaxRetries is the bounded retry horizon the design's
+// exponential-backoff-retry requirement asks for: beyond the first
+// attempt, jobs.StandaloneQueue
 // retries up to this
 // many times (jobs.WithMaxRetries), each wait growing under its own
 // exponential backoff, before the job -- and, through
@@ -345,9 +344,8 @@ func (s *Service) handleDeliveryJob(ctx context.Context, job *jobs.Job) (jobs.Re
 		// delivery was enqueued (webhook_service.go's
 		// DeleteWebhookSubscription deliberately leaves past delivery rows
 		// in place, and dbkit's soft-delete auto-scope plugin hides the
-		// mark-deleted row from this very FindByID call exactly as a
-		// physical DELETE always did before this module adopted
-		// dbkit.SoftDeletable). There is no URL and no secret to deliver
+		// mark-deleted row from this very FindByID call). There is no URL
+		// and no secret to deliver
 		// with any more, and none will reappear within this job's own
 		// bounded retry horizon (webhookMaxRetries) by retrying, so this is
 		// terminal -- a caller wanting delivery to resume calls
@@ -368,11 +366,10 @@ func (s *Service) handleDeliveryJob(ctx context.Context, job *jobs.Job) (jobs.Re
 		return jobs.Result{}, s.settleTerminal(ctx, delivery, "webhook subscription was deleted")
 	}
 	if !sub.Active {
-		// Paused after this delivery was enqueued. Round 2 does not
-		// requeue a paused delivery when the subscription is reactivated
-		// (see AGENTS.md's "Deliberately not in scope" table) -- the
-		// attempt is recorded terminal rather than retried to exhaustion
-		// against a receiver the tenant asked to stop hearing from.
+		// Paused after this delivery was enqueued. A paused delivery is
+		// not requeued when the subscription is reactivated -- the attempt
+		// is recorded terminal rather than retried to exhaustion against a
+		// receiver the tenant asked to stop hearing from.
 		return jobs.Result{}, s.settleTerminal(ctx, delivery, "webhook subscription is inactive")
 	}
 
@@ -395,7 +392,7 @@ func (s *Service) handleDeliveryJob(ctx context.Context, job *jobs.Job) (jobs.Re
 			// already-delivered receiver simply sends a second, harmless
 			// duplicate (webhooks are not required to be exactly-once on
 			// this module's send side any more than notification's own
-			// sends are -- see AGENTS.md's Known limitations).
+			// sends are).
 			return jobs.Result{}, err
 		}
 		return jobs.Result{}, nil
@@ -505,9 +502,9 @@ func truncateWebhookErrorText(text string) string {
 // wrapped by module.go's webhookDeliveryHandler, called at most once per
 // Job strictly after jobs has already persisted it as StatusDeadLetter
 // (jobs.FailureHook's own doc comment). It is this module's ONLY
-// compensation for an exhausted retry horizon, per the root CLAUDE.md's
-// "the queue offers an OnFailure hook; ... belongs to the business module"
-// rule -- here, that compensation is simply recording the terminal state a
+// compensation for an exhausted retry horizon, per the rule that business
+// compensation belongs to the business module, never the queue layer --
+// here, that compensation is simply recording the terminal state a
 // tenant's delivery-log view (Service.ListRecentWebhookDeliveries) shows.
 func (s *Service) onWebhookDeliveryDeadLetter(ctx context.Context, job *jobs.Job, cause error) {
 	log := obs.FromContext(ctx)

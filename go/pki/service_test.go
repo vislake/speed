@@ -31,10 +31,10 @@ func TestService_EnsurePurpose_RejectsNonPositiveMaxCredentialLifetime(t *testin
 	}
 }
 
-// TestService_EnsurePurpose_CreatesAnActiveKeySynchronously pins this
-// round's deliberately simplified behavior: EnsurePurpose does not stage a
-// pending key and wait for a propagation window (round 2) -- it creates a
-// key and marks it active in the same call. See Service's own doc comment.
+// TestService_EnsurePurpose_CreatesAnActiveKeySynchronously pins the
+// bootstrap path: EnsurePurpose does not stage a pending key and wait for
+// a propagation window -- it creates a key and marks it active in the same
+// call. See Service's own doc comment.
 func TestService_EnsurePurpose_CreatesAnActiveKeySynchronously(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
@@ -94,9 +94,8 @@ func TestService_ActiveSigner_NoActiveKey(t *testing.T) {
 }
 
 // TestService_VerificationKeys_ReturnsNonRevokedKeys proves VerificationKeys
-// returns every key for the purpose that is not revoked -- this round's
-// simplified "all still-verifiable keys" answer, per Service's own doc
-// comment on what round 1 does and does not implement.
+// returns every key for the purpose that is not revoked -- the
+// "all still-verifiable keys" answer, per Service's own doc comment.
 func TestService_VerificationKeys_ReturnsNonRevokedKeys(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
@@ -130,9 +129,7 @@ func TestService_VerificationKeys_ReturnsNonRevokedKeys(t *testing.T) {
 // machine alone cannot express: a key in SigningKeyStatusActive whose
 // NotAfter has passed is still "active" as far as the status vocabulary
 // goes, yet must be refused on every read path AT THE MOMENT THE KEY IS
-// TAKEN -- whether or not the expiry scan has run. Before the enforcement
-// round, status alone decided usability and NotAfter was a suggestion
-// whose reality depended on the scan job having run.
+// TAKEN -- whether or not the expiry scan has run.
 //
 // Every test pins the Service's clock (svc.now) rather than sleeping, so
 // the boundary assertions are exact: a key's validity window is
@@ -178,9 +175,9 @@ func TestService_ActiveSigner_KeyPastNotAfterIsRefused(t *testing.T) {
 
 // TestService_ActiveSigner_KeyBeforeNotBeforeIsRefused pins the
 // not-yet-valid half of the window. No shipped code path creates a
-// future-dated key today (NotBefore is always the creation instant), but
-// the enforcement must cover the whole window, not just the expiry end --
-// a future round that pre-provisions keys must not be able to sign with
+// future-dated key (NotBefore is always the creation instant), but the
+// enforcement must cover the whole window, not just the expiry end: a
+// future code path that pre-provisions keys must not be able to sign with
 // them early.
 func TestService_ActiveSigner_KeyBeforeNotBeforeIsRefused(t *testing.T) {
 	svc := newTestService(t)

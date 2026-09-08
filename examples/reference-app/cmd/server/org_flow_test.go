@@ -156,9 +156,9 @@ type orgListMembersResponse struct {
 //
 // Every call also sends the rbac demo header (demoUserHeader) naming
 // demoOwnerUserID, the seeded identity seedDemoGrants grants BuiltinRoleOwner
-// in every configured tenant -- since the org-route-guards round, org's
+// in every configured tenant -- org's
 // route is gated per operation on its own declared permissions like every
-// other module's (go/org/AGENTS.md's own permission table), and this
+// other module's, and this
 // helper's callers register throwaway accounts through registerAndAuthenticate
 // that hold no rbac grant of their own. Riding on the pre-seeded owner
 // identity here is a SETUP choice -- which demo identity rbac evaluates the
@@ -224,14 +224,13 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, token, subject
 }
 
 // TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd is
-// the round's own acceptance criterion (see the frozen plan's B3 block): the
-// roadmap M1 exit path, driven end to end through the real composed HTTP
+// the acceptance journey driven end to end through the real composed HTTP
 // stack this app serves -- the authn+tenancy middleware chain, org's real
 // Handler, and real dbkit.Repository-backed SQLite storage, none of it
 // mocked -- proving org is a genuine consumed dependency of the reference
 // app, not merely a module that compiles alongside it.
 //
-// The shape mirrors docs/internal/14's dental-SaaS DSO scenario: a group
+// The shape mirrors the dental-SaaS DSO scenario: a group
 // with two stores beneath it. A member invited into one store must be
 // visible when the roster is read from the group (their subtree) and
 // invisible when it is read from the sibling store -- the property
@@ -245,14 +244,13 @@ func orgRequest(t *testing.T, srv *httptest.Server, method, path, token, subject
 func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *testing.T) {
 	srv, cfg, mailer := buildOrgTestServer(t)
 
-	// The whole flow runs in one tenant, tenant-acme -- the tenant the demo
-	// host "acme.demo.localhost" used to select before authn landed. The
+	// The whole flow runs in one tenant, tenant-acme. The
 	// bearer token registerAndAuthenticate returns is what selects that
 	// tenant for the INVITER: org's routes sit behind the authn+tenancy
-	// middleware chain like every other route this app protects, and Host no
-	// longer resolves a tenant for them (see server.go's middleware-chain
-	// doc comment). The INVITEE deliberately authenticates as nobody: since
-	// the tenantless-accept round, org_acceptInvitation resolves the
+	// middleware chain like every other route this app protects, and Host
+	// never resolves a tenant for them (see server.go's middleware-chain
+	// doc comment). The INVITEE deliberately authenticates as nobody:
+	// org_acceptInvitation resolves the
 	// invitation's own tenant from the token, server-side, and the app's
 	// tenancy allowlist lets the accept path through unresolved -- exactly
 	// the situation a real invitee is in, holding no membership in and no
@@ -278,8 +276,7 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 		t.Fatalf("created root = %+v, want a non-empty id and empty parentId", root)
 	}
 
-	// Step 2: two stores beneath the group -- the "multi-level" shape the
-	// round's acceptance criterion names explicitly.
+	// Step 2: two stores beneath the group -- the "multi-level" shape.
 	var storeA, storeB orgNode
 	orgRequest(t, srv, http.MethodPost, "/api/v1/org/nodes", inviterToken, "",
 		map[string]string{"name": "Downtown Store", "kind": "store", "parentId": root.ID}, &storeA)
@@ -300,7 +297,7 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 	}
 	// The response must echo neither the address nor its blind index, on
 	// the raw wire: org's own convention never echoes the address, and
-	// since org P1-1 it never echoes the index either -- HMAC
+	// never the index either -- HMAC
 	// non-invertibility is no defense against an online oracle when
 	// invitation creation itself yields (address, index) pairs (see
 	// toInvitationResponse's own doc comment in go/org/handler.go).
@@ -322,7 +319,7 @@ func TestOrgFlow_MultiLevelTree_InviteAcceptAndSubtreeScopedListing_EndToEnd(t *
 
 	// Step 4: the invitee accepts -- a different subject than the inviter
 	// (the person accepting is never the same HTTP caller who sent the
-	// invite) AND, since the tenantless-accept round, a caller holding no
+	// invite) AND a caller holding no
 	// bearer token at all: the token in the body resolves the tenant
 	// server-side, which is the only way a real invitee, who has no
 	// membership in the inviting tenant yet, could ever reach an acceptance.
@@ -381,14 +378,14 @@ func containsUserID(members []orgMembership, userID string) bool {
 }
 
 // TestOrgInvitation_BrowserShapedInviter_CreateInvitationFromPrincipalAlone
-// pins the org-web round's resolver change end to end: a signed-in owner
-// whose browser requests carry a bearer token and NEITHER demo header --
-// the exact shape the team surface's invite flow produces -- can create an
-// invitation. Before the round, org's caller-scoped endpoints resolved the
-// caller from the X-Demo-User-Id header alone (demoOrgSubjectResolver's
-// header-only contract), so a header-less request was refused with
-// org.subject_unresolved even though the rbac gate ahead of it had already
-// let the same principal through.
+// pins the org resolver's principal-fallback path end to end: a signed-in
+// owner whose browser requests carry a bearer token and NEITHER demo
+// header -- the exact shape the team surface's invite flow produces -- can
+// create an invitation. A header-less request resolves through the
+// verified Principal (demoOrgSubjectResolver's principalFallback wiring);
+// without it the request would be refused with org.subject_unresolved even
+// though the rbac gate ahead of it had already let the same principal
+// through.
 //
 // The caller must genuinely hold the permission its bearer proves: this
 // test grants the registered account the owner role through the live rbac

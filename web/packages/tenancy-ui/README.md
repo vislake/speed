@@ -135,9 +135,8 @@ function App() {
           currentTenantId={currentTenant?.tenantId ?? null}
           onSwitched={(tenantId) => {
             // The host's own post-switch work: refetch the tenant's
-            // data, and under the tenant-namespaced query-key rule of
-            // docs/internal/12-frontend.md, remove the previous
-            // tenant's cache so repeated switches do not accumulate:
+            // data and remove the previous tenant's cache, so repeated
+            // switches do not accumulate per-tenant entries:
             //   queryClient.removeQueries({ queryKey: ['tenant', oldId] })
             // Permission lists are re-attached the same way (a switch
             // commit drops the tenant-domain set by auth-core design).
@@ -197,7 +196,7 @@ Behaviour, all of it controlled and test-pinned:
 - **Picking another row calls `session.switchTenant(id)`.** The request
   is the generated operation over the host-bound client; the tenant
   travels in the switch request body, never in a header (tenant context
-  travels in the access token, per the frontend standards).
+  travels in the access token).
 - **While the switch is in flight the trigger is inert and one
   `role="status"` notice names the destination -- the
   `tenantSwitcher.switchingTo` text with the picked tenant's name --
@@ -258,7 +257,7 @@ Behaviour, all of it controlled and test-pinned:
 ## Text and i18n
 
 Every built-in string ships in the bilingual `tenancy-ui` namespace,
-sixteen leaves per language under two sections:
+identical leaf sets per language under two sections:
 
 - `tenantSwitcher` -- the two component states: `noCurrentTenant` and
   `switching`.
@@ -278,7 +277,7 @@ importing the shipped JSON bundles, never by inlining language.
 ### Error text: the reachable-code whitelist
 
 The switch surface resolves a failure to text only for the codes it can
-actually draw, thirteen of them:
+actually draw:
 
 | Code | When |
 |---|---|
@@ -332,7 +331,8 @@ live region (announced without interrupting), the failure banner a
 `role="alert"`. The component suite runs axe over the open list on
 every relevant state. As in `ui-kit`
 and `auth-ui`, `color-contrast` stays axe-disabled in jsdom (no real
-paint) and is verified browser-side in a later round.
+paint); contrast is asserted at the theme-value level in this
+package's component suites.
 
 ## Testing
 
@@ -367,11 +367,10 @@ data), and `src/TenantSwitcher.test.tsx` pins the component behaviour
 above -- every text expectation reads the bundle values.
 `src/usage-example.test.tsx`
 compiles and executes the Quick start composition end to end over the
-real-client rig (four requests in a pinned order: the password sign-in
+real-client rig (the requests pinned in order: the password sign-in
 and the three switch attempts, with each switch's bearer token and
 `{ tenant_id }` body asserted), discharging in form the runtime
-consumption of the switch endpoint -- the browser-and-real-server leg
-stays with the reference-app shells.
+consumption of the switch endpoint.
 
 ## Dependencies
 
@@ -427,13 +426,12 @@ the `speed/no-literal-text` rule enforces the namespace discipline over
   demo-server double. The package-level proof remains the in-form leg
   -- `src/usage-example.test.tsx` drives the composed switcher over a
   real `@speed/api-client` bound through the same seam a host binds,
-  with a scripted fetch answering genuine `Response` objects. The
-  remaining leg, a browser driving a real server, is M4's
-  html-runner/e2e work.
+  with a scripted fetch answering genuine `Response` objects. A browser
+  driving the real server is not wired; the in-form leg and the
+  consumer shell's composed-tree suites are the shipped evidence.
 - **The tenant list has no in-package source.** No endpoint answers
   "which tenants may this principal switch between" in the shipped
-  surface, so the list is host data by contract. When a membership
-  listing surface exists, hosts compose with it; nothing here changes.
+  surface, so the list is host data by contract.
 - **Auth-core hooks stay host-side by design.** The switcher takes the
   session and the current tenant as props and reports through
   callbacks; the host observes transitions with `useAuthState` and
@@ -445,10 +443,11 @@ the `speed/no-literal-text` rule enforces the namespace discipline over
   the pairing within this package's own bundles, and it pins every
   copied leaf against the auth-ui bundles imported as test data, so a
   drift between the packages fails the suite.
-- **Storybook / browser-side visual verification**: no preview-harness
-  round exists yet, same deferral `ui-kit`, `layout-kit` and `auth-ui`
-  carry; `color-contrast` stays axe-disabled for the same jsdom reason
-  and is verified browser-side in a later round.
+- **Storybook / browser-side visual verification**: no preview harness
+  exists (the same deferral `ui-kit`, `layout-kit` and `auth-ui`
+  carry); `color-contrast` stays axe-disabled for the same jsdom
+  reason, and contrast is asserted at the theme-value level in this
+  package's component suites.
 
 ## Development
 

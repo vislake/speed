@@ -85,8 +85,7 @@ type Principal struct {
 }
 
 // AccessTokenKeyPurpose is the KeySource purpose access tokens are signed
-// and verified under -- the exact string docs/internal/22-pki.md's
-// "authn's integration" section names in its own EnsurePurpose example.
+// and verified under.
 const AccessTokenKeyPurpose = "authn.access_token" //nolint:gosec // a KeySource purpose name, not a credential.
 
 // accessTokenKeyAlgorithm is the key algorithm Signer asks KeySource to
@@ -103,9 +102,8 @@ const accessTokenKeyAlgorithm = "ed25519"
 
 // KeySource is what Signer and Verifier need from a signing-key lifecycle
 // provider. It is declared here, in go/authn, rather than imported from
-// go/pki: docs/internal/22-pki.md's "authn's integration" section is
-// explicit that authn must not import pki -- key-material lifecycle and "who is calling"
-// are unrelated concerns, and pki's X.509 layer in particular has no
+// go/pki: authn must not import pki -- key-material lifecycle and "who is
+// calling" are unrelated concerns, and pki's X.509 layer in particular has no
 // business anywhere near JWT verification. go/pki's *Service satisfies this
 // interface STRUCTURALLY, with zero import edge in either direction: every
 // method below is declared using ONLY standard-library types, because two
@@ -261,16 +259,13 @@ func (s *Signer) TTL() time.Duration { return s.cfg.ttl }
 // using ctx's cancellation/deadline/trace for that call. See the ensureMu
 // field's own doc comment for why this happens here rather than at
 // construction, and why a failure is retried rather than cached forever.
-// maxCredentialLifetime is this Signer's own configured TTL:
-// docs/internal/22-pki.md's section on why the retiring overlap period's
-// length is declared by the consumer is explicit that the retiring overlap
-// period must cover an access token's full lifetime, and TTL is exactly
-// that number.
+// maxCredentialLifetime is this Signer's own configured TTL: the retiring
+// overlap period must cover an access token's full lifetime, and TTL is
+// exactly that number.
 func (s *Signer) ensure(ctx context.Context) error {
 	// Every Issue serializes on this decision, retries included: concurrent
 	// callers share one in-flight EnsurePurpose instead of each firing its
-	// own, the same serialization sync.Once used to give the first
-	// bootstrap.
+	// own, serialized the way a sync.Once serializes a first use.
 	s.ensureMu.Lock()
 	defer s.ensureMu.Unlock()
 	if s.ensured {
@@ -403,13 +398,12 @@ func NewVerifier(keySource KeySource, opts ...TokenOption) (*Verifier, error) {
 			// the public key, which is not secret. With it, both are
 			// refused before any key lookup happens.
 			//
-			// docs/internal/22-pki.md's "authn's signing algorithm" section
-			// keeps this allowlist single-EdDSA deliberately: every
-			// Signer implementation (local today; vault/kmsaws in
-			// round 4) can direct-sign Ed25519, so nothing forces a
-			// second algorithm into the allowlist, and a second
-			// algorithm here is a second attack surface for no
-			// deployment that needs it.
+			// The allowlist stays single-EdDSA deliberately: every
+			// Signer implementation (local, vault, kmsaws) can
+			// direct-sign Ed25519, so nothing forces a second
+			// algorithm into the allowlist, and a second algorithm
+			// here is a second attack surface for no deployment that
+			// needs it.
 			jwt.WithValidMethods([]string{tokenSigningAlgorithm}),
 			jwt.WithIssuer(cfg.issuer),
 			jwt.WithExpirationRequired(),
@@ -486,13 +480,13 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Principal, error) {
 // this were ever reached with an HMAC method, would be used as an HMAC
 // secret -- so the check lives next to the key that would be misused, not
 // only in the parser configuration somebody might later edit. It also
-// enforces docs/internal/22-pki.md's "authn's signing algorithm" defense-in-depth
-// rule: the kid's own declared Algorithm (from VerificationKeys) must equal
+// enforces the same defense in depth on the key itself: the kid's own
+// declared Algorithm (from VerificationKeys) must equal
 // accessTokenKeyAlgorithm, the algorithm this Verifier was built to trust --
 // redundant while the parser allowlist admits only EdDSA, but a real second
-// gate rather than documentation of one, so a future algorithm addition
-// that forgets to update this check fails closed instead of silently
-// trusting a key that never should have been offered for this purpose.
+// gate rather than documentation of one, so an algorithm addition that
+// forgets to update this check fails closed instead of silently trusting a
+// key that never should have been offered for this purpose.
 func (v *Verifier) keyFunc(ctx context.Context) jwt.Keyfunc {
 	return func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodEd25519); !ok {

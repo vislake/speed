@@ -2,13 +2,11 @@ package compliance_test
 
 // Runnable documentation for compliance's public API, mirroring
 // go/metering/example_test.go's and go/pki/example_test.go's convention:
-// this example is compiled AND executed by `go test`, so a change to
+// these examples are compiled AND executed by `go test`, so a change to
 // compliance's public API that breaks the documented usage fails the
-// build rather than only rotting in prose. It doubles as the
-// compensating-obligations proof root CLAUDE.md's Documentation rules
-// asks for wherever a round ships with no real business-module consumer
-// yet -- exactly the go/pki X.509-layer precedent this round's own
-// AGENTS.md Known limitations section names.
+// build rather than only rotting in prose. ExampleRenderAuditReport
+// below carries the compensating obligations of RenderAuditReport, the
+// one public API here with no real business-module consumer yet.
 //
 // exampleNotesModule plays the part of a real business module: it
 // implements pkgcore.Module and, in its own Register call, registers one
@@ -202,13 +200,12 @@ func Example() {
 
 // ExampleRenderAuditReport renders one audit.AuditEvent -- the shape an
 // AuditQuery.Query call returns -- as a CSV audit report: the header row
-// first, then one RFC 4180 row per event. The report's bytes are exactly
-// what a future HTTP handler would set as a text/csv response body
-// (go/compliance/AGENTS.md's "no real consumer yet" record names that
-// deferral); this example stands in for that consumer as runnable,
-// compile-checked documentation of RenderAuditReport and ReportFormat, so
-// a change to their signatures fails the build instead of rotting in
-// prose.
+// first, then one RFC 4180 row per event. The report's bytes are what an
+// HTTP handler would set as a text/csv response body (no such handler
+// exists; RenderAuditReport has no real consumer yet). This example
+// stands in for that consumer as runnable, compile-checked documentation
+// of RenderAuditReport and ReportFormat, so a change to their signatures
+// fails the build instead of rotting in prose.
 func ExampleRenderAuditReport() {
 	evt := audit.AuditEvent{
 		ID:         "audit-1",

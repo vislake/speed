@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-r"""The lockstep release coordinator (M0: offline verification only).
+r"""The lockstep release coordinator (offline verification only).
 
-docs/internal/02-repo-and-release.md and docs/internal/18-cicd.md define the
-lockstep release: every Go module and every npm package of the repository
-shares ONE version number and releases together, and a single command must
-be able to publish all of them at that version (the M0 exit condition,
-docs/internal/15-roadmap.md). This script is the M0 deliverable for that
-command: it derives the full release plan from the tree at runtime and
-verifies that the plan is consistent -- OFFLINE, with zero side effects by
-default. Real publishing (pushing tags, npm publish, artifacts, the GitHub
-Release) is deliberately out of scope until the first real release at M4
-(v1.0); see "What this round does not do" below.
+Under the lockstep release, every Go module and every npm package of the
+repository shares ONE version number and releases together, and a single
+command must be able to publish all of them at that version. This script
+is that command's verification half: it derives the full release plan
+from the tree at runtime and verifies that the plan is consistent --
+OFFLINE, with zero side effects by default. Real publishing (pushing
+tags, npm publish, artifacts, the GitHub Release) is deliberately out of
+scope; see "What this script does not do" below.
 
 Publishable set (derived at runtime, never hand-maintained):
 
@@ -29,7 +27,7 @@ Publishable set (derived at runtime, never hand-maintained):
     go.work drift guard). All current versions must be uniform for the
     plan to be consistent.
   * examples/reference-app is deliberately NOT publishable: it is the
-    mandatory first consumer of every module (root CLAUDE.md), consumers
+    mandatory first consumer of every module, consumers
     pin published modules and are never themselves published or tagged,
     and a consumer keeps its replace directives after every release (see
     the replace-cleanup section below). The publishable set is the go/
@@ -42,8 +40,9 @@ Modes:
   Prints the full plan -- every go/ module with the tag it would get,
   every npm package with the version the fixed group would bump it to --
   then the preflight results, and closes with one aggregated line
-  ("21 Go modules + 5 packages -> v0.3.0"). Exit 0 means the plan is
-  consistent. Nothing is tagged, written, fetched or published.
+  reporting the module and package counts the tree carries. Exit 0 means
+  the plan is consistent. Nothing is tagged, written, fetched or
+  published.
 
   --self-test: runs this script's unittest suite offline (temp sandboxes
   only; see test_lockstep_release.py). Proves the verification gates and,
@@ -54,11 +53,10 @@ Modes:
   --apply: HARD-GATED. Refuses with exit 3 unless --allow-local-tag-
   creation is also passed, and even then creates LOCAL, never-pushed,
   lightweight tags only: the escape hatch exists so the self-tests can
-  exercise tag creation against a scratch repository, not so this round
-  can publish. See the refusal message and "What this round does not do".
+  exercise tag creation against a scratch repository, not to publish.
+  See the refusal message and "What this script does not do".
 
-What this round does not do (each item waits for the v1.0 release at M4,
-docs/internal/18-cicd.md, release.yml's header):
+What this script does not do:
 
   * push tags, create the GitHub Release, or touch any publish credential
     (none is wired anywhere in this repository);
@@ -67,7 +65,7 @@ docs/internal/18-cicd.md, release.yml's header):
     version-bumps or publishes);
   * edit any module go.mod or web package.json version field: the tree
     stays in its pre-release transition state (sibling replace lines and
-    0.0.0 / zero pseudo-versions) until the first real release at M4;
+    0.0.0 / zero pseudo-versions);
   * build artifacts (images, goreleaser binaries, speed.yaml, SBOMs) or
     run scaffold-verify.
 
@@ -86,13 +84,12 @@ Preflight checks (all must pass for exit 0):
   4. web/ package versions are uniform and the changesets fixed group
      covers exactly the packages that exist.
 
-First-release replace cleanup (docs/internal/18-cicd.md step 3) ships in
-this module as PURE FUNCTIONS -- first_release_replace_cleanup and its
-error type -- exercised ONLY by the self-tests against the fixtures under
+The first-release replace cleanup ships in this module as PURE
+FUNCTIONS -- first_release_replace_cleanup and its error type --
+exercised ONLY by the self-tests against the fixtures under
 tools/release/testdata/. No operational mode of this script calls them,
 and no mode of this script ever reads or edits a live go.mod beyond
-existence checks: the live tree keeps its transition state until M4, when
-the release round wires the cleanup into the first real release.
+existence checks: the live tree keeps its pre-release transition state.
 
 Usage:
     python3 tools/release/lockstep-release.py v0.3.0        # offline plan
@@ -100,15 +97,15 @@ Usage:
     python3 tools/release/lockstep-release.py --apply v0.3.0
         --allow-local-tag-creation                          # LOCAL tags only
 
-Example, run from the repository root (output shape; the current tree
-carries 21 go/ modules and 5 web packages):
+Example, run from the repository root (output shape; the aggregated
+closing line reports the counts the current tree carries):
 
     $ python3 tools/release/lockstep-release.py v0.3.0
     Lockstep release plan for v0.3.0
     ================================
     ...
     [ok] ...
-    21 Go modules + 5 packages -> v0.3.0
+    <N> Go modules + <M> packages -> v0.3.0
     $ echo $?
     0
 
@@ -296,7 +293,7 @@ def derive_go_modules(repo_root: str) -> tuple[list[str], list[str]]:
 
     Publishable modules are the go.work use entries under go/ whose
     directory carries a go.mod; consumers are every other go.work entry
-    (today: examples/reference-app). The go/ tree and go.work are checked
+    (examples/reference-app). The go/ tree and go.work are checked
     against each other in both directions, so a module added on either
     side alone fails the plan loudly.
     """
@@ -634,12 +631,10 @@ def print_apply_not_done() -> None:
 
 
 # ---------------------------------------------------------------------------
-# First-release replace cleanup (docs/internal/18-cicd.md step 3), as pure
-# functions. Exercised ONLY by the self-tests against the fixtures under
-# tools/release/testdata/ -- no operational mode calls them, and no mode of
-# this script ever reads or edits a live go.mod. The release round at M4
-# wires them into the first real release, when every module tag exists and
-# the transitional sibling replaces can finally be deleted.
+# First-release replace cleanup, as pure functions. Exercised ONLY by the
+# self-tests against the fixtures under tools/release/testdata/ -- no
+# operational mode calls them, and no mode of this script ever reads or
+# edits a live go.mod.
 # ---------------------------------------------------------------------------
 
 

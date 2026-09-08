@@ -164,7 +164,7 @@ func TestService_Describe_NoItemsOrFlags_ReturnsEmptyNotNil(t *testing.T) {
 // stayed latent (no module declares a Sensitive item with a non-empty
 // Default today); this test registers one WITH a non-empty Default and
 // pins the redaction at the boundary Describe() itself applies, so no
-// consumer of the exported view -- the admin console, a future tool --
+// consumer of the exported view -- the admin console, a generated-reference tool --
 // needs to remember to redact. A non-Sensitive item's Default must come
 // through unchanged: the redaction is per-item, decided by the entry's own
 // Sensitive flag, never by its neighbours.

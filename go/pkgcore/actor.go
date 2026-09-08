@@ -43,9 +43,8 @@ type Actor struct {
 // setting one never clears or overwrites the other. This is deliberate --
 // during an impersonated (admin-as-user) session, Actor identifies the
 // impersonated user while OnBehalfOf identifies the real administrator
-// performing the action, and both must be settable, and readable, at once.
-// See docs/internal/10-compliance-and-audit.md's impersonation rule and
-// OnBehalfOfFromContext's own doc comment.
+// performing the action, and both must be settable, and readable, at once
+// (see OnBehalfOfFromContext's own doc comment).
 func WithActor(ctx context.Context, a Actor) context.Context {
 	return context.WithValue(ctx, ctxKeyActor, a)
 }
@@ -76,8 +75,8 @@ func WithOnBehalfOf(ctx context.Context, a Actor) context.Context {
 // the zero Actor.
 //
 // A present OnBehalfOf means the current Actor (see ActorFromContext) is
-// impersonated: per docs/internal/10-compliance-and-audit.md, every audit
-// record produced while impersonating must carry both identities, because
+// impersonated: every audit record produced while impersonating must carry
+// both identities, because
 // an investigation that only sees the impersonated user's own id looks
 // exactly like that user acting on their own account -- the single most
 // common accountability mistake in an admin console.

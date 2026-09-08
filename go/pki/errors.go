@@ -3,66 +3,48 @@ package pki
 import "github.com/vislake/speed/go/pkgcore/apperr"
 
 // The error index of the pki module. Every exported error is an
-// *apperr.Error builder whose Code follows the <module>.<reason> convention
-// the backend coding standard requires: match a decorated error with
-// apperr.As(err) and compare its Code, never with == or errors.Is against
-// the var below. WithParam and WithCause derive a NEW *apperr.Error rather
-// than mutating the receiver, so the pointer a call returns is never the
-// pointer declared here -- the same convention dbkit, tenancy and org
-// already document.
+// *apperr.Error builder whose Code follows the <module>.<reason>
+// convention: match a decorated error with apperr.As(err) and compare its
+// Code, never with == or errors.Is against the var below. WithParam and
+// WithCause derive a NEW *apperr.Error rather than mutating the receiver,
+// so the pointer a call returns is never the pointer declared here -- the
+// same convention dbkit, tenancy and org already document.
 //
 // Every code in this file has a matching description entry in
 // locales/{zh-CN,en-US}.toml, under the identical id.
 //
-// Round 1 declared the first four below. Round 3 (this round -- revocation,
-// CRL generation, JWKS export) adds the remaining five:
+// The codes below fall into three trigger families:
 //
-//   - ErrCertificateRevoked and ErrPropagationWindowNotElapsed are exactly
-//     the two of round 1/2's AGENTS.md's three reserved codes that this
-//     round's own code paths genuinely trigger: VerifyCertificate for the
-//     first (ca.go), Service.PromoteNow for the second (lifecycle.go) --
-//     see PromoteNow's own doc comment for why a propagation-window guard
-//     belongs to a manual promotion path rather than to revocation itself,
-//     which is the deviation from round 1/2's AGENTS.md parenthetical
-//     ("the propagation window") this file's own doc keeps honest about.
-//   - ErrSignerUnavailable is the third reserved code, redirected: round
-//     1/2's AGENTS.md parenthetically associated it with "a KMS-backed
-//     signer" (round 4's vault/kmsaws). Round 3 gave it its first real
-//     trigger -- GenerateCRL (crl.go) wraps a Signer.Sign failure that is
-//     not already an *apperr.Error (LocalSigner's ErrKeyNotFound passes
-//     through unwrapped) as ErrSignerUnavailable, since CRL signing is
-//     exactly the revocation-adjacent path where a KMS-backed signer's
-//     network failure would first surface. Round 3's comment predicted
-//     "round 4's providers may adopt this code directly in a future edit";
-//     the P2-3 closing round (2026-09-08) is that edit: kmsaws's
-//     signDirect answers a KMS Sign that returns no Signature field with
-//     ErrSignerUnavailable -- a signing backend that did not actually sign
-//     (see its own doc comment and go/pki/signer.go's Sign contract
-//     sentence). vault's own missing-signature-field answer stays an
-//     unwrapped fmt.Errorf, exactly as this file's original accounting
-//     recorded for both providers; what changed is that kmsaws now has a
-//     coded reason to return this code, not just GenerateCRL's wrapping.
-//   - ErrCRLNotGenerated is a new code this round adds outright, for the
-//     CRL-fetch HTTP operation when GenerateCRL has never run for the
-//     requested authority -- see crl.go.
-//   - ErrInternal is the catch-all this round's HTTP Handler folds any
-//     non-*apperr.Error failure into before writing a response body, the
-//     same role every other module's own ErrInternal plays (see
-//     storage.ErrInternal, notification.ErrInternal); no round before this
-//     one needed one because no round before this one had an HTTP surface.
-//   - ErrInvalidRequestBody and ErrRevocationReasonRequired are the two
-//     request-validation codes this round's HTTP Handler answers with --
-//     see decodeJSON and PkiRevokeSigningKey/PkiRevokeCertificate in
-//     handler.go -- matching the identical storage.ErrInvalidRequestBody
-//     sibling-module pattern.
+//   - ErrCertificateRevoked and ErrPropagationWindowNotElapsed guard the
+//     two revocation-adjacent surfaces: VerifyCertificate and
+//     ExportAuthorityChainJWKS refuse with the first a revoked certificate
+//     or a revoked member of its authority chain (revocation.go's
+//     walkAuthorityChain), and Service.PromoteNow answers the second for a
+//     pending key staged less than propagationWindow ago -- see PromoteNow's
+//     own doc comment for why a propagation-window guard belongs to a
+//     manual promotion path rather than to revocation itself.
+//   - ErrSignerUnavailable has two triggers: GenerateCRL (crl.go) wraps a
+//     CRL-signing Signer.Sign failure that is not already an *apperr.Error
+//     (LocalSigner's ErrKeyNotFound passes through unwrapped), and
+//     kmsaws's signDirect answers a KMS Sign whose response carries no
+//     Signature field with the code directly -- a signing backend that did
+//     not actually sign (see go/pki/signer.go's Sign contract sentence).
+//     vault's own missing-signature-field answer stays an unwrapped error
+//     (vault/signer.go's decodeVaultSignature validates the shape).
+//   - ErrCRLNotGenerated, ErrInternal, ErrInvalidRequestBody and
+//     ErrRevocationReasonRequired serve the HTTP surface: the CRL fetch
+//     before GenerateCRL has ever run for the authority, the Handler's
+//     fold-in for any non-*apperr.Error failure (the same role
+//     storage.ErrInternal and notification.ErrInternal play), and the two
+//     request-validation answers (handler.go's decodeJSON and the revoke
+//     operations).
 //
-// ErrAuthorityRevoked is the one code added after round 3 (the audit round
-// that closed the issuance/verification asymmetry): round 3's verification
-// path refused a revoked authority anywhere in a chain, but the issuance
-// path never checked the signing authority's own status, so a revoked
-// issuer could keep minting certificates every verifier rejects. Both
-// CreateIntermediateCA and IssueCertificate now refuse that state with this
-// code -- see its own comment in the var block below.
+// ErrAuthorityRevoked stands apart from these families: the issuance paths
+// (CreateIntermediateCA, IssueCertificate) refuse with it a signing
+// authority whose own Status -- or any ancestor's up to the root -- is
+// AuthorityStatusRevoked, so a revoked issuer can never keep minting
+// certificates every downstream verifier rejects -- the refusal mirrored
+// from the verification path's chain-wide check.
 var (
 	// ErrAuthorityNotFound reports that no authority with the requested id
 	// exists -- CAService.CreateIntermediateCA and IssueCertificate's
@@ -87,11 +69,11 @@ var (
 
 	// ErrAlgorithmUnsupportedBySigner reports that the requested algorithm
 	// is not one a given Signer implementation can produce. LocalSigner
-	// supports only AlgorithmEd25519 today, so this is the error every
-	// other algorithm value gets from it; the code exists now because
-	// GenerateKey's algorithm parameter already exists, even though the
-	// case docs/internal/22-pki.md names it for -- AWS KMS asked for an
-	// algorithm it does not support -- is round 4 territory.
+	// supports only AlgorithmEd25519, so this is the error every other
+	// algorithm value gets from it; the code exists because GenerateKey's
+	// algorithm parameter already exists and is the contract an
+	// implementation that cannot produce a requested algorithm reports
+	// (AWS KMS asked for an algorithm it does not support, say).
 	ErrAlgorithmUnsupportedBySigner = apperr.Invalid("pki.algorithm_unsupported_by_signer")
 
 	// ErrCertificateRevoked reports that CAService.VerifyCertificate refused
@@ -127,12 +109,11 @@ var (
 	ErrAuthorityRevoked = apperr.Conflict("pki.authority_revoked")
 
 	// ErrSignerUnavailable reports that a Signer call failed because the
-	// signing backend did not actually sign, with two triggers today:
-	// GenerateCRL (crl.go) wraps a CRL-signing failure that is not itself a
-	// coded *apperr.Error in this code, and kmsaws's signDirect
+	// signing backend did not actually sign, with two triggers: GenerateCRL
+	// (crl.go) wraps a CRL-signing failure that is not itself a coded
+	// *apperr.Error in this code, and kmsaws's signDirect
 	// (go/pki/signer/kmsaws/signer.go) answers a KMS Sign whose response
-	// carries no Signature field with it directly -- the provider adoption
-	// this code's own round-3 history predicted. apperr.Internal, not
+	// carries no Signature field with it directly. apperr.Internal, not
 	// apperr.NotFound or apperr.Invalid: the caller did nothing wrong, the
 	// signing backend did not answer, matching storage.ErrStoreUnavailable's
 	// identical "the infrastructure seam failed" shape.

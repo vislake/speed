@@ -5,18 +5,17 @@ package memcached
 // importing this package -- for side effect alone, if the host calls
 // nothing else in it -- registers "kv.memcached" on pkgcore's shared
 // KVStoreRegistry. Unlike "kv.redis", it is not named by pkgcore.
-// PresetDistributed or any other built-in Preset (see this package's own
-// AGENTS.md entry for why: it is honestly NOT SurvivesRestart, so it is not
-// a sane zero-configuration default for a distributed deployment mode's
-// preset the way kv.redis is); a host that wants it wires it explicitly,
+// PresetDistributed or any other built-in Preset: it is honestly NOT
+// SurvivesRestart, so it is not a sane zero-configuration default for a
+// distributed deployment mode's preset the way kv.redis is. A host that
+// wants it wires it explicitly,
 // either through KVStoreRegistry.Build("kv.memcached", cfg) or by calling
 // NewKVStore directly and injecting it with pkgcore.WithKVStore.
 //
 // The trade this package accepts, same as kv/redis: a host that forgets to
 // import it turns "missing kv.memcached" from a compile-time failure into a
-// Bootstrap-time pkgcore.ErrUnknownImplementation (docs/internal/03-
-// deployment-modes.md's implementation-registry section names this cost and
-// accepts it explicitly).
+// Bootstrap-time pkgcore.ErrUnknownImplementation -- the accepted
+// database/sql trade, an error that names the import which fixes it.
 
 import (
 	"fmt"

@@ -20,14 +20,13 @@
  * What it refuses is the third state, the one shipping today: offered,
  * and claiming delivery to a phone that will never receive anything.
  *
- * FOR THIS DEPLOYMENT the first outcome is the expected one: the product
- * owner has stated that this is a demo and the SMS channel cannot be
- * configured here. A demo shown to people must not offer an entrance
- * nobody can walk through, so the resolution is to hide the tab rather
- * than to caption it. The second branch stays in the gate because it is
- * the right answer for a developer's own machine, where seeing the code
- * in the server log is exactly what one wants -- but it is not the answer
- * for anything a prospect will open.
+ * FOR THIS DEPLOYMENT the first outcome is the one taken: this is a
+ * demo, and the SMS channel cannot be configured here -- a demo shown
+ * to people must not offer an entrance nobody can walk through, so the
+ * tab is hidden rather than captioned. The second branch stays in the
+ * gate because it is the right answer for a developer's own machine,
+ * where seeing the code in the server log is exactly what one wants --
+ * but it is not the answer for anything a prospect will open.
  */
 import { expect, test } from '@playwright/test'
 import { SIGN_IN_TEXT, readSettledText, visitSignIn } from './test-utils/journeys.js'
@@ -49,13 +48,9 @@ const CLAIM_OF_DELIVERY = 'Code sent to'
  */
 const HONEST_ABOUT_CONSOLE = /server log|console|not configured|development/i
 
-// The defect is closed: the demo deployment declares
-// channels={['password']} (ba061cd), so the sign-in surface offers only
-// the channel it can actually deliver -- no SMS tab, and no claim about a
-// phone that would never receive anything. Verified on the fix branch
-// before it landed, with the surface printed to confirm the pass was the
-// tab being gone rather than this gate's own absent-channel branch
-// short-circuiting.
+// The demo deployment declares channels={['password']}, so the sign-in
+// surface offers only the channel it can actually deliver -- no SMS
+// tab, and no claim about a phone that would never receive anything.
 //
 // @budget rather than untagged: it drives the sign-in surface and the
 // per-IP pool cannot absorb another visit in the default tier.
@@ -76,38 +71,18 @@ test(
     await page.getByRole('textbox', { name: 'Phone number' }).fill(VALID_PHONE)
     await page.getByRole('button', { name: 'Send code' }).click()
 
-    // SOMETHING has to answer, and this is now asserted rather than
-    // assumed -- because it turned out not to be true.
-    //
-    // With the read fixed, this gate passed: no claim of delivery
-    // appeared, so the branch below never ran. But the reason no claim
-    // appeared is that NOTHING appeared. Pressing Send code produces no
-    // notice at all, honest or otherwise -- the body reads
-    // "PASSWORD SMS CODE Phone number SEND CODE No account yet?
-    // REGISTER" after the press, exactly as before it.
-    //
-    // That is worse than the lie this gate was written for, and the gate
-    // was letting it through: a person who is told the wrong thing at
-    // least knows the button did something. Silence leaves them pressing
-    // it again. So the gate now fails on silence, and the timeout it
-    // used to wait out is the assertion instead of an accident.
-    // Required to SAY something, not merely to exist.
-    //
-    // auth-ui keeps an empty live region on the surface at all times so
-    // an announcement can be placed into it without a container
-    // appearing -- correct for a screen reader, and it satisfied a plain
-    // toBeVisible() while holding "". So this gate passed with the
-    // surface completely silent after Send code, which is the
-    // check-satisfied-by-absence trap this suite records elsewhere,
-    // reached through a container rather than a missing element.
-    //
-    // And polled rather than read once, which is what the empty region
-    // was hiding: the notice DOES arrive, a moment after the press. My
-    // first read was a point-in-time sample -- the fifth time this suite
-    // has made that mistake -- and it reported the surface as silent
-    // while the real defect, the claim of delivery, was a beat away. The
-    // wrong diagnosis was more alarming than the truth and would have
-    // sent a round looking for a missing notice that is not missing.
+    // SOMETHING has to answer, and it must SAY something, not merely
+    // exist: silence after Send code leaves a person pressing the button
+    // again -- worse than the claim of delivery this gate was written
+    // for, since a person who is told the wrong thing at least knows the
+    // button did something. auth-ui keeps an empty live region on the
+    // surface at all times so an announcement can be placed into it
+    // without a container appearing -- correct for a screen reader, and
+    // it satisfies a plain existence check while holding "". So the
+    // notice is asserted non-empty, and polled rather than read once:
+    // the notice arrives a moment after the press, and a point-in-time
+    // sample taken too early reports the surface as silent while the
+    // notice is a beat away.
     const notice = page.getByRole('status').or(page.getByRole('alert'))
     await expect
       .poll(
@@ -116,19 +91,13 @@ test(
       )
       .not.toBe('')
 
-    // Read from the BODY, not from a main landmark.
-    //
-    // The sign-in surface has no `main` -- there is no app frame yet,
-    // which is the whole point of a sign-in page -- so
-    // getByRole('main').textContent() waited out the full timeout and
-    // this gate failed with "locator.textContent: Test timeout"
-    // instead of naming the defect. That matters more than usual here:
-    // this gate is the acceptance criterion for the round now fixing
-    // the channel, and a criterion that cannot state what it wants
-    // leaves the person implementing it guessing.
-    // Settled, not sampled: reading this immediately is what produced
-    // the "the surface is completely silent" misdiagnosis -- the notice
-    // arrives a beat after the press.
+    // Read from the BODY, not from a main landmark: the sign-in surface
+    // has no `main` -- there is no app frame yet, which is the whole
+    // point of a sign-in page -- so a main-landmark read would wait out
+    // its full timeout and fail with a locator error instead of naming
+    // the defect. Settled, not sampled: reading immediately misreports
+    // the surface as silent, since the notice arrives a beat after the
+    // press.
     const text = await readSettledText(page.locator('body'))
 
     if (CLAIM_OF_DELIVERY.split(' ').every((word) => text.includes(word))) {
@@ -147,18 +116,13 @@ test(
 test(
   'a phone number without a country code is refused with instructions, not a bare rejection',
   async ({ page }) => {
-    // NOT pending, and as of ba061cd not running here either: this
-    // deployment offers only the password channel, so the surface that
-    // renders this message is unreachable and the test stands down.
-    //
-    // Recorded rather than quietly left to skip, because a permanently
-    // skipped test is the "gate that runs nowhere" this suite warns about
-    // wearing a green tick. What it guarded is the best error message in
-    // this product -- auth-ui's authn.invalid_phone, which says what is
-    // wrong, what to do, and shows an example -- and that message is now
-    // unguarded HERE. It still ships in @speed/auth-ui and its own
-    // package tests cover it; what is gone is the consumer-level proof
-    // that a real deployment renders it.
+    // This deployment offers only the password channel, so the surface
+    // that renders this message is unreachable here and the test stands
+    // down rather than running nowhere wearing a green tick. What it
+    // guards -- auth-ui's authn.invalid_phone answer, which says what is
+    // wrong, what to do, and shows an example -- still ships in
+    // @speed/auth-ui and its own package tests cover it; what is gone is
+    // the consumer-level proof that a real deployment renders it.
     //
     // Deliberately not relocated to another surface to keep it running:
     // the closest candidate is the registration password-policy message,

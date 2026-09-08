@@ -83,8 +83,7 @@ func assetPath(key, rel string) string {
 // scaffold-verify's real tidy+build leg (one selection, on a schedule)
 // would silently repair a stale require set rather than fail on it.
 // Regenerating the five goldens through the real tidy procedure whenever
-// a speed module's dependency set changes is the only check that exists
-// (go/saasctl/AGENTS.md's Testing section).
+// a speed module's dependency set changes is the only check that exists.
 //
 // The substitution on THIS side is strings.NewReplacer applied over the
 // same two tokens -- stdlib machinery with the same single-pass semantics
@@ -224,7 +223,8 @@ func TestRunMaterializesEverySelection(t *testing.T) {
 // passthrough, and the single-pass property that replacement values are
 // never re-scanned: an application name or speed-root path whose own text
 // carries a token-shaped substring must survive byte-identical. The
-// token-shaped-values case is the P3-saasctl-A regression: a two-pass
+// token-shaped-values case pins the single-pass property against the
+// two-pass defect: a two-pass
 // substitution (app-name pass, then a speed-root pass over the first
 // pass's output) re-substitutes the app name's embedded speed-root text
 // and corrupts the module line into a spliced path; the single-pass
@@ -291,7 +291,7 @@ func TestReplaceTokensSinglePassByteExactGoldens(t *testing.T) {
 }
 
 // TestRunAppNameContainingTokenTextMaterializesByteIdentical drives the
-// P3-saasctl-A regression through the real command end to end: a target
+// two-pass defect through the real command end to end: a target
 // directory whose base name -- and therefore the app name every token
 // occurrence is substituted with -- contains the speed-root token's own
 // text. The materialized go.mod's module line and the generated server's
@@ -339,8 +339,8 @@ func TestRunAppNameContainingTokenTextMaterializesByteIdentical(t *testing.T) {
 // (--speed-root) is exercised by the subtests' named roots, and the
 // discovery tier by the third subtest, which runs from inside a spaced
 // checkout with no flag and no SPEED_ROOT -- the tier whose resolved path
-// previously received no validation at all. Every subtest asserts the
-// refusal lands before the target directory exists.
+// must receive the same validation. Every subtest asserts the refusal
+// lands before the target directory exists.
 func TestRunSpeedRootBreakingGoModGrammarIsRefusedBeforeAnythingCreated(t *testing.T) {
 	t.Setenv(speedRootEnv, "")
 	// Roots whose paths are legal on the filesystem yet break the go.mod
@@ -387,7 +387,7 @@ func TestRunSpeedRootBreakingGoModGrammarIsRefusedBeforeAnythingCreated(t *testi
 		}
 		// The auto-discovery shape: no --speed-root and no SPEED_ROOT, the
 		// working directory somewhere inside the checkout -- the invocation
-		// shape whose resolved path previously received no validation at all.
+		// shape whose resolved path must receive the same validation.
 		t.Chdir(filepath.Join(checkout, "consumer", "apps"))
 		target := filepath.Join(t.TempDir(), "probeapp")
 		code, stdout, stderr := runNew(t, []string{"--speed-root", "", target})
@@ -734,12 +734,12 @@ func TestValidateSelection(t *testing.T) {
 // keep a generated project's module path looking like a name. The
 // windows-name half of the list is what the plain grammar could never
 // see: "aux" matches the pattern yet is not a module path any go tool
-// accepts, and the real `saasctl new aux` regression (exit 0 and a fully
-// written, unbuildable project before this gate existed) is covered at
-// the command level by TestRunInvalidTargetNameIsUsageError. deriveModuleName
-// takes the base name from the lexically cleaned target, so a trailing
-// ".." in the target can never silently redirect the materialization
-// into a parent directory.
+// accepts -- a `saasctl new aux` run would otherwise exit 0 with a fully
+// written, unbuildable project; the command-level refusal is
+// TestRunInvalidTargetNameIsUsageError. deriveModuleName takes the base
+// name from the lexically cleaned target, so a trailing ".." in the
+// target can never silently redirect the materialization into a parent
+// directory.
 func TestValidateModuleNameAndDeriveModuleName(t *testing.T) {
 	accepted := []string{"myapp", "1app", "a..b", "app-name", "a_b", "App1"}
 	for _, name := range accepted {

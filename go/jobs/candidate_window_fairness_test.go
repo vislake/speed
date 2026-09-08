@@ -8,17 +8,16 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// TestDispatchOnce_CandidateWindowDoesNotStarveOtherTenants is Finding
-// P2-6's regression test: a single tenant with a backlog at or beyond
-// claimBatchSize truly-eligible rows, every one of them older than another
-// tenant's own single eligible row, must not prevent that other tenant's
-// row from ever being selected into a dispatch tick's candidate window.
+// TestDispatchOnce_CandidateWindowDoesNotStarveOtherTenants is the
+// regression test for the candidate-selection starvation gap: a single
+// tenant with a backlog at or beyond claimBatchSize truly-eligible rows,
+// every one of them older than another tenant's own single eligible row,
+// must not prevent that other tenant's row from ever being selected into a
+// dispatch tick's candidate window.
 //
-// worker.go's own dispatchOnce doc comment and go/jobs/AGENTS.md's
-// per-tenant concurrency-limiting claim both used to describe only
 // CONCURRENCY-admission fairness (a flooding tenant's excess Jobs bounce
 // back immediately rather than blocking another tenant's dequeue, proven by
-// TestPerTenantConcurrencyLimiting above) -- a distinct, narrower property
+// TestPerTenantConcurrencyLimiting above) is a distinct, narrower property
 // than what this test proves: that claimCandidates' own SELECTION (its
 // SQL's WHERE/ORDER BY/LIMIT shape, store.go) cannot let one tenant's
 // backlog fill the entire claimBatchSize window every tick and starve

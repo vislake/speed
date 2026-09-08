@@ -2,8 +2,8 @@
  * Contract tests for the AccessTokenStore seam: the memory store keeps
  * exactly one token, forgets it on sign-out, and never touches any
  * persistence API -- there is no storage seam anywhere in the package
- * (docs/internal/12-frontend.md: an access token in localStorage is a
- * credential an XSS walks away with). The absence is structural: the
+ * (an access token in localStorage is a credential an XSS walks away
+ * with). The absence is structural: the
  * store has no browser hooks to call, so the moment anyone adds one the
  * typecheck of this package's consumers stops compiling.
  */

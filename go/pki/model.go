@@ -18,21 +18,21 @@ const (
 	tableCertificateRevocations = "pki_certificate_revocations"
 )
 
-// The Algorithm vocabulary. Only Ed25519 exists today -- every Signer
-// implementation can sign it directly, per docs/internal/22-pki.md's
-// "Ed25519 direct-signs on all three implementations" finding -- but the column and the constant
-// space exist so a second algorithm (a JWT alg an HSM only offers, say)
-// slots in without a migration. AlgorithmUnsupportedBySigner names the
-// failure a mismatched (algorithm, signer) pair produces.
+// The Algorithm vocabulary. AlgorithmEd25519 is the only algorithm that
+// ships -- every Signer implementation can sign it directly -- but the
+// column and the constant space exist so a second algorithm (a JWT alg an
+// HSM only offers, say) slots in without a migration.
+// AlgorithmUnsupportedBySigner names the failure a mismatched (algorithm,
+// signer) pair produces.
 const (
 	AlgorithmEd25519 = "ed25519"
 )
 
-// The SigningKeyStatus vocabulary: the full five-value state machine
-// docs/internal/22-pki.md's "lifecycle state machine" section describes. Getting every value
-// into the column now is round 1's explicit job, even though only the
-// pending->active transition is driven this round -- see Service's doc
-// comment for exactly what that means in practice.
+// The SigningKeyStatus vocabulary: the five-value lifecycle state machine
+// (pending -> active -> retiring -> retired, with revoke reachable from any
+// prior status) that lifecycle.go's transitions, job.go's expiry scan and
+// revocation.go drive. See Service's doc comment for what each value means
+// in practice.
 const (
 	SigningKeyStatusPending  = "pending"
 	SigningKeyStatusActive   = "active"
@@ -42,14 +42,14 @@ const (
 )
 
 // SigningKey is one row of pki_signing_keys: the key-lifecycle layer's core
-// table. authn's future signing keys live here, entirely unrelated to X.509.
+// table. authn's signing keys live here, entirely unrelated to X.509.
 //
 // # Data domain
 //
-// Platform data (docs/internal/04-data-and-tenancy.md): a signing key
-// belongs to the whole deployment, not to one tenant, so SigningKey does
-// NOT implement dbkit.TenantScoped and is reached through SigningKeyRepository's
-// plain *gorm.DB rather than dbkit.Repository[T]. Its isolation is proven by
+// Platform data: a signing key belongs to the whole deployment, not to one
+// tenant, so SigningKey does NOT implement dbkit.TenantScoped and is
+// reached through SigningKeyRepository's plain *gorm.DB rather than
+// dbkit.Repository[T]. Its isolation is proven by
 // tenancytest.AssertNotTenantScoped.
 //
 // The row's data domain also fixes the domain its permission gate must be
@@ -57,8 +57,8 @@ const (
 // handler.go) is gated on pki.PermissionRevokeSigningKey evaluated under
 // the PLATFORM domain (rbac.SystemDomain) -- never under a request
 // tenant's domain, where a single tenant's grant would reach every other
-// tenant's tokens. The same split logic is why round 3's one
-// two-domain "pki:revoke" permission was split (module.go).
+// tenant's tokens. The certificate half of the surface names its own
+// permission, evaluated in the request tenant's domain (module.go).
 //
 // # No private key column, ever
 //
@@ -75,12 +75,11 @@ const (
 //
 // # Algorithm cross-check
 //
-// Algorithm records what this key actually is. docs/internal/22-pki.md's
-// "authn's signing algorithm" section requires a consumer verifying a token to check
-// the token header's alg against this column for the kid in question and
-// reject on any mismatch, even while only one algorithm is legal overall --
-// that check is the consumer's (authn's, from round 2), not this package's,
-// since only the consumer parses tokens.
+// Algorithm records what this key actually is. The consumer verifying a
+// token checks the token header's alg against this column for the kid in
+// question and rejects on any mismatch, even while only one algorithm is
+// legal overall -- that check is the consumer's (authn's), not this
+// package's, since only the consumer parses tokens.
 type SigningKey struct {
 	// ID is the kid: an application-generated, globally unique identifier.
 	ID string `gorm:"column:id;primaryKey;size:64"`
@@ -94,14 +93,14 @@ type SigningKey struct {
 	Algorithm string `gorm:"column:algorithm;size:32;not null"`
 
 	// SignerName names which Signer implementation owns the private key
-	// ("local" this round; "vault" / "kms.aws" from round 4).
+	// ("local", or a registered provider name such as "signer.vault").
 	SignerName string `gorm:"column:signer_name;size:64;not null"`
 
 	// KeyRef is that Signer implementation's own opaque handle. Never a key.
 	// For the vault/kmsaws envelope-mode providers that handle is the base64
-	// of the whole provider-side ciphertext, so migration 0009 widened the
-	// column to 4096 -- this size tag and that migration are the same fact
-	// twice.
+	// of the whole provider-side ciphertext, which is why the column is 4096
+	// wide -- this size tag and the migration that created the width are the
+	// same fact twice.
 	KeyRef string `gorm:"column:key_ref;size:4096;not null"`
 
 	// Status is one of the SigningKeyStatus constants.
@@ -132,19 +131,18 @@ type SigningKey struct {
 	// (verifiable but not selected as ActiveSigner) once it is demoted from
 	// active, before the expiry scan retires it for good.
 	//
-	// docs/internal/22-pki.md's "retiring overlap period" section is
-	// explicit that pki does not know this number -- the consumer that
-	// knows the maximum lifetime of a credential signed under this key
-	// declares it, once, as EnsurePurpose's maxCredentialLifetime
-	// parameter. Recording it HERE, on the key row itself, rather than in a
-	// separate purpose-policy table, is what lets the jobs-driven expiry
-	// scan (which runs on a schedule, with no caller supplying
-	// maxCredentialLifetime on each tick) demote an active key into
-	// retiring without having to ask anyone: it reads the value the key
-	// already carries. A key EnsurePurpose creates copies
-	// maxCredentialLifetime directly; a key the expiry scan stages ahead of
-	// rotation copies it from the active key it will eventually replace,
-	// since one purpose's overlap requirement does not change key to key.
+	// The module does not know this number: the consumer that knows the
+	// maximum lifetime of a credential signed under this key declares it,
+	// once, as EnsurePurpose's maxCredentialLifetime parameter. Recording it
+	// HERE, on the key row itself, rather than in a separate purpose-policy
+	// table, is what lets the jobs-driven expiry scan (which runs on a
+	// schedule, with no caller supplying maxCredentialLifetime on each tick)
+	// demote an active key into retiring without having to ask anyone: it
+	// reads the value the key already carries. A key EnsurePurpose creates
+	// copies maxCredentialLifetime directly; a key the expiry scan stages
+	// ahead of rotation copies it from the active key it will eventually
+	// replace, since one purpose's overlap requirement does not change key
+	// to key.
 	RetiringOverlap time.Duration `gorm:"column:retiring_overlap;not null;default:0"`
 
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
@@ -160,13 +158,11 @@ const (
 	AuthorityTypeIntermediate = "intermediate"
 )
 
-// The AuthorityStatus vocabulary. AuthorityStatusActive was the only value
-// round 1 ever wrote; round 3 (this round) does not add a public API that
-// writes AuthorityStatusRevoked either -- see ca.go's VerifyCertificate doc
-// comment for why the chain-verification path still defends against it
-// (a revoked authority can only appear in this round's own tests by direct
-// repository seeding, matching round 1's identical precedent for
-// SigningKeyStatusRevoked).
+// The AuthorityStatus vocabulary. No method in this module's public API
+// writes AuthorityStatusRevoked -- a revoked authority can only appear
+// through direct repository seeding, as the module's own tests do; the
+// chain-verification path still defends against the value (see
+// revocation.go's VerifyCertificate doc comment for why).
 const (
 	AuthorityStatusActive  = "active"
 	AuthorityStatusRevoked = "revoked"
@@ -209,16 +205,15 @@ type Authority struct {
 	Subject string `gorm:"column:subject;size:255;not null"`
 
 	// Serial is the certificate's serial number, lower-case hex encoded.
-	// It is 16 bytes of crypto/rand -- NEVER a timestamp, the exact
-	// anti-pattern docs/internal/22-pki.md's diagnosis names as a real
-	// collision risk under concurrent issuance (see ca.go's newSerialNumber).
+	// It is 16 bytes of crypto/rand -- NEVER a timestamp, which collides
+	// constantly under concurrent issuance (see ca.go's newSerialNumber).
 	Serial string `gorm:"column:serial;size:64;not null"`
 
 	// CertificatePEM is this authority's own certificate, PEM encoded.
 	CertificatePEM string `gorm:"column:certificate_pem;not null"`
 
 	SignerName string `gorm:"column:signer_name;size:64;not null"`
-	// KeyRef -- same opaque-handle contract and same 0009-widened width as
+	// KeyRef -- same opaque-handle contract and same 4096 width as
 	// SigningKey.KeyRef (see its doc comment).
 	KeyRef string `gorm:"column:key_ref;size:4096;not null"`
 
@@ -232,14 +227,13 @@ type Authority struct {
 	RevocationReason string     `gorm:"column:revocation_reason;size:255;not null;default:''"`
 
 	// CRLDistributionPoint is the URL this authority's own CRL is served
-	// at -- round 3's addition (migration 0006). Empty means "no CRL
-	// extension is written into certificates this authority signs", the
-	// same convention every NotAfter/validity field in this module already
-	// follows for an unset value: never a broken placeholder URL. It is
-	// set once, at CreateRootCA/CreateIntermediateCA time (RootCAParams/
-	// IntermediateCAParams.CRLDistributionPoint), and read at issuance
-	// time by CreateIntermediateCA/IssueCertificate to populate the
-	// CHILD certificate's CRLDistributionPoints extension -- a
+	// at. Empty means "no CRL extension is written into certificates this
+	// authority signs", the same convention every NotAfter/validity field
+	// in this module already follows for an unset value: never a broken
+	// placeholder URL. It is set once, at CreateRootCA/CreateIntermediateCA
+	// time (RootCAParams/IntermediateCAParams.CRLDistributionPoint), and
+	// read at issuance time by CreateIntermediateCA/IssueCertificate to
+	// populate the CHILD certificate's CRLDistributionPoints extension -- a
 	// certificate's CRLDP names where to fetch the CRL that lists ITS
 	// OWN revocation, i.e. the CRL of the authority that signed it, never
 	// the certificate's own (an end-entity certificate has no CRL of its
@@ -272,8 +266,7 @@ type Authority struct {
 // TableName names the pki_authorities table.
 func (Authority) TableName() string { return tableAuthorities }
 
-// The CertificateStatus vocabulary. Only CertificateStatusActive is ever
-// written this round; see Authority's identical note.
+// The CertificateStatus vocabulary.
 const (
 	CertificateStatusActive  = "active"
 	CertificateStatusRevoked = "revoked"
@@ -284,17 +277,14 @@ const (
 //
 // # Data domain
 //
-// Tenant data (docs/internal/04-data-and-tenancy.md): a certificate is
-// meaningful only inside the tenant it was issued for, so Certificate
-// implements dbkit.TenantScoped (via the embedded dbkit.TenantModel), is
-// reached only through CertificateRepository (which embeds
-// dbkit.Repository[Certificate]), and its isolation is proven by
-// tenancytest.AssertIsolated. This is the one table of the four that is
-// tenant-scoped -- getting this split right, rather than folding platform
-// CAs and tenant certificates into one table the way the diagnosed system
-// did, is the whole point of round 1's table design (docs/internal/22-pki.md,
-// the "data model" section's opening rule: "one table must never mix two
-// data domains").
+// Tenant data: a certificate is meaningful only inside the tenant it was
+// issued for, so Certificate implements dbkit.TenantScoped (via the
+// embedded dbkit.TenantModel), is reached only through CertificateRepository
+// (which embeds dbkit.Repository[Certificate]), and its isolation is proven
+// by tenancytest.AssertIsolated. It is the only tenant-scoped table of the
+// module's five: platform CAs and tenant certificates deliberately never
+// share one table, per the rule that one table never mixes two data
+// domains.
 //
 // It embeds dbkit.TenantModel rather than declaring TenantID directly: ID
 // is an application-generated UUID, already globally unique, so a plain
@@ -307,15 +297,14 @@ const (
 // # KeyDelivered
 //
 // KeyDelivered records a fact that has real security consequences: some
-// consumers need the private key itself, not just a signing operation
-// (docs/internal/22-pki.md's DBaaS diagnosis needed to hand JWKS-embedded
-// private keys to a data-plane cluster). Once true, this platform no longer
-// holds the only copy of the key, and Signer-side protection (envelope or
-// direct-sign) has nothing left to protect: the honest mitigation is a
-// short validity period plus rotation, not stronger encryption at rest.
-// This round adds the column; the delivery path itself is explicitly out
-// of scope (docs/internal/22-pki.md, the "deliberately out of scope"
-// section: "no generic private-key export API").
+// consumers need the private key itself, not just a signing operation (a
+// deployment that hands JWKS-embedded private keys to a data-plane
+// cluster, say). Once true, this platform no longer holds the only copy of
+// the key, and Signer-side protection (envelope or direct-sign) has
+// nothing left to protect: the honest mitigation is a short validity
+// period plus rotation, not stronger encryption at rest. The column exists
+// so the fact is recorded; the module ships no path that delivers a
+// private key out -- there is no generic private-key export API.
 type Certificate struct {
 	ID string `gorm:"column:id;primaryKey;size:36"`
 
@@ -336,9 +325,9 @@ type Certificate struct {
 	Subject string `gorm:"column:subject;size:255;not null"`
 
 	// SANs holds the subject alternative names as a JSON array of strings.
-	// datatypes.JSON, never a native array column -- the backend coding
-	// standard bans PostgreSQL-only array types outright, and no query
-	// ever filters into this column's structure.
+	// datatypes.JSON, never a native array column -- the module's
+	// dual-dialect migrations must stay valid on SQLite, and no query ever
+	// filters into this column's structure.
 	SANs datatypes.JSON `gorm:"column:sans"`
 
 	// Serial is 16 bytes of crypto/rand, hex encoded -- see Authority.Serial.
@@ -348,7 +337,7 @@ type Certificate struct {
 	CertificatePEM string `gorm:"column:certificate_pem;not null"`
 
 	SignerName string `gorm:"column:signer_name;size:64;not null"`
-	// KeyRef -- same opaque-handle contract and same 0009-widened width as
+	// KeyRef -- same opaque-handle contract and same 4096 width as
 	// SigningKey.KeyRef (see its doc comment).
 	KeyRef string `gorm:"column:key_ref;size:4096;not null"`
 
@@ -377,45 +366,37 @@ var _ dbkit.TenantScoped = Certificate{}
 
 // LocalKey is one row of pki_local_keys: the LocalSigner implementation's
 // own private-key store. Only LocalSigner ever reads or writes this table --
-// the vault and kmsaws implementations (round 4) never touch it, because
-// their key material never lives in this database at all.
+// the vault and kmsaws implementations never touch it, because their key
+// material never lives in this database at all.
 //
 // # Data domain
 //
 // Platform data: a locally-held private key is not owned by a tenant, and
 // separating it from pki_signing_keys / pki_authorities / pki_certificates
 // keeps "no business table ever holds a private key" true in the schema,
-// not just in prose (docs/internal/22-pki.md's own framing of this table).
-// Reached through LocalKeyRepository's plain *gorm.DB; isolation proven by
-// tenancytest.AssertNotTenantScoped.
+// not just in prose. Reached through LocalKeyRepository's plain *gorm.DB;
+// isolation proven by tenancytest.AssertNotTenantScoped.
 //
 // # EncryptedPrivateKey
 //
 // Sealed with dbkit's field-level AES-256-GCM encryption
 // (RegisterLocalKeySerializer / LocalKeySerializerName) -- authenticated and
-// randomized, unlike the ECB-mode, no-IV cipher the diagnosed system used
-// for the equivalent column. The plaintext form is the algorithm's standard
-// private-key encoding (crypto/x509.MarshalPKCS8PrivateKey for Ed25519).
+// randomized, never a deterministic no-IV cipher. The plaintext form is the
+// algorithm's standard private-key encoding
+// (crypto/x509.MarshalPKCS8PrivateKey for Ed25519).
 //
 // # NotAfter
 //
-// Nullable, and still NOT populated by any of this round's code paths, even
-// though round 2 does add the expiry-scan job docs/internal/22-pki.md
-// anticipated when this column and its index were built ahead of any
-// writer: LocalSigner.GenerateKey (the only write path that would set it)
-// still takes no expiry parameter, by the Signer interface's own frozen
-// shape, and round 2's Service (the caller that DOES know a key's intended
-// lifetime) has no signer-specific channel back to LocalSigner to hand that
-// lifetime to without Service acquiring knowledge of which Signer
-// implementation "local" actually is -- exactly the kind of business-code-
-// depends-on-concrete-implementation coupling this codebase's architecture
-// discipline forbids. Round 2's expiry scan (lifecycle.go) therefore reads
-// only the owning rows' own NotAfter (pki_signing_keys, unconditionally;
-// pki_authorities/pki_certificates are round 3's scope, since their
-// lifecycle is revocation-and-CRL shaped, not pending/active/retiring/
-// retired), never pki_local_keys directly. This column and its index remain
-// unused until a future round finds a shape for the Signer/Service boundary
-// that does not require this coupling -- see AGENTS.md's Known limitations.
+// Nullable and unpopulated: LocalSigner.GenerateKey -- the only write path
+// that would set it -- takes no expiry parameter, the Signer interface's
+// shape having no room for one, and handing LocalSigner a lifetime from the
+// caller that knows it (Service records the intended lifetime on the
+// owning pki_signing_keys row) would make Service acquire
+// signer-implementation-specific knowledge of which implementation "local"
+// is. The expiry scan (lifecycle.go) therefore reads only the owning rows'
+// own NotAfter, never pki_local_keys directly. The column and its index
+// exist for a shape of the Signer/Service boundary that avoids that
+// coupling; none is wired.
 type LocalKey struct {
 	// KeyRef is the opaque handle LocalSigner.GenerateKey returns, and the
 	// same value a SigningKey/Authority/Certificate row's KeyRef names when
@@ -435,7 +416,7 @@ type LocalKey struct {
 	EncryptedPrivateKey string `gorm:"column:encrypted_private_key;serializer:pki_local_key_enc;not null"`
 
 	// NotAfter -- see the type's own doc comment above for why it exists
-	// unpopulated this round.
+	// unpopulated.
 	NotAfter *time.Time `gorm:"column:not_after"`
 
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
@@ -445,12 +426,12 @@ type LocalKey struct {
 // TableName names the pki_local_keys table.
 func (LocalKey) TableName() string { return tableLocalKeys }
 
-// CertificateRevocation is one row of pki_certificate_revocations
-// (migration 0007, round 3): a denormalized ledger entry recording the
-// revocation of one pki_certificates row. Migration 0008 added a UNIQUE
-// index on certificate_id, so the table holds at most one row per
-// certificate -- the database constraint CAService.RevokeCertificate's
-// single-winner transition arbitrates on (revocation.go).
+// CertificateRevocation is one row of pki_certificate_revocations: a
+// denormalized ledger entry recording the revocation of one
+// pki_certificates row. A UNIQUE index on certificate_id keeps the table at
+// most one row per certificate -- the database constraint
+// CAService.RevokeCertificate's single-winner transition arbitrates on
+// (revocation.go).
 //
 // # Why this table exists at all -- the cross-tenant CRL problem
 //
@@ -483,11 +464,10 @@ func (LocalKey) TableName() string { return tableLocalKeys }
 //
 // CertificateID and AuthorityID name rows of pki_certificates and
 // pki_authorities respectively, but neither is a real FK constraint: this
-// row spans two different data domains (platform vs. tenant) the same way
-// Certificate.AuthorityID already does not carry one, for the identical
-// reason (this file's own repository-boundary discipline; root CLAUDE.md's
-// cross-module-FK rule, which applies here even though this is all one
-// module because the two tables sit in different domains).
+// row spans two different data domains (platform vs. tenant), and a foreign
+// key between tables of different domains is as unmanageable as a
+// cross-module one -- Certificate.AuthorityID carries none either, for the
+// identical reason.
 //
 // # Written separately from the pki_certificates write -- arbitrated, not silent
 //
@@ -506,10 +486,7 @@ func (LocalKey) TableName() string { return tableLocalKeys }
 //     UPDATE matching only a row still active (repository.go's
 //     RevokeIfActive). Exactly one racing call's UPDATE matches and
 //     commits; every loser's matches zero rows, so a loser can never write
-//     its own reason and timestamp over the winner's committed row -- the
-//     blind full-row save this module's round entry once shipped, which
-//     left the certificate row holding a loser's revocation while the
-//     ledger and the event held the winner's;
+//     its own reason and timestamp over the winner's committed row;
 //   - the ledger insert is INSERT ... ON CONFLICT (certificate_id) DO
 //     NOTHING whose RowsAffected verdict (repository.go's InsertIfAbsent),
 //     enforced by migration 0008's
@@ -531,8 +508,8 @@ func (LocalKey) TableName() string { return tableLocalKeys }
 // retry cannot rewrite the original revocation's facts, and it publishes
 // the one event the failed call could not. A revocation whose ledger insert
 // fails surfaces as a returned error, never as a log-and-return-success
-// whose later retries are all swallowed by an already-revoked early return
-// (the round's original bug).
+// whose later retries would all be swallowed by an already-revoked early
+// return.
 //
 // The failure mode left over is bounded staleness: between the two
 // statements a crash can leave the certificate correctly revoked but

@@ -15,8 +15,8 @@
  * authn.social_exchange_failed, authn.identity_requires_binding) renders
  * its code text in the InlineError banner under a retry button that
  * re-runs the exchange for the same pair. The exchange verdict settles
- * before the host callback runs, and a throwing onSignedIn is contained
- * the tenancy-ui way: it is not an exchange failure (the exchange
+ * before the host callback runs, and a throwing onSignedIn is
+ * contained: it is not an exchange failure (the exchange
  * committed), so it never flips the handler to the failed state -- which
  * would offer a retry of an already-consumed single-use code -- and
  * never escapes as an unhandled rejection; the success outcome (the

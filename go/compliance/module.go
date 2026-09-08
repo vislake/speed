@@ -19,8 +19,7 @@ const moduleName = "compliance"
 // ConfigDefaultRetentionWindow is the dotted configuration key for the
 // per-tenant retention-window override RetentionService.RetentionWindow
 // resolves: how long a soft-deleted row survives before the periodic
-// sweep hard-deletes it (docs/internal/04-data-and-tenancy.md's delete-
-// semantics section, §2). It is declared, tenant-overridable
+// sweep hard-deletes it. It is declared, tenant-overridable
 // (pkgcore.ConfigItem carries no scope of its own -- go/config's Service
 // resolves tenant-then-system-then-default per key, per its own Get doc
 // comment), through Module.Register; RetentionWindow itself falls back to
@@ -98,10 +97,8 @@ type Module struct {
 type Option func(*Module)
 
 // WithQueue wires the jobs.Queue the retention-sweep task is enqueued on
-// and claimed from. Without it, Register returns ErrQueueRequired --
-// mirroring go/storage's identical WithQueue/ErrQueueRequired pattern,
-// for the identical reason: a registered task handler with no queue to
-// drain it can never run.
+// and claimed from. Without it, Register returns ErrQueueRequired: a
+// registered task handler with no queue to drain it can never run.
 func WithQueue(queue jobs.Queue) Option {
 	return func(m *Module) {
 		m.queue = queue
@@ -148,19 +145,15 @@ func WithSharing(s SharingCreator) Option {
 // RetentionService: config.Module.Attach's *config.Service is only
 // produced strictly after Kernel.Bootstrap returns, by which point
 // NewModule has already run, so a host wires a lazy adapter over a
-// **config.Service filled in later -- exactly the pattern
-// examples/reference-app/cmd/server/server.go's orgFeatureGate already
-// establishes for org.FeatureGate.
+// **config.Service filled in later.
 func WithExportConfigReader(r ExportDeliveryExpiryReader) Option {
 	return func(m *Module) { m.export.cfg = r }
 }
 
 // NewModule returns a Module reading and writing audit events through
 // auditRepo -- the same *audit.Repository instance the host's dbkit/audit
-// wiring already constructs over its own database connection, sharing it
-// rather than opening a second one (the same sharing shape
-// cmd/server/server.go's own audit.New(db) wiring already establishes for
-// the reference app's notes module). Constructing a Module performs no
+// wiring already constructs over its own database connection, shared
+// rather than opening a second one. Constructing a Module performs no
 // I/O.
 func NewModule(auditRepo *audit.Repository, opts ...Option) *Module {
 	m := &Module{
@@ -192,33 +185,28 @@ func (m *Module) AuditQuery() *AuditQuery { return m.auditQuery }
 func (m *Module) Name() string { return moduleName }
 
 // DependsOn implements pkgcore.Module: nothing. compliance sits above
-// every business module in docs/internal/01-architecture.md's graph (just
-// below admin), and every one of its dependencies on a *business module's*
-// participation -- notes, storage's objects, or any other future
+// every business module in the module dependency graph (just below
+// admin), and every one of its dependencies on a *business module's*
+// participation -- notes, storage's objects, or any other
 // pkgcore.RetentionParticipant -- arrives through the host-populated
 // pkgcore.Registry.Retention registrar at call time, never through a
-// construction-time requirement DependsOn would express -- mirroring
-// go/storage's and go/metering's identical answer for the identical
-// reason. go/sharing is different: it is a lower-level *platform* module
-// (docs/internal/01-architecture.md places it below compliance, alongside
-// billing/ai-gateway/integration), imported directly for its Go API the
-// same sanctioned way go/billing imports go/metering (SharingCreator's own
-// doc comment) -- but that is a compile-time package import, not a
-// pkgcore.Module the bootstrap set must contain in a particular order, so
-// it still does not belong in DependsOn (which is reserved for "this
-// module's Register call requires another module to have registered
-// first" -- compliance's own Register never reads anything go/sharing's
-// Register declares).
+// construction-time requirement DependsOn would express. go/sharing is
+// different: it is a lower-level platform module (below compliance in the
+// graph), imported directly for its Go API the same sanctioned way
+// go/billing imports go/metering (SharingCreator's own doc comment) --
+// but that is a compile-time package import, not a pkgcore.Module the
+// bootstrap set must contain in a particular order, so it still does not
+// belong in DependsOn (which is reserved for "this module's Register call
+// requires another module to have registered first" -- compliance's own
+// Register never reads anything go/sharing's Register declares).
 func (m *Module) DependsOn() []string { return nil }
 
 // Migrations implements pkgcore.Module. compliance owns no table of its
-// own this round: the retention sweep, right-to-erasure and export
-// gathering are pure orchestration over each participant's own table
-// (already dual-dialect migrated by that participant's own module) plus
+// own: the retention sweep, right-to-erasure and export gathering are
+// pure orchestration over each participant's own table (already
+// dual-dialect migrated by that participant's own module) plus
 // dbkit/audit's existing audit_events table (already migrated by
-// dbkit/audit's own Module) -- see AGENTS.md's "Why no table" section for
-// the reasoning spelled out in full, including why an erasure-request log
-// was considered and rejected for this round. Returning the zero embed.FS
+// dbkit/audit's own Module). Returning the zero embed.FS
 // is not an error: dbkit.MigrationRegistry.Register documents "a module
 // with no subdirectory at all for that dialect is treated as declaring
 // zero migrations for it, not as an error."
@@ -228,10 +216,9 @@ func (m *Module) Migrations() embed.FS { return embed.FS{} }
 // error codes, in both supported languages with identical id sets.
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module. compliance has no HTTP surface
-// this round -- see AGENTS.md's Known limitations -- so this returns nil,
-// the same "no fragment yet" answer go/config's, go/pki's and go/metering's
-// Module give.
+// OpenAPISpec implements pkgcore.Module. compliance has no HTTP surface,
+// so this returns nil -- the same "no fragment yet" answer go/config's,
+// go/pki's and go/metering's Module give.
 func (m *Module) OpenAPISpec() []byte { return nil }
 
 // Register implements pkgcore.Module. Per the interface's own contract it
@@ -279,12 +266,9 @@ func (m *Module) Register(reg *pkgcore.Registry) error {
 	pkgcore.RegisterSystemPurpose(SystemPurposeRightToErasure)
 
 	// Subscribe to config's own EventConfigItemChanged so every successful
-	// config.Set finally gets the dedicated audit record
-	// docs/internal/11-cross-cutting.md's change-audit bullet promised for
-	// this module's own round -- see onConfigItemChanged's doc comment
-	// (config_audit.go). Valid to install regardless of whether config's
-	// Register has run yet, mirroring go/dbkit/audit's own Module.Register
-	// doc comment on the identical point.
+	// config.Set gets the dedicated audit record onConfigItemChanged
+	// writes (config_audit.go). Valid to install regardless of whether
+	// config's Register has run yet.
 	reg.Events.Subscribe(config.EventConfigItemChanged, m.onConfigItemChanged)
 
 	bus := reg.EventBus()
@@ -322,6 +306,5 @@ var _ pkgcore.Module = (*Module)(nil)
 // compile-time check that *sharing.Service satisfies SharingCreator
 // structurally, so a host constructing a Module with WithSharing can pass
 // a real sharing.Module's Service() straight through with no adapter to
-// write -- the identical proof go/billing/module.go gives for
-// *metering.Aggregator satisfying its own UsageReader.
+// write.
 var _ SharingCreator = (*sharing.Service)(nil)

@@ -93,12 +93,9 @@ var ErrRecordNotFound = apperr.NotFound("dbkit.record_not_found")
 var ErrMissingID = apperr.Invalid("dbkit.missing_id")
 
 // Repository is the generic, tenant-scoped data-access base every business
-// module embeds instead of holding a raw *gorm.DB directly (backend coding
-// standard, section 3.2, "Data access goes through Repository only").
+// module embeds instead of holding a raw *gorm.DB directly.
 //
-// It is the second of the design's three tenant-isolation layers (see
-// docs/internal/04-data-and-tenancy.md's "multi-tenant isolation: triple
-// protection" section):
+// It is the second of the design's three tenant-isolation layers:
 //
 //  1. The GORM plugin dbkit.Open installs, which auto-appends
 //     "WHERE tenant_id = ?" to query/update/delete callbacks for any model
@@ -386,16 +383,14 @@ func (r *Repository[T]) Update(ctx context.Context, m *T) error {
 // gorm error and not a silent no-op success, when nothing matches —
 // including when id exists under a different tenant.
 //
-// Delete branches on T's own capability
-// (docs/internal/04-data-and-tenancy.md's delete-semantics section, §1-2): when T implements
-// SoftDeletable, this is a mark-delete — one UPDATE setting
-// deleted_at/deleted_by, leaving the row in place but hidden from ordinary
-// queries by soft_delete.go's auto-scope plugin — handled by softDelete
-// below. Every other T keeps today's real, physical DELETE, byte-identical
-// to before this capability existed; this branch never changes for such a
-// T. See Restore for the mark-delete path's inverse, and AGENTS.md's
-// "Soft deletion" section for what this capability is (and is explicitly
-// not — a security boundary or compliance-grade erasure).
+// Delete branches on T's own capability: when T implements SoftDeletable,
+// this is a mark-delete — one UPDATE setting deleted_at/deleted_by,
+// leaving the row in place but hidden from ordinary queries by
+// soft_delete.go's auto-scope plugin — handled by softDelete below. Every
+// other T keeps the plain physical DELETE, unchanged. See Restore for the
+// mark-delete path's inverse, and soft_delete.go's doc comment for what
+// this capability is — and is explicitly not (a security boundary or
+// compliance-grade erasure).
 //
 // When ctx carries no tenant, Delete returns pkgcore's error unmodified
 // before the database is touched at all.
@@ -498,9 +493,8 @@ func (r *Repository[T]) softDelete(ctx context.Context, id string) error {
 }
 
 // Restore clears deleted_at/deleted_by on a row previously soft-deleted by
-// Delete, making it visible to ordinary queries again
-// (docs/internal/04-data-and-tenancy.md's delete-semantics section, §2's mark-delete
-// inverse). It returns ErrNotSoftDeletable when T does not implement
+// Delete, making it visible to ordinary queries again — the mark-delete's
+// inverse. It returns ErrNotSoftDeletable when T does not implement
 // SoftDeletable — such a T's Delete never soft-deleted anything for Restore
 // to undo — and ErrRecordNotFound when no row matches id under ctx's
 // tenant that is currently soft-deleted (including a row that exists but
@@ -508,11 +502,10 @@ func (r *Repository[T]) softDelete(ctx context.Context, id string) error {
 // FindByID/Update/Delete already use for the identical reason: not letting
 // a caller learn, from the shape of the error alone, which case it hit).
 //
-// Restore does not enforce a retention window: the design doc's
-// "restorable within the retention window" framing describes retention-window configuration as
-// a future compliance-module (M4) concern that does not exist yet
-// (deferred scope). This Restore succeeds unconditionally for any
-// currently-soft-deleted row under ctx's tenant, with no deadline.
+// Restore does not enforce a retention window: retention-window
+// configuration is a compliance-side concern that does not exist yet, so
+// this Restore succeeds unconditionally for any currently-soft-deleted row
+// under ctx's tenant, with no deadline.
 //
 // The .Unscoped() call is a defensive no-op given that the soft-delete
 // auto-scope (soft_delete.go's softDeleteScopePlugin) only touches query

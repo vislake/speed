@@ -61,12 +61,12 @@ func socialSignIn(t *testing.T, f *serviceFixture, provider SocialProvider, tena
 	})
 }
 
-// TestService_SocialSignIn_AutoLinkRules is the round's most important
-// security test: docs/internal/05's rule that an existing account may be
-// linked to a new external identity automatically ONLY when the provider
-// asserts the address is verified AND the channel is on the platform's
-// trusted list. Every other combination must refuse rather than sign the
-// caller into somebody else's account.
+// TestService_SocialSignIn_AutoLinkRules is the module's most important
+// security test: the rule that an existing account may be linked to a new
+// external identity automatically ONLY when the provider asserts the
+// address is verified AND the channel is on the platform's trusted list.
+// Every other combination must refuse rather than sign the caller into
+// somebody else's account.
 func TestService_SocialSignIn_AutoLinkRules(t *testing.T) {
 	t.Parallel()
 
@@ -175,8 +175,8 @@ func TestService_SocialSignIn_NoEmailNeverAutoLinks(t *testing.T) {
 	existing := f.registerUser(t, "shared@example.com", testTenantA)
 
 	// The new account has no membership of testTenantA yet (membership is
-	// the org module's concern, not this one -- see AGENTS.md "Fail closed
-	// on membership"), so the sign-in itself is refused. That refusal must
+	// the org module's concern, not this one; authn fails closed on it), so
+	// the sign-in itself is refused. That refusal must
 	// not stop the identity and its account from having been provisioned:
 	// this test is about who they resolved to, not about the session.
 	if _, err := socialSignIn(t, f, provider, testTenantA); err == nil {
@@ -223,7 +223,7 @@ func TestService_SocialSignIn_UnmatchedEmailCreatesAVerifiedAccount(t *testing.T
 	// The account itself must still have been provisioned and marked
 	// verified, even though the session could not be started: membership
 	// is a separate concern this module intentionally never grants on its
-	// own (see AGENTS.md "Fail closed on membership").
+	// own.
 	created, findErr := f.svc.Users().FindByEmail(t.Context(), "brand-new@example.com")
 	if findErr != nil {
 		t.Fatalf("the account was not provisioned: %v", findErr)
@@ -337,10 +337,9 @@ func TestService_BindExternalIdentity_IsIdempotentAndRefusesADifferentAccount(t 
 	assertErrorCode(t, err, ErrIdentityAlreadyBound.Code)
 }
 
-// TestService_UnbindIdentity_RefusesTheLastLoginMethod is docs/internal/05's
-// fourth social-login rule: removing a binding must never leave an account
-// with zero ways to sign in, because there is no self-service recovery from
-// that state.
+// TestService_UnbindIdentity_RefusesTheLastLoginMethod pins the last-method
+// rule: removing a binding must never leave an account with zero ways to
+// sign in, because there is no self-service recovery from that state.
 func TestService_UnbindIdentity_RefusesTheLastLoginMethod(t *testing.T) {
 	t.Parallel()
 
@@ -484,11 +483,9 @@ func TestLoginMethodCount(t *testing.T) {
 // person, who may act inside several tenants, so it must stay visible
 // whatever tenant happens to be in the calling context.
 //
-// This closes a gap the federation round's own doc comment (identity.go's
-// UserIdentityRepository) claimed was already covered here and was not:
 // repository.go's file comment states every identity-domain repository is
-// compensated by exactly this suite, and until now user_identities was the
-// one table in this module that carried no such test at all.
+// compensated by exactly this suite; this test is the user_identities half
+// of that statement.
 func TestUserIdentityModel_IsNotTenantScoped(t *testing.T) {
 	t.Parallel()
 
@@ -561,11 +558,11 @@ func twoIdentityNoPasswordAccount(t *testing.T) (*serviceFixture, *User, []UserI
 }
 
 // TestUserIdentityRepository_DeleteUnlessLastLoginMethod_GuardIsAuthoritative
-// is the deterministic half of the P2-10 regression: the guarded delete
-// re-derives the remaining method count inside its own transaction, so even
-// a caller whose service-level pre-check ran against a stale count cannot
-// remove an account's last login method. The second deletion here is
-// exactly what a concurrent unbind executes after the other identity is
+// pins the deterministic half of the concurrent-unbind guard: the guarded
+// delete re-derives the remaining method count inside its own transaction,
+// so even a caller whose service-level pre-check ran against a stale count
+// cannot remove an account's last login method. The second deletion here
+// is exactly what a concurrent unbind executes after the other identity is
 // gone: the stale pre-check has already passed (the count read two
 // methods), and the delete itself must refuse.
 func TestUserIdentityRepository_DeleteUnlessLastLoginMethod_GuardIsAuthoritative(t *testing.T) {
@@ -621,22 +618,22 @@ func TestUserIdentityRepository_DeleteUnlessLastLoginMethod_PasswordStillCounts(
 	}
 }
 
-// TestService_UnbindIdentity_ConcurrentUnbindsNeverZeroTheAccount is the
-// service-level P2-10 regression: two simultaneous unbinds of an account
-// whose ONLY login methods are the two identities they remove. Before the
-// fix, both read the full method count, both passed the pre-check, and both
-// deleted -- an account left with zero ways in and no self-service
-// recovery, which is exactly the state UnbindIdentity's guard exists to
-// prevent. After the fix the guarded delete serializes the two on the
-// account's own row, so exactly one unbind can win and the loser is refused
+// TestService_UnbindIdentity_ConcurrentUnbindsNeverZeroTheAccount pins the
+// service-level race: two simultaneous unbinds of an account whose ONLY
+// login methods are the two identities they remove. Both read the full
+// method count and both pass the service-level pre-check, so a guard that
+// stopped there would let both delete -- an account left with zero ways in
+// and no self-service recovery, exactly the state UnbindIdentity's guard
+// exists to prevent. The guarded delete serializes the two on the account's
+// own row instead, so exactly one unbind can win and the loser is refused
 // with ErrLastLoginMethod.
 //
 // Deliberately not t.Parallel() and run over several fresh fixtures: the
 // harmful interleaving needs both racers' pre-checks to land before either
 // delete commits, and a single round of a wall-clock race can come out the
-// safe way even on the broken code. Under the fix every round is
-// deterministic -- the database arbitrates exactly one winner -- so the
-// loop only costs the broken code its luck.
+// safe way even on a shape without the row-level serialization. The loop
+// exists because every round must be deterministic -- the database
+// arbitrates exactly one winner.
 func TestService_UnbindIdentity_ConcurrentUnbindsNeverZeroTheAccount(t *testing.T) {
 	const rounds = 8
 	for round := 1; round <= rounds; round++ {
@@ -690,7 +687,7 @@ func TestService_UnbindIdentity_ConcurrentUnbindsNeverZeroTheAccount(t *testing.
 }
 
 // TestUserIdentityRepository_TouchLogin_ClearsAFieldTheProviderStoppedReporting
-// is the P3-21 regression: TouchLogin refreshes the display fields a
+// pins the refresh shape: TouchLogin refreshes the display fields a
 // sign-in's provider just reported, and a field the provider STOPPED
 // reporting must clear the stored value rather than persist stale data.
 // GORM's Updates(struct) silently skips zero-valued fields, so the refresh
@@ -787,13 +784,13 @@ var (
 )
 
 // TestUserIdentityRepository_Create_BoundsProviderReportedFieldsToColumnWidths
-// is the write-boundary regression for user_identities' three provider-reported
+// pins the write boundary for user_identities' three provider-reported
 // columns: external_id, display_name and avatar_url are third-party strings
-// written straight into fixed-width columns, and before this round a sign-in
-// carrying an over-width profile succeeded on SQLite and failed on PostgreSQL
-// with SQLSTATE 22001 (real PG probe: display_name 200 chars -> VARCHAR(128),
+// written straight into fixed-width columns, and a sign-in carrying an
+// over-width profile would succeed on SQLite and fail on PostgreSQL with
+// SQLSTATE 22001 (a real PG probe: display_name 200 chars -> VARCHAR(128),
 // avatar_url 610 -> VARCHAR(512), external_id 250 -> VARCHAR(191); SQLite
-// stored all three verbatim). The repository write boundary must bound each
+// stores all three verbatim). The repository write boundary must bound each
 // to its column's width -- head preserved, cut at a rune boundary -- exactly
 // as SessionRepository.Create already bounds device/user_agent.
 func TestUserIdentityRepository_Create_BoundsProviderReportedFieldsToColumnWidths(t *testing.T) {
@@ -869,11 +866,11 @@ func TestUserIdentityRepository_Create_BoundsProviderReportedFieldsToColumnWidth
 
 // TestUserIdentityRepository_TouchLogin_BoundsAGrownProviderProfile is the
 // repository half of the "existing identity whose provider later grows"
-// regression: TouchLogin rewrites display_name and avatar_url from the
+// shape: TouchLogin rewrites display_name and avatar_url from the
 // provider on EVERY login, so a value that outgrows its column between two
-// sign-ins must be bounded at this write -- before the fix, the very login
-// that refreshed the grown value failed on PostgreSQL with SQLSTATE 22001
-// while SQLite stored it, breaking an identity that used to sign in fine.
+// sign-ins must be bounded at this write -- otherwise the very login that
+// refreshed the grown value would fail on PostgreSQL with SQLSTATE 22001
+// while SQLite stored it, breaking an identity that signed in fine before.
 func TestUserIdentityRepository_TouchLogin_BoundsAGrownProviderProfile(t *testing.T) {
 	t.Parallel()
 
@@ -941,12 +938,13 @@ func TestUserIdentityRepository_TouchLogin_BoundsAGrownProviderProfile(t *testin
 
 // TestService_SocialSignIn_BoundsAnOverWidthProviderProfile drives a social
 // sign-in whose provider reports an over-width profile end to end: the same
-// login must succeed identically on both dialects (before the fix it did on
-// SQLite and failed on PostgreSQL with 22001), and the identity row must
-// store the bounded values on every writer -- the first bind's insert and
-// the every-login refresh alike. The second callback additionally proves the
-// over-width EXTERNAL ID round-trips: the next sign-in carries the same raw
-// provider id and must find the row the first one created.
+// login must succeed identically on both dialects (an unguarded one would
+// succeed on SQLite and fail on PostgreSQL with 22001), and the identity
+// row must store the bounded values on every writer -- the first bind's
+// insert and the every-login refresh alike. The second callback
+// additionally proves the over-width EXTERNAL ID round-trips: the next
+// sign-in carries the same raw provider id and must find the row the first
+// one created.
 func TestService_SocialSignIn_BoundsAnOverWidthProviderProfile(t *testing.T) {
 	t.Parallel()
 
@@ -1060,12 +1058,13 @@ func TestService_SocialSignIn_AccountMintBoundsTheProviderReportedName(t *testin
 
 // TestService_SocialSignIn_GrownProviderProfileIsBoundedOnTheRewrite is the
 // full-flow shape of the "existing identity whose provider later grows"
-// regression: the identity signs in fine while the provider's name and avatar
-// fit their columns, then the provider grows both past the widths. The very
-// next login refreshes the stored profile (TouchLogin) and must still succeed
-// with the grown values bounded at the write -- before the fix, that login
-// failed on PostgreSQL with 22001 (the refresh became a self-inflicted
-// account breaker) while SQLite stored the grown values verbatim.
+// case: the identity signs in fine while the provider's name and avatar fit
+// their columns, then the provider grows both past the widths. The very
+// next login refreshes the stored profile (TouchLogin) and must still
+// succeed with the grown values bounded at the write -- an unguarded one
+// would fail on PostgreSQL with 22001 (the refresh becomes a
+// self-inflicted account breaker) while SQLite stores the grown values
+// verbatim.
 func TestService_SocialSignIn_GrownProviderProfileIsBoundedOnTheRewrite(t *testing.T) {
 	t.Parallel()
 

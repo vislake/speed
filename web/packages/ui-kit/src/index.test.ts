@@ -3,20 +3,20 @@
  *
  * The package's public surface is exactly what src/index.ts re-exports,
  * and every public name a source module declares is public by definition
- * once that module is one of the entry's sources. Three public types
- * (EmptyStateHeadingLevel, DataTableColumnPriority, FormLayoutColumns)
- * each missed the entry in three successive feature commits, so the
- * recurrence is guarded structurally: this test walks the entry's own
- * export-from declarations, enumerates each resolved source module's
- * exported symbols with the TypeScript compiler API, and asserts the
- * entry re-exports every one of them. A fourth recurrence -- any public
- * name declared in a module the entry already exposes and forgotten in
- * the entry -- fails here instead of in a consumer's editor.
+ * once that module is one of the entry's sources. The entry is the
+ * single gate that keeps the two lists in step, so drift is guarded
+ * structurally: this test walks the entry's own export-from
+ * declarations, enumerates each resolved source module's exported
+ * symbols with the TypeScript compiler API, and asserts the entry
+ * re-exports every one of them. A public name declared in a module the
+ * entry already exposes and forgotten in the entry fails here instead
+ * of in a consumer's editor.
  *
  * The assertion is deliberately one-directional: the module list derives
  * from the entry's own declarations, so a whole new module the entry
- * does not expose at all (a component not yet wired in) is invisible to
- * this test by design -- the entry is the deliberate gate for that.
+ * does not expose at all (a component deliberately kept out of the
+ * surface) is invisible to this test by design -- the entry is the
+ * deliberate gate for that.
  */
 
 import { readFileSync } from 'node:fs'

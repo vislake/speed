@@ -39,7 +39,7 @@ import (
 // what Get and DeadLetterJobs do when the cancellation-state read fails:
 // in the default (fail-closed) mode they return the read error; in the
 // swallow mode they log nothing and answer the Job's natural record state,
-// the historical asynq behaviour commit c26b058b corrected. Everything else
+// the asynq behaviour this tier exists to reject. Everything else
 // is a minimal faithful queue: Enqueue validates and resolves options
 // through the real jobs helpers, Cancel writes only the marker (asynq's
 // shape), a dispatcher goroutine runs eligible Jobs through their
@@ -177,7 +177,7 @@ func (q *faultTierFake) Get(ctx context.Context, id jobs.JobID) (*jobs.Job, erro
 	cancelledAt, err := q.readCancellationLocked(id)
 	if err != nil {
 		if q.swallow {
-			// The historical asynq defect: the read failure is dropped and
+			// The swallow-mode defect shape: the read failure is dropped and
 			// the Job answered from its natural record state as if the read
 			// had answered "no marker".
 			return jobFromFaultRecord(rec, nil), nil

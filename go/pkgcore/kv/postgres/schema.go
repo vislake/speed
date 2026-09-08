@@ -16,11 +16,11 @@ import (
 // into existence before wiring NewKVStore.
 //
 // It is deliberately not dbkit.MigrationRegistry.Apply: go/pkgcore is the
-// dependency floor every other module sits on (see root CLAUDE.md's module
-// dependency direction), so it cannot import go/dbkit, which sits above it.
+// dependency floor every other module sits on (the dependency graph runs
+// pkgcore -> dbkit -> ...), so it cannot import go/dbkit, which sits above
+// it.
 // EnsureSchema is this package's own, self-contained substitute, built on
-// the same "no AutoMigrate, versioned SQL, idempotent" discipline (root
-// CLAUDE.md's database-and-migrations rules) but without a
+// the same "no AutoMigrate, versioned SQL, idempotent" discipline but without a
 // schema_migrations ledger of its own: every statement in
 // migrations/postgres/0001_create_pkgcore_kv_entries.sql is already
 // idempotent DDL (CREATE TABLE / CREATE INDEX, always guarded with IF NOT
@@ -44,7 +44,7 @@ import (
 // touches no network until its first operation (matching
 // kv/redis.NewKVStore's identical contract), and schema application is an
 // explicit, separate step in this codebase's convention (dbkit's own Apply,
-// saasctl's "db migrate" -- see root CLAUDE.md's Reference App section).
+// saasctl's "db migrate").
 // Call it once, before the first operation, typically right after building
 // pool.
 func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {

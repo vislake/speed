@@ -6,47 +6,35 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// The domain events this module publishes, named <module>.<entity>.<action>
-// per backend coding standard §8.
+// The domain events this module publishes, named <module>.<entity>.<action>.
 //
-// Round 2 declared three of the eventual signing-key lifecycle events --
-// staged, activated, retired -- matching exactly the three transitions its
-// expiry scan drives (docs/internal/22-pki.md's "delivery rounds" table).
-// There is deliberately NO ".pending" event (a key enters pending at the
-// moment it is staged, so EventSigningKeyStaged already communicates it)
-// and NO ".retiring" event (a key enters retiring at the moment its
-// replacement is activated, so EventSigningKeyActivated already
-// communicates both halves of that one atomic transition -- see
-// SigningKeyRepository.PromoteToActive's own doc comment).
-//
-// Round 3 (this round) adds the fourth signing-key event,
-// EventSigningKeyRevoked, plus the module's first pki.certificate.* event,
-// EventCertificateRevoked -- revocation.go's Service.RevokeSigningKey and
-// CAService.RevokeCertificate respectively. Every other
-// pki.certificate.*/pki.authority.* event named in docs/internal/22-pki.md's
-// module-contract section (.issued/.renewed/.expiring, .expiring) stays
-// undeclared: this module's own round-1 table already established the
-// discipline that an undeclared-but-unused event is dead catalog weight,
-// not forward compatibility, and only .revoked has a real emitter this
-// round.
+// The signing-key lifecycle publishes four events -- staged, activated,
+// retired, revoked -- matching the transitions that fire them. There is
+// deliberately NO ".pending" event (a key enters pending at the moment it
+// is staged, so EventSigningKeyStaged already communicates it) and NO
+// ".retiring" event (a key enters retiring at the moment its replacement is
+// activated, so EventSigningKeyActivated already communicates both halves
+// of that one atomic transition -- see SigningKeyRepository.PromoteToActive's
+// own doc comment). EventCertificateRevoked is the module's one
+// pki.certificate.* event. Every other pki.certificate.*/pki.authority.*
+// event (issued/.renewed/.expiring) stays undeclared: an
+// undeclared-but-unused event is dead catalog weight, not forward
+// compatibility, and no other event has a real emitter.
 //
 // Consumers: this module's own process-local key-set cache (cache.go)
-// subscribes to every signing-key event, including the new .revoked one --
-// see attachBus in service.go, which is what makes "the process-local
-// cache must be invalidated on revocation" true through the SAME mechanism
-// round 2 built, never a second cache-clearing path. EventCertificateRevoked
-// has no in-module subscriber (CAService keeps no cache), and exists for an
-// eventual audit/notification consumer this round does not build, matching
-// the identical reasoning SigningKeyLifecycleEvent's own doc comment
-// already gives for KID/OccurredAt.
+// subscribes to every signing-key event, including .revoked -- see
+// attachBus in service.go, which makes "the process-local cache must be
+// invalidated on revocation" true through the SAME event mechanism, never a
+// second cache-clearing path. EventCertificateRevoked has no in-module
+// subscriber (CAService keeps no cache); it exists for an audit or
+// notification consumer outside the module.
 const (
 	// EventSigningKeyStaged is published when the expiry scan generates a
 	// new SigningKeyStatusPending key ahead of an approaching expiry (see
 	// service.go's StageDueRotations). The host is expected to subscribe if
 	// it needs to roll the new public key out to an external system before
-	// relying on it -- this module never does that itself (docs/internal/
-	// 22-pki.md's "rotation" section is explicit that pushing to any
-	// external system is never this module's job).
+	// relying on it -- pushing a key out to any external system is never
+	// this module's job.
 	EventSigningKeyStaged = "pki.signing_key.staged"
 
 	// EventSigningKeyActivated is published when a pending key is promoted
@@ -62,27 +50,25 @@ const (
 
 	// EventSigningKeyRevoked is published when Service.RevokeSigningKey
 	// (revocation.go) transitions a key -- of any prior status -- to
-	// SigningKeyStatusRevoked. Round 3's addition.
+	// SigningKeyStatusRevoked.
 	EventSigningKeyRevoked = "pki.signing_key.revoked"
 
 	// EventCertificateRevoked is published when CAService.RevokeCertificate
 	// (revocation.go) transitions a tenant certificate to
-	// CertificateStatusRevoked. Round 3's addition, and this module's first
-	// pki.certificate.* event.
+	// CertificateStatusRevoked.
 	EventCertificateRevoked = "pki.certificate.revoked"
 )
 
 // certificateEventPayloadType names the payload EventCertificateRevoked
 // carries, for EventDecl.PayloadType -- the pki.certificate.* counterpart
 // of signingKeyEventPayloadType above. A single named constant even though
-// only one event uses it today, matching that same precedent (a second
-// pki.certificate.* event, when one is declared, reuses this type rather
-// than inventing a new payload shape for the same entity).
+// only one event uses it: a second pki.certificate.* event reuses this type
+// rather than inventing a new payload shape for the same entity.
 const certificateEventPayloadType = "pki.CertificateRevokedEvent"
 
 // signingKeyEventPayloadType names the payload every signing-key lifecycle
 // event above carries, for EventDecl.PayloadType. One shape serves all
-// three events -- they describe the same fact (this kid, this purpose,
+// four events -- they describe the same fact (this kid, this purpose,
 // something happened to it) in different directions, exactly like rbac's
 // RoleBindingChangedEvent serves both its assign and revoke events.
 const signingKeyEventPayloadType = "pki.SigningKeyLifecycleEvent"
@@ -120,7 +106,7 @@ var eventDecls = []pkgcore.EventDecl{
 }
 
 // SigningKeyLifecycleEvent is the payload of EventSigningKeyStaged,
-// EventSigningKeyActivated, EventSigningKeyRetired and (round 3)
+// EventSigningKeyActivated, EventSigningKeyRetired and
 // EventSigningKeyRevoked -- signingKeyEventPayloadType's shape.
 //
 // Its first job is this module's own cache invalidation (cache.go): Purpose
@@ -139,7 +125,7 @@ type SigningKeyLifecycleEvent struct {
 	// PreviousKID is the purpose's previously active key's id, set only on
 	// EventSigningKeyActivated when a previous active key existed to demote
 	// (empty on a purpose's very first rotation-staged activation, and
-	// always empty on the other two event types).
+	// always empty on the other event types).
 	PreviousKID string
 
 	// OccurredAt is when the transition was written.

@@ -1,457 +1,213 @@
 name: api-contract
-
-# API-contract discipline pipeline -- docs/internal/18-cicd.md's pipeline
-# table, api-contract row: both halves implemented, backend
-# (oapi-codegen) and frontend (orval -> @speed/api-sdk), plus the
-# multi-fragment merge (redocly) now that five fragments exist -- the
-# merged document doubles as orval's input, which is why this file's
-# steps run the merge before the frontend regeneration. Backs the root
-# CLAUDE.md API-contract discipline and docs/internal/21-api-contract.md's
-# spec-first order: edit api/openapi.yaml -> task api:gen -> compilation
-# failures reveal every handler to fix -> commit spec, generated artifacts
-# and implementation in the same PR. Target under 5 minutes; this job
-# carries a timeout and stale runs are cancelled via concurrency.
+# API-contract discipline pipeline. Enforces the repository's spec-first
+# API-contract order -- edit api/openapi.yaml -> task api:gen ->
+# compilation failures reveal every handler to fix -> commit spec,
+# generated artifacts and implementation in the same PR -- on both
+# halves: backend (oapi-codegen) and frontend (orval -> @speed/api-sdk),
+# plus the multi-fragment merge (redocly) whose merged document is
+# orval's input, which is why this file's steps run the merge before the
+# frontend regeneration. Target under 5 minutes; this job carries a
+# timeout and stale runs are cancelled via concurrency.
 #
-# DESIGN-TABLE TRIGGER: PRs touching api/openapi.yaml or the generation
-# side of the toolchain, via GitHub-native path filtering on the
-# pull_request event -- zero third-party actions (dorny/paths-filter stays
-# future work, per 18-cicd's cost-control section). The path set below
-# deliberately matches what regeneration can be affected by: the spec
-# fragment(s), the generator config, the api:gen task definition, and this
-# workflow itself. A PR touching only handler code has nothing to
-# regenerate; whether it still implements the interface is a compile
-# question, answered by full-check's reference-app job on full-ci-labeled PRs
-# (the reference-app unit suite is not part of fast-check -- see fast-check's
-# DELIBERATELY NOT WIRED list) and, for authn, by this workflow's own
-# go/authn build leg below (go/authn is a real module built on every
-# fast-check run regardless of what changed, so its own compile enforcement
-# does not need to wait for full-ci the way the reference app's does).
+# TRIGGERS: pull_request, path-filtered on the spec/generator-toolchain
+# side of the repository, and every direct push to main, path-filtered
+# on the same set (main allows direct pushes -- the normal landing path
+# here -- and a direct push carries no PR for the pull_request filter to
+# see, so without the push trigger a spec pushed without its
+# regenerated artifact would reach main with no run of this workflow at
+# all). The path set deliberately matches what regeneration can be
+# affected by: the spec fragment(s), the generator config, the api:gen
+# task definition, and this workflow itself. A change touching only
+# handler code has nothing to regenerate; whether it still implements
+# the interface is a compile question answered by full-check's
+# reference-app job on full-ci-labeled PRs and, for authn, by this
+# workflow's own go/authn build leg (go/authn is built on every
+# fast-check run regardless of what changed, so its own compile
+# enforcement does not wait for full-ci the way the reference app's
+# does).
 #
-# DIRECT-PUSH TRIGGER: every direct push to main, path-filtered on the
-# same set as the pull_request event above. main allows direct pushes
-# (18-cicd.md's branch-protection section) and that is the normal path
-# here, not an edge case -- most commits land on main by a direct push
-# rather than a merged pull request, the reasoning full-check.yml and
-# fast-check.yml record in place for their own push triggers -- and a
-# direct push carries no PR for the pull_request filter to see, so the
-# consistency gates below used to be silent on exactly the path where
-# spec commits land. The silence is documented by the drift instance this
-# trigger closes: on 2026-09-07 11:37, 880cf2a ("feat(authn): expose the
-# session expiry in the sessions list response") pushed
-# go/authn/api/openapi.yaml's new AuthnSession.expires_at field alone --
-# spec-first, by design -- while the committed authn-server.gen.go and
-# build/openapi/speed.yaml still carried no ExpiresAt on AuthnSession
-# (the file's only expires_at hits then were AuthnTokenPair's token
-# expiry pair), and 41e9892, nine minutes later, regenerated both. No run
-# of this workflow happened in that window: the reference app compiled
-# green throughout, since an added response field changes neither a
-# handler nor anything a build checks -- the compile-enforcement legs
-# below cannot see this drift class, only the porcelain consistency gates
-# can -- and the author's next commit closed it, not CI. With this
-# trigger the 880cf2a push itself runs the job and fails its authn
-# artifact and merged-document gates on the spot; a drift nobody ever
-# repairs stays red, not silently green.
+# The push trigger shares the pull_request path set because the
+# invariant this pipeline checks can only be violated by a change to one
+# of those paths: a push touching only unrelated code cannot make a
+# committed artifact disagree with its spec, so an unfiltered push run
+# would pay the full job on every push for zero information. Cost
+# control stays GitHub-native: the same filter duplicated under the push
+# key, no third-party action.
+# LOCKSTEP: the pull_request path block, the push path block and the
+# PATH SET comment below must name the same paths -- when a fragment
+# joins, add its api/ directory (and any generator config it needs) to
+# all three. The path set names this workflow itself, so the push that
+# repairs a forgotten path re-runs the repaired workflow on its own
+# change.
 #
-# The push trigger shares the pull_request path set because the invariant
-# this pipeline checks can only be violated by a change to one of those
-# paths: a push touching only unrelated code cannot make a committed
-# artifact disagree with its spec, so an unfiltered push run would pay
-# the full job on every push for zero information. The twins run fully on
-# every push because their checks span every module; the path set is what
-# scopes this pipeline's, and cost control stays GitHub-native -- the
-# same filter duplicated under the push key, no third-party action.
-# Lockstep rule: the pull_request block, the push block and the PATH SET
-# comment below must name the same paths -- when a fragment joins, add
-# its api/ directory (and any generator config it needs) to all three.
-# The path set names this workflow itself, so the push that repairs a
-# forgotten path re-runs the repaired workflow on its own change.
-# Fragment-set consistency is now machine-checked rather than a review
-# convention: tools/api_fragments.json is the single source of truth for
-# the fragment list, and this job's first steps
-# (tools/check_api_fragments.py, see COVERAGE below) fail when the
-# manifest, the tree and any leg of this file disagree about a fragment.
-#
-# COVERAGE -- what genuinely runs today (in step order)
-#   * Fragment-enumeration consistency (the manifest drift gate): the
-#     first steps after checkout run tools/test_check_api_fragments.py
-#     (the planted-drift suite -- every drift class the next step
-#     detects, reproduced and pinned red-before-fix) and then
-#     tools/check_api_fragments.py. The fragment universe this file
-#     names in its path filters, its thirteen regeneration steps and its
-#     merge input list is single-sourced in tools/api_fragments.json;
-#     the gate goes red when a fragment is added to the tree but not to
-#     the manifest, registered in the manifest but not wired into a leg
-#     of this file, or wired into a leg without the manifest (see
+# COVERAGE -- what runs, in step order:
+#   * Fragment-enumeration consistency (manifest drift gate):
+#     tools/test_check_api_fragments.py (the planted-drift suite --
+#     every drift class the next step detects, reproduced and pinned
+#     red-before-fix) and then tools/check_api_fragments.py run right
+#     after checkout. The fragment universe this file names in its path
+#     filters, its regeneration steps and its merge input list is
+#     single-sourced in tools/api_fragments.json; the gate goes red when
+#     a fragment is added to the tree but not to the manifest,
+#     registered in the manifest but not wired into a leg of this file,
+#     or wired into a leg without the manifest (see
 #     tools/check_api_fragments.py's docstring for the invariants).
 #   * Consistency gates: every regeneration below is followed by a gate
-#     that fails the job when the committed artifact is not what the spec
-#     generates -- docs/internal/21-api-contract.md's
-#     generated-artifact consistency check, catching a spec edit
-#     committed without its regenerated artifact. The gate is porcelain,
-#     `git status --porcelain --untracked-files=all`, not `git diff
-#     --exit-code`: `git diff` reports only modifications to TRACKED
-#     files, so a regeneration that CREATES a file -- an artifact a new
-#     fragment step or generator writes before its first commit -- would
-#     pass a diff gate silently. The same reason fast-check's own
-#     workspace gate (repo-checks job) is porcelain (its comment spells
-#     the identical hazard out); --untracked-files=all still honours
-#     .gitignore, and the status listing doubles as the failure output.
-#   * Regeneration consistency (notes): the pinned oapi-codegen (v2.8.0,
-#     the exact same go run as Taskfile's api:gen task, run from the same
-#     directory) regenerates the notes module's api/notes-server.gen.go
-#     from its api/openapi.yaml fragment, then its own porcelain gate
-#     fails the job if the committed artifact is not what the spec
-#     generates -- the 21-api-contract.md generated-artifact consistency
-#     check for the backend half, catching a spec edit committed without
-#     its regenerated artifact.
-#   * Regeneration consistency (cases) and (smilesim): the same check
-#     runs twice more for the reference app's own two P3a fragments
-#     (examples/reference-app/internal/cases/api/openapi.yaml ->
-#     cases-server.gen.go, examples/reference-app/internal/smilesim/api/
-#     openapi.yaml -> smilesim-server.gen.go) -- same pinned oapi-codegen
-#     invocation, same porcelain gates, their own steps so
-#     each fragment's failure is unambiguous in the job log. Unlike the
-#     notes, org and storage rows, these two fragments' handlers live in
-#     the app itself (cmd/server/cases.go and cmd/server/smilesim.go,
-#     behind compile-time ServerInterface assertions), so their compile
-#     enforcement is the reference-app go build below, exactly like every
-#     module the app imports.
-#   * The same regeneration-consistency check runs again for org's
-#     fragment (go/org/api/openapi.yaml -> go/org/api/org-server.gen.go),
-#     the second module to carry one -- same pinned oapi-codegen invocation,
-#     same porcelain gate, its own step so each fragment's
-#     failure is unambiguous in the job log.
-#   * Regeneration consistency (storage): the same check runs again for
-#     storage's fragment (go/storage/api/openapi.yaml ->
-#     go/storage/api/storage-server.gen.go), the third module to carry a
-#     fragment -- same pinned oapi-codegen invocation, same porcelain
-#     gate, its own step so each fragment's failure is
-#     unambiguous in the job log.
-#   * Regeneration consistency (notification): the same check runs again
-#     for notification's fragment (go/notification/api/
-#     openapi.yaml -> go/notification/api/notification-server.gen.go) --
-#     same pinned oapi-codegen invocation, same porcelain gate, its own
-#     step so each fragment's failure is unambiguous in the job log.
-#   * Regeneration consistency (sharing): the same check runs again for
-#     sharing's fragment (go/sharing/api/openapi.yaml ->
-#     go/sharing/api/sharing-server.gen.go) -- same pinned oapi-codegen
-#     invocation, same porcelain gate, its own step so each
-#     fragment's failure is unambiguous in the job log. Backend-only,
-#     like storage's: sharing's fragment feeds neither the merge nor
-#     orval below (go/sharing/AGENTS.md's Deferred list).
-#   * Regeneration consistency (pki): the same check runs again for
-#     pki's fragment (go/pki/api/openapi.yaml ->
-#     go/pki/api/pki-server.gen.go) -- same pinned oapi-codegen
-#     invocation, same porcelain gate, its own step so this fragment's
-#     failure is unambiguous in the job log. Backend-only, like
-#     storage's, sharing's, admin's, integration's and ai-gateway's:
-#     pki's fragment feeds neither the merge nor orval below
-#     (go/pki/AGENTS.md's Known limitations -- its frontend leg defers
-#     for the identical reason org's and storage's do; the fragment's
-#     own oapi-codegen.yaml has named this workflow's pki regeneration
-#     step since the module's round 3, a claim this round finally
-#     makes true).
-#   * Regeneration consistency (admin): the same check runs again for
-#     admin's fragment (go/admin/api/openapi.yaml ->
-#     go/admin/api/admin-server.gen.go) -- same pinned oapi-codegen
-#     invocation, same porcelain gate, its own step so each
-#     fragment's failure is unambiguous in the job log. Backend-only,
-#     like storage's and sharing's: admin's fragment feeds neither the
-#     merge nor orval below (go/admin's own openapi.yaml header records
-#     the same deferral storage's and sharing's AGENTS.md do).
-#     go/admin's round 2 closed the workflow half of the gap the
-#     fragment's own header used to record (neither Taskfile.yml's
-#     api:gen task nor this workflow included admin before then); this
-#     round closes the Taskfile half -- api:gen now carries admin's leg,
-#     so the "same command as Taskfile's api:gen task" instruction below
-#     is true for admin exactly as for every other fragment.
-#   * Regeneration consistency (integration): the same check runs again
-#     for integration's fragment (go/integration/api/
-#     openapi.yaml -> go/integration/api/integration-server.gen.go), the
-#     round that closed round 1's own "no mounted HTTP surface" gap --
-#     same pinned oapi-codegen invocation, same porcelain gate, its
-#     own step so this fragment's failure is unambiguous in
-#     the job log. Backend-only, like storage's, sharing's and admin's:
-#     this fragment feeds neither the merge nor orval below (go/
-#     integration/api/openapi.yaml's own header records why -- its one
-#     consumer is the reference app's own Go HTTP client, not a
-#     generated-SDK caller).
-#   * Regeneration consistency (ai-gateway): the same check runs again
-#     for ai-gateway's fragment (go/ai-gateway/api/
-#     openapi.yaml -> go/ai-gateway/api/ai-gateway-server.gen.go), the
-#     round that closed the "no admin/HTTP surface for writing
-#     platform or tenant BYOK credentials" gap the module's own
-#     AGENTS.md recorded in round 1 -- same pinned oapi-codegen
-#     invocation, same porcelain gate, its own step so
-#     this fragment's failure is unambiguous in the job log.
-#     Backend-only, like storage's, sharing's, admin's and
-#     integration's: this fragment feeds neither the merge nor orval
-#     below (go/ai-gateway/api/openapi.yaml's own header records why
-#     -- its consumers are host-side router gates and the reference
-#     app's own Go services, never a generated-SDK caller).
-#   * Regeneration consistency (billing): the same check runs again for
-#     billing's fragment (go/billing/api/openapi.yaml ->
-#     go/billing/api/billing-server.gen.go), the round that gave the
-#     module's read-only credits surface its first in-workspace web
-#     consumer -- same pinned oapi-codegen invocation, same porcelain
-#     gate, its own step so this fragment's failure is unambiguous in
-#     the job log. Unlike storage's, sharing's, admin's, integration's
-#     and ai-gateway's backend-only fragments, billing's fragment JOINS
-#     the merge below (the credit view calls its two operations through
-#     the generated SDK), the same treatment notification's
-#     recipient-facing fragment received in its own round.
+#     that fails the job when the committed artifact is not what the
+#     spec generates. The gate is porcelain, `git status --porcelain
+#     --untracked-files=all`, not `git diff --exit-code`: `git diff`
+#     reports only modifications to TRACKED files, so a regeneration
+#     that CREATES a file -- an artifact a new fragment step or
+#     generator writes before its first commit -- would pass a diff gate
+#     silently (the identical reason fast-check's own workspace gate is
+#     porcelain). --untracked-files=all still honours .gitignore, and
+#     the status listing doubles as the failure output.
+#   * Regeneration consistency, one step per backend fragment: the
+#     pinned oapi-codegen v2.8.0 (the same `go run` as Taskfile's
+#     api:gen task, run from the fragment's own directory, where
+#     oapi-codegen.yaml's paths are relative) regenerates the fragment's
+#     committed backend artifact from its api/openapi.yaml, then the
+#     fragment's own porcelain gate fails the job if the committed
+#     artifact is not what the spec generates. A step per fragment keeps
+#     each fragment's failure unambiguous in the job log. The fragments
+#     are the reference app's own notes, cases and smilesim
+#     (examples/reference-app/internal/{notes,cases,smilesim}/api) and
+#     the module fragments org, storage, notification, sharing, pki,
+#     admin, integration, ai-gateway, billing and authn; the full list
+#     lives in tools/api_fragments.json, the source of truth. The cases
+#     and smilesim handlers live in the app itself (cmd/server/cases.go
+#     and cmd/server/smilesim.go, behind compile-time ServerInterface
+#     assertions), so their compile enforcement is the reference-app go
+#     build below.
 #   * Spec merge + info stamp + naming-convention lint: the pinned
-#     redocly CLI (2.51.1, the same
-#     `pnpm --package=@redocly/cli@2.51.1 dlx redocly ...` invocation as
-#     Taskfile's api:merge task) `join`s the six fragments -- notes,
-#     cases, smilesim, authn, notification and billing -- into
-#     build/openapi/speed.yaml, then the
-#     deterministic
-#     `web/scripts/redocly-join-fixup.mjs` stamp rewrites the merged
-#     document's info block (join keeps the FIRST fragment's info;
-#     without the stamp the application-wide document -- and through
-#     orval's header the generated SDK -- would carry notes' title and
-#     a description claiming the merge is still future work), then
-#     `lint`s the result against redocly.yaml's rules (operationId
-#     format, component schema-name format, tag format --
-#     docs/internal/21-api-contract.md's naming conventions that avoid
-#     merge conflicts), then its porcelain gate fails the job if
-#     the committed build/openapi/speed.yaml is not what the six
-#     fragments merge -- plus the stamp -- to today -- the
-#     generated-artifact consistency check for the merged document,
-#     same shape as the artifact checks above. These steps sit
-#     before the frontend regeneration below because the merged
-#     document is that leg's input: order-dependent gates must see the
-#     fresh merge first, not a merged document the job itself will
-#     overwrite later in the same run.
-#   * Frontend-sdk regeneration consistency (merged document): the pinned
-#     orval (8.17.0 -- the exact same `pnpm dlx orval` + nodenext-fixup
-#     pair as Taskfile's api:gen frontend leg, run from web/) regenerates
-#     @speed/api-sdk's src/index.ts from build/openapi/speed.yaml -- the
-#     document merged in the step above, covering the notes, cases,
-#     smilesim, authn, notification and billing fragments; org's and
-#     storage's
-#     fragments are deliberately not part of the merge -- org's because
-#     it predates the merge machinery and storage's because it ships its
-#     backend leg only, both fragments' frontend halves deferring to
-#     their own module AGENTS.md deferrals -- while notification's
-#     fragment joined the merged document when its recipient-facing HTTP
-#     surface shipped, billing's joined when the credit view gave its
-#     read surface its first web caller, and the cases and smilesim
-#     fragments joined when
-#     the P3a round promoted the reference app's own case-domain and
-#     smile-simulation routes to fragments: their operations are
-#     self-service surfaces a consumer shell's SDK calls, the same
-#     reason authn's fragment is in the merge -- then its porcelain
-#     gate fails the job if the committed generated package is
-#     not what the spec generates -- the generated-artifact consistency
-#     check for the frontend half. orval itself is never a workspace
-#     dependency (pnpm dlx, no lockfile entry); a version bump is visible
-#     in the regenerated header and must land in Taskfile,
-#     web/orval.config.ts and this file together.
-#   * Compile enforcement (notes, cases, smilesim, org, storage,
-#     notification, billing, sharing, pki, admin, integration and
-#     ai-gateway):
-#     `go build ./...` of examples/reference-app. This is what makes
-#     "spec changed, handler not updated" fail here for ANY of the twelve
-#     surfaces: examples/reference-app imports go/org, go/storage,
-#     go/notification, go/billing, go/pki, go/sharing, go/admin,
-#     go/integration and
-#     go/ai-gateway (root CLAUDE.md's mandatory-first-consumer rule,
-#     go/pki as authn's KeySource), so a regenerated
-#     api.ServerInterface that outgrows any Handler's
-#     compile-time assertion (internal/notes/handler.go, go/org/
-#     handler.go, go/storage/handler.go, go/notification/handler.go,
-#     go/billing/handler.go,
-#     go/sharing/handler.go, go/pki/handler.go, go/admin/handler.go,
-#     go/integration/handler.go, go/ai-gateway/handler.go -- and, for
-#     the app's own
-#     cases and smilesim fragments, cmd/server/cases.go and cmd/server/
-#     smilesim.go) fails this one build step, transitively, with no
-#     separate step needed for org's, storage's, notification's,
-#     billing's,
-#     sharing's, pki's, admin's, integration's, ai-gateway's, cases' or
-#     smilesim's own module build.
-#     Without this leg a spec+artifact PR whose handler lagged
-#     would pass both this pipeline and fast-check (which does not build
-#     the reference app). Precise only for a parameter-free operation,
-#     though: an operation carrying a path or query parameter makes the
-#     generated file import github.com/oapi-codegen/runtime, which the
-#     app's go.mod does not require unless something parameterized
-#     already ships, so the first such spec change fails earlier -- on
-#     the missing module -- rather than on the assertion. Both are hard
-#     build failures; only the diagnostic differs, and it resolves
-#     itself the moment a real parameterized operation lands with its
-#     handler (which the cases and smilesim fragments did in the P3a
-#     round: the app's go.mod now requires runtime v1.7.0 directly).
-#     Pre-adding the require would not help: `go mod tidy`
-#     drops an unused dependency.
-#   * Regeneration consistency (authn): the identical oapi-codegen v2.8.0
-#     invocation over go/authn/api/openapi.yaml, then its own porcelain
-#     gate on go/authn/api/authn-server.gen.go -- the
-#     backend half only. authn's frontend half needs no separate leg: it
-#     is generated together with the other merged-document members from
-#     the merged document above, and @speed/auth-core has
-#     compile-consumed the generated surface since the auth-core round
-#     (runtime consumption stays with the consumer shells).
-#   * Compile enforcement (authn): `go build ./...` of go/authn, the same
-#     "spec changed, handler not updated" guarantee notes' reference-app
-#     build gives, against go/authn/handler.go's own compile-time
-#     assertion.
+#     redocly CLI 2.51.1 (the same `pnpm --package=@redocly/cli@2.51.1
+#     dlx redocly ...` invocation as Taskfile's api:merge task) `join`s
+#     the six merge members -- notes, cases, smilesim, authn,
+#     notification and billing -- into build/openapi/speed.yaml, then
+#     web/scripts/redocly-join-fixup.mjs stamps the merged document's
+#     info block (join keeps the FIRST fragment's info; without the
+#     stamp the application-wide document -- and through orval's header
+#     the generated SDK -- would carry notes' title and a description
+#     claiming the merge is still future work), then the result is
+#     `lint`ed against redocly.yaml's naming rules (operationId,
+#     component schema-name and tag formats, the conventions that keep
+#     fragments from colliding under the merge), then the porcelain gate
+#     fails the job if the committed build/openapi/speed.yaml is not
+#     what the six fragments merge -- plus the stamp -- to. These steps
+#     sit before the frontend regeneration because the merged document
+#     is that leg's input.
+#   * Frontend-sdk regeneration consistency (merged document): the
+#     pinned orval 8.17.0 (the same `pnpm dlx orval` + nodenext-fixup
+#     pair as Taskfile's api:gen frontend leg, run from web/)
+#     regenerates @speed/api-sdk's src/index.ts from
+#     build/openapi/speed.yaml, then its porcelain gate fails the job if
+#     the committed generated package is not what the spec generates.
+#     orval itself is never a workspace dependency (pnpm dlx, no
+#     lockfile entry); a version bump is visible in the regenerated
+#     header and must land in Taskfile, web/orval.config.ts and this
+#     file together. The fragments outside the merge -- org's, storage's,
+#     sharing's, pki's, admin's, integration's and ai-gateway's -- ship
+#     their backend leg only: their consumers are host-side Go services
+#     and router gates, never a generated-SDK caller.
+#   * Compile enforcement (all fragments but authn): `go build ./...` of
+#     examples/reference-app. The app imports every module among the
+#     fragments (go/pki as authn's KeySource), so a regenerated
+#     api.ServerInterface that outgrows any handler's compile-time
+#     assertion -- the module handlers and the app's own cases and
+#     smilesim handlers alike -- fails this one build step,
+#     transitively, with no separate step per module. Without this leg a
+#     spec+artifact change whose handler lagged would pass both this
+#     pipeline and fast-check (which does not build the reference app).
+#     Precise only for a parameter-free operation, though: an operation
+#     carrying a path or query parameter makes the generated file import
+#     github.com/oapi-codegen/runtime, which the app's go.mod requires
+#     because parameterized operations already ship -- a spec whose
+#     first parameterized operation lands without its handler fails on
+#     the missing import first. Both are hard build failures; only the
+#     diagnostic differs. Pre-adding the require would not help: `go mod
+#     tidy` drops an unused dependency.
+#   * Compile enforcement (authn): `go build ./...` of go/authn -- the
+#     authn regeneration above gets its own build leg so authn's
+#     compile enforcement does not wait for full-ci the way the
+#     reference app's does.
 #
-# DELIBERATELY NOT WIRED HERE -- API-contract items whose tooling does
-# not exist yet (wiring them now would be fake checks):
-#   * breaking-change detection (oasdiff, the release-gate diff against
-#     the last release) -- waits for the first release baseline (M4); a
-#     recorded mechanism decision, not a fake gate
-#     (docs/internal/21-api-contract.md).
+# DELIBERATELY NOT WIRED -- API-contract items without the tooling to
+# check them honestly:
+#   * breaking-change detection (oasdiff, a diff of the spec against the
+#     last release): no release has happened, so no baseline exists to
+#     diff against -- a recorded mechanism decision, not a fake gate.
 #   * a redocly rule enforcing the "/api/v1/<module>" path-prefix
-#     convention -- redocly has no subject type that exposes a PathItem's
+#     convention: redocly has no subject type that exposes a PathItem's
 #     own map key to an assertion (verified empirically against a real
 #     merge of the fragments; see redocly.yaml's own trailing comment),
-#     so it stays a code-review concern rather than a rule that would not
-#     actually check what its name claims.
-#   * cross-fragment merge-conflict checks as a gate of their own -- the
+#     so the convention stays a code-review concern rather than a rule
+#     that would not actually check what its name claims.
+#   * cross-fragment merge-conflict checks as a gate of their own: the
 #     naming-convention lint above is what keeps fragments from
 #     colliding under the merge, and the merged-document diff gate
 #     catches a committed speed.yaml that drifted from a fresh merge, so
 #     a separate check would only re-check what those already do.
-# Each lands with its tooling round; the stub headers of the other gated
-# pipelines stay until then.
 #
-# PATH SET -- spec/generator-toolchain changes only:
-#   examples/reference-app/internal/notes/api/**   the notes fragment, its
-#                                                  generator config and the
-#                                                  backend generated
-#                                                  artifact (a hand-edit of
-#                                                  the generated file
-#                                                  triggers the consistency
-#                                                  diff)
-#   examples/reference-app/internal/cases/api/**   the cases fragment (the
-#                                                  app's own case-domain
-#                                                  surface), its generator
-#                                                  config and its backend
-#                                                  generated artifact --
-#                                                  same reasoning as the
-#                                                  notes row above; this
-#                                                  round (P3a) is what
-#                                                  promoted the case routes
-#                                                  to a fragment
-#   examples/reference-app/internal/smilesim/api/** the smile-simulation
-#                                                  fragment (the app's own
-#                                                  simulation surface), its
-#                                                  generator config and its
-#                                                  backend generated
-#                                                  artifact -- same reasoning
-#                                                  as the notes row above;
-#                                                  this round (P3a) is what
-#                                                  promoted the smile-
-#                                                  simulation routes to a
-#                                                  fragment
-#   go/org/api/**                                  org's fragment, its
-#                                                  generator config and its
-#                                                  own backend generated
-#                                                  artifact -- same reasoning
-#                                                  as the notes row above
-#   go/storage/api/**                             storage's fragment, its
-#                                                 generator config and its
-#                                                 own backend generated
-#                                                 artifact -- same reasoning
-#                                                 as the notes row above
-#   web/orval.config.ts, web/scripts/**            the frontend generator
-#                                                  config and the fixup
-#                                                  scripts behind the regen
-#                                                  commands
-#   web/packages/api-sdk/**                        the generated frontend
-#                                                  package (a hand-edit
-#                                                  triggers the diff)
-#   go/authn/api/**                                 authn's fragment, its
-#                                                  generator config and its
-#                                                  backend generated
-#                                                  artifact
-#   go/billing/api/**                              billing's fragment, its
-#                                                  generator config and its
-#                                                  own backend generated
-#                                                  artifact -- same reasoning
-#                                                  as the notification row
-#                                                  below; this round (the
-#                                                  block-D frontend round)
-#                                                  also joins the fragment
-#                                                  into the merge and orval
-#                                                  legs, since its two
-#                                                  operations now have an
-#                                                  in-workspace web caller
-#                                                  (the credit view)
-#   go/notification/api/**                          notification's fragment,
-#                                                  its generator config and
-#                                                  its backend generated
-#                                                  artifact
-#   go/sharing/api/**                              sharing's fragment, its
-#                                                  generator config and its
-#                                                  own backend generated
-#                                                  artifact -- same reasoning
-#                                                  as the storage row above
-#   go/pki/api/**                                  pki's fragment, its
-#                                                  generator config and its
-#                                                  own backend generated
-#                                                  artifact -- same reasoning
-#                                                  as the sharing row above
-#                                                  (its oapi-codegen.yaml
-#                                                  has named this
-#                                                  workflow's pki
-#                                                  regeneration step since
-#                                                  go/pki's round 3; this
-#                                                  row and the step below
-#                                                  are what make that
-#                                                  claim true)
-#   go/admin/api/**                                admin's fragment, its
-#                                                  generator config and its
-#                                                  own backend generated
-#                                                  artifact -- same reasoning
-#                                                  as the storage row above;
-#                                                  this round (go/admin's
-#                                                  round 2) is what closes
-#                                                  the gap the fragment's
-#                                                  own header used to
-#                                                  record ("neither
-#                                                  Taskfile.yml's api:gen
-#                                                  task nor this workflow
-#                                                  includes this fragment
-#                                                  yet")
-#   go/integration/api/**                          integration's fragment,
-#                                                  its generator config and
-#                                                  its own backend generated
-#                                                  artifact -- same reasoning
-#                                                  as the storage row above;
-#                                                  this round is what closed
-#                                                  round 1's own "no mounted
-#                                                  HTTP surface" gap
-#   go/ai-gateway/api/**                          ai-gateway's fragment, its
-#                                                  generator config and its own
-#                                                  backend generated artifact --
-#                                                  same reasoning as the storage
-#                                                  row above; this round (the
-#                                                  credential-write HTTP
-#                                                  surface) is what closed the
-#                                                  "no admin/HTTP surface for
-#                                                  BYOK credentials" gap the
-#                                                  module's own AGENTS.md
-#                                                  recorded in round 1
-#   tools/api_fragments.json,                     the fragment manifest -- the single
-#   tools/check_api_fragments.py,                 machine-readable source of truth the
-#   tools/test_check_api_fragments.py             drift-check steps below compare
-#                                                   every leg of this file against (the
-#                                                   planted-drift suite runs first;
-#                                                   self-test on change)
-#   redocly.yaml                                   the merge/lint naming-
-#                                                  convention rules
-#   build/openapi/**                               the committed merged
-#                                                  document (a hand-edit
-#                                                  triggers the diff)
-#   Taskfile.yml                                   api:gen/api:merge tasks
-#                                                  (the regeneration
-#                                                  commands)
-#   .github/workflows/api-contract.yml             this workflow itself
+# PATH SET -- spec/generator-toolchain changes only (see LOCKSTEP
+# above). Each fragment row covers the fragment's api/ directory, its
+# generator config and its backend generated artifact -- a hand-edit of
+# the generated file triggers the consistency diff:
+#   examples/reference-app/internal/notes/api/**
+#   examples/reference-app/internal/cases/api/**      the app's own
+#                                                     case-domain surface
+#   examples/reference-app/internal/smilesim/api/**   the app's own
+#                                                     smile-simulation
+#                                                     surface
+#   go/org/api/**
+#   go/storage/api/**
+#   go/notification/api/**
+#   go/sharing/api/**                                 backend-only, like
+#                                                     storage's
+#   go/pki/api/**                                     backend-only, like
+#                                                     storage's
+#   go/admin/api/**                                   backend-only, like
+#                                                     storage's
+#   go/integration/api/**                             backend-only, like
+#                                                     storage's
+#   go/ai-gateway/api/**                              backend-only, like
+#                                                     storage's
+#   go/authn/api/**
+#   go/billing/api/**                                 joins the merge and
+#                                                     the orval leg below:
+#                                                     its two operations
+#                                                     have an in-workspace
+#                                                     web caller (the
+#                                                     credit view)
+#   web/orval.config.ts, web/scripts/**              the frontend
+#                                                    generator config and
+#                                                    the fixup scripts
+#                                                    behind the regen
+#                                                    commands
+#   web/packages/api-sdk/**                           the generated frontend
+#                                                    package (a hand-edit
+#                                                    triggers the diff)
+#   tools/api_fragments.json,                        the fragment manifest --
+#   tools/check_api_fragments.py,                    the single machine-
+#   tools/test_check_api_fragments.py                readable source of
+#                                                    truth the drift-check
+#                                                    steps compare every
+#                                                    leg of this file
+#                                                    against (the
+#                                                    planted-drift suite
+#                                                    runs first;
+#                                                    self-test on change)
+#   redocly.yaml                                     the merge/lint
+#                                                    naming-convention
+#                                                    rules
+#   build/openapi/**                                 the committed merged
+#                                                    document (a
+#                                                    hand-edit triggers
+#                                                    the diff)
+#   Taskfile.yml                                     api:gen/api:merge
+#                                                    tasks (the
+#                                                    regeneration
+#                                                    commands)
+#   .github/workflows/api-contract.yml               this workflow itself
 
 on:
   pull_request:
@@ -480,13 +236,12 @@ on:
       - Taskfile.yml
       - .github/workflows/api-contract.yml
   workflow_dispatch:
-  # Direct pushes to main are the normal landing path here (18-cicd.md's
-  # branch-protection section) and carry no PR for the pull_request
-  # filter above to see, so a spec pushed without its regenerated artifact
-  # used to reach main with no run of this workflow at all -- the
-  # 880cf2a/41e9892 window the header records. Same path set as the
-  # pull_request block above: keep the two in lockstep when a fragment
-  # joins.
+  # Direct pushes to main are the normal landing path here and carry no
+  # PR for the pull_request filter above to see, so a spec pushed
+  # without its regenerated artifact would reach main with no run of
+  # this workflow at all -- this push leg closes that gap. Same path set
+  # as the pull_request block above: keep the two in lockstep when a
+  # fragment joins.
   push:
     branches: [main]
     paths:
@@ -532,21 +287,19 @@ jobs:
       # The fragment-enumeration gate -- the first thing this job runs,
       # before any regeneration. This file names the backend-fragment
       # universe in several places at once (the path filters below, the
-      # thirteen oapi-codegen regeneration steps, the redocly join input
-      # list), and until this round the consistency between those places
-      # was held only by the "keep the two in lockstep" comments above:
-      # an enumeration that grew from six to thirteen fragments with no
-      # gate going red. tools/api_fragments.json is now the single
-      # machine-readable source of truth, and tools/check_api_fragments.py
-      # fails when the manifest, the tree and any leg of this file
-      # disagree -- see that script's docstring for the checked
-      # invariants. Nothing here needs more than the runner's python3,
-      # which is why both steps run before the Go toolchain install.
+      # oapi-codegen regeneration steps, the redocly join input list),
+      # places that can drift apart silently. tools/api_fragments.json
+      # is the single machine-readable source of truth, and
+      # tools/check_api_fragments.py fails when the manifest, the tree
+      # and any leg of this file disagree -- see that script's docstring
+      # for the checked invariants. Nothing here needs more than the
+      # runner's python3, which is why both steps run before the Go
+      # toolchain install.
       - name: Fragment-enumeration checker's planted-drift suite (tools/test_check_api_fragments.py)
         # The regression teeth: every drift class the step below detects
-        # is reproduced by this suite and must go red before the fix
-        # (root CLAUDE.md's bug-fix policy). Selftest first, then the
-        # real check -- the license job's order in security.yml.
+        # is reproduced by this suite and must go red before the fix.
+        # Selftest first, then the real check -- the license job's order
+        # in security.yml.
         run: python3 tools/test_check_api_fragments.py
       - name: Fragment enumeration drift check (tools/check_api_fragments.py)
         run: python3 tools/check_api_fragments.py
@@ -763,11 +516,10 @@ jobs:
           fi
       - name: Regenerate admin's API surface (pinned oapi-codegen v2.8.0)
         # The same command as Taskfile.yml's api:gen task's admin leg --
-        # keep the two in lockstep (both pin the generator at v2.8.0; the
-        # leg itself landed in this same round). Run from the fragment's
-        # own directory, where oapi-codegen.yaml's paths are relative,
-        # mirroring the notes, org, storage, notification, sharing and
-        # pki steps above exactly.
+        # keep the two in lockstep (both pin the generator at v2.8.0).
+        # Run from the fragment's own directory, where oapi-codegen.yaml's
+        # paths are relative, mirroring the notes, org, storage,
+        # notification, sharing and pki steps above exactly.
         run: |
           cd go/admin/api
           go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 \
@@ -844,12 +596,10 @@ jobs:
           fi
       - name: Regenerate billing's API surface (pinned oapi-codegen v2.8.0)
         # The same command as Taskfile.yml's api:gen task's billing leg --
-        # keep the two in lockstep (both pin the generator at v2.8.0; the
-        # leg itself landed in this same round, the chore(ci)-shaped
-        # follow-up go/billing's own AGENTS.md recorded for its HTTP
-        # surface). Run from the fragment's own directory, where
-        # oapi-codegen.yaml's paths are relative, mirroring the notes,
-        # org, storage, notification and sharing steps above exactly.
+        # keep the two in lockstep (both pin the generator at v2.8.0).
+        # Run from the fragment's own directory, where oapi-codegen.yaml's
+        # paths are relative, mirroring the notes, org, storage,
+        # notification and sharing steps above exactly.
         # billing's fragment feeds the merge and orval below like
         # notification's and authn's -- its operations are the credit
         # view's reads -- unlike the backend-only fragments above.
@@ -913,9 +663,8 @@ jobs:
       - name: Lint the merged document against the naming-convention rules
         # redocly.yaml's own header explains what each rule checks and why
         # (operationId format, component schema-name format, tag format --
-        # docs/internal/21-api-contract.md's naming conventions that avoid
-        # merge conflicts
-        # table) and what is deliberately not checked yet.
+        # the naming conventions that keep fragments from colliding under
+        # the merge) and what is deliberately not checked yet.
         run: pnpm --package=@redocly/cli@2.51.1 dlx redocly lint build/openapi/speed.yaml --config redocly.yaml
       - name: Generated merged document must match the committed spec
         # Porcelain gate, not git diff --exit-code -- see the notes
@@ -956,9 +705,8 @@ jobs:
         # form (why: @speed/api-sdk's AGENTS.md). The input is the merged
         # document produced above -- notes, cases, smilesim, authn,
         # notification and billing fragments; org's and storage's
-        # fragments are
-        # deliberately not part of it (see the api:merge task and
-        # docs/internal/21-api-contract.md).
+        # fragments are deliberately not part of it (see the api:merge
+        # task).
         run: |
           pnpm dlx orval@8.17.0 --config orval.config.ts
           node scripts/orval-nodenext-fixup.mjs

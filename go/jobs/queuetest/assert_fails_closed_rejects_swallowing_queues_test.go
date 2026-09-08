@@ -10,8 +10,8 @@ import (
 // an error rather than failing a test directly (see assert_fails_closed.go),
 // so these tests drive the checks against a queue in the swallow mode —
 // one that drops the injected cancellation-state read failure and answers
-// its Jobs' natural record state, the exact historical asynq behaviour
-// commit c26b058b corrected — and require the check to reject it. A check
+// its Jobs' natural record state, the exact behaviour the tier exists to
+// reject — and require the check to reject it. A check
 // that accepted the swallowing queue would be a constant-true harness:
 // no better than no injection tier at all, since a rejection nobody proved
 // possible is a rejection nobody can trust (a passing test that cannot fail

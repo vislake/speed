@@ -1,9 +1,8 @@
 package config
 
-// Scope names one tier of the three-tier configuration hierarchy
-// docs/internal/11-cross-cutting.md's dynamic-config section defines:
+// Scope names one tier of the three-tier configuration hierarchy:
 // system (platform-wide) → tenant (per-tenant override) → user (per-user,
-// reserved for a future milestone). Rows in the configs table carry one
+// reserved and unimplemented). Rows in the configs table carry one
 // explicit Scope each, and reads resolve from the narrowest scope the
 // context entitles the caller to down to the schema default.
 type Scope string
@@ -22,12 +21,12 @@ const (
 	// identifier, and requires the context to carry that tenant.
 	ScopeTenant Scope = "tenant"
 
-	// ScopeUser is the per-user tier docs/internal/11-cross-cutting.md
-	// reserves. It is deliberately unimplemented in
-	// this milestone: no call may write a user row, and the scope is only
-	// declared so that schema and store speak the same vocabulary the design
-	// does. Any Set attempt reports ErrUserScopeUnavailable rather than being
-	// silently treated as a coarser scope.
+	// ScopeUser is the reserved per-user tier. It is deliberately
+	// unimplemented: no call may write a user row, and the scope is only
+	// declared so that schema and store speak the same vocabulary as the
+	// three-tier hierarchy intends. Any Set attempt reports
+	// ErrUserScopeUnavailable rather than being silently treated as a coarser
+	// scope.
 	ScopeUser Scope = "user"
 )
 

@@ -49,12 +49,12 @@ func testMessage(id string) *InboxMessage {
 }
 
 // TestRepository_AssertIsolated runs the tenant-data isolation suite every
-// tenant-scoped repository in this codebase is required to pass
-// (docs/internal/04-data-and-tenancy.md): two tenants' rows created side by
-// side, each tenant's FindByID/List/Update/Delete seeing only its own, a
-// forged TenantID overwritten by the context's tenant, and a tenant-less
-// context failing closed. The closure returns a distinct id on every call,
-// as the suite requires, via a plain counter.
+// tenant-scoped repository in this codebase is required to pass: two
+// tenants' rows created side by side, each tenant's
+// FindByID/List/Update/Delete seeing only its own, a forged TenantID
+// overwritten by the context's tenant, and a tenant-less context failing
+// closed. The closure returns a distinct id on every call, as the suite
+// requires, via a plain counter.
 func TestRepository_AssertIsolated(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
@@ -182,8 +182,8 @@ func TestRepository_Create_NullableColumnsAndDefaults_RoundTrip(t *testing.T) {
 }
 
 // TestRepository_DedupeKey_SameKeySameTenant_SecondCreateRejected proves the
-// unique index turns a redelivered message into a duplicate-key error: the
-// producer of a later block recomputes the same dedupe key for a retried
+// unique index turns a redelivered message into a duplicate-key error: a
+// redelivering producer recomputes the same dedupe key for a retried
 // delivery, and the rejection -- not a silent second row -- is what makes
 // redelivery idempotent. The first message must survive untouched.
 func TestRepository_DedupeKey_SameKeySameTenant_SecondCreateRejected(t *testing.T) {
@@ -274,12 +274,11 @@ func TestRepository_DedupeKey_Nil_MultipleMessagesAllowed(t *testing.T) {
 }
 
 // TestRepository_SameRecipient_TwoTenants_HaveSeparateInboxes proves the
-// inbox model of docs/internal/07: one person belongs to several tenants,
-// and their rows form one inbox per tenant, isolated by tenant_id. The same
-// recipient's message in the other tenant must be invisible to each List --
-// a per-tenant roster that leaked across tenants would be an isolation
-// defect, and one that mixed two tenants' messages into one list would be a
-// correctness one.
+// inbox model: one person belongs to several tenants, and their rows form
+// one inbox per tenant, isolated by tenant_id. The same recipient's message
+// in the other tenant must be invisible to each List -- a per-tenant roster
+// that leaked across tenants would be an isolation defect, and one that
+// mixed two tenants' messages into one list would be a correctness one.
 func TestRepository_SameRecipient_TwoTenants_HaveSeparateInboxes(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)
@@ -315,10 +314,10 @@ func TestRepository_SameRecipient_TwoTenants_HaveSeparateInboxes(t *testing.T) {
 	assertInbox("tenant-bright", brightMsg.ID)
 }
 
-// TestRepository_Update_MarksMessageRead drives the read path of the inbox
-// UI of a later block through the promoted Update: load the row, stamp
-// ReadAt, write it back, and read again. A second write is what the inbox
-// list marks read; the assertion that ReadAt was NULL before the update and
+// TestRepository_Update_MarksMessageRead drives the read path a mark-read
+// UI exercises through the promoted Update: load the row, stamp ReadAt,
+// write it back, and read again. A second write is what the inbox list
+// marks read; the assertion that ReadAt was NULL before the update and
 // equals the stamp after it is the whole behaviour.
 func TestRepository_Update_MarksMessageRead(t *testing.T) {
 	db := newTestDB(t)
@@ -847,9 +846,9 @@ func TestRepository_ReadAll_FlipsOnlyTheCallerOwnsUnreadAndCounts(t *testing.T) 
 // failure while the statement runs cannot leave the batch half-applied --
 // every row the call was about to flip stays unread. The injection is a
 // real SQLite trigger that aborts the read_at update of one specific row:
-// a per-row loop (the old shape) would have flipped the earlier rows
-// before the aborted row stopped it, leaving the partial state this test
-// refuses; the single-statement shape rolls the whole batch back instead.
+// a per-row loop would have flipped the earlier rows before the aborted
+// row stopped it, leaving the partial state this test refuses; the
+// single-statement shape rolls the whole batch back instead.
 func TestRepository_ReadAll_FailureMidwayAppliesNothing(t *testing.T) {
 	db := newTestDB(t)
 	repo := NewRepository(db)

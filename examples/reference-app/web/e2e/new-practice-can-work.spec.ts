@@ -5,28 +5,16 @@
  * WHY THIS EXISTS SEPARATELY FROM THE CORE JOURNEY GATES
  *
  * Every gate in core-journey.pending.spec.ts signs in as a SEEDED demo
- * account, and the seeds are granted things a real registrant is not:
- * boot-time seeding gives an entitlement to each of cfg.HostTenants
- * (cmd/server/demo_entitlements.go) and credits to the same set
- * (demo_credits.go). A clinic created at run time by self-service
- * registration is in neither list -- self_service.go does not mention
- * billing at all -- so those gates are structurally blind to whether a
- * new practice can do anything.
- *
- * They were all green while a browser walk-through of the same journey
- * stopped dead at "This clinic's plan does not include smile
- * simulation." A practice registers, opens a case, attaches the
- * photograph, picks the smile it wants, presses the button, and is told
- * its plan does not include the one thing the product is for. That is
- * the self-service dead end in its second form: the first refused them
- * at the door, this one lets them in and refuses them at the work.
- *
- * The lesson is about the population a gate asks its question of, which
- * this suite has now had twice: the clinic-naming gate asked "can a
- * person tell which clinic they are in" only of clinics configured
- * before the server booted, and these ask "can a practice work" only of
- * practices that were handed an entitlement. Both questions were right.
- * Both populations were wrong.
+ * account. Boot-time seeding gives the demo tenants their entitlement
+ * (cmd/server/demo_entitlements.go) and their credits (demo_credits.go);
+ * a clinic created at run time by self-service registration receives the
+ * same subscription and credit seed through its own path
+ * (cmd/server/self_service.go). A gate that only ever signs in as a
+ * seeded account cannot see whether that grant is real -- whether a
+ * practice that registers, opens a case, attaches the photograph, picks
+ * the smile it wants and presses the button gets past the plan and
+ * credit refusals to an actual simulation, instead of stopping at a
+ * refusal it cannot act on.
  *
  * WHAT IT DELIBERATELY DOES NOT PRESCRIBE
  *
@@ -66,12 +54,9 @@ const DEAD_END_TEXT = [
   'This clinic has no credits left for a smile simulation.',
 ] as const
 
-// @budget now: the defect this gate found is closed. Self-service
-// registration grants the new clinic the same subscription and credit
-// seed the demo tenants get (1b6f9a2), so the journey the product offers
-// no longer ends in a refusal the person cannot act on. It stays out of
-// the default run because it registers and signs in, which the sign-in
-// budget cannot absorb -- not because anything about it is unverified.
+// @budget: this test registers and signs in, which the default tier's
+// sign-in budget cannot absorb -- not because anything about it is
+// unverified.
 test(
   'a practice that just signed itself up can generate its first simulation',
   { tag: '@budget' },

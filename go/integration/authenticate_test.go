@@ -90,10 +90,8 @@ func TestService_Authenticate_EmptyKey_ReportsAuthenticationFailed(t *testing.T)
 
 // TestService_Authenticate_RevokedKey_ReportsAuthenticationFailed proves a
 // genuinely-issued, correctly-hashed key that has since been revoked is
-// refused with the exact same ErrAuthenticationFailed a wrong key gets --
-// this is the property go/integration/AGENTS.md's round-5 section named as
-// unverifiable until this round: "a request bearing a rotated-away or
-// revoked key is refused".
+// refused with the exact same ErrAuthenticationFailed a wrong key gets: "a
+// request bearing a rotated-away or revoked key is refused".
 func TestService_Authenticate_RevokedKey_ReportsAuthenticationFailed(t *testing.T) {
 	svc := testService(t, nil, nil, fixedNow)
 
@@ -111,9 +109,8 @@ func TestService_Authenticate_RevokedKey_ReportsAuthenticationFailed(t *testing.
 }
 
 // TestService_Authenticate_RotatedAwayKey_ReportsAuthenticationFailed drives
-// the exact rotate-then-old-key-refused shape AGENTS.md's round-5 section
-// named as the follow-up work this round discharges: the OLD raw key value
-// is refused after Rotate, and the NEW one authenticates successfully.
+// the rotate-then-old-key-refused shape: the OLD raw key value is refused
+// after Rotate, and the NEW one authenticates successfully.
 func TestService_Authenticate_RotatedAwayKey_ReportsAuthenticationFailed(t *testing.T) {
 	svc := testService(t, nil, nil, fixedNow)
 
@@ -163,8 +160,7 @@ func TestService_Authenticate_ExpiredKey_ReportsAuthenticationFailed(t *testing.
 	}
 }
 
-// TestService_Authenticate_RecordsLastUsedAt closes the round-1 gap
-// APIKey.LastUsedAt's own doc comment named ("Round 1 never writes it"): a
+// TestService_Authenticate_RecordsLastUsedAt pins the LastUsedAt write: a
 // successful Authenticate leaves a non-nil LastUsedAt on the row, readable
 // back through the ordinary tenant-scoped ListModule path.
 func TestService_Authenticate_RecordsLastUsedAt(t *testing.T) {

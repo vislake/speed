@@ -197,8 +197,8 @@ func TestNewOptions_DistributedModeWithSMSSender_Succeeds(t *testing.T) {
 
 // TestNewOptions_StandaloneModeWithoutSMSSender_DefaultsToConsole proves
 // the standalone deployment mode, and the zero-value (unset) deployment
-// mode used by every option-validation test that predates this block, both
-// get a working default sender rather than failing to construct.
+// mode used by the option-validation tests in this file, both get a
+// working default sender rather than failing to construct.
 func TestNewOptions_StandaloneModeWithoutSMSSender_DefaultsToConsole(t *testing.T) {
 	t.Parallel()
 

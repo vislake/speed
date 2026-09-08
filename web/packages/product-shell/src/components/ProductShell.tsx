@@ -3,9 +3,9 @@
  * session.
  *
  * ProductShell is the view machine between "who is looking at this page"
- * and the app frame, in exactly the shape auth-ui's suite has been
- * driving since its first journey (the SessionGate pattern of that
- * package's test-utils, shipped here as package code because the shell
+ * and the app frame, in exactly the shape auth-ui's suite drives through
+ * its session gate (the SessionGate pattern of that package's
+ * test-utils, shipped here as package code because the shell
  * tier is the one place the session hooks are meant to be consumed --
  * the tiers below never do):
  *
@@ -54,16 +54,16 @@
  * at, whose destinations announce themselves, move focus only). The
  * announcement renders only where the product-shell namespace is
  * registered: an unregistered host gets the focus transfer and no raw
- * key text -- the composed consumer whose registration lands in its own
- * round must not regress into missing-key noise (the focus half is
- * namespace-independent and always on).
+ * key text -- the missing-key noise of an unregistered namespace must
+ * never regress into view (the focus half is namespace-independent and
+ * always on).
  *
  * ProductShell performs no session operations, navigates nowhere and
  * makes no requests: the session's own transitions drive it through the
  * hooks, login and logout are called by the views the host slotted in
  * (auth-ui's forms and SignOutButton), and route-level authorization
- * (layout-kit's RouteGuard fed by a real status source) is a later,
- * host-side concern inside the children.
+ * (layout-kit's RouteGuard fed by a status source) is composed
+ * host-side inside the children.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -210,8 +210,7 @@ export function ProductShell({
   }, [branch])
 
   // The shell's own text needs its own namespace registration, exactly
-  // like every sibling's; an unregistered host -- the composed consumer
-  // whose registration lands in its own round -- renders no region and
+  // like every sibling's; an unregistered host renders no region and
   // no raw keys, and keeps the focus half of the a11y contract.
   const announcementsRegistered = i18n.hasResourceBundle(
     i18n.language ?? '',
@@ -259,10 +258,10 @@ export function ProductShell({
               // promise is "return to the sign-in view"; without a
               // signIn view there is no such destination, and resetting
               // would land the viewer on the deliberately-blank
-              // fresh-visitor branch -- a whitescreen dead end (the
-              // reviewer's P1-1). Such a host's way back into the app is
-              // its own (see the signIn prop's doc), so the action
-              // keeps the viewer on the ended screen.
+              // fresh-visitor branch -- a whitescreen dead end. Such a
+              // host's way back into the app is its own (see the signIn
+              // prop's doc), so the action keeps the viewer on the
+              // ended screen.
               if (signIn !== undefined) {
                 setReachedApp(false)
               }

@@ -10,17 +10,17 @@ import (
 )
 
 // resolveActorName returns a with its DisplayName filled from authn's
-// users table -- the P2-pkgcore-actor-1 fix: every audit record this
-// module emits for a HUMAN actor (a platform operator, an impersonated
-// target user) must carry the account's display name so the record stays
-// readable after the account is later renamed or deleted, the purpose
-// pkgcore.Actor.DisplayName documents for itself. The caller-side
-// construction sites (handler.go's callerUserID-derived actors, the
-// impersonation pipeline's id-only identities) know a human only by the
-// Principal's user id -- authn.Principal carries no display name, see
-// go/authn/token.go -- so the users table is the single honest source for
-// the label, and every recordAudit-shaped call site resolves through this
-// one helper at record time rather than each site chasing its own read.
+// users table: every audit record this module emits for a HUMAN actor (a
+// platform operator, an impersonated target user) must carry the account's
+// display name so the record stays readable after the account is later
+// renamed or deleted, the purpose pkgcore.Actor.DisplayName documents for
+// itself. The caller-side construction sites (handler.go's
+// callerUserID-derived actors, the impersonation pipeline's id-only
+// identities) know a human only by the Principal's user id -- authn's
+// Principal type carries no display name -- so the users table is the
+// single honest source for the label, and every recordAudit-shaped call
+// site resolves through this one helper at record time rather than each
+// site chasing its own read.
 //
 // a is returned unchanged, with no lookup attempted, when:
 //
@@ -32,11 +32,11 @@ import (
 //     not a users-table account, and no other type has a user row to
 //     resolve;
 //   - its ID is empty;
-//   - authnSvc is nil -- the seam not yet attached (pre-Module.Register,
-//     or a lightweight unit test that wired none of the three recorders'
+//   - authnSvc is nil -- the seam not yet attached (before Module.Register
+//     runs, or a lightweight unit test that wired none of the recorders'
 //     audit seams). WithAuthn is a mandatory production option, so every
 //     real deployment resolves names here; a nil-seam unit fixture keeps
-//     its id-only records, exactly as it did before this helper existed.
+//     its id-only records.
 //
 // A user row that cannot be found (authn.ErrNotFound) also leaves a
 // unchanged, silently: the id has no name anywhere (a fixture id with no

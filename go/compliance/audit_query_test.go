@@ -131,7 +131,7 @@ func insertImpersonationEvent(t *testing.T, repo *audit.Repository, tenant, acto
 	}
 }
 
-// TestAuditQuery_Query_FiltersByOnBehalfOf is P2-1's regression test for
+// TestAuditQuery_Query_FiltersByOnBehalfOf is the regression test for
 // the impersonation-accountability read dimension: an audit row written
 // during an impersonation session carries the impersonated user as Actor
 // and the real administrator as OnBehalfOf (pkgcore's dual-identity
@@ -139,11 +139,10 @@ func insertImpersonationEvent(t *testing.T, repo *audit.Repository, tenant, acto
 // administrator's impersonation-era rows and no others -- not a second
 // administrator's impersonation rows, and not the administrator's own
 // non-impersonation rows, which carry no OnBehalfOf identity at all.
-// The pre-fix QueryFilter had no OnBehalfOf field, so the query this
-// test expresses could not even be formed: the read surface stopped at
-// Actor, and the administrator -- who never appears as Actor on an
-// impersonation-era row -- was unfindable on the read side the
-// dual-identity rule exists to serve.
+// A read surface stopping at Actor could not express this query, and an
+// administrator -- who never appears as Actor on an impersonation-era row
+// -- would be unfindable on the read side the dual-identity rule exists
+// to serve.
 func TestAuditQuery_Query_FiltersByOnBehalfOf(t *testing.T) {
 	repo := audit.NewRepository(newTestAuditDB(t))
 	q := NewAuditQuery(repo)
@@ -176,16 +175,16 @@ func TestAuditQuery_Query_FiltersByOnBehalfOf(t *testing.T) {
 }
 
 // TestAuditQuery_Query_SameTimestampEventsOrderDeterministically is the
-// regression test for the sort's tiebreaker (finding P3): several events
-// sharing an identical OccurredAt must come back in a fixed, deterministic
-// order -- by ID descending, per filterAndSort's documented total order --
-// on every query, so a caller paging over the returned slice never sees
+// regression test for the sort's ID tiebreaker: several events sharing an
+// identical OccurredAt must come back in a fixed, deterministic order --
+// by ID descending, per filterAndSort's documented total order -- on every
+// query, so a caller paging over the returned slice never sees
 // same-timestamp events reorder between requests. dbkit/audit's own
-// ListByTenant orders by occurred_at alone and the pre-fix sort had no
-// tiebreaker, so the order of tied rows was whatever the database's index
-// scan happened to return (SQLite returns them newest-rowid-first, and a
-// second database or query plan could return them differently) -- the
-// instability this test pins the documented total order against.
+// ListByTenant orders by occurred_at alone and sort.Slice is not stable,
+// so without the tiebreaker the order of tied rows is whatever the
+// database's index scan returns (SQLite returns them newest-rowid-first,
+// and a second database or query plan could return them differently) --
+// the instability this test pins the documented total order against.
 func TestAuditQuery_Query_SameTimestampEventsOrderDeterministically(t *testing.T) {
 	repo := audit.NewRepository(newTestAuditDB(t))
 	q := NewAuditQuery(repo)

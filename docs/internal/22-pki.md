@@ -20,7 +20,7 @@
 
 这套系统与 speed 无代码关系，**不存在迁移需求**，它只作为需求镜子。但它证明了一件事：这些问题不是理论风险，是一套已上线系统的真实状态。
 
-值得注意的是，speed 自己的 `go/authn` 患的是**同一个病的轻症**：`authn.KeySet` 有轮转所需的数据结构（active + retired 多 kid 验证），却没有轮转机制——`KeySet` 构造后不可变，"何时换新密钥、谁生成、旧密钥何时退役"全靠宿主在启动时决定。reference-app 传的是一把写死的开发种子。所以本模块不是"接管 authn 的轮转"，是**补上双方都没有的那一半**。
+值得注意的是，speed 自己的 `go/authn` 患的是**同一个病的轻症**：签名密钥没有轮转机制——密钥集构造后不可变，"何时换新密钥、谁生成、旧密钥何时退役"全靠宿主在启动时决定，reference-app 传的是一把写死的开发种子。本模块的密钥生命周期层接管了这半个缺口：`authn` 现在经 `KeySource` 从 pki 取密钥（见"authn 的接入"）。
 
 ## 定位：为什么是独立模块
 
@@ -137,25 +137,15 @@ import _ "github.com/vislake/speed/go/pki/signer/kmsaws"   // 只有这一行带
 pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 ```
 
-**子包而非独立 module**，因为子包已经足够——Go 按包解析依赖，隔离一路穿透到 `go.sum` 与 MVS 版本选择。同一模块内实测：只 import `pkgcore` 根包的消费者，`go.mod` 与 `go.sum` 里都没有 `koanf` 的任何条目（它只被 `pkgcore/config` 子包使用），而 import 该子包的消费者 `go.sum` 里有 10 条。既然隔离效果相同，就没有理由为它多开一个模块：**模块是发布单元，应当按领域内聚性划分，不该被打包机制的需求扯变形。** lockstep 下每多一个模块就要多一份 `go.work` 条目、CI 矩阵行、`AGENTS.md`、changesets 固定版本组条目与版本标签，而子包这些全都不要。
+**子包而非独立 module**，因为子包已经足够——Go 按包解析依赖，隔离一路穿透到 `go.sum` 与 MVS 版本选择。同一模块内的实测：只 import `pkgcore` 根包的消费者，`go.mod` 与 `go.sum` 里都没有 `koanf` 的任何条目（它只被 `pkgcore/config` 子包使用），import 该子包的消费者 `go.sum` 里才出现相应条目。既然隔离效果相同，就没有理由为它多开一个模块：**模块是发布单元，应当按领域内聚性划分，不该被打包机制的需求扯变形。** lockstep 下每多一个模块就要多一份 `go.work` 条目、CI 矩阵行、`AGENTS.md`、changesets 固定版本组条目与版本标签，而子包这些全都不要。
 
 只有当某套实现需要独立于 `pki` 的发布节奏、或消费者会绕开 `pki` 单独使用它时，才值得升格为模块——在 lockstep 版本策略下，这两种情况都不成立。
 
 这正是 `database/sql` 的驱动模式，也是 `pkgcore` 的 `SeamRegistry` 当初照着它设计的原因。**没 import 的项目，`go.mod` 里不出现这个名字。**
 
-这一点必须严格执行，因为仓库里已有一个可实测的反例：**`pkgcore` 根包内联了 Redis 与 S3 两套实现**（`redis_kv.go` / `redis_eventbus.go` / `s3_object_store.go` 与 `package pkgcore` 的其余文件同包），因此任何 import 该根包的消费者都无条件继承 `go-redis` 与 `minio-go` 及其传递依赖——**哪怕它只调用 `NewMemoryKVStore()`**。Go 的依赖分析是按包而非按符号做的，同包内的 import 无法按需裁剪。
+这一点由 CI 兜底：depguard 的 SDK 禁令按实现所在的子包粒度放行，谁把 SDK import 写回根包或另一个实现包都会失败（见 [18 CI/CD](18-cicd.md) 文首注记）。
 
-实测（新建空模块 + `go mod tidy`，`GOWORK=off`）：
-
-| 消费形态 | indirect 依赖数 |
-|---|---|
-| 只 import `pkgcore/apperr` 子包 | **0** |
-| import `pkgcore` 根包，只用内存 KVStore | **23** |
-| import `authn`（真实业务项目形态） | **82** |
-
-从 0 到 23 全部来自根包内联的那两套实现。KMS 供应商有 6 家以上，把它们内联进 pki 的根包就是把这个代价再叠加六份——所以每家一个子包，宿主 import 谁才拿到谁。
-
-（顺带澄清一个容易做出的错误归因：`testcontainers-go` 虽然出现在 `pkgcore` 与 `authn` 的 `go.mod` 主 require 块里，但它**不会**传染给消费者。Go 1.17+ 的模块图裁剪只加载"构建被 import 的包"所需的依赖，上游模块自身测试的依赖不在其中；`pkgcore` 的 testcontainers 只被两个 `integration_test` 文件 import，`authn` 的则来自 `authn/internal/testutil` → `dbkit/dbtest` 这条**测试专用**链路。上表第三行 82 个 indirect 里没有任何 testcontainers、docker、moby 或 containerd 条目，而 `authn/go.mod` 自己列了 108 个——差出来的 26 个正是它自己测试用的，业务项目拿不到。`pkgcore` 根包内联实现的问题不在本模块范围内，记录于此供后续处理。）
+（澄清一个容易做出的错误归因：`testcontainers-go` 虽然出现在 `pkgcore` 与 `authn` 的 `go.mod` 主 require 块里，但它不会传染给消费者。Go 1.17+ 的模块图裁剪只加载"构建被 import 的包"所需的依赖，上游模块自身测试的依赖不在其中——`pkgcore` 的 testcontainers 只被 `integration_test` 文件 import，`authn` 的则来自 `authn/internal/testutil` → `dbkit/dbtest` 这条测试专用链路，业务项目的 `go.mod` 拿不到它们。）
 
 ### 能力声明
 
@@ -167,9 +157,9 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 
 `local` 不具备该能力；`vault`/`aws-kms` 在**直签模式**下具备，在信封模式下不具备。
 
-**尚未落地：这项声明目前不被任何地方校验。** `Kernel.Bootstrap` 对能力的解析与校验（`resolveKernelSeam`/`validateSeamCapability`）只覆盖四个固定的内建 seam（`EventBus`/`KVStore`/`Mailer`/`ObjectStore`），完全不知道 `pki.SignerRegistry` 或 `pki.Signer` 的存在；`go/pki` 一侧也没有等价的校验——`pki.Module.WithSigner` 不接收 `Capability`/需求参数，`SignerRegistry.Build` 只是把注册时声明的 `Capability` 原样返回，不与任何期望值比较。也就是说，宿主即便装配了一个不具备 `KeyNeverLeavesBoundary` 的实现，即便本意是要求它，今天也不会得到任何错误——高安全部署的"声明即校验"目前只是意图，不是实现。这项差距记录在 `go/pki/AGENTS.md` 的 Known limitations 中。
+**尚未落地：这项声明目前不被任何地方校验。** `Kernel.Bootstrap` 对能力的解析与校验（`resolveKernelSeam`/`validateSeamCapability`）只覆盖四个固定的内建 seam（`EventBus`/`KVStore`/`Mailer`/`ObjectStore`），完全不知道 `pki.SignerRegistry` 或 `pki.Signer` 的存在；`go/pki` 一侧也没有等价的校验——`pki.Module.WithSigner` 不接收 `Capability`/需求参数，`SignerRegistry.Build` 只是把注册时声明的 `Capability` 原样返回，不与任何期望值比较。也就是说，宿主即便装配了一个不具备 `KeyNeverLeavesBoundary` 的实现，即便本意是要求它，也不会得到任何错误——高安全部署的"声明即校验"仍是意图，不是实现。这项差距记录在 `go/pki/AGENTS.md` 的 Known limitations 中。
 
-### Ed25519 在三套实现上都能直签（2026-09-04 核实）
+### Ed25519 在三套实现上都能直签
 
 `local` 用标准库；Vault Transit 支持 `ed25519`；**AWS KMS 也支持**——密钥规格 `ECC_NIST_EDWARDS25519`，仅用于签名验签，两个签名算法：
 
@@ -184,7 +174,7 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 
 ## authn 的签名算法：保持 EdDSA 单一，但让算法由密钥决定
 
-> **本节已被一次核实推翻并重写（2026-09-04）。** 早先的版本主张把 `authn` 的 JWT 算法允许列表从 `{EdDSA}` 放松为 `{EdDSA, ES256}`，唯一的必要性论据是"AWS KMS 不支持 Ed25519，所以 AWS 部署签不出 EdDSA"。**该前提不成立**（见上节）：AWS KMS 有 `ECC_NIST_EDWARDS25519` 密钥规格。放松的必要性随之消失，因此**不放松**。
+> 曾经有人主张把 `authn` 的 JWT 算法允许列表从 `{EdDSA}` 放松为 `{EdDSA, ES256}`，唯一的必要性论据是"AWS KMS 不支持 Ed25519，所以 AWS 部署签不出 EdDSA"。该前提不成立（见上节）——AWS KMS 有 `ECC_NIST_EDWARDS25519` 密钥规格，三套 Signer 实现都能直签 Ed25519——放松的必要性随之消失，因此允许列表保持单一 EdDSA 不放松。
 
 `go/authn` 把 JWT 签名算法钉死为 EdDSA，`token.go` 的注释说明了理由：防止算法混淆攻击——`alg: none`，以及把非对称公钥当作 HMAC 密钥去签（公钥不是秘密）。**这条保持不变。**
 
@@ -194,11 +184,11 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 
 这道检查在单一算法下是冗余的——parser 的允许列表已经只放行 EdDSA。仍然加它，是因为它把安全性从"依赖允许列表这一处配置"变成"依赖允许列表**和**密钥声明两处一致"：将来若真的需要加第二种算法，那道闸已经在位，不必在改允许列表的同时想起来补它。冗余的防御在这里成本接近零，而遗漏的代价是算法混淆攻击。
 
-将来若确有部署需要第二种算法（例如某个 HSM 只支持 ECDSA），加进允许列表即可，前提是**绝不混入任何 HMAC 家族**——非对称与对称同列才是算法混淆的必要条件。国密 SM2 同样不在本轮范围：它不是 JWT 标准算法（仅有草案），等真实密评需求出现时再议。
+将来若确有部署需要第二种算法（例如某个 HSM 只支持 ECDSA），加进允许列表即可，前提是**绝不混入任何 HMAC 家族**——非对称与对称同列才是算法混淆的必要条件。国密 SM2 同样不在当前范围内：它不是 JWT 标准算法（仅有草案），等真实密评需求出现时再议。
 
 ## 数据模型
 
-五张表，分属两个数据域（数据域定义见 [04 数据层与多租户](04-data-and-tenancy.md)）。**一张表不得混装两个数据域**——`TenantScoped` 是接口，要么实现要么不实现，这正是诊断对象把平台 CA 与租户证书塞进同一张表所犯的错。（`pki_signing_keys`/`pki_authorities`/`pki_certificates`/`pki_local_keys` 四张是轮 1 落地的；第五张 `pki_certificate_revocations` 是轮 3 随吊销机制新增的，见下文。）
+五张表，分属两个数据域（数据域定义见 [04 数据层与多租户](04-data-and-tenancy.md)）。**一张表不得混装两个数据域**——`TenantScoped` 是接口，要么实现要么不实现，这正是诊断对象把平台 CA 与租户证书塞进同一张表所犯的错。（`pki_signing_keys`/`pki_authorities`/`pki_certificates`/`pki_local_keys` 四张表随密钥生命周期层落地；第五张 `pki_certificate_revocations` 随吊销机制新增，见下文。）
 
 ### `pki_signing_keys` — 平台数据
 
@@ -217,7 +207,7 @@ pki.NewModule(db, pki.WithSigner("kms.aws", cfg))
 
 ### `pki_authorities` — 平台数据
 
-CA 链。`type` 为 `root` / `intermediate`，`parent_id` 指向签发者，同样只存 `signer_name` + `key_ref`，无私钥列。其余为 `subject` / `serial` / `certificate_pem` / `status` / 有效期与吊销字段。**轮 3** 为 CRL 生成新增五列：`crl_distribution_point`（本机构 CRL 的分发点 URL，CA 创建时确定，签发的每张证书都嵌入这个值）、`crl_number`（RFC 5280 §5.2.3 的 CRL 序号，每次 `CAService.GenerateCRL` 单调递增）、`crl_pem` / `crl_issued_at` / `crl_next_update`（最近一次生成的 CRL 本体与时间戳，使读取是取缓存文档而非每次现算）。
+CA 链。`type` 为 `root` / `intermediate`，`parent_id` 指向签发者，同样只存 `signer_name` + `key_ref`，无私钥列。其余为 `subject` / `serial` / `certificate_pem` / `status` / 有效期与吊销字段，外加为 CRL 生成而设的五列：`crl_distribution_point`（本机构 CRL 的分发点 URL，CA 创建时确定，签发的每张证书都嵌入这个值）、`crl_number`（RFC 5280 §5.2.3 的 CRL 序号，每次 `CAService.GenerateCRL` 单调递增）、`crl_pem` / `crl_issued_at` / `crl_next_update`（最近一次生成的 CRL 本体与时间戳，使读取是取缓存文档而非每次现算）。
 
 ### `pki_certificates` — 租户数据
 
@@ -231,7 +221,7 @@ CA 链。`type` 为 `root` / `intermediate`，`parent_id` 指向签发者，同�
 
 `key_delivered` 这一列记录了一个重要事实：某些场景下私钥**必须**离开平台（诊断对象就要把私钥打进 JWKS 下发给数据面集群）。这类密钥的 KMS 保护没有意义，真正的改善手段是**缩短有效期加上能轮转**，而不是加密强度。
 
-### `pki_certificate_revocations` — 平台数据（轮 3 新增）
+### `pki_certificate_revocations` — 平台数据
 
 去规范化的、只追加的吊销台账：`CAService.RevokeCertificate` 每次调用落一行，让 `CAService.GenerateCRL` 能枚举一个 CA 吊销过的全部证书，而不必对租户数据表 `pki_certificates` 发起跨租户读取。列为 `id` / `certificate_id` / `authority_id` / `serial` / `tenant_id`（真实存在但不做隔离强制的信息列，与 `go/notification` 的 `send_records`/`platform_blacklist`、`go/dbkit/audit` 的 `AuditEvent` 同一处理）/ `revoked_at` / `revocation_reason` / `created_at`，`tenancytest.AssertNotTenantScoped` 覆盖。
 
@@ -295,7 +285,7 @@ err := keySource.EnsurePurpose(ctx, "authn.access_token", "ed25519", cfg.ttl)
 
 ## 轮转：模块管状态机，宿主管下发
 
-> **实现状态注记**：本节最初把到期驱动的生命周期描述成密钥和证书/CA 共用的一套机制，但真实落地的 `lifecycle.go`（`Service.ScanExpiry`，由 `PromoteDuePending`/`RetireDueRetiring`/`StageDueRotations` 三步组成）**只操作 `pki_signing_keys` 一张表**——签名密钥这一层。证书与 CA（X.509 层）的生命周期推进目前**只有吊销**这一条路径（见下"吊销"一节），没有到期驱动的续期/轮转扫描，也没有 `pki.certificate.renewed`/`pki.certificate.expiring`/`pki.authority.expiring` 这几个事件——`go/pki/events.go` 真实声明的事件只有 `pki.signing_key.staged`/`.activated`/`.retired`/`.revoked` 与 `pki.certificate.revoked` 五个，下文出现的 `pki.certificate.renewed` 是本节写作时设想、从未落地的事件名。是否要给 X.509 层补一条到期驱动路径是尚未排期的未来工作。
+> **实现状态注记**：到期驱动的生命周期由真实落地的 `lifecycle.go`（`Service.ScanExpiry`，由 `PromoteDuePending`/`RetireDueRetiring`/`StageDueRotations` 三步组成）推进，**只操作 `pki_signing_keys` 一张表**——签名密钥这一层。证书与 CA（X.509 层）的生命周期推进只有**吊销**这一条路径（见下"吊销"一节），没有到期驱动的续期/轮转扫描，也没有 `pki.certificate.renewed`/`pki.certificate.expiring`/`pki.authority.expiring` 这几个事件——`go/pki/events.go` 真实声明的事件只有 `pki.signing_key.staged`/`.activated`/`.retired`/`.revoked` 与 `pki.certificate.revoked` 五个；`pki.certificate.renewed` 是设计阶段的占位名，从未落地。X.509 层的到期驱动路径仍未排期。
 
 `jobs` 上的周期任务扫描签名密钥 `not_after` 将至的记录，按 purpose 声明的策略提前续期，推进密钥状态机，并在每个转换点发布事件。
 
@@ -313,23 +303,21 @@ jobs 扫描到期(仅签名密钥)
 
 这个划分意味着诊断对象最痛的那部分（下发回路）仍需自己实现。这是对的：通用的是状态机、重叠期、扫描、密钥保护与审计，下发本就属于宿主。
 
-证书与 CA 的生命周期目前止步于"吊销"（见下一节）——没有到期扫描，也没有到期未续期时的告警事件；证书/CA 的到期监控与提前续期仍是留白，不是已经存在但本文档懒得写的细节。
-
 ## 退役密钥材料的回收：手段在模块，策略在宿主
 
-> **实现状态注记**：本节记录 census 发现 P2-2 的落地（`go/pki/AGENTS.md` 的同名轮条目有完整的代码级细节）。P2-2 的观察是：`Signer.Destroy` 在仓库里没有任何生产调用者——到期扫描止步于 `retired`，之后密钥的私钥材料永不回收（`LocalSigner` 的密文 `pki_local_keys` 行无限累积；vault/kmsaws 直签模式下云端密钥一直存活）。此前评估把它判为"生命周期策略决策，不是接线细节"并推迟；本轮落地的是**宿主显式调用的回收方法**，不是扫描内的自动销毁。
+> **实现状态注记**：回收问题的观察是：`Signer.Destroy` 在仓库里没有任何生产调用者——到期扫描止步于 `retired`，之后密钥的私钥材料永不回收（`LocalSigner` 的密文 `pki_local_keys` 行无限累积；vault/kmsaws 直签模式下云端密钥一直存活）。落地的方案是**宿主显式调用的回收方法**，不是扫描内的自动销毁——销毁可能触碰真实的外部删除，属于宿主策略而非模块自有配置（代码级细节见 `go/pki/AGENTS.md`）。
 
 密钥状态机停在 `retired` 是有意的：`retired` 的语义是"重叠期已过、设计上不再有任何凭证需要这把密钥验签"，而**销毁私钥材料是另一个轴**——它可能触碰真实的外部删除（直签模式的 `Destroy` 会让 Vault 删 Transit 密钥、让 AWS KMS 排入最短 7 天的删除窗口），所以"何时销毁、要不要销毁"是每部署自己的生命周期策略，与"何时轮转"这种模块自有配置不是一类问题。本节的划分与"轮转：模块管状态机，宿主管下发"完全同构：
 
 - **模块提供手段**：`Service.ReclaimRetired(ctx)` 把每个 `retired` 且 `SignerName` 属于本 Service 的密钥交给自己的 `Signer.Destroy`，返回 `ReclaimReport`（`Destroyed` / `NotOwned` / `Failed` 三个 kid 列表，nil 即无）。它**永远不进入** `ScanExpiry`/到期扫描任务——扫描的边界"推送到任何外部系统不是本模块的事"对销毁同样成立。
 - **宿主执掌策略**：部署通过"是否调用、以什么节奏调用"表达策略——本地签名器部署可以在每次扫描 drain 后调用（回收的就是累积的密文行）；直签云部署把它当作低频、刻意、有操作记录的销毁动作；envelope 部署调用了也不会回收任何东西（见下）。调用节奏即保留期声明，模块不为此新增任何配置项——与 `DefaultCacheTTL` 保持常量的理由相同（读配置会让 pki 依赖 config）。
-- **consultable 的边界已存在**：P2-2 评估时担心的"词汇表里没有自动销毁可咨询的 retired 之后的状态"——宿主显式调用使这个担心不成立：`retired` 本身就是咨询点，宿主调用即决策，模块不需要一个新状态替宿主做决定。
+- **consultable 的边界已存在**：设计时担心的"词汇表里没有自动销毁可咨询的 retired 之后的状态"——宿主显式调用使这个担心不成立：`retired` 本身就是咨询点，宿主调用即决策，模块不需要一个新状态替宿主做决定。
 
 **`Destroy` 逐实现的语义**（`reclaim.go` 的 doc 与各 signer 包自己的 `Destroy` doc 是权威）：
 
 | 实现 | `ReclaimRetired` 调 `Destroy` 后实际发生什么 |
 |---|---|
-| `LocalSigner` | 物理删除 `pki_local_keys` 密文行——P2-2 测量的"无限累积"对象被真正回收 |
+| `LocalSigner` | 物理删除 `pki_local_keys` 密文行——"无限累积"的对象被真正回收 |
 | vault/kmsaws 直签 | 真实云端删除（Vault 立即删；KMS `ScheduleKeyDeletion`，最短 7 天的强制删除窗口——"调用返回后密钥并不会立刻消失"，`kmsaws/signer.go` 的 `Destroy` doc 对此如实记录） |
 | vault/kmsaws envelope | 校验 keyRef（即行内 key_ref 列的密文本身）仍可解密后 no-op——材料就是这行密文，丢弃它是行的历史策略，属宿主决定，不在本模块能替它做的范围内 |
 
@@ -337,7 +325,7 @@ jobs 扫描到期(仅签名密钥)
 
 **刻意排除 `revoked`**：吊销是应急路径，事件响应可能还需要刚被停用的密钥材料，应急动作不应静默捆绑删除任何东西。宿主若确需让某把已吊销密钥的材料消失，直接调它自己的 `Signer.Destroy`。
 
-**尚未落地、记录在案的后续**（有意不做，不是漏做）：自动销毁需要的新机制——每实现"可自动销毁"声明、行级 destroyed 标记或新状态、保留期配置——只有出现真实消费者（尤其需要静默幂等重跑的 vault/kmsaws 直签部署）才值得设计实现；`examples/reference-app` 的宿主周期调度器（已真实驱动到期扫描）是回收调用的自然首个接线点，属宿主侧改动，不在本轮范围。回收不改任何行、不发任何事件：retired 密钥本就在每副本的可验证集与 active 指针之外，没有副本缓存需要被告知。
+**尚未落地、记录在案的后续**（有意不做，不是漏做）：自动销毁需要的新机制——每实现"可自动销毁"声明、行级 destroyed 标记或新状态、保留期配置——只有出现真实消费者（尤其需要静默幂等重跑的 vault/kmsaws 直签部署）才值得设计实现；`examples/reference-app` 的宿主周期调度器（已真实驱动到期扫描）是回收调用的自然接线点，属宿主侧改动。回收不改任何行、不发任何事件：retired 密钥本就在每副本的可验证集与 active 指针之外，没有副本缓存需要被告知。
 
 ## 吊销
 
@@ -447,7 +435,7 @@ type KeySource interface {
 
 `dbkit` 在依赖图底层，收编即循环依赖——这是技术约束。但即使没有这个约束也不该合并：两者的轮转是两件不同难度的事，把"改一个字段就要重写全表"和"等 15 分钟旧 token 过期"塞进同一套状态机，只会让两边都别扭。
 
-`authn.KeySet` 的注释说明它的形状是刻意对齐 `dbkit.NewCipher(active, retired...)` 的，目的是让仓库里"轮转"只有一种形态。`pki` 沿用这个形态（active + 若干仍可验证的旧密钥），只是把"何时轮转"从宿主手里接管过来。
+`dbkit.NewCipher(active, retired...)` 确立了仓库里"轮转"的既有形态——active 加若干仍可验证的旧密钥。`pki` 沿用这个形态，只是把"何时轮转"从宿主手里接管过来。
 
 ## 刻意不做的事
 
@@ -468,9 +456,9 @@ type KeySource interface {
 
 **权限**（`rbac`）：`pki:read` / `pki:issue` / `pki:revoke` / `pki:rotate`。
 
-**审计动作**：真实声明并落地的只有四个——`pki.authority.create` / `pki.certificate.issue` / `pki.key.revoke` / `pki.certificate.revoke`。`pki.key.rotate` 与 `pki.private_key.deliver` 是**刻意永久不声明**，不是尚未补齐的待办：`go/pki/module.go` 自己的注释说明轮转是系统驱动的后台过程，没有审计模型 Actor/Resource 要回答的那种单一"谁做的"人类操作者（`Service.PromoteNow` 这个手动触发接口也只是操作者覆盖一个既有的系统过程，不是新增了一种需要审计的动作类型）；密钥/私钥下发则完全在本轮范围之外——`key_delivered` 这个交付场景本身还没有实现，谈不上要不要审计它。
+**审计动作**：真实声明并落地的只有四个——`pki.authority.create` / `pki.certificate.issue` / `pki.key.revoke` / `pki.certificate.revoke`。`pki.key.rotate` 与 `pki.private_key.deliver` 是**刻意永久不声明**，不是尚未补齐的待办：`go/pki/module.go` 自己的注释说明轮转是系统驱动的后台过程，没有审计模型 Actor/Resource 要回答的那种单一"谁做的"人类操作者（`Service.PromoteNow` 这个手动触发接口也只是操作者覆盖一个既有的系统过程，不是新增了一种需要审计的动作类型）；密钥/私钥下发则完全在当前的交付场景之外——`key_delivered` 这个交付场景本身还没有实现，谈不上要不要审计它。
 
-**事件**：真实声明的是 `pki.signing_key.staged` / `.activated` / `.retired` / `.revoked`（密钥生命周期层）与 `pki.certificate.revoked`（X.509 层，轮 3 新增），共五个。`pki.certificate.issued` / `.renewed` / `.expiring` 与 `pki.authority.expiring` **不存在于代码中**——证书/CA 层目前只有吊销这一条生命周期路径（见"轮转"一节的实现状态注记），到期驱动的续期/告警从未落地，这几个事件名是设计阶段的占位，尚未排期。事件名一律用过去式，与仓库既有惯例一致（`authn.session.revoked` 是事件，`authn.session.revoke` 是审计动作）——这也是没有 `.pending` / `.retiring` 这两个事件的原因：它们是状态名而非已发生的事，进入 `retiring` 由 `.activated` 同时表达（新密钥启用即旧密钥转入重叠期）。
+**事件**：真实声明的是 `pki.signing_key.staged` / `.activated` / `.retired` / `.revoked`（密钥生命周期层）与 `pki.certificate.revoked`（X.509 层）。`pki.certificate.issued` / `.renewed` / `.expiring` 与 `pki.authority.expiring` **不存在于代码中**——证书/CA 层目前只有吊销这一条生命周期路径（见"轮转"一节的实现状态注记），到期驱动的续期/告警从未落地，这几个事件名停留在设计占位状态。事件名一律用过去式，与仓库既有惯例一致（`authn.session.revoked` 是事件，`authn.session.revoke` 是审计动作）——这也是没有 `.pending` / `.retiring` 这两个事件的原因：它们是状态名而非已发生的事，进入 `retiring` 由 `.activated` 同时表达（新密钥启用即旧密钥转入重叠期）。
 
 **任务处理器**（`jobs`）：到期扫描、状态推进、CRL 重新生成。
 
@@ -486,15 +474,6 @@ type KeySource interface {
 - **AWS KMS**：**无集成腿**。LocalStack 是重依赖且其 KMS 实现与真实服务有偏差。用 SDK 接口打桩做单元测试，真实验证靠手工，并在 `AGENTS.md` 的 Testing 一节如实记录这个缺口——不假装它被覆盖了。
 - **算法一致性检查**：必须有一条用例构造"header 的 alg 与密钥声明不符"的 token 并断言拒绝，这是放松算法后新增的那道闸，不能只存在于文档里。
 
-## 交付分轮
+## 交付与现状
 
-本模块不在 [15 里程碑](15-roadmap.md) 原有排期内，是计划外模块；`authn` 已交付，接入它属于回头改造。
-
-| 轮次 | 内容 |
-|---|---|
-| 轮 1 | 四张表与双方言迁移、内部 CA 签发、`Signer` seam 与 `local` 实现、租户隔离套件、密钥生命周期层接口定义 |
-| 轮 2 | 生命周期状态机、`jobs` 到期扫描、传播窗口与重叠期、事件；**`authn` 切换到 `KeySource`**（含 saasctl 四套模板与 golden 文件） |
-| 轮 3 | 吊销与 CRL、JWKS 导出、HTTP 面与 OpenAPI 片段 |
-| 轮 4 | `go/pki/signer/vault` 与 `go/pki/signer/kmsaws` 两个子包 |
-
-轮 1 必须把表结构砌对，否则轮 2 的状态机要推倒重来——诊断对象就是活例子：`CertificateType` 枚举存在却没有落库，导致连"哪些证书快到期了"都查不出分类。
+本模块不在 [15 里程碑](15-roadmap.md) 原有排期内，是计划外模块；`authn` 已交付，接入它属于回头改造。模块的交付内容——数据模型与双方言迁移、内部 CA 签发、`Signer` seam 与 `local` 实现、生命周期状态机与 `jobs` 到期扫描、传播窗口与重叠期、`authn` 切换到 `KeySource`（含 saasctl 模板与 golden 文件）、吊销与 CRL、JWKS 导出、HTTP 面与 OpenAPI 片段、`go/pki/signer/vault` 与 `go/pki/signer/kmsaws` 两个子包——均已落地，各部分当前实现状态见 `go/pki/AGENTS.md` 的 Status 行。

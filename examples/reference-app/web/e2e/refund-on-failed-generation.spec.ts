@@ -10,12 +10,11 @@
  * simulation is the business; charging for a failed one is taking money
  * for nothing, and it accumulates quietly.
  *
- * It is also a path this suite could not reach until two things existed.
- * The vendor had to be able to refuse (FAKE_IMAGE_FAIL=1 in
- * e2e/test-utils/fake-image-provider.mjs), and the balance the refund
- * restores had to have a surface to read (go/billing's credits HTTP
- * surface and the app's credits view). Both landed, so the claim this
- * gate makes is now checkable rather than argued.
+ * The refusal is real: the fake vendor can be armed to refuse
+ * (FAKE_IMAGE_FAIL=1 in e2e/test-utils/fake-image-provider.mjs), and the
+ * ledger the refund restores has a surface to read (go/billing's
+ * credits HTTP surface and the app's credits view) -- so the claim this
+ * gate makes is checkable rather than argued.
  *
  * WHY IT ASSERTS THE LEDGER ROW AND NOT THE BALANCE
  *
@@ -24,8 +23,8 @@
  * taken, and a product that forgot to charge would pass a gate written
  * that way while being wrong in the other direction. The ledger says
  * what actually happened -- a deduction, then its refund, each its own
- * row -- and go/billing chose to expose those rows rather than only the
- * total, which is what makes the stronger question askable.
+ * row -- and go/billing exposes those rows rather than only the total,
+ * which is what makes the stronger question askable.
  *
  * THE VENDOR IS THE ONLY THING FAKED
  *
@@ -59,9 +58,7 @@ const CREDITS_TEXT = {
   /**
    * How the panel says a generation is over and will not be retried
    * (the app's smilesim.status.deadLetter copy). It renders as a row in
-   * the attempt list, not as an alert -- which is what the first version
-   * of this gate looked for, so it failed claiming the surface "never
-   * said so" while the surface said it plainly.
+   * the attempt list, not as an alert.
    */
   failedAttempt: 'This generation failed and cannot be retried.',
 } as const
@@ -79,32 +76,15 @@ const databasePath = join(
 
 // @budget: verified, and out of the default run only because it boots
 // two extra processes of its own and spends a sign-in.
-//
-// It was @pending while I could not vouch for it, and that was the right
-// call: it passed with the vendor set to succeed as well, so it was
-// measuring nothing. Both explanations I offered for that were wrong,
-// and so were the two premises I built on afterwards -- see the notes at
-// the assertions.
 test(
   'a generation that fails gives the credits back, and says so in the ledger',
   { tag: '@budget' },
   async ({ page }) => {
-    // A REFUSING vendor of this spec's own, and a server pointed at it.
-    //
-    // The first version of this passed FAKE_IMAGE_FAIL to the Go server,
-    // which is not its switch at all -- it belongs to the fake provider
-    // process. The server was left with no
-    // APP_AI_GATEWAY_IMAGE_BASE_URL, so it reached for a real vendor and
-    // every generation failed for that reason instead. The gate went
-    // green either way, because it never got as far as the ledger: the
-    // probe that found this printed the ledger read and it was the CASE
-    // DETAIL page, still saying "Something went wrong. Try again later."
-    //
-    // Both explanations I had offered for the false pass were wrong. It
-    // was not short-circuiting at an entitlement refusal, and the
-    // success path was not producing a refund row. It was a switch
-    // handed to the wrong process, and the gate's own navigation never
-    // happening.
+    // A REFUSING vendor of this spec's own, and a server pointed at it:
+    // FAKE_IMAGE_FAIL is the fake provider process's switch, so the
+    // server must be given the vendor's address explicitly
+    // (APP_AI_GATEWAY_IMAGE_BASE_URL) or it would reach for a real
+    // vendor and every generation would fail for that reason instead.
     const vendor = await bootImageProvider({ port: REFUSING_IMAGE_PORT, refuse: true })
     const server = await bootServer({
       port: REFUND_API_PORT,
@@ -120,11 +100,9 @@ test(
 
       await visitSignIn(page)
       await submitPasswordSignIn(page, DEMO_OWNER.email, DEMO_OWNER.password)
-      // expectSignedIn, which exists precisely so a gate does not
-      // identify the frame by a nav entry -- below the md breakpoint the
-      // navigation is behind the menu button and no nav link is in the
-      // DOM. I built that helper for this and then hand-rolled a nav
-      // lookup here anyway; it failed on the iPad project alone.
+      // expectSignedIn identifies the frame by the sign-out control,
+      // which exists below the md breakpoint where the navigation is
+      // behind the menu button and no nav link is in the DOM.
       await expectSignedIn(page)
 
       // A case with a photo, then a generation that will fail.
@@ -160,12 +138,8 @@ test(
       ).toBeVisible({ timeout: 120_000 })
 
       // EXACTLY ONE generation happened, so the ledger below is about
-      // one charge. My earlier version clicked Simulate as well and then
-      // counted dead-letter rows to prove "one click, one attempt" -- it
-      // counted 1 and I read that as confirmation, when the row it
-      // counted belonged to the AUTO-run and the click's own job was
-      // still retrying, invisible to that count. Two generations, two
-      // honest charges, and a count that could not tell them apart.
+      // one charge: the auto-run's own job, whose failure this gate
+      // follows to the refund.
 
       // THE MONEY CAME BACK, as a row that says what happened.
       //
@@ -174,9 +148,8 @@ test(
       // server's own timing, not the browser's. A refund that arrives
       // eventually is correct; one that never arrives is the defect.
       await openSurface(page, CREDITS_TEXT.nav)
-      // On the credits surface, asserted rather than assumed: the false
-      // pass this gate used to give came from reading "the ledger" while
-      // still on the case detail page.
+      // On the credits surface, asserted rather than assumed: a ledger
+      // read from whatever page came before would not be the ledger.
       await expect(
         page.getByRole('heading', { level: 1 }),
         'the gate never reached the credits surface, so whatever it read next was not the ledger',
@@ -194,16 +167,16 @@ test(
       // a pending row that is still there for a moment is the queue
       // working, while one that never clears is credits reserved
       // against work that will never be delivered.
-      // Nothing left reserved for it.
       //
-      // The window is deliberately generous and the reason is
-      // documented: the panel polls a job only while it is mounted, so a
-      // generation whose failure lands after the person navigates away
-      // is settled by the boot-time reconcile sweep instead, on a
-      // five-minute rhythm. A gate that demanded sixty seconds would be
-      // asserting a product expectation nobody has committed to (a
-      // shorter interval, or a completion signal that does not need an
-      // observer) rather than checking the mechanism that exists.
+      // The window is deliberately generous because of how a late
+      // failure is settled: the panel polls a job only while it is
+      // mounted, so a generation whose failure lands after the person
+      // navigates away is settled by the boot-time reconcile sweep
+      // instead, on the sweep's own cadence -- the timeout below is
+      // sized to outlast it. Demanding a shorter interval would assert a
+      // product expectation (a faster sweep, or a completion signal that
+      // needs no observer) that is nowhere stated, rather than checking
+      // the mechanism that exists.
       //
       // What it still catches is the thing that matters: credits
       // reserved against a failed generation that are NEVER released.

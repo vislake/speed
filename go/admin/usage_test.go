@@ -18,7 +18,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// TestUsageService_NeitherModuleWired_Refused pins D9's one boot-shaped
+// TestUsageService_NeitherModuleWired_Refused pins the one boot-shaped
 // refusal at request time: a dashboard with nothing at all to stitch
 // (neither go/metering nor go/billing ever wired) is a wiring gap, not a
 // partial answer.
@@ -33,11 +33,11 @@ func TestUsageService_NeitherModuleWired_Refused(t *testing.T) {
 	}
 }
 
-// TestUsageService_Summary_StitchesMeteringAndBilling is D9's core proof:
-// real go/metering and go/billing data for a real, ledger-registered
-// tenant is stitched into that tenant's own row, with no new aggregate
-// table of admin's own -- Summary reads straight through to
-// metering.SummaryRepository.List and billing.CreditService.Balance/
+// TestUsageService_Summary_StitchesMeteringAndBilling is the dashboard's
+// core proof: real go/metering and go/billing data for a real,
+// ledger-registered tenant is stitched into that tenant's own row, with
+// no new aggregate table of admin's own -- Summary reads straight through
+// to metering.SummaryRepository.List and billing.CreditService.Balance/
 // billing.SubscriptionService.Active.
 func TestUsageService_Summary_StitchesMeteringAndBilling(t *testing.T) {
 	env := buildTestAdminModule(t)
@@ -163,14 +163,13 @@ func failingSingleRowTenantDB(t *testing.T, db *gorm.DB) *gorm.DB {
 }
 
 // TestUsageService_Summary_DisplayNameLookupFails_SurfacedNotSilentlyBlank
-// is Finding P3-2's regression test: a tenant present in the ledger (so
-// ListAllIDs, and therefore the row itself, are produced) whose own
-// TenantService.Get call fails must still render a row (DisplayName simply
-// blank, matching every other omitted dimension in this file), but the
-// failure itself must be SURFACED -- a Warn log carrying the tenant id --
-// rather than silently swallowed the way it was before this fix. Fails
-// against the pre-fix code, whose bare `if t, getErr := ...; getErr == nil`
-// has no else branch at all to log anything.
+// pins the no-silent-omission discipline on the cosmetic read: a tenant
+// present in the ledger (so ListAllIDs, and therefore the row itself, are
+// produced) whose own TenantService.Get call fails must still render a
+// row (DisplayName simply blank, matching every other omitted dimension
+// in this file), but the failure itself must be SURFACED -- a Warn log
+// carrying the tenant id -- never silently swallowed into an unexplained
+// blank name.
 func TestUsageService_Summary_DisplayNameLookupFails_SurfacedNotSilentlyBlank(t *testing.T) {
 	env := buildTestAdminModule(t)
 
@@ -219,18 +218,15 @@ func TestUsageService_Summary_DisplayNameLookupFails_SurfacedNotSilentlyBlank(t 
 }
 
 // TestUsageService_Summary_MaterializesExactlyOneZeroBalanceRowPerRowlessTenant
-// pins the write contract Summary's own doc comment now states (P2-2, the
-// claim/call alignment): the billing leg reads balances through
-// billing.CreditService.Balance, whose documented materialize-on-first-read
-// contract creates one zero-valued billing_credit_balances row per ledger
-// tenant that has no row yet. The pre-fix doc called this surface
-// "read-only" while Balance was doing exactly that -- this test
-// demonstrates the materialization the honest claim must state, and pins
-// the rest of the documented write shape around it: a tenant that already
-// has a row is never written (its stored row and its answer are exactly
-// what its own credit history produced -- the guardrail a future
-// read-shape change must keep), a repeated Summary writes nothing further,
-// and no credit-transaction row is ever created.
+// pins the write shape Summary's own doc comment states: the billing leg
+// reads balances through billing.CreditService.Balance, whose documented
+// materialize-on-first-read contract creates one zero-valued
+// billing_credit_balances row per ledger tenant that has no row yet -- so
+// the dashboard is not strictly read-only, and the materialization is the
+// whole of what it writes. Around that: a tenant that already has a row is
+// never written (its stored row and its answer are exactly what its own
+// credit history produced), a repeated Summary writes nothing further, and
+// no credit-transaction row is ever created.
 func TestUsageService_Summary_MaterializesExactlyOneZeroBalanceRowPerRowlessTenant(t *testing.T) {
 	env := buildTestAdminModule(t)
 

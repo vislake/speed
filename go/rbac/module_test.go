@@ -115,7 +115,7 @@ func TestModule_Register_MountsNoRoutes(t *testing.T) {
 	// rbac deliberately exposes no HTTP surface of its own: role
 	// management belongs to the admin console and the flat permission list
 	// belongs to authn's /me. A route appearing here would mean one of
-	// those deferrals was quietly reversed.
+	// those boundaries was quietly reversed.
 	reg := newPlainRegistry()
 	if err := NewModule(nil).Register(reg); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -331,7 +331,7 @@ func TestModule_Locales_ParityAndCoverage(t *testing.T) {
 }
 
 func TestErrors_CodesArePrefixedWithTheModuleName(t *testing.T) {
-	// Backend coding standard §6.2: every error code is "<module>.<reason>".
+	// Every error code is "<module>.<reason>".
 	// The i18n contract depends on it too -- pkgcore/i18n rejects a message
 	// id that does not start with the module name.
 	errs := []*apperr.Error{

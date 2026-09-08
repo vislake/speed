@@ -12,9 +12,9 @@ import (
 // dispatcher claimed but no worker has picked up yet must not report an
 // inflated Attempts figure -- an attempt is only counted when a worker
 // actually starts it (the handoff, worker.go's runAttempt), never when the
-// dispatcher claims the row. Named for the behaviour it verifies, per the
-// backend coding standard's test-naming rule, since it spans
-// store.go's claimOne/markAttemptStarted and worker.go's dispatch/runWorker.
+// dispatcher claims the row. Named for the behaviour it verifies, since it
+// spans store.go's claimOne/markAttemptStarted and worker.go's
+// dispatch/runWorker.
 
 // TestStandaloneQueue_Get_ClaimedButNotStarted_ReportsNoInflatedAttempts is
 // the deterministic end-to-end regression: a single worker is blocked

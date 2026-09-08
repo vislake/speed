@@ -45,9 +45,9 @@ describe('RouteGuard', () => {
       // The scan mounts the guard inside the page skeleton a real host
       // supplies -- the main landmark and the page's h1 above the
       // gated content -- because page-has-heading-one and
-      // landmark-one-main are determinate in jsdom now (see the axe
-      // helper header): a scan without that context fails instead of
-      // passing by indeterminacy. region stays disabled: the gate is a
+      // landmark-one-main are determinate in jsdom (see the axe helper
+      // header): a scan without that context fails instead of passing
+      // by indeterminacy. region stays disabled: the gate is a
       // per-widget fragment whose host content it does not structure.
       renderWithProviders(
         <main>
@@ -133,9 +133,9 @@ describe('RouteGuard', () => {
 
     it('renders the default denied fallback title at the host-forwarded headingLevel', () => {
       // A host mounting the gate under a heading of its own passes the
-      // level that continues the page's order; pre-fix there was no
-      // host control over the default composition at all and the
-      // fallback stayed at ui-kit's stock h6 whatever the page above.
+      // level that continues the page's order; without a forwarded
+      // headingLevel the default composition stays at ui-kit's stock
+      // h6 whatever the page above.
       const { getByRole } = renderWithProviders(
         <main>
           <h1>Protected page</h1>
@@ -181,10 +181,11 @@ describe('RouteGuard', () => {
       // page-level h1 (the headingLevel default): the denied gate
       // replaces the page content it guards, so the fallback's title IS
       // the page's own heading and the scan document needs no host
-      // heading of its own -- page-has-heading-one stays enabled
-      // (pre-fix the stock h6 left the page heading-less and this rule
-      // failed the scan). A host mounting the gate under a heading of
-      // its own forwards headingLevel, proven by the scan below.
+      // heading of its own -- page-has-heading-one stays enabled (a
+      // stock h6 without the headingLevel default would leave the page
+      // heading-less and this rule would fail the scan). A host
+      // mounting the gate under a heading of its own forwards
+      // headingLevel, proven by the scan below.
       renderWithProviders(
         <main>
           <RouteGuard status="denied" />
@@ -194,11 +195,11 @@ describe('RouteGuard', () => {
     })
 
     it('has no axe violations when the host forwards headingLevel under its own page heading', async () => {
-      // The host-forwarding leg of the heading fix: a page h1 of the
-      // host's own, and the gate's default denied composition below it
-      // at the level that continues the page's order. Pre-fix,
-      // headingLevel reached no composition and the stock h6 fell out
-      // of the page's h1 -- a heading-order skip this scan flags.
+      // The host-forwarding leg: a page h1 of the host's own, and the
+      // gate's default denied composition below it at the level that
+      // continues the page's order. Without the forwarded headingLevel,
+      // the stock h6 would fall out of the page's h1 -- a heading-order
+      // skip this scan flags.
       renderWithProviders(
         <main>
           <h1>Protected page</h1>

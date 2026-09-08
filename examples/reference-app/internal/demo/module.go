@@ -20,9 +20,9 @@
 //
 // Like notes it declares its type as a pkgcore.NotificationType rather than
 // importing go/notification: business code publishes facts and notification
-// consumes them, and the dependency never points the other way (backend
-// coding standard §8; notes' noteCreatedNotificationType comment says the
-// same of the shared channel vocabulary).
+// consumes them, and the dependency never points the other way (notes'
+// noteCreatedNotificationType comment says the same of the shared channel
+// vocabulary).
 package demo
 
 import (

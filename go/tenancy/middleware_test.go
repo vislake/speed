@@ -14,8 +14,7 @@ import (
 
 // stubResolver is a Resolver test double whose behavior is fixed at
 // construction, so Middleware can be exercised without depending on
-// DomainResolver or on the authenticated-request Resolver that authn will
-// eventually supply.
+// DomainResolver or on the authenticated-request Resolver authn supplies.
 type stubResolver struct {
 	tenant pkgcore.TenantID
 	err    error
@@ -317,7 +316,7 @@ func (s *stubStatusResolver) Status(_ context.Context, tenant pkgcore.TenantID) 
 
 // TestMiddleware_NoTenantStatusResolver_BehaviorUnchanged pins D4's
 // central compatibility contract: a host that never calls
-// WithTenantStatusResolver sees exactly today's Middleware behavior,
+// WithTenantStatusResolver sees exactly the baseline Middleware behavior,
 // unchanged -- a resolved tenant's request proceeds regardless of
 // whatever status it might have anywhere else in the system, because
 // nothing here consults one.

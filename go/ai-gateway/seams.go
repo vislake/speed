@@ -17,17 +17,15 @@ type Decision struct {
 	Reason string
 }
 
-// Entitlements is the model-access-control check
-// docs/internal/08-ai-gateway.md names as reusing
-// "billing.Entitlements.Check(ctx, tenant, "model:xxx", 1)'s boolean
-// entitlement" -- without importing go/billing to get it.
+// Entitlements is the model-access-control check mirroring
+// go/billing's *EntitlementsService.Check boolean entitlement decision,
+// without importing go/billing to get it.
 //
 // # Why this is a seam rather than an import of go/billing
 //
 // ai-gateway sits at the same dependency tier as billing, sharing and
-// integration (root CLAUDE.md's module graph: "... -> authn/rbac/org/
-// metering -> billing/ai-gateway/sharing/integration -> ..."), and none of
-// the three peers may import one another. go/billing's real
+// integration -- none of the three peers may import one another.
+// go/billing's real
 // *billing.EntitlementsService already exposes exactly the call this
 // interface mirrors -- Check(ctx context.Context, featureKey string,
 // requested int64) (Decision, error), with the tenant read from ctx via
@@ -42,10 +40,8 @@ type Decision struct {
 // but the method SIGNATURE -- what satisfies an interface -- does not care
 // about a different named return type's extra fields; a host that wants
 // the assignment to type-check writes a two-line closure returning
-// aigateway.Decision built from the billing.Decision fields it needs,
-// exactly the EntitlementsFunc shape below, mirroring
-// go/integration/seams.go's own WithPermissionLister closure example for
-// the identical situation).
+// aigateway.Decision built from the billing.Decision fields it needs --
+// exactly the EntitlementsFunc shape below).
 //
 // # Optional, unlike PermissionLister
 //
@@ -66,10 +62,9 @@ type Entitlements interface {
 }
 
 // EntitlementsFunc adapts a plain function to Entitlements, the same
-// func-to-interface adapter shape http.HandlerFunc popularized and
-// go/integration/seams.go's PermissionListerFunc already applies in this
-// codebase -- so a host can wire the real billing.EntitlementsService with a
-// short closure instead of declaring a named adapter type of its own:
+// func-to-interface adapter shape http.HandlerFunc popularized -- so a host
+// can wire the real billing.EntitlementsService with a short closure
+// instead of declaring a named adapter type of its own:
 //
 //	aigateway.WithEntitlements(aigateway.EntitlementsFunc(
 //	    func(ctx context.Context, featureKey string, requested int64) (aigateway.Decision, error) {
@@ -90,14 +85,13 @@ func (f EntitlementsFunc) Check(ctx context.Context, featureKey string, requeste
 // UsageEvent is one unit of AI usage Gateway reports automatically after a
 // Chat/ChatStream call, the local shape UsageRecorder.Record accepts.
 //
-// This deliberately does NOT reuse go/metering's own UsageEvent struct --
-// crossing the module boundary with a business module's struct is exactly
-// what root CLAUDE.md's "do not import another business module's structs"
-// rule forbids, and metering sits below ai-gateway in the dependency graph
-// but importing it here would still couple this package's public API to
-// metering's own evolution. A host's UsageRecorder implementation maps this
-// local shape onto a real metering.UsageEvent inside its own closure -- see
-// UsageRecorderFunc's doc comment.
+// This deliberately does NOT reuse go/metering's own UsageEvent struct:
+// importing a business module's struct here would couple this package's
+// public API to metering's own evolution, and the metering type also
+// carries fields this seam's contract does not need. A host's
+// UsageRecorder implementation maps this local shape onto a real
+// metering.UsageEvent inside its own closure -- see UsageRecorderFunc's doc
+// comment.
 type UsageEvent struct {
 	// TenantID is the tenant this usage belongs to, read from ctx by
 	// Gateway itself -- never accepted from a caller-supplied parameter.
@@ -105,8 +99,8 @@ type UsageEvent struct {
 	// Feature is the quota/billing dimension this event measures. Gateway
 	// always reports "ai.chat_tokens" for a chat call; the field exists
 	// (rather than a hardcoded constant on UsageRecorder.Record itself) so
-	// a future round can report a different dimension without changing
-	// this seam's shape.
+	// additional dimensions can be reported without changing this seam's
+	// shape.
 	Feature string
 	// Quantity is how many units of Feature this event measures -- the
 	// call's Usage.TotalTokens for the "ai.chat_tokens" dimension, with one
@@ -129,14 +123,13 @@ type UsageEvent struct {
 	// retry (jobs.Job.ID), so its IdempotencyKey is derived deterministically
 	// from that job id and the Feature dimension
 	// (imageUsageIdempotencyKey) -- two recordings of the same job's same
-	// dimension converge on one key. That still is not the whole of this
-	// fix's exactly-once guarantee on its own (a UsageRecorder is free to
-	// ignore IdempotencyKey entirely): the guarantee's real enforcement
-	// point is that imageGenerateHandler.Handle only ever CALLS
-	// recordImageUsage once per job to begin with (image_job_store.go's
-	// markCompleted gate) -- the stable key is defense in depth for a
-	// UsageRecorder that does dedup on it, not the mechanism the invariant
-	// depends on.
+	// dimension converge on one key. The key alone is not the whole
+	// exactly-once guarantee (a UsageRecorder is free to ignore
+	// IdempotencyKey entirely): the guarantee's real enforcement point is
+	// that imageGenerateHandler.Handle only ever CALLS recordImageUsage
+	// once per job to begin with (image_job_store.go's markCompleted
+	// gate) -- the stable key is defense in depth for a UsageRecorder that
+	// does dedup on it, not the mechanism the invariant depends on.
 	IdempotencyKey string
 	// Metadata carries small, bounded context about the call -- currently
 	// just the logical model key under "model".
@@ -157,10 +150,9 @@ type UsageEvent struct {
 // Optional, exactly like Entitlements: a Gateway built with no UsageRecorder
 // wired still works, it just reports no usage anywhere. Business code never
 // calls a metering API of its own for a call that went through this
-// Gateway -- automatic reporting is the whole point (docs/internal/
-// 08-ai-gateway.md's rule that AI metering is a built-in behavior needing
-// no manual reporting) -- so a host that wants metering for AI usage MUST
-// wire this seam; there is no other path.
+// Gateway -- automatic reporting is the whole point: AI usage metering is
+// a built-in behavior needing no manual reporting -- so a host that wants
+// metering for AI usage MUST wire this seam; there is no other path.
 type UsageRecorder interface {
 	// Record reports event. Whether a failed Record call is retried,
 	// buffered, or simply dropped is entirely a property of the wired

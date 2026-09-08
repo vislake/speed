@@ -7,9 +7,8 @@ import (
 )
 
 // SystemDomain is the pseudo-tenant that carries platform-operations
-// grants: the "system" domain docs/internal/05-identity-and-access.md
-// reserves for staff who act across the platform rather than inside one
-// customer's tenant.
+// grants: the "system" domain is where staff who act across the platform,
+// rather than inside one customer's tenant, hold their grants.
 //
 // It is deliberately an ordinary tenant id, not a special case. A grant to
 // a platform operator is a row with tenant_id = 'system', stored through
@@ -27,8 +26,7 @@ const SystemDomain pkgcore.TenantID = "system"
 // Subject is who authorization is being decided for: a user, inside a
 // tenant. It is the entire vocabulary this module has for identity.
 //
-// This type is the reason rbac never imports authn (root CLAUDE.md's
-// module-boundary rule, restated first in this module's AGENTS.md).
+// This type is the reason rbac never imports authn.
 // Whoever authenticates a request -- authn in production, a demo
 // middleware in the reference app, a test in this package -- assembles a
 // Subject from the access token's claims and hands it in. rbac never
@@ -37,7 +35,7 @@ const SystemDomain pkgcore.TenantID = "system"
 type Subject struct {
 	// TenantID is the tenant the subject is acting inside. It always comes
 	// from the access token's claims, never from a request parameter,
-	// header or body (root CLAUDE.md's multi-tenant isolation rule).
+	// header or body.
 	TenantID pkgcore.TenantID
 
 	// UserID is the acting user's id in authn -- an id reference, carried

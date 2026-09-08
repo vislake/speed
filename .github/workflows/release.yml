@@ -1,11 +1,10 @@
 name: release
-
-# The lockstep release pipeline, M0 status: OFFLINE VERIFICATION ONLY.
+# The lockstep release pipeline: OFFLINE VERIFICATION ONLY.
 #
 # Manually dispatched with a version number (the `version` input is the
-# contract and stays). This M0 round verifies, for that version, that the
-# full lockstep release plan is consistent -- the coordinator's default
-# mode (tools/release/lockstep-release.py) derives the publishable set at
+# contract). The job verifies, for that version, that the full lockstep
+# release plan is consistent -- the coordinator's default mode
+# (tools/release/lockstep-release.py) derives the publishable set at
 # runtime (go.work use entries under go/ for the Go half, web/packages/*
 # for the npm half) and exits 0 only when: the version has release-version
 # form; no tag for it exists; the go/ tree is complete against go.work;
@@ -16,57 +15,50 @@ name: release
 # version with green checks passes; an invalid version or any failed check
 # fails the run.
 #
-# THE REAL PUBLISHING SEQUENCE (docs/internal/18-cicd.md, release section)
-# IS NOT WIRED AND IS SCHEDULED FOR THE v1.0 RELEASE AT M4. The 18-cicd
-# sequence, and what each step waits for:
+# WHAT REAL PUBLISHING WOULD ADD -- each step of the full sequence, and
+# what is missing:
 #   1. preflight -- main branch green, clean workspace, changelog
 #      generated; the version-format and duplicate-tag preflights run
-#      here already (this job), the rest waits for the release round's
-#      process decisions (docs/internal/02-repo-and-release.md).
-#   2. full test matrix, any failure aborts -- waits for nothing
-#      technical: full-check already runs the Docker-backed integration
-#      matrix on full-ci-labelled PRs today; the release round mounts the
-#      same reusable workflows here.
+#      here already (this job).
+#   2. full test matrix, any failure aborts -- full-check already runs
+#      the Docker-backed integration matrix on full-ci-labelled PRs; the
+#      same reusable workflows are not mounted here.
 #   3. Go release -- one tag per module directory, go/<module>/<version>
 #      form, MUST be scripted (hand-tagging always misses one). Tag
 #      creation exists in the coordinator as a HARD-GATED local-only mode
-#      (--apply requires --allow-local-tag-creation, refused otherwise);
-#      pushing the tags waits for M4. The first release additionally
-#      scans every module go.mod for transitional
-#      `replace ... => ../<module>` lines, rewrites them to the real
-#      versions and re-runs go mod tidy (docs/internal/02-repo-and-
-#      release.md transition state; a missed line breaks consumer `go
-#      get`). The cleanup engine ships today as pure functions
+#      (--apply requires --allow-local-tag-creation, refused otherwise).
+#      The first release additionally scans every module go.mod for
+#      transitional `replace ... => ../<module>` lines, rewrites them to
+#      the real versions and re-runs go mod tidy (a missed line breaks
+#      consumer `go get`). The cleanup engine ships as pure functions
 #      (first_release_replace_cleanup in tools/release/lockstep-release
 #      .py), exercised ONLY against the fixtures under tools/release/
-#      testdata/ -- the live tree keeps its transition state until M4.
+#      testdata/ -- the live tree keeps its pre-release transition state.
 #   4. npm release -- changesets fixed version group (bootstrap lives at
-#      web/.changeset/config.json), published with provenance -- waits
-#      for M4: changesets is not installed in web/ and no publish
-#      credential exists in this repository.
+#      web/.changeset/config.json), published with provenance --
+#      changesets is not installed in web/ and no publish credential
+#      exists in this repository.
 #   5. artifacts -- multi-arch (amd64/arm64) images, saasctl binaries
 #      (goreleaser), the merged OpenAPI spec speed.yaml (Release asset +
-#      @speed/api-sdk + docs-site version directory) -- waits for the
-#      artifact round (goreleaser config, image builder, spec merge
-#      tooling all land later).
-#   6. post-release scaffold-verify on the just-released version --
-#      waits for scaffold-verify.yml to leave its gated-stub status.
-#   7. outputs -- GitHub Release + changelog + SBOM -- waits for M4.
+#      @speed/api-sdk + docs-site version directory) -- no goreleaser
+#      config, image builder or release spec-merge tooling exists yet.
+#   6. post-release scaffold-verify on the just-released version -- not
+#      wired: nothing in this repository publishes, so there is no real
+#      post-release event to hook it onto.
+#   7. outputs -- GitHub Release + changelog + SBOM.
 # Pre-release channels ship v<version>-rc.N first (reference-app
 # validates, then the stable release). Rollback policy: released Go tags
 # cannot be recalled (module proxies cache), so rollback = patch release,
-# never tag deletion; npm packages are deprecated, not deleted. The
-# pipeline doc must state this.
+# never tag deletion; npm packages are deprecated, not deleted.
 #
-# WHAT EXISTS TODAY: the offline verification above. No publish
-# credential is wired anywhere (permissions: contents: read), so this
-# workflow cannot create a release, push a tag or publish an npm package;
-# no step here can ever publish for real, by construction.
+# WHAT EXISTS: the offline verification above. No publish credential is
+# wired anywhere (permissions: contents: read), so this workflow cannot
+# create a release, push a tag or publish an npm package; no step here can
+# ever publish for real, by construction.
 #
-# GATE: roadmap M0 "lockstep release scripts" engineering item (M0 exit
-# acceptance: one command releases every module under the same version --
-# proven OFFLINE by this job); first end-to-end run at the v1.0 release
-# (M4).
+# GATE: one command releases every module under the same version --
+# proven OFFLINE by this job; an end-to-end run happens at the first real
+# release.
 
 on:
   workflow_dispatch:
@@ -88,7 +80,7 @@ permissions:
 
 jobs:
   verify:
-    name: Verify the lockstep release plan offline (M0)
+    name: Verify the lockstep release plan offline
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -96,11 +88,9 @@ jobs:
         # The same commit-SHA pin every sibling workflow uses (fast-check,
         # api-contract, docs-check, security and reusable-docker-build all
         # checkout actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1,
-        # tagged v7.0.1) -- release.yml was the one file still floating a
-        # version tag (@v4), so any new checkout major or patch release
-        # could silently change what this pipeline runs on, and the
-        # floating file would drift from the pinned ones. A tag-move
-        # cannot change a SHA.
+        # tagged v7.0.1): a floating version tag could silently change what
+        # this pipeline runs on and drift from the pinned ones -- a
+        # tag-move cannot change a SHA.
         # fetch-depth: 0 (full history incl. tags): the duplicate-version
         # preflight lists tags with `git tag -l`, and actions/checkout's
         # default shallow fetch would see none -- silently neutering it.

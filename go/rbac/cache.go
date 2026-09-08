@@ -9,10 +9,9 @@ import (
 
 // A stale authorization cache is a security failure, not a performance
 // one: it keeps answering "yes" after a revoke. The cache below is
-// therefore built around invalidation first and speed second. The
-// performance half of the same requirement is
-// docs/internal/05-identity-and-access.md's: decisions must be served from
-// a policy cache rather than loaded in full on every request.
+// therefore built around invalidation first and speed second: decisions
+// are served from the cache, while grants are never loaded in full on
+// every request.
 //
 // Three mechanisms keep it honest, in decreasing order of how much is
 // riding on each:
@@ -55,11 +54,10 @@ type grantEntry struct {
 //
 // It stores node IDs, never resolved paths. Resolution happens per
 // decision through the host's SubtreeResolver, so a member who moves in
-// the organization tree changes scope immediately -- the requirement
-// docs/internal/16-verification.md pins: a member's permissions must
-// follow immediately when they move within the tree. Caching paths here
-// would reintroduce exactly the staleness that requirement forbids, one
-// layer further in than the binding row does.
+// the organization tree changes scope immediately: a member's permissions
+// must follow when they move within the tree. Caching paths here would
+// reintroduce exactly that staleness, one layer further in than the
+// binding row does.
 type permissionGrant struct {
 	// tenantWide is true when at least one binding grants this permission
 	// at the tenant root.
@@ -181,8 +179,7 @@ func (c *grantCache) put(key grantKey, grants map[string]permissionGrant, now ti
 // beginLoad registers a database load of key as in flight and returns the
 // fence value the load's eventual putIfCurrent must carry: this subject's
 // own invalidation count at the moment the load started. grantsFor calls
-// it BEFORE starting the database read, in place of the process-global
-// generation counter the fence used to read: because the returned fence
+// it BEFORE starting the database read. Because the returned fence
 // is per-subject, an invalidation of a DIFFERENT subject (an assign or
 // revoke for someone else, in any tenant) cannot discard this load's
 // result -- only an invalidation of this subject itself, or of this

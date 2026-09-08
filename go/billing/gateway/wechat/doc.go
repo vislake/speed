@@ -1,16 +1,13 @@
 // Package wechat is billing's WeChat Pay adapter -- the second
-// domestic leg of docs/internal/06-billing-and-metering.md's payment mode
-// split. Like go/billing/gateway/alipay, WeChat Pay offers no
-// periodic-charge primitive at this repository's target tier, so this
-// package creates one-time Native (QR-code) orders only via the APIv3
-// `POST /v3/pay/transactions/native` operation, and a caller re-runs
-// PaymentGateway.CreateCharge once per internally-tracked billing cycle --
-// see billing.PaymentGateway.CreateCharge's own doc comment, and
-// go/billing/gateway/AGENTS.md's own pragmatic-trade-off section, for the
-// full
-// rationale. This package does NOT implement WeChat Pay's periodic
-// withhold agreement product, a distinct, higher-compliance-
-// burden API family explicitly out of this round's scope.
+// domestic leg of the payment-mode split. Like go/billing/gateway/alipay,
+// WeChat Pay offers no periodic-charge primitive at this repository's
+// target tier, so this package creates one-time Native (QR-code) orders
+// only via the APIv3 `POST /v3/pay/transactions/native` operation, and a
+// caller re-runs PaymentGateway.CreateCharge once per internally-tracked
+// billing cycle -- see billing.PaymentGateway.CreateCharge's own doc
+// comment for the full rationale. This package does NOT implement WeChat
+// Pay's periodic withhold agreement product, a distinct,
+// higher-compliance-burden API family explicitly out of scope.
 //
 // # SDK choice: no third-party SDK
 //
@@ -19,18 +16,17 @@
 // deliberately does not adopt it: its own certificate-management layer
 // (`core/downloader`) is built to periodically DOWNLOAD WeChat Pay's
 // current platform certificates over the network and cache them, machinery
-// this round has no live account to exercise or verify, and adopting it
-// would mean carrying an unverified, untested certificate-rotation
-// dependency rather than the explicit, host-supplied platform public key
-// this package uses instead (see "Known limitation: static platform
-// certificate" below). Signature verification, resource decryption and the
+// there is no live account to exercise or verify, and adopting it would
+// mean carrying an unverified, untested certificate-rotation dependency
+// rather than the explicit, host-supplied platform public key this package
+// uses instead (see "Known limitation: static platform certificate"
+// below). Signature verification, resource decryption and the
 // request/response shapes this package needs are implemented directly
 // against WeChat Pay's own published APIv3 documentation (signature scheme:
 // https://pay.weixin.qq.com/doc/v3/merchant/4012774368) using only the
 // standard library's crypto/rsa, crypto/sha256, crypto/aes and
 // crypto/cipher -- the identical "implement directly against the
-// documented format" choice go/billing/gateway/alipay makes, and this
-// round's own task explicitly sanctioned for both non-Stripe providers.
+// documented format" choice go/billing/gateway/alipay makes.
 //
 // # Known limitation: static platform certificate
 //
@@ -39,10 +35,10 @@
 // rotates, discoverable through a `GET /v3/certificates` call. This
 // package does not implement that discovery/rotation flow: Config takes
 // the platform's current RSA public key directly (PEM-encoded), and a host
-// is responsible for keeping it current -- an operational gap this
-// package's AGENTS.md records explicitly rather than silently accepting an
-// expired or rotated certificate would (this package fails closed with a
-// verification error in that case, never a silent accept).
+// is responsible for keeping it current -- an operational gap recorded
+// explicitly rather than silently accepted: an expired or rotated
+// certificate makes verification fail closed with an error, never a silent
+// accept.
 //
 // # What is, and is not, exercised without live credentials
 //
@@ -65,10 +61,10 @@
 //
 // # No sandbox exists for what this package implements
 //
-// The sandbox round investigated WeChat Pay's test environments and found
-// none for this package's API surface, so -- unlike stripe (stripe-mock
-// tier) and alipay (env-gated sandbox leg) -- wechat ships no integration
-// leg, and the boundary is recorded here rather than papered over. The
+// WeChat Pay's test environments were surveyed and none covers this
+// package's API surface, so -- unlike stripe (stripe-mock tier) and alipay
+// (env-gated sandbox leg) -- wechat ships no integration leg, and the
+// boundary is recorded here rather than papered over. The
 // evidence is WeChat Pay's own merchant documentation, the "Payment
 // acceptance guide -- common rules" (pay.wechatpay.cn/doc/v2/merchant/
 // 4011984810, under the product docs' V2 section): the simulation system
@@ -86,6 +82,6 @@
 // configure, and nothing a merchant can do short of operating a real,
 // registered merchant account with a real (small-amount) payment. Real
 // verification against WeChat Pay's production environment therefore has
-// not been performed as of the sandbox round, and cannot be without a
-// registered merchant account.
+// not been performed, and cannot be without a registered merchant
+// account.
 package wechat

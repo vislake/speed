@@ -13,8 +13,7 @@ var (
 	// ErrQueueRequired is returned by Module.Register when no jobs.Queue
 	// was wired through WithQueue. The retention-sweep task handler this
 	// module registers on reg.Jobs is meaningless without a queue to
-	// drain it, mirroring go/storage's identical ErrQueueRequired
-	// reasoning for its own expiry-sweep task.
+	// drain it.
 	ErrQueueRequired = apperr.Internal("compliance.queue_required")
 
 	// ErrTenantListerRequired is returned by RetentionService.
@@ -29,23 +28,20 @@ var (
 	// override but no *config.Service was wired through WithConfigService.
 	// SweepTenant itself never returns this: it falls back to
 	// defaultRetentionWindow instead of failing when no config service is
-	// wired, exactly the same "optional wiring, honest fallback" shape
-	// go/storage's LifecycleService gives a nil ObjectStore. Callers that
-	// want RetentionWindow's own error instead of the fallback ask for it
+	// wired -- optional wiring gets an honest fallback. Callers that want
+	// RetentionWindow's own error instead of the fallback ask for it
 	// directly.
 	ErrConfigServiceRequired = apperr.Internal("compliance.config_service_required")
 
 	// ErrAuditRecordFailed wraps a failed dbkit/audit.Emit call for a
-	// sweep, an erasure or an export. Per docs/internal/10-compliance-and-
-	// audit.md's rule that collection is asynchronous but a failed audit
-	// write must alert rather than silently drop, a failed audit write is
-	// never swallowed: the underlying
-	// deletion or export already happened (and, for a HardDelete-backed
-	// sweep or erasure, cannot be undone), so this error is returned
-	// alongside the operation's own result rather than in place of it --
-	// callers must check for it explicitly to alert an operator that the
-	// operation completed with no audit record, rather than assuming a
-	// non-nil error alone means nothing happened.
+	// sweep, an erasure or an export. A failed audit write must alert,
+	// never silently drop: the underlying deletion or export already
+	// happened (and, for a HardDelete-backed sweep or erasure, cannot be
+	// undone), so this error is returned alongside the operation's own
+	// result rather than in place of it -- callers must check for it
+	// explicitly to alert an operator that the operation completed with no
+	// audit record, rather than assuming a non-nil error alone means
+	// nothing happened.
 	ErrAuditRecordFailed = apperr.Internal("compliance.audit_record_failed")
 
 	// ErrAuditQueryRequiresSystemContext is returned by AuditQuery.
@@ -86,9 +82,7 @@ var (
 	// refusal: RetentionService and ErasureService have nothing to do with
 	// export delivery, so a host that never constructs a Module with
 	// WithSharing can still boot and use them -- only an actual Export
-	// call needs go/sharing wired, mirroring go/sharing's own
-	// ErrQueueRequiredForSweep, which is likewise a call-time-only
-	// refusal for an optional seam.
+	// call needs go/sharing wired.
 	ErrSharingRequired = apperr.Internal("compliance.sharing_required")
 
 	// ErrUnsupportedReportFormat is returned by RenderAuditReport when
@@ -137,8 +131,7 @@ var (
 // hasCode reports whether err is (or wraps, via apperr.As's Unwrap chain
 // walk) an *apperr.Error whose Code equals code. This is the standard way
 // this codebase compares against an apperr sentinel once it may have been
-// decorated with WithParam/WithCause -- see go/org/tree.go's and
-// go/metering/errors.go's identical helper.
+// decorated with WithParam/WithCause.
 func hasCode(err error, code string) bool {
 	appErr, ok := apperr.As(err)
 	return ok && appErr.Code == code

@@ -1,20 +1,15 @@
 /**
  * That the platform's own operator can do their job by clicking.
  *
- * `go/admin` is wired into this app and answers today: probed against
- * the live deployment with a platform-staff token, `/api/v1/admin/tenants`,
- * `/audit-events`, `/roles` and `/impersonation` all answer 200 (`/users`
- * answers 400 for a missing query, which is a shape not a failure). The
- * tenant ledger, the cross-tenant user search, the impersonation
- * pipeline and the read-only audit query are all real, tested, mounted
- * code.
- *
- * What does not exist is a page. `web/src/views/` has no admin view and
- * the frame's navigation offers Home, Cases, Notes, Team, Credits and
- * Account -- so a platform operator cannot reach any of it without
- * curl. This is the same gap as the two the brief named and this suite
- * gated before it (saving the result, adding a colleague), in its third
- * form: capability without a surface.
+ * `go/admin` is wired into this app and answers today: with a
+ * platform-staff token, `/api/v1/admin/tenants`, `/audit-events`,
+ * `/roles` and `/impersonation` all answer 200. The tenant ledger, the
+ * cross-tenant user search, the impersonation pipeline and the
+ * read-only audit query are all real, tested, mounted code. The
+ * administration surface is a nav item after Account ("#/admin",
+ * accessible name "Administration"), shown only when the tenant is the
+ * system domain -- a clinic owner never sees it, and a direct visit
+ * answers the route guard's 403 with the no-permission empty state.
  *
  * WHO THIS IS FOR, AND WHY THAT MATTERS TO THE GATE
  *
@@ -27,27 +22,18 @@
  *
  * WHAT IT ASSERTS, AND WHAT IT LEAVES OPEN
  *
- * That a signed-in platform operator can reach an administration
+ * That a signed-in platform operator can reach the administration
  * surface and read the tenant ledger from it, and that a clinic owner
- * cannot. It does not prescribe where the surface lives, what it is
- * called, which of admin's five capability groups it exposes first, or
- * whether impersonation and audit export appear at all -- those are
- * product decisions. Tenant rows and an operator-only entrance are the
- * floor.
+ * cannot. It does not prescribe which of admin's capability groups the
+ * surface exposes beyond the ledger -- impersonation, audit export and
+ * the rest are product decisions. Tenant rows and an operator-only
+ * entrance are the floor.
  *
- * ONE TRAP RECORDED IN ADVANCE, BECAUSE THIS SUITE HAS PAID FOR IT
- *
- * The ledger's rows carry an EMPTY displayName today (probed live:
- * `{"tenantId":"tenant-64307885-...","displayName":"","status":"active"}`).
- * Rendered as-is, the page would list `tenant-64307885-c306-...` -- the
- * identical defect the Team surface shipped and 42a14614 fixed, where a
- * roster answered "who works here" with UUIDs. So the assertion below
- * refuses a raw tenant id where a tenant's identity belongs. A display
- * name, a clinic name resolved from org, or a short stable label each
- * pass; the id alone does not.
- *
- * @pending in the tag's second sense: the surface does not exist yet
- * rather than being broken.
+ * The ledger's rows carry an EMPTY stored displayName, so the surface
+ * resolves a tenant's identity through the ladder its rows can support:
+ * a stored display name, the demo roster, then a bilingual "unnamed
+ * tenant" fallback. The assertion below refuses a raw tenant id where
+ * a tenant's identity belongs, so no rung of that ladder may be a UUID.
  */
 import { expect, test } from '@playwright/test'
 import { DEMO_OWNER } from './test-utils/accounts.js'
@@ -85,9 +71,7 @@ const PLATFORM_STAFF = {
  *
  * Deliberately NOT matching "Account" or "Team": both exist and are
  * clinic-scoped. A pattern loose enough to reach an admin page that
- * might sit near them is loose enough to land on one of them and pass
- * -- the mistake block D's nav pattern made once, and the one the
- * add-a-colleague gate had to be written around.
+ * might sit near them is loose enough to land on one of them and pass.
  */
 const ADMIN_UI = {
   surface: /admin|administration|platform|operations|tenants/i,
@@ -96,30 +80,14 @@ const ADMIN_UI = {
 /** A tenant id as the ledger stores it, which is not a tenant's name. */
 const RAW_TENANT_ID = /\btenant-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i
 
-// @deployment as well as @pending, and that pairing is required rather
-// than decorative: this gate SKIPS itself unless
-// E2E_PLATFORM_STAFF_PASSWORD is set, and e2e/README.md's own rule says
-// a gate that skips itself unless an environment variable is set must
-// also carry @deployment -- because with E2E_BASE_URL set the config
-// narrows the run to @deployment and a command-line --grep intersects
-// with that rather than replacing it. Without the tag the gate is
-// excluded at BOTH ends: skipped locally by its own guard, filtered out
-// on a deployment for lacking the tag. One gate lived like that (the
-// session address-source check) and had never run anywhere. This one
-// nearly did too -- the first attempt to run it against a real server
-// answered "No tests found", which is exactly how that failure looks.
-// Closed by 3295f50b. The entry is a nav item after Account ("#/admin",
-// accessible name "Administration"), shown only when the tenant is the
-// system domain -- a clinic owner never sees it, and a direct visit
-// answers the route guard's 403 with the no-permission empty state.
-// The ledger names tenants through the ladder its rows can actually
-// support (a stored display name, the demo roster, then a bilingual
-// "unnamed tenant"), and a raw tenant id never reaches the page.
-//
-// Verified on three engines, and against the live deployment with the
-// platform operator's own account: both halves pass there.
-//
-// @deployment stays, @pending goes.
+// @deployment: this gate SKIPS itself unless E2E_PLATFORM_STAFF_PASSWORD
+// is set, and e2e/README.md's own rule says a gate that skips itself
+// unless an environment variable is set must also carry @deployment --
+// because with E2E_BASE_URL set the config narrows the run to
+// @deployment and a command-line --grep intersects with that rather
+// than replacing it. Without the tag the gate would be excluded at BOTH
+// ends: skipped locally by its own guard, filtered out on a deployment
+// for lacking the tag.
 test(
   'a platform operator can administer tenants by clicking',
   { tag: '@deployment' },
@@ -146,10 +114,9 @@ test(
       'the administration surface does not show the platform\'s tenants, which is the ledger every other operator task starts from',
     ).toContainText(/tenant|clinic/i)
 
-    // And it names them. See the trap recorded in the header: the
-    // ledger's displayName is empty today, so rendering the row as
-    // stored would repeat the defect 42a14614 fixed on the Team
-    // surface.
+    // And it names them: the ledger's stored displayName is empty, so
+    // the naming ladder in the header is what keeps a raw id off the
+    // page.
     const shown = await work.innerText()
     const rawIds = shown.match(new RegExp(RAW_TENANT_ID, 'gi')) ?? []
     expect(
@@ -161,12 +128,12 @@ test(
 
 // @budget, not the default tier and not @deployment-only: it signs in
 // as demo-owner a second time, and the default tier already spends that
-// account's whole five-per-minute allowance -- putting it there made the
-// whole tier red on its own pacing. @budget's separate invocation gives
-// it a fresh server and a fresh allowance; it still runs locally AND
-// against a deployment, since it needs no password and no E2E_BASE_URL.
-// The presence half above stays @deployment because it needs the
-// operator's password variable to be meaningful at all.
+// account's whole per-minute login allowance -- putting it there would
+// turn the whole tier red on its own pacing. @budget's separate
+// invocation gives it a fresh server and a fresh allowance; it still
+// runs locally AND against a deployment, since it needs no password and
+// no E2E_BASE_URL. The presence half above stays @deployment because it
+// needs the operator's password variable to be meaningful at all.
 test(
   'a clinic owner cannot reach the platform administration surface',
   { tag: '@budget' },

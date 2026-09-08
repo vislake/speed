@@ -15,8 +15,8 @@ import (
 // This file is admin's counterpart to demo_subject.go and demo_users.go:
 // where a platform-staff Subject comes from, which admin permission gates
 // which admin sub-route, and the demo platform-staff account seeded at
-// startup -- the real, first-consumer proof of go/admin's round 1
-// (docs/internal/23-admin.md).
+// startup -- the real, first-consumer proof of go/admin's console
+// surface.
 
 // demoPlatformStaffEmail is the real account this app registers to
 // demonstrate the admin console end to end. Unlike demoOwnerUserID and
@@ -72,7 +72,7 @@ const adminRoutePath = "/api/v1/admin"
 //
 // adminAuditEventsExportPath MUST be checked before adminAuditEventsPath
 // in adminPermissionFor's switch: both are prefixes of
-// "/api/v1/admin/audit-events/export", and the round-2 export leg is
+// "/api/v1/admin/audit-events/export", and the export leg is
 // deliberately gated on the stronger PermissionAuditExport rather than
 // falling through to the plain-read PermissionAuditRead (module.go's own
 // PermissionAuditExport doc comment: exporting a tenant's complete audit
@@ -92,8 +92,8 @@ const (
 // admin's mounted subtree must hold, from its path and method alone.
 //
 // This is deliberately NOT the generic demoPermissionFor(resource)
-// read/write split every other gated module route uses: admin declares
-// nine permissions distinguished by SUB-RESOURCE (tenants, users,
+// read/write split every other gated module route uses: admin's
+// permissions are distinguished by SUB-RESOURCE (tenants, users,
 // impersonation, audit-events read vs. export, roles, usage, notification
 // send-records), not by one resource's read/write split, so this app's
 // own router-level gate has to know the sub-path shape -- exactly the
@@ -133,13 +133,12 @@ func adminPermissionFor(r *http.Request) string {
 }
 
 // adminSubjectResolver is admin's OWN subject resolver -- deliberately NOT
-// demoSubjectResolver, and the fix for a real privilege-escalation gap
-// found in review: every admin:* permission is evaluated in
-// rbac.SystemDomain (docs/internal/23-admin.md's D1; go/admin/AGENTS.md's
-// wiring-contract section restates it as "does NOT go through ordinary
-// tenancy.Middleware tenant resolution"), so TenantID here is HARD-CODED
-// to rbac.SystemDomain rather than read from pkgcore.TenantFromContext the
-// way demoSubjectResolver does for every other module's route.
+// demoSubjectResolver: every admin:* permission is evaluated in
+// rbac.SystemDomain, because admin's own route does NOT go through
+// ordinary tenancy.Middleware tenant resolution, so TenantID here is
+// HARD-CODED to rbac.SystemDomain rather than read from
+// pkgcore.TenantFromContext the way demoSubjectResolver does for every
+// other module's route.
 //
 // Reading the ambient tenant would be wrong in both directions:
 //   - An operator who ALSO belongs to an ordinary customer tenant, signed
@@ -194,9 +193,9 @@ func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 // resolves unambiguously to "system" with no tenant_id request needed at
 // sign-in -- ensures rbac's built-in roles exist in that tenant, and
 // grants it BuiltinRoleOwner there. BuiltinRoleOwner carries every
-// permission any module declared (rbac/builtin.go), admin's five
+// permission any module declared (rbac/builtin.go), admin's own
 // admin:* permissions included, which is exactly the "platform
-// administrator" shape D1 describes: a person is a normal authn User
+// administrator" shape: a person is a normal authn User
 // holding an ordinary RoleBinding under the "system" pseudo-tenant, no
 // special-cased identity model of its own.
 //
@@ -211,15 +210,14 @@ func guardAdminRoute(az rbac.Authorizer, handler http.Handler) http.Handler {
 // re-assertion a process restart would leave the platform-staff account
 // permanently unable to sign in -- 403 authn.tenant_membership_required
 // from an empty in-memory roster -- locking the operator out of admin's
-// own console until the database is wiped, the SystemDomain twin of the
-// customer-tenant restart defect this round's org-backed membership store
-// fixes. The registration itself goes through registerDemoUserIfAbsent,
+// own console until the database is wiped. The registration itself goes
+// through registerDemoUserIfAbsent,
 // exactly like seedDemoUsers' accounts: an already-registered staff
 // account is discovered by the SearchUsers lookup and never POSTs the
-// public register route -- the route whose per-IP budget (10 per hour)
-// repeated restart boots used to exhaust under the distributed
+// public register route -- the route whose per-IP budget
+// repeated restart boots could exhaust under the distributed
 // deployment mode's shared KVStore (seedDemoUsers' own doc comment has
-// the arithmetic) -- so a restart consumes no register budget at all.
+// the reasoning) -- so a restart consumes no register budget at all.
 //
 // It returns the registered user id, or an error naming exactly what
 // failed -- registration, membership or role assignment -- mirroring

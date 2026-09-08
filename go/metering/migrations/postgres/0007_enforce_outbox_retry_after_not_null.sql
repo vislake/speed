@@ -1,12 +1,11 @@
--- Makes metering_outbox_records.retry_after NOT NULL, closing the review
--- finding this migration ships (P3-metering-E): migration 0005 added the
--- column nullable and never narrowed it, so the "NULL is a legacy-only
--- state, never a state the module itself produces" invariant 0005's own
--- header records has been held by code discipline alone -- Enqueue and
--- markOutboxAttemptFailed always write a concrete value -- while the
--- schema still permitted NULL. The claim query
+-- Makes metering_outbox_records.retry_after NOT NULL. Migration 0005
+-- added the column nullable and never narrowed it, so the "NULL is a
+-- legacy-only state, never a state the module itself produces" invariant
+-- its own header records has been held by code discipline alone --
+-- Enqueue and markOutboxAttemptFailed always write a concrete value --
+-- while the schema still permitted NULL. The claim query
 -- (go/metering/repository.go's claimPendingOutboxRecords) carried the
--- cost of that unreachable state everywhere: its eligibility predicate
+-- cost of that unreachable state: its eligibility predicate
 -- kept an IS NULL escape and its ORDER BY wrapped the column in
 -- COALESCE(retry_after, created_at) -- an EXPRESSION, which the
 -- (status, retry_after) index 0005 built cannot serve. The order key and
@@ -34,11 +33,10 @@
 --       ASC (a stray NULL row jumps the head of every claim poll) while
 --       PostgreSQL's ASC default is NULLS LAST (the same row sits at the
 --       tail), a divergence verified on both engines. 0005's COALESCE was
---       also an incidental dual-dialect equalizer, and this repository
---       treats dialect-identical behavior as a first-class, test-pinned
---       property (org's materialized-path LIKE proof is the standing
---       example); (a) removes the equalizer without replacing it with
---       anything structural.
+--       also an incidental dual-dialect equalizer, and dialect-identical
+--       behavior is a first-class, test-pinned property here; (a)
+--       removes the equalizer without replacing it with anything
+--       structural.
 --   (b) Force the invariant in the schema, then remove the dead
 --       accommodations -- chosen: the migration below first runs the same
 --       idempotent backfill 0005 itself ran (on any database that applied
@@ -46,8 +44,8 @@
 --       concrete retry_after, the in-file precedent for re-running it),
 --       then adds NOT NULL, making NULL structurally impossible. The
 --       claim query's COALESCE and IS NULL escape are then provably dead
---       and are removed in the same round (see claimPendingOutboxRecords'
---       doc comment), so the ordering's leading column is exactly the
+--       and are removed (see claimPendingOutboxRecords' doc comment), so
+--       the ordering's leading column is exactly the
 --       index's second column: order key and index serve each other, and
 --       the NULL-ordering dialect divergence cannot exist because NULL
 --       cannot exist.
@@ -58,10 +56,10 @@
 -- NOT NULL with no DEFAULT, deliberately: the column has no natural
 -- default (a constant retry schedule default would be a lie -- the value
 -- is a per-row schedule), and the module's two writers always supply
--- one. A future third write path that forgets retry_after must fail
--- LOUDLY at the constraint on the write, never write a silently-wrong
--- schedule; the Go model keeps retry_after a *time.Time pointer for
--- exactly that reason (see model.go's OutboxRecord.RetryAfter).
+-- one. Any write path that forgets retry_after fails LOUDLY at the
+-- constraint on the write, never writing a silently-wrong schedule; the
+-- Go model keeps retry_after a *time.Time pointer for exactly that
+-- reason (see model.go's OutboxRecord.RetryAfter).
 --
 -- The backfill runs before the constraint for the same reason 0005's
 -- ordering matters here: ALTER COLUMN SET NOT NULL fails if any NULL row

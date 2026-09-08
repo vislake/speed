@@ -31,9 +31,8 @@ var ErrInvalidKeySize = errors.New("dbkit: key must be exactly 32 bytes (AES-256
 var ErrDecryptionFailed = errors.New("dbkit: ciphertext could not be decrypted with the active key or any retired key")
 
 // Cipher performs authenticated, randomized field-level encryption with
-// AES-256-GCM, for the sensitive columns described in
-// docs/internal/10-compliance-and-audit.md (national ID numbers, phone
-// numbers, health-related free text, and similar).
+// AES-256-GCM, for sensitive columns: national ID numbers, phone numbers,
+// health-related free text, and similar.
 //
 // A Cipher holds exactly one active key, used for every new Encrypt call, and
 // zero or more retired keys kept only so Decrypt can still read data written
@@ -136,11 +135,12 @@ func (c *Cipher) Encrypt(plaintext []byte) ([]byte, error) {
 // retired keys in the order given to NewCipher, and returns the plaintext
 // produced by whichever key successfully authenticates ciphertext.
 //
-// This fallback chain is what keeps previously written data readable across
-// a key rotation: construct a new Cipher with the new key as active and the
-// old key appended to retiredKeys (see NewCipher), and every row encrypted
-// under the old key keeps decrypting through this method, unchanged, until
-// it happens to be rewritten by normal application traffic. When no key —
+// This fallback chain is what keeps data written under an earlier key
+// readable across a rotation: construct a new Cipher with the new key as
+// active and the old key appended to retiredKeys (see NewCipher), and every
+// row encrypted under the old key keeps decrypting through this method,
+// unchanged, until it happens to be rewritten by normal application
+// traffic. When no key —
 // active or retired — can open ciphertext, Decrypt returns
 // ErrDecryptionFailed; this covers both a wrong/missing key and a corrupted
 // or tampered ciphertext, since AES-GCM does not distinguish the two.
@@ -251,8 +251,8 @@ func (s encryptedSerializer) Value(ctx context.Context, field *schema.Field, dst
 // and keyed by name, so call RegisterEncryptedSerializer once per name during
 // application bootstrap — alongside other Module.Register-time wiring, never
 // inside a request path — before opening any *gorm.DB whose models reference
-// name. Registering the same name again replaces the previously registered
-// Cipher for every model using it, which is how a completed key rotation
+// name. Registering the same name again replaces the Cipher registered
+// under it for every model using it, which is how a completed key rotation
 // switches the active key for new writes; register a distinct name per
 // Cipher when different fields must rotate independently of one another.
 func RegisterEncryptedSerializer(name string, cipher *Cipher) {

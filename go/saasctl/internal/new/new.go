@@ -16,8 +16,7 @@
 // authenticating layer, so selecting either without authn is an error
 // naming authn, and unknown names are rejected listing the valid set.
 // There is no --without: closing authn is expressed by not listing it,
-// and dependents cannot be selected without it -- the v0.1 correction
-// note to docs/internal/11-cross-cutting.md's module-switch section.
+// and dependents cannot be selected without it.
 package new
 
 import (
@@ -364,8 +363,7 @@ func validateModuleName(name string) error {
 // The one produced file an external tool consumes is the go.mod, so its
 // produced bytes are handed to the go command's own parser (modfile.Parse
 // -- the same delegate-to-authority self-check `upgrade` applies to its
-// rewritten output, and the third instance of the produced-artifact rule
-// this module's AGENTS.md records) BEFORE anything touches the filesystem:
+// rewritten output) BEFORE anything touches the filesystem:
 // the replace directives embed the resolved speed-root path verbatim, the
 // go.mod grammar is not every filesystem path's grammar (a space cuts a
 // replace right-hand side, parentheses derail the directive's shape), and
@@ -417,9 +415,9 @@ func materialize(target, speedRoot, selectionKey string, stdout io.Writer) error
 	case errors.Is(statErr, os.ErrNotExist):
 		// 0o750 (owner and group), the same owner-private mode pkgcore's
 		// local object store gives the trees it creates -- the rationale is
-		// in its comment there. The scaffold is the consumer's future home
-		// for keys and the database file, and sharing it happens through
-		// git, whose checkouts carry their own modes. An existing empty
+		// in its comment there. The scaffold directory is where the
+		// consumer's keys and the database file live, and sharing it
+		// happens through git, whose checkouts carry their own modes. An existing empty
 		// target keeps its creator's mode: MkdirAll leaves an existing
 		// directory's permissions alone.
 		if mkdirErr := os.MkdirAll(absTarget, 0o750); mkdirErr != nil {

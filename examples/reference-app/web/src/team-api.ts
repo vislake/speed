@@ -30,7 +30,7 @@
  * a display name is named by it; a member who did not is named by
  * their email; a member whose account row cannot be read carries both
  * empty and the surface renders its fallback label -- never the raw
- * user id, which is the exact defect this answer exists to close.
+ * user id.
  */
 
 import type { RequestFn } from '@speed/api-client'

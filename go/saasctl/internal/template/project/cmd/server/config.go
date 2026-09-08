@@ -100,10 +100,10 @@ const (
 	// pkiLocalKeyCipherKeyEnv names the environment variable holding the
 	// hex-encoded 32-byte AES key that seals go/pki's LocalSigner
 	// private-key column (pki_local_keys, via pki.RegisterLocalKeySerializer).
-	// pki follows authn silently in this generator's selection universe
-	// (docs/internal/22-pki.md), so this key is parsed whenever authn is
-	// wired -- and, per the uniform-surface doctrine above, in every
-	// other composition too, consumed only by authn-wiring ones.
+	// pki follows authn silently in this generator's selection universe,
+	// so this key is parsed whenever authn is wired -- and, per the
+	// uniform-surface doctrine above, in every other composition too,
+	// consumed only by authn-wiring ones.
 	pkiLocalKeyCipherKeyEnv = "APP_PKI_LOCAL_KEY_CIPHER_KEY"
 
 	// redisAddrEnv names the environment variable holding the Redis server
@@ -242,7 +242,8 @@ var devOrgIndexKey = []byte{
 // pki.RegisterLocalKeySerializer). go/pki's signing keys themselves need
 // no dev-seed derivation: they are generated once by
 // pki.Service.EnsurePurpose and PERSIST in this project's database
-// across restarts (docs/internal/22-pki.md's post-integration column
+// across restarts -- the persisted-key shape, so no derivation from a
+// dev seed is ever needed (the key's own doc comment in config.go
 // describes that durability).
 //
 // These are the same documented trade-off as devConfigKey's own -- and

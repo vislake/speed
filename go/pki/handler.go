@@ -22,14 +22,14 @@ const jsonContentType = "application/json; charset=utf-8"
 // operation's response is a PEM document, not JSON.
 const pemContentType = "application/x-pem-file; charset=utf-8"
 
-// Handler serves pki's round-3 HTTP surface by implementing the
-// spec-generated api.ServerInterface (api/pki-server.gen.go, regenerated
-// from this module's api/openapi.yaml by task api:gen -- the compile-time
-// assertion at the bottom of this file is what makes "spec changed,
-// handler not" a compile failure instead of a runtime surprise). The five
-// operations it implements are the whole surface the spec defines: revoke
-// a signing key, revoke a certificate, and the three read operations
-// (key-lifecycle JWKS, authority-chain JWKS, authority CRL).
+// Handler serves pki's HTTP surface by implementing the spec-generated
+// api.ServerInterface (api/pki-server.gen.go, regenerated from this
+// module's api/openapi.yaml by task api:gen -- the compile-time assertion
+// at the bottom of this file is what makes "spec changed, handler not" a
+// compile failure instead of a runtime surprise). The five operations it
+// implements are the whole surface the spec defines: revoke a signing key,
+// revoke a certificate, and the three read operations (key-lifecycle JWKS,
+// authority-chain JWKS, authority CRL).
 //
 // # Permission gating is the host's, per operation and per domain
 //
@@ -53,23 +53,21 @@ const pemContentType = "application/x-pem-file; charset=utf-8"
 //     documents -- the material external verifiers are meant to fetch --
 //     gated on PermissionRead.
 //
-// Round 3 declared one spanning PermissionRevoke for both revoke
-// operations; the platform-domain finding split it (module.go's const
-// block documents why one name spanning the module's two data domains is
-// wrong in whichever single domain it is evaluated in), and this
-// per-operation table is the shape a gate must implement.
+// One permission name cannot span the module's two data domains --
+// whichever single domain a spanning name were evaluated in would be wrong
+// for the other half -- so each revoke operation names its own permission
+// (module.go's const block documents the split), and this per-operation
+// table is the shape a gate must implement.
 //
 // # Tenant context: read only where the underlying data needs it
 //
 // Unlike every other module's HTTP surface, pki's own tables span two data
 // domains: pki_certificates is tenant data, but pki_signing_keys and
-// pki_authorities are platform data with no tenant at all
-// (docs/internal/04-data-and-tenancy.md). Only PkiRevokeCertificate reads
-// the caller's tenant from the request context (via
-// pkgcore.MustTenantFromContext, never from a request parameter, header or
-// body, per root CLAUDE.md's multi-tenant isolation rule) -- the other four
-// operations never do, because the rows they touch have no tenant column
-// to scope by. (The tenant's absence from the DATA access is unrelated to
+// pki_authorities are platform data with no tenant at all. Only
+// PkiRevokeCertificate reads the caller's tenant from the request context
+// (via pkgcore.MustTenantFromContext, never from a request parameter,
+// header or body) -- the other four operations never do, because the rows
+// they touch have no tenant column to scope by. (The tenant's absence from the DATA access is unrelated to
 // the permission domain above: PkiRevokeSigningKey reads no tenant from
 // the request and yet its permission must still be evaluated under the
 // platform domain.)
@@ -80,17 +78,16 @@ const pemContentType = "application/x-pem-file; charset=utf-8"
 // through audit.Emit after their underlying Service/CAService call has
 // already committed -- the same "record at the HTTP boundary, after the
 // write" placement examples/reference-app/internal/notes/handler.go's
-// recordNoteCreatedAudit documents, chosen for the identical reason: it
-// keeps this module's own Go API (revocation.go) free of an audit.Emit
-// dependency it does not otherwise need, and it sidesteps the same-SQLite-
-// connection deadlock hazard go/dbkit/audit's own known-limitations entry
-// records for a write-capture plugin sharing a transaction with the
-// business write. bus/auditActions are nil-safe: a nil bus makes the
-// audit-record calls no-ops (recordAudit checks bus first, mirroring
-// Service.publish's own nil-bus tolerance), so a host that boots pki
-// without ever wiring an EventBus (not a real deployment shape, but not
-// something this Handler crashes on either) still serves every operation
-// correctly, just without an audit trail.
+// recordNoteCreatedAudit uses, chosen for the identical reason: it keeps
+// this module's own Go API (revocation.go) free of an audit.Emit
+// dependency it does not otherwise need, and it sidesteps the deadlock
+// hazard of a write-capture plugin sharing a transaction with the business
+// write over the same SQLite connection. bus/auditActions are nil-safe: a
+// nil bus makes the audit-record calls no-ops (recordAudit checks bus
+// first, mirroring Service.publish's own nil-bus tolerance), so a host
+// that boots pki without ever wiring an EventBus (not a real deployment
+// shape, but not something this Handler crashes on either) still serves
+// every operation correctly, just without an audit trail.
 type Handler struct {
 	service      *Service
 	ca           *CAService
@@ -345,7 +342,6 @@ func writeError(w http.ResponseWriter, err error) {
 
 // compile-time check that *Handler implements the api.ServerInterface
 // generated from this module's api/openapi.yaml -- the enforcement half of
-// the spec-first flow (docs/internal/21-api-contract.md): add an operation
-// to the fragment, regenerate, and this assertion stops compiling until
-// Handler implements it.
+// the spec-first flow: add an operation to the fragment, regenerate, and
+// this assertion stops compiling until Handler implements it.
 var _ api.ServerInterface = (*Handler)(nil)

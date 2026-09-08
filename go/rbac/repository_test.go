@@ -14,10 +14,10 @@ import (
 
 // Every table this module owns is tenant-owned -- rbac_roles and
 // rbac_role_permissions are tenant data, rbac_role_bindings is link data
-// (docs/internal/04-data-and-tenancy.md) -- so all three repositories run
+// -- so all three repositories run
 // tenancytest.AssertIsolated and none runs AssertNotTenantScoped. The
-// absence of the reverse assertion is deliberate and is recorded in
-// AGENTS.md: rbac has no identity-domain or platform-domain table for it
+// absence of the reverse assertion is deliberate: rbac has no
+// identity-domain or platform-domain table for it
 // to assert against. The permission catalog, which IS platform-scoped, has
 // no table at all.
 

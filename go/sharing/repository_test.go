@@ -150,8 +150,7 @@ func TestShareRepository_TryRecordView_StaleViewCountLosesTheRace(t *testing.T) 
 
 // TestShareRepository_TryRecordView_RetriedAttemptRecognizesItsOwnRecordedAccess
 // pins the idempotency half of tryRecordView's answer to dbkit's
-// commit-time-failure cell (WithTenantSession's doc comment and
-// go/dbkit/AGENTS.md's "commit-time failure" known limitation): a
+// commit-time-failure cell (WithTenantSession's own doc comment): a
 // WithTenantSession non-nil return does not prove the attempt committed
 // nothing -- a commit reported failed can leave its writes durably present
 // -- so a retried attempt must not read "my WHERE clause no longer
@@ -175,8 +174,9 @@ func TestShareRepository_TryRecordView_StaleViewCountLosesTheRace(t *testing.T) 
 // (it needs dbkit's own deferred-constraint or commit-time-lock machinery,
 // against a schema this module deliberately keeps free of foreign keys) --
 // but the residue it leaves is exactly the state this retried call sees,
-// which is the state the recognition must answer for. On the pre-fix code
-// this retried call reports won == false and the test fails.
+// which is the state the recognition must answer for: without the
+// recognition, this retried call would report won == false and the access
+// would be refused twice over.
 func TestShareRepository_TryRecordView_RetriedAttemptRecognizesItsOwnRecordedAccess(t *testing.T) {
 	repo := NewShareRepository(newTestDB(t))
 	now := time.Now().UTC()
@@ -520,7 +520,8 @@ func TestShareRepository_TryConfirmView_LostConfirmLeavesNoTrace(t *testing.T) {
 
 	// A share revoked while its delivery was in flight: the reservation
 	// stands but the confirm's liveness guard refuses it, exactly as
-	// ee20d37's settle-time liveness refused the post-delivery record.
+	// settle-time liveness refuses a no-longer-live post-delivery record
+	// (tryConfirmView's own doc comment).
 	revoked := newTestShare("revoked-mid-flight", now)
 	revoked.MaxViews = &one
 	if createErr := repo.Create(ctx, revoked); createErr != nil {

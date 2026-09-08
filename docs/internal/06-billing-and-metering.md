@@ -61,10 +61,8 @@ type Decision struct {
 - **回调可能先于下单响应到达**，也可能永远不到达：必须有主动轮询兜底（走 `jobs` 定时任务扫描处于中间态的订单）。
 - 三家渠道适配放在 `billing/gateway` **子包**，业务方不接支付、不 import 该包时，三家 SDK 不进它的依赖树。
 
-- **依赖方向必须单向：`billing/gateway` 可以 import `billing`，`billing` 根包不得 import `billing/gateway`。** 网关子包需要 `billing` 的领域类型才能把渠道事件归一化成 `NormalizedEvent`；反向则不行。`billing` 通过定义在自己根包里的接口消费网关，具体实现由 `gateway` 子包提供并在 `init()` 中注册，宿主按需空白导入——与 `Signer`/`SeamRegistry` 同一模式。
-  这条不是洁癖，它同时守着两件事：其一，**依赖隔离完全取决于它**——`billing` 根包一旦 import `gateway`，所有用 `billing` 的项目都会重新背上三家 SDK，子包就白拆了；其二，**它是本节开头「Subscription 是内部领域概念、支付渠道只是收款执行者」的强制手段**。`billing-gateway` 还是独立模块时，这个解耦由 [01 整体架构](01-architecture.md) 的纪律 2（业务模块之间禁止 import 对方的 struct）兜底；改成子包后同模块内的包可以自由互引，那层强制消失了，必须由这条单向规则接手，否则 `stripe.Subscription` 这类渠道类型迟早会渗进领域模型。执行手段与 issue #1 中各实现子包的做法相同：depguard **分别**把三家支付 SDK 的放行路径各自限定在自己的叶子子包（`stripe-go` 只放行 `**/go/billing/gateway/stripe/**`，`alipay`/`wechatpay` 的 SDK 同理各自限定在 `gateway/alipay`/`gateway/wechat`），而不是笼统放行整个 `**/go/billing/gateway/**`——Stripe SDK 即便写进 `gateway/alipay` 也一样触发 CI 失败，三家互不越界；写回 `billing` 根包同样即 CI 失败（真实规则见 `.golangci.yml`，`go/billing/gateway/AGENTS.md` 已经是这个更窄范围的准确描述）。
-
-> **注记（2026-09-04）：由独立 module 改为子包。** 早先的写法是"`billing-gateway` 拆成独立 module"，理由只有依赖隔离一条。按 [03 部署模式与实现组装](03-deployment-modes.md) 的约束 6，这个理由指向子包而非模块——子包的依赖隔离已经穿透 `go.mod`、`go.sum` 与 MVS，与独立模块完全等效，而模块是发布单元、应按领域内聚性划分，lockstep 下每个模块还要额外付 `go.work` 条目、CI 矩阵行、`AGENTS.md` 与版本标签。审查时它尚是无实现的 stub，改动成本为零，因此就地裁决：`go/billing-gateway` 模块取消，代码位置为 `go/billing/gateway`，`go.work` 条目移除。渠道适配将来仍可各自再分子包（`billing/gateway/stripe` 等），让只接一家渠道的项目不必背上另外两家的 SDK。
+- **依赖方向必须单向：`billing/gateway` 可以 import `billing`，`billing` 根包不得 import `billing/gateway`。** 网关子包需要 `billing` 的领域类型才能把渠道事件归一化成 `NormalizedEvent`；反向则不行。`billing` 通过定义在自己根包里的接口消费网关，具体实现由 `gateway` 子包提供并在 `init()` 中注册，宿主按需空白导入——与 `Signer`/`SeamRegistry` 同一模式。网关放在子包而不是独立模块，依据 [03 部署模式与实现组装](03-deployment-modes.md) 的约束 6：子包的依赖隔离已经穿透 `go.mod`、`go.sum` 与 MVS，与独立模块完全等效，而模块是发布单元、应按领域内聚性划分，lockstep 下每个模块还要额外付 `go.work` 条目、CI 矩阵行、`AGENTS.md` 与版本标签；三家渠道各自分居 `billing/gateway/stripe`、`gateway/alipay`、`gateway/wechat` 子包，只接一家渠道的项目不必背上另外两家的 SDK。
+  这条不是洁癖，它同时守着两件事：其一，**依赖隔离完全取决于它**——`billing` 根包一旦 import `gateway`，所有用 `billing` 的项目都会重新背上三家 SDK，子包就白拆了；其二，**它是本节开头「Subscription 是内部领域概念、支付渠道只是收款执行者」的强制手段**。若网关是独立模块，这个解耦本可由 [01 整体架构](01-architecture.md) 的纪律 2（业务模块之间禁止 import 对方的 struct）兜底；作为同模块内的子包，包之间可以自由互引，那层强制消失，必须由这条单向规则接手，否则 `stripe.Subscription` 这类渠道类型迟早会渗进领域模型。执行手段与各实现子包的做法相同：depguard **分别**把三家支付 SDK 的放行路径各自限定在自己的叶子子包（`stripe-go` 只放行 `**/go/billing/gateway/stripe/**`，`alipay`/`wechatpay` 的 SDK 同理各自限定在 `gateway/alipay`/`gateway/wechat`），而不是笼统放行整个 `**/go/billing/gateway/**`——Stripe SDK 即便写进 `gateway/alipay` 也一样触发 CI 失败，三家互不越界；写回 `billing` 根包同样即 CI 失败（真实规则见 `.golangci.yml`，`go/billing/gateway/AGENTS.md` 已经是这个更窄范围的准确描述）。
 
 ## 计量计费：同一管道，可替换的后端
 
@@ -72,20 +70,20 @@ type Decision struct {
 
 差异只在聚合器往后走哪条后端管道——**下表右列是尚未落地的设计目标，不是与左列并存的第二套真实实现**：
 
-| 环节 | 进程内实现（当前唯一已落地） | Redis / PostgreSQL 实现（后续轮次的设计目标，尚无一行代码） |
+| 环节 | 进程内实现（当前唯一已落地） | Redis / PostgreSQL 实现（设计目标，尚无一行代码） |
 |---|---|---|
 | 缓冲与投递 | 内存 channel 直接进聚合器 | Redis Streams（消费者组，至少一次投递） |
 | 聚合器部署 | 同进程 goroutine | 同进程 goroutine（MVP）→ 量大后拆独立容器 |
 | 实时配额计数 | 进程内 `sync.Map` 计数器 | Redis `INCRBYFLOAT usage:{tenant}:{feature}:{period}` |
 | 汇总存储 | SQLite/Postgres `usage_*_summary` 表（双方言迁移已落地） | 同上，汇总表已经是双方言的 |
-| 原始明细 | 默认关闭，且本轮未提供开启入口 | 可选开启，TimescaleDB hypertable + 保留策略 |
+| 原始明细 | 默认关闭，且未提供开启入口 | 可选开启，TimescaleDB hypertable + 保留策略 |
 
-> **实现状态注记**：`go/metering` 当前实现（round 1）只有"进程内实现"一列是真实代码——`Aggregator` 的实时计数器、数据库汇总写入全部是单进程实现，用一把进程级互斥锁串行化并发写入；`go/metering/AGENTS.md` 自己的 scope 表原话是"本轮只落地进程内后端……Redis Streams / PostgreSQL 原子自增聚合后端、TimescaleDB 原始明细存储……是后续轮次的工作"。分布式部署模式下"用聚合结果对账修正计数器"同样是设计目标，当前代码没有第二个副本互相收敛的机制。
+> `go/metering` 当前实现只有"进程内实现"一列是真实代码——`Aggregator` 的实时计数器、数据库汇总写入全部是单进程实现，用一把进程级互斥锁串行化并发写入；Redis Streams / PostgreSQL 原子自增聚合后端与 TimescaleDB 原始明细存储尚未实现（`go/metering/AGENTS.md` 的 scope 表有逐项记录）。分布式部署模式下"用聚合结果对账修正计数器"同样是设计目标——当前代码没有第二个副本互相收敛的机制。
 
 - 不引入 Kafka：Compose 小集群下 Kafka 的运维复杂度与团队规模严重不匹配，而 Redis 在分布式部署模式下本就要用于 session/缓存/限流，复用它不新增基础设施种类。
 - TimescaleDB 是 Postgres 扩展（换镜像即可），不新增数据库引擎；SQLite 无此扩展，因此选用 SQLite 时原始明细默认关闭，只保留汇总表——这是按**所选实现**降级，不是按部署模式降级。
 - 实时配额不查汇总表（有聚合延迟），走计数器；分布式部署模式下定期用聚合结果对账修正计数器，防长期漂移，这条对账机制同样是尚未落地的设计目标。
-- **超额策略**：Plan 的 `OverageMode` 决定 Block / Allow&Bill / Notify；阈值事件经事件总线发出（`go/metering` 已经真实发布 `metering.overage_threshold.crossed` 事件）。**"由通知模块订阅"仍是尚未实现的设计目标**——当前 `go/notification` 代码库里没有任何模块订阅这个事件，阈值被跨越后除了事件本身被发布之外没有人收到提醒。
+- **超额策略**：Plan 的 `OverageMode` 决定 Block / Allow&Bill / Notify；阈值事件经事件总线发出（`go/metering` 已经真实发布 `metering.overage_threshold.crossed` 事件）。**"由通知模块订阅"是尚未实现的设计目标**——当前 `go/notification` 代码库里没有任何模块订阅这个事件，阈值被跨越后除了事件本身被发布之外没有人收到提醒。
 
 ### 可靠性分级：不是所有计量都能 fail-open
 
@@ -98,7 +96,7 @@ type Decision struct {
 
 计费级用 **outbox 模式**（与业务写操作在同一个数据库事务里落一条待投递记录）是关键：这样"业务成功但计量丢了"在物理上不可能发生。代价是每次计费级计量多一次本地写入——对于按次计费的低频高价值操作（AI 生成），这个代价完全可接受；高频低价值的计量应归入分析级。
 
-> **实现状态注记（计量投递告警轮）**：计费级"投递失败无限重试 + 告警"的告警半句已落地为 `go/metering` 的 `Dispatcher` 升级门槛。一行投递记录的失败次数达到既定门槛（默认 60 次，行自身的持久化 `Attempts` 计数；默认重试节奏下约两分钟触达，宿主可用 `Module.WithDispatchEscalationAttempts` 调整）后，该行此后每次失败不再只是逐次 Warn（`metering.outbox_delivery_failed`），而是以 Error 级告警日志（`metering.outbox_delivery_escalated`）发出，携带行 id（`outbox_id`）、租户、功能、失败次数与门槛值，并在此后每次重试失败时重复，直到行被修复——运营以该 Error 日志键上的告警规则发现卡死行，告警对重试是叠加信号而非封顶：行仍无限重试、不落终态、不丢数据，门槛以下即恢复的行从不告警。回归测试与机制细节见 `go/metering/AGENTS.md` 的 "Escalation round" 一节。
+> 计费级"投递失败无限重试 + 告警"的告警半句落地为 `go/metering` 的 `Dispatcher` 升级门槛。一行投递记录的失败次数达到既定门槛（行自身的持久化 `Attempts` 计数，默认值宿主可用 `Module.WithDispatchEscalationAttempts` 调整）后，该行此后每次失败不再只是逐次 Warn（`metering.outbox_delivery_failed`），而是以 Error 级告警日志（`metering.outbox_delivery_escalated`）发出，携带行 id（`outbox_id`）、租户、功能、失败次数与门槛值，并在此后每次重试失败时重复，直到行被修复——运营以该 Error 日志键上的告警规则发现卡死行，告警对重试是叠加信号而非封顶：行仍无限重试、不落终态、不丢数据，门槛以下即恢复的行从不告警。
 
 **信用点扣减不走计量管道**：预扣/确认/退还是同步的事务性操作（见下节），与事后计量是两条独立路径。计量用于账单明细与用量展示，扣点用于实时余额控制，两者最终对账，不能互相替代。
 

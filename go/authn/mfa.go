@@ -20,7 +20,7 @@ import (
 	"github.com/vislake/speed/go/authn/internal/totp"
 )
 
-// MFA factor types. Only 'totp' ships in this round.
+// MFA factor types; 'totp' is the only shipped type.
 const (
 	// MFATypeTOTP is a time-based one-time password factor
 	// (RFC 6238, internal/totp).
@@ -42,15 +42,15 @@ const (
 // AMR values a second factor contributes, alongside MethodPassword,
 // MethodSocial, MethodOIDC (model.go) and MethodSMS (verification.go).
 const (
-	// MethodMFATOTP is a step-up (or, in a later round, a login)
-	// satisfied by a TOTP code.
+	// MethodMFATOTP is a step-up satisfied by a TOTP code. A TOTP factor
+	// does not serve as a sign-in channel of its own.
 	MethodMFATOTP = "mfa:totp"
 	// MethodMFARecoveryCode is a step-up satisfied by a recovery code.
 	MethodMFARecoveryCode = "mfa:recovery_code"
 )
 
 // recoveryCodeCount is how many recovery codes ConfirmTOTP and
-// RegenerateRecoveryCodes generate, per docs/internal/05.
+// RegenerateRecoveryCodes generate.
 const recoveryCodeCount = 10
 
 // totpSkewSteps is how many adjacent 30-second time steps totp.Validate
@@ -65,11 +65,11 @@ type UserMFAFactor struct {
 	ID string `gorm:"primaryKey;size:36"`
 
 	// UserID is the owning user. Unique together with Type AMONG ACTIVE
-	// ROWS ONLY -- see idx_user_mfa_factors_user_type (migration 0010,
-	// narrowed from the full-table unique index migration 0008 originally
-	// shipped) -- which is what lets a fresh PENDING replacement factor
-	// coexist with the still-ACTIVE factor it will eventually replace, and
-	// unique among PENDING rows too, under the twin partial index
+	// ROWS ONLY -- see idx_user_mfa_factors_user_type (migration 0010), a
+	// partial unique index scoped to status='active' -- which is what lets
+	// a fresh PENDING replacement factor coexist with the still-ACTIVE
+	// factor it will eventually replace, and unique among PENDING rows
+	// too, under the twin partial index
 	// idx_user_mfa_factors_user_type_pending (migration 0011), which is
 	// what keeps two racing enrollments from leaving two pending rows for
 	// a confirm to take the wrong one (see
@@ -131,11 +131,11 @@ func (r *MFAFactorRepository) Create(ctx context.Context, f *UserMFAFactor) erro
 }
 
 // FindActiveByUserAndType returns userID's ACTIVE factor of the given type,
-// or ErrNotFound. Now that a PENDING replacement factor can coexist with
-// the still-ACTIVE factor it will eventually replace (see EnrollTOTP and
-// Confirm), a status-less "find the one row" lookup would be ambiguous
+// or ErrNotFound. A PENDING replacement factor can coexist with the
+// still-ACTIVE factor it will eventually replace (see EnrollTOTP and
+// Confirm), so a status-less "find the one row" lookup would be ambiguous
 // exactly while a replacement is in progress -- every caller that means
-// "the factor that actually works today" (step-up verification, gating
+// "the factor that actually works" (step-up verification, gating
 // recovery-code regeneration, deciding whether EnrollTOTP needs a step-up)
 // wants this one.
 func (r *MFAFactorRepository) FindActiveByUserAndType(ctx context.Context, userID, factorType string) (*UserMFAFactor, error) {
@@ -167,23 +167,23 @@ func (r *MFAFactorRepository) FindPendingByUserAndType(ctx context.Context, user
 // and inserts f in its place, atomically (one transaction per attempt).
 // EnrollTOTP runs every enrollment through this method.
 //
-// Why a retrying transaction rather than the two plain statements
-// EnrollTOTP used to issue: two rapid enroll requests could interleave
-// their deletes and creates (del, del, insert, insert) and leave TWO
-// pending rows for one (user, type) -- nothing at the database refused a
-// second pending row, the unique index being scoped to ACTIVE rows only
-// (migration 0010) -- and ConfirmTOTP's FindPendingByUserAndType would then
-// take whichever row the database happened to return first, which need not
-// be the enrollment the user actually scanned. Migration 0011 closes that
-// hole at the schema: idx_user_mfa_factors_user_type_pending, a partial
-// unique index over the pending rows, makes the database the arbiter. The
-// losing insert is refused with gorm.ErrDuplicatedKey, and by the time the
-// violation surfaces the winner's row has committed, so this method's
-// bounded retry simply runs its delete-then-create again -- the delete now
-// removes the winner's row, and the retry's insert is the sole survivor.
-// Every racing enrollment therefore succeeds and the LAST one to commit
-// owns the pending row, exactly the enrollment the user was most recently
-// shown; a confirm always matches what the user scanned.
+// The retrying transaction exists because two plain statements would let
+// two rapid enroll requests interleave their deletes and creates (del,
+// del, insert, insert) and leave TWO pending rows for one (user, type) --
+// the unique index is scoped to ACTIVE rows only (migration 0010), so
+// nothing at the database refuses a second pending row -- and
+// ConfirmTOTP's FindPendingByUserAndType would then take whichever row the
+// database happened to return first, which need not be the enrollment the
+// user actually scanned. The database is the arbiter instead:
+// idx_user_mfa_factors_user_type_pending (migration 0011), a partial
+// unique index over the pending rows, refuses a second pending row with
+// gorm.ErrDuplicatedKey, and by the time the violation surfaces the
+// winner's row has committed, so this method's bounded retry simply runs
+// its delete-then-create again -- the delete removes the winner's row, and
+// the retry's insert is the sole survivor. Every racing enrollment
+// therefore succeeds and the LAST one to commit owns the pending row,
+// exactly the enrollment the user was most recently shown; a confirm
+// always matches what the user scanned.
 //
 // It is not an error for no pending row to exist -- replacing an abandoned
 // attempt or turning MFA on for the first time are the same call -- and it
@@ -250,14 +250,11 @@ const replacePendingAttempts = 3
 // leaves the type with NO active row instead, which the index has nothing
 // to say about.
 //
-// This is the fix for the audit finding that gives this method its second
-// parameter: EnrollTOTP used to delete the old active factor immediately, so
-// a wizard that enrolled but was then cancelled or abandoned before
-// confirming left the account with no working second factor and no working
-// recovery codes at all, with nothing about the cancel path telling the
-// user that had happened. Keeping the old factor active until THIS call
-// succeeds means an abandoned enrollment leaves the account exactly as it
-// was.
+// The second parameter exists because of the shape of enrollment: no
+// active factor is deleted at enroll time (see EnrollTOTP), so the old
+// factor stays active until THIS call succeeds -- an enrollment that is
+// cancelled or abandoned before confirming leaves the account exactly as
+// it was, with its working second factor and recovery codes intact.
 func (r *MFAFactorRepository) Confirm(ctx context.Context, userID, factorType, id string, at time.Time, step int64) (bool, error) {
 	won := false
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -434,28 +431,26 @@ type EnrollTOTPResult struct {
 // of the same type -- see ConfirmTOTP for the moment a pending factor
 // actually takes over.
 //
-// This is a two-phase replacement, deliberately: an earlier version of this
-// method deleted the existing ACTIVE factor right here, at enroll time,
-// which meant a wizard that started replacement but was then cancelled or
-// abandoned before confirming left the account with no working second
-// factor and no working recovery codes at all -- a silent security-posture
-// downgrade nothing about the cancel path warned the user of. Now the old
-// factor stays fully functional for VerifyStepUp and
-// RegenerateRecoveryCodes all the way through this call succeeding; only a
+// This is a two-phase replacement, deliberately: the existing ACTIVE factor
+// is never deleted at enroll time, so an enrollment that is cancelled or
+// abandoned before confirming cannot leave the account with no working
+// second factor and no working recovery codes at all -- a silent
+// security-posture downgrade nothing about the cancel path would warn the
+// user of. The old factor stays fully functional for VerifyStepUp and
+// RegenerateRecoveryCodes all the way through a successful enroll; only a
 // genuinely successful ConfirmTOTP retires it (see that method and
 // MFAFactorRepository.Confirm for the atomic swap).
 //
 // Replacing an ALREADY ACTIVE factor still requires principal.AMR to carry
-// a completed second-factor step-up (docs/internal/05 line 127: changing
-// MFA settings needs re-proof, not merely an existing session) -- without
-// this, a bare access token could silently seize an established factor by
-// starting a replacement enrollment an attacker-known secret would later
-// confirm. The check is enforced HERE rather than by wrapping the route in
-// RequireStepUp because whether step-up is even required depends on
-// whether an ACTIVE factor already exists to protect, information only
-// this method has: a brand-new enrollment (turning MFA on for the first
-// time, docs/internal/05 line 125) has nothing to step up FROM, so it
-// proceeds exactly as before regardless of AMR.
+// a completed second-factor step-up: changing MFA settings needs re-proof,
+// not merely an existing session -- without this, a bare access token could
+// silently seize an established factor by starting a replacement enrollment
+// an attacker-known secret would later confirm. The check is enforced HERE
+// rather than by wrapping the route in RequireStepUp because whether
+// step-up is even required depends on whether an ACTIVE factor already
+// exists to protect, information only this method has: a brand-new
+// enrollment (turning MFA on for the first time) has nothing to step up
+// from, so it proceeds without one regardless of AMR.
 //
 // The returned secret must be confirmed with ConfirmTOTP before it can
 // verify anything: a pending factor cannot satisfy VerifyStepUp.
@@ -681,10 +676,10 @@ func (s *Service) verifyStepUp(ctx context.Context, principal Principal, code, i
 	if session.UserID != principal.UserID {
 		return nil, ErrTokenInvalid
 	}
-	// The same idiom Rotate uses (session.go), and the identical fix
-	// SwitchTenant carries: a session that is Active in name but past its
-	// own ExpiresAt is not usable either, and nothing here ever flips
-	// Status away from active when a session merely times out.
+	// The same idiom Rotate and SwitchTenant carry (session.go,
+	// service.go): a session that is Active in name but past its own
+	// ExpiresAt is not usable either, and nothing here ever flips Status
+	// away from active when a session merely times out.
 	if session.Status != SessionStatusActive || !s.now().Before(session.ExpiresAt) {
 		return nil, ErrSessionRevoked
 	}
@@ -736,12 +731,13 @@ func (s *Service) verifySecondFactor(ctx context.Context, userID, code string) (
 // verifyTOTPFactor validates code against factor and advances its replay
 // guard, refusing a code whose matched step is not strictly newer than the
 // factor's LastUsedStep -- the check that makes a code single-use. The
-// refusal itself is unchanged; only its classification is: a code that
-// NEVER validates answers ErrMFAInvalidCode, while a code that validates
-// but is refused by the guard -- it was verified before, or the guard
-// advanced past its step -- answers ErrMFACodeUsed, so a holder of a
-// spent code is told it is spent instead of "invalid, try again"
-// (ErrMFAInvalidCode's doc comment carries the disclosure analysis).
+// refusal is the same in both failure shapes; only the classification
+// differs: a code that NEVER validates answers ErrMFAInvalidCode, while a
+// code that validates but is refused by the guard -- it was verified
+// before, or the guard advanced past its step -- answers ErrMFACodeUsed,
+// so a holder of a spent code is told it is spent instead of "invalid, try
+// again" (ErrMFAInvalidCode's doc comment carries the disclosure
+// analysis).
 func (s *Service) verifyTOTPFactor(ctx context.Context, factor *UserMFAFactor, code string) error {
 	ok, step := totp.Validate(factor.Secret, code, totpSkewSteps)
 	if !ok {
@@ -818,12 +814,12 @@ func mfaAccountLabel(user *User) string {
 }
 
 // appendAMR returns base with method appended, unless base already
-// contains it -- so re-verifying step-up twice in the same access token's
-// life (it cannot happen today, since each VerifyStepUp call mints a fresh
-// token from the session's ORIGINAL amr, but a future caller composing amr
-// differently should not have to rediscover this) never duplicates an
-// entry. It always returns a new slice; it never mutates base itself, which
-// may be session.AMRList()'s live backing data.
+// contains it -- so a step-up verification never duplicates an entry when
+// the composed amr already carries the factor. Each VerifyStepUp call
+// mints from the session's ORIGINAL amr, so the dedupe is defensive rather
+// than hot; a caller composing amr some other way should not have to
+// rediscover it. It always returns a new slice; it never mutates base
+// itself, which may be session.AMRList()'s live backing data.
 func appendAMR(base []string, method string) []string {
 	if slices.Contains(base, method) {
 		out := make([]string, len(base))
@@ -843,14 +839,13 @@ func hasSecondFactor(amr []string) bool {
 
 // RequireStepUp refuses a request whose Principal has not recently
 // completed a second-factor step-up (RequireAuthenticated's stricter
-// sibling), for the sensitive actions docs/internal/05 names: changing a
-// password, changing MFA itself, deleting an organization, exporting data.
+// sibling), for a host's sensitive actions: changing a password, changing
+// MFA itself, deleting an organization, exporting data.
 //
-// Known limitation, stated rather than hidden: an account with NO MFA
-// factor enrolled has nothing to step up WITH, so this middleware blocks
-// the sensitive action unconditionally rather than falling back to, say, a
-// password re-entry. A password-re-entry fallback for that case is
-// deferred -- see this module's AGENTS.md.
+// Known limitation: an account with NO MFA factor enrolled has nothing to
+// step up WITH, so this middleware blocks the sensitive action
+// unconditionally rather than falling back to, say, a password re-entry;
+// no password-re-entry fallback exists for that case.
 func RequireStepUp(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := PrincipalFromContext(r.Context())

@@ -13,7 +13,7 @@ import (
 )
 
 // This file pins the window semantics of the poll idempotency key
-// (pollIdempotencyKey, P1-3): enqueues inside one poll window collapse
+// (pollIdempotencyKey): enqueues inside one poll window collapse
 // into one job (the concurrency protection the key exists for,
 // preserved), enqueues in a later window become new jobs and the poll
 // runs again (periodicity -- the property the pre-window key destroyed,

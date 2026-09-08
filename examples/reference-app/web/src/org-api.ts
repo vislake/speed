@@ -6,38 +6,36 @@
  * /api/reference-app/team-members, the host composition that enriches
  * org's membership rows with each member's display identity from
  * authn's users table, because org's rows carry opaque user ids only by
- * its own module-boundary rule), so org's raw member list has no typed
- * call here: a surface that needs the raw list would add it back over
- * ORG_MEMBERS_PATH, whose literal is kept below for that day.
+ * its own module-boundary rule), so no surface consumes org's raw
+ * member list and ORG_MEMBERS_PATH's literal below stays unused.
  *
  * go/org's OpenAPI fragment ships a backend leg only -- it predates the
  * merge machinery and is deliberately not part of the merged application
- * document that drives @speed/api-sdk (go/org/AGENTS.md's own note, the
- * same status go/sharing's fragment holds), so no generated operation
- * exists for any org route and the app reaches them through the
- * api-client RequestFn the host bound, the same seam every generated
- * call travels -- exactly the no-generated-surface mirror of the
- * discipline that share-api.ts already documents for go/sharing. The
- * path literals are hand-kept in step with the module's own mounted
- * route (/api/v1/org -- demo_subject.go's orgRoutePath), and the wire
- * shapes mirror go/org/api/openapi.yaml's schemas field-for-field,
- * never the generator's Go types.
+ * document that drives @speed/api-sdk (the same status go/sharing's
+ * fragment holds), so no generated operation exists for any org route
+ * and the app reaches them through the api-client RequestFn the host
+ * bound, the same seam every generated call travels -- exactly the
+ * no-generated-surface mirror of the discipline that share-api.ts
+ * already documents for go/sharing. The path literals are hand-kept in
+ * step with the module's own mounted route (/api/v1/org --
+ * demo_subject.go's orgRoutePath), and the wire shapes mirror
+ * go/org/api/openapi.yaml's schemas field-for-field, never the
+ * generator's Go types.
  *
  * The caller identity question deserves stating once: org's two
  * caller-scoped operations (create and accept an invitation) resolve
  * who is acting server-side, and the demo wiring's demoOrgSubjectResolver
  * falls back to the verified access-token Principal when no demo header
- * rides along (server.go, the org-web round's wiring) -- so the calls
- * below carry only the bearer the client attaches, never a header of
- * their own, exactly like a delivered consumer's calls would.
+ * rides along (server.go's wiring) -- so the calls below carry only the
+ * bearer the client attaches, never a header of their own, exactly like
+ * a delivered consumer's calls would.
  */
 
 import type { RequestFn } from '@speed/api-client'
 
 /** GET/POST /api/v1/org/members -- org_listMembers / org_removeMember.
- * Unconsumed by this app's surfaces today (see the file header), kept
- * as the module route's literal for the day a surface needs the raw
- * list. */
+ * The module route's own literal; unconsumed by this app's surfaces
+ * (see the file header). */
 export const ORG_MEMBERS_PATH = '/api/v1/org/members'
 /** GET/POST /api/v1/org/invitations -- org_listInvitations /
  * org_createInvitation. */

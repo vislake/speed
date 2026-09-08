@@ -6,7 +6,7 @@ package integration_test
 // breaks the documented usage fails the build rather than only rotting in
 // prose.
 //
-// It covers round 1's full lifecycle in one pass: issuing an API key (the
+// It covers the API-key lifecycle in one pass: issuing an API key (the
 // raw value is available exactly once, right here), checking a request
 // against the three-layer rate limiter, and revoking the key.
 

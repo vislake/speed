@@ -1,14 +1,14 @@
--- Adds revoke_origin to rbac_role_bindings: the marker this module's
--- deferral D14 proposed, recording WHICH writer soft-deleted a row, so the
+-- Adds revoke_origin to rbac_role_bindings: the marker recording
+-- WHICH writer soft-deleted a row, so the
 -- restore-side subscribers (reap.go's onMemberRestored and onNodeRestored)
 -- re-instate exactly the rows the matching removal or deletion reaped and
 -- never an older deliberate revocation at an in-scope tuple.
 --
 -- The column is meaningful only while the row is soft-deleted (deleted_at
 -- IS NOT NULL); live rows carry the default. Three values exist, written by
--- the three mark-delete writers this round routes through one origin-aware
--- revoke path (RoleBindingRepository.Delete, shadowing the dbkit
--- mark-delete the writers used before):
+-- the three mark-delete writers all route through one origin-aware
+-- revoke path (RoleBindingRepository.Delete, shadowing dbkit's
+-- mark-delete):
 --
 --   ''              -- a deliberate Service.RevokeRole revocation. Also the
 --                     value of every row that predates this migration (see
@@ -36,8 +36,8 @@
 -- genuinely wants back after an upgrade is restored the explicit way
 -- (Service.RestoreRole or a fresh AssignRole). The alternative backfill --
 -- treating unknown rows as reaped -- would silently resurrect deliberate
--- revocations on the next member or node restore, which is precisely the
--- privilege-escalation this round closes.
+-- revocations on the next member or node restore -- precisely the
+-- privilege-escalation the marker prevents.
 --
 -- No index change: the column is not part of any unique constraint, and
 -- the partial unique index uq_rbac_role_bindings_tenant_user_role_node is

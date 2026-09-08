@@ -6,8 +6,7 @@
 // every implementation — built-in (pkgcore.NewLocalObjectStore, the
 // objectstore/s3 subpackage's NewObjectStore) or host-supplied through
 // pkgcore.WithObjectStore — must pass, so drift between implementations is
-// caught here once instead of pairwise (see
-// docs/internal/03-deployment-modes.md).
+// caught here once instead of pairwise.
 package objectstoretest
 
 import (

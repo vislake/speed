@@ -47,7 +47,7 @@ import (
 // back as pending, and the invitation email must reach the captured
 // mailer carrying an accept link against the deployment's public origin
 // -- never a configured demo tenant's branded host, and never a 500 that
-// revokes the row the moment it is created (the pre-fix behavior: the
+// revokes the row the moment it is created (the earlier behavior: the
 // link builder's "no host configured for tenant" error failed the
 // delivery leg, InviteService.Invite revoked the fresh row and answered
 // org.internal_error).
@@ -182,7 +182,7 @@ func TestOrgInvitation_SelfRegisteredClinicOwner_InvitationSucceedsEndToEnd(t *t
 // and org's SubjectResolver must resolve the caller from the verified
 // Principal -- the clinic owner the registration provisioned with the
 // built-in owner role in the clinic (self_service.go). It fails the test
-// on anything outside 2xx -- printing the envelope, so a pre-fix run
+// on anything outside 2xx -- printing the envelope, so an earlier run
 // names the org.internal_error answer -- and otherwise decodes the
 // response into out (nil to skip decoding).
 func clinicOrgCall(t *testing.T, srv *httptest.Server, method, path, token string, body, out any) {

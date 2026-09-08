@@ -64,9 +64,9 @@ func Example() {
 	// Output: [rbac:manage rbac:read]
 }
 
-// ExampleService_DeclaredPermissions shows D8's new read-only accessor:
-// the full permission catalog every module declared, frozen at Attach --
-// what a role-management UI (go/admin's D8, docs/internal/23-admin.md)
+// ExampleService_DeclaredPermissions shows the read-only catalog
+// accessor: the full permission catalog every module declared, frozen at
+// Attach -- what a role-management UI
 // renders as "every permission that exists" when defining a new role,
 // as opposed to ListPermissions, which answers what one already-granted
 // Subject currently holds.
@@ -237,7 +237,7 @@ func ExampleService_DataScope() {
 
 // ExampleRequirePermissionFunc shows rbac's whole contribution to the HTTP
 // layer: the gate that sits after authentication in the fixed middleware
-// chain of docs/internal/01-architecture.md. This module mounts no routes
+// chain. This module mounts no routes
 // of its own -- it hands the host a gate to wrap the host's routes in.
 //
 // The Func form picks the required permission per request, which is what a

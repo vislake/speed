@@ -18,13 +18,9 @@ import (
 	"github.com/vislake/speed/go/rbac"
 )
 
-// self_service.go closes the reference app's self-service signup chain:
-// registration used to end in a dead end -- the account was real, its
-// sign-in answered 403 authn.tenant_membership_required ("the account has
-// no organization yet"), and nothing the product offered could change
-// that state (the acceptance finding this file closes). Under the product
-// decision this host now implements, registration CREATES the clinic:
-// every self-registered account is provisioned, synchronously with its
+// self_service.go is the reference app's self-service signup chain:
+// registration CREATES the clinic. Every self-registered account is
+// provisioned, synchronously with its
 // registration, a tenant of its own with an org tree root, its
 // membership of that root, and the built-in owner role -- the account a
 // registration returns is an account that can sign in and use the
@@ -38,8 +34,8 @@ import (
 // product's gated AI routes are open and payable from the clinic's very
 // first request: a clinic whose registration granted neither would find
 // its first smile simulation refused with aigateway.entitlement_denied
-// on a zero balance, the dead end this file's sibling regression suite
-// closes. The billing steps are provision steps like any other, which is
+// on a zero balance. The billing steps are provision steps like any
+// other, which is
 // what keeps them under the same failure/retry semantics as the org and
 // rbac ones (# Failure semantics).
 //
@@ -146,11 +142,10 @@ import (
 // the synchronous attempt succeeded -- the path every normal registration
 // takes -- so "register, then sign in" keeps its gap-free shape. After a
 // failed synchronous attempt the 201 still answers, and a sign-in in the
-// window before the retry converges answers the memberless refusal --
-// since the fold of no-membership logins into ErrInvalidCredentials, the
-// unified 401 authn.invalid_credentials, identical to a wrong password's
-// (the old distinguishable membership answer is gone from the login
-// surface) -- exactly as it did before self-service existed; the retry
+// window before the retry converges answers the memberless refusal
+// folded into the unified 401 authn.invalid_credentials, identical to a
+// wrong password's -- no-membership logins are indistinguishable from
+// wrong-password ones by design; the retry
 // converges the clinic moments later and the same sign-in then lands in
 // it. The browser-shaped e2e gate
 // (self-service-signup.spec.ts) never sees that window, because it signs
@@ -165,9 +160,8 @@ import (
 // subscription and credit rows (provision's own last two steps), are the
 // whole of the durable record, and the sign-in store's "which tenants
 // does this account belong to" answer reads them directly through org's
-// own cross-tenant query
-// (sign_in_memberships.go's doc comment records the self_service_clinics
-// ledger's retirement in the same round), so a boot against a database a
+// own cross-tenant query (sign_in_memberships.go's own doc comment
+// describes the read), so a boot against a database a
 // previous boot provisioned clinics into needs no re-discovery pass and
 // keeps every clinic owner's sign-in working -- and every clinic's
 // subscription Active and balance intact, since nothing re-runs for a
@@ -251,8 +245,7 @@ type selfServiceProvisioner struct {
 // the very path N=1 exists to exercise (the register's synchronous
 // attempt consumes the account's one failure; the first retry succeeds
 // and converges the clinic). A count of 0 answers nil: the disabled
-// default that keeps an absent variable byte-identical to the hook never
-// having existed.
+// default.
 func newProvisionFailureInjector(count int) func(userID string) error {
 	if count < 1 {
 		return nil
@@ -551,9 +544,9 @@ func (p *selfServiceProvisioner) provision(ctx context.Context, userID string, c
 	// AssignRole is a no-op when the binding is already there, so both
 	// are safe to repeat on a redelivery.
 	//
-	// Both writes carry the registering user as the audit Actor: rbac now
-	// emits an audit row for every role it defines or grants (its
-	// role-management audit round), and this host is the layer that knows
+	// Both writes carry the registering user as the audit Actor: rbac
+	// emits an audit row for every role it defines or grants, and this
+	// host is the layer that knows
 	// who the caller is -- the user whose self-registration created the
 	// clinic -- so the attribution is layered HERE, the same way this
 	// app's notes handler layers the creator before its own audit.Emit
@@ -575,8 +568,7 @@ func (p *selfServiceProvisioner) provision(ctx context.Context, userID string, c
 	// having run first. It is the grant the app's gated AI routes judge:
 	// without it the clinic owner's first smile simulation would be
 	// refused with aigateway.entitlement_denied before anything else ran
-	// (internal/smilesim/service.go's entitlement pre-flight), the
-	// browser-verified defect this round closes.
+	// (internal/smilesim/service.go's entitlement pre-flight).
 	// planErr is named apart from the function-scope err above (the org
 	// root step's own): this resolution is the first use of an error
 	// variable AFTER provision's earlier if-init errs, and reusing the
@@ -608,8 +600,8 @@ func (p *selfServiceProvisioner) provision(ctx context.Context, userID string, c
 // otherwise. A self-registered clinic is its registrant's own
 // organization, so "what this clinic is called" is answered by the same
 // name the registration surface asked for -- never by the derived tenant
-// id, which is exactly what the acceptance gate 944b1cc forbids the UI to
-// show as a clinic's identity.
+// id, which the web UI's acceptance gate forbids showing as a clinic's
+// identity.
 //
 // The display name is read from authn's own user row (p.authnSvc's
 // repository accessor -- FindByID on the identity-domain users table,

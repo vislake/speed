@@ -1,13 +1,13 @@
 /**
- * The setup an invitation journey needs and the browser cannot do,
- * because the surfaces for it do not exist yet.
+ * The setup an invitation journey needs and the browser cannot do.
  *
  * Two things here are deliberately not browser steps:
  *
- *  1. Creating an invitation. go/org ships the operation, but this app
- *     has no team-management UI, so the journey's setup calls the
- *     operation directly. When that UI lands, this helper is what the
- *     spec stops needing.
+ *  1. Creating the invitation. Driving a surface to make one is
+ *     add-a-colleague.spec.ts's own journey; the setup of THIS journey
+ *     calls the org operation directly, because the steps under test
+ *     are the invitee's landing before acceptance and the sign-in into
+ *     the invited organization after.
  *  2. Reading the invitation token. It never appears in an API response
  *     -- it is a bearer credential handed to the invitee alone, through
  *     the message the server sends. In standalone mode the Mailer seam is
@@ -108,9 +108,8 @@ export async function inviteAndReadToken(
 
 /**
  * Accepts an invitation with no tenant-scoped credential at all -- the
- * shape a genuinely fresh invitee is in, and the one the endpoint was
- * unable to serve until the tenantless-accept fix: the tenant is resolved
- * from the token itself.
+ * shape a genuinely fresh invitee is in, and the one the endpoint
+ * serves by resolving the tenant from the token itself.
  */
 export async function acceptInvitationAsFreshUser(
   request: APIRequestContext,

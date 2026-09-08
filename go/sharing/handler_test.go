@@ -53,13 +53,13 @@ func accessRequest(token string, password *string) *http.Request {
 
 func strPtr(s string) *string { return &s }
 
-// TestHandler_SharingAccessShare_SetsNoStoreCacheControl pins the one
-// obligation AGENTS.md's "Revocation and caching" section names as binding
-// on whichever round adds this route: EVERY response this handler writes --
-// a granted access, an unrecognized-token refusal, and a resource-resolver
-// failure alike -- carries Cache-Control: no-store. A CDN or shared cache
-// honoring a response without that header is, per that section, the single
-// most common way revocation silently fails to take effect.
+// TestHandler_SharingAccessShare_SetsNoStoreCacheControl pins the
+// route-level half of the module's no-caching rule: EVERY response this
+// handler writes -- a granted access, an unrecognized-token refusal, and a
+// resource-resolver failure alike -- carries Cache-Control: no-store. A
+// CDN or shared cache honoring a response without that header is the
+// single most common way revocation silently fails to take effect on the
+// viewer's very next fetch.
 func TestHandler_SharingAccessShare_SetsNoStoreCacheControl(t *testing.T) {
 	h := newTestHandler(t, fakeResourceResolver{mime: "text/plain", body: "hello"})
 
@@ -87,12 +87,12 @@ func TestHandler_SharingAccessShare_SetsNoStoreCacheControl(t *testing.T) {
 }
 
 // TestHandler_SharingAccessShare_EveryRefusalReasonAnswersIdentically is
-// this round's HTTP-layer proof of rule 5 (AGENTS.md's "The five mandatory
-// rules" section, service_test.go's identical
-// TestService_Access_EveryRefusalReasonIsOutwardlyIdentical for the
-// Service-level proof): every one of Service.Access's refusal reasons must
-// reach the wire as the exact same status and body, so probing this route
-// teaches an outside caller nothing about which reason actually applied.
+// the HTTP-layer proof of the outward-identical-answer rule
+// (service_test.go's TestService_Access_EveryRefusalReasonIsOutwardlyIdentical
+// is the Service-level proof): every one of Service.Access's refusal
+// reasons must reach the wire as the exact same status and body, so
+// probing this route teaches an outside caller nothing about which reason
+// actually applied.
 func TestHandler_SharingAccessShare_EveryRefusalReasonAnswersIdentically(t *testing.T) {
 	h := newTestHandler(t, fakeResourceResolver{mime: "text/plain", body: "hello"})
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -175,9 +175,9 @@ type bodyAndStatus struct {
 }
 
 // TestHandler_SharingAccessShare_PasswordProtected_CorrectPasswordGrants
-// proves the password-protected variant point 2 of the round's scope names
-// explicitly: a correct password serves the content, through the exact
-// same route and parameter shape a wrong one is refused through.
+// proves the password-protected variant: a correct password serves the
+// content, through the exact same route and parameter shape a wrong one is
+// refused through.
 func TestHandler_SharingAccessShare_PasswordProtected_CorrectPasswordGrants(t *testing.T) {
 	h := newTestHandler(t, fakeResourceResolver{mime: "image/png", body: "pixels"})
 	created, err := h.svc.Create(testCtx(), CreateParams{ResourceRef: "ref-1", Password: strPtr("s3cret")})
@@ -256,11 +256,11 @@ func (r tenantAssertingResolver) OpenResource(ctx context.Context, _ string) (Re
 }
 
 // TestHandler_SharingAccessShare_ResolverSeesTheShareOwningTenant is the
-// direct regression test for a real bug this round's own reference-app
-// flow test caught: Service.AccessPublic resolves the tenant only inside
-// its own call to Service.Access, never mutating the *http.Request's own
-// context -- a resolver that itself needs a tenant in ctx (like
-// go/storage's ObjectService.OpenContent) would otherwise fail closed with
+// direct regression test for the bug the reference app's own flow test
+// caught: Service.AccessPublic resolves the tenant only inside its own
+// call to Service.Access, never mutating the *http.Request's own context
+// -- a resolver that itself needs a tenant in ctx (like go/storage's
+// ObjectService.OpenContent) would otherwise fail closed with
 // pkgcore.ErrNoTenant on every granted access. Handler must rebuild the
 // tenant from the granted Share's own row before calling OpenResource.
 func TestHandler_SharingAccessShare_ResolverSeesTheShareOwningTenant(t *testing.T) {
@@ -290,10 +290,9 @@ func TestHandler_SharingAccessShare_ResolverSeesTheShareOwningTenant(t *testing.
 // parameter-binding error path rather than reaching Service at all -- and
 // that NewHandler's own ErrorHandlerFunc (bindingErrorHandler, handler.go),
 // not oapi-codegen's default http.Error, is what answers it: the response
-// must still carry Cache-Control: no-store (AGENTS.md's "Revocation and
-// caching" section names this as binding on every response this route can
-// produce, binding failures included) and the module's own SharingError
-// JSON envelope, never a plain-text body.
+// must still carry Cache-Control: no-store (binding failures included,
+// since every response this route can produce carries the header) and the
+// module's own SharingError JSON envelope, never a plain-text body.
 func TestHandler_SharingAccessShare_MissingTokenParam_Answers400(t *testing.T) {
 	h := newTestHandler(t, nil)
 	req := httptest.NewRequest(http.MethodGet, PathAccess, nil)
@@ -315,12 +314,11 @@ func TestHandler_SharingAccessShare_MissingTokenParam_Answers400(t *testing.T) {
 }
 
 // TestHandler_SharingAccessShare_DuplicatePasswordHeader_Answers400 covers
-// the finding's other named binding failure -- a duplicated
-// X-Sharing-Password header, which SharingAccessShareParams's underlying
-// bind rejects as TooManyValuesForParamError -- through the same
-// ErrorHandlerFunc path as the missing-token case above, so the fix is
-// pinned against more than the one parameter oapi-codegen happens to bind
-// first.
+// the second binding failure -- a duplicated X-Sharing-Password header,
+// which SharingAccessShareParams's underlying bind rejects as
+// TooManyValuesForParamError -- through the same ErrorHandlerFunc path as
+// the missing-token case above, so the path is pinned against more than
+// the one parameter oapi-codegen happens to bind first.
 func TestHandler_SharingAccessShare_DuplicatePasswordHeader_Answers400(t *testing.T) {
 	h := newTestHandler(t, nil)
 	req := accessRequest("some-token", nil)
@@ -343,7 +341,7 @@ func TestHandler_SharingAccessShare_DuplicatePasswordHeader_Answers400(t *testin
 	}
 }
 
-// --- PathShares: the round-3 owner-facing operations --------------------
+// --- PathShares: the five owner-facing operations ----------------------
 
 // sharesRequest builds a request for one of the five owner-facing
 // PathShares operations, with tenant attached to its context exactly as
@@ -389,8 +387,8 @@ func TestHandler_SharingCreateShare_CreatesAndReturnsTokenOnce(t *testing.T) {
 }
 
 // TestHandler_SharingCreateShare_ForeverRefused proves this surface cannot
-// be used to bypass rule 2's never-expiring-link refusal: Service.Create's
-// own ErrExpiryRequired reaches the wire as an ordinary 400, not silently
+// be used to bypass the never-expiring-link refusal: Service.Create's own
+// ErrExpiryRequired reaches the wire as an ordinary 400, not silently
 // dropped by the HTTP translation layer.
 func TestHandler_SharingCreateShare_ForeverRefused(t *testing.T) {
 	h := newTestHandler(t, nil)
@@ -742,18 +740,16 @@ func TestHandler_SharingGetShare_NeverExposesTokenOrPasswordHash(t *testing.T) {
 	}
 }
 
-// --- P2-b: a view is consumed only when the content was actually delivered --
+// --- A view is consumed only when the content was actually delivered ----
 
 // TestHandler_SharingAccessShare_MaxViewsOne_ResolverFailure_DoesNotSpendTheView
-// is the P2-b regression: an access whose serve fails at the resolver (the
-// resource behind its ResourceRef could not be opened) must NOT permanently
-// consume one of the share's MaxViews. The unfixed route recorded the view
-// inside Service.AccessPublic -- before Handler ever asked the resolver for
-// bytes -- so a MaxViews=1 share whose only serve attempt failed at the
-// resolver was left permanently spent even though nobody ever saw its
-// content. The fixed route records the view only once the content was
-// actually delivered: the failed attempt is logged honestly as denied and
-// the share's one view survives for a genuine retry.
+// pins the delivery-gated view: an access whose serve fails at the
+// resolver (the resource behind its ResourceRef could not be opened) must
+// NOT permanently consume one of the share's MaxViews. A MaxViews=1 share
+// whose only serve attempt failed at the resolver must not be left
+// permanently spent when nobody ever saw its content: the failed attempt
+// is logged honestly as denied and the share's one view survives for a
+// genuine retry.
 func TestHandler_SharingAccessShare_MaxViewsOne_ResolverFailure_DoesNotSpendTheView(t *testing.T) {
 	one := 1
 	svc, _ := newTestService(t, nil)
@@ -807,11 +803,11 @@ func TestHandler_SharingAccessShare_MaxViewsOne_ResolverFailure_DoesNotSpendTheV
 }
 
 // TestHandler_SharingAccessShare_MaxViewsOne_NoResolverWired_DoesNotSpendTheView
-// is the same P2-b regression for the no-resolver arm: a host that mounts
-// the access route without wiring a ResourceResolver answers every granted
-// access with ErrResourceUnavailable, and under the unfixed code each of
-// those 502s permanently consumed one of the share's MaxViews -- a
-// MaxViews=1 share behind an unwired resolver could never be served at all.
+// is the same delivery-gated-view proof for the no-resolver arm: a host
+// that mounts the access route without wiring a ResourceResolver answers
+// every granted access with ErrResourceUnavailable, and none of those 502s
+// may consume one of the share's MaxViews -- a MaxViews=1 share behind an
+// unwired resolver must stay servable once a resolver is wired.
 func TestHandler_SharingAccessShare_MaxViewsOne_NoResolverWired_DoesNotSpendTheView(t *testing.T) {
 	one := 1
 	svc, _ := newTestService(t, nil)
@@ -873,12 +869,11 @@ func (interruptingResolver) OpenResource(context.Context, string) (ResourceConte
 }
 
 // TestHandler_SharingAccessShare_InterruptedServe_LoggedDenied_DoesNotSpendTheView
-// is the P2-b regression's interrupted-delivery arm: an access whose content
-// stream dies partway -- after the 200 and partial bytes were written -- must
-// be logged honestly as denied (the unfixed route logged it granted, because
-// the view was recorded before the serve ever started) and must not consume
-// one of the share's MaxViews, so a MaxViews=1 share survives a flaky first
-// attempt for a genuine retry.
+// pins the interrupted-delivery arm: an access whose content stream dies
+// partway -- after the 200 and partial bytes were written -- must be
+// logged honestly as denied and must not consume one of the share's
+// MaxViews, so a MaxViews=1 share survives a flaky first attempt for a
+// genuine retry.
 func TestHandler_SharingAccessShare_InterruptedServe_LoggedDenied_DoesNotSpendTheView(t *testing.T) {
 	one := 1
 	svc, _ := newTestService(t, nil)
@@ -941,10 +936,10 @@ func TestHandler_SharingAccessShare_InterruptedServe_LoggedDenied_DoesNotSpendTh
 }
 
 // TestHandler_SharingAccessShare_SuccessfulServe_ConsumesExactlyOnce pins the
-// grant side of the P2-b fix: a genuinely successful serve records exactly
-// one view and exactly one granted log entry -- never two -- and the
-// exhausted share then refuses the very next attempt with the identical
-// outward answer.
+// grant side of the delivery-gated view: a genuinely successful serve
+// records exactly one view and exactly one granted log entry -- never two
+// -- and the exhausted share then refuses the very next attempt with the
+// identical outward answer.
 func TestHandler_SharingAccessShare_SuccessfulServe_ConsumesExactlyOnce(t *testing.T) {
 	one := 1
 	svc, _ := newTestService(t, nil)
@@ -1003,17 +998,15 @@ func TestHandler_SharingAccessShare_SuccessfulServe_ConsumesExactlyOnce(t *testi
 }
 
 // TestHandler_SharingAccessShare_DeliveredServeWithFailedSettle_KeepsTheViewSpent
-// is the settle-after-serve regression (the finding this round closes): a
-// MaxViews=1 serve whose content was FULLY delivered but whose post-delivery
-// settle write fails (a SQL trigger forces every view_count UPDATE to fail
-// -- the deterministic shape of the reported DB write failure) must leave
-// the view SPENT, never unspent and re-fetchable. Under the unfixed code
-// the settle failure left ViewCount at 0 with no reservation standing, so
-// the identical fetch immediately succeeded again -- a single-view share
-// (a compliance export share is exactly this shape) whose content had
-// already been delivered once stayed endlessly fetchable. Under the fixed
-// code the delivered serve's reservation is never refunded once delivery
-// succeeded, so the second fetch is refused while it stands.
+// pins the never-refund-after-delivery guarantee: a MaxViews=1 serve whose
+// content was FULLY delivered but whose post-delivery settle write fails
+// (a SQL trigger forces every view_count UPDATE to fail -- the
+// deterministic shape of the DB write failure) must leave the view SPENT,
+// never unspent and re-fetchable. A single-view share (a compliance
+// export share is exactly this shape) whose content was already delivered
+// once must not stay endlessly fetchable: the delivered serve's
+// reservation is never refunded once delivery succeeded, so the second
+// fetch is refused while it stands (confirmAccessView's own doc comment).
 func TestHandler_SharingAccessShare_DeliveredServeWithFailedSettle_KeepsTheViewSpent(t *testing.T) {
 	one := 1
 	svc, _ := newTestService(t, nil)
@@ -1042,7 +1035,7 @@ func TestHandler_SharingAccessShare_DeliveredServeWithFailedSettle_KeepsTheViewS
 	}
 
 	// The settle write failed, but the view must stay spent: a second fetch
-	// is refused. Under the unfixed code it was served again in full.
+	// is refused rather than served again in full.
 	rec2 := httptest.NewRecorder()
 	h.ServeHTTP(rec2, accessRequest(created.Token, nil))
 	if rec2.Code != http.StatusNotFound {
@@ -1094,14 +1087,12 @@ func (r *gatedOnceResolver) OpenResource(context.Context, string) (ResourceConte
 }
 
 // TestHandler_SharingAccessShare_SecondFetchDuringInFlightServe_Refused is
-// the in-use half of the reserve-before-serve regression: while a
-// MaxViews-limited share's one serve is mid-delivery (its view reserved,
-// its bytes still streaming), a concurrent second fetch must be refused up
-// front -- under the unfixed code the second fetch was authorized against
-// the not-yet-counted view, admitted all the way into the resolver, and
-// only the post-delivery settlement race (or its failure) decided the
-// share's real fate: a single-view share could be delivered to two viewers.
-// The second fetch is answered here before any delivery attempt, with the
+// the in-use half of the reserve-before-serve rule: while a MaxViews-limited
+// share's one serve is mid-delivery (its view reserved, its bytes still
+// streaming), a concurrent second fetch must be refused up front -- not
+// authorized against the not-yet-counted view and left to the post-delivery
+// settlement race, which could deliver a single-view share to two viewers.
+// The second fetch is answered before any delivery attempt, with the
 // identical outward refusal a share that had simply exhausted its views
 // answers with.
 func TestHandler_SharingAccessShare_SecondFetchDuringInFlightServe_Refused(t *testing.T) {
@@ -1129,10 +1120,10 @@ func TestHandler_SharingAccessShare_SecondFetchDuringInFlightServe_Refused(t *te
 	<-gate.reading
 
 	// The concurrent second fetch is refused while the reservation stands
-	// -- before any delivery attempt. Under the unfixed code it was
-	// admitted past the authorization and failed only at the resolver (502),
-	// after the share's not-yet-counted view had already authorized a
-	// second concurrent delivery.
+	// -- before any delivery attempt: without the reservation, it would be
+	// admitted past the authorization to fail only at the resolver (502),
+	// after the not-yet-counted view had already authorized a second
+	// concurrent delivery.
 	second := httptest.NewRecorder()
 	h.ServeHTTP(second, accessRequest(created.Token, nil))
 	if second.Code != http.StatusNotFound {

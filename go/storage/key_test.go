@@ -19,8 +19,8 @@ const (
 )
 
 // TestObjectKey_BuildsTheCanonicalShape pins the key shape the module's
-// doc comment promises: "<tenantID>/<objectID>/original". This is the shape
-// the service round writes bytes to and the sweep round deletes them from;
+// doc comment promises: "<tenantID>/<objectID>/original". This is the
+// shape the service writes bytes to and the sweep deletes them from;
 // changing it without changing every consumer of those bytes would orphan
 // stored content.
 func TestObjectKey_BuildsTheCanonicalShape(t *testing.T) {

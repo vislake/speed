@@ -5,8 +5,7 @@ package asynq_test
 // go/pkgcore/example_test.go's, go/dbkit/example_test.go's and
 // go/tenancy/example_test.go's): every example here is compiled AND
 // executed by `go test`, so an API change that invalidates the documented
-// usage fails the build instead of only rotting in prose (root CLAUDE.md's
-// Documentation section; this module's own AGENTS.md).
+// usage fails the build instead of only rotting in prose.
 
 import (
 	"context"
@@ -59,13 +58,11 @@ func waitForTerminal(ctx context.Context, queue jobs.Queue, id jobs.JobID, deadl
 //
 // Deliberately has no "// Output:" comment, so go test compiles and
 // type-checks this exactly like every other example here (catching a
-// signature drift immediately, per root CLAUDE.md's "compiled and run by
-// CI" documentation rule) WITHOUT executing it -- this package needs a
-// real Redis, which the default, non-integration test tier this file
-// belongs to must not require (see AGENTS.md's Testing section and
-// integration_test/'s own package comment). The exact same shape,
-// actually run end to end against a real Redis via testcontainers-go, is
-// integration_test/enqueue_execute_test.go's
+// signature drift immediately) WITHOUT executing it -- this package needs
+// a real Redis, which the default, non-integration test tier this file
+// belongs to must not require (see integration_test/'s own package
+// comment). The exact same shape, actually run end to end against a real
+// Redis via testcontainers-go, is integration_test/enqueue_execute_test.go's
 // TestRedisQueue_EnqueueExecuteRoundTrip.
 func ExampleNewQueue() {
 	ctx := context.Background()

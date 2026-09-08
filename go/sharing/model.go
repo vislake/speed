@@ -42,11 +42,11 @@ const (
 //
 // # Data domain
 //
-// Tenant data (docs/internal/04-data-and-tenancy.md): a share link belongs
-// to the tenant whose resource it exposes. Share implements
-// dbkit.TenantScoped (via the embedded dbkit.TenantModel), is reached only
-// through ShareRepository (which embeds dbkit.Repository[Share]), and its
-// isolation is proven by tenancytest.AssertIsolated.
+// Tenant data: a share link belongs to the tenant whose resource it
+// exposes. Share implements dbkit.TenantScoped (via the embedded
+// dbkit.TenantModel), is reached only through ShareRepository (which embeds
+// dbkit.Repository[Share]), and its isolation is proven by
+// tenancytest.AssertIsolated.
 //
 // # The token is never stored
 //
@@ -60,14 +60,11 @@ const (
 //
 // # ExpiresAt is never nil at rest
 //
-// The design sketch this type implements
-// (docs/internal/07-platform-services.md) shows ExpiresAt as an optional
-// *time.Time, and the Go type here matches that shape -- Service.Create's
+// The Go type is an optional *time.Time -- Service.Create's
 // CreateParams.ExpiresAt really is optional, a caller may leave it nil and
 // get the tenant's configured default. But this row's own ExpiresAt is
-// NEVER actually nil once a Share has been created: rule 2
-// (docs/internal/07-platform-services.md's "default expiry" rule) requires
-// every share to carry an expiry, and Service.Create resolves a nil request into
+// NEVER actually nil once a Share has been created: every share must carry
+// an expiry, and Service.Create resolves a nil request into
 // a concrete time before the row is ever written, refusing outright
 // (ErrExpiryRequired) a caller that explicitly asks for one that never
 // expires. The column itself is declared NOT NULL as a second,
@@ -79,8 +76,8 @@ const (
 // An optional per-share access password is stored only as its argon2id PHC
 // digest (password.go) -- the identical discipline authn.User.PasswordHash
 // uses for account passwords, at fixed, un-configurable cost parameters
-// this round (see password.go's own doc comment for why that is an
-// accepted, documented limitation rather than an oversight).
+// (password.go's own doc comment records why that is an accepted
+// limitation rather than an oversight).
 //
 // # Cross-module references
 //
@@ -88,10 +85,10 @@ const (
 // whatever the caller of Create supplied, typically a reference another
 // module's own key scheme produces (e.g. go/storage's object id), stored
 // as plain data with no foreign key -- cross-module foreign keys are
-// forbidden in this codebase (docs/internal/04-data-and-tenancy.md rule 4),
-// and sharing does not import go/storage or any other resource-owning
-// module to interpret it. Resolving ResourceRef into actual bytes is a
-// later round's job (AGENTS.md's Known limitations).
+// forbidden in this codebase, and sharing does not import go/storage or
+// any other resource-owning module to interpret it. Turning ResourceRef
+// into actual bytes is the host's job through the ResourceResolver seam
+// (resolver.go), never this module's.
 type Share struct {
 	// ID is an application-generated UUID.
 	ID string `gorm:"column:id;primaryKey;size:36"`
@@ -131,16 +128,17 @@ type Share struct {
 
 	// ViewsReserved is this share's single in-flight view reservation: 1
 	// while the access route (handler.go) is serving one viewer of a
-	// MaxViews-limited share, 0 otherwise. It exists to close the
-	// settle-after-serve hole (AGENTS.md's "Serving an access" section): the
-	// route reserves the view BEFORE any bytes are delivered, so the
+	// MaxViews-limited share, 0 otherwise. It exists so the route can
+	// reserve the view BEFORE any bytes are delivered (service.go's
+	// reserveAccessView, repository.go's tryReserveView -- see
+	// viewReservationTimeout's doc comment for the full protocol): the
 	// share's ceiling already accounts for the serve in flight -- a
 	// concurrent second fetch is refused up front instead of being
 	// delivered and then losing a settlement race -- and the reservation is
 	// resolved after the delivery (confirmed into a spent view) or after a
 	// failed one (refunded). Deliberately a count-shaped column that only
 	// ever holds 0 or 1: a MaxViews-limited share serves one viewer at a
-	// time, by this round's design -- see service.go's viewReservationTimeout
+	// time -- see service.go's viewReservationTimeout
 	// doc comment for the per-share single-flight reasoning and the recorded
 	// alternative it rejects. Only ever set on a row whose MaxViews is
 	// non-nil: an unlimited share has no finite allowance for a reservation
@@ -163,10 +161,8 @@ type Share struct {
 	PasswordHash *string `gorm:"column:password_hash;size:255"`
 
 	// Sensitive records whether the caller of Create declared the shared
-	// resource as carrying sensitive personal information -- rule 4
-	// (docs/internal/07-platform-services.md's "sensitive resource sharing
-	// needs confirmation" rule). A true value is what makes Create fire the
-	// sensitive-share audit action (module.go's
+	// resource as carrying sensitive personal information. A true value is
+	// what makes Create fire the sensitive-share audit action (module.go's
 	// AuditActionSensitiveShareCreate). Kept on the row itself (rather than
 	// only in the audit trail) so an owner-facing
 	// listing can flag it without a second lookup.
@@ -175,8 +171,8 @@ type Share struct {
 	// RevokedAt is nil for a live share, and the moment Service.Revoke
 	// withdrew it otherwise. Once set, Service.Access refuses every access
 	// on the very next call -- there is no cache to invalidate on this
-	// module's own side; see AGENTS.md's "Revocation and caching" section
-	// for the obligation this places on any future HTTP layer.
+	// module's own side, and handler.go's route answers every response with
+	// Cache-Control: no-store so no cached copy can outlive the revocation.
 	RevokedAt *time.Time `gorm:"column:revoked_at"`
 
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
@@ -252,7 +248,7 @@ var _ dbkit.TenantScoped = Share{}
 // mismatch means a value this module believes it truncated is still
 // rejected by one dialect. PostgreSQL enforces VARCHAR(n) at the database
 // and refuses an over-long value with error 22001, failing the INSERT; the
-// access would then leave no trail at all (rule 4), which is why the cut
+// access would then leave no trail at all, which is why the cut
 // happens here rather than being left to the database. SQLite ignores the
 // bound entirely, which is why the SQLite-only unit tier cannot see an
 // over-long value fail -- the truncation tests in service_test.go pin the
@@ -267,10 +263,9 @@ const (
 )
 
 // AccessLogEntry is one recorded access attempt against a Share -- granted
-// or denied alike, per rule 4 (docs/internal/07-platform-services.md's
-// "access needs no login, but must leave a trail" rule): a resource owner
-// reads this back through Service.ListAccessLog to answer "who viewed this
-// and how many times", and
+// or denied alike: a resource owner reads this back through
+// Service.ListAccessLog to answer "who viewed this and how many times",
+// and
 // recording denied attempts too gives the owner the fuller picture (an
 // exhausted or revoked link still being probed) at no extra cost.
 //
@@ -321,25 +316,18 @@ const (
 // TenantScoped, which AuditEvent deliberately does not implement), and
 // the rejecting triggers as the database-level backstop -- it is the
 // durable record a compliance process reads but never erases.
-// sharing_access_log, by contrast, is tenant data that a compliance
-// regime must be able to delete: retention sweeps and right-to-erasure
-// reach this table through the module's own retention participant, whose
-// callbacks run dbkit.Repository[T].HardDelete (the contract
-// pkgcore.RetentionParticipant's own doc comment describes), and
-// AccessLogEntry's TenantScoped shape is exactly what makes that path
-// instantiable. A DELETE-rejecting trigger here would block precisely
-// that path. No conflict exists today only because this module registers
-// no retention participant of its own (nothing in go/sharing calls
-// Registry.Retention.Add); the moment the direction that every
-// tenant-data module registers one lands, a trigger would collide with
-// the participant's own HardDelete. The trigger pair belongs on the one
-// table that must outlive every erasure regime, not on a table an erasure
-// regime must be able to reach.
-//
-// This table carries no
-// such backstop: nothing in sharing_access_log's migrations rejects an
-// UPDATE or DELETE, which is precisely why the convention this comment
-// states is the whole of its immutability.
+// sharing_access_log, by contrast, is tenant data a compliance regime
+// must be able to erase: retention sweeps and right-to-erasure reach it
+// through a pkgcore.RetentionParticipant whose callbacks run
+// dbkit.Repository[T].HardDelete (that interface's own doc comment
+// describes the contract), and AccessLogEntry's TenantScoped shape is
+// exactly what makes that path instantiable. A DELETE-rejecting trigger
+// here would block precisely that path, so the table carries none --
+// nothing in sharing_access_log's migrations rejects an UPDATE or
+// DELETE, which is precisely why the convention this comment states is
+// the whole of its immutability. The trigger pair belongs on the one
+// table that must outlive every erasure regime, not on a table an
+// erasure regime must be able to reach.
 //
 // # ShareID is not a foreign key
 //
@@ -348,7 +336,8 @@ const (
 // same-module references (see go/storage's object_derivatives.object_id and
 // go/pki's pki_certificates.authority_id for the identical, cross-module
 // precedent this follows even though ShareID is not cross-module) so that
-// dual-dialect migrations and any future soft-delete of Share stay simple.
+// the dual-dialect migrations stay simple and deleting a Share row never
+// drags its access log with it.
 type AccessLogEntry struct {
 	// ID is an application-generated UUID.
 	ID string `gorm:"column:id;primaryKey;size:36"`
@@ -369,8 +358,8 @@ type AccessLogEntry struct {
 	// IP is the viewer's address as the caller of Service.Access observed
 	// it. Free-form: this module neither parses nor validates it, since
 	// how a caller learns the address (a direct connection, a
-	// caller-trusted X-Forwarded-For) is an HTTP-layer decision this round
-	// does not make.
+	// caller-trusted X-Forwarded-For) is an HTTP-layer decision made
+	// outside this module.
 	IP string `gorm:"column:ip;size:64;not null;default:''"`
 
 	// UserAgent is the viewer's User-Agent header value, as given.
@@ -392,29 +381,28 @@ var _ dbkit.TenantScoped = AccessLogEntry{}
 
 // shareTokenIndex is the narrow, deliberately non-tenant-scoped row that
 // resolves a bearer token's owning tenant before any tenant is known at
-// all -- the round-2 answer to AGENTS.md's former "Tenant resolution for an
-// unauthenticated viewer" gap (see that section's replacement for the full
-// reasoning, and repository.go's (*ShareRepository).tenantForTokenHash for
-// the one method that reads it).
+// all -- see repository.go's (*ShareRepository).tenantForTokenHash, the
+// one method that reads it, and service.go's AccessPublic doc comment for
+// the reasoning behind the resolution direction.
 //
 // # Data domain
 //
-// Platform data (docs/internal/04-data-and-tenancy.md's data-domain table),
-// NOT tenant data, and deliberately so: a genuinely unauthenticated visitor
-// holds no tenant claim for dbkit's tenant-scope GORM plugin to filter by,
-// and that plugin fails every tenant-scoped query closed when the context
-// carries none (go/dbkit's tenant_scope.go, tenantScopeBeforeQuery) --
-// correctly, since it has no way to tell "this caller is allowed to look
-// this up with no tenant" apart from an ordinary forgotten-tenant bug. The
-// same repository-wide rule root CLAUDE.md states for identity/platform
-// data applies here without exception: this table implements no
-// dbkit.TenantScoped, is reached through dbkit.Open()'s plain *gorm.DB
-// (never dbkit.Repository[T], whose generic constraint requires
-// TenantScoped, which this type must NOT implement), and its isolation
-// suite is tenancytest.AssertNotTenantScoped, not AssertIsolated -- the
-// identical treatment go/authn's users table, go/jobs's jobRecord and
-// go/config's row already get for the same reason: something that must be
-// resolvable before a tenant is known cannot itself be tenant-scoped.
+// Platform data, NOT tenant data, and deliberately so: a genuinely
+// unauthenticated visitor holds no tenant claim for dbkit's tenant-scope
+// GORM plugin to filter by, and that plugin fails every tenant-scoped
+// query closed when the context carries none (go/dbkit's tenant_scope.go,
+// tenantScopeBeforeQuery) -- correctly, since it has no way to tell "this
+// caller is allowed to look this up with no tenant" apart from an
+// ordinary forgotten-tenant bug. The repository-wide rule for
+// identity/platform data applies here without exception: this table
+// implements no dbkit.TenantScoped, is reached through dbkit.Open()'s
+// plain *gorm.DB (never dbkit.Repository[T], whose generic constraint
+// requires TenantScoped, which this type must NOT implement), and its
+// isolation suite is tenancytest.AssertNotTenantScoped, not
+// AssertIsolated -- the identical treatment go/authn's users table,
+// go/jobs's jobRecord and go/config's row already get for the same
+// reason: something that must be resolvable before a tenant is known
+// cannot itself be tenant-scoped.
 //
 // # Deliberately narrow
 //

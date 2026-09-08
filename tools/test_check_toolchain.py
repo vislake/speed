@@ -7,22 +7,21 @@ executables with no third-party dependencies" convention (tools/README.md's
 
     python3 tools/test_check_toolchain.py
 
-Regression coverage for two findings on this gate:
+Regression coverage for two defects on this gate:
 
   * Exit-code contract (module docstring): an infrastructure error -- a
     source file missing or unparsable, or an expected tool absent from
     .mise.toml -- must exit 2, while genuine version drift stays a
-    content error exiting 1. The readers used to raise
-    sys.exit("error: ..."), which exits 1, so a missing input file was
-    indistinguishable from drift (test_missing_source_file_exits_2,
-    test_missing_mise_exits_2, test_absent_tool_exits_2 fail before the
-    fix).
+    content error exiting 1. The readers must not fall through
+    sys.exit("error: ..."), which exits 1 and would make a missing
+    input file indistinguishable from drift (test_missing_source_file_exits_2,
+    test_missing_mise_exits_2, test_absent_tool_exits_2).
   * The task pin is read by pulling TASK_HEADER_LIMIT lines with
-    next(fh); on a file shorter than the limit the StopIteration branch
-    discarded everything already read, so a freshly scaffolded 2-line
-    Taskfile whose pin sits on line 1 reported "pin not found"
-    (test_short_taskfile_pin_is_found fails before the fix). The read
-    now iterates readline() and keeps every line it got.
+    next(fh); a file shorter than the limit must keep every line
+    already read rather than discarding them, so a freshly scaffolded
+    2-line Taskfile whose pin sits on line 1 resolves its pin. The read
+    iterates readline() and keeps every line it gets
+    (test_short_taskfile_pin_is_found).
 """
 
 from __future__ import annotations
@@ -135,8 +134,8 @@ class ToolchainGateTests(unittest.TestCase):
 
     def test_missing_source_file_exits_2(self) -> None:
         # A missing source file is an infrastructure error: exit 2 (the
-        # module docstring's contract). Fails before the fix -- the
-        # reader raised sys.exit("error: ..."), exiting 1 like drift.
+        # module docstring's contract). The reader must not fall through
+        # sys.exit("error: ..."), which exits 1 like drift.
         (self.root / "go.work").unlink()
         exc = self._run_expect_system_exit()
         self.assertEqual(exc.code, 2)

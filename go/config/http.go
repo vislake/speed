@@ -23,9 +23,8 @@ const (
 
 	// PathSystemFeatures is where this module's feature-flag endpoint is
 	// mounted: which features are enabled, for the same host-resolved
-	// tenant. Both endpoints are GET/HEAD-only and pre-auth in this
-	// milestone (see go/config/AGENTS.md's known limitations for the
-	// deferred spec-fragment contract).
+	// tenant. Both endpoints are GET/HEAD-only and pre-auth, and neither
+	// has an OpenAPI fragment covering its contract.
 	PathSystemFeatures = "/api/system/features"
 )
 
@@ -36,10 +35,9 @@ const jsonContentType = "application/json; charset=utf-8"
 
 // errorEnvelope is the JSON body every error response writes: a stable
 // code plus structured parameters, never localized text and never a raw
-// Go error string (the structured-error envelope of
-// docs/internal/11-cross-cutting.md; notes' handler writes the same
-// shape). Params is omitted when the error carries none, so the wire shape
-// stays {"code": ...} rather than {"code": ..., "params": null}.
+// Go error string (notes' handler writes the same shape). Params is
+// omitted when the error carries none, so the wire shape stays
+// {"code": ...} rather than {"code": ..., "params": null}.
 type errorEnvelope struct {
 	Code   *string        `json:"code,omitempty"`
 	Params map[string]any `json:"params,omitempty"`
@@ -88,15 +86,14 @@ func writeMethodNotAllowed(w http.ResponseWriter) {
 // and no declared Default -- is omitted from the snapshot rather than
 // failing the response (see PublicSnapshot).
 //
-// Tenant resolution follows docs/internal/11-cross-cutting.md's
-// unauthenticated rule: custom domain first, platform subdomain second,
+// Tenant resolution order: custom domain first, platform subdomain second,
 // platform defaults last -- and never an error. The module's own resolver
 // (WithResolver) is consulted per request; when it reports no tenant, or
 // when no resolver is wired, the request reads platform defaults.
 //
-// The endpoint is deliberately pre-auth in this milestone (its fragment
-// contract is deferred to the authn round; see AGENTS.md), and serves only
-// what the design marks public -- display decisions, never data.
+// The endpoint is deliberately pre-auth, serving only display decisions,
+// never data: public configuration is a login-page dependency, so the
+// answer must never depend on a sign-in that has not happened yet.
 func (m *Module) handlePublic(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		writeMethodNotAllowed(w)
@@ -123,12 +120,10 @@ func (m *Module) handlePublic(w http.ResponseWriter, r *http.Request) {
 
 // handleFeatures serves PathSystemFeatures: GET and HEAD return the
 // feature-flag half of the snapshot alone, {"features": [...]}, for the
-// same host-resolved tenant. The shape is the one the design's
-// "/api/system/features query" contract gives the frontend
-// (docs/internal/11-cross-cutting.md's feature-flag section): a client
-// that only needs to know what is on need not fetch the public
-// configuration too. Everything handlePublic says about tenant resolution,
-// pre-auth status and method gating applies unchanged.
+// same host-resolved tenant: a client that only needs to know what is on
+// need not fetch the public configuration too. Everything handlePublic
+// says about tenant resolution, pre-auth status and method gating applies
+// unchanged.
 func (m *Module) handleFeatures(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		writeMethodNotAllowed(w)
@@ -153,8 +148,7 @@ func (m *Module) handleFeatures(w http.ResponseWriter, r *http.Request) {
 // unmatched host, a resolver error, or no resolver at all leaves the
 // context untagged, which is exactly the platform-defaults tier: every
 // read below resolves from the system row down, never failing over a host
-// the resolver does not know (the unauthenticated display rule of
-// docs/internal/04-data-and-tenancy.md).
+// the resolver does not know (the unauthenticated display rule).
 func (m *Module) requestContext(r *http.Request) context.Context {
 	ctx := r.Context()
 	if m.resolver == nil {

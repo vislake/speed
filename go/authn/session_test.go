@@ -201,11 +201,11 @@ func TestSessionManager_Rotate_ReplayRevokesTheFamilyAndTheSession(t *testing.T)
 // the replay sentinel. Both are the same fact -- the presented token is
 // dead and the session is over -- and which one a given loser sees depends
 // on where the winner's commit landed between those two reads. Pinning the
-// replay sentinel alone made the test itself flaky: under load, a loser
-// answering ErrSessionRevoked used to fail the run even though the security
-// property held. What is pinned instead is everything that matters: exactly
-// one winner, every loser refused with one of the two dead-token answers,
-// and the session revoked at the end.
+// replay sentinel alone would make the test itself flaky: under load, a
+// loser answering ErrSessionRevoked would fail the run even though the
+// security property held. What is pinned instead is everything that
+// matters: exactly one winner, every loser refused with one of the two
+// dead-token answers, and the session revoked at the end.
 func TestSessionManager_Rotate_ConcurrentUseOfOneTokenIsTreatedAsAReplay(t *testing.T) {
 	t.Parallel()
 
@@ -359,14 +359,14 @@ func TestSessionManager_Revoke_IsIdempotentAndAnnouncesOnce(t *testing.T) {
 	}
 }
 
-// TestSessionManager_EventsCarryTheSessionsOwnTenant is the P2-9 regression
-// for the two session events: EventSessionRevoked and
+// TestSessionManager_EventsCarryTheSessionsOwnTenant pins the tenant stamp
+// of the two session events: EventSessionRevoked and
 // EventSessionReplayDetected announce a fact about a session -- it stopped
 // being usable, or its token was replayed -- and that fact belongs to the
 // tenant the session itself acted in (its CurrentTenantID), whatever caller
-// ended it. Before the fix both events published with TenantID empty, so a
-// tenant-scoped subscriber (a notification pipeline, say) could neither
-// route the security notice to the session's own tenant nor filter it.
+// ended it. An event published with TenantID empty would leave a
+// tenant-scoped subscriber (a notification pipeline, say) unable to route
+// the security notice to the session's own tenant or to filter it.
 func TestSessionManager_EventsCarryTheSessionsOwnTenant(t *testing.T) {
 	t.Parallel()
 

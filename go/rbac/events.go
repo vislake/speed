@@ -6,8 +6,7 @@ import (
 	"github.com/vislake/speed/go/pkgcore"
 )
 
-// The domain events rbac publishes, named <module>.<entity>.<action> per
-// backend coding standard §8.
+// The domain events rbac publishes, named <module>.<entity>.<action>.
 //
 // They exist for two distinct consumers, which is why they are declared
 // even before anything subscribes to them: an audit trail (who was granted
@@ -44,8 +43,8 @@ const (
 
 const (
 	// eventRoleBindingPayloadType names the concrete payload all three
-	// binding events carry, for EventDecl.PayloadType, so a subscriber (and
-	// the future event catalog) knows what to expect in Event.Payload
+	// binding events carry, for EventDecl.PayloadType, so a subscriber knows
+	// what to expect in Event.Payload
 	// without importing this package just to read a string. The three
 	// events share one payload shape because they describe the same fact
 	// (this user, this role, this scope) in different directions --
@@ -57,8 +56,8 @@ const (
 )
 
 // The audit actions rbac contributes to the platform-wide enumeration.
-// They use the present-tense verb form docs/internal/10-compliance-and-
-// audit.md's own examples use ("org.member.remove"), deliberately distinct
+// They use the present-tense verb form of the platform's audit-action
+// examples ("org.member.remove"), deliberately distinct
 // from the past-tense fact the events above record: the audit trail says
 // what operation someone performed, the event says what became true as a
 // result.
@@ -151,14 +150,14 @@ type RoleBindingChangedEvent struct {
 	// no actor parameter (see Authorizer.AssignRole) and cannot invent
 	// one.
 	//
-	// It is deliberately NOT the audit record of the change, and never was
-	// intended to be: the single user id cannot express the dual-identity
-	// shape an impersonation-era write must carry (root CLAUDE.md's hard
-	// rule), which is why the audit trail is produced separately, by
+	// It is deliberately NOT the audit record of the change: the single
+	// user id cannot express the dual-identity
+	// shape an impersonation-era write must carry, which is why the audit
+	// trail is produced separately, by
 	// audit.go's explicit emissions reading pkgcore.Actor and
 	// pkgcore.OnBehalfOf from ctx the same way every other module's
-	// emission does. The event's actor field stays the lightweight
-	// convergence hint it was -- a replica that only needs to invalidate
+	// emission does. The event's actor field is a lightweight
+	// convergence hint -- a replica that only needs to invalidate
 	// one cache entry has no use for either full identity.
 	ActorUserID string
 

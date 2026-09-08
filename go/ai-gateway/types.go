@@ -30,9 +30,8 @@ type ChatMessage struct {
 //
 // At the Gateway.Chat/ChatStream boundary, Model is a caller-declared
 // LOGICAL model key (for example "chat:default" or "chat:fast"), never a
-// vendor-specific model id -- business code never sees or hardcodes one
-// (docs/internal/08-ai-gateway.md's model-routing rule). The Gateway
-// resolves that key to a ModelRoute and, before calling the provider,
+// vendor-specific model id -- business code never sees or hardcodes one.
+// The Gateway resolves that key to a ModelRoute and, before calling the provider,
 // rewrites a copy of this same struct so that Model instead carries the
 // route's concrete VendorModel (e.g. "gpt-4o-mini"). A ChatProvider
 // implementation therefore always sees a concrete vendor model id in
@@ -47,10 +46,10 @@ type ChatRequest struct {
 	// message with non-empty Content is required.
 	Messages []ChatMessage
 	// Params carries vendor-specific arguments (temperature, top_p, and so
-	// on) passed through to the provider's wire request verbatim, per the
-	// design doc's explicit rule to avoid an over-rigid abstraction. A
-	// provider merges Params into its wire request without letting any
-	// entry override Model or Messages.
+	// on) passed through to the provider's wire request verbatim: modeling
+	// every vendor's parameter set in this type would be an over-rigid
+	// abstraction. A provider merges Params into its wire request without
+	// letting any entry override Model or Messages.
 	Params map[string]any
 }
 
@@ -72,8 +71,7 @@ func (r ChatRequest) validate() error {
 	return nil
 }
 
-// Usage is the token-count billing dimension the design doc names as the
-// default AI metering case.
+// Usage is the token-count billing dimension of a model call.
 type Usage struct {
 	// PromptTokens is how many tokens the request's messages consumed.
 	PromptTokens int
@@ -169,10 +167,10 @@ type ChatChunk struct {
 // provider on its behalf (see this package's doc comment for the full
 // pipeline).
 //
-// This round's MVP does not build a self-hosted inference service, but
-// ChatProvider is deliberately unaware of whether an implementation talks
-// to a local or a remote model -- a future Ollama/vLLM integration is just
-// one more implementation, per the design doc.
+// The interface deliberately does not care whether an implementation talks
+// to a local or a remote model. A self-hosted inference backend is not
+// among this package's shipped implementations; one (an Ollama/vLLM-style
+// server) would arrive as just another implementation of this interface.
 type ChatProvider interface {
 	// Chat sends req and waits for the complete reply.
 	Chat(ctx context.Context, req ChatRequest) (ChatResponse, error)

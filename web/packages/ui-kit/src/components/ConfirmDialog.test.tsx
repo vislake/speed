@@ -183,16 +183,15 @@ describe('ConfirmDialog', () => {
   })
 
   it('doubleConfirm: a double click cannot skip the guard -- the armed confirm stays inert through the arming lockout (P1 regression)', async () => {
-    // PRE-FIX (P1): arming (click 1) only re-labelled the button; a
-    // second click landing ~instantly -- a double click IS two clicks --
-    // found the guard armed and fired onConfirm, skipping the deliberate
-    // second step the guard exists to force. POST-FIX: the arming click
-    // also enters CONFIRM_ARM_LOCKOUT_MS of lockout during which the
-    // confirm button is disabled, so the second event of a double click
-    // cannot land on it; the lockout auto-clears and a click after it
-    // still confirms. The clock is faked only after render: the single
-    // timer that can exist under the fake clock is the lockout timer
-    // itself.
+    // A double click IS two clicks: arming (click 1) re-labels the
+    // button, and a second click landing ~instantly would find the
+    // guard armed and fire onConfirm, skipping the deliberate second
+    // step the guard exists to force. The arming click therefore also
+    // enters CONFIRM_ARM_LOCKOUT_MS of lockout during which the confirm
+    // button is disabled, so the second event of a double click cannot
+    // land on it; the lockout auto-clears and a click after it still
+    // confirms. The clock is faked only after render: the single timer
+    // that can exist under the fake clock is the lockout timer itself.
     const { onConfirm, getByRole } = setup({
       variant: 'danger',
       doubleConfirm: true,
@@ -285,14 +284,13 @@ describe('ConfirmDialog', () => {
   })
 
   it('doubleConfirm: arming the confirm is announced through a live region (P2-9 regression)', async () => {
-    // PRE-FIX (P2-9): the first confirm click re-labeled the button but
-    // nothing announced the armed state -- a label change under focus is
-    // not something a screen reader reports reliably, so a non-visual
-    // user pressing confirm once and waiting heard nothing about the
-    // second click they owe. POST-FIX: a polite live region sits inside
-    // the dialog (empty until armed, so the arm is a text change inside
-    // an existing region, not a region mounting together with its text)
-    // and fills with the confirm-again label on the first click.
+    // The first confirm click re-labels the button, and a label change
+    // under focus is not something a screen reader reports reliably -- a
+    // non-visual user pressing confirm once and waiting would hear
+    // nothing about the second click they owe. A polite live region sits
+    // inside the dialog (empty until armed, so the arm is a text change
+    // inside an existing region, not a region mounting together with its
+    // text) and fills with the confirm-again label on the first click.
     const { getByRole, queryByRole } = setup({
       variant: 'danger',
       doubleConfirm: true,
@@ -391,9 +389,9 @@ describe('ConfirmDialog', () => {
     expect(onItemBConfirmed).not.toHaveBeenCalled()
 
     // A single click on item B's now-showing dialog must only arm it --
-    // it must NOT call onConfirm. This is the exact bypass the finding
-    // reports: pre-fix, item B inherits armed=true and this single click
-    // fires onItemBConfirmed immediately.
+    // it must NOT call onConfirm. The armed state must not survive the
+    // close+reopen for the next item: if item B inherited armed=true,
+    // this single click would fire onItemBConfirmed immediately.
     await user.click(getByRole('button', { name: zhCN.confirmDialog.confirmLabel }))
     expect(onItemBConfirmed).not.toHaveBeenCalled()
     expect(

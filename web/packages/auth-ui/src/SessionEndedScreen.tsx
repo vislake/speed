@@ -1,6 +1,7 @@
 /**
  * SessionEndedScreen: the "session ended" placeholder a host renders
- * where protected content used to be.
+ * once protected content is gone -- the view's authenticated snapshot
+ * just turned anonymous.
  *
  * The session lifecycle is observable, not imperative: there is no
  * recovery and no refresh cookie, so a page reload starts anonymous, and

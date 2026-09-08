@@ -1,10 +1,11 @@
 //go:build integration
 
 // This file is go/sharing's PostgreSQL proof for the writeMu scope
-// decision (finding P2-sharing-5): the in-process mutex around guarded
-// writes exists for SQLite's single-writer file lock and must NOT be
-// taken on PostgreSQL, where the database's own row locks plus the bounded
-// conflict retry (concurrency.go's withTxRetry) are the honest mechanism.
+// decision (concurrency.go's own doc comment): the in-process mutex
+// around guarded writes exists for SQLite's single-writer file lock and
+// must NOT be taken on PostgreSQL, where the database's own row locks
+// plus the bounded conflict retry (concurrency.go's withTxRetry) are the
+// honest mechanism.
 // The SQLite half of the same decision -- the mutex stays engaged there,
 // so the module's writers never contend for the file lock -- is pinned by
 // the unit tier (concurrency_test.go's
@@ -16,12 +17,11 @@
 // The proof is deterministic, not a timing measurement: the test holds one
 // tenant's share row locked at the database level (SELECT ... FOR UPDATE
 // from its own connection), so tenant A's guarded write -- whenever it
-// reaches its UPDATE -- blocks inside its transaction on that row lock. On
-// the pre-mutex-scope code A holds the process-wide writeMu while blocked,
-// so tenant B's guarded write queues behind the in-process mutex and
-// cannot complete until A's transaction is released. On the fixed code no
-// process mutex is taken on PostgreSQL, so B's write -- against its own
-// tenant's unlocked row -- completes while A is still blocked. Whether B
+// reaches its UPDATE -- blocks inside its transaction on that row lock. A
+// process-wide mutex held while blocked would queue tenant B's guarded
+// write behind the in-process lock until A's transaction is released;
+// without one, B's write -- against its own tenant's unlocked row --
+// completes while A is still blocked. Whether B
 // completed is an event, not a duration. A's arrival inside its blocked
 // transaction is observed (not assumed) by polling pg_locks for its
 // ungranted lock request, so B is never launched before A is genuinely
@@ -78,8 +78,8 @@ func TestPostgres_GuardedWrites_UnrelatedTenantsNotSerialized(t *testing.T) {
 
 	// Park tenant A's share row under this connection's own row lock: A's
 	// guarded UPDATE -- whenever it reaches it -- blocks on this lock, so A
-	// is guaranteed to be mid-transaction (and, pre-fix, holding the
-	// process-wide mutex) for as long as the test needs.
+	// is guaranteed to be mid-transaction (and would, under a process-wide
+	// mutex, hold it) for as long as the test needs.
 	hold := db.Begin()
 	defer hold.Rollback() //nolint:errcheck -- rollback after the test's own releases
 	if err := hold.Exec("SELECT id FROM sharing_shares WHERE id = $1 FOR UPDATE", shareA.Share.ID).Error; err != nil {

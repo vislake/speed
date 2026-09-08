@@ -1,9 +1,9 @@
 # Generator configuration for authn's OpenAPI fragment (openapi.yaml in this
-# directory, per docs/internal/21-api-contract.md's module-asset convention:
-# every module keeps its spec at <module>/api/openapi.yaml -- this one lives
-# under go/authn/api rather than under examples/reference-app because authn
-# is a real speed module, unlike notes, which stands in for a reference-app
-# business module).
+# directory, under the module-asset convention that every module keeps its
+# spec at <module>/api/openapi.yaml -- this one lives under go/authn/api
+# rather than under examples/reference-app because authn is a real speed
+# module, unlike notes, which stands in for a reference-app business
+# module).
 #
 # The module's generated surface is regenerated with oapi-codegen v2.8.0,
 # pinned at exactly that version in the two commands that must move
@@ -21,8 +21,8 @@
 # what handler.go's Handler implements via the generated
 # HandlerFromMux/HandlerWithOptions registration helpers. The strict-server
 # and client targets are deliberately not generated: no request-binding or
-# client code exists to consume them yet (the frontend orval leg is
-# deferred -- see go/authn/AGENTS.md).
+# client code exists to consume them (the frontend consumes the merged
+# document through orval instead).
 #
 # output-options.name-normalizer: the default normalizer would name a spec
 # property "id" as the Go field Id; ToCamelCaseWithInitialisms applies the

@@ -15,13 +15,12 @@ import (
 	"github.com/vislake/speed/go/rbac"
 )
 
-// This file proves the org-route-guards round's fix end to end: before it,
-// demoRouteGuards[orgRoutePath] was routePublic, so ANY authenticated
-// tenant member -- holding no org permission at all -- could create, move,
-// rename and cascade-delete nodes and remove arbitrary members. See
-// demo_subject.go's demoRouteGuards doc comment on org's path, and
-// go/org/AGENTS.md's own permission table, for the fixed shape this file
-// exercises.
+// This file proves org's router-level permission gate end to end: without
+// it, demoRouteGuards[orgRoutePath] being routePublic would let ANY
+// authenticated tenant member -- holding no org permission at all --
+// create, move, rename and cascade-delete nodes and remove arbitrary
+// members. See demo_subject.go's demoRouteGuards doc comment on org's
+// path for the fixed shape this file exercises.
 
 // orgErrorBody is the {code, ...} envelope every refusal from either layer
 // of org's gate (rbac.RequirePermissionFunc's coarse Can check, or
@@ -132,7 +131,7 @@ func orgRequestAs(t *testing.T, srv *httptest.Server, method, path, token, demoU
 // ordinary traffic. Before the org-route-guards fix, every case below
 // SUCCEEDED (2xx): demoRouteGuards[orgRoutePath] was routePublic, so no
 // permission was ever checked and the cascade-delete case actually deleted
-// the tree. This test fails on pre-fix code and passes once org's route is
+// the tree. This test fails while org's route is
 // gated per operation (demo_subject.go's guardOrgRoute).
 func TestOrgRouteGuards_UnprivilegedCaller_CannotManageOrgTree(t *testing.T) {
 	// This test's own review flagged an unreproduced, once-in-roughly-eight
@@ -310,7 +309,7 @@ func TestOrgRouteGuards_PrivilegedCaller_CanStillManageOrgTree(t *testing.T) {
 // only because rbacModule is wired with WithSubtreeResolver onto org's own
 // Scope (server.go) -- fails closed (denies, the tenant-wide behavior of
 // pre-org-route-guards code) without it, per SubtreeResolver's own
-// contract, so this test would fail before EITHER this round's gate or
+// contract, so this test would fail before EITHER the router gate or
 // its SubtreeResolver wiring landed.
 func TestOrgRouteGuards_SubtreeScopedGrant_ManagesOwnSubtreeOnly(t *testing.T) {
 	cfg := testConfig(t)

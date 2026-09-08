@@ -44,10 +44,11 @@ const createSimulationsTenantPhotoIndexSQL = `CREATE INDEX IF NOT EXISTS idx_smi
 // produced it, and which image-generation job carries its outcome. The row
 // is written the moment Simulate's enqueue succeeds and is never deleted or
 // updated -- it is this package's append-only per-photo index, the data
-// source the P3 gallery's "simulations of this photo" list reads through
-// Service.ListSimulationsByPhoto, with each record's live status and output
-// object read from the job at query time (the job's own persisted row is
-// the outcome's source of truth; see ListSimulationsByPhoto's doc comment).
+// source the smile gallery's "simulations of this photo" list reads
+// through Service.ListSimulationsByPhoto, with each record's live status
+// and output object read from the job at query time (the job's own
+// persisted row is the outcome's source of truth; see
+// ListSimulationsByPhoto's doc comment).
 //
 // Unlike creditReservation -- platform data by design, because the credit
 // reconciliation sweep must list across every tenant in one query -- this
@@ -57,8 +58,7 @@ const createSimulationsTenantPhotoIndexSQL = `CREATE INDEX IF NOT EXISTS idx_smi
 // tenant-domain model, notes.Note (internal/notes/model.go): it embeds
 // dbkit.TenantModel for its tenant_id column and GetTenantID method, with
 // the tenant filter injected by dbkit's tenant-scoping plugin and by
-// dbkit.Repository[simulationRecord] itself -- never written by hand (root
-// CLAUDE.md's "Do not hand-write WHERE tenant_id = ?" rule; see
+// dbkit.Repository[simulationRecord] itself -- never written by hand (see
 // go/dbkit/tenant_scope.go). Embedding TenantModel -- a plain, non-key
 // tenant_id column -- is the right shape here for the same reason Note's
 // own doc comment gives for it: JobID is this record's primary key and is
@@ -76,7 +76,7 @@ type simulationRecord struct {
 	dbkit.TenantModel
 
 	// PhotoObjectID is the go/storage object id of the patient photo the
-	// simulation was generated from -- the P3 gallery's grouping key.
+	// simulation was generated from -- the smile gallery's grouping key.
 	PhotoObjectID string `gorm:"column:photo_object_id;size:64;not null"`
 
 	// OptionsJSON is the canonical JSON of the EFFECTIVE option set that
@@ -115,12 +115,12 @@ var _ dbkit.TenantScoped = simulationRecord{}
 // SimulationStore is smilesim's tenant-scoped data-access type for
 // simulationRecord -- the app-side mirror of notes' Repository shape
 // (internal/notes/repository.go): it embeds dbkit.Repository[simulationRecord]
-// instead of holding a plain *gorm.DB (root CLAUDE.md's multi-tenant
-// isolation rule; backend coding standard §3.2), so Create is promoted from
+// instead of holding a plain *gorm.DB (the multi-tenant isolation
+// discipline), so Create is promoted from
 // the embedded base -- which resolves the tenant from the ctx itself and
-// fails closed when ctx carries none -- while the two lookups Repository[T]'s
-// deliberately minimal surface cannot express (see go/dbkit/AGENTS.md's
-// "Known limitations") live here as their own methods, each running inside
+// fails closed when ctx carries none -- while the two lookups
+// Repository[T]'s deliberately minimal surface cannot express live here as
+// their own methods, each running inside
 // dbkit.WithTenantSession exactly as notes' own listSoftDeletedBefore and
 // listByCreator do, with the tenant half of the WHERE clause injected by
 // dbkit's tenant-scoping plugin from the ctx tenant (go/dbkit/tenant_scope.go)

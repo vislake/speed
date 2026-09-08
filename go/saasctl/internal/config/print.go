@@ -48,10 +48,9 @@ const redactedMarker = "[redacted]"
 // system's durable secrets and an accidental paste of the output into a
 // log or ticket must not ship them. The decision lives here, once: the
 // row renderer consults this list for every line it prints, so a
-// bootstrap variable added to the surface in the future prints its
-// plaintext by default until someone declares it here -- this list is the
-// checklist that act is performed against, and the whole-output tests
-// force every added row past it either way.
+// bootstrap variable not declared here prints its plaintext by default --
+// this list is the checklist the declaration act is performed against,
+// and the whole-output tests force every added row past it either way.
 var redactedEnv = map[string]bool{
 	appconfig.ConfigKeyEnv:            true,
 	appconfig.OrgIndexKeyEnv:          true,
@@ -208,8 +207,7 @@ func reportError(stderr io.Writer, err error) int {
 // through cfg.EffectiveDBPath, the single shared resolution db migrate
 // opens its database with. The raw value and its provenance stay visible
 // in the source column when the two differ (sqlitePathSource), so the
-// operator sees both the input and the effective file -- the module
-// discipline this command's AGENTS.md entry records in its strong form.
+// operator sees both the input and the effective file.
 func print(modPath string) (string, error) {
 	proj, err := project.Read(modPath)
 	if err != nil {

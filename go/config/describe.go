@@ -6,8 +6,7 @@ import "sort"
 // entry (schemaItem, unexported) -- a ConfigItem as declared by its owning
 // module, or a FeatureFlag folded into the same shape. It exists so an
 // external tool (a Markdown configuration-reference generator, an admin
-// console) can render the full configuration item listing
-// docs/internal/13-documentation-standards.md's must-have doc list names --
+// console) can render the full configuration item listing -- which is
 // generated from the config schema, never hand-written -- without needing
 // to import schema.go's own unexported machinery, which no external
 // package ever could.

@@ -13,13 +13,9 @@
  *     injection armed, which would make every other gate's registration
  *     fail its first attempt if it were set for the whole run.
  *
- * These helpers were written inside restart-survival and moved here when
- * the second consumer arrived, per this repository's own rule about
- * shared test helpers living in test-utils rather than being copied
- * between files (.claude/skills/frontend-coding-standards/SKILL.md §12).
- * Two copies of a boot-and-wait routine would drift in exactly the way
- * that costs a day: the diagnosis fixes below were each learned once and
- * would have had to be learned again.
+ * The boot-and-wait routine lives here, shared by the two journeys, so
+ * its failure diagnosis is written once rather than copied between
+ * specs -- two copies would drift in exactly the way that costs a day.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -99,13 +95,11 @@ export async function bootServer(options: ServerOptions): Promise<OwnedServer> {
  * Collects everything a process says on BOTH streams, returning a reader
  * for it.
  *
- * Both, and all of it: two separate omissions used to hide the reason a
- * boot failed. Keeping only the last stderr chunk let `go run`'s own
- * "exit status 1" epilogue overwrite the program's explanation, and
- * reading stderr alone missed the explanation entirely whenever it went
- * to stdout -- which is where this app's structured logger writes, so
- * that was the normal case rather than the exception. The report said a
- * server had exited without ever saying why.
+ * Both, and all of it: keeping only the last stderr chunk would let
+ * `go run`'s own "exit status 1" epilogue overwrite the program's
+ * explanation, and reading stderr alone would miss the explanation
+ * whenever it went to stdout -- which is where this app's structured
+ * logger writes, so that is the normal case rather than the exception.
  */
 function capture(child: ChildProcess): () => string {
   let said = ''
@@ -201,10 +195,9 @@ export async function bootImageProvider(options: {
  * to another port is a CROSS-ORIGIN request as far as the page is
  * concerned, and the browser applies CORS to it. This app's server sends
  * no CORS headers -- it has never needed to, being same-origin in every
- * real deployment -- so WebKit blocked every rewritten call and the page
- * rendered "No network connection", which reads exactly like the defect
- * a gate is looking for on an engine where nothing is wrong. Chromium
- * happened to allow it, so the suite looked fine.
+ * real deployment -- so a rewritten call would be blocked and the page
+ * would render "No network connection", which reads exactly like the
+ * defect a gate is looking for on an engine where nothing is wrong.
  */
 export async function routeApiTo(
   page: import('@playwright/test').Page,

@@ -12,7 +12,7 @@
 // standalone mode runs, with no database of its own, so there is no
 // dialect for a "sqlite" migration to target. Precedent: go/pki's
 // signer/vault and signer/kmsaws subpackages ship no migrations directory
-// whatsoever for the identical reason (see go/pki/AGENTS.md) -- a
+// whatsoever for the identical reason -- a
 // PostgreSQL-only mechanism ships PostgreSQL-only migrations, and a
 // missing SQLite counterpart is the correct shape here, not a gap.
 // dbkit.MigrationRegistry.Apply itself only ever reads the one

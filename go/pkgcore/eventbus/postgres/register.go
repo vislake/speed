@@ -72,8 +72,8 @@ func (b *closableEventBus) Close() error {
 // mustRegister adds r to registry and panics if that fails, mirroring
 // eventbus/redis/register.go's identical unexported helper -- this package
 // cannot call that one (it is unexported to the redis package), so it
-// carries its own copy, per go/pkgcore/AGENTS.md's packaging rule the same
-// duplication eventbus/redis's own clientFromConfig doc comment cites.
+// carries its own copy -- the same deliberate duplication the redis
+// package's own helper records.
 func mustRegister[T any](registry *pkgcore.SeamRegistry[T], r pkgcore.Registration[T]) {
 	if err := registry.Register(r); err != nil {
 		panic(fmt.Sprintf("pkgcore/eventbus/postgres: builtin implementation registration failed: %v", err))

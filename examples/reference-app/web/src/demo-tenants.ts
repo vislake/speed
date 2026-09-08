@@ -19,8 +19,9 @@
  * answer (tenant-name.ts / useCurrentTenantName in app-services),
  * the route cmd/server/clinic_name.go mounts. Which of the two demo
  * tenants an account lands in when it signs in with no tenant named
- * is NOT fixed (authn resolves the account's first tenant from the
- * host's MembershipReader), so a surface names the CURRENT tenant
+ * is the membership answer's first row (authn resolves the account's
+ * first tenant from the host's MembershipReader, whose enumeration
+ * org orders by tenant id), so a surface names the CURRENT tenant
  * from the principal's own claim, never from a guess.
  */
 

@@ -9,10 +9,8 @@
 //
 // It is split out of go/pkgcore's own package for the identical reason
 // kv/redis is: a consumer which never wires a PostgreSQL-backed store must
-// not inherit jackc/pgx/v5 in its dependency graph (docs/internal/03-
-// deployment-modes.md's implementation-registry section measures the cost
-// and names the boundary; this package's own AGENTS.md entry records the
-// measured number for pgx specifically).
+// not inherit jackc/pgx/v5 in its dependency graph; its measured dependency
+// cost is recorded in its package documentation.
 //
 // Importing this package registers "kv.postgres" on pkgcore's shared
 // KVStoreRegistry as a side effect (see register.go) -- the same
@@ -22,8 +20,7 @@
 // "kv.redis"; a host that wants this implementation instead builds its own
 // Preset (a plain map literal, see Preset's own doc comment) or bypasses the
 // preset layer entirely by constructing NewKVStore and wiring it with
-// pkgcore.WithKVStore, exactly as a host choosing kv/redis explicitly does
-// today.
+// pkgcore.WithKVStore, exactly as a host choosing kv/redis explicitly does.
 //
 // # Sharing an existing connection pool
 //

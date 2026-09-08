@@ -14,11 +14,11 @@ import (
 //
 // It embeds *dbkit.Repository[WebhookSubscription] (Create / FindByID /
 // Update / Delete / List promoted unchanged, mirroring
-// APIKeyRepository's identical shape) and adds the one query round 1's
-// minimal-surface reasoning does not already cover: "every ACTIVE
-// subscription of one tenant whose EventTypes includes a given public
-// type", the fan-out lookup handleDomainEvent (webhook_delivery.go) needs on
-// every matching domain event.
+// APIKeyRepository's identical shape) and adds the one query the
+// API-key repository's minimal surface does not already cover: "every
+// ACTIVE subscription of one tenant whose EventTypes includes a given
+// public type", the fan-out lookup handleDomainEvent (webhook_delivery.go)
+// needs on every matching domain event.
 //
 // Following go/notification's PreferenceRepository precedent exactly (see
 // that type's own doc comment in preference_repository.go): built on the
@@ -102,11 +102,9 @@ type webhookSubscriptionChanges struct {
 // false (that is how a caller pauses a subscription) -- naming the changed
 // columns in Select forces exactly those columns into the SET clause
 // regardless of value. The one always-present extra column is UpdatedAt:
-// gorm's auto-update-time machinery writes it, exactly as it did under the
-// previous statement shape (the map-payload Updates also refreshed it on
-// every write), and its presence is what makes RowsAffected a reliable
-// "did a live row match" answer on SQLite -- a matched row always changes,
-// so it is always counted.
+// gorm's auto-update-time machinery writes it, and its presence is what
+// makes RowsAffected a reliable "did a live row match" answer on SQLite --
+// a matched row always changes, so it is always counted.
 //
 // The tenant filter comes from dbkit's tenant-scope plugin (the statement
 // runs inside WithTenantSession against the TenantScoped
@@ -156,16 +154,15 @@ func (r *WebhookSubscriptionRepository) updateFields(ctx context.Context, id str
 //
 // # Why the restore and the pause must be one statement
 //
-// The method this write replaced performed the act as TWO writes -- first
-// dbkit's Repository[WebhookSubscription].Restore unmark, then an updateFields
-// call setting Active = false -- and the gap between them was a real hazard
-// on both sides. Between the unmark's commit and the pause's commit the row
-// was live with Active still true, the exact state the fan-out matches: a
-// matching domain event observed in that window was fanned out to it. And a
-// pause write that failed left the row permanently restored-ACTIVE while the
-// caller saw only an error -- a half-restored state whose repair a retry
-// could never reach, since the row was no longer mark-deleted for a second
-// restore to match. One statement closes both: no instant of the write has a
+// Two separate writes -- an unmark followed by an Active = false update --
+// would leave a hazard on both sides: between the unmark's commit and the
+// pause's commit the row would be live with Active still true, the exact
+// state the fan-out matches, so a matching domain event observed in that
+// window would be fanned out to it. And a pause write that failed would
+// leave the row permanently restored-ACTIVE while the caller saw only an
+// error -- a half-restored state whose repair a retry could never reach,
+// since the row would no longer be mark-deleted for a second restore to
+// match. One statement closes both: no instant of the write has a
 // live-and-active row (the two column changes commit together), and a
 // failure of the write leaves the row exactly as it was -- still
 // mark-deleted, never restored at all -- failing closed toward "nothing
@@ -187,7 +184,7 @@ func (r *WebhookSubscriptionRepository) updateFields(ctx context.Context, id str
 // reported: an id that never existed, a row that is live (never deleted, or
 // already restored), and another tenant's row all match nothing and all
 // answer the one ErrWebhookSubscriptionNotFound, exactly as dbkit's own
-// Repository[T].Restore behaved -- and a concurrent
+// Repository[T].Restore answers -- and a concurrent
 // DeleteWebhookSubscription whose mark-delete commits before this write
 // finds its deletion winning (matched == false) rather than being silently
 // undone by a stale unmark.
@@ -212,9 +209,9 @@ func (r *WebhookSubscriptionRepository) restorePaused(ctx context.Context, id st
 // matchingSubscriptions), since event_types is a JSON column this module
 // deliberately never filters on inside SQL (webhook_model.go's own doc
 // comment explains why: no native arrays, no JSONB operator filtering, per
-// the backend coding standard's dual-dialect rule). A tenant configures at
-// most a handful of webhooks in practice, so reading them all and filtering
-// in Go is the right trade for staying dialect-portable.
+// the dual-dialect rule). A tenant configures at most a handful of
+// webhooks in practice, so reading them all and filtering in Go is the
+// right trade for staying dialect-portable.
 func (r *WebhookSubscriptionRepository) ListActiveByTenant(ctx context.Context) ([]WebhookSubscription, error) {
 	var subs []WebhookSubscription
 	err := dbkit.WithTenantSession(ctx, r.db, func(tx *gorm.DB) error {
@@ -228,8 +225,7 @@ func (r *WebhookSubscriptionRepository) ListActiveByTenant(ctx context.Context) 
 // the embedded Repository[T] covers Create/FindByID/Update/List, and this
 // file adds the two shapes it cannot express -- a lookup by the fan-out's
 // own idempotency key, and the "recent deliveries for one subscription"
-// listing docs/internal/07-platform-services.md's delivery-log requirement
-// asks for.
+// listing the design's delivery-log requirement asks for.
 type WebhookDeliveryRepository struct {
 	*dbkit.Repository[WebhookDelivery]
 	db *gorm.DB

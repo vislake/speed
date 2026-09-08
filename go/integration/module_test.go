@@ -79,8 +79,8 @@ func TestModule_AuditActionVocabulary_HasNoDeadEntries(t *testing.T) {
 
 // TestModule_Register_RegistersJobHandlers proves the module's job-handler
 // wiring: exactly the two handlers this module enqueues tasks under are
-// registered, under jobTypeWebhookDeliver (round 2's delivery pipeline) and
-// jobTypeAPIKeyExpirySweep (the expiry-sweep task, apikey_sweep.go),
+// registered, under jobTypeWebhookDeliver (the webhook delivery pipeline)
+// and jobTypeAPIKeyExpirySweep (the expiry-sweep task, apikey_sweep.go),
 // matching storage's and notification's identical "job handlers" Register
 // assertion shape. A third registered type would mean a task nothing ever
 // enqueues, and an enqueued task with no registered handler could never

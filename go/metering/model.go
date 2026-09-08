@@ -15,25 +15,24 @@ const (
 )
 
 // The OutboxRecord.Status vocabulary. There is no "processing" transitional
-// state this round: Dispatcher.RunOnce claims a batch, attempts each row's
-// delivery synchronously within that call, and either marks it
+// state: Dispatcher.RunOnce claims a batch, attempts each row's delivery
+// synchronously within that call, and either marks it
 // outboxStatusDelivered or leaves it outboxStatusPending for the next
 // cycle -- see Dispatcher's doc comment for why a single in-process
-// dispatcher makes that safe this round, and what a second concurrent
-// dispatcher process would need that this round does not build.
+// dispatcher makes that safe, and what a second concurrent dispatcher
+// process would need.
 const (
 	outboxStatusPending   = "pending"
 	outboxStatusDelivered = "delivered"
 )
 
 // UsageSummary is one row of metering_usage_summaries: the aggregated
-// quantity for one tenant's one feature within one calendar period
-// (docs/internal/06-billing-and-metering.md's summary-storage row, the
-// SQLite/PostgreSQL usage-summary table the design doc names "usage_*_summary").
+// quantity for one tenant's one feature within one calendar period (the
+// SQLite/PostgreSQL usage-summary table of the aggregation design).
 //
 // # Data domain
 //
-// Tenant data (docs/internal/04-data-and-tenancy.md): a usage summary is
+// Tenant data: a usage summary is
 // meaningful only inside the tenant it measures, so UsageSummary
 // implements dbkit.TenantScoped, is reached only through SummaryRepository
 // (which embeds dbkit.Repository[UsageSummary]), and its isolation is
@@ -45,9 +44,8 @@ const (
 // ULID/UUID -- so Aggregator.upsertSummary can reach the one row for a
 // given (tenant, feature, period) through dbkit.Repository[T].FindByID
 // rather than a hand-written query, which this codebase's raw-GORM-bypass
-// discipline forbids outside dbkit's own internals (root CLAUDE.md,
-// "Do not use db.Table / db.Model / db.Raw to work around the
-// Repository"). Because ID is derived from Feature and PeriodStart alone
+// discipline forbids outside dbkit's own internals. Because ID is derived
+// from Feature and PeriodStart alone
 // (not TenantID), it is NOT globally unique across tenants -- two
 // different tenants both measuring "ai.generation" in the same calendar
 // month get the same ID string -- so, unlike go/pki's Certificate (whose
@@ -89,20 +87,20 @@ type UsageSummary struct {
 	// already happened. A mere quantity comparison cannot answer that once
 	// the configuration may differ from the one the row was folded under
 	// -- thresholds are construction-time values, so an operator lowering
-	// one does so by restarting, and the old equivalence "quantity >=
-	// threshold means the crossing happened" then latches a crossing that
-	// never fired under the new threshold (P2-metering-B). The rebuild
-	// therefore latches only when the row attests that the current
+	// one does so by restarting, and a bare "quantity >= threshold means
+	// the crossing happened" comparison then latches a crossing that never
+	// fired under the new threshold. The rebuild therefore latches only
+	// when the row attests that the current
 	// threshold was in force at its last fold: *OverageThreshold == the
 	// current effective threshold. A row whose last fold ran under a
 	// different threshold -- or under none at all -- attests nothing about
 	// the current configuration, and the first post-restart fold that
 	// reaches the threshold is the crossing event.
 	//
-	// A nil value is therefore also the legacy state: rows written before
-	// migration 0006 added this column carry NULL, exactly like a fold
-	// that ran under no threshold, and the seed treats both identically
-	// (no attestation, latch left open) -- see the migration's own header
+	// A nil value therefore means one of two states treated identically:
+	// a fold that ran under no threshold, or a row written before
+	// migration 0006 added the column. The seed reads either as no
+	// attestation (latch left open) -- see the migration's own header
 	// comment for the bounded duplicate-fire residual that choice leaves on
 	// the one period straddling an upgrade.
 	OverageThreshold *float64  `gorm:"column:overage_threshold"`
@@ -137,19 +135,15 @@ var _ dbkit.TenantScoped = UsageSummary{}
 // The reason is Dispatcher: outbox delivery is a background process that
 // must find every tenant's pending rows to retry them, the same shape
 // go/jobs' own jobRecord is platform data for (its dispatch query "must
-// scan candidate Jobs across every tenant at once", per
-// tools/semgrep_rules/raw-gorm-bypass.yml's own allowlist header for
-// go/jobs/store.go) and the same shape go/config's row and go/dbkit's
-// AuditEvent already get, per root CLAUDE.md's Repository Status census
-// ("AuditEvent is platform data with a real, non-enforced tenant_id
-// column, the same treatment go/jobs's jobRecord and go/config's row
-// already get, never dbkit.TenantScoped"). dbkit.Repository[T] has no
-// cross-tenant read path (tenancy.WithSystemContext elevates who may ask,
-// not what dbkit.Repository[T] itself can see -- see that function's own
-// doc comment), so a genuinely tenant-scoped OutboxRecord would leave
-// Dispatcher with no sanctioned way to find pending rows across tenants at
-// all. See AGENTS.md's "Outbox table: platform data, not tenant-scoped"
-// section for the full argument.
+// scan candidate Jobs across every tenant at once") and the same shape
+// go/config's row and go/dbkit's AuditEvent already get: platform data
+// with a real, non-enforced tenant_id column, never dbkit.TenantScoped.
+// dbkit.Repository[T] has no cross-tenant read path
+// (tenancy.WithSystemContext elevates who may ask, not what
+// dbkit.Repository[T] itself can see -- see that function's own doc
+// comment), so a genuinely tenant-scoped OutboxRecord would leave
+// Dispatcher with no sanctioned way to find pending rows across tenants
+// at all.
 type OutboxRecord struct {
 	ID             string    `gorm:"column:id;primaryKey;size:36"`
 	TenantID       string    `gorm:"column:tenant_id;size:64;not null"`
@@ -165,32 +159,32 @@ type OutboxRecord struct {
 	// Status is outboxStatusPending or outboxStatusDelivered.
 	Status string `gorm:"column:status;size:16;not null"`
 	// Attempts counts failed delivery attempts, incremented by
-	// markOutboxAttemptFailed. It never causes a row to stop being
-	// retried -- see Dispatcher's doc comment: billing-grade delivery
-	// retries indefinitely, it does not dead-letter. Since migration 0005
-	// it is history only: the claim query no longer orders by it (see
-	// RetryAfter for what replaced that ordering).
+	// markOutboxAttemptFailed. It is the escalation count Dispatcher's
+	// alert half reads, and nothing else: it never causes a row to stop
+	// being retried (billing-grade delivery retries indefinitely, it does
+	// not dead-letter -- see Dispatcher's doc comment) and it never orders
+	// claims, which order by RetryAfter alone (see claimPendingOutboxRecords'
+	// doc comment).
 	Attempts int `gorm:"column:attempts;not null;default:0"`
 	// LastError is the most recent delivery failure's message, truncated
 	// to fit the column -- never a stack trace or internal detail beyond
 	// what Aggregator.Ingest's own error already reports.
 	LastError string `gorm:"column:last_error;size:500;not null;default:''"`
 	// RetryAfter is the earliest moment this row may be claimed again --
-	// the per-row re-claim schedule migration 0005 added. Enqueue sets it
-	// to the row's own CreatedAt, so a never-failed row is claimable from
-	// birth; markOutboxAttemptFailed moves it to the failure time plus the
+	// the per-row re-claim schedule. Enqueue sets it to the row's own
+	// CreatedAt, so a never-failed row is claimable from birth;
+	// markOutboxAttemptFailed moves it to the failure time plus the
 	// dispatcher's retry delay, so a failed row re-enters the candidate
 	// set at a moment in the future instead of re-joining the queue head.
 	// See claimPendingOutboxRecords' doc comment for the full fairness
-	// argument. The column is NOT NULL since migration 0007 (which ran
-	// 0005's own idempotent backfill first, so no legacy NULL state
-	// survives anywhere), and the claim query therefore carries no NULL
-	// accommodation -- no COALESCE, no IS NULL escape: the schema backs
-	// what both writers always did. The field stays a *time.Time pointer
-	// deliberately: a future write path that forgets RetryAfter then
-	// fails LOUDLY at the NOT NULL constraint on the write itself, never
-	// stores a silently-wrong schedule (a zero time.Time value would sort
-	// as eligible-from-year-one and be claimed ahead of every row).
+	// argument. The column is NOT NULL (migration 0007), so NULL is
+	// structurally impossible and the claim query carries no NULL
+	// accommodation -- no COALESCE, no IS NULL escape. The field stays a
+	// *time.Time pointer deliberately: any write that forgets to set
+	// RetryAfter fails LOUDLY at the NOT NULL constraint on the write
+	// itself, never storing a silently-wrong schedule (a zero time.Time
+	// value would sort as eligible-from-year-one and be claimed ahead of
+	// every row).
 	RetryAfter  *time.Time `gorm:"column:retry_after;not null"`
 	CreatedAt   time.Time  `gorm:"column:created_at;not null"`
 	DeliveredAt *time.Time `gorm:"column:delivered_at"`

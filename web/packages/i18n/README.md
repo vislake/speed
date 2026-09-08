@@ -19,11 +19,11 @@ nothing:
    `switchLanguage`; stored under `SPEED_LOCALE_STORAGE_KEY` in the bound
    storage (browser localStorage by default, injectable, opt-out with
    `storage: null`).
-3. **Profile language** -- the signed-in user's stored locale. M0 has no
-   profile feature: this slot is the documented extension point the M1
-   user-profile step feeds. Hosts that can resolve a profile locale pass
-   it to `createI18n` and it outranks the browser (the URL parameter and
-   a persisted manual choice still outrank it, in the chain order above).
+3. **Profile language** -- the signed-in user's stored locale. The platform
+   ships no profile feature yet: this slot exists for hosts that can
+   resolve a profile locale, and it outranks the browser (the URL
+   parameter and a persisted manual choice still outrank it, in the chain
+   order above).
 4. **Navigator languages**, in preference order.
 5. **The default language** -- `zh-CN`.
 
@@ -216,8 +216,8 @@ degrade visibly, not crash).
 
 ## Development
 
-From `web/packages/i18n`: `pnpm lint`, `pnpm typecheck`, `pnpm test`
-(80 tests), `pnpm build`. Bilingual fixtures live under
+From `web/packages/i18n`: `pnpm lint`, `pnpm typecheck`, `pnpm test`,
+`pnpm build`. Bilingual fixtures live under
 `test-utils/locales/` (repo CJK-scanner exemption); sources and tests
 assert against imported fixtures. `test-utils/` is test-only and never
 emitted into `dist/`.

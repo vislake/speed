@@ -1,6 +1,6 @@
 -- billing_payment_events is the durable, deduplicated record of every
 -- inbound payment-channel webhook delivery (go/billing/payment_event.go):
--- docs/internal/06-billing-and-metering.md's mandatory insert-first-to-dedup
+-- the mandatory insert-first-to-dedup
 -- rule requires one row per genuinely distinct channel event, inserted
 -- BEFORE any processing runs, so a channel's own event id (provider_event_id)
 -- together with channel is the natural key a redelivered event dedups on.

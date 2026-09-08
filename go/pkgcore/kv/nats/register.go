@@ -16,9 +16,8 @@ package nats
 // The trade this package accepts is also the same as kv/redis's: a host that
 // does name "kv.nats" in a Preset but forgets to import this package turns
 // "missing kv.nats" from a compile-time failure into a Bootstrap-time
-// pkgcore.ErrUnknownImplementation (docs/internal/03-deployment-modes.md's
-// implementation-registry section names this cost and accepts it
-// explicitly).
+// pkgcore.ErrUnknownImplementation -- the accepted database/sql trade, an
+// error that names the import which fixes it.
 
 import (
 	"context"
@@ -128,9 +127,9 @@ func natsBucketFromConfig(cfg pkgcore.Config) string {
 // an equivalent helper rather than share this one: the two packages are
 // independent implementations of different seams, and neither owns the
 // other, so duplicating a dozen lines is cheaper than inventing a third
-// package for both to depend on (go/pkgcore/AGENTS.md's packaging rule,
-// exactly as kv/redis's own clientFromConfig comment argues for its
-// eventbus/redis counterpart).
+// package for both to depend on (the same deliberate duplication
+// kv/redis's own clientFromConfig comment argues for its eventbus/redis
+// counterpart).
 func connFromConfig(cfg pkgcore.Config) (*nats.Conn, error) {
 	url := natsURLFromConfig(cfg)
 

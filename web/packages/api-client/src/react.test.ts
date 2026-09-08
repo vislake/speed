@@ -273,9 +273,9 @@ describe('a failed first load is retried by the next subscriber, never cached as
     // permanent answer: the next mounted consumer's subscribe starts a
     // fresh load, so a later mount (after a reconnect, a retry, a
     // route change) recovers instead of reading the dead error state
-    // for the client's whole lifetime. (Before the fix the `started`
-    // latch inside subscribe never reopened, no second request was
-    // ever made, and the second mount inherited the first failure.)
+    // for the client's whole lifetime. (A `started` latch that never
+    // reopened would make no second request and leave the second mount
+    // inheriting the first failure.)
     const standin = scriptedStandin(
       jsonResponse(500, { code: 'config.internal_error', traceId: 'trace-500' }),
       jsonResponse(200, { config: { brand_name: 'Speed' }, features: ['flag_a'] }),
@@ -318,7 +318,8 @@ describe('a failed first load is retried by the next subscriber, never cached as
     // A usePublicConfig observer alongside the feature hook makes the
     // first load's settled-failure state observable before unmounting,
     // so the second mount deterministically subscribes to a failed
-    // store (the exact state the latch used to cache forever).
+    // store (the failed state no latch may cache: a settled error
+    // caches nothing, so the next subscriber starts a fresh load).
     const observer = renderHook(() => usePublicConfig(api))
     const first = renderHook(() => useFeature(api, 'flag_a'))
     await waitFor(() => expect(observer.result.current.error).toBeDefined())

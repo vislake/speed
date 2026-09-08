@@ -1,11 +1,8 @@
 name: npm-package-ci
-
 # Reusable per-package npm CI, called by the pipeline orchestrators
-# (fast-check today; full-check, nightly and release when they grow npm legs).
-# docs/internal/18-cicd.md's reusable-workflow design section is the
-# governing spec: callers enumerate one matrix row per package, so adding a
-# package means adding one row to a caller's matrix -- never copying this
-# file's legs into a workflow.
+# (fast-check; full-check when it grows npm legs). Callers enumerate one
+# matrix row per package, so adding a package means adding one row to a
+# caller's matrix -- never copying this file's legs into a workflow.
 #
 # INPUT
 # `package` is the package's directory relative to the repository root
@@ -19,8 +16,7 @@ name: npm-package-ci
 #      committed web/pnpm-lock.yaml must satisfy every package manifest
 #      exactly; a stale lockfile fails the install, which is how a new
 #      dependency forces its lockfile update into the same commit. The
-#      pnpm store is cached by setup-node-env under a lockfile-hash key
-#      (18-cicd cost-control rule 3).
+#      pnpm store is cached by setup-node-env under a lockfile-hash key.
 #   1..4 run from inside the package directory, matching the local
 #      workflow of web/AGENTS.md: the scripts resolve against the
 #      package's own dependencies while ESLint and tsconfig walk up to the
@@ -49,39 +45,35 @@ name: npm-package-ci
 #                    tsc --noEmit under the strict web/tsconfig.base.json
 #                    settings (each package's tsconfig extends it).
 #   3. pnpm test      the package's vitest unit suite. No e2e or
-#                    component-preview legs exist until that tooling
-#                    lands (see DELIBERATELY NOT WIRED below); a package's
-#                    tests are its only runtime checks today.
+#                    component-preview legs exist (see DELIBERATELY NOT
+#                    WIRED below); a package's tests are its only runtime
+#                    checks.
 #   4. pnpm build     emits dist/ via each package's project build. The
 #                    package.json exports map to those emitted files, so a
 #                    build that stops compiling fails here before any
 #                    consumer resolves the exports at runtime.
 #
-# DELIBERATELY NOT WIRED HERE (18-cicd discipline-table rows whose tooling
-# does not exist in the repository yet; each lands with the round that
-# introduces it -- wiring them now would be fake checks):
+# DELIBERATELY NOT WIRED -- checks whose tooling does not exist in the
+# repository yet (wiring them now would be fake checks):
 #   * ESLint rules that need the generated api-sdk consumer surface --
-#     request-shape checks against the generated types -- land with the
-#     api-sdk round, where the types to check against exist. (The
+#     request-shape checks against the generated types -- need the types
+#     to check against, which exist only in the generated package. (The
 #     hand-written-calls half of the API-contract family is wired:
-#     speed/no-direct-http covers package src from the shared flat
-#     config with packages/api-client as its single whitelist, and the
-#     JSX family's no-bare-text half likewise with no-literal-text; see
-#     leg 1.)
+#     speed/no-direct-http covers package src from the shared flat config
+#     with packages/api-client as its single whitelist, and the JSX
+#     family's no-bare-text half likewise with no-literal-text; see leg 1.)
 #   * Repo-level i18n key parity over package locale files
 #     (tools/check_i18n_keys.py's web JSON extension) is wired in the
 #     repo-level docs-check pipeline, whose path filter already covers
 #     **/locales/**; the parity runtime half stays in code (@speed/i18n's
 #     registerNamespace validates coverage and identical key sets at
 #     registration).
-#   * Storybook component previews: ui-kit shipped without a preview
-#     harness; the round that introduces one wires it here.
-#   * publint publish-shape validation and changesets wiring: with the
-#     web release-machinery round -- no @speed/* package is published yet,
-#     and the release pipeline stub is gated until that round.
+#   * Storybook component previews: no package ships a preview harness.
+#   * publint publish-shape validation and changesets wiring: no @speed/*
+#     package is published yet, and no release machinery is wired.
 #
-# jobs.timeout-minutes bounds every run (18-cicd cost control); the caller
-# additionally cancels stale runs via concurrency.
+# jobs.timeout-minutes bounds every run; the caller additionally cancels
+# stale runs via concurrency.
 
 on:
   workflow_call:

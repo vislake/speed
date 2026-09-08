@@ -31,7 +31,7 @@ import { CurrentClinicLine } from './current-clinic.js'
  * by the suites that script feature lists. No cross-language import
  * exists to pin the mirror, so drift is fail-closed by direction only:
  * a server-side rename would hide the card silently (useFeature answers
- * false), surfacing only against the real server on the M4 leg. */
+ * false). */
 export const FEATURE_SMILE_PREVIEW = 'ai.smile_preview'
 export const FEATURE_PREMIUM_UPSELL = 'ai.premium_upsell'
 
@@ -124,21 +124,21 @@ export function HomeView(): ReactElement {
         // No flag the server resolves is enabled. The empty state must
         // stay true for the population that actually meets it -- a
         // practice that just registered itself, whose account IS the
-        // administrator and whose whole journey works from that account
-        // (the new-practice acceptance gate's finding). So the copy
-        // never claims the clinic's features are disabled and never
-        // points at an administrator to enable anything: it says the
-        // panel has nothing to show and names where the work actually
-        // lives. The promise-to-blank-space shape this section replaced
-        // (home.intro used to say "the cards below show the
-        // features...", with no mechanism in the app able to enable
-        // any) is what the home-is-self-consistent acceptance gate
-        // refuses. The intro paragraph itself does not frame this
-        // state either: its sentence about what is here depending on
-        // enabled features belongs beside the card list it describes
-        // (the cards branch above) and would contradict this
-        // description -- no feature needs enabling -- on the very same
-        // screen, so the no-features home renders without it.
+        // administrator and whose whole journey works from that account.
+        // So the copy never claims the clinic's features are disabled
+        // and never points at an administrator to enable anything: it
+        // says the panel has nothing to show and names where the work
+        // actually lives. It must also never promise cards that are not
+        // there -- a sentence claiming "the cards below show the
+        // features..." would point at blank space while no mechanism in
+        // the app can enable a feature, the promise-to-blank-space
+        // shape home-is-self-consistent.spec.ts refuses. The intro
+        // paragraph itself does not frame this state either: its
+        // sentence about what is here depending on enabled features
+        // belongs beside the card list it describes (the cards branch
+        // above) and would contradict this description -- no feature
+        // needs enabling -- on the very same screen, so the no-features
+        // home renders without it.
         <EmptyState
           variant="empty"
           title={t('home.emptyTitle')}

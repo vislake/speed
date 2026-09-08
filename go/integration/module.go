@@ -22,9 +22,9 @@ import (
 var openAPISpecYAML []byte
 
 // apiPath is the common prefix this module's HTTP routes are mounted at --
-// round 5's API-key operations and round 7's webhook-subscription CRUD,
-// recent-deliveries listing and restore alike share the one mount (see
-// Register below). It must agree with the "paths:" keys of this module's
+// the API-key operations and the webhook-subscription CRUD, recent-
+// deliveries listing and restore alike share the one mount (see Register
+// below). It must agree with the "paths:" keys of this module's
 // own OpenAPI fragment (api/openapi.yaml): every one of them starts with
 // this prefix, and Handler's inner mux (built by api.HandlerFromMux, see
 // handler.go) registers each spec path as an ABSOLUTE net/http pattern --
@@ -40,25 +40,24 @@ const moduleName = "integration"
 // MaxAPIKeyLifetime is both the forced expiry ceiling Service.Create
 // enforces on every request (ErrExpiryExceedsMaximum past it) and the
 // default it applies when a request names no ExpiresAt at all, per the
-// design doc's forced-expiry-ceiling rule (defaulting to one year) -- the
+// design's forced-expiry-ceiling rule (defaulting to one year) -- the
 // ceiling and the unspecified-request default are declared as the same one
 // year, not two numbers that happen to agree.
 //
 // It is the lifetime every Service uses unless its host configured a
 // different one through WithMaxAPIKeyLifetime: keeping the value a plain
 // package constant (rather than a go/config item) avoids a dependency edge
-// this module's position in docs/internal/01-architecture.md's graph does
-// not have, paid for by every consumer that boots this module without
-// config -- and the host-configurable override is an ordinary NewModule
-// option, exactly like every other seam in this file.
+// this module's position in the module graph does not have, paid for by
+// every consumer that boots this module without config -- and the
+// host-configurable override is an ordinary NewModule option, exactly like
+// every other seam in this file.
 const MaxAPIKeyLifetime = 365 * 24 * time.Hour
 
-// Permission strings this module declares for its API key (round 1) and
-// webhook subscription (round 2) management surfaces. Like go/rbac's own
-// PermissionRead/PermissionManage, this module does not check them itself
-// -- it declares the vocabulary; enforcement is whatever authorization
-// layer the host wires in front of the HTTP surface (round 7's reference-
-// app gate is the webhook pair's first real enforcement; see AGENTS.md).
+// Permission strings this module declares for its API-key and webhook-
+// subscription management surfaces. Like go/rbac's own PermissionRead/
+// PermissionManage, this module does not check them itself -- it declares
+// the vocabulary; enforcement is whatever authorization layer the host
+// wires in front of the HTTP surface.
 const (
 	// PermissionRead covers listing a tenant's API keys.
 	PermissionRead = "integration:apikey:read"
@@ -67,20 +66,19 @@ const (
 	PermissionManage = "integration:apikey:manage"
 
 	// PermissionWebhookRead covers listing a tenant's webhook subscriptions
-	// and their delivery log -- round 2's counterpart of PermissionRead,
+	// and their delivery log -- the webhook counterpart of PermissionRead,
 	// following the identical "integration:<entity>:<verb>" naming
 	// convention.
 	PermissionWebhookRead = "integration:webhook:read"
 
 	// PermissionWebhookManage covers creating, updating and deleting
-	// webhook subscriptions -- round 2's counterpart of PermissionManage.
+	// webhook subscriptions -- the webhook counterpart of PermissionManage.
 	PermissionWebhookManage = "integration:webhook:manage"
 )
 
 // Audit actions this module contributes, following the
-// "<module>.<entity>.<action>" convention (backend coding standard §8).
-// Service calls audit.Emit under each of these after the corresponding
-// mutation commits; see service.go.
+// "<module>.<entity>.<action>" convention. Service calls audit.Emit under
+// each of these after the corresponding mutation commits; see service.go.
 const (
 	// AuditActionAPIKeyCreate is emitted after Service.Create persists a
 	// new key.
@@ -162,10 +160,10 @@ type Module struct {
 	// property.
 	membership MembershipChecker
 
-	// subject is round 5's optional SubjectResolver seam (see seams.go and
+	// subject is the optional SubjectResolver seam (see seams.go and
 	// WithSubjectResolver), read only by Handler's two request-body
 	// operations whose payload carries a creator: integration_createAPIKey
-	// (round 5) and integration_createWebhookSubscription (round 7). Nil is
+	// and integration_createWebhookSubscription. Nil is
 	// legal: those two operations then fail closed with
 	// ErrSubjectUnresolved rather than guessing a creator; every other
 	// operation this fragment mounts is unaffected (see Handler's own doc
@@ -184,7 +182,7 @@ type Module struct {
 	// one number).
 	maxLifetime time.Duration
 
-	// The round-2 fields below back the outbound-webhook surface. See
+	// The fields below back the outbound-webhook surface. See
 	// WithEventMapping, WithWebhookQueue and their doc comments for what
 	// each is, and eventmapping.go's EventMapping doc comment for why
 	// eventMappings is a NewModule-time Option rather than a
@@ -226,13 +224,12 @@ type Module struct {
 	// service is the Service Attach produced, nil until then. It is what
 	// makes a second Attach detectable, and it is what Module's own
 	// forwarding wrappers (handleDomainEvent below, webhookDeliveryHandler,
-	// and round 5's Handler -- see handler.go's own "Built differently from
+	// and the Handler -- see handler.go's own "Built differently from
 	// every other module's Handler" doc comment) read once Attach has run.
 	service *Service
 
-	// handler is round 5's spec-generated HTTP surface over round 1's
-	// API-key operations, grown by round 7 to cover webhook-subscription
-	// CRUD and recent-deliveries listing too, built during Register (see
+	// handler is the spec-generated HTTP surface over the API-key and
+	// webhook-subscription operations, built during Register (see
 	// Register's own doc comment for why it can be built there even though
 	// m.service cannot).
 	handler *Handler
@@ -256,14 +253,13 @@ func WithMembershipChecker(c MembershipChecker) Option {
 	return func(m *Module) { m.membership = c }
 }
 
-// WithSubjectResolver wires the host's caller-identity seam for round 5's
-// HTTP surface -- read only by Handler's integration_createAPIKey (round 5)
-// and integration_createWebhookSubscription (round 7) operations (see
-// SubjectResolver's own doc comment in seams.go). Optional: a Module built
-// with none simply fails those two operations closed with
-// ErrSubjectUnresolved rather than guessing a creator; round 1's and round
-// 2's own Service-level APIs (used directly, with no Handler in front of
-// them) are entirely unaffected either way.
+// WithSubjectResolver wires the host's caller-identity seam for the HTTP
+// surface -- read only by Handler's integration_createAPIKey and
+// integration_createWebhookSubscription operations (see SubjectResolver's
+// own doc comment in seams.go). Optional: a Module built with none simply
+// fails those two operations closed with ErrSubjectUnresolved rather than
+// guessing a creator; the Service-level APIs (used directly, with no
+// Handler in front of them) are entirely unaffected either way.
 func WithSubjectResolver(r SubjectResolver) Option {
 	return func(m *Module) { m.subject = r }
 }
@@ -352,16 +348,16 @@ func WithAuthenticationGuard(guard *HTTPGuard) Option {
 // enqueued on and executed by: webhook deliveries (handleDomainEvent,
 // webhook_delivery.go) and the API-key expiry-sweep task
 // (Service.EnqueueAPIKeyExpirySweep, apikey_sweep.go), both handlers
-// registered on reg.Jobs during Register. Unlike round 1's
-// WithPermissionLister, an unwired queue does NOT fail Register or Attach:
-// a host that has not wired jobs yet can still boot this module and manage
-// subscriptions through Service's Create/List/Update/Delete surface --
-// only the enqueue steps are affected, and they treat a nil queue
-// explicitly: handleDomainEvent's own enqueue treats it as "record the
-// delivery, warn, and stop" rather than a hard failure (see
-// enqueueDelivery's own doc comment), the identical resilience posture
-// handleDomainEvent itself follows for every other failure a domain-event
-// subscriber can hit -- while the two host-invoked schedule points,
+// registered on reg.Jobs during Register. Unlike WithPermissionLister,
+// an unwired queue does NOT fail Register or Attach: a host that has not
+// wired jobs yet can still boot this module and manage subscriptions
+// through Service's Create/List/Update/Delete surface -- only the enqueue
+// steps are affected, and they treat a nil queue explicitly:
+// handleDomainEvent's own enqueue treats it as "record the delivery, warn,
+// and stop" rather than a hard failure (see enqueueDelivery's own doc
+// comment), the identical resilience posture handleDomainEvent itself
+// follows for every other failure a domain-event subscriber can hit --
+// while the two host-invoked schedule points,
 // Service.RedeliverWebhookDelivery and Service.EnqueueAPIKeyExpirySweep,
 // answer with a plain error naming the missing wiring, since a caller that
 // explicitly asked for a delivery or a sweep must learn that nothing can
@@ -380,16 +376,15 @@ func WithWebhookQueue(queue jobs.Queue) Option {
 // A Module built with no WithWebhookURLValidator option gets EXACTLY the
 // same behavior this module has always had: ValidateWebhookURL genuinely
 // refuses loopback, private, link-local and CGNAT addresses, with no other
-// option in this package able to relax that. This seam exists because
-// go/integration's first real consumer -- the reference-app round that
-// wired this module end to end -- found that this repository has no way to
-// stand up a "real" receiver an offline test can prove a genuine signed
-// HTTP delivery against without hitting exactly the class of address SSRF
-// protection exists to refuse: an httptest.Server listens on loopback, and
-// a sibling container reached the same way this repository's OTHER
-// Docker-backed integration tiers reach theirs (a testcontainers-mapped
-// port, or a container-to-container address on a Docker bridge network) is
-// either loopback or RFC 1918 private space either way. Relaxing this one
+// option in this package able to relax that. This seam exists because the
+// repository has no way to stand up a "real" receiver an offline test can
+// prove a genuine signed HTTP delivery against without hitting exactly the
+// class of address SSRF protection exists to refuse: an httptest.Server
+// listens on loopback, and a sibling container reached the same way this
+// repository's OTHER Docker-backed integration tiers reach theirs (a
+// testcontainers-mapped port, or a container-to-container address on a
+// Docker bridge network) is either loopback or RFC 1918 private space
+// either way. Relaxing this one
 // check for one Module instance a test or demo process builds for itself
 // is the only way to get a real round trip against a receiver that process
 // controls -- mirroring the identical shape go/authn's own
@@ -454,42 +449,37 @@ func (m *Module) Migrations() embed.FS { return migrations.FS }
 // the catalog).
 func (m *Module) Locales() embed.FS { return locales.FS }
 
-// OpenAPISpec implements pkgcore.Module: round 5's own OpenAPI fragment,
-// embedded from api/openapi.yaml, covering round 1's API-key surface
-// (Create/List/Rotate/Revoke) and, since round 7, round 2's webhook-
-// subscription management surface (Create/List/Update/Delete/Restore plus
-// the recent-deliveries listing) on one shared api.ServerInterface. The
-// fragment is the single source of this module's HTTP surface -- the api
-// package's generated types and ServerInterface
-// (api/integration-server.gen.go, regenerated by task api:gen) derive from
-// it, and Handler implements that interface (see handler.go) -- per
-// docs/internal/21-api-contract.md's spec-first decision.
-//
-// Round 4's own webhook-subscription CRUD surface (webhooks.go's
-// hand-mounted demo route in the reference app) was retired when round 7
-// shipped the spec surface this fragment describes; see AGENTS.md's
-// round-2 and round-7 sections.
+// OpenAPISpec implements pkgcore.Module: this module's OpenAPI fragment,
+// embedded from api/openapi.yaml, covering the API-key surface
+// (Create/List/Rotate/Revoke) and the webhook-subscription management
+// surface (Create/List/Update/Delete/Restore plus the recent-deliveries
+// listing) on one shared api.ServerInterface. The fragment is the single
+// source of this module's HTTP surface -- the api package's generated
+// types and ServerInterface (api/integration-server.gen.go, regenerated by
+// task api:gen) derive from it, and Handler implements that interface (see
+// handler.go) -- so a spec change without a matching handler change cannot
+// compile.
 func (m *Module) OpenAPISpec() []byte { return openAPISpecYAML }
 
 // Register implements pkgcore.Module. Per the interface's own contract
 // ("It must not perform I/O; it only declares"), it declares this module's
 // permission vocabulary and its audit actions, builds the event-mapping
-// index round 2's WithEventMapping declarations feed, subscribes to every
+// index the WithEventMapping declarations feed, subscribes to every
 // distinct InternalType that index names (reg.Events.Subscribe performs no
 // I/O of its own -- it only registers a callback for later), registers this
 // module's two job handlers on reg.Jobs (the webhook-delivery handler and
 // the API-key expiry-sweep handler, see webhook_delivery.go and
-// apikey_sweep.go), and mounts round 5's API-key HTTP surface, since grown
-// by round 7 to cover webhook-subscription CRUD. It touches neither the
-// database nor the network.
+// apikey_sweep.go), and mounts the module's HTTP surface (the API-key and
+// webhook-subscription operations the OpenAPISpec doc comment above lists).
+// It touches neither the database nor the network.
 //
 // # Handler is built here, not in Attach
 //
 // Every OTHER module with an HTTP surface (org, storage, notification)
 // builds its Handler here from services that already exist -- those
 // modules build their Service in NewModule, not Attach. go/integration's own
-// Service is built in Attach instead (round 1's own established shape,
-// unchanged by this round), which runs strictly after Bootstrap returns --
+// Service is built in Attach instead (this module's own established
+// shape), which runs strictly after Bootstrap returns --
 // too late to build a route reg.Routes.Mount needs NOW, during Register.
 // Handler is therefore built here holding a reference to m itself (never to
 // m.service, which does not exist yet) and reads m.service AT CALL TIME,

@@ -478,10 +478,10 @@ func TestInviteService_Accept_CreatesTheMembership(t *testing.T) {
 // token, and Accept resolves the invitation's own tenant from it through
 // the narrow org_invitation_token_index row createPending wrote alongside
 // the invitation, then creates the membership inside that tenant exactly as
-// the tenant-scoped path always has. Before this round such a caller could
-// not accept at all: every tenant-scoped read underneath failed closed on
-// the missing tenant (and a host's middleware refused the request before
-// org's handler was ever reached).
+// the tenant-scoped path always has. Without the token-index row, such a
+// caller could not accept at all: every tenant-scoped read underneath fails
+// closed on the missing tenant (and a host's middleware refuses the request
+// before org's handler is ever reached).
 func TestInviteService_Accept_NoTenantInContext_ResolvesTenantFromToken(t *testing.T) {
 	f := newInviteFixture(t)
 	result := f.invite(t, "ada@example.test")
@@ -934,9 +934,9 @@ func (f inviteFixture) livePendingCount(t *testing.T, email string) int {
 }
 
 // TestInviteService_Invite_ConcurrentSameAddress_ExactlyOneLiveToken is the
-// D4 (org-rbac P3) regression test: two goroutines both call Invite for the
-// SAME address at the same time, over the real repository against a real,
-// file-backed SQLite database.
+// concurrent-same-address regression test: two goroutines both call Invite
+// for the SAME address at the same time, over the real repository against a
+// real, file-backed SQLite database.
 //
 // # Two legitimate outcomes, and one that is never legitimate
 //
@@ -959,19 +959,16 @@ func (f inviteFixture) livePendingCount(t *testing.T, email string) int {
 //
 // Both are correct; this test accepts either distribution of
 // successes/coded-refusals (any error OTHER than the coded one is still a
-// failure). The one outcome that must NEVER happen, on the fixed code, is
-// what the D4 finding names: BOTH calls succeeding AND leaving two
-// simultaneously live tokens. That is exactly what the pre-fix code's
-// revokePendingFor (a read via pendingByEmail, then a per-row Update loop,
-// itself a separate transaction from the row's own later, separate Create)
-// allows, since neither of its two transactions ever overlapped with the
-// other's -- there was no atomicity to race against in the first place, so
-// "genuine overlap" above always looked exactly like the always-safe first
-// bullet from the caller's point of view, yet still doubled the live token
-// count. The one invariant this test actually enforces, every single trial
-// regardless of which legitimate distribution occurred, is therefore the
-// live-token COUNT rather than the win/loss split: exactly one live
-// (Pending) row for the address once both goroutines have returned.
+// failure). The one outcome that must NEVER happen is BOTH calls succeeding
+// AND leaving two simultaneously live tokens. That outcome is what a
+// read-then-update-loop revoke in its own transaction, with the insert in a
+// separate later transaction, allows: neither transaction overlaps the
+// other's, so two racing calls can each observe nothing pending and both
+// insert -- no atomicity exists to race against. The one invariant this
+// test actually enforces, every single trial regardless of which
+// legitimate distribution occurred, is therefore the live-token COUNT
+// rather than the win/loss split: exactly one live (Pending) row for the
+// address once both goroutines have returned.
 func TestInviteService_Invite_ConcurrentSameAddress_ExactlyOneLiveToken(t *testing.T) {
 	const trials = 25
 	for trial := 0; trial < trials; trial++ {
@@ -1037,17 +1034,18 @@ func errParam(t *testing.T, err error, key string) any {
 }
 
 // TestInviteService_Revoke_RacingAccept_NoRevokedStatusWithLiveMembership is
-// the P2-6 regression proof: Revoke used to read the invitation's status and
-// then write Status = Revoked with a plain, unconditional Update. Racing an
-// Accept of the same invitation, that unconditional write could land AFTER
+// the racing-revoke regression proof: Revoke reads the invitation's status
+// and then writes Status = Revoked with an Update. Raced against an
+// Accept of the same invitation, an unconditional write can land AFTER
 // Accept's compare-and-swap claim (pending -> accepted) and its membership
-// creation had committed -- overwriting the accepted status with revoked and
+// creation has committed -- overwriting the accepted status with revoked and
 // leaving the invitation terminal-revoked while the membership Accept
 // created stays live: the row and the roster disagree about whether the
-// invitee joined. (Accept itself has always been single-use through
-// acceptIfPending's CAS; Revoke was the unguarded writer on the same row.)
+// invitee joined. (Accept itself is single-use through acceptIfPending's
+// CAS; without the same gate Revoke would be the unguarded writer on the
+// same row.)
 //
-// # Deterministic, exactly like the P1-2/P1-3 delete tests
+// # Deterministic
 //
 // A second connection holds an open transaction that has already performed
 // Accept's two writes -- acceptIfPending's compare-and-swap UPDATE on the
@@ -1056,11 +1054,11 @@ func errParam(t *testing.T, err error, key string) any {
 // load-bearing for the interleaving this file-lock rig pins). Revoke's read
 // sees the still-pending committed state; its write parks behind the
 // holder; release lets the accept commit first, and Revoke's resumed write
-// executes against the now-accepted row -- the pre-fix unconditional Update
-// stamps revoked over it (assertions fail), while the fixed compare-and-swap
-// (revokeIfPending, gated on status = 'pending') matches nothing, re-reads,
-// and answers the same org.invitation_already_accepted a caller who had
-// observed the accepted state directly would have gotten.
+// executes against the now-accepted row: an unconditional Update would
+// stamp revoked over it, while the compare-and-swap (revokeIfPending,
+// gated on status = 'pending') matches nothing, re-reads, and answers the
+// same org.invitation_already_accepted a caller who had observed the
+// accepted state directly would get.
 func TestInviteService_Revoke_RacingAccept_NoRevokedStatusWithLiveMembership(t *testing.T) {
 	ctx := tenantCtx("tenant-a")
 
@@ -1191,18 +1189,17 @@ func TestInviteService_Revoke_RacingAccept_NoRevokedStatusWithLiveMembership(t *
 }
 
 // TestInviteService_Accept_NodeDeletedUnderTheInvitation_SettlesToRevoked is
-// the P2-org-12 regression proof. Accept claims an invitation (pending ->
-// accepted), and only then creates the membership; when that creation fails
-// because the very node the invitation points into no longer exists
-// (members.ensure answers ErrNodeNotFound), the invitation can NEVER be
-// fulfilled. The pre-fix failure path (revertAcceptClaim) answered that
-// permanent failure with an unconditional full-row Update putting the row
-// back to pending: a bearer token stayed acceptable for the rest of its TTL
-// while every accept it admitted failed identically, List kept showing an
-// invitation that could only fail, and a concurrent caller who observed the
-// brief accepted interlude was told org.invitation_already_accepted though
-// no membership ever came of it. The honest end state is revoked: the claim
-// is settled, the token is dead, and the row records the withdrawal.
+// the settles-to-revoked regression proof. Accept claims an invitation
+// (pending -> accepted), and only then creates the membership; when that
+// creation fails because the very node the invitation points into no longer
+// exists (members.ensure answers ErrNodeNotFound), the invitation can NEVER
+// be fulfilled. Putting the row back to pending would leave a bearer token
+// acceptable for the rest of its TTL while every accept fails identically,
+// List would keep showing an invitation that can only fail, and a
+// concurrent caller who observed the brief accepted interlude would be told
+// org.invitation_already_accepted though no membership ever came of it. The
+// honest end state is revoked: the claim is settled, the token is dead, and
+// the row records the withdrawal.
 func TestInviteService_Accept_NodeDeletedUnderTheInvitation_SettlesToRevoked(t *testing.T) {
 	f := newInviteFixture(t)
 	result := f.invite(t, "ada@example.test") // the invitation points into f.left

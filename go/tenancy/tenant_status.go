@@ -10,9 +10,9 @@ import (
 //
 // Only TenantStatusActive is servable: Middleware refuses any other
 // reported status -- including a value this version does not define --
-// with ErrTenantSuspended. A future status that should let requests
-// through must be added to Middleware's check explicitly; it can never
-// become servable by default.
+// with ErrTenantSuspended. Any status that should let requests through
+// must be added to Middleware's check explicitly; an out-of-vocabulary
+// value can never become servable by default.
 type TenantStatus string
 
 const (
@@ -33,10 +33,9 @@ const (
 // fact recorded somewhere no request pipeline consults.
 //
 // This package declares the interface and the one call site that consults
-// it; it implements nothing itself and imports nothing that would. Any
-// host wanting real tenant suspension implements this against whatever it
-// uses to track tenant status -- go/admin's own tenant ledger (D3/D4 in
-// docs/internal/23-admin.md) is this seam's first real implementer, kept
+// it; it implements nothing itself and imports nothing that would. A host
+// wanting real tenant suspension implements the interface against whatever
+// it uses to track tenant status -- go/admin's tenant ledger does, kept
 // entirely on admin's side of the boundary, the same "structurally typed,
 // no import in either direction" shape org.FeatureGate and
 // rbac.SubtreeResolver already use.
@@ -55,11 +54,11 @@ const (
 //
 // Middleware consults Status synchronously on every successfully resolved
 // request and caches nothing, so a suspension takes effect on the very
-// next request by construction. Any future caching layer must therefore
-// answer how a stale "active" answer is invalidated when a tenant is
-// suspended -- a design decision (an invalidation contract for
-// tenant-status changes) this seam deliberately does not pre-empt, rather
-// than a TTL trade-off this package can make on its own.
+// next request by construction. Caching is deliberately not pre-empted by
+// this seam: a cached answer would first have to define how a stale
+// "active" answer is invalidated when a tenant is suspended, an
+// invalidation-contract decision for the layer that wants the cache, not
+// a TTL trade-off this package can make on its own.
 type TenantStatusResolver interface {
 	// Status returns tenant's current status. ctx carries the tenant
 	// Middleware already resolved (pkgcore.TenantFromContext reports it),
@@ -74,13 +73,12 @@ type TenantStatusResolver interface {
 // tenant with ErrTenantSuspended.
 //
 // This option is entirely additive and OFF by default: a host that never
-// calls WithTenantStatusResolver gets exactly today's Middleware
-// behavior, unchanged in every respect -- every request that resolves a
-// tenant proceeds, regardless of that tenant's status anywhere else in
-// the system, because nothing consults one. This is what lets the seam
-// ship with no back-compat concern: an existing host recompiled against
-// this version of tenancy, with no code change at all, behaves
-// identically to before.
+// calls WithTenantStatusResolver gets the baseline Middleware behavior,
+// unchanged in every respect -- every request that resolves a tenant
+// proceeds, regardless of that tenant's status anywhere else in the
+// system, because nothing consults a status source. No existing wiring
+// needs to change to adopt the seam; enforcement begins with the host's
+// own WithTenantStatusResolver call.
 func WithTenantStatusResolver(r TenantStatusResolver) MiddlewareOption {
 	return func(c *middlewareConfig) { c.statusResolver = r }
 }

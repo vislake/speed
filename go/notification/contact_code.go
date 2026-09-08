@@ -15,12 +15,11 @@ import (
 // it can later recognise without ever holding the plaintext.
 //
 // The design keeps exactly one pending code per contact, riding on the
-// verified_contacts row itself (AGENTS.md's "The verification code rides
-// on the contact row" adjudication: verification_codes is deliberately
-// not a table). A row in status pending carries the code's
-// SHA-256 hash and its expiry in its own columns; every other status leaves
-// those columns as inert dead data -- the status gate, never the columns,
-// is what makes a consumed code unusable.
+// verified_contacts row itself: verification_codes is deliberately not a
+// table. A row in status pending carries the code's SHA-256 hash and its
+// expiry in its own columns; every other status leaves those columns as
+// inert dead data -- the status gate, never the columns, is what makes a
+// consumed code unusable.
 
 // contactCodeDigits is how many decimal digits a verification code has. The
 // code space is 10^contactCodeDigits; at 6 digits that is one million

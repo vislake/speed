@@ -8,8 +8,7 @@
 // Migrations to expose "postgres" and "sqlite" at the root of its embed.FS
 // -- the layout dbkit.MigrationRegistry.Apply expects from every module --
 // the embedding file has to live in the one directory where those two names
-// are its own immediate children. This mirrors go/org/migrations and
-// go/config/migrations; see go/dbkit/AGENTS.md's "Migrations" section.
+// are its own immediate children.
 package migrations
 
 import "embed"

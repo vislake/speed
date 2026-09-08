@@ -6,27 +6,26 @@ import (
 	"github.com/vislake/speed/go/tenancy"
 )
 
-// Tenant is one row of admin_tenants, the operator-facing TENANT LEDGER
-// docs/internal/23-admin.md's D3 describes -- a record of which tenants
-// the platform believes exist, never the authoritative source of tenant
-// existence (pkgcore.TenantID stays an opaque string everywhere else, and
-// no other module's write path checks this table before writing).
+// Tenant is one row of admin_tenants, the operator-facing TENANT LEDGER:
+// a record of which tenants the platform believes exist, never the
+// authoritative source of tenant existence (pkgcore.TenantID stays an
+// opaque string everywhere else, and no other module's write path checks
+// this table before writing).
 //
-// This is platform data (docs/internal/04-data-and-tenancy.md's four data
-// domains): it describes ALL tenants, not the affairs of one, so it must
-// NOT implement dbkit.TenantScoped -- doing so would put "which tenants
-// exist" itself behind a single tenant's own isolation filter, which is
-// incoherent. Every write goes through dbkit.Open()'s plain *gorm.DB
-// directly (tenant_repository.go), the same treatment go/authn's users
-// table and go/config's row already get, and TestTenant_IsNotTenantScoped
-// (model_test.go) runs tenancytest.AssertNotTenantScoped over it.
+// This is platform data: it describes ALL tenants, not the affairs of one,
+// so it must NOT implement dbkit.TenantScoped -- doing so would put "which
+// tenants exist" itself behind a single tenant's own isolation filter,
+// which is incoherent. Every write goes through dbkit.Open()'s plain
+// *gorm.DB directly (tenant_repository.go), and
+// TestTenant_IsNotTenantScoped (model_test.go) runs
+// tenancytest.AssertNotTenantScoped over it.
 type Tenant struct {
 	// TenantID is the primary key: the string value of the
 	// pkgcore.TenantID this row describes.
 	TenantID string `gorm:"column:tenant_id;primaryKey;size:64"`
 
 	// DisplayName is empty on a row created by the event-driven lazy
-	// population path (D3) until an operator fills it in, and whatever the
+	// population path until an operator fills it in, and whatever the
 	// operator supplied on a manually created row.
 	DisplayName string `gorm:"column:display_name;size:255;not null"`
 
@@ -34,21 +33,16 @@ type Tenant struct {
 	// operator believes this tenant is in. It is typed with go/tenancy's
 	// own TenantStatus, the vocabulary tenancy.Middleware's optional
 	// TenantStatusResolver gate reports, deliberately ONE type rather than
-	// an admin-local duplicate plus a hand-written translation (P3-4's
-	// consolidation): the pre-consolidation shape translated "anything not
-	// suspended" to TenantStatusActive, and a future third state added to
-	// only one side of that translation would silently fail the status gate
-	// OPEN -- the exact fail-open class go/tenancy's seam semantics close.
-	// With the shared type there is no translation to forget: a stored
-	// value is reported to the seam as-is, and the gate refuses anything
-	// other than tenancy.TenantStatusActive by default, so a future ledger
+	// an admin-local duplicate plus a hand-written translation. With the
+	// shared type there is no translation to forget: a stored value is
+	// reported to the seam as-is, and the gate refuses anything other
+	// than tenancy.TenantStatusActive by default, so a future ledger
 	// state a tenant must not be served under (an "archived" tenant, say)
 	// needs no code change here at all -- declaring it as a
 	// tenancy.TenantStatus value is enough, and the gate refuses it. A
-	// state requests SHOULD flow for requires the deliberate widening of
-	// tenancy.Middleware's own check, which is where that decision
-	// belongs. Consumers of the deleted admin.TenantStatus type must
-	// switch to tenancy.TenantStatus.
+	// state a tenant's requests SHOULD flow under requires the deliberate
+	// widening of tenancy.Middleware's own check, which is where that
+	// decision belongs.
 	Status tenancy.TenantStatus `gorm:"column:status;size:32;not null"`
 
 	// SuspendedReason is the operator-supplied reason recorded the last
@@ -70,7 +64,7 @@ type Tenant struct {
 
 	// CreatedBy is the operator user id that manually registered this row,
 	// or empty when the row was created by the event-driven lazy
-	// population path (D3's first path has no human operator to name).
+	// population path, which has no human operator to name.
 	CreatedBy string `gorm:"column:created_by;size:64;not null"`
 
 	// Notes is free-text operator commentary -- a sales contact, an
@@ -84,10 +78,11 @@ type Tenant struct {
 func (Tenant) TableName() string { return "admin_tenants" }
 
 // ImpersonationGrant is one row of admin_impersonation_grants: the
-// short-lived, explicitly revocable authorization credential D5 issues
-// when a platform administrator starts an impersonation session. It is
-// never a real authn access or refresh token -- see docs/internal/23-admin.md
-// section 4.1 for why minting one for the target user was rejected outright.
+// short-lived, explicitly revocable authorization credential issued when a
+// platform administrator starts an impersonation session. It is never a
+// real authn access or refresh token -- impersonation substitutes the
+// target's identity for the rest of one request, never mints credentials
+// the target (or the impersonating administrator) could carry away.
 //
 // Like Tenant, this is platform data and must NOT implement
 // dbkit.TenantScoped: one grant names a target tenant as DATA, but the
@@ -114,8 +109,8 @@ type ImpersonationGrant struct {
 	TargetTenantID string `gorm:"column:target_tenant_id;size:64;not null;index"`
 
 	// Reason is the operator-supplied justification, required at creation
-	// (ErrImpersonationReasonRequired otherwise) -- itself part of the
-	// audit trail docs/internal/23-admin.md section 4.1 describes.
+	// (ErrImpersonationReasonRequired otherwise) -- the reason is itself
+	// part of the audit trail.
 	Reason string `gorm:"column:reason;size:2000;not null"`
 
 	CreatedAt time.Time `gorm:"column:created_at;not null"`

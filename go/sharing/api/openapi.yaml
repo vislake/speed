@@ -5,13 +5,11 @@ info:
     Two families of operations, deliberately gated in two different ways.
     /api/v1/sharing/access is the genuinely public, unauthenticated route an
     external visitor's entry point onto the resource a Share exposes; the
-    five operations under /api/v1/sharing/shares are this round's addition,
-    the owner-facing surface a resource's owner uses to create, inspect and
-    revoke their own shares (see the module's own AGENTS.md and
-    docs/internal/07-platform-services.md's sharing section). This fragment
-    follows the operationId (sharing_<verb><Resource>) and schema-name
-    (Sharing<Type>) conventions from
-    .claude/skills/backend-coding-standards/SKILL.md §6.1. task api:gen
+    five operations under /api/v1/sharing/shares are the owner-facing
+    surface a resource's owner uses to create, inspect and revoke their own
+    shares. This fragment follows the operationId
+    (sharing_<verb><Resource>) and schema-name (Sharing<Type>) naming
+    conventions of the repository's OpenAPI fragments. task api:gen
     regenerates sharing-server.gen.go (in this directory) from this file,
     with oapi-codegen pinned at v2.8.0 -- see oapi-codegen.yaml and
     .github/workflows/api-contract.yml.
@@ -31,17 +29,16 @@ info:
     silently drift out of sync with it.
 
     Every response the access route writes -- success or refusal alike --
-    carries Cache-Control: no-store. docs/internal/07-platform-services.md's
-    revocation rule names CDN or shared-cache caching as the single most
-    common way revocation silently fails to take effect, and this route is
-    the first place this module has an actual HTTP response to set that
-    header on.
+    carries Cache-Control: no-store: CDN or shared-cache caching is the
+    single most common way revocation silently fails to take effect on the
+    viewer's next fetch, and this route is where the module's no-caching
+    rule becomes an actual HTTP header.
 
     /api/v1/sharing/shares is the OPPOSITE shape: an ordinary tenant-scoped
     surface, ungated by this fragment itself -- Handler performs no
     authorization of its own, reading the tenant from request context
     (tenancy.Middleware) exactly like every other module's fragment in this
-    codebase (root CLAUDE.md's multi-tenant isolation rule). A host is
+    codebase (the multi-tenant isolation rule). A host is
     expected to run these five operations downstream of tenancy.Middleware
     (never allowlisted) and to gate them on this module's own
     sharing:read/sharing:create/sharing:revoke permissions through its
@@ -49,18 +46,16 @@ info:
     a host's permission-gate table names, exactly as PathAccess names the
     allowlist entry. Every operation here is a thin HTTP translation of an
     existing Service method (Create, Revoke, Get, ListAccessLog, plus the
-    tenant-listing Service.List this round adds) -- no business rule lives
-    in this fragment or its handler that Service does not already enforce.
+    tenant-listing Service.List) -- no business rule lives in this fragment
+    or its handler that Service does not already enforce.
 
-    Merging this fragment into the application-wide build/openapi/speed.yaml
-    stays future work, following the same precedent org's and storage's
-    fragments already set (docs/internal/21-api-contract.md's
-    implementation-status note): the access route serves raw bytes, and
-    while the new /shares operations ARE typed JSON, this module still has
-    no in-workspace frontend consumer, so there is no pressure yet to join
-    the merge the way notes', authn's and notification's fragments have --
-    see AGENTS.md's own note on this round's scope for why that reasoning
-    was re-examined and left unchanged rather than silently carried over.
+    This fragment stays out of the application-wide
+    build/openapi/speed.yaml merge, following the same precedent org's and
+    storage's fragments already set: the access route serves raw bytes,
+    and while the /shares operations ARE typed JSON, this module still has
+    no in-workspace frontend consumer, so joining the orval-driven merge
+    (as notes', authn's and notification's fragments have) would cost a
+    regeneration nothing exercises.
   version: 0.0.0
 paths:
   /api/v1/sharing/access:
@@ -78,10 +73,10 @@ paths:
 
         Every refusal reason -- an unrecognized token, a revoked, expired or
         view-exhausted share, or a missing or wrong password -- answers
-        with the exact same 404 body, per this module's rule 5 (outward-
-        identical answers, AGENTS.md's "The five mandatory rules" section):
-        probing this endpoint teaches an outside caller nothing about which
-        of those reasons actually applied. A resource that could not be
+        with the exact same 404 body, per this module's
+        outward-identical-answer rule: probing this endpoint teaches an
+        outside caller nothing about which of those reasons actually
+        applied. A resource that could not be
         opened AFTER access was already granted is a distinct, undisguised
         502 -- see SharingError's own description and
         sharing.ErrResourceUnavailable's doc comment for why that case must
@@ -96,10 +91,10 @@ paths:
           description: >-
             The share's bearer token, exactly as returned once by the
             owner-facing Service.Create call. Never the share's own id, and
-            never accepted from anywhere but this query parameter (root
-            CLAUDE.md's multi-tenant isolation rule's spirit extended to
-            this module's own bearer credential: there is exactly one
-            legitimate source for it).
+            never accepted from anywhere but this query parameter (the
+            multi-tenant isolation rule's spirit extended to this module's
+            own bearer credential: there is exactly one legitimate source
+            for it).
         - name: X-Sharing-Password
           in: header
           required: false
@@ -115,8 +110,9 @@ paths:
             credential this module verifies never travels anywhere past the
             caller who presented it. The bearer token itself is this
             module's one already-accepted exception to that rule -- it is
-            the URL itself, by round-1's own design (Share's doc comment) --
-            so putting the SECOND credential a share may require in the URL
+            the URL itself, by the module's own design (Share's doc
+            comment) -- so putting the SECOND credential a share may
+            require in the URL
             too would be a strictly weaker property than what this module
             already ships, not merely an equally weak one.
       responses:
@@ -190,7 +186,7 @@ paths:
       description: >-
         A thin translation of Service.Create: resourceRef is required and
         must be non-empty (sharing.resource_ref_required), forever, when
-        true, is always refused (sharing.expiry_required -- rule 2 names
+        true, is always refused (sharing.expiry_required -- the module's
         this the most common source of data leaks, and this surface must
         never be able to bypass that refusal), maxViews, when given, must
         be positive (sharing.invalid_max_views), and expiresAt, when
@@ -198,9 +194,9 @@ paths:
         back to a fixed default when none is configured). An expiresAt
         that IS given must lie strictly in the future and no more than 30
         days from now -- the platform's maximum share lifetime, the same
-        ceiling rule 2 applies to the default -- or it is refused with
+        ceiling applies to the default -- or it is refused with
         sharing.expiry_out_of_range, so a far-future timestamp can never
-        smuggle in the effectively-never-expiring link rule 2 forbids.
+        smuggle in the effectively-never-expiring link the module forbids.
         token is returned inside the response body exactly once and is
         never retrievable again by any other operation on this surface --
         not even sharing_getShare, whose response carries no token field
@@ -224,7 +220,8 @@ paths:
           description: >-
             resourceRef was empty, forever was true, maxViews was
             non-positive, expiresAt could not be resolved, or expiresAt
-            was outside rule 2's bounds (not strictly in the future, or
+            was outside the allowed expiry bounds (not strictly in the
+            future, or
             more than 30 days out).
           content:
             application/json:
@@ -337,8 +334,8 @@ paths:
         its current (unchanged) state, never a 404 or a 409. Revocation
         takes effect on the very next check against
         /api/v1/sharing/access -- there is no cache anywhere in this
-        module to invalidate (AGENTS.md's "Revocation and caching"
-        section).
+        module to invalidate, so revocation and a spent view take effect on
+        the very next access check.
       parameters:
         - $ref: '#/components/parameters/ShareID'
       responses:
@@ -360,14 +357,15 @@ paths:
       summary: List every recorded access attempt against a share, newest first.
       description: >-
         A thin translation of Service.ListAccessLog: every access attempt
-        recorded against the share, granted or denied alike, per rule 4
-        (docs/internal/07-platform-services.md's "access needs no login,
-        but must leave a trail" rule) -- an owner-facing "who viewed this
-        and how many times" answer. Denied attempts are recorded too, and
-        deliberately without distinguishing which of Access's five
-        refusal reasons applied (outcome is only ever "granted" or
-        "denied"), so this owner-facing report cannot itself be scraped to
-        learn what rule 5 requires an outside prober never learn.
+        recorded against the share, granted or denied alike, per the
+        module's mandatory every-access-is-logged rule -- an owner-facing
+        "who viewed this and how many times" answer. Denied attempts are
+        recorded too, and
+        deliberately without distinguishing which of Access's refusal
+        reasons applied (outcome is only ever "granted" or "denied"), so
+        this owner-facing report cannot itself be scraped to learn what
+        the outward-identical-answer rule requires an outside prober never
+        learn.
       parameters:
         - $ref: '#/components/parameters/ShareID'
       responses:
@@ -410,7 +408,7 @@ components:
         expiresAt:
           type: string
           format: date-time
-          description: When this share stops being accessible. Never absent -- rule 2 forbids a share with no expiry.
+          description: When this share stops being accessible. Never absent -- every share carries an expiry.
         maxViews:
           type: integer
           description: The view ceiling this share was created with; absent when unlimited.
@@ -424,7 +422,7 @@ components:
           type: boolean
           description: >-
             Whether this share was created against a resource carrying
-            sensitive personal information (rule 4's sensitive-resource
+            sensitive personal information (the sensitive-resource
             confirmation).
         revokedAt:
           type: string
@@ -451,7 +449,8 @@ components:
           description: >-
             An explicit expiry, which must lie strictly in the future and
             no more than 30 days from now -- the platform's maximum share
-            lifetime (rule 2's ceiling); anything else is refused with
+            lifetime (the explicit-expiry ceiling); anything else is
+            refused with
             sharing.expiry_out_of_range. Omit to use the tenant's
             configured default (falling back to a fixed default when none
             is configured).
@@ -472,7 +471,7 @@ components:
           type: boolean
           description: >-
             Marks the shared resource as carrying sensitive personal
-            information (rule 4). A true value fires this module's one
+            information). A true value fires this module's one
             audit action.
     SharingCreateShareResponse:
       type: object
@@ -537,7 +536,7 @@ components:
       properties:
         code:
           type: string
-          description: The structured error code, one of this module's error index entries (AGENTS.md).
+          description: The structured error code, one of this module's error index entries.
         params:
           type: object
           additionalProperties: true

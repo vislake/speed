@@ -14,11 +14,10 @@ import (
 	"github.com/vislake/speed/go/tenancy/tenancytest/internal/testutil"
 )
 
-// platformSetting is a minimal fixture standing in for platform-domain data
-// (docs/internal/04-data-and-tenancy.md's data-domain table): global,
-// shared, read/written the same way no matter who is asking, and — the
-// property under test — carrying no GetTenantID method at all. This is
-// exactly the shape AssertNotTenantScoped exists to certify.
+// platformSetting is a minimal fixture standing in for platform-domain
+// data: global, shared, read/written the same way no matter who is asking,
+// and — the property under test — carrying no GetTenantID method at all.
+// This is exactly the shape AssertNotTenantScoped exists to certify.
 type platformSetting struct {
 	Key   string `gorm:"column:key;primaryKey;size:64"`
 	Value string `gorm:"column:value;size:255"`
@@ -160,11 +159,11 @@ const runHandRolledFilteringHelperEnv = "TENANCYTEST_RUN_HAND_ROLLED_FILTERING_H
 // to be in context, simulating a real bug class the interface check alone
 // cannot see: identity/platform data queried through code that someone
 // hand-wrote a "WHERE tenant_id = ?" into, entirely outside dbkit's own
-// plugin and Repository[T] (the backend coding standard's §3.2 forbids
-// exactly this, but a test suite's job is to catch it when it happens
-// anyway). AssertNotTenantScoped's delta-based, multi-context comparison
-// must catch this too, not just a model that opted into TenantScoped
-// honestly.
+// plugin and Repository[T] — exactly the bypass the isolation layers
+// exist to prevent, which is why a test suite's job is to catch it when
+// it happens anyway. AssertNotTenantScoped's delta-based, multi-context
+// comparison must catch this too, not just a model that opted into
+// TenantScoped honestly.
 func TestAssertNotTenantScoped_DetectsHandRolledTenantFiltering_Helper(t *testing.T) {
 	if os.Getenv(runHandRolledFilteringHelperEnv) != "1" {
 		t.Skip("only meant to run as TestAssertNotTenantScoped_DetectsHandRolledTenantFiltering's subprocess")

@@ -45,8 +45,8 @@ func (migrationSetModule) Locales() embed.FS                { return embed.FS{} 
 func (migrationSetModule) OpenAPISpec() []byte              { return nil }
 func (migrationSetModule) Register(*pkgcore.Registry) error { return nil }
 
-// stageRetryAfterUpgrade drives the P3-metering-E upgrade-path proof on
-// one real database: apply the 0006-era subset, seed rows on the nullable
+// stageRetryAfterUpgrade drives the 0007 upgrade-path proof on one real
+// database: apply the 0006-era subset, seed rows on the nullable
 // schema -- including a NULL-retry_after row, a write only the pre-0007
 // schema accepts -- then upgrade by applying the FULL set through a
 // second registry, whose ledger skip is the real upgrade mechanism, and
@@ -75,11 +75,11 @@ func stageRetryAfterUpgrade(t *testing.T, db *gorm.DB, dialect dbkit.Dialect) {
 		(id, tenant_id, feature, quantity, idempotency_key, occurred_at, metadata, status, attempts, last_error, retry_after, created_at, delivered_at)
 		VALUES (?, ?, 'f', 1, ?, ?, '', 'pending', 0, '', ?, ?, NULL)`
 
-	// A row whose retry_after is NULL: the legacy-only state 0005's
-	// backfill eliminated from module-produced databases but the 0006-era
-	// schema still permits -- the exact hole P3-metering-E closes. On the
-	// 0006-era schema this insert succeeds (the pre-fix state, pinned
-	// here); the upgrade must convert it before the constraint lands.
+	// A row whose retry_after is NULL: the state module-produced databases
+	// never write (0005's backfill converted the pre-0005 rows) but the
+	// 0006-era schema still permits -- the exact hole migration 0007
+	// closes. On the 0006-era schema this insert succeeds (pinned here);
+	// the upgrade must convert it before the constraint lands.
 	if err := db.Exec(insertRow, "legacy-null", "tenant-a", "idem-legacy-null", now, nil, createdAt).Error; err != nil {
 		t.Fatalf("insert a NULL-retry_after row on the 0006-era schema: %v (the pre-0007 schema must accept this write -- that is the gap the migration closes)", err)
 	}
@@ -189,13 +189,13 @@ func assertUniqueViolation(t *testing.T, err error, what string) {
 	}
 }
 
-// TestMigrations_0007_UpgradeFromA0006EraDatabase is the P3-metering-E
+// TestMigrations_0007_UpgradeFromA0006EraDatabase is the 0007
 // upgrade-path proof on SQLite: a database migrated through 0006 -- the
-// state every environment that shipped the 0005 retry-schedule round is
-// in -- gets 0007_enforce_outbox_retry_after_not_null.sql applied by the
-// ordinary re-run of the migration registry, its NULL row backfilled, its
-// column NOT NULL from then on, and its table (rebuilt on this dialect)
-// fully intact.
+// schema state that predates the NOT NULL enforcement -- gets
+// 0007_enforce_outbox_retry_after_not_null.sql applied by the ordinary
+// re-run of the migration registry, its NULL row backfilled, its column
+// NOT NULL from then on, and its table (rebuilt on this dialect) fully
+// intact.
 func TestMigrations_0007_UpgradeFromA0006EraDatabase(t *testing.T) {
 	stageRetryAfterUpgrade(t, dbtest.NewSQLite(t), dbkit.DialectSQLite)
 }

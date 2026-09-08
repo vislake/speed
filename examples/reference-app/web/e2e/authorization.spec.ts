@@ -9,17 +9,19 @@
  * different seniority: a hygienist can read the chart and cannot write
  * it, and the refusal explains itself rather than looking like a bug.
  *
- * The refusal text is a third regression gate on the envelope-contract
- * defect (f23079d): the server answers rbac.permission_denied, and the
- * notes surface maps that code to its own message. Before the fix that
- * code never reached the surface as a code at all, so the page rendered
- * its unknown-error fallback for what is a perfectly ordinary,
- * explainable answer.
+ * The refusal assertion pins the envelope contract end to end: the
+ * server answers rbac.permission_denied, and the notes surface maps
+ * that code to its own message. Asserting both the specific message and
+ * the absence of the unknown-error fallback proves the code travelled
+ * to the surface as a code rather than being swallowed into a generic
+ * failure.
  *
- * Both tests align tenants explicitly rather than assuming one. Which
- * tenant an account lands in is not fixed (see TENANT_NAMES in
- * test-utils/journeys.ts), so a spec that wrote as one account and read
- * as another would fail for the wrong reason -- or, worse, pass for one.
+ * Both tests align tenants explicitly rather than assuming one. The
+ * tenant an account lands in is the first of its memberships (ordered
+ * by tenant id; see TENANT_NAMES in test-utils/journeys.ts) -- a fact
+ * about the account rather than a contract -- so a spec that wrote as
+ * one account and read as another would fail for the wrong reason -- or,
+ * worse, pass for one.
  */
 import { expect, test } from '@playwright/test'
 import { DEMO_OWNER, DEMO_READER } from './test-utils/accounts.js'

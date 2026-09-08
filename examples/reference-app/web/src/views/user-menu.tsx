@@ -19,15 +19,12 @@
  * both demo tenants and demo-acme-only@example.com in tenant-acme
  * alone, and the real server refuses a switch into a tenant the
  * signed-in account lacks (authn.tenant_membership_required). The
- * web rig's journeys never cross that refusal: the owner day
- * (owner@example.test) is the one that switches tenants, while the
- * reader day (app-journey.test.tsx) stays on notes, where its grant
- * asymmetry lives. The current tenant comes from the auth-core hook
- * (the principal's own claim), never from local memory of a previous
- * switch, and a completed switch evicts the rows the departing access
- * token fetched: the previous tenant's tenant-namespaced query data
- * (the notes surface, whose keys are ['tenant', tenantId, ...]) and
- * the identity-domain rows the account surface reads (the sessions,
+ * current tenant comes from the auth-core hook (the principal's own
+ * claim), never from local memory of a previous switch, and a
+ * completed switch evicts the rows the departing access token
+ * fetched: the previous tenant's tenant-namespaced query data (the
+ * notes surface, whose keys are ['tenant', tenantId, ...]) and the
+ * identity-domain rows the account surface reads (the sessions,
  * login-history and identities lists, whose bare spec-path keys carry
  * no tenant segment -- evictIdentityDomainQueries below) -- the rule
  * being that no cached row fetched under one access token survives
@@ -37,9 +34,9 @@
  *
  * A completed switch also revalidates the Public config the frame's
  * brand and the home feature cards render from (the config hook's
- * refresh -- the host-switched-tenants-same-origin case, where the
- * server's per-tenant answer cannot be keyed client-side):
- * reference-app-web.md P2-refapp-14.
+ * refresh): the host-switched-tenants-same-origin case, where the
+ * server's per-tenant answer cannot be keyed client-side, so the
+ * shared cache is re-asked rather than trusted stale.
  *
  * Which tenant rows were evicted is read before the switch, from the
  * hook snapshot of the tenant about to be left behind -- never from
@@ -147,8 +144,8 @@ export function UserMenu(): ReactElement {
 
   const handleSwitched = (tenantId: string): void => {
     // Evict the tenant being left, captured before the switch commits:
-    // the notes list (and any later tenant-scoped data) of the old
-    // tenant must not survive into the new tenant's session.
+    // the old tenant's tenant-scoped query data must not survive into
+    // the new tenant's session.
     const leavingTenantId = currentTenant?.tenantId ?? null
     if (leavingTenantId !== null && leavingTenantId !== tenantId) {
       queryClient.removeQueries({
@@ -157,15 +154,14 @@ export function UserMenu(): ReactElement {
     }
     // The identity-domain rows were answered under the access token the
     // switch just rotated: evict them too, so the account surface can
-    // never serve rows fetched under the departing token
-    // (reference-app-web.md P1-apisdk-1).
+    // never serve rows fetched under the departing token.
     evictIdentityDomainQueries(queryClient)
     // The switch committed (the new tenant is the principal's claim
     // now), and the server resolves this page's Public config by host:
     // the brand and the home feature cards must answer the tenant the
-    // page is actually in, so the shared config cache is re-asked
-    // (reference-app-web.md P2-refapp-14). Stale-while-revalidate: the
-    // previous answer keeps rendering until the new one lands.
+    // page is actually in, so the shared config cache is re-asked.
+    // Stale-while-revalidate: the previous answer keeps rendering until
+    // the new one lands.
     publicConfig.refresh()
   }
 

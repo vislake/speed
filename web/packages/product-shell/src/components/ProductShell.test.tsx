@@ -15,10 +15,10 @@
  * fixtures on purpose: they stand in for a host's own content and are
  * data in a test file, not rendered product text.
  *
- * The three branches are mutually exclusive by construction (the same
- * order auth-ui's SessionGate pattern established): the ended view is
- * checked before the sign-in view, so a signed-out user never falls back
- * to a fresh-visitor sign-in.
+ * The three branches are mutually exclusive by construction, in the
+ * same branch order auth-ui's SessionGate pattern uses: the ended view
+ * is checked before the sign-in view, so a signed-out user never falls
+ * back to a fresh-visitor sign-in.
  */
 
 import { act, fireEvent } from '@testing-library/react'
@@ -344,8 +344,7 @@ describe('ProductShell view machine', () => {
 
   it('still transfers focus into the ended branch when its namespace is not registered, and renders no announcement text', async () => {
     // The machine's announcement renders from the product-shell
-    // namespace; a host that has not (yet) registered it -- the composed
-    // consumer whose registration lands in its own round -- must get
+    // namespace; a host that has not registered it must get
     // neither raw key text nor missing-key warnings: the flip still
     // moves focus, the ended screen renders, and no status element
     // exists. The pre-registration harness below registers exactly the

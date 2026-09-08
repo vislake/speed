@@ -23,11 +23,11 @@ import (
 // state flip, deleteObjectRows' single-transaction row removal, and the
 // state/expiry listings a sweep run walks).
 //
-// The queries are written the way go/dbkit/AGENTS.md's "Known limitations"
-// prescribes as option 1: build the query on the same *gorm.DB layer 1
-// already protects, against a TenantScoped destination, so the GORM
-// isolation plugin still injects WHERE tenant_id = ? even though
-// Repository[T]'s own re-verification does not run for that call -- and run
+// The queries are written as the dbkit layering rule's option 1: build the
+// query on the same *gorm.DB layer 1 already protects, against a
+// TenantScoped destination, so the GORM isolation plugin still injects
+// WHERE tenant_id = ? even though Repository[T]'s own re-verification does
+// not run for that call -- and run
 // it inside dbkit.WithTenantSession, so isolation layer 3 (the PostgreSQL
 // RLS session variable) is set for it exactly as it is for every promoted
 // method. What this file must never do, and does not:

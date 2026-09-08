@@ -404,16 +404,14 @@ func TestMigrateFailureRemovesAFreshlyCreatedDatabaseFile(t *testing.T) {
 	}
 }
 
-// TestAgentsMdMigrationCountsMatchTheRegistry is the mechanization of the
-// migration counts AGENTS.md quotes: the Testing section's B4 procedure
-// records the ledger report a fresh migrate of the default authn+org+rbac
-// selection prints, and this test derives that report from a REAL run
-// (which reads the counts from the registry's migration universe) and
-// requires AGENTS.md to carry it verbatim. Hand-edited numbers in that
-// prose can no longer drift from the modules' own migration sets -- the
-// third recurrence of that drift (the counts grew and the prose did not)
-// is what this test exists to make impossible -- without this test having
-// to know any count itself.
+// TestAgentsMdMigrationCountsMatchTheRegistry keeps the migration counts
+// this module's AGENTS.md quotes derived rather than hand-maintained: the
+// AGENTS.md Testing section records the ledger report a fresh migrate of
+// the default authn+org+rbac selection prints, and this test derives that
+// report from a REAL run (which reads the counts from the registry's
+// migration universe) and requires AGENTS.md to carry it verbatim -- so a
+// count in that prose cannot drift from the modules' own migration sets
+// without this test knowing any count itself.
 func TestAgentsMdMigrationCountsMatchTheRegistry(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "cli-app.db")
 	code, stdout, stderr := driveMigrate(t, []string{fixture(t, "full_with_pki.mod")},
@@ -440,13 +438,10 @@ func TestAgentsMdMigrationCountsMatchTheRegistry(t *testing.T) {
 // dbkit.MigrationRegistry.Apply reads when migrate runs (dbkit's
 // migrationFiles selection criterion: the non-directory *.sql entries under
 // the dialect's subdirectory), and requires both maps to carry it verbatim.
-// The recurrence this test closes: go/org's org-membership-query round added
-// 0009_memberships_user_lookup (0009, dual-dialect) and the ledger maps --
-// and every report expectation above -- still said org eight, a drift the
-// report assertions caught only by failing on the run's own output. A future
-// round adding a module's 0010_ file fails HERE too, naming the module, the
-// map's stale count and the count the module's own tree ships, until the
-// saasctl expectations move with it -- deliberately, never silently.
+// A module's migration set moving without the maps moving fails HERE,
+// naming the module, the map's stale count and the count the module's own
+// tree ships; the maps and the report expectations above must move with
+// the module's own set, deliberately, never silently.
 func TestFullUniverseLedgerCountsMatchTheModulesOwnMigrationTrees(t *testing.T) {
 	gdb := openDB(t, filepath.Join(t.TempDir(), "ledger-pin.db"))
 
@@ -592,21 +587,15 @@ func TestMigrateGoModRequiringOnlyNonMigrationModulesIsRefused(t *testing.T) {
 	}
 }
 
-// TestMigrateDistributedModeAppliesTheIdenticalSQLiteSchema:
-// APP_DEPLOYMENT_MODE=distributed is no longer refused -- an earlier
-// version of this test (TestMigrateDistributedModeIsRefused) pinned a
-// refusal reasoning ("the distributed mode's schema lives in PostgreSQL,
-// which this command never touches") that does not hold for what a
-// saasctl-generated project actually does: every generated
+// TestMigrateDistributedModeAppliesTheIdenticalSQLiteSchema pins that a
+// distributed deployment mode must not be refused: every generated
 // cmd/server/server.go blank-imports exactly go/dbkit/dialect/sqlite, with
 // no dialect selection anywhere in its wiring, under either deployment
 // mode (migrate.go's own migrate function doc comment has the full
-// argument, and examples/reference-app/integration_test/
-// distributed_mode_test.go's package doc comment records the identical
-// fact for the reference app). This test proves the corrected behavior: a
-// fresh database migrates identically under the distributed mode, applying
-// the same universe and ledger TestMigrateFreshDatabaseAppliesTheWholeRequiredUniverse
-// pins for the standalone default.
+// argument). A fresh database migrates identically under the distributed
+// mode, applying the same universe and ledger
+// TestMigrateFreshDatabaseAppliesTheWholeRequiredUniverse pins for the
+// standalone default.
 func TestMigrateDistributedModeAppliesTheIdenticalSQLiteSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "cli-app.db")
 	code, stdout, stderr := driveMigrate(t, []string{fixture(t, "full.mod")}, map[string]string{

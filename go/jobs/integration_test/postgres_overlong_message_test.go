@@ -33,10 +33,10 @@ import (
 // fix. The unit tests assert the application-layer cut; this test drives
 // the real worker over a real PostgreSQL server and asserts the terminal
 // state is genuinely reached with the stored values cut exactly to the
-// declared widths -- the assertion that failed pre-fix as the
-// running-state wedge, and fails again if a future change ever lets the
-// truncation width drift from the DDL (a truncation wider than the column
-// re-creates the 22001; a narrower one merely stores less).
+// declared widths -- an uncut value would leave the running-state wedge
+// (the 22001), and a truncation width drifting from the DDL fails again
+// (wider than the column re-creates the 22001; narrower merely stores
+// less).
 func TestStandaloneQueue_PostgresOverlongFailureMessage_ReachesTerminalState(t *testing.T) {
 	// The truncation warnings go through obs.FromContext over a context
 	// with no attached logger, which falls back to slog.Default() read
@@ -106,13 +106,13 @@ func TestStandaloneQueue_PostgresOverlongFailureMessage_ReachesTerminalState(t *
 	}
 
 	// WithMaxRetries(0), the first (and only) attempt's failure is a
-	// dead-letter. Post-fix the attempt settles within milliseconds of the
-	// handler returning; pre-fix the dead-letter UPDATE storing the
-	// overlong error_message is refused with 22001 and the row stays
-	// StatusRunning -- nothing else in-process ever touches it again
-	// (retry-budget bookkeeping is precisely the write that cannot land),
-	// so the bounded wait below fails with the row's running status and
-	// the worker's captured 22001 log as the evidence of the wedge.
+	// dead-letter: the attempt settles within milliseconds of the handler
+	// returning. An overlong error_message uncut at the write would be
+	// refused with 22001 and the row would stay StatusRunning -- nothing
+	// else in-process ever touches it again (retry-budget bookkeeping is
+	// precisely the write that cannot land), so the bounded wait below
+	// fails with the row's running status and the worker's captured 22001
+	// log as the evidence of the wedge.
 	ctx := pkgcore.WithTenant(context.Background(), tenant)
 	deadline := time.Now().Add(15 * time.Second)
 	var job *jobs.Job

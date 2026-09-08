@@ -970,7 +970,7 @@ func TestService_PublicSnapshot_SkipsAnItemWithNoValueAnywhere(t *testing.T) {
 	// type: "the module serves no value until one is set"), so until a row
 	// exists at some scope the item has no value to serve. The snapshot
 	// must omit that key, never fail the whole response: the endpoint's
-	// contract is platform-defaults fallback, never an error, and a future
+	// contract is platform-defaults fallback, never an error, and any
 	// module declaring such an item must not take the pre-auth login
 	// surface down with a 404 for every tenant while ops has not written
 	// the row yet.
@@ -1131,7 +1131,7 @@ func skewedWriteFixture(t *testing.T, svc *Service) {
 }
 
 // TestService_Refresh_IncrementalSweepAloneNeverRecoversASkewedWrite
-// reproduces the peer audit's P2-4 at the mechanism level: changedSince's
+// reproduces the mechanism-level gap: changedSince's
 // ">= watermark" predicate (store.go) can never select a row whose
 // UpdatedAt lands behind an already-advanced watermark, on any future
 // Refresh call, however many -- the watermark only ever grows forward, so
@@ -1140,7 +1140,7 @@ func skewedWriteFixture(t *testing.T, svc *Service) {
 // periodic full-reconciliation fallback (fullReconcileEvery), which this
 // test deliberately stays under (fullReconcileEvery-1 cycles) so it
 // isolates the incremental sweep's own limit rather than the fallback that
-// now bounds it.
+// bounds it.
 func TestService_Refresh_IncrementalSweepAloneNeverRecoversASkewedWrite(t *testing.T) {
 	svc := attachDefaultServiceForTest(t)
 	skewedWriteFixture(t, svc)
@@ -1164,7 +1164,7 @@ func TestService_Refresh_IncrementalSweepAloneNeverRecoversASkewedWrite(t *testi
 			t.Fatalf("Get after Refresh iteration %d: %v", i, err)
 		}
 		if v.Data == "Stuck Forever" {
-			t.Fatalf("iteration %d: the skewed-clock write converged through the incremental sweep alone -- re-evaluate P2-4's verdict", i)
+			t.Fatalf("iteration %d: the skewed-clock write converged through the incremental sweep alone", i)
 		}
 	}
 
@@ -1181,7 +1181,8 @@ func TestService_Refresh_IncrementalSweepAloneNeverRecoversASkewedWrite(t *testi
 }
 
 // TestService_Refresh_PeriodicFullReconciliation_RecoversASkewedWrite
-// proves the fix for P2-4: Refresh's every-fullReconcileEvery-th full
+// proves the bound the periodic reconciliation provides: Refresh's
+// every-fullReconcileEvery-th full
 // cache eviction (valueCache.invalidateAll) bounds how long the row
 // TestService_Refresh_IncrementalSweepAloneNeverRecoversASkewedWrite
 // proves the incremental sweep alone can never recover -- by the
@@ -1237,15 +1238,17 @@ func TestService_Poller_ConvergesAStaleCache(t *testing.T) {
 }
 
 // TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh is a
-// deterministic regression test for a real deadlock a loaded CI runner
-// once hit: Close used to hold pollMu for its entire body, including the
-// block on <-pollDone. The poller's own ticker-triggered Refresh call
-// needs pollMu to finish and let the poller's next select observe the
-// closed pollStop -- so if the poller's select ever picked <-ticker.C
-// over the already-closed <-pollStop while Close was mid-wait, the
-// poller blocked forever trying to re-acquire pollMu for that tick's
-// Refresh call, and Close, still holding pollMu, waited forever for a
-// pollDone that could now never close. Circular wait.
+// deterministic regression test for the deadlock Close's design must
+// avoid: Close must not hold pollMu across its block on <-pollDone. The
+// poller's own ticker-triggered Refresh call needs pollMu to finish and
+// let the poller's next select observe the closed pollStop -- so if the
+// poller's select ever picked <-ticker.C over the already-closed
+// <-pollStop while Close was mid-wait, the poller would block forever
+// trying to re-acquire pollMu for that tick's Refresh call, and Close,
+// still holding pollMu, would wait forever for a pollDone that could now
+// never close. Circular wait. Close avoids it by releasing pollMu before
+// the wait (see Close's doc comment); this test pins that the lock is
+// never held across the wait.
 //
 // The one piece of that race this test cannot pin down directly is which
 // case Go's select picks when both channels are simultaneously ready --
@@ -1257,12 +1260,11 @@ func TestService_Poller_ConvergesAStaleCache(t *testing.T) {
 // a second tick provably pending in the poller's ticker by the time that
 // Refresh call returns. That leaves only the coin flip, so the scenario
 // is repeated enough times that never landing the bad half of it is
-// vanishingly unlikely against the unfixed code, while the fixed Close
-// cannot deadlock on either outcome of that flip -- every iteration
-// passes reliably post-fix. Each iteration carries its own hard
-// wall-clock timeout, so a reappearing deadlock fails fast and names the
-// iteration instead of hanging the whole test binary for minutes the way
-// the real incident did.
+// vanishingly unlikely against a Close that held the lock across the
+// wait, while the Close under test cannot deadlock on either outcome of
+// that flip -- every iteration passes. Each iteration carries its own
+// hard wall-clock timeout, so a reappearing deadlock fails fast and
+// names the iteration instead of hanging the whole test binary.
 func TestService_Close_DoesNotDeadlockAgainstAnInFlightPollerRefresh(t *testing.T) {
 	const iterations = 25
 	for i := 0; i < iterations; i++ {
@@ -1568,10 +1570,11 @@ func TestService_RemoteDelivery_JudgesSensitivityByTheLocalSchema(t *testing.T) 
 	// not decode that wire value and hand it to its watchers as plaintext.
 	// The local judgment wins -- the delivery is redacted, the wire value
 	// is never decoded -- and the divergence itself is Warned, because it
-	// means the replicas' schema snapshots have drifted apart. (Regression:
-	// Redacted and the decode decision used to follow the wire field, so
-	// the value a skewed peer published in the clear reached watchers
-	// labeled Redacted:false.)
+	// means the replicas' schema snapshots have drifted apart. (The decode
+	// decision follows the payload's Sensitive flag nowhere: a skewed peer
+	// publishing a key's clear-text value with Sensitive:false must not
+	// reach watchers labeled Redacted:false, which a payload-side judgment
+	// would allow.)
 	svc := attachDefaultServiceForTest(t)
 
 	// deliver sends one change through the subscriber exactly as the

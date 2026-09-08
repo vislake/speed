@@ -10,23 +10,20 @@
 -- partial indexes since 3.8.0, and the rewrite is standard SQL, not a
 -- PostgreSQL-only feature.
 --
--- This is the schema half of Service.EnrollTOTP/ConfirmTOTP's two-phase
--- replacement fix: EnrollTOTP used to delete an existing ACTIVE factor
--- before creating the new PENDING one, which meant an abandoned or
--- cancelled enrollment wizard left the account with no working second
--- factor and no working recovery codes at all -- a silent security-posture
--- downgrade a step-up-gated "replace" action must never cause. The fix
--- keeps the old active factor live until ConfirmTOTP genuinely succeeds,
--- which needs one pending row to be able to sit beside the still-active row
--- it will eventually replace; this index is what makes that legal instead
--- of a unique-constraint violation on INSERT.
+-- This index exists for Service.EnrollTOTP/ConfirmTOTP's two-phase
+-- replacement: an existing ACTIVE factor stays live until ConfirmTOTP
+-- genuinely succeeds -- an enrollment abandoned before confirming must not
+-- leave the account with no working second factor and no working recovery
+-- codes -- which needs one pending row to be able to sit beside the
+-- still-active row it will eventually replace. This index is what makes
+-- that legal instead of a unique-constraint violation on INSERT.
 --
--- The multiple-pending-rows-per-user-and-type case this leaves unconstrained
--- (nothing stops two pending rows for the same user+type existing at once)
--- is deliberately still ruled out at the application layer instead:
+-- Two pending rows for the same user+type are not constrained by this
+-- index; ruling them out stays the application layer's job:
 -- Service.EnrollTOTP deletes any existing PENDING row of the type before
--- creating a fresh one, exactly as it always deleted before -- only the
--- ACTIVE row is now spared.
+-- creating a fresh one, while the ACTIVE row is spared until a confirm
+-- genuinely succeeds (migration 0011 later constrains the pending case in
+-- the schema as well).
 DROP INDEX idx_user_mfa_factors_user_type;
 
 CREATE UNIQUE INDEX idx_user_mfa_factors_user_type

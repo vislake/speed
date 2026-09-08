@@ -1,122 +1,105 @@
 name: docs-check
-
-# Documentation and public-API discipline pipeline -- docs/internal/
-# 18-cicd.md's pipeline table, docs-check row: documentation code examples
-# compile and run, link checks, zh-CN/en-US i18n key-set parity, and config-
-# reference drift detection. Target under 8 minutes (raised from 5 when the
-# markdown-example check below added a second toolchain install -- Go,
+# Documentation and public-API discipline pipeline: documentation code
+# examples compile and run, link checks, zh-CN/en-US i18n key-set parity,
+# and config-reference drift detection. Target under 8 minutes (the
+# markdown-example check below adds a second toolchain install -- Go,
 # alongside Hugo -- plus two tiny throwaway-module `go build`+`go vet`
 # calls; both are cheap in practice but the budget line should not lie
-# about what the job now does). This pipeline is NOT a GitHub
+# about what the job does). This pipeline is NOT a GitHub
 # branch-protection required check: this repository has no native branch
-# protection on main at all (18-cicd's branch-protection section records
-# the evidence -- `gh api repos/.../branches/main/protection` returns
-# 404 -- and names fast-check, security and docs-check alike as
-# post-hoc signals, never merge gates). Path filtering makes the same
-# point from the other side: a PR that touches no listed path never
-# starts this workflow, so no check run appears for it at all -- nothing
-# "reports neutral" (that status only arises from a job GitHub runs and
-# skips via an `if:`, which this file never does), and a run that does
-# start reports success or failure like any other check. Either way
-# nothing here blocks a merge: main is direct-push by team convention,
-# and the after-the-fact signal for a direct push is fast-check's own
-# push trigger.
+# protection on main at all (`gh api repos/.../branches/main/protection`
+# returns 404); fast-check, security and docs-check alike are post-hoc
+# signals, never merge gates. Path filtering makes the same point from
+# the other side: a PR that touches no listed path never starts this
+# workflow, so no check run appears for it at all -- nothing "reports
+# neutral" (that status only arises from a job GitHub runs and skips via
+# an `if:`, which this file never does), and a run that does start
+# reports success or failure like any other check. Either way nothing
+# here blocks a merge: main is direct-push by team convention, and the
+# after-the-fact signal for a direct push is fast-check's own push
+# trigger.
 #
-# DESIGN-TABLE TRIGGER: PRs touching documentation or a public API, via
-# GitHub-native path filtering on the pull_request event -- zero third-party
-# actions (dorny/paths-filter stays future work for the module set, per
-# 18-cicd's cost-control section; with a single-job pipeline the event's own
-# path filter is the whole gate). The path set below is deliberately not
-# "everything": code-only PRs are already covered by fast-check's module
-# matrix and must not fire this pipeline, while locale and i18n-contract
-# changes must never slip through it.
+# TRIGGER: PRs touching documentation or a public API, via GitHub-native
+# path filtering on the pull_request event -- zero third-party actions
+# (with a single-job pipeline the event's own path filter is the whole
+# gate). The path set below is deliberately not "everything": code-only
+# PRs are already covered by fast-check's module matrix and must not
+# fire this pipeline, while locale and i18n-contract changes must never
+# slip through it.
 #
-# COVERAGE -- what genuinely runs today
-#   * i18n key-set parity (the pipeline's one existing tool): python3
-#     tools/check_i18n_keys.py from the repository root, discovering every
-#     locale directory below it (today examples/reference-app/internal/
-#     notes/locales and go/pkgcore/locales, pkgcore's seed bundle -- TOML
-#     pairs -- plus the web JSON bundles under web/packages/i18n/
-#     test-utils/locales and web/packages/ui-kit/src/locales) and failing
-#     on any zh-CN/en-US key-set drift -- the raw-file half of the i18n
-#     discipline, complementing the compiled halves (pkgcore/i18n's
-#     ErrParityMismatch check inside the Go module unit suites and
-#     @speed/i18n's registerNamespace validation on the web side). The
-#     checker
-#     is dependency-free (tools/README.md): plain python3 -- no Go
-#     toolchain, no package install -- so this job needs no setup step.
-#     ubuntu-latest ships the Python >= 3.11 the checker needs (tomllib).
+# COVERAGE -- what runs, in step order:
+#   * i18n key-set parity: python3 tools/check_i18n_keys.py from the
+#     repository root, discovering every locale directory below it
+#     (TOML pairs under the Go modules' locales/ trees plus the web
+#     packages' JSON bundles) and failing on any zh-CN/en-US key-set
+#     drift -- the raw-file half of the i18n discipline, complementing
+#     the compiled halves (pkgcore/i18n's ErrParityMismatch check inside
+#     the Go module unit suites and @speed/i18n's registerNamespace
+#     validation on the web side). The checker is dependency-free
+#     (tools/README.md): plain python3 -- no Go toolchain, no package
+#     install -- so this job needs no setup step. ubuntu-latest ships
+#     the Python >= 3.11 the checker needs (tomllib).
 #   * error-code index drift: python3 tools/gen_error_code_index.py
 #     --check from the repository root, failing when docs/error-codes.md
 #     is not what the generator renders from the current Go tree --
 #     every code constructed in Go source under go/ and examples/ with a
 #     literal code argument (test and generated files excluded), named
 #     declaration or inline construction alike, each with its own
-#     locales/en-US.toml catalog entry when one exists. The generator's
-#     --check mode shipped with the script but stayed unwired until the
-#     committed index had drifted 271 codes behind the 359 the tool
-#     rendered (later rounds added codes with no regeneration); this is
-#     the wiring that closed that gap. Like the i18n checker above: plain
-#     python3, no setup step.
+#     locales/en-US.toml catalog entry when one exists. Plain python3,
+#     no setup step.
 #   * error-code index coverage: python3
 #     tools/check_error_code_index_coverage.py, running next to the
 #     drift check above. The drift check compares the committed index
 #     against the generator's own output -- both sides derive from the
 #     same scanner, so a construction form the generator does not index
-#     is invisible to it (that blind spot once hid 25 inline codes: 13
-#     jobs.* option-time panics, 6 dbkit.* plugin/connect refusals, 4
-#     reference-app request-shape refusals, the two rateLimited-routed
-#     declarations). The coverage check derives the expected code set
-#     independently from the real tree -- its own scanner, multi-line
-#     aware, comment-masked -- and fails printing every code the index
-#     has no row for (plus the unindexable classes: non-literal code
-#     arguments outside an apperr-constructing helper's body, and helper
-#     calls with non-literal arguments), so an extractor blind spot
-#     shows as a real diff instead of silent agreement. Plain python3,
-#     no setup step.
+#     is invisible to it. The coverage check derives the expected code
+#     set independently from the real tree -- its own scanner,
+#     multi-line aware, comment-masked -- and fails printing every code
+#     the index has no row for (plus the unindexable classes:
+#     non-literal code arguments outside an apperr-constructing
+#     helper's body, and helper calls with non-literal arguments), so
+#     an extractor blind spot shows as a real diff instead of silent
+#     agreement. Plain python3, no setup step.
 #   * docs-site build: python3 tools/check_docs_site.py from the
 #     repository root. docs/site/ is a real Hugo project (theme:
 #     hugo-book, pinned as a git submodule -- docs/site/README.md has
-#     the machinery-decision rationale) as of the Hugo migration round,
-#     so the check runs a real `hugo --minify` build and validates the
-#     BUILT output (docs/site/public/, gitignored, never committed):
-#     the build itself produces no warnings, every required page is
-#     present in both languages (en default/unprefixed, zh-cn under
-#     /zh-cn/), llms.txt lands exactly once at the built root, every
-#     internal link on a built page resolves, and the offline preview
-#     really serves (it spawns the python3 stdlib HTTP server on an
-#     ephemeral port and fetches the site root). Needs the pinned Hugo
-#     binary (setup-hugo-env step below) and the theme submodule checked
-#     out, unlike the dependency-free i18n checker above.
+#     the machinery-decision rationale), so the check runs a real
+#     `hugo --minify` build and validates the BUILT output
+#     (docs/site/public/, gitignored, never committed): the build
+#     itself produces no warnings, every required page is present in
+#     both languages (en default/unprefixed, zh-cn under /zh-cn/),
+#     llms.txt lands exactly once at the built root, every internal
+#     link on a built page resolves, and the offline preview really
+#     serves (it spawns the python3 stdlib HTTP server on an ephemeral
+#     port and fetches the site root). Needs the pinned Hugo binary
+#     (setup-hugo-env step below) and the theme submodule checked out,
+#     unlike the dependency-free i18n checker above.
 #   * markdown Go example compile/parse check: python3 tools/
-#     check_markdown_examples.py from the repository root, closing the
-#     "dedicated harness for prose-embedded documentation examples" item
-#     this file used to carry in the list below (root CLAUDE.md's
-#     Documentation section names the same gap: "Examples embedded in
-#     markdown prose (AGENTS.md, READMEs, ADRs) have no compile harness").
-#     Every fenced ```go block in every AGENTS.md, go/*/README.md,
+#     check_markdown_examples.py from the repository root. Every fenced
+#     ```go block in every AGENTS.md, go/*/README.md,
 #     web/packages/*/README.md, the root README.md and docs/adr/*.md is
 #     checked (docs/internal/** is deliberately excluded -- see the
-#     script's own module docstring for why): a block that opens with its
-#     own `package` clause is a claim of real working code and is really
-#     `go build`+`go vet`'d, in a throwaway module `replace`-directived
-#     onto whichever go/<module> packages its own imports name (the
-#     replace directive alone -- not GOPROXY -- guarantees this repo's own
-#     modules resolve to the tree under review rather than a stale
-#     published version, so the default GOPROXY is left alone and only
-#     GOWORK=off is set, keeping real third-party transitive dependencies
-#     fetchable on a cold module cache); a bare
-#     fragment (the overwhelming majority of the corpus -- a partial
-#     snippet is a deliberate, legitimate documentation style, not a bug)
-#     is instead syntax-checked with `gofmt -e` under several throwaway
-#     wrappings (top-level declaration list, function body, interface
-#     body, struct body, const/var block), failing only if EVERY wrapping
-#     rejects it. Needs the pinned Go toolchain (setup-go-env step below,
-#     no golangci-lint install) but no network beyond what actions/
-#     checkout and setup-go already needed, and no Docker.
+#     script's own module docstring for why): a block that opens with
+#     its own `package` clause is a claim of real working code and is
+#     really `go build`+`go vet`'d, in a throwaway module
+#     `replace`-directived onto whichever go/<module> packages its own
+#     imports name (the replace directive alone -- not GOPROXY --
+#     guarantees this repo's own modules resolve to the tree under
+#     review rather than a stale published version, so the default
+#     GOPROXY is left alone and only GOWORK=off is set, keeping real
+#     third-party transitive dependencies fetchable on a cold module
+#     cache); a bare fragment (the overwhelming majority of the corpus
+#     -- a partial snippet is a deliberate, legitimate documentation
+#     style, not a bug) is instead syntax-checked with `gofmt -e` under
+#     several throwaway wrappings (top-level declaration list, function
+#     body, interface body, struct body, const/var block), failing only
+#     if EVERY wrapping rejects it. Needs the pinned Go toolchain
+#     (setup-go-env step below, no golangci-lint install) but no network
+#     beyond what actions/checkout and setup-go already needed, and no
+#     Docker.
 #
-# DELIBERATELY NOT WIRED HERE -- roadmap M0 docs-engineering items whose
-# tooling does not exist yet (wiring them now would be fake checks):
+# DELIBERATELY NOT WIRED -- docs-engineering items whose tooling does
+# not exist yet (wiring them now would be fake checks):
 #   * link checking across the docs/ markdown tree (broken anchors/URLs
 #     in prose). The docs site's own internal links are already checked
 #     (check_docs_site.py, COVERAGE above); this row is the wider
@@ -124,8 +107,7 @@ name: docs-check
 #   * config-reference generation drift: the reference is generated from
 #     the pkgcore/config schema; generation is not in CI.
 #   * per-version release directories for docs/site/ (the site versioned
-#     like the code it documents) -- still a later (M4) milestone item
-#     (docs/site/README.md, docs/internal/13-documentation-standards.md).
+#     like the code it documents).
 #
 # PATH SET -- documentation or i18n/public-API changes only:
 #   docs/**                     the design docs this pipeline guards, and
@@ -140,29 +122,27 @@ name: docs-check
 #                                line below)
 #   **/locales/**                i18n resources -- the check's direct subject
 #   go/pkgcore/**                the catalog contract the checker mirrors,
-#                                and (see next entry) a dependency of both
-#                                complete markdown examples in the corpus
-#   go/dbkit/**, go/ratelimit/** the two modules a markdown ```go block
-#                                currently claims to be real, buildable code
-#                                against (go/dbkit/AGENTS.md, go/ratelimit/
-#                                AGENTS.md) -- a source-only change to
-#                                either module with no markdown edit could
-#                                otherwise silently make that example stale
-#                                with nothing to catch it (fast-check's own
-#                                module matrix never builds markdown
-#                                fences). Both examples also import
-#                                go/pkgcore directly (pkgcore.TenantID in
-#                                dbkit's, pkgcore.KVStore/NewMemoryKVStore
-#                                in ratelimit's -- confirmed via
+#                                and (see next entry) a dependency of the
+#                                corpus's complete markdown examples
+#   go/dbkit/**, go/ratelimit/** the two modules whose AGENTS.md carries a
+#                                markdown ```go block claiming to be real,
+#                                buildable code against them -- a
+#                                source-only change to either module with
+#                                no markdown edit could otherwise silently
+#                                make that example stale with nothing to
+#                                catch it (fast-check's own module matrix
+#                                never builds markdown fences). Both
+#                                examples also import go/pkgcore directly
+#                                (pkgcore.TenantID in dbkit's,
+#                                pkgcore.KVStore/NewMemoryKVStore in
+#                                ratelimit's -- confirmed via
 #                                _module_dirs_for_block), which is why
 #                                go/pkgcore/** is listed above rather than
-#                                the narrower go/pkgcore/i18n/** alone. This
-#                                list is exactly the set
-#                                check_markdown_examples.py's own --survey
-#                                mode reports as owning a "complete" block
-#                                today; re-run --survey and extend this
-#                                list by hand whenever a new complete block
-#                                starts depending on a module not named here
+#                                the narrower go/pkgcore/i18n/** alone.
+#                                Re-run check_markdown_examples.py
+#                                --survey and extend this list by hand
+#                                whenever a new complete block starts
+#                                depending on a module not named here
 #   tools/check_i18n_keys.py     the checker itself (self-test on change)
 #   tools/check_docs_site.py     the site checker (self-test on change)
 #   tools/check_markdown_examples.py       the markdown-example checker
@@ -185,6 +165,7 @@ name: docs-check
 #                                -- the api-contract precedent)
 #   CLAUDE.md, README.md        root docs stating the rules and CI claims
 #   Taskfile.yml                dev-workflow docs of the checker commands
+
 
 on:
   pull_request:

@@ -88,13 +88,11 @@ type ShareCreatedPayload struct {
 	Sensitive   bool   `json:"sensitive"`
 }
 
-// ShareAccessedPayload is the JSON payload of EventShareAccessed -- the
-// event docs/internal/07-platform-services.md's "relationship to other
-// modules" section describes as flowing into compliance's own audit trail
-// once that module exists (M4). This module only publishes; there is no
-// subscriber in this history, the identical publish-now-subscriber-later
-// shape go/dbkit/audit's write-capture events used before go/dbkit/audit
-// itself existed to consume them.
+// ShareAccessedPayload is the JSON payload of EventShareAccessed. The event
+// announces that an access attempt against a share was settled, granted or
+// denied. No subscriber exists in the current tree; this module only
+// publishes, the publish-now-subscriber-later shape go/dbkit/audit's
+// write-capture events also use.
 type ShareAccessedPayload struct {
 	ShareID  string `json:"share_id"`
 	Granted  bool   `json:"granted"`

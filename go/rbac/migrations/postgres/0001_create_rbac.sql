@@ -9,8 +9,8 @@
 -- arrays, no JSONB.
 --
 -- Every id column is VARCHAR(36) and holds an application-generated UUID.
--- tenant_id is the leftmost column of every index here, per the backend
--- coding standard's data-model rules; the ids themselves are globally
+-- tenant_id is the leftmost column of every index here, because a tenant-filtered query is the only kind this module issues;
+-- the ids themselves are globally
 -- unique, so each table's primary key is its id alone and tenant_id is a
 -- plain indexed column rather than part of a composite key.
 --
@@ -70,8 +70,8 @@ CREATE UNIQUE INDEX uq_rbac_role_permissions_tenant_role_permission
 --
 -- It stores the node's id and never its materialized path. A denormalized
 -- path would go stale the moment the node moves in the tree, and
--- docs/internal/16-verification.md requires permissions to follow such a
--- move immediately; the path is resolved at evaluation time instead.
+-- a member's permissions must follow such a move immediately; the path
+-- is resolved at evaluation time instead.
 --
 -- The (tenant_id, user_id) prefix of the unique index serves the hot read
 -- "which bindings does this subject have". The second index serves the

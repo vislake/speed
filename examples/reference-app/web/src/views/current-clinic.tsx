@@ -4,18 +4,18 @@
  * h1: the one place in the main content area that always says which
  * clinic the person is working in.
  *
- * Why this exists (reference-app acceptance, current-clinic-is-visible):
- * the tenant switcher names the current clinic only in the chrome, and
- * a chrome-only mention is scannable past -- the acceptance story is a
- * practice manager who switches clinic, sees the record list go empty
- * and reads that as data loss, because nothing in the work area ever
- * said the context changed. A person writing a patient record needs to
- * know where that record will land from where they are writing, not
- * from a header they have stopped looking at. So the home and notes
- * surfaces both render this line under their page heading, and the
- * line is driven by the principal's own claim (auth-core's
- * useCurrentTenant) -- when a switch commits, the session notifies and
- * the line re-renders with the new clinic's name, the old name gone.
+ * Why this exists: the tenant switcher names the current clinic only
+ * in the chrome, and a chrome-only mention is scannable past -- a
+ * person who switches clinic, sees the record list go empty and has
+ * nothing in the work area telling them the context changed can read
+ * that as data loss. A person writing a patient record needs to know
+ * where that record will land from where they are writing, not from a
+ * header they have stopped looking at (the property
+ * e2e/current-clinic-is-visible.spec.ts gates). So the surfaces render
+ * this line under their page heading, and the line is driven by the
+ * principal's own claim (auth-core's useCurrentTenant) -- when a
+ * switch commits, the session notifies and the line re-renders with
+ * the new clinic's name, the old name gone.
  *
  * The name comes from useCurrentTenantName (app-services.tsx): the
  * demo roster's copy for the boot-configured tenants, the tenant's own

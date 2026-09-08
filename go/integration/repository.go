@@ -15,21 +15,21 @@ import (
 // APIKey.
 //
 // It embeds *dbkit.Repository[APIKey] (Create / FindByID / Update / Delete
-// / List promoted unchanged, per the backend coding standard's "business
-// repositories embed Repository[T], never hold a raw *gorm.DB" rule) for
-// round 1's own query shapes -- "one key by id, inside the tenant" and
-// "every key of the tenant". Delete is never called on this table: a key's
-// end of life is RevokedAt, set through Update, never a row removal.
+// / List promoted unchanged) for the module's own query shapes -- "one key
+// by id, inside the tenant" and "every key of the tenant". Delete is never
+// called on this table: a key's end of life is RevokedAt, set through
+// Update, never a row removal.
 //
-// This round adds db (the same connection the embedded Repository[APIKey]
-// was built on) plus three extra query shapes on top of it --
+// It adds db (the same connection the embedded Repository[APIKey] was
+// built on) plus three extra query shapes on top of it --
 // createWithHashIndex, tenantForHash, byHash -- the identical construction
 // go/org's Repository and go/sharing's ShareRepository both use for their
-// own hand-written queries: composed on the same *gorm.DB layer 1 already
-// protects (dbkit.WithTenantSession, so the tenant-scope GORM plugin still
-// injects "WHERE tenant_id = ?" for a TenantScoped destination), never
-// db.Table / db.Model / db.Raw. See model.go's apiKeyHashIndex doc comment
-// for why Service.Authenticate needs these three at all.
+// own hand-written queries: composed on the same *gorm.DB the tenant-scope
+// machinery protects (dbkit.WithTenantSession, so the tenant-scope GORM
+// plugin still injects "WHERE tenant_id = ?" for a TenantScoped
+// destination), never db.Table / db.Model / db.Raw. See model.go's
+// apiKeyHashIndex doc comment for why Service.Authenticate needs these
+// three at all.
 type APIKeyRepository struct {
 	*dbkit.Repository[APIKey]
 
@@ -168,10 +168,9 @@ func (r *APIKeyRepository) tenantForHash(ctx context.Context, hash string) (pkgc
 // is a *time.Time, and the non-nil &at pointer is what keeps the column in
 // the SET clause: gorm's struct-based Updates silently omits a zero-valued
 // field, and a nil pointer would be exactly that. UpdatedAt rides along
-// through gorm's auto-update-time machinery exactly as it did under the
-// previous statement shape (an incidental bookkeeping touch, never
-// something the revocation race relies on -- the row's guard columns are
-// untouched, which is the whole point).
+// through gorm's auto-update-time machinery (an incidental bookkeeping
+// touch, never something the revocation race relies on -- the row's guard
+// columns are untouched, which is the whole point).
 //
 // The tenant filter comes from dbkit's tenant-scope plugin (the statement
 // runs inside WithTenantSession against the TenantScoped APIKey model, which

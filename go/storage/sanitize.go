@@ -8,10 +8,10 @@ import (
 	"hash/crc32"
 )
 
-// This file strips metadata from image bytes before they are stored, per the
-// B2 revalidation policy: location and authorship metadata that arrived with
-// an upload must not survive into the object the platform serves to other
-// people. Stripping is structural, not re-encoding: the decodable pixel data
+// This file strips metadata from image bytes before they are stored:
+// location and authorship metadata that arrived with an upload must not
+// survive into the object the platform serves to other people. Stripping
+// is structural, not re-encoding: the decodable pixel data
 // passes through untouched, so the sanitized output decodes to exactly the
 // image the uploader sent -- only the metadata containers are gone.
 //

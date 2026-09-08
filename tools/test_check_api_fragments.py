@@ -21,8 +21,7 @@ the real check against this repository, which is what the api-contract
 job's drift-check step runs on every trigger.
 
 Planted-drift classes covered (each fails before the wiring that makes
-it green -- the regression teeth this mechanism ships with, per root
-CLAUDE.md's bug-fix policy):
+it green -- the regression teeth this mechanism ships with):
 
   * fragment dir added to the tree, not in the manifest
     (test_fragment_dir_added_to_tree_without_manifest_is_drift);

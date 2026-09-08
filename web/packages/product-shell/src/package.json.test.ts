@@ -9,9 +9,8 @@
  * host that installs @speed/product-shell renders the auth-ui family the
  * shell's sign-in slot pairs with (auth-ui's barrel statically imports
  * useForm), so react-hook-form must be a declared peer of this package
- * too -- the reviewer's finding P2-2 (the one missing link). The
- * devDependency pins the exact workspace version so the package's own
- * suite resolves the peer against a real install.
+ * too. The devDependency pins the exact workspace version so the
+ * package's own suite resolves the peer against a real install.
  *
  * The manifest is read from disk, never imported as a module: vite
  * refuses to resolve a package's own package.json through the module

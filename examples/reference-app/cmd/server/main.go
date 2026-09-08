@@ -109,7 +109,7 @@ func main() {
 		// scanning (bearer tokens, JWTs, URL userinfo/DSN passwords) and is
 		// pinned by TestRedact_ErrorValues and
 		// TestRedact_SecretShapesInValues -- a second, independent guard
-		// even if some future err ever did carry a value. Do not "fix" this
+		// even if an err ever did carry such a value. Do not "fix" this
 		// by renaming secretKey or by suppressing this specific alert
 		// without re-tracing the flow if module.go's struct shape changes.
 		obs.FromContext(baseCtx).Error("reference-app server exited with error", "error", err)
@@ -147,9 +147,9 @@ func run(baseCtx context.Context) error {
 	// network until the first Subscribe, so an unreachable APP_REDIS_ADDR
 	// passes Bootstrap and fails loudly at first use instead. buildServer
 	// must run before obs.Init because Init takes no deployment mode and
-	// therefore refuses none: after the retrofit removed the old hard
-	// refusal, this ordering is the only place a bad composition fails
-	// before telemetry starts, and its error is the accurate one. Since
+	// therefore refuses none: this ordering is the only place a bad
+	// composition fails before telemetry starts, and its error is the
+	// accurate one. Since
 	// nothing starts listening until after both calls below succeed,
 	// deferring obs.Init to second costs nothing.
 	// buildServer's fourth return value, the wired *compliance.Module, is
@@ -188,16 +188,11 @@ func run(baseCtx context.Context) error {
 	// obs.Middleware wraps OUTSIDE buildServer's own authn+tenancy
 	// middleware wiring.
 	//
-	// docs/internal/01-architecture.md's originally documented chain order
-	// is recover -> request-id/log-context -> observability ->
-	// tenancy.Middleware -> authn.Middleware -> rbac.RequirePermission ->
-	// handler. buildServer (server.go) deliberately runs authn.Middleware
-	// BEFORE tenancy.Middleware instead -- see its own doc comment on the
-	// handler chain, go/authn/AGENTS.md's "The middleware chain is authn, then tenancy" section,
-	// and docs/internal/01-architecture.md's own implementation-status
-	// note for the full reasoning (a tenancy.Resolver cannot carry a
-	// verified JWT's claims to anything downstream, so the documented
-	// order would force verifying every token twice). obs.Middleware's own
+	// The chain buildServer composes deliberately runs authn.Middleware
+	// before tenancy.Middleware (see its own doc comment on the handler
+	// chain for why: a tenancy.Resolver cannot carry a verified JWT's
+	// claims to anything downstream, so the reverse order would force
+	// verifying every token twice). obs.Middleware's own
 	// position relative to that pair is unaffected: tenancy.Middleware's
 	// doc comment (go/tenancy/middleware.go) says nothing about tracing
 	// middleware specifically, so it wraps outermost regardless of which

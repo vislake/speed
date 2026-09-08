@@ -1,22 +1,22 @@
 package main
 
-// webhook_crud_flow_test.go is go/integration's round-7
+// webhook_crud_flow_test.go is go/integration's
 // webhook-subscription-CRUD surface mandatory-first-consumer proof
-// (go/integration/AGENTS.md's round-7 record names this the compensating
-// obligation the round carried until a real host wired it end to end). It
+// (the
+// mandatory-first-consumer proof). It
 // drives the module's own spec-generated HTTP surface --
 // go/integration/api/openapi.yaml's six operations under
 // /api/v1/integration/webhooks, mounted through server.go's integrationModule
 // wiring and the same generic mountModuleRoutes loop every other module's
 // fragment uses, gated by demo_subject.go's guardIntegrationRoute with its
-// round-7 sub-path dispatch choosing integration:webhook:read for reads and
+// sub-path dispatch choosing integration:webhook:read for reads and
 // integration:webhook:manage for everything else -- through the composed
 // HTTP stack: create (capturing the raw signing secret, shown exactly once),
 // list (secret-free, verified at the raw-JSON level), update (a partial
 // PATCH: pause with active=false, resume with active=true, a present-but-
-// empty eventTypes refused), delete (the mark-delete round 3 shipped, hidden
+// empty eventTypes refused), delete (the mark-delete mechanism, hidden
 // from every read), restore (always landing paused) and the recent-deliveries
-// listing against a REAL delivery made through round 2's pipeline
+// listing against a REAL delivery made through the delivery pipeline
 // (webhook_flow_test.go's own receiver rig).
 //
 // It follows storage_flow_test.go's and org_flow_test.go's wire-shape
@@ -256,7 +256,7 @@ func decodeWebhookDeliveries(t *testing.T, resp *http.Response, wantStatus int, 
 // across every operation class of the fragment: list and the deliveries
 // listing (dispatched to integration:webhook:read) and create, update,
 // delete and restore (dispatched to integration:webhook:manage). This is
-// also this round's own proof that the router-level gate genuinely evaluates
+// also the proof that the router-level gate genuinely evaluates
 // a real permission per sub-path rather than method alone: a router bug that
 // gated every /webhooks request on the API-key pair -- or passed everything
 // through -- would make this test the one that fails.
@@ -496,7 +496,7 @@ func TestBuildServer_WebhookCRUD_CreateListUpdateDeleteRestore_EndToEnd(t *testi
 
 // TestBuildServer_WebhookCRUD_DeliveriesList_RecentDeliveredRow is the
 // deliveries-listing half of this surface's consumer proof: after a REAL
-// delivery through round 2's pipeline (an org member-join triggering one
+// delivery through the pipeline (an org member-join triggering one
 // signed POST at the receiver this test controls, the identical rig
 // webhook_flow_test.go's own delivery proofs drive), the fragment's recent-
 // deliveries listing answers the delivery's row -- status delivered,

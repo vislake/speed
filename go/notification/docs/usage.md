@@ -54,10 +54,10 @@ one, while the Go service surface (`Deliveries()`, `Contacts()`,
 
 ## Configure
 
-notification declares no dynamic `go/config` schema of its own in this
-milestone -- there is nothing here that varies safely at runtime the way a
-brand color or a feature flag does. Every knob above is a construction-time
-Go option, resolved once at boot.
+notification declares no dynamic `go/config` schema of its own -- there is
+nothing here that varies safely at runtime the way a brand color or a
+feature flag does. Every knob above is a construction-time Go option,
+resolved once at boot.
 
 ### Declaring a notification type
 
@@ -162,8 +162,8 @@ notification.Dispatch{...})`, which enqueues a `notification.deliver` job
 that re-checks preferences, consent and addresses at send time, renders
 the recipient's locale, and sends over the resolved transport -- needs a
 real queue running (`jobs.NewStandaloneQueue(db).Start(ctx)`) plus all six
-required `Option`s wired. `AGENTS.md`'s "The pipeline" section walks that
-path end to end; `examples/reference-app/cmd/server/server.go`'s
+required `Option`s wired. `AGENTS.md`'s "Delivery pipeline" section walks
+that path end to end; `examples/reference-app/cmd/server/server.go`'s
 `notificationModule := notification.NewModule(db, ...)` call is the real,
 composed reference wiring every one of those six options together, and
 `cmd/server/notification_flow_test.go` drives it through a full
@@ -209,7 +209,7 @@ compare `.Code`, never a raw string. The most commonly reached ones:
 |---|---|---|
 | `notification.type_not_found` | `Dispatch`/preference call named an undeclared type key | Confirm the declaring module's `Register` ran and called `reg.Notifications.Add` before this call |
 | `notification.contact_not_verified` | Dispatch to an external contact that never completed double opt-in | Nothing sends to this address until `POST /contacts/{id}/verify` succeeds -- the verification message itself is the sole exception |
-| `notification.contact_unsubscribed` / `notification.contact_bounced` | Terminal consent states | Every future delivery to this contact is refused; there is no un-bounce path in this milestone |
+| `notification.contact_unsubscribed` / `notification.contact_bounced` | Terminal consent states | Every later delivery to this contact is refused; there is no un-bounce path |
 | `notification.preference_optout_not_allowed` | A caller tried to opt out of a transactional (non-unsubscribable) type | Expected refusal -- verification codes and similar transactional types cannot be muted |
 | `notification.subject_unresolved` | An HTTP call reached the module with no `SubjectResolver` wired, or the resolver could not identify the caller | Wire `WithSubjectResolver`, or check the resolver's own logic |
 | `notification.sms_sender_required` / `notification.mail_from_required` / `notification.contact_email_indexer_required` / `notification.contact_phone_indexer_required` / `notification.delivery_queue_required` / `notification.user_address_resolver_required` | `Register` refused to boot: one of the six required `Option`s above was never applied | Add the missing `With*` option to `NewModule`'s call |
@@ -235,12 +235,12 @@ it still `pending` (unverified) or already `unsubscribed`/`bounced`? (3)
 did `UserAddressResolver` actually return a non-empty address for that
 channel? None of these are errors from `Dispatch`'s point of view -- the
 job settles a `send_records` row with status `skipped` and a short reason,
-which `AGENTS.md`'s "Failure semantics" section documents in full.
+which `AGENTS.md`'s "Delivery pipeline" section documents in full.
 
 **How do I add a new channel (e.g. push notifications)?**
-Not supported in this milestone -- `AGENTS.md`'s Deferred list names "a
-pkgcore-level SMS seam" and "the platform-staff push consumer" as explicit,
-recorded gaps, not silent omissions.
+Not supported. `AGENTS.md`'s "Not implemented" section names "a
+pkgcore-level SMS seam" and "the platform-staff push consumer" as
+explicit, recorded gaps, not silent omissions.
 
 **Does this module know who a "user" is?**
 No. Its tables hold zero identity data on purpose -- `UserAddressResolver`

@@ -47,12 +47,12 @@
  * signed-in caller's own membership row is "You", never their identity
  * back at them. A member whose account row the composition could not
  * read (a vanished account) answers empty identity fields and the row
- * renders the surface's fallback label rather than the raw user id --
- * the defect this round closed was exactly a raw id where a
- * colleague's identity belongs, and nothing in this view renders a
- * userId as a name. The user id itself stays on the row as its
- * identity key: the "You" naming and the row's react-query key compare
- * against it, but it never reaches the member column.
+ * renders the surface's fallback label rather than the raw user id -- a
+ * raw id where a colleague's identity belongs is exactly what this
+ * surface must never render, and nothing in this view renders a userId
+ * as a name. The user id itself stays on the row as its identity key:
+ * the "You" naming and the row's react-query key compare against it,
+ * but it never reaches the member column.
  *
  * The invitation half of the surface is unchanged by all of this and
  * needs none of it: org holds the address it was asked to invite, so a
@@ -335,8 +335,8 @@ export function TeamView(): ReactElement {
           // named by it, a member who registered none is named by the
           // email their account was registered with, and a member whose
           // account row answered no identity at all renders the
-          // fallback label. The raw user id is never a name -- the
-          // exact defect this surface's walk-through found.
+          // fallback label. The raw user id is never rendered as a
+          // name.
           if (membership.userId === principalUserId) {
             return t('team.members.youRow')
           }

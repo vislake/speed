@@ -5,13 +5,12 @@
  * request, plus the member days of the accounts whose grants differ
  * (the reader's day and the read-denied day).
  *
- * Named for the behaviour it chronicles rather than for one source
- * file, because it crosses every layer the shell composes -- the
- * precedent the packages' session-journey suites set for journeys
- * that span a whole composed family. Where app.test.tsx pins the
- * AppView's routing contract (the fragment parser's degradation
- * rules, per-journey composition checks over the same rig), this
- * suite's first journey keeps one session alive across every surface
+ * Named for the behaviour it covers rather than for one source file,
+ * because it crosses every layer the shell composes. Where
+ * app.test.tsx pins the AppView's routing contract (the fragment
+ * parser's degradation rules, per-journey composition checks over the
+ * same rig), this suite's first journey keeps one session alive
+ * across every surface
  * and pins the ordered network trace that session produces: every
  * method and path, every bearer (the access-1..access-5 numbering of
  * the rig's own token-issuing server), and every body. The binding
@@ -36,14 +35,11 @@
  * self-service leg brings the register-turn visitor back: its sign-in
  * lands inside the clinic its registration provisioned (the server's
  * self-service signup, cmd/server/self_service.go) -- the empty notes
- * list of its own tenant, never the demo rows of the day and never
- * the raw membership-refusal the register turn used to dead-end into
- * (that registered-but-unseeded shape is gone from the demo fixture
- * with the product decision that removed it from the real server).
- * The whole trace pins with configGets === 3: the initial
- * Public-config fetch plus one revalidation per tenant switch (a
- * switch re-asks the host-resolved config the frame's brand and the
- * home cards render from -- reference-app-web.md P2-refapp-14).
+ * list of its own tenant, never the demo rows of the day and never a
+ * membership-refusal. The whole trace pins with configGets === 3: the
+ * initial Public-config fetch plus one revalidation per tenant switch
+ * (a switch re-asks the host-resolved config the frame's brand and
+ * the home cards render from).
  *
  * The second and third journeys script the member days of the demo's
  * other account shapes: the reader day (the rig's reader option --
@@ -149,84 +145,39 @@ function revokeOf(device: string): string {
 
 describe('the app journey', () => {
   // These journeys drive dozens of real userEvent interactions and
-  // network round-trips end to end -- on a warm dev machine the whole
-  // file finishes in a few seconds, but a real GitHub Actions run
-  // (2026-09-05, fast-check run 2) measured a cold import alone at ~14s
-  // against ~0.8s locally, and the owner-day journey's own test then
-  // tripped vitest's 5000ms default per-test timeout.
+  // network round-trips end to end, which can exceed vitest's 5000ms
+  // default per-test timeout against CI's cold-start slowdown -- and a
+  // timed-out test must not be allowed to happen at all: vitest cannot
+  // cancel a running async test body, it only races the test's promise
+  // against a timer, so an abandoned continuation keeps executing,
+  // unobserved, while the next test runs. Because jsdom's `document`
+  // is one shared instance per test *file*, not per test, and Testing
+  // Library's render queries are bound to `document.body` by default,
+  // the abandoned test's stale query handles keep resolving against
+  // the next test's screen and its continued work starves the next
+  // test's own event-loop turns -- a cascade where one overrun can
+  // take down its neighbours.
   //
-  // That first timeout does not stay contained to its own test. Vitest
-  // has no way to cancel a running async test body -- it only races the
-  // test's promise against a timer and reports whichever settles first
-  // -- so the owner-day test's own userEvent/mutateAsync continuation
-  // keeps executing, unobserved, after vitest has already moved on to
-  // the next test. Reproduced directly (a throwaway forced-timeout
-  // build of this file): the abandoned continuation's console output
-  // lands under the *next* test's name in the reporter, and its
-  // continued DOM queries and network calls measurably starve the next
-  // test's own event-loop turns badly enough to blow its own timeout
-  // too -- because jsdom's `document` is one shared instance per test
-  // *file*, not per test, and Testing Library's render queries are
-  // bound to `document.body` by default rather than to the render's own
-  // container, an abandoned test's stale query handle keeps resolving
-  // against whatever the next test currently has on screen. That is
-  // the honest account of the read-only-member journey's own failure in
-  // the same CI run: its DOM at the moment `findByRole('alert')` gave
-  // up already carried a *real*, served note row (the reader's own
-  // typed text under the server's real creation timestamp) with no
-  // Alert in sight -- not a slow assertion, but exactly the signature
-  // this cross-test interference produces. `notes-view.tsx` and the
-  // demo server's write gate were re-audited over this: both are plain,
-  // deterministic, synchronous code with no path for a reader's create
-  // to succeed, and every scripted rbac refusal here is a real 403 the
-  // real notes handler's rbac gate produces (server_test.go:414,
-  // TestBuildServer_PermissionGate_EnforcesTheNotesPermissions, whose
-  // reader-create and ungranted-list assertions sit at :443-445 and
-  // :448-450) -- there is no application-level bug for this failure to
-  // be hiding.
+  // The 30s budget therefore has to apply at COLLECTION time, which is
+  // when vitest freezes each collected test's effective timeout: a
+  // runtime `vi.setConfig` inside a `beforeAll` lands too late to
+  // change a timeout already frozen onto the task. The budget is
+  // passed as a plain-number third argument to `describe` itself --
+  // the supported form of vitest's `SuiteOptions.timeout` (the same
+  // shorthand `it('name', fn, 30_000)` uses per test; the
+  // object-options form as a third argument was removed in Vitest 4) --
+  // read while the suite is being built, before any test body or hook
+  // runs, and applied to every test collected under it. 30s leaves the
+  // owner-day journey generous headroom; a test that ever comes close
+  // to it is its own incident rather than a reason to raise the budget
+  // again, since a second test in this file paying for the first one's
+  // overrun is exactly the cascade above.
   //
-  // The first fix attempted here raised the budget from inside a
-  // `beforeAll(() => { vi.setConfig({ testTimeout: 30_000 }) })` call.
-  // That is a genuine no-op: vitest fixes each collected test's
-  // effective timeout at COLLECTION time, when `describe`'s factory
-  // runs and every `it(...)` call registers its task, which happens
-  // before ANY hook (`beforeAll` included) ever runs. A runtime
-  // `vi.setConfig` inside a hook lands too late to change a timeout
-  // already frozen onto the task. The real CI run confirmed this
-  // exactly -- the failing tests still reported the original "Test
-  // timed out in 5000ms" default, unchanged -- and a local
-  // reproduction (a temporary forced 6s delay in the owner-day test,
-  // run against this exact beforeAll-based code) reproduced the same
-  // failure on demand.
-  //
-  // The fix that actually works reaches vitest at collection time
-  // instead: a plain-number third argument to `describe` itself is a
-  // real, still-supported form of vitest 4.1.11's `SuiteOptions.timeout`
-  // (the identical shorthand `it('name', fn, 30_000)` uses per test --
-  // verified against this pinned version's own `@vitest/runner` source,
-  // since the object-options form as a *third* argument,
-  // `describe(name, fn, { timeout })`, was removed in Vitest 4 and
-  // throws at collection time: "Signature ... was deprecated in Vitest
-  // 3 and removed in Vitest 4"). The number is read while the suite is
-  // being built, before any test body or hook runs, and applies to
-  // every test collected under it -- proven against the same
-  // forced-delay reproduction above, which now passes. It removes the
-  // one precondition the cross-test
-  // cascade above depends on: a test in this file actually exceeding
-  // its timeout. At ~14x the measured CI slowdown, 30s leaves the
-  // owner-day journey (a couple of seconds locally) generous headroom,
-  // so no test here should come close to needing it -- if one ever
-  // does, that is worth treating as its own incident rather than
-  // raising the budget again, since a second test in this file paying
-  // for the first one's overrun is exactly the failure mode above.
-  //
-  // `asyncUtilTimeout` stays a `beforeAll`-set `configure()` call: unlike
-  // vitest's own per-task timeout, Testing Library's config is a plain
-  // runtime object (`@testing-library/dom`'s `config.js`) that
-  // `findBy*`/`waitFor` read via `getConfig()` at the moment they are
-  // called, which is always after `beforeAll` has run for every test in
-  // this file -- so, unlike `vi.setConfig`, it never had the collection-
-  // time problem to begin with.
+  // `asyncUtilTimeout` stays a `beforeAll`-set `configure()` call:
+  // unlike vitest's own per-task timeout, Testing Library's config is
+  // a plain runtime object that `findBy*`/`waitFor` read at the moment
+  // they are called, which is always after `beforeAll` has run -- so
+  // it never had the collection-time problem to begin with.
   beforeAll(() => {
     configure({ asyncUtilTimeout: 5_000 })
   })
@@ -249,9 +200,8 @@ describe('the app journey', () => {
     // session flip -- the register panel reports the created account
     // and sends the visitor back to the sign-in surface. The visitor's
     // own sign-in is the day's closing leg (below): the account the
-    // register turn created now lands in the clinic its registration
-    // provisioned, which is the acceptance finding this journey
-    // chronicles -- the old registered-but-unseeded dead end is gone.
+    // register turn created lands in the clinic its registration
+    // provisioned.
     await user.click(
       view.getByRole('button', { name: zhCN.signIn.registerAction }),
     )
@@ -463,13 +413,11 @@ describe('the app journey', () => {
 
     // The closing self-service leg: back in the day's zh-CN language,
     // the owner signs out, and the register-turn visitor signs in.
-    // Under the product decision this journey chronicles, the visitor
-    // lands INSIDE the clinic its registration provisioned -- the
-    // notes surface under it serves the clinic's own empty list, the
-    // day's tenant-acme rows are nowhere, and the raw
-    // membership-refusal code text that used to answer this exact
-    // sign-in is nowhere either (the register turn's dead end, gone
-    // with the server shape that produced it).
+    // Under the product's self-service shape, the visitor lands INSIDE
+    // the clinic its registration provisioned -- the notes surface
+    // under it serves the clinic's own empty list, the day's tenant-
+    // acme rows are nowhere, and no membership-refusal code text
+    // answers the sign-in.
     await act(async () => {
       await switchLanguage(view.i18n, 'zh-CN')
     })
@@ -492,10 +440,9 @@ describe('the app journey', () => {
     // answers the registration's recorded name; this register turn typed
     // no display name, so the answer is the fixture's
     // REGISTERED_CLINIC_DEFAULT_NAME -- never the raw derived tenant
-    // id, which is the id's only alternative and exactly what the
-    // acceptance gate forbids a person to be shown), the notes surface
-    // under it answers the clinic's empty list, and no membership-
-    // refusal text renders anywhere.
+    // id, which a person must never be shown as their clinic's
+    // identity), the notes surface under it answers the clinic's empty
+    // list, and no membership-refusal text renders anywhere.
     await signInWithPasswordUi(view, user, REGISTER_EMAIL)
     expect(
       view.getByRole('button', { name: REGISTERED_CLINIC_DEFAULT_NAME }),
@@ -519,9 +466,8 @@ describe('the app journey', () => {
     // sent it. The Public-config fetch appears three times: the
     // first-paint fetch (anonymous, hence bearer-less) plus one
     // revalidation after each completed tenant switch -- the switch
-    // handler re-asks the host-resolved config
-    // (reference-app-web.md P2-refapp-14). A revalidation rides the
-    // access token current at the time (the client attaches the
+    // handler re-asks the host-resolved config. A revalidation rides
+    // the access token current at the time (the client attaches the
     // store's token to every request; the pre-auth endpoint ignores
     // it). Each revalidation lands right behind the new tenant's first
     // notes read after its switch: the notes view's re-keyed query
@@ -719,14 +665,14 @@ describe('the app journey', () => {
     // the shared demo server for one test's shape.
     //
     // The second account's read is held open on a gate this test
-    // releases by hand -- proving the cache-eviction half of the fix,
-    // not only the gate-reorder half: without evictQueriesOn
-    // SessionEnd, the query's cache still holds the first account's
-    // row the instant the second account's view remounts, and that
-    // row would render for the whole time this gate stays held (data
-    // defined, isError still false) -- a real, observable leak this
-    // test can catch mid-flight, before the deferred 403 ever settles
-    // isError and lets the reordered ternary alone paper over it.
+    // releases by hand -- proving the cache-eviction half, not only
+    // the gate-order half: without evictQueriesOnSessionEnd, the
+    // query's cache still holds the first account's row the instant
+    // the second account's view remounts, and that row would render
+    // for the whole time this gate stays held (data defined, isError
+    // still false) -- a real, observable leak this test can catch
+    // mid-flight, before the deferred 403 ever settles isError and
+    // lets the gate-order alone paper over it.
     let releaseSecondRead: (() => void) | undefined
     const secondReadGate = new Promise<void>((resolve) => {
       releaseSecondRead = resolve

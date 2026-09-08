@@ -15,17 +15,14 @@ import (
 // DefaultPropagationWindow is how long a newly staged SigningKeyStatusPending
 // key waits before ScanExpiry promotes it to SigningKeyStatusActive.
 //
-// docs/internal/22-pki.md's section on why the pending state exists (a
-// distributed race) explains why the wait exists at all: a multi-replica
-// deployment's
-// process-local caches must all have had a chance to observe the new
-// public key (via event or the cache's own fallback poll) before any
-// replica starts signing with it, or a token signed by the replica that
-// saw the rotation first can arrive at a replica whose cache has not
-// caught up, and fail to verify. The default is a small multiple of
-// DefaultCacheTTL -- generous enough that the cache's fallback poll alone
-// (with no event delivered at all) still catches up well within the
-// window.
+// Why the wait exists: a multi-replica deployment's process-local caches
+// must all have had a chance to observe the new public key (via event or
+// the cache's own fallback poll) before any replica starts signing with
+// it, or a token signed by the replica that saw the rotation first can
+// arrive at a replica whose cache has not caught up, and fail to verify.
+// The default is a small multiple of DefaultCacheTTL -- generous enough
+// that the cache's fallback poll alone (with no event delivered at all)
+// still catches up well within the window.
 const DefaultPropagationWindow = 5 * DefaultCacheTTL
 
 // DefaultRenewalLeadTime is how far ahead of a signing key's NotAfter
@@ -72,11 +69,10 @@ type ScanReport struct {
 // with a stale retiring key still occupying database rows this call could
 // have cleared.
 //
-// docs/internal/22-pki.md's "rotation" section draws the boundary this
-// method respects: it advances the state machine and publishes events, and
-// NEVER pushes a key to any external system, restarts any process, or
-// verifies that a host's own rollout succeeded -- that section is explicit
-// that pushing to any external system is never this module's job.
+// The boundary this method respects: it advances the state machine and
+// publishes events, and NEVER pushes a key to any external system, restarts
+// any process, or verifies that a host's own rollout succeeded -- pushing
+// to any external system is never this module's job.
 func (s *Service) ScanExpiry(ctx context.Context, cfg RotationConfig) (ScanReport, error) {
 	propagationWindow := cfg.PropagationWindow
 	if propagationWindow <= 0 {
@@ -167,30 +163,24 @@ func (s *Service) PromoteDuePending(ctx context.Context, propagationWindow time.
 
 // PromoteNow attempts to promote purpose's pending key to active right now,
 // rather than waiting for the next ScanExpiry tick, honoring the SAME
-// propagationWindow gate PromoteDuePending applies above -- round 3's
-// addition.
+// propagationWindow gate PromoteDuePending applies above.
 //
 // # Why this lives next to revocation, without being part of it
 //
 // PromoteNow exists as a companion to Service.RevokeSigningKey
 // (revocation.go): revoking a purpose's active key in an emergency leaves
 // that purpose with no active signer at all until a replacement is
-// promoted, and docs/internal/22-pki.md's own design deliberately never has
-// revocation auto-promote a waiting successor -- getting a working signer
-// back online is a host's explicit decision, never a side effect the
-// module makes for it. A host that already has a pending key staged for
-// the purpose (StageDueRotations having run ahead of the incident) calls
-// PromoteNow to skip waiting for the next scheduled ScanExpiry tick, while
-// still going through the exact same safety window ScanExpiry itself
-// honors -- PromoteNow is deliberately NOT a way to bypass the window: the
-// incident that makes an operator want to skip it is exactly the scenario
-// the window exists to protect against being made worse by (see
-// PromoteDuePending's own doc comment for the distributed-replica race the
-// window prevents). This is also this round's home for
-// ErrPropagationWindowNotElapsed -- round 1/2's AGENTS.md reserved that
-// code for "the propagation window" without a caller that used it yet; see
-// errors.go's own doc comment for the full accounting of where each of the
-// three originally-reserved codes actually landed.
+// promoted, and the design deliberately never has revocation auto-promote
+// a waiting successor -- getting a working signer back online is a host's
+// explicit decision, never a side effect the module makes for it. A host
+// that already has a pending key staged for the purpose (StageDueRotations
+// having run ahead of the incident) calls PromoteNow to skip waiting for
+// the next scheduled ScanExpiry tick, while still going through the exact
+// same safety window ScanExpiry itself honors -- PromoteNow is
+// deliberately NOT a way to bypass the window: the incident that makes an
+// operator want to skip it is exactly the scenario the window exists to
+// protect against being made worse by (see PromoteDuePending's own doc
+// comment for the distributed-replica race the window prevents).
 //
 // ErrKeyNotFound if purpose has no pending key at all.
 // ErrPropagationWindowNotElapsed if one exists but was staged less than
@@ -306,9 +296,9 @@ func (s *Service) RetireDueRetiring(ctx context.Context) ([]string, error) {
 // EventSigningKeyStaged once per new key.
 //
 // Generating ahead of a hard cutoff, rather than waiting for the active key
-// to actually expire, is docs/internal/22-pki.md's own "rotation" section's
-// instruction: a purpose must never be carried past its active key's expiry with
-// nothing already propagating to replace it.
+// to actually expire, is the point of staging: a purpose must never be
+// carried past its active key's expiry with nothing already propagating to
+// replace it.
 func (s *Service) StageDueRotations(ctx context.Context, renewalLeadTime time.Duration) ([]string, error) {
 	threshold := s.now().Add(renewalLeadTime)
 	nearing, err := s.signingKeys.ListActiveNearingExpiry(ctx, threshold)

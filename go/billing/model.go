@@ -20,9 +20,8 @@ const (
 )
 
 // GrantValueUnlimited is the sentinel Grant.Value string for a
-// FeatureKindUnlimited grant, matching
-// docs/internal/06-billing-and-metering.md's sketch (Value any // bool /
-// int64 / "unlimited") literally.
+// FeatureKindUnlimited grant: the "unlimited" literal of the domain
+// vocabulary, never consulted for its content.
 const GrantValueUnlimited = "unlimited"
 
 // Feature is one capability a Plan can grant. Kind decides how Grant.Value
@@ -120,14 +119,13 @@ type Money struct {
 // Decision is Entitlements.Check's answer: whether the request is allowed,
 // how much of the feature's quota remains, and why.
 //
-// Decision.Remaining's shape was corrected from a bare int64 with a -1
-// sentinel (DecisionRemainingUnbounded) to a *int64 whose nil IS the
-// unbounded marker -- see Remaining's own doc comment for why. The change
-// is recorded as an implementation correction in AGENTS.md's Rescan round
-// entry; it predates any released consumer (no billing HTTP surface and no
-// reference-app consumer yet), so the loud compile-time break it would
-// give an external consumer that compared against the -1 sentinel is the
-// intended migration: check Remaining != nil instead.
+// Decision.Remaining is a *int64 whose nil IS the unbounded marker -- see
+// Remaining's own doc comment for why nil rather than a bare int64 -1
+// sentinel: a bare -1 collided with the genuine -1 raw headroom a bounded
+// overage decision legitimately reports, and an unbounded answer must be a
+// distinguishable absence a UI-shaped consumer can never render as a real
+// remaining count. A consumer that compared against the old
+// DecisionRemainingUnbounded sentinel migrates to Remaining != nil.
 type Decision struct {
 	// Allowed reports whether the request may proceed.
 	Allowed bool
@@ -152,8 +150,7 @@ type Decision struct {
 	Reason string
 }
 
-// Decision.Reason's closed vocabulary, matching
-// docs/internal/06-billing-and-metering.md's Decision sketch exactly.
+// Decision.Reason's closed vocabulary -- the four answers Check can give.
 const (
 	DecisionReasonOK              = "ok"
 	DecisionReasonFeatureDisabled = "feature_disabled"
@@ -161,17 +158,17 @@ const (
 	DecisionReasonNoSubscription  = "no_subscription"
 )
 
-// Entitlements is the single judgment entry point business code -- including
-// the not-yet-built AI gateway -- calls to learn whether a tenant's current
-// subscription permits a feature. Callers never read the subscription or
-// plan tables themselves, and never compute quota consumption by hand.
+// Entitlements is the single judgment entry point business code -- the
+// AI-gateway module included, through its host-wired EntitlementsFunc --
+// calls to learn whether a tenant's current subscription permits a
+// feature. Callers never read the subscription or plan tables themselves,
+// and never compute quota consumption by hand.
 //
 // Check answers "does the plan allow this"; it never decides anything about
-// credits (docs/internal/06-billing-and-metering.md's own explicit split --
-// see CreditService for the separate, synchronous reserve/confirm/refund
-// path). A per-use operation typically consults both: Check to learn
-// whether the plan permits the call at all, then CreditService.PreDeduct to
-// reserve the credits it costs.
+// credits -- that is CreditService's separate, synchronous
+// reserve/confirm/refund path. A per-use operation typically consults
+// both: Check to learn whether the plan permits the call at all, then
+// CreditService.PreDeduct to reserve the credits it costs.
 type Entitlements interface {
 	// Check reports whether featureKey may be consumed for requested
 	// additional units, for the tenant found in ctx

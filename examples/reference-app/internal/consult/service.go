@@ -1,18 +1,16 @@
 // Package consult is the reference app's small, non-HTTP-generated
-// business service that is go/ai-gateway's mandatory first consumer (root
-// CLAUDE.md's "Reference App" section: "a module API that it does not
-// actually use is not considered done"): given an existing note's id, it
+// business service that is go/ai-gateway's mandatory first consumer
+// (a module API this app genuinely uses): given an existing note's id, it
 // asks go/ai-gateway's Gateway for a short AI-generated
 // consultation-suggestion summary of that note's text -- standing in for
 // this dental SaaS's real consultation-assistant feature.
 //
 // It deliberately does not go through the OpenAPI machinery: ai-gateway
-// itself ships no HTTP surface this round (see go/ai-gateway/AGENTS.md's
-// "What this round ships" section), so there is no spec fragment for a
-// route calling it to grow into. Its one route (POST
+// itself ships no HTTP surface for chat, so there is no spec fragment for
+// a route calling it to grow into. Its one route (POST
 // /api/v1/consult/suggest) is mounted by hand in cmd/server
 // (cmd/server/consult.go), the same pattern the notification module's own
-// demo patient-message route already establishes in this app
+// demo patient-message route establishes in this app
 // (cmd/server/demo_notification.go's package comment).
 package consult
 

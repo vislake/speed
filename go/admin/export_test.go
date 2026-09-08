@@ -28,7 +28,7 @@ func TestExportService_Enqueue_EmptyTenantID_Refused(t *testing.T) {
 	}
 }
 
-// TestExportService_Enqueue_EmptyOperatorUserID_Refused pins P1-2's other
+// TestExportService_Enqueue_EmptyOperatorUserID_Refused pins the other
 // half of Enqueue's up-front validation: an empty operator id never
 // reaches jobs.Queue.Enqueue either, since a Job with nothing to
 // attribute it to would leave the export unattributable from the moment
@@ -42,8 +42,8 @@ func TestExportService_Enqueue_EmptyOperatorUserID_Refused(t *testing.T) {
 	}
 }
 
-// TestExportService_Enqueue_RunsRealExport_DeliversThroughSharing is D7's
-// export-leg end-to-end proof: enqueuing a real job runs a real
+// TestExportService_Enqueue_RunsRealExport_DeliversThroughSharing is the
+// export leg's end-to-end proof: enqueuing a real job runs a real
 // compliance.ExportService.Export against a real go/sharing.Service
 // (buildTestAdminModule's own compliance.WithSharing wiring), and the
 // job's Result carries the job-lifecycle bookkeeping a later retrieval
@@ -51,15 +51,13 @@ func TestExportService_Enqueue_EmptyOperatorUserID_Refused(t *testing.T) {
 // run synchronously inside the call that enqueues it (Enqueue returns
 // before the worker has necessarily even claimed the job).
 //
-// P1-B's regression lives in this same proof: the one-time download
+// The no-token regression lives in this same proof: the one-time download
 // token must NOT land in the persisted job result. compliance's own
 // ExportDelivery doc comment promises the token is "returned exactly
 // once and never persisted anywhere, including here", and go/sharing's
 // whole design stores only the token's hash -- so Handle, which receives
 // the token in Export's synchronous return value, must let it die there
-// rather than marshal it into the result the queue persists. Pre-fix,
-// Handle marshalled result.Delivery.Token into the job's Result and this
-// test fails on the leaked token member.
+// rather than marshal it into the result the queue persists.
 func TestExportService_Enqueue_RunsRealExport_DeliversThroughSharing(t *testing.T) {
 	env := buildTestAdminModule(t)
 
@@ -125,7 +123,7 @@ func TestExportService_Enqueue_RunsRealExport_DeliversThroughSharing(t *testing.
 		t.Errorf("export job result = %+v, want a non-zero ExpiresAt", result)
 	}
 
-	// P1-B: the persisted result must carry no token member at all -- the
+	// The persisted result must carry no token member at all -- the
 	// one-time download token is a credential the queue record would hold
 	// at rest, contradicting compliance.ExportDelivery's "never persisted
 	// anywhere, including here" contract and go/sharing's store-only-the-
@@ -142,12 +140,12 @@ func TestExportService_Enqueue_RunsRealExport_DeliversThroughSharing(t *testing.
 }
 
 // TestHandler_AdminExportAuditEvents_AttributesOperatorAndEmitsAuditAction
-// is P1-2's THE scenario: a real audit export driven through admin's own
-// real, composed HTTP handler (never a bare service-level call) must
-// attribute the calling operator through the whole flow and must itself
-// leave an admin.audit_export row naming that operator as Actor -- neither
-// of which held on unfixed main, where AdminExportAuditEvents never even
-// read the caller's Principal.
+// drives a real audit export through admin's own real, composed HTTP
+// handler (never a bare service-level call): the calling operator must be
+// attributed through the whole flow, and the export must itself leave an
+// admin.audit_export row naming that operator as Actor -- an export that
+// read no caller identity could never answer "who exported this tenant's
+// audit trail".
 func TestHandler_AdminExportAuditEvents_AttributesOperatorAndEmitsAuditAction(t *testing.T) {
 	env := buildTestAdminModule(t)
 	if err := env.Queue.RegisterHandler(env.Admin.Export()); err != nil {
@@ -228,18 +226,16 @@ func TestHandler_AdminExportAuditEvents_AttributesOperatorAndEmitsAuditAction(t 
 }
 
 // TestExportService_Handle_ComplianceExportRequestAuditEvent_AttributesOperator
-// closes the gap the review found in
-// TestHandler_AdminExportAuditEvents_AttributesOperatorAndEmitsAuditAction's
-// own admin.audit_export proof: compliance.ExportService.Export fires its
-// own always-on compliance.export.request audit event (compliance's
-// export.go, emitExportAudit -> audit.Emit, reading Actor from the ctx
-// Export itself is called with), and on the unfixed code that ctx was the
-// raw worker ctx go/jobs rebuilds from the job record alone -- carrying no
-// Actor at all, so this event landed anonymous on the very audit table
-// admin.AuditService.Query reads from, for every admin-triggered export.
-// Handle must attach the operator as Actor to ctx before calling
-// s.export.Export, not only to a separate ctx used solely for its own
-// later admin.audit_export emission.
+// pins the operator attribution on compliance's own export-request event:
+// compliance.ExportService.Export fires its always-on
+// compliance.export.request audit event (compliance's export.go,
+// emitExportAudit -> audit.Emit) reading Actor from the ctx Export itself
+// is called with. That ctx is the worker ctx go/jobs rebuilds from the job
+// record alone, so Handle must attach the operator as Actor to ctx before
+// calling s.export.Export -- not only to a separate ctx used solely for
+// its own later admin.audit_export emission -- or the compliance event
+// lands anonymous on the very audit table admin.AuditService.Query reads
+// from.
 func TestExportService_Handle_ComplianceExportRequestAuditEvent_AttributesOperator(t *testing.T) {
 	env := buildTestAdminModule(t)
 	if err := env.Queue.RegisterHandler(env.Admin.Export()); err != nil {
@@ -306,25 +302,19 @@ func TestExportService_Handle_ComplianceExportRequestAuditEvent_AttributesOperat
 }
 
 // TestExportService_Handle_PartialFailure_CompletesTerminallyAndIsAudited
-// is P2-4's admin-half regression: when one registered export participant
-// fails while another contributes, compliance.Export still gathers, stores
-// and delivers the manifest -- it returns ErrExportPartialFailure only
-// AFTER that work is done, together with a fully usable result. Admin's
-// Handle used to treat that returned error exactly like a failure that
-// happened before any work: it discarded the non-empty result
-// (returning jobs.Result{} alongside the error), skipped its own
-// admin.audit_export event entirely (the recordAudit call sat after the
-// error return), and handed the error back to the queue, which retried
-// the side-effectful, non-idempotent export -- a fresh object key and a
-// fresh single-view share minted per attempt, several delivered dumps
-// piling up, and admin's own audit trail carrying no record of any of it.
-//
-// On the fixed code the partial failure is terminal: Handle records the
-// outcome in its own audit event -- Success false naming the failing
-// participant, Changes carrying the very object key and minted share id
-// the export result reports -- and completes the job with the partial
-// result recorded in jobs.Result.Data, never riding the queue's retry
-// budget.
+// pins the terminal handling of a partial export: when one registered
+// export participant fails while another contributes, compliance.Export
+// still gathers, stores and delivers the manifest -- it returns
+// ErrExportPartialFailure only AFTER that work is done, together with a
+// fully usable result. Surfacing that error to the queue would retry a
+// side-effectful, non-idempotent operation: a fresh object key and a fresh
+// single-view share minted per attempt, several delivered dumps piling up,
+// and admin's own audit trail carrying no record of any of it. Handle
+// therefore treats the partial failure as terminal: it records the outcome
+// in its own audit event -- Success false naming the failing participant,
+// Changes carrying the very object key and minted share id the export
+// result reports -- and completes the job with the partial result recorded
+// in jobs.Result.Data, never riding the queue's retry budget.
 func TestExportService_Handle_PartialFailure_CompletesTerminallyAndIsAudited(t *testing.T) {
 	env := buildTestAdminModule(t)
 	if err := env.Queue.RegisterHandler(env.Admin.Export()); err != nil {
@@ -383,10 +373,10 @@ func TestExportService_Handle_PartialFailure_CompletesTerminallyAndIsAudited(t *
 		t.Fatalf("WithSystemContext() error = %v", err)
 	}
 	var job *jobs.Job
-	// The 30s budget exists for the fail-before run alone: on the unfixed
-	// code the returned error sends the job through the queue's retry
-	// budget (1s+2s+4s of backoff before the dead letter lands); the fixed
-	// code completes terminally in well under a second.
+	// The 30s budget exists for the retry-path run: a returned error
+	// sends the job through the queue's retry budget (seconds of backoff
+	// before the dead letter lands), while a terminal completion lands in
+	// well under a second.
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		job, err = env.Queue.Get(systemCtx, jobID)
@@ -415,7 +405,7 @@ func TestExportService_Handle_PartialFailure_CompletesTerminallyAndIsAudited(t *
 		t.Fatalf("export job result = %+v, want the recorded object key and share id of the partial export's delivered manifest", result)
 	}
 
-	// The result Handle used to throw away must land in admin's own audit
+	// The partial export's delivered result must land in admin's own audit
 	// record: exactly one admin.audit_export event, attributed to the
 	// requesting operator, reporting the partial outcome (Success false,
 	// the failing participant named) and carrying the very object key and

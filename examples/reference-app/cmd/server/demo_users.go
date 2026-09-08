@@ -19,7 +19,7 @@ import (
 // demoUsersPasswordEnv gates the boot-time demo-user seed. Unset -- the
 // default `go run ./cmd/server` ships with -- means no demo accounts are
 // registered and demoUserHeader remains the only way to act as a demo
-// user, exactly as before this file existed. Setting it to a passphrase
+// user. Setting it to a passphrase
 // registers the three demo accounts below on every boot, so a browser
 // visitor can sign in as any of them with a real account, a real
 // membership and a real rbac grant -- no header involved.
@@ -110,7 +110,8 @@ var demoSeedAccounts = []demoSeedAccount{
 // buildServer calls it AFTER seedDemoGrants, which is what guarantees the
 // roles this function AssignRole-s are already defined in every tenant. It
 // runs only when the operator set APP_DEMO_USERS_PASSWORD; an empty
-// password leaves the demo-header world exactly as it was.
+// password skips the seed, leaving the demo headers as the only demo
+// identity.
 //
 // Registration goes through the HTTP surface on purpose: seedDemoUsers is
 // a consumer of authn like any other, and taking the same register path a
@@ -137,25 +138,20 @@ var demoSeedAccounts = []demoSeedAccount{
 //
 // One deliberately ordered detail: the existence question is asked of
 // authn.Service.SearchUsers BEFORE the register route, never answered by
-// POSTing and reading the already-registered conflict back (as this seed
-// did before the P2-5 round). Both answers disclose the same fact to the
-// same caller -- the boot-time demo seed is operator configuration, the
-// same trust level as the registration it performs, which is what makes
-// the platform-operator lookup appropriate here without an
-// admin:search_users gate around it (that gate protects HTTP callers;
-// this call is the operator's own boot) -- but asking first means a
-// restart never POSTs the public register route at all, and therefore
-// never debits authn's per-IP register budget (limitRegisterByIP, 10 per
-// hour, go/authn/ratelimit.go) for accounts that are already there. Under
-// the standalone deployment mode's in-memory KVStore a fresh boot carries
-// a fresh budget anyway, but under the distributed mode the budget lives
-// in the shared Redis KVStore and accumulates across restarts: three
-// startups within the quota window used to POST 4 registrations each (the
-// three demo accounts plus the platform-staff account) against that one
-// shared bucket, so the third startup tripped the 10-per-hour limit and
-// the boot failed with the seed's register error. Posting only for
-// genuinely absent accounts leaves restarts at zero register traffic
-// whatever the deployment mode.
+// POSTing and reading the already-registered conflict back. Both answers
+// disclose the same fact to the same caller -- the boot-time demo seed is
+// operator configuration, the same trust level as the registration it
+// performs, which is what makes the platform-operator lookup appropriate
+// here without an admin:search_users gate around it (that gate protects
+// HTTP callers; this call is the operator's own boot) -- but asking first
+// means a restart never POSTs the public register route at all, and
+// therefore never debits authn's per-IP register budget
+// (limitRegisterByIP, go/authn/ratelimit.go) for accounts that are
+// already there. Under the distributed mode the budget lives in the
+// shared Redis KVStore and accumulates across restarts, so a seed that
+// POSTed on every boot could exhaust the budget within the quota window
+// and fail the boot; posting only for genuinely absent accounts leaves
+// restarts at zero register traffic whatever the deployment mode.
 func seedDemoUsers(ctx context.Context, handler http.Handler, authnService *authn.Service, svc *rbac.Service, orgModule *org.Module, tenants map[string]pkgcore.TenantID, password string) error {
 	logger := obs.FromContext(ctx)
 	for _, account := range demoSeedAccounts {
@@ -189,17 +185,17 @@ func seedDemoUsers(ctx context.Context, handler http.Handler, authnService *auth
 // (lookupRegisteredDemoUserID), and only an absent account POSTs
 // /api/v1/authn/register. This is what keeps a restart from debiting the
 // public register budget for accounts a previous boot already created
-// (seedDemoUsers' own doc comment gives the budget arithmetic in full);
+// (seedDemoUsers' own doc comment gives the budget reasoning in full);
 // registerDemoUser itself still treats an unexpected already-registered
 // conflict answer -- a concurrent first boot that registered the account
 // between this boot's lookup and its POST -- as alreadyExists and recovers
-// the assigned id, exactly as it always did, so a first-boot race between
+// the assigned id, so a first-boot race between
 // two replicas cannot double-register or strand an account.
 //
 // alreadyExists=true reports an account that needs no registration; its
 // caller then re-asserts the grant leg under the returned id, the same
-// shape both seedDemoUsers and seedDemoPlatformStaff used to reach after
-// reading the conflict answer.
+// shape both seedDemoUsers and seedDemoPlatformStaff reach after a
+// conflict answer.
 func registerDemoUserIfAbsent(ctx context.Context, handler http.Handler, authnService *authn.Service, email, password string) (userID string, alreadyExists bool, err error) {
 	existingID, exists, err := lookupRegisteredDemoUserID(ctx, authnService, email)
 	if err != nil {
@@ -215,8 +211,7 @@ func registerDemoUserIfAbsent(ctx context.Context, handler http.Handler, authnSe
 	}
 	if alreadyExists {
 		// A concurrent first boot registered the account between the
-		// lookup above and this POST; recover its id exactly as the
-		// pre-P2-5 seed did on this path.
+		// lookup above and this POST; recover its id.
 		userID, err = registeredDemoUserID(ctx, authnService, email)
 		if err != nil {
 			return "", false, err
@@ -272,7 +267,7 @@ func registeredDemoUserID(ctx context.Context, authnService *authn.Service, emai
 // already asked SearchUsers whether the account exists, so reaching this
 // POST at all means the account was genuinely absent a moment ago; the
 // already-registered conflict answer here is the concurrent-first-boot
-// race, handled exactly as before.
+// race.
 //
 // Classification goes through the CODE, exactly as the register API
 // reports it: any non-201 answer other than authn's

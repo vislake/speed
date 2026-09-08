@@ -1,13 +1,13 @@
 package admin
 
-// Runnable documentation for UsageService's metering leg (D9), mirroring
+// Runnable documentation for UsageService's metering leg, mirroring
 // send_records_example_test.go's convention and living IN-package for the
 // same reason: the service's bus arrives through Module.Register's
 // unexported attach -- see the example's own doc comment below.
 //
-// This example is compiled AND executed by `go test`, so a change to D9's
-// read path that breaks the documented usage fails the build rather than
-// only rotting in prose.
+// This example is compiled AND executed by `go test`, so a change to the
+// metering read path that breaks the documented usage fails the build
+// rather than only rotting in prose.
 
 import (
 	"context"
@@ -36,19 +36,18 @@ func (adminMigrationModule) Locales() embed.FS                { return embed.FS{
 func (adminMigrationModule) OpenAPISpec() []byte              { return nil }
 func (adminMigrationModule) Register(*pkgcore.Registry) error { return nil }
 
-// ExampleUsageService_Summary demonstrates D9's cross-tenant usage
+// ExampleUsageService_Summary demonstrates the cross-tenant usage
 // dashboard's metering leg (UsageService.Summary) against REAL
 // go/metering state: a go/metering module constructed the way a host's
-// Module.WithMetering wiring constructs it, one tenant in admin's own D3
+// Module.WithMetering wiring constructs it, one tenant in admin's own
 // ledger, and one real metering event folded into one real
 // metering_usage_summaries row -- read back through metering's own
 // SummaryRepository.List, the cross-module read path a WithMetering
 // wiring opens (Summary calls meteringModule.Summaries().List once per
 // ledger tenant). A comment naming that path would not prove it; the
 // executed read does. This example is the execution-evidence leg of the
-// D9 no-consumer exception's compensating obligations, recorded alongside
-// the still-plain limitation and the deliberately unfrozen API in
-// AGENTS.md's Known limitations, mirroring go/pki's X.509 section.
+// usage dashboard's no-consumer exception's compensating obligations, the
+// limitation stated plainly in this module's AGENTS.md.
 //
 // go/billing is deliberately absent (the WithBilling counterpart of the
 // same wiring choice), so the row's CreditBalance/ActiveSubscription
@@ -93,8 +92,8 @@ func ExampleUsageService_Summary() {
 	pkgcore.RegisterSystemPurpose(SystemPurposeAdminCrossTenant)
 	reg := pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
 
-	// One tenant in admin's own ledger (D3's manual-registration path),
-	// and one real metering event folded into that tenant's real
+	// One tenant in admin's own ledger (the manual-registration path), and
+	// one real metering event folded into that tenant's real
 	// metering_usage_summaries row.
 	adminModule := NewModule(db)
 	if cErr := adminModule.Tenants().Create(ctx, &Tenant{TenantID: "tenant-usage-example", DisplayName: "Usage Example Co"}); cErr != nil {

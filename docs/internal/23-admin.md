@@ -1,12 +1,12 @@
 # 运营后台（admin）
 
-> `go/admin` 提供运营后台的后端能力：跨租户检索、模拟登录、审计检索、角色与配置管理、用量与账单汇总。前端对应包是 `admin-shell`（M3，见 [12 前端架构](12-frontend.md)）。本篇是该模块动工前的需求与设计细化，对齐 [15 里程碑](15-roadmap.md) M3 行的出口条件——"运营后台可跨租户检索、模拟登录、查审计"——以及 [10 合规与审计](10-compliance-and-audit.md)、[05 身份与访问](05-identity-and-access.md) 里已经写过、但尚未落地成机制的段落。
+> `go/admin` 提供运营后台的后端能力：跨租户检索、模拟登录、审计检索、角色与配置管理、用量与账单汇总。前端对应包是 `admin-shell`（M3，见 [12 前端架构](12-frontend.md)）。本篇是该模块的需求与设计细化文档，对齐 [15 里程碑](15-roadmap.md) M3 行的出口条件——"运营后台可跨租户检索、模拟登录、查审计"——以及 [10 合规与审计](10-compliance-and-audit.md)、[05 身份与访问](05-identity-and-access.md) 里已经写过、但尚未落地成机制的段落。
 >
-> **实现状态注记**：本篇最初写作时 `go/admin` 只有 `go.mod` + `doc.go` + 占位 `AGENTS.md`，是纯设计文档；**这一状态已过时**——`go/admin` round 1 现已落地并有真实测试：D3（租户台账，事件驱动惰性建档 + 手工 CRUD）、D5 全量（模拟登录的完整管道：发起/结束/列表、请求管道身份替换中间件、五条强制性质、双身份审计、强制不可退订通知）、D6（跨租户用户检索 + 成员关系拼装）、D7 读侧（`compliance.AuditQuery` 的 HTTP 外壳，不含导出）。reference-app 已作为强制第一消费者接入。round 2（D4 强制暂停、D8 角色管理、D9 用量看板、D10 通知发送记录检索、D7 导出腿）**尚未**落地。以代码为准，不要假设本句时效——详见 `go/admin/AGENTS.md`。本篇正文仍按设计文档的语态书写、并保留原有的"被否决方案"讨论，但第 3/4/6 节里与真实代码有出入的具体机制描述（D2 代码示例、D5 的中间件机制、第 6 节的 CI 接线说法）已按下方"对照代码修正"更新；凡引用其他模块的方法签名，均已对照当前 `main` 分支的真实代码重新核实。
+> **实现状态注记**：`go/admin` 已按文中 D1-D10 的决策全部落地并有真实测试——租户台账（事件驱动惰性建档 + 手工 CRUD）、模拟登录全链路（发起/结束/列表、请求管道身份替换中间件、强制性质、双身份审计、强制不可退订通知）、跨租户用户检索 + 成员关系拼装、审计检索的 HTTP 外壳与导出腿、强制暂停（经 `tenancy` 的 `TenantStatusResolver` seam）、角色管理、用量/账单看板、通知发送记录检索。reference-app 已作为强制第一消费者接入。本篇按设计文档的语态书写并保留"被否决方案"讨论；文中"请求 X 新增方法 / 需要 X 新增"的接口请求均已随实现落地，当前方法名与签名以 `go/admin/AGENTS.md` 与代码为准。
 
 ## 1. 定位与边界
 
-**admin 不是新的数据源，是既有能力的操作面。** 在模块依赖图里 admin 处于最顶端——没有任何模块反向依赖它——这既是它能放心依赖几乎全部下游模块的原因，也是它唯一的职责边界：**它不得引入任何其他模块必须知道它存在的新概念**。凡是"业务模块需要为了配合 admin 而修改自己一小块既有行为"的情况（本篇第 3、8 节会列出几处），改动都必须是纯增量、对没有装配 admin 的宿主完全透明的可选项——这与 `pkgcore` 每一版新增能力的一贯做法（新增字段/新增可选 seam，不改变默认行为）一致。
+**admin 不是新的数据源，是既有能力的操作面。** 在模块依赖图里 admin 处于最顶端——没有任何模块反向依赖它——这既是它能放心依赖几乎全部下游模块的原因，也是它唯一的职责边界：**它不得引入任何其他模块必须知道它存在的新概念**。凡是"业务模块需要为了配合 admin 而修改自己一小块既有行为"的情况（本篇第 3、7 节会列出几处），改动都必须是纯增量、对没有装配 admin 的宿主完全透明的可选项——这与 `pkgcore` 每一版新增能力的一贯做法（新增字段/新增可选 seam，不改变默认行为）一致。
 
 admin 复用[01 整体架构](01-architecture.md)里说的"声明式注册的三个副产品"：权限清单、配置/开关 schema、通知类型全部是活的注册表，admin 只是把它们渲染出来、提供编辑界面，从不自己维护第二份清单。
 
@@ -18,12 +18,12 @@ admin 复用[01 整体架构](01-architecture.md)里说的"声明式注册的三
 
 ## 2. 现状盘点：地基 vs. 缺口
 
-下面这张表决定了 admin 轮真正要写的代码量——大部分能力已经在下游模块里，admin 只是加一层 HTTP 外壳；少数几处是全仓库目前完全没有的概念，需要新建。
+下面这张表决定了 admin 真正要写的代码量——大部分能力已经在下游模块里，admin 只是加一层 HTTP 外壳；少数几处是全仓库当时完全没有的概念，需要新建。表中"admin 需要做的"列与第 7 节的接口请求均已随实现落地。
 
 | 能力 | 现状 | admin 需要做的 |
 |---|---|---|
 | 平台管理员身份/鉴权 | `rbac.SystemDomain` 已落地，`authn` 登录机制已落地 | 无需新增，直接复用（见 D1） |
-| 跨租户读取的审计逃生舱 | `pkgcore.WithSystemContext` + `tenancy.WithSystemContext`（自动发布 `tenancy.system_context.entered` 审计事件）已落地，且 root CLAUDE.md 已把 `admin` 列入四个合法调用者之一 | 声明自己的 `SystemPurpose`，逐租户循环调用下游模块现成的按租户查询方法（见 D2） |
+| 跨租户读取的审计逃生舱 | `pkgcore.WithSystemContext` + `tenancy.WithSystemContext`（自动发布 `tenancy.system_context.entered` 审计事件）已落地，`admin` 属于系统上下文 widening 白名单（admin/compliance/jobs/authn 四模块）的一员 | 声明自己的 `SystemPurpose`，逐租户循环调用下游模块现成的按租户查询方法（见 D2） |
 | 审计检索（单租户/跨租户） | `compliance.AuditQuery.Query`/`QueryAcrossTenants`/`Get` 已落地并读 `dbkit/audit.Repository` | 加 HTTP 外壳 + 分页；导出复用 `compliance.ExportService` 已有的"生成清单→经 `sharing` 投递"模式（见 D7） |
 | 角色/权限管理 | `rbac.Service.DefineRole/AssignRole/RevokeRole/EnsureBuiltinRoles` 已落地；`rbac` 自己**明确不挂 HTTP 路由**（`go/rbac/AGENTS.md`："角色管理是运营后台的界面"） | 加 HTTP 外壳；需要 rbac 新增一个导出的"完整声明权限清单"访问器（当前 `catalog.permissions()` 未导出，见 D8） |
 | 登录历史/会话管理 | `authn.Service.Sessions()/LoginHistory()` 已落地，但都是**按单个 `userID`** 查询 | 需要 authn 新增跨租户的用户检索入口（见 D6），admin 不重新实现登录历史模型 |
@@ -58,7 +58,7 @@ ctx, err := tenancy.WithSystemContext(ctx, bus, pkgcore.SystemReason{
 
 再用这个 `ctx` 调用下游模块**已经存在**的、按租户查询的方法（`org.TreeService.Root`、`notification` 的按租户列表、`billing.CreditService.Balance`……）。跨多个租户时在应用层循环，从不要求下游模块开一个"忽略 tenant_id 过滤"的旁路查询接口。
 
-**为什么这样选**：`tenancy.WithSystemContext` 已经把"审计要求"焊死在机制里——每次调用自动发布 `tenancy.system_context.entered` 事件（[10 合规与审计](10-compliance-and-audit.md) 要求的"运营人员操作全量记录，不做读操作豁免"因此不需要 admin 自己再写一遍）。这也是 root CLAUDE.md 明确把 `admin` 列入 `WithSystemContext` 四个合法调用者的理由所在——这条设计在写这份文档之前就已经被主线代码预留了位置。
+**为什么这样选**：`tenancy.WithSystemContext` 已经把"审计要求"焊死在机制里——每次调用自动发布 `tenancy.system_context.entered` 事件（[10 合规与审计](10-compliance-and-audit.md) 要求的"运营人员操作全量记录，不做读操作豁免"因此不需要 admin 自己再写一遍）。这正是 `admin` 被列入 `WithSystemContext` 合法调用者白名单的理由所在——主线代码在设计时即按此用途预留了 admin 的位置。
 
 **被否决**：让每个业务模块的 Repository 都开一个 `ListAcrossTenants` 方法，或者给 admin 单独开一条不受 GORM 租户插件约束的数据库连接直查表。前者是"每个模块都要为 admin 开一个 except-me 的旁路"，随着模块数量增长成本线性上升，且每个旁路都是一个新的隔离绕过点需要单独审查；后者直接违反"不得绕过 Repository 手写查询"的纪律（`tools/semgrep_rules/raw-gorm-bypass.yml`），而且拿不到 `WithSystemContext` 自带的审计。当某个模块的跨租户聚合确实频繁到"循环调用"性能不可接受时（例如未来的跨租户报表），应该是那个模块自己评估要不要开一个专用的、同样经 `WithSystemContext` 门禁的聚合方法——那是它的产品决策，不是 admin 单方面加的旁路。
 
@@ -73,7 +73,7 @@ ctx, err := tenancy.WithSystemContext(ctx, bus, pkgcore.SystemReason{
 1. **事件驱动的惰性建档**：`admin` 订阅 `org` 发布的根节点创建事件（一个租户第一次被使用，几乎总是从 `org.CreateRoot` 开始），首次出现的 `tenant_id` 自动落一行 `status=active` 的台账记录，`display_name` 先留空待运营人员补充。这与 `org` 自己"不导入 `authn.User`，只认事件名和 JSON 载荷探针"的解耦方式完全一致——`admin` 也不导入 `org.OrgNode`，只认事件类型字符串。
 2. **手工登记**：运营人员也可以在还没有任何业务写入之前，直接在后台新建一条台账记录（例如在给客户开户之前先预注册租户名称与销售负责人）。
 
-**被否决**：把"租户"提升为 `tenancy` 模块里的一等实体（一张 `tenants` 表 + 创建租户的强制入口 + 让 `org`/`authn`/`billing` 在写入前校验 tenant 是否存在），这是概念上更"正确"的答案——`tenancy` 本就是"什么是租户"这个概念的天然归属。但这个方案的代价是：`tenancy` 是几乎所有模块最底层的公共依赖，在 lockstep 发布下改动它意味着**每一个已经发布过的模块**都要在下一个版本里决定"要不要开始校验租户存在性"；而且今天没有任何模块的写路径会先创建租户再写业务数据（`org.CreateRoot` 本身就是事实上的"创建租户"动作，只是从未被这样命名），强推一个前置的"创建租户"步骤会是一次波及全部已交付模块的破坏性改动，用来解决的只是运营后台一个模块的展示需求，不成比例。按本仓库"新增一个内建实现前先测成本"的纪律（见根 CLAUDE.md 架构纪律一节），这个方向被搁置为"未来如果有第二个模块也需要权威租户目录时再重新评估"的候选项，而不是 admin 这一轮要做的事。
+**被否决**：把"租户"提升为 `tenancy` 模块里的一等实体（一张 `tenants` 表 + 创建租户的强制入口 + 让 `org`/`authn`/`billing` 在写入前校验 tenant 是否存在），这是概念上更"正确"的答案——`tenancy` 本就是"什么是租户"这个概念的天然归属。但这个方案的代价是：`tenancy` 是几乎所有模块最底层的公共依赖，在 lockstep 发布下改动它意味着**每一个已经发布过的模块**都要在下一个版本里决定"要不要开始校验租户存在性"；而且今天没有任何模块的写路径会先创建租户再写业务数据（`org.CreateRoot` 本身就是事实上的"创建租户"动作，只是从未被这样命名），强推一个前置的"创建租户"步骤会是一次波及全部已交付模块的破坏性改动，用来解决的只是运营后台一个模块的展示需求，不成比例。按本仓库"新增一个内建实现前先测成本"的纪律（见根 CLAUDE.md 架构纪律一节），这个方向作为候选项搁置，等出现第二个也需要权威租户目录的模块时再重新评估。
 
 ### D4：暂停租户要有牙——`tenancy` 新增一个可选的 `TenantStatusResolver` seam
 
@@ -126,7 +126,7 @@ func (s *Service) SearchUsers(ctx context.Context, q UserSearchQuery) ([]User, e
 
 ### D7：审计检索与导出——直接包装 `compliance`，不重复建设
 
-`compliance.AuditQuery.Query`（单租户）/`QueryAcrossTenants`（system context 门禁，`admin` 是合法调用方）/`Get` 已经是 admin 需要的全部读能力；`compliance.ExportService` 已经落地"生成清单 → 经 `go/sharing` 投递一个限次、短期的分享链接"的导出模式（round 2）。admin 的审计检索页面因此只做：HTTP 外壳 + 分页参数转换；导出报告时复用 `ExportService` 同一套"异步生成 + `sharing` 令牌下发"的路径，而不是自己再造一套"生成 CSV 然后不知道怎么把文件交给用户"的下载机制。
+`compliance.AuditQuery.Query`（单租户）/`QueryAcrossTenants`（system context 门禁，`admin` 是合法调用方）/`Get` 已经是 admin 需要的全部读能力；`compliance.ExportService` 的导出模式是"生成清单 → 经 `go/sharing` 投递一个限次、短期的分享链接"。admin 的审计检索页面因此只做：HTTP 外壳 + 分页参数转换；导出报告时复用 `ExportService` 同一套"异步生成 + `sharing` 令牌下发"的路径，而不是自己再造一套"生成 CSV 然后不知道怎么把文件交给用户"的下载机制。
 
 ### D8：角色/权限管理 UI 的后端——包装 `rbac.Service`，只缺一个导出的"完整权限清单"访问器
 
@@ -172,15 +172,15 @@ sequenceDiagram
 
 关键点逐条对应 [10 合规与审计](10-compliance-and-audit.md) 和 [16 验证方式](16-verification.md) 已经写死的要求：
 
-- **双重身份**：请求真正携带的凭据始终是管理员自己的 access token（`authn.Middleware` 验证的是管理员的真实身份，不是伪造的目标用户身份），只是在验证通过后，插在 `authn.Middleware` 与 `tenancy.Middleware` 之间的一个普通 `net/http` 中间件（`admin.ImpersonationMiddleware`）调用 `authn.WithPrincipal` 把"这次请求要以谁的名义、在哪个租户内被处理"替换成目标用户/目标租户，同时把管理员的真实身份单独存进 `pkgcore.WithOnBehalfOf`（已落地，独立于 `WithActor` 分层，不会互相覆盖）。这样 `dbkit` 现有的自动审计写捕获**不需要任何修改**就能产出"`Actor`=被模拟用户、`OnBehalfOf`=管理员"的记录——这正是 M1 审计基础设施轮特意把 `Actor`/`OnBehalfOf` 分离设计的原因，模拟登录是它一直在等的消费者。
+- **双重身份**：请求真正携带的凭据始终是管理员自己的 access token（`authn.Middleware` 验证的是管理员的真实身份，不是伪造的目标用户身份），只是在验证通过后，插在 `authn.Middleware` 与 `tenancy.Middleware` 之间的一个普通 `net/http` 中间件（`admin.ImpersonationMiddleware`）调用 `authn.WithPrincipal` 把"这次请求要以谁的名义、在哪个租户内被处理"替换成目标用户/目标租户，同时把管理员的真实身份单独存进 `pkgcore.WithOnBehalfOf`（独立于 `WithActor` 分层，不会互相覆盖）。这样 `dbkit` 现有的自动审计写捕获**不需要任何修改**就能产出"`Actor`=被模拟用户、`OnBehalfOf`=管理员"的记录——`Actor`/`OnBehalfOf` 的分层设计正是为这种双身份记录准备的。
 - **权限不放大**：`rbac.RequirePermission` 判定时用的 `Subject` 是目标用户，不是管理员——管理员不会因为发起了模拟登录就获得比该用户更多的权限，只是"以这个人的视角看系统"，这与真实客服场景里"复现用户看到的问题"的需求吻合，也避免了"模拟登录变成一条绕过权限的后门"的风险。
 - **可随时吊销、时效绑定**：grant 是 admin 自己一张表里的一行，有 `expires_at`，管理员或另一个更高权限的运营人员可以随时 `DELETE` 结束它；一旦管理员自己的 access token 失效（登出、被吊销），装饰器查证的仍然是管理员的真实身份先通过验证，所以模拟状态天然跟着管理员自己的会话生死,不会变成一个孤儿凭据。
 - **开始/结束都是审计事件 + 强制通知**：`impersonation.started`/`impersonation.ended` 用显式 `audit.Emit`（不是自动写捕获——因为需要同时写双 Actor，自动捕获拿不到 `OnBehalfOf`），且开始时必须给被模拟用户发一条不可退订的安全类通知（[07 平台服务](07-platform-services.md) 的"不可关闭的安全类通知"分类,`notification` 的类型注册表里声明为不可退订）。
-- **第四种撤销途径：管理员自己的 `admin:impersonate` 权限被 `rbac` 撤销**（一个真实缺口的修复，2026-09）：以上三种途径（`DELETE`、`expires_at` 到期、管理员自己的 access token 失效）都不覆盖"管理员的 access token 仍然有效，但 `rbac` 已经撤销了他持有的 `admin:impersonate` 权限"这一种情况——`ImpersonationMiddleware` 每次请求只查 grant 本身是否 `Active` 以及 `AdminUserID` 是否匹配当前 `Principal`，从不重新咨询 `rbac`，所以被撤权的管理员在 grant 剩余的 30 分钟时效内仍能继续冒充。修复没有改成"每次被模拟请求都重新查一次 `rbac.Can`"（虽然更彻底，但会给 `ImpersonationMiddleware` 的构造签名引入一个新的强制参数，牵动参考应用自己的请求管道装配代码），而是事件驱动：`ImpersonationService` 订阅 `rbac.EventRoleBindingRevoked`/`rbac.EventRoleChanged`（两者都在同一个 `EventBus` 上同步发布——`rbac` 自己的跨副本缓存失效正是靠这条路径的可靠性撑住的），命中 `rbac.SystemDomain` 时对该管理员当前持有的每一张有效 grant 重新调用一次 `rbac.Service.Can`（而不是从事件本身推断结论——同一个权限可能还有另一个角色在授予），把不再满足条件的 grant 立即结束（`OnBehalfOf` 记为 `pkgcore.ActorTypeSystem`，区别于管理员自己发起的正常结束）。见 `go/admin/impersonation_service.go` 的 `onRoleBindingRevoked`/`onRoleChanged`/`endIfNoLongerPermitted`。
+- **第四种撤销途径：管理员自己的 `admin:impersonate` 权限被 `rbac` 撤销**：前三种途径（`DELETE`、`expires_at` 到期、管理员自己的 access token 失效）都不覆盖"管理员的 access token 仍然有效，但 `rbac` 已经撤销了他持有的 `admin:impersonate` 权限"这一种情况——`ImpersonationMiddleware` 每次请求只查 grant 本身是否 `Active` 以及 `AdminUserID` 是否匹配当前 `Principal`，从不重新咨询 `rbac`，所以被撤权的管理员在 grant 剩余时效内仍能继续冒充。实现不采用"每次被模拟请求都重新查一次 `rbac.Can`"（虽然更彻底，但会给 `ImpersonationMiddleware` 的构造签名引入一个新的强制参数，牵动参考应用自己的请求管道装配代码），而是事件驱动：`ImpersonationService` 订阅 `rbac.EventRoleBindingRevoked`/`rbac.EventRoleChanged`（两者都在同一个 `EventBus` 上同步发布——`rbac` 自己的跨副本缓存失效正是靠这条路径的可靠性撑住的），命中 `rbac.SystemDomain` 时对该管理员当前持有的每一张有效 grant 重新调用一次 `rbac.Service.Can`（而不是从事件本身推断结论——同一个权限可能还有另一个角色在授予），把不再满足条件的 grant 立即结束（`OnBehalfOf` 记为 `pkgcore.ActorTypeSystem`，区别于管理员自己发起的正常结束）。见 `go/admin/impersonation_service.go` 的 `onRoleBindingRevoked`/`onRoleChanged`/`endIfNoLongerPermitted`。
 
 ### 4.2 中间件链的插入点，不改变既有顺序
 
-> **对照代码修正**：本节最初把这个机制描述成一个 `tenancy.Resolver` 装饰器（`admin.ImpersonationAwareResolver` "包装" `authn.NewPrincipalResolver()`），与 `org.FeatureGate`/`rbac.SubtreeResolver` 归为同一类无导入 seam。真实的 `tenancy.Resolver` 接口是 `Resolve(r *http.Request) (pkgcore.TenantID, error)`——只返回一个裸的 tenant id，没有任何通道可以顺带告诉下游"这次请求该以谁的名义处理"（`tenancy.Middleware` 唯一的副作用是 `pkgcore.WithTenant`，从不触碰 `authn.Middleware` 已经装好的 `authn.Principal`）。真实机制因此是下面这个普通的 `net/http` 中间件，`go/admin/pipeline.go` 的 `ImpersonationMiddleware`：
+> 一个曾被考虑的形状是把模拟登录做成 `tenancy.Resolver` 装饰器（`admin.ImpersonationAwareResolver` "包装" `authn.NewPrincipalResolver()`），与 `org.FeatureGate`/`rbac.SubtreeResolver` 归为同一类无导入 seam——但 `tenancy.Resolver` 的接口是 `Resolve(r *http.Request) (pkgcore.TenantID, error)`，只返回一个裸的 tenant id，没有任何通道可以顺带告诉下游"这次请求该以谁的名义处理"（`tenancy.Middleware` 唯一的副作用是 `pkgcore.WithTenant`，从不触碰 `authn.Middleware` 已经装好的 `authn.Principal`）。真实机制因此是下面这个普通的 `net/http` 中间件，`go/admin/pipeline.go` 的 `ImpersonationMiddleware`：
 
 [01 整体架构](01-architecture.md) 写死的链路是 `authn.Middleware → tenancy.Middleware(authn.NewPrincipalResolver())`。模拟登录**不重排**这条链——它是在这两者之间插入一层中间件：
 
@@ -231,9 +231,9 @@ type ImpersonationGrant struct {
 
 ## 6. HTTP 面草案
 
-沿用 notes/org/authn/storage/notification 的既有模式：`go/admin/api/openapi.yaml` 是第六个 spec 片段，pinned oapi-codegen 生成 `admin-server.gen.go`，`Handler` 背后有 `var _ api.ServerInterface` 编译期断言。所有路由都要求 `rbac.RequirePermission(..., domain=system)` 且**不**走常规的 `tenancy.Middleware` 租户解析——这些是平台运营对"跨租户"这件事本身的操作，请求本身没有单一租户可言（除非落到模拟登录场景，见第 4 节）：
+沿用各模块的既有模式：`go/admin/api/openapi.yaml` 是 admin 自己的 spec 片段，pinned oapi-codegen 生成 `admin-server.gen.go`，`Handler` 背后有 `var _ api.ServerInterface` 编译期断言。所有路由都要求 `rbac.RequirePermission(..., domain=system)` 且**不**走常规的 `tenancy.Middleware` 租户解析——这些是平台运营对"跨租户"这件事本身的操作，请求本身没有单一租户可言（除非落到模拟登录场景，见第 4 节）：
 
-> **对照代码修正**：本节最初说这个 spec 片段"纳入 `api-contract.yml` 与 Taskfile `api:gen`"，这句话目前不成立——`Taskfile.yml` 的 `api:gen` 任务命令列表与 `.github/workflows/api-contract.yml` 里都没有任何一处提到 `admin`（`grep admin` 两个文件均为零命中），`admin` 的生成产物今天只能靠手动在 `go/admin/api` 目录下运行 `oapi-codegen` 来保持与 spec 同步，spec 改了但忘记手跑生成、忘记提交新的 `admin-server.gen.go` 不会被任何 CI 挡下来。这与 `go/pki` 自己 `AGENTS.md` 记录的同类缺口是同一种诚实披露而非疏漏：pki 的 `Taskfile.yml` 那一半已经补上了（`task api:gen` 能正确重新生成 `pki-server.gen.go`），但 `.github/workflows/api-contract.yml` 的"重新生成再 diff"闸门这一轮没有跟着扩展覆盖 pki；`admin` 目前两边都还没有接线，是比 pki 更靠后一步的同一类缺口。接入这两处闸门留给后续轮次；`Handler` 编译期实现的接口一致性目前只靠 reference-app（已经 import `go/admin`）的普通 build 间接兜底，不是这条专门的 spec-vs-生成产物 diff 闸门。
+> `admin` 的 spec 片段在 `task api:gen` 与 `.github/workflows/api-contract.yml` 的再生成-比对闸门覆盖范围内（片段清单以 `tools/api_fragments.json` 为单一来源，`tools/check_api_fragments.py` 做漂移闸门，与本工作流各 leg 不一致即红）。`Handler` 编译期实现的接口一致性由 reference-app（import `go/admin`）的 `go build` 兜底，与这条专门的 spec-vs-生成产物闸门共同把关。
 
 | 方法 | 路径 | 对应决策 |
 |---|---|---|
@@ -252,34 +252,27 @@ type ImpersonationGrant struct {
 
 `admin-shell`（前端）与其他消费面一样，只通过 `@speed/api-sdk` 生成的 hooks 调用这些接口，不手写 HTTP。
 
-## 7. 需要下游模块新增的最小接口清单（汇总）
+## 7. 下游模块新增的最小接口清单（汇总）
 
-这是 admin 轮启动前需要跟对应模块的负责轮次协调好的、纯新增（非破坏性）的小改动：
+以下是 admin 需要的、纯新增（非破坏性）的小改动（均已随实现落地，当前签名以对应模块代码为准）：
 
 | 模块 | 新增内容 | 对应决策 |
 |---|---|---|
 | `tenancy` | 可选 `TenantStatusResolver` seam + `WithTenantStatusResolver`，未装配时行为不变 | D4 |
-| `authn` | `Service.SearchUsers(ctx, UserSearchQuery) ([]User, error)`，平台运营专用检索 | D6 |
-| `rbac` | `Service.DeclaredPermissions() []string`，导出已冻结的权限 catalog 快照 | D8 |
+| `authn` | `Service.SearchUsers`，平台运营专用检索 | D6 |
+| `rbac` | 导出已冻结的权限 catalog 快照的只读访问器 | D8 |
 | `notification` | `SendRecordRepository` 新增按租户+时间范围+渠道+状态过滤的列表方法 | D10 |
 
-四处都是纯增量方法/可选 seam，不改变任何既有签名或默认行为，可以分别在各自下一次发布里随手带上，不需要专门等 admin 轮。
+四处都是纯增量方法/可选 seam，不改变任何既有签名或默认行为。
 
-## 8. 阶段划分建议
+## 8. 已知局限 / 明确不做
 
-对齐 [15 里程碑](15-roadmap.md) M3 的出口条件（"跨租户检索、模拟登录、查审计"三件事），建议拆两轮：
-
-**Round 1（M3 主线，满足出口条件）**：`admin_tenants` 台账（D3，仅事件驱动惰性建档 + 手工 CRUD，暂不做 D4 的强制暂停）、模拟登录全链路（D5，含审计与通知）、审计检索 HTTP 外壳（D7）、跨租户用户检索（D6，需要 authn 那一侧配合新增方法）、`admin` 自己的 `AGENTS.md`/spec 片段/`Registry` 接线、reference-app 作为强制第一消费者跑通"客服模拟登录复现问题→在审计里查到这条操作"的链路。
-
-**Round 2（视排期，可晚于 M3）**：D4 暂停租户的强制力、D8 角色管理 UI 后端、D9 用量看板、D10 通知发送记录检索、审计导出（复用 `compliance.ExportService`）。这几项都不在 M3 出口条件的字面要求里，且都不阻塞 round 1 的验收。
-
-## 9. 已知局限 / 明确不做
-
-- **不做租户创建的强制流程**。D3 已经说明为什么——台账是运营视角的记录，不是权威数据源，"创建租户"在这套体系里仍然是隐式的（第一次业务写入）。如果未来某个模块需要"租户必须先存在才能写入"的强约束，需要重新评估把台账提升为 `tenancy` 的一等实体（D3 被否决方案里记录的候选项）。
-- **不做管理员操作的二次确认/审批流**（例如"暂停租户需要两名管理员共同批准"）。这是权限模型之上的工作流能力，比本轮范围大得多，留给需要它的业务项目自己在 `admin` 之上叠加。
-- **不做平台层面的操作限流/异常行为检测**（例如"一个管理员一小时内模拟登录了 50 个不同用户"应该告警）。这类风控能力如果要做，应该是 `observability`/`compliance` 更适合的家，本轮不涉及。
-- **审计检索的性能**：`compliance.AuditQuery` 自己的文档已经说明"当前实现是应用层过滤，没有专门的索引/分区优化"——admin 直接继承这个已知限制，不在本轮重复解决。
+- **不做租户创建的强制流程**。D3 已经说明为什么——台账是运营视角的记录，不是权威数据源，"创建租户"在这套体系里仍然是隐式的（第一次业务写入）。如果某个模块需要"租户必须先存在才能写入"的强约束，需要重新评估把台账提升为 `tenancy` 的一等实体（D3 被否决方案里记录的候选项）。
+- **不做管理员操作的二次确认/审批流**（例如"暂停租户需要两名管理员共同批准"）。这是权限模型之上的工作流能力，比 admin 当前的范围大得多，留给需要它的业务项目自己在 `admin` 之上叠加。
+- **不做平台层面的操作限流/异常行为检测**（例如"一个管理员一小时内模拟登录了 50 个不同用户"应该告警）。这类风控能力如果要做，应该是 `observability`/`compliance` 更适合的家。
+- **审计检索的性能**：`compliance.AuditQuery` 自己的文档已经说明"当前实现是应用层过滤，没有专门的索引/分区优化"——admin 直接继承这个已知限制。
+- **用量/账单看板与 `admin-shell` 前端**：`go/admin` 的 usage-summary 依赖 `metering`/`billing` 的可选接线（reference-app 未接线，见 `go/admin/AGENTS.md` 的 Known limitations）；前端 `admin-shell` 尚未实现。
 
 ---
 
-*核实基线：`main` 分支，`git log` 最新提交 `f142caa`（2026-09-04）。文中引用的所有方法签名、类型名均已用 `grep`/`Read` 对照当时的源码核实；若后续下游模块的实际签名与本文有出入，以代码为准，本篇需要相应更新。*
+*文中引用的所有方法签名与类型名以当前代码为准；若下游模块的实际签名与本文有出入，以代码为准，本篇需要相应更新。*

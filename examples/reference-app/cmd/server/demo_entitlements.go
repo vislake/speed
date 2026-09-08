@@ -1,14 +1,13 @@
 // The reference app's demo glue for go/billing's entitlement half: a
 // boot-time seed that resolves a platform-wide demo Plan granting the exact
 // model features this app's real AI routes gate on, and gives every demo
-// tenant an Active subscription to it -- standing in for
-// docs/internal/06-billing-and-metering.md's full pay-per-use-AND-
-// subscription flow's own "tenant buys a subscription, the payment channel
-// confirms it" leg WITHOUT performing a real one.
+// tenant an Active subscription to it -- standing in for the
+// "tenant buys a subscription, the payment channel confirms it" leg of a
+// full pay-per-use-and-subscription flow WITHOUT performing a real one.
 //
-// This is deliberately, explicitly NOT a real purchase: go/billing/gateway/
-// AGENTS.md records that no live credentials exist for any of the three
-// providers in this environment, so a genuine "charge the customer and
+// This is deliberately, explicitly NOT a real purchase: no live
+// credentials exist for any of the three providers in this environment,
+// so a genuine "charge the customer and
 // confirm the subscription" flow cannot be built here without fabricating
 // one. What this file ships instead is the mechanism's OTHER end -- a tenant
 // whose subscription is Active, exactly the state a real payment-channel
@@ -20,8 +19,8 @@
 // "model:"+logicalModel), while a tenant with no Active subscription is
 // refused with ErrEntitlementDenied before any provider is reached --
 // cmd/server/entitlements_flow_test.go drives both directions through the
-// real composed HTTP stack. The pay-and-confirm leg itself stays a named,
-// tracked gap: see go/billing/AGENTS.md's own Scope table.
+// real composed HTTP stack. The pay-and-confirm leg itself stays out of
+// this demo's scope.
 package main
 
 import (
@@ -60,11 +59,10 @@ const demoEntitlementPlanKey = "demo"
 // host injects, and this app wires billing.NewModule(db, nil) -- no usage
 // reader -- so a Quota grant here would panic the moment Check tried to
 // consult it (go/billing/entitlements.go's own checkQuota). "Can this tenant
-// use model X at all" is exactly the Boolean-shaped question
-// docs/internal/06-billing-and-metering.md's per-model gate semantics name
-// for these grants, so no quota machinery is being skipped: this seed's
-// grants are Boolean by design, and quota-kind demo grants would need a real
-// usage reader first (see go/billing/AGENTS.md's Known limitations).
+// use model X at all" is the Boolean-shaped question these
+// per-model gate semantics answer, so no quota machinery is being skipped:
+// this seed's grants are Boolean by design, and quota-kind demo grants
+// would need a real usage reader first, which this app does not wire.
 var demoEntitlementGrants = []billing.Grant{
 	{FeatureKey: "model:" + consult.LogicalModel, Value: true},
 	{FeatureKey: "model:" + smilesim.LogicalModel, Value: true},

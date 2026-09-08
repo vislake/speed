@@ -1,10 +1,8 @@
 package main
 
-// apikey_flow_test.go is go/integration's round-1 API-key surface's
-// mandatory-first-consumer proof (go/integration/AGENTS.md's "Round 1's
-// API-key surface: still no reference-app consumer" section named this the
-// compensating obligation this round carries until a real host wired it end
-// to end). It drives the module's own spec-generated HTTP surface --
+// apikey_flow_test.go is go/integration's API-key surface's
+// mandatory-first-consumer proof. It drives the module's own
+// spec-generated HTTP surface --
 // server.go's integrationModule wiring, mounted through the generic
 // mountModuleRoutes loop exactly like every other module's fragment, gated
 // by demo_subject.go's guardIntegrationRoute -- through the composed
@@ -142,8 +140,8 @@ func assertAPIKeyError(t *testing.T, resp *http.Response, wantStatus int, wantCo
 
 const apikeyBasePath = "/api/v1/integration/apikeys"
 
-// TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd drives round
-// 1's full lifecycle through the composed HTTP stack: create (the raw key
+// TestBuildServer_APIKeyFlow_CreateListRotateRevoke_EndToEnd drives the
+// API-key lifecycle through the composed HTTP stack: create (the raw key
 // is available exactly once, right here), list (it never reappears,
 // checked at the raw-JSON level so a struct that simply omitted the field
 // could not hide a real regression), rotate (the predecessor is revoked and
@@ -286,7 +284,7 @@ func decodeListAPIKeys(t *testing.T, resp *http.Response, wantStatus int, what s
 // the read-only demo user holds notes:read and nothing else -- deliberately
 // no integration:apikey:* permission at all -- so both the read and manage
 // directions of this module's gate must refuse it, while the owner passes.
-// This is also this round's own proof that guardIntegrationRoute
+// This is also the proof that guardIntegrationRoute
 // (demo_subject.go) genuinely evaluates a real permission rather than the
 // generic gate silently passing everything through: a router bug that
 // let every request past would make this test the one that fails.

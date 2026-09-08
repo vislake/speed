@@ -30,11 +30,10 @@ import (
 // registered, re-asserts their grants under the ids authn assigned the
 // first time, and every sign-in that worked under boot one -- the demo
 // customer accounts AND the platform-staff account's SystemDomain
-// membership -- still works under boot two. Before this round, memberships
-// lived in an in-process roster that died with the boot that granted them,
-// and the second boot's sign-ins were refused with 403
-// authn.tenant_membership_required until the database was wiped: this test
-// pinned that failure (as ...FailsClosed) and now pins its fix.
+// membership -- still works under boot two. The sign-ins survive because
+// memberships live in durable org rows and the re-asserted SystemDomain
+// grant, never in an in-process roster that dies with the boot that
+// granted them.
 
 // demoSeedPassword is what the tests below seed demo accounts with. It must
 // satisfy go/authn's password policy (length-based) -- which is exactly the
@@ -244,10 +243,9 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 	// refused before any route exists with the unified 401
 	// authn.invalid_credentials answer a wrong password also gets -- the
 	// account is real and the password right, but the login endpoint must
-	// not disclose that to an anonymous caller (this control used to pin
-	// the distinguishable 403 authn.tenant_membership_required; the answer
-	// was deliberately unified, the specific reason now recorded in the
-	// login history, never the response).
+	// not disclose that to an anonymous caller (the answer was deliberately
+	// unified: the specific reason is recorded in the login history, never
+	// the response).
 	status, code, _ = demoLogin(t, srv, demoAcmeOnlyEmail, demoSeedPassword, "tenant-globex")
 	if status != http.StatusUnauthorized || code != "authn.invalid_credentials" {
 		t.Fatalf("login as the acme-only account in tenant-globex: status = %d, code = %q, want 401 %q",
@@ -274,14 +272,9 @@ func TestDemoUsers_SeededAccountsReachTheGateThroughTheirPrincipal(t *testing.T)
 // rbac.SystemDomain membership is re-granted by seedDemoPlatformStaff on
 // the same already-exists path.
 //
-// Before this round the memberships lived in an in-process roster each
-// boot owned, so boot two (the honest image of a restart) answered "not a
-// member" for every account and refused the sign-ins -- back then with
-// the distinguishable 403 authn.tenant_membership_required, the answer
-// the test's original FailsClosed form could lean on to show the
-// passwords were right and only the membership was missing. That
-// contrast is gone: the fold of no-membership logins into
-// ErrInvalidCredentials answers the same defect's refusal today with the
+// Boot two (the honest image of a restart) must answer every account as a
+// member; the fold of no-membership logins into
+// ErrInvalidCredentials answers a missing membership with the
 // unified 401 authn.invalid_credentials a wrong password also gets (the
 // reason survives only in the login history, never the response), so no
 // distinguishable refusal exists for this test to assert and its proof is
@@ -376,11 +369,11 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 	}
 }
 
-// TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly is the
-// P2-5 second half: registerDemoUser must distinguish authn's register
+// TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly pins that
+// registerDemoUser distinguishes authn's register
 // rate-limit answer from the other fatal answers honestly -- naming the
-// public per-IP register budget (10/hour, go/authn/ratelimit.go's
-// limitRegisterByIP) and its remedy -- rather than folding it into the
+// public per-IP register budget (limitRegisterByIP,
+// go/authn/ratelimit.go) and its remedy -- rather than folding it into the
 // generic "answered HTTP %d with code %q" message that reads like a
 // misconfiguration. The budget here is one boot's own in-memory KVStore:
 // the test exhausts the register route's no-client-address bucket with 10
@@ -388,9 +381,7 @@ func TestDemoUsers_SecondBootAgainstTheSameDatabase_SignInsSurvive(t *testing.T)
 // shape registerDemoUser itself uses, so every POST lands on the same
 // bucket the seed's own POSTs land on), then drives registerDemoUser
 // itself and asserts the refusal is named as the rate limit -- and that an
-// ordinary policy refusal (the control) never carries that name. Failing
-// before the fix: the 11th POST's refusal is reported through the generic
-// message, which contains neither the rate-limit name nor the remedy.
+// ordinary policy refusal (the control) never carries that name.
 func TestDemoUsers_RegisterDemoUser_RateLimitAnswerNamedDistinctly(t *testing.T) {
 	cfg := testConfig(t)
 	handler, cleanup, _, err := buildServer(context.Background(), cfg)

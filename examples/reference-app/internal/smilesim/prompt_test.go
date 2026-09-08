@@ -9,7 +9,7 @@ import (
 // vocabulary value speaks exactly its own instruction, that the strength
 // value renders verbatim (never bucketed, never rounded), that the
 // rendering is deterministic, and -- the pins this product's core promise
-// depends on -- that the legacy preservation sentence appears VERBATIM as
+// depends on -- that the preservation sentence appears VERBATIM as
 // the final sentence of every render, never weakened or reworded.
 //
 // The phrase literals below are deliberately independent copies of the
@@ -34,13 +34,12 @@ var shadeClauses = map[ToothShade]string{
 	ToothShadeUltraWhite: "bright ultra-white shade",
 }
 
-// preservationSentenceLegacy is the pre-parameterization prompt's final
-// sentence, transcribed from the historical simulationPrompt constant this
-// round replaced -- the "never weaken" pin's ground truth.
+// preservationSentenceLegacy is the preservation sentence as it appears
+// in every rendered prompt -- the "never weaken" pin's ground truth.
 const preservationSentenceLegacy = "Keep the rest of the face, lighting and background unchanged."
 
-// identitySentenceP2a is the strengthening sentence this round added before
-// the legacy sentence -- it may be reworded only deliberately, since it
+// identitySentenceP2a is the strengthening sentence that precedes the
+// preservation sentence -- it may be reworded only deliberately, since it
 // names the product vision's preservation dimensions.
 const identitySentenceP2a = "Preserve the patient's facial identity, proportions, skin tone, lip color and pose."
 
@@ -97,9 +96,9 @@ func TestRenderSimulationPrompt_Strength_RendersTheExactRequestedValue(t *testin
 	}
 }
 
-// TestRenderSimulationPrompt_PreservationBlock_NeverWeakened is the round's
+// TestRenderSimulationPrompt_PreservationBlock_NeverWeakened is the
 // core-promise pin: for every style, every shade and every one of a spread
-// of strengths, the rendered prompt ends with the legacy preservation
+// of strengths, the rendered prompt ends with the preservation
 // sentence byte-for-byte as its final sentence, and carries the identity
 // sentence in front of it -- the preservation instruction is never omitted,
 // reworded or displaced.

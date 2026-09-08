@@ -7,24 +7,24 @@ import (
 )
 
 // Note is notes' tenant-scoped placeholder resource: a minimal text record
-// standing in for the real reference-app content that lands in later
-// milestones (see this package's doc.go).
-//
+// Note is notes' tenant-scoped placeholder resource: a minimal text record
+// standing in for the real content surface this app demonstrates with
+// (see this package's doc.go).
 // It embeds dbkit.TenantModel for its tenant_id column and GetTenantID
-// method, following the "Typical integration" pattern dbkit's own
-// AGENTS.md documents for a tenant-scoped model that does not need
+// method, following the "Typical integration" pattern dbkit documents for
+// a tenant-scoped model that does not need
 // tenant_id in a composite primary key. That is a deliberate choice, not
 // an oversight: TenantModel's own gorm tag omits "primaryKey" on purpose
 // (see dbkit's tenant_scope.go doc comment on TenantModel), because a
 // tenant-scoped table's primary key should usually be the composite
-// (tenant_id, id) per the backend coding standard's data-model rules
-// (§5) -- but ID here is an application-generated UUID (see
+// (tenant_id, id) under the data-model rules --
+// but ID here is an application-generated UUID (see
 // handler.go's use of uuid.NewString), already globally unique on its
 // own, so a plain, non-key tenant_id column backed by its own secondary
 // index (see migrations/sqlite/0001_create_notes.sql) is genuinely enough.
 // A resource whose id space is not already globally unique on its own
 // should instead declare TenantID directly, with its own primaryKey tag,
-// exactly as dbkit's AGENTS.md's own Subscription example does, rather
+// exactly as dbkit's own Subscription example does, rather
 // than embedding TenantModel.
 //
 // Do not redeclare a same-named TenantID field on Note to shadow the
@@ -46,9 +46,9 @@ type Note struct {
 	// Note embeds it instead of declaring TenantID directly.
 	dbkit.TenantModel
 
-	// Text is the note's placeholder content. It stands in for whatever
-	// real field(s) a later milestone's module will actually need, and in
-	// this app's own domain the real content is patient data.
+	// Text is the note's placeholder content: a minimal text record with
+	// no dental/business-specific meaning of its own, standing in for
+	// content whose real shape a patient-data-bearing model would carry.
 	//
 	// The audit:"redact" struct tag is dbkit's model-side capture opt-out
 	// for a plaintext-sensitive column (go/dbkit/audit_capture.go's
@@ -86,8 +86,8 @@ type Note struct {
 	CreatorUserID string `gorm:"column:creator_user_id;size:64;not null;default:''"`
 
 	// CreatedAt is populated by gorm's autoCreateTime on Create -- never
-	// written by application code, and never NOW() in a migration (backend
-	// coding standard §5's dual-dialect rule: SQLite has no NOW()).
+	// written by application code, and never NOW() in a migration (the
+	// dual-dialect rule: SQLite has no NOW()).
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
 
 	// DeletedAt and DeletedBy are dbkit.SoftDeletable's required pair
@@ -100,24 +100,24 @@ type Note struct {
 	// as TenantID is (see dbkit/repository.go's setTenantID /
 	// setSoftDeleteFields).
 	//
-	// This is notes' service-level proof of the mark-delete round
-	// (docs/internal/04-data-and-tenancy.md's delete-semantics section): repository_test.go's
+	// This is notes' service-level proof of dbkit's mark-delete
+	// mechanism: repository_test.go's
 	// TestRepository_DeleteThenRestoreThenDelete_HiddenFromNormalQueriesThroughoutLifecycle
 	// drives Create/Delete/Restore/Delete straight through this package's
 	// real, migrated Repository, promoted unchanged from
 	// dbkit.Repository[Note] -- no code in this package's repository.go
 	// itself needed to change for that proof to hold. Notes does not
-	// expose a delete/restore HTTP endpoint yet (a good, named follow-up
-	// scope, not required for this proof), and the delete-semantics
-	// section's hard-delete half is proved at this same service level
+	// expose a delete/restore HTTP endpoint (a named follow-up scope,
+	// not required for this proof), and the hard-delete
+	// half is proved at this same service level
 	// rather than over HTTP: repository_test.go's
 	// TestRepository_HardDelete_SoftDeletedNote_PhysicallyRemoved drives
 	// dbkit.Repository[Note].HardDelete -- promoted unchanged from the
 	// embedded base, exactly like Delete and Restore, with no code in
 	// this package's repository.go needed -- through this same real,
-	// migrated Repository. No migration change was needed or made for
-	// it: HardDelete issues the physical DELETE the pre-soft-delete
-	// schema already permitted, which is also why this migration's own
+	// migrated Repository. No migration change was needed for
+	// it: HardDelete issues the physical DELETE the schema already
+	// permitted, which is also why the 0002 migration's own
 	// doc comment (migrations/{postgres,sqlite}/0002_add_soft_delete.sql)
 	// says it adds nothing for HardDelete.
 	DeletedAt *time.Time `gorm:"column:deleted_at"`
@@ -165,13 +165,12 @@ func (n Note) GetDeletedAt() *time.Time { return n.DeletedAt }
 // do for the consumers of a library module; it is read only for Auditable
 // models, which is why Note keeps the marker (and with it a declared
 // resource kind) rather than dropping the interface and with it the
-// question. (An earlier wiring deliberately left AuditBus unwired
-// entirely because a same-file persister deadlocked under SQLite's single
-// writer; that hazard was dissolved by dbkit's buffered post-commit
-// publish, proven by audit_capture_test.go's
-// TestAuditCapturePlugin_WithTenantSession_SameFileSynchronousPersister_NoLongerDeadlocks,
+// question. (Wiring the bus to a same-file persister is safe because
+// dbkit publishes captured events only after the writing transaction has
+// committed -- proven by audit_capture_test.go's
+// TestAuditCapturePlugin_WithTenantSession_SameFileSynchronousPersister_NoLongerDeadlocks --
 // so nothing in the current shape -- bus wired, Note excluded, Text
-// tagged -- rests on that old limitation.)
+// tagged -- rests on an unwired-bus limitation.)
 //
 // This app's actual audit trail for note creation runs through the
 // declarative mechanism: handler.go's NotesCreateNote calls audit.Emit

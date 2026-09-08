@@ -13,12 +13,10 @@ import (
 )
 
 // This file is go/integration's SSRF (server-side request forgery) defense
-// for outbound webhooks -- docs/internal/07-platform-services.md names it
-// explicitly as the most common security hole in outbound webhooks, and the
-// root CLAUDE.md's own Security rules
-// repeat it as a blanket platform rule: "Do not let outbound webhooks reach
-// internal addresses. SSRF protection is mandatory, including DNS-rebinding
-// protection."
+// for outbound webhooks -- the most common security hole in outbound
+// webhooks, and a blanket platform rule: "Do not let outbound webhooks
+// reach internal addresses. SSRF protection is mandatory, including
+// DNS-rebinding protection."
 //
 // Two checks exist, at two different times, because one check at creation
 // time alone is not enough: DNS can change after a subscription is created
@@ -245,9 +243,8 @@ var errBlockedDialAddress = errors.New("integration: webhook delivery refused: d
 // the rebinding window this file's header comment closes would be open (a
 // re-resolution inside the dial would let a rebinding DNS answer steer the
 // connection). The default implementation builds a fresh dialer per
-// attempt, carrying webhookDialTimeout exactly as the pre-seam code did.
-// This is the twin of go/ai-gateway/ssrf.go's providerDialFunc, per the
-// two modules' keep-in-step rule.
+// attempt, carrying webhookDialTimeout. This is the twin of
+// go/ai-gateway/ssrf.go's providerDialFunc.
 var webhookDialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: webhookDialTimeout}
 	return dialer.DialContext(ctx, network, addr)

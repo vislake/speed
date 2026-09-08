@@ -15,7 +15,7 @@ import (
 )
 
 // TestObsRouteSeed_RealRoutesSurviveStartupGarbage is the consumer-side
-// regression for go/observability's route-label pre-seed API (P1-obs-8):
+// regression for go/observability's route-label pre-seed API:
 // obs.RegisterMountedRoutes exists precisely so a host can hand the route
 // label limiter every obs.Middleware constructs its REAL route table
 // before any request traffic arrives, and this app is the mandatory first

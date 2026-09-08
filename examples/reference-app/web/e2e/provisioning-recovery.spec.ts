@@ -6,23 +6,13 @@
  * inside the register request, and the register route deliberately does
  * not fail a registration whose account was created -- so a provisioning
  * failure is swallowed and the account exists with no clinic. The
- * recovery the code first relied on did not exist: it expected a later
- * redelivery of authn.user.created, and the in-process bus delivers that
- * event exactly once. The account is real, so it cannot re-register; its
- * sign-in would answer the memberless refusal forever. That is the dead
- * end self-service signup was meant to close, reopened by the failure
- * half of its own guarantee, and it is what dcd091c fixed by enqueueing
- * a retry job whose row is the durable record of the unfinished work.
- *
- * WHY THIS GATE COULD NOT BE WRITTEN UNTIL NOW
- *
- * The recovery is only observable if provisioning can be made to fail on
- * purpose, and nothing could ask it to. Until the injection landed, this
- * suite could say the retry had not regressed -- never that it
- * converges, which is a different claim, and the difference is the whole
- * value of the fix. APP_FAIL_SELF_SERVICE_PROVISION=N now fails the
- * first N attempts of EACH account, counted per user id, and leaves
- * every boot without it byte-identical.
+ * account cannot re-register and no event redelivery will come to it,
+ * so recovery rests on a retry job whose row is the durable record of
+ * the unfinished work. The recovery is only observable if provisioning
+ * can be made to fail on purpose:
+ * APP_FAIL_SELF_SERVICE_PROVISION=N fails the first N attempts of EACH
+ * account, counted per user id, and leaves every boot without it
+ * unchanged.
  *
  * N IS 1, AND THAT IS A BUDGET DECISION
  *
@@ -30,9 +20,9 @@
  * retry backoff doubles into minutes and the only way to know when to
  * sign in would be to try repeatedly -- which is a retry-past-a-rate-
  * limit loop wearing different clothes, and this suite refuses those:
- * go/authn allows five sign-ins per account per minute, and a gate that
- * retried past it would stop being able to tell a real regression from
- * its own impatience.
+ * sign-in is rate-limited per account (go/authn's ratelimit.go), and a
+ * gate that retried past the limit would stop being able to tell a real
+ * regression from its own impatience.
  *
  * BOTH HALVES ARE ASSERTED, WHICH IS THE POINT
  *
@@ -112,14 +102,12 @@ test(
         .poll(() => server.said(), { timeout: 30_000 })
         .toMatch(/provisioning failed synchronously/)
 
-      // Then the retry's own success, and waiting for THIS is what the
-      // first draft got wrong: it polled for any mention of provisioning,
-      // which the failure line satisfies immediately, and then signed in
-      // -- ahead of the retry. The sign-in was refused as memberless and
-      // the gate looked like a product defect. Empirically the retry
-      // converges in about five milliseconds, so the wait costs nothing;
-      // the point is that the signal names the thing being waited for
-      // instead of something that merely appears near it.
+      // Then the retry's own success. A poll for any mention of
+      // provisioning would be satisfied by the failure line immediately,
+      // and signing in then -- ahead of the retry -- would be refused as
+      // memberless and look like a product defect. The signal has to
+      // name the thing being waited for instead of something that merely
+      // appears near it.
       await expect
         .poll(() => server.said(), { timeout: 60_000 })
         .toMatch(/job succeeded.*self_service\.provision_clinic/)

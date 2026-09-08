@@ -31,8 +31,8 @@
 // (webhook.GenerateTestSignedPayload, the same real HMAC machinery the
 // package's unit tests use). Capturing a delivery actually signed by
 // Stripe's own servers still requires a live test-mode webhook endpoint
-// and remains on the untestable-without-credentials boundary recorded in
-// go/billing/gateway/AGENTS.md.
+// and remains on the untestable-without-credentials boundary the gateway
+// package's own docs record.
 package stripe_test
 
 import (

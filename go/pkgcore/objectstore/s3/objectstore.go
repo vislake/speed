@@ -1,13 +1,11 @@
 // Package s3 is the distributed deployment mode's ObjectStore, reaching any
 // S3-compatible object service (MinIO, Aliyun OSS, AWS S3) through the
 // minio-go client. It is split out of go/pkgcore's own package -- rather
-// than living beside the ObjectStore interface as pkgcore.s3ObjectStore once
-// did -- so that a consumer which never wires an S3-backed store does not
-// inherit minio-go in its dependency graph: Go resolves dependencies per
-// package, and an interface package that also carries one implementation
-// hands every importer that implementation's whole dependency closure
-// (the implementation-registry section of docs/internal/03-deployment-
-// modes.md measures the cost and names the boundary).
+// than living beside the ObjectStore interface in the pkgcore root -- so
+// that a consumer which never wires an S3-backed store does not inherit
+// minio-go in its dependency graph: Go resolves dependencies per package,
+// and an interface package that also carries one implementation hands
+// every importer that implementation's whole dependency closure.
 //
 // Importing this package registers "objectstore.s3" on pkgcore's shared
 // ObjectStoreRegistry as a side effect (see register.go), the name

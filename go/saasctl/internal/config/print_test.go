@@ -200,11 +200,8 @@ func TestPrintReportsEveryValueThatCameFromTheEnvironment(t *testing.T) {
 // TestPrintRefusesIncompleteS3Group: an S3 group missing one of its four
 // required members fails print exactly as it fails the generated app's own
 // bootstrap -- the coded completeness error naming which variables are
-// missing -- rather than printing five (or seventeen) lines and exiting 0
-// on an environment the generated app would refuse to boot on. Before the
-// appconfig twin validated the S3 group, print silently ignored these
-// variables and always exited 0; this is the exact misdiagnosis the audit
-// finding names.
+// missing -- rather than printing partial rows and exiting 0 on an
+// environment the generated app would refuse to boot on.
 func TestPrintRefusesIncompleteS3Group(t *testing.T) {
 	code, stdout, stderr := drivePrint(t, []string{fixture(t, "print.mod")}, map[string]string{
 		appconfig.S3EndpointEnv:  "s3.internal:9000",
@@ -292,10 +289,10 @@ func TestPrintNeverRendersTheKeyBytes(t *testing.T) {
 	}
 }
 
-// TestPrintRedactsTheSMSGatewayURL pins the P3-1 fix for the one
-// credential-shaped row whose value used to print verbatim: config print
-// under an environment carrying APP_SMS_GATEWAY_URL rendered the URL as
-// any other connection-topology row. The URL is not topology: authn's
+// TestPrintRedactsTheSMSGatewayURL pins the one credential-shaped row
+// whose value must never print verbatim: config print under an environment
+// carrying APP_SMS_GATEWAY_URL must not render the URL as any other
+// connection-topology row. The URL is not topology: authn's
 // HTTP SMS transport (go/authn's NewHTTPSMSSender) has no credential
 // channel separate from its endpoint, so an operator who must
 // authenticate to the gateway has nowhere to put the credentials except
@@ -329,12 +326,12 @@ var envNameInProse = regexp.MustCompile(`APP_[A-Z0-9_]+`)
 
 // TestPrintRedactedEnvParagraphEnumeratesTheList is the gate tying the
 // print usage text's secret-variable enumeration to print.go's actual
-// redactedEnv declaration -- this used to be three copies of one list
-// (the declaration, a role-by-role list in its doc comment, and the
-// usage paragraph) with nothing comparing them, so a variable added to or
-// dropped from the declaration while a copy stayed stale passed every
-// test. This test reads the actual list -- the redactedEnv map this
-// package compiles from print.go -- and asserts the usage paragraph's
+// redactedEnv declaration -- the declaration, a role-by-role list in its
+// doc comment, and the usage paragraph must not be three copies of one
+// list with nothing comparing them, or a variable added to or dropped
+// from the declaration while a copy stays stale would pass every test.
+// This test reads the actual list -- the redactedEnv map this package
+// compiles from print.go -- and asserts the usage paragraph's
 // parenthesized enumerations name exactly its key set, in both
 // directions: a paragraph that forgets a declared secret, or names a
 // variable the declaration does not redact, fails here. Each member's

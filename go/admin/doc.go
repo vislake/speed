@@ -1,10 +1,12 @@
-// Package admin provides the operations-console backend:
-// docs/internal/23-admin.md's design, both landed rounds (AGENTS.md's
-// "Status: round 2 of 2 landed") -- the operator-facing tenant ledger with
-// tenant-suspension enforcement (D3+D4), the impersonation pipeline (D5, in
-// full), cross-tenant user search (D6), the audit-query HTTP shell plus its
-// asynchronous export leg (D7), role management wrapping rbac.Service (D8),
-// the cross-tenant usage/billing dashboard (D9) and notification
-// send-record search (D10). See AGENTS.md for the module's wiring contract
-// and what remains unbuilt.
+// Package admin provides the operations-console backend, the module at the
+// top of the dependency graph that assembles the platform's
+// operator-facing surfaces. It ships the tenant ledger (admin_tenants) with
+// suspension enforcement through tenancy's TenantStatusResolver seam, the
+// impersonation pipeline, cross-tenant user search, an audit-query HTTP
+// surface with an asynchronous export leg, role management over
+// rbac.Service, a cross-tenant usage/billing dashboard, and notification
+// send-record search.
+//
+// The HTTP surface is the module's own OpenAPI fragment (api/openapi.yaml),
+// implemented by handler.go behind the generated api.ServerInterface.
 package admin

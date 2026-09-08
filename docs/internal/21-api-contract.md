@@ -48,112 +48,18 @@ operationId 直接决定生成的函数名与 hook 名，命名不规范会污�
 
 **CI 强制规则**：前端包与业务项目中，除 `@speed/api-client` 内部外，**任何直接 `fetch(`/`axios.` 调用后端路径的代码一律拒绝合入**（ESLint 自定义规则 + 路径白名单）。要调接口，只能用 `@speed/api-sdk` 导出的 hook。
 
-> **实现状态注记（2026-09-03，`speed/no-direct-http` 已生效）——本注记不是设计正文，设计正文保持原样。**
->
-> 上文这条 ESLint 强制规则的 HTTP 一半已落地：`web/eslint-rules/no-direct-http.js` 拒绝前端各包 `src` 中的直接 HTTP——裸全局 `fetch(...)`（带遮蔽检查：标识符能解析到局部或导入绑定时不算全局）、`window.fetch`/`globalThis.fetch`、`new XMLHttpRequest()`，以及任何 `axios`/`node-fetch` 的 import/require（规则不认路径）。配置级白名单只有一处：`web/eslint.config.mjs` 把 `packages/api-client/**` 整体豁免——api-client 就是手写 HTTP 的家，扩大白名单属于架构变更。规则的语义是"除 api-client 外禁止直接触碰网络"，与上文的"只用 `api-sdk` hook"不冲突：`@speed/api-sdk` 生成层同日稍后落地（见文末实现状态注记），其生成代码同样经手写接缝调用 api-client 作 HTTP 层——每轮重新生成后其 src 都必须通过本规则，规则继续把 HTTP 收口在一个包内。规则与其单测在 `web/eslint-rules/no-direct-http.js` / `no-direct-http.test.mjs`，由 fast-check 的 repo-checks 任务逐 PR 与 `no-literal-text` 单测同命令运行。
+> **实现状态注记——本注记不是设计正文，设计正文保持原样。** 本文的各条机制多数已落地，当前实现状态以本注记与 [19 开发工作流](19-dev-workflow.md) 的实现状态注记为准。
 
-## 统一的错误响应
+> **"前端：禁止手写 API 调用"一节的运行时与强制规则均已落地**：`@speed/api-client` 包（`web/packages/api-client`）交付 `createClient` 手写 HTTP 运行时——可注入 fetch、内存 access-token store（包内无任何 storage API）、401 静默单飞刷新、超时、幂等方法限定的瞬态重试、`ApiError` 归一化与结构化 reporter。执行件 `speed/no-direct-http` 规则（`web/eslint-rules/no-direct-http.js`，配套单测 `no-direct-http.test.mjs`）拒绝前端各包 `src` 中的直接 HTTP——裸全局 `fetch(...)`（带遮蔽检查：标识符能解析到局部或导入绑定时不算全局）、`window.fetch`/`globalThis.fetch`、`new XMLHttpRequest()`，以及任何 `axios`/`node-fetch` 的 import/require（规则不认路径）。配置级白名单只有一处：`web/eslint.config.mjs` 把 `packages/api-client/**` 整体豁免——api-client 就是手写 HTTP 的家，扩大白名单属于架构变更。规则与其单测由 fast-check 的 repo-checks 任务逐 PR 与 `no-literal-text` 单测同命令运行。
 
-所有接口的错误响应共用一个 schema，与国际化的结构化错误码方案对齐（见 [11 横切能力](11-cross-cutting.md)）：
+> **spec 片段的组织与生成已全线落地**：`examples/reference-app/internal/notes/api/openapi.yaml` 是"模块自持 spec 片段"惯例的第一个实例（落在 reference-app 而非 go/ 模块下），同目录携带生成器配置 `oapi-codegen.yaml`（钉定 oapi-codegen v2.8.0）与生成物；各 go/ 模块的片段同构。`task api:gen` 的后端 leg 逐一执行钉定的 oapi-codegen 重新生成（片段清单以 `tools/api_fragments.json` 为单一来源，`tools/check_api_fragments.py` 做漂移闸门）；"契约变更的正确顺序"第 2 步真实生效——notes 的 handler 实现生成的 `api.ServerInterface`（`internal/notes/handler.go` 的 `var _` 编译期断言 + `api.HandlerFromMux` 从片段注册路由），spec 加了 operation 而 handler 没跟上时编译直接失败。前端 orval leg 依赖 `api:merge`：钉定的 redocly 把合并列表内的片段 `join` 进 `build/openapi/speed.yaml`（现含 notes、cases、smilesim、authn、notification、billing 六个片段；org 与 storage 只有后端 leg，理由见 `Taskfile.yml` api:merge 头部注释与各自 AGENTS.md 的 Deferred 清单），钉定的 orval 8.17.0（经 `pnpm dlx` 从 web/ 运行、永不进入 lockfile）从合并文档生成 `@speed/api-sdk` 的 `src/index.ts`，文件头带钉定版本的 DO-NOT-EDIT 标记。
 
-```yaml
-ApiError:
-  type: object
-  required: [code, traceId]
-  properties:
-    code:    { type: string, example: "billing.quota_exceeded" }
-    params:  { type: object, additionalProperties: true }
-    message: { type: string, description: "英文兜底文案，仅用于日志排查，前端不得直接展示" }
-    traceId: { type: string }
-    details: { type: array, items: { $ref: "#/components/schemas/FieldError" } }
-```
+> **"生成物一致性检查"以 porcelain 形态接线**：`.github/workflows/api-contract.yml` 在改动 spec 片段 / 生成器配置（含 `web/orval.config.ts` 与 `web/scripts/**`）/ `Taskfile.yml` / 流水线自身的 PR 上触发（路径过滤），每次再生成后跑 `git status --porcelain --untracked-files=all`——绝不 `git diff --exit-code`（再生成新建文件时 diff 闸门会静默通过）——对每个后端片段、合并文档与前端 sdk 各一道，随后对 reference-app 跑 `go build` 兜底 handler 编译；authn 另设自己的再生成与 `go build` leg（authn 是每个 fast-check 都会构建的真实模块，其编译强制不必等 full-ci 才得到回答，与 reference-app 是否 import 它无关，理由见 api-contract.yml 头部注记）。consistency 门禁原样适用于 consumer shell——壳只 import 生成面，不在 `bindRequestFn`/`runtime.ts` 接缝之外出现任何手写 HTTP。
 
-统一 schema 让生成的客户端能做统一错误处理（401 刷新、429 退避、错误码 → i18n 文案映射），而不是每个接口各写一套。**`message` 字段明确标注不得直接展示**——展示文案一律由前端按 `code` 查 i18n 资源。
+> **生成层机制**：生成代码不直接触碰网络——mutator 指向包内唯一手写源文件 `src/runtime.ts`（`bindRequestFn(createClient(...))` 由 host 启动时绑定一次、last-wins，`speedRequest` 把 orval 的 axios 形态调用适配到 `@speed/api-client` 的 `RequestFn` 契约），以 exports map 的 `./runtime` 子路径暴露，整体再生成不会覆盖它。orval 的 mutator 发射为无扩展名相对导入，nodenext 构建无法编译（TS2835），由确定性再生成脚本 `web/scripts/orval-nodenext-fixup.mjs` 改写为显式 `.js`——工具缺口用工具补（脚本在 orval 改变发射形态时非零退出），手写面收敛到那一个接缝文件。生成代码无租户概念：无租户头（tenant 只存在于 access-token claims，前端从不把租户放进请求头，即第 45 行所述）；query key 为裸 spec 路径，租户 query-key 命名空间是 consumer-shell 纪律，不是生成物。
 
-## OpenAPI 覆盖不到的部分
+> **token 传输的现实形状**（[12 前端架构](12-frontend.md) 的机制注记展开同一事实）：authn 的 token 签发响应把 refresh token 放在**响应体**（`AuthnTokenPair.refresh_token`；tenant-switch 与 step-up 响应中缺席——这两个操作轮换既有 token 家族），**不存在 refresh cookie**——authn 设置的唯一 HttpOnly cookie 是 social 绑定预授权路径那个（`Path /api/v1/authn/social`）；refresh 端点在请求体里读取调用方持有的 token。按此现实，内存 store 只持有 access token，refresh token 只存在于会话闭包、永不被写入任何存储。
 
-必须显式列出并单独文档化，避免"以为都覆盖了"：
+> **生成面的消费证明分三层，均已落地**：`@speed/auth-core` 是首个 in-workspace 编译消费者（其单元套件经由包内手写接缝 `bindRequestFn` 绑定 scripted `RequestFn`，驱动登录/登出/刷新等生成操作并做类型检查，`src/usage-example.test.tsx` 编译执行 README 的会话-hooks 流程）；`@speed/account-ui` 把生成 hooks 与 mutation 真正渲染进组件树（列表经 `useAuthnListSessions`/`useAuthnListLoginHistory`/`useAuthnListIdentities` 读取、写经生成的 mutation 与 `authnSocialCallback` 直呼、失效走导出的 query-key 构造器，因此 api-sdk 在 account-ui 是运行时 dependency）；`examples/reference-app/web` 作为 host 组合全部生成面——壳的 `bootstrapReferenceApp` 以同一接缝绑定一个真实 `@speed/api-client`（fetch 由宿主环境供给，绑定恰好一次），notes 半边经生成的 react-query hooks 行使（键以 `['tenant', tenantId, …]` 命名空间化），authn 半边经 auth-core 会话与 auth-ui/account-ui/tenancy-ui 组件面行使；壳的 vitest 套件以脚本化 demo-server 替身运行（`src/test-utils/demo-server.ts` 按真实服务器的方式作答），真实服务器形态由 Go 侧套件（`cmd/server/demo_users_test.go`、`demo_subject_test.go`）驱动。壳的 `src/codes-alignment.test.ts` 把十个消费面的 reachable-error 白名单双向对齐到逐条带源码引用的服务器码枚举（所引 sentinel 标识符由套件以文件级 exactly-once 断言钉住；枚举自身尺寸由套件的守卫钉住）：方向一，服务器答得出的码至少一个表面有白名单文案（漏了即渲染裸 key）；方向二，白名单里没有服务器在此答不出的码（死拷贝）；外加精确规则——`client.*` 各面只白名单保留三件套（`client.network`/`client.timeout`/`client.protocol`）与 tenancy-ui 相对 auth-ui 家族多出的两个 token 验证码（各有 GO_PINNED 引用或登记豁免）。GO_PINNED 枚举为手写且逐条引用（机器提取的服务端码普查仍未实现，理由记录在套件头注释）。
 
-| 场景 | 为什么不在 spec 里 | 如何处理 |
-|---|---|---|
-| 站内信 SSE 推送 | 长连接流式，生成器支持差 | 单独文档化事件格式；前端在 `@speed/notification-ui` 内封装唯一一处 EventSource 调用 |
-| 文件上传的直传形态（例外已消除，2026-09-04） | 该例外成立的前提是上传请求直接发往 S3/OSS、不经过本服务，故 spec 表达不了；此形态未落地——`storage` 轮交付的是**服务端中转流式**上传（Create→Upload→Complete 均为普通端点），relayed 上传全程可由 OpenAPI 表达 | wire 契约权威是 `go/storage/api/openapi.yaml` 的七个操作；前端 storage 调用由 api-sdk 从该片段生成——待合并文档扩展（org 片段先排队的 org-web 轮，storage 搭同一班再生，见 `go/storage/AGENTS.md` deferral 表与 Taskfile `api:gen` 头部注释）；`FileUploader` 是受控队列组件——队列是 host 的 `rows` 状态、交互经回调上报，上传传输是 host 自己的代码，组件不封装任何上传 HTTP |
-| 外发 Webhook | 是本系统**发出**的请求，不是提供的接口 | 用独立的 AsyncAPI 风格文档描述事件负载，见 [07 平台服务](07-platform-services.md) |
-| 支付渠道回调 | 由第三方按各自格式回调 | 内部实现细节，不进公开 spec |
-
-## 与发布流程的绑定
-
-1. **spec 与代码同版本发布**：合并后的 `speed.yaml` 作为 Release 附件，同时打包进 `@speed/api-sdk` 与文档站的对应版本目录。
-2. **破坏性变更闸门**：`oasdiff` 检测到 breaking change（删路径、删字段、改必填、改类型、改 operationId）时，CI 拒绝合入，除非 PR 显式标记 `breaking-change` 标签并附升级指南条目。
-3. **生成物一致性检查**：CI 重新生成一遍前后端代码，与仓库内产物做 diff，不一致即失败——防止有人改了 spec 却没提交重新生成的代码。
-4. **业务项目同样适用**：`saasctl openapi generate` 让业务项目用同一套工具链管理自己的 API，生成的客户端与脚手架的 sdk 在同一个 QueryClient 下工作。
-
-## 契约变更的正确顺序
-
-改接口时必须按这个顺序，不能反过来：
-
-1. 改模块的 `api/openapi.yaml`
-2. 重新生成后端 interface → 编译失败暴露所有待改的 handler
-3. 补实现直到编译通过
-4. 重新生成前端 sdk → 类型错误暴露所有待改的调用点
-5. 补前端直到类型检查通过
-6. 同一个 PR 提交 spec、实现、生成物
-
-**先改实现再补 spec 是被禁止的**——那等于回到 code-first，失去了编译期约束的全部价值。
-
----
-
-> **实现状态注记（2026-09-03，M0：spec-first 闭环两半均已落地——后端 interface 生成、前端 sdk 生成、前端运行时与 CI 一致性 diff）——本注记不是设计正文，设计正文保持原样；完整工具链仍是本文的设计目标，当前实现状态以 [19 开发工作流](19-dev-workflow.md) 的当前状态注记与根目录 CLAUDE.md 的 Repository Status 为准。**
->
-> 后端一半与前端 sdk 一半已在 reference-app 的 notes 模块落地作为示范，前端运行时（`@speed/api-client` 与 `speed/no-direct-http`）亦已落地（见下）：
->
-> - **"规范的组织与合并"惯例的第一个实例**：`examples/reference-app/internal/notes/api/openapi.yaml` 片段，同目录携带生成器配置 `oapi-codegen.yaml`（钉定 oapi-codegen v2.8.0）与生成物 `notes-server.gen.go`——对应上文 `<module>/api/openapi.yaml` 的模块资产布局，只是落在 reference-app 而非 go/ 模块下。
-> - **上文"契约变更的正确顺序"第 2 步真实生效**：notes 的 handler 实现生成的 `api.ServerInterface`（`internal/notes/handler.go` 的 `var _` 编译期断言 + `api.HandlerFromMux` 从片段注册路由），`task api:gen` 执行重新生成；spec 加了 operation 而 handler 没跟上时编译直接失败。
-> - **"与发布流程的绑定"第 3 条（生成物一致性检查）两半均已接线**：`.github/workflows/api-contract.yml` 在改动片段 / 生成器配置（含 `web/orval.config.ts` 与 `web/scripts/**`）/ `Taskfile.yml` / 流水线自身的 PR 上触发——后端 oapi-codegen 重新生成后第一个 `git diff --exit-code` 比对生成物；前端 orval + nodenext-fixup 从 web/ 重新生成后第二个 `git diff --exit-code` 比对 `@speed/api-sdk` 的 `src/index.ts`；最后 `go build` reference-app 兜底 handler 编译。
-> - **"前端：禁止手写 API 调用"一节的运行时一半已落地**：`@speed/api-client` 包（`web/packages/api-client`）交付 `createClient` 手写 HTTP 运行时——可注入 fetch、内存 access-token store（包内无任何 storage API）、401 静默单飞刷新、超时、幂等方法限定的瞬态重试、`ApiError` 归一化与结构化 reporter；上文第 49 行那条强制规则的执行件 `speed/no-direct-http` 同时落地（语义见上文注记）。生成层（`@speed/api-sdk`）落地后其生成代码同样经接缝调用 api-client 作 HTTP 层（见下一条）；M0 阶段两者都只被自己的单元测试消费，reference-app 的强制首个消费身份属 M1 的 consumer 壳。
->
-> - **上文"契约变更的正确顺序"第 4 步与前端 sdk 一半真实生效**：`@speed/api-sdk` 包（`web/packages/api-sdk`）由 orval（钉定 8.17.0，经 `pnpm dlx` 从 web/ 运行、永不进入 lockfile）从同一 notes 片段生成 TanStack Query hooks 与 TS 类型，文件头带钉定版本的 DO-NOT-EDIT 标记；生成代码不直接触碰网络——mutator 指向包内唯一手写源文件 `src/runtime.ts`（`bindRequestFn(createClient(...))` 由 host 启动时绑定一次、last-wins，`speedRequest` 把 orval 的 axios 形态调用适配到 `@speed/api-client` 的 `RequestFn` 契约），并以 exports map 的 `./runtime` 子路径暴露，整体再生成不会覆盖它。机制注记（对设计正文第 44 行"不含任何手写代码"的落地修正）：orval 的 mutator 发射为无扩展名相对导入，nodenext 构建无法编译（TS2835），由确定性再生成脚本 `web/scripts/orval-nodenext-fixup.mjs` 改写为显式 `.js`——工具缺口用工具补（脚本在 orval 改变发射形态时非零退出），手写面收敛到那一个接缝文件。生成代码无租户概念：无租户头（tenant 只存在于 access-token claims，前端从不把租户放进请求头，即第 45 行所述），query key 为裸 spec 路径，租户 query-key 命名空间属 M1 consumer-shell 纪律。`task api:gen` 前端 leg 与 api-contract.yml 的再生成步骤执行同一对命令（见 [19 开发工作流](19-dev-workflow.md) 的当前状态注记）；钉定与延期细节以包内 README/AGENTS.md 为准。
->
-> - **第二个片段：`go/org`，仅后端一半落地**（org round）：`go/org/api/openapi.yaml`——路径全部 `/api/v1/org/...`，`operationId` 为 `org_<action><Resource>`，schema 名 `Org<Type>`，同目录携带自己的 `oapi-codegen.yaml`（同一钉定版本 v2.8.0）与生成物 `org-server.gen.go`，`Handler` 实现生成的 `api.ServerInterface`（`go/org/handler.go` 底部的 `var _` 编译期断言，与 notes 的手法完全一致）。`.github/workflows/api-contract.yml` 的路径过滤器与生成一致性 diff 均已扩到两个片段各一份——即上面"生成物一致性检查"那条现在是三道 `git diff --exit-code`（notes 后端、org 后端、notes 前端）而非两道，reference-app 的 `go build ./...` 兜底同时覆盖两个模块的 handler 编译，因为 reference-app 同时 import 了两者（根 CLAUDE.md 的"强制首个消费者"规则）。**org 片段没有走 orval**：前端生成目标目前仍是单一 spec 源，也没有 org 的 consumer 壳可供生成的 hooks 做类型检查，这条留给 M1 的 `org-web` / consumer-shell round（`go/org/AGENTS.md` 的延期表）——即两个模块都有后端生成，但只有 notes 有前端生成，这是当前状态的真实形状，不是笔误。
->
-> 仍未实现（继续以本文为设计目标）：多片段合并成 `build/openapi/speed.yaml` 与 redocly 规范 lint——**写这段注记时**片段本身已经有两个（notes、org），但合并 CLI（redocly）与 lint 规则尚未接线，这道工序仍然没有落地，继续等它自己的实现 round（authn 轮的注记在下文宣告这道工序的落地）；oasdiff 破坏性变更闸门——需首个发布基线，计划 M4，作为机制决策记录而非假闸门（见 [19 开发工作流](19-dev-workflow.md) 当前状态注记与 `@speed/api-sdk` 的 AGENTS.md）。
-
-> **实现状态注记（2026-09-03，authn 轮：多片段合并与 lint 随之启用，取代上一注记"仍未实现"段落中对应的声称）——本注记不是设计正文，设计正文保持原样。**
->
-> `go/authn/api/openapi.yaml` 是本文"规范的组织与合并"惯例的第三个片段实例（notes、org 之后），与 notes、org 片段各自独立生成（各自的 `task api:gen` leg 互不依赖，改一个片段不会触发另一个片段重新生成）；`go/authn` 的后端半边（`go/authn/api/authn-server.gen.go`、`handler.go` 的 `var _ api.ServerInterface` 编译期断言）与 notes 走的是同一套机制。前端 orval 半边**推迟**：`@speed/api-sdk` 尚无 authn 的第二个导出，因为还没有前端消费者去用它——见 `go/authn/AGENTS.md` 的 Known limitations。
->
-> 第三个片段出现，触发了本文"仍未实现"原先点名的下一件事：`redocly.yaml`（仓库根目录）定义了合并规则与命名规范 lint 规则（operationId 格式、component schema 名称格式两条按 error 强制；tag 格式一条按 warn，因为 notes 片段尚未补上按操作声明 tags，见 `redocly.yaml` 自己的注释），`task api:merge`（`Taskfile.yml`）与 `.github/workflows/api-contract.yml` 用钉定的 `@redocly/cli@2.51.1` 的 `join` 命令（不是 `bundle`——两个片段是对等的完整文档，不是一个根文档 `$ref` 到另一个）把 **notes 与 authn 两个片段**合并进 `build/openapi/speed.yaml` 并 lint，`git diff --exit-code` 校验该文件与提交版本一致；org 片段先于这套合并机制落地，它被重新生成与编译检查，但不在合并命令的片段列表里——org 若要进入合并文档，是后续 round 的事。路径前缀（`/api/v1/<module>`）这一条命名规范暂时没有对应的 redocly 规则——`redocly.yaml` 自己的结尾注释记录了这是因为 redocly 找不到能把 PathItem 的 map key 暴露给断言的 subject 类型，而不是没去做；这条留给代码评审。
-
-> **实现状态注记（2026-09-03，auth-core 轮：authn 片段的前端 orval 半边随之落地）——本注记不是设计正文，设计正文保持原样；前一条 authn 轮注记中"前端 orval 半边**推迟**……`@speed/api-sdk` 尚无 authn 的第二个导出"的声称由本注记取代，该注记的其余内容（合并机制、org 片段不在合并列表、redocly lint 规则形状）继续有效。**
->
-> - **orval 前端 leg 现在消费合并文档**：`task api:gen` 的前端 leg 依赖 `api:merge`，钉定的 orval（8.17.0，经 `pnpm dlx` 运行、永不进入 lockfile）从合并后的 `build/openapi/speed.yaml` 生成 `@speed/api-sdk` 的 `src/index.ts`——即 api-sdk 覆盖 **notes 与 authn 两个片段**（authn 作为其第二个导出组；上一注记"尚无第二个导出"的推迟理由——没有消费者做类型检查——已随消费者落地而消除）。api-contract.yml 对合并文档的再生成与五道 `git diff --exit-code` 一致性校验覆盖的就是这条 leg。org 片段仍不在合并命令的片段列表里，与前一条注记的声称一致。
-> - **第一个 in-workspace compile consumer 落地**：`@speed/auth-core`（`web/packages/auth-core`）成为 api-sdk 生成面的首个工作区内编译消费者——其单元套件经由包内手写接缝 `bindRequestFn` 绑定 scripted `RequestFn`（与 host 的 `createClient` 绑定的同一个接缝，last-bind-wins），驱动密码登录、登出、刷新等生成操作并做类型检查；`src/usage-example.test.tsx` 把 README 的会话-hooks 流程编译执行，作为包的 compilable example。也就是说，"生成层没有消费者做类型检查"这一推迟理由已经消除；api-sdk 的 README/AGENTS.md 与 `go/authn/AGENTS.md` 的 Known limitations 相应更新为两段式声称：**生成半边已编译消费**，**运行时端到端消费**（reference-app shell 以真实客户端驱动真实登录）仍是 consumer-shell（`auth-ui`）round 的事。
-> - 顺带记录 token 传输的现实形状（12-frontend.md 的机制注记展开同一事实）：authn 的 token 签发响应把 refresh token 放在**响应体**（`AuthnTokenPair.refresh_token`，在 tenant-switch 与 step-up 响应中缺席——这两个操作轮换既有 token 家族），**不存在 refresh cookie**——authn 设置的唯一 HttpOnly cookie 是 social 绑定预授权路径那个（`Path /api/v1/authn/social`）；refresh 端点在请求体里读取调用方持有的 token。`@speed/auth-core` 按此现实设计：内存 store 只持有 access token，refresh token 只存在于会话闭包、永不被写入任何存储。
-
-> **实现状态注记（2026-09-03，auth-ui 轮：authn 前端面的"运行时端到端消费"以形态层面兑现）——本注记不是设计正文，设计正文保持原样；前一条 auth-core 轮注记中"**运行时端到端消费**（reference-app shell 以真实客户端驱动真实登录）仍是 consumer-shell（`auth-ui`）round 的事"的声称由本注记取代——该注记的其余内容（生成半边编译消费的机制、token 传输现实、两段式声称的表述方式）在改写后继续有效。**
->
-> `@speed/auth-ui`（`web/packages/auth-ui`）成为 authn 前端面运行时消费的 in-form 证明：`src/usage-example.test.tsx` 编译并执行 README quick start 的组合——**真实 `@speed/api-client`**（`createClient` + 内存 access-token store + 可注入 fetch；fetch 替身以真正的 `Response` 对象作答，并逐条记录 method/path/authorization）经同一 `bindRequestFn` 接缝绑定，`attachSession` 后以 host-gate fixture 驱动组合的登录家族，旅程钉死六次请求的顺序：密码登录（store 持有签发 token）→ 受保护请求（过期的 access token）以 `authn.token_expired` 被拒 → api-client 静默刷新（刷新请求凭声明不带凭据；轮换后重试携带新 token，store 翻新）→ 服务端会话死亡（该次 /me 拒绝为 `authn.session_revoked`，刷新自身被 `authn.refresh_token_invalid` 拒绝）→ `refresh()` 解析 `false` 收敛匿名 → 再次登录 → `switchLanguage` 到 en-US 断言同一表面的英文文案。也就是说"以真实客户端驱动"的**在形态层面已成立**（截至 fetch 替身 seam）；浏览器 + 真服务器的 leg 是 reference-app shell（生成 hooks、租户 query-key 命名空间、`RouteGuard` 门禁随之落地）与 M4 e2e 管线的事。`@speed/auth-ui` 的公开类型还新增了 api-sdk 的第二个编译消费方向——`RegisterForm` 的 `onRegistered` 回调携带生成的 `AuthnUser`（api-sdk 相应列为该包的 dependency）；`go/authn/AGENTS.md` 的 Known limitations 已改写为同一两段式声称。
-
-> **实现状态注记（2026-09-03，saasctl 轮）：上文"与发布流程的绑定"第 4 条仍未落地**——`saasctl openapi generate`（业务项目用同一套工具链管理自己的 API，生成的客户端与脚手架的 sdk 同 QueryClient）不在 saasctl v0.1 的四命令集（`new`、`upgrade`、`db migrate`、`config print`）里；业务项目自持 spec 片段的生成管理仍无官方入口，属后续轮次的 app-owned API-fragment flow。延期的权威清单与理由见 `go/saasctl/AGENTS.md` 的 Known limitations；CLI 分工（后端骨架生成归 saasctl，前端归 create-saas-app）见 [02 仓库结构与发布](02-repo-and-release.md) 的 CLI 分工注记。
-
-> **实现状态注记（2026-09-04，product-shell 轮：authn 切租户端点与其所在会话旅程的 in-form 消费随 `@speed/tenancy-ui` 与 `@speed/product-shell` 落地）——本注记不是设计正文，设计正文保持原样；前一条 auth-ui 轮注记中"浏览器 + 真服务器的 leg 是 reference-app shell（生成 hooks、租户 query-key 命名空间、`RouteGuard` 门禁随之落地）与 M4 e2e 管线的事"的声称由本注记部分取代——该注记的其余内容（in-form 兑现机制、两段式声称的表述方式）继续有效。**
->
-> - **`@speed/tenancy-ui` 是 `authn_switchTenant` 端点的 in-form 运行时消费者**：`src/usage-example.test.tsx` 编译并执行 README quick start——真实 `@speed/api-client`（fetch 替身以真正的 `Response` 作答）经同一 `bindRequestFn` 接缝绑定，`attachSession` 后先密码登录，再驱动三次切换尝试并钉死请求顺序与形状：成功切换的请求携带 `authorization`（新签发的 access token）与 `{tenant_id}` body，store 随签发翻新；被拒切换（非成员租户）的答案经该包 9-code 白名单渲染码文本、会话状态不变、控件可重试。切换响应只含 access token 不含 refresh token（token 传输现实注记的形状），旅程中无刷新腿出现。
-> - **`@speed/product-shell` 把该旅程组合到尽头**：`ProductShell` 三分支视图机（认证 → `AppShell` 框架、匿名且到达过 app → sessionEnded 槽或默认 `SessionEndedScreen`、匿名新访客 → signIn 槽或空）只读 auth-core 快照。其 `src/usage-example.test.tsx` 执行 README 组合，旅程为登录 → 框架 → userMenu（`TenantSwitcher` 与 `SignOutButton` 并列）切租户 → 登出 → 会话结束屏 → 再登录——authn 前端面的登录/切租户/登出/刷新后收敛（会话死亡）各端点在同一 in-form 标准下全部走过。
-> - **auth-ui 轮注记 deferral 的"`RouteGuard` 门禁随之落地"现以 host 组合形态在套件内证明**：product-shell 的 `src/gated-journey.test.tsx` fixture 在 `children` 里以 view-id mini-router 组合 `RouteGuard`（status 由 `usePermission` 在 host attach 的列表上派生，切租户 commit 后按存活规则 re-attach）；shell 包代码仍不消费 `RouteGuard`/`usePermission`/`setPermissionSet`，门禁与权限真实获取（/me 派生列表或 rbac 端点）依旧没有服务端形态——fixture 以 role-load 替身扮演。浏览器 + 真服务器 leg 的声称不变（reference-app shell 与 M4 e2e 管线）。
-
-> **实现状态注记（2026-09-04，account-ui 轮：authn 前端面的生成 hooks 消费随第二个消费者落地——`@speed/account-ui` 是第一个把生成 hooks 真正渲染进组件树的包）——本注记不是设计正文，设计正文保持原样。**
->
-> auth-ui 轮注记证明的运行时端到端消费走的是 **session 契约**（登录操作经 auth-core 的生成调用）；`@speed/account-ui`（`web/packages/account-ui`）证明的是同一生成面的另一条腿——**组件树里的生成 hooks 与 mutation 直呼**：会话/登录历史/绑定身份三个列表分别经 `useAuthnListSessions`/`useAuthnListLoginHistory`/`useAuthnListIdentities` 读取，写经生成的 mutation（下线、解绑、enroll/confirm/regenerate）与 `authnSocialCallback` 直呼，失效一律走导出的 query-key 构造器（`getAuthnListIdentitiesQueryKey` 等），不经手写 query key；hooks 消费意味着宿主树需要 `QueryClientProvider`（shared-QueryClient 契约的第二个消费方，也是第一个渲染进组件树的消费方）。随之 `@speed/api-sdk` 在 account-ui 从 auth-ui 的 type-only dependency 变为**运行时 dependency**（hooks、query-key 构造器、`authnSocialCallback` 都在这里执行）；其 README quick start 由 `src/usage-example.test.tsx` 编译执行——真实 `@speed/api-client` 经同一 `bindRequestFn` 接缝绑定、fetch 替身答真实 `Response` 并逐条记录 method/path/query/authorization，旅程钉死 18 次请求的顺序（社交交换登入 → 列表读取 → 下线 → step-up 403 → 验证经 `session.verifyStepUp` 轮换 access token → 组件重试携带新 token → 绑定回调交换 → remount 后列表收敛，逐请求断言 authorization 头：登入前无凭据、轮换前 `access-1`、轮换后 `access-2`）。两段式声称随之改写为：**生成半边已编译消费（auth-core）+ 已运行时组件树消费（account-ui）**；浏览器 + 真服务器的 leg 仍是 reference-app shell 与 M4 e2e 管线的事。
-
-> **实现状态注记（2026-09-04，consumer-shell round：生成面的运行时端到端消费随 reference-app 的 consumer shell 落地——合并文档的两个片段恰好是壳的两个表面）——本注记不是设计正文，设计正文保持原样；前一条 account-ui 轮注记中"浏览器 + 真服务器的 leg 仍是 reference-app shell 与 M4 e2e 管线的事"的声称由本注记部分取代——reference-app shell 的一半已落地——真实宿主组合（壳的 bootstrap 与门禁，其 vitest 套件以脚本化 demo-server 替身运行）与真服务器答案（同轮 Go 侧套件钉住的真实注册/登录/授权与策略：`cmd/server/demo_users_test.go`、`demo_subject_test.go`）——浏览器页面腿已由浏览器宿主轮落地（`index.html` 把 bootstrap 挂进 vite 生产构建、reference-app 服务器经 `APP_WEB_DIST` 伺服、Dockerfile 打进镜像），随 M4 e2e 落地的是驱动该页的浏览器自动化（html runner 挂载）；该注记的其余内容（account-ui 的 in-form 机制、两段式声称的表述方式）继续有效。**
->
-> - **第一个真实宿主组合下的运行时端到端消费者**：壳的 bootstrap 以同一 `bindRequestFn` 接缝绑定一个真实 `@speed/api-client`（fetch 由宿主环境供给——`createClient` 在构造时捕获 `globalThis.fetch`，包内注入 seam 在此是依赖注入点而非测试替身点），绑定恰好一次；从此壳内全部 API 流量都是生成代码流量，app 目录与包一样受 `speed/no-direct-http` 纪律约束。合并文档的两个片段恰好覆盖该壳的两个表面：notes 半边经生成的 react-query hooks 行使（`useNotesListNotes`/`useNotesCreateNote`，失效经导出的 query-key 构造器，键以 `['tenant', tenantId, …]` 命名空间化——命名空间是壳纪律不是生成物，机制见 12-frontend.md 同轮注记）；authn 半边经 auth-core 会话与 auth-ui/account-ui/tenancy-ui 组件面行使（登录、切租户与账号面全部经同一 bound client 而行——其 `refreshAccessToken` 接会话的静默刷新，但 demo server 不答 401，该腿在壳层从未触发，机制的在形态行使属包级 usage-example 证据；step-up 面则相反，壳层真驱动了它——owner 日的账号腿经组合后的 account 面把 discover-by-acting 的 403 门走通：第二次 MFA setup 经 403 `authn.step_up_required` 发现 active factor（spec 无 factor-status 端点，setup 即探测），错误 step-up 码以 400 `authn.mfa_invalid_code` 的 field text 作答，正确码把 bearer 轮换升高（step-up 后为 access-4），重试的 setup 确认并替换 factor、亮出新一轮恢复码（只亮一次），29 次请求 trace 钉住两次 `POST /api/v1/authn/mfa/step-up`）。auth-core 轮注记的两段式声称——生成半边已编译消费、运行时端到端消费仍属 consumer-shell——随之闭合为一段：生成半边现被真实壳消费（既有 in-workspace 编译消费保留为包级证据）。
-> - **错误码契约在应用边界的对齐**：本文"错误以 code 作为契约"的行使从 spec 结构延伸到"服务器实际可答的码集合"。壳的 `src/codes-alignment.test.ts` 把十个消费面的 reachable-error 白名单——auth-ui/account-ui/tenancy-ui 各自包内 `internal/error-text.js` 的清单（deep-import、绝不复制）与其余七个来自应用自有表面模块的清单（notes-view、cases-errors、smile-sim-errors、share-errors 两份、team-view、credits-view）——双向对齐到 78 个逐条带源码引用（`go/authn/errors.go`、`go/rbac/errors.go` 与各业务模块 sentinel；所引 sentinel 标识符由套件以文件级 exactly-once 断言钉住，行号只作审计注记不再断言）的服务器码（枚举自身的 78 尺寸由套件的守卫钉住）：方向一，服务器答得出的码至少一个表面有白名单文案（漏了即渲染裸 key，失败指名该码与其引用）；方向二，白名单里没有服务器在此答不出的码（死拷贝，失败指名表面）；外加两条精确规则——`client.*` 各面只白名单保留三件套（`client.network`/`client.timeout`/`client.protocol`，`client.http.<status>` 系列按 api-client 契约保持动态、落各面 unknown 兜底）与 tenancy-ui 相对 auth-ui 家族恰好多出的两个 token 验证码（`authn.authentication_required`/`authn.token_invalid`，各有 GO_PINNED 引用或登记豁免，套件对该集合有专门断言）。GO_PINNED 枚举为手写且逐条引用（机器提取的服务端码普查 DEFERRED，理由记录在套件头注释）——两个方向的断言使手写清单保持诚实：服务器新增码而白名单未覆盖、或白名单出现无引用条目，都失败于此。
-> - **org 片段仍未进入合并文档**：authn 轮注记的声称不变——org 只有后端半边（重新生成 + 编译检查，不在合并命令的片段列表里）；org 前端面随 org-web round 落地时作为第三个片段进入合并文档与 orval 再生（`go/org/AGENTS.md` 的延期表同指向）。
-> - **壳不触碰生成物边界**：壳不新增 OpenAPI 片段、不改 `@speed/api-sdk` 的 DO-NOT-EDIT 源、不在 `bindRequestFn`/`runtime.ts` 接缝之外出现任何手写 HTTP；api-contract 流水线的生成物一致性门禁原样适用于壳——壳只 import 生成面，壳自身的 vitest 套件以脚本化 fetch 形态行使（`src/test-utils/demo-server.ts` 按真实服务器的方式作答，镜像事实逐条引用 Go 侧钉住的行号），真实服务器形态由同轮 Go 侧套件行使（`cmd/server/demo_users_test.go`、`demo_subject_test.go` 驱动真实组成的服务器，见该目录 README 的证据边界一节）。
-> **实现状态注记（2026-09-04，notification 轮：通知模块的 HTTP 面成为"规范的组织与合并"的第五个片段实例，并首次把一个轮次的新片段接入合并命令）——本注记不是设计正文，设计正文保持原样。**
->
-> `go/notification/api/openapi.yaml` 是 notes、org、authn、storage 之后的第五个片段：路径全部 `/api/v1/notifications`，`operationId` 为 `notification_<action><Resource>`（收件箱消息列表、未读数、标记已读两操作、类型目录、偏好读与单键更新、外部联系人花名册的 list/create/verify/resend——十一个操作），同目录携带生成配置（同一钉定 oapi-codegen v2.8.0）与生成物 `notification-server.gen.go`，`Handler` 在 `go/notification/handler.go` 底部以 `var _ api.ServerInterface` 编译期断言实现之（与 notes/org/authn/storage 同一手法，契约方的手写半边照旧只此一家）。`.github/workflows/api-contract.yml` 的路径过滤器与后端再生成步骤本轮核实已经扩到六个片段各一份——sharing 轮又加了 `go/sharing/api/openapi.yaml` 一份，本注记同步更正——一致性 diff 在后继轮次里随再生成面一起扩展，现为十五道 porcelain 闸门——每次再生成后跑 `git status --porcelain --untracked-files=all`，绝不 `git diff --exit-code`（再生成新建文件时 diff 闸门会静默通过，工作流头部注记写明该陷阱）：notes、org、storage、notification、sharing、pki、admin、integration、ai-gateway、billing、authn、cases、smilesim 十三个后端片段各一 + 合并文档 + 前端 sdk，片段清单以 `tools/api_fragments.json` 为单一来源、由 `tools/check_api_fragments.py` 做漂移闸门；reference-app 的 `go build ./...` 兜底随其 import 扩展为十三个 handler 的编译强制——reference-app 自 authn 轮起就 import `go/authn`（server.go 组装它的中间件链与解析器），authn 的 handler/生成对同样在该兜底里编译，本注记早先版本「authn 因 reference-app 不 import 它而继续走自己的 build leg」的前提不成立。authn 另设自己的再生成 + `go build ./...` leg 的真实理由见 api-contract.yml 头部注记——go/authn 是每个 fast-check 都会构建的真实模块，其编译强制不必等 full-ci 才得到回答，与 reference-app 是否 import 它无关。
->
-> 合并成员随之变化：`task api:merge` 的合并列表从 notes + authn 两片段扩为 **notes + authn + notification 三片段**（notification 是收件人自助面，与 authn 进合并的理由同类），后续轮次再把 cases、smilesim（P3a 轮）与 billing（credit-view 轮：其两个操作获得工作区首个 web 消费者时随表面加入）接进合并，合并列表现为**六个片段——notes、cases、smilesim、authn、notification、billing**（`tools/api_fragments.json` 的 merge_rank 是单一来源），合并产物 `build/openapi/speed.yaml` 与 orval 前端 leg 的覆盖范围随之扩到六个片段；org 先于合并机制落地、storage 只交付后端腿，两者仍不在合并列表，理由见 `Taskfile.yml` api:merge 头部注释与各自 AGENTS.md 的延期清单，进入合并文档是各自后续轮的事。通知模块的契约侧例外不在操作而在媒体类型：`GET /api/v1/notifications/stream`（SSE 长连接）不是 OpenAPI 3.0 能表达的，由 `NewHandler` 手挂载、片段头部注释记录省略——[07 平台服务](07-platform-services.md) 通知章节"站内信 SSE 实时推送"设计行预言的"单独文档化事件格式"即此形态。
+> **仍未落地**：oasdiff 破坏性变更闸门（"与发布流程的绑定"第 2 条）——它需要首个发布基线作为比对对象，基线出现之前不存在可比对的上一版本，作为机制决策记录而非假闸门；`saasctl openapi generate`（同节第 4 条，业务项目用同一套工具链管理自己的 API）——不在 saasctl 的四命令集里，业务项目自持 spec 片段的生成管理仍无官方入口，延期的权威清单与理由见 `go/saasctl/AGENTS.md` 的 Known limitations；org 片段进入合并文档（需要它的前端消费者先行）。

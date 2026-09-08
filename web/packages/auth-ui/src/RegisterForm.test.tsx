@@ -102,20 +102,18 @@ describe('RegisterForm', () => {
   })
 
   it('announce the success panel through a live region that stood empty from the form phase (mount-with-text regression)', async () => {
-    // PRE-FIX: the success panel's role="status" region rendered only
-    // while the panel existed, so the region mounted in the same commit
-    // as its text. A live region announces content changes that follow
-    // its own existence, never text that mounts together with it, so a
-    // successful registration was silent. POST-FIX: the region stands
-    // mounted (empty, visually silent) for the whole no-callback life of
-    // the form and the created commit fills the text into a region the
+    // The success panel's role="status" region stands mounted (empty,
+    // visually silent) for the whole no-callback life of the form,
+    // because a live region announces content changes that follow its
+    // own existence, never text that mounts together with it -- a
+    // region born in the same commit as the success panel would be
+    // silent. The created commit fills the text into a region the
     // screen reader already knows. The same DOM node must survive the
     // transition, which is what makes the later text change an
     // announcement rather than another mount.
     const harness = makeHarness({ [REGISTER]: () => ALICE })
     renderWithProviders(<RegisterForm session={harness.session} />)
-    // The standing region exists, empty, before anything was submitted:
-    // pre-fix no status region exists at all on the form.
+    // The standing region exists, empty, before anything was submitted.
     const status = screen.getByRole('status')
     expect(status).toHaveTextContent('')
     await fillAndSubmit('alice@example.com', 's3cret-pass', ZH_LABELS)

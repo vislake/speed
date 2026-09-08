@@ -1,7 +1,6 @@
 /**
  * @speed/api-client -- the hand-written HTTP runtime under the speed
- * frontend (the counterpart of the api-contract discipline in
- * docs/internal/21-api-contract.md).
+ * frontend.
  *
  * createClient wires the seams (injectable fetch, memory-only access
  * token store, refresh hook, retry policy, timeout, reporter) into one

@@ -1,8 +1,8 @@
 /**
  * An in-memory Reporter for client tests: records every error/warn call
  * instead of writing to console, so tests can assert the constant
- * message and snake_case attributes the client reports (currently only
- * the access-token-refresh-failed warning).
+ * message and snake_case attributes the client reports (the
+ * access-token-refresh-failed warning).
  */
 
 import type { Reporter } from '../src/index'

@@ -220,11 +220,11 @@ func TestCAService_IssueCertificate_RequiresTenant(t *testing.T) {
 }
 
 // TestCAService_CreateIntermediateCA_EmbedsParentsCRLDistributionPoint
-// proves round 3's CRLDP-extension wiring: when the parent authority
-// declares a CRLDistributionPoint, the CHILD certificate (the intermediate
-// this call issues) carries a CRLDistributionPoints extension naming it --
-// "fetch the parent's CRL to check whether this intermediate has been
-// revoked" -- per CreateIntermediateCA's own doc comment.
+// proves the CRLDP-extension wiring: when the parent authority declares a
+// CRLDistributionPoint, the CHILD certificate (the intermediate this call
+// issues) carries a CRLDistributionPoints extension naming it -- "fetch
+// the parent's CRL to check whether this intermediate has been revoked" --
+// per CreateIntermediateCA's own doc comment.
 func TestCAService_CreateIntermediateCA_EmbedsParentsCRLDistributionPoint(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := context.Background()
@@ -288,15 +288,15 @@ func TestCAService_CreateIntermediateCA_NoParentCRLDistributionPoint_OmitsExtens
 }
 
 // TestCAService_CreateIntermediateCA_RevokedParent_Refused and
-// TestCAService_IssueCertificate_RevokedAuthority_Refused are the P2-1
-// regression pair: issuance under an AuthorityStatusRevoked authority must
-// be refused with ErrAuthorityRevoked, mirroring the chain-verification
-// path's existing stance (revocation.go's VerifyCertificate refuses a
-// revoked authority anywhere in a chain). Before the fix both issuance
-// paths checked only that the authority existed, so a revoked issuer could
-// keep minting certificates every downstream verifier rejects -- an
-// asymmetric hole: the module refused to TRUST a revoked authority's old
-// output but happily produced new output under it.
+// TestCAService_IssueCertificate_RevokedAuthority_Refused pin the
+// revocation refusal on the issuance paths: issuance under an
+// AuthorityStatusRevoked authority must be refused with
+// ErrAuthorityRevoked, mirroring the chain-verification path's stance
+// (revocation.go's VerifyCertificate refuses a revoked authority anywhere
+// in a chain). The refusal covers the whole chain, not just the direct
+// authority: an asymmetric hole where the module refused to TRUST a
+// revoked authority's old output but happily produced new output under it
+// must not exist, whether the revoked row is the issuer or an ancestor.
 //
 // The revoked state is seeded directly through AuthorityRepository.Update,
 // the same precedent
@@ -305,10 +305,10 @@ func TestCAService_CreateIntermediateCA_NoParentCRLDistributionPoint_OmitsExtens
 // transition, so tests must.
 //
 // The two tests below these -- the *_RevokedRootAncestor_Refused pair --
-// pin the follow-up review finding that the original fix stopped at the
-// DIRECT authority: issuance under an active intermediate whose ROOT
-// ancestor is revoked must also be refused, the issuance-side mirror of
-// VerifyCertificate's whole-chain walk. See their own comments.
+// pin the whole-chain half explicitly: issuance under an active
+// intermediate whose ROOT ancestor is revoked must also be refused, the
+// issuance-side mirror of VerifyCertificate's whole-chain walk. See their
+// own comments.
 func TestCAService_CreateIntermediateCA_RevokedParent_Refused(t *testing.T) {
 	ca := newTestCAService(t)
 	ctx := context.Background()
@@ -383,13 +383,12 @@ func issueRootAndIntermediate(t *testing.T, ca *CAService, ctx context.Context) 
 
 // TestCAService_CreateIntermediateCA_RevokedRootAncestor_Refused and
 // TestCAService_IssueCertificate_RevokedRootAncestor_Refused are the chain-
-// walk regression pair for the same P2-1 guarantee: the direct authority is
-// AuthorityStatusActive but its ROOT ancestor is AuthorityStatusRevoked, so
-// a single-hop status check -- the shape the original fix shipped -- lets
-// issuance succeed under a chain VerifyCertificate refuses (revocation.go
-// refuses a revoked authority anywhere in a chain, root included). Before
-// this follow-up's fix both calls SUCCEEDED -- the tests' fail-before
-// output was "error = <nil>, want ErrAuthorityRevoked"; after it, issuance
+// walk regression pair for the whole-chain guarantee: the direct authority
+// is AuthorityStatusActive but its ROOT ancestor is
+// AuthorityStatusRevoked, so a single-hop status check would let issuance
+// succeed under a chain VerifyCertificate refuses (revocation.go refuses a
+// revoked authority anywhere in a chain, root included). Both calls must
+// be refused with ErrAuthorityRevoked; issuance
 // mirrors the verification-side walk and refuses, the returned error naming
 // the revoked root in its authority_id param rather than the active direct
 // authority.

@@ -21,15 +21,15 @@ type Handler interface {
 	// pkgcore.WithTenant, rebuilt by the worker from the Job's own stored
 	// tenant before this call — never inherited from whatever context the
 	// original Queue.Enqueue call happened to run in, which no longer
-	// exists by the time a worker picks the Job up (see AGENTS.md's "The
-	// tenant context trap"). A Handler implementation may call
-	// pkgcore.WithTenant itself too — harmless, it would set the same
-	// value again — but does not need to.
+	// exists by the time a worker picks the Job up (the tenant-context
+	// trap). A Handler implementation may call pkgcore.WithTenant itself
+	// too — harmless, it would set the same value again — but does not need
+	// to.
 	//
 	// Returning a nil error marks job StatusSucceeded with result
 	// recorded. Returning a non-nil error marks it StatusRetrying (if
-	// attempts remain) or StatusDeadLetter (if not) — see AGENTS.md's
-	// retry/backoff section. Handle should respect ctx's cancellation
+	// attempts remain) or StatusDeadLetter (if not). Handle should respect
+	// ctx's cancellation
 	// (which fires when the Job's configured timeout elapses) and return
 	// promptly once it does.
 	Handle(ctx context.Context, job *Job, progress ProgressFn) (Result, error)
@@ -63,9 +63,8 @@ var _ Handler = handlerFunc{}
 // business-specific compensation once a Job exhausts its retries and moves
 // to StatusDeadLetter — refunding a pay-per-use credit reservation, for
 // example. This is the queue's ENTIRE failure-compensation surface, by
-// design: root CLAUDE.md's "Asynchronous work" discipline states "the
-// queue offers an OnFailure hook; refunding credits and similar
-// compensation belongs to the business module." jobs itself never inspects
+// design: compensation belongs to the business module, never the queue
+// layer, which offers a hook and nothing more. jobs itself never inspects
 // a Job's business meaning and never runs compensation logic of its own —
 // a Handler that needs compensation implements this interface itself,
 // alongside Handler, and the queue calls it as a hook, nothing more.
@@ -112,9 +111,7 @@ var _ Handler = handlerFunc{}
 //     dispatch loop strictly after the registered ErrorHandler — this
 //     package's own hook point — already returned, with no separate
 //     post-archive callback asynq exposes to reorder around (see
-//     go/jobs/queue/asynq/AGENTS.md's "FailureHook has no direct asynq
-//     equivalent to hook into" section, and its worker.go's handleError doc
-//     comment, for the mechanism). A FailureHook that reads its own Job back
+//     queue/asynq/worker.go's handleError doc comment for the mechanism). A FailureHook that reads its own Job back
 //     through Queue.Get from inside OnFailure under this implementation
 //     observes StatusRunning, not StatusDeadLetter — a FailureHook must
 //     therefore never depend on its own job's dead-letter persistence

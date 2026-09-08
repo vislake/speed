@@ -472,15 +472,15 @@ func TestPrincipalFromContext_IgnoresAnEmptyPrincipal(t *testing.T) {
 }
 
 // TestMiddleware_ServiceVerifier_ImmediateMode_RefusesTheRevokedSessionsAccessToken
-// is the P1 regression for the revocation wiring hole this round closes: the
-// service wires its own *SessionManager as the revocation source of the
-// Verifier it hands out, and Middleware consults that source by default, so
-// the composition the shipped apps use -- Middleware(service.Verifier())
-// with not a single MiddlewareOption -- refuses the next request carrying
-// the same unexpired access token after a logout. Before the fix the check
-// never ran (cfg.revocation stayed nil unless the host remembered
-// WithRevocationChecker), so the revoked session's access token kept working
-// for its whole natural lifetime.
+// pins the default-wired revocation check: the service wires its own
+// *SessionManager as the revocation source of the Verifier it hands out,
+// and Middleware consults that source by default, so the composition the
+// shipped apps use -- Middleware(service.Verifier()) with not a single
+// MiddlewareOption -- refuses the next request carrying the same unexpired
+// access token after a logout. With no default source the check would never
+// run (cfg.revocation would stay nil unless the host remembered
+// WithRevocationChecker) and the revoked session's access token would keep
+// working for its whole natural lifetime.
 func TestMiddleware_ServiceVerifier_ImmediateMode_RefusesTheRevokedSessionsAccessToken(t *testing.T) {
 	t.Parallel()
 

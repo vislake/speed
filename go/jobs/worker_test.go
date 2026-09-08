@@ -54,8 +54,8 @@ func TestJobContext_ProducesTenantScopedContext(t *testing.T) {
 // context at all -- it is rooted in a fresh context.Background() every
 // call -- so it can never inherit a stale or unrelated tenant from
 // whatever context happens to be available at the call site. This is the
-// "not inherited from the original Enqueue call's context" half of
-// AGENTS.md's tenant context trap: that original context is long gone by
+// "not inherited from the original Enqueue call's context" half of the
+// tenant-context trap: that original context is long gone by
 // the time a worker goroutine picks the Job back up out of SQLite, so
 // jobContext does not even accept one to (mis)use.
 func TestJobContext_IgnoresAmbientTenant(t *testing.T) {
@@ -76,12 +76,12 @@ func TestJobContext_IgnoresAmbientTenant(t *testing.T) {
 // pkgcore.ErrNoTenant instead of silently running unscoped or against the
 // wrong tenant.
 //
-// If a future change to execute/runWorker ever stops routing through
-// jobContext, THIS is the test that must start failing -- with this exact,
-// well-labeled name -- rather than some unrelated Handler mysteriously
-// erroring in production months later. See standalone_queue_test.go's
-// TestStandaloneQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant for the
-// same guarantee proved end to end through a real worker and a real
+// If a change to execute/runWorker ever stops routing through jobContext,
+// THIS is the test that must fail -- with this exact, well-labeled name --
+// rather than some unrelated Handler mysteriously erroring in production.
+// See standalone_queue_test.go's
+// TestStandaloneQueue_RebuildsTenantContext_HandlerUsesOnlyJobTenant for
+// the same guarantee proved end to end through a real worker and a real
 // dbkit.Repository[T] call.
 func TestJobContext_ContrastWithoutRebuild_FailsClosedWithErrNoTenant(t *testing.T) {
 	brokenCtx := context.Background() // what a worker gets if it skips jobContext entirely
@@ -150,8 +150,7 @@ func TestTenantSlotReservation(t *testing.T) {
 // tryReserveTenantSlot/releaseTenantSlot from many goroutines at once:
 // runDispatcher and runWorker call these concurrently by construction (the
 // dispatcher increments, N worker goroutines decrement), so this is the
-// package's concurrency hot spot the backend coding standard §13 requires
-// a -race test for.
+// package's concurrency hot spot and runs under -race.
 func TestTenantSlotReservation_ConcurrentAccessIsRaceFree(t *testing.T) {
 	q := NewStandaloneQueue(nil, WithTenantConcurrencyLimit(3))
 	tenant := pkgcore.TenantID("tenant-a")
@@ -176,18 +175,16 @@ func TestTenantSlotReservation_ConcurrentAccessIsRaceFree(t *testing.T) {
 	}
 }
 
-// TestExecute_EmptyTenantID_FailsClosedWithoutCallingHandle is the
-// regression test for the review finding that execute called
-// handler.Handle for a jobRecord whose TenantID column was empty, instead
-// of refusing the attempt the way asynq.Queue's processTaskUncancelled
-// already does for the identical case (errTaskMissingTenant,
-// queue/asynq/worker.go). Task.validate blocks Enqueue itself from ever creating
-// such a row, so the corrupted row here is seeded directly through q.db --
-// simulating a row written by anything other than Enqueue: a migration
-// bug, a manual SQL fixup, or a future writer that bypasses this package's
-// own API. See errStandaloneJobMissingTenant's own doc comment (worker.go) for
-// why this matters even though it is not reachable through the public API
-// today.
+// TestExecute_EmptyTenantID_FailsClosedWithoutCallingHandle pins that
+// execute refuses an attempt for a jobRecord whose TenantID column is
+// empty, mirroring asynq.Queue's processTaskUncancelled refusal for the
+// identical case (errTaskMissingTenant, queue/asynq/worker.go).
+// Task.validate blocks Enqueue itself from ever creating such a row, so
+// the corrupted row here is seeded directly through q.db -- simulating a
+// row written by anything other than Enqueue: a migration bug, a manual
+// SQL fixup, or a writer that bypasses this package's own API. See
+// errStandaloneJobMissingTenant's own doc comment (worker.go) for why this
+// matters even though the public API cannot produce the row.
 func TestExecute_EmptyTenantID_FailsClosedWithoutCallingHandle(t *testing.T) {
 	q := NewStandaloneQueue(newTestDB(t))
 	handleInvoked := false
@@ -253,18 +250,18 @@ func (panickingHandler) Handle(context.Context, *Job, ProgressFn) (Result, error
 
 var _ Handler = panickingHandler{}
 
-// TestExecute_HandlerPanic_RecoversInsteadOfCrashingProcess is the
-// regression test for the review finding that execute had no recover() of
-// its own around handler.Handle, unlike asynq's own processor.perform,
-// which protects the equivalent call for asynq.Queue for free. Before the
-// fix, this test crashes the ENTIRE test binary rather than merely failing
-// one assertion -- exactly as an unrecovered panic crashes the entire
-// worker-pool process in production, taking every OTHER tenant's in-flight
-// and queued Jobs down with it (root CLAUDE.md: speed's modules "compile
-// into one binary"). The outer defer/recover below exists only to turn
-// that crash into a well-labeled t.Fatal instead of a bare process exit,
-// should this ever regress -- it does not run today, since invokeHandle
-// (worker.go) already recovers the panic before it reaches this test.
+// TestExecute_HandlerPanic_RecoversInsteadOfCrashingProcess pins that
+// execute's call path recovers a Handler panic the way asynq's own
+// processor.perform protects the equivalent call for asynq.Queue. Without
+// invokeHandle's recover, this test would crash the ENTIRE test binary
+// rather than merely failing one assertion -- exactly as an unrecovered
+// panic crashes the entire worker-pool process in production, taking every
+// OTHER tenant's in-flight and queued Jobs down with it: the modules
+// compile into one binary, so no process boundary contains the crash. The
+// outer defer/recover below exists only to turn such a crash into a
+// well-labeled t.Fatal instead of a bare process exit, should this ever
+// regress; it does not run today, since invokeHandle (worker.go) already
+// recovers the panic before it reaches this test.
 func TestExecute_HandlerPanic_RecoversInsteadOfCrashingProcess(t *testing.T) {
 	q := NewStandaloneQueue(newTestDB(t))
 	if err := q.RegisterHandler(panickingHandler{}); err != nil {
@@ -387,17 +384,17 @@ var (
 )
 
 // TestExecute_FinalFailureAfterCancel_DoesNotRunOnFailure is the regression
-// test for the defect where execute ran a FailureHook's OnFailure even when
-// a concurrent Cancel had already moved the Job to StatusCancelled: the
+// test pins that execute does NOT run a FailureHook's OnFailure when a
+// concurrent Cancel has already moved the Job to StatusCancelled: the
 // dead-letter write is a status-guarded no-op in that case (RowsAffected ==
-// 0, nil error), yet the worker still invoked business compensation for a
-// Job the caller deliberately cancelled, violating FailureHook's own
+// 0, nil error), and business compensation for a Job the caller
+// deliberately cancelled would violate FailureHook's own
 // contract (handler.go) that OnFailure runs only after StatusDeadLetter is
 // actually persisted. Deterministic by construction -- markCancelled lands
 // before execute's failure path runs, so completeDeadLetter must report no
 // transition, no OnFailure may run, and the persisted terminal state must
-// stay StatusCancelled. Fails on the pre-fix code, where OnFailure runs
-// anyway. See store_test.go's
+// stay StatusCancelled; OnFailure running anyway fails the test. See
+// store_test.go's
 // TestCompleteDeadLetter_NoTransitionWhenAlreadyCancelled for the
 // store-level half of the same race, and standalone_queue_test.go's
 // TestStandaloneQueue_CancelBeatsFinalFailure_NoOnFailure_DeadLetterNeverPersisted
@@ -442,22 +439,20 @@ func TestExecute_FinalFailureAfterCancel_DoesNotRunOnFailure(t *testing.T) {
 	}
 }
 
-// TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric is the
-// regression test for the defect where execute's dead-letter branch logged
-// "job exhausted retries, moving to dead letter" and recorded the
-// jobs.job.dead_letter counter -- plus the StatusDeadLetter rows of the
-// attempts/duration instruments -- BEFORE calling completeDeadLetter, so
-// even after 91a929a made OnFailure correctly skip a Job a concurrent
-// Cancel had already settled (the !moved branch), the log line and the
-// dead-letter metrics still fired for that Job: ops logs and dashboards
-// showed a cancelled Job as dead-lettered although no dead-letter was ever
-// persisted. The records must now fire strictly AFTER completeDeadLetter's
-// transition report and only for a genuine running -> dead-letter move,
-// leaving a cancelled Job exactly one truthful record: the "job cancelled
-// before its outcome could be recorded, outcome discarded" Info line
-// carrying the discarded_outcome=dead_letter attribute. Fails on the
-// pre-fix code, where the dead-letter log and both metric instruments fire
-// before the no-op write is discovered.
+// TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric pins
+// the ordering rule that execute's dead-letter branch records its log line
+// and metrics -- the "job exhausted retries, moving to dead letter" log,
+// the jobs.job.dead_letter counter, and the StatusDeadLetter rows of the
+// attempts/duration instruments -- only strictly AFTER completeDeadLetter's
+// transition report, and only for a genuine running -> dead-letter move. A
+// record emitted ahead of the write would survive a no-op write (a
+// concurrent Cancel settling the Job) and show a cancelled Job as
+// dead-lettered although no dead-letter was ever persisted. A cancelled
+// Job gets exactly one truthful record: the "job cancelled before its
+// outcome could be recorded, outcome discarded" Info line carrying the
+// discarded_outcome=dead_letter attribute; the log line or either metric
+// instrument firing before the no-op write is discovered fails this
+// test.
 func TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric(t *testing.T) {
 	reader := setupTestMeterProvider(t)
 	q := NewStandaloneQueue(newTestDB(t))
@@ -554,17 +549,14 @@ func TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric(t *testi
 }
 
 // TestExecute_NoOpOutcomeWrite_RowStolenByAnotherWriter_LogsHonestlyNotCancelled
-// is the regression for the unsound cancel inference in execute's three
-// outcome branches: when completeSucceeded/completeRetrying/completeDeadLetter
-// no-op'd (moved == false), the branches used to log "job cancelled before
-// its ..." for EVERY no-op, on the assumption that only a concurrent
-// Cancel's markCancelled could have moved the row out of StatusRunning. A
-// stolen row no-ops the identical write: after a writer-gate lapse, a second
-// queue's resetInterruptedRecords flips the first queue's mid-Handle row back
-// to StatusPending and re-claims it, so the first queue's outcome write finds
-// no running row -- and the pre-fix log then reported an ordinary
-// cancellation for a Job that genuinely executed and whose row was stolen,
-// erasing the very first evidence of a double execution. execute must now
+// pins the classification execute's three outcome branches give a no-op'd
+// outcome write (moved == false): only a row that is actually
+// StatusCancelled may be logged as "job cancelled before its ..." -- a
+// stolen row no-ops the identical write, and a blanket cancellation
+// explanation would erase the very first evidence of a double execution.
+// After a writer-gate lapse, a second queue's resetInterruptedRecords flips
+// the first queue's mid-Handle row back to StatusPending and re-claims it,
+// so the first queue's outcome write finds no running row: execute must
 // probe the row and log the cancellation explanation only when the row is
 // actually StatusCancelled (the cancel marker verified), and otherwise say
 // honestly that the row is no longer running, naming the state it found.
@@ -573,12 +565,12 @@ func TestExecute_FinalFailureAfterCancel_RecordsNoDeadLetterLogOrMetric(t *testi
 // it back to pending -- the exact store-level steal -- and then executes one
 // genuine Handle whose outcome write must no-op. Leg 4 adds the stealing
 // writer's RE-CLAIM of the reset row: the row is running again -- under a
-// claim this queue does not own -- the state in which the pre-fix outcome
-// write (whose WHERE named only id and status) did not even no-op: it
-// settled the sibling's running row with this attempt's result. The fixed
+// claim this queue does not own -- the state in which an outcome write
+// whose WHERE named only id and status would not even no-op: it would
+// settle the sibling's running row with this attempt's result. The guarded
 // write (WHERE ... AND claimed_by = owner) no-ops, and the probe logs its
-// running-under-another-writer Error line. Fails on the pre-fix code, where
-// each leg logs its "job cancelled before its ..." line for the stolen row.
+// running-under-another-writer Error line; each leg logging "job cancelled
+// before its ..." for the stolen row fails this test.
 func TestExecute_NoOpOutcomeWrite_RowStolenByAnotherWriter_LogsHonestlyNotCancelled(t *testing.T) {
 	q := NewStandaloneQueue(newTestDB(t))
 	ctx := context.Background()
@@ -689,9 +681,10 @@ func TestExecute_NoOpOutcomeWrite_RowStolenByAnotherWriter_LogsHonestlyNotCancel
 	// claim this queue does not own while this attempt's Handle finishes. The
 	// outcome write must no-op (its WHERE names this writer's own claim), and
 	// the probe must log its running-under-another-writer Error line -- never
-	// the cancellation explanation, never the generic not-running warn. Fails
-	// on the pre-fix completion write, whose WHERE named only id and status:
-	// this attempt's success LANDED on the sibling's running row.
+	// the cancellation explanation, never the generic not-running warn. A
+	// completion write whose WHERE named only id and status would let this
+	// attempt's success LAND on the sibling's running row, which fails this
+	// test.
 	recReclaimed := fixtureRunningRecord("tenant-a", "discard.stolen.succeed")
 	if err := q.db.Create(recReclaimed).Error; err != nil {
 		t.Fatalf("seed running record: %v", err)
@@ -774,21 +767,20 @@ func injectResultWriteFailures(db *gorm.DB, remaining *int, failErr error) {
 }
 
 // TestExecute_SuccessWriteFailure_SchedulesRetry_InsteadOfLeavingRowRunning
-// is the P1-3 regression for the success-result persistence hole: when
-// completeSucceeded itself failed, execute only logged "jobs: persisting
-// success failed" and returned, leaving the row StatusRunning -- with no
-// time-based lease and no reaper in StandaloneQueue, nothing in a live
-// process ever moved that row again (it converged only at the next Start's
-// resetInterruptedRecords). The fix converges the attempt through the same
+// pins the convergence of the success-result persistence hole: when
+// completeSucceeded itself fails, execute must not only log "jobs:
+// persisting success failed" and return -- with no time-based lease and no
+// reaper in StandaloneQueue, nothing in a live process would ever move a
+// row left StatusRunning again (it would converge only at the next Start's
+// resetInterruptedRecords). Instead the attempt converges through the same
 // terminal machinery a handler failure uses: the row is exactly as the
 // failure path finds it (running, outcome unpersisted), so the attempt is
 // settled as failed with an internal cause naming the persistence failure
 // -- a retry scheduled while attempts remain, a dead-letter once the
 // budget is exhausted. Deterministic by construction: the seeded running
 // record's success write fails exactly once (injectResultWriteFailures),
-// and execute must schedule the retry -- never leave the row running.
-// Fails on the pre-fix code, where the row still reports StatusRunning
-// after execute returns.
+// and execute must schedule the retry -- a row still StatusRunning after
+// execute returns fails this test.
 func TestExecute_SuccessWriteFailure_SchedulesRetry_InsteadOfLeavingRowRunning(t *testing.T) {
 	q := NewStandaloneQueue(newTestDB(t))
 	if err := q.RegisterHandler(NewHandlerFunc("succeeds.once", func(context.Context, *Job, ProgressFn) (Result, error) {
@@ -854,15 +846,15 @@ var (
 )
 
 // TestExecute_SuccessWriteFailure_OnFinalAttempt_DeadLettersWithCauseAndHook
-// is the terminal-attempt half of the same P1-3 regression: a Job whose
-// retry budget is exhausted (attempts > MaxRetries) and whose final
-// attempt's success write fails must converge to StatusDeadLetter --
-// operator-visible through DeadLetterJobs with the persistence failure as
-// its recorded cause, and running the standard FailureHook once, exactly
-// like any other genuine running -> dead-letter transition -- never a row
-// stuck StatusRunning with no outcome. Fails on the pre-fix code, where
-// execute logs the persistence failure and returns, leaving the row
-// running and the hook silent.
+// is the terminal-attempt half of the same success-result persistence-hole
+// pin: a Job whose retry budget is exhausted (attempts > MaxRetries) and
+// whose final attempt's success write fails must converge to
+// StatusDeadLetter -- operator-visible through DeadLetterJobs with the
+// persistence failure as its recorded cause, and running the standard
+// FailureHook once, exactly like any other genuine running -> dead-letter
+// transition -- never a row stuck StatusRunning with no outcome. A path
+// that logged the persistence failure and returned, leaving the row
+// running and the hook silent, fails this test.
 func TestExecute_SuccessWriteFailure_OnFinalAttempt_DeadLettersWithCauseAndHook(t *testing.T) {
 	q := NewStandaloneQueue(newTestDB(t))
 	h := &succeedWithHookHandler{jobType: "succeeds.on_final_attempt", onFailureCh: make(chan struct{}, 1)}

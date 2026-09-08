@@ -55,7 +55,7 @@ describe('public entry', () => {
 })
 
 /* ------------------------------------------------------------------ */
-/* Type-surface pins: every line below compiles today and keeps the    */
+/* Type-surface pins: every line below compiles and keeps the          */
 /* documented shapes honest. Removing or renaming an exported field or */
 /* loosening a type breaks the typecheck -- loudly, in CI.             */
 /* ------------------------------------------------------------------ */

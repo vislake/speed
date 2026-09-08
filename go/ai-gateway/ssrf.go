@@ -15,23 +15,19 @@ import (
 // supplies over the credential HTTP surface (handler.go's
 // AiGatewaySetTenantCredential) and Gateway.Chat / Gateway.ChatStream /
 // Gateway.GenerateImage then dial from the platform's own network,
-// presenting the credential's API key. The primitive is exactly the one
-// docs/internal/07-platform-services.md names as the most common security
-// hole in outbound HTTP, and root CLAUDE.md's own Security rules repeat as
-// a blanket platform rule -- "Do not let outbound webhooks reach internal
-// addresses. SSRF protection is mandatory, including DNS-rebinding
-// protection." -- applied to the one other tenant-influenced outbound dial
-// this codebase ships: webhooks are not the only destination a tenant can
-// steer.
+// presenting the credential's API key. A tenant-supplied dial destination
+// is the same attack class as an outbound webhook URL: a base URL naming
+// an internal address would turn the platform's own network into a
+// request proxy into its own intranet, so internal destinations must be
+// refused at write time and re-checked at dial time, DNS rebinding
+// included.
 //
-// The defense deliberately mirrors go/integration/ssrf.go's shape and its
-// tests. ai-gateway sits on the same dependency tier as integration, so
-// the two modules cannot import each other's helpers; duplicating the
-// small, stdlib-only pure functions (the blocked-CIDR lists, isBlockedIP)
-// is cheaper than a shared lower-tier package, and keeping the two
-// implementations byte-for-byte equivalent in behavior is what the
-// ErrBaseURLBlocked asymmetry comment in errors.go demands of any later
-// consistency round.
+// ai-gateway sits on the same dependency tier as integration, so the two
+// modules cannot import each other's helpers; duplicating the small,
+// stdlib-only pure functions (the blocked-CIDR lists, isBlockedIP) is
+// cheaper than a shared lower-tier package, and the two implementations
+// must stay behaviorally equivalent -- the ErrBaseURLBlocked asymmetry
+// comment in errors.go depends on the two refusals agreeing.
 //
 // # Scope boundary: the tenant-scope write is the SSRF surface
 //
@@ -44,8 +40,7 @@ import (
 // intranet is a legitimate platform default -- refusing private
 // destinations there would break exactly that deployment. A tenant can
 // neither write nor read the platform row, so it cannot steer the platform
-// dial either. The reference app's own boot-time platform credential and
-// its test harness live on this trusted side of the boundary.
+// dial either.
 //
 // Two checks exist, at two different times, because one check at creation
 // time alone is not enough: a tenant controls the DNS of the hostname it
@@ -167,9 +162,8 @@ func mustParseCIDRs(cidrs ...string) []*net.IPNet {
 // classifies -- carrier-grade NAT (100.64.0.0/10) on the IPv4 side, and
 // the IPv6 special-purpose ranges the stdlib misses on the IPv6 side
 // (NAT64, IPv4-compatible, site-local; see blockedIPv6CIDRs's own comment
-// for the full boundary). It is the identical predicate go/integration's
-// ssrf.go applies to webhook destinations, duplicated here per this
-// file's own header comment.
+// for the full boundary). See this file's own header comment for why the
+// predicate is duplicated rather than shared.
 func isBlockedIP(ip net.IP) bool {
 	switch {
 	case ip.IsLoopback(),
@@ -287,8 +281,7 @@ var errBlockedDialAddress = errors.New("aigateway: provider call refused: destin
 // hostname, or the rebinding window this file's header comment closes
 // would be open (a re-resolution inside the dial would let a rebinding
 // DNS answer steer the connection). The default implementation builds a
-// fresh dialer per attempt, carrying providerDialTimeout exactly as the
-// pre-seam code did.
+// fresh dialer per attempt, carrying providerDialTimeout.
 var providerDialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
 	dialer := &net.Dialer{Timeout: providerDialTimeout}
 	return dialer.DialContext(ctx, network, addr)

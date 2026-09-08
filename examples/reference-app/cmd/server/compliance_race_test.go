@@ -15,8 +15,8 @@ import (
 )
 
 // TestComplianceSweepVsErasure_ConcurrentRemovalOfTheSameRow_ConvergesClean
-// pins the P2-9 race tolerance both of notes' destructive participant
-// callbacks now carry (see internal/notes/retention_participant.go's
+// pins the race tolerance both of notes' destructive participant
+// callbacks carry (see internal/notes/retention_participant.go's
 // hardDeleteSaysGone): when a retention sweep and an on-demand erasure
 // converge on the SAME rows -- a soft-deleted note past the retention
 // cutoff is exactly what both target -- whichever removes a row first
@@ -39,8 +39,8 @@ import (
 // delete), then removes all remaining rows itself in one transaction on
 // the second connection, standing in for the other orchestrator's
 // concurrent pass. Whatever the goroutine deletes next then answers
-// record-not-found -- pre-fix, an error; post-fix, an already-removed row
-// that converges clean. (The one interleaving that could hide the pre-fix
+// record-not-found -- without the tolerance an error; with it an already-removed row
+// that converges clean. (The one interleaving that could hide the
 // failure -- the goroutine finishing every remaining delete between the
 // poll's observation and the bulk transaction's commit -- would need
 // hundreds of per-row SQLite commit transactions to complete inside the

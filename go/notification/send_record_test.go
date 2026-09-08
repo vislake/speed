@@ -14,12 +14,11 @@ import (
 )
 
 // TestSendRecord_AssertNotTenantScoped is the mandatory isolation assertion
-// for a platform-domain table (docs/internal/04-data-and-tenancy.md's
-// data-domain table): the outbound-delivery log must stay readable across
-// tenants -- a retry worker must find the succeeded record a previous
-// attempt left, whatever tenant context the retry carries -- so send_records
-// must be visible to any query whatever tenant, or no tenant, is in the
-// context. The suite's createFn returns a distinct id, tenant and
+// for a platform-domain table: the outbound-delivery log must stay readable
+// across tenants -- a retry worker must find the succeeded record a
+// previous attempt left, whatever tenant context the retry carries -- so
+// send_records must be visible to any query whatever tenant, or no tenant,
+// is in the context. The suite's createFn returns a distinct id, tenant and
 // idempotency key on every call, as it requires: the UNIQUE
 // (tenant_id, idempotency_key) index would otherwise turn the suite's
 // second create into a duplicate-key failure before the visibility question

@@ -31,18 +31,17 @@ import (
 const (
 	headerTenantID       = "tenant_id"
 	headerIdempotencyKey = "idempotency_key"
-	headerCreatedAt      = "created_at" // RFC3339Nano; see asynqlib.TaskInfo has no creation-time field of its own.
+	headerCreatedAt      = "created_at" // UnixNano; asynqlib.TaskInfo has no creation-time field of its own.
 )
 
 // The three fixed asynq queues our jobs.Priority levels map onto, ordered
-// highest-priority first. This set is intentionally small and static (see
-// AGENTS.md's "Priority maps onto three fixed asynq queues" section for why
-// a queue-per-tenant or queue-per-arbitrary-priority scheme is not used):
+// highest-priority first. This set is intentionally small and static:
 // asynq's own processor iterates its configured queue list on every dequeue
 // poll, so the queue count must stay O(1), and a Get/Cancel call that does
 // not know which queue a JobID landed in has to probe each of them in turn
 // (findTaskInfo, queue.go) -- a fan-out that only stays cheap because there
-// are exactly three.
+// are exactly three. A queue-per-tenant or queue-per-arbitrary-priority
+// scheme would break both properties.
 const (
 	queueCritical = "critical"
 	queueDefault  = "default" // == asynq's own base.DefaultQueueName; also asynq's own Server default when Config.Queues is left nil.
@@ -54,12 +53,11 @@ const (
 var priorityQueues = [3]string{queueCritical, queueDefault, queueLow}
 
 // queueForPriority maps a jobs.Priority to one of priorityQueues.
-// Intermediate values collapse to "default" -- see AGENTS.md's documented
-// difference from StandaloneQueue's fully continuous ScheduledAt/Priority
-// ordering (asynq's own priority model is three weighted queues, not a
-// per-job numeric sort key; see docs/internal/07-platform-services.md and
-// server.go's Config.Queues doc comment for the weighted-queue design this
-// mirrors).
+// Intermediate values collapse to "default" -- the documented difference
+// from StandaloneQueue's fully continuous ScheduledAt/Priority ordering:
+// asynq's own priority model is three weighted queues, not a per-job
+// numeric sort key (server.go's Config.Queues doc comment documents the
+// weighting).
 func queueForPriority(p jobs.Priority) string {
 	switch {
 	case p >= jobs.PriorityHigh:
@@ -79,7 +77,7 @@ func queueForPriority(p jobs.Priority) string {
 // bucket, not necessarily the exact int originally passed to WithPriority --
 // e.g. Priority(7) is enqueued into "default" and reported back as
 // PriorityNormal (5), not 7. This is the same "coarser than StandaloneQueue"
-// trade-off documented on queueForPriority; see AGENTS.md.
+// trade-off documented on queueForPriority.
 func priorityForQueue(queue string) jobs.Priority {
 	switch queue {
 	case queueCritical:
@@ -127,9 +125,9 @@ func headerCreatedAtTime(headers map[string]string) time.Time {
 // TaskInfo.Result. It carries three things a *jobs.Job needs that asynq's
 // own per-task Redis hash has no field for: the current attempt's start
 // time (StartedAt), and the caller-reported progress (ProgressPct/
-// ProgressMsg) -- see AGENTS.md's "Progress reporting" section for why
-// ResultWriter, a mechanism asynq documents for exactly this kind of
-// mid-execution write, is used instead of a bespoke Redis key. Data is
+// ProgressMsg) -- ResultWriter, which asynq documents for exactly this
+// kind of mid-execution write, is used instead of a bespoke Redis key.
+// Data is
 // populated only on the final, success-path write (mirrors jobs.Job.
 // Result's own "set once Status is StatusSucceeded; nil otherwise").
 type resultEnvelope struct {
@@ -189,8 +187,7 @@ func decodeResultEnvelope(data []byte) resultEnvelope {
 //     archive() never bumps Retried for that last attempt -- Attempts =
 //     Retried+1, same as Active/Completed.
 //
-// See store_test.go for a table test pinning every case above, and
-// AGENTS.md's asynq mapping table for the same reasoning in prose.
+// See store_test.go for a table test pinning every case above.
 func attemptsFromTaskInfo(info *asynqlib.TaskInfo) int {
 	switch info.State {
 	case asynqlib.TaskStateActive, asynqlib.TaskStateCompleted, asynqlib.TaskStateArchived:
@@ -202,8 +199,8 @@ func attemptsFromTaskInfo(info *asynqlib.TaskInfo) int {
 
 // statusFromTaskState maps an asynqlib.TaskState to our jobs.Status.
 // cancelled, when true, wins unconditionally regardless of state -- Cancel's
-// own semantics (see jobs.Queue.Cancel's doc comment and AGENTS.md's asynq
-// mapping) make StatusCancelled override whatever the underlying asynq
+// own semantics (see jobs.Queue.Cancel's doc comment) make StatusCancelled
+// override whatever the underlying asynq
 // state naturally evolves to, exactly mirroring StandaloneQueue's
 // completeSucceeded/completeRetrying/completeDeadLetter's own "WHERE
 // status = running" guard that discards a still-in-flight attempt's

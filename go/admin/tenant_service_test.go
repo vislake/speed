@@ -20,11 +20,10 @@ func newTestRegistry() *pkgcore.Registry {
 	return pkgcore.NewRegistry(pkgcore.NewMemoryEventBus(), pkgcore.NewMemoryKVStore(), pkgcore.NewConsoleMailer())
 }
 
-// TestTenantService_HandleOrgNodeCreated_RootNode_LazilyRegisters is D3's
-// core proof: the event-driven lazy population path fires on a tenant's
-// ROOT node -- org.OrgNode.IsRoot()'s real discriminator, ParentID == "",
-// verified against go/org/model.go this round, NOT node depth as an
-// earlier draft of docs/internal/23-admin.md assumed.
+// TestTenantService_HandleOrgNodeCreated_RootNode_LazilyRegisters is the
+// lazy-population path's core proof: the subscriber fires on a tenant's
+// ROOT node -- org.OrgNode.IsRoot()'s discriminator, ParentID == "",
+// never node depth.
 func TestTenantService_HandleOrgNodeCreated_RootNode_LazilyRegisters(t *testing.T) {
 	db := testutil.NewDB(t)
 	svc := NewTenantService(NewTenantRepository(db))
@@ -170,14 +169,14 @@ func TestTenantService_HandleOrgNodeCreated_Redelivery_IsIdempotent(t *testing.T
 	}
 }
 
-// TestTenantService_ListAllIDs_PagesPastSingleCallLimit reproduces the bug
-// a single List(ctx, TenantFilter{Limit: maxTenantListLimit}) call has:
-// silently dropping every ledger row past the 500th. It seeds
-// maxTenantListLimit+5 rows -- more than one page -- and asserts every one
-// of them comes back, proving ListAllIDs actually pages through
-// TenantRepository.List's Cursor mechanism instead of stopping at the
-// first page the way D6's MembershipsOf and D7's AuditService.Query used
-// to (both now call this method instead of List directly).
+// TestTenantService_ListAllIDs_PagesPastSingleCallLimit pins the
+// no-silent-omission contract: a single List(ctx, TenantFilter{Limit:
+// maxTenantListLimit}) call silently drops every ledger row past the
+// limit. The test seeds maxTenantListLimit+5 rows -- more than one page
+// -- and asserts every one of them comes back, proving ListAllIDs
+// actually pages through TenantRepository.List's Cursor mechanism instead
+// of stopping at the first page (MembershipsOf and AuditService.Query
+// both call this method instead of List directly).
 func TestTenantService_ListAllIDs_PagesPastSingleCallLimit(t *testing.T) {
 	db := testutil.NewDB(t)
 	repo := NewTenantRepository(db)
@@ -218,9 +217,9 @@ func TestTenantService_ListAllIDs_PagesPastSingleCallLimit(t *testing.T) {
 	}
 }
 
-// TestTenantService_SetStatus_RecordsAuditEvent proves D3's round-1 audit
-// trail: a tenant-ledger edit records admin.tenant.status_changed with the
-// operator as Actor.
+// TestTenantService_SetStatus_RecordsAuditEvent pins the ledger's audit
+// trail: a tenant-ledger edit records admin.tenant.status_changed with
+// the operator as Actor.
 func TestTenantService_SetStatus_RecordsAuditEvent(t *testing.T) {
 	db := testutil.NewDB(t)
 	tenantRepo := NewTenantRepository(db)
@@ -261,12 +260,12 @@ func TestTenantService_SetStatus_RecordsAuditEvent(t *testing.T) {
 	}
 }
 
-// TestTenantService_Status_UnknownTenant_IsActiveNeverSuspended is D4's
-// core safety property: a tenant the ledger has never heard of -- whose
-// event-driven lazy registration has not landed yet, or one nobody has
-// recorded here at all -- must never be treated as suspended, or the
-// ledger's own eventual-consistency lag would turn into an outage for a
-// perfectly legitimate, brand-new tenant.
+// TestTenantService_Status_UnknownTenant_IsActiveNeverSuspended is the
+// status seam's core safety property: a tenant the ledger has never heard
+// of -- whose event-driven lazy registration has not landed yet, or one
+// nobody has recorded here at all -- must never be treated as suspended,
+// or the ledger's own eventual-consistency lag would turn into an outage
+// for a perfectly legitimate, brand-new tenant.
 func TestTenantService_Status_UnknownTenant_IsActiveNeverSuspended(t *testing.T) {
 	db := testutil.NewDB(t)
 	svc := NewTenantService(NewTenantRepository(db))
@@ -300,10 +299,10 @@ func TestTenantService_Status_ActiveTenant_ReportsActive(t *testing.T) {
 	}
 }
 
-// TestTenantService_Status_SuspendedTenant_ReportsSuspended is D4's whole
-// point: a ledger row SetStatus suspended reports suspended through this
-// same seam, exactly the fact tenancy.Middleware needs to actually refuse
-// a request.
+// TestTenantService_Status_SuspendedTenant_ReportsSuspended pins the
+// suspension read: a ledger row SetStatus suspended reports suspended
+// through this same seam, exactly the fact tenancy.Middleware needs to
+// actually refuse a request.
 func TestTenantService_Status_SuspendedTenant_ReportsSuspended(t *testing.T) {
 	db := testutil.NewDB(t)
 	repo := NewTenantRepository(db)
@@ -326,11 +325,12 @@ func TestTenantService_Status_SuspendedTenant_ReportsSuspended(t *testing.T) {
 	}
 }
 
-// TestTenantService_Status_ResumedTenant_ReportsActiveAgain proves a
-// resumed tenant's next Status call flips back to active immediately --
-// D4's "takes effect on the next request through the resolver" promise,
-// at the TenantService layer (pipeline_test.go / server-level tests cover
-// the same promise through a real tenancy.Middleware round trip).
+// TestTenantService_Status_ResumedTenant_ReportsActiveAgain pins the
+// resume read: a resumed tenant's next Status call flips back to active
+// immediately -- the "takes effect on the next request through the
+// resolver" behavior, at the TenantService layer (the reference app's
+// admin_flow_test.go covers the same behavior through a real
+// tenancy.Middleware round trip).
 func TestTenantService_Status_ResumedTenant_ReportsActiveAgain(t *testing.T) {
 	db := testutil.NewDB(t)
 	repo := NewTenantRepository(db)
@@ -357,20 +357,15 @@ func TestTenantService_Status_ResumedTenant_ReportsActiveAgain(t *testing.T) {
 	}
 }
 
-// TestTenantService_Status_UnknownLedgerStatus_ReportedAsIsNotActive is
-// the P3-4 consolidation's regression test: the ledger's Status column is
-// typed with tenancy.TenantStatus itself, so TenantService.Status reports
-// a stored value as-is -- it must NEVER translate an unrecognized status
-// to TenantStatusActive the way the pre-consolidation admin-local
-// vocabulary did ("anything not suspended means active"). tenancy's own
-// gate (middleware_test.go's
-// TestMiddleware_TenantStatusResolver_NonActiveStatus_FailsClosed) refuses
-// every status other than TenantStatusActive, so an unrecognized stored
-// value reported faithfully is refused; one translated to active would
-// silently keep serving requests for a tenant a future third state was
-// meant to block -- the exact fail-open this test pins closed. It fails
-// against the pre-consolidation code, which answered TenantStatusActive
-// for this very row.
+// TestTenantService_Status_UnknownLedgerStatus_ReportedAsIsNotActive
+// pins the no-translation invariant: the ledger's Status column is typed
+// with tenancy.TenantStatus itself, so TenantService.Status reports a
+// stored value as-is -- it must NEVER translate an unrecognized status to
+// TenantStatusActive ("anything not suspended means active"). tenancy's
+// own gate refuses every status other than TenantStatusActive, so an
+// unrecognized stored value reported faithfully is refused; one
+// translated to active would silently keep serving requests for a tenant
+// a future third state was meant to block.
 func TestTenantService_Status_UnknownLedgerStatus_ReportedAsIsNotActive(t *testing.T) {
 	db := testutil.NewDB(t)
 	repo := NewTenantRepository(db)

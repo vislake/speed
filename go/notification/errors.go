@@ -7,10 +7,10 @@ import (
 )
 
 // The error index of the notification module. Every exported error is an
-// *apperr.Error builder whose Code follows the <module>.<reason> convention
-// the backend coding standard requires: match a decorated error with
-// apperr.As(err) and compare its Code, never with == or errors.Is against
-// the var below. WithParam and WithCause derive a NEW *apperr.Error rather
+// *apperr.Error builder whose Code follows the <module>.<reason> convention:
+// match a decorated error with apperr.As(err) and compare its Code, never
+// with == or errors.Is against the var below. WithParam and WithCause derive
+// a NEW *apperr.Error rather
 // than mutating the receiver, so the pointer a call returns is never the
 // pointer declared here -- the same convention org, dbkit, tenancy and
 // config already document.
@@ -125,9 +125,9 @@ var (
 
 	// ErrContactBounced reports an operation on a contact whose address
 	// has proven unable to receive messages (a hard delivery failure).
-	// Terminal in this round: re-proving a bounced address is a later
-	// round's remediation (AGENTS.md's "Platform-blacklist writers and
-	// bounce remediation" deferral).
+	// Terminal: the address stays bounced -- nothing in this API re-proves
+	// it (see blacklist.go's doc comment for the unbuilt writer paths that
+	// would record and later clear a platform-level bounce).
 	ErrContactBounced = apperr.Conflict("notification.contact_bounced")
 
 	// ErrContactNotVerified reports a delivery attempt (EnsureDeliverable)
@@ -252,8 +252,8 @@ var (
 	ErrMessageNotFound = apperr.NotFound("notification.message_not_found")
 )
 
-// The send-record group: the errors send_record.go's ListByFilter (D10,
-// docs/internal/23-admin.md) can return.
+// The send-record group: the errors send_record.go's ListByFilter can
+// return.
 var (
 	// ErrSendRecordTenantRequired reports a ListByFilter call whose
 	// SendRecordFilter.TenantID was empty. send_records is platform data

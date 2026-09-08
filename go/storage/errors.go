@@ -24,8 +24,8 @@ func hasCode(err error, code string) bool {
 
 // The apperr half of the storage error index. Every exported error below
 // is an *apperr.Error builder whose Code follows the <module>.<reason>
-// convention the backend coding standard requires: match a decorated error
-// with apperr.As(err) and compare its Code, never with == or errors.Is
+// convention: match a decorated error with apperr.As(err) and compare its
+// Code, never with == or errors.Is
 // against the var below. WithParam and WithCause derive a NEW *apperr.Error
 // rather than mutating the receiver, so the pointer a call returns is never
 // the pointer declared here -- the same convention dbkit, tenancy and org

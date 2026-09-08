@@ -5,9 +5,7 @@
 // which never wires a NATS-backed store does not inherit nats.go in its
 // dependency graph: Go resolves dependencies per package, and an interface
 // package that also carries one implementation hands every importer that
-// implementation's whole dependency closure (docs/internal/03-deployment-
-// modes.md's implementation-registry section measures the cost and names the
-// boundary).
+// implementation's whole dependency closure.
 //
 // Importing this package registers "kv.nats" on pkgcore's shared
 // KVStoreRegistry as a side effect (see register.go), the same database/sql-
@@ -179,9 +177,10 @@ type kvStore struct {
 // The provisioning is probe-then-create, never create-or-update: an
 // existing bucket is probed with a plain KeyValue lookup and adopted when
 // its configuration can satisfy what this implementation declares and
-// relies on, and refused with ErrUnadoptableBucket otherwise. Update-
-// overwriting an existing bucket with this constructor's defaults used to
-// silently rewrite a configuration a provisioning operator set deliberately
+// relies on, and refused with ErrUnadoptableBucket otherwise.
+// Update-overwriting an existing bucket with this constructor's defaults
+// would silently rewrite a configuration a provisioning operator set
+// deliberately
 // -- replica count, storage engine, history depth and TTL all collapsed
 // back to this constructor's single-replica, one-entry-history, no-TTL,
 // file-storage defaults the moment a store was built against it (a
@@ -210,7 +209,8 @@ type kvStore struct {
 //     every key it holds the moment the NATS server itself restarts,
 //     silently forfeiting the pkgcore.SurvivesRestart capability "kv.nats"'s
 //     registration declares -- exactly the claim the bootstrap capability
-//     check exists to enforce, and the one adoption used to bypass.
+//     check exists to enforce, and the one an adoption would otherwise
+//     bypass.
 //   - TTL must be zero. A whole-bucket TTL silently expires keys this store
 //     wrote with ttl <= 0 -- pkgcore.KVStore's stores-forever contract -- on
 //     the server's own clock, overthrowing the envelope expiry design this

@@ -137,14 +137,11 @@ function contrastRatio(a: string, b: string): number {
 
 describe('TenantSwitcher', () => {
   it('default the trigger to an inheriting color, never the primary palette color', async () => {
-    // Regression for the acceptance measurement that named the trigger
-    // at 1:1: a trigger defaulting to the primary palette color
-    // vanishes on the very surface it usually sits on -- an AppBar
-    // whose background IS the primary color (the reference-app header
-    // measured rgb(37,99,235) text on an rgb(37,99,235) background).
-    // color="inherit" makes the text follow the ambient color: the
-    // AppBar's own contrastText there, the surrounding text color on a
-    // plain surface.
+    // A trigger defaulting to the primary palette color vanishes on the
+    // very surface it usually sits on -- an AppBar whose background IS
+    // the primary color. color="inherit" makes the text follow the
+    // ambient color: the AppBar's own contrastText there, the
+    // surrounding text color on a plain surface.
     const harness = makeHarness({ [LOGIN_PASSWORD]: () => makePair() })
     await signIn(harness)
     renderSwitcher(harness)
@@ -228,10 +225,10 @@ describe('TenantSwitcher', () => {
     // The switch announces itself: no alert (nothing failed), but the
     // role=status confirmation names the tenant the session now runs
     // under -- a context change that silently alters which rows a host
-    // shows must say so out loud (the reference-app acceptance gate for
-    // "switching clinic says so"). The list closed, the trigger is back
-    // to its idle label (host data, unchanged by the switch) and
-    // enabled.
+    // shows must say so out loud ("the switching clinic says so", for a
+    // screen-reader user who cannot glance at the chrome). The list
+    // closed, the trigger is back to its idle label (host data,
+    // unchanged by the switch) and enabled.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     const status = screen.getByRole('status')
     expect(status).toHaveTextContent(SWITCHED_TO_ZH('Bright Smile Clinic'))
@@ -292,20 +289,18 @@ describe('TenantSwitcher', () => {
   })
 
   it('keep the focus on a live control when the menu closes onto the inert trigger', async () => {
-    // Regression for the P2-2 focus finding: picking a row closes the
-    // menu while the switch is in flight, and MUI's focus trap restores
-    // focus to the trigger on close. A NATIVE-disabled trigger cannot
-    // take focus in a real browser (focus() on a disabled control is a
-    // no-op), so the restore silently fails and the round trip strands
-    // focus on document.body; jsdom lacks that rule and reports the
-    // same code path as focus resting ON the native-disabled trigger --
-    // both are one defect: the focus target is not a live element. The
-    // trigger therefore stays focusable while the switch is in flight,
-    // inert in the accessible way (aria-disabled, clicks refused by the
-    // open guard), never the native attribute. The round trip then
-    // leaves the focus on the trigger -- a failed switch is retryable
-    // from where the user is, with no tab-out-and-back to find the
-    // control again.
+    // Picking a row closes the menu while the switch is in flight, and
+    // MUI's focus trap restores focus to the trigger on close. A
+    // NATIVE-disabled trigger cannot take focus in a real browser
+    // (focus() on a disabled control is a no-op), so the restore would
+    // silently fail and strand focus on document.body; jsdom lacks that
+    // rule and reports the same code path as focus resting ON the
+    // native-disabled trigger. The trigger therefore stays focusable
+    // while the switch is in flight, inert in the accessible way
+    // (aria-disabled, clicks refused by the open guard), never the
+    // native attribute. The round trip then leaves the focus on the
+    // trigger -- a failed switch is retryable from where the user is,
+    // with no tab-out-and-back to find the control again.
     let rejectSwitch!: (reason: unknown) => void
     const harness = makeHarness({
       [LOGIN_PASSWORD]: () => makePair(),
@@ -617,24 +612,24 @@ describe('TenantSwitcher', () => {
   })
 
   describe('two instances racing a switch on one shared session', () => {
-    // Regression for web-auth-api.md P2-1: this component's own
-    // switching-ref guard only refuses a second concurrent call
-    // THROUGH ITSELF -- it says nothing about a second TenantSwitcher
-    // instance mounted elsewhere (host chrome plus a mobile drawer
-    // copy, a transient double-mount during a route transition) calling
-    // switchTenant on the same shared session. auth-core's settleIssued
-    // rejects whichever request answers after a sibling committed with
-    // OperationSupersededError -- and supersession is decided by
-    // RESPONSE settlement order, never send order, so either racing
-    // request can be the loser. The loser's own request DID go through
-    // server-side, but it cannot know whose write the session row keeps
-    // (see the file header), so a superseded switch stays LOST: no
-    // error, no re-issue, no onSwitched -- the winning operation's own
-    // commit fired its own callback exactly once, for the tenant the
-    // session genuinely runs under, and the controlled component
-    // converges to that same tenant through the host's own
-    // currentTenantId. The three tests below pin both settlement
-    // orders and the drift-probe residual the lost-race rule records.
+    // This component's own switching-ref guard only refuses a second
+    // concurrent call THROUGH ITSELF -- it says nothing about a second
+    // TenantSwitcher instance mounted elsewhere (host chrome plus a
+    // mobile drawer copy, a transient double-mount during a route
+    // transition) calling switchTenant on the same shared session.
+    // auth-core's settleIssued rejects whichever request answers after
+    // a sibling committed with OperationSupersededError -- and
+    // supersession is decided by RESPONSE settlement order, never send
+    // order, so either racing request can be the loser. The loser's own
+    // request went through server-side, but it cannot know whose write
+    // the session row keeps (see the file header), so a superseded
+    // switch stays LOST: no error, no re-issue, no onSwitched -- the
+    // winning operation's own commit fired its own callback exactly
+    // once, for the tenant the session genuinely runs under, and the
+    // controlled component converges to that same tenant through the
+    // host's own currentTenantId. The three tests below pin both
+    // settlement orders and the drift-probe residual the lost-race
+    // rule records.
     const TENANTS_3 = [
       { id: 'tenant-1', name: 'Sunshine Dental' },
       { id: 'tenant-2', name: 'Bright Smile Clinic' },
@@ -732,8 +727,9 @@ describe('TenantSwitcher', () => {
       // request cannot know that (see the file header), so it stays
       // lost: no corrective re-issue, no onSwitched, no error. The
       // winner's commit is the only report, and the session runs the
-      // tenant it committed. Fails before the lost-race correction:
-      // B's re-issue fires onSwitchedB('tenant-3') on a fourth call.
+      // tenant it committed. The stale path this test excludes: a
+      // re-issue of B's request would fire onSwitchedB('tenant-3') on a
+      // fourth call.
       const { harness, releaseTenant2, releaseTenant3 } = makeRacingHarness()
       await signIn(harness)
       const onSwitchedA = vi.fn()
@@ -797,17 +793,17 @@ describe('TenantSwitcher', () => {
     })
 
     it('never re-commit a superseded request: the earlier-sent switch settling last stays lost', async () => {
-      // The D2 drift shape, settlement order inverted: instance A
+      // The drift shape, settlement order inverted: instance A
       // issues its tenant-2 request first and instance B its tenant-3
       // request second, but B's response settles FIRST and commits. A's
       // response settles second, so A -- the EARLIER-sent request, the
       // tenant the user already left behind -- is the superseded one.
-      // The pre-correction reconciliation re-issued A here, actively
-      // switching the session back onto the abandoned tenant; a
-      // superseded request must stay lost and the session must settle
-      // on B, the tenant the user actually settled on. Fails before:
-      // the corrective re-issue commits access-2 on a fourth call and
-      // fires onSwitchedA('tenant-2').
+      // A superseded request must stay lost: re-issuing it would
+      // actively switch the session back onto the abandoned tenant,
+      // and the session must settle on B, the tenant the user actually
+      // settled on. The stale path this test excludes: a corrective
+      // re-issue would commit access-2 on a fourth call and fire
+      // onSwitchedA('tenant-2').
       const { harness, releaseTenant2, releaseTenant3 } = makeRacingHarness()
       await signIn(harness)
       const onSwitchedA = vi.fn()
@@ -868,18 +864,17 @@ describe('TenantSwitcher', () => {
     })
 
     it('leave the superseded switch lost across the refresh probe: only the session own refresh moves the principal', async () => {
-      // The drift-probe descendant of the pre-correction
-      // no-silent-drift regression, recording the lost-race rule's
-      // residual. When responses settle in send order (the race below:
-      // A first, B second), the superseded request is the later-sent
-      // one, so its server write is the last one the session row keeps
-      // -- the refresh mints for it. A superseded request can never
-      // know that (settlement order is not send order), so it stays
-      // lost even here; the session converges to the server row only
-      // through its own refresh path, announced by no onSwitched. The
-      // recorded alternative -- re-issuing the lost request -- is the
-      // active wrong switch the regression above pins when settlement
-      // order inverts. Fails before: the corrective re-issue fires
+      // The drift probe records the lost-race rule's residual. When
+      // responses settle in send order (the race below: A first, B
+      // second), the superseded request is the later-sent one, so its
+      // server write is the last one the session row keeps -- the
+      // refresh mints for it. A superseded request can never know that
+      // (settlement order is not send order), so it stays lost even
+      // here; the session converges to the server row only through its
+      // own refresh path, announced by no onSwitched. The alternative
+      // -- re-issuing the lost request -- is the active wrong switch
+      // the inverted-settlement test above pins. The stale path this
+      // test excludes: a corrective re-issue would fire
       // onSwitchedB('tenant-3') on a fourth call before the refresh.
       const { harness, releaseTenant2, releaseTenant3 } = makeRacingHarness()
       await signIn(harness)

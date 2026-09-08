@@ -573,10 +573,10 @@ func TestDeriveService_DeriveThumbnail_DropsItsBytesWhenTheObjectDisappears(t *t
 // dropped before the error is reported. The run still returns the error, on
 // purpose -- a refusal has nothing left to converge on, but an errored write
 // is a real failure the queue retries, and the retry re-derives from scratch,
-// which is exactly why the orphaned bytes must not survive it. (On the
-// pre-fix code this test failed: the err branch returned immediately, leaving
-// the just-written bytes under the derivative key with no row anywhere
-// referencing them.)
+// which is exactly why the orphaned bytes must not survive it. (Without
+// the drop this test fails: an err branch that returned immediately would
+// leave the just-written bytes under the derivative key with no row
+// anywhere referencing them.)
 //
 // The failure is injected on the derivative row's insert itself, through the
 // Create processor -- the insert is a Create, so only a Create-processor
@@ -629,8 +629,8 @@ func TestDeriveService_DeriveThumbnail_DropsItsBytesWhenTheRowWriteFails(t *test
 // derive, not a failure: the run must converge on nil exactly like a derive
 // that found the object already gone or deleting at its row read, never an
 // ErrStoreError the queue would re-run into a pointless retry of a task
-// whose object is being deleted. (On the pre-fix code this test failed: every
-// not-found byte answer -- the transient deletion race included -- was
+// whose object is being deleted. (Without that rule this test fails: every
+// not-found byte answer -- the transient deletion race included -- would be
 // reported as storage.store_error. The shape stands in for the cross-replica
 // interleaving deterministically, the same way the mid-run race tests above
 // stand in for the sweep.)

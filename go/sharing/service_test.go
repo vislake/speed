@@ -62,18 +62,17 @@ func TestService_Create_ResourceRefRequired(t *testing.T) {
 	assertCode(t, err, ErrResourceRefRequired.Code)
 }
 
-// TestService_Create_ForeverRefused pins rule 2's refusal half
-// (docs/internal/07-platform-services.md's "never-expiring links are not
-// allowed" rule): an explicit request for a never-expiring share must be
-// REFUSED, not silently allowed.
+// TestService_Create_ForeverRefused pins the never-expiring-link refusal:
+// an explicit request for a never-expiring share must be REFUSED, not
+// silently allowed.
 func TestService_Create_ForeverRefused(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	_, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1", Forever: true})
 	assertCode(t, err, ErrExpiryRequired.Code)
 }
 
-// TestService_Create_NoExpiryFallsBackToDefault pins rule 2's forcing half:
-// a request with no ExpiresAt and no TenantConfigReader wired gets
+// TestService_Create_NoExpiryFallsBackToDefault pins the default-expiry
+// forcing half: a request with no ExpiresAt and no TenantConfigReader wired gets
 // defaultShareExpiry, never a nil/never-expiring row.
 func TestService_Create_NoExpiryFallsBackToDefault(t *testing.T) {
 	svc, _ := newTestService(t, nil)
@@ -198,10 +197,9 @@ func TestService_Create_PasswordIsHashedNeverPlaintext(t *testing.T) {
 	}
 }
 
-// TestService_Create_SensitiveEmitsAuditEvent pins rule 4
-// (docs/internal/07-platform-services.md's "sensitive resource sharing
-// needs confirmation" rule): Sensitive: true fires the sensitive-share
-// audit action through the declarative audit.Emit path.
+// TestService_Create_SensitiveEmitsAuditEvent pins the sensitive-resource
+// audit requirement: Sensitive: true fires the sensitive-share audit
+// action through the declarative audit.Emit path.
 func TestService_Create_SensitiveEmitsAuditEvent(t *testing.T) {
 	svc, bus := newTestService(t, nil)
 
@@ -290,10 +288,9 @@ func TestService_Access_GrantedOnValidToken(t *testing.T) {
 }
 
 // TestService_Access_RevokedShare_ImmediatelyDenied is the explicit test
-// rule 3 (docs/internal/07-platform-services.md's "revocation takes effect
-// immediately" rule) calls
-// for: create, access succeeds, revoke, access immediately fails, with no
-// caching involved anywhere on this module's own side.
+// of the immediate-revocation rule: create, access succeeds, revoke,
+// access immediately fails, with no caching involved anywhere on this
+// module's own side.
 func TestService_Access_RevokedShare_ImmediatelyDenied(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	created, err := svc.Create(testCtx(), CreateParams{ResourceRef: "storage:obj-1"})
@@ -353,8 +350,7 @@ func TestService_Access_UnknownToken_Denied(t *testing.T) {
 // --- AccessPublic ----------------------------------------------------
 
 // TestService_AccessPublic_ResolvesTenantFromTokenAlone is the direct
-// round-2 proof of AGENTS.md's former "Tenant resolution for an
-// unauthenticated viewer" gap being closed: a caller supplying NO tenant
+// proof of the token-based tenant resolution: a caller supplying NO tenant
 // at all (context.Background(), not testCtx()) still reaches a granted
 // access, because AccessPublic resolves the tenant from the token itself
 // before re-entering the ordinary Access path.
@@ -489,12 +485,11 @@ func TestService_Access_Password(t *testing.T) {
 	})
 }
 
-// TestService_Access_EveryRefusalReasonIsOutwardlyIdentical pins rule 5
-// (docs/internal/07-platform-services.md's "the share surface must leak
-// nothing about the tenant" rule): an unknown token, a revoked share, an expired share, a
-// view-exhausted share and a wrong password all answer with the exact same
-// *apperr.Error -- same Code, same Status, no parameter distinguishing
-// which reason applied.
+// TestService_Access_EveryRefusalReasonIsOutwardlyIdentical pins the
+// outward-identical-answer rule: an unknown token, a revoked share, an
+// expired share, a view-exhausted share and a wrong password all answer
+// with the exact same *apperr.Error -- same Code, same Status, no
+// parameter distinguishing which reason applied.
 func TestService_Access_EveryRefusalReasonIsOutwardlyIdentical(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	// Every share below is minted at clock T0 (an already-expired share
@@ -594,18 +589,17 @@ func TestService_Access_EveryRefusalReasonIsOutwardlyIdentical(t *testing.T) {
 // TestService_Access_RefusalPathsPayEqualPasswordCheckCost closes the
 // timing side channel TestService_Access_EveryRefusalReasonIsOutwardlyIdentical
 // cannot see: that test only asserts Code/Status/Params equality, never
-// latency, so it passed even when a prior version of Access answered three
-// refusal paths -- an unknown token, a share with no password configured,
-// and a password-protected share accessed with no password at all -- in
-// roughly the time a lookup takes, while a refusal driven by an actual
-// (right-or-wrong) password guess paid argon2id's real, tens-of-milliseconds
-// cost. That gap let an external prober tell "this token names a
+// latency. Without the burn, three refusal paths -- an unknown token, a
+// share with no password configured, and a password-protected share
+// accessed with no password at all -- would answer in roughly the time a
+// lookup takes, while a refusal driven by an actual (right-or-wrong)
+// password guess pays argon2id's real, tens-of-milliseconds cost. That gap
+// would let an external prober tell "this token names a
 // password-protected share" apart from every other refusal purely by
 // response latency, even though every refusal already answers with the
-// identical ErrNotAccessible (rule 5). This test fails on that unfixed
-// code, where the three burnable paths return far faster than the real
-// check, and passes once every path burns an equivalent argon2id check
-// (password.go's burnSharePasswordCheck).
+// identical ErrNotAccessible. This test fails those three paths when they
+// return far faster than the real check, requiring every path to burn an
+// equivalent argon2id check (password.go's burnSharePasswordCheck).
 func TestService_Access_RefusalPathsPayEqualPasswordCheckCost(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing measurement is slow under -short")
@@ -661,11 +655,11 @@ func TestService_Access_RefusalPathsPayEqualPasswordCheckCost(t *testing.T) {
 		},
 	}
 
-	// The unfixed code answered these three paths in a small fraction of
-	// the real check's time (a lookup vs. a real argon2id call).
+	// Without the burn these three paths would answer in a small fraction
+	// of the real check's time (a lookup vs. a real argon2id call).
 	// Requiring at least half the real check's duration leaves ample
-	// margin for scheduling noise while still failing hard against the
-	// effectively-instant unfixed fast paths.
+	// margin for scheduling noise while still failing hard against such
+	// effectively-instant fast paths.
 	const minFraction = 0.5
 	for name, run := range cases {
 		got := minDuration(run)
@@ -769,15 +763,12 @@ func TestService_Access_ConcurrentAccessesRespectMaxViews(t *testing.T) {
 // TestService_Access_ConcurrentUnlimitedViews_AllSucceedAndAllCount races
 // many concurrent Access calls against one UNLIMITED share (MaxViews nil --
 // the common public-link shape) and proves every one of them is granted
-// and every granted view is counted. This is the regression for the
-// unlimited-view arm of recordView: under the old code an unlimited share
-// still went through the bounded compare-and-swap retry loop, whose 8
-// retries are an arbitration budget for something an unlimited share has
-// nothing to arbitrate -- so under genuine concurrency a viewer could lose
-// every race and be refused (a false 404) once it had lost 8 times in a
-// row, and the CAS's lost races also made the exact count assertion below
-// fail. An unlimited share's view recording is now one atomic increment
-// that cannot lose to concurrency at all. Run with -race.
+// and every granted view is counted. An unlimited share has no ceiling
+// for a compare-and-swap to arbitrate, so a bounded CAS retry loop would
+// be the wrong tool there: under genuine concurrency a viewer could lose
+// enough races to be refused (a false 404) and lost races would lose
+// count updates. The view recording is one atomic increment
+// (tryIncrementView) that cannot lose to concurrency. Run with -race.
 // TestService_Access_RefusedWhileTheRouteHoldsTheReservation pins the
 // in-process Access path's respect for the access route's in-flight
 // reservation (the reserve/confirm/refund shape's single-flight rule):
@@ -832,14 +823,14 @@ func TestService_Access_RefusedWhileTheRouteHoldsTheReservation(t *testing.T) {
 }
 
 // TestService_ConfirmAccessView_StoreFailure_KeepsTheReservationHeld pins
-// confirmAccessView's never-refund-after-delivery contract (the regression
-// this round closes): when the confirm write itself fails after the
-// content was fully delivered, the reservation is NOT released -- the view
-// stays held in use, spent -- exactly as go/billing's Confirm-after-success
-// semantics never refund a reservation the delivered work already earned.
-// The reservation's release is left to no one but a later confirm or the
-// recorded timeout convergence; the failed confirm itself never returns
-// the view to the share.
+// confirmAccessView's never-refund-after-delivery contract: when the
+// confirm write itself fails after the content was fully delivered, the
+// reservation is NOT released -- the view stays held in use, spent --
+// exactly as go/billing's Confirm-after-success semantics never refund a
+// reservation the delivered work already earned. The reservation's release
+// is left to no one but a later confirm or the recorded timeout
+// convergence; the failed confirm itself never returns the view to the
+// share.
 func TestService_ConfirmAccessView_StoreFailure_KeepsTheReservationHeld(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	one := 1
@@ -881,9 +872,8 @@ func TestService_ConfirmAccessView_StoreFailure_KeepsTheReservationHeld(t *testi
 }
 
 // TestService_ConfirmAccessView_RevokedMidFlight_RefundsAndSettlesDenied
-// pins the confirm's settle-time-liveness semantics (the same ones ee20d37
-// established for its own post-delivery record): a share revoked while its
-// delivery was in flight refuses the confirm at the database, and the
+// pins the confirm's settle-time-liveness semantics: a share revoked while
+// its delivery was in flight refuses the confirm at the database, and the
 // serve is then settled as denied with its reservation released -- the
 // revoked share can never serve again, so neither the view nor the
 // reservation it held means anything further.
@@ -1189,9 +1179,9 @@ func TestService_ListAccessLog_UnknownShare(t *testing.T) {
 }
 
 // TestService_List_ReturnsTenantSharesIncludingRevoked is Service.List's own
-// proof: the round-3 owner-facing sharing_listShares operation's backing
-// method. A revoked share is not filtered out -- an owner-facing listing
-// must still be able to show what happened to it.
+// proof (the backing method of handler.go's SharingListShares). A revoked
+// share is not filtered out -- an owner-facing listing must still be able
+// to show what happened to it.
 func TestService_List_ReturnsTenantSharesIncludingRevoked(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 
@@ -1544,20 +1534,16 @@ func TestService_Access_LogWriteFailure_FailsTheAccessInsteadOfLeavingNoTrail(t 
 }
 
 // TestService_Access_LogWriteFailure_NeverPermanentlyConsumesTheShare
-// pins finding P2-sharing-4's regression: a granted access whose log row
+// pins the count-and-trail atomicity: a granted access whose log row
 // cannot be written must not permanently exhaust the share it failed to
 // log. The access-log INSERT alone is forced to fail (a trigger raising on
-// the log table -- the view-count UPDATE itself stays healthy), so under
-// the old code the view count had already committed by the time the log
-// write failed: Access returned sharing.internal_error AND a MaxViews=1
-// share was left permanently consumed -- the visitor got a 500, never saw
-// the resource, and no retry could ever succeed. The count and its
-// granted log row now commit in ONE guarded transaction (recordView's own
-// doc comment), so the failed attempt rolls the count back with it: the
-// first Access still fails with sharing.internal_error (rule 4 -- an
-// access that leaves no trail must not be answered), but the share keeps
-// its one view, and once the log write is healthy again a retry succeeds
-// and records exactly one granted row.
+// the log table -- the view-count UPDATE itself stays healthy). The count
+// and its granted log row commit in ONE guarded transaction (recordView's
+// own doc comment), so the failed attempt rolls the count back with it:
+// the first Access still fails with sharing.internal_error -- an access
+// that leaves no trail must not be answered as processed -- but the share
+// keeps its one view, and once the log write is healthy again a retry
+// succeeds and records exactly one granted row.
 func TestService_Access_LogWriteFailure_NeverPermanentlyConsumesTheShare(t *testing.T) {
 	svc, _ := newTestService(t, nil)
 	limit := 1

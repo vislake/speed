@@ -51,11 +51,10 @@ var ErrInvalidObjectKey = errors.New("pkgcore: invalid object key")
 // operations, because the local backend has none of those. There is no
 // listing, no stat, no copy and no presigned access on the interface: a store
 // carries bytes, and callers that need a catalog keep it themselves. Those
-// omissions are the seam's boundary, not a gap to close later -- presigned
-// access, object metadata and lifecycle handling are capabilities only the
-// S3-backed backend could satisfy, so they belong to the M2 storage module
-// that will be built on top of this contract and is its first consumer, never
-// on the interface itself.
+// omissions are the seam's boundary: presigned access, object metadata and
+// lifecycle handling are capabilities only the S3-backed backend could
+// satisfy, so they belong to go/storage -- the module built on top of this
+// contract and its first consumer -- never on the interface itself.
 //
 // The keyspace is a single tree. A key must not be a proper prefix of another
 // stored key (one "/"-separated path cannot hold both a file and a
@@ -100,9 +99,9 @@ type ObjectStore interface {
 // one in the objectstore/s3 subpackage -- so that a key accepted by one
 // backend is accepted by all of them, and the checks run before an operation
 // touches the backend. Exported because the split-out subpackage cannot
-// otherwise share this package's own key grammar (see the implementation-
-// registry section of docs/internal/03-deployment-modes.md for why the
-// implementation lives in its own package rather than here).
+// otherwise share this package's own key grammar; the implementation lives
+// in its own package so that importing it is the only way a consumer pays
+// for its backend's dependencies.
 func ValidateObjectKey(key string) error {
 	if key == "" {
 		return fmt.Errorf("%w: the key is empty", ErrInvalidObjectKey)

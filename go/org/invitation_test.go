@@ -436,9 +436,10 @@ func TestInvitationRepository_byStatus(t *testing.T) {
 	indexer := newTestEmailIndexer(t)
 
 	// Three different addresses, not one: migrations/{postgres,sqlite}/
-	// 0005_unique_pending_invitation.sql's partial unique index now refuses
-	// a SECOND pending row for the same address in the same tenant (the D4
-	// concurrency fix's backstop -- see InvitationRepository.createPending),
+	// 0005_unique_pending_invitation.sql's partial unique index refuses
+	// a SECOND pending row for the same address in the same tenant (the
+	// backstop for concurrent duplicates -- see
+	// InvitationRepository.createPending),
 	// and this test's own purpose is byStatus's status filter, not that
 	// invariant, so the two Pending rows must not share an address.
 	emails := []string{"ada@example.test", "grace@example.test", "linus@example.test"}

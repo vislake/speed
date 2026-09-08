@@ -1,9 +1,8 @@
 package vault
 
-// Mode selects which of the two protection strategies
-// docs/internal/22-pki.md's Signer section describes a Vault-backed Signer
-// runs under. Both are correct implementations of pki.Signer; they differ
-// only in where the private key material actually lives.
+// Mode selects which of the two protection strategies a Vault-backed
+// Signer runs under. Both are correct implementations of pki.Signer; they
+// differ only in where the private key material actually lives.
 type Mode int
 
 const (
@@ -62,8 +61,6 @@ type Config struct {
 	// transit/keys/<name>`, Transit's own default AES256-GCM96 type is
 	// exactly right for wrapping arbitrary bytes) is deployment/operations
 	// work this package deliberately does not perform on the caller's
-	// behalf, the same "no implicit fallback path" discipline
-	// docs/internal/22-pki.md's "no second path" section requires of every
-	// key-management seam in this module.
+	// behalf: this seam has no implicit fallback path.
 	WrappingKeyName string
 }

@@ -209,9 +209,9 @@ func TestModule_Register_DeclaresItsSurface(t *testing.T) {
 	})
 
 	t.Run("no config items are declared", func(t *testing.T) {
-		// No round-1 code path reads a live config value -- see AGENTS.md's
-		// design-choice section for why inventing one speculatively is the
-		// exact thing this repo's round-boundary discipline forbids.
+		// No code path reads a live config value: inventing one
+		// speculatively would be the speculative-declaration shape the
+		// module's own design-choice section names and rejects.
 		if got := reg.Config.Items(); len(got) != 0 {
 			t.Errorf("Register declared %d config item(s), want 0 this round", len(got))
 		}

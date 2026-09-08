@@ -83,9 +83,9 @@ func TestPollingService_Poll_ResolvesStuckPendingRow(t *testing.T) {
 // freshly re-queried Amount once Poll resolves it, driven through the whole
 // Poll call (not just markStatus directly, as
 // TestPaymentEventRepository_MarkStatus_OverwritesZeroAmount already proves
-// at the repository layer). This fails on the pre-fix Poll, which discarded
-// QueryStatus's Money entirely (`status, _, err := gw.QueryStatus(...)`)
-// and called markStatus with no amount to persist at all.
+// at the repository layer). Poll must not discard QueryStatus's Money
+// entirely (`status, _, err := gw.QueryStatus(...)`) and call markStatus
+// with no amount to persist at all.
 func TestPollingService_Poll_ResolvesZeroedAmountRow(t *testing.T) {
 	events := NewPaymentEventRepository(newTestDB(t))
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")

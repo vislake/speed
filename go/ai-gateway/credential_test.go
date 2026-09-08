@@ -165,14 +165,14 @@ func TestCredentialService_SetTenantCredential_Idempotent(t *testing.T) {
 // --- tenant BYOK baseURL SSRF validation (credential.go, ssrf.go) ----------
 
 // TestCredentialService_SetTenantCredential_BlockedBaseURL_Refused is the
-// round's mandatory P0 regression: a tenant's own BYOK credential write
-// naming a private, loopback, link-local or otherwise blocked destination
-// is refused at creation time, before any row is stored -- never silently
-// accepted and dialed later from the platform's network. The four cases
-// cover the two refusal paths: literal IPs the caller typed into the URL
-// (refused without any DNS lookup) and a hostname whose real DNS answer is
-// blocked (localhost resolving to loopback through the hosts file, no
-// resolver seam needed).
+// SSRF regression: a tenant's own BYOK credential write naming a private,
+// loopback, link-local or otherwise blocked destination is refused at
+// creation time, before any row is stored -- never silently accepted and
+// dialed later from the platform's network. The cases cover the two
+// refusal paths: literal IPs the caller typed into the URL (refused
+// without any DNS lookup) and a hostname whose real DNS answer is blocked
+// (localhost resolving to loopback through the hosts file, no resolver
+// seam needed).
 func TestCredentialService_SetTenantCredential_BlockedBaseURL_Refused(t *testing.T) {
 	svc := NewCredentialService(newTestDB(t))
 	acmeCtx := pkgcore.WithTenant(t.Context(), "tenant-acme")
@@ -243,7 +243,7 @@ func TestCredentialService_SetTenantCredential_BlockedLiteralIP_RefusalCarriesTh
 }
 
 // TestCredentialService_SetTenantCredential_PublicBaseURL_AcceptedAndStored
-// pins the product decision this round's fix deliberately preserves: a
+// pins the product boundary the SSRF guard deliberately preserves: a
 // tenant may still point its BYOK credential at ANY public OpenAI-
 // compatible endpoint -- the legitimate use the arbitrary-baseUrl
 // capability exists for. A literal public IP needs no DNS resolution to
@@ -266,8 +266,8 @@ func TestCredentialService_SetTenantCredential_PublicBaseURL_AcceptedAndStored(t
 }
 
 // TestCredentialService_SetPlatformCredential_PrivateBaseURL_StillAccepted
-// pins the scope boundary of this round's SSRF guard: only the TENANT-
-// scope write is tenant-influenceable and therefore validated. The
+// pins the scope boundary of the SSRF guard: only the TENANT-scope write
+// is tenant-influenceable and therefore validated. The
 // platform-wide row is written by the operator under an audited system
 // context (PermissionManagePlatform at the HTTP layer), and an intranet
 // OpenAI-compatible LLM gateway is a legitimate platform default for the
@@ -294,19 +294,16 @@ func TestCredentialService_SetPlatformCredential_PrivateBaseURL_StillAccepted(t 
 }
 
 // TestCredentialService_SetTenantCredential_BlockedBaseURL_RefusedAcrossVersions
-// is the cross-version regression harness for the P0 fix: it deliberately
-// references no symbol the SSRF round adds (no ErrBaseURLBlocked, no
-// ValidateBaseURL) so the very same test compiles and runs against the
-// PRE-fix code too -- where SetTenantCredential accepted and stored any
-// base URL, and this test therefore FAILS ("accepted and stored a blocked
-// destination"), proving the fail-before half of the round's mandatory
-// regression with the identical test that passes after the fix. Post-fix
-// it asserts the two things that matter at the service boundary: the
-// write is refused, and no row was stored -- the blocked destination
-// never becomes a stored dial target waiting for a later call to reach
-// it. (The code-level assertions of the refusal shape -- which coded
-// error, which params -- live in the sibling tests above, which cannot
-// compile against the pre-fix code and are not this harness's job.)
+// is a cross-version regression harness: it deliberately references only
+// symbols that exist without the SSRF guard (no ErrBaseURLBlocked, no
+// ValidateBaseURL), so the identical test body compiles against both
+// unguarded and guarded builds of the module and fails against the
+// unguarded one. What it asserts at the service boundary: a blocked-
+// destination write is refused, and no row is stored -- the blocked
+// destination never becomes a stored dial target waiting for a later call
+// to reach it. (The code-level assertions of the refusal shape -- which
+// coded error, which params -- live in the sibling tests above, which
+// reference the guard's symbols and are not this harness's job.)
 func TestCredentialService_SetTenantCredential_BlockedBaseURL_RefusedAcrossVersions(t *testing.T) {
 	svc := NewCredentialService(newTestDB(t))
 	acmeCtx := pkgcore.WithTenant(t.Context(), "tenant-acme")

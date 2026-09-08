@@ -3,15 +3,14 @@
 
 The workflow names the backend-fragment universe in several coherent
 places at once: the trigger path filters (the pull_request and push
-`paths` blocks name each fragment's api/ directory), the thirteen
-oapi-codegen regeneration steps (one `cd <dir>` + pinned oapi-codegen
-run per fragment), and the redocly `join` input list (the fragments
-merged into build/openapi/speed.yaml, whose order is load-bearing: the
-merged document is committed and diff-gated, and the input order is what
-join renders). The fragment set grew from six to thirteen over
-successive rounds with the sites' consistency held only by comments in
-that file saying "keep the two in lockstep" -- an enumeration that can
-drift silently, and one that did.
+`paths` blocks name each fragment's api/ directory), the oapi-codegen
+regeneration steps (one `cd <dir>` + pinned oapi-codegen run per
+fragment), and the redocly `join` input list (the fragments merged into
+build/openapi/speed.yaml, whose order is load-bearing: the merged
+document is committed and diff-gated, and the input order is what join
+renders). Every one of those sites is enumerated by hand, with the
+sites' consistency held only by comments in that file saying "keep the
+two in lockstep" -- an enumeration that can drift silently.
 
 tools/api_fragments.json is the single machine-readable source of truth
 for the fragment list. This gate reads that manifest, the live tree and

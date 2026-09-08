@@ -12,12 +12,10 @@ import (
 
 // TenantRepository reads and writes admin_tenants.
 //
-// It holds a plain *gorm.DB rather than embedding dbkit.Repository[T], for
-// the same reason go/authn's UserRepository does (see that file's own
-// header comment): admin_tenants is platform data describing every
-// tenant, not one tenant's own data, so it must NOT implement
-// dbkit.TenantScoped and therefore cannot satisfy dbkit.Repository[T]'s
-// generic constraint.
+// It holds a plain *gorm.DB rather than embedding dbkit.Repository[T]:
+// admin_tenants is platform data describing every tenant, not one tenant's
+// own data, so it must NOT implement dbkit.TenantScoped and therefore
+// cannot satisfy dbkit.Repository[T]'s generic constraint.
 //
 // Two rules apply to this file, mirroring every other platform-data
 // repository in the codebase: no .Table/.Model/.Raw (the semgrep-checked
@@ -33,9 +31,8 @@ func NewTenantRepository(db *gorm.DB) *TenantRepository {
 }
 
 // Create inserts t, returning ErrTenantAlreadyExists when a row with this
-// TenantID already exists. It is the manual-registration half of D3: an
-// operator registering a tenant name before any business write has
-// happened.
+// TenantID already exists. It is the manual-registration path: an operator
+// registers a tenant name before any business write has happened.
 func (r *TenantRepository) Create(ctx context.Context, t *Tenant) error {
 	if t.TenantID == "" {
 		return ErrTenantIDRequired
@@ -59,9 +56,9 @@ func (r *TenantRepository) Create(ctx context.Context, t *Tenant) error {
 // EnsureExists idempotently creates an active, blank-display-name ledger
 // row for tenantID if none exists yet, and does nothing (reporting no
 // error) if one already does. This is the event-driven lazy population
-// half of D3 (tenant_service.go's org.node.created subscriber): a
-// redelivered event, or a tenant already registered manually, must never
-// fail or overwrite an operator's own edits.
+// path (tenant_service.go's org.node.created subscriber): a redelivered
+// event, or a tenant already registered manually, must never fail or
+// overwrite an operator's own edits.
 //
 // It reports whether it actually created a row, purely for the caller's
 // own logging -- callers must not branch business behavior on it.
@@ -165,7 +162,7 @@ type TenantPatch struct {
 //
 // The read (this call's own Get) and the write are NOT one atomic
 // operation -- see applyGuardedPatch's own doc comment for the
-// compare-and-set guard that closes the resulting race (P3-3's fix).
+// compare-and-set guard that closes the resulting race.
 func (r *TenantRepository) Update(ctx context.Context, tenantID string, patch TenantPatch) (*Tenant, error) {
 	observed, err := r.Get(ctx, tenantID)
 	if err != nil {
@@ -179,26 +176,24 @@ func (r *TenantRepository) Update(ctx context.Context, tenantID string, patch Te
 // the result back under a conditional UPDATE whose WHERE clause requires
 // every mutable column to still hold EXACTLY the value observed carried.
 //
-// This is P3-3's CAS fix: Update used to Get, mutate the struct in Go, and
-// unconditionally Save every column, so two concurrent PATCH calls (one
-// suspending, one resuming, say) both reading the row before either wrote
-// back would race -- the second Save always won, silently discarding the
-// first's intent with no error to either caller, and the
-// admin.tenant.status_changed audit event TenantService.SetStatus records
-// from the CALLER'S OWN patch (never a re-read of what actually landed)
-// would then describe a status the row never actually reached. The guard
-// makes the second of two such concurrent writes fail (0 rows affected)
+// The guard exists because an unconditional write would let two concurrent
+// PATCH calls (one suspending, one resuming, say) both reading the row
+// before either wrote back race -- the second write would always win,
+// silently discarding the first's intent with no error to either caller,
+// and the admin.tenant.status_changed audit event TenantService.SetStatus
+// records from the CALLER'S OWN patch (never a re-read of what actually
+// landed) would then describe a status the row never actually reached. The
+// guard makes the second of two such concurrent writes affect 0 rows
 // instead: refused with ErrTenantConcurrentUpdate rather than silently
-// overwriting, mirroring go/notification/send_record.go's SaveGuarded
-// conditional-UPDATE idiom (that guard is a business-semantic
-// never-downgrade-succeeded check; this one is a plain optimistic-
-// concurrency snapshot match, since admin_tenants carries no version
-// column and PATCH's fields have no such fixed ordering to enforce) --
-// including that idiom's naming no .Model()/.Table(): GORM infers the
-// table from t's own struct type via Updates(&t), the same raw-GORM-
-// bypass entry point (tools/semgrep_rules/raw-gorm-bypass.yml) a
-// map-shaped Updates call would otherwise have to name explicitly to
-// know which table to touch.
+// overwriting, the conditional-UPDATE idiom
+// go/notification/send_record.go's SaveGuarded also uses (that guard is a
+// business-semantic never-downgrade-succeeded check; this one is a plain
+// optimistic-concurrency snapshot match, since admin_tenants carries no
+// version column and PATCH's fields have no such fixed ordering to
+// enforce) -- including that idiom's naming no .Model()/.Table(): GORM
+// infers the table from t's own struct type via Updates(&t), where a
+// map-shaped Updates call would otherwise have to name the table
+// explicitly through the raw-GORM-bypass entry points.
 //
 // Split out from Update as its own step purely so a test can force the
 // exact race deterministically -- two callers sharing one Get'd snapshot,

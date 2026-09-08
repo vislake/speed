@@ -10,7 +10,7 @@ import (
 
 // Role is one named bundle of permissions inside a single tenant.
 //
-// Data domain: TENANT DATA (docs/internal/04-data-and-tenancy.md). Roles
+// Data domain: TENANT DATA. Roles
 // are owned by the tenant that defined them -- including the built-in
 // owner/admin/member roles, which are seeded per tenant rather than shared
 // from a platform-wide template, so that no read this module ever issues
@@ -28,7 +28,7 @@ type Role struct {
 	// ID is an application-generated UUID. It is globally unique on its
 	// own, which is why this table's primary key is the id alone and
 	// tenant_id is a plain indexed column (see the TenantModel embedding
-	// below and dbkit's own AGENTS.md on that choice).
+	// below).
 	ID string `gorm:"column:id;primaryKey;size:36"`
 
 	// TenantModel promotes the tenant_id column and the GetTenantID method
@@ -45,22 +45,20 @@ type Role struct {
 	// their own "admin" is the normal case.
 	Key string `gorm:"column:key;size:64;not null"`
 
-	// Builtin marks the roles this module seeds itself. It exists so a
-	// later admin surface can refuse to delete or rename them; nothing in
-	// the evaluation path reads it, because a built-in role grants exactly
-	// the way a tenant-defined one does.
+	// Builtin marks the roles this module seeds itself. No shipped surface
+	// can delete or rename a role, so nothing reads it yet; a built-in role
+	// grants exactly the way a tenant-defined one does.
 	Builtin bool `gorm:"column:builtin;not null"`
 
 	// DescriptionKey is an i18n message id, never localized text: the
-	// backend never stores or returns user-facing prose (root CLAUDE.md's
-	// internationalization rule; backend coding standard §12). It is empty
+	// backend never stores or returns user-facing prose. It is empty
 	// for tenant-defined roles, whose display name is the tenant's own
 	// business.
 	DescriptionKey string `gorm:"column:description_key;size:100;not null"`
 
 	// CreatedAt is populated by gorm's autoCreateTime -- never by
 	// application code, and never by a NOW() default in the migration,
-	// which SQLite has no equivalent for (backend coding standard §5).
+	// which SQLite has no equivalent for.
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
 }
 
@@ -76,7 +74,7 @@ func (Role) TableName() string { return "rbac_roles" }
 //
 // RoleID references Role.ID and is stored as a plain id column with no
 // foreign key. That is not laziness: cross-table constraints are avoided
-// here for the same reason root CLAUDE.md bans cross-module foreign keys --
+// here for the same reason cross-module foreign keys are banned --
 // independently released migrations and cascading deletes become
 // unmanageable -- and within this module the rows are always written and
 // removed together by the service that owns both, which is the invariant a
@@ -98,8 +96,7 @@ type RolePermission struct {
 	// Permission is the granted resource:action string, e.g. "notes:read".
 	// Matching at evaluation time is exact: this module has no wildcard
 	// grammar, deliberately (a wildcard grammar is a security surface that
-	// needs a design decision, not an implementation guess -- see
-	// AGENTS.md's deferrals).
+	// needs a design decision, not an implementation guess).
 	Permission string `gorm:"column:permission;size:100;not null"`
 
 	// CreatedAt is populated by gorm's autoCreateTime (see Role.CreatedAt).
@@ -112,23 +109,21 @@ func (RolePermission) TableName() string { return "rbac_role_permissions" }
 // RoleBinding grants one role to one user, either across the whole tenant
 // or over one subtree of the tenant's organization tree.
 //
-// Data domain: LINK DATA (docs/internal/04-data-and-tenancy.md's fourth
-// domain, the one the memberships table is the archetype of): a binding
+// Data domain: LINK DATA (the domain the memberships table is the
+// archetype of): a binding
 // joins a user, a tenant and a role. Link data IS tenant-scoped, so
 // RoleBinding is dbkit.TenantScoped and RoleBindingRepository runs
 // tenancytest.AssertIsolated exactly like the two tenant-data tables above.
 //
 // UserID references users.id in authn and NodeID references a node of the
 // organization tree in org. Both are stored as bare ids: no foreign key, no
-// import, no struct relation (root CLAUDE.md, "Do not import another
-// business module's structs for database relations -- use ID references
-// plus domain events"). It is what keeps rbac free of the authn dependency
-// its whole design forbids.
+// import, no struct relation. It is what keeps rbac free of the authn
+// dependency its whole design forbids.
 //
 // NodeID deliberately stores the node's ID, never its materialized path.
 // A denormalized path column would be stale the moment the node moves, and
-// docs/internal/16-verification.md requires the opposite: a member moving
-// in the tree must see permissions follow immediately. The path is
+// a member moving in the tree must see its permissions follow
+// immediately. The path is
 // therefore resolved at evaluation time through the host-supplied
 // SubtreeResolver (scope.go), and a binding whose node cannot be resolved
 // denies rather than widening to the whole tenant.
@@ -138,9 +133,9 @@ func (RolePermission) TableName() string { return "rbac_role_permissions" }
 // organization module run this module unchanged. The column is NOT NULL
 // with an empty-string sentinel rather than NULL, because NULLs are
 // distinct in a PostgreSQL unique index -- two identical tenant-wide
-// bindings for one user and role could coexist under NULL, while ”
-// collapses them into the single row uq_rbac_role_bindings_tenant_user_role_node
-// promises.
+// bindings for one user and role could coexist under NULL, while the empty
+// string collapses them into the single row
+// uq_rbac_role_bindings_tenant_user_role_node promises.
 type RoleBinding struct {
 	// ID is an application-generated UUID (see Role.ID).
 	ID string `gorm:"column:id;primaryKey;size:36"`
@@ -174,29 +169,29 @@ type RoleBinding struct {
 	// never set by hand at a call site.
 	//
 	// RoleBinding is the only one of this module's three models that
-	// adopted dbkit.SoftDeletable: it is the only one with a real
-	// delete-shaped operation to retrofit (RevokeRole's revoke write) --
-	// rbac.Role has no delete path at all today, so there is nothing on
-	// Role or RolePermission for mark-delete to change. See
-	// go/rbac/AGENTS.md's "Soft deletion" section for the full round.
+	// implements dbkit.SoftDeletable: it is the only one with a
+	// delete-shaped operation (RevokeRole's revoke write) --
+	// rbac.Role and RolePermission have no delete path at all, so there is
+	// nothing on them for mark-delete to change.
 	//
-	// uq_rbac_role_bindings_tenant_user_role_node became a partial index
-	// scoped WHERE deleted_at IS NULL in the same migration that adds these
-	// two columns (migrations/{postgres,sqlite}/0002_add_soft_delete.sql),
+	// uq_rbac_role_bindings_tenant_user_role_node is a partial index
+	// scoped WHERE deleted_at IS NULL (migrations/{postgres,sqlite}/
+	// 0002_add_soft_delete.sql adds these
+	// two columns in the same migration),
 	// so a revoked binding's (tenant, user, role, node) tuple frees up
 	// immediately for a fresh AssignRole, instead of staying reserved by a
 	// row nobody can see.
 	DeletedAt *time.Time `gorm:"column:deleted_at"`
 	DeletedBy string     `gorm:"column:deleted_by;not null;default:''"`
 
-	// RevokeOrigin records WHICH writer soft-deleted this row, the marker
-	// deferral D14 of this module's AGENTS.md proposed. It is meaningful
-	// only while the row is soft-deleted (deleted_at IS NOT NULL): a live
+	// RevokeOrigin records WHICH writer soft-deleted this row. It is
+	// meaningful only while the row is soft-deleted (deleted_at IS NOT
+	// NULL): a live
 	// row always carries the empty default, and every mark-delete -- and
 	// every restore -- rewrites it, so no stale value ever survives onto a
 	// row whose state it does not describe (migrations/{postgres,sqlite}/
 	// 0003_add_revoke_origin.sql has the full value vocabulary and the
-	// backfill policy for rows that predate the column).
+	// backfill policy).
 	//
 	// The three writers of revoked rows all route through the one
 	// origin-aware revoke path RoleBindingRepository.Delete provides (which
@@ -248,10 +243,10 @@ var _ dbkit.SoftDeletable = RoleBinding{}
 
 // newID returns the primary key a new row in this module gets.
 //
-// IDs are generated in the APPLICATION, never by the database: gen_random_uuid()
-// and its relatives are PostgreSQL-only, and this module's tables must
-// migrate and behave identically on SQLite (root CLAUDE.md's dual-dialect
-// rule). A single helper rather than a scattered uuid.NewString() keeps
+// IDs are generated in the APPLICATION, never by the database:
+// gen_random_uuid() and its relatives are PostgreSQL-only, and this
+// module's tables must migrate and behave identically on SQLite. A single
+// helper rather than a scattered uuid.NewString() keeps
 // that decision in one place, next to the size:36 column definitions that
 // depend on it.
 func newID() string { return uuid.NewString() }

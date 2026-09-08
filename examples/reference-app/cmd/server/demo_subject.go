@@ -30,14 +30,12 @@ import (
 // the demo grants seeded at startup. It is deliberately a file of its own
 // rather than more of server.go.
 //
-// The "where a Subject comes from" half changed when authn landed: a
-// request whose access token verified is now resolved from its Principal,
-// the identity the authenticating side proved. demoUserHeader survives as
-// the affordance the pre-auth flows were built around -- its own comment
-// says exactly how the two sources share the resolver -- and demo_users.go
-// seeds real accounts whose grants reach this same gate through the
-// principal path, which is the shape this file settles into once the
-// header goes away.
+// The "where a Subject comes from" half: a request whose access token
+// verified is resolved from its Principal, the identity the authenticating
+// side proved. demoUserHeader survives as the affordance the pre-auth
+// flows were built around -- its own comment says exactly how the two
+// sources share the resolver -- and demo_users.go seeds real accounts
+// whose grants reach this same gate through the principal path.
 
 // demoUserHeader names the request header this example reads an acting
 // user id from.
@@ -47,21 +45,15 @@ import (
 // the server can set it to any value and become that user. It carries the
 // same warning demoHostTenants and strictHostResolver carry in server.go.
 //
-// It predates authn: before access tokens existed it was the only way a
-// request could name a user at all, and the flows that grew up around it
-// (the permission-gate and isolation tests, the actor model
-// seedDemoGrants below seeds) still use it to say which seeded demo actor
-// is acting. demoSubjectResolver therefore still reads it first, so those
-// flows keep meaning exactly what they always meant. What authn actually
-// replaced is everything else: a request carrying no demo header is now
-// resolved from the verified Principal authn.Middleware put in the request
-// context -- which is how the real accounts demo_users.go seeds reach the
-// same gate from a browser with no header at all.
-//
-// The header's remaining days are numbered: once the pre-auth flows move
-// onto those real accounts nothing needs it, and it goes away together
-// with the resolver's fallback. The consumer-shell plan records that
-// removal as deferred to the org-web round.
+// The flows built around the header (the permission-gate and isolation
+// tests, the actor model seedDemoGrants below seeds) use it to say which
+// seeded demo actor is acting. demoSubjectResolver therefore reads it
+// first, so those flows keep their meaning; a request carrying no demo
+// header is resolved from the verified Principal authn.Middleware put in
+// the request context -- which is how the real accounts demo_users.go
+// seeds reach the same gate from a browser with no header at all.
+// Removing the header together with the resolver's fallback stays undone
+// until the pre-auth and demo flows move onto those real accounts.
 //
 // Its precedence over a verified Principal is a real hole for any
 // deployment where a non-demo user might reach this binary: a caller who
@@ -72,17 +64,15 @@ import (
 // who deploys this reference app somewhere a real user might reach sets
 // APP_DISABLE_DEMO_USER_HEADER and every demo identity source is disabled
 // at once: demoSubjectResolverFor makes every gated route resolve from the
-// verified Principal alone, this header no longer consulted at all, and
+// verified Principal alone, this header not consulted at all, and
 // the SAME switch reaches the attribution header this app's other
 // resolver family reads (demoOrgUserHeader, "X-Demo-User-Id", server.go)
 // -- demoOrgSubjectResolver and demoNotesSubjectResolver are wired with
 // headerDisabled then, so notes' create handler, the cases surface, org's
 // caller-scoped endpoints and the notification surface resolve from the
-// verified Principal too. Before the switch covered that second header,
-// setting it disabled X-Demo-User while X-Demo-User-Id still let any
-// caller act as any user id on those surfaces. Left unset (the default),
-// nothing about either header's behavior changes, which is what keeps
-// every demo journey and test built around them working exactly as before.
+// verified Principal too. Left unset (the default),
+// neither header's behavior changes, which is what keeps
+// every demo journey and test built around them working.
 const demoUserHeader = "X-Demo-User"
 
 // The demo users seeded into every configured tenant. Two of them, because
@@ -136,7 +126,7 @@ const (
 	// demoAIGatewayTenantWriterUserID holds demoAIGatewayTenantWriterRoleKey,
 	// a custom role carrying exactly aigateway.PermissionWrite (and
 	// aigateway.PermissionRead) and NOT aigateway.PermissionManagePlatform.
-	// It exists purely to prove this round's two-tier permission gate is
+	// It exists purely to prove the two-tier permission gate is
 	// real: demoOwnerUserID holds BuiltinRoleOwner, which -- per rbac's own
 	// builtin.go doc comment -- carries EVERY permission any module
 	// declared, platform-scope credential write included, so it cannot
@@ -200,23 +190,16 @@ const pkiRoutePath = "/api/v1/pki"
 // integrationRoutePath is where go/integration's spec-generated HTTP
 // fragments mount their routes -- the same unexported-path situation
 // notesRoutePath's own comment explains. One mount path serves BOTH of the
-// module's gated entities: the round-5 API-key CRUD fragment and the
-// round-7 webhook-subscription CRUD + recent-deliveries fragment live under
+// module's gated entities: the API-key CRUD fragment and the
+// webhook-subscription CRUD + recent-deliveries fragment live under
 // this single path (go/integration's Handler implements both halves of the
 // generated ServerInterface and module.go's Register mounts it once, at
 // /api/v1/integration), so the gate below must dispatch by SUB-PATH to tell
 // the two permission pairs apart -- see integrationRouteSentinel's own doc
 // comment for the full argument.
-//
-// Renamed from integrationAPIKeyRoutePath in round 7, when the path stopped
-// belonging to the API-key fragment alone. The rename also retires the
-// identifier's "APIKey" stem, which is what gosec's hardcoded-credential
-// heuristic (G101) used to match on -- the #nosec comment that identifier
-// once carried is gone with it, since neither this name nor this value is
-// credential-shaped.
 const integrationRoutePath = "/api/v1/integration"
 
-// sharingSharesRoutePath is where sharing's round-3 owner-facing operations
+// sharingSharesRoutePath is where sharing's owner-facing operations
 // (create, list, get, revoke, list access log) are mounted -- named through
 // the module's own exported sharing.PathShares constant, mirroring every
 // other *RoutePath constant's use of an exported module constant where one
@@ -227,7 +210,7 @@ const integrationRoutePath = "/api/v1/integration"
 // doc comment in go/sharing for the full contrast.
 const sharingSharesRoutePath = sharing.PathShares
 
-// aiGatewayRoutePath is where go/ai-gateway's round-3 credential-write
+// aiGatewayRoutePath is where go/ai-gateway's credential-write
 // admin surface mounts its routes -- the same unexported-path situation
 // notesRoutePath's own comment explains.
 const aiGatewayRoutePath = "/api/v1/ai-gateway"
@@ -243,7 +226,7 @@ const billingRoutePath = "/api/v1/billing"
 // The map is exhaustive by construction: mountModuleRoutes fails the
 // server build for any mounted path missing from it. That direction
 // matters. A table whose default is "ungated" quietly serves every route a
-// future module adds; a table whose default is "refuse to start" cannot.
+// new module adds; a table whose default is "refuse to start" cannot.
 //
 // config's two paths are routePublic for the same reason they are
 // allowlisted in tenancy.Middleware (see buildServer): they are pre-auth
@@ -252,13 +235,13 @@ const billingRoutePath = "/api/v1/billing"
 // marks public, never tenant data.
 //
 // org's path is gated for real, like storage's and sharing's: org's Handler
-// performs no PERMISSION check of its own for nine of its eleven operations
-// -- it resolves a caller's raw identity through SubjectResolver
-// (demoOrgSubjectResolver in server.go) for exactly two of them,
-// org_createInvitation and org_acceptInvitation, and reads only the tenant
-// from context for the other nine (go/org/AGENTS.md's own honest count) --
-// so this router gate is where the example enforces org's four declared
-// permissions (org:read/manage/invite_member/remove_member) per operation.
+// performs no PERMISSION check of its own -- it resolves a caller's raw
+// identity through SubjectResolver (demoOrgSubjectResolver in server.go)
+// for the two invitation operations, org_createInvitation and
+// org_acceptInvitation, and reads only the tenant from context for every
+// other operation -- so this router gate is where the example enforces
+// org's four declared permissions (org:read/manage/invite_member/remove_member)
+// per operation.
 // It is dispatched to guardOrgRoute, never demoPermissionFor's generic
 // read/write split or a single permissionFor override: org's operations
 // span FOUR permissions distinguished by sub-resource (tree vs. roster vs.
@@ -335,12 +318,13 @@ const billingRoutePath = "/api/v1/billing"
 // a different question from whether the CALLER may reach the route at all.
 // It is dispatched to guardIntegrationRoute, never demoPermissionFor, for
 // the same class of reason pki's path needed its own permissionFor: this
-// module's permission strings carry THREE segments -- round 5's
-// "integration:apikey:read"/"integration:apikey:manage" and round 7's
-// "integration:webhook:read"/"integration:webhook:manage", both sharing one
-// mount path -- and neither demoPermissionFor's generic composition nor
-// rbac.RequirePermissionFunc's own splitPermission (go/rbac/middleware.go)
-// can parse a string whose action half contains a second colon. See
+// module's permission strings carry THREE segments --
+// "integration:apikey:read"/"integration:apikey:manage" and
+// "integration:webhook:read"/"integration:webhook:manage", both pairs
+// sharing one mount path -- and neither demoPermissionFor's generic
+// composition nor rbac.RequirePermissionFunc's own splitPermission
+// (go/rbac/middleware.go) can parse a string whose action half contains a
+// second colon. See
 // integrationRouteSentinel's own doc comment for the full argument, and
 // guardIntegrationRoute's for the sub-path dispatch that tells the two
 // permission pairs apart.
@@ -387,17 +371,13 @@ var demoRouteGuards = map[string]string{
 	// see sharingPermissionFor's own doc comment, the same pkiPermissionFor-
 	// style carve-out guardModuleRoute already makes for pki's path.
 	sharingSharesRoutePath: sharingResource,
-	// pki's path was a KNOWN, PRE-EXISTING GAP (routePublic) when this
-	// table first grew an entry for it: pki mounts a real, fine-grained
+	// pki's path is gated for real: pki mounts a fine-grained
 	// permission vocabulary (pki.PermissionRead/Issue/Rotate plus the two
 	// revoke permissions) and its handler performs no identity check of
 	// its own -- the storage-style shape this table's own doc comment
-	// describes, which normally means router gating -- but
+	// describes, which normally means router gating -- and
 	// demoPermissionFor's binary read/write split cannot express distinct
-	// permissions, so this router-level gate was simply never added when
-	// pki's HTTP surface landed. It is gated for real now, and the
-	// platform-domain round replaced the generic branch with its own
-	// guard: pkiRouteSentinel marks the path non-public, and
+	// permissions, so pkiRouteSentinel marks the path non-public and
 	// guardModuleRoute dispatches it to guardPkiRoute (never
 	// demoPermissionFor), whose pkiPermissionFor selects between pki's
 	// own Read and the two split revoke permissions by route, and whose
@@ -408,8 +388,7 @@ var demoRouteGuards = map[string]string{
 	// tenant) would reach the platform signing key and stop token
 	// issuance for every tenant at once.
 	//
-	// What this gate does NOT reach, left as follow-up for whoever owns
-	// pki's reference-app wiring: PermissionIssue and PermissionRotate
+	// What this gate does NOT reach: PermissionIssue and PermissionRotate
 	// have no HTTP operation in the fragment at all (issuance and manual
 	// rotation stay Go-only per go/pki/api/openapi.yaml's own header), so
 	// there is nothing yet to gate for either.
@@ -503,9 +482,8 @@ const orgRouteSentinel = "ORG_ROUTE_PER_OPERATION_PERMISSION"
 // values that RequirePermissionFunc's splitPermission (go/rbac/
 // middleware.go) parses just fine. go/integration's permissions are declared
 // one segment deeper -- "integration:apikey:read"/"integration:apikey:manage"
-// (round 1's constants, first driven through a real HTTP gate in round 5)
-// and "integration:webhook:read"/"integration:webhook:manage" (round 2's
-// constants, round 7's fragment) -- following this codebase's
+// and "integration:webhook:read"/"integration:webhook:manage" -- following
+// this codebase's
 // "<module>:<entity>:<verb>" convention for a module with more than one
 // gated entity (go/integration/module.go's own doc comments on its
 // permission constants) -- and splitPermission's own doc comment is
@@ -517,19 +495,10 @@ const orgRouteSentinel = "ORG_ROUTE_PER_OPERATION_PERMISSION"
 // action directly from this module's own permission constants instead of
 // round-tripping them through rbac.Permission/splitPermission.
 //
-// Round 4's wireIntegrationWebhooks route (webhooks.go) found and worked
-// around this mismatch first, for the webhook pair, by calling az.Can
-// directly in a hand-mounted demo route outside the OpenAPI machinery;
-// round 5 generalized the identical fix into this router-level gate when
-// the API-key fragment joined the generic mountModuleRoutes loop
-// (reg.Routes.Routes()), and round 7 extended the same gate to the webhook
-// pair as that fragment's operations joined the same mount -- retiring the
-// hand-mounted route, whose az.Can-direct argument now lives here.
-//
 // # Why one gate, two permission pairs, and sub-path dispatch
 //
 // go/integration mounts ONE handler on ONE path, /api/v1/integration
-// (module.go's apiPath), serving round 5's API-key operations and round 7's
+// (module.go's apiPath), serving the API-key operations and the
 // webhook-subscription operations through the same mount -- a Go 1.22
 // ServeMux hands a mounted handler the FULL request path (mountModuleRoutes
 // registers exactly the module's own mount, so r.URL.Path always carries
@@ -567,8 +536,7 @@ const pkiSigningKeyRevokePrefix = pkiRoutePath + "/signing-keys/"
 // the three GET operations export a JWKS or a CRL (PermissionRead), and
 // the two POST operations revoke a signing key or a certificate -- gated on
 // pki.PermissionRevokeSigningKey and pki.PermissionRevokeCertificate
-// respectively, the split that replaced round 3's single two-domain
-// "pki:revoke" (go/pki/module.go's const block documents why one
+// respectively (go/pki/module.go's const block documents why one
 // permission spanning pki_signing_keys and pki_certificates is wrong in
 // whichever single domain it is evaluated in). PermissionIssue and
 // PermissionRotate stay ungated here because nothing under this path
@@ -627,10 +595,8 @@ func pkiSubjectResolverFor(headerDisabled bool) func(*http.Request) (rbac.Subjec
 // guardPkiRoute wraps pki's mounted fragment routes in rbac's permission
 // gate, in the same shape guardAdminRoute (demo_admin.go) wraps admin's:
 // rbac.RequirePermissionFunc with pki's own per-route permission selector
-// and pki's own subject resolver (the SystemDomain pin above). It is what
-// replaces the generic guardModuleRoute branch pki used before the
-// platform-domain round, which evaluated the then-spanning pki:revoke
-// permission in the request tenant's domain for both revoke operations.
+// and pki's own subject resolver (the SystemDomain pin above), instead of
+// the generic demoPermissionFor gate this table's doc comment describes.
 func guardPkiRoute(az rbac.Authorizer, handler http.Handler, demoHeaderDisabled bool) http.Handler {
 	return rbac.RequirePermissionFunc(az, pkiPermissionFor,
 		rbac.WithSubjectResolver(pkiSubjectResolverFor(demoHeaderDisabled)),
@@ -642,12 +608,12 @@ func guardPkiRoute(az rbac.Authorizer, handler http.Handler, demoHeaderDisabled 
 // and sharingPermissionFor's single-pair selectors, this one must FIRST pick
 // which of the module's two permission pairs the request targets, because
 // both fragments share the one mount path integrationRoutePath: a request
-// whose path continues "/webhooks" is round 7's webhook-subscription
+// whose path continues "/webhooks" is the webhook-subscription
 // surface -- its GET/HEAD reads gate on integration.PermissionWebhookRead
 // and its four mutations (create, update, delete, restore) on
 // integration.PermissionWebhookManage, a method-only split like
 // demoPermissionFor's since the webhook fragment's two read operations are
-// both GETs -- and anything else under the mount is round 5's API-key
+// both GETs -- and anything else under the mount is the API-key
 // surface, gated on integration.PermissionRead/PermissionManage the same
 // way. See integrationRouteSentinel's own doc comment for why neither
 // demoPermissionFor's generic composition nor rbac.RequirePermissionFunc
@@ -680,15 +646,10 @@ func integrationPermissionFor(r *http.Request) string {
 // "<resource>:<action>" contract at all. resource and action are derived by
 // cutting integrationPermissionFor's answer at its LAST colon --
 // "integration:apikey" and "read"/"manage", or "integration:webhook" and
-// the webhook pair's own two verbs -- the identical split round 4's
-// wireIntegrationWebhooks route (webhooks.go) hand-derived for this
-// module's webhook pair, generalized here into a reusable middleware since
-// these fragments' routes are mounted through the generic mountModuleRoutes
-// loop rather than hand-mounted one at a time. Round 5's version guarded
-// only the API-key half, with a method-only permission choice; round 7's
-// change is confined to integrationPermissionFor's sub-path dispatch between
-// the two pairs above -- this fail-closed shape is pair-agnostic and
-// unchanged.
+// the webhook pair's own two verbs -- and this fail-closed shape is
+// pair-agnostic: integrationPermissionFor's sub-path dispatch picks the
+// pair, and the guard below gates whatever three-segment permission that
+// selector returns.
 func guardIntegrationRoute(az rbac.Authorizer, handler http.Handler, demoHeaderDisabled bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		permission := integrationPermissionFor(r)
@@ -724,21 +685,17 @@ func guardIntegrationRoute(az rbac.Authorizer, handler http.Handler, demoHeaderD
 // integrationErrInternal folds any error that is not itself an *apperr.Error
 // into go/integration's stable internal code -- the fallback the error
 // writer below applies, the same shape consult.go's own writeConsultError
-// gives its own module. Round 4's webhooks.go declared it next to its
-// hand-mounted subscription route; that route retired in round 7 (see
-// webhooks.go's package doc), and the helper moved here with the rest of
-// the integration gate glue it serves.
+// gives its own module. It lives here with the rest of the integration gate
+// glue it serves.
 var integrationErrInternal = apperr.Internal("integration.internal_error")
 
 // writeIntegrationError writes err to w as a JSON {code, params} body, the
 // same structured-error envelope shape consult.go's own writeConsultError
 // produces -- a stable code plus structured parameters, never localized text
 // (backend coding standard §6.2). It is the one error writer shared by the
-// integration gate above (guardIntegrationRoute) and round 6's
+// integration gate above (guardIntegrationRoute) and the
 // integrationWhoamiPath handler (integration_authenticate.go), which
-// translate coded integration/rbac errors into HTTP responses; it moved
-// here from webhooks.go when round 7 retired that file's hand-mounted
-// route.
+// translate coded integration/rbac errors into HTTP responses.
 func writeIntegrationError(w http.ResponseWriter, err error) {
 	appErr, ok := apperr.As(err)
 	if !ok {
@@ -812,7 +769,7 @@ const billingRouteSentinel = "BILLING_ROUTE_THREE_SEGMENT_PERMISSION"
 // assumes. A GET is aigateway:read (aiGateway_getCredential); a PUT whose
 // path ends in "/platform" is aigateway:manage_platform
 // (aiGateway_setPlatformCredential), the materially more privileged
-// operation this round's own brief requires a DISTINCT permission for;
+// operation, deliberately gated on its own DISTINCT permission;
 // every other write (a PUT ending in "/tenant") is aigateway:write
 // (aiGateway_setTenantCredential). Checking the path suffix is safe for
 // the identical reason sharingPermissionFor's own doc comment gives: the
@@ -831,11 +788,11 @@ func aiGatewayPermissionFor(r *http.Request) string {
 // billingPermissionFor selects the permission a billingRoutePath request
 // must hold, mirroring pkiPermissionFor's method-only split but naming
 // billing's own three-segment permission strings directly. The module's
-// fragment is read-only this round -- both operations are GETs answered
+// fragment is read-only -- both operations are GETs answered
 // under billing.PermissionCreditRead (billing.PermissionCreditManage
 // gates nothing over HTTP yet; see go/billing/api/openapi.yaml's own
-// header for the read-only decision and what a future write round gates
-// on) -- so the GET/HEAD read branch is the one any real request takes;
+// header for the read-only decision) -- so the GET/HEAD read branch is the
+// one any real request takes;
 // the default branch stays the strict direction demoPermissionFor itself
 // adopts, demanding the manage permission from any method this example
 // never thought about rather than guessing.
@@ -1191,10 +1148,8 @@ func peekJSONBody(r *http.Request, dst any) bool {
 // rbac's coarse Can gate (rbac.RequirePermissionFunc, inside guardOrgRoute)
 // has already let the request through, and narrows it further for a
 // subject whose org grant is scoped to one subtree rather than the whole
-// tenant -- rbac's Authorizer.DataScope machinery's first REAL consumer in
-// this codebase (closing P2-2's substance: go/rbac/AGENTS.md and
-// docs/internal/16-verification.md have both described DataScope's
-// contract since M1, with no caller ever having exercised it end to end).
+// tenant -- rbac's Authorizer.DataScope machinery's real, end-to-end
+// consumer in this codebase.
 //
 // A tenant-wide grant is untouched by this function: DataScope.TenantWide
 // short-circuits every branch below to "allowed" before orgNodeScopeFor is
@@ -1360,14 +1315,14 @@ func splitDemoPermission(permission string) (resource, action string, ok bool) {
 //     header below, and never from anything else the caller controls --
 //     accepting a caller-supplied tenant_id is the single most common
 //     horizontal-privilege-escalation bug in multi-tenant systems, and
-//     root CLAUDE.md forbids it outright.
+//     forbidden here outright.
 //   - The USER comes from one of two sources. demoUserHeader comes first,
 //     and that order is deliberate: the header is the affordance the
 //     pre-auth demo flows were built around (it names which seeded demo
-//     actor is acting -- its own comment spells out the history), and
+//     actor is acting -- its own comment spells out the trade-off), and
 //     those flows send it alongside tokens whose accounts hold no rbac
-//     grants, so the header must keep deciding exactly as it always did
-//     or every one of them changes meaning.
+//     grants, so the header keeps deciding first, or every one of them
+//     changes meaning.
 //   - Only when no demo header is present does the resolver read the
 //     request context's verified Principal -- the user authn's access
 //     token proved, which is where a real client's identity comes from.
@@ -1377,18 +1332,15 @@ func splitDemoPermission(permission string) (resource, action string, ok bool) {
 //
 // The header's precedence over the Principal is the remaining scaffold:
 // it is still an unauthenticated claim, and it still overrides a proven
-// identity when both are present. It is only a demo affordance, and its
-// removal is the org-web round's deferred work (see demoUserHeader).
+// identity when both are present. It is a demo affordance only, and it
+// goes away together with the header itself (see demoUserHeader).
 //
-// demoUserHeader's own doc comment now names the real kill switch for
+// demoUserHeader's own doc comment names the real kill switch for
 // exactly that precedence problem (disableDemoUserHeaderEnv,
-// APP_DISABLE_DEMO_USER_HEADER): this function keeps its original,
-// unconditional header-first behavior unchanged -- every direct caller
-// (this file's own guardIntegrationRoute/guardOrgRoute/guardModuleRoute
-// default branch used to call it directly, and demo_subject_test.go still
-// does, pinning that exact behavior) -- while production wiring now goes
-// through demoSubjectResolverFor below, which is what actually honors the
-// switch.
+// APP_DISABLE_DEMO_USER_HEADER): this function keeps the unconditional
+// header-first behavior -- demo_subject_test.go pins it -- while
+// production wiring goes through demoSubjectResolverFor below, which is
+// what actually honors the switch.
 //
 // It fails closed: no tenant, no user (from either source), or an
 // incomplete pair reports (Subject{}, false), and rbac's gate turns that
@@ -1400,11 +1352,10 @@ func demoSubjectResolver(r *http.Request) (rbac.Subject, bool) {
 // demoResolveSubject is demoSubjectResolver's implementation, parameterized
 // by headerDisabled so the kill switch demoUserHeader's doc comment
 // describes can turn the header off without touching the header-enabled
-// default's own behavior at all. headerDisabled=false reproduces
-// demoSubjectResolver's original body exactly (the header read first, the
-// Principal read only when the header is absent); headerDisabled=true skips
-// the header read entirely and resolves the user from the verified
-// Principal alone, exactly as if demoUserHeader had never been sent.
+// behavior at all. headerDisabled=false is the header-enabled body (the
+// header read first, the Principal read only when the header is absent);
+// headerDisabled=true skips the header read entirely and resolves the user
+// from the verified Principal alone.
 //
 // The TENANT half is untouched by headerDisabled either way -- it always
 // comes from the request context (tenancy.Middleware's resolution), never
@@ -1441,10 +1392,10 @@ func demoResolveSubject(r *http.Request, headerDisabled bool) (rbac.Subject, boo
 // buildServer threads from cfg.DisableDemoUserHeader, itself read from
 // disableDemoUserHeaderEnv (APP_DISABLE_DEMO_USER_HEADER, server.go).
 //
-// headerDisabled=false (the default, byte-identical to this switch never
-// having existed) returns demoSubjectResolver itself, so every existing
-// demo journey and test that depends on the header winning keeps working
-// unchanged. headerDisabled=true returns a resolver that never reads
+// headerDisabled=false (the default) returns demoSubjectResolver itself,
+// so every demo journey and test that depends on the header winning keeps
+// working unchanged. headerDisabled=true returns a resolver that never
+// reads
 // demoUserHeader at all -- the kill switch demoUserHeader's own doc comment
 // describes, for a deployment where a real, non-demo user might reach this
 // binary.
@@ -1558,7 +1509,7 @@ func guardModuleRoute(az rbac.Authorizer, path string, handler http.Handler, org
 // made by an administrator through the admin console.
 // demoSeedActorID is the audit Actor id this host's demo and platform-
 // staff seeds attribute their rbac role writes to (pkgcore.ActorTypeSystem):
-// rbac now emits an audit row for every role it defines or grants, and
+// rbac emits an audit row for every role it defines or grants, and
 // boot-time seeding has no operator session behind it, so the row names
 // the seed itself -- the same "the write is a config-driven declaration
 // re-affirmed identically on every restart" attribution shape the app's
@@ -1650,8 +1601,8 @@ func seedDemoReaderRole(ctx context.Context, svc *rbac.Service) error {
 // seedDemoReaderRole spells out.
 //
 // The role carries exactly aigateway.PermissionRead and
-// aigateway.PermissionWrite -- the tenant-scoped half of this round's
-// two-tier gate -- and DELIBERATELY NOT aigateway.PermissionManagePlatform.
+// aigateway.PermissionWrite -- the tenant-scoped half of the two-tier
+// gate -- and DELIBERATELY NOT aigateway.PermissionManagePlatform.
 // demoOwnerUserID (BuiltinRoleOwner) holds every declared permission, so it
 // cannot demonstrate the platform write being refused; this role is the
 // tenant-writer that can set its own tenant's BYOK credential over HTTP and

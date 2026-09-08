@@ -1,8 +1,8 @@
 package main
 
 // sharing_flow_test.go is go/sharing's mandatory-first-consumer proof,
-// covering both HTTP surfaces the module ships: the round-2 public,
-// unauthenticated access route and the round-3 owner-facing create/list/
+// covering both HTTP surfaces the module ships: the public,
+// unauthenticated access route and the owner-facing create/list/
 // get/revoke/access-log routes. Every operation drives the real composed
 // stack buildTestServer wires (server.go's tenancy allowlist,
 // demo_subject.go's routePublic gate for the access route and its
@@ -11,11 +11,7 @@ package main
 // own flow test in this file's package already meets.
 //
 // Create, list, get, revoke and the access log all go through the real
-// owner-facing HTTP routes now (sharing.PathShares) -- round 2's
-// "secondSharingService" workaround (a second connection to the running
-// server's own SQLite file, standing in for the HTTP surface this round
-// adds) is retired along with it; go/sharing/AGENTS.md records exactly why
-// that workaround existed and what retired it.
+// owner-facing HTTP routes (sharing.PathShares).
 
 import (
 	"bytes"
@@ -202,9 +198,8 @@ func TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd(t *testing.T) {
 		t.Errorf("Cache-Control = %q, want %q", got, "no-store")
 	}
 
-	// The owner reads back the access log: one granted attempt, rule 4
-	// (docs/internal/07-platform-services.md's "access needs no login, but
-	// must leave a trail" rule).
+	// The owner reads back the access log: one granted attempt, and the
+	// design rule that access needs no login but must leave a trail.
 	logResp := storageRequest(t, srv, http.MethodGet, sharing.PathShares+"/"+created.Share.ID+"/access-log",
 		acmeToken, demoOwnerUserID, "", nil)
 	var accessLog testListAccessLogResponse
@@ -217,8 +212,7 @@ func TestBuildServer_SharingFlow_CreateAccessRevoke_EndToEnd(t *testing.T) {
 	}
 
 	// Revoke, through the real owner-facing route -- then the very next
-	// access is refused -- rule 3 (docs/internal/07-platform-services.md's
-	// "revocation takes effect immediately" rule).
+	// access is refused: revocation takes effect immediately.
 	revokeResp := storageRequest(t, srv, http.MethodPost, sharing.PathShares+"/"+created.Share.ID+"/revoke",
 		acmeToken, demoOwnerUserID, "", nil)
 	var revoked testSharingShare
@@ -279,7 +273,7 @@ func TestBuildServer_SharingFlow_UnknownToken_Answers404(t *testing.T) {
 // sharing:revoke for POST the revoke sub-route), proving demoRouteGuards'
 // entry for sharing.PathShares and sharingPermissionFor's own
 // GET/POST-create/POST-revoke split are all wired for real, never left
-// ungated the way this same route was before this round.
+// ungated the way the route is without this gate.
 //
 // The revoke case deliberately targets a share id nobody created
 // ("share-does-not-exist"): sharingPermissionFor selects the permission

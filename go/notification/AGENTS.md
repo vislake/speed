@@ -3,9 +3,8 @@
 `go/notification` is the platform's outbound-message module: it delivers a
 tenant's notifications to the people it serves, on the channels those people
 want (the in-app inbox, email, SMS), and -- for contacts who are not users of
-any tenant -- only where consent has been verified first. The module's design,
-channel taxonomy and consent rules live in `docs/internal/07-platform-services.md`;
-this file is the module-level operating guide that ships to consuming projects.
+any tenant -- only where consent has been verified first. This file is the
+module-level operating guide that ships to consuming projects.
 
 ## Status
 
@@ -24,8 +23,8 @@ through `Kernel.Bootstrap`, `cmd/server/demo_notification.go` supplies the
 host-side demo seams, and `cmd/server/notification_flow_test.go` drives the
 composed HTTP stack through the module's surfaces.
 
-Nothing here is a stub. The "Deferred to later rounds" section below is the
-complete, honest list of what this round deliberately does not ship.
+Nothing here is a stub. The "Not implemented" section below is the complete,
+honest list of what the module does not ship.
 
 ## What this module owns
 
@@ -46,9 +45,9 @@ complete, honest list of what this round deliberately does not ship.
   deliberate resend sets so its delivery is a new occurrence with its own
   record; a dispatch's locale participates in the derived key the same
   way, so a resend rendered in a new locale delivers in it; nothing
-  aggregates or rate-limits routine deliveries this round (the module's
+  aggregates or rate-limits routine deliveries (the module's
   rate limits cover verification-code sends and the consent-create path
-  only) -- those delivery-path shapes are deferred below.
+  only) -- those delivery-path shapes are absent (see below).
 - The module's own HTTP surface under `/api/v1/notifications`, served by a
   handler compiled against the generated interface of its own OpenAPI
   fragment, plus the realtime inbox stream.
@@ -314,7 +313,7 @@ back out through the inbox API, so it may carry only what the type's own
 copy interpolates -- never delivery-internal context (an operator's
 free-text justification, an actor's user id). Every type now states that
 surface explicitly through its declaration's `RecipientVisibleParams`
-(pkgcore, added 2026-09): a non-nil list, the empty one included, is
+(pkgcore): a non-nil list, the empty one included, is
 authoritative, and `Dispatch` refuses any dispatch carrying a parameter
 outside it before anything is enqueued (`ErrDispatchParamsNotAllowed`,
 code `notification.dispatch_params_not_allowed`, naming the type in
@@ -334,18 +333,10 @@ covers the dispatch refusal, and
 narrowing; the wire code and its HTTP status ride errors_test.go's
 literal code table.
 
-The P1-2 leak the declaration enforcement above closes was invited by the
-earlier framing of `Dispatch.Params`' own doc comment: the field read as
-an interpolation-only channel ("the values the type's templates
-reference"), and the persistence -- a parameter persists verbatim into the
-inbox row and API whether or not any template references it -- was left to
-inference, so admin's author reasonably read an unreferenced parameter as
-unused; P1-2 was invited by the contract, not by author carelessness. Copy
-governance is now structural
-rather than prose (2026-09): a parameter no copy template of the type
-references renders into nothing yet would still round-trip through the
-row, so `Dispatch` refuses it before anything is enqueued
-(`ErrDispatchParamsUnreferenced`, code
+Copy governance is structural rather than prose: a parameter no copy
+template of the type references renders into nothing yet would still
+round-trip through the row, so `Dispatch` refuses it before anything is
+enqueued (`ErrDispatchParamsUnreferenced`, code
 `notification.dispatch_params_unreferenced`, naming the type in "type_key"
 and the offending keys in "params") -- applied to every DECLARED type
 whether or not its declaration restricts its recipient-visible list
@@ -353,21 +344,20 @@ whether or not its declaration restricts its recipient-visible list
 satisfy both; a type the registry does not declare is not judged here,
 its delivery being refused anyway by the delivery path's own
 undeclared-type gate) -- and a user delivery's channel leg narrows a
-payload that nevertheless reaches it -- a job enqueued before the copy
-gate existed -- down to the parameters that channel's own copy renders
-(render.go's `copyParamsForChannel`, a removal probe: a parameter whose
-removal leaves every rendered part byte-identical is dropped) before the
-delivery key derives or anything renders or persists, so the in-app row
-stores exactly the parameters its own copy was rendered from and the key
-never depends on a copy-inert parameter. Distinguishing two otherwise
-identical deliveries is `OccurrenceID`'s first-class job, never a
-copy-inert parameter's. The delivery suite pins both boundaries:
-`TestDelivery_Dispatch_RefusesParamsNoTemplateReferences` covers the
-dispatch refusal over an unrestricted AND an over-declared type (a
-restricted declaration that itself lists the unreferenced parameter), and
-`TestDelivery_StalePayloadParams_UnreferencedParam_DroppedBeforeRowAndKey`
-the stale-payload narrowing -- both fail on the pre-gate code, where the
-dispatch sailed through and the row carried the marker verbatim.
+stale in-flight payload that reaches it -- a job enqueued before its
+type's copy gate restricted the params -- down to the parameters that
+channel's own copy renders (render.go's `copyParamsForChannel`, a removal
+probe: a parameter whose removal leaves every rendered part byte-identical
+is dropped) before the delivery key derives or anything renders or
+persists, so the in-app row stores exactly the parameters its own copy was
+rendered from and the key never depends on a copy-inert parameter.
+Distinguishing two otherwise identical deliveries is `OccurrenceID`'s
+first-class job, never a copy-inert parameter's. The delivery suite pins
+both boundaries: `TestDelivery_Dispatch_RefusesParamsNoTemplateReferences`
+covers the dispatch refusal over an unrestricted AND an over-declared type
+(a restricted declaration that itself lists the unreferenced parameter),
+and `TestDelivery_StalePayloadParams_UnreferencedParam_DroppedBeforeRowAndKey`
+the stale-payload narrowing.
 
 Record semantics (`send_record.go`): `succeeded` is written only after the
 transport accepted the send, `failed` after a failure exhausted an attempt,
@@ -377,18 +367,18 @@ retrying -- no address on file, an external contact whose consent lapsed.
 of the `failureReason*` classifications the settle site chose (delivery.go's
 fail-and-retry / fail-and-stop paths), on skipped records a short
 `skipReason*` phrase, and the empty sentinel on succeeded ones. The raw text
-of a failure is deliberately never stored, whatever its origin -- the
-mechanism that once stood between transport errors and the column was a
-caller-side redaction of the recipient's address by exact substring match,
-and a transport echoes the address in whatever form IT chose, not reliably
-the normalized form the module handed it, so such a guard systematically
-missed the most likely inputs and the column could still carry plaintext
-PII. The record therefore stores a classification instead of any text
-(delivery.go's `classifiedError` keeps the original cause reachable through
-Unwrap for the job's `errors.Is`/`apperr.As` signals); `send_records` is a
-platform table with no deletion path, and its reads -- the D10 operator
-search first among them -- see only the bounded vocabulary. The module's
-tests pin the classification values, never transport strings.
+of a failure is deliberately never stored, whatever its origin: no
+caller-side redaction stands between transport errors and the column,
+because a transport echoes the address in whatever form IT chose, not
+reliably the normalized form the module handed it, so substring-based
+redaction would systematically miss the most likely inputs and the column
+could still carry plaintext PII. The record therefore stores a
+classification instead of any text (delivery.go's `classifiedError` keeps
+the original cause reachable through Unwrap for the job's
+`errors.Is`/`apperr.As` signals); `send_records` is a platform table with
+no deletion path, and its operator-facing reads see only the bounded
+vocabulary. The module's tests pin the classification values, never
+transport strings.
 
 At-most-once, honestly stated: across the RETRIES of one delivery the
 pipeline converges without a second send -- the job probes the record's
@@ -399,9 +389,9 @@ cover every crash and concurrency shape: a process that dies after the
 transport accepted a send but before the record write leaves no `succeeded`
 row, and the retry re-sends; two concurrently running attempts of one
 dispatch can both probe before either writes. Those double-send windows are
-the price of the record being written after the transport call, and later
-rounds narrow them (a provider receipt id column already exists on
-`SendRecord`, unused by any transport this round).
+the price of the record being written after the transport call, and they
+stay open (a provider receipt id column already exists on `SendRecord`; no
+transport returns one).
 
 Delivery jobs never assume worker context: the job rebuilds the tenant from
 the enqueued job's own field before any repository call, exactly as the
@@ -482,16 +472,14 @@ Verification-code sending and verification are rate limited on two
 the blind index, never the plaintext. `platform_blacklist` exists so a
 platform-level record of a bad address has a home before any writer needs it;
 the reason vocabulary mirrors the two ways an address proves undeliverable
-(`complaint`, `hard_bounce`). This round ships the table, the repository and
-the cross-tenant `IsBlacklisted` read; no writer and no caller exist yet (see
-"Deferred to later rounds").
+(`complaint`, `hard_bounce`). The table, the repository and the
+cross-tenant `IsBlacklisted` read ship; no writer and no caller exist yet
+(see "Not implemented").
 
 ## Adjudications
 
-The consent, verification and seam decisions below were argued out during
-this round's design reviews. They are restated here in the module's own
-words, because code comments across the package cite this section by name
-and must not need the review artifacts those decisions originally lived in.
+The consent, verification and seam decisions below are recorded in the
+module's own words, so every part of the package states the same rule.
 
 ### Unsubscribe is permanent for the contact as a whole
 
@@ -544,12 +532,11 @@ Everything the delivery depends on that lives outside the payload -- the
 host's address resolution for a user, the contact's status and consent for
 an external recipient, the recipient's channel preferences -- is read by
 the delivery job at SEND time. The platform blacklist is deliberately not
-among them this round: its writers are deferred and nothing in the
-delivery pipeline consults it (see "Platform-blacklist writers and bounce
-remediation" under "Deferred to later rounds"). This is what makes a
-static-table demo resolver and a real profile-store resolver
-interchangeable for the module, and what makes the module's own gates the
-ones that actually protect the recipient.
+among them: its writers are unbuilt and nothing in the delivery pipeline
+consults it (see "Not implemented"). This is what makes a static-table
+demo resolver and a real profile-store resolver interchangeable for the
+module, and what makes the module's own gates the ones that actually
+protect the recipient.
 
 ### The verification code rides on the contact row
 
@@ -579,9 +566,8 @@ rule -- the module never classifies an attempt's failure to decide
 anything, budget included -- and it keeps the brute-force bound of a
 6-digit code honest for the outsider the code protects against.
 
-The identical ordering was judged a P2 in go/sharing and fixed there
-(6af7e6c6 charges the per-token access budget only after a wrong
-credential is judged). This module deliberately does NOT follow, and the
+Sharing's access endpoint charges its per-token budget only after a wrong
+credential is judged; this module deliberately does NOT follow, and the
 divergence is the surface, not the mechanism. Sharing's access endpoint is
 anonymous: anyone who holds or guesses a share token can burn that token's
 budget with no account at all, so the rate-limit shape is the whole
@@ -602,8 +588,8 @@ one is not.
 
 The ruling flips if the surface changes: a verify endpoint moved to an
 unauthenticated surface or placed on a pre-auth allowlist makes the
-mechanism identical to sharing's pre-fix shape, and it must then be fixed
-the way 6af7e6c6 fixed sharing -- not re-ruled here.
+mechanism identical to sharing's, and it must then be fixed the way
+sharing fixed it -- not re-ruled here.
 
 ### SMS stays an in-package seam
 
@@ -612,10 +598,10 @@ pkgcore seam, because pkgcore ships no SMS seam. The interface is
 structurally identical to authn's own sender, so a host's wiring can hand
 the same implementation to both modules without either importing the other
 (the console sender and any HTTP sender a host implements satisfy both).
-Promoting SMS to a pkgcore seam alongside `Mailer` -- with a registry,
-presets and capability declarations -- is a later-round pkgcore change (see
-"Deferred to later rounds"); until then the interface lives here and the
-host's implementation is all the module ever calls.
+SMS has no pkgcore-level seam alongside `Mailer` -- no registry entries,
+preset entries or capability declarations for it (see "Not implemented");
+the interface lives here and the host's implementation is all the module
+ever calls.
 
 ### External contacts render in the platform default locale
 
@@ -625,9 +611,9 @@ REQUIRED (validate refuses an empty one: a delivery in the wrong language is
 worse than a failed one, and the module's copy rule forbids silent
 fallback). For an external contact the locale field is ignored: a contact
 row carries no locale column, and the contact's copy renders in the
-platform default locale (the same deferral `renderContactCode` documents).
-Per-contact locale negotiation and its reconciliation with already-rendered
-copy are a later-round change (see below).
+platform default locale (see `renderContactCode`). Per-contact locale
+negotiation and its reconciliation with already-rendered copy are not
+implemented (see below).
 
 ### Separate index keys from the cipher key
 
@@ -640,84 +626,76 @@ go/org, which store the same shape of identity data under the same two-key
 discipline, and it holds for every rate-limit key and dedupe key the module
 derives: they name the index hex, never the plaintext address.
 
-## Deferred to later rounds
+## Not implemented
 
-Each deferral below is recorded here so a code comment can point at it
-instead of re-litigating the decision. What is NOT listed is not deferred:
-if it is not in this section and not in "Known limitations", this round
-claims it works.
+Each entry below records functionality the module does not implement. What
+is NOT listed is not absent: if it is not in this section and not in
+"Known limitations", the module claims it works.
 
 - **Platform-blacklist writers and bounce remediation.** Nothing writes
-  `platform_blacklist` this round, and nothing in the delivery pipeline
-  consults it: the delivery job marks the TENANT'S OWN contact bounced
-  (`MarkBounced`) on a permanent transport failure, leaving the platform
-  list untouched. The writers -- the complaint webhook and the delivery
-  job's hard-failure leg -- belong to later rounds, as does the
-  remediation story for a bounced address: how an address that proved
-  undeliverable is later re-proved (a fresh consent cycle, a platform-side
-  review) is unsettled, and until it is, `bounced` stays terminal and the
-  errors the attestation path raises on a bounced address stand (the
-  "contact is bounced" refusal). The record's `reason` vocabulary
-  (`complaint`, `hard_bounce`) is shipped now so the schema does not move
-  when the writers land.
+  `platform_blacklist`, and nothing in the delivery pipeline consults it:
+  the delivery job marks the TENANT'S OWN contact bounced (`MarkBounced`)
+  on a permanent transport failure, leaving the platform list untouched.
+  The writers -- a complaint webhook and the delivery job's hard-failure
+  leg -- do not exist, and neither does the remediation story for a
+  bounced address: how an address that proved undeliverable is later
+  re-proved (a fresh consent cycle, a platform-side review) is unsettled,
+  so `bounced` stays terminal and the errors the attestation path raises
+  on a bounced address stand (the "contact is bounced" refusal). The
+  record's `reason` vocabulary (`complaint`, `hard_bounce`) is shipped so
+  the schema does not move when the writers land.
 - **Per-contact locale negotiation.** External contacts render in the
-  platform default locale (see Adjudications); giving a contact its own
-  negotiated locale is a later-round change (a `locale` column, the
-  negotiation path, and the reconciliation of copy already rendered under
-  the default).
+  platform default locale (see Adjudications); a contact has no negotiated
+  locale of its own -- no `locale` column, no negotiation path, and no
+  reconciliation of copy already rendered under the default.
 - **SMS as a pkgcore seam.** The in-package `SMSSender` interface (see
-  Adjudications) moves to pkgcore alongside `Mailer` -- seam registry,
-  preset entries, capability declarations and the host options that resolve
-  it -- in a later pkgcore round; authn's HTTP sender and this module's
-  console sender will register there and every host's wiring simplifies.
-- **The platform-staff push consumer.** The hub's per-connection
-  `Subscribe` returns connections a platform-staff shell will one day push
-  to browsers or devices; that consumer is a later round's work (it would
-  subscribe unscoped and do its own recipient routing, exactly as the
-  inbox stream's `SubscribeFor` scoping keeps one recipient's stream to
-  its own announcements). What ships is the hub itself, its
-  `EventInboxCreated` subscription, and the HTTP stream that reads it per
-  replica.
+  Adjudications) has no pkgcore-level home alongside `Mailer`: there is no
+  seam registry entry, preset entry, capability declaration or host option
+  for it, so authn's HTTP sender and this module's console sender cannot
+  register anywhere and every host wires the same implementation to both
+  modules by hand.
+- **The platform-staff push consumer.** No platform-staff push consumer
+  exists for the hub's per-connection `Subscribe` connections (such a
+  consumer would subscribe unscoped and do its own recipient routing,
+  exactly as the inbox stream's `SubscribeFor` scoping keeps one
+  recipient's stream to its own announcements). What ships is the hub
+  itself, its `EventInboxCreated` subscription, and the HTTP stream that
+  reads it per replica.
 - **Tenant-enforced preference tiers.** The preference matrix ships two of
-  the design's three tiers (docs/internal/07's preference-precedence row:
-  personal settings > tenant-enforced policy > type default): a
-  recipient's own per-type channel choices, and the type's declared
-  defaults when a recipient has none. The middle tier -- a tenant
-  administrator forcing a channel for a type across all of that tenant's
-  recipients (security alerts, billing overdues), where personal settings
-  must not win -- is a later round's shape: a tenant-scoped override
-  table, the merge at preference-read time, and the write surface the
-  current single-key update would grow into. Until it lands, the matrix's
-  own two tiers are all the rows express, and a type that must reach its
-  recipients is declared unsubscribable.
+  the design's three tiers (personal settings > tenant-enforced policy >
+  type default): a recipient's own per-type channel choices, and the
+  type's declared defaults when a recipient has none. The middle tier -- a
+  tenant administrator forcing a channel for a type across all of that
+  tenant's recipients (security alerts, billing overdues), where personal
+  settings must not win -- is not implemented: there is no tenant-scoped
+  override table, no merge at preference-read time, and no write surface
+  beyond the current single-key update. The matrix's own two tiers are
+  all the rows express, and a type that must reach its recipients is
+  declared unsubscribable.
 - **Same-type aggregation and delivery rate limiting.** Nothing aggregates
-  or rate-limits the delivery path this round: the module's rate limits
-  gate verification-code sends and the consent-create path, and the
-  delivery job sends every dispatch through as rendered (replay dedupe
-  collapses identical re-dispatches only; a deliberate resend dispatches
-  under a fresh per-occurrence marker and delivers). The design's same-type
-  aggregation -- a short burst of one type coalescing into few messages, a
-  bulk-import failure must not mean five hundred emails -- and the
-  per-type delivery limits that go with it are a later round's work on
-  the pipeline: the aggregation window, the merged message shape, and
-  where the limits sit are all unsettled.
+  or rate-limits the delivery path: the module's rate limits gate
+  verification-code sends and the consent-create path, and the delivery
+  job sends every dispatch through as rendered (replay dedupe collapses
+  identical re-dispatches only; a deliberate resend dispatches under a
+  fresh per-occurrence marker and delivers). Same-type aggregation -- a
+  short burst of one type coalescing into few messages, a bulk-import
+  failure must not mean five hundred emails -- and the per-type delivery
+  limits that go with it are not implemented: the aggregation window, the
+  merged message shape, and where the limits sit are all unsettled.
 - **Admin template editing.** A type's channel templates live in its
   declaring module's own locale files (see the Copy rule above), declared
   next to the type and rendered from the host's merged catalog at send
-  time; nothing stores them here for an operator to edit. The design's
-  operations-console editing and preview surface for that copy is a later
-  round's work: it needs a template store the declaration ids can be
-  re-pointed at, and the registry-driven preview that goes with it. The
-  registry's other two driven surfaces -- the preference page's automatic
-  rendering and the documentation generation -- are likewise deferred
-  with the frontend below.
-- **The `@speed/notification-ui` frontend.** The design's notification
-  center -- the bell with the unread badge, the drop-down list, the
-  message-center page, and the preference-matrix table -- is a later web
-  round's package, consuming this module's HTTP surface through the
-  api-sdk operations that already ride in the merged document. Nothing in
-  this round is a stub of it: the module's generated client half and the
-  reference app's Go-side flows are what ship.
+  time; nothing stores them here for an operator to edit. No
+  operations-console editing and preview surface exists for that copy:
+  there is no template store the declaration ids can be re-pointed at, and
+  no registry-driven preview. The registry's other two driven surfaces --
+  the preference page's automatic rendering and the documentation
+  generation -- are likewise absent with the frontend below.
+- **The `@speed/notification-ui` frontend.** No notification-center
+  frontend package exists -- no bell with the unread badge, no drop-down
+  list, no message-center page, no preference-matrix table; the module's
+  generated client half and the reference app's Go-side flows are what
+  ship.
 
 ## Rules
 
@@ -819,7 +797,7 @@ the end-to-end consumer proof through the composed HTTP stack. `go vet`,
 - The inbox stream (`GET /api/v1/notifications/stream`) sends no heartbeat:
   a connection that survives with no announcements is indistinguishable from
   a dead one until a proxy or the client times it out. Heartbeats are a
-  deliberate non-goal of this round; the route's doc comment says so.
+  deliberate non-goal; the route's doc comment says so.
 - At-most-once holds across a single delivery's retries (see "Delivery
   pipeline"); the crash-between-transport-and-record and
   concurrent-attempt double-send windows are recorded there and in

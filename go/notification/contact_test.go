@@ -28,8 +28,7 @@ import (
 // The consent ledger's three dev keys, all deliberately distinct: the
 // cipher key that encrypts the address column at rest, the email index
 // key, and the phone index key. An index key must never double as the
-// encryption key (AGENTS.md's "Separate index keys from the cipher key"
-// adjudication); the constants stand apart so no fixture can accidentally
+// encryption key; the constants stand apart so no fixture can accidentally
 // share bytes.
 const (
 	testCipherKey     = "0123456789abcdef0123456789abcdef"
@@ -435,11 +434,10 @@ func TestContact_ByChannelAndAddressIndex_TenantScoped(t *testing.T) {
 // verification-code message (the sole sanctioned exception to event-driven
 // messaging), the pending contact refuses delivery until the code is
 // verified, VerifyCode moves the row to verified, and the deliverability
-// gate then passes. This is the contact half of the round's second
-// fail-before-pass requirement: a message to an unverified phone number is
-// refused -- no transport call ever happens for it -- until consent
-// verification completes. Every transport side effect is asserted as a
-// count: exactly one SMS line total, however many gate checks run.
+// gate then passes. A message to an unverified phone number is refused --
+// no transport call ever happens for it -- until consent verification
+// completes. Every transport side effect is asserted as a count: exactly
+// one SMS line total, however many gate checks run.
 func TestContact_CreateDoubleOptIn_SMS_VerifiesAndBecomesDeliverable(t *testing.T) {
 	env := newContactEnv(t)
 	ctx := tenantCtx("tenant-acme")
@@ -851,9 +849,8 @@ func TestContact_AttestationNeverOverwritesPendingRow(t *testing.T) {
 // once per actual transition (an idempotent repeat emits nothing), the
 // deliverability gate and every code path refuse the address afterwards,
 // and re-registering the address resolves to the unsubscribed row -- an
-// unsubscribe is permanent for the contact as a whole (AGENTS.md's
-// "Unsubscribe is permanent for the contact as a whole" adjudication),
-// never silently undone by a fresh create.
+// unsubscribe is permanent for the contact as a whole, never silently
+// undone by a fresh create.
 func TestContact_Unsubscribe_PermanentAndIdempotent(t *testing.T) {
 	env := newContactEnv(t)
 	ctx := tenantCtx("tenant-acme")

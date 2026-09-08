@@ -3,7 +3,7 @@
 // Package org_test holds go/org's integration tier: the module's tenant-
 // isolation proof (this file) and its materialized-path dialect-identity
 // proof (postgres_tree_test.go) re-run against a real PostgreSQL server --
-// per A5 of the round's frozen plan, mirroring go/dbkit, go/tenancy,
+// mirroring go/dbkit, go/tenancy,
 // go/jobs, go/pkgcore and go/config's own integration_test/ directories. It
 // is physically separate from go/org's unit tests (which live in package
 // org, one file per source file) and carries the "integration" build tag: a
@@ -76,8 +76,7 @@ func tenantCtx(tenant pkgcore.TenantID) context.Context {
 
 // TestOrgNodeRepository_AssertIsolated_Postgres re-runs go/org's own
 // TestRepository_AssertIsolated against a real PostgreSQL server. org_nodes
-// is tenant data (docs/internal/04-data-and-tenancy.md); AssertIsolated is
-// the mandatory suite for it.
+// is tenant data; AssertIsolated is the mandatory suite for it.
 //
 // The fixture seeds each tenant ONE root row (the first record requested for
 // that tenant) and every further record beneath it, mirroring the unit-tier
@@ -116,8 +115,8 @@ func TestOrgNodeRepository_AssertIsolated_Postgres(t *testing.T) {
 
 // TestMembershipRepository_AssertIsolated_Postgres re-runs go/org's own
 // TestMembershipRepository_AssertIsolated against a real PostgreSQL server.
-// memberships is LINK data (docs/internal/04), and link data is
-// tenant-scoped: AssertIsolated is the correct half of the pair, never
+// memberships is LINK data, and link data is tenant-scoped: AssertIsolated
+// is the correct half of the pair, never
 // AssertNotTenantScoped -- see membership.go's own extensive doc comment on
 // why this is not a mistake.
 func TestMembershipRepository_AssertIsolated_Postgres(t *testing.T) {

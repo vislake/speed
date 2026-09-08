@@ -271,17 +271,16 @@ func TestService_UpdateWebhookSubscription_ConcurrentDelete_DeletionWins(t *test
 // window is far narrower than the update path's (the delete is always one
 // statement behind the restore -- it can only find the row live after the
 // restore's own un-mark has committed, while the restore's tail read
-// follows that same commit immediately), so a real-concurrency run against
-// the unfixed code was measured at zero collisions over 800 trials. The
-// pre-fix resurrection is therefore pinned separately, deterministically:
-// the deleted-between-read-and-save interleaving is replayed step by step
-// in webhook_repository_test.go's
-// TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly-style
-// direct repository calls, and in this test's sibling
-// TestWebhookSubscriptionRepository_RestoreTail_RestoreReadThenDeleteThenSave
-// -- see the report accompanying this round. This test's own role is the
-// post-fix invariant under real scheduling pressure: no interleaving of
-// the two service calls may resurrect, ever.
+// follows that same commit immediately), so a real-concurrency run
+// measures zero collisions even against a resurrection-shaped
+// implementation. The deleted-between-read-and-save interleaving is
+// therefore pinned separately, deterministically: in
+// webhook_repository_test.go's direct repository calls
+// (TestWebhookSubscriptionRepository_updateFields_PartialAndLiveOnly-style)
+// and in this test's sibling
+// TestWebhookSubscriptionRepository_RestoreTail_RestoreReadThenDeleteThenSave.
+// This test's own role is the invariant under real scheduling pressure: no
+// interleaving of the two service calls may resurrect, ever.
 func TestService_RestoreWebhookSubscription_ConcurrentDelete_DeletionWins(t *testing.T) {
 	_, svc := newWebhookTestService(t)
 
@@ -348,18 +347,17 @@ func TestService_RestoreWebhookSubscription_ConcurrentDelete_DeletionWins(t *tes
 }
 
 // pauseShapedWebhookUpdate reports whether stmt is an UPDATE whose SET
-// clause names the Active column but NOT the DeletedAt unmark -- the exact
-// statement shape of Service.RestoreWebhookSubscription's separate pause
-// write as it shipped in the round that introduced the method (dbkit's
+// clause names the Active column but NOT the DeletedAt unmark -- the
+// statement shape a two-write restore would use for its pause (dbkit's
 // Repository[WebhookSubscription].Restore unmark carries DeletedAt and no
-// Active; the pause that followed it carried Active and no DeletedAt). The
-// two restore regression tests below use it to arm a gorm update-chain
-// callback that fires deterministically at that pause write and only at
-// it: in the pre-fix code the callback observes (or fails) the write
-// precisely between the unmark's commit and the pause's, while in the
-// post-fix code no such statement exists at all -- the restore is one
-// UPDATE carrying Active and DeletedAt together -- so the callback never
-// fires.
+// Active; a following pause write would carry Active and no DeletedAt).
+// The two restore regression tests below use it to arm a gorm update-chain
+// callback that fires deterministically at such a statement and only at
+// it: against a two-write restore the callback would observe (or fail) the
+// pause write precisely between the unmark's commit and the pause's,
+// while the actual one-write restore -- one UPDATE carrying Active and
+// DeletedAt together -- has no such statement at all, so the callback
+// never fires.
 func pauseShapedWebhookUpdate(stmt *gorm.Statement) bool {
 	hasActive, hasDeletedAt := false, false
 	for _, col := range stmt.Selects {
@@ -374,28 +372,29 @@ func pauseShapedWebhookUpdate(stmt *gorm.Statement) bool {
 }
 
 // TestService_RestoreWebhookSubscription_NoDeliveryCanFireBetweenRestoreAndPause
-// is the regression test for the restore-then-pause window this fix
-// closes. RestoreWebhookSubscription used to land its restore and its
-// forced pause in TWO separate writes -- first dbkit's unmark
+// is the regression test for the restore-then-pause window.
+// RestoreWebhookSubscription lands its restore and its forced pause in ONE
+// write (restorePaused); a two-write shape -- dbkit's unmark
 // (Repository[WebhookSubscription].Restore), then an updateFields call
-// setting Active = false. Between the unmark's commit and the pause's
-// commit the subscription was LIVE with Active still true -- the exact row
-// handleDomainEvent's fan-out matches (webhook_delivery.go's
-// matchingSubscriptions, over ListActiveByTenant) -- so a matching domain
-// event observed in that window silently resumed POSTing the tenant's live
-// event data to an external, third-party URL nobody had looked at since
-// the deletion, the very outcome the forced pause exists to prevent.
+// setting Active = false -- would leave the subscription LIVE with Active
+// still true between the unmark's commit and the pause's commit, the exact
+// row handleDomainEvent's fan-out matches (webhook_delivery.go's
+// matchingSubscriptions, over ListActiveByTenant), so a matching domain
+// event observed in that window would silently resume POSTing the
+// tenant's live event data to an external, third-party URL nobody had
+// looked at since the deletion, the very outcome the forced pause exists
+// to prevent.
 //
 // The window is probed deterministically -- no sleeps, no scheduling luck,
 // no goroutines: a gorm update-chain callback armed for the duration of
 // the restore call fires immediately before any pause-shaped UPDATE (see
-// pauseShapedWebhookUpdate). At that instant, in the pre-fix code, the
-// unmark has already committed (it is an earlier, separate statement) and
-// the pause has not, so the callback runs exactly the fan-out a matching
-// domain event observed between the two writes would trigger. In the
-// post-fix code the restore is one statement carrying Active and DeletedAt
-// together, no pause-shaped statement ever exists, and the callback never
-// fires: no instant of the call has a live-and-active row to fan out to.
+// pauseShapedWebhookUpdate). At that instant, against a two-write restore,
+// the unmark would already have committed (it is an earlier, separate
+// statement) and the pause would not, so the callback runs exactly the
+// fan-out a matching domain event observed between the two writes would
+// trigger. Against the actual one-write restore no pause-shaped statement
+// ever exists, and the callback never fires: no instant of the call has a
+// live-and-active row to fan out to.
 func TestService_RestoreWebhookSubscription_NoDeliveryCanFireBetweenRestoreAndPause(t *testing.T) {
 	fq := &fakeQueue{}
 	m, svc := newWebhookTestService(t, WithWebhookQueue(fq))
@@ -422,9 +421,9 @@ func TestService_RestoreWebhookSubscription_NoDeliveryCanFireBetweenRestoreAndPa
 			if !pauseShapedWebhookUpdate(db.Statement) {
 				return
 			}
-			// The pre-fix interleave point: the unmark committed, the pause
-			// has not. Run the real fan-out a matching domain event observed
-			// at this instant would run.
+			// The would-be interleave point of a two-write restore: the
+			// unmark committed, the pause has not. Run the real fan-out a
+			// matching domain event observed at this instant would run.
 			probe.fired = true
 			_ = svc.handleDomainEvent(ctxFor(testTenant),
 				pkgcore.Event{Type: testMapping.InternalType, TenantID: testTenant})
@@ -454,20 +453,23 @@ func TestService_RestoreWebhookSubscription_NoDeliveryCanFireBetweenRestoreAndPa
 }
 
 // TestService_RestoreWebhookSubscription_PauseWriteFailure_LeavesNoRestoredActiveSubscription
-// is the regression test for the failure leg of the same two-write shape:
-// when the separate pause write FAILED, the pre-fix method reported
-// ErrInternal but the unmark had already committed -- leaving the
+// is the regression test for the failure leg of the one-write shape: a
+// two-write restore whose separate pause write FAILED would report
+// ErrInternal while the unmark had already committed -- leaving the
 // subscription permanently restored-ACTIVE, delivering again to a URL
 // nobody had looked at since the deletion, while every caller saw only an
 // error (and a retry would answer the collapsed not-found, since the row
-// was no longer mark-deleted for a second Restore to match).
+// was no longer mark-deleted for a second Restore to match). The single
+// restorePaused write has no such leg: its failure leaves the row still
+// mark-deleted, never restored at all.
 //
 // The failure is injected deterministically through the same gorm
 // update-chain callback: armed for the duration of the restore call, it
 // fails any pause-shaped UPDATE (see pauseShapedWebhookUpdate) before that
-// statement executes. In the pre-fix code that is exactly the pause write,
-// and the test observes the injected failure's aftermath: the unmark
-// committed, the pause did not, and the row is live with Active true --
+// statement executes. Against a two-write restore that is exactly the
+// pause write, and the test observes the injected failure's aftermath:
+// the unmark committed, the pause did not, and the row is live with
+// Active true --
 // matched by ListActiveByTenant, the fan-out's own query. In the post-fix
 // code no pause-shaped statement exists (the restore is one UPDATE
 // carrying Active and DeletedAt together), the injection cannot fire, and
@@ -670,8 +672,8 @@ func TestService_DeleteWebhookSubscription_MarksInsteadOfPhysicallyRemoving(t *t
 	}
 }
 
-// TestService_RestoreWebhookSubscription_UndoesTheDelete proves the round
-// trip: delete, verify invisible everywhere a normal read looks, restore,
+// TestService_RestoreWebhookSubscription_UndoesTheDelete proves the full
+// cycle: delete, verify invisible everywhere a normal read looks, restore,
 // verify visible again with URL/EventTypes/CreatedBy intact and Active
 // forced false regardless of its value before deletion (see
 // RestoreWebhookSubscription's own doc comment for why).

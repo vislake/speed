@@ -22,11 +22,11 @@ func withTestPrincipal(r *http.Request, userID, tenantID string) *http.Request {
 	return r.WithContext(authn.WithPrincipal(r.Context(), principal))
 }
 
-// demo_user_header_kill_switch_test.go pins the fix for Finding 1 of the
-// reference-app-go.md audit -- demoUserHeader (X-Demo-User) used to outrank
+// demo_user_header_kill_switch_test.go pins the kill switch for
+// demoUserHeader (X-Demo-User), which would otherwise outrank
 // a verified authn Principal UNCONDITIONALLY, with no way for an operator
-// to turn that precedence off -- and, since the later Finding 2 round, its
-// extension to the app's SECOND demo identity header: cfg.DisableDemoUserHeader
+// to turn that precedence off -- and the switch's extension to the app's
+// SECOND demo identity header: cfg.DisableDemoUserHeader
 // (APP_DISABLE_DEMO_USER_HEADER, server.go) is the kill switch this file
 // proves closes the hole on BOTH headers -- the rbac gate's X-Demo-User
 // and the attribution seams' X-Demo-User-Id (demoOrgSubjectResolver /
@@ -81,7 +81,7 @@ func postNoteWithDemoHeader(t *testing.T, srv *httptest.Server, bearerToken, dem
 }
 
 // TestDemoUserHeader_KillSwitch_ClosesThePrivilegeEscalationHole is the
-// mandatory end-to-end regression Finding 1 requires: a REAL invited-shaped
+// mandatory end-to-end regression: a REAL invited-shaped
 // session (the seeded demo-reader account, signed in through authn's real
 // login route, holding notes:read and nothing else) additionally sends
 // X-Demo-User: demo-owner (rbac's built-in owner role, every permission any
@@ -177,12 +177,12 @@ func TestDemoResolveSubject_HeaderDisabled_IgnoresHeaderUsesPrincipal(t *testing
 }
 
 // TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface is the
-// mandatory regression Finding 2 requires, on the SECOND demo identity
+// mandatory regression on the SECOND demo identity
 // header this app reads: demoOrgUserHeader ("X-Demo-User-Id", server.go)
 // names the acting user for every attribution seam demoOrgSubjectResolver
 // and demoNotesSubjectResolver serve -- notes' create handler, the cases
 // surface, org's caller-scoped invitation endpoints and the notification
-// module's whole surface. Before this round the kill switch
+// module's whole surface. Without the switch's extension the kill switch
 // (APP_DISABLE_DEMO_USER_HEADER) only reached demoUserHeader
 // ("X-Demo-User") in the rbac gate; the X-Demo-User-Id resolvers were wired
 // unconditionally, so with the switch ON a caller could still impersonate
@@ -194,7 +194,7 @@ func TestDemoResolveSubject_HeaderDisabled_IgnoresHeaderUsesPrincipal(t *testing
 //     must still be attributed to the caller's own Principal -- and the
 //     clinic-wide list, whatever creator header rides along, must answer
 //     the tenant's rows -- the header is not read at all. (The list's
-//     creator-blindness is doubly enforced since the block-A round: even
+//     creator-blindness holds regardless: even
 //     with the switch OFF the list reads no creator, but the create
 //     attribution half of this leg stays the real impersonation gate.)
 //   - the notification inbox (a demoOrgSubjectResolver surface): with the
@@ -230,7 +230,7 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 		// A second case created while sending a FOREIGN X-Demo-User-Id must
 		// carry the SAME principal attribution: with the switch on the
 		// attribution header is not read at all, so it can neither name the
-		// creator of a case nor key any list. (The pre-fix bug: the header
+		// creator of a case nor key any list. (The header alone
 		// was honored, and the caller's own case vanished from its own
 		// "my cases" answer under a foreign id.)
 		createdWithForeignHeader := createCaseAs(t, srv, token, demoNotesCreatorUserID, caseCreateBody{PatientName: "kill switch case two"})
@@ -285,7 +285,7 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 
 		// A request with a verified token and NO demo header must be
 		// resolved from the Principal -- with the switch on the header-only
-		// scaffold stops applying. (The pre-fix bug: the notification
+		// scaffold stops applying. (The notification
 		// surface answered subject_unresolved to every header-less request,
 		// verified Principal or not.)
 		var inbox struct {
@@ -314,8 +314,8 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 	t.Run("switch at its default: the X-Demo-User-Id surfaces stay header-only, unchanged", func(t *testing.T) {
 		// The no-behavior-change guard: with the switch at its default the
 		// notification surface keeps refusing a header-less request with its
-		// per-operation subject_unresolved -- the pinned pre-existing
-		// behavior this round must not have touched.
+		// per-operation subject_unresolved -- the pinned
+		// behavior the switch must not have touched.
 		srv, cfg, _ := buildTestServer(t)
 
 		token := registerAndAuthenticate(t, srv, cfg, "tenant-acme", "killswitch-default-owner")
@@ -335,8 +335,8 @@ func TestDemoUserIDHeader_KillSwitch_NoLongerImpersonatesAnySurface(t *testing.T
 // verified Principal, the disabled resolver reports the Principal's user,
 // never the header's -- and with no Principal at all it fails closed rather
 // than falling back to the header it is disabling. The zero-value
-// (header-enabled) resolver must keep its original header-only contract
-// untouched: the header wins when present, and a header-less request with
+// (header-enabled) resolver must keep its header-only contract:
+// the header wins when present, and a header-less request with
 // only a Principal still fails closed.
 func TestDemoOrgSubjectResolver_HeaderDisabled_UsesPrincipalIgnoresHeader(t *testing.T) {
 	const principalUserID = "real-unprivileged-user"
@@ -365,7 +365,7 @@ func TestDemoOrgSubjectResolver_HeaderDisabled_UsesPrincipalIgnoresHeader(t *tes
 		t.Fatal("the disabled resolver resolved a subject from the attribution header alone with no verified Principal; it must fail closed")
 	}
 
-	// The zero value stays byte-identical to the original header-only
+	// The zero value stays identical to the header-only
 	// resolver: the header wins over the Principal...
 	got, ok := (demoOrgSubjectResolver{}).Subject(withBoth())
 	if !ok || got != demoNotesCreatorUserID {
@@ -430,10 +430,10 @@ func TestDemoNotesSubjectResolver_HeaderDisabled_UsesPrincipalIgnoresHeader(t *t
 }
 
 // TestDemoSubjectResolverFor_DefaultIsByteIdenticalToDemoSubjectResolver is
-// the guard test Finding 1 requires: demoSubjectResolverFor(false) --
+// the guard test: demoSubjectResolverFor(false) --
 // exactly what buildServer wires when cfg.DisableDemoUserHeader is left at
 // its zero value -- must resolve identically to demoSubjectResolver itself
-// in every case demo_subject_test.go already pins, so this round changes
+// in every case demo_subject_test.go already pins, so the switch changes
 // nothing about the header-wins default.
 
 func TestDemoSubjectResolverFor_DefaultIsByteIdenticalToDemoSubjectResolver(t *testing.T) {
@@ -471,7 +471,7 @@ func TestDemoSubjectResolverFor_DefaultIsByteIdenticalToDemoSubjectResolver(t *t
 }
 
 // TestDemoOrgSubjectResolver_PrincipalFallback_UsesPrincipalWhenNoHeader
-// pins the org-web round's exception to the header-only contract: org's
+// pins org's exception to the header-only contract: org's
 // wiring sets principalFallback (server.go's org.NewModule option), so a
 // header-less request carrying a verified Principal resolves as that
 // Principal's user -- the browser-shaped caller the team surface needs --

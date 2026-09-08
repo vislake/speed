@@ -72,7 +72,7 @@ func recvAuditEvent(t *testing.T, received chan pkgcore.Event) audit.RecordedEve
 }
 
 // assertNoAuditEvent fails the test if any audit.EventRecorded event is
-// waiting on received -- used to prove an idempotent no-op retry, or
+// waiting on received -- proves an idempotent no-op retry, or
 // Balance's own read-only path, records nothing.
 func assertNoAuditEvent(t *testing.T, received chan pkgcore.Event) {
 	t.Helper()
@@ -417,17 +417,15 @@ func TestCreditService_Expire_UnkeyedRetry_DoubleApplies(t *testing.T) {
 	}
 }
 
-// TestCreditService_Expire_KeyedRetry_DoesNotDoubleApply is the scheduler
-// contract the credit-expiry round ships: ExpireInput.IdempotencyKey makes
-// a keyed Expire's row ID the caller's own deterministic per-window key
-// (the go/storage EnqueueExpirySweep shape), so a retried call -- a
-// jobs-driven sweep rerunning its own window after a crash or a timeout --
-// is answered with the first call's own row and applies NO second
-// deduction. Pre-fix, ExpireInput carried no IdempotencyKey at all and a
-// retrying sweep run deducted twice (see the unkeyed pin above); this
-// regression cannot compile against the pre-fix API by design -- the
-// compile failure IS the pre-fix state, the identical record the rescan
-// round made for its own new-API regressions.
+// TestCreditService_Expire_KeyedRetry_DoesNotDoubleApply pins the keyed
+// scheduler contract: ExpireInput.IdempotencyKey makes a keyed Expire's
+// row ID the caller's own deterministic per-window key (the go/storage
+// EnqueueExpirySweep shape), so a retried call -- a jobs-driven sweep
+// rerunning its own window after a crash or a timeout -- is answered with
+// the first call's own row and applies NO second deduction. Without the
+// key, a retrying sweep run would deduct twice (see the unkeyed pin
+// above); the unkeyed API cannot express the contract, so this test
+// cannot compile against it -- the compile failure is the point.
 func TestCreditService_Expire_KeyedRetry_DoesNotDoubleApply(t *testing.T) {
 	svc := newCreditService(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")
@@ -760,12 +758,12 @@ func TestCreditService_Grant_ConcurrentCallsForANewTenant_BothSucceed(t *testing
 }
 
 // TestCreditService_Grant_ConcurrentGrantForSameTenant_BlocksUntilPriorTransactionCommits
-// is a regression test for a real correctness bug in emitCreditAudit's
-// resulting_available/resulting_reserved fields: they used to be filled in
-// by a separate, post-commit query (the old emitCreditAudit called
-// s.balances.FindByID itself, AFTER the mutating dbkit.WithTenantSession
-// transaction had already committed) -- a read with no synchronization at
-// all against a second, concurrently-committing operation for the SAME
+// pins the resulting-balance read's correctness: the
+// resulting_available/resulting_reserved audit fields must be read from
+// INSIDE the mutating transaction, never by a separate post-commit query
+// (s.balances.FindByID after the mutating dbkit.WithTenantSession
+// transaction has committed) -- a post-commit read has no synchronization
+// at all against a second, concurrently-committing operation for the SAME
 // tenant. Two concurrent Grants (100 and 1 credits) racing for one tenant
 // could interleave as: the 100-credit grant commits (Available 0->100),
 // then the 1-credit grant commits (Available 100->101), then the
@@ -883,10 +881,10 @@ func TestCreditService_Grant_ConcurrentGrantForSameTenant_BlocksUntilPriorTransa
 
 // --- audit.Emit wiring ---
 //
-// The five tests below are this round's own mandated proof: each of
-// CreditService's five state-changing methods calls audit.Emit with the
-// exact action name module.go's Register declares, a real Resource naming
-// the CreditTransaction the call itself produced, and a useful payload --
+// The five tests below are the audit-wiring proof: each of CreditService's
+// five state-changing methods calls audit.Emit with the exact action name
+// module.go's Register declares, a real Resource naming the
+// CreditTransaction the call itself produced, and a useful payload --
 // never merely "Emit was called". Two further tests prove the idempotent
 // no-op retry paths (PreDeduct, Confirm) do NOT produce a second audit
 // record for a call that changed nothing, and Balance -- deliberately
@@ -1126,10 +1124,9 @@ func TestCreditService_Balance_NeverEmitsAnAuditEvent(t *testing.T) {
 
 // TestCreditService_EmitCreditAudit_NoEventBusWired_IsANoOp proves a bare
 // CreditService built directly through NewCreditService -- every other
-// test in this file, and every pre-existing call site before this round --
-// never attempts to call audit.Emit at all: s.events stays nil until
-// module.go's Register wires it, exactly mirroring notes' own
-// Handler.bus == nil short-circuit.
+// test in this file constructs one that way -- never attempts to call
+// audit.Emit at all: s.events stays nil until module.go's Register wires
+// it, exactly mirroring notes' own Handler.bus == nil short-circuit.
 func TestCreditService_EmitCreditAudit_NoEventBusWired_IsANoOp(t *testing.T) {
 	svc := newCreditService(t)
 	ctx := pkgcore.WithTenant(context.Background(), "tenant-a")

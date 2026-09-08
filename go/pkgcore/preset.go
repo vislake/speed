@@ -6,19 +6,19 @@ package pkgcore
 // looking up its key here and building the named Registration on that seam's
 // SeamRegistry (EventBusRegistry and so on).
 //
-// A Preset is the middle layer of the three docs/internal/03-deployment-modes.md
-// describes -- built-in preset < config-file override < code injection --
-// resolved inside Kernel/Bootstrap itself, which is the bootstrap layer
-// pkgcore offers; a host's own configuration layer (koanf, environment) sits
-// above it and feeds a resolved Preset in, exactly as it feeds
-// Config.OTLPEndpoint in today. pkgcore never reads a config file or the
-// environment to build one itself.
+// A Preset is one layer of the three-layer composition stack -- built-in
+// preset < config-file override < code injection -- resolved inside
+// Kernel/Bootstrap itself, which is the bootstrap layer pkgcore offers; a
+// host's own configuration layer (koanf, environment) sits above it and
+// feeds a resolved Preset in, exactly as it feeds Config.OTLPEndpoint in.
+// pkgcore never reads a config file or the environment to build one
+// itself.
 type Preset map[string]string
 
 // Seam keys a Preset entry may set. These are the only four seams pkgcore
-// pre-registers implementations for; see the deferred-scope note in this
-// round's plan for why Queue, distributed locks and the other seams
-// docs/internal/03-deployment-modes.md's table names are not here yet.
+// pre-registers implementations for; Queue, distributed locks and the
+// other seams are not here yet, since no built-in implementation exists
+// for them in this package.
 const (
 	presetKeyEventBus    = "eventbus"
 	presetKeyKVStore     = "kv"
@@ -28,8 +28,8 @@ const (
 
 // PresetStandalone is the Kernel zero value's default composition: every
 // seam resolves to its in-process, zero-external-dependency implementation,
-// so a bare NewKernel() behaves exactly like today's zero-configuration
-// standalone default and starts in seconds with nothing else running.
+// so a bare NewKernel() is the zero-configuration standalone default and
+// starts in seconds with nothing else running.
 var PresetStandalone = Preset{
 	presetKeyEventBus:    "eventbus.memory",
 	presetKeyKVStore:     "kv.memory",
@@ -47,10 +47,8 @@ var PresetStandalone = Preset{
 // subpackage (a blank import is enough) before that seam resolves; an
 // unimported one fails Bootstrap with ErrUnknownImplementation naming the
 // seam and the implementation, the same "unknown driver" trade
-// database/sql's own drivers make (the implementation-registry section of
-// docs/internal/03-deployment-modes.md). Because the preset layer carries no
-// per-implementation configuration yet (see Config's doc comment, and the
-// deferred-scope note on real credential sourcing in this round's plan), the
+// database/sql's own drivers make. Because the preset layer carries no
+// per-implementation configuration (see Config's doc comment), the
 // two Redis-backed seams fall back to a bare-minimum default
 // ("localhost:6379", no auth) that is only useful against a local Redis, and
 // the SMTP and S3 seams -- which have no safe default host, bucket or

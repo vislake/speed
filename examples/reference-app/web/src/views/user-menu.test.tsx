@@ -10,13 +10,13 @@
  * namespaced-key discipline, proven at the app layer by seeding the
  * query client the tree renders with: the leaving tenant's notes-list
  * data must be gone, and so must the identity-domain rows the account
- * surface reads (their bare spec-path keys carry no tenant segment --
- * reference-app-web.md P1-apisdk-1), while an unrelated key and the
- * other tenant's rows survive. The switch also re-asks the host-
- * resolved Public config (one revalidation fetch on the wire --
- * reference-app-web.md P2-refapp-14), and the switch request itself
- * carries the requested tenant id in its body. The current row is
- * rendered but disabled: a tenant you are in is not a destination.
+ * surface reads (their bare spec-path keys carry no tenant segment,
+ * so no tenant-prefixed removal can reach them), while an unrelated
+ * key and the other tenant's rows survive. The switch also re-asks
+ * the host-resolved Public config (one revalidation fetch on the
+ * wire), and the switch request itself carries the requested tenant
+ * id in its body. The current row is rendered but disabled: a tenant
+ * you are in is not a destination.
  */
 
 import { waitFor } from '@testing-library/react'

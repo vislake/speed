@@ -427,15 +427,15 @@ func TestOpenAICompatibleProvider_ChatStream_NoDoneSentinel_EndsCleanly(t *testi
 }
 
 // TestOpenAICompatibleProvider_ChatStream_NoUsageEverSent_WarnsAndEndsCleanly
-// reproduces the bug: a vendor that ignores
-// stream_options.include_usage (real self-hosted/open-weight
-// OpenAI-compatible gateways do this) and closes the connection cleanly
-// after content, with no usage chunk and no [DONE] sentinel either, used to
-// leave the channel with no terminal chunk at all and nothing in the logs
-// to explain the metering gap. It must now: (1) still deliver the content
-// chunk that genuinely arrived, (2) never fabricate a Usage or turn the
-// already-successful content into a terminal error, and (3) log a warning
-// so the omission is not silent.
+// pins the contract for a vendor that ignores stream_options.include_usage
+// (real self-hosted/open-weight OpenAI-compatible gateways do this) and
+// closes the connection cleanly after content, with no usage chunk and no
+// [DONE] sentinel either: the channel must not be left with no terminal
+// chunk at all and nothing in the logs to explain the metering gap. The
+// provider must (1) still deliver the content chunk that genuinely
+// arrived, (2) never fabricate a Usage or turn the already-successful
+// content into a terminal error, and (3) log a warning so the omission is
+// not silent.
 func TestOpenAICompatibleProvider_ChatStream_NoUsageEverSent_WarnsAndEndsCleanly(t *testing.T) {
 	srv := httptest.NewServer(sseHandler(
 		`{"choices":[{"delta":{"content":"Hi"}}]}`,

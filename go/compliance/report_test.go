@@ -165,8 +165,7 @@ func TestRenderAuditReport_JSON_EmptyEvents_RendersEmptyArray(t *testing.T) {
 // parseAuditReportCSV parses a report RenderAuditReport(..., ReportFormatCSV)
 // produced back into []audit.AuditEvent, the mirror image of
 // auditEventCSVRow -- kept private to this test file (report.go itself
-// ships no parser, per this round's "smallest real, useful shape" scope:
-// only a render direction is a real, asked-for API; round-trip
+// ships no parser: only a render direction is the shipped API; round-trip
 // correctness is what the test needs to prove, not a public CSV reader).
 func parseAuditReportCSV(t *testing.T, b []byte) []audit.AuditEvent {
 	t.Helper()
@@ -239,7 +238,7 @@ func TestRenderAuditReport_CSV_RoundTrip(t *testing.T) {
 // bytes: a value containing a comma must appear wrapped in double quotes,
 // and an embedded double quote must appear doubled, per RFC 4180 --
 // exactly what encoding/csv's Writer already guarantees, and what this
-// test pins so a future change away from encoding/csv would be caught.
+// test pins against any change away from encoding/csv.
 func TestRenderAuditReport_CSV_EscapesCommaAndQuote(t *testing.T) {
 	events := sampleAuditEventsForReport(t)
 	tricky := events[2]

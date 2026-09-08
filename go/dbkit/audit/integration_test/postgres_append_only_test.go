@@ -43,8 +43,8 @@ var _ pkgcore.Module = fakeAuditModule{}
 // newMigratedPostgresAuditDB returns a *gorm.DB (via dbtest.NewPostgres,
 // which itself calls t.Skip when no Docker daemon is reachable) with
 // audit's real, versioned migrations -- both 0001_create_audit_events.sql
-// and this round's 0002_append_only_enforcement.sql -- applied from zero
-// through the real dbkit.MigrationRegistry, never AutoMigrate.
+// and 0002_append_only_enforcement.sql -- applied from zero through the
+// real dbkit.MigrationRegistry, never AutoMigrate.
 func newMigratedPostgresAuditDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db := dbtest.NewPostgres(t)
@@ -88,8 +88,8 @@ func sampleEvent() *audit.AuditEvent {
 // application-level) guarantee: the test opens a raw *sql.DB from the SAME
 // connection dbkit.Open/gorm hands back, and issues a raw UPDATE/DELETE
 // directly against audit_events -- entirely bypassing audit.Repository,
-// which never had an Update or Delete method to bypass in the first place.
-// A real PostgreSQL server, migrated from zero with this round's trigger
+// which has no Update or Delete method to bypass in the first place.
+// A real PostgreSQL server, migrated from zero with the trigger
 // migration applied, must refuse both statements regardless of which role
 // the connection uses (dbtest.NewPostgres connects as the single
 // superuser-ish role testcontainers provisions the whole database with --

@@ -422,22 +422,23 @@ func TestChangesJSON_Populated_MarshalsBoth(t *testing.T) {
 }
 
 // TestModule_OnWriteCaptured_DeliveredToMultipleReplicas_PersistsExactlyOnce
-// reproduces the multi-replica duplication bug this round's review found:
-// in distributed deployment mode, pkgcore.RedisEventBus delivers a single
-// published event to every replica once each (its own doc comment: "each
+// proves Module's deduplication end to end: in distributed deployment
+// mode, a broker-backed bus delivers a single published event to every
+// replica once each (the Redis implementation's own doc comment: "each
 // event is delivered to every replica exactly once" -- once per replica,
 // not once system-wide), and every replica independently runs
-// onWriteCaptured against the SAME shared database. Before
-// auditDeterministicEventID/InsertIdempotent existed, each independent
-// call to Insert generated its own random UUID, so a single real write
-// left one audit_events row per replica instead of one row total.
+// onWriteCaptured against the SAME shared database. Without the
+// deterministic auditDeterministicEventID plus Repository.InsertIdempotent
+// pairing, each replica's independent Insert would generate its own
+// random UUID and a single real write would leave one audit_events row per
+// replica instead of one row total.
 //
 // This test simulates exactly that: onWriteCaptured is invoked twice for
 // the SAME logical write -- once as the publishing replica would see it
 // (the concrete dbkit.WriteCapturedEvent struct, delivered synchronously
 // in-process) and once as every OTHER replica would see it (the identical
-// event decoded from JSON, the shape pkgcore.RedisEventBus's Redis Streams
-// transport reconstructs it as -- see the sibling
+// event decoded from JSON, the shape a broker-backed transport
+// reconstructs it as -- see the sibling
 // TestModule_OnWriteCaptured_JSONMapPayload_PersistsAuditEvent for that
 // same round trip in isolation) -- against the one shared Module/db pair a
 // real deployment's replicas would also share, and asserts exactly one row

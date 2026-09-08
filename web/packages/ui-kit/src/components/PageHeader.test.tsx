@@ -48,9 +48,7 @@ describe('PageHeader', () => {
     // A property assertion, not a rendering proof: jsdom does no real
     // layout, so this cannot show the row actually wrapping at a real
     // narrow width -- it proves the flexWrap CSS is wired onto the row,
-    // guarding against a future refactor silently dropping it (this
-    // behavior was previously untested emergent behavior, per the
-    // round's audit).
+    // guarding against a refactor silently dropping it.
     const { getByRole } = renderWithProviders(
       <PageHeader title="Members" actions={<button type="button">Invite</button>} />,
     )

@@ -7,28 +7,26 @@ import (
 
 // The sign/verify path is this module's highest-frequency call -- every
 // token issuance and every token verification reaches Service.ActiveSigner
-// or Service.VerificationKeys -- so round 1's "query the database on every
-// call" behaviour (go/pki/AGENTS.md's "no caching" known limitation) is
-// exactly what this cache exists to fix, following the SAME pattern
-// go/rbac's decision cache uses (go/rbac/cache.go), for the same reason: a
-// stale cache here does not merely slow a request, it can hand back a key
-// that has since been retired or fail to see one that has since been
-// activated.
+// or Service.VerificationKeys -- so the path is cached, following the SAME
+// pattern go/rbac's decision cache uses (go/rbac/cache.go), for the same
+// reason: a stale cache here does not merely slow a request, it can hand
+// back a key that has since been retired or fail to see one that has since
+// been activated.
 //
 // Three mechanisms keep it honest, in decreasing order of how much is
 // riding on each:
 //
-//  1. Event invalidation. Every staged/activated/retired transition
-//     publishes on the pkgcore.EventBus, and this module's own subscriber
-//     drops the affected purpose's entry. In the standalone deployment mode
-//     the in-memory bus delivers synchronously inside the writing call, so
-//     a local rotation is visible before the call that triggered it
-//     returns; in the distributed mode the bus carries it to every replica.
+//  1. Event invalidation. Every signing-key lifecycle transition
+//     (staged/activated/retired/revoked) publishes on the pkgcore.EventBus,
+//     and this module's own subscriber drops the affected purpose's entry.
+//     In the standalone deployment mode the in-memory bus delivers
+//     synchronously inside the writing call, so a local rotation is visible
+//     before the call that triggered it returns; in the distributed mode
+//     the bus carries it to every replica.
 //  2. TTL expiry. An entry older than the TTL is a miss regardless of
 //     events, so a dropped or undelivered event costs at most one TTL of
-//     staleness -- docs/internal/22-pki.md's own "caching" section calls
-//     this out by name: caching still keeps a fallback poll behind it, to
-//     cover a missed event.
+//     staleness -- the TTL is the fallback poll behind the events, covering
+//     a missed one.
 //  3. A janitor goroutine that sweeps expired entries, so a process that
 //     evaluates many purposes once each does not retain them forever. Pure
 //     memory bound, not a correctness mechanism: (2) already makes an
@@ -106,9 +104,9 @@ func (c *keySetCache) put(purpose string, active *SigningKey, verifiable []Signi
 	c.entries[purpose] = keySetEntry{active: active, verifiable: verifiable, loadedAt: now}
 }
 
-// invalidate drops one purpose's entry -- what a staged, activated or
-// retired transition triggers, whether written locally or observed through
-// the event bus from another replica.
+// invalidate drops one purpose's entry -- what a signing-key lifecycle
+// transition triggers, whether written locally or observed through the
+// event bus from another replica.
 func (c *keySetCache) invalidate(purpose string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

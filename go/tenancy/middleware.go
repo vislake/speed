@@ -69,9 +69,8 @@ type middlewareConfig struct {
 	allowlist map[allowlistKey]struct{}
 
 	// statusResolver is nil unless WithTenantStatusResolver was applied --
-	// Middleware's D4 enforcement check is skipped entirely when it is
-	// nil, which is what keeps an unwired host's behavior byte-for-byte
-	// identical to before this seam existed.
+	// the status check is skipped entirely when it is nil, which keeps an
+	// unwired host on the plain resolution-plus-injection path.
 	statusResolver TenantStatusResolver
 }
 
@@ -98,11 +97,10 @@ type middlewareConfig struct {
 // needs to be public is exactly the mistake this scoping prevents.
 //
 // Reserve this for routes that must work before a tenant can be known --
-// registration, health checks, public configuration -- per
-// docs/internal/04-data-and-tenancy.md. Every (method, path) pair not
-// listed here still fails closed on a resolution failure: Middleware never
-// substitutes an empty tenant just to let a non-allowlisted request
-// through.
+// registration, health checks, public configuration. Every (method, path)
+// pair not listed here still fails closed on a resolution failure:
+// Middleware never substitutes an empty tenant just to let a
+// non-allowlisted request through.
 //
 // The exemption covers the tenant-status gate (WithTenantStatusResolver)
 // the same way: when resolution succeeds but the resolved tenant's status
@@ -137,9 +135,9 @@ func WithAllowlist(method string, paths ...string) MiddlewareOption {
 // Middleware never reads a tenant from a request header, query parameter or
 // body -- under any option, in any configuration. Accepting a
 // client-supplied tenant_id is the single most common way multi-tenant
-// systems suffer a horizontal-privilege-escalation breach; see
-// docs/internal/04-data-and-tenancy.md's section on the tenant context's
-// trust boundary.
+// systems suffer a horizontal-privilege-escalation breach; a custom
+// Resolver must uphold the same rule and derive the tenant from a source
+// the server itself controls (see Resolver's doc comment).
 //
 // When resolver.Resolve fails -- or reports success with an empty
 // TenantID, which Middleware treats the same way -- the request is
@@ -164,7 +162,8 @@ func WithAllowlist(method string, paths ...string) MiddlewareOption {
 // whose resolved tenant is refused proceeds with no tenant in its
 // context, never with the tenant the status gate just refused. With no
 // TenantStatusResolver wired (the default), this check never runs at
-// all, so behavior is unchanged from before this seam existed.
+// all, and Middleware is the plain resolution-plus-injection described
+// above.
 func Middleware(resolver Resolver, opts ...MiddlewareOption) func(http.Handler) http.Handler {
 	cfg := &middlewareConfig{allowlist: make(map[allowlistKey]struct{})}
 	for _, opt := range opts {
@@ -221,8 +220,9 @@ func Middleware(resolver Resolver, opts ...MiddlewareOption) func(http.Handler) 
 }
 
 // tenantErrorBody is the JSON shape written for ErrTenantUnresolved,
-// matching the {code, params} structured-error convention documented in
-// docs/internal/11-cross-cutting.md.
+// matching the {code, params} structured-error envelope convention: the
+// machine-readable code is the API's contract, and the client resolves
+// its text against its own catalog.
 type tenantErrorBody struct {
 	Code   string         `json:"code"`
 	Params map[string]any `json:"params,omitempty"`
@@ -232,9 +232,9 @@ type tenantErrorBody struct {
 // ErrTenantSuspended or ErrTenantStatusUnavailable, Middleware's three
 // possible refusals. The underlying Resolver/TenantStatusResolver error,
 // if any, is deliberately never included in the body: it may carry
-// internal detail from whatever produced it -- once authn supplies the
-// authenticated-request Resolver, that could be token-validation
-// internals -- and internal detail must never reach an API response.
+// internal detail from whatever produced it -- an authenticated-request
+// Resolver's token-validation internals, for one -- and internal detail
+// must never reach an API response.
 func writeError(w http.ResponseWriter, appErr *apperr.Error) {
 	w.Header().Set("Content-Type", tenantErrorContentType)
 	w.WriteHeader(appErr.Status)

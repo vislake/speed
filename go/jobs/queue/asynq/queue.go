@@ -1,22 +1,19 @@
 // Package asynq is the distributed deployment mode's Queue implementation:
-// backed by Redis via github.com/hibiken/asynq, per docs/internal/07-
-// platform-services.md's jobs section ("the distributed deployment mode =
-// Redis (hibiken/asynq, mature and ships its own retry/delay/scheduling/Web
-// UI, not worth reimplementing ourselves)"). It exists as its own
-// subpackage, separate from github.com/vislake/speed/go/jobs's root
-// package, so a consumer that only ever runs the standalone deployment
-// mode's jobs.StandaloneQueue never pulls in asynq or go-redis at all --
-// see AGENTS.md's dependency-cost measurement and root CLAUDE.md's "Do not
-// put a backend implementation in the same package as the interface it
-// implements" rule.
+// backed by Redis via github.com/hibiken/asynq -- mature, and shipping its
+// own retry/delay/scheduling/Web-UI machinery that is not worth
+// reimplementing. It exists as its own subpackage, separate from
+// github.com/vislake/speed/go/jobs's root package, so a consumer that only
+// ever runs the standalone deployment mode's jobs.StandaloneQueue never
+// pulls in asynq or go-redis at all: a backend implementation never sits
+// in the same package as the interface it implements, and which backends a
+// binary contains is the assembling application's decision.
 //
-// Queue implements the exact same jobs.Queue interface jobs.StandaloneQueue
-// does -- see this module's AGENTS.md "Distributed: asynq.Queue" section
-// for the full mapping from every jobs.Task/jobs.Job/jobs.EnqueueOption
-// concept onto asynq's own client/server/inspector primitives, including
-// the two places (per-tenant concurrency, progress reporting) where asynq's
-// own primitives needed a thin layer on top rather than a direct
-// configuration.
+// Queue implements the exact same jobs.Queue interface
+// jobs.StandaloneQueue does. The mapping from every
+// jobs.Task/jobs.Job/jobs.EnqueueOption concept onto asynq's own
+// client/server/inspector primitives includes two places (per-tenant
+// concurrency, progress reporting) where asynq's own primitives needed a
+// thin layer on top rather than a direct configuration.
 package asynq
 
 import (
@@ -76,11 +73,11 @@ type Queue struct {
 
 	// startMu serializes Start, and started records whether a Start has
 	// ever fully succeeded (asynqlib.Server.Start has launched the
-	// processor goroutines). Together they replace the old sync.Once gate
-	// with the same shape StandaloneQueue.Start uses: a Start that FAILED
-	// leaves started false, so a later Start genuinely re-runs
-	// asynqlib.Server.Start (which itself only errors when already
-	// running), while a Start after a success is a no-op returning nil.
+	// processor goroutines), with the same shape StandaloneQueue.Start
+	// uses: a Start that FAILED leaves started false, so a later Start
+	// genuinely re-runs asynqlib.Server.Start (which itself only errors
+	// when already running), while a Start after a success is a no-op
+	// returning nil.
 	startMu sync.Mutex
 	started bool
 
@@ -126,9 +123,9 @@ type Queue struct {
 // jobs.StandaloneQueue's own Default* constants in spirit.
 const (
 	// DefaultTenantConcurrencyLimit matches jobs.StandaloneQueue's own
-	// DefaultTenantConcurrencyLimit -- see AGENTS.md for why the SAME
-	// default is used despite the two deployment modes enforcing it at
-	// different points in the pipeline.
+	// DefaultTenantConcurrencyLimit: one Queue-contract default shared by
+	// both implementations, even though they enforce it at different
+	// points in the pipeline.
 	DefaultTenantConcurrencyLimit = 2
 
 	// DefaultCompletedRetention bounds how long a succeeded Job remains
@@ -136,7 +133,6 @@ const (
 	// SQLite row for a succeeded Job is never deleted, asynq deletes a
 	// completed task immediately unless told to retain it (asynqlib.
 	// Retention) -- Queue always passes this value on every Enqueue call;
-	// see AGENTS.md's "Get() after a Job succeeds" section for why
 	// omitting it would silently break Get()'s contract for the success
 	// path.
 	DefaultCompletedRetention = 24 * time.Hour
@@ -145,8 +141,8 @@ const (
 	// (store.go's cancelMarkerKey) survives in Redis, and so how long
 	// Get() keeps reporting StatusCancelled for a cancelled Job once its
 	// underlying asynq task record has itself expired or been evicted.
-	// Unlike StandaloneQueue's SQLite row, this is not forever -- see
-	// AGENTS.md's Known limitations.
+	// Unlike StandaloneQueue's SQLite row, this is not forever -- a known
+	// limitation of the bounded-retention model.
 	DefaultCancelledRetention = 30 * 24 * time.Hour
 
 	// DefaultThrottleRetryDelay is the base of the short, jittered delay
@@ -188,9 +184,9 @@ var defaultQueueWeights = map[string]int{
 // pass-through, and a negative value is refused like any other unhonourable
 // one. Both implementations of the jobs.Queue seam declare this same
 // strategy -- StandaloneQueue's Option type doc comment says so for its own
-// construction options -- so the two sides refuse alike by declaration, not
-// coincidence, and a future one-sided relaxation is a divergence between two
-// implementations of one seam, never a local change.
+// construction options -- so the two sides refuse alike by declaration; a
+// one-sided relaxation on either side would make the two implementations of
+// one seam diverge.
 type Option func(*Queue)
 
 // WithConcurrency sets asynqlib.Config.Concurrency: the maximum number of
@@ -214,9 +210,9 @@ func WithConcurrency(n int) Option {
 
 // WithTenantConcurrencyLimit caps how many Jobs belonging to any one tenant
 // may be running at once, the direct analog of StandaloneQueue's
-// WithTenantConcurrencyLimit -- see AGENTS.md for how this is enforced
-// differently (a bounce-and-redeliver inside processTask, not a
-// pre-dequeue skip) given what asynq itself offers. Defaults to
+// WithTenantConcurrencyLimit, enforced differently because of what asynq
+// itself offers: a bounce-and-redeliver inside processTask, not a
+// pre-dequeue skip. Defaults to
 // DefaultTenantConcurrencyLimit. A value below 1 is refused at option time
 // with a coded panic: a limit of zero would bounce every task of every
 // tenant forever (errTenantAtCapacity), silently processing nothing.
@@ -512,8 +508,8 @@ func (q *Queue) Start(ctx context.Context) error {
 // ShutdownTimeout (default 8s, a construction-time setting, not a per-call
 // parameter), not directly by ctx; ctx here bounds how long THIS call
 // waits for that to finish, exactly like StandaloneQueue.Close, but does
-// not itself cancel an in-flight Handle call either way -- see AGENTS.md's
-// "Close/Shutdown" section for the full comparison. Idempotent and safe to
+// not itself cancel an in-flight Handle call either way. Idempotent and
+// safe to
 // call more than once, or without a prior Start, exactly like
 // StandaloneQueue.Close: asynqlib.Server.Shutdown is itself safe to invoke
 // repeatedly and before any Start (server.go's own state-machine check),
@@ -527,7 +523,7 @@ func (q *Queue) Start(ctx context.Context) error {
 // Enqueue fails against the now-closed shared redis client. A host whose
 // queue must run again builds a new Queue. On the ctx.Done path none of
 // this applies -- Close timed out, the server is still processing and the
-// client is still open, so the Queue keeps working exactly as before.
+// client is still open, so the Queue keeps working.
 //
 // The done path also stops the queue-depth gauge, under the same lock that
 // orders it against the client close: stopCh is closed and the shared
@@ -578,12 +574,11 @@ func (q *Queue) Enqueue(ctx context.Context, task jobs.Task, opts ...jobs.Enqueu
 	if err != nil {
 		return "", err
 	}
-	// See StandaloneQueue.Enqueue's identical fix for the full rationale:
-	// derive the logger's tenant from task.TenantID -- the Job's own
+	// Derive the logger's tenant from task.TenantID -- the Job's own
 	// owner -- rather than layering an explicit "tenant_id" kv on top of
 	// whatever obs.FromContext(ctx) already auto-attaches from ctx's own
-	// ambient tenant, which AGENTS.md documents as legitimately different
-	// (or absent) for both Queue.Enqueue and StandaloneQueue.Enqueue alike.
+	// ambient tenant, which is legitimately different from (or absent
+	// beside) task.TenantID for both Enqueue implementations.
 	if fresh {
 		q.logEnqueued(ctx, task, id)
 	}
@@ -647,13 +642,15 @@ func (q *Queue) enqueueNew(ctx context.Context, task jobs.Task, resolved jobs.Re
 // far shorter than any wait an operator would accept after a crash.
 const idempotencyClaimTTL = 30 * time.Second
 
-// idempotencyTaskID derives a keyed Task's deterministic id, exactly as
-// before (AGENTS.md's idempotency section): "idem:" + tenant + ":" + key.
-// The deterministic id is what makes the dedupe answer stable -- a second
-// Enqueue for the same pair returns this same string, which is also the
-// JobID Get/Cancel/DeadLetterJobs resolve by -- and its lifetime in asynq's
-// own records is the dedupe's lifetime, unchanged by the claim machinery
-// below.
+// idempotencyTaskID derives a keyed Task's deterministic id:
+// "idem:" + tenant + ":" + key. The composition is a stable format and
+// must never change -- a changed derivation would make every
+// already-enqueued Job's dedupe key unreachable and let its operation be
+// enqueued a second time. The deterministic id is what makes the dedupe
+// answer stable -- a second Enqueue for the same pair returns this same
+// string, which is also the JobID Get/Cancel/DeadLetterJobs resolve by --
+// and its lifetime in asynq's own records is the dedupe's lifetime,
+// unchanged by the claim machinery below.
 //
 // The composition is verbatim: the caller's key text is this string's
 // tail, and through it the tail of the JobID every job_id attribute this
@@ -686,9 +683,9 @@ func idempotencyClaimKey(taskID string) string { return "asynqjobs:enqueue-claim
 // original). Fresh reports whether this call created the task (true) or
 // returned an existing Job's id (false), so Enqueue can log accordingly.
 //
-// The mechanism: the deterministic TaskID stays asynq's own dedupe record,
-// exactly as before -- while a task under that id exists anywhere in the
-// three queues, any Enqueue for the pair returns it. What the claim key
+// The mechanism: the deterministic TaskID is asynq's own dedupe record --
+// while a task under that id exists anywhere in the three queues, any
+// Enqueue for the pair returns it. What the claim key
 // adds is atomicity for the CONCURRENT-first-insert race asynq's
 // per-queue check cannot arbitrate: two same-key Enqueues at different
 // priorities could both pass their own queue's check and both insert. The
@@ -752,9 +749,10 @@ func (q *Queue) enqueueIdempotentClaimed(ctx context.Context, task jobs.Task, re
 			// Defensive: a task under this deterministic id appeared
 			// between the probe above and this insert -- only possible if
 			// another writer enqueued it without holding the claim (a
-			// replica still running a pre-fix release, whose per-queue
-			// conflict check this id passed because it landed in another
-			// queue). Dedupe on it rather than failing the call.
+			// replica running an older release without the cross-queue
+			// claim checks per queue only, and this id passed its check
+			// because it landed in another queue). Dedupe on it rather
+			// than failing the call.
 			if existing, ferr := q.findTaskInfo(taskID); ferr == nil {
 				return jobs.JobID(existing.ID), false, nil
 			}
@@ -823,8 +821,8 @@ func (q *Queue) Get(ctx context.Context, id jobs.JobID) (*jobs.Job, error) {
 	return jobFromTaskInfo(info, cancelledAt), nil
 }
 
-// Cancel implements jobs.Queue. See AGENTS.md's "Cancel" section: the
-// cancellation marker (store.go) is the ONLY authoritative, permanent
+// Cancel implements jobs.Queue. The cancellation marker (store.go) is the
+// ONLY authoritative, permanent
 // effect -- Get() reports StatusCancelled from it unconditionally,
 // exactly mirroring StandaloneQueue's own markCancelled +
 // completeSucceeded/completeRetrying/completeDeadLetter no-op-when-not-
@@ -841,13 +839,12 @@ func (q *Queue) Get(ctx context.Context, id jobs.JobID) (*jobs.Job, error) {
 // record, and Get() would then have nothing left to combine the
 // cancellation marker with -- id would look exactly like an id that never
 // existed, i.e. jobs.ErrJobNotFound, breaking Get()'s contract for a
-// cancelled Job (this was a genuine bug in an earlier version of this
-// method, caught specifically by integration_test/cancel_test.go's
-// TestRedisQueue_Cancel_PendingJobNeverRuns running against a real Redis --
-// a unit test built on a hand-constructed *asynqlib.TaskInfo, never having
-// actually exercised a real delete, could not have caught it -- the
-// concrete reason this task's own instructions required real-backend
-// testing here rather than mocks). Instead:
+// cancelled Job. That failure is only reachable through a real delete
+// against a real backend -- a unit test built on a hand-constructed
+// *asynqlib.TaskInfo can never exercise it -- which is why the property is
+// pinned by integration_test/cancel_test.go's
+// TestRedisQueue_Cancel_PendingJobNeverRuns running against a real Redis.
+// Instead:
 //
 //  1. Cancel leaves the task's own asynq record alone, and just writes the
 //     marker (plus, for an already-Active Job, a best-effort
@@ -892,9 +889,9 @@ func (q *Queue) Get(ctx context.Context, id jobs.JobID) (*jobs.Job, error) {
 // guarantees: any OnFailure decision made for this Job from then on sees
 // StatusCancelled, mirroring StandaloneQueue's "the cancellation wins"
 // semantics. Writing the marker first also means a marker-write failure
-// leaves the attempt completely uninterrupted -- previously the signal
-// could go out and only the marker fail, interrupting an attempt whose
-// cancellation was never recorded.
+// leaves the attempt completely uninterrupted -- if the signal went out
+// and only the marker failed, an attempt whose cancellation was never
+// recorded would be interrupted.
 func (q *Queue) Cancel(ctx context.Context, id jobs.JobID) error {
 	info, err := q.findTaskInfo(string(id))
 	if err != nil {
@@ -927,9 +924,9 @@ func (q *Queue) Cancel(ctx context.Context, id jobs.JobID) error {
 // DeadLetterJobs returns every archived (dead-lettered) Job ctx may access,
 // across all three priority queues -- the asynq-backed analog of
 // StandaloneQueue.DeadLetterJobs, mapping onto asynq's own archived-task
-// mechanism (Inspector.ListArchivedTasks) rather than a parallel one; see
-// AGENTS.md's dead-letter mapping section. Not part of the jobs.Queue
-// interface, exactly like StandaloneQueue's version. Fully drains each
+// mechanism (Inspector.ListArchivedTasks) rather than a parallel one. Not
+// part of the jobs.Queue interface, exactly like StandaloneQueue's
+// version. Fully drains each
 // queue's archive (paginating internally) rather than truncating at one
 // page, though it still exposes no pagination of its own to the caller --
 // the same "no pagination" shape StandaloneQueue.DeadLetterJobs documents
@@ -1027,16 +1024,16 @@ func (q *Queue) readCancelMarker(ctx context.Context, id string) (*time.Time, er
 }
 
 // registerQueueDepthGauge wires the same "jobs.queue.depth" instrument name
-// StandaloneQueue.registerQueueDepthGauge does (docs/internal/09-
-// observability.md's must-instrument table), reusing jobs.
+// StandaloneQueue.registerQueueDepthGauge does, reusing jobs.
 // InstrumentationName so both implementations share one instrumentation
-// scope. The label set differs from StandaloneQueue's, and deliberately so
-// -- see AGENTS.md's observability section: asynq's Inspector.GetQueueInfo
-// reports backlog per QUEUE (one of our three priority tiers), not per job
-// TYPE the way StandaloneQueue's own SQL GROUP BY can, so this gauge is
-// labeled (queue, status) instead of (job_type, status). Both label sets
-// are low-cardinality and neither ever includes tenant_id, per root
-// CLAUDE.md's Prometheus-cardinality rule.
+// scope. The label set differs from StandaloneQueue's, and deliberately
+// so: asynq's Inspector.GetQueueInfo reports backlog per QUEUE (one of our
+// three priority tiers), not per job TYPE the way StandaloneQueue's own
+// SQL GROUP BY can, so this gauge is labeled (queue, status) instead of
+// (job_type, status). Both label sets are low-cardinality and neither
+// ever includes tenant_id -- per-tenant label cardinality would take the
+// metrics system down; tenant dimensions belong in logs and span
+// attributes.
 //
 // The callback reports only the tiers asynq's own registry actually names,
 // discovered per scrape from Inspector.Queues rather than assumed:

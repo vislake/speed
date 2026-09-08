@@ -1,47 +1,38 @@
 package aigateway
 
-// image_job_store.go is the persistence half of this round's fix for a
-// real, audited bug: imageGenerateHandler.Handle (image_gateway.go) used to
-// have no memory of a previous attempt at all, so a go/jobs retry after a
-// failure that landed AFTER a successful ImageProvider call re-called the
-// vendor -- billing the tenant again -- and re-recorded usage under a fresh
-// random idempotency key, which no UsageRecorder could dedup. See this
-// module's AGENTS.md for the concrete scenario that hits this in practice
-// (the SQLITE_BUSY contention entry) and image_gateway.go's own doc comment
-// for the invariant this table now enforces: at most one successful vendor
-// call, and at most one usage record, per enqueued image-generation Job --
-// no matter how many times go/jobs re-runs its Handle.
+// image_job_store.go is the persistence half of the image-generation job
+// handler's idempotency invariant, stated in full in image_gateway.go's
+// own doc comment: per enqueued image-generation Job -- no matter how many
+// times go/jobs re-runs its Handle -- there is at most one successful
+// vendor call and at most one usage record. Without this table, a retry
+// after a failure that landed after a successful ImageProvider call would
+// call the vendor again -- billing the tenant again -- and record usage
+// under a fresh random idempotency key no UsageRecorder could dedup.
 //
 // # Why a marker table, and not the output storage object itself
 //
-// The design doc's object-reference boundary (image_gateway.go's own doc
-// comment) means the eventual output lives in go/storage as an Object --
-// but storage.ObjectService.Create always mints a fresh id (there is no
+// The object-reference boundary (image_gateway.go's own doc comment) means
+// the eventual output lives in go/storage as an Object -- but
+// storage.ObjectService.Create always mints a fresh id (there is no
 // caller-supplied-id create), so nothing about a storage Object can be
 // addressed by this job's stable jobs.JobID ahead of time, and the
 // go/storage row itself cannot serve as the "did the vendor already
-// answer" marker without a storage-side change this round's task
-// instruction rules out ("no changes outside go/ai-gateway"). A dedicated,
-// job-id-keyed table inside this module is therefore the only mechanism
-// this round's real code can build the invariant on.
+// answer" marker. A dedicated, job-id-keyed table inside this module is
+// therefore the mechanism the invariant is built on.
 //
 // # Claim BEFORE the vendor call, not just a marker written after it
 //
-// An earlier version of this file wrote a "generated" marker only once the
-// vendor had already answered -- immediately after the answer, before the
-// go/storage write, which closed the bug's own reproduction (a storage
-// write failing after a successful vendor call). A follow-up audit
-// (findings against this file, see git history) proved that ordering left
-// a real, non-crash-dependent reopening of the exact window this table
-// exists to close: an ORDINARY transient failure of that one INSERT --
-// SQLITE_BUSY-class contention, not a crash -- left no durable row behind,
-// so the queue's next retry saw no marker and called the vendor a SECOND
-// time. Splitting the marker into two writes fixes this structurally
-// rather than papering over it with an in-process retry loop (which this
-// codebase deliberately does not reach for here -- see
-// go/storage/derive.go's own doc comment: "a retry converges once the
-// racing writer clears" is this repository's established answer to
-// SQLITE_BUSY-class contention, achieved by making the retried statement
+// The marker is written in two steps -- a content-less "pending" claim
+// INSERT before the vendor call, then a "generated" transition after it.
+// A single "generated"-only write placed after the vendor answered would
+// leave a window in which an ORDINARY transient failure of that one INSERT
+// -- SQLITE_BUSY-class contention, not a crash -- would leave no durable
+// row behind, so the queue's next retry would see no marker and call the
+// vendor a SECOND time. Splitting the marker fixes this structurally
+// rather than papering over the contention with an in-process retry loop,
+// which is this repository's established answer to SQLITE_BUSY-class
+// contention (go/storage/derive.go's own doc comment: "a retry converges
+// once the racing writer clears", achieved by making the retried statement
 // safe to redo, not by looping around a single attempt):
 //
 //  1. claimPending, an INSERT of a content-less "pending" row, runs FIRST,
@@ -51,16 +42,15 @@ package aigateway
 //     the SAME job (a distributed-mode lease-expiry redelivery, or two
 //     workers racing a poll -- the standalone in-process queue cannot
 //     produce this, since it never starts a second Handle for a job
-//     already running one, but nothing in this table's own shape depended
-//     on that until this round) can never both proceed to call the
-//     vendor. The loser sees an ordinary duplicate-key answer and MUST
-//     refuse to call the vendor at all (see ErrImageJobClaimInFlight).
+//     already running one, but nothing in this table's own shape depends
+//     on that) can never both proceed to call the vendor. The loser sees
+//     an ordinary duplicate-key answer and MUST refuse to call the vendor
+//     at all (see ErrImageJobClaimInFlight).
 //  2. If claimPending itself fails for any OTHER reason -- including the
-//     exact transient contention this round's audit reproduced -- no
-//     vendor call has happened yet, so surfacing the error to go/jobs as
-//     an ordinary attempt failure is always safe: a retry redoes the claim
-//     from a clean slate, exactly like a provider call failing outright
-//     already was.
+//     transient contention discussed above -- no vendor call has happened
+//     yet, so surfacing the error to go/jobs as an ordinary attempt
+//     failure is always safe: a retry redoes the claim from a clean slate,
+//     exactly like a provider call failing outright.
 //  3. Only once claimPending has actually committed does
 //     imageGenerateHandler.Handle call ImageProvider. A failure there
 //     (network error, non-2xx, etc.) means no successful answer exists to
@@ -109,26 +99,25 @@ package aigateway
 //     ErrImageJobClaimInFlight until go/jobs exhausts its retries and
 //     dead-letters it. Recovering it (the vendor genuinely was never
 //     called) needs an operator to delete the stuck row by hand -- an
-//     accepted, documented limitation, not a silent gap; see this module's
-//     AGENTS.md.
+//     accepted, documented limitation, not a silent gap.
 //   - A crash between the vendor answering and markGenerated's own UPDATE
 //     committing leaves the identical "pending" row behind, this time with
 //     a real vendor answer that is now unrecoverable in memory. The job
 //     stalls the same way; the tenant's real-world vendor bill (charged by
 //     the vendor's own out-of-band metering, not this package) is not
 //     matched by an internal usage record, an accepted reconciliation gap
-//     rather than the double-billing/double-recording failure this round
+//     rather than the double-billing/double-recording failure this table
 //     exists to prevent.
 //
 // Similarly, a crash between writeImageObject succeeding and markCompleted
 // committing leaves the marker at "generated": the next attempt correctly
-// skips the vendor call and usage recording (this fix's actual invariant),
-// but redoes writeImageObject, producing a second, orphaned-but-harmless
-// go/storage object nothing ever references. This is a resource-cleanup
-// concern, not a billing or usage-duplication one, and is accepted for the
-// same reason as go/storage's own accepted orphan windows: fixing it would
-// need an idempotent create at the storage layer, out of this round's
-// scope.
+// skips the vendor call and usage recording (the table's actual
+// invariant), but redoes writeImageObject, producing a second,
+// orphaned-but-harmless go/storage object nothing ever references. This
+// is a resource-cleanup concern, not a billing or usage-duplication one,
+// and is accepted for the same reason as go/storage's own accepted orphan
+// windows: fixing it would need an idempotent create at the storage
+// layer, outside this module's scope.
 
 import (
 	"context"
@@ -172,16 +161,14 @@ const (
 //
 // # Data domain and primary key
 //
-// Tenant data (docs/internal/04-data-and-tenancy.md), implementing
-// dbkit.TenantScoped through the embedded dbkit.TenantModel, reached only
-// through imageJobRepository (which embeds dbkit.Repository[imageJobRow])
-// -- the identical shape go/storage's own Object follows, and for the
-// identical reason: a job's marker is meaningless outside the tenant it
-// was enqueued under. The primary key is (id) alone: id is jobs.JobID
-// itself (already globally unique on its own, minted once by whichever
-// Queue.Enqueue created the Job and never regenerated across a retry --
-// see jobs.Job.ID's own doc comment), so tenant_id needs no part in the
-// key, mirroring Object's own id-alone-key rationale (go/storage/model.go).
+// Tenant data, implementing dbkit.TenantScoped through the embedded
+// dbkit.TenantModel, reached only through imageJobRepository (which embeds
+// dbkit.Repository[imageJobRow]): a job's marker is meaningless outside
+// the tenant it was enqueued under. The primary key is (id) alone: id is
+// jobs.JobID itself (already globally unique on its own, minted once by
+// whichever Queue.Enqueue created the Job and never regenerated across a
+// retry -- see jobs.Job.ID's own doc comment), so tenant_id needs no part
+// in the key.
 //
 // Its own isolation is proven by tenancytest.AssertIsolated in
 // image_job_store_test.go.
@@ -286,8 +273,7 @@ func (r *imageJobRepository) get(ctx context.Context, jobID string) (*imageJobRo
 		// dbkit.ErrRecordNotFound is derived fresh by WithParam on every
 		// return (its own doc comment), so it can never be recognized with
 		// errors.Is or == -- compare its Code through hasCode instead, the
-		// same convention this module's own errors.go documents and
-		// go/storage's/go/rbac's identical helpers already use for this
+		// same convention this module's own errors.go documents for this
 		// exact sentinel.
 		if hasCode(err, dbkit.ErrRecordNotFound.Code) {
 			return nil, nil
@@ -418,8 +404,8 @@ func (r *imageJobRepository) markGenerated(ctx context.Context, jobID, provider 
 // row exists at all) -- imageGenerateHandler.Handle uses that boolean as
 // the gate for calling recordImageUsage, so usage is reported at most once
 // per job ever, independent of whatever a wired UsageRecorder itself does
-// or does not dedup on IdempotencyKey (this is this fix's option (c): usage
-// idempotency that does not rely on the marker's existence alone).
+// or does not dedup on IdempotencyKey (usage idempotency that does not
+// rely on the marker's existence alone).
 //
 // The update is expressed as tx.Where(...).Select(...).Updates(&imageJobRow{...})
 // against imageJobRow -- a TenantScoped destination -- inside

@@ -42,10 +42,9 @@ const directSignPinnedKeyVersion = 1
 
 // transitClient is the subset of *vaultapi.Logical this package calls,
 // declared as its own interface so unit tests can inject a scripted fake
-// without a real Vault server -- docs/internal/22-pki.md's testing-strategy
-// note that AWS KMS gets its SDK interface stubbed for unit tests applies
-// equally well here, for the request/response shaping logic that does not
-// need a real Transit engine's network behaviour to prove. *vaultapi.Logical
+// without a real Vault server -- the stubbed-SDK-interface-for-unit-tests
+// approach applies here too, for the request/response shaping logic that
+// does not need a real Transit engine's network behaviour to prove. *vaultapi.Logical
 // already has every one of these
 // methods with this exact signature, so it satisfies transitClient
 // structurally -- no adapter type is needed anywhere in this package.
@@ -119,9 +118,8 @@ func NewSigner(cfg Config) (pki.Signer, error) {
 
 // GenerateKey implements pki.Signer. Only pki.AlgorithmEd25519 is
 // supported -- Vault Transit's ed25519 key type direct-signs the complete
-// message (docs/internal/22-pki.md's Signer section: PureEdDSA, RFC 8037's
-// JWT EdDSA), matching pki.Signer.Sign's own documented, algorithm-
-// dependent input contract exactly.
+// message (PureEdDSA, RFC 8037's JWT EdDSA), matching pki.Signer.Sign's
+// own documented, algorithm-dependent input contract exactly.
 func (s *signer) GenerateKey(ctx context.Context, algorithm string) (string, crypto.PublicKey, error) {
 	if algorithm != pki.AlgorithmEd25519 {
 		return "", nil, pki.ErrAlgorithmUnsupportedBySigner.WithParam("algorithm", algorithm)

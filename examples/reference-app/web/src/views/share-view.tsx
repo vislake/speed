@@ -1,20 +1,21 @@
 /**
- * share-view.tsx -- the block-C patient surface: the page a share link
- * opens, rendered for anyone holding the link, signed in or not. The
- * page carries the shared before/after pair side by side -- the
- * original photo and the smile simulation the clinic generated from it
- * -- each image loaded straight from go/sharing's public access route
+ * share-view.tsx -- the patient-facing surface a share link opens,
+ * rendered for anyone holding the link, signed in or not. The page
+ * carries the shared before/after pair side by side -- the original
+ * photo and the smile simulation the clinic generated from it -- each
+ * image loaded straight from go/sharing's public access route
  * (/api/v1/sharing/access?token=..., the genuinely unauthenticated
  * route this host allowlists) under its own half's share token, so the
  * bytes the browser decodes are the bytes each share resolves, never a
- * blob the page fetched under a session: the block-B blob pattern
- * cannot work here, because a patient holds no session and the
- * simulation-content route is an authenticated surface. The two halves
- * of the link are the two shares the clinic's share action minted
- * (views/simulation-share-action.tsx) -- one resource per share is
- * go/sharing's model -- and the acceptance gate holds this page to the
- * same pair the clinic's own comparison shows: two images, both
- * genuinely decoded, never the same image twice.
+ * blob the page fetched under a session: the blob pattern the
+ * authenticated case pages use cannot work here, because a patient
+ * holds no session and the simulation-content route is an
+ * authenticated surface. The two halves of the link are the two shares
+ * the clinic's share action minted (views/simulation-share-action.tsx)
+ * -- one resource per share is go/sharing's model -- and the e2e
+ * journeys hold this page to the same pair the clinic's own comparison
+ * shows: two images, both genuinely decoded, never the same image
+ * twice.
  *
  * A refused link -- an expired or revoked share, a visitor over the
  * route's rate budget, a resource storage can no longer open -- shows
@@ -99,9 +100,9 @@ export function ShareView({
       () => {
         // Unreachable in practice: a granted access answers raw image
         // bytes, which this client refuses as client.protocol rather
-        // than resolving. Kept as a defensive no-op so a future change
-        // in that contract degrades to the transport message, never a
-        // hang.
+        // than resolving. The branch stays as a defensive no-op, so a
+        // change in that contract degrades to the transport message,
+        // never a hang.
         setPhases((current) => {
           const phase = current[side]
           if (phase.kind !== 'image' || phase.attempt !== attempt) {

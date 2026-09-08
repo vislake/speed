@@ -26,7 +26,7 @@ import (
 // because org cannot read a dynamic config value without importing the config
 // module, which the dependency graph forbids. Declaring a schema this module
 // would then ignore would be worse than a constant: it would be a lying
-// schema. See go/org/AGENTS.md.
+// schema.
 const (
 	// invitesPerTenantRate bounds how many invitations one tenant may send
 	// per invitesPerTenantWindow. It is the blast radius of a compromised
@@ -429,26 +429,26 @@ func (s *InviteService) reportLostAcceptRace(ctx context.Context, token string) 
 //
 //   - ensure answered the coded ErrNodeNotFound: the very node this
 //     invitation would bind its invitee to no longer exists, so the
-//     invitation can never be fulfilled. It ends REVOKED -- never back to
-//     pending, which is the state the pre-fix code left it in: a bearer
-//     token stayed acceptable for the rest of its TTL while every accept it
-//     admitted failed identically, List kept showing an invitation that
-//     could only fail, and a caller who observed the brief accepted
-//     interlude was answered org.invitation_already_accepted though no
-//     membership ever came of it. This is the P2-org-12 state change.
-//   - any other failure is treated as the transient it is (a busy SQLite, a
-//     lost insert race) and the claim is given back to pending, exactly as
-//     the pre-fix code did, so a retry after the transient is not locked
-//     out -- the revert Revoke's own lost-race handling presupposes.
+//     invitation can never be fulfilled. It ends REVOKED, never back to
+//     pending: a pending row keeps its bearer token acceptable for the
+//     rest of its TTL while every accept fails identically, List keeps
+//     showing an invitation that can only fail, and a caller observing
+//     the brief accepted interlude is answered
+//     org.invitation_already_accepted though no membership ever came of
+//     it.
+//   - any other failure is treated as the transient it is (a busy SQLite,
+//     a lost insert race) and the claim is given back to pending, so a
+//     retry after the transient is not locked out -- the revert Revoke's
+//     own lost-race handling presupposes.
 //
 // # The write is a guarded transition, never an unconditional overwrite
 //
 // Whichever end state the failure earns, the write itself is
 // InvitationRepository.settleClaim's guarded transition: it executes only
 // against a row still in the accepted state THIS call won, and touches only
-// the Status and AcceptedAt columns. The pre-fix failure path (then named
-// revertAcceptClaim) issued an unconditional, full-row Repository.Update of
-// the caller's in-memory snapshot instead, which would stamp its stale view
+// the Status and AcceptedAt columns. The alternative -- an unconditional,
+// full-row Repository.Update of
+// the caller's in-memory snapshot -- would stamp the caller's stale view
 // of every column over whatever state the row had moved to. A settle that
 // errors, or that matches nothing (the accepted state this call won is
 // already gone -- a concurrent writer moved the row first, and that

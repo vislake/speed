@@ -14,9 +14,9 @@ import (
 
 // TestTenant_IsNotTenantScoped proves Tenant is genuinely platform data:
 // dbkit's tenant-isolation plugin must not affect it at all, regardless of
-// what tenant (if any) is in the calling context -- see D3's own doc
-// comment in tenant_service.go for why this table must never be scoped to
-// one tenant.
+// what tenant (if any) is in the calling context -- the table describes
+// every tenant, so scoping it to one tenant's isolation filter would be
+// incoherent (model.go's own doc comment).
 func TestTenant_IsNotTenantScoped(t *testing.T) {
 	db := testutil.NewDB(t)
 	seq := 0

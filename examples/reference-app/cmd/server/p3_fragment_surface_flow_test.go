@@ -1,14 +1,15 @@
 package main
 
-// p3_fragment_surface_flow_test.go drives product round P3a's promoted
-// spec fragments -- the case-domain fragment (internal/cases/api) and
+// p3_fragment_surface_flow_test.go drives the case-domain fragment
+// (internal/cases/api) and
 // the smile-simulation fragment (internal/smilesim/api) -- through the
 // real composed HTTP stack buildTestServer builds, in exactly the
-// composition the P3 web UI will call: create a case naming an uploaded
+// composition the case web UI will call: create a case naming an uploaded
 // photo (cases fragment), run one async smile simulation over that photo
 // (smilesim fragment's enqueue operation), observe it to success through
 // the job-status operation, and read the finished simulation back from
-// the per-photo enumeration operation -- the P3 gallery's data source --
+// the per-photo enumeration operation -- the smile gallery's data
+// source --
 // with the case list and detail answered by the cases fragment along the
 // way. Every leg goes through the handlers that implement the fragments'
 // generated ServerInterfaces (cmd/server/cases.go and cmd/server/
@@ -27,8 +28,8 @@ import (
 	"time"
 )
 
-// TestP3FragmentSurface_CaseToSimulation_Journey is the P3a round's
-// end-to-end journey over the two fragments it promoted: one clinic
+// TestP3FragmentSurface_CaseToSimulation_Journey is the end-to-end
+// journey over the two fragments: one clinic
 // staff member, one tenant, one photo, one case and one finished
 // simulation, every step answered by a handler implementing a generated
 // ServerInterface.
@@ -49,9 +50,9 @@ func TestP3FragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 	}
 
 	// Create a case naming that photo (cases fragment: cases_createCase),
-	// read it back from the "my cases" list (cases_listCases) and from
+	// read it back from the clinic-wide list (cases_listCases) and from
 	// the detail route (cases_getCase) -- the three cases operations the
-	// P3 UI will call.
+	// case web UI will call.
 	created := createCaseAs(t, srv, token, demoOwnerUserID, caseCreateBody{
 		PatientName:    "P3 Journey Patient",
 		PatientRef:     "JRN-001",
@@ -101,7 +102,7 @@ func TestP3FragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 	}
 
 	// Enqueue one simulation over the case's photo with no explicit
-	// options -- the P3 UI's first-run shape -- and poll the job-status
+	// options -- the web UI's first-run shape -- and poll the job-status
 	// route until the job is terminal (smilesim fragment:
 	// smilesim_simulate and smilesim_getJob).
 	simulateBody, err := json.Marshal(map[string]string{"photo_object_id": completedPhoto.ID})
@@ -121,7 +122,7 @@ func TestP3FragmentSurface_CaseToSimulation_Journey(t *testing.T) {
 	// enqueue body named no options.
 	assertOptionsIn(t, final, "natural", "natural", 1)
 
-	// The per-photo enumeration -- the P3 gallery's data source
+	// The per-photo enumeration -- the smile gallery's data source
 	// (smilesim fragment: smilesim_listPhotoSimulations) -- lists exactly
 	// the finished simulation under the case's photo.
 	simulations := enumerateSimulations(t, srv, token, completedPhoto.ID)

@@ -16,11 +16,11 @@ import (
 // cursor tables into existence before wiring NewEventBus.
 //
 // It is deliberately not dbkit.MigrationRegistry.Apply: go/pkgcore is the
-// dependency floor every other module sits on (see root CLAUDE.md's module
-// dependency direction), so it cannot import go/dbkit, which sits above
+// dependency floor every other module sits on (the dependency graph runs
+// pkgcore -> dbkit -> ...), so it cannot import go/dbkit, which sits above
 // it. EnsureSchema is this package's own, self-contained substitute, built
-// on the same "no AutoMigrate, versioned SQL, idempotent" discipline
-// (root CLAUDE.md's database-and-migrations rules) but without a
+// on the same "no AutoMigrate, versioned SQL, idempotent" discipline but
+// without a
 // schema_migrations ledger of its own: every statement in
 // migrations/postgres/0001_create_eventbus_outbox.sql is already
 // idempotent DDL (CREATE TABLE / CREATE INDEX, never CREATE TABLE without
@@ -46,8 +46,7 @@ import (
 // touches no network until the first Subscribe (matching
 // eventbus/redis.NewEventBus's identical contract), and schema application
 // is an explicit, separate step in this codebase's convention (dbkit's own
-// Apply, saasctl's "db migrate" -- see root CLAUDE.md's Reference App
-// section). Call it once, before the first Subscribe, typically right
+// Apply, saasctl's "db migrate"). Call it once, before the first Subscribe, typically right
 // after building pool.
 func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	if pool == nil {

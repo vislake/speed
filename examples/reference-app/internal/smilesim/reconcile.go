@@ -77,8 +77,8 @@ func (s *Service) ReconcileOutstandingCredits(ctx context.Context) (int, error) 
 		jobID := jobs.JobID(row.JobID)
 		tenant := pkgcore.TenantID(row.TenantID)
 		// Rebuilt from the reservation's own stored tenant, never trusted
-		// from ctx -- root CLAUDE.md's "workers do not inherit tenant
-		// context" trap, applied here to a background sweep that has no
+		// from ctx -- a worker context never carries tenant by
+		// inheritance, applied here to a background sweep that has no
 		// single ambient tenant of its own at all: it walks rows spanning
 		// every tenant in one pass, so each row supplies its own.
 		tenantCtx := pkgcore.WithTenant(ctx, tenant)

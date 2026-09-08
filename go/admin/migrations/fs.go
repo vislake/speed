@@ -1,8 +1,15 @@
 // Package migrations embeds the admin module's versioned SQL migration
 // files, one subdirectory per SQL dialect, for admin.Module's Migrations()
-// method. See go/pki/migrations/fs.go's identical doc comment for why this
-// lives in its own tiny leaf package rather than as a var declared
-// directly inside module.go.
+// method.
+//
+// It exists as its own tiny leaf package, rather than as a var declared
+// directly inside module.go, because a //go:embed directive's patterns are
+// resolved relative to the directory of the .go file that carries it. For
+// FS to expose "postgres" and "sqlite" at the root of its embed.FS -- the
+// layout dbkit.MigrationRegistry.Apply expects from every module -- the
+// embedding file has to live in the one directory where those two names
+// are its own immediate children. This mirrors go/pki/migrations and
+// go/org/migrations.
 package migrations
 
 import "embed"

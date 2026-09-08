@@ -11,7 +11,7 @@ package main
 // for why that is not the same as "same process, always safe"), and a
 // handful of genuinely unreadable shapes that must still warn-and-drop.
 //
-// This is the regression the reference-app-go.md P1-1 finding named: before
+// This is the regression: before
 // this probe existed, the subscription's naked
 // evt.Payload.(smilesim.SimulationCompletedPayload) type assertion passed
 // case (1) below and failed case (2) -- exactly the failure this test's
@@ -96,7 +96,7 @@ func TestSimulationCompletedFieldsFromPayload_ConcreteStruct_Failed(t *testing.T
 // path). Before this probe existed, the subscription's naked type
 // assertion to the concrete struct type failed on exactly this shape,
 // silently dropping the event with only a warning log -- this case is
-// what the pre-fix code could not pass.
+// what a type-asserting subscriber could not pass.
 func TestSimulationCompletedFieldsFromPayload_DecodedMap(t *testing.T) {
 	decoded := map[string]any{
 		"ImageJobID":      "job-1",

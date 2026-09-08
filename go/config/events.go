@@ -8,23 +8,21 @@ import (
 
 // EventConfigItemChanged is the pkgcore.Event.Type published after every
 // successful Set, following the "<module>.<entity>.<action>" convention
-// (backend coding standard §8; go/pkgcore/registry.go's EventDecl.Type doc
-// comment). Its Payload is an ItemChangedEvent.
+// (go/pkgcore/registry.go's EventDecl.Type doc comment). Its Payload is an
+// ItemChangedEvent.
 //
-// The event is the module's hot-update signal (docs/internal/
-// 11-cross-cutting.md's dynamic-config section: a change is broadcast
-// over the event bus and every instance refreshes its local cache) and
-// its audit trail in one: a future
-// audit-log consumer (the compliance module) can record who changed what,
-// when, and from which value to which value purely by subscribing to this
-// one event type -- which is why every field an audit record needs is on
-// the payload rather than left to be re-derived by the subscriber.
+// The event is the module's hot-update signal -- a change is broadcast
+// over the event bus and every instance refreshes its local cache -- and
+// its audit trail in one: an audit-log consumer (the compliance module)
+// records who changed what, when, and from which value to which value
+// purely by subscribing to this one event type -- which is why every field
+// an audit record needs is on the payload rather than left to be re-derived
+// by the subscriber.
 const EventConfigItemChanged = "config.item.changed"
 
 // eventConfigItemChangedPayloadType names ItemChangedEvent for
-// EventDecl.PayloadType, so a subscriber (and the future event catalog)
-// knows what concrete type to expect in Event.Payload without importing
-// this package just to read a string.
+// EventDecl.PayloadType, so a subscriber knows what concrete type to expect
+// in Event.Payload without importing this package just to read a string.
 const eventConfigItemChangedPayloadType = "config.ItemChangedEvent"
 
 // AuditActionConfigSet is the module's audit action string, declared on the
@@ -74,7 +72,8 @@ type ItemChangedEvent struct {
 	Key string
 
 	// Scope is the scope tier the row was written at: ScopeSystem or
-	// ScopeTenant. ScopeUser rows cannot exist in this milestone.
+	// ScopeTenant. ScopeUser rows do not exist, the tier being reserved and
+	// unimplemented.
 	Scope Scope
 
 	// TenantID is the owning tenant when Scope is ScopeTenant, empty

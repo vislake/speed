@@ -54,16 +54,15 @@ type TenantSSOConfig struct {
 	// tenant-scoped tables.
 	//
 	// It deliberately carries no separate uniqueness constraint of its own.
-	// docs/internal/05 specifies one configuration per tenant as a product
-	// rule, enforced by SaveConfig reading Current before deciding whether
-	// to create or update -- but a DB-level UNIQUE index on tenant_id alone
-	// would reject the second of two rows the mandatory
-	// tenancytest.AssertIsolated suite deliberately creates per tenant to
-	// prove List actually filters (a single-row list cannot distinguish
-	// "correctly scoped" from "returned everything"). The suite is not
-	// negotiable; the constraint that could not coexist with it is. See
-	// Current's doc comment for how "at most one" is kept true in the
-	// normal path despite the database no longer enforcing it.
+	// One configuration per tenant is a product rule, enforced by SaveConfig
+	// reading Current before deciding whether to create or update -- but a
+	// DB-level UNIQUE index on tenant_id alone would reject the second of
+	// two rows the mandatory tenancytest.AssertIsolated suite deliberately
+	// creates per tenant to prove List actually filters (a single-row list
+	// cannot distinguish "correctly scoped" from "returned everything").
+	// The suite is not negotiable; the constraint that could not coexist
+	// with it is. See Current's doc comment for how "at most one" is kept
+	// true in the normal path despite the database not enforcing it.
 	TenantID string `gorm:"column:tenant_id;primaryKey;size:64"`
 
 	// ID is an application-generated UUID, the second half of the
@@ -337,12 +336,12 @@ type SSOCallbackInput struct {
 
 // SSOService is the enterprise OpenID Connect relying party.
 //
-// It is deliberately separate from the social channels. docs/internal/05 is
-// explicit that the two are different mechanisms with different configuration
-// levels -- SSO is per tenant and configured by the tenant's own
-// administrator, social login is per platform and configured by the operator
-// -- and collapsing them into one abstraction would mean a tenant
-// administrator's settings form could reach the platform's channels.
+// It is deliberately separate from the social channels: the two are
+// different mechanisms with different configuration levels -- SSO is per
+// tenant and configured by the tenant's own administrator, social login is
+// per platform and configured by the operator -- and collapsing them into
+// one abstraction would mean a tenant administrator's settings form could
+// reach the platform's channels.
 type SSOService struct {
 	svc        *Service
 	configs    *SSOConfigRepository
@@ -495,13 +494,11 @@ func (s *SSOService) SaveConfig(ctx context.Context, in SSOConfigInput) (*Tenant
 // collection mechanism go/dbkit/audit documents, on the bus the Service
 // was built over (s.svc.bus). It runs at the SERVICE layer, from
 // SaveConfig itself, because that is where this write genuinely happens:
-// no HTTP handler for tenant SSO configuration is mounted anywhere, and
-// the audit.Emit sites across this codebase are overwhelmingly
-// service-layer (12 non-handler sites across seven modules against 3
-// handler-layer ones) -- recordAudit (handler.go) is the same mechanism
-// for the paths that DO have a handler. Wiring: the registrar is attached
-// by module.go's Register, after reg.AuditActions.Add has declared the
-// action (Emit validates the action string against it before publishing).
+// no HTTP handler for tenant SSO configuration is mounted anywhere --
+// recordAudit (handler.go) is the same mechanism for the paths that DO
+// have a handler. Wiring: the registrar is attached by module.go's
+// Register, after reg.AuditActions.Add has declared the action (Emit
+// validates the action string against it before publishing).
 //
 // The row's identity is whatever ctx attests: audit.Emit itself reads
 // pkgcore.ActorFromContext / pkgcore.OnBehalfOfFromContext, so an
@@ -565,10 +562,10 @@ func (s *SSOService) AuthorizeURL(ctx context.Context, redirectURI, sessionBindi
 	// tenant id can never complete a sign-in (its "oidc:<tenant>"
 	// provider name would overflow user_identities.provider), so a state
 	// issued for it would only lead a member to a broken callback. A
-	// configuration row for such a tenant can only exist because it was
-	// written before the SaveConfig gate -- or straight through the
-	// repository -- so the entry path refuses it itself rather than
-	// trusting the write path to have done so. See validateSSOTenantID.
+	// configuration row for such a tenant can only exist if its write path
+	// did not run this gate (the repository validates widths, not the
+	// tenant id), so the entry path refuses it itself rather than trusting
+	// the write path to have done so. See validateSSOTenantID.
 	if tenantID, ok := pkgcore.TenantFromContext(ctx); ok {
 		if err := validateSSOTenantID(tenantID); err != nil {
 			return "", err
@@ -675,8 +672,8 @@ func (s *SSOService) Callback(ctx context.Context, in SSOCallbackInput) (*Social
 	// left to break the identity write with a raw 22001 on PostgreSQL.
 	// Under the fixed code paths this is unreachable -- SaveConfig and
 	// AuthorizeURL both refuse such a tenant before a flow can start -- and
-	// it exists so a flow begun before those gates existed answers the same
-	// named refusal instead of a random database error. See
+	// it exists so a state record issued outside those gates answers the
+	// same named refusal instead of a random database error. See
 	// validateSSOTenantID.
 	if err := validateSSOTenantID(in.TenantID); err != nil {
 		return nil, err

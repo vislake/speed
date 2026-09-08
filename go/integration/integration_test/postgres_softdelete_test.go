@@ -1,29 +1,21 @@
 //go:build integration
 
 // Package integration_test holds go/integration's PostgreSQL integration
-// tier: this round's own proof that WebhookSubscription's mark-delete/
-// restore mechanism (migrations/{sqlite,postgres}/0004_add_soft_delete.sql)
-// behaves identically on the engine whose collation and NULL handling
-// genuinely differ from SQLite's -- the unit tier's SQLite-only proof
+// tier: the proof that WebhookSubscription's mark-delete/restore mechanism
+// (migrations/{sqlite,postgres}/0004_add_soft_delete.sql) behaves
+// identically on the engine whose collation and NULL handling genuinely
+// differ from SQLite's -- the unit tier's SQLite-only proof
 // (webhook_service_test.go's TestService_DeleteWebhookSubscription_
 // MarksInsteadOfPhysicallyRemoving and TestService_
 // RestoreWebhookSubscription_UndoesTheDelete) cannot rule out a
 // PostgreSQL-specific mistake shipping unnoticed. It is physically separate
 // from go/integration's unit tests (all of which live in package
-// integration itself, one file per source file, per the backend coding
-// standard's testing layout rule) and carries the "integration" build tag:
-// a plain "go test ./..." never compiles or runs anything in this
-// directory; it is invoked explicitly with
-// "go test -tags=integration ./integration_test/...". This mirrors the
-// identical convention of go/org, go/rbac, go/dbkit, go/jobs, go/pkgcore
-// and go/config.
-//
-// This is go/integration's FIRST integration_test/ package at all --
-// AGENTS.md's Known limitations previously recorded "no PostgreSQL
-// integration tier" outright; this round adds the tier proactively for its
-// own soft-delete round rather than deferring it, following go/rbac's own
-// round's proactive precedent (go/org's equivalent round added its tier
-// reactively, after a first review pass flagged the gap).
+// integration itself, one file per source file, per the testing-layout
+// rule) and carries the "integration" build tag: a plain "go test ./..."
+// never compiles or runs anything in this directory; it is invoked
+// explicitly with "go test -tags=integration ./integration_test/...". This
+// mirrors the identical convention of go/org, go/rbac, go/dbkit, go/jobs,
+// go/pkgcore and go/config.
 //
 // Every test here spins up its own disposable container and requires a
 // working Docker (or Docker-API-compatible) daemon; there is no fallback or
@@ -92,10 +84,10 @@ func startPostgresContainer(t *testing.T, ctx context.Context) *postgres.Postgre
 // module's tables live in, per WebhookSubscription's own doc comment), and
 // applies this module's own migrations to it with the dialect they ship
 // for, exactly the way a host applies them at startup. Nothing here calls
-// AutoMigrate; the versioned SQL under migrations/postgres, including this
-// round's own 0004_add_soft_delete.sql, is what creates and alters every
-// table, which is what makes this the zero-to-head proof root CLAUDE.md
-// asks for on the second dialect.
+// AutoMigrate; the versioned SQL under migrations/postgres, including
+// 0004_add_soft_delete.sql, is what creates and alters every table, which
+// is what makes this the zero-to-head proof the repository-wide migration
+// rule asks for on the second dialect.
 func openIntegrationPostgres(t *testing.T, ctx context.Context, pgContainer *postgres.PostgresContainer) *gorm.DB {
 	t.Helper()
 
@@ -155,9 +147,9 @@ func attachIntegrationService(t *testing.T, db *gorm.DB) *integration.Service {
 }
 
 // TestPostgres_Migrations_CreateEveryTableFromZero proves the second
-// dialect's migration set -- 0001 through this round's own 0004 -- actually
-// runs and produces every table this module's models are mapped onto,
-// including the two soft-delete columns this round adds.
+// dialect's migration set -- 0001 through 0004 -- actually runs and
+// produces every table this module's models are mapped onto, including the
+// two soft-delete columns.
 func TestPostgres_Migrations_CreateEveryTableFromZero(t *testing.T) {
 	ctx := context.Background()
 	db := openIntegrationPostgres(t, ctx, startPostgresContainer(t, ctx))

@@ -7,8 +7,8 @@ import (
 )
 
 // The error index of the org module. Every exported error is an
-// *apperr.Error builder whose Code follows the <module>.<reason> convention
-// the backend coding standard requires: match a decorated error with
+// *apperr.Error builder whose Code follows the <module>.<reason> convention:
+// match a decorated error with
 // apperr.As(err) and compare its Code, never with == or errors.Is against
 // the var below. WithParam and WithCause derive a NEW *apperr.Error rather
 // than mutating the receiver, so the pointer a call returns is never the
@@ -111,7 +111,7 @@ var (
 	// reality" state path.go's own doc comment calls corrupt, not a
 	// supported one. Restore each ancestor first, root to leaf, so the node
 	// a Restore call lands on is always live; see TreeService.Restore's own
-	// doc comment and go/org/AGENTS.md's "Soft deletion" section.
+	// doc comment.
 	ErrRestoreParentNotLive = apperr.Conflict("org.restore_parent_not_live")
 
 	// ErrInternal reports a failure org cannot classify -- a storage error,
