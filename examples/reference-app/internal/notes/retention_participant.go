@@ -107,7 +107,19 @@ func NewRetentionParticipant(repo *Repository) pkgcore.RetentionParticipant {
 		Export: func(ctx context.Context, _ pkgcore.TenantID) (any, error) {
 			// Export runs with no system context (see export.go) and lists
 			// live notes only -- data-portability gathering exports what the
-			// tenant can see, never rows a soft-delete already hid.
+			// tenant can see, never rows a soft-delete already hid. The
+			// field-level judgment pkgcore's Export contract requires is
+			// stated here too: whole Note rows, Text included, are exactly
+			// what this manifest should carry. A note body is the tenant's
+			// own user content, and the export's recipient -- the holder of
+			// the unauthenticated, single-view share link the manifest
+			// travels (pkgcore/registry.go's Export doc) -- is by that link
+			// entitled to read the export's data. Text's audit:"redact" tag
+			// confines the body within the audit trail's own capture
+			// (model.go: the append-only platform table the body must never
+			// reach verbatim); it is not a statement about the tenant's own
+			// portability export and does not follow the data beyond that
+			// mechanism.
 			return repo.List(ctx)
 		},
 	}
