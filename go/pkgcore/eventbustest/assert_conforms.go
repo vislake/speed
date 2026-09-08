@@ -610,11 +610,17 @@ func checkPanicDoesNotWedgeDelivery(publisher, receiver pkgcore.EventBus, eventT
 	})
 
 	// A correct implementation contains the panic wherever the handler
-	// actually runs: on its own reader goroutine for a distributed bus, or
-	// surfaced to the publisher — and tolerated by
-	// publishToleratingHandlerPanic — for a synchronous one. Either way,
-	// the events published after the panic must still reach the healthy
-	// handler.
+	// actually runs: on its own reader goroutine for a distributed bus's
+	// cross-instance delivery, or inside Publish itself for the
+	// synchronous local fan-out the in-memory bus and every broker bus
+	// share — each recovers and logs a panicking handler rather than
+	// unwinding it through the publisher (pkgcore's runMemoryBusHandler,
+	// and runLocalHandler in the redis, nats and postgres buses). The one
+	// synchronous shape that can still surface the panic out of Publish
+	// is a host-supplied implementation that invokes its handlers bare;
+	// publishToleratingHandlerPanic absorbs that escape so the assertion
+	// keeps holding for such a bus too. Either way, the events published
+	// after the panic must still reach the healthy handler.
 	for seq, tenant := range []pkgcore.TenantID{crossInstanceTenant, panicFollowUpTenant} {
 		if err := publishToleratingHandlerPanic(publisher, pkgcore.Event{
 			Type:     eventType,
@@ -759,25 +765,29 @@ func publishCounted(bus pkgcore.EventBus, evt pkgcore.Event) error {
 }
 
 // errHandlerPanicSurfaced is the sentinel publishToleratingHandlerPanic
-// returns when a Publish call ended in a panic rather than an error: a
-// synchronous delivery shape invokes its handlers on the publisher's own
-// goroutine, so a deliberately panicking handler can surface there instead
-// of on a reader goroutine.
+// returns when a Publish call ended in a panic rather than an error. No
+// shipped bus produces one any more: the in-memory bus and every broker
+// bus's local fan-out contain a panicking handler inside Publish itself
+// (pkgcore's runMemoryBusHandler, runLocalHandler in the redis, nats and
+// postgres buses), so the escape can only come from a host-supplied
+// synchronous implementation that invokes its handlers bare on the
+// publisher's own goroutine.
 var errHandlerPanicSurfaced = errors.New("eventbustest: a handler panic surfaced out of Publish")
 
 // publishToleratingHandlerPanic publishes evt, tolerating a handler panic
-// that escapes out of Publish itself. The in-memory bus no longer produces
-// one -- its Publish contains a panicking handler, logging it and running
-// the handlers registered after it (see pkgcore's memory bus Publish) -- but
-// the same-instance pair shape that represents a one-replica deployment of
-// a broker-backed bus still invokes its local handlers bare on the caller's
-// goroutine, and a host-supplied synchronous implementation may too: for
-// those, a panicking handler surfaces to the publisher rather than to a
-// delivery goroutine of the bus's own. Tolerating the escape is not
-// weakening the assertion that uses this helper — such an implementation
-// has no delivery machinery of its own to wedge, so the panic is the
-// publisher's to observe — but a Publish that returns an error is still
-// reported: a healthy implementation must accept the event.
+// that escapes out of Publish itself. The tolerance is aimed at a
+// host-supplied synchronous implementation: such a bus invokes its
+// handlers on the caller's goroutine with no containment of its own, so a
+// panicking handler surfaces to the publisher rather than to a delivery
+// goroutine of the bus's own — every bus this suite runs against contains
+// the same panic instead, recovering and logging it and running the
+// handlers registered after it (the in-memory bus through
+// runMemoryBusHandler, each broker bus's local fan-out through its own
+// runLocalHandler). Tolerating the escape is not weakening the assertion
+// that uses this helper — such an implementation has no delivery
+// machinery of its own to wedge, so the panic is the publisher's to
+// observe — but a Publish that returns an error is still reported: a
+// healthy implementation must accept the event.
 func publishToleratingHandlerPanic(bus pkgcore.EventBus, evt pkgcore.Event) error {
 	err := func() (err error) {
 		defer func() {
