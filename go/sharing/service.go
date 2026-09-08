@@ -737,6 +737,35 @@ func (s *Service) authorizePublicAccess(ctx context.Context, token string, p Acc
 // comment has the full argument, the same one go/authn already applied to
 // its own per-target wrong-guess dimension).
 //
+// That substitution -- 429 where every other refusal this method can
+// produce answers ErrNotAccessible -- is itself a recognized-token-path
+// disclosure in the scope of rule 5's outward-identical answers, and it is
+// recorded here on the mechanism's own site rather than claimed by that
+// guarantee. Only a caller presenting a token that resolves to a
+// password-protected share ever reaches the charge, so only such a caller
+// can provoke the 429, and it discloses exactly three facts: the token
+// exists (it names a share at all), the share is password-protected, and
+// the wrong-guess budget is exhausted. It discloses nothing else -- no
+// tenant, no share id, and nothing about the share's liveness, since this
+// branch runs before Share.isLive and a revoked, expired or
+// view-exhausted share's wrong guesses charge and answer the same way.
+// (The per-IP dimension answers the same code earlier, in the prelude,
+// before any token is resolved, identically for a garbage token and a
+// resolving one; its dimension param is what tells the two answers
+// apart.) The disclosure is accepted because the budget is the protection
+// against guessing: a spent budget that answered indistinguishably from a
+// wrong credential could not pace the guesser it exists to slow, who
+// would have no way to know further guessing is futile until the window
+// recovers -- the information the 429's retry_after_seconds param exists
+// to carry -- while every futile attempt would still settle one denied
+// row and one denied event, rule 4's own cost, against a budget that
+// cannot admit it. The outward identity of every remaining answer is
+// preserved: unrecognized tokens, under-budget wrong credentials, and
+// revoked, expired and view-exhausted shares all answer the identical
+// ErrNotAccessible, and the legitimate password-holder is never the party
+// disclosed -- a correct attempt is never judged wrong, never reaches the
+// charge, and never answers the 429.
+//
 // On success NOTHING is recorded: no view, no granted row. Recording is the
 // caller's own next step, and the two callers differ deliberately in WHEN
 // that step is honest:
