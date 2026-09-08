@@ -8,7 +8,8 @@
     "notes": "记事",
     "account": "账户",
     "credits": "额度",
-    "team": "团队"
+    "team": "团队",
+    "admin": "平台管理"
   },
   "signIn": {
     "registerPrompt": "还没有账户？",
@@ -62,6 +63,20 @@
     "intro": "管理您的登录会话、最近登录记录与已关联的社交账号，并设置双重验证。",
     "errors": {
       "authorizeUrlRefused": "该登录链接不是安全的网页地址，未予打开。"
+    }
+  },
+  "admin": {
+    "heading": "平台管理",
+    "intro": "平台的租户台账：服务器记录到的每个租户，以及运营人员为其设置的状态。",
+    "tenants": {
+      "tenantColumn": "租户",
+      "statusColumn": "状态",
+      "createdColumn": "记录时间",
+      "identityUnknown": "未命名租户",
+      "statusActive": "已启用",
+      "statusSuspended": "已停用",
+      "emptyTitle": "暂无租户记录",
+      "emptyDescription": "租户创建或注册后会自动进入台账。"
     }
   },
   "cases": {

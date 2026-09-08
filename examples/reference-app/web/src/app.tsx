@@ -16,7 +16,10 @@
  * creation flow and one case's detail -- the block-A acceptance
  * surface), notes, team (who works in the clinic and the invite-a-
  * colleague flow), credits (the clinic's credit balance and ledger --
- * the block-D surface) and account. The
+ * the block-D surface) and account -- and, on the platform frame
+ * alone (a principal signed into the system pseudo-tenant, never a
+ * clinic owner), administration, the tenant ledger go/admin's
+ * operator-facing surface serves (admin-view.tsx). The
  * binding callback is the account surface's subroute: the fragment
  * /auth/binding/<provider>?code=<code>&state=<state> is what the
  * account-ui BindingCallbackHandler completes at, so it parses here
@@ -36,12 +39,16 @@
 import type { ReactElement } from 'react'
 import { Typography } from '@mui/material'
 import type { SocialProvider } from '@speed/account-ui'
+import { useCurrentTenant } from '@speed/auth-core'
 import { useTranslation } from '@speed/i18n'
 import { ProductShell } from '@speed/product-shell'
 import type { AppShellNavItem } from '@speed/layout-kit'
 import { useBrandName } from './app-services.js'
+import { SYSTEM_PSEUDO_TENANT_ID } from './demo-tenants.js'
 import { REFERENCE_APP_NAMESPACE } from './resources.js'
 import { useHashRoute } from './useHashRoute.js'
+import { AccountView } from './views/account-view.js'
+import { AdminView } from './views/admin-view.js'
 import { HomeView } from './views/home-view.js'
 import { CaseDetailView } from './views/case-detail-view.js'
 import { CasesCreateView } from './views/case-create-view.js'
@@ -49,7 +56,6 @@ import { CasesView } from './views/cases-view.js'
 import { NotesView } from './views/notes-view.js'
 import { TeamView } from './views/team-view.js'
 import { CreditsView } from './views/credits-view.js'
-import { AccountView } from './views/account-view.js'
 import { SignInView } from './views/sign-in-view.js'
 import { UserMenu } from './views/user-menu.js'
 import { ShareView } from './views/share-view.js'
@@ -68,6 +74,10 @@ export const ROUTE_TEAM = '/team'
 export const ROUTE_CREDITS = '/credits'
 /** The account surface fragment. */
 export const ROUTE_ACCOUNT = '/account'
+/** The platform administration fragment: the tenant ledger go/admin's
+ * operator-facing surface serves, offered only to the platform frame
+ * (a principal whose tenant claim is the system pseudo-tenant). */
+export const ROUTE_ADMIN = '/admin'
 /** The account surface's binding-callback subroute prefix: the rest of
  * the path is the provider, the query the (code, state) pair the
  * exchange completes with. */
@@ -111,6 +121,7 @@ export type AppFragment =
   | { readonly kind: 'team' }
   | { readonly kind: 'credits' }
   | { readonly kind: 'account' }
+  | { readonly kind: 'admin' }
   | { readonly kind: 'binding'; readonly target: BindingTarget }
   | {
       readonly kind: 'share'
@@ -177,6 +188,9 @@ export function parseHashFragment(fragment: string): AppFragment {
   if (path === ROUTE_ACCOUNT) {
     return { kind: 'account' }
   }
+  if (path === ROUTE_ADMIN) {
+    return { kind: 'admin' }
+  }
   // The patient share fragment: /share/<before>/<after> -- exactly two
   // further segments (a share token is base64url and never carries a
   // slash), constraining the pair the same way /cases/<id> constrains
@@ -231,6 +245,8 @@ function selectedNavId(fragment: AppFragment): string | null {
     case 'account':
     case 'binding':
       return NAV_ACCOUNT
+    case 'admin':
+      return NAV_ADMIN
     case 'share':
       // The share fragment renders its own standalone page, never a nav
       // item -- see AppView's early return below.
@@ -246,6 +262,7 @@ const NAV_NOTES = 'nav-notes'
 const NAV_TEAM = 'nav-team'
 const NAV_CREDITS = 'nav-credits'
 const NAV_ACCOUNT = 'nav-account'
+const NAV_ADMIN = 'nav-admin'
 
 function navHref(route: string): string {
   return `#${route}`
@@ -257,6 +274,17 @@ export function AppView(): ReactElement {
   const { t } = useTranslation(REFERENCE_APP_NAMESPACE)
   const fragment = useHashRoute()
   const parsed = parseHashFragment(fragment)
+
+  // Whether this frame is the platform frame: a signed-in principal
+  // whose tenant claim is the system pseudo-tenant (the demo
+  // platform-staff account's only membership -- see demo-tenants.ts's
+  // SYSTEM_PSEUDO_TENANT_ID). The administration entry is offered on
+  // that frame alone; a clinic owner -- every account signed into a
+  // customer tenant -- is never offered it, and the surface itself
+  // still gates on the ledger read (admin-view.tsx), so a caller who
+  // reaches the fragment another way meets the server's own refusal.
+  const platformFrame =
+    useCurrentTenant()?.tenantId === SYSTEM_PSEUDO_TENANT_ID
 
   // The patient share fragment is the one surface of this app that must
   // render WITHOUT the product shell: whoever opens a share link --
@@ -312,6 +340,20 @@ export function AppView(): ReactElement {
       href: navHref(ROUTE_ACCOUNT),
       selected: selected === NAV_ACCOUNT,
     },
+    // The administration entry exists on the platform frame alone (see
+    // platformFrame above): a clinic owner must not be offered an
+    // entrance to the platform's tenant ledger, which would put every
+    // other practice's row in front of one clinic.
+    ...(platformFrame
+      ? [
+          {
+            id: NAV_ADMIN,
+            label: t('nav.admin'),
+            href: navHref(ROUTE_ADMIN),
+            selected: selected === NAV_ADMIN,
+          },
+        ]
+      : []),
   ]
 
   let content: ReactElement
@@ -365,6 +407,9 @@ export function AppView(): ReactElement {
       break
     case 'account':
       content = <AccountView />
+      break
+    case 'admin':
+      content = <AdminView />
       break
     case 'binding':
       // The binding subroute completes the exchange inside the account

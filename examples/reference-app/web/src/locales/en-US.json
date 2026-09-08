@@ -8,7 +8,8 @@
     "notes": "Notes",
     "account": "Account",
     "credits": "Credits",
-    "team": "Team"
+    "team": "Team",
+    "admin": "Administration"
   },
   "signIn": {
     "registerPrompt": "No account yet?",
@@ -62,6 +63,20 @@
     "intro": "Manage your sign-in sessions, recent sign-in activity and linked social accounts, and set up two-step verification.",
     "errors": {
       "authorizeUrlRefused": "This sign-in link is not a secure web address and was not opened."
+    }
+  },
+  "admin": {
+    "heading": "Administration",
+    "intro": "The platform's tenant ledger: every tenant the server has recorded, and the status an operator set for each.",
+    "tenants": {
+      "tenantColumn": "Tenant",
+      "statusColumn": "Status",
+      "createdColumn": "Recorded",
+      "identityUnknown": "Unnamed tenant",
+      "statusActive": "Active",
+      "statusSuspended": "Suspended",
+      "emptyTitle": "No tenants recorded",
+      "emptyDescription": "The ledger fills in as tenants are created or registered."
     }
   },
   "cases": {

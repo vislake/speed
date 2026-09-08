@@ -67,11 +67,13 @@ import {
   jsonResponse,
   makeRealClientRig,
 } from './test-utils/real-client.js'
+import uiKitZhCN from '../../../../web/packages/ui-kit/src/locales/zh-CN.json' with { type: 'json' }
+import { SYSTEM_PSEUDO_TENANT_ID } from './demo-tenants.js'
 import { FEATURE_SMILE_PREVIEW } from './views/home-view.js'
 import { clearNotesDraft } from './views/notes-draft.js'
 
 describe('parseHashFragment', () => {
-  it('parses the six routes, with or without a leading slash', () => {
+  it('parses the seven routes, with or without a leading slash', () => {
     expect(parseHashFragment('')).toEqual({ kind: 'home' })
     expect(parseHashFragment('/')).toEqual({ kind: 'home' })
     expect(parseHashFragment('/cases')).toEqual({ kind: 'cases' })
@@ -79,6 +81,7 @@ describe('parseHashFragment', () => {
     expect(parseHashFragment('/team')).toEqual({ kind: 'team' })
     expect(parseHashFragment('/credits')).toEqual({ kind: 'credits' })
     expect(parseHashFragment('/account')).toEqual({ kind: 'account' })
+    expect(parseHashFragment('/admin')).toEqual({ kind: 'admin' })
   })
 
   it("parses the cases surface's subroutes: the create page and one case's detail", () => {
@@ -247,6 +250,93 @@ describe('AppView', () => {
       rig.calls.some(
         (call) =>
           call.method === 'POST' && call.path === '/api/v1/authn/login/password',
+      ),
+    ).toBe(true)
+  })
+
+  it("a clinic owner is never offered the administration entry, and a direct visit meets the ledger gate's refusal", async () => {
+    // The platform-staff gate's other half, at the unit tier: the
+    // account with every clinic-level power (the rig's owner shape,
+    // signed into a demo tenant) must not be offered an entrance to
+    // the platform's tenant ledger -- the entry exists on the platform
+    // frame alone. A direct #/admin visit still renders the surface,
+    // whose own gate (the ledger read) answers the admin route guard's
+    // 403 and falls shut to the no-permission suit: no ledger rows, no
+    // entry anywhere.
+    const rig = makeAppRig()
+    const view = rendered(rig)
+    const user = userEvent.setup()
+    await signInWithPasswordUi(view, user)
+    await view.findByRole('link', { name: zhCN.nav.home })
+
+    expect(
+      view.queryByRole('link', { name: zhCN.nav.admin }),
+    ).not.toBeInTheDocument()
+
+    navigateTo('#/admin')
+    expect(
+      await view.findByText(uiKitZhCN.emptyState.noPermission.title),
+    ).toBeInTheDocument()
+    // The surface keeps its own heading but renders no ledger chrome:
+    // the denied branch never mounts the ledger table (its Tenant
+    // column header included).
+    expect(
+      view.getByRole('heading', { name: zhCN.admin.heading, level: 1 }),
+    ).toBeInTheDocument()
+    expect(
+      view.queryByText(zhCN.admin.tenants.tenantColumn),
+    ).not.toBeInTheDocument()
+    expect(
+      view.queryByRole('link', { name: zhCN.nav.admin }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('the platform frame offers the administration entry and reads the tenant ledger through it', async () => {
+    // The platform-staff gate's first half, at the unit tier: the
+    // platform-staff shape (the rig's account signed into the system
+    // pseudo-tenant, the demo-server's mirror of the staff account
+    // whose admin:* grants live under rbac.SystemDomain) is offered
+    // the Administration entry and reaches the ledger through it. The
+    // rows name the demo roster's copy -- the ledger-naming property
+    // itself is pinned at the view tier.
+    const rig = makeAppRig({
+      tenantId: SYSTEM_PSEUDO_TENANT_ID,
+      initialAdminTenants: [
+        {
+          tenantId: 'tenant-acme',
+          displayName: '',
+          status: 'active',
+          createdAt: '2026-09-04T00:00:00Z',
+        },
+        {
+          tenantId: 'tenant-globex',
+          displayName: '',
+          status: 'active',
+          createdAt: '2026-09-04T00:00:00Z',
+        },
+      ],
+    })
+    const view = rendered(rig)
+    const user = userEvent.setup()
+    await signInWithPasswordUi(view, user)
+    await view.findByRole('link', { name: zhCN.nav.home })
+
+    const adminLink = view.getByRole('link', { name: zhCN.nav.admin })
+    expect(adminLink).toHaveAttribute('href', '#/admin')
+    expect(adminLink).not.toHaveAttribute('aria-current')
+    await user.click(adminLink)
+    expect(window.location.hash).toBe('#/admin')
+
+    await view.findByRole('heading', { name: zhCN.admin.heading, level: 1 })
+    await view.findByText(zhCN.tenants.acme)
+    expect(view.getByText(zhCN.tenants.globex)).toBeInTheDocument()
+    expect(
+      view.getByRole('link', { name: zhCN.nav.admin }),
+    ).toHaveAttribute('aria-current', 'page')
+    expect(
+      rig.calls.some(
+        (call) =>
+          call.method === 'GET' && call.path === '/api/v1/admin/tenants',
       ),
     ).toBe(true)
   })

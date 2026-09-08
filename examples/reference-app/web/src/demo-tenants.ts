@@ -47,3 +47,23 @@ export function demoTenantNameKey(tenantId: string | null): string | null {
   const tenant = DEMO_TENANTS.find((entry) => entry.id === tenantId)
   return tenant?.nameKey ?? null
 }
+
+/**
+ * The id of the system pseudo-tenant: rbac.SystemDomain's value
+ * ("system", pinned by go/rbac's own suite in subject_test.go). The
+ * demo's platform-staff seed (cmd/server/demo_admin.go) grants
+ * demo-platform-staff@example.com membership in this pseudo-tenant
+ * ALONE -- never in any customer tenant -- so its access token's tenant
+ * claim always resolves here, and the signed-in frame scoped to this
+ * tenant is the platform frame, not a clinic's.
+ *
+ * Not on DEMO_TENANTS by design: it is not a clinic to switch into, and
+ * the switcher roster lists tenants only. The frame's administration
+ * entry gates on this claim (app.tsx) the way the server's admin
+ * subject resolver evaluates every admin route in this domain
+ * (cmd/server/demo_admin.go's adminSubjectResolver) -- the web side
+ * cannot import the Go constant, so the mirror lives here, and the
+ * demo server's own staff-shaped answers key off the same value
+ * (test-utils/demo-server.ts).
+ */
+export const SYSTEM_PSEUDO_TENANT_ID = 'system'

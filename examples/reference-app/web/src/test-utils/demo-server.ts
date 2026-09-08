@@ -32,7 +32,12 @@
  * reader's list as served, demo_users_test.go:143-153), and a note
  * create from that principal answers the 403 the write gate gives a
  * caller without notes:write (rbac.permission_denied, asserted at
- * server_test.go:443-445).
+ * server_test.go:443-445). The platform-staff shape is the configured
+ * account itself signed into the system pseudo-tenant -- the fixture's
+ * tenantId option set to SYSTEM_PSEUDO_TENANT_ID ('system', the value
+ * the Go seed grants demo-platform-staff@example.com its sole
+ * membership in, demo_admin.go) -- the web mirror of an account whose
+ * admin:* grants live under rbac.SystemDomain.
  *
  * Registration answers 201 and PROVISIONS the account's own clinic --
  * the web mirror of the composed stack's self-service signup
@@ -130,7 +135,12 @@
  * directory; a roster row whose user the directory does not know
  * answers with empty identity fields, exactly what the real server
  * answers for an account row that cannot be read (the surface's
- * fallback label renders it). GET /api/v1/org/members itself remains
+ * fallback label renders it). The administration surface's ledger read
+ * (GET /api/v1/admin/tenants, the mirror of go/admin's own
+ * operator-facing route) is served to the platform-staff shape above
+ * and refused with the rbac gate's 403 to every other principal,
+ * exactly like the real admin route guard. GET /api/v1/org/members
+ * itself remains
  * served for the org surface's own wire-shape fidelity. The notes
  * answers mirror the real handler's
  * refusals: a create whose trimmed text is empty answers 400
@@ -207,6 +217,7 @@ import type {
   BillingCreditTransaction,
 } from '@speed/api-sdk'
 import type { PublicConfigResponse } from '@speed/api-client'
+import { SYSTEM_PSEUDO_TENANT_ID } from '../demo-tenants.js'
 import { errorResponse, jsonResponse } from './real-client.js'
 import type { RealCall, RealResponder } from './real-client.js'
 
@@ -527,6 +538,18 @@ export interface DemoServerOptions {
     readonly status: number
     readonly code: string
   }
+  /** The GET /api/v1/admin/tenants ledger rows as first served -- the
+   * platform's tenant ledger go/admin's operator-facing route answers
+   * (admin-api.ts). Only a principal scoped to the system pseudo-tenant
+   * (SYSTEM_PSEUDO_TENANT_ID -- the demo-server's platform-staff shape,
+   * scripted by signing the configured account into the 'system'
+   * tenant) is served the ledger; any other principal's read answers
+   * the rbac gate's 403, the answer the real app's admin route guard
+   * gives a caller whose user id holds no admin grant under the system
+   * domain (cmd/server/demo_admin.go's adminSubjectResolver). Default
+   * [] -- the mirror of a ledger a freshly booted server auto-fills as
+   * org roots are created. */
+  readonly initialAdminTenants?: readonly DemoAdminTenant[]
 }
 
 /** The name the fixture gives a registered account's clinic when its
@@ -693,6 +716,20 @@ export interface DemoOrgInvitation {
   readonly nodeId: string
   readonly status: string
   readonly expiresAt: string
+  readonly createdAt: string
+}
+
+/** One row of the platform's tenant ledger answer (GET
+ * /api/v1/admin/tenants) -- the wire shape of go/admin's own
+ * operator-facing route (go/admin/api/openapi.yaml's AdminTenant): the
+ * tenant id, the display name an operator recorded ('' for the rows
+ * the org.node.created subscription auto-registers, go/admin's
+ * tenant_service.go), the ledger's status opinion and the row's
+ * recorded-at stamp. */
+export interface DemoAdminTenant {
+  readonly tenantId: string
+  readonly displayName: string
+  readonly status: string
   readonly createdAt: string
 }
 
@@ -871,6 +908,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     sharesCreateRefusal,
     sharesCreateSecondRefusal,
     shareAccessRefusal,
+    initialAdminTenants = [],
   } = options
   // The account state is stateful per responder instance (a revoke
   // marks a row for later list answers, an exchange appends a bound
@@ -1242,6 +1280,13 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         if (registeredName !== undefined) {
           return jsonResponse(200, { name: registeredName })
         }
+        if (principal.tenant_id === SYSTEM_PSEUDO_TENANT_ID) {
+          // The platform-staff shape's pseudo-tenant has no org tree to
+          // name it: the real host answers '' for a tenant with no tree
+          // (cmd/server/clinic_name.go), never an invented identifier,
+          // and no journey may see a fabricated clinic name here.
+          return jsonResponse(200, { name: '' })
+        }
         if (clinicName !== undefined) {
           return jsonResponse(200, { name: clinicName })
         }
@@ -1511,6 +1556,25 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
         nextInvitationId += 1
         invitationsOf(principal.tenant_id).push(created)
         return jsonResponse(201, created)
+      }
+      case 'GET /api/v1/admin/tenants': {
+        // The platform's tenant ledger (admin-api.ts), mirroring
+        // go/admin's own operator-facing route behind this app's admin
+        // route guard (cmd/server/demo_admin.go's guardAdminRoute).
+        // The bearer is resolved BEFORE the gate answers, like every
+        // other gate here. The ledger is served only to a principal
+        // scoped to the system pseudo-tenant -- the demo's
+        // platform-staff shape, the web mirror of the real staff
+        // account's sole membership, whose admin:* grants live under
+        // rbac.SystemDomain -- and any other principal's read answers
+        // the rbac gate's 403, exactly the answer the real guard gives
+        // a caller without the admin grant. The refusal switch a suite
+        // scripts the load failures its surface renders with.
+        const principal = principalOf(call)
+        if (principal.tenant_id !== SYSTEM_PSEUDO_TENANT_ID) {
+          return errorResponse(403, RBAC_PERMISSION_DENIED_CODE)
+        }
+        return jsonResponse(200, { tenants: initialAdminTenants })
       }
       case 'GET /api/v1/cases': {
         // The cases surface has no read gate (any member of the tenant
