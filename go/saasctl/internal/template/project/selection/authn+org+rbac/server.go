@@ -188,7 +188,15 @@ func buildServer(ctx context.Context, cfg serverConfig) (http.Handler, func() er
 	// HMAC-key weakness dbkit warns about (see config.go's orgIndexKeyEnv
 	// doc comment).
 	dbkit.RegisterEncryptedSerializer(org.EmailSerializerName, cipher)
-	orgIndexer, err := dbkit.NewBlindIndexer("email_index", cfg.OrgIndexKey, dbkit.NormalizeEmail)
+	// The column argument below is org's exported EmailIndexColumn, never
+	// a hand-typed literal, for the same reason the serializer registered
+	// above is an exported constant: dbkit.NewBlindIndexer refuses an
+	// EMPTY column name but has no guard for a non-empty wrong one, so the
+	// exact SQL column name must travel from the package that owns the
+	// schema -- pinned there against the model's gorm tag and the migrated
+	// schema -- rather than be spelled out here where it could drift from
+	// org's wiring contract.
+	orgIndexer, err := dbkit.NewBlindIndexer(org.EmailIndexColumn, cfg.OrgIndexKey, dbkit.NormalizeEmail)
 	if err != nil {
 		_ = cleanup()
 		return nil, nil, fmt.Errorf("__APP_NAME__: build the org email indexer: %w", err)

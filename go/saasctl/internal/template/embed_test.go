@@ -469,3 +469,43 @@ func TestAuthnSelectionsConsumeTheThreeKeyMaterialsFromServerConfig(t *testing.T
 		}
 	}
 }
+
+// TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn pins the
+// org invitation indexer's column argument in every org-wiring selection:
+// it must be org's exported EmailIndexColumn, never a hand-typed literal,
+// for the reason org's own doc comments give (dbkit.NewBlindIndexer
+// refuses an EMPTY column name but has no guard for a non-empty wrong one,
+// so the exact SQL name must cross the package boundary as a referenced
+// constant, not a string that can drift from the schema). The literal the
+// fix replaced matched the real column, so the defect was dormant -- no
+// behavioural test could fail on it -- which is exactly why the template
+// source itself is pinned here: these build-ignored files never compile,
+// and a hand-typed column name that drifted from org's schema would ship
+// into every consumer project saasctl new materializes before anything
+// anywhere failed. The selections that wire no org module must not
+// reference the constant at all.
+func TestOrgSelectionsBuildTheInvitationIndexerOverEmailIndexColumn(t *testing.T) {
+	const wantConst = "dbkit.NewBlindIndexer(org.EmailIndexColumn, cfg.OrgIndexKey, dbkit.NormalizeEmail)"
+	const wantLiteral = `dbkit.NewBlindIndexer("email_index", cfg.OrgIndexKey, dbkit.NormalizeEmail)`
+	for _, key := range validSelectionKeys {
+		path := ProjectRoot + "/selection/" + key + "/server.go"
+		content, err := fs.ReadFile(Project, path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		src := string(content)
+		switch key {
+		case "authn+org", "authn+org+rbac":
+			if !strings.Contains(src, wantConst) {
+				t.Errorf("%s does not build its org invitation indexer over org.EmailIndexColumn; the column name must travel as org's exported constant, never a hand-typed literal", key)
+			}
+			if strings.Contains(src, wantLiteral) {
+				t.Errorf("%s still hands dbkit.NewBlindIndexer the hand-typed column literal; reference org.EmailIndexColumn instead", key)
+			}
+		default:
+			if strings.Contains(src, wantConst) || strings.Contains(src, wantLiteral) {
+				t.Errorf("%s wires no org module, so its server.go must construct no org invitation indexer", key)
+			}
+		}
+	}
+}
