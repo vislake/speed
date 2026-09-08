@@ -16,10 +16,8 @@ package nats_test
 
 import (
 	"context"
-	"math/rand/v2"
 	"net"
 	"net/netip"
-	"strconv"
 	"testing"
 	"time"
 
@@ -28,6 +26,8 @@ import (
 	natslib "github.com/nats-io/nats.go"
 	"github.com/testcontainers/testcontainers-go"
 	tcnats "github.com/testcontainers/testcontainers-go/modules/nats"
+
+	"github.com/vislake/speed/go/pkgcore/internal/testutil"
 )
 
 // natsImage is the official NATS server image this tier runs. The
@@ -149,26 +149,25 @@ func startNATSConnN(t *testing.T, ctx context.Context, n int) []*natslib.Conn {
 func startNATSConnPairWithContainer(t *testing.T, ctx context.Context) (*tcnats.NATSContainer, *natslib.Conn, *natslib.Conn) {
 	t.Helper()
 
-	// A random port in the high, rarely-reserved range on every run, so two
-	// concurrent invocations of restart-driven tests are unlikely to collide
-	// (the kv-tier restart fixtures draw from the same range for their own
-	// containers); a genuine collision fails loudly at container start
-	// (Docker refuses the bind) rather than silently reusing someone else's
-	// server.
-	hostPort := strconv.Itoa(40000 + rand.IntN(20000))
-
-	container, err := tcnats.Run(ctx, natsImage,
-		testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
-			hc.PortBindings = network.PortMap{
-				network.MustParsePort("4222/tcp"): {{HostIP: netip.IPv4Unspecified(), HostPort: hostPort}},
-			}
-		}),
-	)
-	if err != nil {
-		t.Fatalf("start nats testcontainer on fixed port %s: %v", hostPort, err)
-	}
+	// testutil.StartOnFreeHostPort picks the pinned port: it draws one the
+	// OS reports free and retries with a fresh draw when a concurrent
+	// container start binds that port first, so parallel invocations of
+	// this tier can never collide on the pin (free_host_port.go's doc
+	// comment has the mechanism).
+	var started *tcnats.NATSContainer
+	hostPort := testutil.StartOnFreeHostPort(t, "nats testcontainer", func(p string) error {
+		var err error
+		started, err = tcnats.Run(ctx, natsImage,
+			testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
+				hc.PortBindings = network.PortMap{
+					network.MustParsePort("4222/tcp"): {{HostIP: netip.IPv4Unspecified(), HostPort: p}},
+				}
+			}),
+		)
+		return err
+	})
 	t.Cleanup(func() {
-		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
+		if terminateErr := testcontainers.TerminateContainer(started); terminateErr != nil {
 			t.Errorf("terminate nats testcontainer: %v", terminateErr)
 		}
 	})
@@ -184,7 +183,7 @@ func startNATSConnPairWithContainer(t *testing.T, ctx context.Context) (*tcnats.
 		t.Cleanup(conn.Close)
 		conns[i] = conn
 	}
-	return container, conns[0], conns[1]
+	return started, conns[0], conns[1]
 }
 
 // restartNATSContainer stops and starts container and blocks until conn has

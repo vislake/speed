@@ -26,11 +26,9 @@ package s3_test
 import (
 	"context"
 	"fmt"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
-	"strconv"
 	"testing"
 	"time"
 
@@ -42,6 +40,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/vislake/speed/go/pkgcore"
+	"github.com/vislake/speed/go/pkgcore/internal/testutil"
 	"github.com/vislake/speed/go/pkgcore/objectstore/s3"
 )
 
@@ -147,37 +146,36 @@ func startRustfsObjectStore(t *testing.T, ctx context.Context) pkgcore.ObjectSto
 func startRustfsPersistentStore(t *testing.T, ctx context.Context) (testcontainers.Container, string, func() pkgcore.ObjectStore) {
 	t.Helper()
 
-	// A random port in the high, rarely-reserved range on every run, so two
-	// concurrent invocations of restart-driven tests are unlikely to collide
-	// (the kv-tier and eventbus-tier restart fixtures draw from the same
-	// range for their own containers); a genuine collision fails loudly at
-	// container start (Docker refuses the bind) rather than silently reusing
-	// someone else's server.
-	hostPort := strconv.Itoa(40000 + rand.IntN(20000))
-
-	req := testcontainers.ContainerRequest{
-		Image: rustfsImage,
-		Env: map[string]string{
-			"RUSTFS_ACCESS_KEY":     "rustfsadmin",
-			"RUSTFS_SECRET_KEY":     "rustfsadmin",
-			"RUSTFS_ADDRESS":        ":9000",
-			"RUSTFS_CONSOLE_ENABLE": "false",
-		},
-		Cmd: []string{"/data"},
-		HostConfigModifier: func(hc *container.HostConfig) {
-			hc.PortBindings = network.PortMap{
-				network.MustParsePort("9000/tcp"): {{HostIP: netip.IPv4Unspecified(), HostPort: hostPort}},
-			}
-		},
-		WaitingFor: wait.ForHTTP("/health").WithPort("9000/tcp").WithStartupTimeout(60 * time.Second),
-	}
-	rustfsContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
+	// testutil.StartOnFreeHostPort picks the pinned port: it draws one the
+	// OS reports free and retries with a fresh draw when a concurrent
+	// container start binds that port first, so parallel invocations of
+	// this tier can never collide on the pin (free_host_port.go's doc
+	// comment has the mechanism).
+	var rustfsContainer testcontainers.Container
+	hostPort := testutil.StartOnFreeHostPort(t, "rustfs testcontainer", func(p string) error {
+		req := testcontainers.ContainerRequest{
+			Image: rustfsImage,
+			Env: map[string]string{
+				"RUSTFS_ACCESS_KEY":     "rustfsadmin",
+				"RUSTFS_SECRET_KEY":     "rustfsadmin",
+				"RUSTFS_ADDRESS":        ":9000",
+				"RUSTFS_CONSOLE_ENABLE": "false",
+			},
+			Cmd: []string{"/data"},
+			HostConfigModifier: func(hc *container.HostConfig) {
+				hc.PortBindings = network.PortMap{
+					network.MustParsePort("9000/tcp"): {{HostIP: netip.IPv4Unspecified(), HostPort: p}},
+				}
+			},
+			WaitingFor: wait.ForHTTP("/health").WithPort("9000/tcp").WithStartupTimeout(60 * time.Second),
+		}
+		var err error
+		rustfsContainer, err = testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: req,
+			Started:          true,
+		})
+		return err
 	})
-	if err != nil {
-		t.Fatalf("start rustfs testcontainer on fixed port %s: %v", hostPort, err)
-	}
 	t.Cleanup(func() {
 		if terminateErr := testcontainers.TerminateContainer(rustfsContainer); terminateErr != nil {
 			t.Errorf("terminate rustfs testcontainer: %v", terminateErr)

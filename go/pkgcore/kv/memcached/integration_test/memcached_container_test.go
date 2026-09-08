@@ -17,10 +17,8 @@ package memcached_test
 import (
 	"context"
 	"errors"
-	"math/rand/v2"
 	"net"
 	"net/netip"
-	"strconv"
 	"testing"
 	"time"
 
@@ -29,6 +27,8 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	tcmemcached "github.com/testcontainers/testcontainers-go/modules/memcached"
+
+	"github.com/vislake/speed/go/pkgcore/internal/testutil"
 )
 
 // startMemcachedClient starts a disposable Memcached container and returns a
@@ -72,29 +72,30 @@ func startMemcachedContainer(t *testing.T, ctx context.Context) string {
 func startMemcachedPersistent(t *testing.T, ctx context.Context) (*tcmemcached.Container, string) {
 	t.Helper()
 
-	// A random port in the high, rarely-reserved range on every run, so two
-	// concurrent invocations of this one test are unlikely to collide; a
-	// genuine collision fails loudly at container start (Docker refuses the
-	// bind) rather than silently reusing someone else's server.
-	hostPort := strconv.Itoa(40000 + rand.IntN(20000))
-
-	container, err := tcmemcached.Run(ctx, "memcached:1.6-alpine",
-		testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
-			hc.PortBindings = network.PortMap{
-				network.MustParsePort("11211/tcp"): {{HostIP: netip.IPv4Unspecified(), HostPort: hostPort}},
-			}
-		}),
-	)
-	if err != nil {
-		t.Fatalf("start memcached testcontainer on fixed port %s: %v", hostPort, err)
-	}
+	// testutil.StartOnFreeHostPort picks the pinned port: it draws one the
+	// OS reports free and retries with a fresh draw when a concurrent
+	// container start binds that port first, so parallel invocations of
+	// this tier can never collide on the pin (free_host_port.go's doc
+	// comment has the mechanism).
+	var started *tcmemcached.Container
+	hostPort := testutil.StartOnFreeHostPort(t, "memcached testcontainer", func(p string) error {
+		var err error
+		started, err = tcmemcached.Run(ctx, "memcached:1.6-alpine",
+			testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
+				hc.PortBindings = network.PortMap{
+					network.MustParsePort("11211/tcp"): {{HostIP: netip.IPv4Unspecified(), HostPort: p}},
+				}
+			}),
+		)
+		return err
+	})
 	t.Cleanup(func() {
-		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
+		if terminateErr := testcontainers.TerminateContainer(started); terminateErr != nil {
 			t.Errorf("terminate memcached testcontainer: %v", terminateErr)
 		}
 	})
 
-	return container, net.JoinHostPort("127.0.0.1", hostPort)
+	return started, net.JoinHostPort("127.0.0.1", hostPort)
 }
 
 // startMemcachedContainerWithHandle starts a disposable Memcached container,

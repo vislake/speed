@@ -76,6 +76,7 @@ import (
 	natsbus "github.com/vislake/speed/go/pkgcore/eventbus/nats"
 	_ "github.com/vislake/speed/go/pkgcore/eventbus/redis"
 	redisbus "github.com/vislake/speed/go/pkgcore/eventbus/redis"
+	"github.com/vislake/speed/go/pkgcore/internal/testutil"
 	_ "github.com/vislake/speed/go/pkgcore/kv/nats"
 	_ "github.com/vislake/speed/go/pkgcore/kv/redis"
 )
@@ -132,6 +133,18 @@ func natsPreset() pkgcore.Preset {
 // via t.Cleanup.
 func startRedisOnDefaultPort(t *testing.T, ctx context.Context) *redis.Client {
 	t.Helper()
+
+	// Host port 6379 is this fixture's contract, not a choice: the
+	// zero-configuration constructors under test dial localhost:6379, so
+	// the pin cannot move to a free port the way the restart fixtures'
+	// pins can (free_host_port.go's doc comment). A genuinely occupied
+	// 6379 -- a local redis, or a concurrent run of this same tier on a
+	// shared Docker host -- is therefore an environment fact this test
+	// yields to rather than fails on, exactly the guard main_test.go's
+	// healthcheck test applies to its own required literal port.
+	if !testutil.HostPortFree("6379") {
+		t.Skipf("host port 6379 is already bound and the zero-configuration seam constructors under test dial it; skipping this leg")
+	}
 
 	container, err := tcredis.Run(ctx, "redis:7-alpine",
 		testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
@@ -193,6 +206,17 @@ func parseCount(v string) (int, error) {
 // ("http://127.0.0.1:<port>") for server-side connection counting.
 func startNATSOnDefaultPort(t *testing.T, ctx context.Context) string {
 	t.Helper()
+
+	// Host port 4222 is this fixture's contract, not a choice: the
+	// zero-configuration constructors under test dial nats.DefaultURL
+	// ("nats://127.0.0.1:4222"), so the pin cannot move to a free port the
+	// way the restart fixtures' pins can (free_host_port.go's doc
+	// comment). A genuinely occupied 4222 is an environment fact this test
+	// yields to rather than fails on, exactly the guard
+	// startRedisOnDefaultPort applies to its own required literal port.
+	if !testutil.HostPortFree("4222") {
+		t.Skipf("host port 4222 is already bound and the zero-configuration seam constructors under test dial it; skipping this leg")
+	}
 
 	// GenericContainer rather than the testcontainers nats module: the
 	// module's own default command ("-DV -js") never starts the HTTP

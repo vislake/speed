@@ -18,10 +18,8 @@ package redis_test
 
 import (
 	"context"
-	"math/rand/v2"
 	"net"
 	"net/netip"
-	"strconv"
 	"testing"
 	"time"
 
@@ -30,6 +28,8 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
+
+	"github.com/vislake/speed/go/pkgcore/internal/testutil"
 )
 
 // startRedisClient starts a disposable Redis 7 container and returns a
@@ -111,32 +111,33 @@ func startRedisClientPair(t *testing.T, ctx context.Context) (*redis.Client, *re
 func startRedisPersistent(t *testing.T, ctx context.Context) (*tcredis.RedisContainer, *redis.Client) {
 	t.Helper()
 
-	// A random port in the high, rarely-reserved range on every run, so two
-	// concurrent invocations of this one test are unlikely to collide; a
-	// genuine collision fails loudly at container start (Docker refuses the
-	// bind) rather than silently reusing someone else's server.
-	hostPort := strconv.Itoa(40000 + rand.IntN(20000))
-
-	container, err := tcredis.Run(ctx, "redis:7-alpine",
-		tcredis.WithSnapshotting(1, 1),
-		testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
-			hc.PortBindings = network.PortMap{
-				network.MustParsePort("6379/tcp"): {{HostIP: netip.IPv4Unspecified(), HostPort: hostPort}},
-			}
-		}),
-	)
-	if err != nil {
-		t.Fatalf("start redis testcontainer on fixed port %s: %v", hostPort, err)
-	}
+	// testutil.StartOnFreeHostPort picks the pinned port: it draws one the
+	// OS reports free and retries with a fresh draw when a concurrent
+	// container start binds that port first, so parallel invocations of
+	// this tier can never collide on the pin (free_host_port.go's doc
+	// comment has the mechanism).
+	var started *tcredis.RedisContainer
+	hostPort := testutil.StartOnFreeHostPort(t, "redis testcontainer", func(p string) error {
+		var err error
+		started, err = tcredis.Run(ctx, "redis:7-alpine",
+			tcredis.WithSnapshotting(1, 1),
+			testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
+				hc.PortBindings = network.PortMap{
+					network.MustParsePort("6379/tcp"): {{HostIP: netip.IPv4Unspecified(), HostPort: p}},
+				}
+			}),
+		)
+		return err
+	})
 	t.Cleanup(func() {
-		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
+		if terminateErr := testcontainers.TerminateContainer(started); terminateErr != nil {
 			t.Errorf("terminate redis testcontainer: %v", terminateErr)
 		}
 	})
 
 	client := redis.NewClient(&redis.Options{Addr: net.JoinHostPort("127.0.0.1", hostPort)})
 	t.Cleanup(func() { client.Close() })
-	return container, client
+	return started, client
 }
 
 // waitForRedisReady polls with a fresh client until the restarted server

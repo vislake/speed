@@ -18,9 +18,7 @@ package postgres_test
 
 import (
 	"context"
-	"math/rand/v2"
 	"net/netip"
-	"strconv"
 	"testing"
 	"time"
 
@@ -32,6 +30,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	eventbuspostgres "github.com/vislake/speed/go/pkgcore/eventbus/postgres"
+	"github.com/vislake/speed/go/pkgcore/internal/testutil"
 )
 
 // startPostgresPool starts a disposable PostgreSQL 16 container (the same
@@ -93,35 +92,34 @@ func startPostgresPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 func startPostgresPersistent(t *testing.T, ctx context.Context) (*tcpostgres.PostgresContainer, *pgxpool.Pool) {
 	t.Helper()
 
-	// A random port in the high, rarely-reserved range on every run, so two
-	// concurrent invocations of restart-driven tests are unlikely to collide
-	// (the kv-tier restart fixtures draw from the same range for their own
-	// containers); a genuine collision fails loudly at container start
-	// (Docker refuses the bind) rather than silently reusing someone else's
-	// server.
-	hostPort := strconv.Itoa(40000 + rand.IntN(20000))
-
-	container, err := tcpostgres.Run(ctx,
-		"postgres:16-alpine",
-		tcpostgres.WithDatabase("pkgcore"),
-		tcpostgres.WithUsername("pkgcore"),
-		tcpostgres.WithPassword("pkgcore"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(90*time.Second),
-		),
-		testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
-			hc.PortBindings = network.PortMap{
-				network.MustParsePort("5432/tcp"): {{HostIP: netip.IPv4Unspecified(), HostPort: hostPort}},
-			}
-		}),
-	)
-	if err != nil {
-		t.Fatalf("start postgres testcontainer on fixed port %s: %v", hostPort, err)
-	}
+	// testutil.StartOnFreeHostPort picks the pinned port: it draws one the
+	// OS reports free and retries with a fresh draw when a concurrent
+	// container start binds that port first, so parallel invocations of
+	// this tier can never collide on the pin (free_host_port.go's doc
+	// comment has the mechanism).
+	var started *tcpostgres.PostgresContainer
+	hostPort := testutil.StartOnFreeHostPort(t, "postgres testcontainer", func(p string) error {
+		var err error
+		started, err = tcpostgres.Run(ctx,
+			"postgres:16-alpine",
+			tcpostgres.WithDatabase("pkgcore"),
+			tcpostgres.WithUsername("pkgcore"),
+			tcpostgres.WithPassword("pkgcore"),
+			testcontainers.WithWaitStrategy(
+				wait.ForLog("database system is ready to accept connections").
+					WithOccurrence(2).
+					WithStartupTimeout(90*time.Second),
+			),
+			testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
+				hc.PortBindings = network.PortMap{
+					network.MustParsePort("5432/tcp"): {{HostIP: netip.IPv4Unspecified(), HostPort: p}},
+				}
+			}),
+		)
+		return err
+	})
 	t.Cleanup(func() {
-		if terminateErr := testcontainers.TerminateContainer(container); terminateErr != nil {
+		if terminateErr := testcontainers.TerminateContainer(started); terminateErr != nil {
 			t.Errorf("terminate postgres testcontainer: %v", terminateErr)
 		}
 	})
@@ -136,7 +134,7 @@ func startPostgresPersistent(t *testing.T, ctx context.Context) (*tcpostgres.Pos
 	if err := eventbuspostgres.EnsureSchema(ctx, pool); err != nil {
 		t.Fatalf("EnsureSchema: %v", err)
 	}
-	return container, pool
+	return started, pool
 }
 
 // waitForPostgresReady polls the pool until the restarted server answers a
