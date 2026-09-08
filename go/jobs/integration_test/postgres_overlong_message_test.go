@@ -41,7 +41,11 @@ func TestStandaloneQueue_PostgresOverlongFailureMessage_ReachesTerminalState(t *
 	// The truncation warnings go through obs.FromContext over a context
 	// with no attached logger, which falls back to slog.Default() read
 	// fresh per call -- the module's established capture seam (see
-	// worker_test.go). No test in this package runs in parallel.
+	// worker_test.go). No test in this package runs in parallel. buf is a
+	// plain bytes.Buffer that the queue's worker goroutines write into, so
+	// every read of it below follows closeQueue (which joins the worker
+	// pool); the unit tier's equivalent captures are safe because they call
+	// the worker machinery synchronously in the test goroutine.
 	prevDefault := slog.Default()
 	var buf bytes.Buffer
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
@@ -76,11 +80,20 @@ func TestStandaloneQueue_PostgresOverlongFailureMessage_ReachesTerminalState(t *
 	if err := q.Start(context.Background()); err != nil {
 		t.Fatalf("StandaloneQueue.Start over PostgreSQL error = %v", err)
 	}
-	t.Cleanup(func() {
+	// closeQueue joins every goroutine the queue owns: Close stops the
+	// poller, wg.Wait()s the worker pool and stops the writer heartbeat
+	// (standalone_queue.go). It is idempotent (closeOnce) and safe to call
+	// more than once, so one helper serves both the in-function calls
+	// below -- every read of the capture buffer must follow it -- and this
+	// cleanup, which covers the early t.Fatalf paths.
+	closeQueue := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = q.Close(ctx)
-	})
+		if err := q.Close(ctx); err != nil {
+			t.Errorf("StandaloneQueue.Close error = %v", err)
+		}
+	}
+	t.Cleanup(closeQueue)
 
 	tenant := pkgcore.TenantID("tenant-pg-overlong")
 	id, err := q.Enqueue(context.Background(), jobs.Task{
@@ -112,6 +125,10 @@ func TestStandaloneQueue_PostgresOverlongFailureMessage_ReachesTerminalState(t *
 			t.Fatalf("job reached StatusSucceeded though its handler always fails -- impossible")
 		}
 		if time.Now().After(deadline) {
+			// The failure message reads the capture buffer below, so the
+			// worker pool is joined first -- same discipline as the
+			// post-loop closeQueue call (see its comment).
+			closeQueue()
 			var status jobs.Status
 			if job != nil {
 				status = job.Status
@@ -121,6 +138,22 @@ func TestStandaloneQueue_PostgresOverlongFailureMessage_ReachesTerminalState(t *
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+
+	// The queue is closed before any of the capture-buffer reads below:
+	// settleFailedAttempt's dead-letter branch logs its "job exhausted
+	// retries, moved to dead letter" record strictly AFTER completeDeadLetter
+	// commits the terminal UPDATE (the record must not precede the write,
+	// or a write a concurrent Cancel no-ops would leave a cancelled Job
+	// logged as dead-lettered -- worker.go), so this poll loop can observe
+	// StatusDeadLetter while the worker is still emitting that post-commit
+	// log line into buf. bytes.Buffer is not safe for a read concurrent
+	// with that write -- -race flags exactly that pair (buf.String() here
+	// versus the worker's slog write through obs.FromContext's fallback,
+	// which reads slog.Default() -- this test's TextHandler over buf --
+	// fresh per call) -- and the join makes the race impossible rather than
+	// merely rarer: after Close returns nil no queue goroutine exists that
+	// can write to buf again.
+	closeQueue()
 
 	select {
 	case <-handled:
