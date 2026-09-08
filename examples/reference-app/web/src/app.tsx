@@ -13,13 +13,13 @@
  * here), and this module parses that fragment into one of the content
  * kinds the app knows. The business surfaces live in views/: home
  * (config/feature-driven), cases (the clinic's case list, the one-page
- * creation flow and one case's detail -- the block-A acceptance
- * surface), notes, team (who works in the clinic and the invite-a-
- * colleague flow), credits (the clinic's credit balance and ledger --
- * the block-D surface) and account -- and, on the platform frame
- * alone (a principal signed into the system pseudo-tenant, never a
- * clinic owner), administration, the tenant ledger go/admin's
- * operator-facing surface serves (admin-view.tsx). The
+ * creation flow and one case's detail), notes, team (who works in the
+ * clinic and the invite-a-colleague flow), credits (the clinic's credit
+ * balance and ledger) and account -- and, on the platform frame alone
+ * (a principal signed into the system pseudo-tenant, never a clinic
+ * owner), the administration area, its two entries the tenant ledger
+ * and the usage/billing dashboard that go/admin's operator-facing
+ * surface serves (admin-view.tsx, admin-usage-view.tsx). The
  * binding callback is the account surface's subroute: the fragment
  * /auth/binding/<provider>?code=<code>&state=<state> is what the
  * account-ui BindingCallbackHandler completes at, so it parses here
@@ -48,6 +48,7 @@ import { SYSTEM_PSEUDO_TENANT_ID } from './demo-tenants.js'
 import { REFERENCE_APP_NAMESPACE } from './resources.js'
 import { useHashRoute } from './useHashRoute.js'
 import { AccountView } from './views/account-view.js'
+import { AdminUsageView } from './views/admin-usage-view.js'
 import { AdminView } from './views/admin-view.js'
 import { HomeView } from './views/home-view.js'
 import { CaseDetailView } from './views/case-detail-view.js'
@@ -78,6 +79,10 @@ export const ROUTE_ACCOUNT = '/account'
  * operator-facing surface serves, offered only to the platform frame
  * (a principal whose tenant claim is the system pseudo-tenant). */
 export const ROUTE_ADMIN = '/admin'
+/** The platform usage fragment: the usage/billing dashboard go/admin's
+ * operator-facing surface serves, offered on the platform frame alone
+ * like the tenant ledger beside it. */
+export const ROUTE_ADMIN_USAGE = '/admin/usage'
 /** The account surface's binding-callback subroute prefix: the rest of
  * the path is the provider, the query the (code, state) pair the
  * exchange completes with. */
@@ -111,7 +116,9 @@ function isSocialProvider(value: string): value is SocialProvider {
  * provider plus the (code, state) pair its callback route completes
  * with. The cases surface is three fragments: the clinic list, the
  * one-page creation flow, and one case's detail (its id). The credits
- * fragment is the clinic's own credit balance and ledger (block D). */
+ * fragment is the clinic's own credit balance and ledger; the
+ * administration area is the tenant ledger fragment and the
+ * usage/billing dashboard fragment beside it. */
 export type AppFragment =
   | { readonly kind: 'home' }
   | { readonly kind: 'cases' }
@@ -122,6 +129,7 @@ export type AppFragment =
   | { readonly kind: 'credits' }
   | { readonly kind: 'account' }
   | { readonly kind: 'admin' }
+  | { readonly kind: 'adminUsage' }
   | { readonly kind: 'binding'; readonly target: BindingTarget }
   | {
       readonly kind: 'share'
@@ -188,6 +196,9 @@ export function parseHashFragment(fragment: string): AppFragment {
   if (path === ROUTE_ACCOUNT) {
     return { kind: 'account' }
   }
+  if (path === ROUTE_ADMIN_USAGE) {
+    return { kind: 'adminUsage' }
+  }
   if (path === ROUTE_ADMIN) {
     return { kind: 'admin' }
   }
@@ -247,6 +258,8 @@ function selectedNavId(fragment: AppFragment): string | null {
       return NAV_ACCOUNT
     case 'admin':
       return NAV_ADMIN
+    case 'adminUsage':
+      return NAV_ADMIN_USAGE
     case 'share':
       // The share fragment renders its own standalone page, never a nav
       // item -- see AppView's early return below.
@@ -263,6 +276,7 @@ const NAV_TEAM = 'nav-team'
 const NAV_CREDITS = 'nav-credits'
 const NAV_ACCOUNT = 'nav-account'
 const NAV_ADMIN = 'nav-admin'
+const NAV_ADMIN_USAGE = 'nav-admin-usage'
 
 function navHref(route: string): string {
   return `#${route}`
@@ -340,10 +354,11 @@ export function AppView(): ReactElement {
       href: navHref(ROUTE_ACCOUNT),
       selected: selected === NAV_ACCOUNT,
     },
-    // The administration entry exists on the platform frame alone (see
+    // The administration entries exist on the platform frame alone (see
     // platformFrame above): a clinic owner must not be offered an
-    // entrance to the platform's tenant ledger, which would put every
-    // other practice's row in front of one clinic.
+    // entrance to the platform's tenant ledger or usage dashboard,
+    // which would put every other practice's rows in front of one
+    // clinic.
     ...(platformFrame
       ? [
           {
@@ -351,6 +366,12 @@ export function AppView(): ReactElement {
             label: t('nav.admin'),
             href: navHref(ROUTE_ADMIN),
             selected: selected === NAV_ADMIN,
+          },
+          {
+            id: NAV_ADMIN_USAGE,
+            label: t('nav.adminUsage'),
+            href: navHref(ROUTE_ADMIN_USAGE),
+            selected: selected === NAV_ADMIN_USAGE,
           },
         ]
       : []),
@@ -410,6 +431,9 @@ export function AppView(): ReactElement {
       break
     case 'admin':
       content = <AdminView />
+      break
+    case 'adminUsage':
+      content = <AdminUsageView />
       break
     case 'binding':
       // The binding subroute completes the exchange inside the account

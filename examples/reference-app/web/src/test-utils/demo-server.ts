@@ -139,7 +139,10 @@
  * (GET /api/v1/admin/tenants, the mirror of go/admin's own
  * operator-facing route) is served to the platform-staff shape above
  * and refused with the rbac gate's 403 to every other principal,
- * exactly like the real admin route guard. GET /api/v1/org/members
+ * exactly like the real admin route guard. The usage/billing dashboard
+ * read (GET /api/v1/admin/usage-summary, admin-api.ts's second
+ * accessor) is served and refused under that identical gate.
+ * GET /api/v1/org/members
  * itself remains
  * served for the org surface's own wire-shape fidelity. The notes
  * answers mirror the real handler's
@@ -550,6 +553,18 @@ export interface DemoServerOptions {
    * [] -- the mirror of a ledger a freshly booted server auto-fills as
    * org roots are created. */
   readonly initialAdminTenants?: readonly DemoAdminTenant[]
+  /** The GET /api/v1/admin/usage-summary rows as first served -- the
+   * platform's usage/billing dashboard go/admin's operator-facing route
+   * answers (admin-api.ts), one row per tenant in the ledger. Only a
+   * principal scoped to the system pseudo-tenant (SYSTEM_PSEUDO_TENANT_ID
+   * -- the demo-server's platform-staff shape) is served the dashboard;
+   * any other principal's read answers the rbac gate's 403, the answer
+   * the real app's admin route guard gives a caller whose user id holds
+   * no admin grant under the system domain (cmd/server/demo_admin.go's
+   * adminSubjectResolver), exactly like the ledger read above. Default
+   * [] -- the mirror of a freshly booted ledger with no tenants in it
+   * yet. */
+  readonly initialUsageSummary?: readonly DemoUsageSummaryRow[]
 }
 
 /** The name the fixture gives a registered account's clinic when its
@@ -733,6 +748,43 @@ export interface DemoAdminTenant {
   readonly createdAt: string
 }
 
+/** One recorded usage aggregation of a usage-dashboard row (the wire
+ * shape of go/admin/api/openapi.yaml's AdminUsageFeatureSummary): a
+ * feature's summed quantity over one calendar period, the feature keys
+ * the composed app records being go/ai-gateway's usage dimensions
+ * (ai.chat_tokens, ai.image_count, ai.image_steps). */
+export interface DemoUsageFeatureSummary {
+  readonly feature: string
+  readonly periodStart: string
+  readonly periodEnd: string
+  readonly quantity: number
+}
+
+/** One row of the platform's usage/billing dashboard answer (GET
+ * /api/v1/admin/usage-summary) -- the wire shape of go/admin's own
+ * operator-facing route (go/admin/api/openapi.yaml's
+ * AdminUsageSummaryRow): the ledger's tenant identity plus the
+ * dimensions a row carries only when the answering module was wired.
+ * The composed app wires both metering and billing, so the mirror's
+ * served rows carry meteringSummaries (possibly empty, never absent)
+ * and creditBalance, with activeSubscription absent exactly when the
+ * tenant holds none active. */
+export interface DemoUsageSummaryRow {
+  readonly tenantId: string
+  readonly displayName: string
+  readonly meteringSummaries?: readonly DemoUsageFeatureSummary[]
+  readonly creditBalance?: {
+    readonly available: number
+    readonly reserved: number
+  }
+  readonly activeSubscription?: {
+    readonly id: string
+    readonly planId: string
+    readonly status: string
+    readonly createdAt: string
+  }
+}
+
 export interface DemoOrgNode {
   readonly id: string
   readonly parentId: string
@@ -909,6 +961,7 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
     sharesCreateSecondRefusal,
     shareAccessRefusal,
     initialAdminTenants = [],
+    initialUsageSummary = [],
   } = options
   // The account state is stateful per responder instance (a revoke
   // marks a row for later list answers, an exchange appends a bound
@@ -1575,6 +1628,17 @@ export function demoServer(options: DemoServerOptions = {}): RealResponder {
           return errorResponse(403, RBAC_PERMISSION_DENIED_CODE)
         }
         return jsonResponse(200, { tenants: initialAdminTenants })
+      }
+      case 'GET /api/v1/admin/usage-summary': {
+        // The platform's usage/billing dashboard (admin-api.ts),
+        // mirroring go/admin's own operator-facing route behind the
+        // same admin route guard as the ledger above -- served and
+        // refused under the identical platform-staff gate.
+        const principal = principalOf(call)
+        if (principal.tenant_id !== SYSTEM_PSEUDO_TENANT_ID) {
+          return errorResponse(403, RBAC_PERMISSION_DENIED_CODE)
+        }
+        return jsonResponse(200, { rows: initialUsageSummary })
       }
       case 'GET /api/v1/cases': {
         // The cases surface has no read gate (any member of the tenant

@@ -9,7 +9,8 @@
     "account": "Account",
     "credits": "Credits",
     "team": "Team",
-    "admin": "Administration"
+    "admin": "Administration",
+    "adminUsage": "Usage & billing"
   },
   "signIn": {
     "registerPrompt": "No account yet?",
@@ -77,6 +78,26 @@
       "statusSuspended": "Suspended",
       "emptyTitle": "No tenants recorded",
       "emptyDescription": "The ledger fills in as tenants are created or registered."
+    },
+    "usage": {
+      "heading": "Usage & billing",
+      "intro": "Every tenant's usage and billing state: the recorded metering usage, the credit balance, and the active subscription.",
+      "emptyTitle": "No tenants recorded",
+      "emptyDescription": "The dashboard is drawn from the tenant ledger, so it fills in as tenants are created or registered.",
+      "noUsage": "No usage recorded yet.",
+      "availableLine_one": "{{value}} credit available",
+      "availableLine_other": "{{value}} credits available",
+      "reservedLine_one": "{{value}} credit reserved",
+      "reservedLine_other": "{{value}} credits reserved",
+      "subscriptionNone": "No active subscription",
+      "subscriptionStatusOnly": "{{status}} subscription",
+      "subscriptionLine": "{{status}} subscription since {{date}}",
+      "subscriptionStatusActive": "Active",
+      "features": {
+        "chatTokens": "AI chat tokens",
+        "imageCount": "AI images",
+        "imageSteps": "AI image steps"
+      }
     }
   },
   "cases": {

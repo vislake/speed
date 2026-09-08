@@ -73,7 +73,7 @@ import { FEATURE_SMILE_PREVIEW } from './views/home-view.js'
 import { clearNotesDraft } from './views/notes-draft.js'
 
 describe('parseHashFragment', () => {
-  it('parses the seven routes, with or without a leading slash', () => {
+  it('parses the app\'s routes, with or without a leading slash', () => {
     expect(parseHashFragment('')).toEqual({ kind: 'home' })
     expect(parseHashFragment('/')).toEqual({ kind: 'home' })
     expect(parseHashFragment('/cases')).toEqual({ kind: 'cases' })
@@ -82,6 +82,9 @@ describe('parseHashFragment', () => {
     expect(parseHashFragment('/credits')).toEqual({ kind: 'credits' })
     expect(parseHashFragment('/account')).toEqual({ kind: 'account' })
     expect(parseHashFragment('/admin')).toEqual({ kind: 'admin' })
+    expect(parseHashFragment('/admin/usage')).toEqual({
+      kind: 'adminUsage',
+    })
   })
 
   it("parses the cases surface's subroutes: the create page and one case's detail", () => {
@@ -254,15 +257,15 @@ describe('AppView', () => {
     ).toBe(true)
   })
 
-  it("a clinic owner is never offered the administration entry, and a direct visit meets the ledger gate's refusal", async () => {
+  it("a clinic owner is never offered either administration entry, and a direct visit meets the gates' refusals", async () => {
     // The platform-staff gate's other half, at the unit tier: the
     // account with every clinic-level power (the rig's owner shape,
     // signed into a demo tenant) must not be offered an entrance to
-    // the platform's tenant ledger -- the entry exists on the platform
-    // frame alone. A direct #/admin visit still renders the surface,
-    // whose own gate (the ledger read) answers the admin route guard's
-    // 403 and falls shut to the no-permission suit: no ledger rows, no
-    // entry anywhere.
+    // the platform's tenant ledger or its usage dashboard -- both
+    // entries exist on the platform frame alone. A direct visit still
+    // renders each surface, whose own gate (its read) answers the
+    // admin route guard's 403 and falls shut to the no-permission
+    // suit: no ledger rows, no dashboard content, no entry anywhere.
     const rig = makeAppRig()
     const view = rendered(rig)
     const user = userEvent.setup()
@@ -271,6 +274,9 @@ describe('AppView', () => {
 
     expect(
       view.queryByRole('link', { name: zhCN.nav.admin }),
+    ).not.toBeInTheDocument()
+    expect(
+      view.queryByRole('link', { name: zhCN.nav.adminUsage }),
     ).not.toBeInTheDocument()
 
     navigateTo('#/admin')
@@ -286,8 +292,30 @@ describe('AppView', () => {
     expect(
       view.queryByText(zhCN.admin.tenants.tenantColumn),
     ).not.toBeInTheDocument()
+
+    // The usage dashboard's own fragment denies the same caller the
+    // same way: the heading renders, the no-permission suit stands in
+    // for its content (the read answers the guard's 403), and neither
+    // administration entry exists.
+    navigateTo('#/admin/usage')
+    expect(
+      await view.findByRole('heading', {
+        name: zhCN.admin.usage.heading,
+        level: 1,
+      }),
+    ).toBeInTheDocument()
+    expect(
+      await view.findByText(uiKitZhCN.emptyState.noPermission.title),
+    ).toBeInTheDocument()
+    expect(view.queryByText(zhCN.admin.usage.emptyTitle)).not.toBeInTheDocument()
+    expect(
+      view.queryByText(zhCN.admin.usage.features.chatTokens),
+    ).not.toBeInTheDocument()
     expect(
       view.queryByRole('link', { name: zhCN.nav.admin }),
+    ).not.toBeInTheDocument()
+    expect(
+      view.queryByRole('link', { name: zhCN.nav.adminUsage }),
     ).not.toBeInTheDocument()
   })
 
@@ -337,6 +365,93 @@ describe('AppView', () => {
       rig.calls.some(
         (call) =>
           call.method === 'GET' && call.path === '/api/v1/admin/tenants',
+      ),
+    ).toBe(true)
+  })
+
+  it('the platform frame offers the usage entry and reads the usage/billing dashboard through it', async () => {
+    // The dashboard's own journey: the platform-staff shape (the rig's
+    // account signed into the system pseudo-tenant) is offered the
+    // usage entry beside the tenant-ledger one and reaches the served
+    // rows through it -- recorded usage, balance and subscription state
+    // rendered from the real dashboard answer.
+    const rig = makeAppRig({
+      tenantId: SYSTEM_PSEUDO_TENANT_ID,
+      initialAdminTenants: [
+        {
+          tenantId: 'tenant-acme',
+          displayName: '',
+          status: 'active',
+          createdAt: '2026-09-04T00:00:00Z',
+        },
+        {
+          tenantId: 'tenant-globex',
+          displayName: '',
+          status: 'active',
+          createdAt: '2026-09-04T00:00:00Z',
+        },
+      ],
+      initialUsageSummary: [
+        {
+          tenantId: 'tenant-acme',
+          displayName: '',
+          meteringSummaries: [
+            {
+              feature: 'ai.chat_tokens',
+              periodStart: '2026-09-01T00:00:00Z',
+              periodEnd: '2026-10-01T00:00:00Z',
+              quantity: 20,
+            },
+          ],
+          creditBalance: { available: 990, reserved: 0 },
+          activeSubscription: {
+            id: 'sub-1',
+            planId: 'plan-demo',
+            status: 'active',
+            createdAt: '2026-09-04T00:00:00Z',
+          },
+        },
+        {
+          tenantId: 'tenant-globex',
+          displayName: '',
+          meteringSummaries: [],
+          creditBalance: { available: 1000, reserved: 0 },
+        },
+      ],
+    })
+    const view = rendered(rig)
+    const user = userEvent.setup()
+    await signInWithPasswordUi(view, user)
+    await view.findByRole('link', { name: zhCN.nav.home })
+
+    const usageLink = view.getByRole('link', { name: zhCN.nav.adminUsage })
+    expect(usageLink).toHaveAttribute('href', '#/admin/usage')
+    expect(usageLink).not.toHaveAttribute('aria-current')
+    expect(
+      view.getByRole('link', { name: zhCN.nav.admin }),
+    ).toBeInTheDocument()
+    await user.click(usageLink)
+    expect(window.location.hash).toBe('#/admin/usage')
+
+    await view.findByRole('heading', {
+      name: zhCN.admin.usage.heading,
+      level: 1,
+    })
+    expect(
+      view.getByText(zhCN.admin.usage.features.chatTokens),
+    ).toBeInTheDocument()
+    expect(view.getByText(zhCN.tenants.globex)).toBeInTheDocument()
+    expect(view.getByText(zhCN.admin.usage.noUsage)).toBeInTheDocument()
+    expect(
+      view.getByRole('link', { name: zhCN.nav.adminUsage }),
+    ).toHaveAttribute('aria-current', 'page')
+    expect(
+      view.getByRole('link', { name: zhCN.nav.admin }),
+    ).not.toHaveAttribute('aria-current')
+    expect(
+      rig.calls.some(
+        (call) =>
+          call.method === 'GET' && call.path === '/api/v1/admin/usage-summary',
       ),
     ).toBe(true)
   })

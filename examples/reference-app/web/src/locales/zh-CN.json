@@ -9,7 +9,8 @@
     "account": "账户",
     "credits": "额度",
     "team": "团队",
-    "admin": "平台管理"
+    "admin": "平台管理",
+    "adminUsage": "用量与账单"
   },
   "signIn": {
     "registerPrompt": "还没有账户？",
@@ -77,6 +78,26 @@
       "statusSuspended": "已停用",
       "emptyTitle": "暂无租户记录",
       "emptyDescription": "租户创建或注册后会自动进入台账。"
+    },
+    "usage": {
+      "heading": "用量与账单",
+      "intro": "各租户的用量与账单状态：已记录的计量用量、信用额度余额与生效订阅。",
+      "emptyTitle": "暂无租户记录",
+      "emptyDescription": "看板数据来自租户台账：租户创建或注册后即会填充。",
+      "noUsage": "暂无用量记录。",
+      "availableLine_one": "{{value}} 额度可用",
+      "availableLine_other": "{{value}} 额度可用",
+      "reservedLine_one": "{{value}} 额度已预留",
+      "reservedLine_other": "{{value}} 额度已预留",
+      "subscriptionNone": "无生效订阅",
+      "subscriptionStatusOnly": "{{status}}订阅",
+      "subscriptionLine": "{{status}}订阅，自 {{date}}",
+      "subscriptionStatusActive": "生效中",
+      "features": {
+        "chatTokens": "AI 对话令牌",
+        "imageCount": "AI 图像",
+        "imageSteps": "AI 图像步数"
+      }
     }
   },
   "cases": {
