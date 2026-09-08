@@ -106,14 +106,42 @@ tasks:
       - go work sync
 
   test:
-    desc: Run the unit suite of every real module (workspace and reference app).
-    # Deliberately no -race/-cover: this is the fast local loop behind
-    # docs/internal/19-dev-workflow.md's "task test" (run the affected
-    # modules' tests). The race detector and coverage live in test:full,
-    # which also adds the Docker-backed integration tiers.
+    desc: Run the unit suite of the modules the current changes affect -- diff against the main branch, downstream dependent modules included -- or the full suite when no scope is computable.
+    # The diff-aware scoping behind docs/internal/19-dev-workflow.md's
+    # "task test" (run the affected modules' tests): tools/
+    # affected_go_modules.py computes the scope from git (committed diff
+    # against the merge-base with main, plus working-tree and untracked
+    # changes), go.work's module enumeration, and the downstream closure
+    # derived from each module go.mod's require lines -- never a
+    # hand-maintained mapping (18-cicd's path-filtering rule states the
+    # same derivation for CI). The scope falls back to ALL -- the full
+    # suite, exactly what this task ran before -- when it cannot be
+    # scoped: on main itself with a clean tree there is no diff, a
+    # change touching nothing under go/ or examples/ (tools/, web/,
+    # docs/) affects no Go module, and a missing main ref cannot be
+    # diffed against, so `task test` can never silently run nothing.
+    # The reference-app module is an ordinary scope member (its go.mod
+    # requires the go/ modules it composes; nothing requires it), run
+    # from its own directory like the other modules.
+    #
+    # Deliberately no -race/-cover: this is the fast local loop. The
+    # race detector and coverage live in test:full, which also adds the
+    # Docker-backed integration tiers. The module subset runs from each
+    # module's own directory (the workspace root is not a module); the
+    # full-suite fallback uses the workspace-wide import-path pattern.
     cmds:
-      - go test {{.ALL_PKGS}}
-      - cd "{{.APP_DIR}}" && go test ./...
+      - |
+        SCOPE="$(python3 tools/affected_go_modules.py --base main)" || exit 1
+        if [ "$SCOPE" = "ALL" ]; then
+          echo "== no diff to scope on (on main, or changes outside the Go tree): full unit suite"
+          go test {{.ALL_PKGS}}
+          cd "{{.APP_DIR}}" && go test ./...
+        else
+          for d in $SCOPE; do
+            echo "== go test ./... ($d)"
+            (cd "$d" && go test ./...) || exit 1
+          done
+        fi
 
   test:full:
     desc: Full matrix -- unit suite under -race with coverage, then the Docker-backed integration tiers (PostgreSQL, Redis, RustFS/S3). Requires Docker.
