@@ -356,12 +356,20 @@ func (r *Repository[T]) Update(ctx context.Context, m *T) error {
 		// "does this row exist for this tenant" the same way FindByID
 		// does, inside this same transaction so the check is covered by
 		// the very session WithTenantSession just opened, not a second,
-		// separate one.
+		// separate one. For a SoftDeletable T the probe carries the same
+		// deleted_at IS NULL condition the Save attempt's own WHERE
+		// carried, so the fallback's scope matches the statement whose
+		// ambiguity it resolves: a soft-deleted row is never reported as
+		// a successful no-op touch by this path either, whatever the
+		// read-side auto-scope plugin would have added on its own.
 		var probe T
-		if err := tx.
+		probeStmt := tx.
 			Where(idColumn+" = ?", id).
-			Where(tenantIDColumn+" = ?", tenant).
-			First(&probe).Error; err != nil {
+			Where(tenantIDColumn+" = ?", tenant)
+		if softDeletable {
+			probeStmt = probeStmt.Where(deletedAtColumn + " IS NULL")
+		}
+		if err := probeStmt.First(&probe).Error; err != nil {
 			return err
 		}
 		rowsAffected = 1 // independently confirmed to exist and be tenant-owned: a successful no-op touch.
