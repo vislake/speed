@@ -121,6 +121,42 @@ func TestInsertOutboxRecord_AndFindByIdempotencyKey(t *testing.T) {
 	}
 }
 
+// TestInsertOutboxRecord_NilRetryAfter_RefusedBySchema is the
+// P3-metering-E regression in its repository-level form: retry_after is
+// NOT NULL since migration 0007, so an insert that fails to schedule the
+// row -- the legacy NULL state 0005's backfill eliminated and the schema
+// used to still permit -- is refused by the constraint itself. Enqueue
+// and markOutboxAttemptFailed always write a concrete value, so the
+// refusal can only ever bite a write path that forgets; the point of the
+// schema force is that such a future writer fails LOUDLY here, at the
+// write, instead of storing a NULL the claim query used to have to
+// accommodate. Fails before the fix (migration 0007 absent, the column
+// nullable: the insert succeeds and the nil-error assertion trips),
+// passes after.
+func TestInsertOutboxRecord_NilRetryAfter_RefusedBySchema(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	rec := newTestOutboxRecord("rec-null-schedule", "tenant-a", "idem-null-schedule")
+	rec.RetryAfter = nil
+	_, err := insertOutboxRecord(ctx, db, rec)
+	if err == nil {
+		t.Fatal("insertOutboxRecord with a nil RetryAfter = nil error, want a NOT NULL constraint refusal -- the schema must back the never-NULL invariant the module's writers always kept (P3-metering-E)")
+	}
+	if msg := strings.ToLower(err.Error()); !strings.Contains(msg, "not null") {
+		t.Errorf("insertOutboxRecord with a nil RetryAfter error = %v, want a NOT NULL constraint refusal", err)
+	}
+
+	// Nothing landed: the refused row is not claimable, now or ever.
+	rows, err := claimPendingOutboxRecords(ctx, db, 10)
+	if err != nil {
+		t.Fatalf("claimPendingOutboxRecords: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("claimPendingOutboxRecords after the refused insert = %d rows, want 0", len(rows))
+	}
+}
+
 // TestInsertOutboxRecord_DuplicateKey_IsANoOpNotAnError pins the
 // dialect-independent half of the outbox idempotent-retry fix: a second
 // insert for the same (tenant_id, idempotency_key) reports inserted ==

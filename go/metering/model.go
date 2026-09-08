@@ -182,9 +182,16 @@ type OutboxRecord struct {
 	// dispatcher's retry delay, so a failed row re-enters the candidate
 	// set at a moment in the future instead of re-joining the queue head.
 	// See claimPendingOutboxRecords' doc comment for the full fairness
-	// argument. NULL is a legacy-only state (rows written before 0005),
-	// treated as the row's CreatedAt by the claim query.
-	RetryAfter  *time.Time `gorm:"column:retry_after"`
+	// argument. The column is NOT NULL since migration 0007 (which ran
+	// 0005's own idempotent backfill first, so no legacy NULL state
+	// survives anywhere), and the claim query therefore carries no NULL
+	// accommodation -- no COALESCE, no IS NULL escape: the schema backs
+	// what both writers always did. The field stays a *time.Time pointer
+	// deliberately: a future write path that forgets RetryAfter then
+	// fails LOUDLY at the NOT NULL constraint on the write itself, never
+	// stores a silently-wrong schedule (a zero time.Time value would sort
+	// as eligible-from-year-one and be claimed ahead of every row).
+	RetryAfter  *time.Time `gorm:"column:retry_after;not null"`
 	CreatedAt   time.Time  `gorm:"column:created_at;not null"`
 	DeliveredAt *time.Time `gorm:"column:delivered_at"`
 }

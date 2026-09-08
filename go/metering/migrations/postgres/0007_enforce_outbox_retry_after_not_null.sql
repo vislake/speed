@@ -1,0 +1,81 @@
+-- Makes metering_outbox_records.retry_after NOT NULL, closing the review
+-- finding this migration ships (P3-metering-E): migration 0005 added the
+-- column nullable and never narrowed it, so the "NULL is a legacy-only
+-- state, never a state the module itself produces" invariant 0005's own
+-- header records has been held by code discipline alone -- Enqueue and
+-- markOutboxAttemptFailed always write a concrete value -- while the
+-- schema still permitted NULL. The claim query
+-- (go/metering/repository.go's claimPendingOutboxRecords) carried the
+-- cost of that unreachable state everywhere: its eligibility predicate
+-- kept an IS NULL escape and its ORDER BY wrapped the column in
+-- COALESCE(retry_after, created_at) -- an EXPRESSION, which the
+-- (status, retry_after) index 0005 built cannot serve. The order key and
+-- the index therefore never met: on both dialects every claim poll
+-- materialized and fully sorted the ENTIRE eligible set before LIMIT
+-- could return (measured at 100,000 rows, ~10,000 eligible, on both
+-- engines: SQLite plans a temp B-tree over the whole OR-union output,
+-- PostgreSQL a full Sort of ~9,900 rows at cost ~2500 before the Limit's
+-- first row), a per-poll cost that grows exactly when the queue
+-- backlogs -- the scenario the 0004/0005 ordering exists for. Dropping
+-- the expression lets both engines stream eligible rows in the index's
+-- own order and stop at the limit (measured: first-row cost ~0.8, the
+-- residual sort confined to created_at tie-breaks among equal
+-- retry_after values). It is not a full table scan in either shape --
+-- the eligibility predicate was always index-served -- but the mismatch
+-- was a measurable performance defect, not just hygiene.
+--
+-- The three candidate closes, and why this one:
+--
+--   (a) Drop the COALESCE and order by retry_after directly, one line,
+--       schema untouched -- rejected: it would bet the invariant on code
+--       discipline with the schema still permitting NULL, and a NULL row
+--       the module's two writers did not produce would then sort
+--       DIFFERENTLY on the two dialects -- SQLite places NULLs first in
+--       ASC (a stray NULL row jumps the head of every claim poll) while
+--       PostgreSQL's ASC default is NULLS LAST (the same row sits at the
+--       tail), a divergence verified on both engines. 0005's COALESCE was
+--       also an incidental dual-dialect equalizer, and this repository
+--       treats dialect-identical behavior as a first-class, test-pinned
+--       property (org's materialized-path LIKE proof is the standing
+--       example); (a) removes the equalizer without replacing it with
+--       anything structural.
+--   (b) Force the invariant in the schema, then remove the dead
+--       accommodations -- chosen: the migration below first runs the same
+--       idempotent backfill 0005 itself ran (on any database that applied
+--       0005 the UPDATE matches zero rows -- every row already carries a
+--       concrete retry_after, the in-file precedent for re-running it),
+--       then adds NOT NULL, making NULL structurally impossible. The
+--       claim query's COALESCE and IS NULL escape are then provably dead
+--       and are removed in the same round (see claimPendingOutboxRecords'
+--       doc comment), so the ordering's leading column is exactly the
+--       index's second column: order key and index serve each other, and
+--       the NULL-ordering dialect divergence cannot exist because NULL
+--       cannot exist.
+--   (c) Keep the query as-is and declare the mismatch a known trade-off
+--       -- rejected: the measured per-poll full sort of the eligible set
+--       is a real cost (b) eliminates for the price of one migration.
+--
+-- NOT NULL with no DEFAULT, deliberately: the column has no natural
+-- default (a constant retry schedule default would be a lie -- the value
+-- is a per-row schedule), and the module's two writers always supply
+-- one. A future third write path that forgets retry_after must fail
+-- LOUDLY at the constraint on the write, never write a silently-wrong
+-- schedule; the Go model keeps retry_after a *time.Time pointer for
+-- exactly that reason (see model.go's OutboxRecord.RetryAfter).
+--
+-- The backfill runs before the constraint for the same reason 0005's
+-- ordering matters here: ALTER COLUMN SET NOT NULL fails if any NULL row
+-- remains, so a database whose rows predate 0005 -- one that somehow
+-- never ran it, or whose every row the backfill above converts -- is
+-- brought to the invariant before the schema enforces it.
+--
+-- This is the PostgreSQL copy; the sqlite/ sibling carries the identical
+-- end state on that dialect, where SQLite's inability to alter a
+-- column's nullability makes the enforcement a table rebuild rather
+-- than an ALTER COLUMN. Kept portable on purpose: no dialect-specific
+-- types, no NOW() (the backfill writes created_at, never the clock).
+UPDATE metering_outbox_records
+   SET retry_after = created_at
+ WHERE retry_after IS NULL;
+
+ALTER TABLE metering_outbox_records ALTER COLUMN retry_after SET NOT NULL;

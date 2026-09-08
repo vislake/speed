@@ -112,13 +112,33 @@ func findOutboxByIdempotencyKey(ctx context.Context, db *gorm.DB, tenantID, idem
 // time.Now(), computed here rather than by the database so a caller --
 // or a test seeding rows around the boundary -- reasons about the same
 // clock the query compares against.
+//
+// # Ordering and the index serve each other (P3-metering-E)
+//
+// Migration 0007 made retry_after NOT NULL (running 0005's own
+// idempotent backfill first), so NULL is structurally impossible here:
+// this query carries no COALESCE and no IS NULL escape -- 0005's comment
+// called NULL "a legacy-only state, never a state the module itself
+// produces", and the schema now backs that claim rather than the code
+// discipline alone. The ORDER BY is therefore the bare column,
+// retry_after ASC, created_at ASC -- an order key idx_
+// metering_outbox_records_status_retry_after's own second column
+// supplies: both engines scan the (status, retry_after) index for
+// pending rows whose retry_after has arrived and stream them out in
+// retry_after order, stopping at the limit, with only the created_at
+// tie-break sorted among rows that share one retry_after instant (the
+// never-failed majority carry retry_after == created_at, so schedule
+// order and creation order coincide there -- the property 0005's header
+// already recorded). A COALESCE-wrapped order key could not be served by
+// that index at all: every claim poll materialized and fully sorted the
+// entire eligible set before the limit could return, on both dialects.
 func claimPendingOutboxRecords(ctx context.Context, db *gorm.DB, limit int) ([]OutboxRecord, error) {
 	now := time.Now()
 	var recs []OutboxRecord
 	err := db.WithContext(ctx).
 		Where("status = ?", outboxStatusPending).
-		Where("retry_after IS NULL OR retry_after <= ?", now).
-		Order("COALESCE(retry_after, created_at) ASC, created_at ASC").
+		Where("retry_after <= ?", now).
+		Order("retry_after ASC, created_at ASC").
 		Limit(limit).
 		Find(&recs).Error
 	return recs, err
