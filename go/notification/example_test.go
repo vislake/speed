@@ -228,13 +228,17 @@ func ExamplePreferenceService() {
 	// one blind indexer per address channel over dev keys (a real host
 	// derives its keys from its own secret store), the standalone queue over
 	// the same database, and a resolver over the host's own identity store.
-	emailIndexer, err := dbkit.NewBlindIndexer("address_index",
+	// The indexers' column argument is the module's exported
+	// notification.AddressIndexColumn -- the blind-index column's exact SQL
+	// name, carried as a referenced constant rather than a hand-typed
+	// string (see its doc comment for why dbkit cannot guard a wrong one).
+	emailIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn,
 		[]byte("abcdef0123456789abcdef0123456789"), dbkit.NormalizeEmail)
 	if err != nil {
 		fmt.Println("email indexer:", err)
 		return
 	}
-	phoneIndexer, err := dbkit.NewBlindIndexer("address_index",
+	phoneIndexer, err := dbkit.NewBlindIndexer(notification.AddressIndexColumn,
 		[]byte("3456789abcdef0123456789abcdef015"), dbkit.NormalizePhoneE164)
 	if err != nil {
 		fmt.Println("phone indexer:", err)

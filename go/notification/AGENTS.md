@@ -244,7 +244,12 @@ Six host-supplied options are REQUIRED -- `Register` returns the matching
 - `WithMailFrom` -- the from-address the contact-email path sends as.
 - `WithContactEmailIndexer`, `WithContactPhoneIndexer` -- the blind indexers
   that make an encrypted contact address queryable (see "Separate index keys
-  from the cipher key").
+  from the cipher key"). A host builds them with `dbkit.NewBlindIndexer`
+  over the module's exported `AddressIndexColumn` -- the blind-index
+  column's exact SQL name, carried as a referenced constant rather than a
+  hand-typed string (see that constant's doc comment for why dbkit refuses
+  an empty name but cannot guard a wrong one; the reference app is the
+  mandatory consumer).
 - `WithDeliveryQueue` -- the `jobs.Queue` delivery jobs are enqueued on and
   the registered handler consumes.
 - `WithUserAddressResolver` -- the host's read of a user recipient's

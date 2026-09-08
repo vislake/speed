@@ -68,6 +68,25 @@ const (
 // must not silently hand over both confidentiality and queryability.
 const ContactAddressSerializerName = "notification_address_enc"
 
+// AddressIndexColumn is the exact SQL column name of the blind-index column
+// this module's encrypted addresses are indexed under -- the value of the
+// `column:` gorm tag on VerifiedContact.AddressIndex and, sharing the same
+// dedupe vocabulary, PlatformBlacklist.AddressIndex (see blacklist.go). It
+// is exported for the same reason ContactAddressSerializerName is: the
+// column name is host wiring, not module code. A host builds the blind
+// indexers WithContactEmailIndexer / WithContactPhoneIndexer accept through
+// dbkit.NewBlindIndexer(AddressIndexColumn, key, normalizer), and dbkit's
+// contract makes that column argument the column's exact SQL name: it
+// refuses an EMPTY name, but has no guard for a non-empty wrong one (its
+// doc comment says so), so the name must cross the package boundary as a
+// referenced constant rather than a hand-typed string that can drift from
+// the schema. The reference app is the mandatory consumer: both of its
+// contact indexers are built over this constant at bootstrap
+// (examples/reference-app/cmd/server/server.go), and the module's own unit
+// suite pins the constant against both models' gorm tags and the migrated
+// schema (address_index_column_test.go).
+const AddressIndexColumn = "address_index"
+
 // VerifiedContact is one external recipient's consent-gated address inside
 // one tenant: a patient's phone number or email address that may receive
 // messages only after it has been verified, or has been attested to by a

@@ -166,20 +166,25 @@ func WithMailFrom(from string) Option {
 }
 
 // WithContactEmailIndexer injects the blind indexer email contact addresses
-// are normalized and indexed with (dbkit.NewBlindIndexer over
-// dbkit.NormalizeEmail). It is REQUIRED: Register returns
+// are normalized and indexed with. It is REQUIRED: Register returns
 // ErrContactEmailIndexerRequired without one, so a module that cannot index
-// an email address can never store one. The indexer's key must never be the
-// encryption key of the module's address cipher (AGENTS.md's "Separate
-// index keys from the cipher key" adjudication; contact.go's doc comment
-// spells it out).
+// an email address can never store one. Build it with
+// dbkit.NewBlindIndexer(AddressIndexColumn, key, dbkit.NormalizeEmail) --
+// the column argument must be the module's exported AddressIndexColumn, the
+// blind-index column's exact SQL name: dbkit refuses an empty name, not a
+// non-empty wrong one, so the name travels as a referenced constant rather
+// than a hand-typed string (see AddressIndexColumn's own doc comment). The
+// indexer's key must never be the encryption key of the module's address
+// cipher (AGENTS.md's "Separate index keys from the cipher key"
+// adjudication; contact.go's doc comment spells it out).
 func WithContactEmailIndexer(indexer *dbkit.BlindIndexer) Option {
 	return func(m *Module) { m.emailIndexer = indexer }
 }
 
 // WithContactPhoneIndexer is the SMS twin of WithContactEmailIndexer: the
-// blind indexer phone contacts are indexed with (dbkit.NewBlindIndexer over
-// dbkit.NormalizePhoneE164), REQUIRED on the same terms
+// blind indexer phone contacts are indexed with, built the same way over
+// AddressIndexColumn (dbkit.NewBlindIndexer(AddressIndexColumn, key,
+// dbkit.NormalizePhoneE164)), REQUIRED on the same terms
 // (ErrContactPhoneIndexerRequired).
 func WithContactPhoneIndexer(indexer *dbkit.BlindIndexer) Option {
 	return func(m *Module) { m.phoneIndexer = indexer }
