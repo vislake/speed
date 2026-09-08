@@ -420,8 +420,10 @@ directly above the construction line, else its enclosing function's doc
 comment -- and the code's own `en-US.toml` catalog entry when one exists
 (go/pkgcore/i18n's own message-catalog convention: the TOML key *is* the
 apperr code) -- a code with none is reported as such rather than silently
-omitted, since it means the code is never rendered to an end user
-(typically a boot-time wiring refusal).
+omitted. The entryless class spans two shapes: boot-time wiring refusals
+that never reach an end user, and request-time refusals that reach one
+only as their structured code, whose client-side text (if any) comes from
+the client's own fallback, never from this table.
 
 The result is one Markdown file, one row per code, one table per module
 (grouped by the code's own dot-prefix, e.g. `notification` from

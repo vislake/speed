@@ -436,10 +436,31 @@ class RenderMarkdownTests(unittest.TestCase):
         self.assertIn("_(undocumented)_", rendered)
         self.assertIn("_(inline construction, no doc comment nearby)_", rendered)
 
-    def test_missing_message_gets_the_not_user_facing_marker(self):
-        entries = [m.ErrorEntry(ident="ErrA", code="foo.a", status=500, source="a.go:1", doc="d")]
-        rendered = m.render_markdown(entries)
-        self.assertIn("not user-facing", rendered)
+    def test_missing_message_gets_the_class_neutral_marker(self):
+        # The entryless cell marker must not assert a class: it lands on
+        # boot-time wiring refusals AND request-time refusals whose rows
+        # the header's two-class definition covers (an entryless
+        # request-time code reaches the client as its structured code, so
+        # "not user-facing" -- the old single-class gloss -- would be
+        # false on it). Both kinds of row render the same neutral fact.
+        for kind in ("declared", "inline"):
+            entries = [m.ErrorEntry(ident="", code="foo.a", status=400, source="a.go:1", doc="d", kind=kind)]
+            rendered = m.render_markdown(entries)
+            self.assertIn("_(no locale message -- the catalog carries no copy)_", rendered)
+            self.assertNotIn("not user-facing", rendered)
+
+    def test_header_defines_entryless_semantics_by_class(self):
+        # The Message-column gloss must name both entryless classes -- a
+        # boot-time wiring refusal that never reaches an end user, and a
+        # request-time refusal that reaches one only as its structured
+        # code (consult's entryless 400s) -- never the old single-class
+        # claim ("never rendered to an end user, typically a boot-time
+        # wiring refusal") that an indexed request-time row falsifies.
+        rendered = m.render_markdown([])
+        self.assertIn("entryless code is one the catalog carries no copy for", rendered)
+        self.assertIn("boot-time wiring refusal never reaches an end user", rendered)
+        self.assertIn("request-time refusal with no entry still reaches the client", rendered)
+        self.assertNotIn("never rendered to an end user", rendered)
 
     def test_pipe_characters_in_message_or_doc_are_escaped(self):
         entries = [

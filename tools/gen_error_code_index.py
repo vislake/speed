@@ -65,10 +65,13 @@ contains it (nearest preceding named-function declaration -- for a panic
 inside jobs' With* option functions, that doc states the exact rule the
 code refuses). It also separately builds a code -> English message dict
 from every locales/en-US.toml this repository ships (go/pkgcore/i18n's
-own message-catalog convention: the TOML key IS the apperr code), so a
-code with no locale entry -- a boot-time wiring refusal, say, never
-rendered to an end user -- is reported as such rather than silently
-omitted.
+own message-catalog convention: the TOML key IS the apperr code), so an
+entryless code is reported as such rather than silently omitted. The
+entryless class spans two shapes: a boot-time wiring refusal that never
+reaches an end user, and a request-time refusal that reaches one only as
+its structured code -- the catalog carries no copy for either, and any
+end-user text for the second shape comes from the client's own fallback,
+never from this table.
 
 The result is one Markdown table (code / message / triggering condition /
 module / HTTP status / source), grouped by module (the code's own
@@ -629,8 +632,11 @@ def render_markdown(entries: list[ErrorEntry]) -> str:
         " refused by `tools/check_error_code_index_coverage.py`, which",
         " measures this index against the tree independently.)",
         " \"Message\" is the code's own `en-US.toml` catalog entry when one",
-        " exists (a code with none is never rendered to an end user --",
-        " typically a boot-time wiring refusal); \"Triggering condition\" is",
+        " exists. An entryless code is one the catalog carries no copy for:",
+        " a boot-time wiring refusal never reaches an end user, while a",
+        " request-time refusal with no entry still reaches the client as its",
+        " structured code -- any text for it comes from the client's own",
+        " fallback, never from this table. \"Triggering condition\" is",
         " the doc comment of the code's declaration when it has one, and",
         " for an inline construction the comment above the construction or",
         " its enclosing function's doc comment, verbatim.",
@@ -662,7 +668,16 @@ def render_markdown(entries: list[ErrorEntry]) -> str:
                 # one row per code rather than duplicating it.
                 continue
             seen_codes.add(e.code)
-            message = e.message.replace("|", "\\|").replace("\n", " ") or "_(no locale message -- not user-facing)_"
+            # The entryless marker must not assert a class: the header
+            # paragraph above defines the two entryless shapes (a boot-time
+            # wiring refusal that never reaches an end user, and a
+            # request-time refusal that reaches one only as its structured
+            # code, whose text -- if any -- comes from the client's own
+            # fallback). A row-level "not user-facing" gloss would repeat
+            # the single-class claim that header replaced and contradict it
+            # on the request-time rows, so the cell states only the shared
+            # fact.
+            message = e.message.replace("|", "\\|").replace("\n", " ") or "_(no locale message -- the catalog carries no copy)_"
             if e.doc:
                 doc = e.doc.replace("|", "\\|")
             elif e.kind == "inline":
