@@ -3192,7 +3192,7 @@
       "file": "examples/reference-app/cmd/server/smilesim.go",
       "ident": "smileSimErrInternal",
       "kind": "declared",
-      "line": 55,
+      "line": 56,
       "module": "smilesim",
       "status": 500
     },
@@ -3201,7 +3201,7 @@
       "file": "examples/reference-app/cmd/server/smilesim.go",
       "ident": "smilesimErrInvalidRequestBody",
       "kind": "declared",
-      "line": 66,
+      "line": 67,
       "module": "smilesim",
       "status": 400
     },
@@ -3210,7 +3210,7 @@
       "file": "examples/reference-app/cmd/server/smilesim.go",
       "ident": "smileSimErrOutputNotFound",
       "kind": "declared",
-      "line": 91,
+      "line": 92,
       "module": "smilesim",
       "status": 404
     },
@@ -3219,7 +3219,7 @@
       "file": "examples/reference-app/cmd/server/smilesim.go",
       "ident": "smileSimErrOutputNotReady",
       "kind": "declared",
-      "line": 86,
+      "line": 87,
       "module": "smilesim",
       "status": 404
     },
@@ -3228,7 +3228,7 @@
       "file": "examples/reference-app/cmd/server/smilesim.go",
       "ident": "smilesimErrPhotoObjectIDRequired",
       "kind": "declared",
-      "line": 70,
+      "line": 71,
       "module": "smilesim",
       "status": 400
     },
@@ -3237,7 +3237,7 @@
       "file": "examples/reference-app/cmd/server/smilesim.go",
       "ident": "smilesimErrRecipientNotInTenant",
       "kind": "declared",
-      "line": 446,
+      "line": 481,
       "module": "smilesim",
       "status": 400
     },
@@ -3246,7 +3246,7 @@
       "file": "examples/reference-app/cmd/server/smilesim.go",
       "ident": "smileSimErrSimulationNotFound",
       "kind": "declared",
-      "line": 82,
+      "line": 83,
       "module": "smilesim",
       "status": 404
     },
