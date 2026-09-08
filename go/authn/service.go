@@ -784,6 +784,30 @@ func (s *Service) login(ctx context.Context, in LoginInput) (*TokenPair, error) 
 		// wires a membership store. Nothing is lost by the uniform answer:
 		// recordFailure below writes the real cause into the login history,
 		// which is where the reason belongs (see Login's doc comment).
+		//
+		// The uniform answer is also the whole of this path's effect on
+		// the login guard, deliberately: recordFailure below is called,
+		// but guard.RecordLoginFailure is not -- the one failure in login
+		// with a real, known account that never feeds the progressive
+		// lockout (the empty-identifier and no-canonical-form failures
+		// above skip it only because their account is the empty string,
+		// which makes the call a no-op). The lockout's escalating delay
+		// is the guard's response to a run of wrong guesses (see
+		// ratelimit.go's RecordLoginFailure), and this path is not a
+		// guess: the password just verified, and the membership answer --
+		// from the host's MembershipReader, or its absence -- is not
+		// something repeated attempts extract differently. Feeding the
+		// lockout here would escalate on non-guesses: in an unwired
+		// generated project, where every correct-password login of every
+		// account is this path, a few correct-password attempts would
+		// refuse the account's own legitimate sign-in for a growing
+		// window -- 30s after the first failure, loginLockoutMax after
+		// roughly five (ratelimit.go's own constants). The sliding
+		// windows CheckLogin applies still count each attempt; what is
+		// skipped is only the failure-accumulating lockout. The failure
+		// itself stays on the record -- the history row and the
+		// EventLoginFailed event below are written exactly as every
+		// failure above is.
 		s.recordFailure(ctx, in, user.ID, index, FailureReasonNoMembership)
 		return nil, ErrInvalidCredentials
 	}

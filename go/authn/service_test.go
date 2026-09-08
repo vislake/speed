@@ -338,11 +338,28 @@ func TestService_Login_NoMembershipIsIndistinguishableFromWrongPassword(t *testi
 
 	f := newServiceFixture(t)
 	f.registerUser(t, "memberless@example.com") // no membership anywhere
-	// Each of the three legs below runs on its own account: a recorded
-	// failure starts the account's progressive lockout delay, and this
-	// suite's clock is frozen, so a second attempt on the same account
-	// would be refused with authn.account_locked before it reached the
-	// membership question at all.
+	// Each of the three legs below runs on its own account: the legs are
+	// distinct scenarios (no membership anywhere; a tenant-A member asking
+	// for tenant B; a wrong password), an address can be registered only
+	// once, and the assertions below count the rows each leg's failure
+	// leaves in its own account's login history -- the memberless history
+	// assertion pins exactly one. The lockout mechanics are worth stating
+	// exactly too, because they differ by leg: the two membership-guard
+	// failures write their login-history row (recordFailure,
+	// FailureReasonNoMembership) and deliberately stop there, never
+	// calling guard.RecordLoginFailure -- a correct password is not a
+	// credential-guessing failure (see the resolveTenant branch in
+	// service.go's login) -- so those accounts' progressive lockout state
+	// is untouched, and a repeat attempt on one of them is not refused
+	// with authn.account_locked; it re-verifies the password and records
+	// again. Only the wrong-password leg feeds the lockout, and on real
+	// wall-clock time: RecordLoginFailure proposes time.Now-based
+	// deadlines and never sees the fixture's injected clock, so this
+	// suite's frozen clock neither starts nor expires a lockout. Within
+	// the 30s base delay (loginLockoutBase) a second wrong password on
+	// the same account is refused at CheckLogin with authn.account_locked,
+	// before the password work and therefore before the membership
+	// question.
 	f.registerUser(t, "elsewhere@example.com", testTenantA)
 	f.registerUser(t, "known@example.com", testTenantA)
 
