@@ -691,9 +691,11 @@ func (s *Service) accessPublicPrelude(ctx context.Context, token string, p Acces
 // checks (authorizeAttempt, with chargeTokenBudget true -- the same
 // anonymous-surface per-token wrong-guess charge AccessPublic applies, for
 // the same reason: this is one of the two surfaces an external attacker can
-// actually reach), settling any refusal as one denied log row and
-// one denied event exactly as AccessPublic does, but recording NO view and
-// NO granted row on success. The route records the view only once the
+// actually reach), settling any refusal of a token that resolved to a
+// share as one denied log row and one denied event exactly as AccessPublic
+// does -- a refusal answered before a share is on hand (the prelude's
+// per-IP 429, an unrecognized token's ErrNotAccessible) settles nothing --
+// but recording NO view and NO granted row on success. The route records the view only once the
 // share's content was actually delivered (settleAccessGranted) and settles
 // every serve failure in between as denied (settleAccessDenied) -- see
 // authorizeAttempt's own doc comment for why recording at the authorization

@@ -153,11 +153,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // codebase (AGENTS.md's "Serving an access" section has the full
 // two-directions reasoning):
 //
-//  1. authorizePublicAccess runs every refusal check (rate limit, token
-//     lookup, the constant-time password check, current liveness) and
-//     records NOTHING on success -- no view, no reservation, no granted
-//     log row. Refusals are settled as one denied row and one denied
-//     event, exactly as Service.Access settles them.
+//  1. authorizePublicAccess runs the prelude's per-IP rate-limit check
+//     and token-to-tenant lookup, then every one of Access's own refusal
+//     checks (the tenant-scoped token lookup, the constant-time password
+//     check, current liveness), and records NOTHING on success -- no
+//     view, no reservation, no granted log row. Every refusal of a token
+//     that resolved to a share is settled as one denied row and one
+//     denied event, exactly as Service.Access settles them; a refusal
+//     answered before any share is on hand -- an over-budget caller's
+//     prelude 429 or an unrecognized token's ErrNotAccessible -- settles
+//     nothing, no row existing to attribute an entry to.
 //  2. A MaxViews-limited share's view is then RESERVED (reserveAccessView)
 //     before any delivery can begin: the share's ceiling already accounts
 //     for the serve in flight, so a concurrent second fetch is refused up
